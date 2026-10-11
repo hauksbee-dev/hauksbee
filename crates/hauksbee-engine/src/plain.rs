@@ -533,6 +533,14 @@ impl OrderTriage {
                 "NOT OK TO ORDER YET: this run failed. {}",
                 verdict.reason.as_deref().unwrap_or_default()
             );
+        } else if verdict.is_pass() && !verdict.conditions.is_empty() {
+            // A pass with items to inspect still rests on its conditions; say
+            // so here, not only on the closing line.
+            let _ = writeln!(
+                out,
+                "CONDITIONALLY: whatever the items below decide, this rests on: {}",
+                verdict.conditions.join(" ")
+            );
         }
         Self::write_bucket(&mut out, "DO NOT ORDER", &self.do_not_order);
         Self::write_bucket(&mut out, "INSPECT BEFORE ORDERING", &self.inspect);

@@ -37,7 +37,10 @@ const exportInput = (report: WebReport) => ({
 describe('verdict conditions', () => {
   test('the conditional fixture carries the engine sentence and the headline that says it', () => {
     expect(conditional.verdict_conditions).toEqual([CONDITION])
-    expect(conditional.headline).toBe(`No blocking findings, on a condition: ${CONDITION}`)
+    expect(conditional.verdict).toBe('pass')
+    expect(conditional.headline).toBe(
+      `OK to order, conditionally: the static checks found nothing that blocks ordering; this rests on: ${CONDITION}`,
+    )
   })
 
   test('each condition is its own list item, with the sentence verbatim', () => {
@@ -56,7 +59,9 @@ describe('verdict conditions', () => {
   test('the fixture report projects to one condition and a lead-in headline that does not repeat it', () => {
     const view = reportView(conditional)
     expect(view.conditions).toEqual([CONDITION])
-    expect(view.headline).toBe('No blocking findings, on a condition:')
+    expect(view.headline).toBe(
+      'OK to order, conditionally: the static checks found nothing that blocks ordering; this rests on:',
+    )
     expect(view.tone).not.toBe('error')
     const html = renderToStaticMarkup(<VerdictConditions conditions={view.conditions} />)
     expect(html.split(CONDITION)).toHaveLength(2)

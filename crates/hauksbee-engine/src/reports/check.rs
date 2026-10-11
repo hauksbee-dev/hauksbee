@@ -184,9 +184,8 @@ impl CheckReport<'_> {
         );
         // No outcome is stated on this surface, so what an indicator MEANS was
         // not judged; say so instead of letting a clean triage imply it was.
-        triage.add_not_covered(crate::checks::indicators::not_judged_note(
-            &crate::checks::indicators::indicator_traces(board, lib),
-        ));
+        let indicators = crate::checks::indicators::indicator_traces(board, lib);
+        triage.add_not_covered(crate::checks::indicators::not_judged_note(&indicators));
         // This surface's own exit gate, computed before anything renders so the
         // machine document can state the same outcome the exit code will. It is
         // wider than the `serious` severity on purpose (medium lint findings, any
@@ -194,16 +193,11 @@ impl CheckReport<'_> {
         // An unvalidated board format (KiCad 10+) yields possibly-phantom shorts
         // that do not gate unless KiCad's own DRC confirms the exact net pair; the
         // unmatched caveat is printed instead.
-        let usbc_serious = matches!(&usbc, Some(u) if u.is_serious());
-        let drc_gates = if combined {
-            drc_gate_fails(&drc, qualification.as_ref())
+        let would_gate = if combined {
+            drc_gate_fails(&drc, qualification.as_ref()) || findings_gate(&lint, &si, usbc.as_ref())
         } else {
-            drc_structured
-                .shorts
-                .iter()
-                .any(|short| short.severity == "serious")
+            check_gate_fails(&drc_structured, &lint, &si, usbc.as_ref())
         };
-        let would_gate = drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious;
         // The machine document, assembled for EVERY output mode: its verdict is
         // the single derivation the plain triage headline and the closing
         // VERDICT line read, so no human surface can say something the `--json`
@@ -217,7 +211,9 @@ impl CheckReport<'_> {
             would_gate,
         )
         .with_inputs(input.inputs)
-        .with_evidence(&evidence);
+        .with_evidence(&evidence)
+        // A pass over hardware-fixed indicator meaning nobody stated rests on it.
+        .with_condition(crate::checks::indicators::intent_condition(&indicators));
         let run_verdict = jr.run_verdict();
         match mode {
             OutputMode::Json => {
@@ -379,11 +375,36 @@ impl CheckReport<'_> {
     }
 }
 
+/// Whether the lint, SI or USB-C findings fail the `--check` gate.
+fn findings_gate(
+    lint: &hauksbee_extract::NetLintReport,
+    si: &hauksbee_extract::SiReport,
+    usbc: Option<&crate::checks::usb_c::UsbcReport>,
+) -> bool {
+    lint_fails(lint)
+        || si_fails(si)
+        || usbc.is_some_and(crate::checks::usb_c::UsbcReport::is_serious)
+}
+
+/// The `--check` exit gate over the structured copper result: a serious short,
+/// or a lint, SI or USB-C finding that gates. Wider than the `serious` grade on
+/// purpose (medium lint findings, any SI finding), which is why the machine
+/// verdict has to be told about it. The web report gates on the same rule.
+pub(crate) fn check_gate_fails(
+    drc: &DrcStructured,
+    lint: &hauksbee_extract::NetLintReport,
+    si: &hauksbee_extract::SiReport,
+    usbc: Option<&crate::checks::usb_c::UsbcReport>,
+) -> bool {
+    drc.shorts.iter().any(|short| short.severity == "serious") || findings_gate(lint, si, usbc)
+}
+
 /// The machine document for a `--check` run, minus its inputs and evidence:
 /// everything `JsonReport::verdict` reads about the findings, the bind summary
-/// and this surface's own strict gate. One constructor for the JSON output and
-/// for the verdict the plain triage and the closing line carry.
-fn machine_report(
+/// and this surface's own strict gate. One constructor for the JSON output, for
+/// the verdict the plain triage and the closing line carry, and for the web
+/// report's verdict.
+pub(crate) fn machine_report(
     board_name: &str,
     summary: &BindSummary,
     drc: &DrcStructured,

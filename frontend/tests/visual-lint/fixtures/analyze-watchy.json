@@ -1,452 +1,38 @@
 {
  "ok": true,
  "error": null,
- "board_name": "",
+ "board_name": "watchy",
  "file_name": "watchy.kicad_pcb",
  "num_components": 82,
  "num_nets": 84,
- "headline": "53 issues found, none serious. Worth a look before you order boards.",
+ "clearance_rule_source": {
+  "source": "defaulted",
+  "value_mm": 0.15,
+  "project_file_found": false
+ },
+ "triage": {
+  "do_not_order": [],
+  "inspect": [],
+  "checked_ok": [],
+  "not_covered": "7 parts lack an executable simulation model; model-dependent firmware/analog/AC/thermal claims involving those parts are not covered. Copper geometry and datasheet decode rules do not require a simulation model. Clearance findings use DEFAULT rules, not your rules, because no usable .kicad_pro netclass rules were read."
+ },
+ "headline": "Not conclusive: nothing found blocks ordering, but this run cannot vouch for the board; see the reason below.",
  "serious": 0,
- "total": 53,
+ "total": 0,
  "sections": [
   {
-   "title": "Copper spacing (DRC)",
-   "verdict": "53 issues found, none serious (worth a look).",
-   "findings": [
-    {
-     "level": "warning",
-     "what": "\"+3V3\" and \"/32K_P\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.154 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 81.609192,
-     "y": 85.5579035
-    },
-    {
-     "level": "warning",
-     "what": "\"+3V3\" and \"ACC_INT_1\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.183 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 81.95146982512303,
-     "y": 84.99080131981351
-    },
-    {
-     "level": "warning",
-     "what": "\"+3V3\" and \"ACC_INT_2\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 80.39,
-     "y": 82.895
-    },
-    {
-     "level": "warning",
-     "what": "\"+3V3\" and \"ADC\" are very close but not quite touching at 1 location on the back copper layer (B.Cu) (tightest 0.174 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 81.996192,
-     "y": 85.180807
-    },
-    {
-     "level": "warning",
-     "what": "\"+3V3\" and \"BTN1\" are very close but not quite touching at 1 location on the back copper layer (B.Cu) (tightest 0.174 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 81.33554148711652,
-     "y": 84.90715648711652
-    },
-    {
-     "level": "warning",
-     "what": "\"+3V3\" and \"BTN3\" are very close but not quite touching at 2 locations on the back copper layer (B.Cu) (tightest 0.174 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 73.8,
-     "y": 81.587
-    },
-    {
-     "level": "warning",
-     "what": "\"+3V3\" and \"BUSY\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.179 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 88.317614741411,
-     "y": 94.797614741411
-    },
-    {
-     "level": "warning",
-     "what": "\"+3V3\" and \"EN\" are very close but not quite touching at 7 locations on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 87.62606616523516,
-     "y": 81.83627583476483
-    },
-    {
-     "level": "warning",
-     "what": "\"+3V3\" and \"MOSI\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.168 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 86.16178274089336,
-     "y": 90.55668109200504
-    },
-    {
-     "level": "warning",
-     "what": "\"+3V3\" and \"Net-(U4-XTAL_P)\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.177 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 89.56,
-     "y": 83.94630000000001
-    },
-    {
-     "level": "warning",
-     "what": "\"+3V3\" and \"RESE\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.183 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 94.62,
-     "y": 104.80369999999999
-    },
-    {
-     "level": "warning",
-     "what": "\"+3V3\" and \"SDA\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 78.94,
-     "y": 82.32
-    },
-    {
-     "level": "warning",
-     "what": "\"+BATT\" and \"BTN2\" are very close but not quite touching at 1 location on the back copper layer (B.Cu) (tightest 0.174 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 100.02365051288349,
-     "y": 86.37365051288349
-    },
-    {
-     "level": "warning",
-     "what": "\"/40M_P\" and \"/40M_N\" are very close but not quite touching at 2 locations on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 92.0569145,
-     "y": 86.22058249999999
-    },
-    {
-     "level": "warning",
-     "what": "\"ACC_INT_1\" and \"ACC_INT_2\" are very close but not quite touching at 6 locations on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 79.89,
-     "y": 83.27
-    },
-    {
-     "level": "warning",
-     "what": "\"ADC\" and \"BTN1\" are very close but not quite touching at 6 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 83.1459145,
-     "y": 83.0836075
-    },
-    {
-     "level": "warning",
-     "what": "\"ADC\" and \"BTN2\" are very close but not quite touching at 10 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 89.1607435,
-     "y": 88.1930855
-    },
-    {
-     "level": "warning",
-     "what": "\"ADC\" and \"USB_D-\" are very close but not quite touching at 2 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 82.0512775,
-     "y": 87.5840975
-    },
-    {
-     "level": "warning",
-     "what": "\"BTN1\" and \"BTN2\" are very close but not quite touching at 3 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 82.7097605,
-     "y": 80.9902385
-    },
-    {
-     "level": "warning",
-     "what": "\"BTN1\" and \"BTN4\" are very close but not quite touching at 4 locations on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 84.0269145,
-     "y": 81.86308550000001
-    },
-    {
-     "level": "warning",
-     "what": "\"BTN1\" and \"STAT\" are very close but not quite touching at 9 locations on the back copper layer (B.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 94.90606600000001,
-     "y": 95.528198
-    },
-    {
-     "level": "warning",
-     "what": "\"BTN2\" and \"BTN3\" are very close but not quite touching at 7 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 82.9235895,
-     "y": 80.7764095
-    },
-    {
-     "level": "warning",
-     "what": "\"BUSY\" and \"RES\" are very close but not quite touching at 5 locations on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 88.213934,
-     "y": 90.52347499999999
-    },
-    {
-     "level": "warning",
-     "what": "\"DC\" and \"CS\" are very close but not quite touching at 4 locations on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 88.276066,
-     "y": 91.434135
-    },
-    {
-     "level": "warning",
-     "what": "\"DN\" and \"DP\" are very close but not quite touching at 2 locations on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 97.24119999999999,
-     "y": 92.65
-    },
-    {
-     "level": "warning",
-     "what": "\"EN\" and \"BTN2\" are very close but not quite touching at 3 locations on the front copper layer (F.Cu) (tightest 0.179 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 76.66550000000001,
-     "y": 80.95
-    },
-    {
-     "level": "warning",
-     "what": "\"EN\" and \"BTN3\" are very close but not quite touching at 7 locations on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 87.2269145,
-     "y": 81.86308550000001
-    },
-    {
-     "level": "warning",
-     "what": "\"GND\" and \"+3V3\" are very close but not quite touching at 4 locations on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 80.465,
-     "y": 82.82
-    },
-    {
-     "level": "warning",
-     "what": "\"GND\" and \"+3V3\" are very close but not quite touching at 2 locations on In2.Cu (tightest 0.155 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 85.5775,
-     "y": 94.21
-    },
-    {
-     "level": "warning",
-     "what": "\"GND\" and \"+BATT\" are very close but not quite touching at 1 location on In2.Cu (tightest 0.154 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 99.857,
-     "y": 92.38
-    },
-    {
-     "level": "warning",
-     "what": "\"GND\" and \"/40M_N\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.155 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 91.6947334957055,
-     "y": 89.9147334957055
-    },
-    {
-     "level": "warning",
-     "what": "\"GND\" and \"/40M_P\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.155 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 93.4447334957055,
-     "y": 89.9147334957055
-    },
-    {
-     "level": "warning",
-     "what": "\"GND\" and \"BTN2\" are very close but not quite touching at 3 locations on the back copper layer (B.Cu) (tightest 0.174 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 88.12,
-     "y": 88.297
-    },
-    {
-     "level": "warning",
-     "what": "\"GND\" and \"BTN4\" are very close but not quite touching at 1 location on the back copper layer (B.Cu) (tightest 0.154 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 72.51657926288348,
-     "y": 99.80657926288349
-    },
-    {
-     "level": "warning",
-     "what": "\"GND\" and \"BUSY\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.179 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 88.817614741411,
-     "y": 90.682385258589
-    },
-    {
-     "level": "warning",
-     "what": "\"GND\" and \"SCL\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 79.39,
-     "y": 81.395
-    },
-    {
-     "level": "warning",
-     "what": "\"GND\" and \"SDA\" are very close but not quite touching at 2 locations on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 78.94,
-     "y": 81.82
-    },
-    {
-     "level": "warning",
-     "what": "\"GND\" and \"STAT\" are very close but not quite touching at 1 location on the back copper layer (B.Cu) (tightest 0.191 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 92.27,
-     "y": 94.68950000000001
-    },
-    {
-     "level": "warning",
-     "what": "\"MOSI\" and \"SCK\" are very close but not quite touching at 5 locations on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 87.67606599999999,
-     "y": 93.297337
-    },
-    {
-     "level": "warning",
-     "what": "\"PREVGH\" and \"PREVGL\" are very close but not quite touching at 8 locations on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 76.4188,
-     "y": 99.14668
-    },
-    {
-     "level": "warning",
-     "what": "\"RES\" and \"DC\" are very close but not quite touching at 6 locations on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 88.576066,
-     "y": 91.309871
-    },
-    {
-     "level": "warning",
-     "what": "\"RESE\" and \"GDR\" are very close but not quite touching at 4 locations on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 93.76625650000001,
-     "y": 104.3837435
-    },
-    {
-     "level": "warning",
-     "what": "\"SCK\" and \"CS\" are very close but not quite touching at 6 locations on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 87.976066,
-     "y": 93.421601
-    },
-    {
-     "level": "warning",
-     "what": "\"SDA\" and \"ACC_INT_2\" are very close but not quite touching at 5 locations on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 81.47208549999999,
-     "y": 83.6435725
-    },
-    {
-     "level": "warning",
-     "what": "\"SDA\" and \"BTN4\" are very close but not quite touching at 2 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 79.832207,
-     "y": 84.872285
-    },
-    {
-     "level": "warning",
-     "what": "\"SDA\" and \"SCL\" are very close but not quite touching at 2 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 79.529807,
-     "y": 91.932207
-    },
-    {
-     "level": "warning",
-     "what": "\"SDA\" and \"SCL\" are very close but not quite touching at 4 locations on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 82.0730855,
-     "y": 83.8169145
-    },
-    {
-     "level": "warning",
-     "what": "\"STAT\" and \"BTN4\" are very close but not quite touching at 3 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 82.05976043709381,
-     "y": 83.0097614850904
-    },
-    {
-     "level": "warning",
-     "what": "\"USB_D-\" and \"USB_D+\" are very close but not quite touching at 8 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 81.9500435,
-     "y": 87.9105215
-    },
-    {
-     "level": "warning",
-     "what": "\"USB_DET\" and \"USB_D+\" are very close but not quite touching at 5 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 86.7911785,
-     "y": 93.1793145
-    },
-    {
-     "level": "warning",
-     "what": "\"VBUS\" and \"DN\" are very close but not quite touching at 2 locations on the front copper layer (F.Cu) (tightest 0.155 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 96.93750000000001,
-     "y": 93.13000000000001
-    },
-    {
-     "level": "warning",
-     "what": "\"VBUS\" and \"Net-(D1-K)\" are very close but not quite touching at 3 locations on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 94.63565834335382,
-     "y": 93.72434165664617
-    },
-    {
-     "level": "warning",
-     "what": "\"VBUS\" and \"Net-(U3-PROG)\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
-     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
-     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
-     "x": 98.0956590465644,
-     "y": 102.25565904656439
-    }
-   ]
+   "title": "Copper spacing (DRC; DEFAULT rules, not your rules)",
+   "verdict": "CLEARANCE RULE SOURCE: DEFAULT 0.150 mm; this upload did not include a .kicad_pro, so your netclass rules were not read; these are default rules, not your rules. Upload the matching .kicad_pro alongside the board to check your netclass rules. Looks healthy: no copper spacing (drc) problems found.",
+   "findings": []
   },
   {
    "title": "Connectivity & wiring",
-   "verdict": "Looks healthy: no connectivity problems found.",
+   "verdict": "INCONCLUSIVE: 1 current-carrying / active part(s) have no model (U1), so a clean result here is not a clean bill. Draft models from their datasheets (`hauksbee models extract --unmodelled <board>`, or the Extend button in `hauksbee serve`), scaffold one by hand (`hauksbee models new`, then --models-dir), or supply BOM identity (--bom) to make this verdict conclusive.",
    "findings": []
   },
   {
    "title": "Signal integrity",
-   "verdict": "No signal-integrity failures, but 3 things worth a look (see below).",
+   "verdict": "INCONCLUSIVE: 1 current-carrying / active part(s) have no model (U1), so a clean result here is not a clean bill. Draft models from their datasheets (`hauksbee models extract --unmodelled <board>`, or the Extend button in `hauksbee serve`), scaffold one by hand (`hauksbee models new`, then --models-dir), or supply BOM identity (--bom) to make this verdict conclusive. Plus 3 things worth a look (see below).",
    "findings": [],
    "heads_up": [
     {
@@ -455,7 +41,7 @@
      "fix": "If this pair is NOT a high-speed link (USB/Ethernet/HDMI), you can ignore it. If it is: adjust the trace width and pair spacing for your actual layer stackup so the estimate lands near the target (the formulas are in https://docs.hauksbee.dev/docs/checks/si_checks), or ask your fab to build a controlled-impedance stackup to spec."
     },
     {
-     "what": "A high-speed trace pair (USB_D+ / USB_D-) is off its impedance target (W~0.150 mm, S~0.173 mm microstrip -> Zdiff ~ 125 ohm [target 90 ohm, USB differential]: estimate +39% from target).",
+     "what": "A high-speed trace pair (USB_D+ / USB_D-) is off its impedance target (W~0.150 mm, S~0.152 mm microstrip -> Zdiff ~ 122 ohm [target 90 ohm, USB differential]: estimate +35% from target).",
      "why": "Fast links like USB (90 ohm differential) or Ethernet need their traces to present a specific impedance so the signal does not reflect off the wire and smear. This is a computed estimate, flagged only because the board did not formally declare a controlled-impedance stackup; it is informational, not a confirmed failure, but a value well off target on a real high-speed net can make the link marginal or fail to enumerate.",
      "fix": "If this pair is NOT a high-speed link (USB/Ethernet/HDMI), you can ignore it. If it is: adjust the trace width and pair spacing for your actual layer stackup so the estimate lands near the target (the formulas are in https://docs.hauksbee.dev/docs/checks/si_checks), or ask your fab to build a controlled-impedance stackup to spec."
     },
@@ -1043,15 +629,3075 @@
    "rot": -90
   }
  ],
+ "import_diagnostics": {
+  "format": "text board / netlist",
+  "recovered": 82,
+  "partial": 0,
+  "unplaced": 0,
+  "missing_or_refused": 0,
+  "objects": [
+   {
+    "id": "AE1",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 74.255,
+    "y": 79.18,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "Net-(AE1-FEED)"
+    ]
+   },
+   {
+    "id": "C1",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 92.54,
+    "y": 82.7,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "GND"
+    ]
+   },
+   {
+    "id": "C10",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 92.27,
+    "y": 96.06,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "GND"
+    ]
+   },
+   {
+    "id": "C11",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 101.22,
+    "y": 88.62,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "ADC",
+     "GND"
+    ]
+   },
+   {
+    "id": "C12",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 96.2,
+    "y": 89.92,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "VBUS"
+    ]
+   },
+   {
+    "id": "C13",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 84,
+    "y": 90.49,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "VDD"
+    ]
+   },
+   {
+    "id": "C14",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 75.51,
+    "y": 81.9,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "Net-(D2-A)"
+    ]
+   },
+   {
+    "id": "C15",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 84,
+    "y": 91.41,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "VDD"
+    ]
+   },
+   {
+    "id": "C16",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 94.105,
+    "y": 89.47,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "/40M_P",
+     "GND"
+    ]
+   },
+   {
+    "id": "C17",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 78.43,
+    "y": 84.56,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "/32K_P",
+     "GND"
+    ]
+   },
+   {
+    "id": "C18",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 78.43,
+    "y": 86.24,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "/32K_N",
+     "GND"
+    ]
+   },
+   {
+    "id": "C19",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 89.78,
+    "y": 90.94,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "/40M_N",
+     "GND"
+    ]
+   },
+   {
+    "id": "C2",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 84.13,
+    "y": 79.94,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "EN",
+     "GND"
+    ]
+   },
+   {
+    "id": "C20",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 74.42,
+    "y": 109.33,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "GND"
+    ]
+   },
+   {
+    "id": "C21",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 74.42,
+    "y": 103.37,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "Net-(D3-K)",
+     "Net-(D5-A)"
+    ]
+   },
+   {
+    "id": "C22",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 81.58,
+    "y": 96.06,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "PREVGH"
+    ]
+   },
+   {
+    "id": "C23",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 89.47,
+    "y": 96.06,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "Net-(J3-Pin_5)"
+    ]
+   },
+   {
+    "id": "C24",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 83.42,
+    "y": 96.06,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "Net-(J3-Pin_18)"
+    ]
+   },
+   {
+    "id": "C25",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 82.5,
+    "y": 96.06,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "Net-(J3-Pin_20)"
+    ]
+   },
+   {
+    "id": "C26",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 80.66,
+    "y": 96.06,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "Net-(J3-Pin_22)"
+    ]
+   },
+   {
+    "id": "C27",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 78.82,
+    "y": 96.06,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "Net-(J3-Pin_24)"
+    ]
+   },
+   {
+    "id": "C28",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 84.34,
+    "y": 96.06,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "GND"
+    ]
+   },
+   {
+    "id": "C29",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 79.74,
+    "y": 96.06,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "PREVGL"
+    ]
+   },
+   {
+    "id": "C3",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 85.05,
+    "y": 79.94,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "GND"
+    ]
+   },
+   {
+    "id": "C4",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 91.62,
+    "y": 82.7,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "GND"
+    ]
+   },
+   {
+    "id": "C5",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 85.97,
+    "y": 79.94,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "GND"
+    ]
+   },
+   {
+    "id": "C6",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 90.7,
+    "y": 82.7,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "GND"
+    ]
+   },
+   {
+    "id": "C7",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 87.34,
+    "y": 80.22,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "Net-(AE1-FEED)"
+    ]
+   },
+   {
+    "id": "C9",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 90.1,
+    "y": 81.33,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "Net-(U4-LNA_IN/RF)"
+    ]
+   },
+   {
+    "id": "D1",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 94.76,
+    "y": 93.73,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "Net-(D1-K)",
+     "VBUS"
+    ]
+   },
+   {
+    "id": "D2",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 73.9,
+    "y": 81.45,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "Net-(D2-A)"
+    ]
+   },
+   {
+    "id": "D3",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 69.95,
+    "y": 100.29,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "Net-(D3-K)",
+     "PREVGL"
+    ]
+   },
+   {
+    "id": "D4",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 72.25,
+    "y": 100.29,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "Net-(D3-K)"
+    ]
+   },
+   {
+    "id": "D5",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 74.55,
+    "y": 100.29,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "Net-(D5-A)",
+     "PREVGH"
+    ]
+   },
+   {
+    "id": "J1",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 96.83,
+    "y": 84.72,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+BATT",
+     "GND"
+    ]
+   },
+   {
+    "id": "J2",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 100.08,
+    "y": 93.68,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "DN",
+     "DP",
+     "GND",
+     "VBUS",
+     "unconnected-(J2-ID-Pad4)"
+    ]
+   },
+   {
+    "id": "J3",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 85.65,
+    "y": 100.27,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "BUSY",
+     "CS",
+     "DC",
+     "GDR",
+     "GND",
+     "MOSI",
+     "Net-(J3-Pin_18)",
+     "Net-(J3-Pin_20)",
+     "Net-(J3-Pin_22)",
+     "Net-(J3-Pin_24)",
+     "Net-(J3-Pin_5)",
+     "PREVGH",
+     "PREVGL",
+     "RES",
+     "RESE",
+     "SCK",
+     "unconnected-(J3-Pin_1-Pad1)",
+     "unconnected-(J3-Pin_19-Pad19)",
+     "unconnected-(J3-Pin_4-Pad4)",
+     "unconnected-(J3-Pin_6-Pad6)",
+     "unconnected-(J3-Pin_7-Pad7)"
+    ]
+   },
+   {
+    "id": "L1",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 88.72,
+    "y": 80.86,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "Net-(AE1-FEED)",
+     "Net-(U4-LNA_IN/RF)"
+    ]
+   },
+   {
+    "id": "L2",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 75.19,
+    "y": 106.35,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "Net-(D5-A)"
+    ]
+   },
+   {
+    "id": "M1",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 70.15,
+    "y": 85.155,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "Net-(D2-A)"
+    ]
+   },
+   {
+    "id": "Q1",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 97.2,
+    "y": 100.2,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+BATT",
+     "Net-(D1-K)",
+     "VBUS"
+    ]
+   },
+   {
+    "id": "Q2",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 75.45,
+    "y": 84.73,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "Net-(D2-A)",
+     "Net-(Q2-B)"
+    ]
+   },
+   {
+    "id": "Q3",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 96.84,
+    "y": 106.9,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GDR",
+     "Net-(D5-A)",
+     "RESE"
+    ]
+   },
+   {
+    "id": "R1",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 83.2,
+    "y": 79.96,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "EN"
+    ]
+   },
+   {
+    "id": "R10",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 75.52,
+    "y": 80.06,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "BTN3"
+    ]
+   },
+   {
+    "id": "R11",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 70.07,
+    "y": 110.47,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "BTN4"
+    ]
+   },
+   {
+    "id": "R12",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 91.17,
+    "y": 84.08,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "/40M_P",
+     "Net-(U4-XTAL_P)"
+    ]
+   },
+   {
+    "id": "R13",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 78.45,
+    "y": 87.17,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "Net-(Q2-B)",
+     "VIB_PWM"
+    ]
+   },
+   {
+    "id": "R14",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 91.94,
+    "y": 93.51,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "USB_DET",
+     "VBUS"
+    ]
+   },
+   {
+    "id": "R15",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 91,
+    "y": 93.51,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "USB_DET"
+    ]
+   },
+   {
+    "id": "R16",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 91.34,
+    "y": 96.04,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GDR",
+     "GND"
+    ]
+   },
+   {
+    "id": "R17",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 90.4,
+    "y": 96.04,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "RESE"
+    ]
+   },
+   {
+    "id": "R18",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 78.17,
+    "y": 82.64,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "SDA"
+    ]
+   },
+   {
+    "id": "R19",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 88.54,
+    "y": 96.04,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "RES"
+    ]
+   },
+   {
+    "id": "R2",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 97.49,
+    "y": 103.05,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "VBUS"
+    ]
+   },
+   {
+    "id": "R20",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 80.21,
+    "y": 80.6,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "SCL"
+    ]
+   },
+   {
+    "id": "R3",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 98.43,
+    "y": 103.05,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "Net-(U3-PROG)"
+    ]
+   },
+   {
+    "id": "R4",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 101.11,
+    "y": 110.47,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "BTN1"
+    ]
+   },
+   {
+    "id": "R5",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 96.55,
+    "y": 103.05,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "STAT",
+     "VBUS"
+    ]
+   },
+   {
+    "id": "R6",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 95.61,
+    "y": 103.05,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "Net-(U3-STAT)",
+     "STAT"
+    ]
+   },
+   {
+    "id": "R7",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 91.35,
+    "y": 87.4,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "BTN2"
+    ]
+   },
+   {
+    "id": "R8",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 101.24,
+    "y": 86.75,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+BATT",
+     "ADC"
+    ]
+   },
+   {
+    "id": "R9",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 101.24,
+    "y": 87.69,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "ADC",
+     "GND"
+    ]
+   },
+   {
+    "id": "SW1",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 100.54,
+    "y": 79.93,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "BTN2",
+     "GND"
+    ]
+   },
+   {
+    "id": "SW2",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 100.54,
+    "y": 106.33,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "BTN1",
+     "GND"
+    ]
+   },
+   {
+    "id": "SW3",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 70.66,
+    "y": 79.92,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "BTN3",
+     "GND"
+    ]
+   },
+   {
+    "id": "SW4",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 70.66,
+    "y": 106.33,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "BTN4",
+     "GND"
+    ]
+   },
+   {
+    "id": "TP1",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 93.66,
+    "y": 87.56,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "Net-(U4-U0TXD/PROG/GPIO43)"
+    ]
+   },
+   {
+    "id": "TP2",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 93.16,
+    "y": 84.65,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "Net-(U4-U0RXD/PROG/GPIO44)"
+    ]
+   },
+   {
+    "id": "TP3",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 80.26,
+    "y": 88.42,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "BTN3"
+    ]
+   },
+   {
+    "id": "TP4",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 86.73,
+    "y": 92.13,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3"
+    ]
+   },
+   {
+    "id": "TP5",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 84.87,
+    "y": 92.87,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND"
+    ]
+   },
+   {
+    "id": "TP6",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 82.99,
+    "y": 93.58,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "SCL"
+    ]
+   },
+   {
+    "id": "TP7",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 82.09,
+    "y": 91.79,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "SDA"
+    ]
+   },
+   {
+    "id": "U1",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 76.95,
+    "y": 82.66,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "BTN2",
+     "BTN3",
+     "EN",
+     "GND",
+     "unconnected-(U1-NC-Pad4)"
+    ]
+   },
+   {
+    "id": "U2",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 95.06,
+    "y": 96.58,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "GND",
+     "Net-(D1-K)",
+     "unconnected-(U2-NC-Pad4)"
+    ]
+   },
+   {
+    "id": "U3",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 100.7,
+    "y": 100.18,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+BATT",
+     "GND",
+     "Net-(U3-PROG)",
+     "Net-(U3-STAT)",
+     "VBUS"
+    ]
+   },
+   {
+    "id": "U4",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 86.12,
+    "y": 85.91,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "/32K_N",
+     "/32K_P",
+     "/40M_N",
+     "ACC_INT_1",
+     "ACC_INT_2",
+     "ADC",
+     "BTN1",
+     "BTN2",
+     "BTN3",
+     "BTN4",
+     "BUSY",
+     "CS",
+     "DC",
+     "EN",
+     "GND",
+     "MOSI",
+     "Net-(U4-LNA_IN/RF)",
+     "Net-(U4-U0RXD/PROG/GPIO44)",
+     "Net-(U4-U0TXD/PROG/GPIO43)",
+     "Net-(U4-XTAL_P)",
+     "RES",
+     "SCK",
+     "SCL",
+     "SDA",
+     "STAT",
+     "USB_D+",
+     "USB_D-",
+     "USB_DET",
+     "VDD",
+     "VIB_PWM",
+     "unconnected-(U4-GPIO1/ADC1_CH0-Pad6)",
+     "unconnected-(U4-GPIO18/ADC2_CH7/DAC_1-Pad24)",
+     "unconnected-(U4-GPIO2/ADC1_CH1-Pad7)",
+     "unconnected-(U4-GPIO3/ADC1_CH2-Pad8)",
+     "unconnected-(U4-GPIO37-Pad42)",
+     "unconnected-(U4-GPIO38-Pad43)",
+     "unconnected-(U4-GPIO4/ADC1_CH3-Pad9)",
+     "unconnected-(U4-GPIO45-Pad51)",
+     "unconnected-(U4-GPIO46-Pad52)",
+     "unconnected-(U4-GPIO5/ADC1_CH4-Pad10)",
+     "unconnected-(U4-MTCK/JTAG/GPIO39-Pad44)",
+     "unconnected-(U4-MTDI/JTAG/GPIO41-Pad47)",
+     "unconnected-(U4-MTDO/JTAG/GPIO40-Pad45)",
+     "unconnected-(U4-MTMS/JTAG/GPIO42-Pad48)",
+     "unconnected-(U4-SPICLK/GPIO30-Pad33)",
+     "unconnected-(U4-SPICS0/GPIO29-Pad32)",
+     "unconnected-(U4-SPID/GPIO32-Pad35)",
+     "unconnected-(U4-SPIHD/GPIO27-Pad30)",
+     "unconnected-(U4-SPIQ/GPIO31-Pad34)",
+     "unconnected-(U4-SPIWP/GPIO28-Pad31)",
+     "unconnected-(U4-SPI_CS1/GPIO26-Pad28)"
+    ]
+   },
+   {
+    "id": "U5",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 95.6075,
+    "y": 91.48,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "DN",
+     "DP",
+     "GND",
+     "USB_D+",
+     "USB_D-",
+     "VBUS"
+    ]
+   },
+   {
+    "id": "U6",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 79.89,
+    "y": 82.32,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "ACC_INT_1",
+     "ACC_INT_2",
+     "GND",
+     "SCL",
+     "SDA",
+     "unconnected-(U6-ASCL-Pad11)",
+     "unconnected-(U6-ASDA-Pad4)"
+    ]
+   },
+   {
+    "id": "Y1",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 80.24,
+    "y": 85.4,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "/32K_N",
+     "/32K_P"
+    ]
+   },
+   {
+    "id": "Y2",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 91.94,
+    "y": 90.06,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "/40M_N",
+     "/40M_P",
+     "GND"
+    ]
+   }
+  ]
+ },
  "bind": {
-  "critical_parts_bound": "6/6"
+  "critical_parts_bound": "5/6",
+  "active_path_unresolved": [
+   "U1"
+  ],
+  "open_parts": [
+   {
+    "reference": "U1",
+    "value": "SR2HARU",
+    "reason": "identity matched model 'sr2' but behavior is unavailable: sr2 has no generic executable device behavior; only identity and sourced metadata are available",
+    "consequence": "U1 is an active IC left OPEN; analog/AC/thermal results on its nets are NOT trustworthy",
+    "active_ic": true,
+    "bound": false
+   }
+  ]
+ },
+ "model_coverage": {
+  "schema_version": 1,
+  "summary": {
+   "active_connected": 6,
+   "identified": 6,
+   "executable_available": 5,
+   "unresolved": 0,
+   "identity_only": 1,
+   "executable_scope_unspecified": 0,
+   "executable_partial": 5,
+   "executable_declared": 0,
+   "ignored": 0,
+   "actionable_behavior_gaps": 6,
+   "authoring_targets": 7,
+   "requirements_total": 0,
+   "requirements_met": 0,
+   "requirements_unmet": 0
+  },
+  "components": [
+   {
+    "reference": "U1",
+    "value": "SR2HARU",
+    "lib_id": "Watchy:SR2HARU",
+    "footprint": "Watchy:SR2HARU",
+    "stage": "identity_only",
+    "actionable_behavior_gap": true,
+    "model_id": "sr2",
+    "model_kind": "digital",
+    "layer": "builtin(0)",
+    "origin": "power_ics",
+    "source": {
+     "tier": "curated-library",
+     "layer": "builtin",
+     "origin": "power_ics",
+     "validation": "physical-bounds-only",
+     "uncertainty": [
+      {
+       "status": "unknown",
+       "parameter": "sr2.model",
+       "reason": "the source publishes no validated numeric error interval"
+      }
+     ]
+    },
+    "properties": [
+     {
+      "name": "Sheetfile",
+      "value": "Watchy.kicad_sch"
+     },
+     {
+      "name": "Sheetname",
+      "value": ""
+     }
+    ],
+    "implements": [
+     "pin_roles",
+     "fixed_input_thresholds",
+     "supply_current",
+     "open_drain_output_without_fabricated_high_drive",
+     "absolute_ratings"
+    ],
+    "missing": [
+     "smart_reset_timer",
+     "recovery_timer",
+     "low_voltage_input_ignore",
+     "overvoltage_test_mode",
+     "push_pull_variants"
+    ],
+    "pins": [
+     {
+      "number": "1",
+      "function": "VSS",
+      "kind": "input",
+      "net": "GND",
+      "position_mm": [
+       77.35000000000001,
+       81.86
+      ]
+     },
+     {
+      "number": "2",
+      "function": "~{SR1}",
+      "kind": "input",
+      "net": "BTN2",
+      "position_mm": [
+       76.95,
+       81.86
+      ]
+     },
+     {
+      "number": "3",
+      "function": "~{RST}",
+      "kind": "output",
+      "net": "EN",
+      "position_mm": [
+       76.55,
+       81.86
+      ]
+     },
+     {
+      "number": "4",
+      "function": "NC",
+      "kind": "no_connect",
+      "net": "unconnected-(U1-NC-Pad4)",
+      "position_mm": [
+       76.55,
+       83.46
+      ]
+     },
+     {
+      "number": "5",
+      "function": "~{SR0}",
+      "kind": "input",
+      "net": "BTN3",
+      "position_mm": [
+       76.95,
+       83.46
+      ]
+     },
+     {
+      "number": "6",
+      "function": "VCC",
+      "kind": "power_in",
+      "net": "+3V3",
+      "position_mm": [
+       77.35000000000001,
+       83.46
+      ]
+     }
+    ]
+   },
+   {
+    "reference": "U2",
+    "value": "RT908033",
+    "lib_id": "Package_TO_SOT_SMD:SOT-23-5",
+    "footprint": "Package_TO_SOT_SMD:SOT-23-5",
+    "stage": "executable_partial",
+    "actionable_behavior_gap": true,
+    "model_id": "rt9080_3v3",
+    "model_kind": "vreg",
+    "layer": "builtin(0)",
+    "origin": "vreg",
+    "source": {
+     "tier": "curated-library",
+     "layer": "builtin",
+     "origin": "vreg",
+     "validation": "physical-bounds-only",
+     "uncertainty": [
+      {
+       "status": "unknown",
+       "parameter": "rt9080_3v3.model",
+       "reason": "the source publishes no validated numeric error interval"
+      }
+     ]
+    },
+    "references": [
+     {
+      "url": "https://www.richtek.com/assets/product_file/RT9080/DS9080-09.pdf",
+      "title": "Richtek RT9080 datasheet DS9080-09 (December 2024)",
+      "locator": "Section 7 Pin Configuration and Section 8 Functional Pin Description, TSOT-23-5 column (page 4)",
+      "sha256": "52d09967ef32672003df93d1382bc249715365406f59d110d9ebad6d618017d4"
+     }
+    ],
+    "properties": [
+     {
+      "name": "Sheetfile",
+      "value": "Watchy.kicad_sch"
+     },
+     {
+      "name": "Sheetname",
+      "value": ""
+     },
+     {
+      "name": "ki_description",
+      "value": "600mA low dropout linear regulator, with enable pin, 3.8V-6V input voltage range, 3.3V fixed positive output, SOT-23-5"
+     },
+     {
+      "name": "ki_keywords",
+      "value": "linear regulator ldo fixed positive"
+     }
+    ],
+    "implements": [
+     "nominal_dc_regulation",
+     "dropout_headroom",
+     "quiescent_current",
+     "continuous_current_rating",
+     "junction_temperature_estimate"
+    ],
+    "missing": [
+     "enable_gating",
+     "current_limit",
+     "load_dependent_dropout",
+     "line_and_load_regulation",
+     "psrr",
+     "output_noise",
+     "active_discharge",
+     "thermal_shutdown"
+    ],
+    "pins": [
+     {
+      "number": "1",
+      "function": "VIN",
+      "kind": "power_in",
+      "net": "Net-(D1-K)",
+      "position_mm": [
+       96.1975,
+       97.53
+      ]
+     },
+     {
+      "number": "2",
+      "function": "GND",
+      "kind": "power_in",
+      "net": "GND",
+      "position_mm": [
+       96.1975,
+       96.58
+      ]
+     },
+     {
+      "number": "3",
+      "function": "EN",
+      "kind": "input",
+      "net": "Net-(D1-K)",
+      "position_mm": [
+       96.1975,
+       95.63
+      ]
+     },
+     {
+      "number": "4",
+      "function": "NC",
+      "kind": "no_connect",
+      "net": "unconnected-(U2-NC-Pad4)",
+      "position_mm": [
+       93.9225,
+       95.63
+      ]
+     },
+     {
+      "number": "5",
+      "function": "VOUT",
+      "kind": "power_out",
+      "net": "+3V3",
+      "position_mm": [
+       93.9225,
+       97.53
+      ]
+     }
+    ]
+   },
+   {
+    "reference": "U3",
+    "value": "TP4054",
+    "lib_id": "TO_SOT_Packages_SMD:SOT-23-5",
+    "footprint": "TO_SOT_Packages_SMD:SOT-23-5",
+    "stage": "executable_partial",
+    "actionable_behavior_gap": true,
+    "model_id": "tp4054",
+    "model_kind": "vreg",
+    "layer": "builtin(0)",
+    "origin": "power_ics",
+    "source": {
+     "tier": "curated-library",
+     "layer": "builtin",
+     "origin": "power_ics",
+     "validation": "physical-bounds-only",
+     "uncertainty": [
+      {
+       "status": "unknown",
+       "parameter": "tp4054.model",
+       "reason": "the source publishes no validated numeric error interval"
+      }
+     ]
+    },
+    "properties": [
+     {
+      "name": "Sheetfile",
+      "value": "Watchy.kicad_sch"
+     },
+     {
+      "name": "Sheetname",
+      "value": ""
+     },
+     {
+      "name": "ki_description",
+      "value": "Single cell, Li-Ion/Li-Po charge management controller, 4.20V, Tri-State Status Output, in SOT23-5 package"
+     },
+     {
+      "name": "ki_keywords",
+      "value": "battery charger lithium"
+     }
+    ],
+    "implements": [
+     "nominal_cv_output",
+     "program_resistor_static_charge_current",
+     "dynamic_current_limit",
+     "input_current_draw",
+     "quiescent_current",
+     "absolute_ratings"
+    ],
+    "missing": [
+     "cc_cv_state_machine",
+     "input_uvlo",
+     "charge_termination",
+     "recharge_hysteresis",
+     "thermal_regulation",
+     "charge_status_timing"
+    ],
+    "pins": [
+     {
+      "number": "1",
+      "function": "STAT",
+      "kind": "output",
+      "net": "Net-(U3-STAT)",
+      "position_mm": [
+       101.65,
+       99.08000000000001
+      ]
+     },
+     {
+      "number": "2",
+      "function": "VSS",
+      "kind": "power_in",
+      "net": "GND",
+      "position_mm": [
+       100.7,
+       99.08000000000001
+      ]
+     },
+     {
+      "number": "3",
+      "function": "VBAT",
+      "kind": "power_out",
+      "net": "+BATT",
+      "position_mm": [
+       99.75,
+       99.08000000000001
+      ]
+     },
+     {
+      "number": "4",
+      "function": "VDD",
+      "kind": "power_in",
+      "net": "VBUS",
+      "position_mm": [
+       99.75,
+       101.28
+      ]
+     },
+     {
+      "number": "5",
+      "function": "PROG",
+      "kind": "input",
+      "net": "Net-(U3-PROG)",
+      "position_mm": [
+       101.65,
+       101.28
+      ]
+     }
+    ]
+   },
+   {
+    "reference": "U4",
+    "value": "ESP32-S3",
+    "lib_id": "Package_DFN_QFN:QFN-56-1EP_7x7mm_P0.4mm_EP5.6x5.6mm",
+    "footprint": "Package_DFN_QFN:QFN-56-1EP_7x7mm_P0.4mm_EP5.6x5.6mm",
+    "stage": "executable_partial",
+    "actionable_behavior_gap": true,
+    "model_id": "esp32s3_qfn56",
+    "model_kind": "mcu",
+    "layer": "builtin(0)",
+    "origin": "mcu",
+    "source": {
+     "tier": "curated-library",
+     "layer": "builtin",
+     "origin": "mcu",
+     "validation": "physical-bounds-only",
+     "uncertainty": [
+      {
+       "status": "unknown",
+       "parameter": "esp32s3_qfn56.model",
+       "reason": "the source publishes no validated numeric error interval"
+      }
+     ]
+    },
+    "properties": [
+     {
+      "name": "Sheetfile",
+      "value": "Watchy.kicad_sch"
+     },
+     {
+      "name": "Sheetname",
+      "value": ""
+     },
+     {
+      "name": "ki_description",
+      "value": "ESP32-S3 is a low-power MCU-based system-on-chip (SoC) that supports 2.4 GHz Wi-Fi and Bluetooth® Low Energy (Bluetooth LE). It consists of high-performance dual-core microprocessor (Xtensa® 32-bit LX7), a low power coprocessor, a Wi-Fi baseband, a Bluetooth LE baseband, RF module, and peripherals."
+     }
+    ],
+    "static_contracts": [
+     "strap:gpio0",
+     "strap:gpio46",
+     "strap:gpio45"
+    ],
+    "implements": [
+     "xtensa_lx7_machine_boot",
+     "gpio_output_register_or_mailbox_observation_0_to_31",
+     "uart_transport",
+     "wall_bounded_virtual_time",
+     "gpio_input_mailbox_contract_0_to_31",
+     "adc_input_mailbox_contract",
+     "i2c_spi_mailbox_contract"
+    ],
+    "missing": [
+     "application_firmware_end_to_end_proof",
+     "gpio_32_to_48_observation",
+     "instruction_counted_timing",
+     "unmodified_firmware_gpio_input",
+     "native_adc_peripheral",
+     "unmodified_firmware_i2c_spi_observation",
+     "watchdog_behavior",
+     "silicon_power_current_profile",
+     "silicon_timing_and_errata"
+    ],
+    "pins": [
+     {
+      "number": "",
+      "function": "",
+      "kind": "",
+      "net": null,
+      "position_mm": [
+       88.22,
+       83.81
+      ]
+     },
+     {
+      "number": "",
+      "function": "",
+      "kind": "",
+      "net": null,
+      "position_mm": [
+       86.82000000000001,
+       83.81
+      ]
+     },
+     {
+      "number": "",
+      "function": "",
+      "kind": "",
+      "net": null,
+      "position_mm": [
+       85.42,
+       83.81
+      ]
+     },
+     {
+      "number": "",
+      "function": "",
+      "kind": "",
+      "net": null,
+      "position_mm": [
+       84.02000000000001,
+       83.81
+      ]
+     },
+     {
+      "number": "",
+      "function": "",
+      "kind": "",
+      "net": null,
+      "position_mm": [
+       88.22,
+       85.21
+      ]
+     },
+     {
+      "number": "",
+      "function": "",
+      "kind": "",
+      "net": null,
+      "position_mm": [
+       86.82000000000001,
+       85.21
+      ]
+     },
+     {
+      "number": "",
+      "function": "",
+      "kind": "",
+      "net": null,
+      "position_mm": [
+       85.42,
+       85.21
+      ]
+     },
+     {
+      "number": "",
+      "function": "",
+      "kind": "",
+      "net": null,
+      "position_mm": [
+       84.02000000000001,
+       85.21
+      ]
+     },
+     {
+      "number": "",
+      "function": "",
+      "kind": "",
+      "net": null,
+      "position_mm": [
+       88.22,
+       86.61
+      ]
+     },
+     {
+      "number": "",
+      "function": "",
+      "kind": "",
+      "net": null,
+      "position_mm": [
+       86.82000000000001,
+       86.61
+      ]
+     },
+     {
+      "number": "",
+      "function": "",
+      "kind": "",
+      "net": null,
+      "position_mm": [
+       85.42,
+       86.61
+      ]
+     },
+     {
+      "number": "",
+      "function": "",
+      "kind": "",
+      "net": null,
+      "position_mm": [
+       84.02000000000001,
+       86.61
+      ]
+     },
+     {
+      "number": "",
+      "function": "",
+      "kind": "",
+      "net": null,
+      "position_mm": [
+       88.22,
+       88.00999999999999
+      ]
+     },
+     {
+      "number": "",
+      "function": "",
+      "kind": "",
+      "net": null,
+      "position_mm": [
+       86.82000000000001,
+       88.00999999999999
+      ]
+     },
+     {
+      "number": "",
+      "function": "",
+      "kind": "",
+      "net": null,
+      "position_mm": [
+       85.42,
+       88.00999999999999
+      ]
+     },
+     {
+      "number": "",
+      "function": "",
+      "kind": "",
+      "net": null,
+      "position_mm": [
+       84.02000000000001,
+       88.00999999999999
+      ]
+     },
+     {
+      "number": "1",
+      "function": "LNA_IN/RF",
+      "kind": "bidirectional",
+      "net": "Net-(U4-LNA_IN/RF)",
+      "position_mm": [
+       88.72,
+       82.4725
+      ]
+     },
+     {
+      "number": "2",
+      "function": "VDD3P3",
+      "kind": "power_in",
+      "net": "+3V3",
+      "position_mm": [
+       88.32000000000001,
+       82.4725
+      ]
+     },
+     {
+      "number": "3",
+      "function": "VDD3P3",
+      "kind": "power_in",
+      "net": "+3V3",
+      "position_mm": [
+       87.92,
+       82.4725
+      ]
+     },
+     {
+      "number": "4",
+      "function": "CHIP_PU/RESET",
+      "kind": "input",
+      "net": "EN",
+      "position_mm": [
+       87.52000000000001,
+       82.4725
+      ]
+     },
+     {
+      "number": "5",
+      "function": "GPIO0/BOOT",
+      "kind": "bidirectional",
+      "net": "BTN3",
+      "position_mm": [
+       87.12,
+       82.4725
+      ]
+     },
+     {
+      "number": "6",
+      "function": "GPIO1/ADC1_CH0",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-GPIO1/ADC1_CH0-Pad6)",
+      "position_mm": [
+       86.72,
+       82.4725
+      ]
+     },
+     {
+      "number": "7",
+      "function": "GPIO2/ADC1_CH1",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-GPIO2/ADC1_CH1-Pad7)",
+      "position_mm": [
+       86.32000000000001,
+       82.4725
+      ]
+     },
+     {
+      "number": "8",
+      "function": "GPIO3/ADC1_CH2",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-GPIO3/ADC1_CH2-Pad8)",
+      "position_mm": [
+       85.92,
+       82.4725
+      ]
+     },
+     {
+      "number": "9",
+      "function": "GPIO4/ADC1_CH3",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-GPIO4/ADC1_CH3-Pad9)",
+      "position_mm": [
+       85.52000000000001,
+       82.4725
+      ]
+     },
+     {
+      "number": "10",
+      "function": "GPIO5/ADC1_CH4",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-GPIO5/ADC1_CH4-Pad10)",
+      "position_mm": [
+       85.12,
+       82.4725
+      ]
+     },
+     {
+      "number": "11",
+      "function": "GPIO6/ADC1_CH5",
+      "kind": "bidirectional",
+      "net": "BTN2",
+      "position_mm": [
+       84.72,
+       82.4725
+      ]
+     },
+     {
+      "number": "12",
+      "function": "GPIO7/ADC1_CH6",
+      "kind": "bidirectional",
+      "net": "BTN1",
+      "position_mm": [
+       84.32000000000001,
+       82.4725
+      ]
+     },
+     {
+      "number": "13",
+      "function": "GPIO8/ADC1_CH7",
+      "kind": "bidirectional",
+      "net": "BTN4",
+      "position_mm": [
+       83.92,
+       82.4725
+      ]
+     },
+     {
+      "number": "14",
+      "function": "GPIO9/ADC1_CH8",
+      "kind": "bidirectional",
+      "net": "ADC",
+      "position_mm": [
+       83.52000000000001,
+       82.4725
+      ]
+     },
+     {
+      "number": "15",
+      "function": "GPIO10/ADC1_CH9",
+      "kind": "bidirectional",
+      "net": "STAT",
+      "position_mm": [
+       82.6825,
+       83.31
+      ]
+     },
+     {
+      "number": "16",
+      "function": "GPIO11/ADC2_CH0",
+      "kind": "bidirectional",
+      "net": "SCL",
+      "position_mm": [
+       82.6825,
+       83.71
+      ]
+     },
+     {
+      "number": "17",
+      "function": "GPIO12/ADC2_CH1",
+      "kind": "bidirectional",
+      "net": "SDA",
+      "position_mm": [
+       82.6825,
+       84.11
+      ]
+     },
+     {
+      "number": "18",
+      "function": "GPIO13/ADC2_CH2",
+      "kind": "bidirectional",
+      "net": "ACC_INT_2",
+      "position_mm": [
+       82.6825,
+       84.50999999999999
+      ]
+     },
+     {
+      "number": "19",
+      "function": "GPIO14/ADC2_CH3",
+      "kind": "bidirectional",
+      "net": "ACC_INT_1",
+      "position_mm": [
+       82.6825,
+       84.91
+      ]
+     },
+     {
+      "number": "20",
+      "function": "VDD3P3_RTC",
+      "kind": "power_in",
+      "net": "+3V3",
+      "position_mm": [
+       82.6825,
+       85.31
+      ]
+     },
+     {
+      "number": "21",
+      "function": "GPIO15/ADC2_CH4/XTAL_32K_P",
+      "kind": "bidirectional",
+      "net": "/32K_P",
+      "position_mm": [
+       82.6825,
+       85.71
+      ]
+     },
+     {
+      "number": "22",
+      "function": "GPIO16/ADC2_CH5/XTAL_32K_N",
+      "kind": "bidirectional",
+      "net": "/32K_N",
+      "position_mm": [
+       82.6825,
+       86.11
+      ]
+     },
+     {
+      "number": "23",
+      "function": "GPIO17/ADC2_CH6/DAC_2",
+      "kind": "bidirectional",
+      "net": "VIB_PWM",
+      "position_mm": [
+       82.6825,
+       86.50999999999999
+      ]
+     },
+     {
+      "number": "24",
+      "function": "GPIO18/ADC2_CH7/DAC_1",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-GPIO18/ADC2_CH7/DAC_1-Pad24)",
+      "position_mm": [
+       82.6825,
+       86.91
+      ]
+     },
+     {
+      "number": "25",
+      "function": "GPIO19/USB_D-/ADC2_CH8",
+      "kind": "bidirectional",
+      "net": "USB_D-",
+      "position_mm": [
+       82.6825,
+       87.31
+      ]
+     },
+     {
+      "number": "26",
+      "function": "GPIO20/USB_D+/ADC2_CH9",
+      "kind": "bidirectional",
+      "net": "USB_D+",
+      "position_mm": [
+       82.6825,
+       87.71
+      ]
+     },
+     {
+      "number": "27",
+      "function": "GPIO21",
+      "kind": "bidirectional",
+      "net": "USB_DET",
+      "position_mm": [
+       82.6825,
+       88.11
+      ]
+     },
+     {
+      "number": "28",
+      "function": "SPI_CS1/GPIO26",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-SPI_CS1/GPIO26-Pad28)",
+      "position_mm": [
+       82.6825,
+       88.50999999999999
+      ]
+     },
+     {
+      "number": "29",
+      "function": "VDD_SPI",
+      "kind": "power_out",
+      "net": "VDD",
+      "position_mm": [
+       83.52000000000001,
+       89.3475
+      ]
+     },
+     {
+      "number": "30",
+      "function": "SPIHD/GPIO27",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-SPIHD/GPIO27-Pad30)",
+      "position_mm": [
+       83.92,
+       89.3475
+      ]
+     },
+     {
+      "number": "31",
+      "function": "SPIWP/GPIO28",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-SPIWP/GPIO28-Pad31)",
+      "position_mm": [
+       84.32000000000001,
+       89.3475
+      ]
+     },
+     {
+      "number": "32",
+      "function": "SPICS0/GPIO29",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-SPICS0/GPIO29-Pad32)",
+      "position_mm": [
+       84.72,
+       89.3475
+      ]
+     },
+     {
+      "number": "33",
+      "function": "SPICLK/GPIO30",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-SPICLK/GPIO30-Pad33)",
+      "position_mm": [
+       85.12,
+       89.3475
+      ]
+     },
+     {
+      "number": "34",
+      "function": "SPIQ/GPIO31",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-SPIQ/GPIO31-Pad34)",
+      "position_mm": [
+       85.52000000000001,
+       89.3475
+      ]
+     },
+     {
+      "number": "35",
+      "function": "SPID/GPIO32",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-SPID/GPIO32-Pad35)",
+      "position_mm": [
+       85.92,
+       89.3475
+      ]
+     },
+     {
+      "number": "36",
+      "function": "SPICLK_N/GPIO48",
+      "kind": "bidirectional",
+      "net": "MOSI",
+      "position_mm": [
+       86.32000000000001,
+       89.3475
+      ]
+     },
+     {
+      "number": "37",
+      "function": "SPICLK_P/GPIO47",
+      "kind": "bidirectional",
+      "net": "SCK",
+      "position_mm": [
+       86.72,
+       89.3475
+      ]
+     },
+     {
+      "number": "38",
+      "function": "GPIO33",
+      "kind": "bidirectional",
+      "net": "CS",
+      "position_mm": [
+       87.12,
+       89.3475
+      ]
+     },
+     {
+      "number": "39",
+      "function": "GPIO34",
+      "kind": "bidirectional",
+      "net": "DC",
+      "position_mm": [
+       87.52000000000001,
+       89.3475
+      ]
+     },
+     {
+      "number": "40",
+      "function": "GPIO35",
+      "kind": "bidirectional",
+      "net": "RES",
+      "position_mm": [
+       87.92,
+       89.3475
+      ]
+     },
+     {
+      "number": "41",
+      "function": "GPIO36",
+      "kind": "bidirectional",
+      "net": "BUSY",
+      "position_mm": [
+       88.32000000000001,
+       89.3475
+      ]
+     },
+     {
+      "number": "42",
+      "function": "GPIO37",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-GPIO37-Pad42)",
+      "position_mm": [
+       88.72,
+       89.3475
+      ]
+     },
+     {
+      "number": "43",
+      "function": "GPIO38",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-GPIO38-Pad43)",
+      "position_mm": [
+       89.5575,
+       88.50999999999999
+      ]
+     },
+     {
+      "number": "44",
+      "function": "MTCK/JTAG/GPIO39",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-MTCK/JTAG/GPIO39-Pad44)",
+      "position_mm": [
+       89.5575,
+       88.11
+      ]
+     },
+     {
+      "number": "45",
+      "function": "MTDO/JTAG/GPIO40",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-MTDO/JTAG/GPIO40-Pad45)",
+      "position_mm": [
+       89.5575,
+       87.71
+      ]
+     },
+     {
+      "number": "46",
+      "function": "VDD3P3_CPU",
+      "kind": "power_in",
+      "net": "+3V3",
+      "position_mm": [
+       89.5575,
+       87.31
+      ]
+     },
+     {
+      "number": "47",
+      "function": "MTDI/JTAG/GPIO41",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-MTDI/JTAG/GPIO41-Pad47)",
+      "position_mm": [
+       89.5575,
+       86.91
+      ]
+     },
+     {
+      "number": "48",
+      "function": "MTMS/JTAG/GPIO42",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-MTMS/JTAG/GPIO42-Pad48)",
+      "position_mm": [
+       89.5575,
+       86.50999999999999
+      ]
+     },
+     {
+      "number": "49",
+      "function": "U0TXD/PROG/GPIO43",
+      "kind": "bidirectional",
+      "net": "Net-(U4-U0TXD/PROG/GPIO43)",
+      "position_mm": [
+       89.5575,
+       86.11
+      ]
+     },
+     {
+      "number": "50",
+      "function": "U0RXD/PROG/GPIO44",
+      "kind": "bidirectional",
+      "net": "Net-(U4-U0RXD/PROG/GPIO44)",
+      "position_mm": [
+       89.5575,
+       85.71
+      ]
+     },
+     {
+      "number": "51",
+      "function": "GPIO45",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-GPIO45-Pad51)",
+      "position_mm": [
+       89.5575,
+       85.31
+      ]
+     },
+     {
+      "number": "52",
+      "function": "GPIO46",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U4-GPIO46-Pad52)",
+      "position_mm": [
+       89.5575,
+       84.91
+      ]
+     },
+     {
+      "number": "53",
+      "function": "XTAL_N",
+      "kind": "input",
+      "net": "/40M_N",
+      "position_mm": [
+       89.5575,
+       84.50999999999999
+      ]
+     },
+     {
+      "number": "54",
+      "function": "XTAL_P",
+      "kind": "output",
+      "net": "Net-(U4-XTAL_P)",
+      "position_mm": [
+       89.5575,
+       84.11
+      ]
+     },
+     {
+      "number": "55",
+      "function": "VDDA",
+      "kind": "power_in",
+      "net": "+3V3",
+      "position_mm": [
+       89.5575,
+       83.71
+      ]
+     },
+     {
+      "number": "56",
+      "function": "VDDA",
+      "kind": "passive",
+      "net": "+3V3",
+      "position_mm": [
+       89.5575,
+       83.31
+      ]
+     },
+     {
+      "number": "57",
+      "function": "GND",
+      "kind": "power_in",
+      "net": "GND",
+      "position_mm": [
+       86.12,
+       85.91
+      ]
+     }
+    ]
+   },
+   {
+    "reference": "U5",
+    "value": "USBLC6-2P6",
+    "lib_id": "Package_TO_SOT_SMD:SOT-666",
+    "footprint": "Package_TO_SOT_SMD:SOT-666",
+    "stage": "executable_partial",
+    "actionable_behavior_gap": true,
+    "model_id": "usblc6_2",
+    "model_kind": "diode",
+    "layer": "builtin(0)",
+    "origin": "diodes",
+    "source": {
+     "tier": "curated-library",
+     "layer": "builtin",
+     "origin": "diodes",
+     "validation": "physical-bounds-only",
+     "uncertainty": [
+      {
+       "status": "unknown",
+       "parameter": "usblc6_2.model",
+       "reason": "the source publishes no validated numeric error interval"
+      }
+     ]
+    },
+    "properties": [
+     {
+      "name": "Sheetfile",
+      "value": "Watchy.kicad_sch"
+     },
+     {
+      "name": "Sheetname",
+      "value": ""
+     },
+     {
+      "name": "ki_description",
+      "value": "Very low capacitance ESD protection diode, 2 data-line, SOT-666"
+     },
+     {
+      "name": "ki_keywords",
+      "value": "usb ethernet video"
+     }
+    ],
+    "implements": [
+     "vbus_to_ground_transil",
+     "positive_io_steering_clamps",
+     "negative_io_steering_clamps",
+     "datasheet_piecewise_clamp_voltage",
+     "absolute_ratings"
+    ],
+    "missing": [
+     "io_capacitance",
+     "subthreshold_leakage",
+     "iec_pulse_waveform",
+     "package_parasitics",
+     "temperature_dependence"
+    ],
+    "pins": [
+     {
+      "number": "1",
+      "function": "I/O1",
+      "kind": "passive",
+      "net": "USB_D+",
+      "position_mm": [
+       94.75750000000001,
+       90.94250000000001
+      ]
+     },
+     {
+      "number": "2",
+      "function": "GND",
+      "kind": "passive",
+      "net": "GND",
+      "position_mm": [
+       94.6825,
+       91.48
+      ]
+     },
+     {
+      "number": "3",
+      "function": "I/O2",
+      "kind": "passive",
+      "net": "USB_D-",
+      "position_mm": [
+       94.75750000000001,
+       92.0175
+      ]
+     },
+     {
+      "number": "4",
+      "function": "I/O2",
+      "kind": "passive",
+      "net": "DN",
+      "position_mm": [
+       96.4575,
+       92.0175
+      ]
+     },
+     {
+      "number": "5",
+      "function": "VBUS",
+      "kind": "passive",
+      "net": "VBUS",
+      "position_mm": [
+       96.5325,
+       91.48
+      ]
+     },
+     {
+      "number": "6",
+      "function": "I/O1",
+      "kind": "passive",
+      "net": "DP",
+      "position_mm": [
+       96.4575,
+       90.94250000000001
+      ]
+     }
+    ]
+   },
+   {
+    "reference": "U6",
+    "value": "BMA423",
+    "lib_id": "Package_LGA:LGA-12_2x2mm_P0.5mm",
+    "footprint": "Package_LGA:LGA-12_2x2mm_P0.5mm",
+    "stage": "executable_partial",
+    "actionable_behavior_gap": true,
+    "model_id": "bma423",
+    "model_kind": "digital",
+    "layer": "builtin(0)",
+    "origin": "digital",
+    "source": {
+     "tier": "curated-library",
+     "layer": "builtin",
+     "origin": "digital",
+     "validation": "physical-bounds-only",
+     "uncertainty": [
+      {
+       "status": "unknown",
+       "parameter": "bma423.model",
+       "reason": "the source publishes no validated numeric error interval"
+      }
+     ]
+    },
+    "properties": [
+     {
+      "name": "Field4",
+      "value": "Bosch Sensortec"
+     },
+     {
+      "name": "Sheetfile",
+      "value": "Watchy.kicad_sch"
+     },
+     {
+      "name": "Sheetname",
+      "value": ""
+     }
+    ],
+    "implements": [
+     "pin_roles",
+     "logic_levels_at_3v3_vddio",
+     "performance_mode_supply_current",
+     "absolute_ratings",
+     "i2c_bus_mode_strap",
+     "i2c_address_strap",
+     "register_map_subset",
+     "chip_id_read",
+     "bus_coupled_active_current",
+     "supply_voltage_gating"
+    ],
+    "missing": [
+     "full_register_map",
+     "spi_register_map",
+     "accelerometer_data",
+     "power_mode_state",
+     "fifo",
+     "interrupt_engine",
+     "step_and_activity_engine",
+     "auxiliary_i2c_master",
+     "supply_domain_current_split"
+    ],
+    "pins": [
+     {
+      "number": "1",
+      "function": "SDO",
+      "kind": "bidirectional",
+      "net": "GND",
+      "position_mm": [
+       79.1275,
+       81.57
+      ]
+     },
+     {
+      "number": "2",
+      "function": "SDX",
+      "kind": "bidirectional",
+      "net": "SDA",
+      "position_mm": [
+       79.1275,
+       82.07
+      ]
+     },
+     {
+      "number": "3",
+      "function": "VDDIO",
+      "kind": "power_in",
+      "net": "+3V3",
+      "position_mm": [
+       79.1275,
+       82.57
+      ]
+     },
+     {
+      "number": "4",
+      "function": "ASDA",
+      "kind": "bidirectional+no_connect",
+      "net": "unconnected-(U6-ASDA-Pad4)",
+      "position_mm": [
+       79.1275,
+       83.07
+      ]
+     },
+     {
+      "number": "5",
+      "function": "INT1",
+      "kind": "bidirectional",
+      "net": "ACC_INT_1",
+      "position_mm": [
+       79.64,
+       83.0825
+      ]
+     },
+     {
+      "number": "6",
+      "function": "INT2",
+      "kind": "bidirectional",
+      "net": "ACC_INT_2",
+      "position_mm": [
+       80.14,
+       83.0825
+      ]
+     },
+     {
+      "number": "7",
+      "function": "VDD",
+      "kind": "power_in",
+      "net": "+3V3",
+      "position_mm": [
+       80.6525,
+       83.07
+      ]
+     },
+     {
+      "number": "8",
+      "function": "GNDIO",
+      "kind": "power_in",
+      "net": "GND",
+      "position_mm": [
+       80.6525,
+       82.57
+      ]
+     },
+     {
+      "number": "9",
+      "function": "GND",
+      "kind": "power_in",
+      "net": "GND",
+      "position_mm": [
+       80.6525,
+       82.07
+      ]
+     },
+     {
+      "number": "10",
+      "function": "CSB",
+      "kind": "input",
+      "net": "+3V3",
+      "position_mm": [
+       80.6525,
+       81.57
+      ]
+     },
+     {
+      "number": "11",
+      "function": "ASCL",
+      "kind": "output+no_connect",
+      "net": "unconnected-(U6-ASCL-Pad11)",
+      "position_mm": [
+       80.14,
+       81.55749999999999
+      ]
+     },
+     {
+      "number": "12",
+      "function": "SCX",
+      "kind": "input",
+      "net": "SCL",
+      "position_mm": [
+       79.64,
+       81.55749999999999
+      ]
+     }
+    ]
+   }
+  ],
+  "authoring_targets": [
+   {
+    "reference": "AE1",
+    "value": "Antenna_Chip",
+    "lib_id": "Watchy:SWRA117D",
+    "footprint": "Watchy:SWRA117D",
+    "stage": "unresolved",
+    "actionable_behavior_gap": true,
+    "model_id": null,
+    "model_kind": null,
+    "layer": "-",
+    "origin": "-",
+    "source": {
+     "tier": "open",
+     "layer": "unspecified",
+     "origin": "unresolved",
+     "validation": "unvalidated",
+     "uncertainty": [
+      {
+       "status": "unknown",
+       "parameter": "AE1.model",
+       "reason": "no model resolved; the component is explicitly open"
+      }
+     ]
+    },
+    "properties": [
+     {
+      "name": "Sheetfile",
+      "value": "Watchy.kicad_sch"
+     },
+     {
+      "name": "Sheetname",
+      "value": ""
+     },
+     {
+      "name": "ki_description",
+      "value": "Ceramic chip antenna with pin for PCB trace"
+     },
+     {
+      "name": "ki_keywords",
+      "value": "antenna"
+     }
+    ],
+    "pins": [
+     {
+      "number": "1",
+      "function": "FEED",
+      "kind": "input",
+      "net": "Net-(AE1-FEED)",
+      "position_mm": [
+       88.725,
+       79.43
+      ]
+     },
+     {
+      "number": "2",
+      "function": "PCB_Trace",
+      "kind": "passive",
+      "net": "GND",
+      "position_mm": [
+       90.82499999999999,
+       79.43
+      ]
+     }
+    ]
+   },
+   {
+    "reference": "C7",
+    "value": "TBD",
+    "lib_id": "Watchy:C_0402_1005Metric",
+    "footprint": "Watchy:C_0402_1005Metric",
+    "stage": "unresolved",
+    "actionable_behavior_gap": true,
+    "model_id": null,
+    "model_kind": null,
+    "layer": "-",
+    "origin": "-",
+    "source": {
+     "tier": "open",
+     "layer": "unspecified",
+     "origin": "unresolved",
+     "validation": "unvalidated",
+     "uncertainty": [
+      {
+       "status": "unknown",
+       "parameter": "C7.model",
+       "reason": "no model resolved; the component is explicitly open"
+      }
+     ]
+    },
+    "properties": [
+     {
+      "name": "Sheetfile",
+      "value": "Watchy.kicad_sch"
+     },
+     {
+      "name": "Sheetname",
+      "value": ""
+     },
+     {
+      "name": "ki_description",
+      "value": "Unpolarized capacitor"
+     },
+     {
+      "name": "ki_keywords",
+      "value": "cap capacitor"
+     }
+    ],
+    "pins": [
+     {
+      "number": "1",
+      "function": "",
+      "kind": "passive",
+      "net": "Net-(AE1-FEED)",
+      "position_mm": [
+       87.82000000000001,
+       80.22
+      ]
+     },
+     {
+      "number": "2",
+      "function": "",
+      "kind": "passive",
+      "net": "GND",
+      "position_mm": [
+       86.86,
+       80.22
+      ]
+     }
+    ]
+   },
+   {
+    "reference": "C9",
+    "value": "TBD",
+    "lib_id": "Watchy:C_0402_1005Metric",
+    "footprint": "Watchy:C_0402_1005Metric",
+    "stage": "unresolved",
+    "actionable_behavior_gap": true,
+    "model_id": null,
+    "model_kind": null,
+    "layer": "-",
+    "origin": "-",
+    "source": {
+     "tier": "open",
+     "layer": "unspecified",
+     "origin": "unresolved",
+     "validation": "unvalidated",
+     "uncertainty": [
+      {
+       "status": "unknown",
+       "parameter": "C9.model",
+       "reason": "no model resolved; the component is explicitly open"
+      }
+     ]
+    },
+    "properties": [
+     {
+      "name": "Sheetfile",
+      "value": "Watchy.kicad_sch"
+     },
+     {
+      "name": "Sheetname",
+      "value": ""
+     },
+     {
+      "name": "ki_description",
+      "value": "Unpolarized capacitor"
+     },
+     {
+      "name": "ki_keywords",
+      "value": "cap capacitor"
+     }
+    ],
+    "pins": [
+     {
+      "number": "1",
+      "function": "",
+      "kind": "passive",
+      "net": "Net-(U4-LNA_IN/RF)",
+      "position_mm": [
+       89.61999999999999,
+       81.33
+      ]
+     },
+     {
+      "number": "2",
+      "function": "",
+      "kind": "passive",
+      "net": "GND",
+      "position_mm": [
+       90.58,
+       81.33
+      ]
+     }
+    ]
+   },
+   {
+    "reference": "L1",
+    "value": "TBD",
+    "lib_id": "Watchy:L_0402_1005Metric",
+    "footprint": "Watchy:L_0402_1005Metric",
+    "stage": "unresolved",
+    "actionable_behavior_gap": true,
+    "model_id": null,
+    "model_kind": null,
+    "layer": "-",
+    "origin": "-",
+    "source": {
+     "tier": "open",
+     "layer": "unspecified",
+     "origin": "unresolved",
+     "validation": "unvalidated",
+     "uncertainty": [
+      {
+       "status": "unknown",
+       "parameter": "L1.model",
+       "reason": "no model resolved; the component is explicitly open"
+      }
+     ]
+    },
+    "properties": [
+     {
+      "name": "Sheetfile",
+      "value": "Watchy.kicad_sch"
+     },
+     {
+      "name": "Sheetname",
+      "value": ""
+     },
+     {
+      "name": "ki_description",
+      "value": "Inductor"
+     },
+     {
+      "name": "ki_keywords",
+      "value": "inductor choke coil reactor magnetic"
+     }
+    ],
+    "pins": [
+     {
+      "number": "1",
+      "function": "1",
+      "kind": "passive",
+      "net": "Net-(AE1-FEED)",
+      "position_mm": [
+       88.72,
+       80.375
+      ]
+     },
+     {
+      "number": "2",
+      "function": "2",
+      "kind": "passive",
+      "net": "Net-(U4-LNA_IN/RF)",
+      "position_mm": [
+       88.72,
+       81.345
+      ]
+     }
+    ]
+   },
+   {
+    "reference": "M1",
+    "value": "Vibration_Motor",
+    "lib_id": "Watchy:Motor_Header",
+    "footprint": "Watchy:Motor_Header",
+    "stage": "unresolved",
+    "actionable_behavior_gap": true,
+    "model_id": null,
+    "model_kind": null,
+    "layer": "-",
+    "origin": "-",
+    "source": {
+     "tier": "open",
+     "layer": "unspecified",
+     "origin": "unresolved",
+     "validation": "unvalidated",
+     "uncertainty": [
+      {
+       "status": "unknown",
+       "parameter": "M1.model",
+       "reason": "no model resolved; the component is explicitly open"
+      }
+     ]
+    },
+    "properties": [
+     {
+      "name": "Sheetfile",
+      "value": "Watchy.kicad_sch"
+     },
+     {
+      "name": "Sheetname",
+      "value": ""
+     },
+     {
+      "name": "ki_description",
+      "value": "DC Motor"
+     },
+     {
+      "name": "ki_keywords",
+      "value": "DC Motor"
+     }
+    ],
+    "pins": [
+     {
+      "number": "1",
+      "function": "+",
+      "kind": "passive",
+      "net": "+3V3",
+      "position_mm": [
+       70.15,
+       85.155
+      ]
+     },
+     {
+      "number": "2",
+      "function": "-",
+      "kind": "passive",
+      "net": "Net-(D2-A)",
+      "position_mm": [
+       72.15,
+       85.155
+      ]
+     }
+    ]
+   },
+   {
+    "reference": "R12",
+    "value": "TBD",
+    "lib_id": "Watchy:R_0402_1005Metric",
+    "footprint": "Watchy:R_0402_1005Metric",
+    "stage": "unresolved",
+    "actionable_behavior_gap": true,
+    "model_id": null,
+    "model_kind": null,
+    "layer": "-",
+    "origin": "-",
+    "source": {
+     "tier": "open",
+     "layer": "unspecified",
+     "origin": "unresolved",
+     "validation": "unvalidated",
+     "uncertainty": [
+      {
+       "status": "unknown",
+       "parameter": "R12.model",
+       "reason": "no model resolved; the component is explicitly open"
+      }
+     ]
+    },
+    "properties": [
+     {
+      "name": "Sheetfile",
+      "value": "Watchy.kicad_sch"
+     },
+     {
+      "name": "Sheetname",
+      "value": ""
+     },
+     {
+      "name": "ki_description",
+      "value": "Resistor"
+     },
+     {
+      "name": "ki_keywords",
+      "value": "R res resistor"
+     }
+    ],
+    "pins": [
+     {
+      "number": "1",
+      "function": "",
+      "kind": "passive",
+      "net": "Net-(U4-XTAL_P)",
+      "position_mm": [
+       90.66,
+       84.08
+      ]
+     },
+     {
+      "number": "2",
+      "function": "",
+      "kind": "passive",
+      "net": "/40M_P",
+      "position_mm": [
+       91.68,
+       84.08
+      ]
+     }
+    ]
+   },
+   {
+    "reference": "U1",
+    "value": "SR2HARU",
+    "lib_id": "Watchy:SR2HARU",
+    "footprint": "Watchy:SR2HARU",
+    "stage": "identity_only",
+    "actionable_behavior_gap": true,
+    "model_id": "sr2",
+    "model_kind": "digital",
+    "layer": "builtin(0)",
+    "origin": "power_ics",
+    "source": {
+     "tier": "curated-library",
+     "layer": "builtin",
+     "origin": "power_ics",
+     "validation": "physical-bounds-only",
+     "uncertainty": [
+      {
+       "status": "unknown",
+       "parameter": "sr2.model",
+       "reason": "the source publishes no validated numeric error interval"
+      }
+     ]
+    },
+    "properties": [
+     {
+      "name": "Sheetfile",
+      "value": "Watchy.kicad_sch"
+     },
+     {
+      "name": "Sheetname",
+      "value": ""
+     }
+    ],
+    "implements": [
+     "pin_roles",
+     "fixed_input_thresholds",
+     "supply_current",
+     "open_drain_output_without_fabricated_high_drive",
+     "absolute_ratings"
+    ],
+    "missing": [
+     "smart_reset_timer",
+     "recovery_timer",
+     "low_voltage_input_ignore",
+     "overvoltage_test_mode",
+     "push_pull_variants"
+    ],
+    "pins": [
+     {
+      "number": "1",
+      "function": "VSS",
+      "kind": "input",
+      "net": "GND",
+      "position_mm": [
+       77.35000000000001,
+       81.86
+      ]
+     },
+     {
+      "number": "2",
+      "function": "~{SR1}",
+      "kind": "input",
+      "net": "BTN2",
+      "position_mm": [
+       76.95,
+       81.86
+      ]
+     },
+     {
+      "number": "3",
+      "function": "~{RST}",
+      "kind": "output",
+      "net": "EN",
+      "position_mm": [
+       76.55,
+       81.86
+      ]
+     },
+     {
+      "number": "4",
+      "function": "NC",
+      "kind": "no_connect",
+      "net": "unconnected-(U1-NC-Pad4)",
+      "position_mm": [
+       76.55,
+       83.46
+      ]
+     },
+     {
+      "number": "5",
+      "function": "~{SR0}",
+      "kind": "input",
+      "net": "BTN3",
+      "position_mm": [
+       76.95,
+       83.46
+      ]
+     },
+     {
+      "number": "6",
+      "function": "VCC",
+      "kind": "power_in",
+      "net": "+3V3",
+      "position_mm": [
+       77.35000000000001,
+       83.46
+      ]
+     }
+    ]
+   }
+  ]
  },
  "inventory": [
   {
    "path": "watchy.kicad_pcb",
    "kind": "ki_cad_pcb",
    "role": "layout",
-   "sha256": "d7f8eb56613968aa061cd612a8679a034430fd9a1fcb08f83690b92c167db217",
+   "sha256": "a76c4786cfd9b93272dd005723ab6945e98540bb79f0886474c6f34f67be160f",
    "contributed": [
     {
      "what": "connectivity",
@@ -1081,25 +3727,7 @@
    "statement": "M1 (Vibration_Motor) is treated as an open circuit.",
    "because": "No model; left open.",
    "consequence": "Nets through M1 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
-   "replacement": "Add a model for M1 to your models directory, or mark it DNP if the board does not fit it."
-  },
-  {
-   "id": "open-part:Y2",
-   "kind": "open_part",
-   "source": "binder",
-   "scope": {
-    "type": "subjects",
-    "value": [
-     {
-      "kind": "part",
-      "id": "Y2"
-     }
-    ]
-   },
-   "statement": "Y2 (40MHz) is treated as an open circuit.",
-   "because": "Unparseable value '40MHz'.",
-   "consequence": "Nets through Y2 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
-   "replacement": "Add a model for Y2 to your models directory, or mark it DNP if the board does not fit it."
+   "replacement": "Add a model for M1 (draft one from its datasheet with `hauksbee models extract`, or the web UI's Extend button), or mark it DNP if the board does not fit it."
   },
   {
    "id": "open-part:L1",
@@ -1117,7 +3745,7 @@
    "statement": "L1 (TBD) is treated as an open circuit.",
    "because": "No model; left open.",
    "consequence": "Nets through L1 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
-   "replacement": "Add a model for L1 to your models directory, or mark it DNP if the board does not fit it."
+   "replacement": "Add a model for L1 (draft one from its datasheet with `hauksbee models extract`, or the web UI's Extend button), or mark it DNP if the board does not fit it."
   },
   {
    "id": "open-part:C9",
@@ -1135,7 +3763,7 @@
    "statement": "C9 (TBD) is treated as an open circuit.",
    "because": "No model; left open.",
    "consequence": "Nets through C9 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
-   "replacement": "Add a model for C9 to your models directory, or mark it DNP if the board does not fit it."
+   "replacement": "Add a model for C9 (draft one from its datasheet with `hauksbee models extract`, or the web UI's Extend button), or mark it DNP if the board does not fit it."
   },
   {
    "id": "open-part:AE1",
@@ -1151,9 +3779,9 @@
     ]
    },
    "statement": "AE1 (Antenna_Chip) is treated as an open circuit.",
-   "because": "No model; left open.",
+   "because": "\"Antenna_Chip\" names a function, not a construction. A ceramic chip antenna is a DC open at its feed pad; a monopole or inductor-as-antenna is a DC short across its pads. Those are opposite answers to the one question this tool would ask of the part, and the generic value cannot say which applies, so this library states neither.",
    "consequence": "Nets through AE1 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
-   "replacement": "Add a model for AE1 to your models directory, or mark it DNP if the board does not fit it."
+   "replacement": "The actual part number. Its datasheet's DC continuity (ceramic patch = open, conductive element = short) turns into a one-line model card: an `ignore` entry for the open case, or a `passive` entry with the element's DC resistance for the conductive case. Put it in your models directory keyed on this board's value or footprint."
   },
   {
    "id": "open-part:C7",
@@ -1171,7 +3799,7 @@
    "statement": "C7 (TBD) is treated as an open circuit.",
    "because": "No model; left open.",
    "consequence": "Nets through C7 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
-   "replacement": "Add a model for C7 to your models directory, or mark it DNP if the board does not fit it."
+   "replacement": "Add a model for C7 (draft one from its datasheet with `hauksbee models extract`, or the web UI's Extend button), or mark it DNP if the board does not fit it."
   },
   {
    "id": "open-part:R12",
@@ -1189,10 +3817,10 @@
    "statement": "R12 (TBD) is treated as an open circuit.",
    "because": "No model; left open.",
    "consequence": "Nets through R12 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
-   "replacement": "Add a model for R12 to your models directory, or mark it DNP if the board does not fit it."
+   "replacement": "Add a model for R12 (draft one from its datasheet with `hauksbee models extract`, or the web UI's Extend button), or mark it DNP if the board does not fit it."
   },
   {
-   "id": "open-part:Y1",
+   "id": "open-part:U1",
    "kind": "open_part",
    "source": "binder",
    "scope": {
@@ -1200,14 +3828,14 @@
     "value": [
      {
       "kind": "part",
-      "id": "Y1"
+      "id": "U1"
      }
     ]
    },
-   "statement": "Y1 (32.768KHz) is treated as an open circuit.",
-   "because": "Unparseable value '32.768KHz'.",
-   "consequence": "Nets through Y1 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
-   "replacement": "Add a model for Y1 to your models directory, or mark it DNP if the board does not fit it."
+   "statement": "U1 (SR2HARU) is treated as an open circuit.",
+   "because": "Identity matched model 'sr2' but behavior is unavailable: sr2 has no generic executable device behavior; only identity and sourced metadata are available.",
+   "consequence": "Nets through U1 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
+   "replacement": "A validated executable model for sr2."
   },
   {
    "id": "reduced-fidelity:model/D5",
@@ -1256,698 +3884,33 @@
    "because": "It came from the generic fallback model 'signal_diode_1n4148_fallback', whose ratings and device parameters are estimates for the package class rather than values from any datasheet, not from the primary path.",
    "consequence": "Numbers for D1 (MBR0530) are indicative: the mechanism that produced them is documented as less accurate than the primary path.",
    "replacement": "Add a model entry matching the part (value_re or mpn_re), or put the manufacturer part number on the component."
+  },
+  {
+   "id": "reduced-fidelity:U3",
+   "kind": "reduced_fidelity",
+   "source": "binder",
+   "scope": {
+    "type": "board"
+   },
+   "statement": "U3 (TP4054) is modelled only in part.",
+   "because": "control-loop stability is not simulated and this card does not state the output-capacitor requirement; add `cout_min_f` and, when required, `cout_esr_min_ohm` plus `cout_esr_max_ohm` to the card.",
+   "consequence": "U3 (TP4054) counts as a resolved part, so nothing else on this report flags it, but any result that depends on the unmodelled part of it is not evidence.",
+   "replacement": "Model the rest of the part, or treat results that depend on it as unanswered."
+  },
+  {
+   "id": "reduced-fidelity:U2",
+   "kind": "reduced_fidelity",
+   "source": "binder",
+   "scope": {
+    "type": "board"
+   },
+   "statement": "U2 (RT908033) is modelled only in part.",
+   "because": "Its enable pin is not modelled; the output rail is stamped as an unconditional ideal source, so a board that holds this regulator OFF still reads as having this rail present at 3.30 V.",
+   "consequence": "U2 (RT908033) counts as a resolved part, so nothing else on this report flags it, but any result that depends on the unmodelled part of it is not evidence.",
+   "replacement": "Model the rest of the part, or treat results that depend on it as unanswered."
   }
  ],
  "evidence": [
-  {
-   "assertion": "+3V3 vs /32K_P: 1 location on F.Cu, below the 0.200 mm clearance rule (tightest 0.154 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "+3V3 vs ACC_INT_1: 1 location on F.Cu, below the 0.200 mm clearance rule (tightest 0.183 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "+3V3 vs ACC_INT_2: 1 location on F.Cu, below the 0.200 mm clearance rule (tightest 0.150 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "+3V3 vs ADC: 1 location on B.Cu, below the 0.200 mm clearance rule (tightest 0.174 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "+3V3 vs BTN1: 1 location on B.Cu, below the 0.200 mm clearance rule (tightest 0.174 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "+3V3 vs BTN3: 2 locations on B.Cu, below the 0.200 mm clearance rule (tightest 0.174 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "+3V3 vs BUSY: 1 location on F.Cu, below the 0.200 mm clearance rule (tightest 0.179 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "+3V3 vs EN: 7 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.150 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "+3V3 vs MOSI: 1 location on F.Cu, below the 0.200 mm clearance rule (tightest 0.168 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "+3V3 vs Net-(U4-XTAL_P): 1 location on F.Cu, below the 0.200 mm clearance rule (tightest 0.177 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "+3V3 vs RESE: 1 location on F.Cu, below the 0.200 mm clearance rule (tightest 0.183 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "+3V3 vs SDA: 1 location on F.Cu, below the 0.200 mm clearance rule (tightest 0.150 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "+BATT vs BTN2: 1 location on B.Cu, below the 0.200 mm clearance rule (tightest 0.174 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "/40M_P vs /40M_N: 2 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.152 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "ACC_INT_1 vs ACC_INT_2: 6 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.150 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "ADC vs BTN1: 6 locations on B.Cu, below the 0.200 mm clearance rule (tightest 0.152 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "ADC vs BTN2: 10 locations on B.Cu, below the 0.200 mm clearance rule (tightest 0.152 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "ADC vs USB_D-: 2 locations on B.Cu, below the 0.200 mm clearance rule (tightest 0.152 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "BTN1 vs BTN2: 3 locations on B.Cu, below the 0.200 mm clearance rule (tightest 0.152 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "BTN1 vs BTN4: 4 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.152 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "BTN1 vs STAT: 9 locations on B.Cu, below the 0.200 mm clearance rule (tightest 0.150 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "BTN2 vs BTN3: 7 locations on B.Cu, below the 0.200 mm clearance rule (tightest 0.152 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "BUSY vs RES: 5 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.150 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "DC vs CS: 4 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.150 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "DN vs DP: 2 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.152 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "EN vs BTN2: 3 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.179 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "EN vs BTN3: 7 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.152 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "GND vs +3V3: 4 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.150 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "GND vs +3V3: 2 locations on In2.Cu, below the 0.200 mm clearance rule (tightest 0.155 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "GND vs +BATT: 1 location on In2.Cu, below the 0.200 mm clearance rule (tightest 0.154 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "GND vs /40M_N: 1 location on F.Cu, below the 0.200 mm clearance rule (tightest 0.155 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "GND vs /40M_P: 1 location on F.Cu, below the 0.200 mm clearance rule (tightest 0.155 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "GND vs BTN2: 3 locations on B.Cu, below the 0.200 mm clearance rule (tightest 0.174 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "GND vs BTN4: 1 location on B.Cu, below the 0.200 mm clearance rule (tightest 0.154 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "GND vs BUSY: 1 location on F.Cu, below the 0.200 mm clearance rule (tightest 0.179 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "GND vs SCL: 1 location on F.Cu, below the 0.200 mm clearance rule (tightest 0.150 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "GND vs SDA: 2 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.150 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "GND vs STAT: 1 location on B.Cu, below the 0.200 mm clearance rule (tightest 0.191 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "MOSI vs SCK: 5 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.150 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "PREVGH vs PREVGL: 8 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.152 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "RES vs DC: 6 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.150 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "RESE vs GDR: 4 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.150 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "SCK vs CS: 6 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.150 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "SDA vs ACC_INT_2: 5 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.152 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "SDA vs BTN4: 2 locations on B.Cu, below the 0.200 mm clearance rule (tightest 0.152 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "SDA vs SCL: 2 locations on B.Cu, below the 0.200 mm clearance rule (tightest 0.152 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "SDA vs SCL: 4 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.152 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "STAT vs BTN4: 3 locations on B.Cu, below the 0.200 mm clearance rule (tightest 0.152 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "USB_D- vs USB_D+: 8 locations on B.Cu, below the 0.200 mm clearance rule (tightest 0.152 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "USB_DET vs USB_D+: 5 locations on B.Cu, below the 0.200 mm clearance rule (tightest 0.152 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "VBUS vs DN: 2 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.155 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "VBUS vs Net-(D1-K): 3 locations on F.Cu, below the 0.200 mm clearance rule (tightest 0.152 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
-  {
-   "assertion": "VBUS vs Net-(U3-PROG): 1 location on F.Cu, below the 0.200 mm clearance rule (tightest 0.152 mm)",
-   "artifacts": [
-    0
-   ],
-   "assumptions": [
-    "reduced-fidelity:model/D5",
-    "reduced-fidelity:model/D4",
-    "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
-   ],
-   "status": "qualified"
-  },
   {
    "assertion": "Y2 (40MHz): board presents CL ~ 15.0 pF (C1=22p, C2=22p, +4p stray); crystal CL spec unknown from value, no judgement",
    "artifacts": [
@@ -1957,7 +3920,9 @@
     "reduced-fidelity:model/D5",
     "reduced-fidelity:model/D4",
     "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
+    "reduced-fidelity:model/D1",
+    "reduced-fidelity:U3",
+    "reduced-fidelity:U2"
    ],
    "status": "qualified"
   },
@@ -1970,7 +3935,9 @@
     "reduced-fidelity:model/D5",
     "reduced-fidelity:model/D4",
     "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
+    "reduced-fidelity:model/D1",
+    "reduced-fidelity:U3",
+    "reduced-fidelity:U2"
    ],
    "status": "qualified"
   },
@@ -1983,7 +3950,9 @@
     "reduced-fidelity:model/D5",
     "reduced-fidelity:model/D4",
     "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
+    "reduced-fidelity:model/D1",
+    "reduced-fidelity:U3",
+    "reduced-fidelity:U2"
    ],
    "status": "qualified"
   },
@@ -1996,7 +3965,9 @@
     "reduced-fidelity:model/D5",
     "reduced-fidelity:model/D4",
     "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
+    "reduced-fidelity:model/D1",
+    "reduced-fidelity:U3",
+    "reduced-fidelity:U2"
    ],
    "status": "qualified"
   },
@@ -2009,7 +3980,9 @@
     "reduced-fidelity:model/D5",
     "reduced-fidelity:model/D4",
     "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
+    "reduced-fidelity:model/D1",
+    "reduced-fidelity:U3",
+    "reduced-fidelity:U2"
    ],
    "status": "qualified"
   },
@@ -2022,7 +3995,9 @@
     "reduced-fidelity:model/D5",
     "reduced-fidelity:model/D4",
     "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
+    "reduced-fidelity:model/D1",
+    "reduced-fidelity:U3",
+    "reduced-fidelity:U2"
    ],
    "status": "qualified"
   },
@@ -2035,12 +4010,14 @@
     "reduced-fidelity:model/D5",
     "reduced-fidelity:model/D4",
     "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
+    "reduced-fidelity:model/D1",
+    "reduced-fidelity:U3",
+    "reduced-fidelity:U2"
    ],
    "status": "qualified"
   },
   {
-   "assertion": "USB_D+ / USB_D-: W~0.150 mm, S~0.173 mm microstrip -> Zdiff ~ 125 ohm [target 90 ohm, USB differential]: estimate +39% from target - info only (board does not declare controlled impedance (dielectric_constraints no); board stackup H=0.280 mm, T=0.035 mm, Er=4.50)",
+   "assertion": "USB_D+ / USB_D-: W~0.150 mm, S~0.152 mm microstrip -> Zdiff ~ 122 ohm [target 90 ohm, USB differential]: estimate +35% from target - info only (board does not declare controlled impedance (dielectric_constraints no); board stackup H=0.280 mm, T=0.035 mm, Er=4.50)",
    "artifacts": [
     0
    ],
@@ -2048,7 +4025,9 @@
     "reduced-fidelity:model/D5",
     "reduced-fidelity:model/D4",
     "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
+    "reduced-fidelity:model/D1",
+    "reduced-fidelity:U3",
+    "reduced-fidelity:U2"
    ],
    "status": "qualified"
   },
@@ -2061,7 +4040,9 @@
     "reduced-fidelity:model/D5",
     "reduced-fidelity:model/D4",
     "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
+    "reduced-fidelity:model/D1",
+    "reduced-fidelity:U3",
+    "reduced-fidelity:U2"
    ],
    "status": "qualified"
   },
@@ -2069,6 +4050,7 @@
    "assertion": "converter: the switching stage around L2 (switch node 'Net-(D5-A)', rails 'RESE' and '+3V3') was detected but not classified: the connectivity is reversible, so it is equally consistent with a buck and a boost, and neither rail name says which is the input. No ripple or duty verdict was reached for this stage. Rename the rails to carry their role (VIN / VOUT, or a *_IN / *_OUT suffix) to cover it.",
    "models": [
     {
+     "subject": "C21",
      "reference": "C21",
      "model_id": "c_fallback",
      "layer": "engine-fallback",
@@ -2088,6 +4070,7 @@
      "confidence": "guessed"
     },
     {
+     "subject": "D5",
      "reference": "D5",
      "model_id": "signal_diode_1n4148_fallback",
      "layer": "engine-fallback",
@@ -2107,6 +4090,7 @@
      "confidence": "guessed"
     },
     {
+     "subject": "L2",
      "reference": "L2",
      "model_id": "l_fallback",
      "layer": "engine-fallback",
@@ -2126,6 +4110,7 @@
      "confidence": "guessed"
     },
     {
+     "subject": "Q3",
      "reference": "Q3",
      "model_id": "ao3400a",
      "layer": "builtin",
@@ -2147,6 +4132,7 @@
    ],
    "parameters": [
     {
+     "subject": "C21",
      "parameter": "C21.model",
      "value": "c_fallback",
      "origin": {
@@ -2157,6 +4143,7 @@
      }
     },
     {
+     "subject": "D5",
      "parameter": "D5.model",
      "value": "signal_diode_1n4148_fallback",
      "origin": {
@@ -2167,6 +4154,7 @@
      }
     },
     {
+     "subject": "L2",
      "parameter": "L2.model",
      "value": "l_fallback",
      "origin": {
@@ -2177,6 +4165,7 @@
      }
     },
     {
+     "subject": "Q3",
      "parameter": "Q3.model",
      "value": "ao3400a",
      "origin": {
@@ -2191,7 +4180,9 @@
     "reduced-fidelity:model/D5",
     "reduced-fidelity:model/D4",
     "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
+    "reduced-fidelity:model/D1",
+    "reduced-fidelity:U3",
+    "reduced-fidelity:U2"
    ],
    "status": "qualified"
   },
@@ -2204,7 +4195,9 @@
     "reduced-fidelity:model/D5",
     "reduced-fidelity:model/D4",
     "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
+    "reduced-fidelity:model/D1",
+    "reduced-fidelity:U3",
+    "reduced-fidelity:U2"
    ],
    "status": "qualified"
   },
@@ -2217,9 +4210,17 @@
     "reduced-fidelity:model/D5",
     "reduced-fidelity:model/D4",
     "reduced-fidelity:model/D3",
-    "reduced-fidelity:model/D1"
+    "reduced-fidelity:model/D1",
+    "reduced-fidelity:U3",
+    "reduced-fidelity:U2"
    ],
    "status": "qualified"
+  }
+ ],
+ "notes": [
+  {
+   "kind": "bind_role",
+   "message": "Current-carrying / active part(s) left open on the live circuit: U1. Analog/AC/thermal results on their nets are NOT trustworthy."
   }
  ],
  "nets": [
@@ -2386,10 +4387,210 @@
   "Y1": "passive",
   "Y2": "passive"
  },
+ "component_assertions": {
+  "C1": [
+   "max_temp"
+  ],
+  "C10": [
+   "max_temp"
+  ],
+  "C11": [
+   "max_temp"
+  ],
+  "C12": [
+   "max_temp"
+  ],
+  "C13": [
+   "max_temp"
+  ],
+  "C14": [
+   "max_temp"
+  ],
+  "C15": [
+   "max_temp"
+  ],
+  "C16": [
+   "max_temp"
+  ],
+  "C17": [
+   "max_temp"
+  ],
+  "C18": [
+   "max_temp"
+  ],
+  "C19": [
+   "max_temp"
+  ],
+  "C2": [
+   "max_temp"
+  ],
+  "C20": [
+   "max_temp"
+  ],
+  "C21": [
+   "max_temp"
+  ],
+  "C22": [
+   "max_temp"
+  ],
+  "C23": [
+   "max_temp"
+  ],
+  "C24": [
+   "max_temp"
+  ],
+  "C25": [
+   "max_temp"
+  ],
+  "C26": [
+   "max_temp"
+  ],
+  "C27": [
+   "max_temp"
+  ],
+  "C28": [
+   "max_temp"
+  ],
+  "C29": [
+   "max_temp"
+  ],
+  "C3": [
+   "max_temp"
+  ],
+  "C4": [
+   "max_temp"
+  ],
+  "C5": [
+   "max_temp"
+  ],
+  "C6": [
+   "max_temp"
+  ],
+  "D1": [
+   "max_current",
+   "max_temp"
+  ],
+  "D2": [
+   "max_current",
+   "max_temp"
+  ],
+  "D3": [
+   "max_current",
+   "max_temp"
+  ],
+  "D4": [
+   "max_current",
+   "max_temp"
+  ],
+  "D5": [
+   "max_current",
+   "max_temp"
+  ],
+  "L2": [
+   "max_temp"
+  ],
+  "Q1": [
+   "max_temp"
+  ],
+  "Q2": [
+   "max_temp"
+  ],
+  "Q3": [
+   "max_temp"
+  ],
+  "R1": [
+   "max_current",
+   "max_temp"
+  ],
+  "R10": [
+   "max_current",
+   "max_temp"
+  ],
+  "R11": [
+   "max_current",
+   "max_temp"
+  ],
+  "R13": [
+   "max_current",
+   "max_temp"
+  ],
+  "R14": [
+   "max_current",
+   "max_temp"
+  ],
+  "R15": [
+   "max_current",
+   "max_temp"
+  ],
+  "R16": [
+   "max_current",
+   "max_temp"
+  ],
+  "R17": [
+   "max_current",
+   "max_temp"
+  ],
+  "R18": [
+   "max_current",
+   "max_temp"
+  ],
+  "R19": [
+   "max_current",
+   "max_temp"
+  ],
+  "R2": [
+   "max_current",
+   "max_temp"
+  ],
+  "R20": [
+   "max_current",
+   "max_temp"
+  ],
+  "R3": [
+   "max_current",
+   "max_temp"
+  ],
+  "R4": [
+   "max_current",
+   "max_temp"
+  ],
+  "R5": [
+   "max_current",
+   "max_temp"
+  ],
+  "R6": [
+   "max_current",
+   "max_temp"
+  ],
+  "R7": [
+   "max_current",
+   "max_temp"
+  ],
+  "R8": [
+   "max_current",
+   "max_temp"
+  ],
+  "R9": [
+   "max_current",
+   "max_temp"
+  ],
+  "U2": [
+   "max_temp"
+  ],
+  "U3": [
+   "max_temp"
+  ],
+  "U5": [
+   "max_current",
+   "max_temp"
+  ]
+ },
  "supplies": [
   {
    "net": "VBUS",
    "volts": 5
   }
- ]
+ ],
+ "verdict_reason": "1 key part has no usable model (U1), so the checks cannot vouch for this board; next: draft their models with `hauksbee models extract --unmodelled <board>` (one part: `--pdf <datasheet.pdf> --part <MPN>`) or `hauksbee models new`, then rerun.",
+ "verdict": "invalid"
 }

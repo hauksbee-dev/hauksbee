@@ -368,6 +368,10 @@ export interface WebReport {
    *  "VERDICT: clean, conditionally: ..." carry. Absent when there are none or
    *  the verdict is not a pass. */
   verdict_conditions?: string[]
+  /** The machine verdict, the same one `run --check --json` prints for this
+   *  board: a fail or an invalid run never reads as a pass in the browser.
+   *  Absent on reports from engines that predate it. */
+  verdict?: 'pass' | 'fail' | 'invalid'
 }
 
 export interface WebSupply {

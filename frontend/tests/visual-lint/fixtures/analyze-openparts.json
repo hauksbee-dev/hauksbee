@@ -1,27 +1,51 @@
 {
  "ok": true,
  "error": null,
- "board_name": "",
+ "board_name": "open_active_ic",
  "file_name": "open_active_ic.kicad_pcb",
  "num_components": 3,
  "num_nets": 3,
- "headline": "Evidence is undermined; results touching unresolved inputs are invalid for analysis. See the evidence below.",
- "serious": 0,
- "total": 0,
+ "clearance_rule_source": {
+  "source": "defaulted",
+  "value_mm": 0.2,
+  "project_file_found": false
+ },
+ "triage": {
+  "do_not_order": [
+   {
+    "id": "lint",
+    "kind": "unrouted_pad",
+    "statement": "the board is not routed yet, so it cannot be ordered as is: no copper joins its 4 pad group(s) on +3V3, GND, SENSOR_OUT. The circuit was checked as a netlist"
+   }
+  ],
+  "inspect": [],
+  "checked_ok": [],
+  "not_covered": "1 part lacks an executable simulation model; model-dependent firmware/analog/AC/thermal claims involving those parts are not covered. Copper geometry and datasheet decode rules do not require a simulation model. Clearance findings use DEFAULT rules, not your rules, because no usable .kicad_pro netclass rules were read."
+ },
+ "headline": "1 issue found, 1 serious. Fix the serious ones before ordering boards.",
+ "serious": 1,
+ "total": 1,
  "sections": [
   {
-   "title": "Copper spacing (DRC)",
-   "verdict": "Looks healthy: no copper spacing (drc) problems found.",
+   "title": "Copper spacing (DRC; DEFAULT rules, not your rules)",
+   "verdict": "CLEARANCE RULE SOURCE: DEFAULT 0.200 mm; this upload did not include a .kicad_pro, so your netclass rules were not read; these are default rules, not your rules. Upload the matching .kicad_pro alongside the board to check your netclass rules. Looks healthy: no copper spacing (drc) problems found.",
    "findings": []
   },
   {
    "title": "Connectivity & wiring",
-   "verdict": "INCONCLUSIVE: 1 current-carrying / active part(s) have no model (U1), so a clean result here is not a clean bill. Supply device models (--models-dir; scaffold one with `hauksbee models new`) or BOM identity (--bom) for them to make this verdict conclusive.",
-   "findings": []
+   "verdict": "1 issue found, 1 serious.",
+   "findings": [
+    {
+     "level": "serious",
+     "what": "the board is not routed yet, so it cannot be ordered as is: no copper joins its 4 pad group(s) on +3V3, GND, SENSOR_OUT. The circuit was checked as a netlist",
+     "why": "The pads are on the right net, but no track, via or copper pour actually reaches them. A board made from these files would leave the connection open: the ratsnest line the layout editor shows here was never routed.",
+     "fix": "Route the missing connection (or extend the pour to it), refill the zones, and run the layout editor's DRC until it reports no unconnected items."
+    }
+   ]
   },
   {
    "title": "Signal integrity",
-   "verdict": "INCONCLUSIVE: 1 current-carrying / active part(s) have no model (U1), so a clean result here is not a clean bill. Supply device models (--models-dir; scaffold one with `hauksbee models new`) or BOM identity (--bom) for them to make this verdict conclusive.",
+   "verdict": "INCONCLUSIVE: 1 current-carrying / active part(s) have no model (U1), so a clean result here is not a clean bill. Draft models from their datasheets (`hauksbee models extract --unmodelled <board>`, or the Extend button in `hauksbee serve`), scaffold one by hand (`hauksbee models new`, then --models-dir), or supply BOM identity (--bom) to make this verdict conclusive.",
    "findings": []
   }
  ],
@@ -48,6 +72,52 @@
    "rot": 0
   }
  ],
+ "import_diagnostics": {
+  "format": "text board / netlist",
+  "recovered": 3,
+  "partial": 0,
+  "unplaced": 0,
+  "missing_or_refused": 0,
+  "objects": [
+   {
+    "id": "R1",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 130,
+    "y": 100,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "SENSOR_OUT"
+    ]
+   },
+   {
+    "id": "R2",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 130,
+    "y": 110,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "SENSOR_OUT"
+    ]
+   },
+   {
+    "id": "U1",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 110,
+    "y": 100,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+3V3",
+     "GND",
+     "SENSOR_OUT"
+    ]
+   }
+  ]
+ },
  "bind": {
   "critical_parts_bound": "0/1",
   "active_path_unresolved": [
@@ -61,6 +131,143 @@
     "consequence": "U1 is an active IC left OPEN; analog/AC/thermal results on its nets are NOT trustworthy",
     "active_ic": true,
     "bound": false
+   }
+  ]
+ },
+ "model_coverage": {
+  "schema_version": 1,
+  "summary": {
+   "active_connected": 1,
+   "identified": 0,
+   "executable_available": 0,
+   "unresolved": 1,
+   "identity_only": 0,
+   "executable_scope_unspecified": 0,
+   "executable_partial": 0,
+   "executable_declared": 0,
+   "ignored": 0,
+   "actionable_behavior_gaps": 1,
+   "authoring_targets": 1,
+   "requirements_total": 0,
+   "requirements_met": 0,
+   "requirements_unmet": 0
+  },
+  "components": [
+   {
+    "reference": "U1",
+    "value": "XLOGIC9999",
+    "lib_id": "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+    "footprint": "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+    "stage": "unresolved",
+    "actionable_behavior_gap": true,
+    "model_id": null,
+    "model_kind": null,
+    "layer": "-",
+    "origin": "-",
+    "source": {
+     "tier": "open",
+     "layer": "unspecified",
+     "origin": "unresolved",
+     "validation": "unvalidated",
+     "uncertainty": [
+      {
+       "status": "unknown",
+       "parameter": "U1.model",
+       "reason": "no model resolved; the component is explicitly open"
+      }
+     ]
+    },
+    "pins": [
+     {
+      "number": "1",
+      "function": "",
+      "kind": "",
+      "net": "+3V3",
+      "position_mm": [
+       110,
+       100
+      ]
+     },
+     {
+      "number": "4",
+      "function": "",
+      "kind": "",
+      "net": "GND",
+      "position_mm": [
+       111,
+       100
+      ]
+     },
+     {
+      "number": "5",
+      "function": "",
+      "kind": "",
+      "net": "SENSOR_OUT",
+      "position_mm": [
+       112,
+       100
+      ]
+     }
+    ]
+   }
+  ],
+  "authoring_targets": [
+   {
+    "reference": "U1",
+    "value": "XLOGIC9999",
+    "lib_id": "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+    "footprint": "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+    "stage": "unresolved",
+    "actionable_behavior_gap": true,
+    "model_id": null,
+    "model_kind": null,
+    "layer": "-",
+    "origin": "-",
+    "source": {
+     "tier": "open",
+     "layer": "unspecified",
+     "origin": "unresolved",
+     "validation": "unvalidated",
+     "uncertainty": [
+      {
+       "status": "unknown",
+       "parameter": "U1.model",
+       "reason": "no model resolved; the component is explicitly open"
+      }
+     ]
+    },
+    "pins": [
+     {
+      "number": "1",
+      "function": "",
+      "kind": "",
+      "net": "+3V3",
+      "position_mm": [
+       110,
+       100
+      ]
+     },
+     {
+      "number": "4",
+      "function": "",
+      "kind": "",
+      "net": "GND",
+      "position_mm": [
+       111,
+       100
+      ]
+     },
+     {
+      "number": "5",
+      "function": "",
+      "kind": "",
+      "net": "SENSOR_OUT",
+      "position_mm": [
+       112,
+       100
+      ]
+     }
+    ]
    }
   ]
  },
@@ -99,14 +306,15 @@
    "statement": "U1 (XLOGIC9999) is treated as an open circuit.",
    "because": "No model.",
    "consequence": "Nets through U1 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
-   "replacement": "Add a model for U1 to your models directory, or mark it DNP if the board does not fit it."
+   "replacement": "Add a model for U1 (draft one from its datasheet with `hauksbee models extract`, or the web UI's Extend button), or mark it DNP if the board does not fit it."
   }
  ],
  "evidence": [
   {
-   "assertion": "Static analysis covered 3 extracted nets",
+   "assertion": "the board is not routed yet, so it cannot be ordered as is: no copper joins its 4 pad group(s) on +3V3, GND, SENSOR_OUT. The circuit was checked as a netlist",
    "models": [
     {
+     "subject": "R1",
      "reference": "R1",
      "model_id": "r_fallback",
      "layer": "engine-fallback",
@@ -126,6 +334,7 @@
      "confidence": "guessed"
     },
     {
+     "subject": "R2",
      "reference": "R2",
      "model_id": "r_fallback",
      "layer": "engine-fallback",
@@ -147,6 +356,7 @@
    ],
    "parameters": [
     {
+     "subject": "R1",
      "parameter": "R1.model",
      "value": "r_fallback",
      "origin": {
@@ -157,6 +367,7 @@
      }
     },
     {
+     "subject": "R2",
      "parameter": "R2.model",
      "value": "r_fallback",
      "origin": {
@@ -188,10 +399,22 @@
   "R1": "passive",
   "R2": "passive"
  },
+ "component_assertions": {
+  "R1": [
+   "max_current",
+   "max_temp"
+  ],
+  "R2": [
+   "max_current",
+   "max_temp"
+  ]
+ },
  "supplies": [
   {
    "net": "+3V3",
    "volts": 3.3
   }
- ]
+ ],
+ "verdict_reason": "1 blocking problem(s), first: the board is not routed yet, so it cannot be ordered as is: no copper joins its 4 pad group(s) on +3V3, GND, SENSOR_OUT. The circuit was checked as a netlist; next: Route the unconnected pads to their net (or refill the zones) until KiCad DRC reports no unconnected items. Also: 1 key part has no usable model (U1), so the rest of the board is not vouched for.",
+ "verdict": "fail"
 }

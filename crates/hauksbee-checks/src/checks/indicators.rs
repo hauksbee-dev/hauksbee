@@ -52,6 +52,10 @@ pub struct IndicatorTrace {
     /// The source net's name reads as active-low (`_N`, `n` prefix/suffix,
     /// an overbar spelling).
     pub source_active_low: bool,
+    /// A microcontroller pin drives the indicator directly, with no logic
+    /// stage between: firmware writes the level that lights it, so its
+    /// meaning is a firmware choice rather than one ordering the board fixes.
+    pub firmware_sets_level: bool,
 }
 
 impl IndicatorTrace {
@@ -122,6 +126,41 @@ pub fn not_judged_note(traces: &[IndicatorTrace]) -> Option<String> {
     ))
 }
 
+/// The one condition a pass rests on while hardware-fixed indicator meaning is
+/// unjudged, or `None` when there is none to state.
+///
+/// One compact sentence for the whole area, naming the indicators (the
+/// not-covered note carries each traced path). An indicator a microcontroller
+/// pin drives directly is left out: firmware writes its level, so ordering
+/// the board does not fix its meaning, and it stays listed as not covered.
+#[must_use]
+pub fn intent_condition(traces: &[IndicatorTrace]) -> Option<String> {
+    const SHOWN: usize = 4;
+    let fixed: Vec<&str> = traces
+        .iter()
+        .filter(|t| !t.firmware_sets_level)
+        .map(|t| t.indicator.as_str())
+        .collect();
+    let (listed, them) = match fixed.as_slice() {
+        [] => return None,
+        [one] => ((*one).to_string(), "it"),
+        many if many.len() <= SHOWN => (many.join(", "), "them"),
+        many => (
+            format!(
+                "{} and {} more",
+                many[..SHOWN].join(", "),
+                many.len() - SHOWN
+            ),
+            "them",
+        ),
+    };
+    Some(format!(
+        "Indicator polarity versus intent was not checked for {listed}: the hardware sets \
+         which level lights {them}, and no stated outcome says which should; state it as an \
+         outcome (`hauksbee-ci init` scaffolds one) to remove this condition."
+    ))
+}
+
 /// Does a net name read as active-low? Looks at the last path segment only, so
 /// a `KiCad` sheet path (`/power/EN`) is not read as an overbar.
 #[must_use]
@@ -168,6 +207,8 @@ fn looks_like_supply(name: &str) -> bool {
 #[derive(Clone)]
 struct Driver {
     reference: String,
+    /// A microcontroller pin: its level is firmware state.
+    mcu: bool,
     /// `(inverting, input net)` when the output is one buffer/inverter stage.
     stage: Option<(bool, i64)>,
 }
@@ -226,6 +267,7 @@ fn drivers(
                 if is_signal(id) {
                     out.entry(id).or_insert_with(|| Driver {
                         reference: comp.reference.clone(),
+                        mcu: true,
                         stage: None,
                     });
                 }
@@ -249,6 +291,7 @@ fn drivers(
                 id,
                 Driver {
                     reference: comp.reference.clone(),
+                    mcu: false,
                     stage,
                 },
             );
@@ -261,6 +304,7 @@ fn drivers(
                 if let Some(id) = pin.net.filter(|&id| is_signal(id)) {
                     out.entry(id).or_insert_with(|| Driver {
                         reference: comp.reference.clone(),
+                        mcu: false,
                         stage: None,
                     });
                 }
@@ -369,6 +413,7 @@ pub fn indicator_traces(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<Indic
             net = input;
         }
         let source_net = name(net);
+        let firmware_sets_level = stages.is_empty() && drivers.get(&net).is_some_and(|d| d.mcu);
         out.push(IndicatorTrace {
             indicator: led.reference.clone(),
             indicator_net: name(own),
@@ -377,6 +422,7 @@ pub fn indicator_traces(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<Indic
             stages,
             source_active_low: name_suggests_active_low(&source_net),
             source_net,
+            firmware_sets_level,
         });
     }
     out.sort_by(|a, b| a.indicator.cmp(&b.indicator));
@@ -416,6 +462,7 @@ mod tests {
             stages,
             source_net: src.into(),
             source_active_low: name_suggests_active_low(src),
+            firmware_sets_level: false,
         };
         let buffer = vec![Stage {
             reference: "U1".into(),
@@ -434,6 +481,34 @@ mod tests {
         assert!(note.contains("2 on U10 outputs (D10, D11)"), "{note}");
         assert!(!note.contains("Net-(D10-K)"), "{note}");
         assert!(not_judged_note(&[]).is_none());
+    }
+
+    #[test]
+    fn hardware_fixed_indicators_make_one_condition_and_firmware_set_ones_none() {
+        let trace = |led: &str, firmware: bool| IndicatorTrace {
+            indicator: led.into(),
+            indicator_net: format!("Net-({led}-K)"),
+            sinks: Some(true),
+            driver: "U1".into(),
+            stages: Vec::new(),
+            source_net: "STATUS".into(),
+            source_active_low: false,
+            firmware_sets_level: firmware,
+        };
+        // A GPIO-driven LED's level is firmware's to choose: no condition.
+        assert!(intent_condition(&[trace("D1", true)]).is_none());
+        assert!(intent_condition(&[]).is_none());
+        let one = intent_condition(&[trace("D1", true), trace("D2", false)]).unwrap();
+        assert!(
+            one.contains("not checked for D2: the hardware sets which level lights it,"),
+            "{one}"
+        );
+        assert!(!one.contains("D1"), "{one}");
+        // Many indicators stay one compact sentence, not a list per LED.
+        let many: Vec<_> = (1..=9).map(|i| trace(&format!("D{i}"), false)).collect();
+        let many = intent_condition(&many).unwrap();
+        assert!(many.contains("D1, D2, D3, D4 and 5 more: "), "{many}");
+        assert!(!many.contains("D5"), "{many}");
     }
 
     #[test]

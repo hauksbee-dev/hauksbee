@@ -16,7 +16,7 @@
   "checked_ok": [],
   "not_covered": "Clearance findings use DEFAULT rules, not your rules, because no usable .kicad_pro netclass rules were read."
  },
- "headline": "No blocking findings, on a condition: Q1 passes across assumed corners (generic_pmos_sot_corner_high_vth, generic_pmos_sot_corner_low_vth); put the MPN on Q1 to remove this assumption.",
+ "headline": "OK to order, conditionally: the static checks found nothing that blocks ordering; this rests on: Q1 passes across assumed corners (generic_pmos_sot_corner_high_vth, generic_pmos_sot_corner_low_vth); put the MPN on Q1 to remove this assumption.",
  "serious": 0,
  "total": 0,
  "sections": [
@@ -40,30 +40,30 @@
   {
    "reference": "Q1",
    "value": "Q_PMOS_GSD",
-   "x": 110.0,
-   "y": 100.0,
-   "rot": 0.0
+   "x": 110,
+   "y": 100,
+   "rot": 0
   },
   {
    "reference": "RL",
    "value": "1k",
-   "x": 130.0,
-   "y": 100.0,
-   "rot": 0.0
+   "x": 130,
+   "y": 100,
+   "rot": 0
   },
   {
    "reference": "RGS",
    "value": "10k",
-   "x": 110.0,
-   "y": 115.0,
-   "rot": 0.0
+   "x": 110,
+   "y": 115,
+   "rot": 0
   },
   {
    "reference": "RG",
    "value": "100",
-   "x": 110.0,
-   "y": 130.0,
-   "rot": 0.0
+   "x": 110,
+   "y": 130,
+   "rot": 0
   }
  ],
  "import_diagnostics": {
@@ -77,8 +77,8 @@
     "id": "Q1",
     "status": "recovered",
     "confidence": "high",
-    "x": 110.0,
-    "y": 100.0,
+    "x": 110,
+    "y": 100,
     "explanation": "Reference, value, pins and board location were recovered from the input.",
     "nets": [
      "+5V",
@@ -90,8 +90,8 @@
     "id": "RG",
     "status": "recovered",
     "confidence": "high",
-    "x": 110.0,
-    "y": 130.0,
+    "x": 110,
+    "y": 130,
     "explanation": "Reference, value, pins and board location were recovered from the input.",
     "nets": [
      "G",
@@ -102,8 +102,8 @@
     "id": "RGS",
     "status": "recovered",
     "confidence": "high",
-    "x": 110.0,
-    "y": 115.0,
+    "x": 110,
+    "y": 115,
     "explanation": "Reference, value, pins and board location were recovered from the input.",
     "nets": [
      "+5V",
@@ -114,8 +114,8 @@
     "id": "RL",
     "status": "recovered",
     "confidence": "high",
-    "x": 130.0,
-    "y": 100.0,
+    "x": 130,
+    "y": 100,
     "explanation": "Reference, value, pins and board location were recovered from the input.",
     "nets": [
      "GND",
@@ -295,10 +295,11 @@
  "supplies": [
   {
    "net": "+5V",
-   "volts": 5.0
+   "volts": 5
   }
  ],
  "verdict_conditions": [
   "Q1 passes across assumed corners (generic_pmos_sot_corner_high_vth, generic_pmos_sot_corner_low_vth); put the MPN on Q1 to remove this assumption."
- ]
+ ],
+ "verdict": "pass"
 }

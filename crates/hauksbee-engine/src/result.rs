@@ -2370,9 +2370,11 @@ pub struct JsonReport {
     /// The assumptions a `pass` rests on beyond the checks, one sentence each:
     /// each part the board names only by class, whose assumed corners the run
     /// swept ("Q1 passes across assumed corners (...); put the MPN on Q1 to
-    /// remove this assumption."). A pass with any is conditional on them,
-    /// never unconditional. Additive; omitted when empty or when the verdict
-    /// is not a pass (`verdict_reason` then says why).
+    /// remove this assumption."), and, once per area, intent the tool cannot
+    /// know but the hardware fixes (which level lights an indicator, when no
+    /// stated outcome says). A pass with any is conditional on them, never
+    /// unconditional. Additive; omitted when empty or when the verdict is not
+    /// a pass (`verdict_reason` then says why).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verdict_conditions: Vec<String>,
 }
@@ -2556,6 +2558,15 @@ impl JsonReport {
         self.assumptions = evidence.assumptions().to_vec();
         self.evidence = evidence.maps().to_vec();
         self.verdict_conditions = evidence.conditions().to_vec();
+        self
+    }
+
+    /// Add one assumption a pass rests on beyond the checks (nothing for
+    /// `None`): an outcome the tool cannot know, such as what an indicator
+    /// is meant to show. It qualifies a pass and never changes the verdict.
+    #[must_use]
+    pub fn with_condition(mut self, condition: Option<String>) -> Self {
+        self.verdict_conditions.extend(condition);
         self
     }
 

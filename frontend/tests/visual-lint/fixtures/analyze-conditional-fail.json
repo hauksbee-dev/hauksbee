@@ -53,30 +53,30 @@
   {
    "reference": "Q1",
    "value": "Q_PMOS_GSD",
-   "x": 110.0,
-   "y": 100.0,
-   "rot": 0.0
+   "x": 110,
+   "y": 100,
+   "rot": 0
   },
   {
    "reference": "RL",
    "value": "1k",
-   "x": 130.0,
-   "y": 100.0,
-   "rot": 0.0
+   "x": 130,
+   "y": 100,
+   "rot": 0
   },
   {
    "reference": "RGS",
    "value": "10k",
-   "x": 110.0,
-   "y": 115.0,
-   "rot": 0.0
+   "x": 110,
+   "y": 115,
+   "rot": 0
   },
   {
    "reference": "RG",
    "value": "100",
-   "x": 110.0,
-   "y": 130.0,
-   "rot": 0.0
+   "x": 110,
+   "y": 130,
+   "rot": 0
   }
  ],
  "import_diagnostics": {
@@ -90,8 +90,8 @@
     "id": "Q1",
     "status": "recovered",
     "confidence": "high",
-    "x": 110.0,
-    "y": 100.0,
+    "x": 110,
+    "y": 100,
     "explanation": "Reference, value, pins and board location were recovered from the input.",
     "nets": [
      "+5V",
@@ -103,8 +103,8 @@
     "id": "RG",
     "status": "recovered",
     "confidence": "high",
-    "x": 110.0,
-    "y": 130.0,
+    "x": 110,
+    "y": 130,
     "explanation": "Reference, value, pins and board location were recovered from the input.",
     "nets": [
      "+2V5",
@@ -115,8 +115,8 @@
     "id": "RGS",
     "status": "recovered",
     "confidence": "high",
-    "x": 110.0,
-    "y": 115.0,
+    "x": 110,
+    "y": 115,
     "explanation": "Reference, value, pins and board location were recovered from the input.",
     "nets": [
      "+5V",
@@ -127,8 +127,8 @@
     "id": "RL",
     "status": "recovered",
     "confidence": "high",
-    "x": 130.0,
-    "y": 100.0,
+    "x": 130,
+    "y": 100,
     "explanation": "Reference, value, pins and board location were recovered from the input.",
     "nets": [
      "GND",
@@ -430,8 +430,9 @@
   },
   {
    "net": "+5V",
-   "volts": 5.0
+   "volts": 5
   }
  ],
- "verdict_reason": "1 blocking problem(s), first: Whether Q1 turns on depends on which part is fitted. Q1 has no part number, so it is bounded by assumed corners; at the corner generic_pmos_sot_corner_low_vth it conducts with |VGS| = 2.48 V, below the 3.00 V maximum VGS(th) of its class, so a part nearer generic_pmos_sot_corner_high_vth is not guaranteed to turn on: put the MPN on Q1 to remove this assumption, or drive its gate to at least 4.50 V; next: Put the manufacturer part number on the transistor so its real threshold is checked, or drive the gate further (a level shifter or a higher gate supply), or pick a logic-level part rated at this drive."
+ "verdict_reason": "1 blocking problem(s), first: Q1 has no part number, so it is bounded by assumed corners; at the corner generic_pmos_sot_corner_low_vth it conducts with |VGS| = 2.48 V, below the 3.00 V maximum VGS(th) of its class, so a part nearer generic_pmos_sot_corner_high_vth is not guaranteed to turn on: put the MPN on Q1 to remove this assumption, or drive its gate to at least 4.50 V; next: Put the transistor's part number on it so its real threshold is checked, or drive the gate past the class's maximum threshold (a level shifter or a logic-level part).",
+ "verdict": "fail"
 }

@@ -105,3 +105,140 @@ fn the_web_report_carries_the_same_note_without_failing() {
         "{findings:?}"
     );
 }
+
+const CONDITION: &str = "Indicator polarity versus intent was not checked for D1";
+
+/// A 74HCT245 channel sinking a green LED from `CARRIER_DETECT`: electrically
+/// clean as a netlist, and which level lights the LED is fixed by the wiring,
+/// not by firmware. `placeholder_cap` adds a decoupling capacitor whose value
+/// is still the placeholder `C`: a gating warning that is not serious.
+fn transceiver_netlist(name: &str, placeholder_cap: bool) -> std::path::PathBuf {
+    let (cap, cap_5v, cap_gnd) = if placeholder_cap {
+        (
+            r#"
+    (comp (ref "C1") (value "C") (footprint "Capacitor_SMD:C_0805_2012Metric"))"#,
+            r#" (node (ref "C1") (pin "1"))"#,
+            r#" (node (ref "C1") (pin "2"))"#,
+        )
+    } else {
+        ("", "", "")
+    };
+    let text = format!(
+        r#"(export (version "E")
+  (design (source "{name}.kicad_sch") (tool "Eeschema"))
+  (components
+    (comp (ref "J1") (value "Conn_01x03") (footprint "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical"))
+    (comp (ref "U1") (value "74HCT245") (footprint "Package_SO:SOIC-20W_7.5x12.8mm_P1.27mm"))
+    (comp (ref "R1") (value "330") (footprint "Resistor_SMD:R_0805_2012Metric"))
+    (comp (ref "D1") (value "LED_GREEN") (footprint "LED_SMD:LED_0805_2012Metric")){cap})
+  (nets
+    (net (code "1") (name "+5V") (node (ref "J1") (pin "1")) (node (ref "U1") (pin "20")) (node (ref "U1") (pin "1")) (node (ref "D1") (pin "2") (pinfunction "A")){cap_5v})
+    (net (code "2") (name "GND") (node (ref "J1") (pin "2")) (node (ref "U1") (pin "10")) (node (ref "U1") (pin "19")){cap_gnd}
+      (node (ref "U1") (pin "3")) (node (ref "U1") (pin "4")) (node (ref "U1") (pin "5")) (node (ref "U1") (pin "6"))
+      (node (ref "U1") (pin "7")) (node (ref "U1") (pin "8")) (node (ref "U1") (pin "9")))
+    (net (code "3") (name "CARRIER_DETECT") (node (ref "J1") (pin "3")) (node (ref "U1") (pin "2")))
+    (net (code "4") (name "LED_K") (node (ref "U1") (pin "18")) (node (ref "R1") (pin "1")))
+    (net (code "5") (name "LED_R") (node (ref "R1") (pin "2")) (node (ref "D1") (pin "1") (pinfunction "K")))))
+"#
+    );
+    let dir = std::env::temp_dir().join(format!("hauksbee_indicator_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("{name}.net"));
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+/// The pass rests on what the tool cannot know, so every surface says it is
+/// conditional on it, in the same words: `--json` (verdict still `pass`), the
+/// plain triage headline, the closing VERDICT line and the web headline.
+#[test]
+fn a_hardware_fixed_indicator_makes_the_pass_conditional_on_every_surface() {
+    let path = transceiver_netlist("indicator_condition", false);
+
+    let json = run_board(&path, &["--check", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&json.stdout).expect("json report");
+    assert_eq!(v["verdict"], "pass", "{v:#}");
+    let conditions: Vec<&str> = v["verdict_conditions"]
+        .as_array()
+        .unwrap_or_else(|| panic!("conditions: {v:#}"))
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    assert_eq!(
+        conditions.len(),
+        1,
+        "one condition for the area: {conditions:?}"
+    );
+    assert!(conditions[0].starts_with(CONDITION), "{conditions:?}");
+
+    let text = stdout(&run_board(&path, &["--check", "--plain"]));
+    let headline = text.lines().nth(1).unwrap_or_default();
+    assert!(
+        headline.starts_with("OK TO ORDER, conditionally: ") && headline.contains(conditions[0]),
+        "{text}"
+    );
+    let verdict = text
+        .lines()
+        .rfind(|l| l.starts_with("VERDICT:"))
+        .unwrap_or_default();
+    assert!(
+        verdict.starts_with("VERDICT: clean, conditionally: ") && verdict.contains(conditions[0]),
+        "{verdict}"
+    );
+    // The detail stays where it was: the traced path is in NOT COVERED.
+    assert!(text.contains("NOT COVERED: Indicators: "), "{text}");
+
+    let bytes = std::fs::read(&path).unwrap();
+    let web = hauksbee_engine::frontdoor::analyze("indicator_condition.net", &bytes);
+    assert!(web.ok, "{:?}", web.error);
+    assert_eq!(web.verdict, "pass");
+    assert_eq!(web.verdict_conditions, conditions);
+    assert!(
+        web.headline.contains("OK to order, conditionally")
+            && web
+                .headline
+                .ends_with(&format!("this rests on: {}", conditions[0])),
+        "{}",
+        web.headline
+    );
+}
+
+/// A finding that fails the `--check` gate without being serious (a
+/// placeholder capacitor value) fails the run; the web headline must not read
+/// as a pass beside it.
+#[test]
+fn a_gating_warning_fails_the_web_headline_as_it_fails_the_json() {
+    let path = transceiver_netlist("indicator_gating_warning", true);
+    let json = run_board(&path, &["--check", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&json.stdout).expect("json report");
+    assert_eq!(v["verdict"], "fail", "{v:#}");
+    assert_eq!(v["serious_count"], 0, "{v:#}");
+    assert!(v.get("verdict_conditions").is_none(), "{v:#}");
+
+    let bytes = std::fs::read(&path).unwrap();
+    let web = hauksbee_engine::frontdoor::analyze("indicator_gating_warning.net", &bytes);
+    assert!(web.ok, "{:?}", web.error);
+    assert_eq!(web.verdict, "fail");
+    assert_eq!(web.serious, 0);
+    assert_eq!(web.verdict_reason.as_deref(), v["verdict_reason"].as_str());
+    assert!(web.verdict_conditions.is_empty());
+    assert!(
+        web.headline.starts_with("Not OK to order: "),
+        "{}",
+        web.headline
+    );
+}
+
+/// An LED a microcontroller pin drives directly is lit by whatever level the
+/// firmware writes, so ordering the board does not fix its meaning: it stays
+/// NOT COVERED but adds no condition (blinky keeps its clean bill).
+#[test]
+fn a_firmware_driven_indicator_adds_no_condition() {
+    let path = crate::support::board("../hauksbee-ci/examples/boards/blinky.kicad_pcb");
+    let json = run_board(&path, &["--check", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&json.stdout).expect("json report");
+    let note = v["triage"]["not_covered"].as_str().unwrap_or_default();
+    assert!(note.contains(LINE), "{note}");
+    assert_eq!(v["verdict"], "pass", "{v:#}");
+    assert!(v.get("verdict_conditions").is_none(), "{v:#}");
+}

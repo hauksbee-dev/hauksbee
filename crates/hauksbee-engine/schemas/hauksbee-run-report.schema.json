@@ -2990,7 +2990,7 @@
       "type": "string"
     },
     "verdict_conditions": {
-      "description": "The assumptions a `pass` rests on beyond the checks, one sentence each:\neach part the board names only by class, whose assumed corners the run\nswept (\"Q1 passes across assumed corners (...); put the MPN on Q1 to\nremove this assumption.\"). A pass with any is conditional on them,\nnever unconditional. Additive; omitted when empty or when the verdict\nis not a pass (`verdict_reason` then says why).",
+      "description": "The assumptions a `pass` rests on beyond the checks, one sentence each:\neach part the board names only by class, whose assumed corners the run\nswept (\"Q1 passes across assumed corners (...); put the MPN on Q1 to\nremove this assumption.\"), and, once per area, intent the tool cannot\nknow but the hardware fixes (which level lights an indicator, when no\nstated outcome says). A pass with any is conditional on them, never\nunconditional. Additive; omitted when empty or when the verdict is not\na pass (`verdict_reason` then says why).",
       "items": {
         "type": "string"
       },

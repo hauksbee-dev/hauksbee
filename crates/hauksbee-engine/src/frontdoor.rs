@@ -27,7 +27,7 @@ use crate::plain::{
     plain_drc_structured_with_rule_source, plain_netlint, plain_si, HeadsUp, PlainFinding,
     PlainLevel, PlainReport,
 };
-use crate::result::{BindSummary, JsonNote, JsonNoteKind, Refusal, VerdictCause};
+use crate::result::{BindSummary, JsonNote, JsonNoteKind, Refusal};
 
 /// A finding, in the shape the browser renders.
 #[derive(Debug, Clone, Serialize)]
@@ -634,7 +634,7 @@ pub struct WebReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refusal: Option<Refusal>,
     /// Why the verdict is not a pass, and what to do next, in one plain
-    /// sentence: the SAME [`VerdictCause::reason`] text `--json`, `--check` and
+    /// sentence: the SAME [`crate::result::VerdictCause::reason`] text `--json`, `--check` and
     /// the CI report carry. Absent when nothing blocks the verdict.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict_reason: Option<String>,
@@ -645,30 +645,105 @@ pub struct WebReport {
     /// the verdict is not a pass.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verdict_conditions: Vec<String>,
+    /// The machine verdict, `"pass"` | `"fail"` | `"invalid"`: the same
+    /// derivation `run --check --json` prints for this board, so the browser
+    /// can never read a pass the CLI fails. Absent on a report that could not
+    /// read the board.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub verdict: String,
+    /// The `--check` machine document for the static board, which the verdict
+    /// is derived from. Firmware co-sim faults are folded into a copy of it
+    /// when the verdict is derived, never into this one.
+    #[serde(skip)]
+    machine: Option<crate::result::JsonReport>,
+    /// The headline as the sections and co-sim left it, before the verdict
+    /// set its class. The firmware pass restarts from it.
+    #[serde(skip)]
+    pre_verdict_headline: String,
 }
 
 impl WebReport {
-    /// Derive [`Self::verdict_reason`] from the finished report. Called after
-    /// the last mutation of the verdict inputs (findings, bind, refusal).
+    /// Derive [`Self::verdict`], [`Self::verdict_reason`],
+    /// [`Self::verdict_conditions`] and the verdict class of the headline from
+    /// the machine document, plus any firmware co-sim faults and refusal.
+    /// Called after the last mutation of the verdict inputs (findings, bind,
+    /// refusal, co-sim).
     fn explain_verdict(&mut self) {
-        let findings = self.sections.iter().flat_map(|s| &s.findings);
-        let cosim = self.cosim.iter().flat_map(|c| &c.findings);
-        let first = findings.chain(cosim).find(|f| f.level == "serious");
-        let failing = (self.serious > 0).then(|| VerdictCause::Failing {
-            count: self.serious,
-            first: first.map(|f| (f.what.as_str(), f.fix.as_str())),
-        });
-        let refused = self.refusal.as_ref().map(VerdictCause::from);
-        let blockers = self
-            .bind
-            .as_ref()
-            .map_or(&[][..], |b| &b.active_path_unresolved);
-        self.verdict_reason =
-            VerdictCause::pick(failing, refused, blockers, self.run_level_undermined)
-                .map(|cause| cause.reason_alongside(blockers));
-        // A condition qualifies a pass; a verdict that is not one says why instead.
-        if self.verdict_reason.is_some() {
-            self.verdict_conditions.clear();
+        let Some(mut machine) = self.machine.clone() else {
+            return;
+        };
+        machine.refusal.clone_from(&self.refusal);
+        // A co-sim fault gates like the CLI's co-sim surface: a destroyed part
+        // is serious, and any raised over-stress fails the gate.
+        let faults: Vec<crate::result::JsonFinding> = self
+            .cosim
+            .iter()
+            .flat_map(|c| &c.findings)
+            .filter(|f| f.level == "serious" || f.level == "warning")
+            .map(|f| crate::result::JsonFinding {
+                check: "cosim".into(),
+                kind: "fault".into(),
+                severity: f.level.clone(),
+                nets: Vec::new(),
+                location_mm: None,
+                layer: None,
+                refs: Vec::new(),
+                actionable: true,
+                message: f.what.clone(),
+                plain: f.what.clone(),
+                fix: (!f.fix.is_empty()).then(|| f.fix.clone()),
+            })
+            .collect();
+        if !faults.is_empty() {
+            machine.surface_gate_fails = true;
+            machine.findings.get_or_insert_with(Vec::new).extend(faults);
+        }
+        let verdict = machine.run_verdict();
+        self.pre_verdict_headline.clone_from(&self.headline);
+        self.headline = verdict_headline(&verdict, &self.headline, self.serious);
+        self.verdict = verdict.verdict.to_string();
+        self.verdict_reason = verdict.reason;
+        self.verdict_conditions = verdict.conditions;
+    }
+}
+
+/// Headlines that already say the run could not be judged.
+const BIND_OPEN_HEADLINE: &str = "No blocking issues, but active parts are unresolved; analog/AC/thermal results are not trustworthy. See the notes.";
+const UNDERMINED_HEADLINE: &str = "Evidence is undermined; results touching unresolved inputs are invalid for analysis. See the evidence below.";
+const FIRMWARE_UNDERMINED_HEADLINE: &str = "Firmware evidence is undermined; substituted or unresolved inputs invalidate affected co-sim assertions.";
+const REFUSAL_HEADLINE: &str =
+    "Analysis invalid for the requested firmware co-simulation. Static board findings remain valid.";
+
+/// The headline in the class the machine verdict states.
+///
+/// The sections and the co-sim pass describe what they found; this makes sure
+/// the words never claim a different outcome than the verdict. A failing run
+/// never reads as fine, an inconclusive one never as a pass, and a pass that
+/// rests on conditions names them (the browser lists them under the lead-in).
+fn verdict_headline(verdict: &crate::result::RunVerdict, current: &str, serious: usize) -> String {
+    let inconclusive = [
+        BIND_OPEN_HEADLINE,
+        UNDERMINED_HEADLINE,
+        FIRMWARE_UNDERMINED_HEADLINE,
+        REFUSAL_HEADLINE,
+    ];
+    match verdict.verdict {
+        // A serious finding's headline already says to fix it before ordering.
+        "fail" if serious > 0 => current.to_string(),
+        "fail" => "Not OK to order: a finding fails the check gate; see the reason below.".to_string(),
+        "invalid" if inconclusive.contains(&current) => current.to_string(),
+        "invalid" => "Not conclusive: nothing found blocks ordering, but this run cannot vouch for the board; see the reason below.".to_string(),
+        _ if verdict.conditions.is_empty() => current.to_string(),
+        _ => {
+            let conditions = verdict.conditions.join(" ");
+            if current == overall_headline(0, 0, false, false) {
+                format!(
+                    "OK to order, conditionally: the static checks found nothing that blocks \
+                     ordering; this rests on: {conditions}"
+                )
+            } else {
+                format!("{current} OK to order, conditionally; this rests on: {conditions}")
+            }
         }
     }
 }
@@ -1250,9 +1325,8 @@ fn analyze_normalized_with_context(
     let usbc_reliable = crate::reports::usb_c::scoped_blockers(board, &verdict_blockers).is_empty();
     // What an indicator MEANS is not judged without a stated outcome; the
     // triage and the browser's notes both say so.
-    let indicators_not_judged = crate::checks::indicators::not_judged_note(
-        &crate::checks::indicators::indicator_traces(board, lib),
-    );
+    let indicators = crate::checks::indicators::indicator_traces(board, lib);
+    let indicators_not_judged = crate::checks::indicators::not_judged_note(&indicators);
     let triage = (!is_gerber).then(|| {
         let mut triage = crate::plain::order_triage_with_rule_source(
             &drc_structured,
@@ -1358,16 +1432,24 @@ fn analyze_normalized_with_context(
     });
     // Fail beats invalid, but a non-serious warning must not: an undermined
     // run-level claim overrides the headline whenever nothing serious does.
+    // A pass that rests on conditions is headlined by the verdict, which names
+    // them (see `verdict_headline`); assumed corners are not "qualified" news.
     if serious == 0 && run_level_undermined {
-        headline = "Evidence is undermined; results touching unresolved inputs are invalid for analysis. See the evidence below.".to_string();
-    } else if serious == 0 && !evidence.conditions().is_empty() {
-        headline = format!(
-            "No blocking findings, on a condition: {}",
-            evidence.conditions().join(" ")
-        );
-    } else if total == 0 && evidence.has_caveats() {
+        headline = UNDERMINED_HEADLINE.to_string();
+    } else if total == 0 && evidence.conditions().is_empty() && evidence.has_caveats() {
         headline = "No blocking findings, but some evidence is qualified; see the evidence limitations below.".to_string();
     }
+    // The `--check` machine document for this board: the web verdict is ITS
+    // verdict, so the browser and `run --check --json` cannot disagree.
+    let machine = crate::reports::check::machine_report(
+        &board.name,
+        &bind_summary,
+        &drc_structured,
+        &actual_findings,
+        crate::reports::check::check_gate_fails(&drc_structured, &lint, &si, usbc.as_ref()),
+    )
+    .with_evidence(&evidence)
+    .with_condition(crate::checks::indicators::intent_condition(&indicators));
 
     let components = board
         .components
@@ -1430,7 +1512,7 @@ fn analyze_normalized_with_context(
             .collect(),
         component_assertions: component_assertion_capabilities(board, bound),
         supplies,
-        verdict_conditions: evidence.conditions().to_vec(),
+        machine: Some(machine),
         ..WebReport::default()
     };
     report.explain_verdict();
@@ -1610,6 +1692,10 @@ fn analyze_with_firmware_context(
         Some(static_bound),
         supporting_artifacts,
     );
+    // The static pass already set the headline's verdict class; the co-sim
+    // below works on what the sections said, and the verdict is derived again
+    // at the end over both.
+    report.headline = std::mem::take(&mut report.pre_verdict_headline);
     let tie_qualification = schematic_ties.map(|ties| ties.qualify(&drc));
 
     // The firmware part may be a zip (a built tree, or a whole PlatformIO
@@ -1729,14 +1815,16 @@ fn analyze_with_firmware_context(
                 // report. Everything up to `fault_maps_end` is the static
                 // prefix plus the per-fault (finding-backed) maps, so only what
                 // follows it is a run-level simulation claim to grade here.
-                let sim_undermined = evidence
-                    .maps()
-                    .get(fault_maps_end..)
-                    .unwrap_or_default()
+                let sim_maps = evidence.maps().get(fault_maps_end..).unwrap_or_default();
+                let sim_undermined = sim_maps
                     .iter()
                     .any(hauksbee_ir::evidence::EvidenceMap::is_undermined);
+                // The verdict grades the same run-level simulation claims.
+                if let Some(machine) = report.machine.as_mut() {
+                    machine.evidence.extend(sim_maps.iter().cloned());
+                }
                 if report.serious == 0 && (report.run_level_undermined || sim_undermined) {
-                    report.headline = "Firmware evidence is undermined; substituted or unresolved inputs invalidate affected co-sim assertions.".to_string();
+                    report.headline = FIRMWARE_UNDERMINED_HEADLINE.to_string();
                     evidence_invalid = true;
                 } else if report.total == 0 && evidence.has_caveats() {
                     report.headline = "No blocking findings, but firmware evidence is qualified; see the evidence limitations below.".to_string();
@@ -1799,7 +1887,7 @@ fn analyze_with_firmware_context(
 
 fn apply_refusal_headline(report: &mut WebReport) {
     if report.refusal.is_some() && report.serious == 0 {
-        report.headline = "Analysis invalid for the requested firmware co-simulation. Static board findings remain valid.".to_string();
+        report.headline = REFUSAL_HEADLINE.to_string();
     }
 }
 
@@ -2684,7 +2772,7 @@ fn usbc_web_section(usbc: &crate::checks::usb_c::UsbcReport) -> Option<WebSectio
 fn overall_headline(total: usize, serious: usize, has_heads_up: bool, bind_open: bool) -> String {
     if total == 0 {
         if bind_open {
-            return "No blocking issues, but active parts are unresolved; analog/AC/thermal results are not trustworthy. See the notes.".to_string();
+            return BIND_OPEN_HEADLINE.to_string();
         }
         if has_heads_up {
             return "No problems found, but there is something worth knowing; see the heads-up note below.".to_string();
@@ -3424,6 +3512,148 @@ fn main {
         assert!(healthy(&overall_headline(0, 0, false, false)));
     }
 
+    /// A lint finding at `severity`, for the verdict table below.
+    fn verdict_finding(severity: &str) -> crate::result::JsonFinding {
+        crate::result::JsonFinding {
+            check: "lint".into(),
+            kind: "pcb_schematic_mismatch".into(),
+            severity: severity.into(),
+            nets: Vec::new(),
+            location_mm: None,
+            layer: None,
+            refs: vec!["C4".into()],
+            actionable: true,
+            message: "C4 has value 100n in the schematic but 10n on the PCB".into(),
+            plain: "C4's value differs between schematic and PCB".into(),
+            fix: Some("make the two values agree".into()),
+        }
+    }
+
+    /// A web report over `findings` whose machine verdict is built exactly as
+    /// the static path builds it, then explained.
+    fn verdict_web(
+        findings: &[crate::result::JsonFinding],
+        gate: bool,
+        conditions: &[&str],
+        refusal: Option<Refusal>,
+    ) -> WebReport {
+        let bind = crate::result::BindSummary {
+            resolved: 1,
+            unresolved: 0,
+            non_ignored: 1,
+            critical_parts_bound: "1/1".into(),
+            critical_parts_bound_n: 1,
+            critical_parts_total: 1,
+            mcu_bound: false,
+            active_path_unresolved: Vec::new(),
+            resolved_but_open_active: Vec::new(),
+        };
+        let drc = crate::result::DrcStructured::from_report(&hauksbee_extract::DrcReport {
+            clearance_mm: 0.2,
+            findings: Vec::new(),
+            primitive_count: 2,
+            version_warning: None,
+            zone_pad_overlaps_suppressed: Some(0),
+            excluded: Vec::new(),
+        });
+        let (total, serious) = (
+            findings.len(),
+            findings.iter().filter(|f| f.severity == "serious").count(),
+        );
+        let mut machine =
+            crate::reports::check::machine_report("board", &bind, &drc, findings, gate);
+        machine.verdict_conditions = conditions.iter().map(ToString::to_string).collect();
+        let mut report = WebReport {
+            ok: true,
+            headline: overall_headline(total, serious, false, false),
+            serious,
+            total,
+            refusal,
+            machine: Some(machine),
+            ..WebReport::default()
+        };
+        report.explain_verdict();
+        report
+    }
+
+    /// The web headline takes its class from the `--check` machine verdict:
+    /// one table of the same cases the plain triage agrees with.
+    #[test]
+    fn the_web_headline_follows_the_machine_verdict() {
+        let finding = verdict_finding;
+        let web = |findings: Vec<_>, gate, conditions: &[&str], refusal| {
+            verdict_web(&findings, gate, conditions, refusal)
+        };
+        let refusal = || {
+            Some(Refusal::new(
+                "firmware co-simulation",
+                "a firmware image",
+                Vec::<String>::new(),
+                "upload one",
+            ))
+        };
+        let clean = web(Vec::new(), false, &[], None);
+        assert_eq!(
+            (clean.verdict.as_str(), clean.headline.as_str()),
+            ("pass", overall_headline(0, 0, false, false).as_str())
+        );
+
+        // A gating warning that is not serious: the old headline read "worth
+        // a look" beside a failed JSON verdict.
+        let gating = web(vec![finding("warning")], true, &[], None);
+        assert_eq!(gating.verdict, "fail");
+        assert!(
+            gating.headline.starts_with("Not OK to order: "),
+            "{}",
+            gating.headline
+        );
+        assert!(gating
+            .verdict_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("C4's value")));
+
+        let serious = web(vec![finding("serious")], true, &[], None);
+        assert_eq!(serious.verdict, "fail");
+        assert!(
+            serious.headline.contains("1 serious"),
+            "{}",
+            serious.headline
+        );
+
+        // Inconclusive: never a pass-shaped headline, and an inconclusive
+        // headline already set by the run is kept.
+        let refused = web(Vec::new(), false, &[], refusal());
+        assert_eq!(refused.verdict, "invalid");
+        assert!(
+            refused.headline.starts_with("Not conclusive: "),
+            "{}",
+            refused.headline
+        );
+        let mut kept = web(Vec::new(), false, &[], refusal());
+        kept.headline = REFUSAL_HEADLINE.to_string();
+        kept.explain_verdict();
+        assert_eq!(kept.headline, REFUSAL_HEADLINE);
+
+        // A conditional pass names its conditions after the lead-in.
+        let condition = "Indicator polarity versus intent was not checked for D1.";
+        let conditional = web(Vec::new(), false, &[condition], None);
+        assert_eq!(conditional.verdict, "pass");
+        assert_eq!(conditional.verdict_conditions, [condition]);
+        assert!(
+            conditional
+                .headline
+                .starts_with("OK to order, conditionally: ")
+                && conditional
+                    .headline
+                    .ends_with(&format!("this rests on: {condition}")),
+            "{}",
+            conditional.headline
+        );
+        // A failing run states no conditions: the reason says what to do.
+        let failing = web(vec![finding("warning")], true, &[condition], None);
+        assert!(failing.verdict_conditions.is_empty() && !failing.headline.contains(condition));
+    }
+
     #[test]
     fn web_report_carries_bind_summary() {
         let r = analyze("bp.kicad_pcb", BLUEPILL);
@@ -3641,6 +3871,7 @@ fn main {
             "component_assertions",
             "clearance_rule_source",
             "triage",
+            "verdict",
             "verdict_reason",
         ] {
             object.remove(key);

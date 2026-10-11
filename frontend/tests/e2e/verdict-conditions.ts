@@ -45,7 +45,7 @@ await browserFlow({ out: OUT, viewport: { width: 1440, height: 900 } }, async pa
   const text = await items(page).first().innerText()
   ok('the item is the engine sentence', text.includes('Q1 passes across assumed corners') && text.includes('put the MPN on Q1'), text)
   const verdict = await verdictText(page)
-  ok('the headline leads in, then the item says it once', verdict.includes('on a condition') && verdict.split('Q1 passes across assumed corners').length === 2, verdict)
+  ok('the headline leads in, then the item says it once', verdict.includes('OK to order, conditionally') && verdict.split('Q1 passes across assumed corners').length === 2, verdict)
   ok('it does not read as a failure', !/serious|fix the serious/i.test(verdict), verdict)
   ok('the list sits inside the verdict card',
     await page.locator('[data-testid="report-verdict"] [data-testid="report-verdict-conditions"]').count() === 1)

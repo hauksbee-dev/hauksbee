@@ -203,7 +203,11 @@ export type ReportVerdictTone = 'ok' | 'warning' | 'error'
 
 /** One verdict contract for the browser card, the shell chip and the export. */
 export function reportVerdictTone(report: WebReport): ReportVerdictTone {
+  // The engine's verdict leads: a gating finding fails the run even when none
+  // of its findings is graded serious, and an inconclusive run is never green.
+  if (report.verdict === 'fail') return 'error'
   if (report.serious > 0 || (report.cosim?.findings ?? []).some(f => f.level === 'serious')) return 'error'
+  if (report.verdict === 'invalid') return 'warning'
   const cosimQualified = !!(
     report.refusal
     || report.cosim?.findings?.length
@@ -312,7 +316,8 @@ export interface ReportView {
 }
 
 /** The engine's conditional headline carries the same sentences as
- *  `verdict_conditions` ("No blocking findings, on a condition: <joined>"). The
+ *  `verdict_conditions` ("OK to order, conditionally: ...; this rests on:
+ *  <joined>"). The
  *  card lists them as items, so the headline keeps only its lead-in rather than
  *  saying everything twice. Any other headline is left alone. */
 function headlineWithoutConditions(headline: string, conditions: string[]): string {
