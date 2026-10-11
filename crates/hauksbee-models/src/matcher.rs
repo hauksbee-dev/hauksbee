@@ -9,6 +9,8 @@
 //! Long-form how-and-why: docs/how-and-why/hauksbee-models/schema.md (this
 //! module and the schema are one story: what an entry is and how it wins).
 
+use std::sync::OnceLock;
+
 use regex::Regex;
 
 use crate::schema::{ComponentKind, ModelEntry};
@@ -75,7 +77,14 @@ impl CompiledEntry {
         });
         // European comma-decimal is normalised before the value regex runs.
         let value = normalise_value_str(field(q.value.as_ref()));
+        // A part value often carries its package as a trailing parenthesis
+        // ("BAT54A(SOT23-3)"). The rule may name the whole string or only the
+        // part, so it matches if either spelling does.
+        let bare = strip_package_suffix(&value);
         let re_ok = |re: &Option<Regex>, text: &str| re.as_ref().is_none_or(|re| re.is_match(text));
+        let value_ok = |re: &Option<Regex>| {
+            re_ok(re, &value) || bare.is_some_and(|b| re_ok(re, b))
+        };
         // Named source properties: every authored rule is required, and a
         // missing property is not evidence, so it cannot match.
         let properties_ok = self.property_res.iter().all(|(expected_key, regex)| {
@@ -105,7 +114,7 @@ impl CompiledEntry {
             return false;
         }
         lib_ok
-            && re_ok(&self.value_re, &value)
+            && value_ok(&self.value_re)
             && re_ok(&self.footprint_re, field(q.footprint.as_ref()))
             && re_ok(&self.mpn_re, field(q.mpn.as_ref()))
             && properties_ok
@@ -345,6 +354,22 @@ fn normalise_value_str(s: &str) -> String {
     s.replace(',', ".") // European decimal comma → point
 }
 
+/// The value without a trailing parenthesised package, when that is what the
+/// parenthesis is: a package family followed by a digit ("(SOT23-3)",
+/// "(QFN32)", "(SOIC-8_150mil)"), or SMA/SMB/SMC. Anything else in
+/// parentheses (a value, "DNP", a manufacturer) is left alone, so a suffix can
+/// never turn an unrelated string into a part code.
+fn strip_package_suffix(value: &str) -> Option<&str> {
+    static PACKAGE: OnceLock<Regex> = OnceLock::new();
+    let re = PACKAGE.get_or_init(|| {
+        Regex::new(
+            r"(?i)^(.*[a-z0-9])\s*\(\s*(?:(?:SOT|SOD|SOIC|SOP|SSOP|TSSOP|MSOP|VSSOP|SO|SC|QFN|DFN|BGA|LGA|DIP|TO|DO|LQFP|TQFP|QFP)[-_ ]?\d[-_ a-z0-9.]*|SM[abc])\s*\)$",
+        )
+        .expect("static package regex")
+    });
+    re.captures(value).and_then(|c| c.get(1)).map(|m| m.as_str())
+}
+
 fn normalise_property_key(s: &str) -> String {
     s.trim().to_ascii_lowercase().replace([' ', '-'], "_")
 }
@@ -502,6 +527,33 @@ mod tests {
         assert_eq!(c("(?i)AB"), c("AB"));
         assert_eq!(c("(AB)"), c("AB"));
         assert_eq!(c("^1N4148W$"), c("^1N4148(W)$"));
+    }
+
+    #[test]
+    fn a_trailing_package_parenthesis_does_not_hide_the_part_code() {
+        let card = entry(
+            ComponentKind::Diode,
+            MatchRules {
+                value_re: Some("^BAT54[AC]?$".to_string()),
+                ..Default::default()
+            },
+        );
+        let value = |v: &str| ComponentQuery {
+            value: Some(v.to_string()),
+            ..Default::default()
+        };
+        // Legal control: the package suffix is dropped before matching.
+        assert!(card.matches(&value("BAT54A(SOT23-3)")));
+        assert!(card.matches(&value("BAT54C (SOT-23)")));
+        assert!(card.matches(&value("BAT54")));
+        // Not a package: a note, a value or another part stays unmatched.
+        assert!(!card.matches(&value("BAT54A(DNP)")));
+        assert!(!card.matches(&value("BAT54A(SUNHOLD)")));
+        // The stripped part must still be the part: an unrelated code with a
+        // package suffix does not match, and a bare package is not a part.
+        assert!(!card.matches(&value("BAT46(SOT23-3)")));
+        assert!(!card.matches(&value("(SOT23-3)")));
+        assert!(!card.matches(&value("XBAT54A(SOT23-3)")));
     }
 
     #[test]

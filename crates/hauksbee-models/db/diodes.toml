@@ -2526,10 +2526,12 @@ kind = "diode"
 description = "1N5819HW Schottky rectifier, 40 V, 1 A, SOD-123 surface mount"
 
 [models.match]
-# 1N5819HW / 1N5819W / SS14 / SKM14, and the Olimex composite that names the
-# SOD-123 package explicitly. The bare "1N5819" is NOT matched here: it belongs
-# to the DO-41 entry above, whose thermal ratings are 4.5x apart from these.
-value_re = "(?i)^(1N5819[HW]W?|SS14|SKM14|1N5819\\(S4 ?SOD-?123\\))$"
+# 1N5819HW / 1N5819W / SS14 / SKM14, and the Olimex composites that name the
+# SOD-123 package explicitly ("1N5819(S4 SOD-123)", and "1N5819S4" once a
+# trailing "(SOD-123)" is split off by the matcher). The bare "1N5819" is NOT
+# matched here: it belongs to the DO-41 entry above, whose thermal ratings are
+# 4.5x apart from these. The S4 caveat in the note above applies to both.
+value_re = "(?i)^(1N5819[HW]W?|SS14|SKM14|1N5819S4|1N5819\\(S4 ?SOD-?123\\))$"
 
 [models.params]
 is  = 1.16662e-6  # fitted with n and rs to the 0.1 A and 3.0 A points
