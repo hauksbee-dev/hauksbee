@@ -9916,6 +9916,8 @@ value_re = "(?i)^CH340X$"
 icc_3v3_a = 0.004
 supply_on_v = 3.1
 icc_5v_a = 0.007
+vcc_3v3_v = 3.3
+vcc_5v_v = 5.0
 warning = "source-bound supply model only: the typical supply current (4 mA at 3.3 V, 7 mA at 5 V, interpolated in between) is executable; the UART and modem-control outputs, the USB engine, the V3 internal regulator and sleep current are not represented"
 
 [models.pins]
@@ -9938,7 +9940,7 @@ name = "supply_draw"
 kind = "current"
 a = "vcc"
 b = "gnd"
-expr = "(icc_3v3_a + (icc_5v_a - icc_3v3_a) * min(1.0, max(0.0, (v_vcc - 3.3) / 1.7))) * min(1.0, max(0.0, v_vcc / supply_on_v))"
+expr = "(icc_3v3_a + (icc_5v_a - icc_3v3_a) * min(1.0, max(0.0, (v_vcc - vcc_3v3_v) / (vcc_5v_v - vcc_3v3_v)))) * min(1.0, max(0.0, v_vcc / supply_on_v))"
 
 [models.source]
 tier = "datasheet-derived"
