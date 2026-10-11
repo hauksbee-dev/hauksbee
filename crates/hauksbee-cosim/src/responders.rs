@@ -401,12 +401,48 @@ pub(crate) struct ParallelMemoryResponder {
     data_in: Vec<ParallelSignal>,
     data_out: Vec<(char, u8)>,
     chains: Vec<Hc595Chain>,
-    pin_levels: HashMap<(char, u8), bool>,
-    initial_pin_levels: HashMap<(char, u8), bool>,
-    pin_outputs: HashMap<(char, u8), bool>,
+    pin_levels: PinMap,
+    initial_pin_levels: PinMap,
+    pin_outputs: PinMap,
     watched: Vec<(char, u8)>,
     last_write_cycle: Option<u64>,
     runtime: Arc<Mutex<ParallelMemoryRuntime>>,
+}
+
+/// A per-pin level, kept sorted by pin. A parallel memory reads these for
+/// every address, data and gate bit on every bus edge, and a board has tens
+/// of such pins at most, so a binary search beats hashing the key each time.
+#[derive(Default)]
+struct PinMap(Vec<(GpioPin, bool)>);
+
+impl PinMap {
+    fn get(&self, pin: GpioPin) -> Option<bool> {
+        self.0
+            .binary_search_by_key(&pin, |entry| entry.0)
+            .ok()
+            .map(|at| self.0[at].1)
+    }
+
+    fn insert(&mut self, pin: GpioPin, level: bool) {
+        match self.0.binary_search_by_key(&pin, |entry| entry.0) {
+            Ok(at) => self.0[at].1 = level,
+            Err(at) => self.0.insert(at, (pin, level)),
+        }
+    }
+
+    fn remove(&mut self, pin: GpioPin) {
+        if let Ok(at) = self.0.binary_search_by_key(&pin, |entry| entry.0) {
+            self.0.remove(at);
+        }
+    }
+}
+
+impl From<HashMap<GpioPin, bool>> for PinMap {
+    fn from(levels: HashMap<GpioPin, bool>) -> Self {
+        let mut entries: Vec<_> = levels.into_iter().collect();
+        entries.sort_unstable_by_key(|entry| entry.0);
+        Self(entries)
+    }
 }
 
 #[derive(Clone)]
@@ -480,9 +516,9 @@ impl ParallelMemoryResponder {
             data_in,
             data_out,
             chains,
-            pin_levels: HashMap::new(),
-            initial_pin_levels: HashMap::new(),
-            pin_outputs: HashMap::new(),
+            pin_levels: PinMap::default(),
+            initial_pin_levels: PinMap::default(),
+            pin_outputs: PinMap::default(),
             watched,
             last_write_cycle: None,
             runtime,
@@ -490,8 +526,8 @@ impl ParallelMemoryResponder {
     }
 
     pub(crate) fn with_initial_pin_levels(mut self, levels: HashMap<(char, u8), bool>) -> Self {
-        self.pin_levels = levels.clone();
-        self.initial_pin_levels = levels;
+        self.initial_pin_levels = PinMap::from(levels);
+        self.pin_levels = PinMap(self.initial_pin_levels.0.clone());
         for index in 0..self.writes.len() {
             let signal = self.writes[index].signal;
             let initial = self.source_level(signal, &[]);
@@ -502,7 +538,7 @@ impl ParallelMemoryResponder {
 
     fn source_level(&self, source: ParallelSignal, volts: &[f64]) -> Option<bool> {
         match source {
-            ParallelSignal::Mcu(pin) => self.pin_levels.get(&pin).copied(),
+            ParallelSignal::Mcu(pin) => self.pin_levels.get(pin),
             ParallelSignal::Hc595 { chain, chip, bit } => self
                 .chains
                 .get(chain)
@@ -678,7 +714,7 @@ impl InputResponder for ParallelMemoryResponder {
         let effective = edges
             .iter()
             .filter_map(|&(pin, port_high)| {
-                if self.pin_outputs.get(&pin).copied().unwrap_or(false) {
+                if self.pin_outputs.get(pin).unwrap_or(false) {
                     Some((pin, port_high))
                 } else {
                     // A PORT write changes only the output latch while DDR is
@@ -711,16 +747,16 @@ impl InputResponder for ParallelMemoryResponder {
     ) -> Vec<InputDrive> {
         let mut edges = Vec::new();
         for &(pin, output, port_high) in changes {
-            let previous = self.pin_levels.get(&pin).copied();
+            let previous = self.pin_levels.get(pin);
             self.pin_outputs.insert(pin, output);
             let level = output
                 .then_some(port_high)
-                .or_else(|| self.initial_pin_levels.get(&pin).copied());
+                .or_else(|| self.initial_pin_levels.get(pin));
             match (previous, level) {
                 (Some(_), Some(level)) => edges.push((pin, level)),
                 (None, Some(level)) => self.establish_pin(pin, level),
                 (_, None) => {
-                    self.pin_levels.remove(&pin);
+                    self.pin_levels.remove(pin);
                 }
             }
         }
