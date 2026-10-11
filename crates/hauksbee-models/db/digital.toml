@@ -9644,3 +9644,618 @@ basis = "Cypress 38-08032 Rev. AD Table 11 AVCC: connect to the 3.3 V power sour
 [models.coverage]
 implements = ["pin_roles", "supply_ranges", "io_logic_levels", "absolute_ratings"]
 missing = ["mcu_core", "firmware", "usb_engine", "gpif_fifos", "i2c_boot", "crystal_oscillator", "port_drive"]
+
+# ══ Olimex ESP32-EVB REV-L peripherals ════════════════════════════════════════
+# Datasheets were fetched into target/launch/olimex-datasheets/ (sha256 recorded
+# in each card). Each card models only what the datasheet states as a number: the
+# supply draw, the supply-limit envelope, and, where the part is a switch or a
+# threshold device, that behaviour. Everything else is listed under `missing`.
+#
+# A supply draw is the datasheet current only once the supply reaches its minimum
+# operating voltage (`supply_on_v`) and ramps linearly from zero at 0 V below it.
+# A constant current drawn from an unpowered rail has no physical meaning and
+# stalled the DC homotopy (source stepping) on the ESP32-EVB, where it asked a
+# 2 percent-scaled supply for the full datasheet current.
+
+# ── VS1838B infrared receiver module ─────────────────────────────────────────
+# Source: VS1838B datasheet (3 pages, manufacturer not printed), datasheetcafe
+# copy, sha256 3dd6f14bc6a4f71a703f4a03434d25bf2ac5b6e8b1ceb54d3e490103935ba7d0.
+# Pins in order OUT, GND, VCC. Vcc 2.7-5.5 V, Icc 0.4 mA typ / 1.5 mA max,
+# abs max Vcc 6.0 V. The block diagram shows an internal pull-up on OUT whose
+# value is not published, so the output is deliberately not driven here.
+[[models]]
+id = "vs1838b_ir_receiver"
+kind = "digital"
+description = "VS1838B 38 kHz infrared receiver module, 3-pin (supply draw and supply limits)"
+
+[models.match]
+value_re = "(?i)^VS1838B?$"
+
+[models.params]
+supply_current_a = 0.0004
+supply_on_v = 2.7
+warning = "source-bound supply model only: the 0.4 mA typical supply current and the 2.7-5.5 V supply limits are executable; the output stage (an internal pull-up of unpublished value), IR demodulation, burst timing and the 1.5 mA maximum draw are not represented"
+
+[models.pins]
+"1" = "out"
+"2" = "gnd"
+"3" = "vcc"
+
+[models.ratings]
+max_voltage_v = 6.0   # datasheet absolute maximum Vcc 6.0 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.0
+basis = "VS1838B datasheet (datasheetcafe copy), Electrical Characteristics Vcc 2.7 V to 5.5 V; Absolute Maximum Ratings Vcc 6.0 V"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vcc"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vcc / supply_on_v))"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.datasheetcafe.com/wp-content/uploads/2015/11/VS1838B.pdf"
+title = "VS1838B infrared receiver module datasheet (manufacturer not printed)"
+locator = "pin order OUT/GND/VCC; Electrical Characteristics Icc and Vcc; Absolute Maximum Ratings"
+sha256 = "3dd6f14bc6a4f71a703f4a03434d25bf2ac5b6e8b1ceb54d3e490103935ba7d0"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "supply_current_a"
+low = 0.0
+high = 0.0015
+unit = "A"
+kind = "specification-limits"
+basis = "VS1838B datasheet Icc 0.4 mA typical, 1.5 mA maximum"
+
+[models.coverage]
+implements = ["supply_current", "supply_range"]
+missing = ["output_stage", "ir_demodulation", "burst_timing", "maximum_supply_current"]
+
+# ── HX7027 2.7 V voltage detector (SOT-23-3) ─────────────────────────────────
+# Source: HX70XX series datasheet Ver 2.1 (Chinese), wmsc.lcsc.com copy, sha256
+# b8adc1db151b1aab2eff09fa05629c2b6fc5f0865f98fc15ab71c5f0e6aa8b30.
+# p.1 pin table (SOT23-3: 1 OUT, 2 GND, 3 VDD); p.2 absolute maximum (VDD 15 V,
+# PD 250 mW); p.3 HX7027 table: VDET 2.619 / 2.700 / 2.781 V, VHYS 0.02 / 0.05 /
+# 0.1 x VDET, IDD 2 uA typ (4 uA max) at VDD = 8 V, VDD 1.5-12 V, IOL 0.5 mA min
+# / 1 mA typ at VDD = 2 V, VOUT = 0.2 V (0.2 V / 1 mA = 200 Ohm).
+# ASSUMED: an NMOS open-drain output. The datasheet gives only IOL (no IOH), its
+# application circuit pulls OUT up externally (Rp), and it describes external
+# threshold setting for "NMOS open-drain types"; it does not print the output
+# type of the HX7027 itself.
+[[models]]
+id = "hx7027_voltage_detector"
+kind = "digital"
+description = "HX7027 2.7 V voltage detector, SOT-23-3, output low below the detect threshold (assumed open drain)"
+
+[models.match]
+value_re = "(?i)^HX7027$"
+
+[models.params]
+vdet_v = 2.7
+vhys_v = 0.135
+supply_current_a = 2.0e-6
+supply_on_v = 1.5
+warning = "source-bound threshold model: the 2.7 V typical detect level, 5 percent typical hysteresis, 200 Ohm low-level output (0.2 V at 1 mA) and 2 uA draw are executable; the output is ASSUMED NMOS open drain (the datasheet gives IOL only), and the +-3 percent detect tolerance, response time and temperature coefficient are not represented"
+
+[models.pins]
+"1" = "out"
+"2" = "gnd"
+"3" = "vdd"
+
+[models.ratings]
+max_voltage_v = 15.0   # p.2 absolute maximum, VDD input voltage 15 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.5
+max_v = 12.0
+abs_max_v = 15.0
+basis = "HX70XX Ver 2.1 p.3 HX7027 table, VDD operating voltage 1.5 V to 12 V; p.2 absolute maximum VDD 15 V"
+
+[models.behavioral.fsm]
+states = ["detected", "released"]
+initial = "detected"
+
+[[models.behavioral.fsm.transitions]]
+from = "detected"
+to = "released"
+guard = "v_vdd >= vdet_v + vhys_v"
+
+[[models.behavioral.fsm.transitions]]
+from = "released"
+to = "detected"
+guard = "v_vdd < vdet_v"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vdd"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vdd / supply_on_v))"
+
+[[models.behavioral.laws]]
+name = "output_low"
+kind = "voltage"
+a = "out"
+b = "gnd"
+expr = "0.0"
+r_ohms = 200.0
+only_in_state = "detected"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2203281730_HX-hengjiaxing-HX7027_C2984884.pdf"
+title = "HX70XX series low-voltage detector datasheet Ver 2.1 (Chinese)"
+locator = "p.1 pin table; p.2 absolute maximum ratings; p.3 HX7027 electrical characteristics"
+sha256 = "b8adc1db151b1aab2eff09fa05629c2b6fc5f0865f98fc15ab71c5f0e6aa8b30"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vdet_v"
+low = 2.619
+high = 2.781
+unit = "V"
+kind = "specification-limits"
+basis = "HX70XX Ver 2.1 p.3 HX7027 VDET minimum and maximum at 25 C"
+
+[models.coverage]
+implements = ["voltage_detection", "hysteresis", "low_level_output", "supply_current", "supply_range"]
+missing = ["detect_tolerance", "response_time", "temperature_coefficient", "output_type_confirmation"]
+
+# ── SIT1050T high-speed CAN transceiver (SOP-8) ──────────────────────────────
+# Source: SiT SIT1050 datasheet REC V1.16 (2022.07), wmsc.lcsc.com copy, sha256
+# 32c8f1165b0507ef95c3f44baec5c7272c16f6167840add4e32410a59dd2f49e.
+# p.1 Vcc 4.5-5.5 V; p.2 pin table (1 TXD, 2 GND, 3 VCC, 4 RXD, 5 Vref, 6 CANL,
+# 7 CANH, 8 S) and absolute maximum Vcc -0.3 to 6 V; p.4 RXD VOH 4.6 V typ at
+# IO = -2 mA, VOL 0.2 V typ at 2 mA; p.7 ICC silent 6 mA typ / 10 max, recessive
+# 6 / 10, dominant 50 / 70 with a 60 Ohm bus load, and the function table (bus
+# recessive gives RXD high).
+# The board's symbol is MCP2562-shaped (pin 5 VIO, pin 8 STBY); the card follows
+# the SIT1050T pad numbers, where pin 5 is a reference OUTPUT and is left
+# undriven here.
+[[models]]
+id = "sit1050t_can_transceiver"
+kind = "digital"
+description = "SIT1050T CAN transceiver, SOP-8, bus idle (recessive): supply draw and RXD high"
+
+[models.match]
+value_re = "(?i)^SIT1050T?$"
+
+[models.params]
+supply_current_a = 0.006
+supply_on_v = 4.5
+warning = "source-bound bus-idle model: the 6 mA recessive supply current, the 4.5-5.5 V supply limits and an RXD that reads high (recessive) are executable; dominant transmission (50 mA with a 60 Ohm bus load), CANH/CANL bus levels, the Vref output (pin 5, which the board's MCP2562-shaped symbol calls VIO), silent mode and timing are not represented"
+
+[models.pins]
+"1" = "txd"
+"2" = "gnd"
+"3" = "vcc"
+"4" = "rxd"
+"5" = "vref"
+"6" = "canl"
+"7" = "canh"
+"8" = "s"
+
+[models.ratings]
+max_voltage_v = 6.0   # p.2 absolute maximum, Vcc -0.3 V to 6 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 4.5
+max_v = 5.5
+abs_max_v = 6.0
+basis = "SIT1050 REC V1.16 p.1 supply voltage Vcc 4.5 V to 5.5 V; p.2 absolute maximum Vcc -0.3 V to 6 V"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vcc"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vcc / supply_on_v))"
+
+[[models.behavioral.laws]]
+name = "rxd_recessive_high"
+kind = "voltage"
+a = "rxd"
+b = "gnd"
+expr = "max(0.0, v_vcc - 0.4)"
+r_ohms = 200.0
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/1912111437_SIT-SIT1050T_C313021.pdf"
+title = "SiT SIT1050 high-speed CAN transceiver datasheet REC V1.16 (2022.07)"
+locator = "p.1 supply voltage; p.2 pin table and absolute maximum; p.4 RXD output levels; p.7 supply current and function table"
+sha256 = "32c8f1165b0507ef95c3f44baec5c7272c16f6167840add4e32410a59dd2f49e"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "supply_current_a"
+low = 0.0
+high = 0.010
+unit = "A"
+kind = "specification-limits"
+basis = "SIT1050 REC V1.16 p.7 ICC recessive 6 mA typical, 10 mA maximum"
+
+[models.coverage]
+implements = ["supply_current", "supply_range", "recessive_rxd_output"]
+missing = ["dominant_transmit", "bus_levels", "vref_output", "silent_mode", "timing"]
+
+# ── CH340X USB-to-UART bridge (MSOP-10) ──────────────────────────────────────
+# Source: WCH CH340 datasheet V3D (CH340DS1), sha256
+# 4d7b150edfda88e44eb8f499c22693318666968125ff17f652ca9983d9929e5e.
+# p.3 pin table (MSOP-10 column; the E/X variants carry RTS# on pin 4 and
+# TNOW/DTR# on pin 6, as the board symbol draws it); Section 6.1 absolute
+# maximum VCC 6.0 V; Section 6.2 (5 V) ICC 7 mA typ / 20 max; Section 6.3
+# (3.3 V, VCC 3.1-3.6 V) ICC 4 mA typ / 12 max. The card interpolates the
+# typical supply current linearly between the 3.3 V and 5 V rows.
+[[models]]
+id = "ch340x_usb_uart"
+kind = "digital"
+description = "CH340X USB-to-UART bridge, MSOP-10 (supply draw only)"
+
+[models.match]
+value_re = "(?i)^CH340[XE]$"
+
+[models.params]
+icc_3v3_a = 0.004
+supply_on_v = 3.1
+icc_5v_a = 0.007
+warning = "source-bound supply model only: the typical supply current (4 mA at 3.3 V, 7 mA at 5 V, interpolated in between) is executable; the UART and modem-control outputs, the USB engine, the V3 internal regulator and sleep current are not represented"
+
+[models.pins]
+"1" = "ud_p"
+"2" = "ud_m"
+"3" = "gnd"
+"4" = "rts_n"
+"5" = "cts_n"
+"6" = "dtr_n"
+"7" = "vcc"
+"8" = "txd"
+"9" = "rxd"
+"10" = "v3"
+
+[models.ratings]
+max_voltage_v = 6.0   # Section 6.1 absolute maximum, VCC 6.0 V
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vcc"
+b = "gnd"
+expr = "(icc_3v3_a + (icc_5v_a - icc_3v3_a) * min(1.0, max(0.0, (v_vcc - 3.3) / 1.7))) * min(1.0, max(0.0, v_vcc / supply_on_v))"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.wch-ic.com/download/file?id=79"
+title = "WCH CH340 Datasheet (USB to Serial Port chip CH340), Version 3D"
+locator = "Section 4 Pin, MSOP-10 column p.3; Section 6.1 p.8 absolute maximum; Sections 6.2 and 6.3 pp.8-9 supply current"
+sha256 = "4d7b150edfda88e44eb8f499c22693318666968125ff17f652ca9983d9929e5e"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "icc_5v_a"
+low = 0.0
+high = 0.020
+unit = "A"
+kind = "specification-limits"
+basis = "CH340 V3D Section 6.2 ICC 7 mA typical, 20 mA maximum at 5 V; Section 6.3 12 mA maximum at 3.3 V"
+
+[models.coverage]
+implements = ["supply_current"]
+missing = ["uart_outputs", "modem_control_outputs", "usb_engine", "v3_regulator", "sleep_current"]
+
+# ── LAN8710A 10/100 Ethernet PHY with RMII (QFN-32) ──────────────────────────
+# Source: Microchip LAN8710A/LAN8710Ai datasheet DS00002164B, sha256
+# 0f4b8670bcfc7e6327e2053a22c892bea2f4e7722262a7e799a84dcdf17efa7d.
+# Table 3-1 pin list (QFN-32; pad 33 is the exposed ground pad); Section 5.1 p.54
+# absolute maximum (VDDIO, VDD1A, VDD2A -0.5 to 3.6 V; VDDCR -0.5 to 1.5 V);
+# Section 5.2 operating (VDDIO 1.62-3.6 V, VDD1A / VDD2A 3.0-3.6 V); Table 5-1
+# p.55, 100BASE-TX with traffic, typical: VDDA3.3 26 mA, VDDCR 18 mA, VDDIO
+# 4.3 mA. Note 5-6: the VDDCR current is supplied by the internal regulator from
+# VDD2A, so VDD2A carries 13 mA + 18 mA and VDD1A 13 mA (the 26 mA of VDDA3.3
+# is split evenly over the two analog pins; the datasheet does not split it).
+# Chosen as the conservative state (link up, traffic); the link-down draw is
+# lower. Magnetics current (Note 5-7) is excluded by the datasheet.
+[[models]]
+id = "lan8710a_phy_supply"
+kind = "digital"
+description = "LAN8710A 10/100 Ethernet PHY, QFN-32 (supply draw, 100BASE-TX with traffic)"
+
+[models.match]
+value_re = "(?i)^LAN8710A(-[A-Z0-9]+)?$"
+
+[models.params]
+vdd1a_current_a = 0.013
+supply_on_v = 3.0
+vddio_on_v = 1.62
+vdd2a_current_a = 0.031
+vddio_current_a = 0.0043
+warning = "source-bound supply model only: the typical 100BASE-TX-with-traffic supply currents (VDD1A 13 mA, VDD2A 31 mA including the VDDCR regulator current, VDDIO 4.3 mA; the A/B split of the 26 mA analog figure is assumed even) and the supply limits are executable; the RMII and MDIO interface, the 50 MHz reference clock output, the strap pins, link state and lower-power modes are not represented"
+
+[models.pins]
+"1" = "vdd2a"
+"2" = "led2_nintsel"
+"3" = "led1_regoff"
+"4" = "xtal2"
+"5" = "xtal1_clkin"
+"6" = "vddcr"
+"7" = "rxclk"
+"8" = "rxd3"
+"9" = "rxd2"
+"10" = "rxd1"
+"11" = "rxd0"
+"12" = "vddio"
+"13" = "rxer"
+"14" = "crs"
+"15" = "col_crs_dv"
+"16" = "mdio"
+"17" = "mdc"
+"18" = "nint"
+"19" = "nrst"
+"20" = "txclk"
+"21" = "txen"
+"22" = "txd0"
+"23" = "txd1"
+"24" = "txd2"
+"25" = "txd3"
+"26" = "rxdv"
+"27" = "vdd1a"
+"28" = "txn"
+"29" = "txp"
+"30" = "rxn"
+"31" = "rxp"
+"32" = "rbias"
+"33" = "gnd"
+
+[models.ratings]
+max_voltage_v = 3.6   # Section 5.1 p.54 absolute maximum, VDDIO / VDD1A / VDD2A -0.5 V to +3.6 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd1a"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 3.6
+basis = "DS00002164B Section 5.2 analog port supply VDD1A 3.0 V to 3.6 V; Section 5.1 p.54 absolute maximum 3.6 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd2a"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 3.6
+basis = "DS00002164B Section 5.2 analog port supply VDD2A 3.0 V to 3.6 V; Section 5.1 p.54 absolute maximum 3.6 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.62
+max_v = 3.6
+abs_max_v = 3.6
+basis = "DS00002164B Section 5.2 supply VDDIO 1.62 V to 3.6 V; Section 5.1 p.54 absolute maximum 3.6 V"
+
+[[models.behavioral.laws]]
+name = "vdd1a_draw"
+kind = "current"
+a = "vdd1a"
+b = "gnd"
+expr = "vdd1a_current_a * min(1.0, max(0.0, v_vdd1a / supply_on_v))"
+
+[[models.behavioral.laws]]
+name = "vdd2a_draw"
+kind = "current"
+a = "vdd2a"
+b = "gnd"
+expr = "vdd2a_current_a * min(1.0, max(0.0, v_vdd2a / supply_on_v))"
+
+[[models.behavioral.laws]]
+name = "vddio_draw"
+kind = "current"
+a = "vddio"
+b = "gnd"
+expr = "vddio_current_a * min(1.0, max(0.0, v_vddio / vddio_on_v))"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/00002164B.pdf"
+title = "Microchip LAN8710A/LAN8710Ai small footprint MII/RMII 10/100 Ethernet transceiver, DS00002164B"
+locator = "Section 5.1 p.54 absolute maximum; Section 5.2 operating conditions; Table 5-1 p.55 supply currents, Notes 5-6 and 5-7; QFN-32 pin list"
+sha256 = "0f4b8670bcfc7e6327e2053a22c892bea2f4e7722262a7e799a84dcdf17efa7d"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vdd2a_current_a"
+low = 0.0
+high = 0.049
+unit = "A"
+kind = "specification-limits"
+basis = "DS00002164B Table 5-1 maximum VDDCR 21 mA plus half of the 28 mA maximum VDDA3.3 current, 100BASE-TX with traffic"
+
+[models.coverage]
+implements = ["supply_current", "supply_range"]
+missing = ["rmii_interface", "mdio_management", "reference_clock_output", "strap_pins", "link_state", "power_down_modes"]
+
+# ── Sun Hold RAS-0515 5 V SPDT power relay ───────────────────────────────────
+# Source: Sun Hold RAS series catalogue, pp.24-25 (image-only PDF from
+# store.comet.bg download-file.php?id=246), sha256
+# 604dbca4e1775ef6144c620d84d30fc01a6cf6a961d426dff939610ebca9f6bd.
+# 5 V coil: 69 Ohm +-10 %, 72 mA, 0.36 W; pull-in 75 % of rated voltage maximum,
+# drop-out 10 % minimum, operate 10 ms / release 5 ms maximum, contact
+# resistance 50 mOhm maximum, form C, 15 A type (AC 125 V 15 A, AC 250 V 10 A,
+# DC 24 V 15 A, 20 A maximum). The coil inductance is not published, so only the
+# resistive coil is modelled. Pins: 1 and 2 coil, COM0 / NC0 / NO0 contacts.
+[[models]]
+id = "ras_0515_relay"
+kind = "digital"
+description = "Sun Hold RAS-0515 5 V coil SPDT relay (resistive coil, contact switch)"
+
+[models.match]
+value_re = "(?i)^RAS-0515( \\(SUNHOLD\\))?$"
+
+[models.params]
+coil_ohms = 69.0
+pull_in_v = 3.75
+drop_out_v = 0.5
+contact_ohms = 0.05
+warning = "source-bound relay model: the 69 Ohm coil, the 75 percent pull-in and 10 percent drop-out thresholds (3.75 V and 0.5 V on a 5 V coil, taken as the switching points), and 50 mOhm closed contacts are executable; coil inductance (not published), operate and release times (10 ms and 5 ms), contact bounce, contact current and voltage ratings, and coil polarity are not represented"
+
+[models.pins]
+"1" = "coil_p"
+"2" = "coil_n"
+"COM0" = "com"
+"NC0" = "nc"
+"NO0" = "no"
+
+[models.behavioral.fsm]
+states = ["released", "energised"]
+initial = "released"
+
+[[models.behavioral.fsm.transitions]]
+from = "released"
+to = "energised"
+guard = "abs(v_coil_p - v_coil_n) >= pull_in_v"
+
+[[models.behavioral.fsm.transitions]]
+from = "energised"
+to = "released"
+guard = "abs(v_coil_p - v_coil_n) <= drop_out_v"
+
+[[models.behavioral.laws]]
+name = "coil"
+kind = "current"
+a = "coil_p"
+b = "coil_n"
+expr = "(v_coil_p - v_coil_n) / coil_ohms"
+
+[[models.behavioral.laws]]
+name = "contact_com_no"
+kind = "current"
+a = "com"
+b = "no"
+expr = "(v_com - v_no) / contact_ohms"
+only_in_state = "energised"
+
+[[models.behavioral.laws]]
+name = "contact_com_nc"
+kind = "current"
+a = "com"
+b = "nc"
+expr = "(v_com - v_nc) / contact_ohms"
+only_in_state = "released"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://store.comet.bg/download-file.php?id=246"
+title = "Sun Hold RAS series relay catalogue, pp.24-25"
+locator = "pp.24-25 RAS-05xx 5 V coil row (69 Ohm, 72 mA), pull-in / drop-out percentages, contact resistance, contact ratings"
+sha256 = "604dbca4e1775ef6144c620d84d30fc01a6cf6a961d426dff939610ebca9f6bd"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "coil_ohms"
+low = 62.1
+high = 75.9
+unit = "Ohm"
+kind = "specification-limits"
+basis = "Sun Hold RAS series catalogue p.24, 5 V coil 69 Ohm +-10 %"
+
+[models.coverage]
+implements = ["coil_resistance", "pull_in_drop_out", "spdt_contacts"]
+missing = ["coil_inductance", "operate_release_time", "contact_bounce", "contact_ratings", "coil_polarity"]
+
+# ── TI ESDS314 four-channel unidirectional TVS (SOT-23-5) ────────────────────
+# Source: TI ESDS311/ESDS312/ESDS314 datasheet SLVSEG9C (Rev. C, Feb 2024),
+# sha256 dab78fc389d0d3cce51eeba2491c89f538f2042dd708f8189902ab06680ecbae.
+# Table 4-3 p.3 pins (I/O1 1, GND 2, I/O2 3, I/O3 4, I/O4 5); Section 5.1 p.4
+# absolute maximum IEC 61000-4-5 peak pulse 25 A; Section 5.5 p.4 RthetaJA
+# 127.6 C/W (DBV, 5 pins); Section 5.6 p.5: VRWM 3.6 V, VCLAMP IO to GND 5 V at
+# 1 A, 5.6 V at 12 A, 6.5 V at 25 A; GND to IO 1 V at 1 A, 2.1 V at 12 A, 3.6 V
+# at 25 A. Piecewise-linear fit: reverse knee 4.94 V + 0.0625 Ohm (5.0 / 5.69 /
+# 6.5 V), forward knee 0.89 V + 0.108 Ohm (1.0 / 2.19 / 3.59 V). The datasheet
+# calls VBRF 4.5-7.5 V at 1 mA before snapback; the fit follows the clamp rows.
+[[models]]
+id = "esds314_tvs"
+kind = "digital"
+description = "ESDS314 four-channel unidirectional TVS, DBV SOT-23-5"
+
+[models.match]
+value_re = "(?i)^ESDS314[A-Z0-9_-]*$"
+
+[models.params]
+vbreak_v = 4.94
+rdyn_rev_ohms = 0.0625
+vf_v = 0.89
+rdyn_fwd_ohms = 0.108
+warning = "source-bound piecewise-linear clamp: the surge clamping rows (5.0 V to 6.5 V reverse and 1.0 V to 3.6 V forward at 1 A to 25 A) are fitted and executable on all four channels; 4.5 pF line capacitance, 5 nA leakage, the 4.5-7.5 V snapback breakdown window, IEC pulse waveform and temperature are not represented"
+
+[models.pins]
+"1" = "io1"
+"2" = "gnd"
+"3" = "io2"
+"4" = "io3"
+"5" = "io4"
+
+[models.ratings]
+max_surge_current_a = 25.0   # Section 5.1 p.4, IEC 61000-4-5 8/20 us peak pulse current 25 A
+
+[[models.behavioral.laws]]
+name = "io1_clamp"
+kind = "current"
+a = "io1"
+b = "gnd"
+expr = "max(0.0, v_io1 - vbreak_v) / rdyn_rev_ohms + min(0.0, v_io1 + vf_v) / rdyn_fwd_ohms"
+
+[[models.behavioral.laws]]
+name = "io2_clamp"
+kind = "current"
+a = "io2"
+b = "gnd"
+expr = "max(0.0, v_io2 - vbreak_v) / rdyn_rev_ohms + min(0.0, v_io2 + vf_v) / rdyn_fwd_ohms"
+
+[[models.behavioral.laws]]
+name = "io3_clamp"
+kind = "current"
+a = "io3"
+b = "gnd"
+expr = "max(0.0, v_io3 - vbreak_v) / rdyn_rev_ohms + min(0.0, v_io3 + vf_v) / rdyn_fwd_ohms"
+
+[[models.behavioral.laws]]
+name = "io4_clamp"
+kind = "current"
+a = "io4"
+b = "gnd"
+expr = "max(0.0, v_io4 - vbreak_v) / rdyn_rev_ohms + min(0.0, v_io4 + vf_v) / rdyn_fwd_ohms"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/esds314.pdf"
+title = "Texas Instruments ESDS311, ESDS312, ESDS314 datasheet SLVSEG9C (Feb 2024)"
+locator = "Table 4-3 p.3 pins; Section 5.1 p.4; Section 5.6 p.5 electrical characteristics"
+sha256 = "dab78fc389d0d3cce51eeba2491c89f538f2042dd708f8189902ab06680ecbae"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the clamp rows are typical values"
+
+[models.coverage]
+implements = ["esd_clamp", "negative_clamp", "positive_breakdown"]
+missing = ["channel_capacitance", "subthreshold_leakage", "snapback_window", "iec_pulse_waveform", "temperature_dependence"]

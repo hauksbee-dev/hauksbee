@@ -88,9 +88,23 @@ kind = "no_faults"
 
     let result = run_body("olimex_burst.toml", &body);
     eprintln!("{}", result.render_human());
+    // A clean PASS, not merely "no assertion failed": an INVALID run (analog
+    // solve aborted, or an assertion window overlapping a failed chunk) leaves
+    // every assertion false-but-not-failed and exits 3, which is not a calibration.
+    assert!(
+        !result.analog_invalid(),
+        "Olimex EVB calibration run must be valid for analysis (no INVALID, no analog abort):\n{}",
+        result.render_human()
+    );
     assert!(
         result.passed(),
         "Olimex EVB WiFi-burst calibration must be GREEN (robust supply rides the burst):\n{}",
+        result.render_human()
+    );
+    assert_eq!(
+        result.exit_code(),
+        0,
+        "Olimex EVB WiFi-burst calibration must exit 0:\n{}",
         result.render_human()
     );
 }
