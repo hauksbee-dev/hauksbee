@@ -24,7 +24,9 @@
 # pairs and the backend now refuses with a named bootloader-offset error.
 
 name = "boot_coverage: Watchy v1.5 e-paper RES# driven HIGH at boot (reduced firmware)"
-board = "../../../../board-corpus/famous/watchy_history/v1.5/Watchy.kicad_pcb"
+# Where `scripts/fetch-corpus.sh --only watchy_history_v1_5` puts it:
+# <repo>/board-corpus/watchy_history/v1.5 (corpus.toml `default_dir` + `dest`).
+board = "../../../board-corpus/watchy_history/v1.5/Watchy.kicad_pcb"
 firmware = "../../../testdata/firmware/watchy_display_init/flash.bin"
 mcu = "esp32_pico"
 duration_ms = 800

@@ -18,10 +18,11 @@
 # supply) be trusted as a real failure and not a too-pessimistic model. See the
 # integration test crates/hauksbee-ci/tests/olimex_burst_calibration.rs.
 #
-# Corpus-gated: needs board-corpus/famous/olimex_esp32 present.
+# Corpus-gated: needs <repo>/board-corpus/olimex_esp32, from
+# `scripts/fetch-corpus.sh --only olimex_esp32`.
 
 name = "Olimex ESP32-EVB: WiFi burst on robust supply (transient)"
-board = "../../../board-corpus/famous/olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_sch"
+board = "../../board-corpus/olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_sch"
 duration_ms = 40
 frame_ms = 0.2
 
