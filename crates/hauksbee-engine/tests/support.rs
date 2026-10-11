@@ -84,6 +84,31 @@ pub fn spi_adc_flag(demo: &str, fw: &std::path::Path, ch0_volts: f64, ms: u32) -
     last_flag(&mut engine, 5e-3, n)
 }
 
+/// Why a FLAG stuck LOW at every input voltage points at the transport, not the
+/// threshold logic: the modelled MCP3008 never answered, so the firmware read
+/// 0x000 from every SPI byte (MISO undriven) and `counts == 0` always. Both
+/// backends install an `on_spi` bridge, but QEMU only surfaces transactions
+/// that firmware submits through the RAM-mailbox bus contract; firmware driving
+/// the real (host-invisible) SPI2 controller never reaches the model.
+fn spi_adc_stuck_low_hint(backend: &str) -> String {
+    let transport = if backend.eq_ignore_ascii_case("qemu") {
+        "Espressif QEMU never surfaces transfers on the real SPI2 controller to the host, \
+         so only firmware that submits through the RAM-mailbox bus contract (or a QEMU \
+         SPI hook) reaches the model: see hauksbee-mcu/src/qemu/mod.rs"
+            .to_string()
+    } else {
+        format!(
+            "check that the {backend} SPI bridge in hauksbee-mcu/src/{}/mod.rs routes this \
+             controller to the attached bus",
+            backend.to_lowercase()
+        )
+    };
+    format!(
+        "A FLAG stuck LOW at every input means the modelled MCP3008 never answered \
+         (counts == 0 always) rather than the threshold being wrong; {transport}."
+    )
+}
+
 /// 0.8 V is below the 1.65 V threshold, so FLAG must read LOW.
 pub fn assert_spi_adc_flag_low_below_threshold(flag_at: impl Fn(f64) -> f64) {
     let v = flag_at(0.8);
@@ -91,24 +116,22 @@ pub fn assert_spi_adc_flag_low_below_threshold(flag_at: impl Fn(f64) -> f64) {
     assert!(
         v < 1.0,
         "at 0.8 V ADC input (below threshold), FLAG net should be LOW; got {v:.3} V. \
-         If this is ~3.3 V the SPI bridge is working but the threshold logic is wrong. \
-         If this is stuck-LOW the on_spi bridge is not yet wired (expected for now)."
+         FLAG HIGH here means the firmware read a count >= 512 for a 0.8 V input, so \
+         its threshold logic or the modelled ADC's conversion is wrong (an ADC that \
+         never answers leaves FLAG LOW and does not fail this check)."
     );
 }
 
 /// 2.5 V is above the 1.65 V threshold, so FLAG must read HIGH. `backend` names
-/// the emulator whose `on_spi` bridge this waits on.
+/// the emulator whose `on_spi` bridge carries the firmware's SPI transfers.
 pub fn assert_spi_adc_flag_high_above_threshold(backend: &str, flag_at: impl Fn(f64) -> f64) {
     let v = flag_at(2.5);
     eprintln!("FLAG at 2.5 V input: {v:.3} V");
     assert!(
         v > 2.5,
-        "at 2.5 V ADC input (above threshold), FLAG net should be HIGH (~3.3 V); got {v:.3} V. \
-         This test is expected to FAIL until the {backend} on_spi bridge is implemented \
-         (currently a no-op in hauksbee-mcu/src/{}/mod.rs). The firmware reads 0x000 \
-         from every SPI byte because MISO is never driven, so counts == 0 always, \
-         and FLAG stays LOW regardless of the configured Mcp3008 voltage.",
-        backend.to_lowercase()
+        "at 2.5 V ADC input (above threshold), FLAG net should be HIGH (~3.3 V); got \
+         {v:.3} V. {}",
+        spi_adc_stuck_low_hint(backend)
     );
 }
 
@@ -138,7 +161,8 @@ pub fn assert_spi_adc_flag_follows_sweep(backend: &str, flag_at: impl Fn(f64) ->
     }
     assert!(
         failures.is_empty(),
-        "FLAG did not follow ADC voltage sweep (SPI bridge not yet wired for {backend}): {failures:?}"
+        "FLAG did not follow the ADC voltage sweep on {backend}: {failures:?}. {}",
+        spi_adc_stuck_low_hint(backend)
     );
 }
 
