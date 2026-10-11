@@ -107,12 +107,11 @@ fn unmodified_esp_idf_gpio_reaches_the_backend_without_a_mailbox() {
 }
 
 /// The GPIO-matrix output-select words only mean something when the emulator
-/// retains them. The fixture's own outputs (GPIO2/GPIO4) are plain GPIO
-/// (`OUT_SEL` 256) and must not read as routed; the boot ROM's SPI flash attach
-/// does route the flash signals SPIQ/SPID/SPIHD/SPIWP/SPICS0 to their pads
-/// through the matrix (GPIO6-11 are the ESP32's `SD_CLK`, `SD_DATA0`-`SD_DATA3` and `SD_CMD`
-/// flash pads in the datasheet pin list), so those pads are the only ones allowed, and at
-/// least one must appear to prove the read reaches real routing. Skips honestly on a build without the capability
+/// retains them, and the fixture routes nothing but plain GPIO outputs
+/// (`OUT_SEL` 256), so on a matrix-capable build no pad may be reported as
+/// routed to a peripheral. The boot ROM's flash attach does put SPIQ..SPICS0
+/// on pads 7-11 through the matrix; that memory bus is not firmware drive and
+/// must stay out of the report. Skips honestly on a build without the capability
 /// (the supported mailbox build, or a patched build older than the matrix
 /// words): there the backend must say it cannot see the matrix, and report
 /// nothing rather than a zero-filled block read as "signal 0 on every pad".
@@ -143,15 +142,10 @@ fn plain_gpio_outputs_are_not_reported_as_routed_to_a_peripheral() {
         return;
     }
     let routed = mcu.pins_routed_to_peripheral();
-    let flash_bus = |p: &PinId| p.port == '0' && (6..=11).contains(&p.bit);
     assert!(
-        routed.iter().all(flash_bus),
-        "the fixture drives GPIO2/GPIO4 through the plain GPIO registers only, so \
-         no pad off the SPI flash bus may read as peripheral-routed: {routed:?}"
-    );
-    assert!(
-        routed.iter().any(flash_bus),
-        "the boot ROM routes the SPI flash signals through the matrix; seeing none \
-         means the output-select words were not read: {routed:?}"
+        routed.is_empty(),
+        "the fixture drives GPIO2/GPIO4 through the plain GPIO registers only and \
+         the flash bus is not firmware drive, so no pad may read as \
+         peripheral-routed: {routed:?}"
     );
 }

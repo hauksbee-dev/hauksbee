@@ -519,9 +519,21 @@ const FUNC_OUT_SEL_GPIO: u32 = 0x100;
 /// `GPIO_ENABLE` bit n, 0 takes it from the peripheral (same TRM register).
 const FUNC_OEN_SEL: u32 = 1 << 10;
 
+/// ESP32 output signals of the SPI0/SPI1 memory bus: `SPICLK`..`SPICS2`
+/// (0-7) and `SPID4`..`SPID7` (128-131), ESP-IDF v5.4
+/// `components/soc/esp32/include/soc/gpio_sig_map.h`. The boot ROM and cache
+/// own them, not the application, and QEMU's esp32 machine attaches its flash
+/// on the module's default pads whatever the board's package (an ESP32-PICO-D4
+/// keeps its flash elsewhere and leaves GPIO9/GPIO10 free), so a pad carrying
+/// one says nothing about what the firmware drives on this board.
+const fn is_memory_bus_signal(out_sel: u32) -> bool {
+    matches!(out_sel, 0..=7 | 128..=131)
+}
+
 /// The pads (bit n set for pad n) whose output is a peripheral's waveform
-/// rather than the plain `GPIO_OUT` latch: `OUT_SEL` is not 256, and the
-/// pad's output is not held off. The output enable comes from `GPIO_ENABLE`
+/// rather than the plain `GPIO_OUT` latch: `OUT_SEL` is neither 256 nor a
+/// memory-bus signal (see [`is_memory_bus_signal`]), and the pad's output is
+/// not held off. The output enable comes from `GPIO_ENABLE`
 /// when `OEN_SEL` is set, so a pad whose enable bit is clear is high
 /// impedance whatever is routed to it; with `OEN_SEL` clear the peripheral
 /// owns the enable and the pad counts as driven (the safe direction: the
@@ -535,7 +547,8 @@ fn peripheral_routed_pads(words: &[u32], enable: u32) -> u32 {
         .take(32)
         .enumerate()
         .filter(|&(pad, &word)| {
-            let routed = word & FUNC_OUT_SEL_MASK != FUNC_OUT_SEL_GPIO;
+            let out_sel = word & FUNC_OUT_SEL_MASK;
+            let routed = out_sel != FUNC_OUT_SEL_GPIO && !is_memory_bus_signal(out_sel);
             let held_off = word & FUNC_OEN_SEL != 0 && enable & (1 << pad) == 0;
             routed && !held_off
         })
@@ -1761,6 +1774,21 @@ mod tests {
         assert_eq!(peripheral_routed_pads(&words, 0), 1 << 5);
     }
 
+    /// The boot ROM's flash attach leaves SPIQ/SPID/SPIHD/SPIWP/SPICS0 (1-5)
+    /// on pads 7-11; on a package with its flash elsewhere those pads are
+    /// free GPIOs the firmware may never touch, so they must not read as
+    /// firmware-driven.
+    #[test]
+    fn the_boot_roms_flash_bus_routing_is_not_firmware_drive() {
+        let mut words = [FUNC_OUT_SEL_GPIO; 32];
+        for (pad, sig) in [(7, 1), (8, 2), (9, 3), (10, 4), (11, 5), (16, 6), (17, 130)] {
+            words[pad] = sig;
+        }
+        assert_eq!(peripheral_routed_pads(&words, 0), 0);
+        words[9] = 71;
+        assert_eq!(peripheral_routed_pads(&words, 0), 1 << 9);
+    }
+
     #[test]
     fn plain_gpio_selections_are_not_routed() {
         // Reset state and an IDF-configured plain output: OUT_SEL = 256, with
@@ -1784,12 +1812,12 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_out_sel_is_signal_zero_not_unrouted() {
-        // OUT_SEL 0 is peripheral signal 0 (SPICLK_out), not "no routing": a
-        // build that reads back zeros would mark every pad, which is why the
-        // capability probe gates the whole block.
+    fn a_zero_out_sel_is_the_flash_clock_not_firmware_drive() {
+        // OUT_SEL 0 is peripheral signal 0 (SPICLK_out), a memory-bus signal,
+        // so even a build that reads back zeros marks no pad; the capability
+        // probe still gates the whole block, since zeros prove nothing.
         let words = [0u32; 32];
-        assert_eq!(peripheral_routed_pads(&words, 0), u32::MAX);
+        assert_eq!(peripheral_routed_pads(&words, 0), 0);
     }
 
     #[test]
