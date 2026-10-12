@@ -492,7 +492,7 @@ fn an_unpowered_cascade_asks_for_its_first_stage_only() {
     std::fs::write(&path, text).unwrap();
     let spec = Spec::load(&path).expect("a bare spec loads");
     let outcomes = hauksbee_ci::runner::run_spec(&spec).expect("it runs");
-    let asked: Vec<String> = outcomes
+    let mut asked: Vec<String> = outcomes
         .iter()
         .filter_map(|o| o.evidence.as_ref())
         .flat_map(|e| e.assumptions().iter())
@@ -501,6 +501,9 @@ fn an_unpowered_cascade_asks_for_its_first_stage_only() {
             _ => None,
         })
         .collect();
+    // Every seed's outcome repeats the same assumption.
+    asked.sort();
+    asked.dedup();
     assert_eq!(
         asked,
         ["/VIN"],
