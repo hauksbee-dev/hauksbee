@@ -251,7 +251,7 @@ pub fn record(tool: &str, model: &str, billing: Billing, usage: Option<Usage>) {
 }
 
 /// [`record`], with the list-price cost the backend itself reported for a
-/// metered call (`None`: price it from [`LIST_PRICES`]). Also sends a `usage`
+/// metered call (`None`: price it from the list prices). Also sends a `usage`
 /// activity event carrying the run's totals so far.
 pub fn record_priced(
     tool: &str,

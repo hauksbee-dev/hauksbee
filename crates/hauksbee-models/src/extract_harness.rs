@@ -31,6 +31,12 @@ pub const NOTES: &str = "notes.md";
 pub const CONFIDENCE: &str = "confidence.txt";
 pub const PREVIOUS: &str = "previous.toml";
 
+/// Told to the agent that takes over from one stopped at its context budget.
+pub const CONTINUE_AFTER_STOP: &str = "\n\nThe previous agent ran out of context before it \
+    finished. Its partial draft, if it wrote one, is `previous.toml`: keep what it has, re-read \
+    only the pages still needed for what is missing or failed, and write the whole table to \
+    model.toml early, then refine it with Edit.";
+
 /// An agent run stopped by its stream watcher (its context passed the budget).
 #[derive(Debug, Clone)]
 pub struct Stopped(pub String);
@@ -187,7 +193,9 @@ pub fn handoff(dir: &Path, staged: bool, escalated_because: Option<&str>) -> Str
             out,
             "\n\nIf `{PREVIOUS}` exists it is the last draft, which failed the check quoted \
              below: start from it, fix exactly what failed, re-read only the pages the fix \
-             needs, and write the whole corrected table to model.toml."
+             needs, and write the whole corrected table to model.toml. Write model.toml as soon \
+             as you have the pin map and the required values, then refine it: a stage that runs \
+             out of context keeps only what is on disk."
         );
     }
     out

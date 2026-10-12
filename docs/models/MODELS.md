@@ -206,12 +206,13 @@ Sonnet 5.5 → Opus 5.5; `codex-luna` escalates Luna to Sol. The cheapest Claude
 preset, `claude-code-haiku`, also escalates (to Sonnet on failure): no Claude tier
 below the codex gpt-6-luna baseline is the default or is offered without a
 stronger fallback, and the benchmark checks both against Luna. A model with a
-context budget (Haiku: 100k tokens) runs the staged harness
+context budget (Haiku: 85k tokens, so no request reaches 100k) runs the staged harness
 (`extract_harness.rs`): a locate agent reads `page-index.md` and only the pages
 it needs and writes compact `notes.md` (package, pin map, key pages and values,
 ambiguities); a fresh draft agent writes the card from the notes; a validator
-failure goes to a fresh fix agent as `previous.toml`. Each agent is killed if its
-streamed context passes the budget. `HAUKSBEE_EXTRACT_HARNESS=staged|single`
+failure goes to a fresh fix agent as `previous.toml`. Each agent is stopped if its
+streamed context passes the budget, and a fresh agent carries on from its partial
+draft. `HAUKSBEE_EXTRACT_HARNESS=staged|single`
 forces the harness on or off. The default ladder is provisional until
 `qc/claude_tier_bench` measures it; that benchmark's recommendation decides it.
 

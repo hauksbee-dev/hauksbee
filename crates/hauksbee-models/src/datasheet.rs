@@ -2988,6 +2988,16 @@ fn validated_attempts(
                 );
                 continue;
             }
+            // A staged agent stopped at its context budget hands over to a fresh
+            // one, which starts from its partial draft (`previous.toml`) and the
+            // notes instead of losing the reading done so far.
+            Err(e) if e.is::<harness::Stopped>() && attempt <= retries => {
+                say!(
+                    "[model-extract] attempt {attempt} {e}; a fresh agent continues from its draft"
+                );
+                prompt = format!("{base_prompt}{}", harness::CONTINUE_AFTER_STOP);
+                continue;
+            }
             fetched => fetched?,
         };
         let raw = reply.complete(fetched);
@@ -3768,7 +3778,8 @@ const AGENT_POINTER: &[u8] = b"Read prompt.md in your working directory and foll
     The supplied files and output location are in that working directory; read nothing outside \
     it, use the file tools available to you, and report any denied required read or write instead of claiming success. \
     Read values off the rendered page images (page-*.png) for anything that lives in a table \
-    or pinout, with datasheet.pdf available in the same directory. Write your answer to model.toml.";
+    or pinout, with datasheet.pdf available in the same directory. Write your answer to the file prompt.md names \
+    (model.toml unless it names another).";
 
 /// Poll a spawned CLI agent to completion, killing its process tree at
 /// `timeout` (or, when `idle` is set, after that long with no stdout), and
@@ -5694,6 +5705,32 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         .unwrap_err();
         assert_eq!(calls, 2, "{err:#}");
         assert!(err.is::<IdleStalled>());
+    }
+
+    #[test]
+    fn a_stage_stopped_at_its_context_budget_is_continued_by_a_fresh_agent() {
+        let mut prompts = Vec::new();
+        let word = validated_attempts(1, "p", Reply::Word, "claude", |p| {
+            prompts.push(p.to_string());
+            if prompts.len() == 1 {
+                Err(harness::Stopped("over budget".into()).into())
+            } else {
+                Ok("resistor".into())
+            }
+        })
+        .unwrap();
+        assert_eq!(word, "resistor");
+        assert!(
+            prompts[1].ends_with(harness::CONTINUE_AFTER_STOP),
+            "{}",
+            prompts[1]
+        );
+        // With no attempt left the stop is the outcome, for the ladder to escalate on.
+        let err = validated_attempts(0, "p", Reply::Word, "claude", |_| {
+            Err(harness::Stopped("over budget".into()).into())
+        })
+        .unwrap_err();
+        assert!(err.is::<harness::Stopped>());
     }
 
     #[test]

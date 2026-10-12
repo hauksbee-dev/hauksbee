@@ -82,7 +82,10 @@ const fn choice(name: &'static str, note: &'static str) -> ModelChoice {
 }
 
 /// The staged-harness budget a model runs with when nothing overrides it.
-pub const HARNESS_BUDGET: u64 = 100_000;
+///
+/// A stage is stopped once its context passes 85k tokens, so the request that
+/// follows (one more page image or tool result) still stays under 100k.
+pub const HARNESS_BUDGET: u64 = 85_000;
 
 const MOST_ACCURATE: &str = "Recommended: most accurate";
 const BUDGET: &str = "Very good for most circuit extraction, and much cheaper";
@@ -149,7 +152,7 @@ pub const AGENTS: [AgentSpec; 3] = [
         models: &[
             ModelChoice {
                 name: "claude-haiku-5-5",
-                note: "Cheapest; runs in short ~100k-token stages (locate, draft, fix)",
+                note: "Cheapest; runs in short stages kept under 100k tokens (locate, draft, fix)",
                 context_budget: HARNESS_BUDGET,
             },
             choice(
@@ -961,7 +964,7 @@ static PRESETS: [Preset; 11] = [
         ..agent_preset(
             "claude-code-haiku",
             "Claude Code · Haiku 5.5 → Sonnet on failure, high effort",
-            "Cheapest: short ~100k-token Haiku stages; Sonnet only when a draft fails or doubts its pin map. Not yet benchmarked against the Luna baseline.",
+            "Cheapest: short Haiku stages kept under 100k tokens; Sonnet only when a draft fails or doubts its pin map. Not yet benchmarked against the Luna baseline.",
             Backend::ClaudeCode,
             "claude-haiku-5-5",
             "high",
