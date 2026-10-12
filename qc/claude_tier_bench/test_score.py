@@ -86,6 +86,11 @@ class ScoreTests(unittest.TestCase):
         self.assertFalse(exact)
         self.assertAlmostEqual(frac, 1 / 3)
         self.assertFalse(run.pin_score(ref, {**ref, "4": "nc"})[0])  # extra pad
+        # The binder reads vee and v_minus as the vss rail; so does the score.
+        rail = {"1": "out", "2": "vss"}
+        self.assertEqual(run.pin_score(rail, {"1": "out", "2": "V-"}), (False, 0.5))
+        self.assertEqual(run.pin_score(rail, {"1": "out", "2": "vee"}), (True, 1.0))
+        self.assertEqual(run.pin_score(rail, {"1": "out", "2": "v_minus"}), (True, 1.0))
         self.assertEqual(run.pin_score({}, ref), (False, 0.0))
         # A lone channel index is a naming choice; a real second channel is not.
         one = {"1": "vcca", "2": "gnd", "3": "a1", "4": "b1", "5": "dir", "6": "vccb"}

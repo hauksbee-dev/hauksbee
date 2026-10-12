@@ -140,8 +140,14 @@ def models_of(path: Path) -> list[dict[str, Any]]:
     return [m for m in tomllib.loads(path.read_text(encoding="utf-8")).get("models", []) if isinstance(m, dict)]
 
 
+# Role names the binder reads as one pin (hauksbee-bind binder.rs: the negative
+# rail of an op-amp or comparator is any of vss, vee, v_minus).
+_SAME_ROLE = {"vee": "vss", "vminus": "vss"}
+
+
 def _role(v: Any) -> str:
-    return re.sub(r"[^a-z0-9]", "", str(v).lower())
+    r = re.sub(r"[^a-z0-9]", "", str(v).lower())
+    return _SAME_ROLE.get(r, r)
 
 
 def _unindexed(roles: dict[str, str]) -> dict[str, str]:
