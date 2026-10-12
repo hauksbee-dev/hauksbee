@@ -160,7 +160,7 @@ function presetMatchesResolved(preset: ExtractPreset, resolved: ExtractResolved)
   if (preset.backend === 'api') return preset.model === resolved.api.model && preset.api_base === resolved.api.base_url
   const { model, effort } = resolvedBlock(resolved, preset.backend)
   if (preset.model !== model || preset.effort !== effort) return false
-  // Presets that differ only in their ladder (Haiku alone vs Haiku, Sonnet,
+  // Presets that differ only in their ladder (Sonnet alone vs Sonnet,
   // Opus) are told apart when both sides report one.
   const have = resolvedEscalate(resolved, preset.backend)
   return !preset.escalate || !have || preset.escalate.join(',') === have.join(',')

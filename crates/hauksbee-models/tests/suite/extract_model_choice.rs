@@ -45,7 +45,7 @@ fn every_backend_defaults_to_its_strong_model_at_high_effort() {
         assert_eq!(effort, "high", "high, deliberately not max: {backend}");
     }
     assert_eq!(DEFAULT_CODEX_MODEL, "gpt-6.1-sol");
-    assert_eq!(DEFAULT_CLAUDE_MODEL, "claude-haiku-5-5");
+    assert_eq!(DEFAULT_CLAUDE_MODEL, "claude-sonnet-5-5");
     assert_eq!(DEFAULT_AGY_MODEL, "gemini-3.8-flash");
 }
 

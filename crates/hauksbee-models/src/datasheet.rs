@@ -5488,6 +5488,10 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         assert!(!summary.contains('$'), "{summary}");
     }
 
+    /// The escalation list behind a Haiku first tier in the ladder tests.
+    #[cfg(unix)]
+    const HAIKU_LADDER: &str = "claude-sonnet-5-5,claude-opus-5-5";
+
     /// Fake Claude Code for the ladder: every call logs its `--model`, writes
     /// the locate notes and a valid card, and reports usage in a `result`
     /// event; a model named in `doubtful` says `low` confidence, one in `bad`
@@ -5525,6 +5529,9 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let env = [
             (extract_config::ENV_CONFIG_PATH, cfg.to_str().unwrap()),
             ("HAUKSBEE_CLAUDE_COMMAND", agent.to_str().unwrap()),
+            // Haiku is named, not defaulted: these tests drive the staged
+            // Haiku harness and its ladder on purpose.
+            ("HAUKSBEE_CLAUDE_MODEL", "claude-haiku-5-5"),
             ("HAUKSBEE_CLAUDE_ESCALATE", escalate),
             (
                 crate::extract_progress::ENV_EVENTS,
@@ -5559,12 +5566,12 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         )
     }
 
-    /// The default ladder: a harnessed Haiku that doubts its pin map hands the
+    /// The Haiku ladder: a harnessed Haiku that doubts its pin map hands the
     /// part to Sonnet, whose card is kept and says which tier wrote it and why.
     #[cfg(unix)]
     #[test]
     fn a_doubtful_haiku_draft_escalates_and_the_card_names_its_tier() {
-        let (ran, models, summary, events) = run_ladder_fake("", "claude-haiku-5-5", "");
+        let (ran, models, summary, events) = run_ladder_fake(HAIKU_LADDER, "claude-haiku-5-5", "");
         let card = ran.unwrap();
         // Haiku runs a locate stage then a draft; Sonnet reuses the notes.
         assert_eq!(
@@ -5612,7 +5619,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             "{card}"
         );
         // A confident first tier stops there.
-        let (ran, models, _, _) = run_ladder_fake("", "", "");
+        let (ran, models, _, _) = run_ladder_fake(HAIKU_LADDER, "", "");
         assert!(ran
             .unwrap()
             .starts_with("# extracted by claude-code claude-haiku-5-5 (tier 1 of 3)\n"));

@@ -127,7 +127,7 @@ the same validation, and the same retry-with-feedback loop:
 
 | backend | requirement | default model / effort | flags |
 |---------|-------------|-------------------------|-------|
-| `claude-code` | `claude` CLI in PATH, signed in | `claude-haiku-5-5` → `claude-sonnet-5-5` → `claude-opus-5-5`, high | `--backend claude-code`, `--model`, `--effort` |
+| `claude-code` | `claude` CLI in PATH, signed in | `claude-sonnet-5-5` → `claude-opus-5-5`, high | `--backend claude-code`, `--model`, `--effort` |
 | `agy` | `agy` CLI in PATH, signed in (Antigravity) | `gemini-3.8-flash`, high | `--backend agy`, `--model`, `--effort` |
 | `codex` | `codex` CLI in PATH, signed in | `gpt-6.1-sol`, high | `--backend codex`, `--model`, `--effort` |
 | `api` | key in the env var named by `--api-key-env` (default `OPENAI_API_KEY`; a set `HAUKSBEE_LLM_API_KEY` is honoured) | `gpt-6.1-sol` | `--backend api`, `--api-base`, `--model`, `--api-key-env` |
@@ -198,14 +198,28 @@ validation after its retries, the run times out or passes its context budget,
 the agent writes `low` to `confidence.txt`, or the pin map is left unresolved.
 A doubtful but valid draft is kept as the fallback if every stronger tier fails.
 The card's first line records the tier (`# extracted by claude-code
-claude-haiku-5-5 (tier 1 of 3)`) and each escalation's reason. An explicit
+claude-sonnet-5-5 (tier 1 of 2)`) and each escalation's reason. An explicit
 `--model` (or the web page's model field) runs that model alone.
 
-The Claude Code default (`claude-code` preset) is the balanced ladder Haiku 5.5 →
-Sonnet 5.5 → Opus 5.5; `codex-luna` escalates Luna to Sol. The cheapest Claude
-preset, `claude-code-haiku`, also escalates (to Sonnet on failure): no Claude tier
-below the codex gpt-6-luna baseline is the default or is offered without a
-stronger fallback, and the benchmark checks both against Luna. A model with a
+The Claude Code default (`claude-code` preset) is Sonnet 5.5, then Opus 5.5 only
+when Sonnet fails or doubts its pin map; `codex-luna` escalates Luna to Sol. The
+cheapest Claude preset, `claude-code-haiku`, escalates to Sonnet on failure:
+harnessed Haiku alone fell below the codex gpt-6-luna baseline on validity, so
+it is never offered without a fallback. `qc/claude_tier_bench` chose the default
+(2026-10-12; five parts, one run each, a small sample, so differences of one
+part are noise; prices are API list prices):
+
+| tier | exact pin maps | valid | approx. cost per part |
+|------|----------------|-------|-----------------------|
+| codex gpt-6-luna (baseline) | 4/5 | 5/5 | not measured here |
+| Haiku 5.5 alone (staged) | 4/5 | 4/5 | $0.04 |
+| Haiku 5.5, Sonnet on failure | 4/5 | 5/5 | $0.04, plus 2.3M tokens on the escalated part |
+| Sonnet 5.5 alone | 5/5 | 5/5 | $0.46 (mean 546k tokens, 156 s) |
+
+Haiku alone stopped SN74LVC1T45 at its 85k budget three times. With Sonnet as
+fallback that part passed validation but named pin 1 `vcc` for `vcca`, and the
+escalation cost 2.3M tokens and 17 minutes. Sonnet alone was the only tier with
+every pin map exact. A model with a
 context budget (Haiku: 85k tokens, so no request reaches 100k) runs the staged harness
 (`extract_harness.rs`): a locate agent reads `page-index.md` and only the pages
 it needs and writes compact `notes.md` (package, pin map, key pages and values,
@@ -213,8 +227,7 @@ ambiguities); a fresh draft agent writes the card from the notes; a validator
 failure goes to a fresh fix agent as `previous.toml`. Each agent is stopped if its
 streamed context passes the budget, and a fresh agent carries on from its partial
 draft. `HAUKSBEE_EXTRACT_HARNESS=staged|single`
-forces the harness on or off. The default ladder is provisional until
-`qc/claude_tier_bench` measures it; that benchmark's recommendation decides it.
+forces the harness on or off.
 
 **What a run costs.** Billing follows how the CLI is signed in, never a setting:
 an API key (`ANTHROPIC_API_KEY`, or `claude auth status` / `codex login status`

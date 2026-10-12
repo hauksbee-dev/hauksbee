@@ -21,15 +21,15 @@ fn the_consent_notice_names_every_backend_it_could_send_to() {
 }
 
 #[test]
-fn the_documented_defaults_are_the_haiku_ladder_high_and_gemini_flash_high() {
+fn the_documented_defaults_are_the_sonnet_ladder_high_and_gemini_flash_high() {
     let host = FakeHost::default();
     let r = ExtractConfig::default().resolve(&host, Some(Backend::ClaudeCode));
-    assert_eq!((r.model(), r.effort()), ("claude-haiku-5-5", Some("high")));
+    assert_eq!((r.model(), r.effort()), ("claude-sonnet-5-5", Some("high")));
     let r = ExtractConfig::default().resolve(&host, Some(Backend::Agy));
     assert_eq!((r.model(), r.effort()), ("gemini-3.8-flash", Some("high")));
     // And the presets that a fresh setup is steered to say the same thing.
     let claude = presets().iter().find(|p| p.id == "claude-code").unwrap();
-    assert_eq!((claude.model, claude.effort), ("claude-haiku-5-5", "high"));
+    assert_eq!((claude.model, claude.effort), ("claude-sonnet-5-5", "high"));
     let agy = presets().iter().find(|p| p.id == "agy").unwrap();
     assert_eq!((agy.model, agy.effort), ("gemini-3.8-flash", "high"));
 }

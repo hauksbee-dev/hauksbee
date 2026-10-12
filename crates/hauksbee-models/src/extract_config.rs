@@ -157,7 +157,7 @@ pub const AGENTS: [AgentSpec; 3] = [
             },
             choice(
                 "claude-sonnet-5-5",
-                "Faster and cheaper than Opus; one session",
+                "Recommended: the most accurate tier in the benchmark; one session",
             ),
             choice("claude-opus-5-5", "Strongest single model; one session"),
             choice("claude-fable-5-1", ""),
@@ -200,11 +200,10 @@ pub const AGENTS: [AgentSpec; 3] = [
     },
 ];
 
-/// The balanced Claude Code ladder: harnessed Haiku first, Sonnet then Opus
-/// only when a tier fails or doubts its own pin map. Provisional until
-/// `qc/claude_tier_bench` measures it against the single-model tiers; the
-/// benchmark's recommendation is what this constant should hold.
-const BALANCED_CLAUDE: &[&str] = &["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"];
+/// The balanced Claude Code ladder: Sonnet first, Opus only when it fails or
+/// doubts its own pin map. `qc/claude_tier_bench` (2026-10-12, five parts, one
+/// run each) chose it: Sonnet was the only tier with every pin map exact.
+const BALANCED_CLAUDE: &[&str] = &["claude-sonnet-5-5", "claude-opus-5-5"];
 
 /// Chooses the harness for one run: `staged`, `single`, or `auto` (the default).
 pub const ENV_HARNESS: &str = "HAUKSBEE_EXTRACT_HARNESS";
@@ -948,23 +947,24 @@ static PRESETS: [Preset; 11] = [
         escalate: AGENTS[0].escalate,
         ..agent_preset(
             "claude-code",
-            "Claude Code · Haiku 5.5 → Sonnet → Opus, high effort",
-            "Balanced: harnessed Haiku first; Sonnet, then Opus, only when a draft fails or doubts its pin map. Signs in with your Claude account.",
+            "Claude Code · Sonnet 5.5 → Opus 5.5, high effort",
+            "Balanced: Sonnet first; Opus only when a draft fails or doubts its pin map. Every pin map was exact in the five-part tier benchmark. Signs in with your Claude account.",
             Backend::ClaudeCode,
             DEFAULT_CLAUDE_MODEL,
             DEFAULT_CLAUDE_EFFORT,
             true,
         )
     },
-    // The lowest tier escalates on failure: until `qc/claude_tier_bench` shows
-    // harnessed Haiku alone at or above the codex gpt-6-luna baseline, it is
-    // not offered without a Sonnet fallback.
+    // The lowest tier escalates on failure: harnessed Haiku alone fell below
+    // the codex gpt-6-luna baseline on validity in `qc/claude_tier_bench`
+    // (one part hit its context budget), so it is not offered without a
+    // Sonnet fallback.
     Preset {
         escalate: &["claude-sonnet-5-5"],
         ..agent_preset(
             "claude-code-haiku",
             "Claude Code · Haiku 5.5 → Sonnet on failure, high effort",
-            "Cheapest: short Haiku stages kept under 100k tokens; Sonnet only when a draft fails or doubts its pin map. Not yet benchmarked against the Luna baseline.",
+            "Cheapest: short Haiku stages kept under 100k tokens; Sonnet only when a draft fails or doubts its pin map. Matched the Luna baseline on the five-part benchmark (4/5 exact pin maps) and costs least.",
             Backend::ClaudeCode,
             "claude-haiku-5-5",
             "high",
@@ -1530,7 +1530,7 @@ mod tests {
         for (backend, model, effort, permission) in [
             (
                 Backend::ClaudeCode,
-                "claude-haiku-5-5",
+                "claude-sonnet-5-5",
                 "high",
                 "acceptEdits",
             ),
@@ -1544,10 +1544,10 @@ mod tests {
             );
         }
         assert_eq!((r.retries, r.timeout_secs), (2, 900));
-        assert!(r.summary().contains(
-            "claude-haiku-5-5 → claude-sonnet-5-5 → claude-opus-5-5, high effort; file tools"
-        ));
-        assert_eq!(r.ladder().len(), 3);
+        assert!(r
+            .summary()
+            .contains("claude-sonnet-5-5 → claude-opus-5-5, high effort; file tools"));
+        assert_eq!(r.ladder().len(), 2);
         // A model chosen in the file without its own ladder runs alone.
         let mut cfg = ExtractConfig::default();
         cfg.set("claude-code.model", "claude-opus-5-5").unwrap();
@@ -1700,11 +1700,11 @@ mod tests {
                 cfg.claude_code.model.as_deref(),
                 cfg.claude_code.effort.as_deref()
             ),
-            (Some("claude-haiku-5-5"), Some("high"))
+            (Some("claude-sonnet-5-5"), Some("high"))
         );
         assert_eq!(
             cfg.claude_code.escalate.as_deref().map(<[String]>::len),
-            Some(2)
+            Some(1)
         );
         assert_eq!(cfg.codex.model.as_deref(), Some("keep-me"));
 
