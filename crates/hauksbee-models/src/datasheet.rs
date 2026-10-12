@@ -2660,7 +2660,7 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
 
     if chosen == Backend::Api {
         let request = ApiRequest::prepare(&resolved.api)?;
-        let raw = validated_attempts(resolved.retries, prompt, reply, "api", |p| {
+        let raw = validated_attempts(resolved.retries, prompt, reply, ("api", false), |p| {
             let (text, usage) = request.send_with_usage(p)?;
             let metered = crate::extract_usage::Billing::Metered { fast: false };
             crate::extract_usage::record("api", &request.model, metered, usage);
@@ -2839,11 +2839,8 @@ fn run_tier(
                 "stage",
                 serde_json::json!({"stage": "locate", "attempt": 1, "attempts": 1}),
             );
-            run(&harness::locate_prompt(
-                part,
-                kind,
-                required_params_for_kind(kind),
-            ))?;
+            let locate = harness::locate_prompt(part, kind, required_params_for_kind(kind));
+            run(&(locate + &harness::page_list(ws.path())))?;
             if !ws.path().join(harness::NOTES).is_file() {
                 bail!("the locating agent wrote no {}", harness::NOTES);
             }
@@ -2857,12 +2854,15 @@ fn run_tier(
         prompt += harness::CONFIDENCE_CLAUSE;
     }
     let mut timed_out = None;
-    let raw = validated_attempts(resolved.retries, &prompt, reply, tool, |p| {
+    let raw = validated_attempts(resolved.retries, &prompt, reply, (tool, staged), |p| {
         let answer = ws.answer_path();
+        // A staged fix agent finds the failed draft where it will edit it, and
+        // `previous.toml` as a copy; an unstaged retry starts clean.
         if staged && answer.is_file() {
-            let _ = std::fs::rename(&answer, ws.path().join(harness::PREVIOUS));
+            let _ = std::fs::copy(&answer, ws.path().join(harness::PREVIOUS));
+        } else {
+            let _ = std::fs::remove_file(&answer);
         }
-        let _ = std::fs::remove_file(answer);
         let ran = run(p);
         let stdout = match ran {
             // A killed run keeps its draft only if it passes the finished-answer check.
@@ -2874,6 +2874,17 @@ fn run_tier(
                 checked.map_err(|_| t.clone())?;
                 timed_out = Some(t);
                 return Ok(draft);
+            }
+            // A staged agent stopped at its budget after writing model.toml has
+            // that draft checked like any other: a failure goes to a fix agent
+            // that edits it, instead of a fresh agent redoing the reading.
+            Err(e) if staged && e.is::<harness::Stopped>() => {
+                let draft = std::fs::read_to_string(ws.answer_path()).unwrap_or_default();
+                if reply.table().is_empty() || draft.trim().is_empty() {
+                    return Err(e);
+                }
+                say!("[model-extract] {e}; checking the draft it wrote");
+                return Ok(extract_toml_block(&draft, reply.table()));
             }
             outcome => outcome?,
         };
@@ -2953,7 +2964,7 @@ fn validated_attempts(
     retries: usize,
     base_prompt: &str,
     reply: Reply<'_>,
-    tool: &str,
+    (tool, edit_in_place): (&str, bool),
     mut fetch: impl FnMut(&str) -> Result<String>,
 ) -> Result<String> {
     let mut prompt = base_prompt.to_string();
@@ -3019,7 +3030,7 @@ fn validated_attempts(
                 say!("[model-extract] attempt {attempt} failed: {e:#}; retrying with feedback...");
                 prompt = format!(
                     "{base_prompt}\n\n{}",
-                    retry_feedback(&raw, &format!("{e:#}"), reply.table())
+                    retry_feedback(&raw, &format!("{e:#}"), reply.table(), edit_in_place)
                 );
             }
             Err(e) => {
@@ -3067,7 +3078,7 @@ const HONEST_EXITS: &str = "\n\nA missing required param is NOT a request for a 
 
 /// The retry appendix for the latest failure. Quoting a short reply back to
 /// the model makes the classification-vs-card mistake concrete.
-fn retry_feedback(raw: &str, validation_error: &str, table: &str) -> String {
+fn retry_feedback(raw: &str, validation_error: &str, table: &str, edit_in_place: bool) -> String {
     let fragment_correction = if !table.is_empty() && reply_is_kind_or_fragment(raw, table) {
         format!(
             "YOUR PREVIOUS REPLY, QUOTED VERBATIM:\n--- BEGIN REPLY ---\n{raw}\n\
@@ -3083,11 +3094,17 @@ fn retry_feedback(raw: &str, validation_error: &str, table: &str) -> String {
     let missing_param = validation_error.contains("missing required param");
     let honest_exits = (table == "[[models]]" && missing_param).then_some(HONEST_EXITS);
     let honest_exits = honest_exits.unwrap_or_default();
+    let fix = if edit_in_place {
+        format!("Fix exactly those issues. {}", harness::EDIT_IN_PLACE)
+    } else {
+        format!(
+            "Fix exactly those issues and write the corrected WHOLE `{table}` TOML table \
+             to model.toml."
+        )
+    };
     format!(
         "{fragment_correction}YOUR PREVIOUS ANSWER FAILED VALIDATION WITH:\n\
-         {validation_error}\n\n\
-         Fix exactly those issues and write the corrected WHOLE `{table}` TOML table \
-         to model.toml.{honest_exits}"
+         {validation_error}\n\n{fix}{honest_exits}"
     )
 }
 
@@ -4510,13 +4527,24 @@ mod tests {
             FORMAT_EXAMPLES[0].card,
             "[[models]]"
         ));
-        assert!(retry_feedback("digital", "no table", "[[models]]")
+        assert!(retry_feedback("digital", "no table", "[[models]]", false)
             .contains("--- BEGIN REPLY ---\ndigital\n"));
         // A missing required param offers the honest exits, never "produce a number".
         let card = FORMAT_EXAMPLES[0].card;
-        let missing = retry_feedback(card, "missing required param 'vout'", "[[models]]");
+        let missing = retry_feedback(card, "missing required param 'vout'", "[[models]]", false);
         assert!(missing.contains("NOT a request") && missing.contains("identity_only"));
-        assert!(!retry_feedback(card, "no table", "[[models]]").contains("identity_only"));
+        assert!(!retry_feedback(card, "no table", "[[models]]", false).contains("identity_only"));
+        // A whole-table rewrite is the unstaged ask; a staged run edits the draft in place.
+        let whole = retry_feedback(card, "bad", "[[models]]", false);
+        assert!(whole.contains("write the corrected WHOLE `[[models]]` TOML table"));
+        assert!(!whole.contains(harness::EDIT_IN_PLACE));
+        let edit = retry_feedback(card, "bad", "[[models]]", true);
+        assert!(edit.contains(harness::EDIT_IN_PLACE) && !edit.contains("WHOLE"));
+        let edit = retry_feedback(card, "missing required param 'vout'", "[[models]]", true);
+        assert!(
+            edit.contains("NOT a request"),
+            "the honest exits still follow"
+        );
     }
 
     #[test]
@@ -5503,18 +5531,33 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         doubtful: &str,
         bad: &str,
     ) -> (Result<String>, Vec<String>, String, String) {
+        run_ladder_fake_loud(escalate, doubtful, bad, "")
+    }
+
+    /// [`run_ladder_fake`] where a model named in `loud` also streams an
+    /// assistant turn far past any context budget, after its first call (so
+    /// after the locate stage) has written its files.
+    #[cfg(unix)]
+    fn run_ladder_fake_loud(
+        escalate: &str,
+        doubtful: &str,
+        bad: &str,
+        loud: &str,
+    ) -> (Result<String>, Vec<String>, String, String) {
         use std::os::unix::fs::PermissionsExt;
         let _guard = MOCK_ENV.lock().unwrap();
         let (dir, ex) = (tempfile::tempdir().unwrap(), FORMAT_EXAMPLES[0]);
         let [pdf, agent, draft, cfg, log, events] =
             ["a.pdf", "agent", "draft", "c", "log", "events"].map(|f| dir.path().join(f));
         let result = r#"{"type":"result","result":"done","modelUsage":{"MODEL":{"inputTokens":1000,"outputTokens":100,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"costUSD":0.01,"costBasis":"list"}}}"#;
+        let over = r#"{"type":"assistant","message":{"content":[],"usage":{"input_tokens":2,"cache_read_input_tokens":500000}}}"#;
         let script = format!(
             "#!/bin/sh\n[ \"$1\" = auth ] && echo '{{\"loggedIn\":true,\"authMethod\":\"api_key\"}}' && exit 0\n\
              cat >/dev/null\nm=; p=; for a in \"$@\"; do [ \"$p\" = --model ] && m=$a; p=$a; done\necho \"$m\" >> {log:?}\n\
              printf '## Pin map\\n1 VCC\\n' > notes.md\ncp {draft:?} model.toml\necho high > confidence.txt\n\
              case \" {doubtful} \" in *\" $m \"*) printf 'low\\npin 3 unclear\\n' > confidence.txt;; esac\n\
              case \" {bad} \" in *\" $m \"*) printf '[[models]]\\nid = 1\\n' > model.toml;; esac\n\
+             if [ -f seen ]; then case \" {loud} \" in *\" $m \"*) echo '{over}'; sleep 20;; esac; fi\ntouch seen\n\
              echo '{result}' | sed \"s/MODEL/$m/\"\n"
         );
         for (path, text) in [
@@ -5592,6 +5635,24 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         ] {
             assert!(events.contains(kind), "{kind} missing: {events}");
         }
+    }
+
+    /// A staged agent stopped at its budget after it wrote a valid card is not
+    /// redone: its draft is checked and kept, with no continuation agent.
+    #[cfg(unix)]
+    #[test]
+    fn a_stopped_agent_that_wrote_a_valid_card_is_not_redone() {
+        let (ran, models, _, _) = run_ladder_fake_loud(HAIKU_LADDER, "", "", "claude-haiku-5-5");
+        let card = ran.unwrap();
+        assert_eq!(
+            models,
+            ["claude-haiku-5-5", "claude-haiku-5-5"],
+            "locate, draft"
+        );
+        assert!(
+            card.starts_with("# extracted by claude-code claude-haiku-5-5 (tier 1 of 3)"),
+            "{card}"
+        );
     }
 
     /// When the stronger tier fails outright, the doubtful but valid draft is
@@ -5705,7 +5766,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
     #[test]
     fn a_second_stall_is_not_retried_again() {
         let mut calls = 0;
-        let err = validated_attempts(5, "p", Reply::Word, "codex", |_| {
+        let err = validated_attempts(5, "p", Reply::Word, ("codex", false), |_| {
             calls += 1;
             Err(IdleStalled("codex".into(), 1).into())
         })
@@ -5717,7 +5778,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
     #[test]
     fn a_stage_stopped_at_its_context_budget_is_continued_by_a_fresh_agent() {
         let mut prompts = Vec::new();
-        let word = validated_attempts(1, "p", Reply::Word, "claude", |p| {
+        let word = validated_attempts(1, "p", Reply::Word, ("claude", false), |p| {
             prompts.push(p.to_string());
             if prompts.len() == 1 {
                 Err(harness::Stopped("over budget".into()).into())
@@ -5733,7 +5794,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             prompts[1]
         );
         // With no attempt left the stop is the outcome, for the ladder to escalate on.
-        let err = validated_attempts(0, "p", Reply::Word, "claude", |_| {
+        let err = validated_attempts(0, "p", Reply::Word, ("claude", false), |_| {
             Err(harness::Stopped("over budget".into()).into())
         })
         .unwrap_err();

@@ -223,10 +223,13 @@ every pin map exact. A model with a
 context budget (Haiku: 85k tokens, so no request reaches 100k) runs the staged harness
 (`extract_harness.rs`): a locate agent reads `page-index.md` and only the pages
 it needs and writes compact `notes.md` (package, pin map, key pages and values,
-ambiguities); a fresh draft agent writes the card from the notes; a validator
-failure goes to a fresh fix agent as `previous.toml`. Each agent is stopped if its
-streamed context passes the budget, and a fresh agent carries on from its partial
-draft. `HAUKSBEE_EXTRACT_HARNESS=staged|single`
+ambiguities); a fresh draft agent writes the card from the notes, which its
+prompt carries along with the list of pages (so it neither re-reads nor lists
+them); a validator failure goes to a fresh fix agent that finds the failed draft
+in `model.toml` (and a copy as `previous.toml`) and repairs it with small edits
+rather than rewriting the card. Each agent is stopped if its streamed context
+passes the budget; a card it had already written is validated and fixed like
+any other, and one it had not written is started afresh from the notes. `HAUKSBEE_EXTRACT_HARNESS=staged|single`
 forces the harness on or off.
 
 **What a run costs.** Billing follows how the CLI is signed in, never a setting:

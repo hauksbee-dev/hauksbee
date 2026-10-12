@@ -31,11 +31,23 @@ pub const NOTES: &str = "notes.md";
 pub const CONFIDENCE: &str = "confidence.txt";
 pub const PREVIOUS: &str = "previous.toml";
 
-/// Told to the agent that takes over from one stopped at its context budget.
+/// Told to the agent that takes over from one stopped at its context budget
+/// before it wrote `model.toml` (a stopped agent that did write one has that
+/// draft validated and fixed instead).
 pub const CONTINUE_AFTER_STOP: &str = "\n\nThe previous agent ran out of context before it \
-    finished. Its partial draft, if it wrote one, is `previous.toml`: keep what it has, re-read \
-    only the pages still needed for what is missing or failed, and write the whole table to \
-    model.toml early, then refine it with Edit.";
+    wrote model.toml. Do not repeat its reading: take what you can from the notes, open a page \
+    only for what they lack, and write the whole table to model.toml early, then refine it with \
+    Edit.";
+
+/// Appended to a validation failure in a staged run.
+///
+/// `model.toml` already holds the failed draft: rewriting or re-reading the
+/// whole card cost an agent 15-30k of its small context, a targeted edit a few
+/// hundred tokens.
+pub const EDIT_IN_PLACE: &str = "model.toml holds that draft. Fix exactly those issues with small \
+    Edit calls: find the lines with `grep -n`, read only them (Read with offset and limit), and \
+    never read or rewrite the whole file. Then run `hauksbee models lint model.toml` and repeat \
+    until it is clean.";
 
 /// An agent run stopped by its stream watcher (its context passed the budget).
 #[derive(Debug, Clone)]
@@ -131,6 +143,52 @@ pub fn write_pages<'a>(dir: &Path, pages: impl Iterator<Item = (usize, &'a str, 
     let _ = std::fs::write(dir.join("page-index.md"), index);
 }
 
+/// Which pages exist in the sandbox, so an agent need not `ls` for them: every
+/// page has a text file, and only some have a render.
+#[must_use]
+pub fn page_list(dir: &Path) -> String {
+    let numbers = |sub: &Path, ext: &str| -> Vec<usize> {
+        let entries = std::fs::read_dir(sub).into_iter().flatten().flatten();
+        let mut found: Vec<usize> = entries
+            .filter_map(|e| {
+                let name = e.file_name().into_string().ok()?;
+                let digits = name.strip_prefix("page-")?.strip_suffix(ext)?;
+                digits.parse().ok()
+            })
+            .collect();
+        found.sort_unstable();
+        found
+    };
+    let texts = numbers(&dir.join("pages"), ".txt");
+    let images = numbers(dir, ".png");
+    if texts.is_empty() && images.is_empty() {
+        return String::new();
+    }
+    let join = |v: &[usize]| {
+        v.iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut out = String::from("\n\nPages, so you need not `ls`:");
+    if let (Some(first), Some(last)) = (texts.first(), texts.last()) {
+        let _ = write!(
+            out,
+            " text of pages {first}-{last} is in `pages/page-NNN.txt`;"
+        );
+    }
+    if images.is_empty() {
+        out.push_str(" no page is rendered yet.");
+    } else {
+        let _ = write!(
+            out,
+            " rendered `page-NNN.png` exist for pages {}.",
+            join(&images)
+        );
+    }
+    out
+}
+
 /// The first stage: find the facts and hand off compact notes.
 #[must_use]
 pub fn locate_prompt(part: &str, kind: &str, needs: &str) -> String {
@@ -176,12 +234,14 @@ pub fn handoff(dir: &Path, staged: bool, escalated_because: Option<&str>) -> Str
              because: {why}. Do the extraction yourself; anything it left is a lead to check.",
         );
     }
+    out += &page_list(dir);
     if !notes.trim().is_empty() {
         let trust = if staged {
-            "A locating agent read the datasheet first. Its notes are your map: open the pages \
-             they name (page-NNN.png, or pages/page-NNN.txt where there is no image) and check \
-             each value you use against its page. Your context is small: do not open \
-             datasheet.pdf or datasheet.txt whole; this overrides the instruction above."
+            "A locating agent read the datasheet first. The notes are your map and are below, so \
+             do not re-read them or `ls`. Open a page (page-NNN.png, or pages/page-NNN.txt where \
+             there is no image) only for a value the notes lack or flag as doubtful: each image \
+             costs about 5k tokens of your small context. Do not open datasheet.pdf or \
+             datasheet.txt whole; this overrides the instruction above."
         } else {
             "Notes from the cheaper pass, a map only: verify the pin map and every value \
              against the pages yourself."
@@ -191,11 +251,12 @@ pub fn handoff(dir: &Path, staged: bool, escalated_because: Option<&str>) -> Str
     if staged {
         let _ = write!(
             out,
-            "\n\nIf `{PREVIOUS}` exists it is the last draft, which failed the check quoted \
-             below: start from it, fix exactly what failed, re-read only the pages the fix \
-             needs, and write the whole corrected table to model.toml. Write model.toml as soon \
-             as you have the pin map and the required values, then refine it: a stage that runs \
-             out of context keeps only what is on disk."
+            "\n\nIf model.toml already exists it is the last draft (`{PREVIOUS}` is a copy), which \
+             failed the check quoted below: do not read or rewrite it whole, fix exactly what \
+             failed with small Edit calls, and re-read a page only if a fix needs a value. \
+             Otherwise write model.toml as soon as you have the pin map and the required values, \
+             then refine it with Edit: a stage that runs out of context keeps only what is on \
+             disk."
         );
     }
     out
@@ -335,5 +396,42 @@ mod tests {
         let index = std::fs::read_to_string(dir.path().join("page-index.md")).unwrap();
         assert!(index.contains("| 1 |  | LM358 / dual op amp |") && index.contains("| 2 | pins |"));
         assert!(dir.path().join("pages/page-002.txt").is_file());
+    }
+
+    #[test]
+    fn the_page_list_spares_an_agent_an_ls() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(page_list(dir.path()), "", "no pages, nothing to say");
+        let pages = [(1, "a", vec![]), (2, "b", vec![]), (10, "c", vec![])];
+        write_pages(dir.path(), pages.into_iter());
+        std::fs::write(dir.path().join("page-010.png"), b"png").unwrap();
+        std::fs::write(dir.path().join("page-002.png"), b"png").unwrap();
+        std::fs::write(dir.path().join("datasheet.png"), b"not a page").unwrap();
+        let list = page_list(dir.path());
+        assert!(list.contains("text of pages 1-10"), "{list}");
+        assert!(list.contains("for pages 2, 10."), "{list}");
+        // The draft prompt carries it with the notes, so the agent opens neither.
+        std::fs::write(dir.path().join(NOTES), "## Pin map\n1 VCC\n").unwrap();
+        let prompt = handoff(dir.path(), true, None);
+        assert!(prompt.contains("for pages 2, 10.") && prompt.contains("1 VCC"));
+        assert!(prompt.contains("do not re-read them or `ls`"), "{prompt}");
+    }
+
+    #[test]
+    fn a_staged_fix_edits_the_draft_in_place_not_rewrites_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompt = handoff(dir.path(), true, None);
+        assert!(
+            prompt.contains("do not read or rewrite it whole"),
+            "{prompt}"
+        );
+        assert!(
+            !prompt.contains("write the whole corrected table"),
+            "{prompt}"
+        );
+        assert!(!handoff(dir.path(), false, None).contains("rewrite it whole"));
+        // A continuation after a stop with no draft on disk says so, and does not point at one.
+        assert!(CONTINUE_AFTER_STOP.contains("before it wrote model.toml"));
+        assert!(!CONTINUE_AFTER_STOP.contains("previous.toml"));
     }
 }
