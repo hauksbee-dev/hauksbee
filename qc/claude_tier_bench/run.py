@@ -197,8 +197,24 @@ def param_score(ref: dict[str, Any], draft: dict[str, Any]) -> dict[str, Any]:
 
 def best_draft_model(ref: dict[str, Any], drafts: list[dict[str, Any]]) -> dict[str, Any] | None:
     """The draft entry closest to the reference (several entries are allowed)."""
-    return max(drafts, key=lambda m: pin_score(ref.get("pins") or {}, m.get("pins") or {})[1],
+    return max(drafts, key=lambda m: pin_score(ref.get("pins") or {}, comparable_pins(ref, m))[1],
                default=None)
+
+
+def comparable_pins(ref: dict[str, Any], draft: dict[str, Any]) -> dict[str, Any]:
+    """The draft's `pins`, keyed like the reference's. A card may key pins by pad number
+    ("1" = "gate") or by symbol pin name ("G" = "gate"); when the two share no key, the
+    draft's own `source.pinout` tables (pad -> name) rename its pads to names."""
+    pins = draft.get("pins") or {}
+    ref_keys = {str(k).strip().upper() for k in (ref.get("pins") or {})}
+    if not pins or ref_keys & {str(k).strip().upper() for k in pins}:
+        return pins
+    names: dict[str, str] = {}
+    for table in (draft.get("source") or {}).get("pinout") or []:
+        for pad, name in ((table or {}).get("pins") or {}).items():
+            names.setdefault(str(pad).strip().upper(), str(name))
+    renamed = {names.get(str(k).strip().upper(), k): v for k, v in pins.items()}
+    return renamed if ref_keys & {str(k).strip().upper() for k in renamed} else pins
 
 
 def read_events(path: Path) -> dict[str, Any]:
@@ -264,7 +280,7 @@ def score_sample(case: dict[str, Any], sdir: Path, binary: Path) -> dict[str, An
             draft = best_draft_model(ref, models_of(draft_path))
         except (OSError, tomllib.TOMLDecodeError) as exc:
             res["parse_error"] = str(exc)
-    exact, frac = pin_score(ref.get("pins") or {}, (draft or {}).get("pins") or {})
+    exact, frac = pin_score(ref.get("pins") or {}, comparable_pins(ref, draft or {}))
     res.update(pin_exact=exact, pin_frac=frac, params=param_score(ref, draft or {}))
     lint = None
     if draft_path and not rejected and "parse_error" not in res and binary.is_file():

@@ -94,6 +94,17 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(run.pin_score(two, {"1": "a", "2": "a2", "3": "gnd"})[1], 2 / 3)
         self.assertEqual(run.pin_score(two, {"1": "a2", "2": "a1", "3": "gnd"})[1], 1 / 3)
 
+    def test_pads_are_renamed_through_the_drafts_own_pinout(self):
+        ref = {"pins": {"G": "gate", "S": "source", "D": "drain"}}
+        draft = {"pins": {"1": "gate", "2": "source", "3": "drain"},
+                 "source": {"pinout": [{"package": "SOT23", "pins": {"1": "G", "2": "S", "3": "D"}}]}}
+        self.assertEqual(run.pin_score(ref["pins"], run.comparable_pins(ref, draft)), (True, 1.0))
+        swapped = {**draft, "pins": {"1": "source", "2": "gate", "3": "drain"}}
+        self.assertFalse(run.pin_score(ref["pins"], run.comparable_pins(ref, swapped))[0])
+        # Keys already comparable, or no pinout to rename through: left as drafted.
+        self.assertEqual(run.comparable_pins({"pins": {"1": "gate"}}, draft), draft["pins"])
+        self.assertEqual(run.comparable_pins(ref, {"pins": draft["pins"]}), draft["pins"])
+
     def test_param_score(self):
         ref, draft = tomllib.loads(REF)["models"][0], tomllib.loads(GOOD)["models"][0]
         p = run.param_score(ref, draft)
