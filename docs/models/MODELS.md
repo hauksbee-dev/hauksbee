@@ -141,7 +141,13 @@ output tokens) Sol is $2.00 / $0.10 / $10.00 and Luna $0.10 / $0.01 / $0.50,
 about 20 times cheaper; the fast tier (`service_tier="fast"`, formerly
 `"priority"`) costs double. Those prices apply to an API key. A `codex` signed in
 with a ChatGPT account (`codex login status`) draws on the plan's Codex usage
-instead, with no per-call charge; Luna uses less of that allowance than Sol.
+instead, with no per-call charge. On a ChatGPT Plus plan, one measured board
+(Glasgow revD1, high effort, standard tier, one run) took about 1% of the
+5-hour limit and 0.1% of the weekly limit per part on Luna, and about 6% and
+1% per part on Sol (around 13 times as much); extraction runs once per part and
+the card is reused. Those are integer-percentage readings of one run, and plan
+limits change. At list price the same runs came to about $0.05 per part on Luna
+and $0.50 per part on Sol.
 Codex and `api` runs end with a token count; metered ones (an API key, or
 `api`) add a list-price estimate that includes the fast-tier doubling, and
 `HAUKSBEE_LLM_PRICE=in,cached,out` prices any other model. `hauksbee models backend show` and the web
