@@ -6,11 +6,16 @@
 //! ordinary verdict, and a missing emulator is an INVALID with the install
 //! command rather than an "invalid spec".
 
-use crate::support::{bin, blinky_board, repo_root, stderr, stdout};
-use std::process::{Command, Output};
+use crate::support::{bin, repo_root, stderr};
+#[cfg(feature = "avr")]
+use crate::support::{blinky_board, stdout};
+use std::process::Command;
+#[cfg(feature = "avr")]
+use std::process::Output;
 
 /// The bundled blinky spec's board, supply and assertions, with `firmware`
 /// optionally present, run from a scratch directory.
+#[cfg(feature = "avr")]
 fn run_blinky(firmware: Option<&str>, asserts: &str) -> Output {
     let dir = tempfile::tempdir().unwrap();
     std::fs::copy(blinky_board(), dir.path().join("blinky.kicad_pcb")).unwrap();
@@ -30,6 +35,7 @@ fn run_blinky(firmware: Option<&str>, asserts: &str) -> Output {
         .expect("binary runs")
 }
 
+#[cfg(feature = "avr")]
 const ASSERTS: &str = r#"
 [[assert]]
 kind = "voltage"
