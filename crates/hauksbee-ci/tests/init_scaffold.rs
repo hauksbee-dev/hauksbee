@@ -485,7 +485,7 @@ fn an_unpowered_cascade_asks_for_its_first_stage_only() {
     use hauksbee_ir::evidence::Remedy;
     let board = repo("examples/board-as-code/stormduino.board");
     let text = format!(
-        "name = \"bare\"\nboard = \"{}\"\nduration_ms = 1\n\n[[assert]]\nkind = \"no_faults\"\n",
+        "name = \"bare\"\nboard = '{}'\nduration_ms = 1\n\n[[assert]]\nkind = \"no_faults\"\n",
         board.display()
     );
     let path = std::env::temp_dir().join(format!("hauksbee_ci_bare_{}.toml", std::process::id()));

@@ -231,7 +231,7 @@ fn a_frequency_is_refused_when_there_are_too_few_toggles_to_measure_one() {
     // covered by `no_firmware_spec`.)
     let hex = repo_root().join("testdata/firmware/demo/demo.hex");
     let dir = dir_with_spec(&format!(
-        "firmware = \"{}\"\nmcu = \"atmega328p\"\n\n[[supply]]\nnet = \"+5V\"\nkind = \"bench\"\nvolts = 5.0\n\n\
+        "firmware = '{}'\nmcu = \"atmega328p\"\n\n[[supply]]\nnet = \"+5V\"\nkind = \"bench\"\nvolts = 5.0\n\n\
          [[assert]]\nkind = \"toggle\"\nnet = \"D13\"\nfreq_hz = 5.0\n",
         hex.display()
     ));
