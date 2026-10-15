@@ -1518,8 +1518,9 @@ fn own_pinout(entry: &ModelEntry) -> Result<Option<&Pinout>, String> {
     Ok(Some(own))
 }
 
-/// How a sheet whose packages number their pads differently is carded: the
-/// prompts (P4, the pins section) and [`draft_pin_map_problems`] quote it.
+/// How a sheet whose packages number their pads differently is carded.
+///
+/// The prompts (P4, the pins section) and [`draft_pin_map_problems`] quote it.
 /// Measured: one 8-pin PDIP/SOIC map written for an EEPROM whose SOT-23-6
 /// numbers the same signals differently, so a SOT-23 board bound wrong pads.
 pub const PACKAGE_SPLIT_RULE: &str = "when the part number names no package and its packages \
@@ -1542,8 +1543,10 @@ fn numbering_differs(a: &Pinout, b: &Pinout) -> bool {
 }
 
 /// The lead numbering a package standard fixes, for a sheet printing only lead
-/// letters on a drawn view: the one table the P7 prompt rule quotes and
-/// [`draft_pin_map_problems`] cites, keyed by [`crate::package::package_body`] name.
+/// letters on a drawn view.
+///
+/// The one table the P7 prompt rule quotes and [`draft_pin_map_problems`]
+/// cites, keyed by [`crate::package::package_body`] name.
 pub const LEAD_STANDARDS: &[(&str, &str)] = &[
     (
         "SOT-23",
@@ -3179,7 +3182,11 @@ pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
         // A fixed part's FB/VOUT pin is its output.
         accepts(&card(&[("\"5\" = \"VOUT\" }", "\"5\" = \"FB/VOUT\" }")]));
         // A draft must say which package its map is for, read in full.
-        assert!(draft_pin_map_problems(&card(&[])).is_empty());
+        // Its DFN-4 column numbers the pads differently, so the card is held to
+        // its SOT-23-5 footprints (PACKAGE_SPLIT_RULE) before it stands.
+        assert!(draft_pin_map_problems(&card(&[]))[0].contains(PACKAGE_SPLIT_RULE));
+        let held = card(&[("[source]", "[match]\nfootprint_re = \"(?i)SOT-?23\"\n[source]")]);
+        assert!(draft_pin_map_problems(&held).is_empty());
         let no_column = LDO_FIXTURE[..LDO_FIXTURE.find("[[source.pinout]]").unwrap()].replace("SOT-23-5 package", "");
         let no_column: ModelEntry = toml::from_str(&no_column).unwrap();
         assert!(draft_pin_map_problems(&no_column)[0].contains("records no [[models.source.pinout]] column"));

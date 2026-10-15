@@ -80,9 +80,10 @@ pub const RULES: &[Rule] = &[
     },
     Rule {
         id: "converter_dropout",
-        guide: "a switching regulator ([models.behavioral.converter]) has no dropout_v: a \
-                dropout row on its datasheet belongs to an internal bias regulator (VCC, \
-                INTVCC, EXTVCC) and stays a characteristic record",
+        guide: "a switching regulator's (behavioral converter card's) dropout_v is only \
+                its own input-to-output headroom at full duty; the dropout row of an internal \
+                bias regulator (VCC, INTVCC, EXTVCC, an LDO sub-block) is not it and stays a \
+                characteristic record",
         check: converter_dropout,
     },
 ];
@@ -146,7 +147,7 @@ pub fn fractions(text: &str) -> Vec<(f64, String)> {
 }
 
 fn same(a: f64, b: f64) -> bool {
-    (a - b).abs() <= 1e-9 + 1e-6 * a.abs().max(b.abs())
+    (a - b).abs() <= 1e-6f64.mul_add(a.abs().max(b.abs()), 1e-9)
 }
 
 /// A key's (scale, base unit): its suffix, else its glossary unit.
@@ -178,7 +179,7 @@ fn rows(entry: &ModelEntry) -> Vec<(String, &Characteristic)> {
     cited.chain(params).collect()
 }
 
-fn columns(r: &Characteristic) -> [(&'static str, Option<f64>); 3] {
+const fn columns(r: &Characteristic) -> [(&'static str, Option<f64>); 3] {
     [("min", r.min), ("typ", r.typ), ("max", r.max)]
 }
 
@@ -455,11 +456,28 @@ fn static_supply(entry: &ModelEntry) -> Vec<String> {
 }
 
 fn converter_dropout(entry: &ModelEntry) -> Vec<String> {
+    const BIAS: &[&str] = &[
+        "vcc", "intvcc", "extvcc", "drvcc", "bias", "internal", "ldo",
+    ];
     let converter = entry.kind == ComponentKind::Vreg && entry.behavioral.converter.is_some();
-    if !converter || !entry.params.0.contains_key("dropout_v") {
+    let Some(dropout) = entry.params.get_f64("dropout_v").filter(|_| converter) else {
         return Vec::new();
-    }
-    vec!["this switching regulator states dropout_v; drop it from [models.params]".to_string()]
+    };
+    let bias = |r: &Characteristic| {
+        let text = format!("{} {} {}", r.parameter, r.conditions, r.basis);
+        words(&text).iter().any(|w| BIAS.contains(&w.as_str()))
+    };
+    let at = |r: &Characteristic| {
+        let scale = crate::units::scale_between(&r.unit, "V");
+        columns(r)
+            .into_iter()
+            .any(|(_, x)| x.zip(scale).is_some_and(|(x, k)| same(x * k, dropout)))
+    };
+    rows(entry)
+        .into_iter()
+        .filter(|(name, r)| bias(r) && (name == "param `dropout_v`" || at(r)))
+        .map(|(name, _)| format!("dropout_v = {dropout} is {name}, an internal bias regulator's"))
+        .collect()
 }
 
 #[cfg(test)]
@@ -566,11 +584,22 @@ mod tests {
         assert!(rule_ids(&entry(&card(1.0))).is_empty());
     }
 
-    /// MAX17760 round-3 draft: the VCC LDO's dropout on a buck.
+    /// MAX17760 round-3 draft: its "VCC Dropout Voltage" row (VIN = 4.5V,
+    /// IVCC = 5mA, max 0.27 V, the internal VCC LDO's) as the buck's dropout.
     #[test]
     fn a_converter_with_dropout_is_refused() {
-        let card = "[[models]]\nid = \"x\"\nkind = \"vreg\"\n[models.params]\ndropout_v = 0.27\n[models.behavioral.converter]\ntopology = \"buck\"\nout_pin = \"sw\"\nin_pin = \"in\"\nvout_setpoint = 5.0\n";
+        let card = "[[models]]\nid = \"x\"\nkind = \"vreg\"\n[models.params]\ndropout_v = 0.27\n\
+                    [[models.source.characteristic]]\nparameter = \"VCC Dropout Voltage\"\n\
+                    conditions = \"VIN = 4.5V, IVCC = 5mA\"\nmax = 0.27\nunit = \"V\"\nbasis = \"p.3\"\n\
+                    [models.behavioral.converter]\ntopology = \"buck\"\nout_pin = \"sw\"\n\
+                    in_pin = \"in\"\nvout_setpoint = 5.0\n";
         assert_eq!(rule_ids(&entry(card)), vec!["converter_dropout"]);
+        // A converter's own full-duty headroom, or a dropout no row states, stands.
+        let own = card
+            .replace("VCC Dropout Voltage", "Dropout (VIN - VOUT), 100% duty")
+            .replace("IVCC", "IOUT");
+        assert!(rule_ids(&entry(&own)).is_empty());
+        assert!(rule_ids(&entry(&card.replace("max = 0.27", "max = 0.4"))).is_empty());
     }
 
     #[test]

@@ -884,6 +884,22 @@ pub struct Rejected {
     pub kept: Option<(PathBuf, PathBuf)>,
 }
 
+impl Rejected {
+    /// A tier whose redraft repeats the draft it was told to fix.
+    fn unchanged(tool: &str, attempt: usize, e: &anyhow::Error, draft: String) -> Self {
+        Self {
+            tool: tool.to_string(),
+            attempts: attempt,
+            error: format!(
+                "attempt {attempt} returned the previous failing draft unchanged, so this tier \
+                 is not acting on the feedback: {e:#}"
+            ),
+            draft,
+            kept: None,
+        }
+    }
+}
+
 fn rejected_tail(draft: &str, kept: Option<&(PathBuf, PathBuf)>) -> String {
     let Some((saved, dest)) = kept else {
         return format!("\nRaw reply was:\n{draft}");
@@ -3904,17 +3920,7 @@ fn validated_attempts(
             // at this tier would repeat it, so the tier stops and the ladder
             // escalates (or, on its last tier, the draft is refused).
             Err(e) if previous_failure.as_deref() == Some(raw.trim()) => {
-                return Err(Rejected {
-                    tool: tool.to_string(),
-                    attempts: attempt,
-                    error: format!(
-                        "attempt {attempt} returned the previous failing draft unchanged, so \
-                         this tier is not acting on the feedback: {e:#}"
-                    ),
-                    draft: raw,
-                    kept: None,
-                }
-                .into())
+                return Err(Rejected::unchanged(tool, attempt, &e, raw).into());
             }
             Err(e) if attempt <= retries => {
                 previous_failure = Some(raw.trim().to_string());
@@ -6190,7 +6196,11 @@ uncertainty = [
             "\"1\" = \"base\"\n\"2\" = \"emitter\"\n\"6\" = \"collector\"",
             "b = \"base\"\ne = \"emitter\"\nc = \"collector\"",
         );
-        let second = lettered.replace("\"bcm847bs\"", "\"b\"");
+        // (Two cards both accepting the requested name would be refused as
+        // ambiguous, so the second names a sibling code.)
+        let second = lettered
+            .replace("\"bcm847bs\"", "\"b\"")
+            .replace("(?i)BCM847BS", "(?i)BCM847BS-Q");
         let filled = model.complete(format!("{lettered}{second}"));
         assert!(parse_and_validate_reply(&filled, part, kind).is_ok());
         assert_eq!(filled.matches("\"model\"").count(), 2);
@@ -6747,10 +6757,11 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             text.contains("`identity_only` is set directly in [models.source]"),
             "{text}"
         );
-        // Three attempts of 1M in / 100k out at luna's 0.10 / 0.50 per million.
+        // Two attempts of 1M in / 100k out at luna's 0.10 / 0.50 per million:
+        // the second repeats the first failing draft unchanged, so the tier stops.
         let cost = crate::extract_usage::summary();
         assert!(
-            cost.contains("3000000 input") && cost.contains("about $0.4500"),
+            cost.contains("2000000 input") && cost.contains("about $0.3000"),
             "{cost}"
         );
         let spaced = Path::new("/tmp/a b/it's.toml");
@@ -7074,9 +7085,11 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let (ran, models, _, _) =
             run_ladder_fake("claude-sonnet-5-5", "claude-haiku-5-5", "claude-sonnet-5-5");
         let card = ran.unwrap();
+        // Its second attempt repeats the first failing draft unchanged, so the
+        // tier stops there instead of spending a third.
         assert_eq!(
             models.iter().filter(|m| *m == "claude-sonnet-5-5").count(),
-            3,
+            2,
             "{models:?}"
         );
         assert!(
