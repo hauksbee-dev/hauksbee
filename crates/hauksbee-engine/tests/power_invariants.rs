@@ -589,7 +589,13 @@ fn switch_plan(card: &Card, value: &str, on: &str) -> Plan {
         let net = match role.as_str() {
             r if r == a => input.clone(),
             r if r == b => output.clone(),
-            "s1" | "s1_1" => {
+            // The second lane of a shared-select DPDT mux mirrors the first: the
+            // binder stamps the two-lane arm only when every terminal is wired,
+            // and otherwise falls back to bridging whichever two nets it sorts
+            // first, which depends on the card's pad order, not on the part.
+            "com_2" => input.clone(),
+            "s0_2" => output.clone(),
+            "s1" | "s1_1" | "s1_2" => {
                 second = Some("OUT2");
                 "OUT2".to_string()
             }
@@ -667,12 +673,6 @@ fn run(plan: &Plan, lib: &ModelLibrary, model_id: &str) -> Outcome {
     let board = plan.rig.board();
     let bound = bind_board_with(&board, lib, &CustomRegistry::new());
     let path = path_of(&bound.circuit.devices);
-    if model_id.starts_with("fsusb30") {
-        for d in bound.circuit.devices.iter().filter(|d| d.name().contains("U1")) {
-            eprintln!("DIAG {model_id} {d:?}");
-        }
-        eprintln!("DIAG warning {:?}", bound.report.row("U1").map(|r| r.warning.clone()));
-    }
     let mut broken = Vec::new();
     let row = bound.report.row("U1");
     if row.and_then(|r| r.model_id.as_deref()) != Some(model_id) {
@@ -765,19 +765,8 @@ fn every_power_card_balances_power_and_owns_its_rail() {
             let high = run(&switch_plan(card, &value, "+3.3V"), &lib, &card.id);
             if high.broken.iter().any(|b| b.starts_with("output")) {
                 run(&switch_plan(card, &value, "GND"), &lib, &card.id)
-            } else if high.broken.is_empty() {
-                high
             } else {
-                // A select that routes the input to the unloaded throw leaves
-                // the output rail held by its own supply, so no "output" error
-                // fires; the active-low polarity is the other way to enable the
-                // part, and the card must hold every invariant in one of them.
-                let low = run(&switch_plan(card, &value, "GND"), &lib, &card.id);
-                if low.broken.is_empty() {
-                    low
-                } else {
-                    high
-                }
+                high
             }
         } else if let Some(plan) = vreg_plan(card, &value) {
             run(&plan, &lib, &card.id)
