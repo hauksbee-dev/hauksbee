@@ -3202,7 +3202,12 @@ fn run_tier(
             Reply::Word => {}
         }
     }
-    let mut prompt = if staged { &prompts.staged } else { &prompts.single }.clone();
+    let mut prompt = if staged {
+        &prompts.staged
+    } else {
+        &prompts.single
+    }
+    .clone();
     if !reply.table().is_empty() {
         prompt += &harness::handoff(ws.path(), staged, escalated_because.map(String::as_str));
     }
@@ -3409,7 +3414,10 @@ fn envelope_note(schema_path: &Path) -> String {
 /// `confidence` is one of the schema's three words is an envelope.
 fn envelope_in(text: &str) -> Option<serde_json::Value> {
     let text = text.trim();
-    let braced = text.find('{').zip(text.rfind('}')).map(|(a, b)| &text[a..=b]);
+    let braced = text
+        .find('{')
+        .zip(text.rfind('}'))
+        .map(|(a, b)| &text[a..=b]);
     let v = [Some(text), braced]
         .into_iter()
         .flatten()
@@ -5069,14 +5077,21 @@ mod tests {
         std::fs::write(&drafting, envelope_schema().to_string()).unwrap();
         std::fs::write(&identify, identify_schema().to_string()).unwrap();
         let note = envelope_note(&drafting);
-        assert!(note.contains("written | identity_only | not_written"), "{note}");
+        assert!(
+            note.contains("written | identity_only | not_written"),
+            "{note}"
+        );
         assert!(note.contains("low while the last checker run still reports a finding"));
         assert_eq!(envelope_note(&identify), "");
         assert_eq!(envelope_note(&dir.path().join("none.json")), "");
         assert_eq!(schema_flag(Backend::ClaudeCode, Path::new("claude")), None);
         let body = r#"{"status":"written","confidence":"medium","reason":"r","questions":["q"]}"#;
         for text in [body.to_string(), format!("Done.\n```json\n{body}\n```")] {
-            assert_eq!(envelope_in(&text).unwrap()["confidence"], "medium", "{text}");
+            assert_eq!(
+                envelope_in(&text).unwrap()["confidence"],
+                "medium",
+                "{text}"
+            );
         }
         assert!(envelope_in(r#"{"confidence":"certain"}"#).is_none());
         assert!(envelope_in("model.toml written").is_none());
