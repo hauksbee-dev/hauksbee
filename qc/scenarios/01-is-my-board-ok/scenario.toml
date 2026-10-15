@@ -37,12 +37,13 @@ contains = [
 ]
 matches = [
   "^Looks healthy: no copper spacing \\(drc\\) problems found\\.$",
-  # The model-dependent sections must say INCONCLUSIVE and name U1, rather than
-  # turning an identity-only SR2 card into a behavioural clean bill.
+  # The scope banner says INCONCLUSIVE and names U1 once, above the sections,
+  # rather than turning an identity-only SR2 card into a behavioural clean bill.
   "^INCONCLUSIVE: 1 current-carrying / active part\\(s\\) have no model \\(U1\\)",
-  # Informational SI observations must remain visible under the inconclusive
-  # verdict even though Watchy can no longer exercise the clean wording.
-  "^INCONCLUSIVE: .* Plus 3 things worth a look \\(see below\\)\\.$",
+  # Each model-dependent section points back at it. Informational SI
+  # observations must remain visible under the inconclusive verdict even
+  # though Watchy can no longer exercise the clean wording.
+  "^Not a clean bill: key parts have no model \\(see INCONCLUSIVE at the top\\)\\. Plus 3 things worth a look \\(see below\\)\\.$",
   "^VERDICT: inconclusive: 0 serious, 3 worth a look; 1 key part has no usable model \\(U1\\), so the checks cannot vouch for this board; next: ",
   # U1 reaches every net through the circuit, so no electrical check is judged
   # and nothing reads as partly judged; the clean wiring checks are a line of
