@@ -23,6 +23,7 @@ internal_clock = "internal 8 MHz RC oscillator"
 # DS40002061A section 9.2.1 "Default Clock Source" (PDF page 37): a part ships
 # with the 8.0 MHz RC and CKDIV8 programmed, i.e. 1.0 MHz; this key does not
 # assume CKDIV8, so a factory-fused part is 8x slower than the run.
+default_clock_hz = 8000000
 # Microchip ATmega328P DS40001984, "ADC Noise Canceler / Analog Input Circuitry":
 # the ADC is optimized for analog signals with an output impedance of
 # approximately 10 kOhm or less, because the 14 pF sample-and-hold capacitor is
