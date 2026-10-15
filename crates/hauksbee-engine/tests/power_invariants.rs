@@ -899,8 +899,14 @@ fn opamp_rig(card: &Card, value: &str, run: &OpampRun) -> (Rig, Vec<String>) {
         let id = rig.net(&net);
         pins.push(pin(&pad, id));
     }
-    rig.parts
-        .push(component("U1", value, "Package_SO:SOIC-14", pins));
+    // A card that records its package binds only on a matching footprint; the
+    // rig names none for it rather than a SOIC-14 the part never comes in.
+    let footprint = if card.declares_package() {
+        ""
+    } else {
+        "Package_SO:SOIC-14"
+    };
+    rig.parts.push(component("U1", value, footprint, pins));
     for (i, net) in outs.iter().enumerate() {
         rig.load(&format!("RL{i}"), net, LOAD);
     }

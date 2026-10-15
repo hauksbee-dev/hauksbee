@@ -3762,7 +3762,10 @@ missing = ["switching_ripple", "compensation_stability", "soft_start", "pfm_ldo_
 # setpoint is a placeholder that the binder replaces from the board's own FB
 # divider. EN is a precision 1.21 V typ rising / 1.10 V typ falling threshold
 # (VEN_H 1.21 typ, 1.25 max). Efficiency 0.85 is an assumption (the sheet
-# gives only curves); out_r_ohms is the 600 mOhm high-side RDS(ON) typ.
+# gives only curves); out_r_ohms is the averaged source's numerical output
+# impedance (0.02, as ap64501sp_13), not the 600 mOhm high-side RDS(ON): that
+# conduction loss is part of the efficiency, so stamping it here as well billed
+# it twice and drew 1.2 % more input power than efficiency states.
 [[models]]
 id = "ap64060wu_7"
 kind = "vreg"
@@ -3827,7 +3830,7 @@ in_pin = "in"
 vout_setpoint = 5.0
 iout_limit_a = 0.6
 efficiency = 0.85
-out_r_ohms = 0.6
+out_r_ohms = 0.02
 switching_hz = 2.0e6   # Electrical Characteristics, fSW AP64060 typ 2 MHz
 
 [models.behavioral.converter.feedback]
