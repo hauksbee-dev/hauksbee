@@ -54,8 +54,10 @@ fn fresh_id() -> String {
     format!("{epoch:x}-{}", NEXT.fetch_add(1, Ordering::Relaxed))
 }
 
-/// Keep the runner's `exports` and answer the page's JSON: the same object
-/// without `exports`, with `export_id` added. An answer that carries no exports
+/// Keep the runner's `exports` and answer the page's JSON.
+///
+/// The answer is the same object without `exports`, with `export_id` added. An
+/// answer that carries no exports
 /// (an error, a scaffold, a catalogue) is returned untouched.
 #[must_use]
 pub fn stash(runner_json: String) -> String {
@@ -100,14 +102,17 @@ pub fn stash(runner_json: String) -> String {
 /// `file` is `results.xml`, `report.json` or `manifest.json`.
 #[must_use]
 pub fn lookup(id: &str, file: &str) -> Option<(&'static str, String)> {
-    let kept = store()
+    let run = store()
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (_, run) = kept.iter().find(|(kept_id, _)| kept_id == id)?;
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|(kept_id, _)| kept_id == id)?
+        .1
+        .clone();
     match file {
-        "results.xml" => Some(("application/xml", run.junit.clone())),
-        "report.json" => Some(("application/json", run.json.clone())),
-        "manifest.json" => run.manifest.clone().map(|m| ("application/json", m)),
+        "results.xml" => Some(("application/xml", run.junit)),
+        "report.json" => Some(("application/json", run.json)),
+        "manifest.json" => run.manifest.map(|m| ("application/json", m)),
         _ => None,
     }
 }

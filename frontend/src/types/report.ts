@@ -872,6 +872,9 @@ export interface RunResponse {
   results?: CheckResult[]
   /** What the verdict and each assumption's terms mean, from hauksbee-ir. */
   glossary?: GlossaryRow[]
+  /** The run's JUnit, `--json` and manifest files, served at
+   *  `/api/ci/export/{export_id}/{results.xml|report.json|manifest.json}`. */
+  export_id?: string
 }
 
 /** One term's explanation, from `hauksbee_ir::glossary`: the words every

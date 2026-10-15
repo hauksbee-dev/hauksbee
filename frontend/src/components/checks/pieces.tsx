@@ -1,6 +1,9 @@
-import { useMemo } from 'react'
+import { useContext, useMemo } from 'react'
 import type { ArtifactProvenance, CheckResult, EvidenceAssumption } from '../../types/report'
-import { assumptionsForEvidence, describeModelSource, evidenceStatusTerm } from '../../lib/report-view'
+import { assumptionsForEvidence, describeModelSource, evidenceStatusTerm, plural } from '../../lib/report-view'
+import type { ResultEntity } from '../../lib/result-links'
+import { EntityChip, ResultLinkContext } from '../report/ResultLinks'
+import { causeGroups, openPartCount, showOpenParts, withoutIds } from './Remedies'
 import { summarizeErrorBudget } from '../../lib/report-view'
 import { checkKind, tomlToBuilder } from '../../lib/check-spec'
 import { VerdictBadge } from '../../motion'
@@ -77,9 +80,101 @@ export function ResultChip({ result, stale }: { result: CheckResult; stale: bool
   return tone.term ? <Term id={tone.term} bare>{badge}</Term> : badge
 }
 
-/** Canonical assertion evidence from the CI runner. Wording is rendered
- * verbatim from the shared registry so web, CLI, JSON and CI artifacts cannot
- * drift into different explanations of the same limitation. */
+/** One measured quantity a check's detail line reports, with its limits. */
+export interface Measure {
+  /** The measured values (a window's min and max, or one reading). */
+  values: number[]
+  lo?: number
+  hi?: number
+  unit: string
+}
+
+const NUM = String.raw`(-?\d+(?:\.\d+)?)`
+const all = (text: string, src: string) => [...text.matchAll(new RegExp(src, 'g'))]
+
+/** The numbers in a check's detail line, as measured-vs-limit pairs. The
+ *  runner writes them as prose (`max=0.000V (<= 0.75V)`, `3 toggles (need >=
+ *  2)`, `boot 1.20ms (<= 2ms)`); this reads only those shapes and returns
+ *  nothing for any other, so an unknown line keeps its text alone. */
+export function parseMeasures(detail: string): Measure[] {
+  const out: Measure[] = []
+  // Window statistics: min/max, passing `(>= lo)` or failing `< required lo`.
+  const stat: Measure = { values: [], unit: '' }
+  for (const [, which, v, unit, okLimit, badLimit] of all(detail,
+    String.raw`\b(min|max)=${NUM}\s*([A-Za-zµ°]*)\s*(?:\((?:>=|<=)\s*${NUM}|[<>]\s*(?:required|allowed)\s*${NUM})`)) {
+    stat.values.push(Number(v))
+    stat.unit ||= unit
+    if (which === 'min') stat.lo = Number(okLimit ?? badLimit)
+    else stat.hi = Number(okLimit ?? badLimit)
+  }
+  if (stat.values.length > 0) out.push(stat)
+  for (const [, n, need] of all(detail, String.raw`(\d+) toggles \(need >= (\d+)\)`)) {
+    out.push({ values: [Number(n)], lo: Number(need), unit: 'toggles' })
+  }
+  for (const [, v, unit, okLimit, badLimit] of all(detail,
+    String.raw`${NUM}\s*(ms|A|C)\s*(?:\(<=\s*${NUM}\s*\2\)|>\s*allowed\s*${NUM}\s*\2)`)) {
+    out.push({ values: [Number(v)], hi: Number(okLimit ?? badLimit), unit })
+  }
+  // A peripheral field: `id.field = v (>= lo, <= hi)`.
+  for (const [, v, bounds] of all(detail, String.raw`=\s*${NUM}\s*\(((?:[<>]=\s*-?[\d.]+(?:,\s*)?)+)\)`)) {
+    const lo = />=\s*(-?[\d.]+)/.exec(bounds)
+    const hi = /<=\s*(-?[\d.]+)/.exec(bounds)
+    out.push({ values: [Number(v)], lo: lo ? Number(lo[1]) : undefined, hi: hi ? Number(hi[1]) : undefined, unit: '' })
+  }
+  return out
+}
+
+const fmt = (n: number) => (Number.isInteger(n) || Math.abs(n) >= 100 ? String(n) : String(Number(n.toPrecision(3))))
+
+/** Measured against allowed: the allowed band shaded, the measured value (or
+ *  its min..max span) marked in the verdict's colour, the numbers beside it. */
+export function MeasureBar({ measure, ok }: { measure: Measure; ok: boolean }) {
+  const { values, lo, hi, unit } = measure
+  const bounds = [lo, hi].filter((b): b is number => b !== undefined)
+  const vMin = Math.min(...values)
+  const vMax = Math.max(...values)
+  const pts = [...values, ...bounds]
+  const span = Math.max(...pts) - Math.min(...pts) || Math.abs(vMax) || 1
+  // A one-sided ceiling on a non-negative reading starts the scale at zero.
+  const min = lo === undefined && vMin >= 0 ? 0 : Math.min(...pts) - span * 0.25
+  const max = Math.max(...pts) + span * 0.25
+  const W = 160
+  const x = (v: number) => 4 + ((v - min) / (max - min || 1)) * (W - 8)
+  const bandLo = x(lo ?? min)
+  const bandHi = x(hi ?? max)
+  const tone = ok ? 'var(--ok)' : 'var(--err)'
+  const u = unit === 'toggles' ? ' toggles' : unit ? ` ${unit}` : ''
+  const measured = values.length > 1 && vMin !== vMax ? `${fmt(vMin)} to ${fmt(vMax)}${u}` : `${fmt(vMax)}${u}`
+  const limit = lo !== undefined && hi !== undefined ? `${fmt(lo)} to ${fmt(hi)}${u}`
+    : lo !== undefined ? `at least ${fmt(lo)}${u}` : hi !== undefined ? `at most ${fmt(hi)}${u}` : ''
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5 tnum" data-testid="measure-bar">
+      <svg width={W} height="14" viewBox={`0 0 ${W} 14`} role="img" aria-label={`measured ${measured}, allowed ${limit}`} style={{ flexShrink: 0, maxWidth: '100%' }}>
+        <rect x="4" y="6" width={W - 8} height="2" rx="1" fill="var(--hairline)" />
+        <rect x={bandLo} y="3" width={Math.max(bandHi - bandLo, 2)} height="8" rx="2" fill="var(--ok-bg)" stroke="var(--ok-border)" />
+        {x(vMax) - x(vMin) > 3
+          ? <rect x={x(vMin)} y="4.5" width={x(vMax) - x(vMin)} height="5" rx="2.5" fill={tone} />
+          : <circle cx={x(vMax)} cy="7" r="4" fill={tone} />}
+      </svg>
+      <span style={{ color: 'var(--silk)' }}>{measured}</span>
+      {limit && <span style={{ color: 'var(--silk-faint)' }}>allowed {limit}</span>}
+    </span>
+  )
+}
+
+/** The part or net a check's detail is about, for its "show on board" chip. */
+function subjectOf(detail: string): ResultEntity | null {
+  const part = /\b(?:I|Tj)\(([A-Za-z]+\d+[A-Za-z0-9]*)\)/.exec(detail)
+  if (part) return { kind: 'part', ref: part[1] }
+  const net = /^([^\s:]+?)(?::| window:)/.exec(detail)
+  return net ? { kind: 'net', net: net[1] } : null
+}
+
+/** A check row's result, inline: the measured-vs-limit bar, a chip that shows
+ *  the subject on the board, and for a check that could not be judged one line
+ *  saying what blocks it, with the button that opens the open-parts sheet. The
+ *  registry's own sentences, inputs and numbers are one click away, verbatim,
+ *  so web, CLI and CI explain a limitation the same way. */
 export function AssertionEvidence({ result, assumptions, inventory, repeats, stale }: {
   result: CheckResult
   assumptions: readonly EvidenceAssumption[]
@@ -87,57 +182,66 @@ export function AssertionEvidence({ result, assumptions, inventory, repeats, sta
   repeats: ReadonlySet<string>
   stale: boolean
 }) {
+  const { onGo } = useContext(ResultLinkContext)
   const map = result.evidence
-  if (!map) return null
-  const linked = assumptionsForEvidence(map, assumptions)
-  const artifacts = (map.artifacts ?? []).flatMap(index => inventory[index] ? [inventory[index]] : [])
-  if (map.status === 'clean' && linked.length === 0 && !map.error_budget) return null
+  const measures = useMemo(() => parseMeasures(result.detail), [result.detail])
+  const subject = useMemo(() => subjectOf(result.detail), [result.detail])
+  const linked = map ? assumptionsForEvidence(map, assumptions) : []
+  const artifacts = (map?.artifacts ?? []).flatMap(index => inventory[index] ? [inventory[index]] : [])
+  const open = openPartCount(causeGroups(assumptions))
+  const why = !result.invalid ? null
+    : result.kind === 'no_faults' && open > 0
+      ? `this whole-board check is judged once every part has a model, so it waits on the ${plural(open, 'open part')}. That is expected on a first run.`
+      : linked[0] ? withoutIds(linked[0].statement) : null
+  const status = map?.status ?? 'clean'
+  const details = linked.length > 0 || artifacts.length > 0 || !!map?.error_budget || (map?.models ?? []).length > 0
+  const showSubject = !!subject && !!onGo
+  if (measures.length === 0 && !showSubject && !why && !details) return null
   return (
-    <div
-      data-testid="assertion-evidence"
-      className="mt-2 rounded-md px-2.5 py-2 text-[11px]"
-      style={{
-        background: 'var(--surface-2)',
-        border: '1px solid var(--hairline)',
-        color: 'var(--silk-dim)',
-        opacity: stale ? 0.55 : 1,
-      }}
-    >
-      <div
-        className="font-semibold uppercase tracking-wide"
-        style={{ color: map.status === 'undermined' ? 'var(--warn)' : 'var(--silk-faint)' }}
-      >
-        Evidence <Term id={evidenceStatusTerm(map.status)}>{map.status}</Term>
-      </div>
-      {linked.map(assumption => (
-        <div key={assumption.id} className="mt-1.5">
-          <code style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}>{assumption.id}</code>
-          {assumption.term && <> <Term id={assumption.term} /></>}
-          <div style={{ color: 'var(--silk)' }}>{assumption.statement}</div>
-          {repeats.has(assumption.id) ? '(explained above)' : <>
-            <div>{assumption.because} {assumption.consequence}</div>
-            <div>To remove it: {assumption.replacement}</div>
-          </>}
-        </div>
-      ))}
-      {artifacts.length > 0 && (
-        <div className="mt-1.5" style={{ color: 'var(--silk-faint)' }}>
-          Inputs: {artifacts.map(artifact => artifact.path.split('/').pop() ?? artifact.path).join(', ')}
+    <div data-testid="assertion-evidence" className="mt-1.5 text-[12px]" style={{ color: 'var(--silk-dim)', opacity: stale ? 0.55 : 1 }}>
+      {(measures.length > 0 || showSubject) && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {measures.map((m, i) => <MeasureBar key={i} measure={m} ok={result.passed && !result.invalid} />)}
+          {showSubject && subject && <span data-testid="show-on-board"><EntityChip entity={subject} /></span>}
         </div>
       )}
-      {/* The numbers behind the verdict matter to a reviewer and bury the line
-          that matters to everyone else, so they open on request. */}
-      {(map.error_budget || (map.models ?? []).length > 0) && (
-        <details className="mt-1.5" data-testid="numeric-details">
-          <summary className="cursor-pointer" style={{ color: 'var(--silk-faint)' }}>Numeric details</summary>
-          {map.error_budget && (
+      {why && (
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1" data-testid="not-judged" style={{ color: 'var(--warn-strong)' }}>
+          <span>Not judged: {why}</span>
+          {open > 0 && (
+            <button type="button" className="hb-chip hb-press px-2 text-[12px]" style={{ height: 24 }} data-testid="not-judged-open" onClick={showOpenParts}>
+              Fix what blocks it
+            </button>
+          )}
+        </div>
+      )}
+      {details && (
+        <details className="mt-1" data-testid="numeric-details">
+          <summary className="cursor-pointer" style={{ color: status === 'undermined' ? 'var(--warn)' : 'var(--silk-faint)' }}>
+            Evidence <Term id={evidenceStatusTerm(status)}>{status}</Term>
+          </summary>
+          {linked.map(a => (
+            <div key={a.id} className="mt-1.5">
+              <div style={{ color: 'var(--silk)' }}>{withoutIds(a.statement)}{a.term && <> <Term id={a.term} /></>}</div>
+              {repeats.has(a.id) ? '(explained above)' : <>
+                <div>{withoutIds(`${a.because} ${a.consequence}`)}</div>
+                <div>To remove it: {withoutIds(a.replacement)}</div>
+              </>}
+            </div>
+          ))}
+          {artifacts.length > 0 && (
+            <div className="mt-1.5" style={{ color: 'var(--silk-faint)' }}>
+              Inputs: {artifacts.map(artifact => artifact.path.split('/').pop() ?? artifact.path).join(', ')}
+            </div>
+          )}
+          {map?.error_budget && (
             <div className="mt-1" data-testid="error-budget-summary">
               {summarizeErrorBudget(map.error_budget).map(row => <div key={row}>{row}</div>)}
             </div>
           )}
-          {(map.models ?? []).length > 0 && (
+          {(map?.models ?? []).length > 0 && (
             <div className="mt-1" data-testid="model-provenance" style={{ color: 'var(--silk-faint)' }}>
-              Models: {(map.models ?? []).map(describeModelSource).join('; ')}
+              Models: {(map?.models ?? []).map(describeModelSource).join('; ')}
             </div>
           )}
         </details>

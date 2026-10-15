@@ -125,19 +125,20 @@ export const APP_SURFACES: Surface[] = [
   },
   {
     id: 'write-part-kind',
-    what: 'the "write a part yourself" editor opening on its kind picker',
+    what: 'the "Model U1" surface opening on Write it, an identity-only scaffold that validates',
     async reach(page) {
       const close = page.locator('[data-testid="extract-close"]')
       if (await close.count() > 0) await close.first().click()
       await page.locator('[data-testid="write-part-open"]').scrollIntoViewIfNeeded()
       const opener = await page.locator('[data-testid="write-part-open"]').textContent()
-      if (!opener?.includes('Write U1 yourself')) {
+      if (!opener?.includes('Model U1')) {
         throw new Error(`manual model editor did not name its selected part: ${opener}`)
       }
       await page.click('[data-testid="write-part-open"]')
-      // The editor opens on "what kind of part is it?": a reference letter does
-      // not say, so no TOML appears until the author chooses.
+      // The editor opens on a scaffold that already validates (identity only),
+      // with the kind picker above it for a model that simulates.
       await page.waitForSelector('[data-testid="kind-picker"]')
+      await page.waitForSelector('[data-testid="write-part-status"]:has-text("Valid")', { timeout: 10_000 })
       await page.locator('[data-testid="kind-picker"]').scrollIntoViewIfNeeded()
       await settle(page)
     },
@@ -146,7 +147,7 @@ export const APP_SURFACES: Surface[] = [
     id: 'write-part',
     what: 'the "write a part yourself" editor, TOML with the live validator',
     async reach(page) {
-      await page.click('[data-testid="kind-digital"]')
+      await page.selectOption('[data-testid="kind-select"]', 'digital')
       // The scaffold is requested from the server, and the box is busy (and
       // still holds the generic starter) until it lands.
       await page.waitForSelector('[data-testid="write-part-toml"]:not([aria-busy="true"])')
@@ -166,7 +167,7 @@ export const APP_SURFACES: Surface[] = [
     id: 'write-part-spice',
     what: 'the same editor on its SPICE tab',
     async reach(page) {
-      await page.click('[data-testid="write-part-format-spice"]')
+      await page.selectOption('[data-testid="kind-select"]', 'spice')
       await settle(page, 700)
     },
   },

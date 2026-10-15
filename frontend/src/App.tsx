@@ -5,6 +5,7 @@ import type { AppView } from './components/Sidebar'
 import { UploadView } from './components/UploadView'
 import { BoardView } from './components/BoardView'
 import { ChecksView, checksStorageKey } from './components/ChecksView'
+import { ChecksLinks } from './components/checks/ChecksLinks'
 import type { ChecksSummary } from './components/ChecksView'
 import { DepsPanel } from './components/DepsPanel'
 import { SettingsView } from './components/SettingsView'
@@ -198,6 +199,8 @@ function Shell({ boot }: { boot: Boot }) {
     }
     setView(v)
   }, [deck, driveLive, openLiveSession, reportOk, serverLiveActive, session.liveMode, simMounted])
+
+  const showBoard = useCallback(() => setView('board'), [])
 
   const analyzeAnother = useCallback(() => {
     session.resetFlow()
@@ -446,6 +449,7 @@ function Shell({ boot }: { boot: Boot }) {
 
           {reportOk && report && (
             <div style={{ display: view === 'checks' ? 'block' : 'none', height: '100%' }}>
+              <ChecksLinks report={report} onShow={showBoard} selectNet={session.setSelectedNet} selectComponent={session.setSelectedComponent}>
               <ChecksView
                 // Remount per board (the key doubles as the localStorage key):
                 // the panel's mount-time restore is then authoritative, and one
@@ -468,6 +472,7 @@ function Shell({ boot }: { boot: Boot }) {
                 onSpec={setSpec}
                 onModelSaved={session.reanalyzeCurrent}
               />
+              </ChecksLinks>
             </div>
           )}
 

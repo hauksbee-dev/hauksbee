@@ -1,4 +1,4 @@
-//! The Checks page's export route serves the CLI writers' own bytes: the JUnit,
+//! The Checks page's export route serves the CLI writers' own bytes: the `JUnit`,
 //! `run --json` document and manifest of a web run equal what `hauksbee-ci run`
 //! writes for the same spec, board and firmware (wall time and staging paths
 //! aside, which differ between any two runs).
@@ -79,7 +79,7 @@ fn web_export_route_serves_the_cli_writers_bytes() {
     let served = |file: &str| hauksbee_server::ci_export::lookup(id, file).expect(file).1;
 
     let cli = hauksbee_ci::run(&hauksbee_ci::RunConfig {
-        spec: spec_path.clone(),
+        spec: spec_path,
         seed: None,
         models_dir: None,
         spice_models: Vec::new(),
