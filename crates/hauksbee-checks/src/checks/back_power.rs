@@ -43,8 +43,9 @@
 //!   element; the clamp carries whatever the rail sources.
 //! - Pull-up resistor to a higher rail: **Medium**. The resistor bounds the
 //!   clamp current, and higher-voltage-tolerant pins make this idiom
-//!   legitimate on SOME parts, but the model db does not carry per-pin
-//!   tolerance, so the finding says what the clamp path is and names the
+//!   legitimate on SOME parts. Where the card rates a signal pin with its own
+//!   `supply_range` envelope, that rating replaces the clamp assumption;
+//!   otherwise the finding says what the clamp path is and names the
 //!   exception the reader must verify.
 //!
 //! Pins the check deliberately skips: supply and ground roles (they belong on
@@ -56,7 +57,7 @@ use std::collections::BTreeSet;
 use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
 };
-use hauksbee_models::ModelLibrary;
+use hauksbee_models::{ModelLibrary, OperatingEnvelope};
 
 use hauksbee_bind::binder::power_rail_voltage;
 use hauksbee_extract::assembly::AssemblyState;
@@ -89,6 +90,27 @@ fn is_skipped_role(role: &str) -> bool {
         || role.starts_with("gnd")
         || matches!(role, "vss" | "agnd" | "dgnd" | "pgnd" | "gndio" | "nc")
         || matches!(role, "vin" | "vbus" | "vbat" | "vsys" | "raw" | "vmot")
+}
+
+/// The highest voltage the card itself rates `role` for: the ceiling of any
+/// `supply_range` envelope declared on that pin (its abs max when printed).
+/// A pin with a declared range is rated against that range, not against a
+/// clamp to its part's supply: a current-sense amplifier's IN+/IN- take a
+/// 40 V common mode from a 1.8 V supply. The envelope check judges the pin.
+fn declared_pin_ceiling_v(model: &hauksbee_models::ModelEntry, role: &str) -> Option<f64> {
+    model
+        .envelope
+        .iter()
+        .filter_map(|e| match e {
+            OperatingEnvelope::SupplyRange {
+                pin,
+                max_v,
+                abs_max_v,
+                ..
+            } if pin == role => Some(abs_max_v.unwrap_or(*max_v)),
+            _ => None,
+        })
+        .reduce(f64::max)
 }
 
 /// A plain two-terminal, assembled resistor (ref R*, not RV/RT/RN/RP/RM).
@@ -194,6 +216,12 @@ pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
                 continue;
             };
             let Some(net) = board.net(id) else { continue };
+            // A rail at or under the pin's own declared rating is not a clamp
+            // fault; a rail above it still fires.
+            let ceiling = declared_pin_ceiling_v(&model, role);
+            let clamps = |rail_v: f64| {
+                rail_v > supply_v + CLAMP_MARGIN_V && ceiling.is_none_or(|c| rail_v > c)
+            };
 
             // A signal pin STRAPPED TO GROUND has no clamp path to report, and
             // the pull-up walk below would misread the board if it looked: a
@@ -211,9 +239,7 @@ pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
 
             // Direct tie: the signal pin's own net IS a higher rail.
             if let Some(rail_v) = power_rail_voltage(&net.name) {
-                if rail_v > supply_v + CLAMP_MARGIN_V
-                    && seen.insert((comp.reference.clone(), id, net.name.clone()))
-                {
+                if clamps(rail_v) && seen.insert((comp.reference.clone(), id, net.name.clone())) {
                     report.findings.push(LintFinding {
                         check: LintCheck::BackPower,
                         severity: Severity::High,
@@ -242,9 +268,7 @@ pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
                 Severity::Medium
             };
             for (r_ref, rail_net, rail_v) in pullups_to_rails(board, id) {
-                if rail_v > supply_v + CLAMP_MARGIN_V
-                    && seen.insert((comp.reference.clone(), id, rail_net.clone()))
-                {
+                if clamps(rail_v) && seen.insert((comp.reference.clone(), id, rail_net.clone())) {
                     report.findings.push(LintFinding {
                         check: LintCheck::BackPower,
                         severity,
@@ -459,6 +483,76 @@ mod tests {
             0,
             "a pin strapped to ground is not pulled up by a bleeder to a rail, got {:?}",
             r.findings
+        );
+    }
+
+    /// A card that rates a signal pin with its own `supply_range` envelope
+    /// (a current-sense amplifier's IN+ takes 40 V from a 3.3 V supply) is
+    /// judged against that rating: a rail inside it is silent, a rail above it
+    /// still fires, and the same board on a card without the rating fires.
+    #[test]
+    fn a_declared_pin_rating_replaces_the_supply_clamp_assumption() {
+        let card = |envelope: &str| {
+            format!(
+                r#"
+[[models]]
+id = "sense_amp"
+kind = "digital"
+description = "pin-rating fixture"
+[models.match]
+value_re = "^SENSE_AMP$"
+[models.params]
+identity_only = true
+warning = "identity only"
+unlocked_by = "validated behavior"
+[models.pins]
+"1" = "vcc"
+"2" = "gnd"
+"3" = "in_plus"
+{envelope}"#
+            )
+        };
+        let rated = card(
+            r#"[[models.envelope]]
+kind = "supply_range"
+pin = "in_plus"
+min_v = -0.2
+max_v = 40.0
+abs_max_v = 42.0
+basis = "Absolute Maximum Ratings, IN+ row""#,
+        );
+        let board = |rail: &str| {
+            format!(
+                r#"(kicad_pcb (version 20221018) (generator pcbnew)
+  (net 0 "") (net 1 "GND") (net 2 "{rail}") (net 4 "+3V3")
+  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 100 100)
+    (property "Reference" "U4" (at 0 0)) (property "Value" "SENSE_AMP" (at 0 2))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 4 "+3V3"))
+    (pad "2" smd rect (at 0 1) (size 1 1) (layers "F.Cu") (net 1 "GND"))
+    (pad "3" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 2 "{rail}"))))"#
+            )
+        };
+        let count = |source: &str, rail: &str| {
+            let dir = std::env::temp_dir().join(format!(
+                "hauksbee_back_power_{}_{}",
+                source.len(),
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("models.toml"), source).unwrap();
+            let mut lib = ModelLibrary::empty();
+            assert!(lib.load_user_dir(&dir).is_empty(), "fixture card loads");
+            let parsed = ExtractedBoard::from_kicad_pcb(&board(rail)).expect("parse");
+            back_power_lint(&parsed, &lib)
+                .of_check(LintCheck::BackPower)
+                .count()
+        };
+        assert_eq!(count(&rated, "+5V"), 0, "5 V is inside the pin's rating");
+        assert_eq!(count(&rated, "+48V"), 1, "48 V is above the pin's rating");
+        assert_eq!(
+            count(&card(""), "+5V"),
+            1,
+            "no rating: the clamp rule holds"
         );
     }
 

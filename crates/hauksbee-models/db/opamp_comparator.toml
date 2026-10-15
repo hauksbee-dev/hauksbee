@@ -106,6 +106,23 @@ missing = ["supply_referenced_output_swing", "output_current_limit",
 "5" = "in_minus"
 "6" = "out"
 
+# IN+ / IN- are rated against GND, not clamped to VS: TI INA186 SBOS318B.
+[[models.envelope]]
+kind = "supply_range"
+pin = "in_plus"
+min_v = -0.2
+max_v = 40.0
+abs_max_v = 42.0
+basis = "TI INA186 SBOS318B, 6.3 Recommended Operating Conditions, VIN+ input pin voltage range GND - 0.2 V to 40 V; 6.1 Absolute Maximum Ratings, VIN+ with respect to GND 42 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in_minus"
+min_v = -0.2
+max_v = 40.0
+abs_max_v = 42.0
+basis = "TI INA186 SBOS318B, 6.3 Recommended Operating Conditions, VIN- input pin voltage range GND - 0.2 V to 40 V; 6.1 Absolute Maximum Ratings, VIN- with respect to GND 42 V"
+
 [[models]]
 id = "ina186_dck_a2"
 kind = "opamp"
@@ -136,6 +153,23 @@ missing = ["supply_referenced_output_swing", "output_current_limit",
 "4" = "in_plus"
 "5" = "in_minus"
 "6" = "out"
+
+# IN+ / IN- are rated against GND, not clamped to VS: TI INA186 SBOS318B.
+[[models.envelope]]
+kind = "supply_range"
+pin = "in_plus"
+min_v = -0.2
+max_v = 40.0
+abs_max_v = 42.0
+basis = "TI INA186 SBOS318B, 6.3 Recommended Operating Conditions, VIN+ input pin voltage range GND - 0.2 V to 40 V; 6.1 Absolute Maximum Ratings, VIN+ with respect to GND 42 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in_minus"
+min_v = -0.2
+max_v = 40.0
+abs_max_v = 42.0
+basis = "TI INA186 SBOS318B, 6.3 Recommended Operating Conditions, VIN- input pin voltage range GND - 0.2 V to 40 V; 6.1 Absolute Maximum Ratings, VIN- with respect to GND 42 V"
 
 [[models]]
 id = "ina186_dck_a3"
@@ -168,6 +202,23 @@ missing = ["supply_referenced_output_swing", "output_current_limit",
 "5" = "in_minus"
 "6" = "out"
 
+# IN+ / IN- are rated against GND, not clamped to VS: TI INA186 SBOS318B.
+[[models.envelope]]
+kind = "supply_range"
+pin = "in_plus"
+min_v = -0.2
+max_v = 40.0
+abs_max_v = 42.0
+basis = "TI INA186 SBOS318B, 6.3 Recommended Operating Conditions, VIN+ input pin voltage range GND - 0.2 V to 40 V; 6.1 Absolute Maximum Ratings, VIN+ with respect to GND 42 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in_minus"
+min_v = -0.2
+max_v = 40.0
+abs_max_v = 42.0
+basis = "TI INA186 SBOS318B, 6.3 Recommended Operating Conditions, VIN- input pin voltage range GND - 0.2 V to 40 V; 6.1 Absolute Maximum Ratings, VIN- with respect to GND 42 V"
+
 [[models]]
 id = "ina186_dck_a4"
 kind = "opamp"
@@ -198,6 +249,23 @@ missing = ["supply_referenced_output_swing", "output_current_limit",
 "4" = "in_plus"
 "5" = "in_minus"
 "6" = "out"
+
+# IN+ / IN- are rated against GND, not clamped to VS: TI INA186 SBOS318B.
+[[models.envelope]]
+kind = "supply_range"
+pin = "in_plus"
+min_v = -0.2
+max_v = 40.0
+abs_max_v = 42.0
+basis = "TI INA186 SBOS318B, 6.3 Recommended Operating Conditions, VIN+ input pin voltage range GND - 0.2 V to 40 V; 6.1 Absolute Maximum Ratings, VIN+ with respect to GND 42 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in_minus"
+min_v = -0.2
+max_v = 40.0
+abs_max_v = 42.0
+basis = "TI INA186 SBOS318B, 6.3 Recommended Operating Conditions, VIN- input pin voltage range GND - 0.2 V to 40 V; 6.1 Absolute Maximum Ratings, VIN- with respect to GND 42 V"
 
 [[models]]
 id = "ina186_dck_a5"
@@ -230,6 +298,23 @@ missing = ["supply_referenced_output_swing", "output_current_limit",
 "5" = "in_minus"
 "6" = "out"
 
+# IN+ / IN- are rated against GND, not clamped to VS: TI INA186 SBOS318B.
+[[models.envelope]]
+kind = "supply_range"
+pin = "in_plus"
+min_v = -0.2
+max_v = 40.0
+abs_max_v = 42.0
+basis = "TI INA186 SBOS318B, 6.3 Recommended Operating Conditions, VIN+ input pin voltage range GND - 0.2 V to 40 V; 6.1 Absolute Maximum Ratings, VIN+ with respect to GND 42 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in_minus"
+min_v = -0.2
+max_v = 40.0
+abs_max_v = 42.0
+basis = "TI INA186 SBOS318B, 6.3 Recommended Operating Conditions, VIN- input pin voltage range GND - 0.2 V to 40 V; 6.1 Absolute Maximum Ratings, VIN- with respect to GND 42 V"
+
 [[models]]
 id = "ina186_dck_a1_family"
 kind = "opamp"
@@ -260,6 +345,23 @@ missing = ["supply_referenced_output_swing", "output_current_limit",
 "4" = "in_plus"
 "5" = "in_minus"
 "6" = "out"
+
+# IN+ / IN- are rated against GND, not clamped to VS: TI INA186 SBOS318B.
+[[models.envelope]]
+kind = "supply_range"
+pin = "in_plus"
+min_v = -0.2
+max_v = 40.0
+abs_max_v = 42.0
+basis = "TI INA186 SBOS318B, 6.3 Recommended Operating Conditions, VIN+ input pin voltage range GND - 0.2 V to 40 V; 6.1 Absolute Maximum Ratings, VIN+ with respect to GND 42 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in_minus"
+min_v = -0.2
+max_v = 40.0
+abs_max_v = 42.0
+basis = "TI INA186 SBOS318B, 6.3 Recommended Operating Conditions, VIN- input pin voltage range GND - 0.2 V to 40 V; 6.1 Absolute Maximum Ratings, VIN- with respect to GND 42 V"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
