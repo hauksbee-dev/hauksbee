@@ -230,6 +230,20 @@ impl<'a> VerdictCause<'a> {
             refs_summary(unmodelled)
         )
     }
+
+    /// [`Self::reason_alongside`], with the judgement scope's sentence in
+    /// place of the blanket caveat when the verdict was scoped around them.
+    #[must_use]
+    pub fn reason_scoped(
+        self,
+        unmodelled: &[String],
+        scope: Option<&crate::scope::JudgementScope>,
+    ) -> String {
+        scope.map_or_else(
+            || self.reason_alongside(unmodelled),
+            |s| format!("{} Also: {}", self.reason(), s.condition()),
+        )
+    }
 }
 
 /// The one machine verdict every human surface of a run must agree with.
@@ -2855,9 +2869,8 @@ impl JsonReport {
             });
             VerdictCause::Failing { count, first }
         });
-        // Scoped judgement: blockers whose dependent checks the scope already
-        // set aside no longer refuse the rest of the board; the scope's
-        // condition (or, on a failing run, the reason) says what was not judged.
+        // Scoped judgement: blockers whose dependent checks the scope set aside
+        // no longer refuse the rest; its sentence says what was not judged.
         let scope = self.active_scope(&blockers);
         let unjudged: &[String] = if scope.is_some() { &[] } else { &blockers };
         let cause = VerdictCause::pick(failing, refused, unjudged, evidence_undermined);
@@ -2866,14 +2879,10 @@ impl JsonReport {
             Some(c) if c.is_invalid() => "invalid",
             Some(_) => "fail",
         };
-        let reason = cause.map(|c| match scope {
-            Some(s) => format!("{} Also: {}", c.reason(), s.condition()),
-            None => c.reason_alongside(&blockers),
-        });
         (
             (verdict == "pass", verdict, serious, actionable),
             waived,
-            reason,
+            cause.map(|c| c.reason_scoped(&blockers, scope)),
         )
     }
 

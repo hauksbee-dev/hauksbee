@@ -61,6 +61,12 @@ fn unbound() -> PathBuf {
     fixture("verdict_fet_unbound.kicad_pcb")
 }
 
+/// [`unbound`] with a pin of Q1 on every net, so even `--check`, which judges
+/// around an open part, has nothing left to judge and refuses the board.
+fn unbound_everywhere() -> PathBuf {
+    fixture("verdict_fet_everywhere.kicad_pcb")
+}
+
 /// [`unbound`]'s twin with Q1 bound, so the normal verdicts return.
 fn bound() -> PathBuf {
     fixture("verdict_fet_bound.kicad_pcb")
@@ -763,11 +769,7 @@ fn check_strict_exit_agrees_with_the_check_verdict_on_both_sides_of_the_bind_gat
     assert_gate_matches_verdict(&["--check"], &unbound(), "pass");
     assert_gate_matches_verdict(&["--check"], &bound(), "pass");
     // With a pin on every net it leaves nothing to judge: invalid, exit 3.
-    assert_gate_matches_verdict(
-        &["--check"],
-        &fixture("verdict_fet_everywhere.kicad_pcb"),
-        "invalid",
-    );
+    assert_gate_matches_verdict(&["--check"], &unbound_everywhere(), "invalid");
 }
 
 #[test]
@@ -908,7 +910,9 @@ fn the_resources_subset_and_the_bare_machine_report_gate_like_their_verdicts() {
     // bare `--json` produces.
     assert_gate_matches_verdict(&["--resources"], &unbound(), "invalid");
     assert_gate_matches_verdict(&["--resources"], &bound(), "pass");
-    assert_bare_json_gate_matches_verdict(&unbound(), "invalid");
+    // The bare report is the `--check` document, so it scopes like `--check`.
+    assert_bare_json_gate_matches_verdict(&unbound(), "pass");
+    assert_bare_json_gate_matches_verdict(&unbound_everywhere(), "invalid");
     assert_bare_json_gate_matches_verdict(&bound(), "pass");
 }
 
@@ -996,7 +1000,14 @@ fn github_annotations_agree_with_a_specialist_surfaces_verdict() {
     // pipeline that gates on the exit code alone would still get a silent
     // checks tab.
     for surface in ["--lint", "--si", "--check", "--resources"] {
-        let out = run_board_in_actions(&unbound(), &[surface, "--json", "--strict"]);
+        // `--check` judges around a part it can scope, so it refuses only
+        // when the open part reaches every net check.
+        let board = if surface == "--check" {
+            unbound_everywhere()
+        } else {
+            unbound()
+        };
+        let out = run_board_in_actions(&board, &[surface, "--json", "--strict"]);
         assert_eq!(
             out.status.code(),
             Some(3),
@@ -1302,7 +1313,10 @@ fn an_invalid_verdict_keeps_the_invalid_shape_in_the_artifact() {
     // parts, so the artifact carries the INVALID evidence blocker as its only
     // gate-grade entry and the document still reads `invalid`, not `fail`.
     let art = Artifacts::new("out");
-    let out = run_board(&unbound(), &art.with_both(&["--check", "--json"]));
+    let out = run_board(
+        &unbound_everywhere(),
+        &art.with_both(&["--check", "--json"]),
+    );
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     assert_eq!(json_verdict(&out).0, "invalid");
 

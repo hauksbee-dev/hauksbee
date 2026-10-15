@@ -90,7 +90,7 @@ impl JudgementScope {
 
     /// Net claims judged: both claims of every net, less the dependent ones.
     #[must_use]
-    pub fn judged(&self) -> usize {
+    pub const fn judged(&self) -> usize {
         (2 * self.nets)
             .saturating_sub(self.wiring_dependent.len() + self.electrical_dependent.len())
     }
