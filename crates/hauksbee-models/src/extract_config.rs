@@ -250,6 +250,12 @@ pub fn suggested_models(backend: Backend) -> &'static [ModelChoice] {
     agent_spec(backend).map_or(OPENAI_MODELS, |a| a.models)
 }
 
+/// The API backend serves any OpenAI-compatible endpoint (a local Ollama model,
+/// say), so only a model name with this prefix is compared against the list.
+/// Served to the Settings page as `options.model_hint_prefix` so the browser
+/// applies the same rule instead of keeping its own copy.
+pub const API_MODEL_HINT_PREFIX: &str = "gpt-";
+
 /// A short nudge when `model` is not one of the current picks for `backend`.
 ///
 /// The model may be an older name saved earlier, or free text. It is still used
@@ -258,7 +264,7 @@ pub fn suggested_models(backend: Backend) -> &'static [ModelChoice] {
 /// there is compared against the list.
 #[must_use]
 pub fn model_hint(backend: Backend, model: &str) -> Option<String> {
-    if backend == Backend::Api && !model.starts_with("gpt-") {
+    if backend == Backend::Api && !model.starts_with(API_MODEL_HINT_PREFIX) {
         return None;
     }
     let picks = suggested_models(backend);

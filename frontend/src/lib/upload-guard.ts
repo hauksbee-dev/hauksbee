@@ -8,7 +8,7 @@
 // with an odd name is cheap to just send. What is checked here is only what is
 // both certain and expensive to get wrong.
 
-import { BOARD_EXTS, FIRMWARE_EXTS, acceptedFormatsSentence } from './board-formats'
+import { acceptedFormatsSentence, boardExts, endsWithAny, firmwareExts } from './board-formats'
 
 /** The server's body limit (`MAX_UPLOAD_BYTES` in
  *  crates/hauksbee-server/src/frontdoor.rs). Anything larger is refused with a
@@ -25,11 +25,6 @@ const MAX_UPLOAD_LABEL = '256 MB'
  *  that ends in "could not read the file". */
 const UNKNOWN_EXT_LIMIT_BYTES = 20 * 1024 * 1024
 
-/** Extensions the engine's board extractors claim, plus the two firmware
- *  extensions the board zone re-routes rather than rejects. Derived from the
- *  one accepted-formats list so a refusal can never name a shorter set of
- *  formats than the picker offers. */
-const KNOWN_BOARD_EXTS = [...BOARD_EXTS, ...FIRMWARE_EXTS.map(e => e.toLowerCase())]
 
 /** Human file size. Binary units, one decimal past MB, because the number's
  *  only job is to be compared against the stated limit. */
@@ -40,17 +35,17 @@ export function formatBytes(n: number): string {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
 
+/** The last dot-suffix of the name, for the message only ('' with no dot). */
 function extensionOf(name: string): string {
-  // `.kicad_pcb` has a dot in the middle of nothing else, so a plain
-  // lastIndexOf is right; a file with no dot at all yields ''.
   const i = name.lastIndexOf('.')
   return i < 0 ? '' : name.slice(i).toLowerCase()
 }
 
 /** True when the name ends in an extension the board zone knows what to do
- *  with (extract, or re-route to the firmware jack). */
+ *  with (extract, or re-route to the firmware jack). Matched on the whole
+ *  suffix, so `board.tar.gz` is `.tar.gz` and not an unknown `.gz`. */
 function hasKnownBoardExtension(name: string): boolean {
-  return KNOWN_BOARD_EXTS.includes(extensionOf(name))
+  return endsWithAny(name, [...boardExts(), ...firmwareExts()])
 }
 
 /**
@@ -73,7 +68,9 @@ export function precheckBoardFile(f: File): string | null {
       + 'that zip: the circuit is reverse-extracted from the copper, and the zip is '
       + 'usually a few MB.'
   }
-  if (!hasKnownBoardExtension(f.name) && f.size > UNKNOWN_EXT_LIMIT_BYTES) {
+  // Without the served table (an older server) there is no list to be unknown
+  // against, so the only refusals are the ones above.
+  if (boardExts().length > 0 && !hasKnownBoardExtension(f.name) && f.size > UNKNOWN_EXT_LIMIT_BYTES) {
     return `“${f.name}” does not look like a board file: nothing recognises `
       + `${extensionOf(f.name) || 'a name with no extension'}, and at `
       + `${formatBytes(f.size)} it is too large to be worth trying. `

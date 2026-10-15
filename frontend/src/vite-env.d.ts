@@ -13,3 +13,7 @@ declare const __APP_VERSION__: string
 /** Exact release commit injected by release/CI builds. Empty dev builds refuse
  * to generate a credential-bearing workflow until a commit is supplied. */
 declare const __RELEASE_COMMIT__: string
+
+/** Build-time literal from vite.config.ts `define`: the one-line installer,
+ *  defined once there so no component carries a copy of the URL. */
+declare const __INSTALL_COMMAND__: string

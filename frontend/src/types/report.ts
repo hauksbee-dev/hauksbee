@@ -480,9 +480,19 @@ export interface WebSupply {
  *  when the server can launch a live sim for an uploaded board
  *  (`POST /api/live/launch`); absent on older/non-live deployments, where the
  *  report falls back to the CLI hint. */
-export type Startup =
-  | { preloaded: false; live?: boolean; avr?: boolean; version?: string }
-  | { preloaded: true; board_name: string; report: WebReport | null; live?: boolean; avr?: boolean; version?: string }
+export type Startup = StartupCommon & (
+  | { preloaded: false }
+  | { preloaded: true; board_name: string; report: WebReport | null }
+)
+
+/** The fields both startup shapes carry. `board_formats` is the engine's one
+ *  accepted-formats table (see lib/board-formats). */
+interface StartupCommon {
+  live?: boolean
+  avr?: boolean
+  version?: string
+  board_formats?: import('../lib/board-formats').ServedBoardFormats
+}
 
 /** What `GET /api/live/status` returns: whether (and for which board) a live
  *  session is running server-side. The server holds ONE session globally, so

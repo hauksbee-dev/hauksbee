@@ -590,7 +590,43 @@ pub fn invalidate_deps_cache() {
     SIGNIN_CACHE.clear();
 }
 
-/// The `/api/deps` response body: `{"deps":[...]}`.
+/// SHA-256 of the running executable, streamed and computed once per process:
+/// the one hash of "which build is this" that an environment report can cite.
+fn exe_sha256() -> Option<&'static str> {
+    use sha2::{Digest as _, Sha256};
+    use std::io::Read as _;
+    static HASH: OnceLock<Option<String>> = OnceLock::new();
+    HASH.get_or_init(|| {
+        let mut file = std::fs::File::open(std::env::current_exe().ok()?).ok()?;
+        let mut hasher = Sha256::new();
+        let mut buf = vec![0u8; 1 << 20];
+        loop {
+            let n = file.read(&mut buf).ok()?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+        }
+        Some(crate::run_manifest::bytes_to_hex(&hasher.finalize()))
+    })
+    .as_deref()
+}
+
+/// The `environment` block of `/api/deps`: what a reviewer attaches to a
+/// sign-off record. Engine version, the running binary's hash, the host, and
+/// the same backend probe `hauksbee doctor --json` prints, so the web report
+/// and the CLI's cannot disagree about what is installed.
+fn environment_json() -> serde_json::Value {
+    serde_json::json!({
+        "engine_version": env!("CARGO_PKG_VERSION"),
+        "exe_sha256": exe_sha256(),
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "doctor": crate::commands::doctor::backends_json(),
+    })
+}
+
+/// The `/api/deps` response body: `{"deps":[...],"environment":{...}}`.
 #[must_use]
 pub fn deps_json() -> String {
     let mut cache = deps_cache().lock().unwrap_or_else(PoisonError::into_inner);
@@ -599,8 +635,10 @@ pub fn deps_json() -> String {
             return json.clone();
         }
     }
-    let json = serde_json::to_string(&serde_json::json!({ "deps": probe_all() }))
-        .unwrap_or_else(|_| "{\"deps\":[]}".to_string());
+    let json = serde_json::to_string(
+        &serde_json::json!({ "deps": probe_all(), "environment": environment_json() }),
+    )
+    .unwrap_or_else(|_| "{\"deps\":[]}".to_string());
     *cache = Some((Instant::now(), json.clone()));
     json
 }

@@ -156,6 +156,9 @@ pub fn emit_or_serve(
         "avr": cfg!(feature = "avr"),
         // Engine version, for the Environment page's "what am I running" card.
         "version": env!("CARGO_PKG_VERSION"),
+        // The accepted board formats, from the engine's one table, for the
+        // picker, the drop card and the precheck.
+        "board_formats": crate::board_input::accepted_formats_json(),
     })
     .to_string();
 

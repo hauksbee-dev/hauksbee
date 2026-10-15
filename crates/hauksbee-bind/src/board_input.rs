@@ -236,12 +236,99 @@ pub enum BoardInputError {
     Unsupported(String),
 }
 
-/// The one supported-formats list every refusal quotes, so the set can never
-/// drift between messages (it already had: a "Supported:" clause that omitted
-/// Altium while the diagnostic said it tried the altium reader).
-const SUPPORTED_FORMATS: &str = "KiCad .kicad_pcb / .kicad_sch / netlist, Eagle .brd, \
-     Altium .PcbDoc, IPC-2581 .xml, an ODB++ job (folder / .tgz / .zip), IPC-D-356 \
-     .d356, Board-as-Code .board, or a zip of gerbers / a .board export";
+/// Which intake a format goes through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormatRoute {
+    /// Read by the board analysis (`/api/analyze`, `hauksbee run`).
+    Board,
+    /// A SPICE deck, run by `hauksbee sim` / `/api/sim` instead of analysed.
+    Deck,
+}
+
+/// One row of the accepted-formats table.
+#[derive(Debug, Clone, Copy)]
+pub struct AcceptedFormat {
+    /// The ECAD tool or standard that produces the file.
+    pub vendor: &'static str,
+    /// Extensions with the dot, in the casing a user would recognise. An
+    /// extension two rows claim (`.net`: a KiCad netlist and a SPICE deck) is
+    /// told apart by content, never by name.
+    pub exts: &'static [&'static str],
+    pub route: FormatRoute,
+    /// Offered in the file picker but not advertised in prose: an extension
+    /// that is only sometimes a board (an Excellon drill file named `.txt`).
+    pub quiet: bool,
+}
+
+const fn board_format(vendor: &'static str, exts: &'static [&'static str]) -> AcceptedFormat {
+    AcceptedFormat {
+        vendor,
+        exts,
+        route: FormatRoute::Board,
+        quiet: false,
+    }
+}
+
+/// The one accepted-formats table. Every refusal quotes it
+/// ([`supported_formats_sentence`]) and the web app reads it from
+/// `/api/startup` (`board_formats`) for its file picker, its drop-card copy and
+/// its client-side extension precheck, so the set cannot drift between the
+/// engine's messages and the browser (it already had: a "Supported:" clause
+/// that omitted Altium while the diagnostic said it tried that reader, and
+/// `.net` read as KiCad here and as SPICE in the browser). The reader
+/// registry itself sniffs content, not names, so this table is the only
+/// extension list.
+pub const ACCEPTED_FORMATS: &[AcceptedFormat] = &[
+    board_format("KiCad", &[".kicad_pcb", ".kicad_sch", ".net"]),
+    board_format("Eagle", &[".brd"]),
+    board_format("Altium", &[".PcbDoc"]),
+    board_format("IPC-2581", &[".xml"]),
+    board_format("IPC-D-356", &[".d356"]),
+    board_format("ODB++ job", &[".tgz", ".tar.gz", ".tar"]),
+    board_format("fab archive (gerbers, ODB++ or a .board export)", &[".zip"]),
+    board_format("Board-as-Code", &[".board"]),
+    AcceptedFormat {
+        vendor: "SPICE deck",
+        exts: &[".cir", ".sp", ".net"],
+        route: FormatRoute::Deck,
+        quiet: false,
+    },
+    AcceptedFormat {
+        vendor: "Excellon drill",
+        exts: &[".txt"],
+        route: FormatRoute::Board,
+        quiet: true,
+    },
+];
+
+/// Compiled firmware, which the web board zone re-routes to the firmware jack
+/// rather than refusing.
+pub const FIRMWARE_EXTS: &[&str] = &[".elf", ".hex"];
+
+/// The board formats as one sentence fragment for a refusal.
+#[must_use]
+pub fn supported_formats_sentence() -> String {
+    ACCEPTED_FORMATS
+        .iter()
+        .filter(|f| !f.quiet && f.route == FormatRoute::Board)
+        .map(|f| format!("{} {}", f.vendor, f.exts.join(" / ")))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The table as the JSON the web app reads (`board_formats` in `/api/startup`).
+#[must_use]
+pub fn accepted_formats_json() -> serde_json::Value {
+    serde_json::json!({
+        "formats": ACCEPTED_FORMATS.iter().map(|f| serde_json::json!({
+            "vendor": f.vendor,
+            "exts": f.exts,
+            "route": match f.route { FormatRoute::Board => "board", FormatRoute::Deck => "deck" },
+            "quiet": f.quiet,
+        })).collect::<Vec<_>>(),
+        "firmware_exts": FIRMWARE_EXTS,
+    })
+}
 
 impl BoardInputError {
     /// The web front door's wording for this failure: what `/api/analyze`
@@ -254,7 +341,10 @@ impl BoardInputError {
                 format!("Could not compile this Board-as-Code file: {e}.")
             }
             Self::Extract(e) => {
-                format!("Could not read this board file: {e}. Supported: {SUPPORTED_FORMATS}.")
+                format!(
+                    "Could not read this board file: {e}. Supported: {}.",
+                    supported_formats_sentence()
+                )
             }
             other => format!("Could not read this board file: {other}"),
         }
@@ -1346,6 +1436,45 @@ fn main {
         // raw must be the EXACT container bytes: altium_drc reads copper from it.
         assert_eq!(norm.raw, ALTIUM, "raw bytes must survive for the DRC twin");
         assert_eq!(norm.board.components.len(), 2, "R1 and R2 survive");
+    }
+
+    #[test]
+    fn accepted_formats_table_feeds_the_refusal_and_the_served_json() {
+        let sentence = supported_formats_sentence();
+        for ext in [
+            ".kicad_pcb",
+            ".brd",
+            ".PcbDoc",
+            ".xml",
+            ".d356",
+            ".tgz",
+            ".zip",
+            ".board",
+        ] {
+            assert!(sentence.contains(ext), "{ext} missing from: {sentence}");
+        }
+        // A SPICE deck is not a board: a board refusal must not offer it.
+        assert!(!sentence.contains(".cir"), "{sentence}");
+        let json = accepted_formats_json();
+        let formats = json["formats"].as_array().expect("formats array");
+        assert!(formats.iter().any(|f| f["route"] == "deck"
+            && f["exts"]
+                .as_array()
+                .is_some_and(|e| e.iter().any(|x| x == ".net"))));
+        assert!(formats.iter().any(|f| f["route"] == "board"
+            && f["exts"]
+                .as_array()
+                .is_some_and(|e| e.iter().any(|x| x == ".net"))));
+        assert_eq!(json["firmware_exts"][0], ".elf");
+        // Every single-file and archive input the CI workflow template globs
+        // must be pickable in the browser (the picker's `accept` is this table).
+        let all: Vec<&str> = ACCEPTED_FORMATS
+            .iter()
+            .flat_map(|f| f.exts.iter().copied())
+            .collect();
+        for ext in [".xml", ".zip", ".tgz", ".tar.gz", ".tar"] {
+            assert!(all.contains(&ext), "{ext} missing from the served table");
+        }
     }
 
     #[test]

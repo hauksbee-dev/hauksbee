@@ -18,7 +18,7 @@ import { useBoardSession } from './hooks/useBoardSession'
 import { useSessions } from './hooks/useSessions'
 import type { SpecSnapshot } from './hooks/useSessions'
 import type { SavedSession } from './lib/session-store'
-import { BOARD_ACCEPT_ATTR } from './lib/board-formats'
+import { boardAcceptAttr, firmwareExts, setServedBoardFormats } from './lib/board-formats'
 import { BoardTargetIcon, PlayIcon } from './components/Icons'
 import { api } from './lib/api'
 import type { BoardRequest, QueuedLiveRegisterMap, QueuedRequest, WebReport } from './types/report'
@@ -57,6 +57,11 @@ export default function App() {
   useEffect(() => {
     let alive = true
     void api.startup()
+      .then(startup => {
+        // The engine's accepted-formats table, before the first screen reads it.
+        setServedBoardFormats(startup.board_formats)
+        return startup
+      })
       .then(startup => ({
         report: startup.preloaded ? startup.report : null,
         boardName: startup.preloaded ? startup.board_name : null,
@@ -340,12 +345,9 @@ function Shell({ boot }: { boot: Boot }) {
 
           <div className="flex-1" />
 
-          {/* Status chips need about 190px of their own. They appear from `md`,
-              where the header has it to spare once the secondary action is a
-              glyph. A long board name can still leave too little: the row then
-              scrolls horizontally in its own container, so every chip stays
-              reachable and none is served cut in half. */}
-          <div className="hidden md:flex items-center gap-1.5 overflow-x-auto min-w-0">
+          {/* The one status chip. It shrinks and ellipsizes its label before it
+              pushes a header action off the row; the full text is its hover. */}
+          <div className="flex items-center min-w-0">
             <ShellChips
               view={view}
               report={report}
@@ -515,19 +517,19 @@ function Shell({ boot }: { boot: Boot }) {
 
       {/* Hidden file inputs, shared by the drop card and every firmware jack,
           so the report view can keep offering both slots. The board picker's
-          accepted list comes from lib/board-formats, the one such list, so it
+          accepted list is the engine's served table (lib/board-formats), so it
           cannot offer a different set from the one the copy names. */}
       <input
         id="board-file"
         type="file"
-        accept={BOARD_ACCEPT_ATTR}
+        accept={boardAcceptAttr()}
         className="hidden"
         onChange={e => { const f = e.target.files?.[0]; if (f) session.handleBoard(f); e.target.value = '' }}
       />
       <input
         id="firmware-file"
         type="file"
-        accept=".elf,.hex,.zip"
+        accept={[...firmwareExts(), '.zip'].join(',')}
         className="hidden"
         onChange={e => { const f = e.target.files?.[0]; if (f) session.handleFirmware(f); e.target.value = '' }}
       />
