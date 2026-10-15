@@ -825,6 +825,29 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         }
     }
 
+    let stated = toml::Value::try_from(r).ok();
+    let stated = stated
+        .as_ref()
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flatten();
+    for (key, _) in stated.filter(|(k, _)| !rating_applies(entry.kind, k)) {
+        let guide = rating_guide(entry.kind);
+        let valid: Vec<&str> = guide
+            .lines()
+            .filter_map(|l| l.split_whitespace().next())
+            .collect();
+        p.push(format!(
+            "rating '{key}' does not apply to a {} card; its rating keys are: {}",
+            serde_json::to_value(entry.kind)
+                .ok()
+                .as_ref()
+                .and_then(|v| v.as_str())
+                .unwrap_or("this"),
+            valid.join(", ")
+        ));
+    }
+
     if let Some(program) = &entry.current_program {
         check_current_program(entry, program, &mut p);
     }
@@ -1339,7 +1362,7 @@ fn check_required_pins(entry: &ModelEntry, p: &mut Problems) {
 
 /// The fix for a switching regulator drafted as a simple one: its pads hold a
 /// switch node but no regulated output, which only a converter block binds.
-pub const SWITCHER_FIX: &str = ". This pin map has a switch node (SW/PH/LX), so the part is a switching regulator: its regulated rail is past the inductor, on no pad of the IC. Keep the switch node 'sw' and add [models.behavioral.converter] with topology (\"buck\", \"boost\" or \"buck_boost\"), out_pin = \"sw\", in_pin = \"in\", vout_setpoint (a seed used only when the board has no feedback divider) and, for an adjustable part, [models.behavioral.converter.feedback] with pin = \"fb\" and vref_v = the feedback reference; drop vout/vref/dropout_v from [models.params]";
+pub const SWITCHER_FIX: &str = ". This pin map has a switch node (SW/PH/LX), so the part is a switching regulator: its regulated rail is past the inductor, on no pad of the IC. Keep the switch node 'sw' and add [models.behavioral.converter] with topology (\"buck\", \"boost\" or \"buck_boost\"), out_pin = \"sw\", in_pin = \"in\", vout_setpoint (the fixed output, or for an adjustable part the datasheet's typical-application output as a seed for a board without a divider, never the reference) and, for an adjustable part, [models.behavioral.converter.feedback] with pin = \"fb\" and vref_v = the feedback reference; drop vout/vref/dropout_v from [models.params]";
 
 /// Why a card's pin map leaves it OPEN at bind time: one line per role the
 /// binder's path for its kind reads (`bind_vreg`, `bind_adj_vreg`, the device
@@ -1659,6 +1682,130 @@ pub fn unknown_pads_warning(entry: &ModelEntry) -> Option<String> {
     let total = entry.pins.len();
     (unknown >= 2 && unknown * 4 >= total).then(|| {
         format!("{unknown} of {total} pads in [models.pins] are unknown_pad_: any supply or ground pin among them goes unchecked, so this card cannot be trusted for supply checks")
+    })
+}
+
+/// The rating categories nearly every datasheet of a kind prints.
+///
+/// Each is `(key, what it is)`: a draft that has neither the key nor an
+/// `unknown` record for it most likely skipped the row. Measured: two tiers
+/// drafting one pack FET driver both dropped its printed TJ maximum.
+#[must_use]
+pub const fn expected_ratings(kind: ComponentKind) -> &'static [(&'static str, &'static str)] {
+    use ComponentKind::{
+        Adc, AnalogSwitch, BjtNpn, BjtPnp, Comparator, Dac, Digital, Diode, Mcu, Nmos, Opamp, Pmos,
+        ShiftRegister, Timer, Vreg,
+    };
+    const VOLTAGE: (&str, &str) = (
+        "max_voltage_v",
+        "absolute-maximum supply or blocking voltage",
+    );
+    const TJ: (&str, &str) = ("max_junction_temp_c", "junction-temperature maximum");
+    const CURRENT: (&str, &str) = ("max_current_a", "rated continuous (output) current");
+    match kind {
+        Diode | BjtNpn | BjtPnp | Nmos | Pmos | Vreg => &[VOLTAGE, TJ, CURRENT],
+        Opamp | Comparator | AnalogSwitch | Digital | ShiftRegister | Dac | Adc | Timer => {
+            &[VOLTAGE, TJ]
+        }
+        Mcu => &[VOLTAGE],
+        _ => &[],
+    }
+}
+
+/// Whether `[models.ratings]` key `key` means anything on a `kind` card.
+///
+/// A capacitor's ripple, a MOSFET's gate bias, a regulator's minimum load and an
+/// IC's per-pin limit are each read only for their own class.
+#[must_use]
+pub fn rating_applies(kind: ComponentKind, key: &str) -> bool {
+    use ComponentKind::{BjtNpn, BjtPnp, Connector, Diode, Nmos, Passive, Pmos, Vreg};
+    match key {
+        "polarized" | "max_ripple_current_a" => kind == Passive,
+        "rds_on_vgs" | "vgs_th_max" => matches!(kind, Nmos | Pmos),
+        "min_current_a" => kind == Vreg,
+        "max_pin_current_a" => !matches!(
+            kind,
+            Diode | BjtNpn | BjtPnp | Nmos | Pmos | Passive | Connector
+        ),
+        _ => true,
+    }
+}
+
+/// The `KEY_GUIDE` lines whose key applies to `kind` ([`rating_applies`]).
+#[must_use]
+pub fn rating_guide(kind: ComponentKind) -> String {
+    let lines = crate::schema::Ratings::KEY_GUIDE.lines();
+    let applies = |l: &&str| {
+        l.split_whitespace()
+            .next()
+            .is_some_and(|k| rating_applies(kind, k))
+    };
+    lines.filter(applies).collect::<Vec<_>>().join("\n")
+}
+
+/// Advisory: each expected rating category ([`expected_ratings`]) left unstated.
+///
+/// That is, the card neither states (the key, or a row tagged `rating = "<key>"`) nor declares
+/// absent (an `unknown` uncertainty record whose `parameter` is the key).
+#[must_use]
+pub fn missing_rating_warnings(entry: &ModelEntry) -> Vec<String> {
+    let stated = toml::Value::try_from(&entry.ratings).ok();
+    let stated = stated.as_ref().and_then(toml::Value::as_table);
+    let source = entry.source.as_ref();
+    let tagged = |key: &str| {
+        source.is_some_and(|s| {
+            s.characteristic
+                .iter()
+                .any(|r| r.rating.as_deref() == Some(key))
+        })
+    };
+    let declared = |key: &str| {
+        source.is_some_and(|s| {
+            s.uncertainty.iter().any(
+                |u| matches!(u, ModelUncertainty::Unknown { parameter, .. } if parameter == key),
+            )
+        })
+    };
+    expected_ratings(entry.kind)
+        .iter()
+        .filter(|(key, _)| {
+            !(stated.is_some_and(|t| t.contains_key(*key)) || tagged(key) || declared(key))
+        })
+        .map(|(key, what)| {
+            format!(
+                "no {key} ({what}): read it from the Absolute Maximum Ratings, Recommended \
+                 Operating Conditions or Thermal tables; if the datasheet prints none, add \
+                 [[models.source.uncertainty]] status = \"unknown\", parameter = \"{key}\", \
+                 reason naming the tables checked"
+            )
+        })
+        .collect()
+}
+
+/// An adjustable converter's `vout_setpoint` written as its own reference.
+///
+/// `vout_setpoint == feedback.vref_v` is how a FIXED-output card says its FB
+/// pin senses VOUT directly (the checks read it so), so on an adjustable part
+/// it claims a fixed output at the reference voltage. The output of an
+/// adjustable part is the board divider's; the seed is the datasheet's
+/// typical-application output. A card naming itself fixed may keep it.
+#[must_use]
+pub fn adjustable_seed_problem(entry: &ModelEntry) -> Option<String> {
+    let c = entry.behavioral.converter.as_ref()?;
+    let fb = c.feedback.as_ref()?;
+    let description = entry.description.to_ascii_lowercase();
+    let fixed = description.contains("fixed") && !description.contains("adjustable");
+    let equal = (c.vout_setpoint - fb.vref_v).abs() <= 1e-6 * fb.vref_v.abs().max(1.0);
+    (equal && !fixed).then(|| {
+        format!(
+            "converter vout_setpoint = {} equals feedback vref_v, which declares a FIXED {} V \
+             output whose FB pin senses VOUT directly. An adjustable part's output is set by the \
+             board's feedback divider, which Hauksbee reads: set vout_setpoint to the output of \
+             the datasheet's typical application (cite it) as the seed for a board without one, \
+             never the reference. Only a fixed-output version keeps vout_setpoint = vref_v, and \
+             its description says 'fixed'",
+            c.vout_setpoint, c.vout_setpoint
+        )
     })
 }
 

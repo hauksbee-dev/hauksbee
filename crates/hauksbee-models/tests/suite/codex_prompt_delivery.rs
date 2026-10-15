@@ -36,7 +36,7 @@ fn the_instruction_is_written_to_stdin() {
         .nth(1)
         .expect("the spawn path writes to the child's stdin");
     assert!(
-        stdin_block.contains("Read prompt.md"),
+        stdin_block[..stdin_block.len().min(200)].contains("stdin.write_all(stdin_text"),
         "the instruction must be delivered on stdin, where no variadic flag can \
          eat it; found this after the stdin take:\n{}",
         &stdin_block[..stdin_block.len().min(400)]

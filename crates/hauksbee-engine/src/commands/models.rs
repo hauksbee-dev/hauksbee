@@ -186,6 +186,15 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Whether the entry says it was drafted from a datasheet.
+fn datasheet_derived(entry: &hauksbee_models::schema::ModelEntry) -> bool {
+    use hauksbee_ir::evidence::ModelSourceTier::DatasheetDerived;
+    entry
+        .source
+        .as_ref()
+        .is_some_and(|s| s.tier == DatasheetDerived)
+}
+
 /// Lint every `[[models]]` entry in `text`, printing each finding and adding the
 /// finding and warning counts; returns how many entries were checked.
 fn lint_model_db(
@@ -243,10 +252,7 @@ fn lint_model_db(
         }
         // A machine draft must also say which package its map is for; a
         // shipped card's map was checked by a person against the footprint.
-        let drafted = !shipped
-            && entry.source.as_ref().is_some_and(|s| {
-                s.tier == hauksbee_ir::evidence::ModelSourceTier::DatasheetDerived
-            });
+        let drafted = !shipped && datasheet_derived(entry);
         let draft_rules =
             drafted.then(|| hauksbee_models::validation::draft_pin_map_problems(entry));
         let pin_map = hauksbee_models::validation::unknown_pads_warning(entry).into_iter();
@@ -254,6 +260,12 @@ fn lint_model_db(
         for w in pin_map.chain(draft_rules.into_iter().flatten()) {
             entry_warnings += 1;
             say!(lines, "model '{}' [models.pins]: warning: {w}", entry.id);
+        }
+        // A draft that skipped a rating category says so; a shipped card was reviewed.
+        let ratings = drafted.then(|| hauksbee_models::validation::missing_rating_warnings(entry));
+        for w in ratings.into_iter().flatten() {
+            entry_warnings += 1;
+            say!(lines, "model '{}' [models.ratings]: warning: {w}", entry.id);
         }
         if let Some(standard) = hauksbee_models::validation::pin_standard(entry) {
             say!(lines, "model '{}' [[models.source.pinout]]: note: [models.pins] pads are numbered from package standard \"{standard}\", not printed on the sheet; every result marks their roles assumed, so recheck the view and the pin-1 corner against the drawing", entry.id);
