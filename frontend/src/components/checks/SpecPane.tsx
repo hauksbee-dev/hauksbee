@@ -100,11 +100,8 @@ export function SpecPane({
 
   return (
     <div className="min-w-0" data-testid="spec-pane" data-mode={mode}>
-      {/* The one toolbar. It stays in view while the surface scrolls. */}
-      <div
-        className="sticky top-0 z-10 -mx-1 px-1 pt-1 pb-2 flex flex-wrap items-center gap-x-3 gap-y-2"
-        style={{ background: 'var(--canvas)' }}
-      >
+      {/* The one toolbar: mode, then the actions. */}
+      <div className="pb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
         <div role="tablist" aria-label="How to edit the checks" className="inline-flex items-center gap-0.5 p-0.5 rounded-lg" style={{ border: '1px solid var(--hairline)', background: 'var(--surface-2)' }}>
           {modeButton('builder', 'Builder')}
           {modeButton('toml', 'TOML')}
@@ -119,7 +116,7 @@ export function SpecPane({
           <span style={{ width: 7, height: 7, borderRadius: 4, display: 'inline-block', flexShrink: 0, background: stale ? 'var(--warn)' : 'var(--ok)' }} />
           <span className="truncate">{specFileName}</span>
         </span>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        <div className="sm:ml-auto flex flex-wrap items-center gap-2 min-w-0 max-w-full">
           <button
             type="button"
             data-testid="run-checks"
@@ -132,7 +129,7 @@ export function SpecPane({
           </button>
           <button
             type="button"
-            className="hb-btn hb-press px-3 py-1.5 text-[13px]"
+            className="hb-btn hb-press px-3 py-1.5 text-[13px] max-w-full truncate"
             onClick={() => download(specFileName, specText)}
           >
             Download {specStem}.toml

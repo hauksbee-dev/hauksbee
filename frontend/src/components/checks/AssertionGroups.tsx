@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import type { ArtifactProvenance, CheckResult, EvidenceAssumption } from '../../types/report'
 import { checkKind } from '../../lib/check-spec'
@@ -26,6 +27,13 @@ export function AssertionGroups({
   onRemove: (id: number) => void
 }) {
   const reduced = useReducedMotion()
+  // A row's evidence is a wall of text; it opens on request, never by default.
+  const [evidenceOpen, setEvidenceOpen] = useState<ReadonlySet<number>>(new Set())
+  const toggleEvidence = (id: number) => setEvidenceOpen(prev => {
+    const next = new Set(prev)
+    if (!next.delete(id)) next.add(id)
+    return next
+  })
   // The groups, the order and the plain-language titles are the served
   // catalogue's (lib/check-catalog); the builder only says which kinds it has a row for.
   const catalog = useCatalog()
@@ -110,14 +118,28 @@ export function AssertionGroups({
                         </code>
                         {rowResult && <ResultChip result={rowResult} stale={stale} />}
                       </div>
-                      <button
-                        type="button"
-                        className="hb-press text-[12px] cursor-pointer shrink-0"
-                        style={{ color: 'var(--silk-faint)', background: 'none', border: 'none' }}
-                        onClick={() => onRemove(c.id)}
-                      >
-                        remove
-                      </button>
+                      <div className="flex items-center gap-3 shrink-0">
+                        {rowResult && (
+                          <button
+                            type="button"
+                            data-testid="row-evidence-toggle"
+                            aria-expanded={evidenceOpen.has(c.id)}
+                            className="hb-press text-[12px] cursor-pointer underline"
+                            style={{ color: 'var(--silk-dim)', background: 'none', border: 'none' }}
+                            onClick={() => toggleEvidence(c.id)}
+                          >
+                            {evidenceOpen.has(c.id) ? 'Hide evidence' : rowResult.passed && !rowResult.invalid ? 'Evidence' : 'Why'}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="hb-press text-[12px] cursor-pointer"
+                          style={{ color: 'var(--silk-faint)', background: 'none', border: 'none' }}
+                          onClick={() => onRemove(c.id)}
+                        >
+                          remove
+                        </button>
+                      </div>
                     </div>
                     <div className="mt-2">
                       <ConstraintEditor
@@ -148,7 +170,7 @@ export function AssertionGroups({
                         {stale ? ' (from the last run; the spec has changed since)' : ''}
                       </div>
                     )}
-                    {rowResult && (
+                    {rowResult && evidenceOpen.has(c.id) && (
                       <AssertionEvidence
                         result={rowResult}
                         assumptions={assumptions}
