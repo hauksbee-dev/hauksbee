@@ -8491,3 +8491,589 @@ min_v = 0.0
 max_v = 15.0
 abs_max_v = 20.0
 basis = "TI LM1117 SNOS412Q, 7.3 Recommended Operating Conditions VIN (to GND) 15 V maximum, no minimum printed; 7.1 Absolute Maximum Ratings VIN 20 V"
+
+# ── max17760: Analog Devices MAX17760 76 V / 300 mA synchronous buck ──
+# MAX17760 datasheet (12 TDFN-EP). Drafted by the extraction pipeline (codex gpt-6-luna) and reviewed against the PDF:
+# pin map (12 pins + EP), fsw 400 kHz, FB vref 0.802 V, VIN abs max 80 V, theta-JA 41 / theta-JC 8.5 checked.
+# Hand edit: EN/UVLO threshold uses the typical 1.215 V rising value, not the 1.24 V maximum column.
+[[models]]
+id = "max17760"
+kind = "vreg"
+description = "Analog Devices MAX17760 adjustable synchronous buck converter, 12 TDFN-EP (3mm x 3mm); averaged converter model with board feedback. It does not model switching ripple, loop stability, soft-start, PWM/PFM light-load behavior, current-limit and hiccup protection, thermal shutdown, or RESET monitoring."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "feedback_reference"
+low = 0.788
+high = 0.815
+unit = "V"
+kind = "specification-limits"
+basis = "Electrical Characteristics, FB Regulation Voltage, VMODE = 0V (PWM mode), min/max columns; VIN = 24V, TA = -40°C to +125°C"
+
+[[models.source.pinout]]
+package = "12 TDFN - EP (3mm x 3mm)"
+pins = { "1" = "VIN", "2" = "PGND", "3" = "VCC", "4" = "EN/UVLO", "5" = "RESET", "6" = "RT/SYNC", "7" = "EXTVCC", "8" = "FB", "9" = "SS", "10" = "MODE", "11" = "SGND", "12" = "LX", "EP" = "EP" }
+
+[models.match]
+value_re = '(?i)^(MAX17760|MAX17760ATC\+T?)$'
+
+[models.params]
+warning = "averaged buck model with board feedback; switching ripple, loop stability, soft-start, PWM/PFM light-load behavior, current-limit and hiccup protection, thermal shutdown, and RESET monitoring are not modeled"
+iq_a = 2.5e-3  # derived: iq_a = quiescent current at the lightest printed load, 'Input quiescent current, PWM' typ 2.5 mA (VFB = 0.75V, normal switching mode; VIN = 24V)
+dropout_v = 2.7e-1  # derived: VCC LDO dropout max 0.27 V (VIN = 4.5V, IVCC = 5mA); kept as the only printed dropout row, a buck's real headroom limit is max_duty
+
+[models.pins]
+"1" = "in" # VIN
+"2" = "pgnd" # Power Ground
+"3" = "vcc" # Internal 5V LDO output; not the buck output
+"4" = "en" # EN/UVLO
+"5" = "reset_n" # Open-drain RESET output
+"6" = "rt_sync" # RT/SYNC
+"7" = "extvcc" # EXTVCC
+"8" = "fb"
+"9" = "ss"
+"10" = "mode"
+"11" = "gnd" # SGND
+"12" = "sw" # LX switching node
+"EP" = "gnd" # Exposed pad; connect to SGND
+
+[models.ratings]
+max_current_a = 0.3 # Source: page 1 feature summary and Ordering Information; rated output current
+max_voltage_v = 80.0 # Source: Absolute Maximum Ratings, VIN to SGND, +80V upper limit
+max_power_w = 1.9512 # Source: Absolute Maximum Ratings, continuous power dissipation, multilayer board, TA = +70°C
+max_junction_temp_c = 150.0 # Source: Absolute Maximum Ratings, Junction Temperature
+theta_ja_c_per_w = 41.0 # Source: Package Information, 12 TDFN, four-layer board, junction to ambient
+theta_jc_c_per_w = 8.5 # Source: Package Information, 12 TDFN, junction to case
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 4.5
+max_v = 76.0
+abs_max_v = 80.0
+basis = "Electrical Characteristics, Input Voltage Range; Absolute Maximum Ratings, VIN to SGND"
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+vout_setpoint = 5.0 # Typical Application Circuits, Figure 4, 5V output example; seed when board has no FB divider
+iout_limit_a = 0.3 # Page 1 feature summary and Ordering Information, 300mA rated output
+max_duty = 0.88 # Electrical Characteristics, Maximum Duty Cycle, min column
+switching_hz = 400000.0 # Electrical Characteristics, fSW typ at RRT/SYNC = 69.8kΩ
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 0.802 # Electrical Characteristics, FB Regulation Voltage, PWM mode, typ column
+
+[models.behavioral.converter.enable]
+pin = "en"
+high_threshold_v = 1.215 # Electrical Characteristics, EN/UVLO Threshold VENR rising, typ column (min 1.19 / max 1.24)
+
+[models.coverage]
+implements = ["averaged_buck_dc", "board_feedback_divider", "input_supply_range", "output_current_ceiling", "enable_gating"]
+missing = ["switching_ripple", "loop_stability", "soft_start", "pfm_light_load_mode", "current_limit", "hiccup_protection", "thermal_shutdown", "reset_monitoring", "temperature_curves"]
+
+[[models.source.characteristic]]
+parameter = "EN/UVLO to SGND absolute maximum"
+min = -0.3
+unit = "V"
+conditions = "upper limit is min((VIN + 0.3V), 26V)"
+basis = "Absolute Maximum Ratings, EN/UVLO to SGND"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "EXTVCC to SGND absolute maximum"
+min = -0.3
+max = 26.0
+unit = "V"
+basis = "Absolute Maximum Ratings, EXTVCC to SGND"
+
+[[models.source.characteristic]]
+parameter = "LX to PGND absolute maximum"
+min = -0.3
+unit = "V"
+conditions = "upper limit is VIN + 0.3V"
+basis = "Absolute Maximum Ratings, LX to PGND"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "FB, RESET, SS, MODE, VCC, RT/SYNC to SGND absolute maximum"
+min = -0.3
+max = 6.0
+unit = "V"
+basis = "Absolute Maximum Ratings, listed signal pins to SGND"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "PGND to SGND absolute maximum"
+min = -0.3
+max = 0.3
+unit = "V"
+basis = "Absolute Maximum Ratings, PGND to SGND"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "LX total RMS current"
+min = -0.6
+max = 0.6
+unit = "A"
+basis = "Absolute Maximum Ratings, LX Total RMS Current"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "Operating temperature range"
+min = -40
+max = 125
+unit = "°C"
+basis = "Absolute Maximum Ratings, Operating Temperature Range"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "Storage temperature range"
+min = -65
+max = 150
+unit = "°C"
+basis = "Absolute Maximum Ratings, Storage Temperature Range"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "Lead temperature, soldering 10s"
+max = 300
+unit = "°C"
+basis = "Absolute Maximum Ratings, Lead Temperature"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "Soldering temperature, reflow"
+max = 260
+unit = "°C"
+basis = "Absolute Maximum Ratings, Soldering Temperature"
+
+[[models.source.characteristic]]
+parameter = "Input shutdown current"
+min = 2.5
+typ = 5
+max = 10
+unit = "uA"
+conditions = "VEN/UVLO = 0V, shutdown mode; VIN = 24V"
+basis = "Electrical Characteristics, Input Shutdown Current, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "Input quiescent current, PFM"
+typ = 75
+unit = "uA"
+conditions = "MODE unconnected, VEXTVCC = 5V; VIN = 24V"
+basis = "Electrical Characteristics, Input Quiescent Current IQ_PFM, typ"
+
+[[models.source.characteristic]]
+parameter = "Input quiescent current, PWM"
+typ = 2.5
+unit = "mA"
+conditions = "VFB = 0.75V, normal switching mode; VIN = 24V"
+basis = "Electrical Characteristics, Input Quiescent Current IQ_PWM, typ"
+
+[[models.source.characteristic]]
+parameter = "EN/UVLO rising threshold"
+min = 1.19
+typ = 1.215
+max = 1.24
+unit = "V"
+conditions = "VIN = 24V"
+basis = "Electrical Characteristics, EN/UVLO Threshold VENR, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "EN/UVLO falling threshold"
+min = 1.09
+typ = 1.115
+max = 1.14
+unit = "V"
+conditions = "VIN = 24V"
+basis = "Electrical Characteristics, EN/UVLO Threshold VENF, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "EN/UVLO true shutdown threshold"
+typ = 0.7
+unit = "V"
+conditions = "EN/UVLO falling; VIN = 24V"
+basis = "Electrical Characteristics, EN/UVLO Threshold VENT, typ"
+
+[[models.source.characteristic]]
+parameter = "EN/UVLO pullup current"
+min = 2.2
+typ = 2.5
+max = 2.8
+unit = "uA"
+conditions = "VEN/UVLO = 1.215V; VIN = 24V"
+basis = "Electrical Characteristics, EN/UVLO Pullup Current, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "VCC output voltage"
+min = 4.75
+typ = 5.0
+max = 5.25
+unit = "V"
+conditions = "6V <= VIN <= 76V, 0mA < IVCC < 5mA"
+basis = "Electrical Characteristics, VCC Output Voltage Range, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "VCC current limit"
+min = 13
+typ = 26
+max = 52
+unit = "mA"
+conditions = "VCC = 4.3V, VIN = 12V"
+basis = "Electrical Characteristics, VCC Current Limit, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "VCC dropout voltage"
+max = 0.27
+unit = "V"
+conditions = "VIN = 4.5V, IVCC = 5mA"
+basis = "Electrical Characteristics, VCC Dropout Voltage, max"
+
+[[models.source.characteristic]]
+parameter = "VCC UVLO rising"
+min = 4.05
+typ = 4.2
+max = 4.35
+unit = "V"
+conditions = "VCC rising"
+basis = "Electrical Characteristics, VCC UVLO VCC-UVR, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "VCC UVLO falling"
+min = 3.65
+typ = 3.8
+max = 3.95
+unit = "V"
+conditions = "VCC falling"
+basis = "Electrical Characteristics, VCC UVLO VCC-UVF, min/typ/max"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "EXTVCC operating voltage range"
+min = 4.85
+max = 24
+unit = "V"
+basis = "Electrical Characteristics, EXTVCC Operating Voltage Range"
+
+[[models.source.characteristic]]
+parameter = "EXTVCC switchover rising threshold"
+min = 4.65
+typ = 4.74
+max = 4.85
+unit = "V"
+conditions = "VEXTVCC rising"
+basis = "Electrical Characteristics, EXTVCC Switchover Threshold, min/typ/max"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "EXTVCC switchover hysteresis"
+typ = 0.3
+unit = "V"
+basis = "Electrical Characteristics, EXTVCC Switchover Threshold Hysteresis, typ"
+
+[[models.source.characteristic]]
+parameter = "EXTVCC dropout voltage"
+max = 0.1
+unit = "V"
+conditions = "VEXTVCC = 4.75V, IVCC = 5mA"
+basis = "Electrical Characteristics, EXTVCC Dropout Voltage, max"
+
+[[models.source.characteristic]]
+parameter = "EXTVCC current limit"
+min = 13
+typ = 21
+max = 34
+unit = "mA"
+conditions = "VCC = 4.3V, VEXTVCC = 5V"
+basis = "Electrical Characteristics, EXTVCC Current Limit, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "High-side pMOS on-resistance"
+typ = 1.8
+max = 3.6
+unit = "ohm"
+conditions = "ILX = 0.15A, sourcing"
+basis = "Electrical Characteristics, POWER MOSFETS RDS-ONH, typ/max"
+
+[[models.source.characteristic]]
+parameter = "Low-side nMOS on-resistance"
+typ = 0.55
+max = 1.1
+unit = "ohm"
+conditions = "ILX = 0.15A, sinking"
+basis = "Electrical Characteristics, POWER MOSFETS RDS-ONL, typ/max"
+
+[[models.source.characteristic]]
+parameter = "LX leakage current"
+min = -1
+max = 1
+unit = "uA"
+conditions = "VLX = (VPGND + 1V) to (VIN - 1V), TA = +25°C"
+basis = "Electrical Characteristics, LX Leakage Current, min/max"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "Soft-start charging current"
+min = 4.7
+typ = 5
+max = 5.3
+unit = "uA"
+basis = "Electrical Characteristics, SOFT-START Charging Current, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "FB regulation voltage, PFM"
+min = 0.788
+typ = 0.813
+max = 0.827
+unit = "V"
+conditions = "MODE unconnected; VIN = 24V"
+basis = "Electrical Characteristics, FB Regulation Voltage, PFM mode, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "FB input leakage current"
+min = -100
+max = 100
+unit = "nA"
+conditions = "TA = +25°C"
+basis = "Electrical Characteristics, FB Input Leakage Current, min/max"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "Peak current limit threshold"
+min = 532
+typ = 640
+max = 755
+unit = "mA"
+basis = "Electrical Characteristics, CURRENT LIMIT Peak Current Limit Threshold, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "Negative current limit threshold, PWM"
+min = 238
+typ = 270
+max = 302
+unit = "mA"
+conditions = "VMODE = 0V (PWM mode)"
+basis = "Electrical Characteristics, Negative Current Limit Threshold, PWM row, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "Negative current limit threshold, PFM"
+typ = 2.5
+unit = "mA"
+conditions = "MODE unconnected (PFM mode)"
+basis = "Electrical Characteristics, Negative Current Limit Threshold, PFM row, typ"
+
+[[models.source.characteristic]]
+parameter = "PFM current limit"
+min = 185
+typ = 240
+max = 310
+unit = "mA"
+conditions = "MODE unconnected"
+basis = "Electrical Characteristics, PFM Current Limit, min/typ/max"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "PFM mode threshold rising"
+min = 1
+typ = 1.22
+max = 1.44
+unit = "V"
+basis = "Electrical Characteristics, PFM Mode Threshold Rising, min/typ/max"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "PFM mode threshold hysteresis"
+typ = 0.175
+unit = "V"
+basis = "Electrical Characteristics, PFM Mode Threshold Hysteresis, typ"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "MODE pullup current at power-up"
+typ = 2.5
+unit = "uA"
+basis = "Electrical Characteristics, MODE Pullup Current at Power-Up, typ"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "Switching frequency at RRT/SYNC = 140kΩ"
+min = 180
+typ = 200
+max = 220
+unit = "kHz"
+basis = "Electrical Characteristics, Oscillator Switching Frequency, RRT/SYNC = 140kΩ, min/typ/max"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "Switching frequency at RRT/SYNC = 93.1kΩ"
+min = 270
+typ = 300
+max = 330
+unit = "kHz"
+basis = "Electrical Characteristics, Oscillator Switching Frequency, RRT/SYNC = 93.1kΩ, min/typ/max"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "Switching frequency at RRT/SYNC = 46.4kΩ"
+min = 540
+typ = 600
+max = 660
+unit = "kHz"
+basis = "Electrical Characteristics, Oscillator Switching Frequency, RRT/SYNC = 46.4kΩ, min/typ/max"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "Switching frequency adjustable range"
+min = 200
+max = 600
+unit = "kHz"
+basis = "Electrical Characteristics, Switching Frequency Adjustable Range, min/max"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "Minimum on-time"
+typ = 70
+max = 110
+unit = "ns"
+basis = "Electrical Characteristics, Minimum On-Time, typ/max"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "Maximum duty cycle"
+min = 88
+typ = 93
+max = 97
+unit = "%"
+basis = "Electrical Characteristics, Maximum Duty Cycle, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "Hiccup timeout period"
+typ = 51
+unit = "ms"
+conditions = "For MAX17760"
+basis = "Electrical Characteristics, Hiccup Timeout Period, typ"
+
+[[models.source.characteristic]]
+parameter = "SYNC frequency capture lower multiplier"
+min = 1.15
+unit = "x"
+conditions = "fSW (typ)"
+basis = "Electrical Characteristics, SYNC Frequency Capture Range, min column"
+
+[[models.source.characteristic]]
+parameter = "SYNC frequency capture upper multiplier"
+max = 1.4
+unit = "x"
+conditions = "fSW (typ)"
+basis = "Electrical Characteristics, SYNC Frequency Capture Range, max column"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "SYNC threshold high"
+min = 2.1
+unit = "V"
+basis = "Electrical Characteristics, SYNC Threshold VIH, min"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "SYNC threshold low"
+max = 0.8
+unit = "V"
+basis = "Electrical Characteristics, SYNC Threshold VIL, max"
+
+[[models.source.characteristic]]
+parameter = "RESET output low level"
+max = 0.4
+unit = "V"
+conditions = "IRESET = 10mA"
+basis = "Electrical Characteristics, RESET Output Level Low, max"
+
+[[models.source.characteristic]]
+parameter = "RESET output leakage current"
+max = 1
+unit = "uA"
+conditions = "TA = +25°C"
+basis = "Electrical Characteristics, RESET Output Leakage Current, max"
+
+[[models.source.characteristic]]
+parameter = "FB threshold for RESET deassertion"
+typ = 95
+unit = "%"
+conditions = "VFB rising"
+basis = "Electrical Characteristics, FB Threshold for RESET Deassertion, typ"
+
+[[models.source.characteristic]]
+parameter = "FB threshold for RESET assertion"
+typ = 92
+unit = "%"
+conditions = "VFB falling"
+basis = "Electrical Characteristics, FB Threshold for RESET Assertion, typ"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "RESET delay after FB reaches 95% regulation"
+typ = 2.1
+unit = "ms"
+basis = "Electrical Characteristics, RESET Delay after FB Reaches 95% Regulation, typ"
+
+[[models.source.characteristic]]
+parameter = "Thermal shutdown rising threshold"
+typ = 160
+unit = "°C"
+conditions = "Temperature rising"
+basis = "Electrical Characteristics, Thermal Shutdown Threshold, typ"
+
+[[models.source.characteristic]]
+conditions = "No additional row-specific conditions stated"
+
+parameter = "Thermal shutdown hysteresis"
+typ = 20
+unit = "°C"
+basis = "Electrical Characteristics, Thermal Shutdown Threshold Hysteresis, typ"
+
+[[models.source.references]]
+title = "MAX17760.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "e3fe95f15b01ae26be6926a8871aa0bec73edabeaf746abd6411db28a60a7736"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "output_short_circuit_duration"
+reason = "Absolute Maximum Ratings states the output short-circuit duration is continuous but gives no numerical quantity"

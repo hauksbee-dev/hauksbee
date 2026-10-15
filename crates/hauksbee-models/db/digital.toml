@@ -13267,3 +13267,616 @@ pins = { "1" = "CPL", "2" = "CPH", "3" = "VM", "4" = "VDRAIN", "5" = "VCP", "6" 
 [models.coverage]
 implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]
 missing = ["gate_drive", "charge_pump", "dvdd_regulator", "vgls_regulator", "shunt_amplifiers", "spi_registers", "sleep_mode", "fault_logic", "logic_levels"]
+
+# ── PCF8563: NXP I2C real-time clock/calendar (HVSON10 / SO8 / TSSOP8) ──
+# NXP PCF8563 Rev. 11.1 (19 January 2026), sha256 2ed5d1b0a1051d0e81399417c4ff0ced0658fa36e13c0487670f9cb6dfb4f1d4. Drafted by the extraction pipeline
+# (codex gpt-6-luna, --kind digital on the second run) and reviewed against the PDF: the three pin maps (Table 3), the limiting values (Table 28) and
+# the 250 nA typical standby current. Identity only: the clock, alarm and timer registers are not modelled. Hand edits: value_re and orderable_re
+# accept a board's BS / T / TS suffix; vih/vil are 0.7/0.3 x VDD at 3.3 V (the draft wrote a bare 0.7 V); supply_static_ua is the 250 nA standby draw (the draft used the 800 uA active bound).
+[[models]]
+id = "pcf8563_bs4"
+kind = "digital"
+description = "PCF8563BS/4 in HVSON10; identity only because this stateful I2C RTC, calendar, alarms, timer, interrupt, and clock output cannot be represented by the bounded digital logic schema; does not model those behaviors."
+variant_of = "pcf8563"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "bounded_digital_logic_model"
+reason = "ABSTAIN: the datasheet describes a stateful I2C register interface and clock/calendar functions that the bounded digital logic schema cannot represent"
+[[models.source.pinout]]
+package = "HVSON10"
+pins = { "1" = "OSCI", "2" = "OSCO", "3" = "n.c.", "4" = "INT", "5" = "VSS", "6" = "SDA", "7" = "SCL", "8" = "CLKOUT", "9" = "VDD", "10" = "n.c." }
+
+[[models.source.characteristic]]
+parameter = "VDD supply voltage"
+min = 1.0
+max = 5.5
+unit = "V"
+conditions = "Interface inactive; fSCL = 0 Hz; Tamb = 25 °C; footnote [1]"
+basis = "Table 29, Supply voltage, min/max"
+[[models.source.characteristic]]
+parameter = "VDD supply voltage"
+min = 1.8
+max = 5.5
+unit = "V"
+conditions = "Interface active; fSCL = 400 kHz; TA = -40 °C to +85 °C"
+basis = "Table 29, Supply voltage, min/max"
+[[models.source.characteristic]]
+parameter = "VDD supply voltage for clock data integrity"
+max = 5.5
+unit = "V"
+conditions = "Clock data integrity; Tamb = 25 °C; lower limit Vlow"
+basis = "Table 29, Supply voltage, max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+max = 800
+unit = "μA"
+conditions = "Interface active; fSCL = 400 kHz; TA = -40 °C to +85 °C"
+basis = "Table 29, Supply current, max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+max = 200
+unit = "μA"
+conditions = "Interface active; fSCL = 100 kHz"
+basis = "Table 29, Supply current, max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 275
+max = 550
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT disabled; Tamb = 25 °C; VDD = 5.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 250
+max = 500
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT disabled; Tamb = 25 °C; VDD = 3.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 225
+max = 450
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT disabled; Tamb = 25 °C; VDD = 2.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 500
+max = 750
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT disabled; Tamb = -40 °C to +85 °C; VDD = 5.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 400
+max = 650
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT disabled; Tamb = -40 °C to +85 °C; VDD = 3.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 400
+max = 600
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT disabled; Tamb = -40 °C to +85 °C; VDD = 2.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 825
+max = 1600
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT enabled at 32 kHz; Tamb = 25 °C; VDD = 5.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 550
+max = 1000
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT enabled at 32 kHz; Tamb = 25 °C; VDD = 3.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 425
+max = 800
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT enabled at 32 kHz; Tamb = 25 °C; VDD = 2.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 950
+max = 1700
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT enabled at 32 kHz; Tamb = -40 °C to +85 °C; VDD = 5.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 650
+max = 1100
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT enabled at 32 kHz; Tamb = -40 °C to +85 °C; VDD = 3.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 500
+max = 900
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT enabled at 32 kHz; Tamb = -40 °C to +85 °C; VDD = 2.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "VIL low-level input voltage"
+min = -0.5
+unit = "V"
+conditions = "Upper limit +0.3 VDD"
+basis = "Table 29, LOW-level input voltage, min"
+[[models.source.characteristic]]
+parameter = "VIH high-level input voltage"
+min = 0.7
+max = 5.5
+unit = "V"
+conditions = "Lower limit 0.7 VDD"
+basis = "Table 29, HIGH-level input voltage, min/max"
+[[models.source.characteristic]]
+parameter = "ILI input leakage current"
+min = -1
+typ = 0
+max = 1
+unit = "μA"
+conditions = "VI = VDD or VSS"
+basis = "Table 29, Input leakage current, min/typ/max"
+[[models.source.characteristic]]
+parameter = "Ci input capacitance"
+max = 7
+unit = "pF"
+conditions = "Tested on a sample basis, footnote [3]"
+basis = "Table 29, Input capacitance, max"
+[[models.source.characteristic]]
+parameter = "IOL low-level output current"
+min = 3
+unit = "mA"
+conditions = "Output sink current; VOL = 0.4 V; VDD = 5 V; pin SDA"
+basis = "Table 29, LOW-level output current, min"
+[[models.source.characteristic]]
+parameter = "IOL low-level output current"
+min = 1
+unit = "mA"
+conditions = "Output sink current; VOL = 0.4 V; VDD = 5 V; pin INT"
+basis = "Table 29, LOW-level output current, min"
+[[models.source.characteristic]]
+parameter = "IOL low-level output current"
+min = 1
+unit = "mA"
+conditions = "Output sink current; VOL = 0.4 V; VDD = 5 V; pin CLKOUT"
+basis = "Table 29, LOW-level output current, min"
+[[models.source.characteristic]]
+parameter = "ILO output leakage current"
+min = -1
+typ = 0
+max = 1
+unit = "μA"
+conditions = "VO = VDD or VSS"
+basis = "Table 29, Output leakage current, min/typ/max"
+[[models.source.characteristic]]
+parameter = "Vlow low voltage"
+typ = 0.9
+max = 1.0
+unit = "V"
+conditions = "Tamb = 25 °C; sets bit VL"
+basis = "Table 29, Low voltage, typ/max"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, HBM"
+min = -3500
+max = 3500
+unit = "V"
+conditions = "HVSON10 (PCF8563BS/4); pass level"
+basis = "Table 28, ESD HBM, package row [1]"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, CDM"
+min = 2000
+max = 2000
+unit = "V"
+conditions = "HVSON10 (PCF8563BS/4); pass level"
+basis = "Table 28, ESD CDM, package row [2]"
+
+[[models.source.references]]
+title = "PCF8563.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "2ed5d1b0a1051d0e81399417c4ff0ced0658fa36e13c0487670f9cb6dfb4f1d4"
+
+[models.match]
+value_re = '(?i)^PCF8563'
+
+[models.variant]
+orderable_re = '(?i)^PCF8563BS'
+orderable = ["PCF8563BS/4"]
+package = "HVSON10"
+basis = "Table 1, Ordering information"
+
+[models.params]
+identity_only = true
+warning = "Stateful I2C register, clock/calendar, alarm, timer, and output behavior is not representable by the bounded digital logic schema."
+unlocked_by = "A validated stateful I2C RTC model with register, timing, and calendar semantics."
+supply_static_ua = 0.25  # PCF8563 Table 29: IDD 250 nA typ, interface inactive, CLKOUT off, VDD = 3.0 V, 25 C
+vih = 2.31  # Table 29: VIH min 0.7 x VDD, evaluated at VDD = 3.3 V
+vil = 0.99  # Table 29: VIL max 0.3 x VDD, evaluated at VDD = 3.3 V
+
+[models.ratings]
+max_voltage_v = 6.5 # Source: Table 28, Supply voltage, absolute value of +6.5 V maximum
+max_current_a = 0.05 # Source: Table 28, Supply current, absolute maximum of +50 mA
+max_pin_current_a = 0.01 # Source: Table 28, Input current and output current, absolute maximum of +10 mA
+max_power_w = 0.3 # Source: Table 28, Total power dissipation, 300 mW maximum
+
+[models.pins]
+"1" = "osci"
+"2" = "osco"
+"3" = "nc" # n.c.
+"4" = "int_n" # INT is open-drain and active LOW
+"5" = "vss"
+"6" = "sda" # Serial data input and output (bidirectional)
+"7" = "scl"
+"8" = "clkout" # Open-drain clock output
+"9" = "vdd"
+"10" = "nc" # n.c.
+
+[models.coverage]
+implements = []
+missing = ["i2c_register_interface", "rtc_calendar", "alarm", "timer", "interrupt_output", "programmable_clock_output", "oscillator_and_frequency_divider", "power_on_reset", "voltage_low_detection", "propagation_delay_and_timing_races"]
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.0
+max_v = 5.5
+conditions = "Interface inactive; fSCL = 0 Hz; Tamb = 25 °C"
+abs_max_v = 6.5
+basis = "Table 29, Supply voltage; Table 28, Supply voltage"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.8
+max_v = 5.5
+conditions = "Interface active; fSCL = 400 kHz; TA = -40 °C to +85 °C"
+abs_max_v = 6.5
+basis = "Table 29, Supply voltage; Table 28, Supply voltage"
+
+[[models]]
+id = "pcf8563_so8"
+kind = "digital"
+description = "PCF8563T/5 and PCF8563T/F4 in SO8; identity only because this stateful I2C RTC, calendar, alarms, timer, interrupt, and clock output cannot be represented by the bounded digital logic schema; does not model those behaviors."
+variant_of = "pcf8563"
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "bounded_digital_logic_model"
+reason = "ABSTAIN: the datasheet describes a stateful I2C register interface and clock/calendar functions that the bounded digital logic schema cannot represent"
+[[models.source.pinout]]
+package = "SO8"
+pins = { "1" = "OSCI", "2" = "OSCO", "3" = "INT", "4" = "VSS", "5" = "SDA", "6" = "SCL", "7" = "CLKOUT", "8" = "VDD" }
+[[models.source.characteristic]]
+parameter = "VDD supply voltage"
+min = 1.0
+max = 5.5
+unit = "V"
+conditions = "Interface inactive; fSCL = 0 Hz; Tamb = 25 °C; footnote [1]"
+basis = "Table 29, Supply voltage, min/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+max = 800
+unit = "μA"
+conditions = "Interface active; fSCL = 400 kHz"
+basis = "Table 29, Supply current, max"
+[[models.source.characteristic]]
+parameter = "VIH high-level input voltage"
+max = 5.5
+unit = "V"
+conditions = "Lower limit 0.7 VDD"
+basis = "Table 29, HIGH-level input voltage, min/max"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, HBM"
+min = -3500
+max = 3500
+unit = "V"
+conditions = "SO8 (PCF8563T/F4); pass level"
+basis = "Table 28, ESD HBM, package row [1]"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, HBM"
+min = -2000
+max = 2000
+unit = "V"
+conditions = "SO8 (PCF8563T/5); pass level"
+basis = "Table 28, ESD HBM, package row [1]"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, CDM"
+min = -1000
+max = 1000
+unit = "V"
+conditions = "SO8 (PCF8563T/F4); pass level"
+basis = "Table 28, ESD CDM, package row [2]"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, CDM"
+min = -1500
+max = 1500
+unit = "V"
+conditions = "SO8 (PCF8563T/5); pass level"
+basis = "Table 28, ESD CDM, package row [2]"
+
+[[models.source.references]]
+title = "PCF8563.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "2ed5d1b0a1051d0e81399417c4ff0ced0658fa36e13c0487670f9cb6dfb4f1d4"
+[models.match]
+value_re = '(?i)^PCF8563'
+[models.variant]
+orderable_re = '(?i)^PCF8563T(?:/|$)'
+orderable = ["PCF8563T/5", "PCF8563T/F4"]
+package = "SO8"
+basis = "Table 1, Ordering information"
+[models.params]
+identity_only = true
+warning = "Stateful I2C register, clock/calendar, alarm, timer, and output behavior is not representable by the bounded digital logic schema."
+unlocked_by = "A validated stateful I2C RTC model with register, timing, and calendar semantics."
+vih = 2.31  # Table 29: VIH min 0.7 x VDD, evaluated at VDD = 3.3 V
+vil = 0.99  # Table 29: VIL max 0.3 x VDD, evaluated at VDD = 3.3 V
+supply_static_ua = 0.25  # PCF8563 Table 29: IDD 250 nA typ, interface inactive, CLKOUT off, VDD = 3.0 V, 25 C
+
+[models.ratings]
+max_voltage_v = 6.5 # Source: Table 28, Supply voltage, absolute value of +6.5 V maximum
+max_current_a = 0.05 # Source: Table 28, Supply current, absolute maximum of +50 mA
+max_pin_current_a = 0.01 # Source: Table 28, Input current and output current, absolute maximum of +10 mA
+max_power_w = 0.3 # Source: Table 28, Total power dissipation, 300 mW maximum
+[models.pins]
+"1" = "osci"
+"2" = "osco"
+"3" = "int_n" # INT is open-drain and active LOW
+"4" = "vss"
+"5" = "sda" # Serial data input and output (bidirectional)
+"6" = "scl"
+"7" = "clkout" # Open-drain clock output
+"8" = "vdd"
+[models.coverage]
+implements = []
+missing = ["i2c_register_interface", "rtc_calendar", "alarm", "timer", "interrupt_output", "programmable_clock_output", "oscillator_and_frequency_divider", "power_on_reset", "voltage_low_detection", "propagation_delay_and_timing_races"]
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.0
+max_v = 5.5
+conditions = "Interface inactive; fSCL = 0 Hz; Tamb = 25 °C"
+abs_max_v = 6.5
+basis = "Table 29, Supply voltage; Table 28, Supply voltage"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.8
+max_v = 5.5
+conditions = "Interface active; fSCL = 400 kHz; TA = -40 °C to +85 °C"
+abs_max_v = 6.5
+basis = "Table 29, Supply voltage; Table 28, Supply voltage"
+
+[[models]]
+id = "pcf8563_tssop8"
+kind = "digital"
+description = "PCF8563TS/4 and PCF8563TS/5 in TSSOP8; identity only because this stateful I2C RTC, calendar, alarms, timer, interrupt, and clock output cannot be represented by the bounded digital logic schema; does not model those behaviors."
+variant_of = "pcf8563"
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "bounded_digital_logic_model"
+reason = "ABSTAIN: the datasheet describes a stateful I2C register interface and clock/calendar functions that the bounded digital logic schema cannot represent"
+[[models.source.pinout]]
+package = "TSSOP8"
+pins = { "1" = "OSCI", "2" = "OSCO", "3" = "INT", "4" = "VSS", "5" = "SDA", "6" = "SCL", "7" = "CLKOUT", "8" = "VDD" }
+[[models.source.characteristic]]
+parameter = "VDD supply voltage"
+min = 1.0
+max = 5.5
+unit = "V"
+conditions = "Interface inactive; fSCL = 0 Hz; Tamb = 25 °C; footnote [1]"
+basis = "Table 29, Supply voltage, min/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+max = 800
+unit = "μA"
+conditions = "Interface active; fSCL = 400 kHz"
+basis = "Table 29, Supply current, max"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, HBM"
+min = -3500
+max = 3500
+unit = "V"
+conditions = "TSSOP8 (PCF8563TS/4); pass level"
+basis = "Table 28, ESD HBM, package row [1]"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, HBM"
+min = -2000
+max = 2000
+unit = "V"
+conditions = "TSSOP8 (PCF8563TS/5); pass level"
+basis = "Table 28, ESD HBM, package row [1]"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, CDM"
+min = -1500
+max = 1500
+unit = "V"
+conditions = "TSSOP8 (PCF8563TS/4); pass level"
+basis = "Table 28, ESD CDM, package row [2]"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, CDM"
+min = -1750
+max = 1750
+unit = "V"
+conditions = "TSSOP8 (PCF8563TS/5); pass level"
+basis = "Table 28, ESD CDM, package row [2]"
+
+[[models.source.references]]
+title = "PCF8563.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "2ed5d1b0a1051d0e81399417c4ff0ced0658fa36e13c0487670f9cb6dfb4f1d4"
+[models.match]
+value_re = '(?i)^PCF8563'
+[models.variant]
+orderable_re = '(?i)^PCF8563TS'
+orderable = ["PCF8563TS/4", "PCF8563TS/5"]
+package = "TSSOP8"
+basis = "Table 1, Ordering information"
+[models.params]
+identity_only = true
+warning = "Stateful I2C register, clock/calendar, alarm, timer, and output behavior is not representable by the bounded digital logic schema."
+unlocked_by = "A validated stateful I2C RTC model with register, timing, and calendar semantics."
+vih = 2.31  # Table 29: VIH min 0.7 x VDD, evaluated at VDD = 3.3 V
+vil = 0.99  # Table 29: VIL max 0.3 x VDD, evaluated at VDD = 3.3 V
+supply_static_ua = 0.25  # PCF8563 Table 29: IDD 250 nA typ, interface inactive, CLKOUT off, VDD = 3.0 V, 25 C
+
+[models.ratings]
+max_voltage_v = 6.5 # Source: Table 28, Supply voltage, absolute value of +6.5 V maximum
+max_current_a = 0.05 # Source: Table 28, Supply current, absolute maximum of +50 mA
+max_pin_current_a = 0.01 # Source: Table 28, Input current and output current, absolute maximum of +10 mA
+max_power_w = 0.3 # Source: Table 28, Total power dissipation, 300 mW maximum
+[models.pins]
+"1" = "osci"
+"2" = "osco"
+"3" = "int_n" # INT is open-drain and active LOW
+"4" = "vss"
+"5" = "sda" # Serial data input and output (bidirectional)
+"6" = "scl"
+"7" = "clkout" # Open-drain clock output
+"8" = "vdd"
+[models.coverage]
+implements = []
+missing = ["i2c_register_interface", "rtc_calendar", "alarm", "timer", "interrupt_output", "programmable_clock_output", "oscillator_and_frequency_divider", "power_on_reset", "voltage_low_detection", "propagation_delay_and_timing_races"]
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.0
+max_v = 5.5
+conditions = "Interface inactive; fSCL = 0 Hz; Tamb = 25 °C"
+abs_max_v = 6.5
+basis = "Table 29, Supply voltage; Table 28, Supply voltage"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.8
+max_v = 5.5
+conditions = "Interface active; fSCL = 400 kHz; TA = -40 °C to +85 °C"
+abs_max_v = 6.5
+basis = "Table 29, Supply voltage; Table 28, Supply voltage"
+
+# ── PCA9635: NXP 16-channel Fm+ I2C LED driver, TSSOP28 ──
+# NXP PCA9635 Rev. 7.1 (27 July 2021), sha256 15110f5e5ce3e955a589bec76c9b1fa1f4c54c8c7525c0994861a5c99b6e5696. Drafted by the extraction pipeline
+# (codex gpt-6-luna) and reviewed against the PDF: all 28 pins (Table 3), VDD 2.3-5.5 V / 6.0 V abs max, ISS 400 mA, 25 mA per LED pin, Ptot 400 mW and the 2.5 mA operating IDD (Tables 17, 18).
+# Supply draw only; the I2C interface and LED outputs are not modelled. Hand edit: value_re unanchored (the eurorack-pmod board writes the value as 'PCA9635 LED DRIVER').
+[[models]]
+id = "pca9635"
+kind = "digital"
+description = "NXP PCA9635 16-channel I2C LED driver; models VDD supply draw only and does not model I2C control, LED drive, PWM dimming or blinking, or output-enable behavior."
+
+[models.match]
+value_re = '(?i)^PCA9635'
+
+[models.params]
+supply_current_a = 0.0025 # Table 18, IDD operating mode/no load/fSCL=1 MHz; typ at VDD=2.3 V, 3.3 V, and 5.5 V
+supply_on_v = 2.3 # Table 18, recommended supply voltage minimum
+warning = "source-bound supply-draw model: VDD operating current is 2.5 mA typ at 2.3 V, 3.3 V, and 5.5 V with no load and fSCL=1 MHz; only supply draw and the 2.3 V to 5.5 V operating range are executable; I2C communication, LED output drive and logic states, individual and group PWM, oscillator behavior, and OE control are not modeled"
+
+[models.pins]
+"1" = "a0"
+"2" = "a1"
+"3" = "a2"
+"4" = "a3"
+"5" = "a4"
+"6" = "led0"
+"7" = "led1"
+"8" = "led2"
+"9" = "led3"
+"10" = "led4"
+"11" = "led5"
+"12" = "led6"
+"13" = "led7"
+"14" = "gnd"
+"15" = "led8"
+"16" = "led9"
+"17" = "led10"
+"18" = "led11"
+"19" = "led12"
+"20" = "led13"
+"21" = "led14"
+"22" = "led15"
+"23" = "oe_n"
+"24" = "a5"
+"25" = "a6"
+"26" = "scl"
+"27" = "sda"
+"28" = "vdd"
+
+[models.ratings]
+max_voltage_v = 6.0 # Table 17, VDD supply voltage, maximum +6.0 V
+max_current_a = 0.4 # Table 17, ISS ground supply current, maximum 400 mA
+max_pin_current_a = 0.025 # Table 17, IO(LEDn) output current per LED pin, maximum 25 mA
+max_power_w = 0.4 # Table 17, Ptot total power dissipation, maximum 400 mW
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.3
+max_v = 5.5
+abs_max_v = 6.0
+basis = "Table 18, VDD supply voltage row, 2.3 V to 5.5 V; Table 17, VDD absolute maximum +6.0 V"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vdd"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vdd / supply_on_v))"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = "https://www.nxp.com/docs/en/data-sheet/PCA9635.pdf"
+title = "NXP PCA9635 16-bit Fm+ I2C-bus LED driver, Rev. 7.1, 27 July 2021"
+locator = "Table 3 Pin description pp. 5-6; Table 1 Ordering information p. 3; Table 17 Limiting values p. 24; Table 18 Static characteristics p. 25"
+sha256 = "15110f5e5ce3e955a589bec76c9b1fa1f4c54c8c7525c0994861a5c99b6e5696"
+
+[[models.source.references]]
+title = "PCA9635.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "15110f5e5ce3e955a589bec76c9b1fa1f4c54c8c7525c0994861a5c99b6e5696"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_current_a"
+reason = "Table 18 gives IDD typical 2.5 mA and maximum 10 mA at VDD=2.3 V, 3.3 V, and 5.5 V, with operating mode, no load, fSCL=1 MHz; no minimum is specified and standby current is a separate mode"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "The datasheet publishes no validated model error interval; only VDD supply draw is modeled"
+
+[[models.source.pinout]]
+package = "TSSOP28 (PCA9635PW / PCA9635PW/Q900)"
+pins = { "1" = "A0", "2" = "A1", "3" = "A2", "4" = "A3", "5" = "A4", "6" = "LED0", "7" = "LED1", "8" = "LED2", "9" = "LED3", "10" = "LED4", "11" = "LED5", "12" = "LED6", "13" = "LED7", "14" = "VSS", "15" = "LED8", "16" = "LED9", "17" = "LED10", "18" = "LED11", "19" = "LED12", "20" = "LED13", "21" = "LED14", "22" = "LED15", "23" = "OE", "24" = "A5", "25" = "A6", "26" = "SCL", "27" = "SDA", "28" = "VDD" }
+
+[models.coverage]
+implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]
+missing = ["i2c_interface", "led_output_drive", "individual_pwm", "group_dimming_and_blinking", "output_enable", "oscillator_behavior", "logic_levels", "timing"]
