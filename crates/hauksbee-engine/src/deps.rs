@@ -36,10 +36,10 @@ pub struct DepStatus {
     pub name: &'static str,
     /// True when the engine's own resolver found the local dependency.
     ///
-    /// For the optional LLM CLIs this is deliberately a discovery result, not
-    /// an authentication claim. Their sign-in state is checked only when the
-    /// user requests datasheet extraction (the Environment page must not run
-    /// login/version commands just to paint a status row).
+    /// For the optional LLM CLIs this means installed, not usable: their
+    /// sign-in state is the separate [`DepStatus::sign_in`] field, so a CLI
+    /// that is installed but signed out reads `INSTALLED, not signed in` rather
+    /// than either a green tick or a false "missing".
     pub present: bool,
     /// Resolved binary path(s) when present.
     pub path: Option<String>,
@@ -68,6 +68,11 @@ pub struct DepStatus {
     /// field means a surface has to decide what to do with it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sends_data_offhost: Option<&'static str>,
+    /// For the extractor CLIs only: `signed_in`, `not_signed_in` or
+    /// `not_checked` (the CLI has no status command). Set from the CLI's own
+    /// read-only status command, never from a model call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<&'static str>,
 }
 
 impl DepStatus {
@@ -92,6 +97,7 @@ impl DepStatus {
             manual,
             detail: None,
             sends_data_offhost: None,
+            sign_in: None,
         }
     }
 }
@@ -100,9 +106,10 @@ impl DepStatus {
 ///
 /// Each probe runs the engine's own discovery; none of this is a plain `which`
 /// that could disagree with a real run. Independent resolvers run in parallel so
-/// a slow local tool cannot hold up all the other rows. Version and
-/// authentication commands are intentionally deferred to the operation that
-/// needs them.
+/// a slow local tool cannot hold up all the other rows. The only subprocesses
+/// are the ones whose answer is cached by binary path and mtime (kicad-cli's
+/// version) or briefly by time (an extractor CLI's read-only sign-in status),
+/// so a second look at this page costs file stats, not process launches.
 ///
 /// # Panics
 ///
@@ -116,9 +123,9 @@ pub fn probe_all() -> Vec<DepStatus> {
         let ngspice = scope.spawn(probe_ngspice);
         let kicad_cli = scope.spawn(probe_kicad_cli);
         let avr = scope.spawn(probe_avr);
-        let codex = scope.spawn(probe_codex);
-        let claude_code = scope.spawn(probe_claude_code);
-        let agy = scope.spawn(probe_agy);
+        let codex = scope.spawn(|| with_signin(probe_codex()));
+        let claude_code = scope.spawn(|| with_signin(probe_claude_code()));
+        let agy = scope.spawn(|| with_signin(probe_agy()));
         vec![
             renode.join().expect("Renode dependency probe panicked"),
             esp_qemu
@@ -138,20 +145,210 @@ pub fn probe_all() -> Vec<DepStatus> {
     })
 }
 
+/// What a binary looked like when a subprocess answer about it was recorded:
+/// its modification time and size. A reinstall or upgrade changes it, so a
+/// cached answer never outlives the binary it was about.
+type FileStamp = (std::time::SystemTime, u64);
+
+fn file_stamp(path: &std::path::Path) -> Option<FileStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+/// Subprocess answers kept per binary path and valid for that file's stamp.
+/// Launching `kicad-cli version` costs seconds on a cold macOS app bundle;
+/// asking again about an unchanged binary must cost a `stat`.
+pub(crate) struct StampCache<T> {
+    map: OnceLock<Mutex<std::collections::HashMap<PathBuf, (FileStamp, T)>>>,
+}
+
+impl<T: Clone> StampCache<T> {
+    pub(crate) const fn new() -> Self {
+        Self {
+            map: OnceLock::new(),
+        }
+    }
+
+    fn lock(
+        &self,
+    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<PathBuf, (FileStamp, T)>> {
+        self.map
+            .get_or_init(Mutex::default)
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The recorded answer for `path`, if the file is unchanged since.
+    pub(crate) fn get(&self, path: &std::path::Path) -> Option<T> {
+        let stamp = file_stamp(path)?;
+        let map = self.lock();
+        map.get(path)
+            .filter(|(s, _)| *s == stamp)
+            .map(|(_, v)| v.clone())
+    }
+
+    pub(crate) fn put(&self, path: &std::path::Path, value: T) {
+        if let Some(stamp) = file_stamp(path) {
+            self.lock().insert(path.to_path_buf(), (stamp, value));
+        }
+    }
+
+    fn clear(&self) {
+        self.lock().clear();
+    }
+}
+
+/// Run `cmd` to completion but give up (and kill it) after `limit`. Status
+/// commands print a few lines, so reading the pipes only after exit is safe.
+fn output_within(cmd: &mut Command, limit: Duration) -> Option<std::process::Output> {
+    use std::io::Read;
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+                if let Some(mut out) = child.stdout.take() {
+                    let _ = out.read_to_end(&mut stdout);
+                }
+                if let Some(mut err) = child.stderr.take() {
+                    let _ = err.read_to_end(&mut stderr);
+                }
+                return Some(std::process::Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
+            }
+            Ok(None) if started.elapsed() < limit => std::thread::sleep(Duration::from_millis(15)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
+/// Whether an extractor CLI is signed in, from the CLI's own read-only status
+/// command (no model call, no network request of ours).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SignIn {
+    /// Signed in; carries the CLI's own description when it gives one.
+    SignedIn(Option<String>),
+    NotSignedIn,
+    /// The CLI has no status command (or it did not answer in time).
+    NotChecked,
+}
+
+/// A sign-in answer stays valid this long: signing in or out in a terminal
+/// shows up on the next look without a status launch on every page view.
+const SIGNIN_TTL: Duration = Duration::from_secs(20);
+const SIGNIN_LIMIT: Duration = Duration::from_secs(8);
+static SIGNIN_CACHE: StampCache<(Instant, SignIn)> = StampCache::new();
+
+/// The sign-in state of extractor `id` (`codex`, `claude-code`, `agy`) at
+/// `bin`. `fresh` skips the cache: extraction readiness must never act on an
+/// answer that is a few seconds old.
+pub(crate) fn signin_state(id: &str, bin: &std::path::Path, fresh: bool) -> SignIn {
+    if !fresh {
+        if let Some((at, state)) = SIGNIN_CACHE.get(bin) {
+            if at.elapsed() < SIGNIN_TTL {
+                return state;
+            }
+        }
+    }
+    let state = match id {
+        "codex" => match codex_login_state(bin) {
+            CodexLogin::LoggedIn(how) => SignIn::SignedIn(how),
+            CodexLogin::NotLoggedIn => SignIn::NotSignedIn,
+        },
+        "claude-code" => claude_signin(bin),
+        // agy has no status command, so say that rather than guess.
+        _ => SignIn::NotChecked,
+    };
+    SIGNIN_CACHE.put(bin, (Instant::now(), state.clone()));
+    state
+}
+
+/// `claude auth status` prints JSON with a `loggedIn` boolean. An older CLI
+/// without the command, or one that does not answer, reads as not checked
+/// rather than as signed out.
+fn claude_signin(bin: &std::path::Path) -> SignIn {
+    let Some(out) = output_within(Command::new(bin).args(["auth", "status"]), SIGNIN_LIMIT) else {
+        return SignIn::NotChecked;
+    };
+    let parsed: Option<serde_json::Value> = serde_json::from_slice(&out.stdout).ok();
+    match parsed.as_ref().and_then(|v| v["loggedIn"].as_bool()) {
+        Some(true) => SignIn::SignedIn(
+            parsed
+                .as_ref()
+                .and_then(|v| v["authMethod"].as_str())
+                .map(|m| format!("Signed in ({m})")),
+        ),
+        Some(false) => SignIn::NotSignedIn,
+        None => SignIn::NotChecked,
+    }
+}
+
+/// The command that signs the extractor CLI in.
+pub(crate) fn login_command(id: &str) -> &'static str {
+    if id == "codex" {
+        "codex login"
+    } else {
+        "claude auth login"
+    }
+}
+
+/// Add sign-in state to an installed extractor row: the Environment page and
+/// `hauksbee doctor` say `installed, not signed in` and the one command to
+/// fix it, instead of a green row that fails on first use.
+fn with_signin(mut row: DepStatus) -> DepStatus {
+    let Some(bin) = row.path.clone().filter(|_| row.present) else {
+        return row;
+    };
+    match signin_state(row.id, std::path::Path::new(&bin), false) {
+        SignIn::SignedIn(how) => {
+            row.sign_in = Some("signed_in");
+            row.detail = Some(how.unwrap_or_else(|| "Signed in.".to_string()));
+        }
+        SignIn::NotSignedIn => {
+            row.sign_in = Some("not_signed_in");
+            row.detail = Some(format!(
+                "Installed but not signed in, so an extraction would fail. Run `{}`.",
+                login_command(row.id)
+            ));
+            row.manual = login_command(row.id).to_string();
+        }
+        SignIn::NotChecked => {
+            row.sign_in = Some("not_checked");
+            row.detail = Some(format!(
+                "Installed. {} has no sign-in status command, so sign-in is not checked until you extract.",
+                row.name.split(" (").next().unwrap_or(row.name)
+            ));
+        }
+    }
+    row
+}
+
 /// Probe only the two extractors for `/api/models/extract/ready`.
 ///
-/// The Environment page uses [`probe_all`] and intentionally does not run an
-/// authentication command. Readiness is different: before offering consent,
-/// it must fail closed if the Codex CLI is installed but not signed in. Keeping
-/// this narrow avoids making a model-readiness request wait for KiCad/QEMU.
+/// Readiness must fail closed: before offering consent it checks, fresh, that
+/// the Codex CLI is signed in. Keeping this narrow avoids making a
+/// model-readiness request wait for KiCad/QEMU.
 pub(crate) fn probe_extractors() -> Vec<DepStatus> {
     let mut codex = probe_codex();
     if let Some(path) = codex.path.clone() {
-        match codex_login_state(std::path::Path::new(&path)) {
-            CodexLogin::LoggedIn(how) => {
+        match signin_state("codex", std::path::Path::new(&path), true) {
+            SignIn::SignedIn(how) => {
                 codex.detail = how;
             }
-            CodexLogin::NotLoggedIn => {
+            SignIn::NotSignedIn | SignIn::NotChecked => {
                 codex.present = false;
                 codex.manual = "codex login".to_string();
                 codex.detail = Some(
@@ -213,7 +410,7 @@ fn probe_claude_code() -> DepStatus {
         name: "Claude Code (datasheet extraction)",
         unlocks: "datasheet-to-model extraction (`hauksbee models extract`, the web Extend flow) via the Claude Code CLI",
         cost: "free if you already pay for Claude: the CLI signs in with that account".to_string(),
-        manual: "npm install -g @anthropic-ai/claude-code   # then: claude login".to_string(),
+        manual: "npm install -g @anthropic-ai/claude-code   # then: claude auth login".to_string(),
         privacy: "Using this sends the datasheet, and what the agent reads in its sandbox, to Anthropic. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.",
         absent_detail: "claude not found on PATH. This is optional: extraction also runs via                  codex or an API key, and a model can always be written by hand (one                  TOML file, see docs/extending/)."
             .to_string(),
@@ -313,11 +510,9 @@ enum CodexLogin {
 
 /// Ask codex itself. Its own answer cannot drift from what an extraction hits.
 fn codex_login_state(bin: &std::path::Path) -> CodexLogin {
-    let out = std::process::Command::new(bin)
-        .args(["login", "status"])
-        .output();
+    let out = output_within(Command::new(bin).args(["login", "status"]), SIGNIN_LIMIT);
     match out {
-        Ok(o) if o.status.success() => {
+        Some(o) if o.status.success() => {
             // codex writes "Logged in using ChatGPT" to STDERR, not stdout.
             // Reading stdout alone lost the description while still getting
             // the state right from the exit code, so the row said "installed"
@@ -346,7 +541,7 @@ fn which_codex() -> Option<std::path::PathBuf> {
 }
 
 /// Resolve one binary name on PATH (with the Windows .exe/.cmd variants).
-fn which_on_path(name: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn which_on_path(name: &str) -> Option<std::path::PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         if cfg!(windows) {
@@ -368,8 +563,10 @@ fn which_on_path(name: &str) -> Option<std::path::PathBuf> {
 /// Keep the status response briefly so a page mount, a retry, and a post-install
 /// refresh do not all relaunch local resolver subprocesses. The cache is short
 /// enough that a manual install becomes visible without restarting the server;
-/// successful in-app installs invalidate it immediately.
-const DEPS_CACHE_TTL: Duration = Duration::from_secs(2);
+/// successful in-app installs invalidate it immediately. The expensive parts
+/// (kicad-cli's version, an extractor's sign-in) have their own, longer-lived
+/// per-binary caches underneath, so this one only saves file stats.
+const DEPS_CACHE_TTL: Duration = Duration::from_secs(5);
 static DEPS_JSON_CACHE: OnceLock<Mutex<Option<(Instant, String)>>> = OnceLock::new();
 
 fn deps_cache() -> &'static Mutex<Option<(Instant, String)>> {
@@ -378,8 +575,8 @@ fn deps_cache() -> &'static Mutex<Option<(Instant, String)>> {
 
 /// Discard the status snapshot after an installer changes the filesystem.
 pub fn invalidate_deps_cache() {
-    let mut cache = deps_cache().lock().unwrap_or_else(PoisonError::into_inner);
-    *cache = None;
+    *deps_cache().lock().unwrap_or_else(PoisonError::into_inner) = None;
+    SIGNIN_CACHE.clear();
 }
 
 /// The `/api/deps` response body: `{"deps":[...]}`.
@@ -431,7 +628,20 @@ fn probe_renode() -> DepStatus {
             },
             Err(e) => DepStatus {
                 installable: host_is_installable_os(),
-                detail: Some(e.to_string()),
+                // Plain "not found" is an optional tool that is simply not
+                // here: the row already carries the Install button and the
+                // terminal command, so the resolver's long list of manual
+                // routes is left to `hauksbee doctor` and the error a run
+                // hits. Any other failure (a bad override) keeps its words.
+                detail: Some(
+                    if e.downcast_ref::<hauksbee_mcu::BackendNotInstalled>()
+                        .is_some()
+                    {
+                        "Not installed. Optional: only firmware co-simulation for these chips needs it; board checks and every other simulator work without it.".to_string()
+                    } else {
+                        e.to_string()
+                    },
+                ),
                 ..base
             },
         }
@@ -580,8 +790,9 @@ fn probe_ngspice() -> DepStatus {
         },
         None => DepStatus {
             detail: Some(
-                "ngspice not found ($NGSPICE, PATH, or a standard install location). \
-                 It comes from your system package manager, not from here."
+                "Not installed. Optional: ngspice only cross-checks hauksbee's analog solver. \
+                 Looked in $NGSPICE, PATH and the standard install locations. It comes from \
+                 your system package manager (command below); hauksbee does not download it."
                     .to_string(),
             ),
             ..base
@@ -616,9 +827,10 @@ fn probe_kicad_cli() -> DepStatus {
         },
         None => DepStatus {
             detail: Some(
-                "kicad-cli not found (PATH, /Applications, or a standard install \
-                 location). KiCad is a desktop application install, not something this \
-                 server should download for you."
+                "Not installed. Optional: kicad-cli only adds KiCad's own DRC cross-check and \
+                 SVG/Gerber export. Looked on PATH, in /Applications and the standard install \
+                 locations. KiCad is a desktop application install (command below), not \
+                 something this server should download for you."
                     .to_string(),
             ),
             ..base
@@ -1271,9 +1483,10 @@ mod tests {
         }
     }
 
-    /// The Environment page must not execute either LLM CLI. A version/login
-    /// command is both slower and a surprising side effect for a read-only
-    /// status request; readiness owns the one Codex auth check instead.
+    /// The discovery probes themselves must not execute either LLM CLI: a
+    /// version command is slow and a surprising side effect for a read-only
+    /// status request. Sign-in is a separate, cached, read-only step
+    /// (`with_signin`), tested below.
     #[cfg(unix)]
     #[test]
     fn fast_extractor_rows_do_not_spawn_cli_status_commands() {
@@ -1367,6 +1580,91 @@ echo "codex-cli 0.0.0""#,
             codex_login_state(std::path::Path::new("/no/such/codex")),
             CodexLogin::NotLoggedIn
         ));
+    }
+
+    #[cfg(unix)]
+    fn cli_shim(dir: &std::path::Path, name: &str, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.join(name);
+        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Installed is not usable: a signed-out CLI reads `not_signed_in` with the
+    /// one command that fixes it, a signed-in one says how, and a CLI with no
+    /// status command (agy) says the sign-in was not checked rather than
+    /// guessing either way.
+    #[cfg(unix)]
+    #[test]
+    fn extractor_rows_report_sign_in_from_the_cli_status_commands() {
+        let _serial = serial_guard();
+        let dir = tempfile::tempdir().unwrap();
+        cli_shim(dir.path(), "codex", r#"echo "Not logged in" >&2; exit 1"#);
+        cli_shim(
+            dir.path(),
+            "claude",
+            r#"echo '{"loggedIn":true,"authMethod":"claude.ai"}'"#,
+        );
+        cli_shim(dir.path(), "agy", "exit 0");
+        let _path_guard = PathGuard(std::env::var_os("PATH"));
+        std::env::set_var("PATH", dir.path());
+
+        let codex = with_signin(probe_codex());
+        assert!(codex.present, "signed out is still installed");
+        assert_eq!(codex.sign_in, Some("not_signed_in"));
+        assert_eq!(codex.manual, "codex login");
+        assert!(codex
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.contains("`codex login`")));
+
+        let claude = with_signin(probe_claude_code());
+        assert_eq!(claude.sign_in, Some("signed_in"));
+        assert_eq!(claude.detail.as_deref(), Some("Signed in (claude.ai)"));
+
+        let agy = with_signin(probe_agy());
+        assert_eq!(agy.sign_in, Some("not_checked"));
+        assert!(agy.present);
+
+        // A claude that has no `auth status` (or does not answer sensibly) is
+        // not checked, never reported as signed out.
+        cli_shim(dir.path(), "claude", "echo 'unknown command' >&2; exit 2");
+        assert_eq!(
+            claude_signin(&dir.path().join("claude")),
+            SignIn::NotChecked
+        );
+    }
+
+    /// A subprocess answer is remembered for the binary it was about and
+    /// forgotten when that binary changes.
+    #[test]
+    fn stamp_cache_forgets_a_changed_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("tool");
+        std::fs::write(&bin, "v1").unwrap();
+        let cache: StampCache<String> = StampCache::new();
+        assert_eq!(cache.get(&bin), None);
+        cache.put(&bin, "1.0".to_string());
+        assert_eq!(cache.get(&bin).as_deref(), Some("1.0"));
+        std::fs::write(&bin, "version two").unwrap();
+        assert_eq!(
+            cache.get(&bin),
+            None,
+            "a changed binary must not reuse the old answer"
+        );
+    }
+
+    /// A status command that hangs is killed at its limit, not waited on.
+    #[cfg(unix)]
+    #[test]
+    fn output_within_kills_a_hung_command() {
+        let started = Instant::now();
+        let out = output_within(
+            Command::new("/bin/sh").args(["-c", "exec sleep 30"]),
+            Duration::from_millis(200),
+        );
+        assert!(out.is_none());
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     /// AVR is linked at build time: it must never be offered as installable,

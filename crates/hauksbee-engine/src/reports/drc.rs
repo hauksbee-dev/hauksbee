@@ -204,8 +204,17 @@ fn actual_mm(desc: &str) -> Option<f64> {
 /// standard macOS / Linux / Homebrew install locations, preferring the highest
 /// version (a KiCad-10 cli is needed to read v20260206 boards). `KiCad` is NOT
 /// bundled with hauksbee; this finds an existing install. Returns (path, version).
+///
+/// `kicad-cli version` takes seconds to start on a cold macOS bundle, and the
+/// same binary is usually reachable as PATH, a /Applications bundle and a
+/// Homebrew link. So the candidates are de-duplicated by real path, asked in
+/// parallel, and each answer is remembered until that binary changes.
 pub(crate) fn find_kicad_cli() -> Option<(String, String)> {
-    let mut candidates: Vec<String> = vec!["kicad-cli".to_string()];
+    static VERSIONS: crate::deps::StampCache<String> = crate::deps::StampCache::new();
+    let mut candidates: Vec<String> = crate::deps::which_on_path("kicad-cli")
+        .map(|p| p.to_string_lossy().into_owned())
+        .into_iter()
+        .collect();
     let home = std::env::var("HOME").unwrap_or_default();
     for base in ["/Applications".to_string(), format!("{home}/Applications")] {
         if let Ok(rd) = std::fs::read_dir(&base) {
@@ -237,21 +246,41 @@ pub(crate) fn find_kicad_cli() -> Option<(String, String)> {
             candidates.push(p.to_string());
         }
     }
-    let mut best: Option<(String, String, (u32, u32, u32))> = None;
-    for c in candidates {
-        let Ok(out) = std::process::Command::new(&c).arg("version").output() else {
-            continue;
-        };
+    let mut seen = std::collections::HashSet::new();
+    candidates.retain(|c| seen.insert(std::fs::canonicalize(c).unwrap_or_else(|_| c.into())));
+    let version_of = |c: &String| -> Option<String> {
+        let real = std::fs::canonicalize(c).unwrap_or_else(|_| c.into());
+        if let Some(ver) = VERSIONS.get(&real) {
+            return Some(ver);
+        }
+        let out = std::process::Command::new(c).arg("version").output().ok()?;
         if !out.status.success() {
-            continue;
+            return None;
         }
         let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        let parsed = parse_version(&ver);
-        if best.as_ref().is_none_or(|b| parsed > b.2) {
-            best = Some((c, ver, parsed));
-        }
-    }
-    best.map(|(p, v, _)| (p, v))
+        VERSIONS.put(&real, ver.clone());
+        Some(ver)
+    };
+    let answers: Vec<Option<String>> = std::thread::scope(|scope| {
+        // Every thread must be started before the first join, so the handles
+        // are collected on purpose.
+        #[allow(clippy::needless_collect)]
+        let handles: Vec<_> = candidates
+            .iter()
+            .map(|c| scope.spawn(|| version_of(c)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().ok().flatten())
+            .collect()
+    });
+    candidates
+        .into_iter()
+        .zip(answers)
+        // Reversed so a tie on version keeps the earliest candidate (PATH first).
+        .rev()
+        .filter_map(|(c, ver)| ver.map(|v| (c, v)))
+        .max_by_key(|(_, v)| parse_version(v))
 }
 
 /// Cross-check hauksbee's geometric DRC against `KiCad`'s own `kicad-cli pcb drc`,

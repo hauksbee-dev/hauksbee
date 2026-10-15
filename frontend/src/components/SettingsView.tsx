@@ -526,10 +526,13 @@ export function SettingsView() {
   return (
     <div className="mt-10" data-testid="settings-view">
       <div
-        className="text-[11px] font-semibold tracking-[0.2em] uppercase text-center mb-5"
+        className="text-[11px] font-semibold tracking-[0.2em] uppercase text-center mb-2"
         style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}
       >
-        Datasheet extraction
+        Datasheet drafting
+      </div>
+      <div className="text-[12px] text-center mb-5" data-testid="settings-intro" style={{ color: 'var(--silk-dim)' }}>
+        Only used when you draft a part model from a datasheet. Board checks never use this.
       </div>
 
       {/* ── Status strip ── */}

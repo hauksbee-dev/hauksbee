@@ -3,7 +3,7 @@ import type { CheckResult, QueuedLiveRegisterMap, QueuedRequest, Remedy, RunResp
 import type { ActionResultMsg } from '../types/protocol'
 import type { SelectedComponent } from './SelectionCard'
 import { PlusIcon } from './Icons'
-import { specStemFor, workflowExportAvailable, workflowYaml } from '../lib/ci-workflow'
+import { specStemFor, workflowExportAvailable, workflowPreviewYaml, workflowYaml } from '../lib/ci-workflow'
 import { EmptyState } from '../motion'
 import { buildCheckUpload, buildPortableCheckSpec } from '../lib/board-upload'
 import type { SupplementalDesignFiles } from '../lib/board-upload'
@@ -591,7 +591,7 @@ export function ChecksView({
     setRawMode(false)
   }
 
-  const workflowYml = workflowExportAvailable ? workflowYaml(specStem) : null
+  const workflowYml = workflowExportAvailable ? workflowYaml(specStem) : workflowPreviewYaml(specStem)
 
   const result = run?.response ?? null
   const results = result?.ok ? result.results ?? [] : []
@@ -963,6 +963,7 @@ export function ChecksView({
             result={result}
             runKey={run?.toml}
             workflowYml={workflowYml}
+            workflowPinned={workflowExportAvailable}
             reportSerious={report.serious}
           />
         </div>

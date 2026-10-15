@@ -27,6 +27,10 @@ type DepsFetch =
 const inThisPage = (text: string) =>
   text.replace(/in the app use Install on the\s+Environment page/g, 'use the Install button on this page')
 
+/** The datasheet-drafting CLIs. Any one of them being ready is enough, so a row
+ *  for another one that is not ready says which one works and how to switch. */
+const EXTRACTOR_IDS = ['codex', 'claude-code', 'agy']
+
 /** After this long the first probe is slow, not stuck: say so. */
 const SLOW_PROBE_MS = 4000
 
@@ -80,6 +84,7 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
 
   const deps = fetchState.phase === 'ready' ? fetchState.deps : []
   const missing = deps.filter(d => !d.present).length
+  const readyExtractors = deps.filter(d => EXTRACTOR_IDS.includes(d.id) && d.present && d.sign_in !== 'not_signed_in')
   const busyId = install.phase === 'running' ? install.id : null
   const activeLog = install.phase === 'running' || install.phase === 'ended' ? install.log : []
   const activeId = install.phase === 'idle' ? null : install.id
@@ -154,7 +159,14 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
       </div>
 
       <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--hairline)' }}>
-        {deps.map((d, i) => (
+        {deps.map((d, i) => {
+          // Installed but signed out is neither "ready" nor "missing": the
+          // tool is here and one command away from working.
+          const signedOut = d.present && d.sign_in === 'not_signed_in'
+          const otherReady = EXTRACTOR_IDS.includes(d.id) && (!d.present || signedOut)
+            ? readyExtractors.find(r => r.id !== d.id)
+            : undefined
+          return (
           <div
             key={d.id}
             data-testid={`dep-${d.id}`}
@@ -174,8 +186,9 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
                   height: 8,
                   borderRadius: 4,
                   flexShrink: 0,
-                  background: d.present ? 'var(--ok)' : 'var(--err)',
-                  boxShadow: d.present ? '0 0 8px rgba(87,224,160,0.5)' : '0 0 8px rgba(239,68,68,0.4)',
+                  // A missing tool here is optional, not a fault: neutral, not red.
+                  background: signedOut ? 'var(--warn)' : d.present ? 'var(--ok)' : 'var(--silk-faint)',
+                  boxShadow: signedOut ? 'none' : d.present ? '0 0 8px rgba(87,224,160,0.5)' : 'none',
                   display: 'inline-block',
                 }}
               />
@@ -184,9 +197,10 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
                   {d.name}
                   <span
                     className="ml-2 text-[10px] font-bold tracking-widest uppercase"
-                    style={{ color: d.present ? 'var(--ok)' : 'var(--err-strong)' }}
+                    style={{ color: signedOut ? 'var(--warn-strong)' : d.present ? 'var(--ok)' : 'var(--silk-faint)' }}
+                    data-testid={`dep-status-${d.id}`}
                   >
-                    {d.present ? 'installed' : 'missing'}
+                    {signedOut ? 'installed · not signed in' : d.present ? 'installed' : 'optional · not installed'}
                   </span>
                   {d.version && (
                     <span className="ml-2 text-[11px] font-normal" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
@@ -240,7 +254,14 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
                     {d.cost}
                   </div>
                 )}
-                {!d.present && d.manual && (
+                {otherReady && (
+                  <div className="text-[11px] mt-1.5 leading-relaxed" data-testid={`dep-alt-${d.id}`} style={{ color: 'var(--silk-dim)' }}>
+                    Datasheet drafting already works through {otherReady.name.split(' (')[0]}. To use it,
+                    pick it in Settings or run:
+                    <TerminalCommand command={`hauksbee models backend use ${otherReady.id}`} testId="dep-switch-copy" />
+                  </div>
+                )}
+                {(!d.present || signedOut) && d.manual && (
                   <div className="text-[11px] mt-1.5" style={{ color: 'var(--silk-faint)' }}>
                     <TerminalCommand command={d.manual} testId="dep-manual-copy" />
                   </div>
@@ -296,7 +317,8 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
               </div>
             )}
           </div>
-        ))}
+          )
+        })}
       </div>
         </>
       )}

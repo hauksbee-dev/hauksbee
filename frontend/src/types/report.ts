@@ -729,6 +729,9 @@ export interface DepInfo {
   /** Present only on a dependency that sends the user's data off this machine;
    *  rendered as its own line rather than folded into `unlocks`. */
   sends_data_offhost?: string | null
+  /** Datasheet-extraction CLIs only: from the CLI's own read-only status command.
+   *  `not_checked` = the CLI has no status command. */
+  sign_in?: 'signed_in' | 'not_signed_in' | 'not_checked' | null
 }
 
 /** One bundled register-map behaviour, from `GET /api/sensor-specs`. */

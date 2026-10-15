@@ -14,7 +14,7 @@ import type { RemedyActions } from './Remedies'
 export function SpecPane({
   specText, specStem, specFileName, builtToml, rawMode, rawText, setRawText,
   onLeaveRawMode, onEnterRawMode, stale, running, canRun, preparing, pulseRun, remedyActions, remedyEditor, onRun,
-  validationCount, result, runKey, workflowYml, reportSerious,
+  validationCount, result, runKey, workflowYml, workflowPinned, reportSerious,
 }: {
   specText: string
   specStem: string
@@ -43,7 +43,9 @@ export function SpecPane({
   result: RunResponse | null
   runKey: string | undefined
   /** The generated workflow, or null on a build with no release commit. */
-  workflowYml: string | null
+  workflowYml: string
+  /** False in a development build: the YAML is a preview, not downloadable. */
+  workflowPinned: boolean
   /** Serious findings on the board's own report, carried into the verdict. */
   reportSerious: number
 }) {
@@ -198,33 +200,38 @@ export function SpecPane({
           <div className="text-[12px] mb-1.5" style={{ color: 'var(--silk-dim)' }}>
             2. <code className="hb-inline break-all">.github/workflows/hauksbee-ci.yml</code>:
           </div>
-          {workflowYml ? (
-            <>
-              {/* pre-wrap: the long `paths:` lines soft-wrap at spaces
-                  instead of clipping at the card's right edge (the
-                  copied text keeps its real newlines either way). */}
-              <pre className="hb-code p-3 overflow-x-auto whitespace-pre-wrap text-[11px] leading-relaxed">
-                {workflowYml}
-              </pre>
-              <button
-                type="button"
-                className="hb-btn hb-press mt-2 px-3 py-1.5 text-[12px]"
-                onClick={() => download('hauksbee-ci.yml', workflowYml)}
-              >
-                Download hauksbee-ci.yml
-              </button>
-              <div className="text-[12px] mt-2 leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
-                The workflow reads one repository secret. Add{' '}
-                <code className="hb-inline">HAUKSBEE_BETA_TOKEN</code> in Settings, a GitHub token
-                with read access to the Hauksbee beta repository; the action stops on its first
-                step without it.
-              </div>
-            </>
-          ) : (
-            <div className="text-[12px] leading-relaxed" style={{ color: 'var(--warn)' }}>
-              This development build has no immutable release commit, so it will not export a credential-bearing workflow. Install a released Hauksbee build first.
+          {!workflowPinned && (
+            <div
+              data-testid="ci-dev-banner"
+              className="text-[12px] mb-2 px-2.5 py-2 rounded-md leading-relaxed"
+              style={{ color: 'var(--warn)', border: '1px solid var(--warn)' }}
+            >
+              Dev build: pin a release before committing. This is a preview. Replace{' '}
+              <code className="hb-inline">PIN-A-RELEASE-COMMIT</code> with a released Hauksbee
+              build&apos;s commit, or install a released build and download the real file.
             </div>
           )}
+          {/* pre-wrap: the long `paths:` lines soft-wrap at spaces
+              instead of clipping at the card's right edge (the
+              copied text keeps its real newlines either way). */}
+          <pre className="hb-code p-3 overflow-x-auto whitespace-pre-wrap text-[11px] leading-relaxed">
+            {workflowYml}
+          </pre>
+          {workflowPinned && (
+            <button
+              type="button"
+              className="hb-btn hb-press mt-2 px-3 py-1.5 text-[12px]"
+              onClick={() => download('hauksbee-ci.yml', workflowYml)}
+            >
+              Download hauksbee-ci.yml
+            </button>
+          )}
+          <div className="text-[12px] mt-2 leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
+            The workflow reads one repository secret. Add{' '}
+            <code className="hb-inline">HAUKSBEE_BETA_TOKEN</code> in Settings, a GitHub token
+            with read access to the Hauksbee beta repository; the action stops on its first
+            step without it.
+          </div>
         </div>
       )}
     </div>

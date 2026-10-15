@@ -117,6 +117,10 @@ pub fn file_name(p: &Path) -> String {
 /// the same consent contract `hauksbee models extract` holds).
 pub fn deps_hooks() -> hauksbee_frontdoor_api::frontdoor::ToolHooks {
     use std::sync::Arc;
+    // Probe once in the background as the server starts, so the first visit to
+    // the Environment page finds the slow answers (kicad-cli's version, the
+    // extractor sign-ins) already cached instead of paying for them.
+    std::thread::spawn(|| drop(crate::deps::deps_json()));
     hauksbee_frontdoor_api::frontdoor::ToolHooks {
         deps_status: Arc::new(crate::deps::deps_json),
         install: Arc::new(|id, progress| crate::deps::install_dep(id, progress)),

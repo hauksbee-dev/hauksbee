@@ -355,6 +355,7 @@ function Shell({ boot }: { boot: Boot }) {
               simOffline={simOffline}
               sessionBoard={sessionBoard}
               sessionMatchesCurrent={sessionMatchesCurrent}
+              currentBoard={session.boardLabel}
               serverLiveActive={serverLiveActive}
               goTo={setView}
               onOpenLiveSession={openLiveSession}

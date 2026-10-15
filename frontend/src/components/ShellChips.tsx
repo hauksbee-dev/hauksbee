@@ -1,3 +1,5 @@
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { WebReport } from '../types/report'
 import { reportVerdictTone, summarizeEvidence } from '../lib/report-view'
 import type { SimShellStatus } from '../SimView'
@@ -24,9 +26,92 @@ interface Chip {
   testid: string
   onClick?: () => void
   pulse?: boolean
+  /** One line saying what the chip means, shown on hover or focus together
+   *  with `actions`. */
+  explain?: string
+  actions?: { label: string; testid: string; onClick: () => void }[]
+}
+
+/** The chip's explanation and actions. Portalled and fixed-positioned: the
+ *  chip row scrolls horizontally, which would clip an absolutely positioned
+ *  child. Stays open while the pointer or focus is on the chip or the popover. */
+function ExplainedChip({ chip }: { chip: Chip }) {
+  const id = useId()
+  const anchor = useRef<HTMLSpanElement>(null)
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  const open = useCallback(() => {
+    clearTimeout(closeTimer.current)
+    const r = anchor.current?.getBoundingClientRect()
+    if (r) setPos({ top: r.bottom + 6, left: Math.max(8, Math.min(r.left, window.innerWidth - 328)) })
+  }, [])
+  const close = useCallback(() => {
+    clearTimeout(closeTimer.current)
+    closeTimer.current = setTimeout(() => setPos(null), 150)
+  }, [])
+  useEffect(() => () => clearTimeout(closeTimer.current), [])
+  useEffect(() => {
+    if (!pos) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPos(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [pos])
+  return (
+    <>
+      <span
+        ref={anchor}
+        className="inline-flex shrink-0"
+        aria-describedby={pos ? id : undefined}
+        onMouseEnter={open}
+        onMouseLeave={close}
+        onFocus={open}
+        onBlur={close}
+      >
+        <ChipPill chip={chip} />
+      </span>
+      {pos && createPortal(
+        <div
+          id={id}
+          role="tooltip"
+          data-testid={`${chip.testid}-explain`}
+          onMouseEnter={open}
+          onMouseLeave={close}
+          onFocus={open}
+          onBlur={close}
+          className="rounded-lg px-3 py-2.5 text-[12px] leading-relaxed"
+          style={{
+            position: 'fixed', top: pos.top, left: pos.left, width: 320, zIndex: 60,
+            background: 'var(--surface)', border: '1px solid var(--hairline)', color: 'var(--silk-dim)',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+          }}
+        >
+          {chip.explain}
+          <div className="mt-2 flex flex-wrap gap-2">
+            {chip.actions?.map(a => (
+              <button
+                key={a.testid}
+                type="button"
+                data-testid={a.testid}
+                onClick={() => { setPos(null); a.onClick() }}
+                className="hb-btn hb-press px-2.5 text-[12px]"
+                style={{ height: 28 }}
+              >
+                {a.label}
+              </button>
+            ))}
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  )
 }
 
 function ChipButton({ chip }: { chip: Chip }) {
+  return chip.explain ? <ExplainedChip chip={chip} /> : <ChipPill chip={chip} />
+}
+
+function ChipPill({ chip }: { chip: Chip }) {
   return (
     <button
       type="button"
@@ -49,7 +134,7 @@ function ChipButton({ chip }: { chip: Chip }) {
 
 export function ShellChips({
   view, report, checks, sim, simMounted, simOffline, sessionBoard, sessionMatchesCurrent,
-  serverLiveActive, goTo, onOpenLiveSession, onDriveLive,
+  currentBoard, serverLiveActive, goTo, onOpenLiveSession, onDriveLive,
 }: {
   view: AppView
   report: WebReport | null
@@ -65,6 +150,9 @@ export function ShellChips({
   /** THIS page launched (or preloaded) the session for the analyzed board. A
    *  same-named session from a previous page-load is deliberately foreign. */
   sessionMatchesCurrent: boolean
+  /** The analyzed board's name, to tell "the same file, started elsewhere" from
+   *  "a different board". */
+  currentBoard: string | null
   serverLiveActive: boolean
   goTo: (view: AppView) => void
   onOpenLiveSession: () => void
@@ -146,11 +234,25 @@ export function ShellChips({
       // A session is live for some OTHER board (or a pre-reload launch of this
       // one): never show "sim running" as if it were this board's. The chip
       // names the session's board and opens it.
+      // Another tab, an earlier page load or a CLI launch can all have started
+      // it, and a same-named file may differ in content, so the chip only
+      // claims what it knows and says in one line what that means.
+      const openIt = simMounted ? () => goTo('sim') : onOpenLiveSession
+      const sameName = sessionBoard === currentBoard
       chips.push({
-        label: `another session is live: ${sessionBoard}`,
+        label: sameName ? `live session not from this tab: ${sessionBoard}` : `another session is live: ${sessionBoard}`,
         tone: 'warn',
         testid: 'chip-sim',
-        onClick: simMounted ? () => goTo('sim') : onOpenLiveSession,
+        onClick: openIt,
+        explain: sameName
+          ? `The live simulator runs one board at a time, and it is running a ${sessionBoard} that another tab or an earlier page started. This tab cannot tell whether it is the same file.`
+          : `The live simulator runs one board at a time, and it is running ${sessionBoard}, not the board you analyzed.`,
+        actions: [
+          { label: 'Switch to it', testid: 'chip-sim-switch', onClick: openIt },
+          ...(report?.ok === true && currentBoard
+            ? [{ label: `Replace with ${currentBoard}`, testid: 'chip-sim-replace', onClick: onDriveLive }]
+            : []),
+        ],
       })
     } else if (report?.ok === true && sessionMatchesCurrent) {
       chips.push({ label: 'live session ready', tone: 'ok', testid: 'chip-sim', onClick: onDriveLive })

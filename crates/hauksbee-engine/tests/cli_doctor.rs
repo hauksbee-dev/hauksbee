@@ -19,7 +19,9 @@ use crate::support::run;
 const KNOWN_BACKENDS: &[&str] = &["avr", "qemu-xtensa", "qemu-riscv32", "renode", "extract"];
 
 /// Statuses the machine-readable table may carry (single lowercase tokens).
-const KNOWN_STATUSES: &[&str] = &["ok", "absent", "builtin", "disabled"];
+/// `warn` is a backend that is installed but cannot be used yet (an extractor
+/// CLI that is not signed in).
+const KNOWN_STATUSES: &[&str] = &["ok", "warn", "absent", "builtin", "disabled"];
 
 #[test]
 fn doctor_backends_runs_exits_zero_and_lists_each_backend_once() {

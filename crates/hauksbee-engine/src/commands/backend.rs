@@ -18,7 +18,7 @@ use hauksbee_models::extract_config::{self, Loaded, Preset, ProcessHost, Resolve
 /// Load the config and resolve it against the real process environment, with
 /// no `--backend` flag override (the CLI surfaces always show the saved /
 /// auto-detected choice, never a hypothetical one).
-fn load_and_resolve() -> anyhow::Result<(Loaded, Resolved)> {
+pub(super) fn load_and_resolve() -> anyhow::Result<(Loaded, Resolved)> {
     let loaded = extract_config::load()?;
     let resolved = loaded.config.resolve(&ProcessHost, None);
     Ok((loaded, resolved))

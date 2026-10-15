@@ -174,7 +174,7 @@ pub fn definitions() -> Value {
         },
         {
             "name": "doctor",
-            "description": "Which co-sim backends this machine has, as `hauksbee doctor --json`: {backends: [{name, status, available, detail, summary}]}. `status` is builtin, ok, absent or disabled; `detail` is the resolved path or the install hint. It also lists the datasheet-extraction backend. Unlike list_capabilities it carries no scope table. Call it to explain why a firmware run refused or substituted a backend.",
+            "description": "Which co-sim backends this machine has, as `hauksbee doctor --json`: {backends: [{name, status, available, detail, summary}]}. `status` is builtin, ok, warn (installed but not usable yet, e.g. the extraction CLI is not signed in), absent or disabled; `detail` is the resolved path or the install hint. It also lists the datasheet-extraction backend. Unlike list_capabilities it carries no scope table. Call it to explain why a firmware run refused or substituted a backend.",
             "inputSchema": { "type": "object", "properties": {} }
         },
         {

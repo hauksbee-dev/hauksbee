@@ -26,8 +26,8 @@ struct Backend {
 /// present with its resolved path.
 ///
 /// Piped stdout: one line per backend, `NAME<TAB>STATUS<TAB>DETAIL`, STATUS a
-/// single lowercase token (`ok` / `absent` / `builtin` / `disabled`); DETAIL
-/// is the resolved path or a one-line install hint and may contain spaces
+/// single lowercase token (`ok` / `warn` / `absent` / `builtin` / `disabled`); DETAIL
+/// is the resolved path or a one-line fix and may contain spaces
 /// (parsers should read field 3 to end-of-line). The human header goes to
 /// stderr so the data stream stays clean. On a TTY there is no parser to
 /// protect, so the view is one box-drawing table instead of TSV interleaved
@@ -57,7 +57,8 @@ pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
         .filter(|b| b.status == "ok" || b.status == "builtin")
         .count();
     let summary_line = format!(
-        "{available} of {} backends available; `hauksbee install --help` fetches the missing ones.",
+        "{available} of {} backends ready. All are optional: board checks work without them. \
+         `hauksbee install --help` fetches the missing ones.",
         backends.len()
     );
     if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
@@ -168,7 +169,7 @@ fn probe_backends() -> Vec<Backend> {
                 Err(e) => backends.push(Backend {
                     name,
                     status: "absent",
-                    detail: one_line(&e.to_string()),
+                    detail: absent_detail(&e, "ESP32 firmware co-sim", "hauksbee install esp-qemu"),
                     summary,
                 }),
             }
@@ -199,7 +200,11 @@ fn probe_backends() -> Vec<Backend> {
         Err(e) => backends.push(Backend {
             name: "renode",
             status: "absent",
-            detail: one_line(&e.to_string()),
+            detail: absent_detail(
+                &e,
+                "STM32 / nRF52 / RISC-V firmware co-sim",
+                "hauksbee install renode",
+            ),
             summary: "STM32 / nRF52 / RISC-V firmware co-sim",
         }),
     }
@@ -211,16 +216,115 @@ fn probe_backends() -> Vec<Backend> {
         summary: "STM32 / nRF52 / RISC-V firmware co-sim",
     });
 
-    // Datasheet extraction, resolved as `models backend show` resolves it.
-    let (ok, detail) = super::backend::extract_status()
-        .unwrap_or_else(|e| (false, format!("extraction config unreadable: {e:#}")));
-    backends.push(Backend {
-        name: "extract",
-        status: if ok { "ok" } else { "absent" },
-        detail: detail.replace('\n', " "),
-        summary: "datasheet model extraction (`hauksbee models backend show`)",
-    });
+    backends.push(extract_row());
     backends
+}
+
+/// A resolver's "not found" is an optional tool, not a fault: say what it is
+/// for and the one command that fixes it. Any other error (an override
+/// variable naming a missing file) is the resolver's own words, unchanged.
+#[cfg(any(feature = "qemu", feature = "renode"))]
+fn absent_detail(err: &anyhow::Error, needed_for: &str, fix: &str) -> String {
+    if err
+        .downcast_ref::<hauksbee_mcu::BackendNotInstalled>()
+        .is_some()
+    {
+        format!("not installed (optional, only for {needed_for}). Fix: `{fix}`")
+    } else {
+        one_line(&err.to_string())
+    }
+}
+
+/// Whether one datasheet-extraction backend can run right now.
+enum Readiness {
+    Missing,
+    SignedOut,
+    /// Installed (and signed in where the CLI can tell); `true` when the
+    /// sign-in could actually be checked.
+    Ready(bool),
+}
+
+/// The datasheet-extraction row. Installed is not usable, so this asks each
+/// agent CLI for its sign-in (its own read-only status command, cached) and,
+/// when the selected backend cannot run but another can, says which one works
+/// and the one command that switches to it.
+fn extract_row() -> Backend {
+    use crate::deps::{signin_state, SignIn};
+    use hauksbee_models::datasheet::Backend as Extractor;
+    use hauksbee_models::extract_config::{ProcessHost, Resolved};
+    const SUMMARY: &str = "datasheet model extraction (`hauksbee models backend show`)";
+    let row = |status, detail: String| Backend {
+        name: "extract",
+        status,
+        detail: detail.replace('\n', " "),
+        summary: SUMMARY,
+    };
+    let Ok((_, resolved)) = super::backend::load_and_resolve() else {
+        return row(
+            "absent",
+            "extraction config unreadable; run `hauksbee models backend show`".to_string(),
+        );
+    };
+    let readiness = |r: &Resolved, b: Extractor| {
+        let st = r.status(&ProcessHost, b);
+        if !st.available {
+            return Readiness::Missing;
+        }
+        // A wrapper command owns its own sign-in; the API backend has a key.
+        if b.tool().is_none() || r.custom_command(b).is_some() {
+            return Readiness::Ready(false);
+        }
+        match signin_state(b.name(), std::path::Path::new(&st.detail), false) {
+            SignIn::NotSignedIn => Readiness::SignedOut,
+            SignIn::SignedIn(_) => Readiness::Ready(true),
+            SignIn::NotChecked => Readiness::Ready(false),
+        }
+    };
+    let chosen = resolved.backend;
+    let label = chosen.label();
+    let switch = Extractor::ALL
+        .into_iter()
+        .find(|&b| b != chosen && matches!(readiness(&resolved, b), Readiness::Ready(_)))
+        .map(|b| {
+            format!(
+                " {} is ready instead: switch with `hauksbee models backend use {}`.",
+                b.label(),
+                b.name()
+            )
+        });
+    match readiness(&resolved, chosen) {
+        Readiness::Ready(checked) => {
+            let (_, line) = super::backend::extract_status()
+                .unwrap_or_else(|e| (false, format!("extraction config unreadable: {e:#}")));
+            let note = if checked { "" } else { " (sign-in not checked)" };
+            row("ok", format!("{line}{note}"))
+        }
+        Readiness::SignedOut => row(
+            "warn",
+            format!(
+                "{label} installed but not signed in. Run `{}`.{}",
+                crate::deps::login_command(chosen.name()),
+                switch.unwrap_or_default()
+            ),
+        ),
+        Readiness::Missing => switch.map_or_else(
+            || {
+                row(
+                    "absent",
+                    format!(
+                        "not installed (optional, only for drafting part models from datasheets). Fix: `{}`",
+                        chosen.install_hint()
+                    ),
+                )
+            },
+            |switch| {
+                row(
+                    "warn",
+                    format!("{label} is selected but not installed (`{}`).{switch}", chosen.install_hint()),
+                )
+            },
+        ),
+    }
 }
 
 /// Collapse a possibly multi-line message to its first line (discovery errors
