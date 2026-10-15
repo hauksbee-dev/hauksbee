@@ -364,12 +364,8 @@ pub fn github_refusal_annotation(refusal: &Refusal) {
     );
 }
 
-/// GitHub annotations for evidence that is not entitled to a clean result.
-pub fn github_evidence_annotations(maps: &[hauksbee_ir::evidence::EvidenceMap]) {
-    github_evidence_annotations_with_gate(maps, |_| true);
-}
-
-/// As [`github_evidence_annotations`], with the run-level split.
+/// GitHub annotations for evidence that is not entitled to a clean result,
+/// with the run-level split.
 ///
 /// An undermined finding-backed map annotates as a warning, not an `::error`,
 /// so the annotation level can never contradict the JUnit/SARIF entry or the

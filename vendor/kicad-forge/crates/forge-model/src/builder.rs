@@ -100,7 +100,7 @@ impl PcbBuilder {
     }
 
     /// Add a standard 2-layer setup (F.Cu / B.Cu + common silkscreen/fab
-    /// layers). Convenience helper; you can also call `add_layer` directly.
+    /// layers). Convenience helper.
     pub fn standard_2layer_layers(mut self) -> Self {
         let defs: &[(i64, &str, &str)] = &[
             (0, "F.Cu", "signal"),
@@ -120,15 +120,6 @@ impl PcbBuilder {
                 kind: kind.to_string(),
             });
         }
-        self
-    }
-
-    pub fn add_layer(mut self, id: i64, name: &str, kind: &str) -> Self {
-        self.layers.push(LayerBuilder {
-            id,
-            name: name.to_string(),
-            kind: kind.to_string(),
-        });
         self
     }
 
