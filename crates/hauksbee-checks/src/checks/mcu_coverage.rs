@@ -53,10 +53,14 @@ const MCU_FAMILY_PREFIXES: &[&str] = &[
     "RA2", "RA4", "RA6", "FE310", "GD32VF", "NUC1", "MM32", "HT32", "HC32",
 ];
 
-// Does this reference designator name an active IC (`U*` / `IC*` / `MCU*`)?
-// The binder's own MCU-candidate predicate, so a part the binder treats as an
-// MCU is never invisible to this check.
-use hauksbee_models::refdes::is_active_ic_ref as is_active_ic_refdes;
+/// Does this reference designator name an active IC (`U*` / `IC*` / `MCU*`)?
+/// The binder's MCU-candidate predicate, so a part the binder treats as an MCU
+/// is never invisible to this check. An Eagle placeholder (`U$2`) also counts
+/// here: it says nothing either way, and the MCU-family value gate decides.
+fn is_active_ic_refdes(reference: &str) -> bool {
+    hauksbee_models::refdes::is_active_ic_ref(reference)
+        || hauksbee_models::refdes::is_tool_generated_ref(reference)
+}
 
 /// Families with a boot-mode pin sampled by hardware at reset; the surface the
 /// strap lint exists for. STM32 and its pin-compatible clones latch BOOT0; the

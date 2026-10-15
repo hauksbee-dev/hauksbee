@@ -1958,10 +1958,11 @@ fn supply_groups(
     domains.supply_groups(circuit, board_net, owner, &regulations)
 }
 
-/// The upper-cased alphabetic designator prefix of a reference ("JP3" -> "JP").
+/// The upper-cased alphabetic designator prefix of a reference ("JP3" -> "JP"),
+/// read through the one designator table, so a split keyboard's mirrored `rC6`
+/// is a `C`, not an `RC` resistor.
 fn ref_prefix(reference: &str) -> String {
-    let letters = reference.chars().take_while(char::is_ascii_alphabetic);
-    letters.collect::<String>().to_ascii_uppercase()
+    hauksbee_models::refdes::prefix(&hauksbee_models::refdes::designator(reference))
 }
 
 /// Which passive ('R', 'C' or 'L') a designator's first letter claims, or an

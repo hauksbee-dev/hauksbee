@@ -604,8 +604,8 @@ pub fn is_connector_like(c: &Component) -> bool {
         || fp.contains("fpc")
         || fp.contains("ffc")
         || fp.contains("edge")
-        || fp.contains("_1x")
-        || fp.contains("_2x")
+        // Pin rows (`_1x04`, `_2x20`) come through the grid parser, which tells
+        // them from an IC body (`LGA-12_2x2mm`); a bare `_2x` substring did not.
         || is_pin_array_package(&c.footprint)
         || is_module_socket(c)
 }
