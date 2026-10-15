@@ -581,7 +581,9 @@ fn build_sensor_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
     bus = "i2c"
     i2c_address = 0x??         # the 7-bit address (default/all-pins-low value)
   and a [sensor.protocol] block:
-    style = "i2c_pointer"      # master writes the register addr, then reads N bytes"#
+    style = "i2c_pointer"      # master writes the register addr, then reads N bytes
+                               # (every I2C sensor: a command-driven part with no
+                               # registers keeps it and states [sensor.read_frame])"#
     };
 
     format!(
@@ -3328,7 +3330,11 @@ fn envelope_schema() -> serde_json::Value {
         "type": "object",
         "properties": {
             "status": {"type": "string", "enum": ["written", "identity_only", "not_written"]},
-            "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+            "confidence": {
+                "type": "string",
+                "enum": ["high", "medium", "low"],
+                "description": "low while the last checker run still reports a finding"
+            },
             "reason": {"type": "string"},
             "questions": {"type": "array", "items": {"type": "string"}}
         },
