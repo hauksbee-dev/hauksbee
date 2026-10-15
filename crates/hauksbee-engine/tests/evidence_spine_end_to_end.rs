@@ -348,6 +348,7 @@ fn downstream_mcu_evidence_struct_literals_keep_the_legacy_field_contract() {
         adc_pin: HashMap::new(),
         module: false,
         max_supply_v: None,
+        supply_stand_in: None,
         min_supply_v: None,
         supply_floors: HashMap::new(),
     };

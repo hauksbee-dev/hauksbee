@@ -2082,6 +2082,26 @@ impl JsonFinding {
     }
 }
 
+/// Why a verdict with no cause is partly judged, if it is: the judgement
+/// scope's sentence and the first stated stand-in-rating condition (see
+/// [`hauksbee_models::rating_basis`]), when there is one.
+fn partly_judged_reason(
+    scope: Option<&crate::scope::JudgementScope>,
+    stated: Option<&str>,
+) -> Option<String> {
+    let stated = stated.map(|c| {
+        format!("a part's limit was judged against a stand-in card's rating, not its own: {c}.")
+    });
+    match (scope, stated) {
+        (Some(s), Some(c)) => Some(format!("{} {c}", s.partly_judged_reason())),
+        (Some(s), None) => Some(s.partly_judged_reason()),
+        (None, Some(c)) => Some(format!(
+            "PARTLY JUDGED (not a pass): nothing found blocks ordering, but {c}"
+        )),
+        (None, None) => None,
+    }
+}
+
 /// The sentence a finding carries when its subject resolves to no board net.
 pub const NOT_MAPPED_TO_BOARD_NOTE: &str = "Not mapped to the board: the affected component connects to no board net, so this finding has no board location.";
 
@@ -2701,6 +2721,15 @@ impl JsonReport {
         self
     }
 
+    /// The first stated condition a finding carries: a part held past a
+    /// placeholder or guessed card's limit, not its own
+    /// ([`hauksbee_models::rating_basis`]), which is never a fail.
+    fn stated_condition(&self) -> Option<&str> {
+        (self.findings.iter().flatten())
+            .find(|f| hauksbee_models::rating_basis::is_condition(&f.message))
+            .map(|f| f.message.as_str())
+    }
+
     /// The scope, when it lets the verdict judge around exactly `blockers`.
     fn active_scope(&self, blockers: &[String]) -> Option<&crate::scope::JudgementScope> {
         self.judgement_scope.as_ref().filter(|s| s.scopes(blockers))
@@ -2907,7 +2936,10 @@ impl JsonReport {
         let scope = self.active_scope(&blockers);
         let unjudged: &[String] = if scope.is_some() { &[] } else { &blockers };
         let cause = VerdictCause::pick(failing, refused, unjudged, evidence_undermined);
-        let partial = cause.is_none() && scope.is_some();
+        // A limit passed that was a placeholder or guessed card's, not the
+        // part's own, is a stated condition: never a fail, never a pass either.
+        let stated = self.stated_condition();
+        let partial = cause.is_none() && (scope.is_some() || stated.is_some());
         let verdict = match cause {
             None if partial => "invalid",
             None => "pass",
@@ -2924,8 +2956,7 @@ impl JsonReport {
                 Some(note.map_or_else(|| c.reason(), |n| format!("{} {n}", c.reason())))
             }
             (Some(c), _) => Some(c.reason_scoped(&blockers, scope)),
-            (None, Some(s)) => Some(s.partly_judged_reason()),
-            (None, None) => None,
+            (None, s) => partly_judged_reason(s, stated),
         };
         (
             (verdict == "pass", verdict, serious, actionable),
@@ -3625,6 +3656,55 @@ mod tests {
             .run_verdict();
         assert_eq!(only.verdict, "invalid");
         assert!(!only.reason.unwrap().contains("Also:"));
+    }
+
+    /// A part held past a placeholder card's rating is a stated condition: the
+    /// verdict is partly judged and says so, never a fail and never a pass.
+    #[test]
+    fn a_stand_in_rating_passed_is_partly_judged_never_a_fail() {
+        use hauksbee_models::rating_basis::{condition, StandIn, StandInKind};
+        let stand_in = StandIn {
+            card: "generic_nmos_power_pkg".into(),
+            kind: StandInKind::Placeholder,
+        };
+        let stated = condition(
+            "Q1",
+            &stand_in,
+            "Q1 sees 48 V, past its 30 V voltage limit",
+            "30 V",
+        );
+        let mut report = JsonReport::new("b", summary_with(Vec::new(), Vec::new()));
+        report.findings = Some(lint_findings_json(&NetLintReport {
+            findings: vec![hauksbee_extract::LintFinding {
+                check: hauksbee_extract::LintCheck::DcOverstress,
+                severity: hauksbee_extract::Severity::Low,
+                message: stated.clone(),
+                refs: vec!["Q1".into()],
+                nets: Vec::new(),
+            }],
+        }));
+        let run = report.run_verdict();
+        assert_eq!(
+            run.verdict, "invalid",
+            "a stand-in limit is never a fail or a pass"
+        );
+        assert!(run.partial);
+        let why = run.reason.expect("a partly judged verdict says why");
+        assert!(
+            why.starts_with("PARTLY JUDGED") && why.contains(&stated),
+            "{why}"
+        );
+        // The part's own rating passed still fails, condition or not.
+        let mut own = report;
+        own.findings
+            .as_mut()
+            .unwrap()
+            .extend(fault_findings_json(&[fault(
+                "Q2",
+                crate::stress::FaultKind::Overcurrent,
+                true,
+            )]));
+        assert_eq!(own.run_verdict().verdict, "fail");
     }
 
     #[test]

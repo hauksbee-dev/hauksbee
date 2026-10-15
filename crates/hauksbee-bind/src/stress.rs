@@ -55,6 +55,7 @@ use hauksbee_ir::evidence::{Assumption, AssumptionSource, Scope, Subject};
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
 use hauksbee_models::chip_size;
 use hauksbee_models::derating::{Carrier, Curve, Derating, TempRef};
+use hauksbee_models::rating_basis::{self, Limit, StandIn};
 use hauksbee_models::schema::{ComponentKind, Ratings};
 use hauksbee_solve::{mos_body_vth, mos_channel};
 
@@ -710,6 +711,9 @@ pub struct SupplyWatch {
     pub node: NodeId,
     /// Absolute-maximum supply voltage (V) from the model's ratings.
     pub max_v: f64,
+    /// The placeholder or guessed card `max_v` came from, when it is not the
+    /// part's own: passing it is a stated condition, never a fault.
+    pub stand_in: Option<StandIn>,
 }
 
 /// Sustain/raised state for one [`SupplyWatch`] (same filter as continuous
@@ -777,6 +781,76 @@ pub struct StressMonitor {
     /// Faults whose value is physically impossible ([`is_implausible`]): kept
     /// apart from the real ones so a caller can report a model error instead.
     pub implausible: Vec<FaultEvent>,
+    /// Limits passed that were a placeholder or guessed card's stand-in, not
+    /// the part's own ([`hauksbee_models::rating_basis`]): kept apart from the
+    /// faults, since a tool or model limit is never a board fault, so a caller
+    /// states each as a condition instead.
+    pub stand_in: Vec<StandInExceedance>,
+}
+
+/// A limit passed that was a stand-in card's, not the part's own.
+#[derive(Debug, Clone)]
+pub struct StandInExceedance {
+    /// What would have been the fault.
+    pub fault: FaultEvent,
+    /// Which of the part's limits it passed.
+    pub limit: Limit,
+    /// The card the limit came from.
+    pub stand_in: StandIn,
+}
+
+impl StandInExceedance {
+    /// The stated condition: what was seen, the stand-in rating it was judged
+    /// against, and that the part needs its own model.
+    #[must_use]
+    pub fn condition(&self) -> String {
+        let f = &self.fault;
+        let (unit, seen, what) = match f.kind {
+            FaultKind::Overcurrent => ("A", "carries", "current"),
+            FaultKind::SurgeCurrent => ("A", "carries", "surge current"),
+            FaultKind::PinOvercurrent => ("A", "passes", "pin current"),
+            FaultKind::Overpower => ("W", "dissipates", "power"),
+            FaultKind::Overtemperature => ("C", "reaches", "junction temperature"),
+            FaultKind::ReverseBias => ("V", "sees", "reverse bias"),
+            FaultKind::Overvoltage | FaultKind::Short => ("V", "sees", "voltage"),
+        };
+        let rating = format!("{} {unit} {what}", fmt_rating(f.limit));
+        let subject = format!(
+            "{} {seen} {} {unit}, past its {rating} limit",
+            f.component,
+            fmt_rating(f.value),
+        );
+        rating_basis::condition(&f.component, &self.stand_in, &subject, &rating)
+    }
+}
+
+/// A rating as a card prints it: no trailing zeros.
+fn fmt_rating(v: f64) -> String {
+    let s = format!("{v:.3}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// The card limit a `kind` fault on `meta` is held to, or `None` when no card
+/// sets it: a resistor's wattage and a passive's junction limit come from its
+/// package, and a short is no rating at all.
+fn card_limit(meta: &DeviceMeta, kind: FaultKind) -> Option<Limit> {
+    let r = &meta.ratings;
+    match kind {
+        FaultKind::Overcurrent | FaultKind::SurgeCurrent => Some(Limit::Current),
+        FaultKind::Overpower => {
+            (r.max_power_w.is_some() || !meta.derating.power.0.is_empty()).then_some(Limit::Power)
+        }
+        FaultKind::Overvoltage => Some(Limit::Voltage),
+        FaultKind::ReverseBias => Some(Limit::Polarity),
+        FaultKind::PinOvercurrent => Some(Limit::PinCurrent),
+        // An active part's dissipation is its card's model; a passive's is its
+        // value's, held to its package unless the card says otherwise.
+        FaultKind::Overtemperature => (!matches!(meta.kind, ComponentKind::Passive)
+            || r.max_junction_temp_c.is_some()
+            || r.theta_ja_c_per_w.is_some())
+        .then_some(Limit::JunctionTemp),
+        FaultKind::Short => None,
+    }
 }
 
 /// How a regulator's dissipation is estimated.
@@ -1002,6 +1076,7 @@ impl StressMonitor {
             reg_heat: vec![None; n],
             board_caveats: Vec::new(),
             implausible: Vec::new(),
+            stand_in: Vec::new(),
         }
     }
 
@@ -1106,6 +1181,21 @@ impl StressMonitor {
     #[must_use]
     pub fn rating_disclosures(&self) -> Vec<Assumption> {
         let (mut out, mut said) = (Vec::new(), std::collections::HashSet::new());
+        for e in &self.stand_in {
+            let r = e.fault.component.as_str();
+            if said.insert((r, e.fault.kind.as_str())) {
+                out.push(Assumption::partial_model_for_component(
+                    &format!("{r}-stand-in-{}", e.fault.kind.as_str()),
+                    r,
+                    "",
+                    &e.condition(),
+                    &format!(
+                        "give {r} its own model (its manufacturer part number, or a card from \
+                         its datasheet), then re-run"
+                    ),
+                ));
+            }
+        }
         for ((m, s), limits) in self.metas.iter().zip(&self.run).zip(&self.limits) {
             let r = strip_unit_suffix(&m.reference);
             let fresh = (m.derating.caveats.iter()).filter(|a| said.insert((r, a.id().as_str())));
@@ -1296,6 +1386,25 @@ impl StressMonitor {
             return false;
         }
         if self.tracks[i].raised.insert(chk.kind.as_str(), true) == Some(true) {
+            return false;
+        }
+        // A stand-in card's limit says nothing about the part: a condition,
+        // noted once per part and kind, never a fault.
+        let limit = card_limit(meta, chk.kind);
+        let stand_in = limit.and_then(|l| meta.ratings.basis.stand_in_for(l).map(|s| (l, s)));
+        if let Some((limit, stand_in)) = stand_in {
+            self.stand_in.push(StandInExceedance {
+                fault: FaultEvent {
+                    component: meta.reference.clone(),
+                    kind: chk.kind,
+                    value: chk.value,
+                    limit: chk.limit,
+                    t,
+                    destroyed: false,
+                },
+                limit,
+                stand_in: stand_in.clone(),
+            });
             return false;
         }
         let destroyed = self.maybe_destroy(circuit, meta, chk.kind);
@@ -1695,6 +1804,12 @@ impl StressMonitor {
                 };
                 if is_implausible(event.kind, v) {
                     self.implausible.push(event);
+                } else if let Some(stand_in) = w.stand_in {
+                    self.stand_in.push(StandInExceedance {
+                        fault: event,
+                        limit: Limit::Voltage,
+                        stand_in,
+                    });
                 } else {
                     faults.push(event);
                 }
@@ -2363,6 +2478,7 @@ mod monitor_temp_tests {
             reference: reference.into(),
             node,
             max_v,
+            stand_in: None,
         }]);
         (circuit, node, monitor)
     }

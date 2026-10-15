@@ -69,6 +69,7 @@ pub mod package;
 pub mod param_names;
 pub mod pin_rules;
 pub mod profile;
+pub mod rating_basis;
 pub mod schema;
 pub mod sensor_spec;
 pub mod spice_input;
