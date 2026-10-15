@@ -203,7 +203,9 @@ fn prompt(part: &str, kind: &str, section: &str) -> String {
             format!(
                 "`description`: one line naming the part and its package, then `does not model ...` \
                  for each behaviour the params leave out (rule 4). A param that names a pad \
-                 (`supply_pin`, `gnd_pin`) takes the pad number the package's pin table prints.\n\n\
+                 (`supply_pin`, `gnd_pin`) takes the pad number the package's pin table prints. \
+                 `identity_only`, `warning` and `unlocked_by` go under `[models.params]`, never at \
+                 the top of the entry.\n\n\
                  For kind=\"{base}\", the required params are:\n{}{}\n{}\n{}\n\n{SOURCE_QUANTITY_GUIDANCE}\n\n\
                  {EXTRACTION_RULES}\n{}\n{}",
                 required_params_for_kind(kind),
@@ -333,6 +335,16 @@ mod tests {
         let entry = &card(&m)["models"][0];
         assert_eq!(entry["coverage"]["missing"].as_array().unwrap().len(), 3);
         assert_eq!(entry["source"]["uncertainty"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_keys_table_stays_its_own_table_after_the_merge() {
+        let a = "[[models]]\nid = \"x1\"\n[models.params]\nidentity_only = true\nwarning = \"w\"\n";
+        let m = merge(&sections([Some(a), Some(RATINGS), Some(IDENTITY)])).unwrap();
+        eprintln!("{}", m.card);
+        let entry = &card(&m)["models"][0];
+        assert!(entry.get("identity_only").is_none(), "{}", m.card);
+        assert_eq!(entry["params"]["identity_only"].as_bool(), Some(true));
     }
 
     #[test]

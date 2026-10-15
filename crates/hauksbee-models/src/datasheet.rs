@@ -2557,6 +2557,15 @@ impl Reply<'_> {
         };
         for table in tables {
             let source = table.entry("source").or_insert(Item::Table(blank.clone()));
+            // A source table another part of the draft opened (a pinout) still gets its tier.
+            if let Some(t) = source.as_table_mut() {
+                for (k, v) in &blank {
+                    if !t.contains_key(k) {
+                        t.insert(k, v.clone());
+                        inserted = true;
+                    }
+                }
+            }
             let records = source.as_table_mut().map(|t| t.entry("uncertainty"));
             let records = records.map(|e| e.or_insert(ArrayOfTables::new().into()));
             match records {
@@ -2572,7 +2581,8 @@ impl Reply<'_> {
         }
         // A param omitted where a cited row fixes it is filled, with its working,
         // and a diode law off its cited VF rows is replaced by their fit.
-        let db = toml::from_str::<crate::schema::DbFile>(&raw).map_or(vec![], |d| d.models);
+        let db =
+            toml::from_str::<crate::schema::DbFile>(&doc.to_string()).map_or(vec![], |d| d.models);
         let models = doc.get_mut(path).and_then(Item::as_array_of_tables_mut);
         let tables = models.into_iter().flat_map(ArrayOfTables::iter_mut);
         for (original, table) in db.iter().zip(tables) {
@@ -5726,6 +5736,25 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             card.starts_with("# extracted by claude-code claude-haiku-5-5 (tier 1 of 3)"),
             "{card}"
         );
+    }
+
+    /// Section agents write no `[models.source]` tier lines, but the pinout opens
+    /// that table: it still gets its tier and validation like an absent one.
+    #[test]
+    fn a_source_table_opened_by_a_pinout_still_gets_its_tier() {
+        let ex = FORMAT_EXAMPLES[0];
+        let bare: String = ex
+            .card
+            .lines()
+            .filter(|l| !l.starts_with("tier = ") && !l.starts_with("validation = "))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let reply = Reply::Model {
+            part: ex.part,
+            kind: ex.kind,
+        };
+        assert!(reply.check(&bare).is_err());
+        assert!(reply.check(&reply.complete(bare)).is_ok());
     }
 
     /// A section agent that wrote nothing is not papered over: a fix agent
