@@ -28,7 +28,7 @@ contains = [
   "[PASS] no stress faults raised",
   "GREEN",
   "CONDITION",
-  "default_clock_hz",
+  "the core clock is a guess",
 ]
 matches = [
   # The time it was driven at has to be reported, not just "in time".
