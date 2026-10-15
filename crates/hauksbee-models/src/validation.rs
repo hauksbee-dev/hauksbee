@@ -1173,6 +1173,22 @@ fn check_current_program(
         });
     }
 
+    for (name, ohms) in [
+        ("min_program_ohms", program.min_program_ohms),
+        ("max_program_ohms", program.max_program_ohms),
+    ] {
+        if let Some(ohms) = ohms {
+            p.positive(format!("current_program.{name}"), ohms);
+        }
+    }
+    if let (Some(min), Some(max)) = (program.min_program_ohms, program.max_program_ohms) {
+        p.require(min < max, || {
+            format!(
+                "current_program.min_program_ohms = {min} is not below max_program_ohms = {max}"
+            )
+        });
+    }
+
     let limit = program.max_operating_current_a;
     p.require(!regulated || limit.is_some(), || "current_program regulated_current requires max_operating_current_a so an undersized programming resistor cannot imply operation beyond the sourced domain".into());
     p.require(program.above_domain != AboveDomainBehavior::Saturate || limit.is_some(), || "current_program above_domain = saturate requires max_operating_current_a as the sourced saturation value".into());

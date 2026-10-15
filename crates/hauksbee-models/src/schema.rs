@@ -764,6 +764,18 @@ pub struct CurrentProgram {
     #[serde(default, skip_serializing_if = "is_default")]
     pub above_domain: AboveDomainBehavior,
 
+    /// The smallest programming resistance (ohms) the datasheet allows ("the
+    /// minimum allowed RILIM is 15 kOhm"). A board resistor below it is outside
+    /// the part's specified range whatever the equation would return, so the
+    /// device-decode check reports it rather than decoding a setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_program_ohms: Option<f64>,
+
+    /// The largest programming resistance (ohms) the datasheet allows; above
+    /// it is reported the same way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_program_ohms: Option<f64>,
+
     /// Manufacturer programming equation, flattened into the TOML block so a
     /// model reads `equation = "inverse_resistance"` beside its constants.
     #[serde(flatten)]
@@ -949,6 +961,18 @@ pub enum CurrentProgramEquation {
 }
 
 impl CurrentProgram {
+    /// Whether `ohms` lies outside the datasheet's allowed programming range,
+    /// as `(bound, below)`: the violated bound and whether it is the minimum.
+    #[must_use]
+    pub fn out_of_program_range(&self, ohms: f64) -> Option<(f64, bool)> {
+        if let Some(min) = self.min_program_ohms.filter(|min| ohms < *min) {
+            return Some((min, true));
+        }
+        self.max_program_ohms
+            .filter(|max| ohms > *max)
+            .map(|max| (max, false))
+    }
+
     fn apply_operating_domain(&self, equation_current_a: f64) -> Option<f64> {
         match self
             .max_operating_current_a

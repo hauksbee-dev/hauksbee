@@ -395,8 +395,79 @@ pub fn device_decode_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLint
         if is_tps25982(comp) {
             check_tps25982_ilim(board, comp, lib, &mut report);
         }
+        check_program_range(board, comp, lib, &mut report);
     }
     report
+}
+
+/// Card-driven, for any part whose model states the datasheet's allowed
+/// programming-resistor range (`current_program.min_program_ohms` /
+/// `max_program_ohms`): a fitted resistor from the programming pin to ground
+/// outside that range is a Medium finding, because the part is then outside
+/// its specified operation whatever the programming equation would return.
+/// Silent when the part is absent or unmodelled, the card states no range, the
+/// pin is floating, or a leg's value cannot be read.
+fn check_program_range(
+    board: &ExtractedBoard,
+    comp: &Component,
+    lib: &ModelLibrary,
+    report: &mut NetLintReport,
+) {
+    let AssemblyState::Present(part) = AssemblyState::of(comp) else {
+        return;
+    };
+    let resolution = hauksbee_bind::binder::resolve(lib, part);
+    let Some(model) = resolution
+        .model
+        .as_ref()
+        .filter(|m| !m.id.starts_with("generic"))
+    else {
+        return;
+    };
+    let Some(program) = model
+        .current_program
+        .as_ref()
+        .filter(|p| p.min_program_ohms.is_some() || p.max_program_ohms.is_some())
+    else {
+        return;
+    };
+    let Ok(net) = hauksbee_bind::component_evidence::role_net(part, model, &program.pin) else {
+        return;
+    };
+    let ProgramResistor::Parsed { reference, ohms } = program_resistor_to_ground(board, net) else {
+        return;
+    };
+    let Some((bound, below)) = program.out_of_program_range(ohms) else {
+        return;
+    };
+    let pin = program.pin.to_ascii_uppercase();
+    let (side, word) = if below {
+        ("below", "minimum")
+    } else {
+        ("above", "maximum")
+    };
+    report.findings.push(LintFinding {
+        check: LintCheck::DeviceDecode,
+        severity: Severity::Medium,
+        message: format!(
+            "{} {pin} resistor {reference} = {} ohm is {side} the {} ohm {word} the {} \
+             datasheet allows on {pin}, so the part is outside its specified operation; \
+             fit a value inside the datasheet's programming range",
+            comp.reference,
+            if ohms < 10.0 {
+                format!("{ohms:.2}")
+            } else {
+                format_ohms(ohms)
+            },
+            format_ohms(bound),
+            model.id,
+        ),
+        refs: vec![comp.reference.clone(), reference],
+        nets: board
+            .net(net)
+            .map(|n| vec![n.name.clone()])
+            .unwrap_or_default(),
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1622,6 +1693,80 @@ mod bq2407x_tests {
         assert!(findings[0].message.contains(
             "identify the battery-pack thermistor part or reduce TS to one source-classified two-terminal element"
         ));
+    }
+}
+
+#[cfg(test)]
+mod program_range_tests {
+    use super::*;
+
+    /// A DRV8871 (whose card states the 15 kOhm minimum ILIM resistor) with
+    /// `rilim` from ILIM to ground, or nothing on the pin.
+    fn drv_board(rilim: Option<&str>) -> String {
+        let resistor = rilim
+            .map(|value| {
+                format!(
+                    r#"  (module Resistor_SMD:R_2512_6332Metric (layer F.Cu)
+    (fp_text reference R2 (at 0 0) (layer F.SilkS))
+    (fp_text value {value} (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 4 "Net-(U2-ILIM)"))
+    (pad 2 smd rect (at 2 0) (net 1 "GND"))
+  )
+"#
+                )
+            })
+            .unwrap_or_default();
+        format!(
+            r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+12V")
+  (net 4 "Net-(U2-ILIM)")
+  (module Package_SO:SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.29x3mm (layer F.Cu)
+    (fp_text reference U2 (at 0 0) (layer F.SilkS))
+    (fp_text value DRV8871DDAR (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 1 "GND"))
+    (pad 4 smd rect (at 0 3) (net 4 "Net-(U2-ILIM)"))
+    (pad 5 smd rect (at 0 4) (net 2 "+12V"))
+    (pad 7 smd rect (at 0 6) (net 1 "GND"))
+  )
+{resistor})
+"#
+        )
+    }
+
+    fn range_findings(report: &NetLintReport) -> Vec<&LintFinding> {
+        report
+            .of_check(LintCheck::DeviceDecode)
+            .filter(|f| f.severity == Severity::Medium && f.message.contains("programming range"))
+            .collect()
+    }
+
+    #[test]
+    fn a_programming_resistor_below_the_card_minimum_fires() {
+        let report = lint(&drv_board(Some("0.1")));
+        let hits = range_findings(&report);
+        assert_eq!(hits.len(), 1, "{:?}", report.findings);
+        assert_eq!(hits[0].refs, vec!["U2".to_string(), "R2".to_string()]);
+        assert!(
+            hits[0]
+                .message
+                .contains("= 0.10 ohm is below the 15.0k ohm minimum"),
+            "{}",
+            hits[0].message
+        );
+    }
+
+    #[test]
+    fn in_range_floating_and_unreadable_programming_resistors_stay_silent() {
+        for rilim in [Some("33k"), Some("15k"), None, Some("TBD")] {
+            let report = lint(&drv_board(rilim));
+            assert!(
+                range_findings(&report).is_empty(),
+                "{rilim:?}: {:?}",
+                report.findings
+            );
+        }
     }
 }
 
