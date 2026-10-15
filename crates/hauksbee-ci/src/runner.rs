@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
+use hauksbee_engine::binder::BoardFacts;
 use hauksbee_engine::checks::BoardStatics;
 use hauksbee_engine::power_supply::{PowerSupply, SupplyLeg};
 use hauksbee_engine::rail_owner::{Feed, RailDomains};
@@ -80,21 +81,30 @@ const BOARD_CACHE_CAP: usize = 64;
 /// The static answers ([`BoardStatics`]) for each distinct board an ensemble
 /// runs, each worked out once and shared by every member on that board.
 ///
+/// Each board's facts are derived from a reference board's, so a part the two
+/// have alike is shared, and only a part with another value is worked out.
+///
 /// A member's board is the base board plus its plan's sampled values and
 /// pinned variants, so the key is exactly those. Supply values, enables, the
 /// seed and a search condition are not in it because they never touch the
 /// board: they reach the checks as the levels a member solved, per member.
 struct BoardCache<'l> {
     lib: &'l ModelLibrary,
+    /// The board the others derive from, and its facts (`None`: none do).
+    reference: Option<(ExtractedBoard, BoardFacts)>,
     /// One slot per board: the map lock is held only to find the slot, so
     /// members on other boards work out theirs at the same time.
     slots: Mutex<HashMap<BoardKey, Arc<OnceLock<Arc<BoardStatics<'l>>>>>>,
 }
 
 impl<'l> BoardCache<'l> {
-    fn new(lib: &'l ModelLibrary) -> Self {
+    fn new(lib: &'l ModelLibrary, reference: Option<ExtractedBoard>) -> Self {
         Self {
             lib,
+            reference: reference.map(|board| {
+                let facts = BoardFacts::derived(&board, lib, None);
+                (board, facts)
+            }),
             slots: Mutex::default(),
         }
     }
@@ -112,7 +122,11 @@ impl<'l> BoardCache<'l> {
         }
         let slot = Arc::clone(slots.entry(key).or_default());
         drop(slots);
-        let statics = slot.get_or_init(|| Arc::new(BoardStatics::of(board, self.lib)));
+        let statics = slot.get_or_init(|| {
+            let base = self.reference.as_ref().map(|(b, facts)| (b, facts));
+            let facts = BoardFacts::derived(board, self.lib, base);
+            Arc::new(BoardStatics::with_facts(board, self.lib, facts))
+        });
         debug_assert!(
             statics.describes(board),
             "statics taken from a different board"
@@ -854,6 +868,17 @@ pub fn run_spec_with_lib(
     only_seed: Option<u32>,
     lib: &ModelLibrary,
 ) -> Result<Vec<RunOutcome>, SpecError> {
+    run_members(spec, only_seed, lib, true)
+}
+
+/// [`run_spec_with_lib`], with `share` choosing whether member boards share
+/// what they have alike (the outcomes are the same either way).
+fn run_members(
+    spec: &Spec,
+    only_seed: Option<u32>,
+    lib: &ModelLibrary,
+    share: bool,
+) -> Result<Vec<RunOutcome>, SpecError> {
     // `[mcu] descriptor_dir`: publish the spec's SoC-descriptor override dir
     // through the same channel the engine already consumes ($HAUKSBEE_MCU_DIR,
     // read by hauksbee_mcu::SocConfig::resolve), scoped to this run by the
@@ -946,7 +971,7 @@ pub fn run_spec_with_lib(
     // paces itself against the wall clock and a loaded machine would skew it.
     let members_are_independent =
         spec.search.is_some() || (firmware.is_none() && spec.firmware.is_none());
-    let boards = BoardCache::new(lib);
+    let boards = BoardCache::new(lib, share.then(|| apply_overrides(spec, &base)));
     let run_plans = |batch: &[SeedPlan]| {
         let one = |plan: &SeedPlan| {
             run_one(
@@ -998,7 +1023,7 @@ fn compute_ac(
     let cfg = spec.ac.as_ref().expect("compute_ac called without [ac]");
     let mut board = apply_overrides(spec, base);
     apply_plan(&mut board, plan);
-    let mut bound = bind_driven(&board, lib, spec, fuzz_drives);
+    let mut bound = bind_driven(&board, lib, spec, fuzz_drives, None);
 
     // Bias the operating point exactly as the transient run would: rail
     // suppression, supplies, and net drives (the per-seed fuzz straps
@@ -1995,7 +2020,8 @@ fn run_one(
     let mut drives = fuzz_net_drives(spec, seed);
     let forced = plan.conditions.iter().filter(|c| !c.amps);
     drives.extend(forced.map(|c| (c.net.clone(), c.value)));
-    let mut bound = bind_driven(&board, lib, spec, &drives);
+    let statics = boards.statics(plan, &board);
+    let mut bound = bind_driven(&board, lib, spec, &drives, Some(statics.facts()));
 
     // The as-built overlay comes first: it is BOARD state (the physical rework
     // record, cuts, jumpers, fitted values), so it lands before any harness
@@ -2477,7 +2503,6 @@ fn run_one(
             .error_budget()
             .map_err(SpecError::invalid("building run error budget"))?,
     );
-    let statics = boards.statics(plan, &board);
     let production_assumptions =
         production_assumptions(spec, &board, &engine, &statics, seed, hollow_assumptions)?;
     let evidence = build_evidence(
@@ -3643,10 +3668,11 @@ fn bind_driven(
     lib: &ModelLibrary,
     spec: &Spec,
     drives: &[(String, f64)],
+    facts: Option<&BoardFacts>,
 ) -> BoundBoard {
     let set = spec.net_drives.iter().map(|d| (d.net.clone(), d.volts));
     let levels: Vec<(String, f64)> = set.chain(drives.iter().cloned()).collect();
-    bind_board_driven(board, lib, &CustomRegistry::new(), &levels)
+    bind_board_driven(board, lib, &CustomRegistry::new(), &levels, facts)
 }
 
 /// Force `net` to a source waveform by stamping an ideal source (unless one is
@@ -4426,7 +4452,7 @@ mod spi_cs_source_tests {
     #[test]
     fn members_share_statics_only_when_they_share_a_board() {
         let lib = hauksbee_models::ModelLibrary::builtin();
-        let cache = BoardCache::new(&lib);
+        let cache = BoardCache::new(&lib, Some(board()));
         let plan = |seed: u32, si: f64, variant: &str| SeedPlan {
             seed,
             values: vec![crate::tolerance::SampledValue {
@@ -4575,5 +4601,54 @@ mod spi_cs_source_tests {
         assert!(hint("watchy/v1/W.kicad_pcb").ends_with("fetch-corpus.sh --only watchy_v1"));
         assert!(hint("unknown/x.kicad_pcb").ends_with("fetch-corpus.sh"));
         assert_eq!(corpus_hint("/tmp/elsewhere/board.kicad_pcb"), "");
+    }
+}
+
+#[cfg(test)]
+mod ensemble_sharing_tests {
+    //! Sharing per-board work across an ensemble's members never changes an
+    //! answer: each member's outcome is as when it works everything out itself.
+
+    use super::*;
+
+    /// What a member reports that a shared binding could change, in a fixed
+    /// order (the outcome's maps iterate in no order).
+    fn digest(out: &RunOutcome) -> String {
+        let windows: std::collections::BTreeMap<_, _> = out.windows.iter().collect();
+        let peaks: std::collections::BTreeMap<_, _> = out.peak_current.iter().collect();
+        let (faults, bind) = (&out.faults, &out.bind);
+        format!(
+            "{windows:?} {peaks:?} {faults:?} {bind:?} {:?}",
+            out.evidence
+        )
+    }
+
+    #[test]
+    fn sharing_per_board_work_changes_no_members_outcome() {
+        // An op-amp amplifier whose gain resistors are toleranced: each member's
+        // board differs from the base's in those values alone.
+        let board = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/lm358_gain11.board"
+        );
+        let text = format!(
+            "board = {board:?}\nduration_ms = 1\n\
+             [[supply]]\nnet = \"V5\"\nkind = \"ideal\"\nvolts = 12.0\n\
+             [[net_drive]]\nnet = \"VSIG\"\nvolts = 0.4\n\
+             [[assert]]\nkind = \"voltage\"\nnet = \"OUT\"\nmin = 3.0\nmax = 6.0\n\
+             [[tolerance]]\nref = \"R*\"\npercent = 5.0\n[ensemble]\nseeds = 4\n"
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("ensemble.toml");
+        std::fs::write(&path, text).expect("spec");
+        let spec = Spec::load(&path).expect("spec loads");
+        let lib = ModelLibrary::builtin();
+
+        let run = |share: bool| run_members(&spec, None, &lib, share).expect("runs");
+        let (shared, alone) = (run(true), run(false));
+        assert!(shared.len() > 1 && shared.len() == alone.len());
+        for (s, a) in shared.iter().zip(&alone) {
+            assert_eq!(digest(s), digest(a), "member {} differs", s.seed);
+        }
     }
 }

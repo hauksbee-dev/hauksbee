@@ -18,6 +18,7 @@
 //! default to an open circuit.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use hauksbee_extract::{is_placeholder_value, Component, ExtractedBoard};
 use hauksbee_ir::evidence::{Assumption, ModelSource, ModelUncertainty};
@@ -400,7 +401,7 @@ pub fn bind_board_with(
     lib: &ModelLibrary,
     custom: &crate::behavioral::CustomRegistry,
 ) -> BoundBoard {
-    bind_board_driven(board, lib, custom, &[])
+    bind_board_driven(board, lib, custom, &[], None)
 }
 
 /// Bind with the voltages the caller will hold `driven` nets at.
@@ -410,6 +411,9 @@ pub fn bind_board_with(
 /// the rail it will actually see, not at a name-guessed default. A driven
 /// value wins over a name's; it only informs part binding, never stamps a
 /// rail source: the caller drives the net itself.
+///
+/// `facts` holds what the library decides about the board's parts (see
+/// [`BoardFacts`]); `None` works it out here.
 #[must_use]
 #[allow(clippy::too_many_lines)] // the ordered bind passes share many locals
 pub fn bind_board_driven(
@@ -417,7 +421,9 @@ pub fn bind_board_driven(
     lib: &ModelLibrary,
     custom: &crate::behavioral::CustomRegistry,
     driven: &[(String, f64)],
+    facts: Option<&BoardFacts>,
 ) -> BoundBoard {
+    debug_assert!(facts.is_none_or(|f| f.parts.len() == board.components.len()));
     let mut circuit = Circuit::new();
     let mut net_nodes: HashMap<String, NodeId> = HashMap::new();
     let mut net_names: Vec<String> = Vec::new();
@@ -435,13 +441,16 @@ pub fn bind_board_driven(
     // driving pin is tagged `power_out`.
     let power_out_nets = power_out_net_voltages(board);
     // Rails a fitted module sources on its own pins, per its card.
-    let module_supply_nets = module_supply_net_voltages(board, lib);
+    let module_supply_nets = module_supply_net_voltages(board, lib, facts);
     // Nets that are a regulator-shaped part's output: a convention-guessed
     // magnitude (bare `VCC` = 5 V) must not be stamped on one.
     let regulator_outputs = regulator_output_nets(board);
     // A separate circuit's own ground is its reference: see
     // `island_reference_grounds`.
-    let island_grounds = island_reference_grounds(board);
+    let island_grounds = facts.map_or_else(
+        || std::borrow::Cow::Owned(island_reference_grounds(board)),
+        |f| std::borrow::Cow::Borrowed(&*f.islands),
+    );
     for net in &board.nets {
         if net.id == 0 {
             continue;
@@ -531,7 +540,7 @@ pub fn bind_board_driven(
     let mut dnp_mcus: Vec<(String, String)> = Vec::new();
 
     // ── Pass 2: bind every component ────────────────────────────────────────
-    for comp in &board.components {
+    for (index, comp) in board.components.iter().enumerate() {
         // The three-state assembled-component contract, asked once per part:
         // only a Present record reaches model resolution; the two absent
         // states each leave a visible row rather than a silent hole.
@@ -587,7 +596,8 @@ pub fn bind_board_driven(
                 continue;
             }
         };
-        let res = resolve(lib, part);
+        let found = part_facts(facts, index, lib, part);
+        let res = &found.resolution;
         let model = res.model.clone();
         let conf = res.confidence;
         let source = res.provenance.clone();
@@ -663,7 +673,7 @@ pub fn bind_board_driven(
             }
         };
 
-        let warning = with_tie_warning(comp, &res, warning);
+        let warning = with_tie_warning(comp, res, warning);
         if let Some(k) = &kind_str {
             component_kinds.insert(comp.reference.clone(), k.clone());
         }
@@ -682,7 +692,7 @@ pub fn bind_board_driven(
                 pins: comp.pins.iter().filter_map(pin).collect(),
             });
         }
-        if let Some(selection) = res.selection {
+        if let Some(selection) = res.selection.clone() {
             report.selections.insert(report.rows.len(), selection);
         }
         report.push(BindRow {
@@ -766,7 +776,7 @@ pub fn bind_board_driven(
     // scheduler iterates each chunk. Programmable limits read board resistor
     // values through `board_resistor`. Runs BEFORE the supply pass so a
     // converter-driven supply net is known before the ideal auto-rails attach.
-    let behavioral = bind_behavioral(board, lib, &mut circuit, &node_of, custom);
+    let behavioral = bind_behavioral(board, lib, facts, &mut circuit, &node_of, custom);
 
     // ── Pass 3b: attach configurable power supplies ──────────────────────────
     // A supply net takes an ideal source (default Ideal at the rail's nominal
@@ -909,7 +919,9 @@ pub fn bind_board_driven(
     // reference for the parts we stamp) and the component's resolved ratings +
     // footprint, so the stress monitor can evaluate it. Supplies/regulators are
     // matched by their Vsource device id directly.
-    let device_meta = gather_device_meta(board, lib, &circuit, &node_of, &mcus, &digital, &dacs);
+    let device_meta = gather_device_meta(
+        board, lib, facts, &circuit, &node_of, &mcus, &digital, &dacs,
+    );
 
     // Computed before the move: see `BoundBoard::latching_switches`.
     let latching_switches = component_kinds.values().any(|k| k == "timer");
@@ -956,6 +968,7 @@ pub fn bind_board_driven(
 fn bind_behavioral(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
+    facts: Option<&BoardFacts>,
     circuit: &mut Circuit,
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
     custom: &crate::behavioral::CustomRegistry,
@@ -992,7 +1005,7 @@ fn bind_behavioral(
         |refdes: &str| -> Option<f64> { resistor_ohms.get(refdes).copied().flatten() };
 
     let mut out = Vec::new();
-    for comp in &board.components {
+    for (index, comp) in board.components.iter().enumerate() {
         // Not assembled, or identity refused -> no behavioural device (same
         // three-state rule as pass 2). Custom factories may match raw value
         // strings even when normal model resolution refuses the component, so
@@ -1000,8 +1013,8 @@ fn bind_behavioral(
         let Some(part) = AssemblyState::of(comp).fitted() else {
             continue;
         };
-        let res = resolve(lib, part);
-        let model = res.model;
+        let found = part_facts(facts, index, lib, part);
+        let model = found.resolution.model.as_ref();
 
         // Escape-hatch keys: the resolved model id, the component value, and the
         // MPN, any of which a custom factory may be registered under.
@@ -1022,9 +1035,8 @@ fn bind_behavioral(
         // only when the pin is genuinely DRIVEN (mb2.0's GPIO), not merely left
         // floating at 0 V (mb2.5+ NC).
         let empty_pins = std::collections::BTreeMap::new();
-        let model_pins = model.as_ref().map_or(&empty_pins, |m| &m.pins);
-        let role_nets =
-            role_node_map_pins(comp, model_pins, model.as_ref().map(|m| m.kind), node_of);
+        let model_pins = model.map_or(&empty_pins, |m| &m.pins);
+        let role_nets = role_node_map_pins(comp, model_pins, model.map(|m| m.kind), node_of);
         let role_map: std::collections::BTreeMap<String, NodeId> = role_nets
             .into_iter()
             .filter(|(_role, node)| !circuit.node_name(*node).starts_with("unconnected-"))
@@ -1034,7 +1046,7 @@ fn bind_behavioral(
         //    even for a part with no declarative block / no DB model at all.
         if !custom.is_empty() {
             if let Some(boxed) = custom.build_for(&keys) {
-                let params = model.as_ref().map(|m| m.params.clone()).unwrap_or_default();
+                let params = model.map(|m| m.params.clone()).unwrap_or_default();
                 out.push(crate::behavioral::BehavioralDevice::from_custom(
                     circuit,
                     &comp.reference,
@@ -1047,10 +1059,10 @@ fn bind_behavioral(
         }
 
         // 2. Otherwise the declarative behavioural block, if the model has one.
-        let Some(mut model) = model else { continue };
-        if model.behavioral.is_empty() {
+        let Some(model) = model.filter(|m| !m.behavioral.is_empty()) else {
             continue;
-        }
+        };
+        let mut model = model.clone();
         // Resolve board-programmable params: any `<name>_from_ref = "Rxx"` param
         // is rewritten to `<name> = ohms(Rxx)`, reading the value off the board.
         // A missing board resistor means the part it programmed is gone (the
@@ -1107,6 +1119,7 @@ fn resolve_from_ref_params(
 fn gather_device_meta(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
+    facts: Option<&BoardFacts>,
     circuit: &Circuit,
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
     mcus: &[McuBinding],
@@ -1116,44 +1129,27 @@ fn gather_device_meta(
     // Index components by reference, with their resolved kind/ratings/footprint.
     struct CompInfo {
         kind: ComponentKind,
-        ratings: hauksbee_models::schema::Ratings,
-        derating: hauksbee_models::derating::Derating,
+        rated: std::sync::Arc<Rated>,
         footprint: String,
         /// Role nodes, for a card rating current or power per path.
         roles: HashMap<String, NodeId>,
     }
     let mut by_ref: HashMap<String, CompInfo> = HashMap::new();
-    for comp in &board.components {
+    for (index, comp) in board.components.iter().enumerate() {
         // Only a present part's ratings may describe a monitored device: a DNP
         // or identity-refused record sharing the reference designator must not
         // supply the ratings for a device another record stamped.
         let Some(part) = AssemblyState::of(comp).fitted() else {
             continue;
         };
-        let res = resolve(lib, part);
-        if let Some(m) = res.model {
-            let mounting = (comp.properties.iter().rev())
-                .find(|(k, _)| k == hauksbee_models::derating::MOUNTING_PROPERTY)
-                .map(|(_, v)| v.as_str());
-            let derating = m
-                .derating
-                .fitted(&comp.reference, &comp.footprint, mounting);
-            let roles = role_node_map(comp, &m, node_of);
-            // A fuse or polyfuse limits by its hold current: the card's, else the
-            // one its value states ("6V 0.5A"), so a load past it is a trip.
-            let mut ratings = m.ratings.clone();
-            if m.passive_class == Some(hauksbee_models::schema::PassiveClass::Fuse) {
-                ratings.trips_over_current = true;
-                ratings.max_current_a = ratings
-                    .max_current_a
-                    .or_else(|| hauksbee_models::value::parse_current_rating_a(&comp.value));
-            }
+        let found = part_facts(facts, index, lib, part);
+        if let (Some(m), Some(rated)) = (&found.resolution.model, found.rated(comp)) {
+            let roles = role_node_map(comp, m, node_of);
             by_ref.insert(
                 comp.reference.clone(),
                 CompInfo {
                     kind: m.kind,
-                    ratings,
-                    derating,
+                    rated,
                     footprint: comp.footprint.clone(),
                     roles,
                 },
@@ -1191,8 +1187,8 @@ fn gather_device_meta(
                     device: id,
                     kind: info.kind,
                     footprint: info.footprint.clone(),
-                    ratings: info.ratings.clone(),
-                    derating: info.derating.clone(),
+                    ratings: info.rated.ratings.clone(),
+                    derating: info.rated.derating.clone(),
                 });
             }
         }
@@ -1226,8 +1222,8 @@ fn gather_device_meta(
                             device: id,
                             kind: ComponentKind::Vreg,
                             footprint: info.footprint.clone(),
-                            ratings: info.ratings.clone(),
-                            derating: info.derating.clone(),
+                            ratings: info.rated.ratings.clone(),
+                            derating: info.rated.derating.clone(),
                         });
                     }
                 }
@@ -1252,7 +1248,14 @@ fn gather_device_meta(
         if let Some(c) = by_ref.get(r) {
             let paths = paths_of.entry(r).or_insert_with(|| {
                 let units = &units_of[r.as_str()];
-                crate::stress::rated_paths_indexed(circuit, &index, r, &c.derating, &c.roles, units)
+                crate::stress::rated_paths_indexed(
+                    circuit,
+                    &index,
+                    r,
+                    &c.rated.derating,
+                    &c.roles,
+                    units,
+                )
             });
             meta.derating.carriers.clone_from(paths);
         }
@@ -1278,14 +1281,14 @@ fn gather_device_meta(
     // deterministic meta (and therefore fault/frame) order across runs.
     let push_pin = |metas: &mut Vec<DeviceMeta>, reference: &str, pin: String, vsource| {
         if let Some(info) = by_ref.get(reference) {
-            if info.ratings.max_pin_current_a.is_some() {
+            if info.rated.ratings.max_pin_current_a.is_some() {
                 metas.push(DeviceMeta {
                     reference: format!("{reference}:{pin}"),
                     device: vsource,
                     kind: info.kind,
                     footprint: info.footprint.clone(),
-                    ratings: info.ratings.clone(),
-                    derating: info.derating.clone(),
+                    ratings: info.rated.ratings.clone(),
+                    derating: info.rated.derating.clone(),
                 });
             }
         }
@@ -1327,6 +1330,135 @@ fn gather_device_meta(
 #[must_use]
 pub fn resolve(lib: &ModelLibrary, part: FittedComponent<'_>) -> hauksbee_models::Resolution {
     library_resolution(lib, part.component())
+}
+
+/// What the library alone decides about one fitted part, shared by every board
+/// that has that part exactly.
+pub struct PartFacts {
+    pub resolution: hauksbee_models::Resolution,
+    rated: std::sync::OnceLock<Arc<Rated>>,
+}
+
+/// A part's ratings and derating, as the stress monitor holds them.
+pub struct Rated {
+    ratings: hauksbee_models::schema::Ratings,
+    derating: hauksbee_models::derating::Derating,
+}
+
+impl PartFacts {
+    const fn new(resolution: hauksbee_models::Resolution) -> Self {
+        Self {
+            resolution,
+            rated: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The ratings the model gives the part `comp`, worked out on first ask.
+    fn rated(&self, comp: &Component) -> Option<Arc<Rated>> {
+        let m = self.resolution.model.as_ref()?;
+        let rated = self.rated.get_or_init(|| {
+            let mounting = (comp.properties.iter().rev())
+                .find(|(k, _)| k == hauksbee_models::derating::MOUNTING_PROPERTY)
+                .map(|(_, v)| v.as_str());
+            let derating = m
+                .derating
+                .fitted(&comp.reference, &comp.footprint, mounting);
+            // A fuse or polyfuse limits by its hold current: the card's, else the
+            // one its value states ("6V 0.5A"), so a load past it is a trip.
+            let mut ratings = m.ratings.clone();
+            if m.passive_class == Some(hauksbee_models::schema::PassiveClass::Fuse) {
+                ratings.trips_over_current = true;
+                ratings.max_current_a = ratings
+                    .max_current_a
+                    .or_else(|| hauksbee_models::value::parse_current_rating_a(&comp.value));
+            }
+            Arc::new(Rated { ratings, derating })
+        });
+        Some(Arc::clone(rated))
+    }
+}
+
+/// What a board and the library alone decide, for the binder to take.
+///
+/// Each fitted part's [`PartFacts`] (by component index) and the board's
+/// separate-circuit grounds. An ensemble's boards differ in a few sampled
+/// values, so each is [derived](Self::derived) from a base's facts, holding
+/// pointers to what it has alike, not copies.
+pub struct BoardFacts {
+    parts: Vec<Option<Arc<PartFacts>>>,
+    islands: Arc<std::collections::HashSet<i64>>,
+}
+
+impl BoardFacts {
+    /// The facts of `board`, sharing with `base` (a board and its facts) what
+    /// the two have alike: a part with the same identity and pins, and the
+    /// ground islands when every pin is on the same net.
+    #[must_use]
+    pub fn derived(
+        board: &ExtractedBoard,
+        lib: &ModelLibrary,
+        base: Option<(&ExtractedBoard, &Self)>,
+    ) -> Self {
+        let shared = |i: usize, comp: &Component| {
+            let (b, facts) = base?;
+            same_part(b.components.get(i)?, comp).then(|| facts.parts[i].clone())?
+        };
+        let part = |(i, comp): (usize, &Component)| {
+            let fitted = AssemblyState::of(comp).fitted()?;
+            shared(i, comp).or_else(|| Some(Arc::new(PartFacts::new(resolve(lib, fitted)))))
+        };
+        let islands = match base {
+            Some((b, facts)) if same_topology(b, board) => Arc::clone(&facts.islands),
+            _ => Arc::new(island_reference_grounds(board)),
+        };
+        Self {
+            parts: board.components.iter().enumerate().map(part).collect(),
+            islands,
+        }
+    }
+
+    /// `(component index, model)` for each fitted part a model answers.
+    pub fn models(&self) -> impl Iterator<Item = (usize, &ModelEntry)> {
+        let each = self.parts.iter().enumerate();
+        each.filter_map(|(i, p)| Some((i, p.as_ref()?.resolution.model.as_ref()?)))
+    }
+}
+
+/// `part`'s facts: `facts`' for component `index`, else worked out now.
+fn part_facts(
+    facts: Option<&BoardFacts>,
+    index: usize,
+    lib: &ModelLibrary,
+    part: FittedComponent<'_>,
+) -> Arc<PartFacts> {
+    let held = facts.and_then(|f| f.parts[index].clone());
+    held.unwrap_or_else(|| Arc::new(PartFacts::new(resolve(lib, part))))
+}
+
+/// Whether two records carry the same pins, each on the same net.
+fn same_pins(a: &Component, b: &Component) -> bool {
+    let alike = |(p, q): (&hauksbee_extract::Pin, &hauksbee_extract::Pin)| {
+        (&p.number, p.net, &p.function, &p.kind) == (&q.number, q.net, &q.function, &q.kind)
+    };
+    a.pins.len() == b.pins.len() && a.pins.iter().zip(&b.pins).all(alike)
+}
+
+/// Whether two records say the same about a part: everything its resolution
+/// and ratings read (a position or a layer is not read).
+fn same_part(a: &Component, b: &Component) -> bool {
+    a.reference == b.reference
+        && (&a.value, &a.lib_id, &a.footprint) == (&b.value, &b.lib_id, &b.footprint)
+        && (&a.properties, a.dnp) == (&b.properties, b.dnp)
+        && same_pins(a, b)
+}
+
+/// Whether two boards put every pin on the same net.
+fn same_topology(a: &ExtractedBoard, b: &ExtractedBoard) -> bool {
+    a.components.len() == b.components.len()
+        && a.components
+            .iter()
+            .zip(&b.components)
+            .all(|(p, q)| same_pins(p, q))
 }
 
 /// What the model bound to `reference` says about that part's chip-select.
@@ -8009,13 +8141,18 @@ fn regulator_output_nets(board: &ExtractedBoard) -> HashMap<i64, String> {
 /// [`power_out_net_voltages`] for a board whose symbol does not tag the pin
 /// `power_out`; a regulator output on the net is excluded the same way, by the
 /// caller's regulator check and the vreg model sourcing its own net.
-fn module_supply_net_voltages(board: &ExtractedBoard, lib: &ModelLibrary) -> HashMap<i64, f64> {
+fn module_supply_net_voltages(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    facts: Option<&BoardFacts>,
+) -> HashMap<i64, f64> {
     let mut out = HashMap::new();
-    for comp in &board.components {
+    for (index, comp) in board.components.iter().enumerate() {
         let Some(part) = AssemblyState::of(comp).fitted() else {
             continue;
         };
-        let Some(model) = resolve(lib, part).model else {
+        let found = part_facts(facts, index, lib, part);
+        let Some(model) = &found.resolution.model else {
             continue;
         };
         for supply in &model.supply_outputs {
@@ -10580,7 +10717,7 @@ style = "i2c_pointer"
         };
         let node_of =
             |n: Option<i64>| n.map(|n| NodeId(u32::try_from(n).expect("valid synthetic node")));
-        let metas = gather_device_meta(&board, &lib, enabled, &node_of, &[], &[], &[]);
+        let metas = gather_device_meta(&board, &lib, None, enabled, &node_of, &[], &[], &[]);
         let mut names: Vec<_> = metas.iter().map(|m| m.reference.as_str()).collect();
         names.sort_unstable();
         assert_eq!(names, ["U8_s0", "U8_s1", "U8_s2", "U8_s3"]);

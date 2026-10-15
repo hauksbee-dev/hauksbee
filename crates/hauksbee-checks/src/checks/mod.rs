@@ -92,6 +92,7 @@ pub mod straps;
 pub(crate) mod test_support;
 pub mod usb_c;
 
+use hauksbee_bind::binder::BoardFacts;
 use hauksbee_bind::variant_sweep::CornerPlan;
 use hauksbee_extract::{ExtractedBoard, NetLintReport, SiReport};
 use hauksbee_models::ModelLibrary;
@@ -141,8 +142,8 @@ pub(crate) fn resolved_components<'a>(
 pub struct BoardStatics<'l> {
     lib: &'l ModelLibrary,
     fingerprint: u64,
-    /// `(index into the board's components, its model)` for each fitted part.
-    models: Vec<(usize, hauksbee_models::ModelEntry)>,
+    /// Each fitted part's model, and the other things the library decides.
+    facts: BoardFacts,
     rails: std::sync::OnceLock<envelope::Rails>,
 }
 
@@ -150,15 +151,24 @@ impl<'l> BoardStatics<'l> {
     /// The statics of `board` against `lib`.
     #[must_use]
     pub fn of(board: &ExtractedBoard, lib: &'l ModelLibrary) -> Self {
-        let models = Self::resolve_all(board, lib)
-            .map(|(i, _, model)| (i, model))
-            .collect();
+        Self::with_facts(board, lib, BoardFacts::derived(board, lib, None))
+    }
+
+    /// The statics of `board`, given its `facts`.
+    #[must_use]
+    pub fn with_facts(board: &ExtractedBoard, lib: &'l ModelLibrary, facts: BoardFacts) -> Self {
         Self {
             lib,
             fingerprint: fingerprint(board),
-            models,
+            facts,
             rails: std::sync::OnceLock::new(),
         }
+    }
+
+    /// What the library decides about the board, for the binder to take.
+    #[must_use]
+    pub const fn facts(&self) -> &BoardFacts {
+        &self.facts
     }
 
     fn resolve_all<'a>(
@@ -199,8 +209,9 @@ impl<'l> BoardStatics<'l> {
             &'a hauksbee_models::ModelEntry,
         ),
     > + 'a {
-        let at = |(i, model): &'a (usize, _)| (&board.components[*i], model);
-        self.models.iter().map(at)
+        self.facts
+            .models()
+            .map(|(i, model)| (&board.components[i], model))
     }
 }
 
