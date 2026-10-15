@@ -134,6 +134,7 @@ export default function SimView({
   // A 316 px instrument rail consumes the entire work surface on a phone.
   // Start it collapsed there so Drive it live still lands on the board; the
   // labelled 18 px toggle keeps every instrument one tap away.
+  const [narrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 640)
   const [railOpen, setRailOpen] = useState(
     () => typeof window === 'undefined' || window.innerWidth >= 640,
   )
@@ -527,8 +528,9 @@ export default function SimView({
         {shorts && <ShortsBanner shorts={shorts} />}
 
         <div className="flex flex-1 overflow-hidden">
-          {/* The working surface: the board, and its scope under it. */}
-          <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+          {/* The working surface: the board, and its scope under it. On a
+              phone the open dock takes the screen instead of squeezing both. */}
+          <div className={`flex-1 min-w-0 flex flex-col overflow-hidden${railOpen ? ' max-sm:hidden' : ''}`}>
             <div
               className="flex-1 relative min-w-0 min-h-0 overflow-hidden"
               style={boardFullscreen
@@ -614,7 +616,7 @@ export default function SimView({
                   onAddProbe={addProbe}
                   onRemoveProbe={removeProbe}
                   exportRef={scopeRef}
-                  height={150}
+                  height={narrow ? 96 : 150}
                 />
               </div>
             )}
@@ -638,8 +640,8 @@ export default function SimView({
           </button>
 
           {railOpen && (
-            <div className="shrink-0 flex flex-col min-h-0"
-              style={{ width: 'min(340px, calc(100vw - 18px))', borderLeft: '1px solid var(--hairline)', background: 'var(--canvas)' }}>
+            <div className="shrink-0 flex flex-col min-h-0 w-[340px] max-sm:w-auto max-sm:flex-1 max-sm:min-w-0"
+              style={{ borderLeft: '1px solid var(--hairline)', background: 'var(--canvas)' }}>
               {/* Without this the dock's panels ("No nets loaded") read as
                   findings ABOUT the board rather than as a lost connection. */}
               {sessionLost && (
