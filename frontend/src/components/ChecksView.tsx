@@ -699,7 +699,9 @@ export function ChecksView({
     const row = document.querySelector<HTMLElement>(`.check-row[data-row-id="${assertIndex + 1}"]`)
       ?? document.querySelector<HTMLElement>('[data-testid="check-results"]')
     if (!row) return
-    row.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    // 'start': a row with long evidence is taller than the viewport, and
+    // centring it would scroll its heading (the part that names it) away.
+    row.scrollIntoView({ behavior: 'smooth', block: 'start' })
     row.animate?.([{ boxShadow: 'inset 0 0 0 2px var(--copper)' }, { boxShadow: 'inset 0 0 0 2px transparent' }], { duration: 1200 })
   }
 

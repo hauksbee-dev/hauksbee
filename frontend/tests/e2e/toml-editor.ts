@@ -106,9 +106,9 @@ await browserFlow({
   if (await marks.count() > 0) {
     await marks.last().click()
     await settle(page, 900)
-    const row = page.locator('.check-row', { hasText: 'A net must sit at a voltage' }).last()
-    const box = await row.boundingBox()
-    ok('clicking a verdict dot brings its row into view', !!box && box.y >= 0 && box.y < 1000, JSON.stringify(box))
+    const row = page.locator(`.check-row[data-row-id="${asserts}"]`)
+    const box = (await row.count()) ? await row.boundingBox() : null
+    ok('clicking a verdict dot brings the top of its row into view', !!box && box.y >= -2 && box.y < 300, JSON.stringify(box))
     await shoot(page, '04-gutter-jump')
   }
 
@@ -133,7 +133,15 @@ await browserFlow({
     await settle(page, 1_000)
     const text = await editorText(page)
     ok('applying the fix rewrote the kind', text.includes('kind = "boot_coverage"') && !text.includes('boot-coverage'), text.slice(-60))
-    ok('the alias marker cleared', await page.locator(`${EDITOR} .cm-lintRange`, { hasText: 'boot' }).count() === 0)
+    // A missing-`net` diagnostic may still sit on the kind; only the alias one must go.
+    const left = page.locator(`${EDITOR} .cm-lintRange`, { hasText: 'boot' })
+    let aliasLeft = ''
+    if (await left.count() > 0) {
+      await left.first().hover()
+      await tip.first().waitFor({ timeout: 2_000 }).catch(() => undefined)
+      aliasLeft = (await tip.count()) ? await tip.first().innerText() : ''
+    }
+    ok('the alias marker cleared', !/boot-coverage|Replace with boot_coverage|alias/i.test(aliasLeft), aliasLeft.replace(/\n/g, ' / '))
   }
   await page.mouse.move(5, 5)
 
