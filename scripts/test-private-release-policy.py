@@ -36,6 +36,33 @@ SURFACE_CHECKER = ROOT / "scripts" / "check-private-release-surfaces.py"
 CONTAINER_PREFLIGHT = ROOT / "scripts" / "check-private-container-publication.sh"
 MIRROR_DEPENDENCY_CHECKER = ROOT / "scripts" / "check-mirror-dependencies.py"
 REGISTRY_USER = ROOT / "integrations" / "github-action" / "resolve-registry-user.sh"
+SIGNING_SECRETS = (
+    "HAUKSBEE_SIGN_IDENTITY",
+    "HAUKSBEE_SIGNING_CERTIFICATE_BASE64",
+    "HAUKSBEE_SIGNING_CERTIFICATE_PASSWORD",
+    "HAUKSBEE_NOTARY_APPLE_ID",
+    "HAUKSBEE_NOTARY_TEAM_ID",
+    "HAUKSBEE_NOTARY_PASSWORD",
+)
+
+
+def run_quiet(argv: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
+    """Run argv with captured text output and no check, unless the caller overrides it."""
+    return subprocess.run(argv, **{"text": True, "capture_output": True, "check": False, **kwargs})
+
+
+def fake_gh_env(tmp: Path, script: str, token: str | None, **fake_vars: str) -> dict[str, str]:
+    """Write an executable fake gh into tmp and return an env that puts it first on PATH."""
+    gh = tmp / "gh"
+    gh.write_text(script)
+    gh.chmod(0o755)
+    env = os.environ.copy()
+    env.update({"PATH": f"{tmp}:{env['PATH']}", **fake_vars})
+    if token is None:
+        env.pop("GH_TOKEN", None)
+    else:
+        env["GH_TOKEN"] = token
+    return env
 
 
 def provenance_checkout(root: Path) -> None:
@@ -1269,14 +1296,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         cleanup_start = workflow.index("- name: Clean up macOS signing keychain")
         cleanup_end = workflow.index("\n  build-windows:", cleanup_start)
         cleanup_step = workflow[cleanup_start:cleanup_end]
-        for secret in (
-            "HAUKSBEE_SIGN_IDENTITY",
-            "HAUKSBEE_SIGNING_CERTIFICATE_BASE64",
-            "HAUKSBEE_SIGNING_CERTIFICATE_PASSWORD",
-            "HAUKSBEE_NOTARY_APPLE_ID",
-            "HAUKSBEE_NOTARY_TEAM_ID",
-            "HAUKSBEE_NOTARY_PASSWORD",
-        ):
+        for secret in SIGNING_SECRETS:
             with self.subTest(secret=secret):
                 self.assertIn(f"secrets.{secret}", import_step)
         for contract in (
@@ -1301,14 +1321,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                 self.assertIn(contract, cleanup_step)
 
         signing_doc = (ROOT / "app/macos/SIGNING.md").read_text()
-        for secret in (
-            "HAUKSBEE_SIGN_IDENTITY",
-            "HAUKSBEE_SIGNING_CERTIFICATE_BASE64",
-            "HAUKSBEE_SIGNING_CERTIFICATE_PASSWORD",
-            "HAUKSBEE_NOTARY_APPLE_ID",
-            "HAUKSBEE_NOTARY_TEAM_ID",
-            "HAUKSBEE_NOTARY_PASSWORD",
-        ):
+        for secret in SIGNING_SECRETS:
             self.assertIn(secret, signing_doc)
 
     def test_shipped_installer_examples_use_the_public_one_liner(self) -> None:
@@ -2007,8 +2020,8 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                         )
                     )
 
-            gh = tmp / "gh"
-            gh.write_text(
+            env = fake_gh_env(
+                tmp,
                 textwrap.dedent(
                     """\
                     #!/usr/bin/env bash
@@ -2029,22 +2042,12 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                       *) exit 64 ;;
                     esac
                     """
-                )
+                ),
+                token,
+                FAKE_GH_LOG=str(tmp / "gh.log"),
+                FAKE_GH_VISIBILITY=visibility,
+                FAKE_IMMUTABLE_RELEASES=str(immutable_releases).lower(),
             )
-            gh.chmod(0o755)
-            env = os.environ.copy()
-            env.update(
-                {
-                    "PATH": f"{tmp}:{env['PATH']}",
-                    "FAKE_GH_LOG": str(tmp / "gh.log"),
-                    "FAKE_GH_VISIBILITY": visibility,
-                    "FAKE_IMMUTABLE_RELEASES": str(immutable_releases).lower(),
-                }
-            )
-            if token is None:
-                env.pop("GH_TOKEN", None)
-            else:
-                env["GH_TOKEN"] = token
             return subprocess.run(
                 ["bash", "-c", self.release_preflight_body()],
                 cwd=tmp,
