@@ -2,7 +2,7 @@
 //! the severity scale, the exit-code table and the check names, beside the
 //! existing [`crate::glossary`].
 //!
-//! The CLI, `hauksbee-ci`, the app, JUnit, SARIF, the KiCad report and the
+//! The CLI, `hauksbee-ci`, the app, `JUnit`, SARIF, the KiCad report and the
 //! documents all render a run from the same [`crate::run_record::RunRecord`],
 //! and they name what they show with the words defined here. A renderer that
 //! wants a label, a one-line meaning, a CI alias, an exit code, a SARIF level
@@ -278,7 +278,9 @@ impl ExitClass {
 }
 
 /// How much a finding matters, on one ordered scale (`info` lowest,
-/// `serious` highest). Whether it fails the run is a separate flag,
+/// `serious` highest).
+///
+/// Whether it fails the run is a separate flag,
 /// [`BLOCKING`]: the gate decides that per check (a lint warning can block, a
 /// DRC warning does not), and every renderer leads with it ("2 blocking,
 /// 0 serious, 2 worth a look") so the headline and the verdict agree.
@@ -427,8 +429,9 @@ pub const fn kicad_severity(severity: Severity, blocking: bool, waived: bool) ->
     }
 }
 
-/// How much a conclusion's evidence can be trusted: the record's spelling of
-/// [`EvidenceStatus`]. `full` replaces that type's `clean`, which collided
+/// How much a conclusion's evidence can be trusted.
+///
+/// The record's spelling of [`EvidenceStatus`]: `full` replaces that type's `clean`, which collided
 /// with the verdict word "clean"; `clean` stays the wire word in `run --json`
 /// v3 and `hauksbee-ci --json` v2 until those documents become the record.
 #[derive(

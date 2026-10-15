@@ -1,6 +1,6 @@
 //! `hauksbee.run-record/1`: the one document a run produces.
 //!
-//! Every surface renders from a [`RunRecord`]: the terminal, `--json`, JUnit,
+//! Every surface renders from a [`RunRecord`]: the terminal, `--json`, `JUnit`,
 //! SARIF, the KiCad report, the BOM CSV, the Markdown/HTML document and the
 //! app. It wraps what already exists instead of replacing it:
 //!
@@ -17,10 +17,11 @@
 //!
 //! `record_id` is `sha256:` over the canonical JSON of the record without
 //! `record_id`, `artifacts` and `signoffs`: the citable run identifier.
-//! Artifacts and sign-offs are attached after sealing (a JUnit file or an
+//! Artifacts and sign-offs are attached after sealing (a `JUnit` file or an
 //! HTML document carries the id, so it cannot also be inside it).
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use schemars::{json_schema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
@@ -329,7 +330,7 @@ pub struct Waiver {
 }
 
 /// One spec assertion (`hauksbee-ci`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Assertion {
     /// Stable id: `<spec file>#<label>`.
     pub id: String,
@@ -357,7 +358,7 @@ pub enum AssertionOutcome {
 }
 
 /// The evidence spine, as its own types serialize it.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct EvidenceSpine {
     #[serde(default)]
     #[schemars(with = "Vec<ArtifactProvenance>")]
@@ -477,8 +478,12 @@ impl RunRecord {
     /// As [`Self::canonical_json`].
     pub fn compute_id(&self) -> serde_json::Result<String> {
         let digest = Sha256::digest(self.canonical_json()?.as_bytes());
-        let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-        Ok(format!("sha256:{hex}"))
+        let mut id = String::from("sha256:");
+        for b in digest {
+            // Writing to a String cannot fail.
+            let _ = write!(id, "{b:02x}");
+        }
+        Ok(id)
     }
 
     /// Fill `record_id`. Call after the last change to anything it covers.

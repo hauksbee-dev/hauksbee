@@ -145,23 +145,30 @@ fn serde_round_trip_is_lossless() {
 
 #[test]
 fn record_id_ignores_key_order_and_whitespace() {
-    let r = sample();
-    assert!(r.record_id.starts_with("sha256:") && r.record_id.len() == 71);
-    // Reverse every object's key order and re-indent; the id must not move.
-    fn reverse(v: Value) -> Value {
+    /// JSON text with every object's keys in reverse order and extra
+    /// whitespace, written by hand so no map type can re-sort it.
+    fn reversed_text(v: &Value) -> String {
         match v {
             Value::Object(m) => {
-                let mut entries: Vec<(String, Value)> = m.into_iter().collect();
-                entries.reverse();
-                Value::Object(entries.into_iter().map(|(k, v)| (k, reverse(v))).collect())
+                let fields: Vec<String> = m
+                    .iter()
+                    .rev()
+                    .map(|(k, v)| {
+                        format!("\n  {} :  {}", Value::from(k.as_str()), reversed_text(v))
+                    })
+                    .collect();
+                format!("{{{}\n}}", fields.join(" ,"))
             }
-            Value::Array(a) => Value::Array(a.into_iter().map(reverse).collect()),
-            o => o,
+            Value::Array(a) => {
+                let items: Vec<String> = a.iter().map(reversed_text).collect();
+                format!("[ {} ]", items.join(" ,\t"))
+            }
+            leaf => leaf.to_string(),
         }
     }
-    let shuffled = serde_json::to_string_pretty(&reverse(serde_json::to_value(&r).unwrap()))
-        .unwrap()
-        .replace('\n', "\n   ");
+    let r = sample();
+    assert!(r.record_id.starts_with("sha256:") && r.record_id.len() == 71);
+    let shuffled = reversed_text(&serde_json::to_value(&r).unwrap());
     let back: RunRecord = serde_json::from_str(&shuffled).unwrap();
     assert_eq!(back.compute_id().unwrap(), r.record_id);
     assert_eq!(back.canonical_json().unwrap(), r.canonical_json().unwrap());
