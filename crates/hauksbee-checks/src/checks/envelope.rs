@@ -1123,6 +1123,40 @@ basis = "Recommended Operating Conditions, Table 1, VDD row"
         );
     }
 
+    /// An RP2040 core net fed from its own regulator output is at the 1.1 V
+    /// that regulator starts at, whatever level the net's name implies; the
+    /// same net fed from nowhere the board shows keeps the name's assumed band,
+    /// which leaves the DVDD window.
+    #[test]
+    fn an_on_chip_regulator_output_sets_its_rail_over_the_net_name() {
+        let nets = &[(1, "GND"), (2, "+1V2"), (3, "VREG_OUT_NC")];
+        let rp2040 = |vreg_vout_net: i64| Component {
+            footprint: "Package_DFN_QFN:QFN-56-1EP_7x7mm_P0.4mm_EP3.2x3.2mm".into(),
+            ..part(
+                "U7",
+                "RP2040",
+                vec![
+                    pin("23", 2),
+                    pin("50", 2),
+                    pin("45", vreg_vout_net),
+                    pin("57", 1),
+                ],
+            )
+        };
+        let core = |vreg_vout_net: i64| {
+            let report = envelope_lint(
+                &board(nets, vec![rp2040(vreg_vout_net)]),
+                &ModelLibrary::builtin(),
+            );
+            report
+                .of_check(LintCheck::OperatingEnvelope)
+                .filter(|f| f.message.contains("dvdd"))
+                .count()
+        };
+        assert_eq!(core(2), 0, "VREG_VOUT drives the core net");
+        assert!(core(3) >= 1, "nothing on the board sets the core net");
+    }
+
     #[test]
     fn named_rail_uses_full_plus_minus_five_percent_range() {
         let report = envelope_lint(
