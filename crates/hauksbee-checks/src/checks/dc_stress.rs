@@ -1013,4 +1013,37 @@ mod tests {
             inside.findings
         );
     }
+
+    /// A power FET the library knows only by its package binds the generic
+    /// placeholder card (30 V, no datasheet's). Held off on a 48 V rail it sees
+    /// 48 V: judged against that stand-in, this is the stated condition naming
+    /// the part and the card, never a failing finding, because the fitted part
+    /// may be rated far past it.
+    #[test]
+    fn a_power_fet_on_the_generic_placeholder_past_30_v_is_a_condition() {
+        let nets = [(1, "GND"), (2, "+48V"), (3, "/DRAIN")];
+        let pull = part("R1", "10k", &[("1", 2), ("2", 3)]);
+        let mut fet = part("Q1", "NFET-UNCARDED", &[("G", 1), ("D", 3), ("S", 1)]);
+        fet.footprint = "Package_TO_SOT_SMD:TO-252-2".into();
+        let report = dc_stress_lint(&board(&nets, vec![pull, fet]), &ModelLibrary::builtin());
+        let found = findings_on(&report, "Q1");
+        assert!(!found.is_empty(), "{:#?}", report.findings);
+        assert!(
+            found.iter().all(|f| f.severity == Severity::Low),
+            "{:#?}",
+            report.findings
+        );
+        let stated = (found.iter())
+            .find(|f| hauksbee_models::rating_basis::is_condition(&f.message))
+            .unwrap_or_else(|| panic!("no stated condition: {:#?}", report.findings));
+        assert!(
+            stated
+                .message
+                .contains("judged against a generic 30 V voltage rating")
+                && stated.message.contains("generic_nmos_power_pkg")
+                && stated.message.contains("give Q1 its own model"),
+            "{}",
+            stated.message
+        );
+    }
 }
