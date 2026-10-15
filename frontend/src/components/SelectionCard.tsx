@@ -307,7 +307,11 @@ export function SelectionCard({
                   {onPickNet ? (
                     <button
                       type="button"
-                      onClick={() => onPickNet(n)}
+                      onClick={() => {
+                        onPickNet(n)
+                        // The card is rebuilt for the net: keep the keyboard in it.
+                        window.setTimeout(() => document.querySelector<HTMLElement>('[data-testid="check-this"]')?.focus(), 60)
+                      }}
                       className="hb-press cursor-pointer"
                       style={{
                         background: 'none', border: 'none', padding: 0,

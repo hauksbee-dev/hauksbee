@@ -90,7 +90,7 @@ export function AddCheckMenu({ open, onOpenChange, legacy, onLegacyAdd }: {
                 />
               </div>
               {groups.map(([group, entries]) => (
-                <div key={group} data-testid={`kind-group-${group.toLowerCase().replace(/\W+/g, '-')}`}>
+                <div key={group} data-testid={`check-group-${group.toLowerCase().replace(/\W+/g, '-')}`}>
                   <div className="px-3 pt-2 pb-0.5 text-[10px] font-bold tracking-[0.14em]" style={{ color: 'var(--silk-faint)' }}>
                     {group.toUpperCase()}
                   </div>

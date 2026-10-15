@@ -182,10 +182,10 @@ export function OfferEditor({ offer, host, live, onAdd, onCollapse, defaultNets 
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" data-testid="offer-add" className="hb-btn-primary hb-press px-3 py-1.5 text-[12px]" onClick={() => add(false)}>
+        <button type="button" data-testid="editor-add" className="hb-btn-primary hb-press px-3 py-1.5 text-[12px]" onClick={() => add(false)}>
           Add check
         </button>
-        <button type="button" data-testid="offer-add-run" className="hb-btn hb-press px-3 py-1.5 text-[12px]" onClick={() => add(true)}>
+        <button type="button" data-testid="editor-add-run" className="hb-btn hb-press px-3 py-1.5 text-[12px]" onClick={() => add(true)}>
           Add and run
         </button>
         <span className="text-[10px]" style={{ color: 'var(--silk-faint)' }}>Ctrl+Enter adds, Esc closes</span>
@@ -225,7 +225,7 @@ function BlockedOffer({ offer, onFix }: { offer: Offer; onFix: () => void }) {
     >
       <div>{offer.text}</div>
       <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px]">
-        <span data-testid="offer-blocked-reason">{blocked.reason}</span>
+        <span data-testid="blocked-reason">{blocked.reason}</span>
         {blocked.fix && (
           <button type="button" data-testid="needs_fix" className="hb-chip hb-press px-2 py-0.5 text-[11px]" onClick={onFix}>
             {blocked.fix.label}
