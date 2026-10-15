@@ -174,12 +174,16 @@ function subjectOf(detail: string): ResultEntity | null {
  *  saying what blocks it, with the button that opens the open-parts sheet. The
  *  registry's own sentences, inputs and numbers are one click away, verbatim,
  *  so web, CLI and CI explain a limitation the same way. */
-export function AssertionEvidence({ result, assumptions, inventory, repeats, stale }: {
+export function AssertionEvidence({ result, assumptions, inventory, repeats, stale, part = 'all' }: {
   result: CheckResult
   assumptions: readonly EvidenceAssumption[]
   inventory: readonly ArtifactProvenance[]
   repeats: ReadonlySet<string>
   stale: boolean
+  /** 'glance': what a row always shows (bars, the board link, why it was not
+   *  judged); 'details': the evidence behind it, unfolded; 'all': both, with
+   *  the evidence folded. */
+  part?: 'all' | 'glance' | 'details'
 }) {
   const { onGo } = useContext(ResultLinkContext)
   const map = result.evidence
@@ -195,16 +199,47 @@ export function AssertionEvidence({ result, assumptions, inventory, repeats, sta
   const status = map?.status ?? 'clean'
   const details = linked.length > 0 || artifacts.length > 0 || !!map?.error_budget || (map?.models ?? []).length > 0
   const showSubject = !!subject && !!onGo
-  if (measures.length === 0 && !showSubject && !why && !details) return null
+  const glance = part !== 'details'
+  const unfold = part !== 'glance'
+  const note = part === 'glance' && measures.length === 0 && !why ? result.detail : ''
+  if (!(glance && (measures.length > 0 || showSubject || why || note)) && !(unfold && details)) return null
+  const evidence = <>
+    {linked.map(a => (
+      <div key={a.id} className="mt-1.5">
+        <div style={{ color: 'var(--silk)' }}>{withoutIds(a.statement)}{a.term && <> <Term id={a.term} /></>}</div>
+        {repeats.has(a.id) ? '(explained above)' : <>
+          <div>{withoutIds(`${a.because} ${a.consequence}`)}</div>
+          <div>To remove it: {withoutIds(a.replacement)}</div>
+        </>}
+      </div>
+    ))}
+    {artifacts.length > 0 && (
+      <div className="mt-1.5" style={{ color: 'var(--silk-faint)' }}>
+        Inputs: {artifacts.map(artifact => artifact.path.split('/').pop() ?? artifact.path).join(', ')}
+      </div>
+    )}
+    {map?.error_budget && (
+      <div className="mt-1" data-testid="error-budget-summary">
+        {summarizeErrorBudget(map.error_budget).map(row => <div key={row}>{row}</div>)}
+      </div>
+    )}
+    {(map?.models ?? []).length > 0 && (
+      <div className="mt-1" data-testid="model-provenance" style={{ color: 'var(--silk-faint)' }}>
+        Models: {(map?.models ?? []).map(describeModelSource).join('; ')}
+      </div>
+    )}
+  </>
+  const statusWord = <Term id={evidenceStatusTerm(status)}>{status}</Term>
   return (
     <div data-testid="assertion-evidence" className="mt-1.5 text-[12px]" style={{ color: 'var(--silk-dim)', opacity: stale ? 0.55 : 1 }}>
-      {(measures.length > 0 || showSubject) && (
+      {note && <div data-testid="result-note">{note}{stale ? ' (from the last run; the spec has changed since)' : ''}</div>}
+      {glance && (measures.length > 0 || showSubject) && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           {measures.map((m, i) => <MeasureBar key={i} measure={m} ok={result.passed && !result.invalid} />)}
           {showSubject && subject && <span data-testid="show-on-board"><EntityChip entity={subject} /></span>}
         </div>
       )}
-      {why && (
+      {glance && why && (
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1" data-testid="not-judged" style={{ color: 'var(--warn-strong)' }}>
           <span>Not judged: {why}</span>
           {open > 0 && (
@@ -214,37 +249,19 @@ export function AssertionEvidence({ result, assumptions, inventory, repeats, sta
           )}
         </div>
       )}
-      {details && (
+      {unfold && details && (part === 'details' ? (
+        <div className="mt-1" data-testid="numeric-details">
+          <div style={{ color: status === 'undermined' ? 'var(--warn)' : 'var(--silk-faint)' }}>Evidence {statusWord}</div>
+          {evidence}
+        </div>
+      ) : (
         <details className="mt-1" data-testid="numeric-details">
           <summary className="cursor-pointer" style={{ color: status === 'undermined' ? 'var(--warn)' : 'var(--silk-faint)' }}>
-            Evidence <Term id={evidenceStatusTerm(status)}>{status}</Term>
+            Evidence {statusWord}
           </summary>
-          {linked.map(a => (
-            <div key={a.id} className="mt-1.5">
-              <div style={{ color: 'var(--silk)' }}>{withoutIds(a.statement)}{a.term && <> <Term id={a.term} /></>}</div>
-              {repeats.has(a.id) ? '(explained above)' : <>
-                <div>{withoutIds(`${a.because} ${a.consequence}`)}</div>
-                <div>To remove it: {withoutIds(a.replacement)}</div>
-              </>}
-            </div>
-          ))}
-          {artifacts.length > 0 && (
-            <div className="mt-1.5" style={{ color: 'var(--silk-faint)' }}>
-              Inputs: {artifacts.map(artifact => artifact.path.split('/').pop() ?? artifact.path).join(', ')}
-            </div>
-          )}
-          {map?.error_budget && (
-            <div className="mt-1" data-testid="error-budget-summary">
-              {summarizeErrorBudget(map.error_budget).map(row => <div key={row}>{row}</div>)}
-            </div>
-          )}
-          {(map?.models ?? []).length > 0 && (
-            <div className="mt-1" data-testid="model-provenance" style={{ color: 'var(--silk-faint)' }}>
-              Models: {(map?.models ?? []).map(describeModelSource).join('; ')}
-            </div>
-          )}
+          {evidence}
         </details>
-      )}
+      ))}
     </div>
   )
 }

@@ -1,4 +1,5 @@
 import type { PeripheralRow } from '../../lib/check-spec'
+import { ToBoard } from './ChecksLinks'
 import { AddInlineButton, BuilderSection, Field, RemoveButton, RowCard, RowIssues } from './pieces'
 
 /** Physical interactions are experiment inputs, not verdicts. They live
@@ -16,7 +17,7 @@ export function InteractionBuilder({ peripherals, validation, onAdd, onUpdate, o
       testId="interaction-builder"
       title="Interactions & stimuli"
       caption={peripherals.length === 0
-        ? 'Click a trace on the board, or add one here.'
+        ? <><ToBoard>Click a trace on the board</ToBoard>, or add one here.</>
         : 'Real 50 Ω stimulus and contact models attached to board nets; not forced post-solve values.'}
       actions={(['stimulus', 'pushbutton', 'toggle'] as const).map(kind => (
         <button

@@ -1,9 +1,30 @@
-import { useMemo } from 'react'
+import { createContext, useContext, useMemo } from 'react'
 import type { WebReport } from '../../types/report'
 import { coverageFor, padNetsOf } from '../../lib/report-view'
 import { vocabulary } from '../../lib/result-links'
 import type { SelectedComponent } from '../SelectionCard'
 import { ResultLinkContext, type ResultLinkHandlers } from '../report/ResultLinks'
+
+/** Switch to the Board view, when the Checks page is mounted beside one. */
+export const ShowBoardContext = createContext<(() => void) | null>(null)
+
+/** Words that point at the board ("click a trace on the board") as a button
+ *  that goes there, or as plain words where there is no board to go to. */
+export function ToBoard({ children }: { children: React.ReactNode }) {
+  const show = useContext(ShowBoardContext)
+  if (!show) return <>{children}</>
+  return (
+    <button
+      type="button"
+      data-testid="to-board"
+      onClick={show}
+      className="hb-press underline underline-offset-2 text-left"
+      style={{ color: 'var(--copper)', background: 'none', border: 'none', padding: 0, font: 'inherit' }}
+    >
+      {children}
+    </button>
+  )
+}
 
 /** The Checks page's reach into the board: a part or net chip on a check row
  *  goes to the Board view with that part or net selected (its card open), the
@@ -37,5 +58,9 @@ export function ChecksLinks({ report, onShow, selectNet, selectComponent, childr
       onShow()
     },
   }), [report, onShow, selectNet, selectComponent])
-  return <ResultLinkContext.Provider value={links}>{children}</ResultLinkContext.Provider>
+  return (
+    <ShowBoardContext.Provider value={onShow}>
+      <ResultLinkContext.Provider value={links}>{children}</ResultLinkContext.Provider>
+    </ShowBoardContext.Provider>
+  )
 }

@@ -5,7 +5,7 @@ import { checkKind } from '../../lib/check-spec'
 import { groupOf, KIND_GROUPS, useCatalog } from '../../lib/check-catalog'
 import { repeatedAssumptions } from '../../lib/report-view'
 import type { CheckRow, RowIssue } from '../../lib/check-spec'
-import { ARRIVE, LEAVE, StaggerItem, ValueSettle } from '../../motion'
+import { ARRIVE, LEAVE, StaggerItem } from '../../motion'
 import { PlusIcon } from '../Icons'
 import { AssertionEvidence, ResultChip } from './pieces'
 import { ConstraintEditor } from '../ConstraintEditor'
@@ -155,23 +155,22 @@ export function AssertionGroups({
                         Not run: {issues.map(i => i.message).join(' · ')}
                       </div>
                     )}
-                    {rowResult && rowResult.detail && (
-                      <div
-                        data-testid="row-result-detail"
-                        className="mt-1.5 text-[11px] tnum"
-                        style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)', opacity: stale ? 0.55 : 1 }}
-                      >
-                        {/* The measured number rolls to its new value on a
-                            re-run: up from below when it rose, down from above
-                            when it fell. That direction is the only thing the
-                            animation carries. No colour: a measurement going up
-                            is not good news, it is a measurement. */}
-                        <ValueSettle value={rowResult.detail} />
-                        {stale ? ' (from the last run; the spec has changed since)' : ''}
-                      </div>
+                    {/* The result at a glance, on the row it judges: the
+                        measured value against its limit, the net or part it
+                        is about, and why it was not judged. */}
+                    {rowResult && (
+                      <AssertionEvidence
+                        part="glance"
+                        result={rowResult}
+                        assumptions={assumptions}
+                        inventory={inventory}
+                        repeats={repeats[displayRows.indexOf(c)] ?? new Set()}
+                        stale={stale}
+                      />
                     )}
                     {rowResult && evidenceOpen.has(c.id) && (
                       <AssertionEvidence
+                        part="details"
                         result={rowResult}
                         assumptions={assumptions}
                         inventory={inventory}

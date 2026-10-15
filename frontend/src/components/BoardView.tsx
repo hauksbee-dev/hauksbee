@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { BoardRequest, ModelCoverageComponent } from '../types/report'
+import type { BoardRequest, ModelCoverageComponent, WebOpenPart } from '../types/report'
 import { coverageFor, explainReport, modelsOnNet, padNetsOf, plural, reportView, stageWords } from '../lib/report-view'
 import type { BoardSession } from '../hooks/useBoardSession'
 import { WarningIcon } from './Icons'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './BoardViewer'
 import { OpenSelectionsBanner, SelectionCard } from './SelectionCard'
 import { AdditionalEvidencePanel, evidenceSlots } from './AdditionalEvidencePanel'
-import { DatasheetExtract } from './DatasheetExtract'
 import { WritePart } from './WritePart'
 import { acceptedFormatsSentence, withoutEngineFormatList } from '../lib/board-formats'
 import { StaggerItem } from '../motion'
@@ -79,6 +78,7 @@ export function BoardView({
   // a datasheet draft's: the open-selections banner above already offers it.
   const awaitingPick = new Set(r.bind?.open_selections?.map(s => s.reference))
   const openParts = (r.bind?.open_parts ?? []).filter(p => !awaitingPick.has(p.reference))
+  const unmodelled = openParts.filter(part => !part.bound)
   const {
     boardUrl, selectedNet, selectedComponent, setSelectedNet, setSelectedComponent,
     busy, uploadError, uploadNotice, dismissNotice, firmwareFile,
@@ -97,7 +97,7 @@ export function BoardView({
   // it is a "let me look at this properly" gesture, not a setting.
   const [mapFullscreen, setMapFullscreen] = useState(false)
   const [importOverlay, setImportOverlay] = useState(false)
-  const [authoringComponent, setAuthoringComponent] = useState<ModelCoverageComponent | null>(null)
+  const [authoringComponent, setAuthoringComponent] = useState<ModelCoverageComponent | WebOpenPart | null>(null)
   const [authoringSignal, setAuthoringSignal] = useState(0)
   // The two collapsed groups something else can open: the parts the run had to
   // guess at (the banner's link, an Extend click) and the evidence slots (the
@@ -272,22 +272,42 @@ export function BoardView({
         />
       )}
 
-      {/* Directly under the line that says a model is missing: the offer to
-          draft one. This is the moment the user learns they need it, and the
-          only moment they have the part number and the datasheet in mind. */}
+      {/* Directly under the line that says a model is missing: the one
+          "Model this part" surface (draft from a datasheet, extend, or write
+          it), for whichever part the user picks. */}
       {!restoredFrom && (
         <>
-          <DatasheetExtract
-            openParts={openParts}
-            onSaved={session.reanalyzeCurrent}
-            onOpenSettings={onOpenSettings}
-          />
           <div className="mt-3" ref={authoringRef}>
+            {unmodelled.length > 1 && (
+              <label className="flex flex-wrap items-center gap-1.5 text-[12px] mb-1.5" style={{ color: 'var(--silk-dim)' }}>
+                {plural(unmodelled.length, 'part')} have no model:
+                <select
+                  className="hb-input text-[12px] truncate"
+                  data-testid="model-part-pick"
+                  aria-label="Part to model"
+                  value={authoringComponent?.reference ?? ''}
+                  onChange={e => {
+                    const ref = e.target.value
+                    const pickedPart = coverageFor(r.model_coverage, ref) ?? unmodelled.find(p => p.reference === ref)
+                    if (!pickedPart) return
+                    setAuthoringComponent(pickedPart)
+                    setAuthoringSignal(value => value + 1)
+                  }}
+                  style={{ height: 28, maxWidth: 220 }}
+                >
+                  <option value="" disabled>choose one</option>
+                  {unmodelled.map(p => (
+                    <option key={p.reference} value={p.reference}>{p.reference}{p.value ? ` · ${p.value}` : ''}</option>
+                  ))}
+                </select>
+              </label>
+            )}
             <WritePart
               onSaved={session.reanalyzeCurrent}
-              suggested={authoringComponent ?? openParts.find(part => !part.bound)}
+              suggested={authoringComponent ?? unmodelled[0]}
               openSignal={authoringSignal > 0 ? `${authoringComponent?.reference}:${authoringSignal}` : null}
               boardLabel={boardLabel ?? r.file_name}
+              onOpenSettings={onOpenSettings}
             />
           </div>
         </>

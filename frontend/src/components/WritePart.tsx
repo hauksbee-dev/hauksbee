@@ -290,8 +290,9 @@ function MarkedEditor({ value, onChange, issues, tone, disabled, busy }: {
   )
 }
 
-export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
+export function WritePart({ onSaved, suggested, openSignal, boardLabel, onOpenSettings }: {
   onSaved?: () => void
+  onOpenSettings?: () => void
   suggested?: WebOpenPart | ModelAuthoringSuggestion
   /** Changing this explicit signal opens the editor. Merely suggesting a part
    *  must not pop a panel open while a report arrives. */
@@ -513,7 +514,7 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
       </div>
 
       {tab === 'draft' && openPart ? (
-        <DatasheetExtract focus openParts={[openPart]} onSaved={onSaved} />
+        <DatasheetExtract focus openParts={[openPart]} onSaved={onSaved} onOpenSettings={onOpenSettings} />
       ) : (<>
         {tab === 'write' && (
           <div className="flex flex-wrap items-center gap-1.5 mb-2" data-testid="kind-picker">

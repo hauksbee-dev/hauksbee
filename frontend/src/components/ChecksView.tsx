@@ -20,6 +20,8 @@ import {
 import type { SpecModel } from '../lib/spec-model'
 import { applyOps, readCst } from '../lib/toml-cst'
 import type { PatchOp } from '../lib/toml-cst'
+import { coverageFor } from '../lib/report-view'
+import { ToBoard } from './checks/ChecksLinks'
 import { BuilderSection, Field, RemoveButton } from './checks/pieces'
 import { InteractionBuilder } from './checks/InteractionBuilder'
 import { SensorBuilder } from './checks/SensorBuilder'
@@ -764,9 +766,13 @@ export function ChecksView({
   // `suggested` is memoized: WritePart re-prepares its draft whenever it changes.
   const modelPart = useMemo(() => {
     if (!modelFor) return undefined
+    // The coverage row when the part has one, so a part with an executable
+    // model opens on Extend; otherwise its board identity.
+    const row = coverageFor(report.model_coverage, modelFor.reference)
+    if (row) return row
     const part = report.components?.find(c => c.reference === modelFor.reference)
     return { reference: modelFor.reference, value: part?.value ?? '' }
-  }, [modelFor, report.components])
+  }, [modelFor, report.components, report.model_coverage])
   const modelEditor = modelFor && modelPart ? (
     <div className="mt-3" data-testid="remedy-model-editor">
       <WritePart
@@ -822,7 +828,7 @@ export function ChecksView({
           <Field label="run length (ms)" value={root.duration} width={70} onChange={duration => updateRoot({ duration })} />
           {!firmwareFile && (
             <span className="text-[12px]" style={{ color: 'var(--silk-faint)' }}>
-              no firmware loaded: add it on the Board view to check UART/blink/boot
+              no firmware loaded: <ToBoard>add it on the Board view</ToBoard> to check UART/blink/boot
             </span>
           )}
         </div>
@@ -969,8 +975,8 @@ export function ChecksView({
               title="No checks in this spec yet"
               body={<>
                 A spec with no assertions has nothing to pass or fail, so the run is
-                refused rather than reported as green. Add one below, or click a trace
-                on the Board view to start from a real net.
+                refused rather than reported as green. Add one below, or{' '}
+                <ToBoard>click a trace on the Board view</ToBoard> to start from a real net.
               </>}
               action={
                 <button
