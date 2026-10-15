@@ -1565,7 +1565,8 @@ datasheet leaves unresolved, or the identity-only abstention for an unresolved p
 abstaining on params never makes a resolved pin table unknown: a pad the pin table names
 keeps its source-named role. Never invent a pin role.";
 
-const RATINGS_RULES: &str = r#"[models.ratings]: these are the ONLY valid keys (any other key fails
+const RATINGS_RULES: &str = concat!(
+    r#"[models.ratings]: these are the ONLY valid keys (any other key fails
 validation). Read them from the Absolute Maximum Ratings / Limiting Values and
 Thermal Characteristics tables, or the table a line names. Include every key the
 datasheet states for the selected package; omit a key it does not state (do NOT
@@ -1580,9 +1581,10 @@ is one characteristic per printed row with `rating = "<key>"`, its temperature i
 `conditions` and any `package` or `mounting` as printed. A current or power limit
 printed per path, channel or output is one row per path, `pins` naming its
 [models.pins] roles (IN1 to OUT: `pins = ["in1"]`), and a printed total a row
-without `pins`. Hauksbee sets each tagged key itself to its row at the standard
-condition (25 °C, the standard test board, else the least favourable), so write
-any tagged row there; it reads the rows at the scenario's temperature:"#;
+without `pins`. Hauksbee sets each tagged key itself to "#,
+    standard_condition!(),
+    ", so write any tagged row there; it reads the rows at the scenario's temperature:"
+);
 
 const ENVELOPE_RULES: &str = r"[[models.envelope]]: read the Recommended Operating Conditions and Absolute
 Maximum Ratings tables. Emit supply_range for every SUPPLY-class pin whose
@@ -1956,14 +1958,24 @@ OUTPUT (TOML only, starting with [[models]]):
     )
 }
 
+/// The rating key guide every extraction prompt offers: the keys validation
+/// accepts for `kind` ([`crate::validation::rating_guide`]), or all of them for a
+/// kind that is not one of ours (nothing to filter by).
+fn rating_key_guide(kind: &str) -> String {
+    component_kind(kind).map_or_else(
+        || crate::schema::Ratings::KEY_GUIDE.to_string(),
+        crate::validation::rating_guide,
+    )
+}
+
 /// The rating keys that apply to the kind, then its rating categories as a
 /// checklist. Measured: two tiers both dropped a printed TJ maximum, and one
 /// put a per-pin limit where the rated output current belonged.
 fn ratings_hint_for_kind(kind: &str) -> String {
+    let guide = rating_key_guide(kind);
     let Some(kind) = component_kind(kind) else {
-        return crate::schema::Ratings::KEY_GUIDE.to_string();
+        return guide;
     };
-    let guide = crate::validation::rating_guide(kind);
     let expected = crate::validation::expected_ratings(kind);
     if expected.is_empty() {
         return guide;
@@ -5195,7 +5207,7 @@ mod tests {
         assert!(bjt.contains("derives tf, cjc"));
         assert!(bjt.contains("rated IOUT") && bjt.contains("least favourable row the part"));
         assert!(bjt.contains("one characteristic per printed row with `rating = \"<key>\"`"));
-        assert!(bjt.contains("Hauksbee sets each tagged key itself to its row at the standard"));
+        assert!(bjt.contains("Hauksbee sets each tagged key itself to the row at the standard"));
         // Each convention the code applies is named in its kind's prompt, no other's.
         for (kind, rule) in [
             ("diode", "a single VF row"),

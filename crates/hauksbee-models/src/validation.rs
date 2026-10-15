@@ -801,8 +801,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     }
     // No consumer reads a rating from [models.params]: the binder takes it from [models.ratings].
     for u in crate::param_names::unknown_params(entry) {
-        let rating = |l: &str| l.split_whitespace().next() == Some(u.name.as_str());
-        if crate::schema::Ratings::KEY_GUIDE.lines().any(rating) {
+        if crate::schema::Ratings::keys().any(|k| k == u.name) {
             p.push(format!(
                 "param '{0}' is a rating, read only from [models.ratings]: move {0} there",
                 u.name
@@ -814,37 +813,22 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     // monitor computes `if limit > 0.0 { value/limit } else { 0.0 }`: a NaN
     // or non-positive rating silently disables the fault (thermal.rs leaves
     // the thermal resistances unfloored the same way).
-    let r = &entry.ratings;
-    for (name, rating) in [
-        ("max_current_a", r.max_current_a),
-        ("max_surge_current_a", r.max_surge_current_a),
-        ("max_power_w", r.max_power_w),
-        ("max_voltage_v", r.max_voltage_v),
-        ("max_pin_current_a", r.max_pin_current_a),
-        ("max_ripple_current_a", r.max_ripple_current_a),
-        ("max_junction_temp_c", r.max_junction_temp_c),
-        ("theta_ja_c_per_w", r.theta_ja_c_per_w),
-        ("theta_jc_c_per_w", r.theta_jc_c_per_w),
-    ] {
-        if let Some(v) = rating {
-            p.require(positive_finite(v), || {
-                format!("rating '{name}' = {v} must be a positive finite number")
-            });
-        }
+    // Every numeric rating key (the table is the serialised struct, so a new key
+    // is covered; `polarized` is the one flag).
+    let stated = toml::Value::try_from(&entry.ratings).ok();
+    let stated = || {
+        (stated.as_ref())
+            .and_then(toml::Value::as_table)
+            .into_iter()
+            .flatten()
+    };
+    for (name, v) in stated().filter_map(|(k, v)| Some((k, v.as_float()?))) {
+        p.require(positive_finite(v), || {
+            format!("rating '{name}' = {v} must be a positive finite number")
+        });
     }
-
-    let stated = toml::Value::try_from(r).ok();
-    let stated = stated
-        .as_ref()
-        .and_then(toml::Value::as_table)
-        .into_iter()
-        .flatten();
-    for (key, _) in stated.filter(|(k, _)| !rating_applies(entry.kind, k)) {
-        let guide = rating_guide(entry.kind);
-        let valid: Vec<&str> = guide
-            .lines()
-            .filter_map(|l| l.split_whitespace().next())
-            .collect();
+    for (key, _) in stated().filter(|(k, _)| !rating_applies(entry.kind, k)) {
+        let valid = rating_keys(entry.kind);
         p.push(format!(
             "rating '{key}' does not apply to a {} card; its rating keys are: {}",
             serde_json::to_value(entry.kind)
@@ -1792,6 +1776,15 @@ pub fn rating_applies(kind: ComponentKind, key: &str) -> bool {
         ),
         _ => true,
     }
+}
+
+/// The rating keys that apply to `kind` ([`rating_applies`]): the ones validation
+/// accepts, and the ones the prompt may offer.
+#[must_use]
+pub fn rating_keys(kind: ComponentKind) -> Vec<&'static str> {
+    crate::schema::Ratings::keys()
+        .filter(|k| rating_applies(kind, k))
+        .collect()
 }
 
 /// The `KEY_GUIDE` lines whose key applies to `kind` ([`rating_applies`]).
