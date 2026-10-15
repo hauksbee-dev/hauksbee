@@ -296,7 +296,7 @@ fn a_failure_on_a_board_outside_a_datasheet_limit_is_a_failure_that_names_it() {
 #[test]
 fn a_rail_starved_through_its_feed_resistor_fails_naming_the_feed() {
     // Three LMV7219s (SNOS458I: 1.1 mA typ each at 5 V, 2.7 V minimum supply;
-    // SOT-23-5 pads 1 OUT, 2 V-, 3 IN+, 4 IN-, 5 V+) on VDD_A, fed from V5
+    // SOT-23-5 pads 1 OUT, 2 V-, 3 IN+, 4 IN-, 5 V+) on VDD_A, fed from +5V
     // through 1 k: their 3.3 mA would drop 3.3 V, past the 2.3 V between the
     // 5 V feed and their minimum. Inputs sit at 0 V, inside the common-mode
     // range at any supply, so the starved rail is the only limit broken.
@@ -319,7 +319,7 @@ fn a_rail_starved_through_its_feed_resistor_fails_naming_the_feed() {
         r0805,
         "1k",
         100,
-        support::pad(1, "V5") + &support::pad(2, "VDD_A"),
+        support::pad(1, "+5V") + &support::pad(2, "VDD_A"),
     );
     parts += &support::comp(
         "CA",
@@ -328,7 +328,7 @@ fn a_rail_starved_through_its_feed_resistor_fails_naming_the_feed() {
         120,
         support::pad(1, "VDD_A") + &support::pad(2, "GND"),
     );
-    let nets = ["V5", "VDD_A", "GND", "OUT1", "OUT2", "OUT3"].map(|n| format!("net \"{n}\"\n"));
+    let nets = ["+5V", "VDD_A", "GND", "OUT1", "OUT2", "OUT3"].map(|n| format!("net \"{n}\"\n"));
     let board = format!(
         "board version 20171130\nfn main {{\n{}{parts}}}\n",
         nets.concat()
@@ -338,7 +338,6 @@ fn a_rail_starved_through_its_feed_resistor_fails_naming_the_feed() {
         "starved.toml",
         &format!(
             "name = \"starved\"\nboard = {}\nduration_ms = 5\n\
-             [[supply]]\nnet = \"V5\"\nkind = \"ideal\"\nvolts = 5.0\n\
              [[assert]]\nname = \"analog rail is up\"\nkind = \"voltage\"\nnet = \"VDD_A\"\n\
              min = 4.5\nmax = 5.5\n",
             support::toml_path(&path),
