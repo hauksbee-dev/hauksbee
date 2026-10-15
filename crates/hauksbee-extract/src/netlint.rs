@@ -710,8 +710,9 @@ pub fn is_connector_like(c: &Component) -> bool {
     // SODIMM, FPC). Adapter / interposer boards label these with `U` refs.
     let val = c.value.to_ascii_lowercase();
     if val.contains("connector")
-        || val.contains("-som")
-        || val.contains("som_")
+        || val
+            .split(|ch: char| !ch.is_ascii_alphanumeric())
+            .any(|word| word == "som")
         || val.contains("sodimm")
         || val.contains("header")
         || val.contains("socket")
@@ -1007,7 +1008,15 @@ fn check_design_file_qc(board: &ExtractedBoard, report: &mut NetLintReport) {
         // the DNP policy already recognises is exempt from the placeholder
         // check. (Verified fire before this guard: Arduino Uno R3 RESET-EN,
         // library "jumper", package "SJ", value "".)
+        // A manufacturer part number names the part outright, so a generic
+        // symbol value beside it ("L" on a ferrite bead ordered by MPN) is not
+        // a value left unset: the BOM and the model lookup go by the MPN.
+        let has_mpn = c
+            .properties
+            .iter()
+            .any(|(k, v)| crate::bom::is_mpn_property_key(k) && !v.trim().is_empty());
         if is_placeholder_value(value_trimmed)
+            && !has_mpn
             && !crate::dnp::is_jumper_or_net_tie(c)
             && !crate::dnp::unbought(c)
         {
