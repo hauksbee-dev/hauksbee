@@ -293,6 +293,47 @@ fn host_paced_uart_miss_is_invalid_and_the_refusal_names_the_clock() {
     assert_eq!(ci_result(results, false).exit_code(), 1);
 }
 
+/// A whole-run pass on a host-paced clock is a conditional GREEN: the row is
+/// green, the run exits 0 as "GREEN, conditionally", and the human report
+/// carries `condition`. Returns the run result for further checks.
+fn assert_conditional_green(
+    results: Vec<hauksbee_ci::assertions::AssertResult>,
+    condition: &str,
+) -> hauksbee_ci::CiResult {
+    assert_row_green(&results[0], "whole-run level");
+    let mut result = ci_result(results, false);
+    result.verdict_conditions = hauksbee_ci::assertions::host_paced_conditions(&result.results);
+    assert_eq!(result.exit_code(), 0);
+    let human = result.render_human();
+    assert!(human.contains("GREEN, conditionally"), "{human}");
+    assert!(human.contains(condition), "{human}");
+    result
+}
+
+/// A level that holds only inside the window is INVALID, never a hard FAIL,
+/// and its reason contains every one of `parts`.
+fn assert_window_refused(results: &[hauksbee_ci::assertions::AssertResult], parts: &[&str]) {
+    assert!(
+        results[0].invalid && !results[0].passed,
+        "{}",
+        results[0].detail
+    );
+    for part in parts {
+        assert!(
+            results[0].detail.contains(part),
+            "{part}: {}",
+            results[0].detail
+        );
+    }
+}
+
+/// The verdict is hard: a green row with no host-paced caveat and no
+/// condition on the run.
+fn assert_hard_verdict(results: &[hauksbee_ci::assertions::AssertResult]) {
+    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
+    assert!(hauksbee_ci::assertions::host_paced_conditions(results).is_empty());
+}
+
 /// A 200 ms run on which firmware on host-paced MCU `U1` drives `EN`: `whole`
 /// is its (min, max) over the run, `after` its (min, max) from 50 ms on, and it
 /// ends at the `after` max.
@@ -316,6 +357,32 @@ fn firmware_level_run(whole: (f64, f64), after: (f64, f64), host_paced: bool) ->
     out
 }
 
+/// Give `net` the same windows `EN` has, at both thresholds.
+fn copy_en_windows(out: &mut RunOutcome, net: &str) {
+    for thr in [0.0_f64, 50.0] {
+        let win = out.windows[&("EN".to_string(), thr.to_bits())].clone();
+        out.windows.insert((net.to_string(), thr.to_bits()), win);
+    }
+}
+
+/// [`firmware_level_run`] read on `net`, which sits downstream of `driver`,
+/// the only net the firmware drives (the scheduler's walk attributes it).
+fn downstream_run(
+    whole: (f64, f64),
+    after: (f64, f64),
+    host_paced: bool,
+    driver: &str,
+    net: &str,
+) -> RunOutcome {
+    let mut out = firmware_level_run(whole, after, host_paced);
+    out.driven_nets.clear();
+    out.driven_nets.insert(driver.to_string());
+    copy_en_windows(&mut out, net);
+    out.influenced_nets
+        .insert(net.to_string(), driver.to_string());
+    out
+}
+
 /// A level asserted after a simulated-time window start on a firmware-driven
 /// net, on a host-paced clock: a pass is conditional and the condition reaches
 /// the run verdict; a level that holds only inside the window refuses (exit 3)
@@ -328,15 +395,9 @@ fn host_paced_windowed_level_is_a_conditional_pass_or_a_refusal() {
          net=\"EN\"\nmin=3.0\nafter_ms=50\n",
     );
     let results = evaluate(&spec, &[firmware_level_run((3.3, 3.3), (3.3, 3.3), true)]);
-    assert_row_green(&results[0], "whole-run level");
-    let mut result = ci_result(results, false);
-    result.verdict_conditions = hauksbee_ci::assertions::host_paced_conditions(&result.results);
-    assert_eq!(result.exit_code(), 0);
-    let human = result.render_human();
-    assert!(human.contains("GREEN, conditionally"), "{human}");
-    assert!(
-        human.contains("CONDITION: EN high: the 50 ms after_ms window was not judged"),
-        "{human}"
+    let result = assert_conditional_green(
+        results,
+        "CONDITION: EN high: the 50 ms after_ms window was not judged",
     );
     let json: serde_json::Value =
         serde_json::from_str(&result.render_json()).expect("the report is JSON");
@@ -348,11 +409,7 @@ fn host_paced_windowed_level_is_a_conditional_pass_or_a_refusal() {
     );
 
     let results = evaluate(&spec, &[firmware_level_run((0.0, 3.3), (3.3, 3.3), true)]);
-    assert!(
-        results[0].invalid && !results[0].passed,
-        "{}",
-        results[0].detail
-    );
+    assert_window_refused(&results, &[]);
     let result = ci_result(results, false);
     assert_eq!(result.exit_code(), 3);
     let refusal = result.refusal().expect("an INVALID assertion refuses");
@@ -370,22 +427,16 @@ fn host_paced_windowed_level_is_a_conditional_pass_or_a_refusal() {
     );
 
     // The same waveform on a clock-exact backend: the window is judged, PASS.
-    let results = evaluate(&spec, &[firmware_level_run((0.0, 3.3), (3.3, 3.3), false)]);
-    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
-    assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
+    assert_hard_verdict(&evaluate(
+        &spec,
+        &[firmware_level_run((0.0, 3.3), (3.3, 3.3), false)],
+    ));
 }
 
 /// [`firmware_level_run`] read on `LOAD`, a load-switch output the firmware
 /// moves through `EN` without driving it.
 fn load_switch_run(whole: (f64, f64), after: (f64, f64), host_paced: bool) -> RunOutcome {
-    let mut out = firmware_level_run(whole, after, host_paced);
-    for thr in [0.0_f64, 50.0] {
-        let win = out.windows[&("EN".to_string(), thr.to_bits())].clone();
-        out.windows.insert(("LOAD".to_string(), thr.to_bits()), win);
-    }
-    out.influenced_nets
-        .insert("LOAD".to_string(), "EN".to_string());
-    out
+    downstream_run(whole, after, host_paced, "EN", "LOAD")
 }
 
 /// A windowed level on a net downstream of a firmware-driven GPIO (a MOSFET
@@ -400,53 +451,26 @@ fn host_paced_windowed_level_downstream_of_firmware_is_conditional_or_refused() 
          net=\"LOAD\"\nmin=3.0\nafter_ms=50\n",
     );
     let results = evaluate(&spec, &[load_switch_run((3.3, 3.3), (3.3, 3.3), true)]);
-    assert_row_green(&results[0], "whole-run level");
-    let mut result = ci_result(results, false);
-    result.verdict_conditions = hauksbee_ci::assertions::host_paced_conditions(&result.results);
-    assert_eq!(result.exit_code(), 0);
-    let human = result.render_human();
-    assert!(human.contains("GREEN, conditionally"), "{human}");
-    assert!(
-        human.contains(
-            "CONDITION: load on: the 50 ms after_ms window on 'LOAD', downstream of \
-             firmware-driven 'EN' was not judged"
-        ),
-        "{human}"
+    assert_conditional_green(
+        results,
+        "CONDITION: load on: the 50 ms after_ms window on 'LOAD', downstream of \
+         firmware-driven 'EN' was not judged",
     );
 
     let results = evaluate(&spec, &[load_switch_run((0.0, 3.3), (3.3, 3.3), true)]);
-    assert!(
-        results[0].invalid && !results[0].passed,
-        "{}",
-        results[0].detail
-    );
-    assert!(
-        results[0]
-            .detail
-            .contains("'LOAD' is downstream of firmware-driven 'EN'"),
-        "{}",
-        results[0].detail
-    );
+    assert_window_refused(&results, &["'LOAD' is downstream of firmware-driven 'EN'"]);
     assert_eq!(ci_result(results, false).exit_code(), 3);
 
-    let results = evaluate(&spec, &[load_switch_run((0.0, 3.3), (3.3, 3.3), false)]);
-    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
-    assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
+    assert_hard_verdict(&evaluate(
+        &spec,
+        &[load_switch_run((0.0, 3.3), (3.3, 3.3), false)],
+    ));
 }
 
 /// [`firmware_level_run`] read on `VOUT`, a DAC output the firmware sets by
 /// writing the I2C bus whose `SDA` it drives (no MCU pin drives `VOUT`).
 fn dac_output_run(whole: (f64, f64), after: (f64, f64), host_paced: bool) -> RunOutcome {
-    let mut out = firmware_level_run(whole, after, host_paced);
-    out.driven_nets.remove("EN");
-    out.driven_nets.insert("SDA".to_string());
-    for thr in [0.0_f64, 50.0] {
-        let win = out.windows[&("EN".to_string(), thr.to_bits())].clone();
-        out.windows.insert(("VOUT".to_string(), thr.to_bits()), win);
-    }
-    out.influenced_nets
-        .insert("VOUT".to_string(), "SDA".to_string());
-    out
+    downstream_run(whole, after, host_paced, "SDA", "VOUT")
 }
 
 /// A windowed level on a DAC output the firmware writes over a bus is as
@@ -461,41 +485,23 @@ fn host_paced_windowed_level_on_a_bus_driven_dac_output_is_conditional_or_refuse
          net=\"VOUT\"\nmin=3.0\nafter_ms=50\n",
     );
     let results = evaluate(&spec, &[dac_output_run((3.3, 3.3), (3.3, 3.3), true)]);
-    assert_row_green(&results[0], "whole-run level");
-    let mut result = ci_result(results, false);
-    result.verdict_conditions = hauksbee_ci::assertions::host_paced_conditions(&result.results);
-    assert_eq!(result.exit_code(), 0);
-    let human = result.render_human();
-    assert!(human.contains("GREEN, conditionally"), "{human}");
-    assert!(
-        human.contains(
-            "CONDITION: setpoint: the 50 ms after_ms window on 'VOUT', downstream of \
-             firmware-driven 'SDA' was not judged"
-        ),
-        "{human}"
+    assert_conditional_green(
+        results,
+        "CONDITION: setpoint: the 50 ms after_ms window on 'VOUT', downstream of \
+         firmware-driven 'SDA' was not judged",
     );
 
     // The level holds only inside the window: a host-paced run cannot say
     // when the DAC was written, so the claim is refused.
     let results = evaluate(&spec, &[dac_output_run((0.0, 3.3), (3.3, 3.3), true)]);
-    assert!(
-        results[0].invalid && !results[0].passed,
-        "{}",
-        results[0].detail
-    );
-    assert!(
-        results[0]
-            .detail
-            .contains("'VOUT' is downstream of firmware-driven 'SDA'"),
-        "{}",
-        results[0].detail
-    );
+    assert_window_refused(&results, &["'VOUT' is downstream of firmware-driven 'SDA'"]);
     assert_eq!(ci_result(results, false).exit_code(), 3);
 
     // A clock-exact backend orders the DAC write in simulated time: hard.
-    let results = evaluate(&spec, &[dac_output_run((0.0, 3.3), (3.3, 3.3), false)]);
-    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
-    assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
+    assert_hard_verdict(&evaluate(
+        &spec,
+        &[dac_output_run((0.0, 3.3), (3.3, 3.3), false)],
+    ));
 
     // Without the walk's attribution the same net keeps its hard verdict,
     // which is what the scheduler's seeds change.
@@ -509,16 +515,7 @@ fn host_paced_windowed_level_on_a_bus_driven_dac_output_is_conditional_or_refuse
 /// transmit line the firmware drove by sending UART bytes (no GPIO write is
 /// reported for it, and no other pin drives `FILT`).
 fn uart_filter_run(whole: (f64, f64), after: (f64, f64), host_paced: bool) -> RunOutcome {
-    let mut out = firmware_level_run(whole, after, host_paced);
-    out.driven_nets.remove("EN");
-    out.driven_nets.insert("UART_TX".to_string());
-    for thr in [0.0_f64, 50.0] {
-        let win = out.windows[&("EN".to_string(), thr.to_bits())].clone();
-        out.windows.insert(("FILT".to_string(), thr.to_bits()), win);
-    }
-    out.influenced_nets
-        .insert("FILT".to_string(), "UART_TX".to_string());
-    out
+    downstream_run(whole, after, host_paced, "UART_TX", "FILT")
 }
 
 /// A windowed level behind a UART transmit line is as host-dependent as one
@@ -533,60 +530,38 @@ fn host_paced_windowed_level_behind_a_uart_tx_line_is_conditional_or_refused() {
          net=\"FILT\"\nmin=3.0\nafter_ms=50\n",
     );
     let results = evaluate(&spec, &[uart_filter_run((3.3, 3.3), (3.3, 3.3), true)]);
-    assert_row_green(&results[0], "whole-run level");
-    let mut result = ci_result(results, false);
-    result.verdict_conditions = hauksbee_ci::assertions::host_paced_conditions(&result.results);
-    assert_eq!(result.exit_code(), 0);
-    let human = result.render_human();
-    assert!(human.contains("GREEN, conditionally"), "{human}");
-    assert!(
-        human.contains(
-            "CONDITION: filtered: the 50 ms after_ms window on 'FILT', downstream of \
-             firmware-driven 'UART_TX' was not judged"
-        ),
-        "{human}"
+    assert_conditional_green(
+        results,
+        "CONDITION: filtered: the 50 ms after_ms window on 'FILT', downstream of \
+         firmware-driven 'UART_TX' was not judged",
     );
 
     // The level holds only inside the window: refused, not passed.
     let results = evaluate(&spec, &[uart_filter_run((0.0, 3.3), (3.3, 3.3), true)]);
-    assert!(
-        results[0].invalid && !results[0].passed,
-        "{}",
-        results[0].detail
-    );
-    assert!(
-        results[0]
-            .detail
-            .contains("'FILT' is downstream of firmware-driven 'UART_TX'"),
-        "{}",
-        results[0].detail
+    assert_window_refused(
+        &results,
+        &["'FILT' is downstream of firmware-driven 'UART_TX'"],
     );
     assert_eq!(ci_result(results, false).exit_code(), 3);
 
     // A clock-exact backend orders the bytes in simulated time: hard.
-    let results = evaluate(&spec, &[uart_filter_run((0.0, 3.3), (3.3, 3.3), false)]);
-    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
-    assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
+    assert_hard_verdict(&evaluate(
+        &spec,
+        &[uart_filter_run((0.0, 3.3), (3.3, 3.3), false)],
+    ));
 
     // Legal control: the same windowed claim on a net the walk did not reach
     // keeps its hard verdict on a host-paced clock.
     let mut other = uart_filter_run((0.0, 3.3), (3.3, 3.3), true);
     other.influenced_nets.clear();
-    let results = evaluate(&spec, &[other]);
-    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
-    assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
+    assert_hard_verdict(&evaluate(&spec, &[other]));
 }
 
 /// [`uart_filter_run`] with the filter behind `I2C_SCL`, a bus clock line the
 /// hardware I2C block drove (the scheduler counts it once the core delivered
 /// I2C events, whether or not the backend reported a GPIO write for it).
 fn i2c_filter_run(whole: (f64, f64), after: (f64, f64), host_paced: bool) -> RunOutcome {
-    let mut out = uart_filter_run(whole, after, host_paced);
-    out.driven_nets.remove("UART_TX");
-    out.driven_nets.insert("I2C_SCL".to_string());
-    out.influenced_nets
-        .insert("FILT".to_string(), "I2C_SCL".to_string());
-    out
+    downstream_run(whole, after, host_paced, "I2C_SCL", "FILT")
 }
 
 /// A windowed level behind an I2C clock line is as host-dependent as one
@@ -602,48 +577,31 @@ fn host_paced_windowed_level_behind_an_i2c_line_is_conditional_or_refused() {
          net=\"FILT\"\nmin=3.0\nafter_ms=50\n",
     );
     let results = evaluate(&spec, &[i2c_filter_run((3.3, 3.3), (3.3, 3.3), true)]);
-    assert_row_green(&results[0], "whole-run level");
-    let mut result = ci_result(results, false);
-    result.verdict_conditions = hauksbee_ci::assertions::host_paced_conditions(&result.results);
-    assert_eq!(result.exit_code(), 0);
-    let human = result.render_human();
-    assert!(human.contains("GREEN, conditionally"), "{human}");
-    assert!(
-        human.contains(
-            "CONDITION: filtered: the 50 ms after_ms window on 'FILT', downstream of \
-             firmware-driven 'I2C_SCL' was not judged"
-        ),
-        "{human}"
+    assert_conditional_green(
+        results,
+        "CONDITION: filtered: the 50 ms after_ms window on 'FILT', downstream of \
+         firmware-driven 'I2C_SCL' was not judged",
     );
 
     // The level holds only inside the window: refused, not passed.
     let results = evaluate(&spec, &[i2c_filter_run((0.0, 3.3), (3.3, 3.3), true)]);
-    assert!(
-        results[0].invalid && !results[0].passed,
-        "{}",
-        results[0].detail
-    );
-    assert!(
-        results[0]
-            .detail
-            .contains("'FILT' is downstream of firmware-driven 'I2C_SCL'"),
-        "{}",
-        results[0].detail
+    assert_window_refused(
+        &results,
+        &["'FILT' is downstream of firmware-driven 'I2C_SCL'"],
     );
     assert_eq!(ci_result(results, false).exit_code(), 3);
 
     // A clock-exact backend orders the bus events in simulated time: hard.
-    let results = evaluate(&spec, &[i2c_filter_run((0.0, 3.3), (3.3, 3.3), false)]);
-    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
-    assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
+    assert_hard_verdict(&evaluate(
+        &spec,
+        &[i2c_filter_run((0.0, 3.3), (3.3, 3.3), false)],
+    ));
 
     // Legal control: the same windowed claim on a net the walk did not reach
     // keeps its hard verdict on a host-paced clock.
     let mut other = i2c_filter_run((0.0, 3.3), (3.3, 3.3), true);
     other.influenced_nets.clear();
-    let results = evaluate(&spec, &[other]);
-    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
-    assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
+    assert_hard_verdict(&evaluate(&spec, &[other]));
 }
 
 /// [`firmware_level_run`] read on `FILT`, an RC filter behind `PWM_OUT`, an
@@ -653,10 +611,7 @@ fn host_paced_windowed_level_behind_an_i2c_line_is_conditional_or_refused() {
 fn unobserved_pad_run(whole: (f64, f64), after: (f64, f64), host_paced: bool) -> RunOutcome {
     let mut out = firmware_level_run(whole, after, host_paced);
     out.driven_nets.clear();
-    for thr in [0.0_f64, 50.0] {
-        let win = out.windows[&("EN".to_string(), thr.to_bits())].clone();
-        out.windows.insert(("FILT".to_string(), thr.to_bits()), win);
-    }
+    copy_en_windows(&mut out, "FILT");
     let pad = hauksbee_engine::scheduler::PeripheralPad {
         net: "PWM_OUT".to_string(),
         mcu: "U1".to_string(),
@@ -687,39 +642,23 @@ fn host_paced_windowed_level_behind_an_unobserved_pad_is_conditional_or_refused(
          net=\"FILT\"\nmin=3.0\nafter_ms=50\n",
     );
     let results = evaluate(&spec, &[unobserved_pad_run((3.3, 3.3), (3.3, 3.3), true)]);
-    assert_row_green(&results[0], "whole-run level");
-    let mut result = ci_result(results, false);
-    result.verdict_conditions = hauksbee_ci::assertions::host_paced_conditions(&result.results);
-    assert_eq!(result.exit_code(), 0);
-    let human = result.render_human();
-    assert!(human.contains("GREEN, conditionally"), "{human}");
-    assert!(
-        human.contains(
-            "CONDITION: filtered: the 50 ms after_ms window on 'FILT', downstream of MCU U1 \
-             pad GPIO5 ('PWM_OUT')"
-        ),
-        "{human}"
+    assert_conditional_green(
+        results,
+        "CONDITION: filtered: the 50 ms after_ms window on 'FILT', downstream of MCU U1 \
+         pad GPIO5 ('PWM_OUT')",
     );
 
     // The level holds only inside the window: INVALID, not a hard FAIL.
     let results = evaluate(&spec, &[unobserved_pad_run((0.0, 3.3), (3.3, 3.3), true)]);
-    assert!(
-        results[0].invalid && !results[0].passed,
-        "{}",
-        results[0].detail
+    assert_window_refused(
+        &results,
+        &[
+            "'FILT' is downstream of MCU U1 pad GPIO5 ('PWM_OUT')",
+            "the backend could not observe peripheral routing on this pad",
+            "scripts/install-sims.sh --qemu-patched-source",
+            "host-paced clock",
+        ],
     );
-    for part in [
-        "'FILT' is downstream of MCU U1 pad GPIO5 ('PWM_OUT')",
-        "the backend could not observe peripheral routing on this pad",
-        "scripts/install-sims.sh --qemu-patched-source",
-        "host-paced clock",
-    ] {
-        assert!(
-            results[0].detail.contains(part),
-            "{part}: {}",
-            results[0].detail
-        );
-    }
     let result = ci_result(results, false);
     assert_eq!(result.exit_code(), 3);
     let json = result.render_json();
@@ -729,15 +668,14 @@ fn host_paced_windowed_level_behind_an_unobserved_pad_is_conditional_or_refused(
     );
 
     // A clock-exact backend orders the pad's output in simulated time: hard.
-    let results = evaluate(&spec, &[unobserved_pad_run((0.0, 3.3), (3.3, 3.3), false)]);
-    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
-    assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
+    assert_hard_verdict(&evaluate(
+        &spec,
+        &[unobserved_pad_run((0.0, 3.3), (3.3, 3.3), false)],
+    ));
 
     // An input-only pad has no output driver, so the scheduler lists nothing
     // for it: the windowed claim keeps its hard verdict on a host-paced clock.
     let mut input_only = unobserved_pad_run((0.0, 3.3), (3.3, 3.3), true);
     input_only.peripheral_pad_nets.clear();
-    let results = evaluate(&spec, &[input_only]);
-    assert!(row_is_green(&results[0]) && results[0].host_paced.is_none());
-    assert!(hauksbee_ci::assertions::host_paced_conditions(&results).is_empty());
+    assert_hard_verdict(&evaluate(&spec, &[input_only]));
 }
