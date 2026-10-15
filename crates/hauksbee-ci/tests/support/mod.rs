@@ -334,15 +334,9 @@ pub fn descriptor_env_lock() -> std::sync::MutexGuard<'static, ()> {
 /// line) when Renode or either fixture is missing.
 #[cfg(feature = "renode")]
 pub fn renode_thermostat() -> Option<(PathBuf, PathBuf)> {
-    if !hauksbee_mcu::renode::is_available() {
-        eprintln!("SKIP: Renode not installed");
-        return None;
-    }
+    hauksbee_testkit::skip_if!(!hauksbee_mcu::renode::is_available() => None, "Renode not installed");
     let board = repo("testdata/boards/stm32_i2c_thermostat.kicad_pcb");
     let fw = repo("testdata/firmware/stm32_i2c_thermostat/thermostat.elf");
-    if !board.exists() || !fw.exists() {
-        eprintln!("SKIP: thermostat board/firmware not present");
-        return None;
-    }
+    hauksbee_testkit::skip_if!(!board.exists() || !fw.exists() => None, "thermostat board/firmware not present");
     Some((board, fw))
 }

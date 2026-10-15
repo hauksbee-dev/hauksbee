@@ -66,10 +66,10 @@ fn spicelib_verify(uv: &std::path::Path, name: &str, raw: &str, py: &str) {
 
 #[test]
 fn spicelib_reads_all_four_analysis_types() {
-    let Some(uv) = find_uv() else {
-        eprintln!("SKIP: `uv` not found on PATH; spicelib round-trip not exercised.");
-        return;
-    };
+    let uv = hauksbee_testkit::skip_none!(
+        find_uv(),
+        "`uv` not found on PATH; spicelib round-trip not exercised."
+    );
 
     // --- Operating point: no scale variable, one point ----------------------
     let op = out(&["V(in)", "V(out)"], None, vec![vec![5.0, 3.75]]);

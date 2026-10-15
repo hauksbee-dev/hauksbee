@@ -55,14 +55,11 @@ fn boot_and_collect_uart(config: RenodeConfig, elf: &Path) -> String {
 
 #[test]
 fn nrf52840_boots_and_talks_uart() {
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
-        return;
-    }
-    let Some(elf) = demo_elf("nrf52840-zephyr_shell.elf") else {
-        eprintln!("SKIP: nrf52840 demo ELF not present");
-        return;
-    };
+    hauksbee_testkit::skip_if!(!is_available(), "Renode not installed");
+    let elf = hauksbee_testkit::skip_none!(
+        demo_elf("nrf52840-zephyr_shell.elf"),
+        "nrf52840 demo ELF not present"
+    );
     let text = boot_and_collect_uart(RenodeConfig::nrf52840(), &elf);
     eprintln!("nRF52840 UART: {text:?}");
     // The Zephyr shell prints its prompt over uart0 through the socket bridge.
@@ -74,14 +71,11 @@ fn nrf52840_boots_and_talks_uart() {
 
 #[test]
 fn sifive_fe310_boots_and_talks_uart() {
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
-        return;
-    }
-    let Some(elf) = demo_elf("zephyr-fe310-shell.elf") else {
-        eprintln!("SKIP: fe310 demo ELF not present");
-        return;
-    };
+    hauksbee_testkit::skip_if!(!is_available(), "Renode not installed");
+    let elf = hauksbee_testkit::skip_none!(
+        demo_elf("zephyr-fe310-shell.elf"),
+        "fe310 demo ELF not present"
+    );
     // sifive_fe310() carries the post_load_setup (PRCI tags + `cpu PC vinit`)
     // the FE310 Zephyr demo needs after the ELF load.
     let text = boot_and_collect_uart(RenodeConfig::sifive_fe310(), &elf);

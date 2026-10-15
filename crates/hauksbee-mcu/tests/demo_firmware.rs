@@ -32,10 +32,7 @@ fn uart_string(rx: &Arc<Mutex<Vec<u8>>>) -> String {
 
 #[test]
 fn boot_banner() {
-    let Some((mut mcu, rx)) = boot() else {
-        eprintln!("SKIP: demo.hex missing");
-        return;
-    };
+    let (mut mcu, rx) = hauksbee_testkit::skip_none!(boot(), "demo.hex missing");
     mcu.run_millis(50).unwrap();
     assert!(
         uart_string(&rx).contains("hauksbee-demo v1"),
@@ -46,10 +43,7 @@ fn boot_banner() {
 
 #[test]
 fn uart_echo_and_ident() {
-    let Some((mut mcu, rx)) = boot() else {
-        eprintln!("SKIP: demo.hex missing");
-        return;
-    };
+    let (mut mcu, rx) = hauksbee_testkit::skip_none!(boot(), "demo.hex missing");
     mcu.run_millis(30).unwrap();
     rx.lock().unwrap().clear();
 
@@ -73,10 +67,7 @@ fn uart_echo_and_ident() {
 
 #[test]
 fn led_blinks_on_pb5() {
-    let Some((mut mcu, _rx)) = boot() else {
-        eprintln!("SKIP: demo.hex missing");
-        return;
-    };
+    let (mut mcu, _rx) = hauksbee_testkit::skip_none!(boot(), "demo.hex missing");
     let edges: Arc<Mutex<u32>> = Arc::default();
     let counter = edges.clone();
     mcu.on_pin_change(Box::new(move |pin: PinId, _high, _cycle| {
@@ -93,10 +84,7 @@ fn led_blinks_on_pb5() {
 
 #[test]
 fn adc_voltage_readback() {
-    let Some((mut mcu, rx)) = boot() else {
-        eprintln!("SKIP: demo.hex missing");
-        return;
-    };
+    let (mut mcu, rx) = hauksbee_testkit::skip_none!(boot(), "demo.hex missing");
     mcu.run_millis(30).unwrap();
     mcu.set_analog_in(0, 2.5);
     mcu.run_millis(30).unwrap();

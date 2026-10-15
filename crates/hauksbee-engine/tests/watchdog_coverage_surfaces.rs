@@ -93,10 +93,10 @@ fn expected_reboot_line(resets: u64) -> String {
 #[test]
 fn a_watchdog_that_rebooted_the_core_reaches_all_four_surfaces() {
     let fw = repo("testdata/firmware/avr_watchdog/wdt.elf");
-    if !fw.exists() {
-        eprintln!("SKIP: wdt.elf not built (run make in testdata/firmware/avr_watchdog)");
-        return;
-    }
+    hauksbee_testkit::skip_if!(
+        !fw.exists(),
+        "wdt.elf not built (run make in testdata/firmware/avr_watchdog)"
+    );
 
     // Surface 1 + 2: the `--json` coverage notes and the structured CosimJson
     // field, from one invocation so they cannot disagree about the count.
@@ -160,10 +160,10 @@ fn a_watchdog_that_rebooted_the_core_reaches_all_four_surfaces() {
 #[test]
 fn a_faithful_backend_with_no_reboots_says_nothing_on_any_surface() {
     let fw = repo("testdata/firmware/avr_watchdog/nowdt.elf");
-    if !fw.exists() {
-        eprintln!("SKIP: nowdt.elf not built (run make in testdata/firmware/avr_watchdog)");
-        return;
-    }
+    hauksbee_testkit::skip_if!(
+        !fw.exists(),
+        "nowdt.elf not built (run make in testdata/firmware/avr_watchdog)"
+    );
 
     for extra in [vec![], vec!["--json"], vec!["--plain"]] {
         let out = run_avr(&fw, &extra);
@@ -206,16 +206,13 @@ fn a_faithful_backend_with_no_reboots_says_nothing_on_any_surface() {
 #[cfg(feature = "renode")]
 #[test]
 fn known_backend_limitations_reach_all_four_surfaces() {
-    if !hauksbee_mcu::renode::is_available() {
-        eprintln!("SKIP: Renode not installed");
-        return;
-    }
+    hauksbee_testkit::skip_if!(
+        !hauksbee_mcu::renode::is_available(),
+        "Renode not installed"
+    );
     let board = repo("testdata/boards/stm32_bluepill_demo.kicad_pcb");
     let fw = repo("testdata/firmware/stm32_blinky/blinky.elf");
-    if !fw.exists() {
-        eprintln!("SKIP: blinky.elf not built");
-        return;
-    }
+    hauksbee_testkit::skip_if!(!fw.exists(), "blinky.elf not built");
 
     let args = |extra: &[&str]| {
         let mut a = vec![

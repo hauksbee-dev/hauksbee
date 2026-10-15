@@ -336,10 +336,7 @@ fn declarative_lm75_i2c_thermostat_cosim() {
 )
 "#;
 
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
-        return;
-    }
+    hauksbee_testkit::skip_if!(!is_available(), "Renode not installed");
 
     let fw = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/firmware/stm32_i2c_thermostat/thermostat.elf");

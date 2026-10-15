@@ -56,16 +56,13 @@ fn hole_in_every_format(r: &hauksbee_ci::CiResult, subject: &str) {
 #[test]
 fn dropped_adc_injection_reaches_every_ci_report_format() {
     let _guard = support::descriptor_env_lock();
-    if !hauksbee_mcu::renode::is_available() {
-        eprintln!("SKIP: Renode not installed");
-        return;
-    }
+    hauksbee_testkit::skip_if!(
+        !hauksbee_mcu::renode::is_available(),
+        "Renode not installed"
+    );
     let board = repo("testdata/boards/stm32_adc_divider_demo.kicad_pcb");
     let fw = repo("testdata/firmware/stm32_blinky/blinky.elf");
-    if !fw.exists() {
-        eprintln!("SKIP: blinky.elf not built");
-        return;
-    }
+    hauksbee_testkit::skip_if!(!fw.exists(), "blinky.elf not built");
 
     let dir = std::env::temp_dir().join(format!("hauksbee-ci-adc-drop-{}", std::process::id()));
     let spec = write_spec(

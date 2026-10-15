@@ -75,10 +75,10 @@ kind = "no_faults"
 
 #[test]
 fn watchdog_reboots_reach_the_ci_coverage_hole_path_in_every_format() {
-    if !repo("testdata/firmware/avr_watchdog/wdt.elf").exists() {
-        eprintln!("SKIP: wdt.elf not built (run make in testdata/firmware/avr_watchdog)");
-        return;
-    }
+    hauksbee_testkit::skip_if!(
+        !repo("testdata/firmware/avr_watchdog/wdt.elf").exists(),
+        "wdt.elf not built (run make in testdata/firmware/avr_watchdog)"
+    );
     let spec = spec_for("wdt.elf", "starved");
     let result = run(&support::run_config(spec)).expect("ci run");
 
@@ -125,10 +125,10 @@ fn watchdog_reboots_reach_the_ci_coverage_hole_path_in_every_format() {
 /// to filter out the warning that matters.
 #[test]
 fn a_fed_watchdog_on_a_faithful_backend_adds_no_coverage_warning() {
-    if !repo("testdata/firmware/avr_watchdog/nowdt.elf").exists() {
-        eprintln!("SKIP: nowdt.elf not built (run make in testdata/firmware/avr_watchdog)");
-        return;
-    }
+    hauksbee_testkit::skip_if!(
+        !repo("testdata/firmware/avr_watchdog/nowdt.elf").exists(),
+        "nowdt.elf not built (run make in testdata/firmware/avr_watchdog)"
+    );
     let spec = spec_for("nowdt.elf", "fed");
     let result = run(&support::run_config(spec)).expect("ci run");
 

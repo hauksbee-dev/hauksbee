@@ -31,10 +31,7 @@ fn clock_ready_markers(
     budget_us: u64,
 ) -> Option<(u64, u64)> {
     const CHUNK_US: u64 = 50;
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
-        return None;
-    }
+    hauksbee_testkit::skip_if!(!is_available() => None, "Renode not installed");
     let Some(elf) = clock_ready_elf() else {
         eprintln!(
             "SKIP: clock_ready.elf not built \
@@ -80,10 +77,10 @@ fn clock_ready_markers(
 
 #[test]
 fn stm32_external_clock_does_not_become_ready_without_board_source() {
-    if !is_available() || clock_ready_elf().is_none() {
-        eprintln!("SKIP: Renode or clock_ready.elf unavailable");
-        return;
-    }
+    hauksbee_testkit::skip_if!(
+        !is_available() || clock_ready_elf().is_none(),
+        "Renode or clock_ready.elf unavailable"
+    );
 
     // Do not assert the private presence control. A real F103 with no crystal
     // on OSC_IN/OSC_OUT never raises HSERDY, so firmware cannot reach either
@@ -116,14 +113,11 @@ fn stm32_external_clock_and_pll_observe_startup_delays() {
 /// Bring up an STM32F103 with the demo firmware loaded, or skip.
 macro_rules! stm32_or_skip {
     ($name:ident) => {
-        if !is_available() {
-            eprintln!("SKIP: Renode not installed");
-            return;
-        }
-        let Some(elf) = blinky_elf() else {
-            eprintln!("SKIP: blinky.elf not built (run make in testdata/firmware/stm32_blinky)");
-            return;
-        };
+        hauksbee_testkit::skip_if!(!is_available(), "Renode not installed");
+        let elf = hauksbee_testkit::skip_none!(
+            blinky_elf(),
+            "blinky.elf not built (run make in testdata/firmware/stm32_blinky)"
+        );
         let mut $name = RenodeBackend::stm32f103().expect("spawn Renode STM32F103");
         $name.load_firmware(&elf).expect("load blinky.elf");
     };

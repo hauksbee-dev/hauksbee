@@ -151,10 +151,10 @@ fn f072_descriptor_resolves_as_a_builtin() {
 /// with the reason.
 macro_rules! f072_or_skip {
     ($mcu:ident, $elf:literal) => {
-        if !is_available() {
-            eprintln!("SKIP: Renode not installed (hauksbee install renode)");
-            return;
-        }
+        hauksbee_testkit::skip_if!(
+            !is_available(),
+            "Renode not installed (hauksbee install renode)"
+        );
         let Some(elf) = firmware($elf) else {
             eprintln!(
                 "SKIP: {} not built (run make in testdata/firmware/stm32f072_blinky)",

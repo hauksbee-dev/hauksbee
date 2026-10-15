@@ -33,12 +33,7 @@ fn board(rel: &str) -> Option<PathBuf> {
 /// The built firmware `name` under `HAUKSBEE_REALFW_DIR`, or `None` with a
 /// skip note naming what is missing.
 fn firmware(name: &str) -> Option<PathBuf> {
-    let Some(dir) = std::env::var_os("HAUKSBEE_REALFW_DIR") else {
-        eprintln!(
-            "SKIP: HAUKSBEE_REALFW_DIR unset (firmware {name} is built from source, not committed)"
-        );
-        return None;
-    };
+    let dir = hauksbee_testkit::skip_none!(std::env::var_os("HAUKSBEE_REALFW_DIR") => None, "HAUKSBEE_REALFW_DIR unset (firmware {name} is built from source, not committed)");
     let path = Path::new(&dir).join(name);
     if !path.is_file() {
         eprintln!("SKIP: {} not built", path.display());
@@ -222,10 +217,7 @@ usb = "5v0.5a"
 
 #[cfg(feature = "renode")]
 fn thing_plus() -> Option<PathBuf> {
-    if !hauksbee_mcu::renode::is_available() {
-        eprintln!("SKIP: Renode not found");
-        return None;
-    }
+    hauksbee_testkit::skip_if!(!hauksbee_mcu::renode::is_available() => None, "Renode not found");
     board("sparkfun_thingplus_rp2040/Hardware/RP2040_Thing_Plus.brd")
 }
 
@@ -309,10 +301,10 @@ matches = "(Hello, world!\\r\\n){{2}}"
 #[test]
 #[ignore = "about a minute of QEMU emulation; needs the corpus and HAUKSBEE_REALFW_DIR"]
 fn esp32_evb_prints_its_chip_id() {
-    if !hauksbee_mcu::qemu::is_available(hauksbee_mcu::qemu::QemuArch::Xtensa) {
-        eprintln!("SKIP: no Espressif QEMU fork");
-        return;
-    }
+    hauksbee_testkit::skip_if!(
+        !hauksbee_mcu::qemu::is_available(hauksbee_mcu::qemu::QemuArch::Xtensa),
+        "no Espressif QEMU fork"
+    );
     let Some(board) = board("olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_pcb") else {
         return;
     };

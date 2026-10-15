@@ -114,10 +114,10 @@ fn a_missing_emulator_is_invalid_with_the_install_command_not_an_invalid_spec() 
         .output()
         .expect("binary runs");
     let err = stderr(&out);
-    if !err.contains("Renode not found.") {
-        eprintln!("SKIP: Renode is installed here, so nothing is missing");
-        return;
-    }
+    hauksbee_testkit::skip_if!(
+        !err.contains("Renode not found."),
+        "Renode is installed here, so nothing is missing"
+    );
     assert_eq!(out.status.code(), Some(3), "{err}");
     assert!(!err.contains("invalid spec"), "{err}");
     assert!(err.contains("INVALID"), "{err}");

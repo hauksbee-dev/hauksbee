@@ -42,10 +42,7 @@ const DEMO: &str = "esp32_spi_adc_demo";
 /// QEMU + firmware preconditions shared by every test below: `Some(path)`
 /// when both are satisfied, `None` after printing why (SKIP) it did not run.
 fn preconditions() -> Option<PathBuf> {
-    if !is_available(QemuArch::Xtensa) {
-        eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
-        return None;
-    }
+    hauksbee_testkit::skip_if!(!is_available(QemuArch::Xtensa) => None, "Espressif QEMU (qemu-system-xtensa) not installed");
     crate::support::testdata("firmware/esp32_spi_adc/flash.bin").or_else(|| {
         eprintln!("SKIP: flash.bin not built; run `./build.sh` in testdata/firmware/esp32_spi_adc");
         None

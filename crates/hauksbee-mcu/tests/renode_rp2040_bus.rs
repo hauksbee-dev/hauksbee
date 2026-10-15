@@ -49,10 +49,10 @@ fn rp2040_i2c_bridge_round_trips_with_pico_sdk_firmware() {
     if !crate::support::renode_or_skip() {
         return;
     }
-    let Some(elf) = firmware("rp2040_i2c_probe", "i2c_probe.elf") else {
-        eprintln!("SKIP: rp2040_i2c_probe/i2c_probe.elf not present");
-        return;
-    };
+    let elf = hauksbee_testkit::skip_none!(
+        firmware("rp2040_i2c_probe", "i2c_probe.elf"),
+        "rp2040_i2c_probe/i2c_probe.elf not present"
+    );
 
     // Straight from the descriptor: this also proves the bridge registers on
     // EVERY controller it names (a typo, or a name the platform does not carry,
@@ -137,10 +137,10 @@ fn rp2040_spi_bridge_probe() {
     if !crate::support::renode_or_skip() {
         return;
     }
-    let Some(elf) = firmware("rp2040_spi_probe", "spi_probe.elf") else {
-        eprintln!("SKIP: rp2040_spi_probe/spi_probe.elf not present");
-        return;
-    };
+    let elf = hauksbee_testkit::skip_none!(
+        firmware("rp2040_spi_probe", "spi_probe.elf"),
+        "rp2040_spi_probe/spi_probe.elf not present"
+    );
 
     let mut config = RenodeConfig::rp2040();
     config.spi_controllers = vec!["spi0".to_string()];

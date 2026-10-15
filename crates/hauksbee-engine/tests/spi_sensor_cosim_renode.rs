@@ -36,10 +36,7 @@ const DEMO: &str = "stm32_spi_adc_demo";
 /// Renode + firmware preconditions shared by every test below: `Some(path)`
 /// when both are satisfied, `None` after printing why (SKIP) it did not run.
 fn preconditions() -> Option<PathBuf> {
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
-        return None;
-    }
+    hauksbee_testkit::skip_if!(!is_available() => None, "Renode not installed");
     crate::support::testdata("firmware/stm32_spi_adc/spi_adc.elf").or_else(|| {
         eprintln!("SKIP: spi_adc.elf not built; run `make -C testdata/firmware/stm32_spi_adc`");
         None

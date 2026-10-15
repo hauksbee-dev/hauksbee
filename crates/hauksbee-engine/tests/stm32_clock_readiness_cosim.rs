@@ -80,14 +80,8 @@ fn board_text(with_crystal: bool) -> String {
 
 fn marker_times(with_crystal: bool) -> Option<(Option<u64>, Option<u64>)> {
     const CHUNK_US: u16 = 50;
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
-        return None;
-    }
-    let Some(fw) = firmware() else {
-        eprintln!("SKIP: clock_ready.elf not built");
-        return None;
-    };
+    hauksbee_testkit::skip_if!(!is_available() => None, "Renode not installed");
+    let fw = hauksbee_testkit::skip_none!(firmware() => None, "clock_ready.elf not built");
     let mut engine = HauksbeeEngine::from_board_file(
         &board_text(with_crystal),
         Some(&fw),

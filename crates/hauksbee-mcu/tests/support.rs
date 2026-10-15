@@ -131,13 +131,7 @@ pub fn renode_or_skip() -> bool {
 #[cfg(feature = "qemu")]
 pub fn esp32_blinky_or_skip() -> Option<hauksbee_mcu::QemuBackend> {
     use hauksbee_mcu::qemu::{is_available, QemuArch};
-    if !is_available(QemuArch::Xtensa) {
-        eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
-        return None;
-    }
-    let Some(fw) = firmware("esp32_blinky/flash.bin") else {
-        eprintln!("SKIP: flash.bin not built; run ./build.sh in testdata/firmware/esp32_blinky");
-        return None;
-    };
+    hauksbee_testkit::skip_if!(!is_available(QemuArch::Xtensa) => None, "Espressif QEMU (qemu-system-xtensa) not installed");
+    let fw = hauksbee_testkit::skip_none!(firmware("esp32_blinky/flash.bin") => None, "flash.bin not built; run ./build.sh in testdata/firmware/esp32_blinky");
     Some(hauksbee_mcu::QemuBackend::esp32(&fw).expect("boot Espressif QEMU esp32"))
 }

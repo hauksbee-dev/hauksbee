@@ -39,14 +39,8 @@ fn firmware() -> Option<PathBuf> {
 
 #[test]
 fn dropped_adc_injection_reaches_cosim_json() {
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
-        return;
-    }
-    let Some(fw) = firmware() else {
-        eprintln!("SKIP: blinky.elf not built");
-        return;
-    };
+    hauksbee_testkit::skip_if!(!is_available(), "Renode not installed");
+    let fw = hauksbee_testkit::skip_none!(firmware(), "blinky.elf not built");
 
     let mut engine = HauksbeeEngine::from_board_file(
         &board_text(),

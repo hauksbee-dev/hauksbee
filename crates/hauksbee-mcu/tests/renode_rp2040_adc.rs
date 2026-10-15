@@ -35,10 +35,7 @@ fn rp2040_adc_injection_reaches_firmware() {
     if !crate::support::renode_or_skip() {
         return;
     }
-    let Some(elf) = adc_elf() else {
-        eprintln!("SKIP: rp2040_adc_probe/adc_probe.elf not present");
-        return;
-    };
+    let elf = hauksbee_testkit::skip_none!(adc_elf(), "rp2040_adc_probe/adc_probe.elf not present");
 
     let config = RenodeConfig::rp2040();
     assert_eq!(

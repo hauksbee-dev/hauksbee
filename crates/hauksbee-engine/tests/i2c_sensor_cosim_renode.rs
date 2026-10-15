@@ -113,10 +113,7 @@ fn run_at_temp(temp_c: f64, ms: u32) -> f64 {
 /// bridge delivers real bytes.
 #[test]
 fn stm32_i2c_firmware_drives_gpio_from_temperature() {
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
-        return;
-    }
+    hauksbee_testkit::skip_if!(!is_available(), "Renode not installed");
     let fw = firmware();
     assert!(
         fw.exists(),
@@ -147,10 +144,7 @@ fn stm32_i2c_firmware_drives_gpio_from_temperature() {
 /// (firmware reports wrong polarity) fails here.
 #[test]
 fn stm32_i2c_gpio_follows_temperature_sweep() {
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
-        return;
-    }
+    hauksbee_testkit::skip_if!(!is_available(), "Renode not installed");
     let fw = firmware();
     assert!(fw.exists(), "firmware missing: {fw:?}");
     crate::support::assert_flag_follows_lm75_sweep("STM32", 1.5, |t| run_at_temp(t, 400));
@@ -162,10 +156,7 @@ fn stm32_i2c_gpio_follows_temperature_sweep() {
 /// requirement.
 #[test]
 fn stm32_i2c_temperature_change_is_live() {
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
-        return;
-    }
+    hauksbee_testkit::skip_if!(!is_available(), "Renode not installed");
     let fw = firmware();
     assert!(fw.exists(), "firmware missing: {fw:?}");
     crate::support::assert_lm75_change_is_live(BOARD, &fw, 40, "Renode");

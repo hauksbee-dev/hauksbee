@@ -118,14 +118,14 @@ fn unmodified_esp_idf_gpio_reaches_the_backend_without_a_mailbox() {
 #[test]
 fn plain_gpio_outputs_are_not_reported_as_routed_to_a_peripheral() {
     let _guard = crate::support::qemu_lock();
-    if !is_available(QemuArch::Xtensa) {
-        eprintln!("SKIP: Espressif qemu-system-xtensa is not installed");
-        return;
-    }
-    let Some(flash) = fixture() else {
-        eprintln!("SKIP: build testdata/firmware/esp32_native_gpio/flash.bin with ./build.sh");
-        return;
-    };
+    hauksbee_testkit::skip_if!(
+        !is_available(QemuArch::Xtensa),
+        "Espressif qemu-system-xtensa is not installed"
+    );
+    let flash = hauksbee_testkit::skip_none!(
+        fixture(),
+        "build testdata/firmware/esp32_native_gpio/flash.bin with ./build.sh"
+    );
     let mut mcu = QemuBackend::esp32(&flash).expect("boot ordinary ESP-IDF fixture");
     for _ in 0..50 {
         mcu.run_micros(20_000).expect("advance QEMU");

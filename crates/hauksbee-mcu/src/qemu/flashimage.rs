@@ -298,10 +298,7 @@ mod tests {
     fn merges_the_fixture_elf_into_a_bootable_image() {
         let elf = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../testdata/firmware/esp32_blinky/esp32_blinky.elf");
-        if !elf.exists() {
-            eprintln!("SKIP: fixture ELF not present");
-            return;
-        }
+        hauksbee_testkit::skip_if!(!elf.exists(), "fixture ELF not present");
         let tmp = merged_image_from_elf(&elf, "esp32").expect("merge");
         let img = std::fs::read(tmp.path()).unwrap();
         assert_eq!(img.len(), FLASH_SIZE_BYTES);

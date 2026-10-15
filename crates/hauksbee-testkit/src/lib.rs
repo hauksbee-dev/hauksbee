@@ -16,6 +16,55 @@ use std::path::{Path, PathBuf};
 
 pub mod circuits;
 
+/// Print `SKIP: <why>` and return from the enclosing test when `cond` holds.
+///
+/// `skip_if!(cond => value, "why")` returns `value` instead of `()`, for
+/// helpers that hand back an `Option`. Only for environment gaps a developer machine may legitimately have (a
+/// missing emulator, an unbuilt firmware image). Missing corpus assets go
+/// through [`corpus_or_skip`] so `HAUKSBEE_REQUIRE_CORPUS=1` can fail them.
+#[macro_export]
+macro_rules! skip_if {
+    ($cond:expr, $($why:tt)+) => {
+        if $cond {
+            eprintln!("SKIP: {}", format_args!($($why)+));
+            return;
+        }
+    };
+    ($cond:expr => $ret:expr, $($why:tt)+) => {
+        if $cond {
+            eprintln!("SKIP: {}", format_args!($($why)+));
+            return $ret;
+        }
+    };
+}
+
+/// Unwrap an `Option`, or print `SKIP: <why>` and return from the enclosing
+/// function.
+///
+/// The `let ... else` counterpart of [`skip_if!`]; `=> value` returns
+/// something other than `()`.
+#[macro_export]
+macro_rules! skip_none {
+    ($opt:expr, $($why:tt)+) => {
+        match $opt {
+            Some(value) => value,
+            None => {
+                eprintln!("SKIP: {}", format_args!($($why)+));
+                return;
+            }
+        }
+    };
+    ($opt:expr => $ret:expr, $($why:tt)+) => {
+        match $opt {
+            Some(value) => value,
+            None => {
+                eprintln!("SKIP: {}", format_args!($($why)+));
+                return $ret;
+            }
+        }
+    };
+}
+
 /// The repository root, derived from the calling crate's manifest directory.
 ///
 /// `CARGO_MANIFEST_DIR` is set per-crate at compile time, so this takes it as

@@ -121,14 +121,14 @@ fn run_cosim() -> (String, f64, usize, u32) {
 #[test]
 fn esp32_full_cosim_through_solved_circuit() {
     let _guard = qemu_test_lock();
-    if !is_available(QemuArch::Xtensa) {
-        eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
-        return;
-    }
-    if flash_image().is_none() {
-        eprintln!("SKIP: testdata/firmware/esp32_blinky/flash.bin not built");
-        return;
-    }
+    hauksbee_testkit::skip_if!(
+        !is_available(QemuArch::Xtensa),
+        "Espressif QEMU (qemu-system-xtensa) not installed"
+    );
+    hauksbee_testkit::skip_if!(
+        flash_image().is_none(),
+        "testdata/firmware/esp32_blinky/flash.bin not built"
+    );
 
     let (text, max_r1_current_ma, led_high_samples, gpio4_transitions) = run_cosim();
 
@@ -177,10 +177,10 @@ fn esp32_full_cosim_through_solved_circuit() {
 #[ignore = "QEMU wall-clock windows are non-deterministic; see 05-cosim-fidelity.md section 5"]
 fn esp32_cosim_is_deterministic_across_runs() {
     let _guard = qemu_test_lock();
-    if !is_available(QemuArch::Xtensa) || flash_image().is_none() {
-        eprintln!("SKIP: Espressif QEMU or flash.bin absent");
-        return;
-    }
+    hauksbee_testkit::skip_if!(
+        !is_available(QemuArch::Xtensa) || flash_image().is_none(),
+        "Espressif QEMU or flash.bin absent"
+    );
     let (t1, _, _, n1) = run_cosim();
     let (t2, _, _, n2) = run_cosim();
     // The banner is identical run to run (icount-deterministic guest).
@@ -205,14 +205,11 @@ fn c3_flash_image() -> Option<PathBuf> {
 #[test]
 fn esp32c3_full_cosim_through_solved_circuit() {
     let _guard = qemu_test_lock();
-    if !is_available(QemuArch::Riscv32) {
-        eprintln!("SKIP: Espressif QEMU (qemu-system-riscv32) not installed");
-        return;
-    }
-    let Some(fw) = c3_flash_image() else {
-        eprintln!("SKIP: flash_c3.bin not built");
-        return;
-    };
+    hauksbee_testkit::skip_if!(
+        !is_available(QemuArch::Riscv32),
+        "Espressif QEMU (qemu-system-riscv32) not installed"
+    );
+    let fw = hauksbee_testkit::skip_none!(c3_flash_image(), "flash_c3.bin not built");
 
     let board = std::fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))

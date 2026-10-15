@@ -124,10 +124,10 @@ fn run_at_temp(temp_c: f64, ms: u32) -> f64 {
 /// never sets the flag, so this fails with a clear assertion message.
 #[test]
 fn esp32_i2c_firmware_drives_gpio_from_temperature() {
-    if !is_available(QemuArch::Xtensa) {
-        eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
-        return;
-    }
+    hauksbee_testkit::skip_if!(
+        !is_available(QemuArch::Xtensa),
+        "Espressif QEMU (qemu-system-xtensa) not installed"
+    );
     let fw = flash_image();
     assert!(
         fw.exists(),
@@ -154,10 +154,10 @@ fn esp32_i2c_firmware_drives_gpio_from_temperature() {
 /// Sweep test: GPIO must track the 30 C threshold across the full sweep.
 #[test]
 fn esp32_i2c_gpio_follows_temperature_sweep() {
-    if !is_available(QemuArch::Xtensa) {
-        eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
-        return;
-    }
+    hauksbee_testkit::skip_if!(
+        !is_available(QemuArch::Xtensa),
+        "Espressif QEMU (qemu-system-xtensa) not installed"
+    );
     let fw = flash_image();
     assert!(fw.exists(), "firmware missing: {fw:?}");
     crate::support::assert_flag_follows_lm75_sweep("ESP32", 1.5, |t| run_at_temp(t, 800));
@@ -169,10 +169,10 @@ fn esp32_i2c_gpio_follows_temperature_sweep() {
 /// every transaction (not cached from spawn).
 #[test]
 fn esp32_i2c_temperature_change_is_live() {
-    if !is_available(QemuArch::Xtensa) {
-        eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
-        return;
-    }
+    hauksbee_testkit::skip_if!(
+        !is_available(QemuArch::Xtensa),
+        "Espressif QEMU (qemu-system-xtensa) not installed"
+    );
     let fw = flash_image();
     assert!(fw.exists(), "firmware missing: {fw:?}");
     let engine = crate::support::assert_lm75_change_is_live(BOARD, &fw, 80, "QEMU");
