@@ -117,7 +117,7 @@ struct Attributions {
 
 /// The populated DC resistance from `start` to ground and the parts that carry
 /// it ([`read_program_ohms`] over this board's nets).
-fn program_resistance_to_ground(
+pub(super) fn program_resistance_to_ground(
     board: &ExtractedBoard,
     start: i64,
     max_hops: usize,
