@@ -1467,3 +1467,117 @@ max_current_a       = 0.1
 max_voltage_v       = 25.0
 theta_ja_c_per_w    = 350.0
 max_junction_temp_c = 150.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mmbt2222a"
+kind = "bjt_npn"
+description = "MMBT2222A NPN small-signal switching transistor SOT-23, 40V, 600mA (Diodes Incorporated)"
+
+[models.match]
+# Diodes' SOT23 part: MMBT2222A-7-F / -13-F are the ordering codes (tape and reel).
+# SparkFun's Eagle libraries write the value without the "A" ("mmbt2222", Huzzah32
+# Q1/Q2 and the Circuit Playground Express Q1) on a SOT23-3 land. Other vendors'
+# bare MMBT2222 rates VCEO 30 V / VCBO 60 V against this sheet's 40 V / 75 V; the
+# board rails that drive these switches sit far inside either, and the 40 V
+# rating is flagged as an assumption for a bare "MMBT2222".
+value_re = "(?i)^MMBT2222A?(?:-7-F|-13-F)?$"
+
+[models.params]
+# Source: Diodes Incorporated "MMBT2222A 40V NPN Small-Signal Transistor in SOT23",
+# DS30041 Rev. 18-2, June 2025, Electrical Characteristics p.4. The sheet prints
+# MIN and MAX columns only (no typical) and no SPICE model.
+# bf: hFE 100 min / 300 max at IC = 150 mA, VCE = 10 V; the geometric mean,
+#   sqrt(100 * 300) = 173, is used. ASSUMED (no typical printed).
+# is: ASSUMED. VBE(sat) is the interval 0.6 to 1.2 V at IC = 150 mA, IB = 15 mA
+#   with no typical; is is set so VBE = 0.9 V (the midpoint) at 150 mA with nf = 1:
+#   is = 0.150 / exp(0.9 / 0.025852) = 1.14e-16 A.
+# cje: Cibo MAX 25 pF at VEB = 0.5 V, 25p * (1 + 0.5/0.75)^0.33 = 29.5 pF. A max
+#   bound, not a typical.
+# cjc: Cobo MAX 8 pF at VCB = 10 V, 8p * (1 + 10/0.75)^0.33 = 18.8 pF zero-bias.
+#   A max bound, not a typical.
+# tf: fT MIN 300 MHz at IC = 20 mA, VCE = 20 V, f = 100 MHz: 1/(2*pi*300e6). An
+#   upper bound on tf.
+# DELIBERATELY OMITTED, because the sheet states none of them: vaf, br, rb, rc,
+#   re, tr, ise/ikf.
+is  = 1.14e-16
+bf  = 173.0
+nf  = 1.0
+cje = 2.95e-11
+cjc = 1.88e-11
+tf  = 5.305e-10
+
+[models.pins]
+# SOT23 top view (DS30041 p.1, Pinout): pin 1 base, pin 2 emitter, pin 3 collector.
+"1" = "base"
+"2" = "emitter"
+"3" = "collector"
+
+[models.ratings]
+# Source: DS30041 Rev. 18-2, Absolute Maximum Ratings and Thermal Characteristics p.2
+# (TA = 25 C). PD and RthJA are the Note 5 rows (minimum recommended pad layout);
+# Note 6 (15 mm x 15 mm copper) gives 350 mW and 357 C/W.
+max_current_a = 0.6            # IC continuous (ICM 800 mA single pulse)
+max_power_w = 0.31             # PD, Note 5
+max_voltage_v = 40.0           # VCEO (VCBO 75 V)
+max_junction_temp_c = 150.0    # TJ, TSTG -55 to +150 C
+theta_ja_c_per_w = 403.0       # RθJA, Note 5
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/datasheet/download/MMBT2222A.pdf"
+title = "Diodes Incorporated MMBT2222A 40V NPN Small-Signal Transistor in SOT23, DS30041 Rev. 18-2, June 2025"
+locator = "p.1 Pinout and Ordering Information; p.2 Absolute Maximum Ratings and Thermal Characteristics; p.4 Electrical Characteristics"
+sha256 = "02047f112848a0d26b37670d1d155b83a5a21248c342fd9b4354d3af8207d68b"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "bf"
+reason = "the datasheet prints hFE as 100 min / 300 max at IC = 150 mA with no typical; the geometric mean is assumed"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "max_voltage_v"
+reason = "boards value this part 'mmbt2222' without the A; another vendor's bare MMBT2222 rates VCEO 30 V against this sheet's 40 V"
+[[models.source.pinout]]
+package = "SOT23"
+standard = "top view: 1 B, 2 E, 3 C"
+pins = { "1" = "B", "2" = "E", "3" = "C" }
+[[models.source.characteristic]]
+parameter = "IC collector current, continuous"
+rating = "max_current_a"
+max = 0.6
+unit = "A"
+conditions = "TA = 25 °C"
+basis = "Diodes MMBT2222A DS30041 Rev. 18-2, Absolute Maximum Ratings, IC"
+[[models.source.characteristic]]
+parameter = "PD collector power dissipation"
+rating = "max_power_w"
+max = 0.31
+unit = "W"
+conditions = "minimum recommended pad layout, 1 oz copper, TA = 25 °C"
+mounting = "minimum recommended pad layout"
+basis = "Diodes MMBT2222A DS30041 Rev. 18-2, Thermal Characteristics, PD (Note 5)"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance, junction to ambient"
+rating = "theta_ja_c_per_w"
+max = 403.0
+unit = "°C/W"
+conditions = "minimum recommended pad layout"
+mounting = "minimum recommended pad layout"
+basis = "Diodes MMBT2222A DS30041 Rev. 18-2, Thermal Characteristics, RθJA (Note 5)"
+[[models.source.characteristic]]
+parameter = "VBE(sat) base-emitter saturation voltage"
+min = 0.6
+max = 1.2
+unit = "V"
+conditions = "IC = 150 mA, IB = 15 mA"
+basis = "Diodes MMBT2222A DS30041 Rev. 18-2, Electrical Characteristics, VBE(sat) at IC = 150 mA, IB = 15 mA"
+[[models.source.characteristic]]
+parameter = "hFE DC current gain"
+min = 100.0
+max = 300.0
+unit = ""
+conditions = "IC = 150 mA, VCE = 10 V"
+basis = "Diodes MMBT2222A DS30041 Rev. 18-2, Electrical Characteristics, hFE at IC = 150 mA, VCE = 10 V"

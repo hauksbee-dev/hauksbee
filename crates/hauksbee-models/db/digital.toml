@@ -12232,3 +12232,212 @@ pins = { "1" = "GND", "2" = "IN2", "3" = "IN1", "4" = "VREF", "5" = "VM", "6" = 
 [models.coverage]
 implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]
 missing = ["h_bridge_drive", "current_regulation", "sleep_mode", "overcurrent_protection", "logic_levels"]
+
+# ── CP2104: Silicon Labs single-chip USB-to-UART bridge with on-chip 3.45 V regulator, QFN-24 ──
+# Source: Silicon Labs CP2104 datasheet Rev. 1.0 (Pololu copy, 22 pages): Table 1
+# Absolute Maximum Ratings and Table 2 Global DC Electrical Characteristics p.5,
+# Table 5 Voltage Regulator Electrical Specifications p.6, Table 7 Pin Definitions
+# p.7, Figure 2 QFN-24 Pinout (Top View) p.8. The pinout drawing prints the numbers.
+# The VDD supply draw is the normal-operation Supply Current (17 mA typ, 18.5 mA max,
+# VREG enabled); the suspended figure (100 uA typ) is not modelled, so the draw is
+# the awake figure. The USB transceiver, the UART/modem lines, the GPIO block, the
+# on-chip regulator that drives VDD from REGIN (3.45 V typ, 1 to 100 mA) and the
+# VBUS sense are NOT modelled: the UART outputs carry no stamped drive.
+[[models]]
+id = "cp2104_qfn24"
+kind = "digital"
+description = "Silicon Labs CP2104 USB-to-UART bridge, QFN-24: VDD supply draw (USB, UART, GPIO, on-chip regulator not modelled)"
+
+[models.match]
+value_re = "(?i)^CP2104(?:-F[0-9]+-GM[R]?|-GM[R]?)?$"
+
+[models.params]
+supply_current_a = 17e-3
+supply_on_v = 3.0
+warning = "source-bound supply-draw model: the awake VDD supply current (17 mA typ, 18.5 mA max, VREG enabled) and the 3.0 V to 3.6 V VDD range are executable; USB, the UART and modem lines, GPIO, suspend (100 uA), the on-chip REGIN to VDD regulator and VBUS sensing are not modelled"
+
+[models.pins]
+"1" = "ri"
+"2" = "gnd"
+"3" = "usb_dp"
+"4" = "usb_dm"
+"5" = "vio"
+"6" = "vdd"
+"7" = "regin"
+"8" = "vbus"
+"9" = "rst"
+"10" = "nc"
+"11" = "gpio3"
+"12" = "gpio2"
+"13" = "gpio1"
+"14" = "gpio0"
+"15" = "suspend_n"
+"16" = "vpp"
+"17" = "suspend"
+"18" = "cts"
+"19" = "rts"
+"20" = "rxd"
+"21" = "txd"
+"22" = "dsr"
+"23" = "dtr"
+"24" = "dcd"
+
+[models.ratings]
+max_voltage_v = 4.2            # Table 1: VDD or VIO with respect to GND (the 5.8 V figure is for the I/O pins)
+max_current_a = 0.5            # Table 1: maximum total current through VDD, VIO and GND
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 4.2
+basis = "Silicon Labs CP2104 Rev. 1.0, Table 2 Digital Supply Voltage (VDD) 3.0 V to 3.6 V; Table 1 Absolute Maximum Ratings, VDD 4.2 V"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vdd"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vdd / supply_on_v))"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.silabs.com/documents/public/data-sheets/cp2104.pdf"
+title = "Silicon Labs CP2104 Single-Chip USB-to-UART Bridge, Rev. 1.0"
+locator = "Table 1 Absolute Maximum Ratings and Table 2 Global DC Electrical Characteristics p.5; Table 5 p.6; Table 7 Pin Definitions p.7; Figure 2 QFN-24 Pinout p.8"
+sha256 = "ddc53152fc933b7e995b2f48b4219d75af4fed36fb1f6f73d89e3c5501229e48"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_current_a"
+reason = "CP2104 Rev. 1.0 Table 2 prints typ/max only (17 mA typ / 18.5 mA max normal operation, 100 uA typ / 200 uA max suspended, VREG enabled), no min column; the awake typ is used"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; only the VDD supply draw is modelled"
+[[models.source.pinout]]
+package = "QFN-24"
+pins = { "1" = "RI", "2" = "GND", "3" = "D+", "4" = "D-", "5" = "VIO", "6" = "VDD", "7" = "REGIN", "8" = "VBUS", "9" = "RST", "10" = "NC", "11" = "GPIO.3", "12" = "GPIO.2", "13" = "GPIO.1", "14" = "GPIO.0", "15" = "SUSPEND", "16" = "VPP", "17" = "SUSPEND", "18" = "CTS", "19" = "RTS", "20" = "RXD", "21" = "TXD", "22" = "DSR", "23" = "DTR", "24" = "DCD" }
+
+[models.coverage]
+implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]
+missing = ["usb_transceiver", "uart_drive", "gpio", "suspend_mode", "on_chip_regulator", "vbus_sense", "logic_levels"]
+
+# ── AK4619VN: AKM 4-ADC / 4-DAC 32-bit audio codec, 32-pin QFN ──
+# Source: AKM AK4619VN datasheet 200900082-E-00 (2021/06): 5.2 Pin Functions pp.7-8
+# (pins numbered 1 to 32 plus the exposed pad), 6 Absolute Maximum Ratings, 7
+# Recommended Operating Conditions (AVDD 3.0 to 3.6 V, TVDD 1.7 to 3.6 V), 8.1 Power
+# Supply Current table (AVDD = VREFH = TVDD = 3.3 V, fs = 192 kHz, PDN high: AVDD 20 mA
+# typ / 30 mA max, TVDD 10 mA typ / 20 mA max).
+# The two supply draws are executable. The converters, the serial audio port, the
+# I2C/SPI control port, VCOM and the 1.2 V AVDRV regulator are NOT modelled: the
+# analog and serial outputs carry no stamped drive, and the power-down state (PDN low,
+# 1 uA per rail) is not distinguished from the awake state.
+[[models]]
+id = "ak4619vn_qfn32"
+kind = "digital"
+description = "AKM AK4619VN audio codec, 32-pin QFN: AVDD and TVDD supply draws (converters, audio and control ports not modelled)"
+
+[models.match]
+value_re = "(?i)^AK4619(?:VN)?(?:[ _-]AUDIO[ _-]CODEC)?$"
+
+[models.params]
+avdd_current_a = 20e-3
+tvdd_current_a = 10e-3
+supply_on_v = 3.0
+warning = "source-bound supply-draw model: the awake AVDD (20 mA typ, 30 mA max) and TVDD (10 mA typ, 20 mA max) currents at 3.3 V, fs = 192 kHz and the 3.0 V to 3.6 V AVDD and 1.7 V to 3.6 V TVDD ranges are executable; the ADC and DAC paths, serial audio and control ports, power-down (1 uA per rail) and the 1.2 V AVDRV regulator are not modelled"
+
+[models.pins]
+"1" = "sdin1"
+"2" = "sdin2"
+"3" = "tvdd"
+"4" = "gnd"          # VSS2, digital ground
+"5" = "avdrv"        # internal 1.2 V LDO output, capacitor only
+"6" = "lrck"
+"7" = "bick"
+"8" = "mclk"
+"9" = "ain5r"
+"10" = "ain4r"
+"11" = "ain5l"
+"12" = "ain4l"
+"13" = "ain2r"
+"14" = "ain1r"
+"15" = "ain2l"
+"16" = "ain1l"
+"17" = "vcom"
+"18" = "avdd"
+"19" = "gnd_a"        # VSS1, analog ground
+"20" = "vrefl"
+"21" = "vrefh"
+"22" = "aout1l"
+"23" = "aout1r"
+"24" = "aout2l"
+"25" = "aout2r"
+"26" = "pdn"
+"27" = "cad"
+"28" = "scl"
+"29" = "si"
+"30" = "sda"
+"31" = "sdout1"
+"32" = "sdout2"
+"33" = "gnd_ep"       # exposed pad, open or VSS1 (recommended)
+
+[models.ratings]
+max_voltage_v = 4.3            # 6: AVDD and TVDD abs max
+max_junction_temp_c = 105.0    # 6: Ta max 105 C (ambient, powered)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "avdd"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 4.3
+basis = "AKM AK4619VN 200900082-E-00, 7 Recommended Operating Conditions AVDD 3.0 V to 3.6 V; 6 Absolute Maximum Ratings AVDD 4.3 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "tvdd"
+min_v = 1.7
+max_v = 3.6
+abs_max_v = 4.3
+basis = "AKM AK4619VN 200900082-E-00, 7 Recommended Operating Conditions TVDD 1.7 V to 3.6 V; 6 Absolute Maximum Ratings TVDD 4.3 V"
+
+[[models.behavioral.laws]]
+name = "avdd_draw"
+kind = "current"
+a = "avdd"
+b = "gnd_a"
+expr = "avdd_current_a * min(1.0, max(0.0, v_avdd / supply_on_v))"
+
+[[models.behavioral.laws]]
+name = "tvdd_draw"
+kind = "current"
+a = "tvdd"
+b = "gnd"
+expr = "tvdd_current_a * min(1.0, max(0.0, v_tvdd / supply_on_v))"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.akm.com/content/dam/documents/products/audio/audio-codec/ak4619vn/ak4619vn-en-datasheet.pdf"
+title = "AKM AK4619VN 4ch ADC + 4ch DAC 32-bit audio codec datasheet, 200900082-E-00, 2021/06"
+locator = "5.2 Pin Functions pp.7-8; 6 Absolute Maximum Ratings; 7 Recommended Operating Conditions; 8.1 Power Supply Current"
+sha256 = "ff9e341162801d7da28f65ef6ea7ca7688aeae3465a5e420b99df21b7066c21a"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_current_a"
+reason = "the Power Supply Current table prints typ and max only (AVDD 20/30 mA, TVDD 10/20 mA at fs = 192 kHz), no min column; the typ is used, and the draw varies with sample rate and MCLK"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; only the AVDD and TVDD supply draws are modelled"
+[[models.source.pinout]]
+package = "QFN-32 (0.5 mm pitch)"
+pins = { "1" = "SDIN1", "2" = "SDIN2", "3" = "TVDD", "4" = "VSS2", "5" = "AVDRV", "6" = "LRCK", "7" = "BICK", "8" = "MCLK", "9" = "AIN5R", "10" = "AIN4R", "11" = "AIN5L", "12" = "AIN4L", "13" = "AIN2R", "14" = "AIN1R", "15" = "AIN2L", "16" = "AIN1L", "17" = "VCOM", "18" = "AVDD", "19" = "VSS1", "20" = "VREFL", "21" = "VREFH", "22" = "AOUT1L", "23" = "AOUT1R", "24" = "AOUT2L", "25" = "AOUT2R", "26" = "PDN", "27" = "CAD", "28" = "SCL", "29" = "SI", "30" = "SDA", "31" = "SDOUT1", "32" = "SDOUT2", "33" = "Exposed Pad" }
+
+[models.coverage]
+implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]
+missing = ["adc_paths", "dac_paths", "serial_audio_port", "control_port", "power_down_state", "avdrv_regulator", "logic_levels"]
