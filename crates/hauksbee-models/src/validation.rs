@@ -1720,6 +1720,61 @@ pub const fn expected_ratings(kind: ComponentKind) -> &'static [(&'static str, &
     }
 }
 
+/// Whether a pin role names a power or drive output rather than a signal.
+///
+/// A switch node or a half-bridge, motor-phase or gate-drive output (`sw`,
+/// `phase`, `ho`/`lo`, `out1`, `out_a`, `drv`) carries load current; a plain
+/// `out` is a signal output unless the part also has a supply input.
+fn is_output_stage_role(role: &str) -> bool {
+    let r = role.to_ascii_lowercase();
+    let stem = r.trim_end_matches(|c: char| c.is_ascii_digit() || c == '_');
+    if matches!(
+        stem,
+        "sw" | "lx" | "phase" | "ph" | "ho" | "lo" | "gh" | "gl" | "drv" | "drive"
+    ) {
+        return true;
+    }
+    r.strip_prefix("out").is_some_and(|rest| {
+        let rest = rest.trim_start_matches('_');
+        !rest.is_empty()
+            && rest.len() <= 2
+            && rest.chars().all(|c| c.is_ascii_alphanumeric())
+            && rest != "en"
+    })
+}
+
+/// Whether a digital-kind card describes a power or driver output stage.
+///
+/// Decided from the card's role data, never its name: no executable logic (its
+/// outputs are not logic levels), and either a switch, bridge or gate-drive
+/// output role, or a supply input role beside a plain `out` (a load switch).
+fn has_output_stage(entry: &ModelEntry) -> bool {
+    if entry.kind != ComponentKind::Digital || !entry.logic.is_empty() {
+        return false;
+    }
+    let roles: Vec<String> = entry
+        .pins
+        .values()
+        .map(|r| r.to_ascii_lowercase())
+        .collect();
+    let has = |names: &[&str]| roles.iter().any(|r| names.contains(&r.as_str()));
+    roles.iter().any(|r| is_output_stage_role(r)) || (has(&["out", "vout"]) && has(&["in", "vin"]))
+}
+
+/// [`expected_ratings`] for this card: its kind's categories, plus the rated
+/// output current when the card is a power or driver output stage.
+///
+/// Measured: a motor driver's 3.5 A output rating was kept as an untagged
+/// characteristic row because the digital kind did not expect a current.
+#[must_use]
+pub fn expected_ratings_for(entry: &ModelEntry) -> Vec<(&'static str, &'static str)> {
+    let mut expected = expected_ratings(entry.kind).to_vec();
+    if has_output_stage(entry) {
+        expected.push(("max_current_a", "rated continuous (output) current"));
+    }
+    expected
+}
+
 /// Whether `[models.ratings]` key `key` means anything on a `kind` card.
 ///
 /// A capacitor's ripple, a MOSFET's gate bias, a regulator's minimum load and an
@@ -1774,7 +1829,7 @@ pub fn missing_rating_warnings(entry: &ModelEntry) -> Vec<String> {
             )
         })
     };
-    expected_ratings(entry.kind)
+    expected_ratings_for(entry)
         .iter()
         .filter(|(key, _)| {
             !(stated.is_some_and(|t| t.contains_key(*key)) || tagged(key) || declared(key))
@@ -2120,6 +2175,32 @@ mod tests {
 
     fn accepts(e: &ModelEntry) {
         assert!(validate(e).is_ok(), "{:?}", validate(e));
+    }
+
+    /// A digital card with no logic and a bridge, switch-node or load-switch
+    /// output expects a rated current; a signal-output or logic card does not.
+    #[test]
+    fn output_stage_digital_cards_expect_a_current_rating() {
+        let warns_current = |e: &ModelEntry| {
+            missing_rating_warnings(e)
+                .iter()
+                .any(|w| w.starts_with("no max_current_a"))
+        };
+        let mut bridge = entry(ComponentKind::Digital, &[]);
+        pins(
+            &mut bridge,
+            &[("1", "gnd"), ("2", "vm"), ("3", "out1"), ("4", "out2")],
+        );
+        assert!(warns_current(&bridge));
+        let mut switch = entry(ComponentKind::Digital, &[]);
+        pins(&mut switch, &[("1", "in"), ("2", "out"), ("3", "gnd")]);
+        assert!(warns_current(&switch));
+        let mut detector = entry(ComponentKind::Digital, &[]);
+        pins(&mut detector, &[("1", "vcc"), ("2", "out"), ("3", "gnd")]);
+        assert!(!warns_current(&detector));
+        let mut stated = bridge.clone();
+        stated.ratings.max_current_a = Some(3.5);
+        assert!(!warns_current(&stated));
     }
 
     /// The simple regulator's enable fields: paired, ordered for the polarity,
