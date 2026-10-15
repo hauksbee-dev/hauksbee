@@ -95,14 +95,18 @@ function parse(text: string): CstRead {
     ast = parseTOML(text)
   } catch (e) {
     const err = e as { message?: string; index?: number; lineNumber?: number; column?: number }
-    const offset = typeof err.index === 'number' ? Math.min(err.index, text.length) : 0
+    let offset = typeof err.index === 'number' ? Math.min(err.index, text.length) : text.length
+    // An error found at the end of the input belongs to the last line written,
+    // not to the empty line after the final newline.
+    if (offset >= text.length) while (offset > 0 && /\s/.test(text[offset - 1])) offset--
+    const before = text.slice(0, offset)
     return {
       ok: false,
       error: {
         message: err.message ?? 'not valid TOML',
         offset,
-        line: err.lineNumber ?? text.slice(0, offset).split('\n').length,
-        column: err.column ?? 0,
+        line: before.split('\n').length,
+        column: offset - (before.lastIndexOf('\n') + 1) + 1,
       },
     }
   }
@@ -170,7 +174,8 @@ function parse(text: string): CstRead {
 /** The element a table path names. */
 export function findElement(doc: CstDoc, table: TablePath): CstElement | undefined {
   if (table.length === 0) return undefined
-  const [name, index] = table as [string, number?]
+  const name = table[0]
+  const index = table.length === 2 ? table[1] : undefined
   return doc.elements.find(el => el.name === name && (index === undefined ? el.index === null : el.index === index))
 }
 
@@ -218,7 +223,8 @@ export function opSplice(text: string, op: PatchOp): { at: number; remove: numbe
     case 'removeKey': {
       const hit = entriesOf(doc, op.table)?.find(e => e.key === op.key)
       if (!hit) return undefined
-      let [start, end] = hit.lineRange
+      let start = hit.lineRange[0]
+      const end = hit.lineRange[1]
       // The last line with no final newline: take the line break before it.
       if (end === text.length && !text.endsWith('\n') && start > 0) start -= text.endsWith('\r\n', start) ? 2 : 1
       return { at: start, remove: end - start, insert: '' }

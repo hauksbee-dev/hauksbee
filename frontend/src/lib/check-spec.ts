@@ -498,7 +498,7 @@ export function buildToml(
   duration: string,
   supplies: SupplyRow[],
   peripherals: PeripheralRow[],
-  checks: ConstraintDraft[],
+  checks: readonly (ConstraintDraft | CheckRow)[],
   sensors: SensorRow[] = [],
   overrides: OverrideRow[] = [],
   noFit: string[] = [],

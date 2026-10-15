@@ -584,7 +584,6 @@ export function ChecksView({
       return ops
     })
     onPendingConsumed(pending[pending.length - 1].seq)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, onPendingConsumed, edit])
 
   const runChecks = useCallback(async () => {
