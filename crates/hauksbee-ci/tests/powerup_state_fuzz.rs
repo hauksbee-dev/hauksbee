@@ -241,36 +241,9 @@ fn olimex_evb_relay_boot_states_are_safe() {
 /// extract/bind/solve path is exercised across every supervisor boot state.
 #[test]
 fn mnt_reform_supervisor_boot_states_raise_no_fault() {
-    let Some(board) = corpus_board(
-        "mnt_reform/reform2-motherboard30-pcb/reform2-motherboard30.kicad_sch",
-        "MNT Reform",
-    ) else {
+    let Some(result) = reform_supervisor_fuzz("reform_supervisor", 24) else {
         return;
     };
-    let enables: Vec<String> = [
-        "3V3_PWR_EN",
-        "5V_PWR_EN",
-        "1V2_PWR_EN",
-        "PCIE1_PWR_EN",
-        "USB_PWR_EN",
-    ]
-    .iter()
-    .map(|s| (*s).to_string())
-    .collect();
-    let result = boot_state_fuzz(
-        "reform_supervisor",
-        &board,
-        &[("VIN", 12.0), ("+5V", 5.0), ("+3V3", 3.3)],
-        &enables,
-        24,
-        "",
-        // Model gap: `no_faults` spans the whole board and ~30 parts have no
-        // model, among them the supervisor U18 and the regulators U7, U9, U12
-        // and U14, which stay critical as active parts. The open ESD arrays
-        // (SP0503BAHT, TPD6E05U06) stay critical too: no card states an open
-        // part's standoff or polarity. GREEN once all of them are modelled.
-        &["U18", "U7", "U9", "U12", "U14"],
-    );
     // Six class-only LEDs (D8 D9 D11 D12 D22 D23), two assumed forward-voltage
     // corners each: 24 seeds x 2^6 = 1536 runs is over the 1024-run cap. That
     // used to run only the first-listed (high-Vf, least-current) stand-ins and
@@ -303,4 +276,53 @@ fn mnt_reform_supervisor_boot_states_raise_no_fault() {
         "the human log must name the condition"
     );
     assert!(result.render_json().contains("\"verdict_conditions\""));
+}
+
+/// The MNT Reform supervisor fuzz over `seeds` seeds, or `None` without the
+/// corpus. Every boot state must solve: the run is INVALID only by the open
+/// parts named below, never by an analog abort.
+fn reform_supervisor_fuzz(case: &str, seeds: u32) -> Option<hauksbee_ci::CiResult> {
+    let board = corpus_board(
+        "mnt_reform/reform2-motherboard30-pcb/reform2-motherboard30.kicad_sch",
+        "MNT Reform",
+    )?;
+    let enables: Vec<String> = [
+        "3V3_PWR_EN",
+        "5V_PWR_EN",
+        "1V2_PWR_EN",
+        "PCIE1_PWR_EN",
+        "USB_PWR_EN",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect();
+    Some(boot_state_fuzz(
+        case,
+        &board,
+        &[("VIN", 12.0), ("+5V", 5.0), ("+3V3", 3.3)],
+        &enables,
+        seeds,
+        "",
+        // Model gap: `no_faults` spans the whole board and ~30 parts have no
+        // model, among them the supervisor U18 and the regulators U7, U9, U12
+        // and U14, which stay critical as active parts. The open ESD arrays
+        // (SP0503BAHT, TPD6E05U06) stay critical too: no card states an open
+        // part's standoff or polarity. GREEN once all of them are modelled.
+        &["U18", "U7", "U9", "U12", "U14"],
+    ))
+}
+
+/// Seed 0 alone, every regulator enable low: the boot state whose every chunk
+/// failed on macOS (all its LED-corner members aborted INVALID) while Linux
+/// passed. The disabled TLV62568's behavioral current node sat nanovolts from
+/// its root, inside Newton's own step tolerance, and the transient false-root
+/// gate read that as relative residual 1.0 or a pass depending on which side
+/// of a kink round-off left the last iterate. Pinned alone so the case runs in
+/// seconds rather than as one seed of 24.
+#[test]
+fn mnt_reform_all_enables_low_boot_state_solves() {
+    let Some(result) = reform_supervisor_fuzz("reform_supervisor_seed0", 1) else {
+        return;
+    };
+    assert!(!result.analog_abort, "{}", result.render_human());
 }

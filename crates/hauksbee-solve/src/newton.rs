@@ -1623,17 +1623,41 @@ fn residual_rel_inf_norm_at(
     // the junction-limiting convergence denial (`JunctionEval::take_limited`,
     // SPICE's icheck), which is the mechanism that actually owns it; this gate
     // owns the milder settled-but-unbalanced iterates.
+    //
+    // The scale is also floored at the residual the solve's OWN convergence
+    // tolerance permits: `sum_j |g_ij| * tol_j`, with `tol_j` the per-unknown
+    // bar [`converged`] applies (`reltol*|x| + vntol` on a node, `+ abstol`
+    // on a branch). A step-converged iterate may sit anywhere within those
+    // tolerances of the root, so a row imbalance no larger than that is not
+    // evidence of a false root. Without the floor the gate was stricter than
+    // Newton itself on rows whose every term is far below the tolerance: a
+    // disabled converter's behavioral current node at nanovolts, beside a
+    // kinked expression whose input sits at picovolts either side of zero,
+    // reads relative residual exactly 1 or a clean pass depending on which
+    // side of the kink the last iterate's round-off lands. That is a knife
+    // edge (measured: re-reading the same circuit with a last-bit difference
+    // in its parameters flipped the outcome, so it differed between macOS and
+    // Linux), and losing it refused the step down to `dt_min`. The false roots the
+    // gate exists for are amperes against milliamps, far above this floor.
     let mut worst = 0.0f64;
     for i in 0..ws.layout.n_nodes {
         let mut acc = 0.0;
         let mut mag = 0.0f64;
+        let mut within_tol = 0.0f64;
         for &(col, val) in ws.matrix.row(i) {
-            let term = val * ws.x[col];
+            let xj = ws.x[col];
+            let term = val * xj;
             acc += term;
             mag = mag.max(term.abs());
+            let floor = if col < ws.layout.n_nodes {
+                opts.vntol
+            } else {
+                opts.abstol
+            };
+            within_tol += val.abs() * opts.reltol.mul_add(xj.abs(), floor);
         }
         let f = acc - ws.rhs[i];
-        let scale = mag.max(ws.rhs[i].abs()).max(opts.abstol);
+        let scale = mag.max(ws.rhs[i].abs()).max(within_tol).max(opts.abstol);
         let rel = f.abs() / scale;
         if rel > worst {
             worst = rel;
@@ -3735,5 +3759,39 @@ mod tests {
             );
         }
         assert!(!dc_polish(&mut ws, &c, &opts, &[0.0]));
+    }
+
+    /// The transient false-root gate judges a row against the residual Newton's
+    /// own step tolerance allows, so it is never stricter than convergence.
+    ///
+    /// The case is the MNT Reform supervisor boot fuzz's all-low seed: a
+    /// disabled converter's behavioral current node sat 2.8 nV from its root,
+    /// well inside `vntol`, with every row term below `abstol`. Relative to its
+    /// own nanoamp terms that read as residual 1.0, so the step was refused down
+    /// to `dt_min`, or accepted, by which side of a kink the last iterate's
+    /// round-off landed on, so the run aborted on macOS and passed on Linux. A
+    /// genuine false root, a volt away, is still caught.
+    #[test]
+    fn false_root_gate_allows_what_the_step_tolerance_allows() {
+        let mut c = Circuit::new();
+        let a = c.node("a");
+        res(&mut c, "R1", a, GND, 1.0);
+        crate::test_fixtures::idc(&mut c, "I1", a, GND, 2.8e-9);
+        let opts = SolverOptions::default();
+        let bar = (opts.reltol * 100.0).max(1e-4);
+        let mut ws = Workspace::new(&c);
+        let i = ws.layout.node(a).unwrap();
+        let coeffs = IntegCoeffs::for_step(opts.integration, 1e-9, 1e-9, true);
+        let state = ReactiveState::new(c.devices.len());
+        let mut gate = |x: f64| {
+            ws.x[i] = x;
+            residual_rel_inf_norm_at(
+                &mut ws, &c, &opts, 3e-7, coeffs, &state, false, false, opts.gmin, 1.0,
+            )
+        };
+        let near = gate(0.0);
+        assert!(near <= bar, "within vntol of the root, refused: {near:.3e}");
+        let far = gate(1.0);
+        assert!(far > bar, "a volt off the root, accepted: {far:.3e}");
     }
 }
