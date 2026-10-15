@@ -548,10 +548,7 @@ fn classify_metric_only(f: &str) -> MetricCode {
             return MetricCode::Absent;
         }
     }
-    match chip_size::by_metric(&metric) {
-        Some(c) => MetricCode::Rated(c.watts),
-        None => MetricCode::Unrecognised,
-    }
+    chip_size::by_metric(&metric).map_or(MetricCode::Unrecognised, |c| MetricCode::Rated(c.watts))
 }
 
 /// The rating of a recognised DIN axial resistor body, from its DIN code.

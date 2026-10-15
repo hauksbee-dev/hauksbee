@@ -3583,6 +3583,25 @@ fn help_mentions(exe: &Path, args: &[&str], flag: &str) -> bool {
     false
 }
 
+/// Tell the progress stream which attempt is starting.
+fn announce_attempt(attempt: usize, attempts: usize, reply: Reply<'_>) {
+    let doing = match (attempt, reply) {
+        (1, Reply::Word) => "identifying the part kind",
+        (1, _) => "drafting the model",
+        _ => "redrafting with the checker's feedback",
+    };
+    progress::phase(format!("{doing} (attempt {attempt} of {attempts})"));
+    let stage = match (attempt, reply) {
+        (_, Reply::Word) => "identify",
+        (1, _) => "draft",
+        _ => "fix",
+    };
+    progress::event(
+        "stage",
+        serde_json::json!({"stage": stage, "attempt": attempt, "attempts": attempts}),
+    );
+}
+
 /// Fetch, validate, and retry with feedback: one loop for every backend.
 ///
 /// Each attempt sends `base_prompt` plus an appendix quoting only the LATEST
@@ -3605,21 +3624,7 @@ fn validated_attempts(
     let mut accepted: Option<String> = None;
     for attempt in 1..=retries + 1 {
         let started = Instant::now();
-        let doing = match (attempt, reply) {
-            (1, Reply::Word) => "identifying the part kind",
-            (1, _) => "drafting the model",
-            _ => "redrafting with the checker's feedback",
-        };
-        progress::phase(format!("{doing} (attempt {attempt} of {})", retries + 1));
-        let stage = match (attempt, reply) {
-            (_, Reply::Word) => "identify",
-            (1, _) => "draft",
-            _ => "fix",
-        };
-        progress::event(
-            "stage",
-            serde_json::json!({"stage": stage, "attempt": attempt, "attempts": retries + 1}),
-        );
+        announce_attempt(attempt, retries + 1, reply);
         let fetched = match fetch(&prompt) {
             Err(e) if accepted.is_some() => {
                 say!("[model-extract] redraft for lint warnings failed ({e:#}); keeping the accepted draft");
@@ -5784,7 +5789,7 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
                 }
             })
         };
-        let out = run(Ok(good.clone())).unwrap();
+        let out = run(Ok(good)).unwrap();
         assert!(out.contains("rating = \"max_power_w\""), "{out}");
         let prompts = seen.borrow().clone();
         assert_eq!(prompts.len(), 2);
