@@ -15827,3 +15827,183 @@ max_voltage_v = 6.5 # Source: Absolute Maximum Ratings, VCC
 [models.coverage]
 implements = []
 missing = ["eeprom_storage", "i2c_serial_protocol", "unique_id_access", "write_cycle_timing", "package_specific_pad_binding"]
+
+# VEML7700 ambient light sensor (Vishay datasheet): extraction pipeline with --kind digital (identity only); hand-fixed: value_re unanchored; pins 1 SCL, 2 VDD, 3 GND, 4 SDA and the 4 V abs max checked against the PDF.
+[[models]]
+id = "veml7700"
+kind = "digital"
+description = "VEML7700 surface-mount ambient light sensor, matching ordering codes VEML7700-TR and VEML7700-TT; identity-only because the I2C register protocol, ambient-light conversion, and measurement/interrupt behavior are not represented by the bounded digital logic schema."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "Datasheet publishes no validated model error interval"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "voh"
+reason = "ABSTAIN: datasheet does not state an I2C output high level"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vol"
+reason = "ABSTAIN: datasheet gives a low-level sink current but does not state an output low voltage"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "tpd_s"
+reason = "ABSTAIN: datasheet does not state a logic propagation delay"
+
+[[models.source.pinout]]
+package = "side view"
+pins = { "1" = "SCL", "2" = "VDD", "3" = "GND", "4" = "SDA" }
+
+[[models.source.characteristic]]
+parameter = "Tamb, operation temperature range"
+min = -25
+max = 85
+unit = "°C"
+conditions = "Tamb = 25 °C unless otherwise specified"
+basis = "Absolute Maximum Ratings, operation temperature range, min/max"
+
+[[models.source.characteristic]]
+parameter = "Tstg, storage temperature range"
+min = -25
+max = 85
+unit = "°C"
+conditions = "Tamb = 25 °C unless otherwise specified"
+basis = "Absolute Maximum Ratings, storage temperature range, min/max"
+
+[[models.source.characteristic]]
+parameter = "VDD, recommended operating supply voltage"
+min = 2.5
+typ = 3.3
+max = 3.6
+unit = "V"
+conditions = "Tamb = 25 °C unless otherwise specified"
+basis = "Basic Characteristics, Supply voltage, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "Isd, shut down current"
+typ = 0.5
+unit = "μA"
+conditions = "VDD = 3.3 V; light conditions: dark"
+basis = "Basic Characteristics, Shut down current, typ; note (2)"
+
+[[models.source.characteristic]]
+parameter = "IDD, operation mode current"
+typ = 2
+unit = "μA"
+conditions = "VDD = 3.3 V, PSM = 11, refresh time 4100 ms; light source: white LED"
+basis = "Basic Characteristics, Operation mode current, typ; note (1)"
+
+[[models.source.characteristic]]
+parameter = "IDD, operation mode current"
+typ = 8
+unit = "μA"
+conditions = "VDD = 3.3 V, PSM = 00, refresh time 600 ms; light source: white LED"
+basis = "Basic Characteristics, Operation mode current, typ; note (1)"
+
+[[models.source.characteristic]]
+parameter = "IDD, operation mode current"
+typ = 45
+unit = "μA"
+conditions = "VDD = 3.3 V, PSM_EN = 0, refresh time 100 ms; light source: white LED"
+basis = "Basic Characteristics, Operation mode current, typ; note (1)"
+
+[[models.source.characteristic]]
+parameter = "fSCL, I2C clock rate range"
+min = 10
+max = 400
+unit = "kHz"
+conditions = "Standard and fast mode"
+basis = "Basic Characteristics, I2C clock rate range, min/max"
+
+[[models.source.characteristic]]
+parameter = "Vih, I2C bus input H-level range"
+min = 1.3
+max = 3.6
+unit = "V"
+conditions = "VDD = 3.3 V"
+basis = "Basic Characteristics, I2C bus input H-level range, min/max"
+
+[[models.source.characteristic]]
+parameter = "Vil, I2C bus input L-level range"
+min = -0.3
+max = 0.4
+unit = "V"
+conditions = "VDD = 3.3 V"
+basis = "Basic Characteristics, I2C bus input L-level range, min/max"
+
+[[models.source.characteristic]]
+parameter = "Iol, digital current out (low, current sink)"
+min = 3
+unit = "mA"
+conditions = ""
+basis = "Basic Characteristics, Digital current out (low, current sink), min"
+
+[[models.source.characteristic]]
+parameter = "Digital resolution (LSB count)"
+typ = 0.0042
+unit = "lx/step"
+conditions = "ALS_GAIN = x2, ALS_IT = 800 ms"
+basis = "Basic Characteristics, Digital resolution (LSB count), typ"
+
+[[models.source.characteristic]]
+parameter = "EVmax, detectable maximum illuminance"
+typ = 140000
+unit = "lx"
+conditions = "ALS_GAIN = x1/8, ALS_IT = 25 ms"
+basis = "Basic Characteristics, Detectable maximum illuminance, typ"
+
+[[models.source.characteristic]]
+parameter = "Dark offset"
+typ = 3
+unit = "step"
+conditions = "ALS_GAIN = x2, ALS_IT = 800 ms; light conditions: dark"
+basis = "Basic Characteristics, Dark offset, typ; note (2)"
+
+[[models.source.references]]
+title = "VEML7700.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "f338cf7d5911828a2f2ac8ae8324049380c852e34aa5afa43ac92c98ffe827d1"
+
+[models.match]
+value_re = '(?i)^VEML7700'
+
+[models.params]
+vih = { min = 1.3, max = 3.6, unit = "V", conditions = "VDD = 3.3 V", basis = "Basic Characteristics, I2C bus input H-level range, min/max" }
+vil = { min = -0.3, max = 0.4, unit = "V", conditions = "VDD = 3.3 V", basis = "Basic Characteristics, I2C bus input L-level range, min/max" }
+supply_pin = "2"
+gnd_pin = "3"
+identity_only = true
+warning = "Identity and sourced electrical limits only; no executable model of the sensor or I2C register transactions."
+unlocked_by = "Required digital behavior includes an I2C memory/register protocol and sensor conversion, which the available bounded logic schema cannot represent; datasheet does not state output VOH, output VOL, or propagation delay."
+supply_static_ua = { typ = 2, unit = "μA", conditions = "VDD = 3.3 V, PSM = 11, refresh time 4100 ms; white LED light source", basis = "Basic Characteristics, Operation mode current, typ; note (1)" }
+
+[models.ratings]
+max_voltage_v = 4.0 # Source: Absolute Maximum Ratings, Supply voltage, max
+max_power_w = 0.05 # Source: Absolute Maximum Ratings, Total power dissipation, max
+max_junction_temp_c = 100.0 # Source: Absolute Maximum Ratings, Junction temperature, max
+
+[models.pins]
+"1" = "scl" # SCL clock; package pinning and Fig. 1 block diagram agree.
+"2" = "vdd"
+"3" = "gnd"
+"4" = "sda" # SDA data; package pinning and Fig. 1 block diagram agree.
+
+[models.coverage]
+implements = ["pin_identity", "supply_limits", "input_thresholds"]
+missing = ["i2c_register_protocol", "ambient_light_conversion", "measurement_timing", "interrupt_behavior", "output_logic_levels", "propagation_delay"]
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.5
+max_v = 3.6
+abs_max_v = 4.0
+basis = "Basic Characteristics, Supply voltage; Absolute Maximum Ratings, Supply voltage"

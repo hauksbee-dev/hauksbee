@@ -602,8 +602,14 @@ fn switch_plan(card: &Card, value: &str, on: &str) -> Plan {
         let id = rig.net(&net);
         pins.push(pin(pad, id));
     }
-    rig.parts
-        .push(component("U1", value, "Package_TO_SOT_SMD:SOT-23-6", pins));
+    // A card that records its own package (a ten-pad mux, say) is held to its
+    // own outline, not to the rig's SOT-23-6, which has no pads past six.
+    let footprint = if card.declares_package() {
+        ""
+    } else {
+        "Package_TO_SOT_SMD:SOT-23-6"
+    };
+    rig.parts.push(component("U1", value, footprint, pins));
     if rig.nets.iter().any(|(_, n)| n == "ILIM") {
         rig.two("R9", "10k", RES, "ILIM", "GND");
     }
