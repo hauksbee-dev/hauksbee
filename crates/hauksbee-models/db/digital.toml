@@ -12778,8 +12778,8 @@ warning = "source-bound bus-idle model: the normal-mode recessive VCC current (4
 "6" = "canl"
 "7" = "canh"
 "8" = "s"
-"9" = "gnd2"
-"EP" = "gnd3"
+"9" = "ep"
+"EP" = "ep"
 
 [models.ratings]
 max_voltage_v = 6.0
