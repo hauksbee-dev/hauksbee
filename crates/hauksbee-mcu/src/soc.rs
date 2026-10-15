@@ -320,8 +320,8 @@ impl Backend {
     /// [`SocError::UnknownBackend`] for anything but `renode` or `qemu`.
     pub fn parse(s: &str) -> Result<Self, SocError> {
         match s {
-            "renode" => Ok(Self::Renode),
-            "qemu" => Ok(Self::Qemu),
+            crate::backend_id::RENODE => Ok(Self::Renode),
+            crate::backend_id::QEMU => Ok(Self::Qemu),
             other => Err(SocError::UnknownBackend(other.to_string())),
         }
     }
@@ -330,8 +330,8 @@ impl Backend {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
-            Self::Renode => "renode",
-            Self::Qemu => "qemu",
+            Self::Renode => crate::backend_id::RENODE,
+            Self::Qemu => crate::backend_id::QEMU,
         }
     }
 
