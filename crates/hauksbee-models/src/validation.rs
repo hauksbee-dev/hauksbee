@@ -2121,6 +2121,23 @@ mod tests {
         rejects(&rails, "names role 'b1'");
     }
 
+    /// A buck mapped as a linear regulator is told the converter way out,
+    /// never to invent an `out` pad; a linear one missing `out` is not.
+    #[test]
+    fn a_switcher_missing_out_is_pointed_at_the_converter_block() {
+        let params = [("vout", 3.3), ("dropout_v", 0.3), ("iq_a", 1e-3)];
+        let mut buck = entry(ComponentKind::Vreg, &params);
+        pins(
+            &mut buck,
+            &[("1", "in"), ("2", "sw"), ("3", "gnd"), ("4", "fb")],
+        );
+        rejects(&buck, "add [models.behavioral.converter] with topology");
+        let mut linear = entry(ComponentKind::Vreg, &params);
+        pins(&mut linear, &[("1", "in"), ("2", "gnd")]);
+        assert!(!missing_pin_roles(&linear).concat().contains("converter"));
+        rejects(&linear, "declares no 'out' pin");
+    }
+
     #[test]
     #[rustfmt::skip]
     fn param_ranges_and_orderings() {
@@ -2212,12 +2229,6 @@ mod tests {
         pins(&mut sink, &[("1", "in"), ("2", "gate"), ("3", "gnd")]);
         sink.behavioral.pins.insert("gate".into(), crate::behavioral::BehavioralPin::default());
         rejects(&sink, "declares no 'out' pin");
-        // A buck mapped as a linear regulator is told the converter way out,
-        // never to invent an `out` pad.
-        let mut buck = vreg(&[]);
-        pins(&mut buck, &[("1", "in"), ("2", "sw"), ("3", "gnd"), ("4", "fb")]);
-        rejects(&buck, "add [models.behavioral.converter] with topology");
-        assert!(!missing_pin_roles(&sink).concat().contains("converter"));
 
         rejects(
             &entry(AnalogSwitch, &[("ron", 5000.0), ("roff", 2000.0)]),

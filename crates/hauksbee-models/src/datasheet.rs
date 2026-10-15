@@ -6326,11 +6326,11 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             if prompts.len() == 1 {
                 Err(harness::Stopped("over budget".into()).into())
             } else {
-                Ok("resistor".into())
+                Ok("vreg".into())
             }
         })
         .unwrap();
-        assert_eq!(word, "resistor");
+        assert_eq!(word, "vreg");
         assert!(
             prompts[1].ends_with(harness::CONTINUE_AFTER_STOP),
             "{}",
