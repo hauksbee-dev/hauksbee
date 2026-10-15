@@ -5771,11 +5771,13 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
              case \" {loud} \" in *\" $m \"*) echo '{over}'; sleep 20;; esac\n\
              echo '{result}' | sed \"s/MODEL/$m/\"\n"
         );
+        // A section agent ends its file with the closing line.
+        let finished = format!("{}\n# end\n", ex.card);
         for (path, text) in [
             (&pdf, "%PDF-1.4\n"),
             (&cfg, ""),
             (&agent, script.as_str()),
-            (&draft, ex.card),
+            (&draft, finished.as_str()),
         ] {
             std::fs::write(path, text).unwrap();
         }
