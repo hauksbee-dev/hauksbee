@@ -150,7 +150,7 @@ export function AddCheck({ entities }: { entities: ResultEntity[] }) {
   const offer = entities.map(checkOffer).find(o => o !== null)
   if (!offer) return null
   return (
-    <RowAction testId="result-add-check" onClick={() => onAddCheck(offer)} title={`Opens the check editor: ${offer.label}`}>
+    <RowAction testId="result-add-check" onClick={() => onAddCheck(offer)} title={`Opens it in the board's check-this dock: ${offer.label}`}>
       + Add as check
     </RowAction>
   )
