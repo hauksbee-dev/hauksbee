@@ -1382,7 +1382,10 @@ fn kill_process_group(
 mod tests {
     use super::*;
 
-    /// Serializes tests that touch the global `INSTALL_ACTIVE` flag.
+    /// Serializes tests that touch the global `INSTALL_ACTIVE` flag or the
+    /// process-wide `PATH`: a test that spawns `sh` or `powershell.exe` by name
+    /// must hold it too, or it can run while another test has `PATH` pointing
+    /// at an empty directory and fail to find the interpreter.
     static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -1726,6 +1729,7 @@ echo "codex-cli 0.0.0""#,
     /// is the regression here).
     #[test]
     fn failure_carries_the_output_tail() {
+        let _serial = serial_guard();
         // One POSIX and one PowerShell script: shell_command picks the
         // matching interpreter, and PowerShell parses neither `>&2` nor a
         // bare `&`.
@@ -1754,6 +1758,7 @@ echo "codex-cli 0.0.0""#,
 
     #[test]
     fn timeout_kills_the_child_and_says_so() {
+        let _serial = serial_guard();
         #[cfg(windows)]
         let script = "echo begun; Start-Sleep -Seconds 30; echo never";
         #[cfg(not(windows))]
@@ -1781,6 +1786,7 @@ echo "codex-cli 0.0.0""#,
     #[cfg(windows)]
     #[test]
     fn timeout_kills_a_real_installer_grandchild_through_the_owned_job() {
+        let _serial = serial_guard();
         use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
         use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
         use windows_sys::Win32::System::Threading::{
@@ -1850,6 +1856,7 @@ echo "codex-cli 0.0.0""#,
 
     #[test]
     fn success_streams_and_returns_ok() {
+        let _serial = serial_guard();
         #[cfg(not(windows))]
         let cmd = shell_command("echo one; echo two >&2; exit 0");
         #[cfg(windows)]
