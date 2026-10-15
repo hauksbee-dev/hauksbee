@@ -136,10 +136,10 @@ pub struct PeripheralBinding {
     /// Address selected by an exact board strap. `None` means use the address
     /// embedded in the portable sensor spec.
     pub i2c_address_override: Option<u8>,
-    /// Why the override is the spec's default rather than what the board's
-    /// straps select (a floating or signal-net strap). Surfaced as a
-    /// partial-model assumption on the bind row.
-    pub i2c_address_assumed: Option<String>,
+    /// Which strap levels were assumed rather than read off the board (a
+    /// floating or firmware-driven bus-select or address strap), and why.
+    /// Surfaced as a partial-model assumption on the bind row.
+    pub straps_assumed: Option<String>,
     /// Datasheet current envelope and the exact board rails that power this
     /// peripheral. `None` means the model deliberately makes no electrical
     /// current/power-gating claim; protocol behavior remains usable but cannot
@@ -1372,6 +1372,14 @@ impl PartFacts {
                     .max_current_a
                     .or_else(|| hauksbee_models::value::parse_current_rating_a(&comp.value));
             }
+            // A capacitor's value often states its rated voltage ("10uF/16V");
+            // the card's rating, when it has one, wins.
+            let capacitor = m.passive_class
+                == Some(hauksbee_models::schema::PassiveClass::Capacitor)
+                || (m.kind == ComponentKind::Passive && passive_letter(comp) == Some('C'));
+            if capacitor && ratings.max_voltage_v.is_none() {
+                ratings.max_voltage_v = hauksbee_models::value::parse_voltage_rating_v(&comp.value);
+            }
             Arc::new(Rated { ratings, derating })
         });
         Some(Arc::clone(rated))
@@ -1945,7 +1953,8 @@ fn ref_prefix(reference: &str) -> String {
     letters.collect::<String>().to_ascii_uppercase()
 }
 
-/// Which passive ('R', 'C' or 'L') a designator's first letter claims. A word
+/// Which passive ('R', 'C' or 'L') a designator's first letter claims, or an
+/// Eagle `PC` polarised capacitor that two pads and a capacitance corroborate. A word
 /// rather than a designator ("COIL", "LOAD") yields to a `KiCad` footprint family:
 /// a relay winding on `Resistor_SMD:R_0805` is 167 ohms, not a 167 F capacitor.
 fn passive_letter(comp: &Component) -> Option<char> {
@@ -1958,8 +1967,21 @@ fn passive_letter(comp: &Component) -> Option<char> {
     let by_ref = prefix
         .chars()
         .next()
-        .filter(|c| matches!(c, 'R' | 'C' | 'L'));
+        .filter(|c| matches!(c, 'R' | 'C' | 'L'))
+        .or_else(|| polarised_capacitor(comp, &prefix).then_some('C'));
     by_ref.map(|c| by_footprint.map_or(c, |(_, letter)| *letter))
+}
+
+/// An Eagle-style `PC` designator (polarised capacitor) that really is one:
+/// two terminals and a capacitance value ("47uF/25V", "47u"). `PC` also names
+/// photocouplers, so the reference alone never decides it.
+fn polarised_capacitor(comp: &Component, prefix: &str) -> bool {
+    prefix == "PC"
+        && crate::program_resistor::electrical_terminal_nets(comp).is_some()
+        && parse_value(&comp.value).is_some_and(|v| match v.unit.as_deref() {
+            Some(unit) => unit == "F",
+            None => v.si > 0.0 && v.si < 1.0,
+        })
 }
 
 /// Connector-class prefixes: ports and mechanical parts, never simulated drivers.
@@ -2965,11 +2987,9 @@ fn bind_component(
     // A model-declared firmware peripheral is executable behavior in its own
     // right, but only when the board actually wires the bus roles.
     if let Some(spec) = model.peripheral.clone() {
-        return match bind_model_peripheral(
-            comp, model, spec, &role_nets, node_of, power_nets, circuit,
-        ) {
+        return match bind_model_peripheral(comp, model, spec, &role_nets, node_of, board, circuit) {
             Ok(binding) => {
-                let assumed = binding.i2c_address_assumed.as_ref().map(|why| {
+                let assumed = binding.straps_assumed.as_ref().map(|why| {
                     format!(
                         "{}{} ({}): {why}",
                         Assumption::PARTIAL_MODEL_MARKER,
@@ -3282,12 +3302,13 @@ fn bound_digital_outcome(
 /// Resolve a model-declared firmware peripheral (EEPROM, SPI NOR, register-map
 /// sensor) against the board's own wiring.
 ///
-/// `Err((reason, warning))` when the board does not wire the bus roles, the
-/// supply roles, or the strap levels the spec needs: a flash with no CS or an
-/// EEPROM with no SDA is left open, not counted as modelled because its part
-/// number was recognised. A register-map spec's own `[sensor.pins]` fills the
-/// roles the card's `[models.pins]` leaves out, and its address-select table
-/// picks the address from the board's straps.
+/// `Err((reason, warning))` when the board does not wire the bus roles or the
+/// supply roles the spec needs, or holds a bus-select strap at the level of a
+/// personality the spec does not model: a flash with no CS or an EEPROM with
+/// no SDA is left open, not counted as modelled because its part number was
+/// recognised. A register-map spec's own `[sensor.pins]` fills the roles the
+/// card's `[models.pins]` leaves out, and its address-select table picks the
+/// address from the board's straps.
 #[allow(clippy::too_many_lines)] // one refusal per unwired bus/power role
 fn bind_model_peripheral(
     comp: &Component,
@@ -3295,7 +3316,7 @@ fn bind_model_peripheral(
     spec: PeripheralSpec,
     role_nets: &HashMap<String, NodeId>,
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
-    power_nets: &HashMap<String, f64>,
+    (components, power_nets): (&[Component], &HashMap<String, f64>),
     circuit: &Circuit,
 ) -> Result<PeripheralBinding, (String, String)> {
     let sensor = match &spec {
@@ -3349,7 +3370,7 @@ fn bind_model_peripheral(
         None => None,
     };
 
-    let mut i2c_address_assumed = None;
+    let mut straps_assumed = None;
     let (cs_net, i2c_address_override) = match &spec {
         PeripheralSpec::I2cEeprom { .. } => {
             if !all_connected(&["scl", "sda"]) {
@@ -3409,61 +3430,71 @@ fn bind_model_peripheral(
             ..
         } => {
             let sensor = sensor.as_ref().expect("parsed above for a register map");
-            // A strap role must resolve to ground or to a rail the board's own
-            // power-net resolution accepted, directly or through pull resistors
-            // that all end on the same one; anything else is not a level.
+            // A level is ground, a rail the board's power-net resolution
+            // accepted, or the part's own supply or ground pin: a datasheet's
+            // "tie CSB to VDDIO" names the pin, whatever the rail is called.
+            let own = |ground: bool| {
+                (role_nets.iter())
+                    .filter(move |(role, _)| {
+                        let r = role.to_ascii_lowercase();
+                        if ground {
+                            r.starts_with("gnd") || r.contains("vss")
+                        } else {
+                            r.contains("vdd") || r.contains("vcc") || r == "vio"
+                        }
+                    })
+                    .map(|(_, node)| *node)
+            };
             let rail_level = |node: NodeId| {
-                (node.is_ground() || power_nets.contains_key(circuit.node_name(node)))
-                    .then(|| !node.is_ground())
+                let high = power_nets.contains_key(circuit.node_name(node))
+                    || own(false).any(|n| n == node);
+                let low = node.is_ground() || own(true).any(|n| n == node);
+                (high || low).then_some(!low)
             };
             let strap_level = |role: &str| -> Result<bool, String> {
                 let node = role_nets
                     .get(role)
                     .copied()
                     .ok_or_else(|| format!("strap role '{role}' is not connected"))?;
-                let pulls: Vec<Option<bool>> = (circuit.devices.iter())
-                    .filter_map(|d| match d {
-                        Device::Resistor { a, b, .. } if *a == node => Some(rail_level(*b)),
-                        Device::Resistor { a, b, .. } if *b == node => Some(rail_level(*a)),
-                        _ => None,
-                    })
-                    .collect();
-                let pulled = pulls.first().copied().flatten();
-                rail_level(node)
-                    .or_else(|| pulled.filter(|_| pulls.iter().all(|p| *p == pulled)))
-                    .ok_or_else(|| {
-                        format!(
-                            "strap role '{role}' is on '{}' rather than a resolved supply or ground",
-                            circuit.node_name(node)
-                        )
-                    })
+                let held = board_strap_level(node, (comp, components), node_of, &rail_level);
+                held.map_err(|why| {
+                    let net = circuit.node_name(node);
+                    format!("strap role '{role}' is on '{net}', {why}")
+                })
             };
-            let require_strap = |role: &str, want: bool| -> Result<(), (String, String)> {
-                if strap_level(role) == Ok(want) {
-                    return Ok(());
-                }
+            // A strap the board holds at the other level selects a personality
+            // this map does not model, so it stays unattached. One the board
+            // does not hold (floating, or on a part that can drive it) is set
+            // by firmware or the part's own default: the map attaches, and the
+            // level it assumed is disclosed, as an unresolved address strap is.
+            let mut assumed: Vec<String> = Vec::new();
+            for (role, want) in (required_high_roles.iter().map(|r| (r, true)))
+                .chain(required_low_roles.iter().map(|r| (r, false)))
+            {
                 let level = if want { "high" } else { "low" };
-                let opposite = if want {
-                    "resolved low"
-                } else {
-                    "resolved high"
-                };
-                let actual = strap_level(role).map_or_else(|error| error, |_| opposite.to_string());
-                Err(refuse(
-                    format!(
-                        "register-map bus personality requires role '{role}' {level}, but it is {actual}"
-                    ),
-                    format!(
-                        "model '{}' register-map behavior not attached: role '{role}' must resolve {level} ({actual})",
-                        model.id
-                    ),
-                ))
-            };
-            for role in required_high_roles {
-                require_strap(role, true)?;
-            }
-            for role in required_low_roles {
-                require_strap(role, false)?;
+                match strap_level(role) {
+                    Ok(held) if held == want => {}
+                    Ok(_) => {
+                        let actual = if want {
+                            "resolved low"
+                        } else {
+                            "resolved high"
+                        };
+                        return Err(refuse(
+                            format!(
+                                "register-map bus personality requires role '{role}' {level}, but it is {actual}"
+                            ),
+                            format!(
+                                "model '{}' register-map behavior not attached: role '{role}' must resolve {level} ({actual})",
+                                model.id
+                            ),
+                        ));
+                    }
+                    Err(why) => assumed.push(format!(
+                        "bus personality assumed ({role} {level}); its level is unknown, \
+                         firmware-driven or floating: {why}"
+                    )),
+                }
             }
             let address = match (
                 address_select_role.as_deref(),
@@ -3473,14 +3504,13 @@ fn bind_model_peripheral(
                 (Some(role), Some(low), Some(high)) => match strap_level(role) {
                     Ok(false) => Some(*low),
                     Ok(true) => Some(*high),
-                    Err(error) => {
-                        return Err(refuse(
-                            format!("register-map I2C address cannot be selected: {error}"),
-                            format!(
-                                "model '{}' register-map behavior not attached because {error}",
-                                model.id
-                            ),
+                    Err(why) => {
+                        let default = sensor.i2c_address;
+                        let shown = default.map_or_else(|| "?".into(), |a| format!("0x{a:02x}"));
+                        assumed.push(format!(
+                            "I2C address {shown} is assumed (the spec default): {why}"
                         ));
+                        default
                     }
                 },
                 _ if sensor.address_selects.is_empty() => None,
@@ -3500,10 +3530,11 @@ fn bind_model_peripheral(
                             .map(|high| if high { StrapTie::High } else { StrapTie::Low })
                     })
                     .map(|choice| {
-                        i2c_address_assumed = choice.assumed;
+                        assumed.extend(choice.assumed);
                         choice.address
                     }),
             };
+            straps_assumed = (!assumed.is_empty()).then(|| assumed.join("; "));
             match sensor.bus {
                 Bus::I2c => {
                     if !all_connected(&[scl_role, sda_role]) {
@@ -3580,10 +3611,97 @@ fn bind_model_peripheral(
         spec,
         cs_net,
         i2c_address_override,
-        i2c_address_assumed,
+        straps_assumed,
         power,
         bus_nodes,
     })
+}
+
+/// The level the board's own parts hold the strap node `start` at, for the
+/// part `owner`, whatever order the parts are bound in.
+///
+/// The node's tie set is everything joined to it through closed links (a 0 Ω
+/// part, a closed solder jumper). A tie set holding a `level` is at it, and
+/// one holding both is refused. Otherwise every assembled resistor leaving the
+/// set must end on the same level, a pull. Capacitors, open links, connectors
+/// and test points set no level; any other part on the set may drive it, so
+/// the level is firmware-driven, and nothing at all leaves it floating. The
+/// `Err` says which, in words that follow "strap role 'x' is on 'NET', ".
+fn board_strap_level(
+    start: NodeId,
+    (owner, components): (&Component, &[Component]),
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+    level: &dyn Fn(NodeId) -> Option<bool>,
+) -> Result<bool, String> {
+    use crate::program_resistor::{classify_series, electrical_terminal_nets, Series};
+    let parts = || {
+        (components.iter()).filter(|c| {
+            c.reference != owner.reference
+                && !matches!(AssemblyState::of(c), AssemblyState::DnpAbsent(_))
+        })
+    };
+    let ends = |c: &Component| {
+        let (a, b) = electrical_terminal_nets(c)?;
+        Some((node_of(Some(a))?, node_of(Some(b))?))
+    };
+    let mut ties = vec![start];
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for (a, b) in parts()
+            .filter(|c| matches!(classify_series(c), Series::Closed))
+            .filter_map(ends)
+        {
+            for (near, far) in [(a, b), (b, a)] {
+                // A tie through a rail would join every net on that rail.
+                if ties.contains(&near) && level(near).is_none() && !ties.contains(&far) {
+                    ties.push(far);
+                    grew = true;
+                }
+            }
+        }
+    }
+    let held: Vec<bool> = ties.iter().filter_map(|n| level(*n)).collect();
+    if let Some(&first) = held.first() {
+        return if held.iter().all(|h| *h == first) {
+            Ok(first)
+        } else {
+            Err("which is tied to both a supply and ground".to_string())
+        };
+    }
+    let on_ties = |c: &&Component| {
+        c.pins
+            .iter()
+            .any(|p| node_of(p.net).is_some_and(|n| ties.contains(&n)))
+    };
+    let mut pulls = Vec::new();
+    for c in parts().filter(on_ties) {
+        if is_port_class(&ref_prefix(&c.reference)) {
+            continue;
+        }
+        let pull = ends(c).filter(|_| !matches!(classify_series(c), Series::Unknown));
+        let Some((a, b)) = pull else {
+            return Err(format!(
+                "which {} ({}) can drive, so its level is firmware-driven",
+                c.reference, c.value
+            ));
+        };
+        match classify_series(c) {
+            Series::Ohms(_) => {
+                let far = if ties.contains(&a) { b } else { a };
+                let Some(to) = level(far) else {
+                    return Err(format!("pulled by {} to an unresolved net", c.reference));
+                };
+                pulls.push(to);
+            }
+            Series::Closed | Series::Open | Series::Unknown => {}
+        }
+    }
+    match pulls.first() {
+        Some(&first) if pulls.iter().all(|p| *p == first) => Ok(first),
+        Some(_) => Err("which is pulled both high and low".to_string()),
+        None => Err("which nothing on the board holds at a level (floating)".to_string()),
+    }
 }
 
 /// The distinct non-ground nodes the named bus `roles` are wired to, in the
@@ -4828,6 +4946,16 @@ fn bind_vreg(
         if roles.get(&conv.in_pin).is_none_or(|n| n.is_ground()) {
             return open_warning(comp, "vreg input not connected");
         }
+        // A feedback-programmed converter's rail is the board's divider; with
+        // the pin unwired or nothing on it to set it, there is no rail to report.
+        if let Some(feedback) = &conv.feedback {
+            let Some(fb) = roles.get(&feedback.pin).copied() else {
+                return open_warning(comp, FEEDBACK_UNWIRED);
+            };
+            if feedback_unset(comp, (fb, out), components, node_of) {
+                return open_warning(comp, FEEDBACK_UNSET);
+            }
+        }
         // An unstated loop bandwidth scales every load-step deviation, so it is
         // a disclosed default (a Qualified assumption downstream), never silent.
         let (fc, stated) = conv.loop_crossover_hz();
@@ -5541,6 +5669,39 @@ fn port_heat(circuit: &Circuit) -> Vec<(DeviceId, NodeId, DeviceId)> {
         .collect()
 }
 
+/// Why an adjustable regulator is left open when its ADJ/FB pin is unwired.
+const FEEDBACK_UNWIRED: &str = "adjustable vreg ADJ/FB pin not connected, so nothing sets its \
+     output voltage";
+/// Why one is left open when nothing on the board sets its ADJ/FB pin.
+const FEEDBACK_UNSET: &str = "adjustable vreg ADJ/FB pin has no divider on the board (nothing but \
+     capacitors on its net), so its output voltage cannot be determined; check the divider \
+     resistors were extracted, or use a fixed-output model";
+
+/// True when nothing on the board sets the adjustable regulator `comp`'s
+/// ADJ/FB node `fb`: it is not the output (unity feedback) or ground, and no
+/// fitted part other than capacitors, open links and connectors touches it.
+/// The MNA solves whatever divider is there, so any resistor, link or driver
+/// counts; a bypass capacitor alone sets no DC level, and stamping one would
+/// invent the rail.
+fn feedback_unset(
+    comp: &Component,
+    (fb, out): (NodeId, NodeId),
+    components: &[Component],
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+) -> bool {
+    use crate::program_resistor::{classify_series, Series};
+    if fb == out || fb.is_ground() {
+        return false;
+    }
+    !components.iter().any(|c| {
+        c.reference != comp.reference
+            && !matches!(AssemblyState::of(c), AssemblyState::DnpAbsent(_))
+            && !is_port_class(&ref_prefix(&c.reference))
+            && !matches!(classify_series(c), Series::Open)
+            && c.pins.iter().any(|p| node_of(p.net) == Some(fb))
+    })
+}
+
 /// The adjustable vreg stamp, from primitives the IR already has. The LM317
 /// class (no `gnd` in the card's `[models.pins]`) holds `Vref` between OUT and
 /// ADJ; [`pass_draw`] moves that branch current onto IN (what the pass element
@@ -5576,8 +5737,11 @@ fn bind_adj_vreg(
     // `[models.pins]` value is a role verbatim, so both spellings are read here.
     // Without one there is nothing to regulate against and no rail to report.
     let Some(adj) = roles.get("fb").or_else(|| roles.get("adj")).copied() else {
-        return open_warning(comp, "adjustable vreg ADJ pin not connected");
+        return open_warning(comp, FEEDBACK_UNWIRED);
     };
+    if feedback_unset(comp, (adj, out), components, node_of) {
+        return open_warning(comp, FEEDBACK_UNSET);
+    }
     // Read off the CARD, not the resolved roles: an unconnected GND pad must not
     // silently move a ground-referenced part onto the LM317 law.
     let grounded = model.pins.values().any(|r| r == "gnd");
@@ -9877,6 +10041,67 @@ mod tests {
         );
     }
 
+    /// An adjustable regulator's rail is its board divider: with one it binds;
+    /// with only a bypass capacitor on ADJ, or ADJ unwired, it is left open
+    /// with that reason rather than stamped at Vref.
+    #[test]
+    fn an_adjustable_regulator_without_a_divider_is_left_open() {
+        let lm317 = |adj: Option<i64>| Component {
+            footprint: "Package_TO_SOT_SMD:SOT-223-3_TabPin2".into(),
+            pins: [
+                adj.map(|n| pin("1", n)),
+                Some(pin("2", 2)),
+                Some(pin("3", 1)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            ..comp("U1", "LM317")
+        };
+        let part = |reference: &str, value: &str, (a, b): (i64, i64)| Component {
+            pins: vec![pin("1", a), pin("2", b)],
+            ..comp(reference, value)
+        };
+        let outcome = |parts: Vec<Component>| {
+            let board = ExtractedBoard {
+                name: "adj".into(),
+                nets: vec![net(1, "VIN"), net(2, "VOUT"), net(3, "ADJ"), net(4, "GND")],
+                components: parts,
+            };
+            let bound = bind_board(&board, &ModelLibrary::builtin());
+            let row = bound.report.row("U1").unwrap();
+            (row.outcome.clone(), row.warning.clone())
+        };
+        let load = || part("RL", "500", (2, 4));
+        // Legal control: R1 OUT-ADJ, R2 ADJ-GND.
+        let (bound, warning) = outcome(vec![
+            lm317(Some(3)),
+            part("R1", "240", (2, 3)),
+            part("R2", "720", (3, 4)),
+            part("C1", "10uF", (3, 4)),
+            load(),
+        ]);
+        assert!(
+            !matches!(bound, BindOutcome::Unresolved { .. }),
+            "{bound:?} / {warning:?}"
+        );
+        // Faulty: a capacitor alone on ADJ, and ADJ unwired.
+        for (parts, why) in [
+            (
+                vec![lm317(Some(3)), part("C1", "10uF", (3, 4)), load()],
+                "has no divider",
+            ),
+            (vec![lm317(None), load()], "ADJ/FB pin not connected"),
+        ] {
+            let (open, warning) = outcome(parts);
+            assert!(
+                matches!(&open, BindOutcome::Unresolved { reason } if reason.contains(why)),
+                "{open:?}"
+            );
+            assert!(warning.is_some_and(|w| w.contains(why)));
+        }
+    }
+
     /// Bind one peripheral card on a board of SDA/+3V3/SCL/IRQ nets (board
     /// nets 0/1 ground, 2 SDA, 3 +3V3, 4 SCL, 5 a signal net).
     fn bind_peripheral(
@@ -9886,25 +10111,24 @@ mod tests {
         bind_peripheral_pulled(component, model, &[])
     }
 
-    /// [`bind_peripheral`] with 10k resistors already stamped between the
-    /// given board nets (0/1 ground, 2 SDA, 3 +3V3, 4 SCL, 5 IRQ).
+    /// [`bind_peripheral`] on a board that also carries the given parts
+    /// (board nets 0/1 ground, 2 SDA, 3 +3V3, 4 SCL, 5 IRQ, 6 a spare net).
     fn bind_peripheral_pulled(
         component: &Component,
         model: &ModelEntry,
-        pulls: &[(i64, i64)],
+        others: &[Component],
     ) -> (BindOutcome, Option<String>, Vec<PeripheralBinding>) {
         let lib = ModelLibrary::builtin();
         let mut circuit = Circuit::new();
-        let nodes = ["SDA", "+3V3", "SCL", "IRQ"].map(|name| circuit.node(name));
+        let nodes = ["SDA", "+3V3", "SCL", "IRQ", "SPARE"].map(|name| circuit.node(name));
         let node_of = |n: Option<i64>| match n {
             Some(0 | 1) => Some(NodeId::GROUND),
-            Some(n @ 2..=5) => nodes.get(usize::try_from(n - 2).ok()?).copied(),
+            Some(n @ 2..=6) => nodes.get(usize::try_from(n - 2).ok()?).copied(),
             _ => None,
         };
-        for (i, &(a, b)) in pulls.iter().enumerate() {
-            let (a, b) = (node_of(Some(a)).unwrap(), node_of(Some(b)).unwrap());
-            circuit.add(Device::resistor(format!("RP{i}"), a, b, 10e3));
-        }
+        let board: Vec<Component> = std::iter::once(component.clone())
+            .chain(others.iter().cloned())
+            .collect();
         let mut peripherals = Vec::new();
         let (outcome, warning, _) = bind_component(
             component,
@@ -9917,10 +10141,7 @@ mod tests {
             &mut Vec::new(),
             &mut peripherals,
             &mut Vec::new(),
-            (
-                std::slice::from_ref(component),
-                &HashMap::from([("+3V3".to_string(), 3.3)]),
-            ),
+            (&board, &HashMap::from([("+3V3".to_string(), 3.3)])),
             lib.pin_rules(),
         );
         (outcome, warning, peripherals)
@@ -9928,6 +10149,14 @@ mod tests {
 
     fn pins_on(wiring: &[(&str, i64)]) -> Vec<Pin> {
         wiring.iter().map(|&(pad, net)| pin(pad, net)).collect()
+    }
+
+    /// A two-pad board part between nets `a` and `b`.
+    fn two_pad(reference: &str, value: &str, (a, b): (i64, i64)) -> Component {
+        Component {
+            pins: pins_on(&[("1", a), ("2", b)]),
+            ..comp(reference, value)
+        }
     }
 
     #[test]
@@ -9952,6 +10181,74 @@ mod tests {
         );
         assert_eq!(peripherals.len(), 1);
         assert_eq!(peripherals[0].i2c_address_override, Some(0x18));
+    }
+
+    /// The bus-select strap resolves through the board's own parts: a 0 Ω
+    /// link or a pull to the rail selects I2C, a tie to ground refuses, and a
+    /// strap nothing holds (floating, or on a pin another part drives) is
+    /// firmware's business, so the map attaches with the level disclosed.
+    #[test]
+    fn bus_select_strap_resolves_through_links_and_pulls() {
+        let model = resolve_value(&ModelLibrary::builtin(), "BMA423", "");
+        let mut component = comp("U6", "BMA423");
+        // As above, but CSB (pad 10) on the spare net 6.
+        component.pins = pins_on(&[
+            ("1", 1),
+            ("2", 2),
+            ("3", 3),
+            ("7", 3),
+            ("8", 0),
+            ("9", 0),
+            ("10", 6),
+            ("12", 4),
+        ]);
+        let bound = |others: &[Component]| {
+            let (outcome, warning, peripherals) =
+                bind_peripheral_pulled(&component, &model, others);
+            assert!(
+                matches!(outcome, BindOutcome::Behavioral { .. }),
+                "{outcome:?} / {warning:?}"
+            );
+            assert_eq!(peripherals.len(), 1, "{warning:?}");
+            (warning, peripherals.into_iter().next().unwrap())
+        };
+        // Legal: a 0R link or a 10k pull to the rail is a resolved high.
+        for tie in [two_pad("R5", "0R", (6, 3)), two_pad("R5", "10k", (6, 3))] {
+            let (warning, peripheral) = bound(&[tie]);
+            assert_eq!(peripheral.straps_assumed, None);
+            assert_eq!(warning, None);
+        }
+        // Floating: attached, with the assumption named.
+        let (warning, peripheral) = bound(&[]);
+        let why = peripheral.straps_assumed.expect("floating CSB is assumed");
+        assert!(
+            why.contains("csb high") && why.contains("floating"),
+            "{why}"
+        );
+        assert!(warning.is_some_and(|w| w.contains(Assumption::PARTIAL_MODEL_MARKER)));
+        // Driven by a controller pin: firmware-driven, not a fault.
+        let mcu = Component {
+            pins: pins_on(&[("1", 6), ("2", 3), ("3", 0)]),
+            ..comp("U1", "ESP32-S3")
+        };
+        let (_, peripheral) = bound(&[mcu]);
+        let why = peripheral.straps_assumed.expect("driven CSB is assumed");
+        assert!(
+            why.contains("U1") && why.contains("firmware-driven"),
+            "{why}"
+        );
+        // Faulty: tied low through a link selects SPI, which the map does not
+        // model, so it stays unattached; pulled both ways is unresolved.
+        let (outcome, warning, peripherals) =
+            bind_peripheral_pulled(&component, &model, &[two_pad("R5", "0R", (6, 0))]);
+        assert!(!matches!(outcome, BindOutcome::Behavioral { .. }));
+        assert!(peripherals.is_empty());
+        assert!(warning.is_some_and(|w| w.contains("must resolve high")));
+        let both = [two_pad("R5", "10k", (6, 3)), two_pad("R6", "10k", (6, 0))];
+        let (_, peripheral) = bound(&both);
+        assert!(peripheral
+            .straps_assumed
+            .is_some_and(|w| w.contains("pulled both high and low")));
     }
 
     /// A card whose register map carries its own `[sensor.pins]` and a
@@ -10017,7 +10314,7 @@ style = "i2c_pointer"
             "{outcome:?} / {warning:?}"
         );
         assert_eq!(peripherals[0].i2c_address_override, Some(0x41));
-        assert_eq!(peripherals[0].i2c_address_assumed, None);
+        assert_eq!(peripherals[0].straps_assumed, None);
         assert_eq!(warning, None);
 
         component.pins = wire(5);
@@ -10034,10 +10331,15 @@ style = "i2c_pointer"
 
         // A strap on a signal net pulled to one rail takes that rail's level;
         // pulls to both rails leave it assumed.
-        let (_, warning, peripherals) = bind_peripheral_pulled(&component, &model, &[(5, 3)]);
+        let (_, warning, peripherals) =
+            bind_peripheral_pulled(&component, &model, &[two_pad("R1", "10k", (5, 3))]);
         assert_eq!(peripherals[0].i2c_address_override, Some(0x41));
         assert_eq!(warning, None);
-        let (_, warning, _) = bind_peripheral_pulled(&component, &model, &[(5, 3), (0, 5)]);
+        let (_, warning, _) = bind_peripheral_pulled(
+            &component,
+            &model,
+            &[two_pad("R1", "10k", (5, 3)), two_pad("R2", "10k", (0, 5))],
+        );
         assert!(warning.is_some_and(|w| w.contains("0x40 is assumed")));
 
         // Without SCL wired the bus personality is not attached.
@@ -12087,6 +12389,38 @@ style = "i2c_pointer"
         // A real designator outranks a borrowed land pattern.
         assert_eq!(letter("R1", "Capacitor_SMD:C_0603_1608Metric"), Some('R'));
         assert_eq!(letter("U1", "Resistor_SMD:R_0805_2012Metric"), None);
+    }
+
+    /// Eagle names polarised capacitors `PC`, and their values carry the
+    /// rated voltage; a `PC` photocoupler or an unreadable value stays open.
+    #[test]
+    fn a_polarised_pc_capacitor_binds_with_its_rated_voltage() {
+        let part = |reference: &str, value: &str, pads: &[(&str, i64)]| Component {
+            pins: pins_on(pads),
+            footprint: "PANASONIC_D".into(),
+            ..comp(reference, value)
+        };
+        let two = [("+", 3), ("-", 0)];
+        for (value, farads, volts) in [
+            ("47uF+/6.3V+", 47e-6, Some(6.3)),
+            ("47uF/25V", 47e-6, Some(25.0)),
+            ("10uF/16V", 10e-6, Some(16.0)),
+            ("47u", 47e-6, None),
+        ] {
+            let c = part("PC1", value, &two);
+            assert_eq!(passive_letter(&c), Some('C'), "{value}");
+            let entry = fallback_entry(&c).expect("a PC capacitor binds");
+            assert_eq!(entry.kind, ComponentKind::Passive);
+            let parsed = parse_value(&c.value).unwrap();
+            assert!((parsed.si - farads).abs() < 1e-9, "{value}");
+            assert_eq!(hauksbee_models::value::parse_voltage_rating_v(value), volts);
+        }
+        // Controls: a four-pin photocoupler, a part-number value, no value.
+        let opto = part("PC1", "PC817", &[("1", 2), ("2", 0), ("3", 4), ("4", 0)]);
+        assert_eq!(passive_letter(&opto), None);
+        assert_eq!(passive_letter(&part("PC2", "PC817", &two)), None);
+        assert_eq!(passive_letter(&part("PC3", "CAP", &two)), None);
+        assert!(fallback_entry(&part("PC3", "CAP", &two)).is_none());
     }
 
     #[test]

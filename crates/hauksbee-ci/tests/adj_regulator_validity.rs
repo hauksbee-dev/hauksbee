@@ -181,3 +181,40 @@ fn a_measurement_is_undermined_by_the_same_evidence_a_bound_is() {
         r.render_human()
     );
 }
+
+/// An ADJ pin whose net holds only a bypass capacitor has no divider to set
+/// the rail: the part is left open, and no rail is read off VOUT. The legal
+/// control is the divider rows above.
+#[test]
+fn an_adj_pin_with_only_a_capacitor_is_refused_not_given_a_rail() {
+    let u1 = pad(1, "ADJ") + &pad(2, "VOUT") + &pad(3, "VIN");
+    let cap = pad(1, "ADJ") + &pad(2, "GND");
+    let load = pad(1, "VOUT") + &pad(2, "GND");
+    let parts = comp(
+        "U1",
+        "Package_TO_SOT_SMD:SOT-223-3_TabPin2",
+        "LM317",
+        20,
+        u1,
+    ) + &comp("C1", "Capacitor_SMD:C_0805_2012Metric", "10uF", 40, cap)
+        + &comp("RL", "Resistor_SMD:R_0805_2012Metric", "500", 48, load);
+    let text = format!(
+        "board version 20171130\nfn main {{\nnet \"VIN\"\nnet \"VOUT\"\nnet \"GND\"\nnet \"ADJ\"\n{parts}}}\n"
+    );
+    let board_path = support::write_tmp("adj-cap-only.board", &text);
+    let spec = support::write_tmp(
+        "adj-cap-only.toml",
+        &format!(
+            "name = \"adj cap only\"\nboard = {}\nduration_ms = 3\n\
+             [[supply]]\nnet = \"VIN\"\nkind = \"bench\"\nvolts = 12.0\n\
+             current_limit_a = 0.5\nr_out_ohms = 0.1\n\
+             [[assert]]\nkind = \"voltage\"\nname = \"vout\"\nnet = \"VOUT\"\n\
+             min = 1.0\nmax = 1.5\nafter_ms = 1.0\n",
+            support::toml_path(&board_path),
+        ),
+    );
+    let r = hauksbee_ci::run(&support::run_config(spec)).expect("run the spec");
+    let a = support::row(&r, "vout");
+    // Before, ADJ held at Vref alone put VOUT at 1.25 V, inside this band.
+    assert!(!a.passed && r.exit_code() != 0, "{a:?}");
+}

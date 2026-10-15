@@ -291,8 +291,9 @@ fn loop_exprs(c: &Converter, farads: f64, r: f64, eff: f64, full_lim: f64) -> [S
 }
 
 /// The fraction of the regulated voltage a resistive divider presents at a
-/// feedback node: its conductance to other nets over its total (1 if none).
-fn divider_ratio(circuit: &Circuit, fb: NodeId) -> f64 {
+/// feedback node: its conductance to other nets over its total (1 with no
+/// path to another net), or `None` when no resistor touches the node at all.
+fn divider_ratio(circuit: &Circuit, fb: NodeId) -> Option<f64> {
     let (mut top, mut all) = (0.0, 0.0);
     for (_, d) in circuit.iter() {
         if let Device::Resistor { a, b, ohms, .. } = d {
@@ -306,9 +307,9 @@ fn divider_ratio(circuit: &Circuit, fb: NodeId) -> f64 {
         }
     }
     if top > 0.0 {
-        top / all
+        Some(top / all)
     } else {
-        1.0
+        (all > 0.0).then_some(1.0)
     }
 }
 
@@ -1035,7 +1036,16 @@ impl BehavioralDevice {
             .as_ref()
             .map(|f| (f.vref_v, role_nodes.get(&f.pin)));
         let (sense, vref, k) = match fb {
-            Some((vref, Some(&n))) => (n, vref, divider_ratio(circuit, n)),
+            Some((vref, Some(&n))) => {
+                // Away from the output, a feedback pin with no resistor on it
+                // has no divider to set the rail: the binder leaves the part
+                // open, and no rail is invented here.
+                let ratio = divider_ratio(circuit, n);
+                let Some(k) = ratio.or_else(|| (n == out || n == reg).then_some(1.0)) else {
+                    return;
+                };
+                (n, vref, k)
+            }
             _ => (reg, c.vout_setpoint, 1.0),
         };
         let farads = out_farads(circuit, reg).max(1e-6) / k;
