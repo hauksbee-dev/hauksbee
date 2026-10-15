@@ -60,7 +60,22 @@ impl Merged {
 fn plain(item: &Item) -> Option<toml::Value> {
     let mut holder = Table::new();
     holder.insert("v", item.clone());
-    holder.to_string().parse::<toml::Table>().ok()?.remove("v")
+    // A table under a key prints as a `[v]` section the parse below rejects
+    // here, so tables are compared as a document of their own.
+    let text = match item {
+        Item::Table(t) => DocumentMut::from(t.clone()).to_string(),
+        _ => holder.to_string(),
+    };
+    let parsed = text.parse::<toml::Table>().ok()?;
+    match item {
+        Item::Table(_) => Some(toml::Value::Table(parsed)),
+        _ => parsed.get("v").cloned(),
+    }
+}
+
+/// Whether two items hold the same values; one that cannot be read is never the same.
+fn same_values(a: &Item, b: &Item) -> bool {
+    plain(a).is_some_and(|a| Some(a) == plain(b))
 }
 
 fn join_tables(dst: &mut Table, src: &Table, path: &str, who: (&str, &str), out: &mut Vec<String>) {
@@ -81,9 +96,8 @@ fn join_tables(dst: &mut Table, src: &Table, path: &str, who: (&str, &str), out:
             (Item::Table(a), Item::Table(b)) => join_tables(a, b, &at, who, out),
             (Item::ArrayOfTables(a), Item::ArrayOfTables(b)) => {
                 for row in b {
-                    let same = |x: &Table| {
-                        plain(&Item::Table(x.clone())) == plain(&Item::Table(row.clone()))
-                    };
+                    let same =
+                        |x: &Table| same_values(&Item::Table(x.clone()), &Item::Table(row.clone()));
                     if !a.iter().any(same) {
                         a.push(row.clone());
                     }
@@ -102,7 +116,7 @@ fn join_tables(dst: &mut Table, src: &Table, path: &str, who: (&str, &str), out:
                     }
                 }
             }
-            (a, b) if plain(a) == plain(b) => {}
+            (a, b) if same_values(a, b) => {}
             (a, b) => {
                 let show = |i: &Item| i.to_string().trim().replace('\n', " ");
                 let (a, b) = (show(a), show(b));
@@ -329,6 +343,27 @@ mod tests {
     const ELECTRICAL: &str =
         "[[models]]\nid = \"x1\"\ndescription = \"X1 does not model timing\"\n\
         [models.params]\nvoh = 2.4\n[models.coverage]\nmissing = [\"timing\"]\n";
+
+    /// Rows two fragments both write under one key are all kept; only an
+    /// identical row is written once.
+    #[test]
+    fn rows_under_a_shared_key_are_appended() {
+        let rows = |tag: &str| {
+            format!(
+                "[[models]]\n[[models.source.characteristic]]\nparameter = \"{tag}\"\nmin = 1.0\n\
+                 [[models.source.characteristic]]\nparameter = \"shared\"\nmin = 2.0\n"
+            )
+        };
+        let merged = merge(&[("a", Some(rows("a"))), ("b", Some(rows("b")))]).unwrap();
+        assert_eq!(
+            merged
+                .card
+                .matches("[[models.source.characteristic]]")
+                .count(),
+            3
+        );
+        assert!(merged.problems().is_empty());
+    }
 
     fn sections(parts: [Option<&str>; 3]) -> Vec<(&'static str, Option<String>)> {
         let parts = parts.map(|p| p.map(str::to_string));
