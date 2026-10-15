@@ -94,7 +94,8 @@ pub use netlint::{
     control_role, is_capacitor, is_connector_like, is_ground, is_led, is_led_identity,
     is_placeholder_value, is_resistor, is_test_point_or_hole, is_unconnected_net, norm,
     pin_is_no_connect, render_netlint, LintCheck, LintFinding, NetLintReport, Severity,
-    ABSTENTION_MARKER, DNP_PULLUP_MESSAGE_MARKER, INFORMATIONAL_MARKER, SPI_PULLUP_MESSAGE_MARKER,
+    ABSTENTION_MARKER, CHECK_BEFORE_ORDERING, DNP_PULLUP_MESSAGE_MARKER, INFORMATIONAL_MARKER,
+    SPI_PULLUP_MESSAGE_MARKER,
 };
 pub use si::{
     cl_board_pf, cl_series, i2c_rise_time_ns, render_si, routed_length_mm, SiCheck, SiFinding,

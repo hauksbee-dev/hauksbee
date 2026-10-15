@@ -439,7 +439,7 @@ enum Verdict {
     /// ordering/packaging or an extra unrecognised spec. A low-severity note.
     Unsure(String),
     /// Both sides name a different electrical value or a different part: the
-    /// verdict analysed one of them, so this gates.
+    /// verdict analysed the layout's, so this is a check-before-ordering item.
     Differs,
 }
 
@@ -630,8 +630,8 @@ fn compare_values(sch: &str, pcb: &str) -> Verdict {
 /// then silently analyses the layout's.
 ///
 /// A disagreement that changes what was simulated (a different electrical
-/// value, or a different base part number) is one gating warning naming both
-/// and saying which the verdict used. A pair that merely cannot be compared
+/// value, or a different base part number) is one non-gating
+/// "check before ordering" item naming both and saying which the verdict used. A pair that merely cannot be compared
 /// (see [`compare_values`]) is one low-severity note naming both strings.
 /// Blank fields and differences of case or spacing are not disagreements.
 fn part_identity_parity(pcb: &ExtractedBoard, sch: &ExtractedBoard, out: &mut Vec<LintFinding>) {
@@ -674,10 +674,13 @@ fn part_identity_parity(pcb: &ExtractedBoard, sch: &ExtractedBoard, out: &mut Ve
             continue;
         };
         let (severity, message) = match verdict {
+            // Not gating: the layout's part is what gets built and is what was
+            // simulated, so this is a list item to confirm before ordering.
             Verdict::Differs => (
-                Severity::Medium,
+                Severity::Low,
                 format!(
-                    "{reference} has {what} '{schematic}' in the schematic but '{layout}' on the PCB. This verdict analysed the PCB's '{layout}'; if the schematic's part is the one to be fitted, update the PCB from the schematic and re-check."
+                    "{}{reference} has {what} '{schematic}' in the schematic but '{layout}' on the PCB. This verdict analysed the PCB's '{layout}', the part that gets built; if the schematic's part is the one to be fitted, update the PCB from the schematic and re-check.",
+                    crate::CHECK_BEFORE_ORDERING
                 ),
             ),
             Verdict::Unsure(why) => (
