@@ -642,17 +642,29 @@ kind = "no_faults"
     /// End-to-end through the real sibling binary when it exists (a build tree
     /// or an installed layout); skips cleanly otherwise so a bare `cargo test`
     /// on a fresh clone stays green.
+    /// The workspace's newest built `hauksbee-ci`. In a cargo test the
+    /// `current_exe` is the test runner deep in target/, so resolve it
+    /// explicitly, and take the newest so a stale release binary left from an
+    /// old checkout never stands in for the one this tree just built.
+    fn built_ci_binary() -> Option<std::path::PathBuf> {
+        ["release", "debug"]
+            .iter()
+            .map(|p| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join(format!("../../target/{p}/hauksbee-ci"))
+            })
+            .filter_map(|p| Some((std::fs::metadata(&p).ok()?.modified().ok()?, p)))
+            .max()
+            .map(|(_, p)| p)
+    }
+
     #[test]
     fn web_check_runs_the_real_ci_binary() {
         let _serial = serial_guard();
-        // In a cargo test the current_exe is the test runner deep in target/,
-        // so resolve the built binary explicitly.
-        let ci = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/release/hauksbee-ci");
-        if !ci.is_file() {
-            eprintln!("skipping web_check e2e (no release hauksbee-ci built)");
+        let Some(ci) = built_ci_binary() else {
+            eprintln!("skipping web_check e2e (no hauksbee-ci built)");
             return;
-        }
+        };
         std::env::set_var("HAUKSBEE_CI_BIN", &ci);
         let json = run_web_check(
             "boot_gate.kicad_pcb",
@@ -675,14 +687,7 @@ kind = "no_faults"
     #[test]
     fn web_scaffold_asks_the_ci_binary_for_its_init_supplies() {
         let _serial = serial_guard();
-        let ci = ["release", "debug"]
-            .iter()
-            .map(|p| {
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join(format!("../../target/{p}/hauksbee-ci"))
-            })
-            .find(|p| p.is_file());
-        let Some(ci) = ci else {
+        let Some(ci) = built_ci_binary() else {
             eprintln!("skipping web_scaffold e2e (no hauksbee-ci built)");
             return;
         };
