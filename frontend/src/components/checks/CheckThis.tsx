@@ -240,7 +240,7 @@ function BlockedOffer({ offer, onFix }: { offer: Offer; onFix: () => void }) {
  * The checks for the current selection. Renders nothing until the catalogue has
  * loaded (a server without one has no offers to make).
  */
-export function CheckThis({ net, component, boundKind, capabilities, live, padNet, onQueue }: {
+export function CheckThis({ net, component, boundKind, capabilities, live, padNet, onQueue, openOffer }: {
   net: string | null
   component: { ref: string; padNets?: string[] } | null
   boundKind?: string | null
@@ -249,6 +249,8 @@ export function CheckThis({ net, component, boundKind, capabilities, live, padNe
   live: number | null
   padNet?: string | null
   onQueue?: (request: BoardRequest) => void
+  /** Open the offer of this kind once (a new `seq` asks again); how the result panel's "Add as check" lands here. */
+  openOffer?: { kind: string; seq: number } | null
 }) {
   const host = useCheckHost()
   const kinds = useCatalog()
@@ -270,6 +272,13 @@ export function CheckThis({ net, component, boundKind, capabilities, live, padNe
   // A new selection starts with every offer collapsed.
   const subject = `${net ?? ''}|${component?.ref ?? ''}`
   useEffect(() => { setOpen(null) }, [subject])
+  const openedSeq = useRef(0)
+  useEffect(() => {
+    if (!openOffer || openOffer.seq === openedSeq.current || offers.length === 0) return
+    const hit = offers.find(o => o.kind === openOffer.kind && !o.blocked)
+    openedSeq.current = openOffer.seq
+    if (hit) setOpen(offerKey(hit))
+  }, [openOffer, offers])
 
   if (!kinds || offers.length === 0) return null
   const fix = (offer: Offer) => {

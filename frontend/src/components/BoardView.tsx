@@ -146,10 +146,11 @@ export function BoardView({
     setGuessOpen(true)
     requestAnimationFrame(() => centerInScroller(guessRef.current))
   }, [])
-  const resultLinks = useMemo<ResultLinkHandlers>(() => ({
-    vocab: vocabulary(r),
-    onPoint: setPointed,
-    onGo: entity => {
+  // "Add as check" on a result row lands on the same CheckThis dock a click on
+  // the map does, with that offer already open: one way to add a check.
+  const [checkIntent, setCheckIntent] = useState<{ kind: string; seq: number } | null>(null)
+  const resultLinks = useMemo<ResultLinkHandlers>(() => {
+    const go = (entity: ResultEntity) => {
       frameSeq.current += 1
       if (entity.kind === 'part') {
         const row = coverageFor(r.model_coverage, entity.ref)
@@ -169,7 +170,11 @@ export function BoardView({
         setFrameTarget({ refs: [], nets: [entity.net], seq: frameSeq.current })
       }
       centerInScroller(mapRef.current)
-    },
+    }
+    return {
+    vocab: vocabulary(r),
+    onPoint: setPointed,
+    onGo: go,
     onGiveModel: restoredFrom ? undefined : ref => {
       const row = coverageFor(r.model_coverage, ref)
       if (row) author(row)
@@ -184,8 +189,12 @@ export function BoardView({
       if (caps.includes('max_temp')) return { kind: 'max_temp', ref: entity.ref, label: `${entity.ref} must stay cool` }
       return null
     },
-    onAddCheck: offer => setConstraintDraft({ kind: offer.kind, net: offer.net ?? '', ref: offer.ref ?? '' }),
-  }), [r, restoredFrom, author, showGuessed, setSelectedNet, setSelectedComponent])
+    onAddCheck: offer => {
+      go(offer.ref ? { kind: 'part', ref: offer.ref } : { kind: 'net', net: offer.net ?? '' })
+      setCheckIntent(prev => ({ kind: offer.kind, seq: (prev?.seq ?? 0) + 1 }))
+    },
+    }
+  }, [r, restoredFrom, author, showGuessed, setSelectedNet, setSelectedComponent])
   const pointedRefs = useMemo(() => (pointed?.kind === 'part' ? [pointed.ref] : []), [pointed])
   const pointedNets = useMemo(() => (pointed?.kind === 'net' ? [pointed.net] : []), [pointed])
 
@@ -299,6 +308,7 @@ export function BoardView({
       modelCoverage={coverageFor(r.model_coverage, selectedComponent?.ref)}
       openSelection={r.bind?.open_selections?.find(s => s.reference === selectedComponent?.ref)}
       netModels={modelsOnNet(r.model_coverage, selectedNet)}
+      openOffer={checkIntent}
       onQueue={request => {
         onQueue(request)
         if (request.type !== 'check' && request.type !== 'assert') onOpenChecks()

@@ -106,7 +106,7 @@ export function OpenSelectionsBanner({ selections, onQueue }: {
 
 export function SelectionCard({
   net, liveVolts, reading, component, boundKind, modelCoverage, netModels = [], assertionCapabilities = [],
-  onQueue, peripheralMode = 'scenario', onAddProbe, onAuthorModel, onClose, onPickNet, openSelection, docked = false,
+  onQueue, openOffer = null, peripheralMode = 'scenario', onAddProbe, onAuthorModel, onClose, onPickNet, openSelection, docked = false,
 }: {
   /** In a dock (a rail or a block under the map) rather than floating over it:
    *  fills the dock's width and may grow taller. */
@@ -139,6 +139,8 @@ export function SelectionCard({
    *  checks builder (see `BoardRequest`). Absent where there is no builder
    *  (the standalone demo), which hides every such offer. */
   onQueue?: (request: BoardRequest) => void
+  /** A check kind to open in the CheckThis dock (the result panel's "Add as check"). */
+  openOffer?: { kind: string; seq: number } | null
   /** Say whether the action only prepares a replayable scenario or also
    *  mutates the connected live solver immediately. */
   peripheralMode?: 'scenario' | 'live-and-scenario'
@@ -353,7 +355,7 @@ export function SelectionCard({
         <CheckThis
           net={net} component={component} boundKind={boundKind} capabilities={assertionCapabilities}
           live={reading ? (reading.kind === 'measured' ? reading.volts : null) : liveVolts ?? null}
-          padNet={component?.padNet} onQueue={onQueue}
+          padNet={component?.padNet} onQueue={onQueue} openOffer={openOffer}
         />
       )}
 
