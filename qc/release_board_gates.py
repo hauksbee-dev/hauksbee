@@ -101,6 +101,10 @@ def append_iteration_result(
         return entry
 
 
+def _iteration_error(iteration_id: str, problem: str) -> HistoryError:
+    return HistoryError(f"iteration {iteration_id!r} {problem}")
+
+
 def audit_release_history(
     history_path: Path,
     evidence_dir: Path,
@@ -124,58 +128,39 @@ def audit_release_history(
     failed = 0
     reservations = {entry["iteration_id"]: entry for entry in history.iterations}
     for result in history.results:
+        iteration_id = result["iteration_id"]
         artifact = evidence_dir / result["evidence_file"]
         if not artifact.is_file() or artifact.is_symlink():
-            raise HistoryError(
-                f"iteration {result['iteration_id']!r} evidence file is missing"
-            )
+            raise _iteration_error(iteration_id, "evidence file is missing")
         digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
         if digest != result["evidence_sha256"]:
-            raise HistoryError(
-                f"iteration {result['iteration_id']!r} evidence digest does not match"
-            )
+            raise _iteration_error(iteration_id, "evidence digest does not match")
         try:
             evidence = json.loads(artifact.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise HistoryError(
-                f"iteration {result['iteration_id']!r} evidence is not valid JSON"
-            ) from error
+            raise _iteration_error(iteration_id, "evidence is not valid JSON") from error
         if not isinstance(evidence, dict):
-            raise HistoryError(
-                f"iteration {result['iteration_id']!r} evidence must be an object"
-            )
-        if evidence.get("gate") != "external-five":
-            raise HistoryError(
-                f"iteration {result['iteration_id']!r} evidence is not external-five"
-            )
-        if evidence.get("iteration_id") != result["iteration_id"]:
-            raise HistoryError(
-                f"iteration {result['iteration_id']!r} evidence iteration does not match"
-            )
-        if evidence.get("status") != result["status"]:
-            raise HistoryError(
-                f"iteration {result['iteration_id']!r} evidence status does not match"
-            )
-        if evidence.get("tool_commit") != result["tool_commit"]:
-            raise HistoryError(
-                f"iteration {result['iteration_id']!r} evidence tool commit does not match"
-            )
+            raise _iteration_error(iteration_id, "evidence must be an object")
+        for key, expected, problem in (
+            ("gate", "external-five", "evidence is not external-five"),
+            ("iteration_id", iteration_id, "evidence iteration does not match"),
+            ("status", result["status"], "evidence status does not match"),
+            ("tool_commit", result["tool_commit"], "evidence tool commit does not match"),
+        ):
+            if evidence.get(key) != expected:
+                raise _iteration_error(iteration_id, problem)
         evidence_boards = evidence.get("boards")
         if not isinstance(evidence_boards, list) or any(
             not isinstance(board, dict) or not isinstance(board.get("sha256"), str)
             for board in evidence_boards
         ):
-            raise HistoryError(
-                f"iteration {result['iteration_id']!r} evidence boards are invalid"
-            )
+            raise _iteration_error(iteration_id, "evidence boards are invalid")
         evidence_hashes = sorted(board["sha256"] for board in evidence_boards)
         reserved_hashes = sorted(
-            board["sha256"] for board in reservations[result["iteration_id"]]["boards"]
+            board["sha256"] for board in reservations[iteration_id]["boards"]
         )
         if evidence_hashes != reserved_hashes:
-            raise HistoryError(
-                f"iteration {result['iteration_id']!r} evidence boards do not match reservation"
-            )
+            raise _iteration_error(iteration_id, "evidence boards do not match reservation")
         if result["status"] == "completed":
             completed += 1
         else:
@@ -404,6 +389,19 @@ def _journey_honesty_failure(
     return None
 
 
+def _redacted_row(
+    item: dict, candidate: Candidate, staged: Path, value: dict
+) -> object:
+    """One retained browser row, graded as ``value``, with local paths rewritten."""
+
+    row = dict(item)
+    row["path"] = f"inputs/{staged.name}"
+    row["board_id"] = candidate.board_id
+    row["sha256"] = candidate.sha256
+    row["value"] = value
+    return _redact_local_paths(row, _redaction_map(candidate, staged))
+
+
 def _validate_browser_results(
     result_path: Path,
     *,
@@ -467,19 +465,13 @@ def _validate_browser_results(
             # graded document a REDUCTION of the failure summary it replaces,
             # losing the one row a reader most wants: what actually went wrong,
             # on which input, with what status.
-            broken = dict(item)
-            broken["path"] = f"inputs/{staged.name}"
-            broken["board_id"] = candidate.board_id
-            broken["sha256"] = candidate.sha256
-            broken["value"] = {
+            failed_value = {
                 "grade": "journey-failed",
                 "reasons": [str(text) for text in failures],
                 "unlocks": [],
                 "signals": {"input_format": candidate.input_format},
             }
-            redacted.append(
-                _redact_local_paths(broken, _redaction_map(candidate, staged))
-            )
+            redacted.append(_redacted_row(item, candidate, staged, failed_value))
             continue
         expects_refusal = REFUSAL_AXIS in candidate.axes
         honesty = _journey_honesty_failure(
@@ -487,19 +479,13 @@ def _validate_browser_results(
         )
         if honesty is not None:
             honesty_failures.append(honesty)
-            dishonest = dict(item)
-            dishonest["path"] = f"inputs/{staged.name}"
-            dishonest["board_id"] = candidate.board_id
-            dishonest["sha256"] = candidate.sha256
-            dishonest["value"] = {
+            honesty_value = {
                 "grade": "honesty-failed",
                 "reasons": [honesty],
                 "unlocks": [],
                 "signals": {"input_format": candidate.input_format},
             }
-            redacted.append(
-                _redact_local_paths(dishonest, _redaction_map(candidate, staged))
-            )
+            redacted.append(_redacted_row(item, candidate, staged, honesty_value))
             continue
         # Honest is necessary and not sufficient. Everything above establishes
         # that the run said true things about what it did; this says whether
@@ -518,14 +504,7 @@ def _validate_browser_results(
         # the board, and it is already open in the retained evidence.
         grades.append((f"{candidate.source_id}:{candidate.relative_path}", grade))
 
-        safe = dict(item)
-        safe["path"] = f"inputs/{staged.name}"
-        safe["board_id"] = candidate.board_id
-        safe["sha256"] = candidate.sha256
-        safe["value"] = grade.as_dict()
-        redacted.append(
-            _redact_local_paths(safe, _redaction_map(candidate, staged))
-        )
+        redacted.append(_redacted_row(item, candidate, staged, grade.as_dict()))
     summary = summarize(grades)
     if journey_failures or honesty_failures:
         # Every board that completed is graded and enumerated above; this is what

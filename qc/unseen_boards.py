@@ -226,6 +226,15 @@ def _input_format(path: Path) -> str | None:
     return None
 
 
+def _git(source_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(source_root), *args],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 def _manifest_revision(
     source_root: Path,
     source_id: str,
@@ -259,12 +268,7 @@ def _manifest_revision(
                 raise SelectionError(
                     f"{source_id}: external Git revision must be a full commit"
                 )
-            head = subprocess.run(
-                ["git", "-C", str(source_root), "rev-parse", "HEAD"],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            head = _git(source_root, "rev-parse", "HEAD")
             if (
                 head.returncode != 0
                 or re.fullmatch(r"[0-9a-f]{40}", head.stdout.strip()) is None
@@ -277,29 +281,12 @@ def _manifest_revision(
                     f"{source_id}: external checkout HEAD {head.stdout.strip()} "
                     f"does not match pinned revision {expected}"
                 )
-            status = subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    str(source_root),
-                    "status",
-                    "--porcelain",
-                    "--untracked-files=no",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            status = _git(source_root, "status", "--porcelain", "--untracked-files=no")
             if status.returncode != 0 or status.stdout.strip():
                 raise SelectionError(
                     f"{source_id}: external Git checkout has tracked changes"
                 )
-            remote = subprocess.run(
-                ["git", "-C", str(source_root), "remote", "get-url", "origin"],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            remote = _git(source_root, "remote", "get-url", "origin")
             wanted_url = str(entry.get("url", "")).removesuffix(".git").rstrip("/")
             actual_url = remote.stdout.strip().removesuffix(".git").rstrip("/")
             if remote.returncode != 0 or actual_url != wanted_url:
