@@ -208,9 +208,10 @@ export function normalizeSavedCheck(value: unknown, fallbackId: number): CheckRo
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const saved = value as Partial<CheckRow>
   const kind = typeof saved.kind === 'string' ? saved.kind : ''
-  if (!checkKind(kind)) return null
+  const known = checkKind(kind)
+  if (!known) return null
   const id = typeof saved.id === 'number' && Number.isFinite(saved.id) ? saved.id : fallbackId
-  const row = { ...emptyCheck(id, kind), ...saved } as CheckRow
+  const row = { ...emptyCheck(id, known.kind), ...saved, kind: known.kind } as CheckRow
   for (const field of CHECK_STRING_FIELDS) {
     if (typeof row[field] !== 'string') row[field] = ''
   }
@@ -357,14 +358,17 @@ export const CHECK_KINDS: CheckKind[] = [
     needs: [{ any: ['freq_hz', 'min_toggles'], message: 'needs a freq Hz or a min toggles' }],
   },
   {
-    kind: 'boot-coverage', label: 'Firmware must drive a net by a deadline', group: 'Firmware',
+    kind: 'boot_coverage', label: 'Firmware must drive a net by a deadline', group: 'Firmware',
     hint: 'a gate/enable must be actively driven after reset', subject: 'net',
     fields: [V('min', 'reach V'), V('deadline_ms', 'within ms')],
     needs: [{ any: ['min'], message: 'reach V is empty' }, { any: ['deadline_ms'], message: 'within ms is empty' }],
   },
 ]
 
-export const checkKind = (kind: string): CheckKind | undefined => CHECK_KINDS.find(k => k.kind === kind)
+/** The builder's schema for a kind. The hyphenated spelling an older build wrote
+ *  (`boot-coverage`) is the same kind as the engine's `boot_coverage`. */
+export const checkKind = (kind: string): CheckKind | undefined =>
+  CHECK_KINDS.find(k => k.kind === (kind === 'boot-coverage' ? 'boot_coverage' : kind))
 
 /** The display groups, in a stable order (only groups with rows render). */
 export const GROUP_ORDER = ['Voltages', 'Currents', 'Temperatures', 'Stress', 'Firmware', 'Activity']

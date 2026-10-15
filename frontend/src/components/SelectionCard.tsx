@@ -1,17 +1,17 @@
-import { useEffect, useState } from 'react'
 import { CloseIcon } from './Icons'
 import { displayNet } from '../lib/net-name'
 import { netReadoutText, type NetReading } from '../lib/net-state'
 import type { ModelCoverageComponent, BoardRequest, WebOpenSelection } from '../types/report'
 import { Callout } from './ui'
+import { CheckThis } from './checks/CheckThis'
 
 // The unified selection card: what a click on the board surface reports, in
 // the same card language on the report map and the live sim. A net shows its
 // name (and live volts when a sim frame is in hand); a component shows refdes,
 // value, its BOUND model (what the engine actually simulates; honesty first),
-// and the nets on its pads. Both offer assertion starters through the same
-// shared in-place editor; the selection card never decides to navigate or
-// silently append a check itself.
+// and the nets on its pads. Both offer the checks that apply (CheckThis, from
+// the assertion catalogue) and edit them in place; the card never decides to
+// navigate or silently append a check itself.
 
 /** A component picked on the board map (the viewer's footprint hit-test). */
 export interface SelectedComponent {
@@ -22,68 +22,6 @@ export interface SelectedComponent {
   padNet?: string | null
   /** All distinct nets on this part's pads (the viewer knows the copper). */
   padNets?: string[]
-}
-
-export interface AssertOffer {
-  kind: string
-  label: string
-  net?: string
-  ref?: string
-}
-
-export function assertionOffers(
-  net: string | null,
-  component: SelectedComponent | null,
-  assertionCapabilities: string[] = [],
-): AssertOffer[] {
-  if (net) {
-    return [
-      { kind: 'voltage', label: 'must sit at a voltage', net },
-      { kind: 'rail_window', label: 'must stay inside a voltage window', net },
-      { kind: 'toggle', label: 'must blink', net },
-      { kind: 'boot-coverage', label: 'firmware must drive it by a deadline', net },
-    ]
-  }
-  if (!component) return []
-  const supported = new Set(assertionCapabilities)
-  return [
-    ...(supported.has('max_current')
-      ? [{ kind: 'max_current', label: 'must stay under a current', ref: component.ref }]
-      : []),
-    ...(supported.has('max_temp')
-      ? [{ kind: 'max_temp', label: 'must stay cool', ref: component.ref }]
-      : []),
-    ...(component.padNet
-      ? [{ kind: 'voltage', label: `net ${displayNet(component.padNet)} must sit at a voltage`, net: component.padNet }]
-      : []),
-  ]
-}
-
-function OfferButton({ offer, onQueue }: {
-  offer: AssertOffer
-  onQueue: (request: BoardRequest) => void
-}) {
-  const [queued, setQueued] = useState(false)
-  // The confirmation flash resets on its own; clear the timer if the card
-  // unmounts first.
-  useEffect(() => {
-    if (!queued) return
-    const t = setTimeout(() => setQueued(false), 1800)
-    return () => clearTimeout(t)
-  }, [queued])
-  return (
-    <button
-      type="button"
-      data-testid={`assert-${offer.kind}`}
-      onClick={() => {
-        onQueue({ type: 'check', kind: offer.kind, net: offer.net, ref: offer.ref })
-        setQueued(true)
-      }}
-      className="hb-chip hb-press px-2.5 py-1.5 text-[12px] text-left"
-    >
-      {queued ? 'Constraint editor open ✓' : `+ ${offer.label}`}
-    </button>
-  )
 }
 
 /** Pick the orderable variant a part really is: each option names the member,
@@ -168,8 +106,11 @@ export function OpenSelectionsBanner({ selections, onQueue }: {
 
 export function SelectionCard({
   net, liveVolts, reading, component, boundKind, modelCoverage, netModels = [], assertionCapabilities = [],
-  onQueue, peripheralMode = 'scenario', onAddProbe, onAuthorModel, onClose, onPickNet, openSelection,
+  onQueue, peripheralMode = 'scenario', onAddProbe, onAuthorModel, onClose, onPickNet, openSelection, docked = false,
 }: {
+  /** In a dock (a rail or a block under the map) rather than floating over it:
+   *  fills the dock's width and may grow taller. */
+  docked?: boolean
   /** The selected part's open variant selection, when the board leaves one. */
   openSelection?: WebOpenSelection
 
@@ -212,7 +153,6 @@ export function SelectionCard({
 }) {
   if (!net && !component) return null
 
-  const offers = assertionOffers(net, component, assertionCapabilities)
   const needsRegisterMapWork = modelCoverage?.missing?.some(item => /i2c|spi|register|bus/i.test(item)) ?? false
   const modelOwnsRegisterMap = modelCoverage?.implements?.some(item => /register[_-]map/i.test(item)) ?? false
 
@@ -225,7 +165,9 @@ export function SelectionCard({
     <div
       data-testid="selection-card"
       className="hb-card flex flex-col"
-      style={{ minWidth: 230, maxWidth: 320, maxHeight: '100%', boxShadow: 'var(--shadow-pop)' }}
+      style={docked
+        ? { width: '100%', maxHeight: 'min(78vh, 720px)', boxShadow: 'var(--shadow-card)' }
+        : { minWidth: 230, maxWidth: 320, maxHeight: '100%', boxShadow: 'var(--shadow-pop)' }}
     >
       <div className="shrink-0 flex flex-col gap-2 px-3 pt-3 pb-2">
         <div className="flex items-center justify-between">
@@ -365,7 +307,11 @@ export function SelectionCard({
                   {onPickNet ? (
                     <button
                       type="button"
-                      onClick={() => onPickNet(n)}
+                      onClick={() => {
+                        onPickNet(n)
+                        // The card is rebuilt for the net: keep the keyboard in it.
+                        window.setTimeout(() => document.querySelector<HTMLElement>('[data-testid="check-this"]')?.focus(), 60)
+                      }}
                       className="hb-press cursor-pointer"
                       style={{
                         background: 'none', border: 'none', padding: 0,
@@ -401,6 +347,14 @@ export function SelectionCard({
             </div>
           ))}
         </div>
+      )}
+
+      {onQueue && (
+        <CheckThis
+          net={net} component={component} boundKind={boundKind} capabilities={assertionCapabilities}
+          live={reading ? (reading.kind === 'measured' ? reading.volts : null) : liveVolts ?? null}
+          padNet={component?.padNet} onQueue={onQueue}
+        />
       )}
 
       {net && onAddProbe && (
@@ -486,14 +440,6 @@ export function SelectionCard({
         </div>
       )}
 
-      {onQueue && offers.length > 0 && (
-        <div className="flex flex-col gap-1.5 mt-0.5">
-          {offers.map(o => <OfferButton key={o.kind + (o.net ?? '')} offer={o} onQueue={onQueue} />)}
-          <div className="text-[10px]" style={{ color: 'var(--silk-faint)' }}>
-            opens the shared constraint editor
-          </div>
-        </div>
-      )}
       </div>
     </div>
   )

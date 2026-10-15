@@ -13,7 +13,7 @@ import {
   assertToml, buildToml, CHECK_KINDS, componentCapabilityIssues, CONSTRAINT_KEYS,
   emptyCheck, emptyPeripheral, emptySensor, normalizeSavedCheck, peripheralIssues,
   peripheralToml, railPolarity, rowIssues, sensorIssues, sensorToml, supplyToml,
-  overrideToml, scaffoldRows, upsertOverride, USB_PROFILES,
+  overrideToml, scaffoldRows, tomlToBuilder, upsertOverride, USB_PROFILES,
 } from '../lib/check-spec'
 import type {
   BuilderState, CheckRow, OverrideRow, PeripheralRow, RowIssue, SensorRow, SupplyRow,
@@ -23,9 +23,8 @@ import { InteractionBuilder } from './checks/InteractionBuilder'
 import { SensorBuilder } from './checks/SensorBuilder'
 import { AssertionGroups, hasNoGroups } from './checks/AssertionGroups'
 import { SpecPane } from './checks/SpecPane'
-import { MoreChecks } from './checks/MoreChecks'
-import { appendExample } from '../lib/ci-catalog'
-import type { CatalogEntry, RawSelection } from '../lib/ci-catalog'
+import { AddCheckMenu } from './checks/AddCheckMenu'
+import type { RawSelection } from '../lib/ci-catalog'
 import type { RemedyActions } from './checks/Remedies'
 import { WritePart } from './WritePart'
 
@@ -255,9 +254,9 @@ export function ChecksView({
   const [rawMode, setRawMode] = useState(!!(saved?.rawMode && typeof saved.rawText === 'string'))
   const [rawText, setRawText] = useState(typeof saved?.rawText === 'string' ? saved.rawText : '')
   const [addOpen, setAddOpen] = useState(false)
-  // The value to type over after a catalogue example lands in the raw text.
-  const [addedKind, setAddedKind] = useState<CatalogEntry | null>(null)
-  const [rawSelect, setRawSelect] = useState<(RawSelection & { seq: number }) | null>(null)
+  // A value for the raw pane to select after text lands in it. Nothing sets one
+  // now that checks arrive with their values filled in; the pane still accepts it.
+  const [rawSelect] = useState<(RawSelection & { seq: number }) | null>(null)
   const [running, setRunning] = useState(false)
   // The last run's response, plus the exact spec text it ran, so results can
   // be flagged stale the moment the spec diverges.
@@ -380,16 +379,6 @@ export function ChecksView({
     setAddOpen(false)
   }
 
-  /** A catalogue kind the builder has no row for: its example goes into the raw
-   *  TOML (entering raw mode first), with its first required value selected. */
-  const insertCatalogExample = (entry: CatalogEntry) => {
-    const { text, select } = appendExample(rawMode ? rawText : builtToml, entry.example, entry.required.map(f => f.name))
-    setRawText(text)
-    setRawMode(true)
-    setAddedKind(entry)
-    setRawSelect(prev => (select ? { ...select, seq: (prev?.seq ?? 0) + 1 } : null))
-  }
-
   const updateCheck = (id: number, patch: Partial<CheckRow>) => {
     setChecks(cs => cs.map(c => (c.id === id ? { ...c, ...patch } : c)))
     setValidation(prev => forget(prev, id))
@@ -448,6 +437,7 @@ export function ChecksView({
     const checkRows: CheckRow[] = [], peripheralRows: PeripheralRow[] = []
     const sensorRows: SensorRow[] = [], supplyRows: SupplyRow[] = [], selects: OverrideRow[] = []
     let raw = ''
+    let needsText = false
     for (const r of pending) {
       if (r.type === 'check') {
         const row = emptyCheck(nextId.current++, r.kind, r.net ?? '')
@@ -472,6 +462,22 @@ export function ChecksView({
         const row = emptySensor(nextSensorId.current++, r.id, r.ref ?? '', r.modelId ?? '')
         sensorRows.push(row)
         raw += `\n# TODO: paste a validated register-map spec for ${r.ref ?? r.id}${sensorToml(row)}`
+      } else if (r.type === 'assert') {
+        // The in-place editor's exact table. A builder kind with only builder keys
+        // becomes a row; anything else (a kind the builder has no row for, or a
+        // prerequisite block) goes into the text, which takes the whole batch with it.
+        const block = `\n${r.toml}`
+        const parsed = rawMode ? null : tomlToBuilder(r.toml)
+        const only = parsed && parsed.checks.length === 1 && parsed.supplies.length === 0
+          && parsed.peripherals.length === 0 && parsed.sensors.length === 0 && parsed.overrides.length === 0
+          && parsed.noFit.length === 0 ? parsed.checks[0] : null
+        if (only) {
+          checkRows.push({ ...only, id: nextId.current++ })
+          raw += block
+        } else {
+          raw += block
+          needsText = true
+        }
       } else if (r.type === 'select') {
         const row = { ref: r.ref, select: r.select, reason: 'picked in the app' }
         selects.push(row)
@@ -483,7 +489,11 @@ export function ChecksView({
       }
     }
     if (rawMode) setRawText(previous => previous + raw)
-    else {
+    else if (needsText) {
+      // Something the rows cannot hold: carry the whole batch in the text.
+      setRawText(`${builtToml.trimEnd()}\n${raw}`)
+      setRawMode(true)
+    } else {
       if (selects.length) setOverrides(rows => selects.reduce(upsertOverride, rows))
       if (checkRows.length) setChecks(cs => [...cs, ...checkRows])
       if (peripheralRows.length) setPeripherals(rows => [...rows, ...peripheralRows])
@@ -491,7 +501,7 @@ export function ChecksView({
       if (supplyRows.length) setSupplies(rows => [...rows, ...supplyRows])
     }
     onPendingConsumed(pending[pending.length - 1].seq)
-  }, [pending, rawMode, onPendingConsumed])
+  }, [pending, rawMode, builtToml, onPendingConsumed])
 
   const runChecks = useCallback(async () => {
     if (!boardFile) return
@@ -773,7 +783,9 @@ export function ChecksView({
             {rawMode ? (
               <>
                 <RawModeSummary rawText={rawText} />
-                <div className="mt-4"><MoreChecks onInsert={insertCatalogExample} added={addedKind} /></div>
+                <div className="mt-4">
+                  <AddCheckMenu open={addOpen} onOpenChange={setAddOpen} legacy={CHECK_KINDS} onLegacyAdd={addCheck} />
+                </div>
               </>
             ) : (
               <>
@@ -929,39 +941,8 @@ export function ChecksView({
                   </div>
                 )}
 
-                {/* Global add menu: the builder's kinds, then every kind the engine
-                    knows (the catalogue), whose examples go into the raw TOML. */}
-                <div className="flex flex-wrap items-start gap-2">
-                <div className="relative">
-                  <button
-                    type="button"
-                    data-testid="add-check"
-                    className="hb-btn hb-press px-3 py-1.5 text-[13px] inline-flex items-center gap-1.5"
-                    onClick={() => setAddOpen(o => !o)}
-                  >
-                    <PlusIcon size={13} /> Add a check
-                  </button>
-                  {addOpen && (
-                    <div className="hb-card view-enter absolute z-10 mt-1 overflow-hidden" style={{ width: 400, maxWidth: '100%', boxShadow: 'var(--shadow-pop)' }}>
-                      {CHECK_KINDS.map(k => (
-                        <button
-                          key={k.kind}
-                          type="button"
-                          onClick={() => addCheck(k.kind)}
-                          className="hb-press block w-full text-left px-3 py-2 cursor-pointer"
-                          style={{ background: 'none', border: 'none' }}
-                          onMouseEnter={e => { e.currentTarget.style.background = 'var(--copper-tint)' }}
-                          onMouseLeave={e => { e.currentTarget.style.background = 'none' }}
-                        >
-                          <div className="text-[13px]" style={{ color: 'var(--silk)' }}>{k.label}</div>
-                          <div className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>{k.hint}</div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <MoreChecks onInsert={insertCatalogExample} added={addedKind} />
-                </div>
+                {/* Global add menu: every kind in the assertion catalogue, grouped. */}
+                <AddCheckMenu open={addOpen} onOpenChange={setAddOpen} legacy={CHECK_KINDS} onLegacyAdd={addCheck} />
               </>
             )}
           </div>

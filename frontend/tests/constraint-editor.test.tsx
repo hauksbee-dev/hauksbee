@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ConstraintModal } from '../src/components/ConstraintModal'
-import { constraintIssues, emptyConstraint } from '../src/components/ConstraintEditor'
+import { ConstraintEditor, constraintIssues, emptyConstraint } from '../src/components/ConstraintEditor'
 import { buildToml, tomlToBuilder } from '../src/lib/check-spec'
 
 describe('shared constraint editor', () => {
@@ -13,20 +12,14 @@ describe('shared constraint editor', () => {
     expect(constraintIssues(filled)).toEqual([])
   })
 
-  test('board-side modal exposes save and full Checks without navigation', () => {
+  test('the editor is plain in-page markup: no dialog, no backdrop', () => {
     const html = renderToStaticMarkup(
-      <ConstraintModal
-        initial={{ kind: 'voltage', net: '+3V3' }}
-        onSave={() => {}}
-        onClose={() => {}}
-        onOpenChecks={() => {}}
-      />,
+      <ConstraintEditor draft={{ ...emptyConstraint('voltage', '+3V3') }} onChange={() => {}} />,
     )
-    expect(html).toContain('data-testid="constraint-modal"')
-    expect(html).toContain('Add to Checks spec')
-    expect(html).toContain('Open full Checks')
+    expect(html).toContain('data-testid="constraint-editor"')
     expect(html).toContain('value="+3V3"')
-    expect(html).toContain('Nothing runs until you choose Run in Checks')
+    expect(html).not.toContain('aria-modal')
+    expect(html).not.toContain('constraint-modal')
   })
 
   test('supports strict over-voltage rail windows with the shared polarity control', () => {
@@ -47,7 +40,7 @@ describe('shared constraint editor', () => {
     expect(tomlToBuilder(toml.replace('spike_above = 3.6\n', ''))).toBeNull()
     expect(tomlToBuilder(toml.replace('spike_for_max_ms = 5\n', 'dip_below = 2.8\n'))).toBeNull()
     const html = renderToStaticMarkup(
-      <ConstraintModal initial={{ ...spike }} onSave={() => {}} onClose={() => {}} onOpenChecks={() => {}} />,
+      <ConstraintEditor draft={{ ...spike }} onChange={() => {}} />,
     )
     expect(html).toContain('data-testid="rail-polarity"')
     expect(html).toContain('spike above')
@@ -83,7 +76,7 @@ describe('shared constraint editor', () => {
     } as unknown as ReturnType<typeof emptyConstraint>
     expect(constraintIssues(legacy)).toEqual([])
     const html = renderToStaticMarkup(
-      <ConstraintModal initial={legacy} onSave={() => {}} onClose={() => {}} onOpenChecks={() => {}} />,
+      <ConstraintEditor draft={legacy} onChange={() => {}} />,
     )
     expect(html).toContain('value="dip" selected=""')
     expect(html).toContain('value="3.0"')
