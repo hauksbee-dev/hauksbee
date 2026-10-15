@@ -5,6 +5,7 @@ import type { SpecSnapshot } from '../hooks/useSessions'
 import { DownloadIcon } from './Icons'
 import { ARRIVE, LEAVE } from '../motion'
 import { buildReportHtml, downloadText, reportJson } from '../lib/report-export'
+import { checkReportJson, reportMarkdown } from '../lib/result-export'
 import { specStemFor, workflowExportAvailable, workflowYaml } from '../lib/ci-workflow'
 import { APP_VERSION } from '../lib/version'
 import { useDismissable } from '../hooks/useDismissable'
@@ -81,6 +82,22 @@ export function ExportMenu({
       label: 'Findings as JSON',
       what: `${stem}-report.json; exactly what /api/analyze returned`,
       run: () => emit('The findings', `${stem}-report.json`, reportJson(report), 'application/json'),
+    },
+    {
+      id: 'export-check-json',
+      label: 'CI verdict as JSON',
+      what: report.check_report
+        ? `${stem}-check.json; the same document hauksbee run --check --json prints`
+        : `${stem}-check.json; the run --check --json verdict fields, rebuilt from this report`,
+      run: () => emit('The CI verdict', `${stem}-check.json`, checkReportJson(report), 'application/json'),
+    },
+    {
+      id: 'export-markdown',
+      label: 'Summary as Markdown',
+      what: `${stem}-result.md; verdict, scope, conditions and findings for a PR or an issue`,
+      run: () => emit('The summary', `${stem}-result.md`, reportMarkdown({
+        report, boardLabel, firmwareName, engineVersion, analyzedAt,
+      }), 'text/markdown;charset=utf-8'),
     },
   ]
   if (spec) {

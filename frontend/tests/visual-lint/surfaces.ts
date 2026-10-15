@@ -215,7 +215,7 @@ export const APP_SURFACES: Surface[] = [
   },
   {
     id: 'export-menu',
-    what: 'the Export menu open under the report verdict: four files, each named',
+    what: 'the Export menu open in the result panel action bar: six files, each named',
     async reach(page) {
       await page.click('[data-testid="nav-board"]')
       await openExportMenu(page)

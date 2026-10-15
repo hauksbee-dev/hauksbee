@@ -47,7 +47,7 @@ test('the verdict reason is the engine sentence, shown in the card and the expor
   const base = { ok: true, file_name: 'b.kicad_pcb', num_components: 1, num_nets: 1, headline: 'Not cleared', serious: 0, total: 0 } as WebReport
   expect(reportView({ ...base, verdict_reason: reason }).reason).toBe(reason)
   expect(reportView(base).reason).toBeNull()
-  const boardView = readFileSync(new URL('../src/components/BoardView.tsx', import.meta.url), 'utf8')
+  const boardView = readFileSync(new URL('../src/components/report/ResultPanel.tsx', import.meta.url), 'utf8')
   const checksRun = readFileSync(new URL('../src/components/checks/RunResults.tsx', import.meta.url), 'utf8')
   expect(boardView).toContain('data-testid="report-verdict-reason"')
   expect(checksRun).toContain('result.verdict_reason')
