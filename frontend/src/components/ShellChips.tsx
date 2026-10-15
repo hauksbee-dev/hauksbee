@@ -197,6 +197,7 @@ export function ShellChips({
   } else {
     if (report?.ok === true) {
       const tone = reportVerdictTone(report)
+      const conditional = report.verdict === 'pass' && (report.verdict_conditions ?? []).some(c => c.trim() !== '')
       chips.push({
         testid: 'chip-findings',
         onClick: () => goTo('board'),
@@ -210,9 +211,9 @@ export function ShellChips({
               ? { tone: 'warn' as const, label: 'partly judged, not a pass' }
               : summarizeEvidence(report.evidence).undermined > 0
               ? { tone: 'warn' as const, label: 'analysis undermined', term: 'invalid' }
-              : { tone: 'warn' as const, label: report.total > 0 ? plural(report.total, 'finding') : 'analysis qualified' }
+              : { tone: 'warn' as const, label: report.total > 0 ? plural(report.total, 'finding') : conditional ? 'clean, conditionally' : 'analysis qualified' }
             // A pass that rests on conditions is never the plain "clean" the chip says for none.
-            : { tone: 'ok' as const, label: report.verdict_conditions?.some(c => c.trim() !== '') ? 'clean, conditionally' : 'analysis clean' }),
+            : { tone: 'ok' as const, label: conditional ? 'clean, conditionally' : 'analysis clean' }),
       })
     }
     if (checks) {
