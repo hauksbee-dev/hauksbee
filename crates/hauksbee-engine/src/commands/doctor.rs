@@ -1,9 +1,18 @@
-//! The `hauksbee doctor [--backends] [--json]` subcommand: probe co-sim backends.
+//! The `hauksbee doctor [--backends] [--json]` subcommand: probe the external
+//! programs a run can use.
 //!
-//! It checks availability (AVR, QEMU, Renode) and prints one machine-readable line
-//! per backend. It calls the engine's OWN backend resolvers rather than
-//! re-implementing discovery, so what `doctor` reports can never drift from what a
-//! real co-sim would actually accept.
+//! It checks availability (AVR, QEMU, Renode, ngspice, kicad-cli, freerouting,
+//! datasheet extraction) and prints one machine-readable line per backend. It
+//! calls the engine's OWN resolvers rather than re-implementing discovery, so
+//! what `doctor` reports can never drift from what a real run would accept. The
+//! run manifest records the same discovery ([`resolved_backends`]), so a
+//! reproduced run can say which backend versions changed.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Duration;
+
+use crate::run_manifest::BackendRevision;
 
 /// A probed backend. `status` is a single token by contract (see [`run`]).
 struct Backend {
@@ -11,19 +20,61 @@ struct Backend {
     status: &'static str,
     detail: String,
     summary: &'static str,
+    /// The executable (or jar) that was found, when there is one.
+    path: Option<PathBuf>,
+    /// The backend's own version string, when it reports one.
+    version: Option<String>,
 }
 
-/// `hauksbee doctor --backends`: report co-sim backend availability using the
+impl Backend {
+    fn new(
+        name: &'static str,
+        status: &'static str,
+        detail: String,
+        summary: &'static str,
+    ) -> Self {
+        Self {
+            name,
+            status,
+            detail,
+            summary,
+            path: None,
+            version: None,
+        }
+    }
+
+    /// An installed backend at `path` whose version is asked for with `version_args`.
+    fn found(
+        name: &'static str,
+        summary: &'static str,
+        path: PathBuf,
+        version_args: &[&str],
+    ) -> Self {
+        let version = version_of_tool(&path, version_args);
+        Self {
+            detail: path.display().to_string(),
+            path: Some(path),
+            version,
+            ..Self::new(name, "ok", String::new(), summary)
+        }
+    }
+
+    fn available(&self) -> bool {
+        self.status == "ok" || self.status == "builtin"
+    }
+}
+
+/// `hauksbee doctor --backends`: report backend availability using the
 /// engine's OWN discovery, so no other availability surface can drift from
-/// what a real co-sim would accept.
+/// what a real run would accept.
 ///
-/// For each backend this calls the exact resolver the scheduler uses
-/// (`hauksbee_mcu::qemu::find_qemu`, `hauksbee_mcu::renode::find_renode`), no
-/// re-implemented search logic. `find_qemu` runs the Espressif-fork check
-/// (`is_esp_fork`), so a Homebrew mainline `qemu-system-xtensa` on PATH is
-/// reported `absent` here just as the co-sim rejects it, and a fork under
-/// `~/.hauksbee-qemu-esp` or a Renode under `~/renode-portable` is reported
-/// present with its resolved path.
+/// For each backend this calls the exact resolver the engine uses
+/// (`hauksbee_mcu::qemu::find_qemu`, `hauksbee_mcu::renode::find_renode`, the
+/// ngspice, kicad-cli and freerouting finders), no re-implemented search logic.
+/// `find_qemu` runs the Espressif-fork check (`is_esp_fork`), so a Homebrew
+/// mainline `qemu-system-xtensa` on PATH is reported `absent` here just as the
+/// co-sim rejects it, and a fork under `~/.hauksbee-qemu-esp` or a Renode under
+/// `~/renode-portable` is reported present with its resolved path.
 ///
 /// Piped stdout: one line per backend, `NAME<TAB>STATUS<TAB>DETAIL`, STATUS a
 /// single lowercase token (`ok` / `warn` / `absent` / `builtin` / `disabled`); DETAIL
@@ -52,12 +103,9 @@ pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
     // pipe gets the TSV contract external tooling parses; its human framing
     // goes to stderr as one contiguous block BEFORE the data lines, never
     // alternating with them, so a `2>&1` merge stays two clean blocks.
-    let available = backends
-        .iter()
-        .filter(|b| b.status == "ok" || b.status == "builtin")
-        .count();
+    let ready = backends.iter().filter(|b| b.available()).count();
     let summary_line = format!(
-        "{available} of {} backends ready. All are optional: board checks work without them. \
+        "{ready} of {} backends ready. All are optional: board checks work without them. \
          `hauksbee install --help` fetches the missing ones.",
         backends.len()
     );
@@ -68,6 +116,7 @@ pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
                 vec![
                     b.name.to_string(),
                     b.status.to_string(),
+                    b.version.clone().unwrap_or_default(),
                     b.summary.to_string(),
                     b.detail.clone(),
                 ]
@@ -75,12 +124,15 @@ pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
             .collect();
         print!(
             "{}",
-            super::models::box_table(&["Backend", "Status", "Co-sim", "Detail"], &rows)
+            super::models::box_table(
+                &["Backend", "Status", "Version", "Used for", "Detail"],
+                &rows
+            )
         );
         println!("{summary_line}");
         println!("{SERVE_LINE}");
     } else {
-        eprintln!("hauksbee co-sim backends (resolved by the engine's own discovery)");
+        eprintln!("hauksbee backends (resolved by the engine's own discovery)");
         eprintln!("{SERVE_LINE}");
         for b in &backends {
             eprintln!("    {:<13} {}", b.name, b.summary);
@@ -94,130 +146,321 @@ pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
 
 /// `hauksbee doctor --json` as data.
 ///
-/// Shape: `{"backends": [{name, status, available, detail, summary}]}`. The CLI
-/// prints it and the MCP `doctor` tool returns it, so the two cannot disagree
-/// about what is installed.
+/// Shape: `{"tool": {name, version, git_revision}, "backends": [{name, status,
+/// available, version, detail, summary}]}`. `version` is the backend's own
+/// version string or `null`. The CLI prints it and the MCP `doctor` tool returns
+/// it, so the two cannot disagree about what is installed.
 #[must_use]
 pub fn backends_json() -> serde_json::Value {
+    let tool = crate::run_manifest::ToolIdentity::workspace("hauksbee");
     let arr: Vec<serde_json::Value> = probe_backends()
         .iter()
         .map(|b| {
             serde_json::json!({
                 "name": b.name,
                 "status": b.status,
-                "available": b.status == "ok" || b.status == "builtin",
+                "available": b.available(),
+                "version": b.version,
                 "detail": b.detail,
                 "summary": b.summary,
             })
         })
         .collect();
-    serde_json::json!({ "backends": arr })
+    serde_json::json!({ "tool": tool, "backends": arr })
 }
 
-/// Probe every co-sim backend with the engine's own resolvers, in report order.
+/// The installed backends a run can use, with version and binary hash, as the
+/// run manifest records them. Same discovery as [`run`]; the extraction row is
+/// left out (it names a service, not a tool whose bytes decide a result). The
+/// built-in AVR backend is `simavr` at its source commit.
+#[must_use]
+pub fn resolved_backends() -> Vec<BackendRevision> {
+    probe(false)
+        .into_iter()
+        .filter(Backend::available)
+        .map(|b| BackendRevision {
+            name: if b.name == "avr" { "simavr" } else { b.name }.to_string(),
+            sha256_of_binary: b.path.as_deref().and_then(sha256_of_file),
+            version: b.version,
+        })
+        .collect()
+}
+
+/// Probe every backend with the engine's own resolvers, in report order. The
+/// probes are independent and some start a program, so they run side by side.
 fn probe_backends() -> Vec<Backend> {
-    let mut backends: Vec<Backend> = Vec::new();
+    probe(true)
+}
 
-    // AVR: built into this binary via libsimavr (feature `avr`); there is no
-    // external process to locate, so it is `builtin` when compiled in.
-    #[cfg(feature = "avr")]
-    backends.push(Backend {
-        name: "avr",
-        status: "builtin",
-        detail: hauksbee_mcu::simavr_build_detail(),
-        summary: "ATmega / ATtiny firmware co-sim",
-    });
-    #[cfg(not(feature = "avr"))]
-    backends.push(Backend {
-        name: "avr",
-        status: "disabled",
-        // Honest for BINARY users too: this build (the permissive download)
-        // can never gain AVR at runtime; rebuilding from source with
-        // libsimavr is the only way to get it.
-        detail: "not in this build (the permissive, Apache-2.0 download drops \
-                 the GPL simavr backend). For AVR co-sim, build from source \
-                 with libsimavr (scripts/install-sims.sh --avr)"
+fn probe(with_extract: bool) -> Vec<Backend> {
+    let all: [fn() -> Backend; 8] = [
+        probe_avr,
+        || probe_qemu(QemuKind::Xtensa),
+        || probe_qemu(QemuKind::Riscv32),
+        probe_renode,
+        probe_ngspice,
+        probe_kicad_cli,
+        probe_freerouting,
+        extract_row,
+    ];
+    // `extract_row` is last: the manifest leaves it out.
+    let probes = if with_extract { &all[..] } else { &all[..7] };
+    std::thread::scope(|scope| {
+        // Every probe starts before the first join, so the handles are
+        // collected on purpose.
+        #[allow(clippy::needless_collect)]
+        let handles: Vec<_> = probes.iter().map(|probe| scope.spawn(probe)).collect();
+        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+    })
+}
+
+const AVR_SUMMARY: &str = "ATmega / ATtiny firmware co-sim";
+
+/// AVR: built into this binary via libsimavr (feature `avr`); there is no
+/// external process to locate, so it is `builtin` when compiled in, and its
+/// version is the simavr source commit.
+#[cfg(feature = "avr")]
+fn probe_avr() -> Backend {
+    Backend {
+        version: hauksbee_mcu::SIMAVR_BUILD_COMMIT.map(str::to_owned),
+        ..Backend::new(
+            "avr",
+            "builtin",
+            hauksbee_mcu::simavr_build_detail(),
+            AVR_SUMMARY,
+        )
+    }
+}
+
+#[cfg(not(feature = "avr"))]
+fn probe_avr() -> Backend {
+    // Honest for BINARY users too: this build (the permissive download) can
+    // never gain AVR at runtime; rebuilding from source with libsimavr is the
+    // only way to get it.
+    Backend::new(
+        "avr",
+        "disabled",
+        "not in this build (the permissive, Apache-2.0 download drops \
+         the GPL simavr backend). For AVR co-sim, build from source \
+         with libsimavr (scripts/install-sims.sh --avr)"
             .to_string(),
-        summary: "ATmega / ATtiny firmware co-sim",
-    });
+        AVR_SUMMARY,
+    )
+}
 
-    // Espressif QEMU (Xtensa ESP32 / ESP32-S3, RISC-V ESP32-C3). `find_qemu`
-    // verifies the binary is the Espressif fork before accepting it.
+#[derive(Clone, Copy)]
+enum QemuKind {
+    Xtensa,
+    Riscv32,
+}
+
+/// Espressif QEMU (Xtensa ESP32 / ESP32-S3, RISC-V ESP32-C3). `find_qemu`
+/// verifies the binary is the Espressif fork before accepting it.
+fn probe_qemu(kind: QemuKind) -> Backend {
+    let (name, summary) = match kind {
+        QemuKind::Xtensa => (
+            "qemu-xtensa",
+            "ESP32 / ESP32-S3 firmware co-sim (Espressif QEMU fork)",
+        ),
+        QemuKind::Riscv32 => (
+            "qemu-riscv32",
+            "ESP32-C3 firmware co-sim (Espressif QEMU fork)",
+        ),
+    };
     #[cfg(feature = "qemu")]
     {
         use hauksbee_mcu::qemu::{find_qemu, QemuArch};
-        let probes = [
-            (
-                "qemu-xtensa",
-                QemuArch::Xtensa,
-                "ESP32 / ESP32-S3 firmware co-sim (Espressif QEMU fork)",
+        let arch = match kind {
+            QemuKind::Xtensa => QemuArch::Xtensa,
+            QemuKind::Riscv32 => QemuArch::Riscv32,
+        };
+        match find_qemu(arch) {
+            Ok(p) => Backend::found(name, summary, p, &["--version"]),
+            Err(e) => Backend::new(
+                name,
+                "absent",
+                absent_detail(&e, "ESP32 firmware co-sim", "hauksbee install esp-qemu"),
+                summary,
             ),
-            (
-                "qemu-riscv32",
-                QemuArch::Riscv32,
-                "ESP32-C3 firmware co-sim (Espressif QEMU fork)",
-            ),
-        ];
-        for (name, arch, summary) in probes {
-            match find_qemu(arch) {
-                Ok(p) => backends.push(Backend {
-                    name,
-                    status: "ok",
-                    detail: p.display().to_string(),
-                    summary,
-                }),
-                Err(e) => backends.push(Backend {
-                    name,
-                    status: "absent",
-                    detail: absent_detail(&e, "ESP32 firmware co-sim", "hauksbee install esp-qemu"),
-                    summary,
-                }),
-            }
         }
     }
     #[cfg(not(feature = "qemu"))]
-    for (name, summary) in [
-        ("qemu-xtensa", "ESP32 / ESP32-S3 firmware co-sim"),
-        ("qemu-riscv32", "ESP32-C3 firmware co-sim"),
-    ] {
-        backends.push(Backend {
+    {
+        Backend::new(
             name,
-            status: "disabled",
-            detail: "built without the `qemu` feature".to_string(),
+            "disabled",
+            "built without the `qemu` feature".to_string(),
             summary,
-        });
+        )
     }
+}
 
-    // Renode (STM32 / nRF52 / SiFive RISC-V, i.e. ARM Cortex-M and RISC-V).
+/// Renode (STM32 / nRF52 / SiFive RISC-V, i.e. ARM Cortex-M and RISC-V).
+fn probe_renode() -> Backend {
+    const SUMMARY: &str = "STM32 / nRF52 / RISC-V firmware co-sim";
     #[cfg(feature = "renode")]
-    match hauksbee_mcu::renode::find_renode() {
-        Ok(p) => backends.push(Backend {
-            name: "renode",
-            status: "ok",
-            detail: p.display().to_string(),
-            summary: "STM32 / nRF52 / RISC-V firmware co-sim",
-        }),
-        Err(e) => backends.push(Backend {
-            name: "renode",
-            status: "absent",
-            detail: absent_detail(
-                &e,
-                "STM32 / nRF52 / RISC-V firmware co-sim",
-                "hauksbee install renode",
+    {
+        match hauksbee_mcu::renode::find_renode() {
+            Ok(p) => Backend::found("renode", SUMMARY, p, &["--version"]),
+            Err(e) => Backend::new(
+                "renode",
+                "absent",
+                absent_detail(&e, SUMMARY, "hauksbee install renode"),
+                SUMMARY,
             ),
-            summary: "STM32 / nRF52 / RISC-V firmware co-sim",
-        }),
+        }
     }
     #[cfg(not(feature = "renode"))]
-    backends.push(Backend {
-        name: "renode",
-        status: "disabled",
-        detail: "built without the `renode` feature".to_string(),
-        summary: "STM32 / nRF52 / RISC-V firmware co-sim",
-    });
+    {
+        Backend::new(
+            "renode",
+            "disabled",
+            "built without the `renode` feature".to_string(),
+            SUMMARY,
+        )
+    }
+}
 
-    backends.push(extract_row());
-    backends
+/// ngspice, the SPICE oracle: `$NGSPICE`, then PATH, then the known install
+/// locations (the same finder the dependency panel and the differential harness use).
+fn probe_ngspice() -> Backend {
+    const SUMMARY: &str = "SPICE oracle for cross-checking the analog solver";
+    crate::deps::find_ngspice().map_or_else(
+        || {
+            let fix = match std::env::consts::OS {
+                "macos" => "`brew install ngspice`",
+                "linux" => "your package manager (`apt install ngspice`)",
+                _ => "ngspice.sourceforge.io",
+            };
+            Backend::new(
+                "ngspice",
+                "absent",
+                format!("not installed (optional, only for the SPICE cross-check). Fix: {fix}"),
+                SUMMARY,
+            )
+        },
+        |p| Backend::found("ngspice", SUMMARY, p, &["--version"]),
+    )
+}
+
+/// kicad-cli, the DRC oracle, through the finder the DRC cross-check uses.
+fn probe_kicad_cli() -> Backend {
+    const SUMMARY: &str = "KiCad's own DRC, for cross-checking copper findings";
+    crate::reports::drc::find_kicad_cli().map_or_else(
+        || {
+            Backend::new(
+                "kicad-cli",
+                "absent",
+                "not installed (optional, only for the KiCad DRC cross-check). \
+                 Fix: install KiCad from kicad.org"
+                    .to_string(),
+                SUMMARY,
+            )
+        },
+        |(path, version)| Backend {
+            detail: path.clone(),
+            path: Some(PathBuf::from(path)),
+            version: Some(version).filter(|v| !v.is_empty()),
+            ..Backend::new("kicad-cli", "ok", String::new(), SUMMARY)
+        },
+    )
+}
+
+/// freerouting, the autorouter: a jar, found the way `--route` finds it, plus
+/// a `java` to run it. The version is the jar's file stem
+/// (`freerouting-1.9.0.jar` is 1.9.0); Java is not started here.
+fn probe_freerouting() -> Backend {
+    const SUMMARY: &str = "autorouter for `hauksbee boardcode --route`";
+    let Some(jar) =
+        forge_codegen::find_freerouting_jar(&forge_codegen::FreeroutingConfig::default())
+    else {
+        return Backend::new(
+            "freerouting",
+            "absent",
+            "no freerouting jar found (optional, only for autorouting; the built-in grid \
+             router is used instead). Fix: set FREEROUTING_JAR or pass --freerouting-jar"
+                .to_string(),
+            SUMMARY,
+        );
+    };
+    let version = jar
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .and_then(parse_version);
+    let java = crate::deps::which_on_path("java").is_some();
+    Backend {
+        detail: if java {
+            jar.display().to_string()
+        } else {
+            format!("{} found, but `java` is not on PATH", jar.display())
+        },
+        path: Some(jar),
+        version,
+        ..Backend::new(
+            "freerouting",
+            if java { "ok" } else { "warn" },
+            String::new(),
+            SUMMARY,
+        )
+    }
+}
+
+/// `tool args...`'s version, asked once per binary until that file changes.
+fn version_of_tool(path: &Path, args: &[&str]) -> Option<String> {
+    static VERSIONS: crate::deps::StampCache<Option<String>> = crate::deps::StampCache::new();
+    if let Some(cached) = VERSIONS.get(path) {
+        return cached;
+    }
+    let output = crate::deps::output_within(Command::new(path).args(args), Duration::from_secs(5));
+    let version = output.and_then(|out| {
+        let text = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        parse_version(&text)
+    });
+    VERSIONS.put(path, version.clone());
+    version
+}
+
+/// The first version-looking word in `text`: `QEMU emulator version 8.2.0 (...)`
+/// gives `8.2.0`, `Renode v1.15.0.1` gives `1.15.0.1`, `** ngspice-42 : ...`
+/// gives `42`, `freerouting-1.9.0` gives `1.9.0`.
+fn parse_version(text: &str) -> Option<String> {
+    text.split_whitespace().find_map(|word| {
+        let word = word.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+        let word = word
+            .strip_prefix("ngspice-")
+            .or_else(|| word.strip_prefix("freerouting-"))
+            .unwrap_or(word);
+        let word = word.strip_prefix('v').unwrap_or(word);
+        word.starts_with(|c: char| c.is_ascii_digit())
+            .then(|| word.to_string())
+    })
+}
+
+/// Lowercase hex SHA-256 of a file, streamed and remembered until it changes.
+fn sha256_of_file(path: &Path) -> Option<String> {
+    use sha2::{Digest as _, Sha256};
+    use std::io::Read as _;
+    static HASHES: crate::deps::StampCache<String> = crate::deps::StampCache::new();
+    if let Some(hash) = HASHES.get(path) {
+        return Some(hash);
+    }
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        let n = file.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let hash = crate::run_manifest::bytes_to_hex(&hasher.finalize());
+    HASHES.put(path, hash.clone());
+    Some(hash)
 }
 
 /// A resolver's "not found" is an optional tool, not a fault: say what it is
@@ -253,11 +496,8 @@ fn extract_row() -> Backend {
     use hauksbee_models::datasheet::Backend as Extractor;
     use hauksbee_models::extract_config::{ProcessHost, Resolved};
     const SUMMARY: &str = "datasheet model extraction (`hauksbee models backend show`)";
-    let row = |status, detail: String| Backend {
-        name: "extract",
-        status,
-        detail: detail.replace('\n', " "),
-        summary: SUMMARY,
+    let row = |status, detail: String| {
+        Backend::new("extract", status, detail.replace('\n', " "), SUMMARY)
     };
     let Ok((_, resolved)) = super::backend::load_and_resolve() else {
         return row(
@@ -324,5 +564,31 @@ fn extract_row() -> Backend {
                 )
             },
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_version;
+
+    #[test]
+    fn versions_are_read_from_each_tools_banner() {
+        assert_eq!(
+            parse_version("QEMU emulator version 8.2.0 (esp_develop_8.2.0_20240122)\nCopyright"),
+            Some("8.2.0".to_string())
+        );
+        assert_eq!(
+            parse_version("Renode v1.15.0.52"),
+            Some("1.15.0.52".to_string())
+        );
+        assert_eq!(
+            parse_version("******\n** ngspice-42 : Circuit level simulation program"),
+            Some("42".to_string())
+        );
+        assert_eq!(
+            parse_version("freerouting-1.9.0"),
+            Some("1.9.0".to_string())
+        );
+        assert_eq!(parse_version("no numbers here"), None);
     }
 }

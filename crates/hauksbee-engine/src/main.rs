@@ -1849,6 +1849,13 @@ fn main() -> anyhow::Result<()> {
             InstallCommand::Renode { yes } => hauksbee_engine::commands::install::renode(yes),
         },
     };
+    // A run that wrote a manifest records how it ended in that manifest.
+    hauksbee_engine::run_manifest::finish_outcome(
+        "hauksbee",
+        result
+            .as_ref()
+            .map_or_else(hauksbee_engine::commands::run::error_exit_code, |()| 0),
+    );
     if let Err(e) = &result {
         if json {
             // serde_json escapes the message so the object is always well-formed.
