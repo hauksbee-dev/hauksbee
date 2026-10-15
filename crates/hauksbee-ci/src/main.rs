@@ -128,6 +128,21 @@ enum Command {
     #[command(verbatim_doc_comment)]
     Explain(ExplainArgs),
 
+    /// Check a spec the way an editor does: findings with a character range and a one-click fix.
+    ///
+    /// Prints one JSON object, `{"ok":true,"diagnostics":[...]}`; each diagnostic
+    /// has `severity`, `code`, `start`/`end` (UTF-16 offsets into the file),
+    /// `message` and, when the cure is mechanical, `fix`. The file may omit
+    /// `board` and `firmware`; the app supplies them.
+    Lint(LintArgs),
+
+    /// Read one assertion's value off a single nominal run, with no bound and no verdict.
+    ///
+    /// Prints one JSON object: the reading, its range and unit, and the
+    /// uncertainty the run admits. A reading the run cannot honestly take is
+    /// `{"ok":false,"error":...}`, never a number.
+    Measure(MeasureArgs),
+
     /// Install the pre-commit gate into this repository.
     ///
     /// Detects which hook mechanism the repo uses: a repo with a
@@ -287,8 +302,31 @@ struct ExplainArgs {
     kind: Option<String>,
 
     /// Print the whole catalogue as one JSON object (the app reads this).
-    #[arg(long, conflicts_with = "kind")]
+    #[arg(long, conflicts_with_all = ["kind", "schema"])]
     json: bool,
+
+    /// Print the spec's JSON Schema with the catalogue's words attached to every
+    /// assertion property (`x-hauksbee-doc`) and the glossary (`x-hauksbee-glossary`).
+    #[arg(long, conflicts_with = "kind")]
+    schema: bool,
+}
+
+#[derive(Parser)]
+struct LintArgs {
+    /// The spec text to lint (a TOML file).
+    #[arg(value_name = "SPEC")]
+    spec: PathBuf,
+}
+
+#[derive(Parser)]
+struct MeasureArgs {
+    /// The spec to run.
+    #[arg(value_name = "SPEC")]
+    spec: PathBuf,
+
+    /// Which `[[assert]]` block to read, counting from 0.
+    #[arg(long, value_name = "N")]
+    assertion: usize,
 }
 
 #[derive(Parser)]
@@ -322,6 +360,8 @@ fn main() -> ExitCode {
         Command::Check(args) => cmd_check(args),
         Command::Init(args) => cmd_init(args),
         Command::Explain(args) => cmd_explain(&args),
+        Command::Lint(args) => cmd_lint(&args),
+        Command::Measure(args) => cmd_measure(&args),
         Command::Hook(HookCommand::Install) => {
             report(cwd().and_then(|cwd| integrate::hook_install(&cwd)))
         }
@@ -599,6 +639,9 @@ fn cmd_check(args: CheckArgs) -> ExitCode {
 /// and the app read. An unknown kind is a usage error that names the nearest kind.
 fn cmd_explain(args: &ExplainArgs) -> ExitCode {
     use hauksbee_ci::catalog;
+    if args.schema {
+        return report(Ok(catalog::editor_schema().to_string()));
+    }
     report(match (&args.kind, args.json) {
         (_, true) => Ok(catalog::to_json().to_string()),
         (None, _) => Ok(catalog::render_list().trim_end().to_string()),
@@ -612,6 +655,30 @@ fn cmd_explain(args: &ExplainArgs) -> ExitCode {
                 )
             }),
     })
+}
+
+/// `hauksbee-ci lint <spec>`: the editor's findings as JSON; exit 0 whatever they are.
+fn cmd_lint(args: &LintArgs) -> ExitCode {
+    report(
+        std::fs::read_to_string(&args.spec)
+            .map(|text| hauksbee_ci::lint::lint_json(&text).to_string())
+            .map_err(|e| anyhow::anyhow!("reading {}: {e}", args.spec.display())),
+    )
+}
+
+/// `hauksbee-ci measure <spec> --assertion N`: one reading as JSON. A reading the run
+/// could not take is `{"ok":false,"error":..}` and exit 2.
+fn cmd_measure(args: &MeasureArgs) -> ExitCode {
+    match hauksbee_ci::measure::measure(&args.spec, args.assertion) {
+        Ok(reading) => {
+            println!("{reading}");
+            ExitCode::from(0)
+        }
+        Err(error) => {
+            println!("{}", serde_json::json!({ "ok": false, "error": error }));
+            ExitCode::from(2)
+        }
+    }
 }
 
 /// `hauksbee-ci init <board>`: scaffold a starter spec and print where it landed.

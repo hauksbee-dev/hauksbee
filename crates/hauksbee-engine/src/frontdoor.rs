@@ -543,6 +543,32 @@ pub struct WebImportFailure {
     pub suggested_fix: String,
 }
 
+/// What one bound component's card says it can take, and the logic levels it reads.
+/// Every field is omitted when the model does not state it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct ComponentRatings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_current_a: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_pin_current_a: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_power_w: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_voltage_v: Option<f64>,
+    /// Lowest voltage the part reads as a high.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vih: Option<f64>,
+    /// Highest voltage the part reads as a low.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vil: Option<f64>,
+}
+
+impl ComponentRatings {
+    fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// The whole payload sent back to the browser after an upload.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct WebReport {
@@ -634,6 +660,13 @@ pub struct WebReport {
     /// must not offer a component assertion merely because a reference exists.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub component_assertions: std::collections::BTreeMap<String, Vec<String>>,
+    /// reference -> the limits the bound card states (current, pin current, power,
+    /// voltage) and the logic input thresholds it drives with. The checks builder
+    /// pre-fills a ceiling from these ("80 % of the datasheet's maximum"). Only
+    /// numbers the model carries are present, and a part with none is omitted;
+    /// there is no source page here, so the UI must not cite one. Additive.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub component_ratings: std::collections::BTreeMap<String, ComponentRatings>,
     /// Binder-detected power supplies (rail net → nominal volts): the checks
     /// builder prefills `[[supply]]` rows from these; the same data
     /// `hauksbee-ci init` scaffolds from.
@@ -1144,6 +1177,43 @@ fn component_assertion_capabilities(
         .collect()
 }
 
+/// The card limits and logic thresholds of every bound component that states any.
+/// A multi-unit package merges its units' numbers by keeping the smallest limit.
+fn component_ratings(
+    board: &ExtractedBoard,
+    bound: &BoundBoard,
+) -> std::collections::BTreeMap<String, ComponentRatings> {
+    fn tighter(slot: &mut Option<f64>, new: Option<f64>) {
+        *slot = match (*slot, new) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+    }
+    board
+        .components
+        .iter()
+        .filter_map(|component| {
+            let reference = &component.reference;
+            let mut out = ComponentRatings::default();
+            for meta in bound
+                .device_meta
+                .iter()
+                .filter(|m| ref_or_unit_matches(reference, &m.reference))
+            {
+                tighter(&mut out.max_current_a, meta.ratings.max_current_a);
+                tighter(&mut out.max_pin_current_a, meta.ratings.max_pin_current_a);
+                tighter(&mut out.max_power_w, meta.ratings.max_power_w);
+                tighter(&mut out.max_voltage_v, meta.ratings.max_voltage_v);
+            }
+            if let Some(d) = bound.digital.iter().find(|d| &d.reference == reference) {
+                out.vih = Some(d.levels.vih);
+                out.vil = Some(d.levels.vil);
+            }
+            (!out.is_empty()).then(|| (reference.clone(), out))
+        })
+        .collect()
+}
+
 /// Serialize one normalizer refusal with the same localized import diagnosis
 /// as [`analyze_json_with_ties`]. The shipped schematic-aware HTTP callback
 /// has to normalize once before resolving companion ties; without this helper
@@ -1584,6 +1654,7 @@ fn analyze_normalized_with_context(
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
         component_assertions: component_assertion_capabilities(board, bound),
+        component_ratings: component_ratings(board, bound),
         supplies,
         machine: Some(machine),
         ..WebReport::default()
@@ -3160,6 +3231,37 @@ fn main {
         cosim
     }
 
+    /// Ratings are listed only for parts that state some, and serialize without the
+    /// keys the card leaves out.
+    #[test]
+    fn web_report_lists_component_ratings_only_where_the_card_states_them() {
+        let report = analyze("boot_gate.kicad_pcb", SHORTED);
+        assert!(report.ok, "analysis failed: {:?}", report.error);
+        assert!(
+            report
+                .component_ratings
+                .values()
+                .all(|r| *r != ComponentRatings::default()),
+            "{:?}",
+            report.component_ratings
+        );
+        let json = serde_json::to_value(&report).unwrap();
+        if let Some(all) = json["component_ratings"].as_object() {
+            assert!(all
+                .values()
+                .all(|r| r.as_object().is_some_and(|o| !o.is_empty())));
+        }
+        let one = ComponentRatings {
+            max_current_a: Some(0.5),
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_value(&one).unwrap(),
+            serde_json::json!({ "max_current_a": 0.5 })
+        );
+        assert!(!one.is_empty() && ComponentRatings::default().is_empty());
+    }
+
     #[test]
     fn web_report_exposes_only_bound_component_assertion_capabilities() {
         let report = analyze("boot_gate.kicad_pcb", SHORTED);
@@ -4001,6 +4103,7 @@ fn main {
             "import_failure",
             "model_coverage",
             "component_assertions",
+            "component_ratings",
             "clearance_rule_source",
             "triage",
             "verdict",

@@ -22,7 +22,7 @@
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, Multipart, Path as UrlPath, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path as UrlPath, RawQuery, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -132,7 +132,10 @@ pub fn check_route_with_design(check: DesignCheckRunner) -> Router {
         Router::new()
             .route("/api/check", post(check_handler))
             .route("/api/ci/scaffold", post(scaffold_handler))
-            .route("/api/ci/catalog", get(catalog_handler)),
+            .route("/api/ci/catalog", get(catalog_handler))
+            .route("/api/ci/schema", get(schema_handler))
+            .route("/api/ci/lint", post(lint_handler))
+            .route("/api/ci/measure", post(measure_handler)),
         check,
     )
 }
@@ -969,6 +972,102 @@ async fn check_handler(
 /// the table `hauksbee-ci explain` prints. No board is involved, so the runner
 /// gets an empty upload and the catalogue marker.
 async fn catalog_handler(State(check): State<Arc<DesignCheckRunner>>) -> JsonResponse {
+    ask_without_a_board(
+        "the catalogue task",
+        check,
+        hauksbee_frontdoor_api::frontdoor::CATALOG_SPEC.to_string(),
+    )
+    .await
+}
+
+/// GET `/api/ci/schema`: the editor's JSON Schema for a spec, with the catalogue's
+/// words on every assertion property (`hauksbee-ci explain --schema`).
+async fn schema_handler(State(check): State<Arc<DesignCheckRunner>>) -> JsonResponse {
+    ask_without_a_board(
+        "the schema task",
+        check,
+        hauksbee_frontdoor_api::frontdoor::SCHEMA_SPEC.to_string(),
+    )
+    .await
+}
+
+/// POST `/api/ci/lint`: body `{"toml": "<the editor buffer>"}`. Answers
+/// `{ok, diagnostics:[{severity, code, start, end, message, fix?}]}` with UTF-16
+/// offsets into the buffer. The buffer need not name a board or firmware.
+async fn lint_handler(
+    State(check): State<Arc<DesignCheckRunner>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> JsonResponse {
+    if let Some(refused) = reject_cross_site(&headers) {
+        return refused;
+    }
+    let toml = match serde_json::from_slice::<serde_json::Value>(&body) {
+        Ok(serde_json::Value::Object(mut fields)) => match fields.remove("toml") {
+            Some(serde_json::Value::String(toml)) => toml,
+            _ => return json_error("the lint request needs a string field `toml`"),
+        },
+        _ => return json_error("the lint request body must be JSON: {\"toml\": \"...\"}"),
+    };
+    ask_without_a_board(
+        "the lint task",
+        check,
+        format!("{}\n{toml}", hauksbee_frontdoor_api::frontdoor::LINT_SPEC),
+    )
+    .await
+}
+
+/// POST `/api/ci/measure?assertion=N`: the `/api/check` upload, reading assertion `N`
+/// (counting `[[assert]]` blocks from 0) once with its bounds removed. Answers
+/// `{ok, kind, value, min, max, unit, uncertainty, window_ms, t_ms, detail,
+/// error_budget, judged:false, cached}`; never a verdict. A reading the run cannot
+/// honestly take is `{ok:false, error}`.
+async fn measure_handler(
+    State(check): State<Arc<DesignCheckRunner>>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+    mut multipart: Multipart,
+) -> JsonResponse {
+    let mut parts = match guarded_upload(&headers, &mut multipart).await {
+        Ok(parts) => parts,
+        Err(response) => return response,
+    };
+    let Some(spec) = parts.spec.take() else {
+        return json_error(NEEDS_BOARD_AND_SPEC);
+    };
+    let index = query
+        .as_deref()
+        .into_iter()
+        .flat_map(|q| q.split('&'))
+        .find_map(|pair| pair.strip_prefix("assertion="))
+        .and_then(|n| n.parse::<usize>().ok());
+    let Some(index) = index else {
+        return json_error("a measurement names the assertion to read: ?assertion=N");
+    };
+    let spec = format!(
+        "{} {index}\n{spec}",
+        hauksbee_frontdoor_api::frontdoor::MEASURE_SPEC
+    );
+    match run_blocking("the measurement task", move || {
+        parts
+            .into_design_upload()
+            .map(|upload| check(upload, &spec))
+            .map_err(str::to_string)
+    })
+    .await
+    {
+        Ok(json) => json_ok(json),
+        Err(response) => response,
+    }
+}
+
+/// Ask the check runner a question that involves no board: it gets an empty upload
+/// and the marker (plus any body) as its spec.
+async fn ask_without_a_board(
+    what: &'static str,
+    check: Arc<DesignCheckRunner>,
+    spec: String,
+) -> JsonResponse {
     let empty = || NamedUpload {
         name: String::new(),
         bytes: Vec::new(),
@@ -983,14 +1082,7 @@ async fn catalog_handler(State(check): State<Arc<DesignCheckRunner>>) -> JsonRes
         asbuilt: None,
         models: Vec::new(),
     };
-    match run_blocking("the catalogue task", move || {
-        Ok(check(
-            upload,
-            hauksbee_frontdoor_api::frontdoor::CATALOG_SPEC,
-        ))
-    })
-    .await
-    {
+    match run_blocking(what, move || Ok(check(upload, &spec))).await {
         Ok(json) => json_ok(json),
         Err(response) => response,
     }
