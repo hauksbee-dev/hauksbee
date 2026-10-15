@@ -2558,7 +2558,7 @@ impl Reply<'_> {
         for table in tables {
             let source = table.entry("source").or_insert(Item::Table(blank.clone()));
             // A source table another part of the draft opened (a pinout) still gets its tier.
-            if let Some(t) = source.as_table_mut() {
+            if let Some(t) = source.as_table_mut().filter(|t| !t.contains_key("tier")) {
                 for (k, v) in &blank {
                     if !t.contains_key(k) {
                         t.insert(k, v.clone());
