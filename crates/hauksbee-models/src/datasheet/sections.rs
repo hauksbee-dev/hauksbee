@@ -11,8 +11,9 @@
 //! card to a fix agent first; a clean merge goes straight to the validator.
 
 use anyhow::{anyhow, bail, Result};
+use std::path::Path;
 use std::thread::ScopedJoinHandle;
-use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
+use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, TableLike, Value};
 
 use super::{
     behavioral_family_base_kind, behavioral_hint_for_kind, conventions_for_kind,
@@ -25,6 +26,37 @@ use crate::extract_config::Resolved;
 use crate::extract_harness as harness;
 use crate::extract_progress as progress;
 
+/// How an agent's file ends, so an unfinished one is told from a finished one.
+const FINISH: &str = " End `model.toml` with the line `# end`.";
+
+/// The switching agent's output shape. Its tables hold about 200 rows; written
+/// as full records they were 64 KB in one Write (about 55k tokens of context in
+/// one turn, past the stop). A parameter's section, page, unit and shared
+/// conditions are written once per block, and `basis` is cited by the merge.
+const TABLE_SHAPE: &str = r#"OUTPUT SHAPE: write each parameter of a datasheet table as ONE `[[models.table]]` block, never as `[[models.source.characteristic]]` records, and add no `# Source:` comments (the merge writes each row's `basis` from `section`, `page`, `parameter` and the columns the row prints). The block holds what its rows share; a row holds the min/typ/max it prints (omit the others) and, in `conditions`, only what differs from the block's. A row may override a block key such as `unit`:
+```toml
+[[models]]
+[[models.table]]
+section = "Table 7.6"  # as the datasheet names it
+page = 7
+parameter = "tPLH propagation delay, A to B"
+unit = "ns"
+conditions = "VCCA = 1.8 V ± 0.15 V, over the operating temperature range, see Figure 1"
+rows = [
+  { conditions = "VCCB = 1.8 V ± 0.15 V", min = 3, max = 17.7 },
+  { conditions = "VCCB = 2.5 V ± 0.2 V", min = 2.2, max = 10.3 },
+]
+[[models.table]]
+section = "Table 7.6"
+page = 7
+parameter = "tPZH enable time, DIR to A"
+unit = "ns"
+conditions = "VCCA = 1.8 V ± 0.15 V, over the operating temperature range, see Figure 1"
+rows = [{ conditions = "VCCB = 1.8 V ± 0.15 V", max = 24.4 }]
+# end
+```
+Write one file per datasheet table, each in one Write straight from the page text: the first as `model.toml`, then `model-2.toml`, `model-3.toml`. Each is a `[[models]]` entry with that table's blocks. End every file but the last with the line `# more`, and the last with `# end`."#;
+
 pub(super) const NAMES: [&str; 4] = ["identity", "ratings", "electrical", "switching"];
 
 /// What the merge made of the section fragments.
@@ -35,6 +67,9 @@ pub(super) struct Merged {
     pub conflicts: Vec<String>,
     /// Sections that wrote no usable `[[models]]` entry.
     pub missing: Vec<&'static str>,
+    /// What the fragments leave undone: an agent's unfinished output, malformed
+    /// compact rows, behaviour the card's own data call for.
+    pub gaps: Vec<String>,
 }
 
 impl Merged {
@@ -44,7 +79,8 @@ impl Merged {
             .missing
             .iter()
             .map(|m| format!("the {m} section agent wrote nothing usable"));
-        let all: Vec<String> = missing.chain(self.conflicts.iter().cloned()).collect();
+        let gaps = self.conflicts.iter().chain(&self.gaps).cloned();
+        let all: Vec<String> = missing.chain(gaps).collect();
         if all.is_empty() {
             return String::new();
         }
@@ -95,11 +131,14 @@ fn join_tables(dst: &mut Table, src: &Table, path: &str, who: (&str, &str), out:
         match (&mut *ours, theirs) {
             (Item::Table(a), Item::Table(b)) => join_tables(a, b, &at, who, out),
             (Item::ArrayOfTables(a), Item::ArrayOfTables(b)) => {
+                // Each row is read once; one that cannot be read is never a duplicate.
+                let read = |x: &Table| plain(&Item::Table(x.clone()));
+                let mut seen: Vec<toml::Value> = a.iter().filter_map(read).collect();
                 for row in b {
-                    let same =
-                        |x: &Table| same_values(&Item::Table(x.clone()), &Item::Table(row.clone()));
-                    if !a.iter().any(same) {
+                    let theirs = read(row);
+                    if !theirs.as_ref().is_some_and(|t| seen.contains(t)) {
                         a.push(row.clone());
+                        seen.extend(theirs);
                     }
                 }
             }
@@ -127,10 +166,103 @@ fn join_tables(dst: &mut Table, src: &Table, path: &str, who: (&str, &str), out:
     }
 }
 
-/// The one `[[models]]` entry a fragment holds. An abstention's `identity_only`,
+/// The columns a compact row prints, as its `basis` names them.
+fn columns(row: &Table) -> String {
+    let printed = ["min", "typ", "max"].into_iter();
+    printed
+        .filter(|c| row.contains_key(c))
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// The text of `key` in a table.
+fn text(t: &dyn TableLike, key: &str) -> Option<String> {
+    t.get(key).and_then(Item::as_str).map(str::to_string)
+}
+
+/// Expand the `[[models.table]]` blocks of an entry into the
+/// `[[models.source.characteristic]]` rows they stand for: a block's keys other
+/// than `section` and `page` are shared by its `rows`, a row's `conditions`
+/// come before the block's, and a row's `basis` is cited from the block's
+/// `section` and `page`, the row's parameter and the columns it prints. A
+/// block or row that cannot be read goes into `problems`.
+fn expand_tables(entry: &mut Table, problems: &mut Vec<String>) {
+    let Some(Item::ArrayOfTables(blocks)) = entry.remove("table") else {
+        return;
+    };
+    let mut made = ArrayOfTables::new();
+    for (n, block) in blocks.iter().enumerate() {
+        let Some(rows) = block.get("rows").and_then(Item::as_array) else {
+            problems.push(format!("table block {}: it has no `rows` array", n + 1));
+            continue;
+        };
+        let page = block.get("page").and_then(Item::as_integer);
+        let cite = text(block, "section").map(|s| match page {
+            Some(p) => format!("{s} (p. {p})"),
+            None => s,
+        });
+        if cite.is_none() {
+            problems.push(format!("table block {}: it names no `section`", n + 1));
+        }
+        for (m, row) in rows.iter().enumerate() {
+            let mut out = Table::new();
+            for (k, v) in block {
+                if !["rows", "section", "page"].contains(&k) {
+                    out.insert(k, v.clone());
+                }
+            }
+            let row = row.as_inline_table();
+            for (k, v) in row.into_iter().flatten() {
+                out.insert(k, Item::Value(v.clone().decorated("", "")));
+            }
+            let (Some(row), Some(name)) = (row, text(&out, "parameter")) else {
+                let at = format!("table block {}, row {}", n + 1, m + 1);
+                problems.push(format!(
+                    "{at}: it is no inline table, or has no `parameter`"
+                ));
+                continue;
+            };
+            let when = [text(row, "conditions"), text(block, "conditions")];
+            let when = when.into_iter().flatten().collect::<Vec<_>>();
+            out.insert("conditions", toml_edit::value(when.join(", ")));
+            if !out.contains_key("basis") {
+                let cited = [cite.clone(), Some(name), Some(columns(&out))];
+                let cited = cited.into_iter().flatten().collect::<Vec<_>>();
+                out.insert("basis", toml_edit::value(cited.join(", ")));
+            }
+            let rank = |k: &str| {
+                let order = [
+                    "parameter",
+                    "min",
+                    "typ",
+                    "max",
+                    "unit",
+                    "conditions",
+                    "basis",
+                ];
+                order.iter().position(|c| *c == k).unwrap_or(order.len())
+            };
+            out.sort_values_by(|a, _, b, _| rank(a).cmp(&rank(b)));
+            made.push(out);
+        }
+    }
+    let source = entry.entry("source").or_insert(Item::Table(Table::new()));
+    let rows = source.as_table_like_mut().map(|s| {
+        s.entry("characteristic")
+            .or_insert(ArrayOfTables::new().into())
+    });
+    if let Some(Item::ArrayOfTables(rows)) = rows {
+        for row in made {
+            rows.push(row);
+        }
+    }
+}
+
+/// The one `[[models]]` entry a fragment holds, its compact tables expanded
+/// (see [`expand_tables`]). An abstention's `identity_only`,
 /// `warning` and `unlocked_by` belong under `[models.params]`; one written at the
 /// top of the entry is moved there rather than sent to a fix agent.
-fn entry(raw: &str) -> Option<Table> {
+fn entry(raw: &str, problems: &mut Vec<String>) -> Option<Table> {
     let text = extract_toml_block(raw, "[[models]]");
     let doc = text.parse::<DocumentMut>().ok()?;
     let models = doc.get("models")?.as_array_of_tables()?;
@@ -141,6 +273,7 @@ fn entry(raw: &str) -> Option<Table> {
             params.as_table_like_mut()?.insert(key, moved);
         }
     }
+    expand_tables(&mut table, problems);
     Some(table)
 }
 
@@ -159,9 +292,9 @@ fn document(card: Table) -> String {
 /// Fails when no section wrote a usable `[[models]]` entry.
 pub(super) fn merge(sections: &[(&'static str, Option<String>)]) -> Result<Merged> {
     let (mut card, mut conflicts, mut missing) = (Table::new(), Vec::new(), Vec::new());
-    let mut merged: Vec<&str> = Vec::new();
+    let (mut merged, mut gaps): (Vec<&str>, Vec<String>) = (Vec::new(), Vec::new());
     for (name, raw) in sections {
-        let Some(fragment) = raw.as_deref().and_then(entry) else {
+        let Some(fragment) = raw.as_deref().and_then(|r| entry(r, &mut gaps)) else {
             missing.push(*name);
             continue;
         };
@@ -172,10 +305,47 @@ pub(super) fn merge(sections: &[(&'static str, Option<String>)]) -> Result<Merge
     if merged.is_empty() {
         bail!("no section agent wrote a usable [[models]] entry");
     }
+    gaps.extend(unmodelled_levels(&card));
     Ok(Merged {
         card: document(card),
         conflicts,
         missing,
+        gaps,
+    })
+}
+
+/// A digital card whose fragments carry I/O level characteristics (VOH, VOL,
+/// VIH, VIL as params or rows) but no executable behaviour and an
+/// `identity_only` abstention: a card that lints but cannot simulate. The
+/// behaviour is a missing section, not a settled abstention. It is not built
+/// here: which pins are inputs, outputs, enabled or sensed is the function
+/// table's, and a guess would be a wrong model.
+fn unmodelled_levels(card: &Table) -> Option<String> {
+    const LEVELS: [&str; 4] = ["voh", "vol", "vih", "vil"];
+    let digital = card.get("kind").and_then(Item::as_str) == Some("digital");
+    let params = card.get("params").and_then(Item::as_table_like)?;
+    let abstains = params.get("identity_only").and_then(Item::as_bool) == Some(true);
+    let behaves = ["logic", "behavioral", "peripheral", "current_program"];
+    if !digital || !abstains || behaves.iter().any(|k| card.contains_key(k)) {
+        return None;
+    }
+    let rows = card.get("source").and_then(|s| s.get("characteristic"));
+    let rows = rows
+        .and_then(Item::as_array_of_tables)
+        .into_iter()
+        .flatten();
+    let level = |p: &str| {
+        p.split(|c: char| !c.is_alphanumeric())
+            .next()
+            .is_some_and(|w| LEVELS.contains(&w.to_lowercase().as_str()))
+    };
+    let row_levels = rows.filter_map(|r| r.get("parameter")?.as_str()).any(level);
+    (LEVELS.iter().any(|k| params.contains_key(k)) || row_levels).then(|| {
+        "the card abstains from behaviour (`identity_only`) with no `[models.logic]` although it \
+         carries I/O level characteristics (voh/vol/vih/vil): write the behaviour from the \
+         datasheet's function table (inputs, outputs, tristate, sense) and drop the abstention, \
+         or keep it and state in `warning` what the function table cannot express"
+            .to_string()
     })
 }
 
@@ -217,13 +387,16 @@ fn prompt(part: &str, kind: &str, section: &str, known: &str) -> String {
             ),
         ),
         "switching" => (
-            "a `[[models.source.characteristic]]` per row of the switching-characteristics table \
-             (propagation, enable, disable, transition and skew times, per supply pairing it \
-             prints) and per capacitance row"
+            "`[[models.table]]` blocks holding every row of the switching-characteristics \
+             tables (propagation, enable, disable, transition and skew times, per supply pairing \
+             they print) and of the capacitance tables"
                 .to_string(),
             "switching characteristics and capacitance",
             " At most two images.",
-            format!("{SOURCE_QUANTITY_GUIDANCE}\n\n{EXTRACTION_RULES}"),
+            format!(
+                "{TABLE_SHAPE}\n\n{SOURCE_QUANTITY_GUIDANCE}\n\n{}",
+                crate::schema::PRINTED_REFERENCE
+            ),
         ),
         _ => (
             "`description`, `[models.params]`, `[models.coverage]`, every behaviour table the kind \
@@ -258,14 +431,21 @@ fn prompt(part: &str, kind: &str, section: &str, known: &str) -> String {
             "\n\nThe identity agent wrote these keys (do not repeat them):\n```toml\n{known}```"
         )
     };
-    let example = format_examples_for_kind(kind).first().map_or_else(String::new, |e| {
-        format!("FORMAT EXAMPLE ONLY, a different part ({}); copy its shape, never its numbers:\n{}", e.part, e.card)
+    // The switching agent's rows are compact: a full-card example would teach the long shape.
+    let examples = format_examples_for_kind(kind);
+    let example = examples.first().filter(|_| section != "switching");
+    let example = example.map_or_else(String::new, |e| {
+        format!(
+            "FORMAT EXAMPLE ONLY, a different part ({}); copy its shape, never its numbers:\n{}",
+            e.part, e.card
+        )
     });
+    let finish = if section == "switching" { "" } else { FINISH };
     format!(
         "You are one of the agents drafting the Hauksbee model card for {part} (kind `{kind}`). \
          YOUR SECTION: {section}. Write `model.toml` as a `[[models]]` entry holding ONLY these \
          keys: {owns}. Leave every other key to the other agents. Do not run `hauksbee models \
-         lint`: a fragment fails it.\n\n\
+         lint`: a fragment fails it.{finish}\n\n\
          Your context is small. Start from `page-index.md` and open only the pages on {topics}: \
          `pages/page-NNN.txt` first, `page-NNN.png` (about 5k tokens each) only for a table whose \
          text columns are scrambled.{images} Never open `datasheet.pdf` or `datasheet.txt` whole. \
@@ -286,7 +466,7 @@ pub(super) fn draft(
     budget: u64,
     billing: crate::extract_usage::Billing,
 ) -> Result<Merged> {
-    let run = |name: &'static str, known: &str| -> Result<Option<String>> {
+    let run = |name: &'static str, known: &str| -> Result<Wrote> {
         let fork = ws.fork()?;
         let at = serde_json::json!({"stage": format!("section {name}"), "agent": fork.label(), "attempt": 1, "attempts": 1});
         progress::event("stage", at);
@@ -295,24 +475,30 @@ pub(super) fn draft(
         if let Err(e) = run_and_record(resolved, &brief, &fork, budget, billing) {
             say!("[model-extract] the {name} section agent ended early: {e:#}");
         }
-        let written = std::fs::read_to_string(fork.answer_path()).ok();
+        let files = files_written(fork.path());
         // The pin-map agent's self-reported confidence is the card's.
         let said = std::fs::read(fork.path().join(harness::CONFIDENCE));
         if let (Ok(said), true) = (said, name == NAMES[0]) {
             std::fs::write(ws.path().join(harness::CONFIDENCE), said)?;
         }
         // A saved fragment replays the merge and the briefs for free.
-        if let (Some(dir), Some(text)) = (std::env::var_os("HAUKSBEE_SECTION_DUMP"), &written) {
-            let _ = std::fs::write(
-                std::path::Path::new(&dir).join(format!("{name}.toml")),
-                text,
-            );
+        if let Some(dir) = std::env::var_os("HAUKSBEE_SECTION_DUMP") {
+            for (n, text) in &files {
+                let file = format!("{name}-{n}.toml");
+                let _ = std::fs::write(std::path::Path::new(&dir).join(file), text);
+            }
         }
-        Ok(written)
+        Ok(Wrote {
+            finished: finished(&files),
+            parts: files.into_iter().map(|f| f.1).collect(),
+        })
     };
     let identity = run(NAMES[0], "")?;
-    let known = identity.as_deref().and_then(entry).map(document);
-    let known = known.unwrap_or_default();
+    let known = identity
+        .parts
+        .first()
+        .and_then(|t| entry(t, &mut Vec::new()));
+    let known = known.map(document).unwrap_or_default();
     let drafted = std::thread::scope(|scope| {
         let mut agents = Vec::new();
         for name in &NAMES[1..] {
@@ -323,12 +509,69 @@ pub(super) fn draft(
             .map(ScopedJoinHandle::join)
             .collect::<Vec<_>>()
     });
-    let mut sections = vec![(NAMES[0], identity)];
-    for (name, text) in NAMES[1..].iter().zip(drafted) {
-        let text = text.map_err(|_| anyhow!("a section agent panicked"))?;
-        sections.push((*name, text?));
+    let mut wrote = vec![(NAMES[0], identity)];
+    for (name, w) in NAMES[1..].iter().zip(drafted) {
+        wrote.push((*name, w.map_err(|_| anyhow!("a section agent panicked"))??));
     }
-    merge(&sections)
+    let (mut sections, mut unfinished) = (Vec::new(), Vec::new());
+    for (name, w) in wrote {
+        if w.parts.is_empty() {
+            sections.push((name, None));
+        } else if !w.finished {
+            unfinished.push(format!(
+                "the {name} section agent's output is unfinished (it stopped, or its last file does \
+                 not end with `# end`): rows or keys of its section may be missing"
+            ));
+        }
+        sections.extend(w.parts.into_iter().map(|t| (name, Some(t))));
+    }
+    let mut merged = merge(&sections)?;
+    merged.gaps.extend(unfinished);
+    Ok(merged)
+}
+
+/// What one section agent left behind.
+struct Wrote {
+    /// Its `[[models]]` files, in order.
+    parts: Vec<String>,
+    /// Whether the last file ends with the closing line.
+    finished: bool,
+}
+
+/// The files an agent wrote in its sandbox, numbered: `model.toml` is 1 and
+/// `model-N.toml` is N.
+fn files_written(dir: &Path) -> Vec<(u32, String)> {
+    let mut files: Vec<(u32, String)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|f| {
+            let name = f.file_name().to_string_lossy().into_owned();
+            let n = match name.as_str() {
+                "model.toml" => 1,
+                _ => name
+                    .strip_prefix("model-")?
+                    .strip_suffix(".toml")?
+                    .parse()
+                    .ok()?,
+            };
+            Some((n, std::fs::read_to_string(f.path()).ok()?))
+        })
+        .collect();
+    files.sort_unstable();
+    files
+}
+
+/// Whether numbered files are a whole fragment: no file missing between the
+/// first and the last, and the last ends with the line `# end` (a closing
+/// code fence after it is allowed). An agent stopped midway has not written it.
+fn finished(files: &[(u32, String)]) -> bool {
+    let whole = files.iter().zip(1..).all(|((n, _), k)| *n == k);
+    let last = files.last().and_then(|f| {
+        let lines = f.1.lines().map(str::trim);
+        lines.rev().find(|l| !l.is_empty() && !l.starts_with("```"))
+    });
+    whole && last == Some("# end")
 }
 
 #[cfg(test)]
@@ -453,7 +696,7 @@ mod tests {
     #[test]
     fn each_brief_is_narrow_and_the_later_ones_carry_the_identity_keys() {
         let full = super::super::build_prompt("SN74LVC1T45", "digital", "");
-        let known = document(entry(IDENTITY).unwrap());
+        let known = document(entry(IDENTITY, &mut Vec::new()).unwrap());
         for name in NAMES {
             let brief = prompt("SN74LVC1T45", "digital", name, &known);
             assert!(brief.contains(&format!("YOUR SECTION: {name}")) && brief.len() < full.len());
@@ -468,8 +711,198 @@ mod tests {
         assert!(later.contains("belong to the switching agent"));
         let timing = prompt("X1", "digital", "switching", &known);
         assert!(
-            timing.contains("switching-characteristics table")
+            timing.contains("switching-characteristics")
                 && !timing.contains("[models.logic]")
+                && timing.contains("OUTPUT SHAPE")
+                && timing.contains("`# more`")
         );
+        // Every other agent ends its one file with the closing line.
+        assert!(
+            later.contains("End `model.toml` with the line `# end`")
+                && !later.contains("OUTPUT SHAPE")
+        );
+    }
+
+    /// Switching rows as the TI SN74LVC1T45 datasheet prints them (Section 5.6,
+    /// VCCA = 1.8 V), in the compact shape, and a typical-only capacitance row.
+    const TABLES: &str = r#"[[models]]
+[[models.table]]
+section = "Section 5.6"
+page = 7
+parameter = "tPLH propagation delay, A to B"
+unit = "ns"
+conditions = "VCCA = 1.8V ±0.15V, recommended operating free-air temperature range, see Figure 6-1"
+rows = [
+  { conditions = "VCCB = 1.8V ±0.15V", min = 3, max = 17.7 },
+  { conditions = "VCCB = 2.5V ±0.2V", min = 2.2, max = 10.3 },
+]
+[[models.table]]
+section = "Section 5.10"
+page = 9
+parameter = "CpdA power dissipation capacitance"
+unit = "pF"
+rows = [{ conditions = "VCCA = VCCB = 5V", typ = 21 }, { conditions = "VCCA = VCCB = 3.3V", typ = 20, unit = "nF" }]
+# end
+"#;
+
+    fn characteristics(m: &Merged) -> Vec<crate::schema::Characteristic> {
+        let rows = &card(m)["models"][0]["source"]["characteristic"];
+        let row = |r: &toml::Value| r.clone().try_into().unwrap();
+        rows.as_array().unwrap().iter().map(row).collect()
+    }
+
+    #[test]
+    fn compact_tables_expand_to_the_rows_they_stand_for() {
+        let m = merge(&sections([Some(IDENTITY), Some(TABLES), None])).unwrap();
+        assert!(m.gaps.is_empty(), "{:?}", m.gaps);
+        let rows = characteristics(&m);
+        assert_eq!(rows.len(), 4);
+        let at = &rows[1];
+        assert_eq!((at.min, at.typ, at.max), (Some(2.2), None, Some(10.3)));
+        assert_eq!(at.unit, "ns");
+        assert_eq!(
+            at.conditions,
+            "VCCB = 2.5V ±0.2V, VCCA = 1.8V ±0.15V, recommended operating free-air temperature range, see Figure 6-1"
+        );
+        assert_eq!(
+            at.basis,
+            "Section 5.6 (p. 7), tPLH propagation delay, A to B, min/max"
+        );
+        // No shared conditions: the row's own; a row's key overrides the block's.
+        assert_eq!(rows[2].conditions, "VCCA = VCCB = 5V");
+        assert_eq!(
+            rows[2].basis,
+            "Section 5.10 (p. 9), CpdA power dissipation capacitance, typ"
+        );
+        assert_eq!((rows[2].unit.as_str(), rows[3].unit.as_str()), ("pF", "nF"));
+        assert!(!m.card.contains("models.table"));
+    }
+
+    #[test]
+    fn a_table_block_or_row_it_cannot_read_is_reported_not_dropped() {
+        let bad = "[[models]]\n[[models.table]]\nsection = \"S\"\nparameter = \"a\"\nunit = \"V\"\n\
+            [[models.table]]\nparameter = \"b\"\nunit = \"V\"\nrows = [{ min = 1 }, 3, { parameter = \"c\", max = 2 }]\n";
+        let m = merge(&sections([Some(IDENTITY), Some(bad), Some(ELECTRICAL)])).unwrap();
+        let said = m.problems();
+        assert!(
+            said.contains("table block 1: it has no `rows` array"),
+            "{said}"
+        );
+        assert!(
+            said.contains("table block 2: it names no `section`"),
+            "{said}"
+        );
+        assert!(
+            said.contains("table block 2, row 2: it is no inline table"),
+            "{said}"
+        );
+        // The rows that read are kept, with no section to cite.
+        let basis = characteristics(&m);
+        assert_eq!(
+            basis.iter().map(|r| r.basis.as_str()).collect::<Vec<_>>(),
+            ["b, min", "c, max"]
+        );
+    }
+
+    #[test]
+    fn one_agents_files_join_and_an_unfinished_one_is_told_from_a_finished_one() {
+        let rows = |tag: &str| {
+            format!("[[models]]\n[[models.table]]\nsection = \"S\"\nparameter = \"{tag}\"\nunit = \"V\"\nrows = [{{ max = 1 }}]\n")
+        };
+        let parts = [Some(rows("a")), Some(rows("b"))].map(|t| ("switching", t));
+        assert_eq!(characteristics(&merge(&parts).unwrap()).len(), 2);
+        let file = |n: u32, tail: &str| (n, format!("[[models]]\n{tail}\n"));
+        assert!(finished(&[file(1, "# end")]));
+        assert!(finished(&[file(1, "# more"), file(2, "# end\n```\n")]));
+        // Stopped between files, a file lost, nothing written, or a table cut short.
+        assert!(!finished(&[file(1, "# more"), file(2, "# more")]));
+        assert!(!finished(&[file(1, "# more"), file(3, "# end")]));
+        assert!(!finished(&[]));
+        assert!(!finished(&[(
+            1,
+            "[[models]]\n[[models.table]]\nsection = \"S\"\nrows = [".into()
+        )]));
+    }
+
+    #[test]
+    fn files_written_are_read_in_order_and_others_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, text) in [
+            ("model-2.toml", "b"),
+            ("model.toml", "a"),
+            ("model-x.toml", "?"),
+            ("notes.md", "n"),
+        ] {
+            std::fs::write(dir.path().join(name), text).unwrap();
+        }
+        assert_eq!(
+            files_written(dir.path()),
+            [(1, "a".to_string()), (2, "b".to_string())]
+        );
+    }
+
+    /// The electrical agent of a real run abstained (`identity_only`, no
+    /// `[models.logic]`) on a part whose rows give its I/O levels; its params
+    /// as it wrote them (TI SN74LVC1T45, Tables 5.3 and 5.5).
+    const ABSTAINED: &str = r#"[[models]]
+description = "dual-supply 1-bit direction-controlled level translator"
+[models.params]
+identity_only = true
+warning = "ABSTAIN: the [models.logic.sense] syntax is not confirmed here, so no [models.logic] table is written"
+unlocked_by = "confirmed [models.logic.sense] schema for bidirectional pins A and B"
+supply_pin = "1" # VCCA, pad 1
+gnd_pin = "2" # GND, pad 2
+voh = { min = 2.4, unit = "V", conditions = "IOH = -24 mA; VI = VIH; VCCA = 3 V; VCCB = 3 V", basis = "Table 5.5, VOH, MIN" }
+vol = { max = 0.55, unit = "V", conditions = "IOL = 24 mA; VI = VIL; VCCA = 3 V; VCCB = 3 V", basis = "Table 5.5, VOL, MAX" }
+"#;
+
+    #[test]
+    fn an_abstention_with_io_levels_and_no_behaviour_is_a_gap_for_the_fix_agent() {
+        let run = |electrical: &str, kind: &str| {
+            let identity = IDENTITY.replace("digital", kind);
+            let m = merge(&sections([Some(&identity), None, Some(electrical)])).unwrap();
+            (m.problems(), m.gaps.len())
+        };
+        let (said, gaps) = run(ABSTAINED, "digital");
+        assert_eq!(gaps, 1);
+        assert!(
+            said.contains("abstains from behaviour") && said.contains("[models.logic]"),
+            "{said}"
+        );
+        // Behaviour written, no abstention, no level data, or another kind: nothing to add.
+        let logic = format!("{ABSTAINED}[models.logic]\ninputs = [\"a\"]\noutputs = [\"b\"]\n");
+        assert_eq!(run(&logic, "digital").1, 0);
+        assert_eq!(
+            run(
+                &ABSTAINED.replace("identity_only = true", "identity_only = false"),
+                "digital"
+            )
+            .1,
+            0
+        );
+        assert_eq!(run(ABSTAINED, "opamp").1, 0);
+        let bare = "[[models]]\n[models.params]\nidentity_only = true\nwarning = \"w\"\nunlocked_by = \"u\"\n";
+        assert_eq!(run(bare, "digital").1, 0);
+        // A level printed only as a row counts too.
+        let rows = format!("{bare}[[models.source.characteristic]]\nparameter = \"VOH high-level output voltage\"\nmin = 2.4\nunit = \"V\"\nconditions = \"c\"\nbasis = \"b\"\n");
+        assert_eq!(run(&rows, "digital").1, 1);
+    }
+
+    /// Replay of recorded fragments for free: `HAUKSBEE_REPLAY_DIR` holds one
+    /// agent's files (`model.toml`, `model-2.toml`, ...); the merged card is
+    /// written beside them as `merged.toml`.
+    #[test]
+    #[ignore = "replays saved fragments from HAUKSBEE_REPLAY_DIR"]
+    fn replay_saved_fragments() {
+        let dir = std::path::PathBuf::from(std::env::var_os("HAUKSBEE_REPLAY_DIR").unwrap());
+        let files = files_written(&dir);
+        assert!(finished(&files), "unfinished");
+        let parts: Vec<_> = files
+            .into_iter()
+            .map(|f| ("switching", Some(f.1)))
+            .collect();
+        let merged = merge(&parts).unwrap();
+        assert!(merged.gaps.is_empty(), "{:?}", merged.gaps);
+        std::fs::write(dir.join("merged.toml"), merged.card).unwrap();
     }
 }
