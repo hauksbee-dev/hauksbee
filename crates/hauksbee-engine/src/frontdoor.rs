@@ -1595,11 +1595,17 @@ fn analyze_normalized_with_context(
         &board.name,
         &bind_summary,
         &drc_structured,
+        clearance_rule_source.as_ref(),
         &actual_findings,
         crate::reports::check::check_gate_fails(&drc_structured, &lint, &si, usbc.as_ref()),
     )
     .with_evidence(&evidence)
     .with_condition(crate::checks::indicators::intent_condition(&indicators))
+    .with_condition(
+        clearance_rule_source
+            .as_ref()
+            .and_then(|p| crate::reports::drc::default_rules_condition(&drc_structured, p)),
+    )
     .with_judgement_scope(crate::scope::JudgementScope::of(
         board,
         bound,
@@ -3786,7 +3792,7 @@ fn main {
             findings.iter().filter(|f| f.severity == "serious").count(),
         );
         let mut machine =
-            crate::reports::check::machine_report("board", &bind, &drc, findings, gate);
+            crate::reports::check::machine_report("board", &bind, &drc, None, findings, gate);
         machine.verdict_conditions = conditions.iter().map(ToString::to_string).collect();
         let mut report = WebReport {
             ok: true,
