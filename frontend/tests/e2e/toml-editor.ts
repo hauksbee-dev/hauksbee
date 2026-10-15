@@ -53,13 +53,17 @@ await browserFlow({
   await page.waitForSelector('[data-testid="report-verdict"]', { timeout: 120_000 })
   await page.click('[data-testid="nav-checks"]')
   await page.waitForSelector('[data-testid="checks-panel"]')
+  ok('one surface at a time: the builder is up first, the editor is not mounted', await page.locator(`${EDITOR} .cm-editor`).count() === 0)
+  await page.click('[data-testid="mode-toml"]')
   await page.waitForSelector(`${EDITOR} .cm-content`, { timeout: 20_000 })
   ok('the editor loaded (lazily) in the spec pane', await page.locator(`${EDITOR} .cm-editor`).count() === 1)
+  ok('and the builder stepped aside', await page.locator('[data-testid="add-check"]').count() === 0)
   ok('the old raw-mode toggle is gone', await page.locator('[data-testid="raw-toggle"]').count() === 0)
   await settle(page, 1_000) // the scaffolded supplies land
   await shoot(page, '01-editor-dark')
 
   step('a comment above an assertion survives a builder edit')
+  await page.click('[data-testid="mode-builder"]')
   await page.click('[data-testid="add-check"]')
   await page.click('[data-testid="kind-voltage"]')
   await page.fill('[data-testid="check-editor"] [data-testid="field-net"]', 'GND')
@@ -67,12 +71,16 @@ await browserFlow({
   await page.click('[data-testid="editor-add"]')
   await settle(page)
   // Put "# my note" right above that (last) [[assert]] header in the TOML.
+  await page.click('[data-testid="mode-toml"]')
   await page.locator(`${EDITOR} .cm-line`, { hasText: '[[assert]]' }).last().click()
   await page.keyboard.press('Home')
   await page.keyboard.insertText('# my note\n')
   await settle(page)
+  await page.click('[data-testid="mode-builder"]')
   await page.locator('label', { hasText: 'max V' }).locator('input').last().fill('0.25')
   await settle(page)
+  await page.click('[data-testid="mode-toml"]')
+  await page.waitForSelector(`${EDITOR} .cm-content`)
   const afterBuilder = await editorText(page)
   const at = afterBuilder.lastIndexOf('# my note')
   ok('the comment is still directly above the assertion, and only max changed',
@@ -87,16 +95,20 @@ await browserFlow({
   await page.keyboard.press('Backspace')
   await page.keyboard.insertText('75')
   await settle(page)
-  const builderMax = await page.locator('label', { hasText: 'max V' }).locator('input').last().inputValue()
-  ok('the builder shows 0.75', builderMax === '0.75', builderMax)
   ok('focus stayed in the editor', await page.evaluate(sel => !!document.activeElement?.closest(sel), EDITOR))
   await page.keyboard.insertText(' # tuned')
   await settle(page)
   ok('typing carries on where it was', (await editorText(page)).includes('max = 0.75 # tuned'))
+  await page.click('[data-testid="mode-builder"]')
+  const builderMax = await page.locator('label', { hasText: 'max V' }).locator('input').last().inputValue()
+  ok('the builder shows 0.75', builderMax === '0.75', builderMax)
+  await page.click('[data-testid="mode-toml"]')
+  await page.waitForSelector(`${EDITOR} .cm-content`)
 
   step('run, and the gutter carries each verdict')
   await page.getByTestId('run-checks').click()
-  await page.getByTestId('check-results').waitFor({ timeout: 120_000 }).catch(() => undefined)
+  await page.getByTestId('run-count-pass').or(page.getByTestId('run-count-fail')).or(page.getByTestId('run-count-invalid'))
+    .first().waitFor({ timeout: 120_000 }).catch(() => undefined)
   const marks = page.locator(`${EDITOR} [data-testid="gutter-result"]`)
   await marks.first().waitFor({ timeout: 10_000 }).catch(() => undefined)
   const asserts = ((await editorText(page)).match(/^\[\[assert\]\]/gm) ?? []).length
@@ -106,10 +118,10 @@ await browserFlow({
   await shoot(page, '03-gutter-dark')
   if (await marks.count() > 0) {
     await marks.last().click()
-    await settle(page, 900)
-    const row = page.locator(`.check-row[data-row-id="${asserts}"]`)
-    const box = (await row.count()) ? await row.boundingBox() : null
-    ok('clicking a verdict dot brings the top of its row into view', !!box && box.y >= -2 && box.y < 300, JSON.stringify(box))
+    await settle(page, 600)
+    const picked = await page.evaluate(() => (window.getSelection()?.toString() ?? ''))
+    ok('clicking a verdict dot selects that assertion in the editor', /\[\[assert\]\]/.test(picked) || (await page.locator(`${EDITOR} .cm-selectionBackground`).count()) > 0, JSON.stringify(picked.slice(0, 40)))
+    ok('the run summary names the verdicts and jumps to them', (await page.locator('[data-testid^="run-count-"]').count()) > 0)
     await shoot(page, '04-gutter-jump')
   }
 

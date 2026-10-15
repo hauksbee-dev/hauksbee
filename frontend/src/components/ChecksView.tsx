@@ -24,7 +24,8 @@ import { BuilderSection, Field, RemoveButton } from './checks/pieces'
 import { InteractionBuilder } from './checks/InteractionBuilder'
 import { SensorBuilder } from './checks/SensorBuilder'
 import { AssertionGroups, hasNoGroups } from './checks/AssertionGroups'
-import { SpecPane } from './checks/SpecPane'
+import { SpecPane, type SpecMode } from './checks/SpecPane'
+import { statusOf, type RunStatus } from './checks/RunStrip'
 import { AddCheckMenu } from './checks/AddCheckMenu'
 import type { RemedyActions } from './checks/Remedies'
 import type { GutterResult } from './editor/TomlEditor'
@@ -33,6 +34,8 @@ import { WritePart } from './WritePart'
 /** The spec body that asks `/api/ci/scaffold` for the starter spec rather than
  *  a run; the server does not read it as TOML. */
 const SCAFFOLD_SPEC = '# hauksbee:scaffold'
+
+const MODE_KEY = 'hauksbee.checks.mode'
 
 // The Checks view: compose the body of a hauksbee-ci spec, run it through the
 // REAL hauksbee-ci binary (`POST /api/check` shells the sibling install), and
@@ -267,6 +270,15 @@ export function ChecksView({
   )
   const previousFirmware = useRef<File | null>(firmwareFile)
   const [addOpen, setAddOpen] = useState(false)
+  // One working surface at a time: the builder or the spec TOML. The choice is
+  // remembered across visits (a per-browser convenience, never required).
+  const [mode, setModeState] = useState<SpecMode>(() => {
+    try { return localStorage.getItem(MODE_KEY) === 'toml' ? 'toml' : 'builder' } catch { return 'builder' }
+  })
+  const setMode = (next: SpecMode) => {
+    setModeState(next)
+    try { localStorage.setItem(MODE_KEY, next) } catch { /* private window: the choice just is not remembered */ }
+  }
   const [select, setSelect] = useState<{ start: number; end: number; seq: number } | null>(null)
   const [running, setRunning] = useState(false)
   // The last run's response, plus the exact spec text it ran, so results can
@@ -679,15 +691,25 @@ export function ChecksView({
     stale,
   })), [results, stale])
 
-  /** The gutter's verdict dot: show that assertion's row (or the results). */
+  /** A verdict's place in the active surface: the gutter dot's click, or the run
+   *  strip's count. In the TOML it selects that assertion's header line; in the
+   *  builder it brings the row into view. */
   const jumpToResult = (assertIndex: number) => {
+    if (mode === 'toml') {
+      const at = Array.from(specText.matchAll(/^\[\[assert\]\]/gm))[assertIndex]?.index
+      if (at !== undefined) showInText(at)
+      return
+    }
     const row = document.querySelector<HTMLElement>(`.check-row[data-row-id="${assertIndex + 1}"]`)
-      ?? document.querySelector<HTMLElement>('[data-testid="check-results"]')
     if (!row) return
     // 'start': a row with long evidence is taller than the viewport, and
     // centring it would scroll its heading (the part that names it) away.
     row.scrollIntoView({ behavior: 'smooth', block: 'start' })
     row.animate?.([{ boxShadow: 'inset 0 0 0 2px var(--copper)' }, { boxShadow: 'inset 0 0 0 2px transparent' }], { duration: 1200 })
+  }
+  const jumpToStatus = (status: RunStatus) => {
+    const first = results.findIndex(r => statusOf(r) === status)
+    if (first >= 0) jumpToResult(first)
   }
 
   // One click per remedy. Each edits the text the way a hand edit would, so
@@ -762,269 +784,266 @@ export function ChecksView({
 
   /** Select a kept-as-written block's first line in the TOML pane. */
   const showInText = (offset: number) => {
+    setMode('toml')
     const end = specText.indexOf('\n', offset)
     setSelect(prev => ({ start: offset, end: end < 0 ? specText.length : end, seq: (prev?.seq ?? 0) + 1 }))
   }
 
-  return (
-    <div className="h-full overflow-y-auto view-enter" data-testid="checks-panel">
-      <div className="max-w-6xl mx-auto px-6 pt-5 pb-16">
-        <div className="text-[13px] leading-relaxed mb-4" style={{ color: 'var(--silk-dim)', maxWidth: '46rem' }}>
-          Pick what must hold (a rail voltage, a blink, a print, nothing over-stressed), run it
-          here, then take the spec file with you; the same file <code className="hb-inline">hauksbee-ci</code>{' '}
-          runs in a pipeline. Click a trace on the Board view to start a check on that net.
+  // The builder surface. While the text does not parse, it shows the last spec
+  // that did, read-only: an edit here would have nothing to patch.
+  const builder = (
+    <div className="min-w-0 checks-flush">
+      {parseError && (
+        <div
+          data-testid="builder-paused"
+          role="status"
+          className="rounded-lg px-3 py-2.5 mb-4 text-[13px] leading-relaxed"
+          style={{ background: 'var(--warn-bg)', border: '1px solid var(--warn-border)', color: 'var(--silk)' }}
+        >
+          The TOML has a syntax error on line {parseError.line}: {parseError.message}. The builder
+          is paused on the last version that parsed, and picks up again as soon as the text does.
+        </div>
+      )}
+
+      {/* While the text does not parse, the builder shows the last spec that
+          did, read-only: an edit here would have nothing to patch. */}
+      <fieldset disabled={!parsed} className="min-w-0" style={{ border: 0, padding: 0, margin: 0, opacity: parsed ? 1 : 0.6 }}>
+        {/* Spec identity */}
+        <div className="hb-card px-4 py-3 mb-4 flex flex-wrap items-center gap-x-5 gap-y-2">
+          <label className="inline-flex items-center gap-2 text-[12px] min-w-0 max-w-full" style={{ color: 'var(--silk-faint)' }}>
+            spec name
+            <input
+              className="hb-input min-w-0 flex-1"
+              style={{ maxWidth: 220 }}
+              value={root.name}
+              onChange={e => updateRoot({ name: e.target.value })}
+            />
+          </label>
+          <Field label="run length (ms)" value={root.duration} width={70} onChange={duration => updateRoot({ duration })} />
+          {!firmwareFile && (
+            <span className="text-[12px]" style={{ color: 'var(--silk-faint)' }}>
+              no firmware loaded: add it on the Board view to check UART/blink/boot
+            </span>
+          )}
         </div>
 
+        {/* Power. The net picker gives up width first (it is the one
+            field with slack), then the row wraps; `remove` is last in
+            reading order but never last in line, so it stays inside
+            the card at every width. */}
+        <BuilderSection
+          title="Power supplies"
+          actions={<span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>detected from the board, adjust if wrong</span>}
+        >
+          {supplies.map(({ row: s, index }) => {
+            const patch = (next: Partial<SupplyRow>) => updateSupply(index, next)
+            return (
+              <div
+                key={index}
+                data-testid="supply-row"
+                data-net={s.net.trim()}
+                className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-1.5"
+              >
+                <input
+                  className="hb-input min-w-0 flex-1"
+                  style={{ maxWidth: 180 }}
+                  list="net-options"
+                  value={s.net}
+                  placeholder="net (e.g. +5V)"
+                  onChange={e => patch({ net: e.target.value })}
+                />
+                <select
+                  className="hb-input"
+                  aria-label={`source behind ${s.net || 'this supply'}`}
+                  value={s.kind ?? 'ideal'}
+                  onChange={e => patch({ kind: e.target.value as SupplyRow['kind'] })}
+                >
+                  <option value="ideal">ideal</option>
+                  <option value="bench">bench supply</option>
+                  <option value="usb">USB port</option>
+                </select>
+                {s.kind === 'usb' ? (
+                  <select
+                    className="hb-input"
+                    aria-label="USB profile"
+                    value={s.usb ?? USB_PROFILES[1]}
+                    onChange={e => patch({ usb: e.target.value })}
+                  >
+                    {USB_PROFILES.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                ) : (
+                  <Field label="volts" testId="supply-volts" value={s.volts} width={70} onChange={volts => patch({ volts })} />
+                )}
+                {s.kind === 'bench' && (
+                  <Field label="limit (A)" value={s.limit ?? ''} width={60} onChange={limit => patch({ limit })} />
+                )}
+                <RemoveButton
+                  className="text-[12px] shrink-0"
+                  onClick={() => removeTable('supply', index)}
+                />
+              </div>
+            )
+          })}
+          <button
+            type="button"
+            className="hb-press text-[12px] cursor-pointer inline-flex items-center gap-1"
+            style={{ color: 'var(--silk-dim)', background: 'none', border: 'none' }}
+            onClick={() => appendSupply({ net: '', volts: '5.0' })}
+          >
+            <PlusIcon size={12} /> add a supply
+          </button>
+        </BuilderSection>
+
+        <InteractionBuilder
+          peripherals={peripherals}
+          validation={peripheralValidation}
+          onAdd={kind => addPeripheral(kind)}
+          onUpdate={updatePeripheral}
+          onRemove={rowId => removeTable('peripheral', rowId - 1)}
+        />
+
+        <SensorBuilder
+          sensors={sensors}
+          validation={sensorValidation}
+          catalog={sensorCatalog}
+          catalogError={sensorCatalogError}
+          liveRequests={sensorLiveRequests}
+          liveActionResult={liveActionResult}
+          liveAttachAvailable={liveRegisterMapAvailable && !!onAttachRegisterMapLive}
+          nextInputId={() => nextSensorInputId.current++}
+          onAdd={() => addSensor()}
+          onUpdate={updateSensor}
+          onRemove={rowId => removeTable('sensor', rowId - 1)}
+          onAttachLive={attachSensorLive}
+        />
+
+        <AssertionGroups
+          checks={checks}
+          validation={validation}
+          stale={stale}
+          resultForRow={resultForRow}
+          assumptions={run?.response.assumptions ?? []}
+          inventory={run?.response.inventory ?? []}
+          onAdd={addCheck}
+          onUpdate={updateCheck}
+          onRemove={id => removeTable('assert', id - 1)}
+        />
+
+        {/* What the builder shows but leaves to the TOML pane: tables and
+            keys outside its vocabulary, kept byte for byte. */}
+        {model.kept.length > 0 && (
+          <section className="hb-card px-4 py-3.5 mb-4" data-testid="kept-as-written">
+            <h2 className="text-[11px] font-bold tracking-widest uppercase mb-1" style={{ margin: 0, color: 'var(--silk-faint)' }}>
+              Kept as written
+            </h2>
+            <p className="text-[12px] mt-1 mb-2 leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
+              These run as written. The builder does not edit them and never changes them;
+              click one to edit it in the TOML.
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {model.kept.map(k => (
+                <button
+                  key={`${k.offset}:${k.label}`}
+                  type="button"
+                  data-testid="kept-chip"
+                  onClick={() => showInText(k.offset)}
+                  className="hb-chip hb-press px-2.5 py-1 text-[12px]"
+                  style={{ fontFamily: 'var(--font-mono)' }}
+                >
+                  {k.label}
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Every check removed. A blank area is a question the
+            interface asked and then refused to answer: say what is
+            missing, what happens if it stays missing (the run is
+            refused, not silently empty), and the one check worth
+            starting from. */}
+        {hasNoGroups(checks) && keptAsserts === 0 && (
+          <div className="mb-4">
+            <EmptyState
+              testId="checks-empty"
+              title="No checks in this spec yet"
+              body={<>
+                A spec with no assertions has nothing to pass or fail, so the run is
+                refused rather than reported as green. Add one below, or click a trace
+                on the Board view to start from a real net.
+              </>}
+              action={
+                <button
+                  type="button"
+                  data-testid="checks-empty-add"
+                  onClick={() => addCheck('no_faults')}
+                  className="hb-btn-primary hb-press px-3.5 py-2 text-[13px] inline-flex items-center gap-1.5"
+                >
+                  <PlusIcon size={13} /> Start with “nothing over-stressed”
+                </button>
+              }
+            />
+          </div>
+        )}
+
+        {/* The one way to add a check here: every kind the engine knows,
+            grouped; the board's check-this dock is the other door. */}
+        <AddCheckMenu open={addOpen} onOpenChange={setAddOpen} />
+      </fieldset>
+    </div>
+  )
+
+  const firmwareChoice = firmwareFile ? (
+    <FirmwareRunChoice
+      firmware={firmwareFile}
+      include={includeFirmware}
+      avrAvailable={avrAvailable}
+      running={running}
+      onChange={setIncludeFirmware}
+    />
+  ) : null
+
+  return (
+    <div className="h-full overflow-y-auto view-enter" data-testid="checks-panel">
+      <div className="max-w-5xl mx-auto px-6 pt-3 pb-16">
         {/* The one net picker every field in this view completes from. */}
         <datalist id="net-options">
           {nets.map(n => <option key={n} value={n} />)}
         </datalist>
 
-        {/* Two columns where both fit, one stacked column below 1024px. The
-            track sizes and the stacking live on `.checks-grid` in index.css,
-            next to the rest of this surface's box discipline. */}
-        <div className="checks-grid gap-5">
-          {/* ── Left: the builder ── */}
-          <div className="min-w-0 checks-flush">
-            {firmwareFile && (
-              <FirmwareRunChoice
-                firmware={firmwareFile}
-                include={includeFirmware}
-                avrAvailable={avrAvailable}
-                running={running}
-                onChange={setIncludeFirmware}
-              />
-            )}
-
-            {parseError && (
-              <div
-                data-testid="builder-paused"
-                role="status"
-                className="rounded-lg px-3 py-2.5 mb-4 text-[13px] leading-relaxed"
-                style={{ background: 'var(--warn-bg)', border: '1px solid var(--warn-border)', color: 'var(--silk)' }}
-              >
-                The TOML has a syntax error on line {parseError.line}: {parseError.message}. The builder
-                is paused on the last version that parsed, and picks up again as soon as the text does.
-              </div>
-            )}
-
-            {/* While the text does not parse, the builder shows the last spec that
-                did, read-only: an edit here would have nothing to patch. */}
-            <fieldset disabled={!parsed} className="min-w-0" style={{ border: 0, padding: 0, margin: 0, opacity: parsed ? 1 : 0.6 }}>
-              {/* Spec identity */}
-              <div className="hb-card px-4 py-3 mb-4 flex flex-wrap items-center gap-x-5 gap-y-2">
-                <label className="inline-flex items-center gap-2 text-[12px] min-w-0 max-w-full" style={{ color: 'var(--silk-faint)' }}>
-                  spec name
-                  <input
-                    className="hb-input min-w-0 flex-1"
-                    style={{ maxWidth: 220 }}
-                    value={root.name}
-                    onChange={e => updateRoot({ name: e.target.value })}
-                  />
-                </label>
-                <Field label="run length (ms)" value={root.duration} width={70} onChange={duration => updateRoot({ duration })} />
-                <span className="text-[12px]" style={{ color: 'var(--silk-faint)' }}>
-                  {firmwareFile
-                    ? <>firmware: <span style={{ color: includeFirmware ? 'var(--ok)' : 'var(--silk-dim)', fontFamily: 'var(--font-mono)' }}>{firmwareFile.name}</span>{' '}
-                      ({includeFirmware ? 'included in this run' : 'staged, excluded from this run'})</>
-                    : 'no firmware loaded: add it on the Board view to check UART/blink/boot'}
-                </span>
-              </div>
-
-              {/* Power. The net picker gives up width first (it is the one
-                  field with slack), then the row wraps; `remove` is last in
-                  reading order but never last in line, so it stays inside
-                  the card at every width. */}
-              <BuilderSection
-                title="Power supplies"
-                actions={<span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>detected from the board, adjust if wrong</span>}
-              >
-                {supplies.map(({ row: s, index }) => {
-                  const patch = (next: Partial<SupplyRow>) => updateSupply(index, next)
-                  return (
-                    <div
-                      key={index}
-                      data-testid="supply-row"
-                      data-net={s.net.trim()}
-                      className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-1.5"
-                    >
-                      <input
-                        className="hb-input min-w-0 flex-1"
-                        style={{ maxWidth: 180 }}
-                        list="net-options"
-                        value={s.net}
-                        placeholder="net (e.g. +5V)"
-                        onChange={e => patch({ net: e.target.value })}
-                      />
-                      <select
-                        className="hb-input"
-                        aria-label={`source behind ${s.net || 'this supply'}`}
-                        value={s.kind ?? 'ideal'}
-                        onChange={e => patch({ kind: e.target.value as SupplyRow['kind'] })}
-                      >
-                        <option value="ideal">ideal</option>
-                        <option value="bench">bench supply</option>
-                        <option value="usb">USB port</option>
-                      </select>
-                      {s.kind === 'usb' ? (
-                        <select
-                          className="hb-input"
-                          aria-label="USB profile"
-                          value={s.usb ?? USB_PROFILES[1]}
-                          onChange={e => patch({ usb: e.target.value })}
-                        >
-                          {USB_PROFILES.map(p => <option key={p} value={p}>{p}</option>)}
-                        </select>
-                      ) : (
-                        <Field label="volts" testId="supply-volts" value={s.volts} width={70} onChange={volts => patch({ volts })} />
-                      )}
-                      {s.kind === 'bench' && (
-                        <Field label="limit (A)" value={s.limit ?? ''} width={60} onChange={limit => patch({ limit })} />
-                      )}
-                      <RemoveButton
-                        className="text-[12px] shrink-0"
-                        onClick={() => removeTable('supply', index)}
-                      />
-                    </div>
-                  )
-                })}
-                <button
-                  type="button"
-                  className="hb-press text-[12px] cursor-pointer inline-flex items-center gap-1"
-                  style={{ color: 'var(--silk-dim)', background: 'none', border: 'none' }}
-                  onClick={() => appendSupply({ net: '', volts: '5.0' })}
-                >
-                  <PlusIcon size={12} /> add a supply
-                </button>
-              </BuilderSection>
-
-              <InteractionBuilder
-                peripherals={peripherals}
-                validation={peripheralValidation}
-                onAdd={kind => addPeripheral(kind)}
-                onUpdate={updatePeripheral}
-                onRemove={rowId => removeTable('peripheral', rowId - 1)}
-              />
-
-              <SensorBuilder
-                sensors={sensors}
-                validation={sensorValidation}
-                catalog={sensorCatalog}
-                catalogError={sensorCatalogError}
-                liveRequests={sensorLiveRequests}
-                liveActionResult={liveActionResult}
-                liveAttachAvailable={liveRegisterMapAvailable && !!onAttachRegisterMapLive}
-                nextInputId={() => nextSensorInputId.current++}
-                onAdd={() => addSensor()}
-                onUpdate={updateSensor}
-                onRemove={rowId => removeTable('sensor', rowId - 1)}
-                onAttachLive={attachSensorLive}
-              />
-
-              <AssertionGroups
-                checks={checks}
-                validation={validation}
-                stale={stale}
-                resultForRow={resultForRow}
-                assumptions={run?.response.assumptions ?? []}
-                inventory={run?.response.inventory ?? []}
-                onAdd={addCheck}
-                onUpdate={updateCheck}
-                onRemove={id => removeTable('assert', id - 1)}
-              />
-
-              {/* What the builder shows but leaves to the TOML pane: tables and
-                  keys outside its vocabulary, kept byte for byte. */}
-              {model.kept.length > 0 && (
-                <section className="hb-card px-4 py-3.5 mb-4" data-testid="kept-as-written">
-                  <h2 className="text-[11px] font-bold tracking-widest uppercase mb-1" style={{ margin: 0, color: 'var(--silk-faint)' }}>
-                    Kept as written
-                  </h2>
-                  <p className="text-[12px] mt-1 mb-2 leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
-                    These run as written. The builder does not edit them and never changes them;
-                    click one to edit it in the TOML.
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {model.kept.map(k => (
-                      <button
-                        key={`${k.offset}:${k.label}`}
-                        type="button"
-                        data-testid="kept-chip"
-                        onClick={() => showInText(k.offset)}
-                        className="hb-chip hb-press px-2.5 py-1 text-[12px]"
-                        style={{ fontFamily: 'var(--font-mono)' }}
-                      >
-                        {k.label}
-                      </button>
-                    ))}
-                  </div>
-                </section>
-              )}
-
-              {/* Every check removed. A blank area is a question the
-                  interface asked and then refused to answer: say what is
-                  missing, what happens if it stays missing (the run is
-                  refused, not silently empty), and the one check worth
-                  starting from. */}
-              {hasNoGroups(checks) && keptAsserts === 0 && (
-                <div className="mb-4">
-                  <EmptyState
-                    testId="checks-empty"
-                    title="No checks in this spec yet"
-                    body={<>
-                      A spec with no assertions has nothing to pass or fail, so the run is
-                      refused rather than reported as green. Add one below, or click a trace
-                      on the Board view to start from a real net.
-                    </>}
-                    action={
-                      <button
-                        type="button"
-                        data-testid="checks-empty-add"
-                        onClick={() => addCheck('no_faults')}
-                        className="hb-btn-primary hb-press px-3.5 py-2 text-[13px] inline-flex items-center gap-1.5"
-                      >
-                        <PlusIcon size={13} /> Start with “nothing over-stressed”
-                      </button>
-                    }
-                  />
-                </div>
-              )}
-
-              {/* The one way to add a check here: every kind the engine knows,
-                  grouped; the board's check-this dock is the other door. */}
-              <AddCheckMenu open={addOpen} onOpenChange={setAddOpen} />
-            </fieldset>
-          </div>
-
-          <SpecPane
-            specText={portableText}
-            specStem={specStem}
-            specFileName={specFileName}
-            bodyText={specText}
-            onBodyChange={setSpecText}
-            pathLines={pathLines}
-            select={select}
-            nets={nets}
-            refs={refs}
-            gutter={gutter}
-            onGutterClick={jumpToResult}
-            showAllResults={keptAsserts > 0 || !parsed}
-            stale={stale}
-            running={running}
-            canRun={!!boardFile}
-            preparing={scaffolding}
-            pulseRun={pulseRun}
-            remedyActions={remedyActions}
-            remedyEditor={modelEditor}
-            onRun={() => void runChecks()}
-            validationCount={validation.size}
-            result={result}
-            runKey={run?.toml}
-            workflowYml={workflowYml}
-            workflowPinned={workflowExportAvailable}
-            reportSerious={report.serious}
-          />
-        </div>
+        <SpecPane
+          mode={mode}
+          onModeChange={setMode}
+          builder={builder}
+          firmwareChoice={firmwareChoice}
+          onJump={jumpToStatus}
+          specText={portableText}
+          specStem={specStem}
+          specFileName={specFileName}
+          bodyText={specText}
+          onBodyChange={setSpecText}
+          pathLines={pathLines}
+          select={select}
+          nets={nets}
+          refs={refs}
+          gutter={gutter}
+          onGutterClick={jumpToResult}
+          showAllResults={keptAsserts > 0 || !parsed}
+          stale={stale}
+          running={running}
+          canRun={!!boardFile}
+          preparing={scaffolding}
+          pulseRun={pulseRun}
+          remedyActions={remedyActions}
+          remedyEditor={modelEditor}
+          onRun={() => void runChecks()}
+          validationCount={validation.size}
+          result={result}
+          runKey={run?.toml}
+          workflowYml={workflowYml}
+          workflowPinned={workflowExportAvailable}
+          reportSerious={report.serious}
+        />
       </div>
     </div>
   )

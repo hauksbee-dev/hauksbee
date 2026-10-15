@@ -95,7 +95,7 @@ await browserFlow(flow, async (page, { base, browser }) => {
 
   await composeChecks(page, 700)
   await page.click('[data-testid="run-checks"]')
-  await page.waitForSelector('[data-testid="check-results"], [data-testid="builder-validation"]', { timeout: 90_000 })
+  await page.waitForSelector('[data-testid="run-details-toggle"], [data-testid="builder-validation"]', { timeout: 90_000 })
   await settle(page, 900)
   const specText = (await page.locator('[data-testid="spec-preview"]').textContent()) ?? ''
   ok('the composed spec holds both assertions',
