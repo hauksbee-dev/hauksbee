@@ -92,7 +92,12 @@ fn the_web_report_carries_the_same_corner_verdicts() {
     };
     let pass = analyze("generic_pmos_switch_gate_0v.kicad_pcb");
     assert_eq!(pass.serious, 0, "{:?}", pass.sections);
-    assert_eq!(pass.verdict_conditions, [CONDITION]);
+    assert_eq!(pass.verdict_conditions[0], CONDITION);
+    assert_eq!(
+        serde_json::json!(pass.verdict_conditions),
+        json("generic_pmos_switch_gate_0v.kicad_pcb")["verdict_conditions"],
+        "the web and the CLI rest the pass on the same conditions"
+    );
     assert!(pass.headline.contains(CONDITION), "{}", pass.headline);
     let fail = analyze("generic_pmos_switch_gate_2v5.kicad_pcb");
     assert_eq!(fail.serious, 1, "{:?}", fail.sections);

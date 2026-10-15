@@ -583,10 +583,12 @@ pub fn note_ungated_findings(strict: bool, would_gate: bool) {
     }
 }
 
-/// The exit-3 counterpart of [`note_ungated_findings`]: a run the verdict
-/// cannot vouch for (partly judged, or inconclusive over unmodelled key parts)
-/// still exits 0 without `--strict`, and a CI log reader must not read that 0
-/// as a pass. Said once on stderr, so stdout stays the report.
+/// The exit-3 counterpart of [`note_ungated_findings`].
+///
+/// A run the verdict cannot vouch for (partly judged, or inconclusive over
+/// unmodelled key parts) still exits 0 without `--strict`, and a CI log reader
+/// must not read that 0 as a pass. Said once on stderr, so stdout stays the
+/// report.
 pub fn note_unvouched_exit(strict: bool, unvouched: bool) {
     if !strict && unvouched {
         eprintln!(
