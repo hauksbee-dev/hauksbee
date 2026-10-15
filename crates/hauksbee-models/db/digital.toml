@@ -15497,3 +15497,333 @@ reason = "ABSTAIN: Table 3 prints only supply-relative thresholds (minimum 0.7 V
 status = "unknown"
 parameter = "VIH2"
 reason = "ABSTAIN: Table 3 prints only supply-relative thresholds (minimum 0.75 VCC and maximum VCC + 0.5 V), with no absolute voltage values"
+
+# 24AA025UID 2-Kbit I2C EEPROM with unique ID (Microchip DS20005202A, copy from a distributor mirror because the Microchip URLs return 403): extraction pipeline with --kind digital, hand-fixed into two cards (8-lead and 6-lead SOT-23 pad numbering) gated by footprint_re; vih/vil at VCC = 3.3 V.
+[[models]]
+id = "24aa025uid_8pin"
+kind = "digital"
+description = "24AA025UID (8-lead PDIP/SOIC) 2-Kbit I2C serial EEPROM with preprogrammed 32-bit unique ID and 16-byte page write buffer; identity-only because the schema cannot represent EEPROM/I2C stateful bus behavior; does not model memory contents, serial protocol, unique-ID access, or write timing. ABSTAIN: no package was specified."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+
+[[models.source.pinout]]
+package = "8-lead PDIP/SOIC"
+pins = { "1" = "A0", "2" = "A1", "3" = "A2", "4" = "Vss", "5" = "SDA", "6" = "SCL", "7" = "NC", "8" = "Vcc" }
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "Datasheet publishes no validated model error interval."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "package"
+reason = "The datasheet lists 8-lead PDIP, 8-lead SOIC, and 6-lead SOT-23; one card per pad numbering (8-lead and 6-lead); the 5-lead SOT-23 is 24AA02UID only and has no card; footprint_re gates which card binds."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vhys"
+reason = "ABSTAIN: Table 1-1 specifies hysteresis only as 0.05 VCC, a supply-relative value with no absolute voltage."
+
+[[models.source.characteristic]]
+parameter = "Absolute maximum storage temperature"
+min = -65
+max = 150
+unit = "°C"
+conditions = "Storage temperature"
+basis = "Absolute Maximum Ratings, storage temperature"
+
+[[models.source.characteristic]]
+parameter = "Absolute maximum ambient temperature with power applied"
+min = -40
+max = 85
+unit = "°C"
+conditions = "Power applied"
+basis = "Absolute Maximum Ratings, ambient temperature with power applied"
+
+[[models.source.characteristic]]
+parameter = "Absolute maximum input/output voltage relative to VSS"
+min = -0.3
+unit = "V"
+conditions = "Maximum is VCC + 1.0 V relative to VSS"
+basis = "Absolute Maximum Ratings, all inputs and outputs w.r.t. VSS"
+
+[[models.source.characteristic]]
+parameter = "ESD protection on all pins"
+min = 4
+unit = "kV"
+conditions = "All pins"
+basis = "Absolute Maximum Ratings, ESD protection"
+
+[[models.source.characteristic]]
+parameter = "Recommended VCC operating range"
+min = 1.7
+max = 5.5
+unit = "V"
+conditions = "Industrial temperature range"
+basis = "Table 1-1 DC Characteristics, Industrial (I) conditions"
+
+[[models.source.characteristic]]
+parameter = "Maximum clock frequency"
+max = 400
+unit = "kHz"
+conditions = "100 kHz for VCC < 2.5 V"
+basis = "Device Selection Table, 24AA025UID Max. Clock Frequency; Note 1"
+
+[[models.source.characteristic]]
+parameter = "Operating temperature range"
+min = -40
+max = 85
+unit = "°C"
+conditions = "Industrial (I)"
+basis = "Device Selection Table, Temp. Ranges"
+
+[[models.source.characteristic]]
+parameter = "ILI, input leakage current"
+min = -1
+max = 1
+unit = "µA"
+conditions = "VIN = VSS or VCC; printed ±1 µA"
+basis = "Table 1-1, D5, max"
+
+[[models.source.characteristic]]
+parameter = "ILO, output leakage current"
+min = -1
+max = 1
+unit = "µA"
+conditions = "VOUT = VSS or VCC; printed ±1 µA"
+basis = "Table 1-1, D6, max"
+
+[[models.source.characteristic]]
+parameter = "CIN, COUT, pin capacitance"
+max = 10
+unit = "pF"
+conditions = "All inputs/outputs; VCC = 5.0 V, TA = 25°C, FCLK = 1 MHz; periodically sampled, not 100% tested"
+basis = "Table 1-1, D7, max"
+
+[[models.source.characteristic]]
+parameter = "ICC write, operating current"
+typ = 0.1
+max = 3
+unit = "mA"
+conditions = "VCC = 5.5 V, SCL = 400 kHz"
+basis = "Table 1-1, D8, typ/max"
+
+[[models.source.characteristic]]
+parameter = "ICC read, operating current"
+typ = 0.05
+max = 1
+unit = "mA"
+conditions = "Table 1-1 does not specify additional conditions for D9"
+basis = "Table 1-1, D9, typ/max"
+
+[[models.source.characteristic]]
+parameter = "ICCS, standby current"
+typ = 0.01
+max = 1
+unit = "µA"
+conditions = "Industrial; SDA = SCL = VCC; A0, A1, A2 = VSS"
+basis = "Table 1-1, D10, typ/max"
+
+[[models.source.references]]
+title = "24AA025UID.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "ec80c624e7ab04dad80e6bdb867f7afbe3ab79616cdecb41ebeba346f2710aeb"
+
+[models.match]
+value_re = "(?i)^24AA025UID"
+footprint_re = '''(?ix)
+    (SOIC|SO|SOP|DIP|PDIP|DIL) [-_]? 0?8 ([^0-9]|$)
+  | [-_] 8N ([^0-9]|$)
+'''
+
+[models.params]
+identity_only = true
+warning = "Identity-only datasheet card: the EEPROM's stateful I2C memory behavior cannot be represented by the digital logic schema."
+unlocked_by = "Specify a package and use a behavioral EEPROM/I2C model that represents storage and protocol state."
+vih = 2.31 # Table 1-1, D1: VIH = 0.7 VCC, evaluated at VCC = 3.3 V
+vil = 0.99 # Table 1-1, D2: VIL = 0.3 VCC, evaluated at VCC = 3.3 V
+vol = { max = 0.40, unit = "V", conditions = "IOL = 3.0 mA, VCC = 2.5 V", basis = "Table 1-1, D4, max" }
+supply_static_ua = 1 # Table 1-1 ICCS standby current, max 1 uA (typ 0.01 uA); the 0.1 mA typ is the write current
+
+[models.ratings]
+max_voltage_v = 6.5 # Source: Absolute Maximum Ratings, VCC
+
+[models.pins]
+# Table 2-1, PDIP and SOIC columns. The 6-pin SOT-23 numbers the pads differently and has its own card below.
+"1" = "a0"
+"2" = "a1"
+"3" = "a2"
+"4" = "vss"
+"5" = "sda"
+"6" = "scl"
+"7" = "nc"
+"8" = "vcc"
+
+[models.coverage]
+implements = []
+missing = ["eeprom_storage", "i2c_serial_protocol", "unique_id_access", "write_cycle_timing", "package_specific_pad_binding"]
+
+[[models]]
+id = "24aa025uid_sot23_6"
+kind = "digital"
+description = "24AA025UID (6-lead SOT-23) 2-Kbit I2C serial EEPROM with preprogrammed 32-bit unique ID and 16-byte page write buffer; identity-only because the schema cannot represent EEPROM/I2C stateful bus behavior; does not model memory contents, serial protocol, unique-ID access, or write timing. ABSTAIN: no package was specified."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+
+[[models.source.pinout]]
+package = "SOT-23-6"
+pins = { "1" = "SCL", "2" = "Vss", "3" = "SDA", "4" = "A1", "5" = "A0", "6" = "Vcc" }
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "Datasheet publishes no validated model error interval."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "package"
+reason = "The datasheet lists 8-lead PDIP, 8-lead SOIC, and 6-lead SOT-23; one card per pad numbering (8-lead and 6-lead); the 5-lead SOT-23 is 24AA02UID only and has no card; footprint_re gates which card binds."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vhys"
+reason = "ABSTAIN: Table 1-1 specifies hysteresis only as 0.05 VCC, a supply-relative value with no absolute voltage."
+
+[[models.source.characteristic]]
+parameter = "Absolute maximum storage temperature"
+min = -65
+max = 150
+unit = "°C"
+conditions = "Storage temperature"
+basis = "Absolute Maximum Ratings, storage temperature"
+
+[[models.source.characteristic]]
+parameter = "Absolute maximum ambient temperature with power applied"
+min = -40
+max = 85
+unit = "°C"
+conditions = "Power applied"
+basis = "Absolute Maximum Ratings, ambient temperature with power applied"
+
+[[models.source.characteristic]]
+parameter = "Absolute maximum input/output voltage relative to VSS"
+min = -0.3
+unit = "V"
+conditions = "Maximum is VCC + 1.0 V relative to VSS"
+basis = "Absolute Maximum Ratings, all inputs and outputs w.r.t. VSS"
+
+[[models.source.characteristic]]
+parameter = "ESD protection on all pins"
+min = 4
+unit = "kV"
+conditions = "All pins"
+basis = "Absolute Maximum Ratings, ESD protection"
+
+[[models.source.characteristic]]
+parameter = "Recommended VCC operating range"
+min = 1.7
+max = 5.5
+unit = "V"
+conditions = "Industrial temperature range"
+basis = "Table 1-1 DC Characteristics, Industrial (I) conditions"
+
+[[models.source.characteristic]]
+parameter = "Maximum clock frequency"
+max = 400
+unit = "kHz"
+conditions = "100 kHz for VCC < 2.5 V"
+basis = "Device Selection Table, 24AA025UID Max. Clock Frequency; Note 1"
+
+[[models.source.characteristic]]
+parameter = "Operating temperature range"
+min = -40
+max = 85
+unit = "°C"
+conditions = "Industrial (I)"
+basis = "Device Selection Table, Temp. Ranges"
+
+[[models.source.characteristic]]
+parameter = "ILI, input leakage current"
+min = -1
+max = 1
+unit = "µA"
+conditions = "VIN = VSS or VCC; printed ±1 µA"
+basis = "Table 1-1, D5, max"
+
+[[models.source.characteristic]]
+parameter = "ILO, output leakage current"
+min = -1
+max = 1
+unit = "µA"
+conditions = "VOUT = VSS or VCC; printed ±1 µA"
+basis = "Table 1-1, D6, max"
+
+[[models.source.characteristic]]
+parameter = "CIN, COUT, pin capacitance"
+max = 10
+unit = "pF"
+conditions = "All inputs/outputs; VCC = 5.0 V, TA = 25°C, FCLK = 1 MHz; periodically sampled, not 100% tested"
+basis = "Table 1-1, D7, max"
+
+[[models.source.characteristic]]
+parameter = "ICC write, operating current"
+typ = 0.1
+max = 3
+unit = "mA"
+conditions = "VCC = 5.5 V, SCL = 400 kHz"
+basis = "Table 1-1, D8, typ/max"
+
+[[models.source.characteristic]]
+parameter = "ICC read, operating current"
+typ = 0.05
+max = 1
+unit = "mA"
+conditions = "Table 1-1 does not specify additional conditions for D9"
+basis = "Table 1-1, D9, typ/max"
+
+[[models.source.characteristic]]
+parameter = "ICCS, standby current"
+typ = 0.01
+max = 1
+unit = "µA"
+conditions = "Industrial; SDA = SCL = VCC; A0, A1, A2 = VSS"
+basis = "Table 1-1, D10, typ/max"
+
+[[models.source.references]]
+title = "24AA025UID.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "ec80c624e7ab04dad80e6bdb867f7afbe3ab79616cdecb41ebeba346f2710aeb"
+
+[models.match]
+value_re = "(?i)^24AA025UID"
+footprint_re = '(?i)SOT[-_]?23[-_]?6([^0-9]|$)'
+
+[models.params]
+identity_only = true
+warning = "Identity-only datasheet card: the EEPROM's stateful I2C memory behavior cannot be represented by the digital logic schema."
+unlocked_by = "Specify a package and use a behavioral EEPROM/I2C model that represents storage and protocol state."
+vih = 2.31 # Table 1-1, D1: VIH = 0.7 VCC, evaluated at VCC = 3.3 V
+vil = 0.99 # Table 1-1, D2: VIL = 0.3 VCC, evaluated at VCC = 3.3 V
+vol = { max = 0.40, unit = "V", conditions = "IOL = 3.0 mA, VCC = 2.5 V", basis = "Table 1-1, D4, max" }
+supply_static_ua = 1 # Table 1-1 ICCS standby current, max 1 uA (typ 0.01 uA); the 0.1 mA typ is the write current
+
+[models.ratings]
+max_voltage_v = 6.5 # Source: Absolute Maximum Ratings, VCC
+
+[models.pins]
+# Table 2-1, 6-Pin SOT-23 column (A2 is not connected on this package).
+"1" = "scl"
+"2" = "vss"
+"3" = "sda"
+"4" = "a1"
+"5" = "a0"
+"6" = "vcc"
+
+[models.coverage]
+implements = []
+missing = ["eeprom_storage", "i2c_serial_protocol", "unique_id_access", "write_cycle_timing", "package_specific_pad_binding"]
