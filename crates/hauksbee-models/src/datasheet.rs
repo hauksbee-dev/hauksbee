@@ -1964,11 +1964,14 @@ OUTPUT (TOML only, starting with [[models]]):
 /// pattern of `table`; the `(key, pattern)` pairs rewritten.
 fn unanchor_match(table: &mut toml_edit::Table) -> Vec<(&'static str, String)> {
     let mut rewritten = Vec::new();
-    let Some(rules) = table.get_mut("match").and_then(Item::as_table_like_mut) else {
+    let Some(rules) = table
+        .get_mut("match")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    else {
         return rewritten;
     };
     for key in ["value_re", "mpn_re"] {
-        let text = rules.get(key).and_then(Item::as_str);
+        let text = rules.get(key).and_then(toml_edit::Item::as_str);
         let bare = text.and_then(crate::validation::without_end_anchor);
         if let Some(bare) = bare.filter(|b| !b.is_empty()).map(str::to_string) {
             rules.insert(key, toml_edit::value(bare.clone()));
