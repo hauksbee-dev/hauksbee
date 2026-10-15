@@ -1323,7 +1323,7 @@ impl StressMonitor {
             // Not a fault: a model error, noted once per part and kind. The
             // kind stays unraised so a plausible violation later still reports.
             if !(self.implausible.iter())
-                .any(|e| e.kind == chk.kind && e.component == meta.reference)
+                .any(|e| (e.component.as_str(), e.kind) == (meta.reference.as_str(), chk.kind))
             {
                 self.implausible.push(FaultEvent {
                     component: meta.reference.clone(),

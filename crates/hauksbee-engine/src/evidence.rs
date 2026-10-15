@@ -3502,7 +3502,7 @@ mod tests {
         );
         let evidence = evidence(&board, &report(vec![]));
         let held = ["MCU_SUPPLY".to_string()];
-        let lost = ["".to_string()];
+        let lost = [String::new()];
         assert!(evidence.simulation_map("held", &held, &[], None).is_ok());
         let mixed = [held[0].clone(), lost[0].clone()];
         assert!(evidence.simulation_map("mixed", &mixed, &[], None).is_ok());

@@ -282,17 +282,11 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
     findings.extend(
         (under.into_values()).filter_map(|(drive, nets)| gate_underdrive(&bound, &drive, nets)),
     );
-    findings.extend(impossible.into_iter().map(|(part, clause)| LintFinding {
-        check: LintCheck::DcOverstress,
-        severity: Severity::Low,
-        message: format!(
-            "{part} {clause}, which no real part can see: this is a modelling or \
-             binding error (a wrong value or rating, or a part that is not fitted), not an \
-             overstress finding, so it was not reported as one"
-        ),
-        refs: vec![part],
-        nets: Vec::new(),
-    }));
+    findings.extend(
+        impossible
+            .into_iter()
+            .map(|(part, clause)| model_error(part, &clause)),
+    );
     if !unsolved.is_empty() {
         findings.push(LintFinding {
             check: LintCheck::DcOverstress,
@@ -307,6 +301,21 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
         });
     }
     NetLintReport { findings }
+}
+
+/// The low-severity note for a part whose computed stress no real part can see.
+fn model_error(part: String, clause: &str) -> LintFinding {
+    LintFinding {
+        check: LintCheck::DcOverstress,
+        severity: Severity::Low,
+        message: format!(
+            "{part} {clause}, which no real part can see: this is a modelling or \
+             binding error (a wrong value or rating, or a part that is not fitted), not an \
+             overstress finding, so it was not reported as one"
+        ),
+        refs: vec![part],
+        nets: Vec::new(),
+    }
 }
 
 /// Keep the first impossible value computed for each part, worded as a clause.
