@@ -84,6 +84,7 @@ export function AssertionGroups({
                     animate={{ opacity: 1, y: 0 }}
                     exit={reduced ? { opacity: 0 } : { opacity: 0, height: 0, transition: LEAVE }}
                     transition={reduced ? { duration: 0 } : ARRIVE}
+                    data-row-id={c.id}
                     className="check-row py-2.5"
                     style={{
                       overflow: 'hidden',

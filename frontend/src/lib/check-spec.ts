@@ -1,5 +1,7 @@
 import { parse as parseToml } from 'smol-toml'
 import type { ScaffoldSupply } from '../types/report'
+import { readCst, tomlNumberLiteral } from './toml-cst'
+import type { CstEntry, PatchOp, TablePath } from './toml-cst'
 
 // The checks spec, as a data model: the builder's rows, the TOML they compose
 // into, and the round-trip back. The Checks view renders these; nothing here
@@ -384,84 +386,119 @@ export function tomlString(v: string): string {
   return JSON.stringify(v)
 }
 
-/** The trimmed value when it is a finite number, else null. */
+/** The trimmed value when it is a TOML number literal, else null (a value
+ *  TOML would reject, like `1.` or `05`, is never written). */
 function numOr(v: string): string | null {
-  const t = v.trim()
-  if (t === '') return null
-  return Number.isFinite(Number(t)) ? t : null
+  return tomlNumberLiteral(v)
+}
+
+/** One `key = literal` pair, in the order it is written. */
+export type Kv = [key: string, literal: string]
+
+const lines = (kvs: readonly Kv[]) => kvs.map(([k, v]) => `${k} = ${v}\n`).join('')
+
+/** The keys one [[supply]] carries (net only when named). */
+export function supplyKvs(s: SupplyRow): Kv[] {
+  const kind = s.kind ?? 'ideal'
+  const out: Kv[] = []
+  if (s.net.trim()) out.push(['net', tomlString(s.net.trim())])
+  out.push(['kind', `"${kind}"`])
+  if (kind === 'usb') return [...out, ['usb', tomlString(s.usb || USB_PROFILES[1])]]
+  out.push(['volts', numOr(s.volts) ?? '5.0'])
+  const limit = kind === 'bench' ? numOr(s.limit ?? '') : null
+  if (limit) out.push(['current_limit_a', limit])
+  return out
 }
 
 /** One [[supply]] block, or nothing for a row with no net. */
 export function supplyToml(s: SupplyRow): string {
-  if (!s.net.trim()) return ''
-  const kind = s.kind ?? 'ideal'
-  const head = `\n[[supply]]\nnet = ${tomlString(s.net.trim())}\nkind = "${kind}"\n`
-  if (kind === 'usb') return `${head}usb = ${tomlString(s.usb || USB_PROFILES[1])}\n`
-  const limit = kind === 'bench' && numOr(s.limit ?? '') ? `current_limit_a = ${numOr(s.limit ?? '')}\n` : ''
-  return `${head}volts = ${numOr(s.volts) ?? '5.0'}\n${limit}`
+  return s.net.trim() ? `\n[[supply]]\n${lines(supplyKvs(s))}` : ''
 }
 
-export function peripheralToml(p: PeripheralRow): string {
-  let out = `\n[[peripheral]]\nid = ${tomlString(p.id.trim())}\ntype = ${tomlString(p.kind)}\nnet = ${tomlString(p.net.trim())}\n`
+function peripheralKvs(p: PeripheralRow): Kv[] {
+  const out: Kv[] = [['id', tomlString(p.id.trim())], ['type', tomlString(p.kind)], ['net', tomlString(p.net.trim())]]
   if (p.kind === 'stimulus') {
-    out += `waveform = ${tomlString(p.waveform)}\noffset = ${numOr(p.offset) ?? '0'}\n`
-    if (p.waveform !== 'dc') out += `amplitude = ${numOr(p.amplitude) ?? '1'}\nfreq_hz = ${numOr(p.freq_hz) ?? '1000'}\n`
+    out.push(['waveform', tomlString(p.waveform)], ['offset', numOr(p.offset) ?? '0'])
+    if (p.waveform !== 'dc') out.push(['amplitude', numOr(p.amplitude) ?? '1'], ['freq_hz', numOr(p.freq_hz) ?? '1000'])
   } else {
-    if (p.to.trim()) out += `to = ${tomlString(p.to.trim())}\n`
-    if (p.kind === 'pushbutton' && numOr(p.bounce_ms)) out += `bounce_ms = ${numOr(p.bounce_ms)}\n`
-    if (numOr(p.initial)) out += `initial = ${numOr(p.initial)}\n`
+    if (p.to.trim()) out.push(['to', tomlString(p.to.trim())])
+    if (p.kind === 'pushbutton' && numOr(p.bounce_ms)) out.push(['bounce_ms', numOr(p.bounce_ms)!])
+    if (numOr(p.initial)) out.push(['initial', numOr(p.initial)!])
   }
-  for (const event of p.events) out += `[[peripheral.event]]\nt_ms = ${numOr(event.t_ms) ?? '0'}\nvalue = ${numOr(event.value) ?? '0'}\n`
   return out
+}
+
+const eventsToml = (p: PeripheralRow) => p.events
+  .map(event => `[[peripheral.event]]\nt_ms = ${numOr(event.t_ms) ?? '0'}\nvalue = ${numOr(event.value) ?? '0'}\n`).join('')
+
+export function peripheralToml(p: PeripheralRow): string {
+  return `\n[[peripheral]]\n${lines(peripheralKvs(p))}${eventsToml(p)}`
+}
+
+function sensorKvs(sensor: SensorRow): Kv[] {
+  const out: Kv[] = [['id', tomlString(sensor.id.trim())], ['spec', tomlString(sensor.spec)]]
+  if (sensor.controller.trim()) out.push(['controller', tomlString(sensor.controller.trim())])
+  if (sensor.csNet.trim()) out.push(['cs_net', tomlString(sensor.csNet.trim())])
+  return out
+}
+
+const inputsToml = (sensor: SensorRow) => {
+  const inputs = sensor.inputs.filter(input => input.name.trim() && numOr(input.value))
+  if (inputs.length === 0) return ''
+  return `[sensor.inputs]\n${inputs.map(input => `${tomlString(input.name.trim())} = ${numOr(input.value)}\n`).join('')}`
 }
 
 /** The spec bytes are kept inline (JSON string escaping is valid TOML
  *  basic-string escaping) so a downloaded check is self-contained. */
 export function sensorToml(sensor: SensorRow): string {
-  let out = `\n[[sensor]]\nid = ${tomlString(sensor.id.trim())}\nspec = ${tomlString(sensor.spec)}\n`
-  if (sensor.controller.trim()) out += `controller = ${tomlString(sensor.controller.trim())}\n`
-  if (sensor.csNet.trim()) out += `cs_net = ${tomlString(sensor.csNet.trim())}\n`
-  const inputs = sensor.inputs.filter(input => input.name.trim() && numOr(input.value))
-  if (inputs.length > 0) {
-    out += `[sensor.inputs]\n`
-    for (const input of inputs) out += `${tomlString(input.name.trim())} = ${numOr(input.value)}\n`
+  return `\n[[sensor]]\n${lines(sensorKvs(sensor))}${inputsToml(sensor)}`
+}
+
+function overrideKvs(o: OverrideRow): Kv[] {
+  const out: Kv[] = [['ref', tomlString(o.ref)]]
+  for (const key of ['select', 'value', 'reason'] as const) {
+    if (o[key] !== undefined) out.push([key, tomlString(o[key])])
   }
   return out
 }
 
 export function overrideToml(o: OverrideRow): string {
-  let out = `\n[[override]]\nref = ${tomlString(o.ref)}\n`
-  for (const key of ['select', 'value', 'reason'] as const) {
-    if (o[key] !== undefined) out += `${key} = ${tomlString(o[key])}\n`
-  }
-  return out
+  return `\n[[override]]\n${lines(overrideKvs(o))}`
 }
 
-/** One [[assert]] block: the kind's subject, then its schema fields in order,
- *  each only when filled (strings quoted, numbers only when finite). */
-export function assertToml(c: CheckRow): string {
+/** The keys one [[assert]] carries: its kind, its subject, then its schema
+ *  fields in order, each only when filled (strings quoted, numbers only when
+ *  they are TOML numbers). */
+export function assertKvs(c: ConstraintDraft): Kv[] {
   const k = checkKind(c.kind)
-  let out = `\n[[assert]]\nkind = ${tomlString(c.kind)}\n`
+  const out: Kv[] = [['kind', tomlString(c.kind)]]
   if (!k) return out
-  if (k.subject && c[k.subject].trim()) out += `${k.subject} = ${tomlString(c[k.subject].trim())}\n`
+  if (k.subject && c[k.subject].trim()) out.push([k.subject, tomlString(c[k.subject].trim())])
   for (const f of k.fields) {
     if (f.ui || (f.active && !f.active(c))) continue
     const t = c[f.key].trim()
     if (!t) continue
-    if (f.text) out += `${f.key} = ${tomlString(t)}\n`
-    else if (numOr(t)) out += `${f.key} = ${numOr(t)}\n`
+    if (f.text) out.push([f.key, tomlString(t)])
+    else if (numOr(t)) out.push([f.key, numOr(t)!])
   }
   return out
 }
 
-/** Compose the spec BODY (no board/firmware keys; the server injects those
- *  from the uploaded files). */
+/** One [[assert]] block. */
+export function assertToml(c: ConstraintDraft): string {
+  return `\n[[assert]]\n${lines(assertKvs(c))}`
+}
+
+/** Compose a whole spec BODY from rows (no board/firmware keys; the server
+ *  injects those from the uploaded files). Used only to start a spec (a new
+ *  board, a save from before the text was the source of truth); every edit
+ *  after that is a patch on the text. */
 export function buildToml(
   name: string,
   duration: string,
   supplies: SupplyRow[],
   peripherals: PeripheralRow[],
-  checks: CheckRow[],
+  checks: ConstraintDraft[],
   sensors: SensorRow[] = [],
   overrides: OverrideRow[] = [],
   noFit: string[] = [],
@@ -476,10 +513,10 @@ export function buildToml(
     + overrides.map(overrideToml).join('')
 }
 
-// Fields the builder round-trips on a [[supply]] / an [[assert]]. Anything
-// outside these sets (an assertion scenario, a ripple spec, a sensor...) would
-// be silently destroyed on the way back to the builder, so its presence makes
-// tomlToBuilder refuse the conversion.
+// ── Reading the text back ─────────────────────────────────────────────────
+// Fields the builder edits on each table. A table carrying anything else (an
+// assertion scenario, a ripple spec, an unknown kind...) is shown as "kept as
+// written": the builder leaves its bytes alone and the TOML pane edits it.
 const SUPPLY_FIELDS = new Set(['net', 'kind', 'volts', 'usb', 'current_limit_a'])
 const PERIPHERAL_FIELDS = new Set([
   'id', 'type', 'net', 'to', 'waveform', 'offset', 'amplitude', 'freq_hz',
@@ -487,102 +524,276 @@ const PERIPHERAL_FIELDS = new Set([
 ])
 const PERIPHERAL_EVENT_FIELDS = new Set(['t_ms', 'value'])
 const SENSOR_FIELDS = new Set(['id', 'spec', 'controller', 'cs_net', 'inputs'])
+const OVERRIDE_FIELDS = new Set(['ref', 'select', 'value', 'reason'])
+/** Root keys the builder edits, and the path keys it leaves to the server. */
+const ROOT_EDITED = new Set(['name', 'duration_ms', 'no_fit'])
+const ROOT_SILENT = new Set(['board', 'firmware', 'mcu'])
+const ARRAYS = new Set(['supply', 'peripheral', 'sensor', 'assert', 'override'])
 
-/** Best-effort: load a raw TOML back into builder rows. Returns null when the
- *  spec uses vocabulary the builder doesn't cover (an unknown top-level key,
- *  OR any nested supply/assert field the builder would not write back out);
- *  the caller then stays in raw mode, or warns before discarding. */
-export function tomlToBuilder(raw: string): BuilderState | null {
-  let doc: Record<string, unknown>
-  try {
-    doc = parseToml(raw) as Record<string, unknown>
-  } catch {
-    return null
+/** Something in the spec the builder shows but does not edit. */
+export interface KeptBlock {
+  /** What it is, as written: `[[assert]] ac_gain`, `[ac]`, `schematic`. */
+  label: string
+  /** Where it starts in the text, to jump the TOML pane there. */
+  offset: number
+}
+
+/** The builder's view of the spec text. Row ids are positions in the text:
+ *  check `id` is the [[assert]] index plus one, a peripheral's or sensor's
+ *  `rowId` its array index plus one, and supplies and overrides carry their
+ *  index, so an edit always finds its own table. */
+export interface SpecModel {
+  name: string
+  duration: string
+  noFit: string[]
+  supplies: { row: SupplyRow; index: number }[]
+  peripherals: PeripheralRow[]
+  sensors: SensorRow[]
+  checks: CheckRow[]
+  overrides: { row: OverrideRow; index: number }[]
+  kept: KeptBlock[]
+}
+
+type Table = Record<string, unknown>
+
+const tableOf = (entries: CstEntry[]): Table | null => {
+  const out: Table = {}
+  for (const e of entries) {
+    if (e.key.includes('.') || e.key in out) return null
+    out[e.key] = e.value
   }
-  const KNOWN = new Set(['name', 'duration_ms', 'supply', 'peripheral', 'sensor', 'assert', 'override', 'board', 'firmware', 'mcu', 'no_fit'])
-  if (Object.keys(doc).some(k => !KNOWN.has(k))) return null
-  const noFit = Array.isArray(doc.no_fit) ? doc.no_fit : []
-  if (doc.no_fit !== undefined && !noFit.every(r => typeof r === 'string')) return null
-  const supplies: SupplyRow[] = []
-  for (const s of (doc.supply as Record<string, unknown>[] | undefined) ?? []) {
-    if (Object.keys(s).some(k => !SUPPLY_FIELDS.has(k))) return null
-    if (s.kind && !['ideal', 'bench', 'usb'].includes(String(s.kind))) return null
-    supplies.push({
-      net: String(s.net ?? ''),
-      volts: String(s.volts ?? ''),
-      ...(s.kind && s.kind !== 'ideal' ? { kind: s.kind as SupplyRow['kind'] } : {}),
-      ...(s.usb !== undefined ? { usb: String(s.usb) } : {}),
-      ...(s.current_limit_a !== undefined ? { limit: String(s.current_limit_a) } : {}),
-    })
-  }
-  const peripherals: PeripheralRow[] = []
-  let peripheralId = 1
-  for (const p of (doc.peripheral as Record<string, unknown>[] | undefined) ?? []) {
-    if (Object.keys(p).some(k => !PERIPHERAL_FIELDS.has(k))) return null
-    const kind = String(p.type ?? '')
-    if (!['stimulus', 'pushbutton', 'toggle'].includes(kind)) return null
-    const events = (p.event as Record<string, unknown>[] | undefined) ?? []
-    if (events.some(event => Object.keys(event).some(k => !PERIPHERAL_EVENT_FIELDS.has(k)))) return null
-    const row = emptyPeripheral(peripheralId++, kind as PeripheralRow['kind'], String(p.net ?? ''))
-    row.id = String(p.id ?? row.id)
-    row.to = String(p.to ?? row.to)
-    row.waveform = String(p.waveform ?? row.waveform) as PeripheralRow['waveform']
-    if (!['dc', 'sine', 'noise'].includes(row.waveform)) return null
-    row.offset = String(p.offset ?? row.offset)
-    row.amplitude = String(p.amplitude ?? row.amplitude)
-    row.freq_hz = String(p.freq_hz ?? row.freq_hz)
-    row.bounce_ms = String(p.bounce_ms ?? row.bounce_ms)
-    row.initial = String(p.initial ?? row.initial)
-    row.events = events.map(event => ({ t_ms: String(event.t_ms ?? ''), value: String(event.value ?? '') }))
-    peripherals.push(row)
-  }
-  const sensors: SensorRow[] = []
-  let sensorId = 1
-  for (const sensor of (doc.sensor as Record<string, unknown>[] | undefined) ?? []) {
-    if (Object.keys(sensor).some(key => !SENSOR_FIELDS.has(key))) return null
-    if (typeof sensor.spec !== 'string') return null
-    const inputsObject = sensor.inputs as Record<string, unknown> | undefined
-    if (inputsObject && (Array.isArray(inputsObject) || typeof inputsObject !== 'object')) return null
-    const row = emptySensor(sensorId++, String(sensor.id ?? ''))
-    row.spec = sensor.spec
-    row.controller = String(sensor.controller ?? '')
-    row.csNet = String(sensor.cs_net ?? '')
-    row.inputs = Object.entries(inputsObject ?? {}).map(([name, value], index) => ({
-      rowId: index + 1,
-      name,
-      value: String(value),
-    }))
-    sensors.push(row)
-  }
-  const checks: CheckRow[] = []
-  let id = 1
-  for (const a of (doc.assert as Record<string, unknown>[] | undefined) ?? []) {
-    const k = checkKind(String(a.kind ?? ''))
-    if (!k) return null
-    const allowed = assertKeys(k)
-    if (Object.keys(a).some(key => !allowed.has(key))) return null
-    if (k.refuses?.(a)) return null
-    const row = emptyCheck(id++, k.kind)
-    for (const key of CHECK_KEYS) if (a[key] !== undefined) row[key] = String(a[key])
-    k.hydrate?.(row)
-    checks.push(row)
-  }
-  const overrides: OverrideRow[] = []
-  for (const o of (doc.override as Record<string, unknown>[] | undefined) ?? []) {
-    if (Object.keys(o).some(k => !['ref', 'select', 'value', 'reason'].includes(k))) return null
-    if (Object.values(o).some(v => typeof v !== 'string')) return null
-    overrides.push(o as unknown as OverrideRow)
-  }
+  return out
+}
+
+function supplyRow(s: Table): SupplyRow | null {
+  if (Object.keys(s).some(k => !SUPPLY_FIELDS.has(k))) return null
+  if (s.kind && !['ideal', 'bench', 'usb'].includes(String(s.kind))) return null
   return {
-    name: String(doc.name ?? 'board checks'),
-    duration: String(doc.duration_ms ?? '100'),
-    supplies,
-    peripherals,
-    sensors,
-    checks,
-    overrides,
-    noFit: noFit as string[],
+    net: String(s.net ?? ''),
+    volts: String(s.volts ?? ''),
+    ...(s.kind && s.kind !== 'ideal' ? { kind: s.kind as SupplyRow['kind'] } : {}),
+    ...(s.usb !== undefined ? { usb: String(s.usb) } : {}),
+    ...(s.current_limit_a !== undefined ? { limit: String(s.current_limit_a) } : {}),
   }
+}
+
+function peripheralRow(p: Table, rowId: number): PeripheralRow | null {
+  if (Object.keys(p).some(k => !PERIPHERAL_FIELDS.has(k))) return null
+  const kind = String(p.type ?? '')
+  if (!['stimulus', 'pushbutton', 'toggle'].includes(kind)) return null
+  const events = (p.event as Table[] | undefined) ?? []
+  if (events.some(event => !event || Object.keys(event).some(k => !PERIPHERAL_EVENT_FIELDS.has(k)))) return null
+  const row = emptyPeripheral(rowId, kind as PeripheralRow['kind'], String(p.net ?? ''))
+  row.id = String(p.id ?? row.id)
+  row.to = String(p.to ?? row.to)
+  row.waveform = String(p.waveform ?? row.waveform) as PeripheralRow['waveform']
+  if (!['dc', 'sine', 'noise'].includes(row.waveform)) return null
+  row.offset = String(p.offset ?? row.offset)
+  row.amplitude = String(p.amplitude ?? row.amplitude)
+  row.freq_hz = String(p.freq_hz ?? row.freq_hz)
+  row.bounce_ms = String(p.bounce_ms ?? row.bounce_ms)
+  row.initial = String(p.initial ?? row.initial)
+  row.events = events.map(event => ({ t_ms: String(event.t_ms ?? ''), value: String(event.value ?? '') }))
+  return row
+}
+
+function sensorRow(sensor: Table, rowId: number): SensorRow | null {
+  if (Object.keys(sensor).some(key => !SENSOR_FIELDS.has(key))) return null
+  if (typeof sensor.spec !== 'string') return null
+  const inputsObject = sensor.inputs as Table | undefined
+  if (inputsObject && (Array.isArray(inputsObject) || typeof inputsObject !== 'object')) return null
+  const row = emptySensor(rowId, String(sensor.id ?? ''))
+  row.spec = sensor.spec
+  row.controller = String(sensor.controller ?? '')
+  row.csNet = String(sensor.cs_net ?? '')
+  row.inputs = Object.entries(inputsObject ?? {}).map(([name, value], index) => ({
+    rowId: index + 1,
+    name,
+    value: String(value),
+  }))
+  return row
+}
+
+function checkRow(a: Table, id: number): CheckRow | null {
+  const k = checkKind(String(a.kind ?? ''))
+  if (!k) return null
+  const allowed = assertKeys(k)
+  if (Object.keys(a).some(key => !allowed.has(key))) return null
+  if (k.refuses?.(a)) return null
+  if (Object.values(a).some(v => typeof v === 'object')) return null
+  const row = emptyCheck(id, k.kind)
+  for (const key of CHECK_KEYS) if (a[key] !== undefined) row[key] = String(a[key])
+  k.hydrate?.(row)
+  return row
+}
+
+function overrideRow(o: Table): OverrideRow | null {
+  if (Object.keys(o).some(k => !OVERRIDE_FIELDS.has(k))) return null
+  if (Object.values(o).some(v => typeof v !== 'string')) return null
+  return o as unknown as OverrideRow
+}
+
+/** Read the spec text into builder rows plus what the builder keeps as
+ *  written; null when the text does not parse. */
+export function readSpec(text: string): SpecModel | null {
+  const read = readCst(text)
+  if (!read.ok) return null
+  const { doc } = read
+  const model: SpecModel = {
+    name: 'board checks', duration: '100', noFit: [],
+    supplies: [], peripherals: [], sensors: [], checks: [], overrides: [], kept: [],
+  }
+  for (const e of doc.root) {
+    const keep = () => model.kept.push({ label: e.key, offset: e.lineRange[0] })
+    if (ROOT_SILENT.has(e.key)) continue
+    if (!ROOT_EDITED.has(e.key)) { keep(); continue }
+    if (e.key === 'name') model.name = String(e.value ?? '')
+    else if (e.key === 'duration_ms') model.duration = String(e.value ?? '')
+    else if (Array.isArray(e.value) && e.value.every(r => typeof r === 'string')) model.noFit = e.value as string[]
+    else keep()
+  }
+  for (const el of doc.elements) {
+    const own = tableOf(el.entries)
+    let table: Table | null = own
+    if (table && el.subtables.length) {
+      for (const sub of el.subtables) {
+        const body = tableOf(sub.entries)
+        if (!body) { table = null; break }
+        if (sub.header === 'peripheral.event') {
+          const list = (table.event as Table[] | undefined) ?? []
+          if (!Array.isArray(list)) { table = null; break }
+          table.event = [...list, body]
+        } else if (sub.header === 'sensor.inputs' && table.inputs === undefined) {
+          table.inputs = body
+        } else { table = null; break }
+      }
+    }
+    const index = el.index ?? -1
+    let ok = false
+    if (table && el.index !== null && ARRAYS.has(el.name)) {
+      if (el.name === 'supply') {
+        const row = supplyRow(table)
+        if (row) { model.supplies.push({ row, index }); ok = true }
+      } else if (el.name === 'peripheral') {
+        const row = peripheralRow(table, index + 1)
+        if (row) { model.peripherals.push(row); ok = true }
+      } else if (el.name === 'sensor') {
+        const row = sensorRow(table, index + 1)
+        if (row) { model.sensors.push(row); ok = true }
+      } else if (el.name === 'assert') {
+        const row = checkRow(table, index + 1)
+        if (row) { model.checks.push(row); ok = true }
+      } else {
+        const row = overrideRow(table)
+        if (row) { model.overrides.push({ row, index }); ok = true }
+      }
+    }
+    if (!ok) {
+      const kind = el.name === 'assert' && typeof own?.kind === 'string' ? ` ${own.kind}` : ''
+      const label = el.index === null ? `[${el.header}]` : `[[${el.header}]]${kind}`
+      model.kept.push({ label, offset: el.headerStart })
+    }
+  }
+  return model
+}
+
+/** Best-effort, all-or-nothing: the builder rows for a spec the builder covers
+ *  completely, or null when it does not parse or keeps anything as written. */
+export function tomlToBuilder(raw: string): BuilderState | null {
+  const model = readSpec(raw)
+  if (!model || model.kept.length > 0) return null
+  return {
+    name: model.name,
+    duration: model.duration,
+    supplies: model.supplies.map(s => s.row),
+    peripherals: model.peripherals,
+    sensors: model.sensors,
+    checks: model.checks,
+    overrides: model.overrides.map(o => o.row),
+    noFit: model.noFit,
+  }
+}
+
+// ── Builder edits as patch ops ────────────────────────────────────────────
+
+/** The ops that turn `prev`'s keys into `next`'s, touching only keys whose
+ *  literal changed. Keys in `hold` (a number still being typed) keep their
+ *  current text. */
+export function kvDiffOps(table: TablePath, prev: readonly Kv[], next: readonly Kv[], hold: ReadonlySet<string> = new Set()): PatchOp[] {
+  const before = new Map(prev)
+  const after = new Map(next)
+  const ops: PatchOp[] = []
+  for (const [key, value] of after) {
+    if (hold.has(key)) continue
+    if (!before.has(key)) ops.push({ op: 'insertKey', table, key, value })
+    else if (before.get(key) !== value) ops.push({ op: 'setValue', table, key, value })
+  }
+  for (const key of before.keys()) {
+    if (!after.has(key) && !hold.has(key)) ops.push({ op: 'removeKey', table, key })
+  }
+  return ops
+}
+
+/** A typed value that is not (yet) a TOML number. */
+const unfinished = (v: string | undefined) => !!v && v.trim() !== '' && numOr(v) === null
+
+export function checkOps(prev: CheckRow, next: ConstraintDraft): PatchOp[] {
+  const k = checkKind(next.kind)
+  const hold = new Set((k?.fields ?? []).filter(f => !f.text && !f.ui && unfinished(next[f.key])).map(f => f.key as string))
+  return kvDiffOps(['assert', prev.id - 1], assertKvs(prev), assertKvs(next), hold)
+}
+
+export function supplyOps(index: number, prev: SupplyRow, next: SupplyRow): PatchOp[] {
+  const hold = new Set<string>()
+  if (unfinished(next.volts)) hold.add('volts')
+  if (unfinished(next.limit)) hold.add('current_limit_a')
+  return kvDiffOps(['supply', index], supplyKvs(prev), supplyKvs(next), hold)
+}
+
+export function peripheralOps(prev: PeripheralRow, next: PeripheralRow): PatchOp[] {
+  const table: TablePath = ['peripheral', prev.rowId - 1]
+  const numbers = [next.offset, next.amplitude, next.freq_hz, next.bounce_ms, next.initial,
+    ...next.events.flatMap(e => [e.t_ms, e.value])]
+  if (numbers.some(unfinished)) return []
+  if (JSON.stringify(prev.events) !== JSON.stringify(next.events)) {
+    return [{ op: 'replaceBody', table, body: lines(peripheralKvs(next)) + eventsToml(next) }]
+  }
+  return kvDiffOps(table, peripheralKvs(prev), peripheralKvs(next))
+}
+
+export function sensorOps(prev: SensorRow, next: SensorRow): PatchOp[] {
+  const table: TablePath = ['sensor', prev.rowId - 1]
+  if (next.inputs.some(input => unfinished(input.value))) return []
+  if (inputsToml(prev) !== inputsToml(next)) {
+    return [{ op: 'replaceBody', table, body: lines(sensorKvs(next)) + inputsToml(next) }]
+  }
+  return kvDiffOps(table, sensorKvs(prev), sensorKvs(next))
+}
+
+export function overrideOps(index: number, prev: OverrideRow, next: OverrideRow): PatchOp[] {
+  return kvDiffOps(['override', index], overrideKvs(prev), overrideKvs(next))
+}
+
+/** The root keys: name, run length, the not-fitted list. */
+export function rootOps(
+  prev: Pick<SpecModel, 'name' | 'duration' | 'noFit'>,
+  next: Pick<SpecModel, 'name' | 'duration' | 'noFit'>,
+): PatchOp[] {
+  const kvs = (m: typeof prev): Kv[] => {
+    const out: Kv[] = [['name', tomlString(m.name)]]
+    const dur = numOr(m.duration)
+    if (dur) out.push(['duration_ms', dur])
+    if (m.noFit.length) out.push(['no_fit', `[${m.noFit.map(tomlString).join(', ')}]`])
+    return out
+  }
+  return kvDiffOps([], kvs(prev), kvs(next), new Set(unfinished(next.duration) ? ['duration_ms'] : []))
+}
+
+/** A new table at the end of the spec, from the same composer a fresh spec uses. */
+export function appendOp(block: string): PatchOp {
+  const m = /^\n?\[\[([^\]]+)\]\]\n/.exec(block)
+  if (!m) return { op: 'splice', at: Number.MAX_SAFE_INTEGER, remove: 0, insert: block }
+  return { op: 'appendTable', name: m[1], body: block.slice(m[0].length) }
 }
 
 /** One builder-row validation problem: which UI fields could satisfy it,
