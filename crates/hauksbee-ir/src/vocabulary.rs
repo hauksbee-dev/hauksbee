@@ -1,0 +1,818 @@
+//! The one vocabulary every surface reads: verdict states, evidence grades,
+//! the severity scale, the exit-code table and the check names, beside the
+//! existing [`crate::glossary`].
+//!
+//! The CLI, `hauksbee-ci`, the app, JUnit, SARIF, the KiCad report and the
+//! documents all render a run from the same [`crate::run_record::RunRecord`],
+//! and they name what they show with the words defined here. A renderer that
+//! wants a label, a one-line meaning, a CI alias, an exit code, a SARIF level
+//! or a KiCad severity asks this module; it never spells its own.
+//!
+//! Every entry has an `id` (the wire word), a display `label`, a one-line
+//! `meaning` and its `aliases` (older or tool-specific spellings, so a
+//! renderer being migrated, or a reader of an old report, can map them).
+//! [`vocabulary`] is the whole set as data with one serialization, committed
+//! as `crates/hauksbee-ir/schemas/hauksbee-vocabulary.json` (drift-tested):
+//! what `explain verdicts|severities|exit-codes` prints and what the app reads.
+
+use serde::{Deserialize, Serialize};
+
+use crate::evidence::EvidenceStatus;
+use crate::glossary::TermEntry;
+
+/// The exit-code contract the codes in [`ExitClass`] belong to. A record
+/// states it next to its exit code so a consumer can tell which table applies.
+pub const EXIT_CONTRACT: &str = "hauksbee/1";
+
+/// What a run concluded. Ordered from best to worst for the reader: a pass,
+/// a pass with named conditions, a fail, and the two outcomes that vouch for
+/// nothing (partly judged, invalid run).
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum VerdictState {
+    /// Every check in scope ran on trustworthy evidence and nothing blocks.
+    Pass,
+    /// Nothing blocks, but the pass rests on named conditions.
+    PassConditional,
+    /// At least one blocking finding or failed assertion.
+    Fail,
+    /// Nothing blocks among the checks that ran, but key parts were not judged.
+    PartlyJudged,
+    /// The run's own evidence is not trustworthy, so it vouches for nothing.
+    InvalidRun,
+}
+
+impl VerdictState {
+    /// Every state, in display order.
+    pub const ALL: [Self; 5] = [
+        Self::Pass,
+        Self::PassConditional,
+        Self::Fail,
+        Self::PartlyJudged,
+        Self::InvalidRun,
+    ];
+
+    /// The wire word, identical to what serde writes.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::PassConditional => "pass_conditional",
+            Self::Fail => "fail",
+            Self::PartlyJudged => "partly_judged",
+            Self::InvalidRun => "invalid_run",
+        }
+    }
+
+    /// The display label every human surface prints.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::PassConditional => "pass, conditionally",
+            Self::Fail => "fail",
+            Self::PartlyJudged => "partly judged, not a pass",
+            Self::InvalidRun => "invalid run, not a pass",
+        }
+    }
+
+    /// One line saying what the state means, for `explain verdicts`, a
+    /// document's verdict box and a tooltip.
+    #[must_use]
+    pub const fn meaning(self) -> &'static str {
+        match self {
+            Self::Pass => "Every check in scope ran on trustworthy evidence and nothing blocks.",
+            Self::PassConditional => {
+                "Nothing blocks, but the pass rests on named conditions (default rules, \
+                 guessed or fallback models); each condition says how to lift it."
+            }
+            Self::Fail => "At least one blocking finding or failed assertion.",
+            Self::PartlyJudged => {
+                "Nothing blocks among the checks that ran, but key parts have no usable \
+                 model, so the checks they could change were not judged."
+            }
+            Self::InvalidRun => {
+                "The run's own evidence is not trustworthy (a refusal, an undermined claim, \
+                 a failed simulation), so it vouches for nothing either way."
+            }
+        }
+    }
+
+    /// The CI word printed next to the canonical label, where CI has one.
+    #[must_use]
+    pub const fn ci_alias(self) -> Option<&'static str> {
+        match self {
+            Self::Pass => Some("GREEN"),
+            Self::PassConditional => Some("GREEN, conditionally"),
+            Self::Fail => Some("RED"),
+            Self::PartlyJudged | Self::InvalidRun => None,
+        }
+    }
+
+    /// The exit class this state ends a run with under [`EXIT_CONTRACT`].
+    #[must_use]
+    pub const fn exit_class(self) -> ExitClass {
+        match self {
+            Self::Pass | Self::PassConditional => ExitClass::Pass,
+            Self::Fail => ExitClass::Fail,
+            Self::PartlyJudged | Self::InvalidRun => ExitClass::InvalidRun,
+        }
+    }
+
+    /// Whether the state is a pass (conditional or not). Partly judged and
+    /// invalid runs are never a pass.
+    #[must_use]
+    pub const fn is_pass(self) -> bool {
+        matches!(self, Self::Pass | Self::PassConditional)
+    }
+
+    /// The spellings this state had before the shared vocabulary, across the
+    /// `run --json` v3 `verdict`, the terminal, `hauksbee-ci` and the app.
+    #[must_use]
+    pub const fn aliases(self) -> &'static [&'static str] {
+        match self {
+            Self::Pass => &["pass", "clean", "GREEN", "OK TO ORDER", "analysis clean"],
+            Self::PassConditional => &[
+                "clean, conditionally",
+                "GREEN, conditionally",
+                "OK TO ORDER, conditionally",
+                "conditional_pass",
+            ],
+            Self::Fail => &["fail", "failing", "RED", "FAIL", "DO NOT ORDER"],
+            Self::PartlyJudged => &["PARTLY JUDGED", "partly judged, not a pass"],
+            Self::InvalidRun => &[
+                "invalid",
+                "inconclusive",
+                "INCONCLUSIVE",
+                "NOT CONCLUSIVE",
+                "INVALID",
+                "analysis undermined",
+                "invalid for analysis",
+            ],
+        }
+    }
+
+    /// Map the `run --json` v3 verdict (`"pass"` / `"fail"` / `"invalid"`)
+    /// and its two qualifiers onto a state. `partial` is the v3 PARTLY JUDGED
+    /// flag; `conditional` is whether `verdict_conditions` is non-empty.
+    /// Returns `None` for a word v3 never wrote.
+    #[must_use]
+    pub fn from_v3(verdict: &str, partial: bool, conditional: bool) -> Option<Self> {
+        Some(match verdict {
+            "pass" if conditional => Self::PassConditional,
+            "pass" => Self::Pass,
+            "fail" => Self::Fail,
+            "invalid" if partial => Self::PartlyJudged,
+            "invalid" => Self::InvalidRun,
+            _ => return None,
+        })
+    }
+}
+
+impl std::fmt::Display for VerdictState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+/// The shared exit table: one meaning per number, in both binaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ExitClass {
+    /// 0: a pass or a conditional pass.
+    Pass,
+    /// 1: a fail.
+    Fail,
+    /// 2: a usage, spec or input error; the run did not start.
+    Usage,
+    /// 3: partly judged or invalid run; not a pass and not a fail.
+    InvalidRun,
+    /// 4: an internal error in hauksbee itself.
+    ToolFault,
+}
+
+impl ExitClass {
+    /// Every class, in code order.
+    pub const ALL: [Self; 5] = [
+        Self::Pass,
+        Self::Fail,
+        Self::Usage,
+        Self::InvalidRun,
+        Self::ToolFault,
+    ];
+
+    /// The process exit code.
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        match self {
+            Self::Pass => 0,
+            Self::Fail => 1,
+            Self::Usage => 2,
+            Self::InvalidRun => 3,
+            Self::ToolFault => 4,
+        }
+    }
+
+    /// The wire word, identical to what serde writes.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+            Self::Usage => "usage",
+            Self::InvalidRun => "invalid_run",
+            Self::ToolFault => "tool_fault",
+        }
+    }
+
+    /// The display label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+            Self::Usage => "usage or input error",
+            Self::InvalidRun => "not judged",
+            Self::ToolFault => "tool fault",
+        }
+    }
+
+    /// What each code meant before the shared table.
+    #[must_use]
+    pub const fn aliases(self) -> &'static [&'static str] {
+        match self {
+            Self::Pass => &["clean or report-only (hauksbee)", "GREEN (hauksbee-ci)"],
+            Self::Fail => &["input error (hauksbee)", "RED (hauksbee-ci)"],
+            Self::Usage => &[
+                "strict findings or usage error (hauksbee)",
+                "spec, usage or output error (hauksbee-ci)",
+            ],
+            Self::InvalidRun => &["invalid for analysis"],
+            Self::ToolFault => &[],
+        }
+    }
+
+    /// One line saying what the code means.
+    #[must_use]
+    pub const fn meaning(self) -> &'static str {
+        match self {
+            Self::Pass => "Pass or conditional pass.",
+            Self::Fail => "Fail: a blocking finding or a failed assertion.",
+            Self::Usage => "Usage, spec or input error: the run did not start.",
+            Self::InvalidRun => "Partly judged or invalid run: not a pass, and not a fail.",
+            Self::ToolFault => "Internal error in hauksbee itself; please report it.",
+        }
+    }
+}
+
+/// How much a finding matters, on one ordered scale (`info` lowest,
+/// `serious` highest). Whether it fails the run is a separate flag,
+/// [`BLOCKING`]: the gate decides that per check (a lint warning can block, a
+/// DRC warning does not), and every renderer leads with it ("2 blocking,
+/// 0 serious, 2 worth a look") so the headline and the verdict agree.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Severity {
+    /// Context, not a problem.
+    Info,
+    /// Worth knowing; no action expected.
+    Note,
+    /// Worth a look before ordering.
+    Warning,
+    /// A real problem with the design.
+    Serious,
+}
+
+impl Severity {
+    /// Every grade, highest first.
+    pub const ALL: [Self; 4] = [Self::Serious, Self::Warning, Self::Note, Self::Info];
+
+    /// The wire word, identical to what serde writes.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Note => "note",
+            Self::Warning => "warning",
+            Self::Serious => "serious",
+        }
+    }
+
+    /// The display label (the terminal already says "worth a look").
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Note => "note",
+            Self::Warning => "worth a look",
+            Self::Serious => "serious",
+        }
+    }
+
+    /// SARIF 2.1.0 `result.level` of a finding with this grade. A blocking
+    /// finding is `error` whatever its grade ([`sarif_level`]).
+    #[must_use]
+    pub const fn sarif_level(self) -> &'static str {
+        match self {
+            Self::Info | Self::Note => "note",
+            Self::Warning => "warning",
+            Self::Serious => "error",
+        }
+    }
+
+    /// `severity` in the `kicad-cli pcb drc --format json` report shape. A
+    /// blocking finding is `error` and a waived one `exclusion`
+    /// ([`kicad_severity`]).
+    #[must_use]
+    pub const fn kicad_severity(self) -> &'static str {
+        match self {
+            Self::Info | Self::Note => "info",
+            Self::Warning => "warning",
+            Self::Serious => "error",
+        }
+    }
+
+    /// Older or tool-specific spellings of this grade.
+    #[must_use]
+    pub const fn aliases(self) -> &'static [&'static str] {
+        match self {
+            Self::Info => &["Info"],
+            Self::Note => &["Low", "[note]"],
+            Self::Warning => &["Medium"],
+            Self::Serious => &["High"],
+        }
+    }
+
+    /// One line saying what the grade means.
+    #[must_use]
+    pub const fn meaning(self) -> &'static str {
+        match self {
+            Self::Info => "Context, not a problem.",
+            Self::Note => "Worth knowing; no action expected.",
+            Self::Warning => "Worth a look before ordering.",
+            Self::Serious => "A real problem with the design.",
+        }
+    }
+
+    /// Map a grade spelled by an existing producer: the engine's
+    /// `serious`/`warning`/`note`/`info` and the checks crate's
+    /// `High`/`Medium`/`Low`/`Info` (any case).
+    #[must_use]
+    pub fn from_legacy(word: &str) -> Option<Self> {
+        Some(match word.to_ascii_lowercase().as_str() {
+            "serious" | "high" | "error" => Self::Serious,
+            "warning" | "medium" => Self::Warning,
+            "note" | "low" => Self::Note,
+            "info" => Self::Info,
+            _ => return None,
+        })
+    }
+}
+
+/// The blocking flag: the gate fails the run on this finding unless a waiver
+/// covers it. Independent of [`Severity`].
+pub const BLOCKING: Entry = Entry {
+    id: "blocking",
+    label: "blocking",
+    meaning: "The gate fails the run on this finding unless it is waived. Independent of \
+              severity: a gating warning blocks.",
+    aliases: &["gating", "blocking problem"],
+};
+
+/// SARIF `result.level` for a finding: `error` when it blocks, else its
+/// grade's level.
+#[must_use]
+pub const fn sarif_level(severity: Severity, blocking: bool) -> &'static str {
+    if blocking {
+        "error"
+    } else {
+        severity.sarif_level()
+    }
+}
+
+/// KiCad report `severity` for a finding: `exclusion` when waived, `error`
+/// when it blocks, else its grade's severity.
+#[must_use]
+pub const fn kicad_severity(severity: Severity, blocking: bool, waived: bool) -> &'static str {
+    if waived {
+        "exclusion"
+    } else if blocking {
+        "error"
+    } else {
+        severity.kicad_severity()
+    }
+}
+
+/// How much a conclusion's evidence can be trusted: the record's spelling of
+/// [`EvidenceStatus`]. `full` replaces that type's `clean`, which collided
+/// with the verdict word "clean"; `clean` stays the wire word in `run --json`
+/// v3 and `hauksbee-ci --json` v2 until those documents become the record.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceGrade {
+    /// No assumption on the causal path.
+    Full,
+    /// Assumptions on the path, none critical.
+    Qualified,
+    /// A critical assumption on the path: no verdict.
+    Undermined,
+}
+
+impl EvidenceGrade {
+    /// Every grade, best first.
+    pub const ALL: [Self; 3] = [Self::Full, Self::Qualified, Self::Undermined];
+
+    /// The wire word, identical to what serde writes.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Qualified => "qualified",
+            Self::Undermined => "undermined",
+        }
+    }
+
+    /// The display label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Full => "full evidence",
+            Self::Qualified => "qualified evidence",
+            Self::Undermined => "undermined evidence",
+        }
+    }
+
+    /// One line saying what the grade means.
+    #[must_use]
+    pub const fn meaning(self) -> &'static str {
+        match self {
+            Self::Full => {
+                "The conclusion stands on evidence alone: nothing on its causal path was assumed."
+            }
+            Self::Qualified => {
+                "The conclusion holds with named caveats: assumptions sit on its path, none \
+                 critical."
+            }
+            Self::Undermined => {
+                "A critical assumption sits on the causal path, so the conclusion gets no verdict."
+            }
+        }
+    }
+
+    /// Older spellings.
+    #[must_use]
+    pub const fn aliases(self) -> &'static [&'static str] {
+        match self {
+            Self::Full => &["clean"],
+            Self::Qualified => &["analysis qualified"],
+            Self::Undermined => &["UNDERMINED", "analysis undermined"],
+        }
+    }
+}
+
+impl From<EvidenceStatus> for EvidenceGrade {
+    fn from(status: EvidenceStatus) -> Self {
+        match status {
+            EvidenceStatus::Clean => Self::Full,
+            EvidenceStatus::Qualified => Self::Qualified,
+            EvidenceStatus::Undermined => Self::Undermined,
+        }
+    }
+}
+
+/// A check or analysis a run can perform: the `check` of a finding and the
+/// names in `scope.checks_run`.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Check {
+    Drc,
+    Lint,
+    Si,
+    Resources,
+    UsbC,
+    Thermal,
+    Ac,
+    Cosim,
+    /// Spec assertions (`hauksbee-ci`).
+    Spec,
+    /// Run-level evidence findings (an undermined claim).
+    Evidence,
+}
+
+impl Check {
+    /// Every check, in report order.
+    pub const ALL: [Self; 10] = [
+        Self::Drc,
+        Self::Lint,
+        Self::Si,
+        Self::Resources,
+        Self::UsbC,
+        Self::Thermal,
+        Self::Ac,
+        Self::Cosim,
+        Self::Spec,
+        Self::Evidence,
+    ];
+
+    /// The wire word, identical to what serde writes.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Drc => "drc",
+            Self::Lint => "lint",
+            Self::Si => "si",
+            Self::Resources => "resources",
+            Self::UsbC => "usb_c",
+            Self::Thermal => "thermal",
+            Self::Ac => "ac",
+            Self::Cosim => "cosim",
+            Self::Spec => "spec",
+            Self::Evidence => "evidence",
+        }
+    }
+
+    /// The display label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Drc => "Design rules (DRC)",
+            Self::Lint => "Connectivity lint",
+            Self::Si => "Signal integrity",
+            Self::Resources => "MCU resources",
+            Self::UsbC => "USB-C",
+            Self::Thermal => "Thermal",
+            Self::Ac => "AC response",
+            Self::Cosim => "Firmware co-simulation",
+            Self::Spec => "Spec assertions",
+            Self::Evidence => "Evidence",
+        }
+    }
+
+    /// One line saying what the check does.
+    #[must_use]
+    pub const fn meaning(self) -> &'static str {
+        match self {
+            Self::Drc => {
+                "Copper geometry against the clearance and width rules: shorts, spacing, \
+                 unrouted pads."
+            }
+            Self::Lint => {
+                "The netlist the copper implements: floating inputs, unpowered parts, wrong \
+                 values."
+            }
+            Self::Si => "Signal integrity of fast nets: impedance, length and coupling.",
+            Self::Resources => {
+                "MCU pins and peripherals the board uses, against what the part provides."
+            }
+            Self::UsbC => "USB-C configuration: CC resistors, VBUS and the receptacle wiring.",
+            Self::Thermal => "Dissipation and temperature rise of each part against its ratings.",
+            Self::Ac => "Small-signal frequency response of the solved circuit.",
+            Self::Cosim => {
+                "Compiled firmware run against the solved board, with ratings checked over time."
+            }
+            Self::Spec => "The assertions a hauksbee-ci spec states, each judged against the run.",
+            Self::Evidence => "Claims whose own evidence is undermined, reported as findings.",
+        }
+    }
+
+    /// Other spellings (command-line flags, older words).
+    #[must_use]
+    pub const fn aliases(self) -> &'static [&'static str] {
+        match self {
+            Self::Drc => &["--drc"],
+            Self::Lint => &["--lint"],
+            Self::Si => &["--si"],
+            Self::Resources => &["--resources"],
+            Self::UsbC => &["--usb-c", "usb_c_cc"],
+            Self::Thermal => &["--thermal"],
+            Self::Ac => &["--ac"],
+            Self::Cosim => &["co-sim", "--headless"],
+            Self::Spec => &["ci", "assertion"],
+            Self::Evidence => &[],
+        }
+    }
+}
+
+/// One vocabulary entry: the shape every domain shares.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Entry {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub meaning: &'static str,
+    pub aliases: &'static [&'static str],
+}
+
+/// A verdict state's entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct VerdictEntry {
+    #[serde(flatten)]
+    pub entry: Entry,
+    pub ci_alias: Option<&'static str>,
+    pub exit_code: u8,
+}
+
+/// A severity grade's entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SeverityEntry {
+    #[serde(flatten)]
+    pub entry: Entry,
+    pub sarif_level: &'static str,
+    pub kicad_severity: &'static str,
+}
+
+/// An exit code's entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExitEntry {
+    #[serde(flatten)]
+    pub entry: Entry,
+    pub code: u8,
+}
+
+/// The `schema` value of [`Vocabulary`].
+pub const VOCABULARY_SCHEMA: &str = "hauksbee.vocabulary/1";
+
+/// The whole vocabulary, as data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Vocabulary {
+    /// Always [`VOCABULARY_SCHEMA`].
+    pub schema: &'static str,
+    pub exit_contract: &'static str,
+    pub verdicts: Vec<VerdictEntry>,
+    pub evidence_grades: Vec<Entry>,
+    pub severities: Vec<SeverityEntry>,
+    /// [`BLOCKING`].
+    pub blocking: Entry,
+    pub exit_codes: Vec<ExitEntry>,
+    pub checks: Vec<Entry>,
+    /// [`crate::glossary::all`], by reference: the glossary stays the one
+    /// place its terms are explained.
+    pub glossary: Vec<TermEntry>,
+}
+
+/// `explain verdicts`: every state, in display order.
+#[must_use]
+pub fn verdicts() -> Vec<VerdictEntry> {
+    VerdictState::ALL
+        .iter()
+        .map(|&s| VerdictEntry {
+            entry: Entry {
+                id: s.as_str(),
+                label: s.label(),
+                meaning: s.meaning(),
+                aliases: s.aliases(),
+            },
+            ci_alias: s.ci_alias(),
+            exit_code: s.exit_class().code(),
+        })
+        .collect()
+}
+
+/// `explain severities`: the scale, highest first, with its SARIF and KiCad
+/// mappings.
+#[must_use]
+pub fn severities() -> Vec<SeverityEntry> {
+    Severity::ALL
+        .iter()
+        .map(|&s| SeverityEntry {
+            entry: Entry {
+                id: s.as_str(),
+                label: s.label(),
+                meaning: s.meaning(),
+                aliases: s.aliases(),
+            },
+            sarif_level: s.sarif_level(),
+            kicad_severity: s.kicad_severity(),
+        })
+        .collect()
+}
+
+/// `explain exit-codes`: the shared table under [`EXIT_CONTRACT`].
+#[must_use]
+pub fn exit_codes() -> Vec<ExitEntry> {
+    ExitClass::ALL
+        .iter()
+        .map(|&c| ExitEntry {
+            entry: Entry {
+                id: c.as_str(),
+                label: c.label(),
+                meaning: c.meaning(),
+                aliases: c.aliases(),
+            },
+            code: c.code(),
+        })
+        .collect()
+}
+
+/// The evidence grades, best first.
+#[must_use]
+pub fn evidence_grades() -> Vec<Entry> {
+    EvidenceGrade::ALL
+        .iter()
+        .map(|&g| Entry {
+            id: g.as_str(),
+            label: g.label(),
+            meaning: g.meaning(),
+            aliases: g.aliases(),
+        })
+        .collect()
+}
+
+/// The checks, in report order.
+#[must_use]
+pub fn checks() -> Vec<Entry> {
+    Check::ALL
+        .iter()
+        .map(|&c| Entry {
+            id: c.as_str(),
+            label: c.label(),
+            meaning: c.meaning(),
+            aliases: c.aliases(),
+        })
+        .collect()
+}
+
+/// Everything above plus the glossary: the one serialization the app and
+/// `explain` read.
+#[must_use]
+pub fn vocabulary() -> Vocabulary {
+    Vocabulary {
+        schema: VOCABULARY_SCHEMA,
+        exit_contract: EXIT_CONTRACT,
+        verdicts: verdicts(),
+        evidence_grades: evidence_grades(),
+        severities: severities(),
+        blocking: BLOCKING,
+        exit_codes: exit_codes(),
+        checks: checks(),
+        glossary: crate::glossary::all(),
+    }
+}
+
+/// Every display label defined here and in the glossary, for the test that
+/// fails when a renderer spells one itself instead of reading it.
+#[must_use]
+pub fn labels() -> Vec<&'static str> {
+    let v = vocabulary();
+    let mut out: Vec<&'static str> = v
+        .verdicts
+        .iter()
+        .map(|e| e.entry.label)
+        .chain(v.severities.iter().map(|e| e.entry.label))
+        .chain(v.exit_codes.iter().map(|e| e.entry.label))
+        .chain(v.evidence_grades.iter().map(|e| e.label))
+        .chain(v.checks.iter().map(|e| e.label))
+        .chain([v.blocking.label])
+        .chain(v.glossary.iter().map(|e| e.label))
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
