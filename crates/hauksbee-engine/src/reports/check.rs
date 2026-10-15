@@ -464,7 +464,7 @@ fn verdict_counts(
     worth_a_look = worth_a_look.saturating_sub(
         lint.findings
             .iter()
-            .filter(|f| f.is_abstention() && f.severity != hauksbee_extract::Severity::High)
+            .filter(|f| !f.is_actionable() && f.severity != hauksbee_extract::Severity::High)
             .count(),
     );
     if usbc.is_some_and(crate::checks::usb_c::UsbcReport::is_serious) {

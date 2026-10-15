@@ -2207,9 +2207,10 @@ pub fn lint_findings_json(report: &NetLintReport) -> Vec<JsonFinding> {
             location_mm: None,
             layer: None,
             refs: f.refs.clone(),
-            // An abstention says what was not judged; it stays on the report
-            // but is not a finding to act on (see `LintFinding::is_abstention`).
-            actionable: !f.is_abstention(),
+            // An abstention says what was not judged and an informational note
+            // reports evidence with no verdict; both stay on the report but are
+            // not findings to act on (see `LintFinding::is_actionable`).
+            actionable: f.is_actionable(),
             message: f.message.clone(),
             plain: f.message.clone(),
             fix: if f.is_abstention() {
@@ -3269,6 +3270,51 @@ mod tests {
                 .as_deref()
                 .is_some_and(|f| f.contains("net_drive")),
             "an envelope abstention says how to unlock it, not 'move the pin'"
+        );
+    }
+
+    #[test]
+    fn informational_evidence_notes_are_not_actionable() {
+        use hauksbee_extract::{
+            LintCheck, LintFinding, Severity, SiCheck, SiFinding, SiReport, SiSeverity,
+        };
+        let lint = |severity, message: &str| LintFinding {
+            check: LintCheck::DeviceDecode,
+            severity,
+            message: message.to_string(),
+            refs: vec!["U1".to_string(), "R1".to_string()],
+            nets: vec!["ILIM".to_string()],
+        };
+        let json = lint_findings_json(&hauksbee_extract::NetLintReport {
+            findings: vec![
+                // Legal: a decoded band reported for audit, no verdict.
+                lint(Severity::Low, "U1 eFuse current-limit decode (informational): R1 = 127 ohm decodes to 10/11/12 A"),
+                // Faulty: the verdict drawn from it stays actionable.
+                lint(Severity::Medium, "U1 eFuse connector budget: R1 = 127 ohm decodes to 10/11/12 A, while J1 is rated 2 A"),
+                // The marker never demotes a finding above note severity.
+                lint(Severity::Medium, "U1 decode (informational) out of range"),
+            ],
+        });
+        assert!(!json[0].actionable, "{json:?}");
+        assert!(json[1].actionable && json[2].actionable, "{json:?}");
+
+        let si = |message: &str| SiFinding {
+            check: SiCheck::ControlledImpedance,
+            severity: SiSeverity::Info,
+            message: message.to_string(),
+            refs: vec![],
+            nets: vec!["DP".to_string(), "DN".to_string()],
+        };
+        let json = si_findings_json(&SiReport {
+            findings: vec![
+                si("DP / DN [target 90 ohm, USB differential]: estimate +1% from target, within +-15% - info only (undeclared)"),
+                si("DP / DN [target 90 ohm, USB differential]: estimate +90% from target - info only (undeclared)"),
+            ],
+        });
+        assert!(!json[0].actionable, "an in-band estimate is not off target");
+        assert!(
+            json[1].actionable,
+            "an off-target estimate stays actionable"
         );
     }
 

@@ -724,12 +724,19 @@ fn judge(
     // control these nets (e.g. a full-speed USB keyboard), so a deviation is not
     // a defect. Report the computed impedance as an auditable info note. Only a
     // board that declares it is impedance-controlled can produce a finding.
+    // An in-band estimate says so: a consumer treats an info note as actionable
+    // only when it reports an off-target deviation, and +1% is not one.
     if let Some(why) = confidence_caveat(stackup) {
+        let band = if in_band {
+            format!(", within +-{:.0}%", Z_TOLERANCE * 100.0)
+        } else {
+            String::new()
+        };
         report.findings.push(SiFinding {
             check: SiCheck::ControlledImpedance,
             severity: SiSeverity::Info,
             message: format!(
-                "{} [target {:.0} ohm, {}]: estimate {:+.0}% from target - info only ({})",
+                "{} [target {:.0} ohm, {}]: estimate {:+.0}% from target{band} - info only ({})",
                 detail,
                 target,
                 class.kind_label(),
@@ -1601,6 +1608,44 @@ mod tests {
             !msg.contains("+15% deviation exceeds +-15%"),
             "the message must not render deviation equal to the tolerance: {msg}"
         );
+    }
+
+    #[test]
+    fn undeclared_stackup_estimate_says_whether_it_is_in_band() {
+        // A board without declared impedance control gets info notes only. The
+        // note for an estimate inside the tolerance must say so, or a consumer
+        // reading "from target" counts a +1% estimate as off target.
+        let stackup = Stackup {
+            h_microstrip_mm: 0.099,
+            t_cu_mm: 0.035,
+            er: 4.5,
+            source: StackupSource::Board,
+            impedance_controlled: false,
+        };
+        let mut report = SiReport::default();
+        // Legal: 91 ohm against the 90 ohm USB target is +1%.
+        judge(
+            &mut report,
+            &stackup,
+            ImpedanceClass::UsbDiff,
+            91.0,
+            "DP / DN",
+            vec![],
+        );
+        // Faulty: 171 ohm is +90%, far outside the band.
+        judge(
+            &mut report,
+            &stackup,
+            ImpedanceClass::UsbDiff,
+            171.0,
+            "DP / DN",
+            vec![],
+        );
+        let legal = &report.findings[0].message;
+        let faulty = &report.findings[1].message;
+        assert!(legal.contains("within +-15%"), "in-band note: {legal}");
+        assert!(!faulty.contains("within"), "out-of-band note: {faulty}");
+        assert!(faulty.contains("+90% from target"), "{faulty}");
     }
 
     #[test]

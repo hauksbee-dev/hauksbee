@@ -81,7 +81,7 @@ use super::{is_ground_name, is_unconnected_net, norm};
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
     is_plain_resistor as is_source_classified_resistor, Component, ExtractedBoard, LintCheck,
-    LintFinding, NetLintReport, Severity,
+    LintFinding, NetLintReport, Severity, INFORMATIONAL_MARKER,
 };
 use hauksbee_models::value::parse_value;
 use hauksbee_models::{ComponentKind, ModelLibrary};
@@ -736,7 +736,7 @@ fn check_tps25982_ilim(
         check: LintCheck::DeviceDecode,
         severity: Severity::Low,
         message: format!(
-            "{} eFuse current-limit decode (informational): ILIM resistor {r_ref} = {} ohm \
+            "{} eFuse current-limit decode{INFORMATIONAL_MARKER}: ILIM resistor {r_ref} = {} ohm \
              decodes to {:.2}/{:.2}/{:.2} A min/typ/max across the TPS25982 \
              datasheet tolerance band (Section 7.3.3.3 Equation 8 scaled by the \
              Section 6.5 full-temperature 100-ohm row); this note alone makes no \

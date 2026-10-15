@@ -48,7 +48,21 @@ pub const ABSTENTION_MARKER: &str = " abstained";
 /// through a pour was not checked, so it is an abstention too.
 pub const ZONES_NOT_FILLED_PREFIX: &str = "zones not filled";
 
+/// The word a low-severity evidence note carries: a decoded value or computed
+/// band reported for audit, with no verdict of its own. Any verdict drawn from
+/// it is emitted as a separate finding.
+pub const INFORMATIONAL_MARKER: &str = " (informational)";
+
 impl LintFinding {
+    /// Whether this finding asks the reader to do something: not an abstention
+    /// and not a low-severity informational evidence note.
+    #[must_use]
+    pub fn is_actionable(&self) -> bool {
+        let evidence_note =
+            self.severity == Severity::Low && self.message.contains(INFORMATIONAL_MARKER);
+        !(self.is_abstention() || evidence_note)
+    }
+
     /// Whether this finding records what a check did NOT judge rather than a
     /// flaw it found: an MCU with no model, a strap divider it cannot evaluate,
     /// an operating envelope / decode whose input level is unknown, a rating
