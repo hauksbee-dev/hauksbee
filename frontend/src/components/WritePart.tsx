@@ -519,7 +519,7 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
           <div className="flex flex-wrap items-center gap-1.5 mb-2" data-testid="kind-picker">
             <span className="text-[12px]" style={{ color: 'var(--silk-dim)' }}>Simulate it as</span>
             <select
-              className="hb-input text-[12px] w-full"
+              className="hb-input text-[12px] w-full truncate"
               aria-label="Kind of part"
               data-testid="kind-select"
               value={format === 'spice' ? 'spice' : kind ?? ''}
