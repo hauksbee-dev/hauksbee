@@ -253,6 +253,7 @@ theta_ja_c_per_w    = 125.0   # RthJA steady-state max (typ 100; the t<=10s row 
 max_junction_temp_c = 150.0   # TJ max (C)
 rds_on_vgs          = 2.5     # lowest RDS(on) row: 24 mOhm typ / 48 max @ VGS=2.5V, ID=3A
 vgs_th_max          = 1.45    # VGS(th) max @ VDS=VGS, ID=250mA
+vgs_max             = 12.0    # VGS +-12 V, Absolute Maximum Ratings (Rev 3.1, July 2023)
 [models.source]
 tier = "curated-library"
 validation = "physical-bounds-only"
@@ -344,6 +345,7 @@ max_power_w = 1.4           # PD at TA=25C; Note B: derived from the t<=10s RthJ
 max_voltage_v = 30.0
 max_junction_temp_c = 150.0 # TJ, TSTG -55 to 150 C
 theta_ja_c_per_w = 125.0    # RthJA steady-state max (typ 100), Note A: 1 in2 FR-4, 2 oz Cu
+vgs_max = 12.0              # VGS +-12 V, Absolute Maximum Ratings (Rev 3.1, December 2023)
 [models.source]
 tier = "curated-library"
 validation = "physical-bounds-only"
@@ -3503,6 +3505,7 @@ theta_jc_c_per_w    = 1.3     # RthJC bottom, max
 max_junction_temp_c = 175.0   # Tj, Tstg max
 rds_on_vgs          = 4.5     # lowest-VGS RDS(on) row (1.5 mOhm typ / 1.9 max @ 4.5 V)
 vgs_th_max          = 2.0     # VGS(th) max @ ID = 250 uA
+vgs_max             = 20.0    # Gate source voltage -20 / 20 V, Table 2 Maximum ratings
 
 [models.source]
 tier = "curated-library"
@@ -3572,6 +3575,7 @@ theta_ja_c_per_w    = 200.0   # RθJA, Note 5 (155 for Note 6)
 max_junction_temp_c = 150.0   # TJ, TSTG -55 to +150 C
 rds_on_vgs          = 4.5     # lowest |VGS| RDS(on) row (0.600 Ohm max @ VGS = -4.5 V)
 vgs_th_max          = 3.0     # |VGS(th)| max (-3 V) @ ID = -250 uA
+vgs_max             = 20.0    # Gate-Source Voltage VGS +-20 V, Maximum Ratings (DS32014 Rev. 7-2)
 
 [models.source]
 tier = "curated-library"
@@ -3665,6 +3669,7 @@ theta_jc_c_per_w    = 22.0    # RthJC (Note 6)
 max_junction_temp_c = 150.0   # TJ, TSTG -55 to +150 C
 rds_on_vgs          = 1.8     # lowest |VGS| RDS(on) row (51 mOhm typ / 65 max @ VGS = -1.8 V)
 vgs_th_max          = 1.0     # |VGS(th)| max (-1.0 V) @ ID = -250 uA
+vgs_max             = 8.0     # Gate-Source Voltage VGSS +-8 V, Maximum Ratings (DS31842 Rev. 7-3)
 
 [models.source]
 tier = "curated-library"
@@ -3745,6 +3750,7 @@ theta_jc_c_per_w    = 33.0    # RthJC (Note 7)
 max_junction_temp_c = 150.0   # TJ, TSTG -55 to +150 C
 rds_on_vgs          = 1.8     # lowest |VGS| RDS(on) row (68 mOhm typ / 200 max @ VGS = -1.8 V)
 vgs_th_max          = 0.9     # |VGS(th)| max (-0.9 V) @ ID = -250 uA
+vgs_max             = 8.0     # Gate-Source Voltage VGSS +-8 V, Maximum Ratings (DS36196 Rev. 8-2)
 
 [models.source]
 tier = "curated-library"
@@ -4105,6 +4111,7 @@ max_junction_temp_c = 150.0 # Source: Thermal Characteristics, TJ,TSTG upper lim
 theta_ja_c_per_w = 62.5 # Source: Thermal Characteristics, RθJA Note 5
 rds_on_vgs = 6.0 # Source: Electrical Characteristics, RDS(on) specified at VGS=-6 V and -10 V; lowest magnitude
 vgs_th_max = 4.0 # Source: Electrical Characteristics, VGS(th) max column = -4.0 V (magnitude)
+vgs_max = 20.0 # Source: Maximum Ratings, Gate-Source Voltage VGS 20 V (DS32022 Rev. 4-2; IGSS is tested at +-20 V)
 
 [models.pins]
 # The datasheet's top-view pin-out (page 1) draws G / D / S down the lead side and D on the tab, unnumbered; the
@@ -4356,6 +4363,7 @@ theta_ja_c_per_w = 417.0 # Source: Thermal Characteristics, RθJA = 417 °C/W
 max_junction_temp_c = 150.0 # Source: Thermal Characteristics, TJ max = +150 °C
 rds_on_vgs = 5.0 # Source: Electrical Characteristics, RDS(ON), VGS = -5 V
 vgs_th_max = 2.0 # Source: Electrical Characteristics, VGS(TH), max = -2.0 V
+vgs_max = 20.0 # Source: Maximum Ratings, Gate-Source Voltage Continuous VGSS +-20 V (DS30149 Rev. 27-2)
 
 [models.pins]
 "1" = "gate" # SOT23 top view, lower-left; cross-checked against equivalent circuit

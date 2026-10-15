@@ -1218,6 +1218,12 @@ pub struct Ratings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vgs_th_max: Option<f64>,
 
+    /// MOSFET: absolute-maximum gate-source voltage magnitude (V), the
+    /// datasheet's VGS / VGSS row. The gate oxide breaks down past it in either
+    /// direction, so the stress monitor judges |V(gate) - V(source)| against it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vgs_max: Option<f64>,
+
     /// Set by the binder, never by a card: `max_current_a` is a fuse's or
     /// polyfuse's hold current, so a load past it trips the part and the rail
     /// it feeds collapses, which the DC stress finding says in those words.
@@ -1343,7 +1349,8 @@ impl Ratings {
   theta_jc_c_per_w     # Rth(j-c) junction-to-case thermal resistance (C/W = K/W), selected package and stated case reference only
   min_current_a        # FLOOR, not a ceiling (A): least current the datasheet guarantees regulation at (shunt-reference IKmin, LDO minimum load)
   rds_on_vgs           # MOSFET: lowest |VGS| (V) at which the datasheet specifies RDS(on)
-  vgs_th_max           # MOSFET: MAXIMUM |VGS(th)| (V) from Electrical Characteristics";
+  vgs_th_max           # MOSFET: MAXIMUM |VGS(th)| (V) from Electrical Characteristics
+  vgs_max              # MOSFET: absolute-maximum gate-source voltage magnitude (V), the VGS / VGSS row (+-12 V gives 12)";
 
     #[must_use]
     pub fn is_empty(&self) -> bool {

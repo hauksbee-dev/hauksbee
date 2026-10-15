@@ -1784,7 +1784,7 @@ pub fn rating_applies(kind: ComponentKind, key: &str) -> bool {
     use ComponentKind::{BjtNpn, BjtPnp, Connector, Diode, Nmos, Passive, Pmos, Vreg};
     match key {
         "polarized" | "max_ripple_current_a" => kind == Passive,
-        "rds_on_vgs" | "vgs_th_max" => matches!(kind, Nmos | Pmos),
+        "rds_on_vgs" | "vgs_th_max" | "vgs_max" => matches!(kind, Nmos | Pmos),
         "min_current_a" => kind == Vreg,
         "max_pin_current_a" => !matches!(
             kind,

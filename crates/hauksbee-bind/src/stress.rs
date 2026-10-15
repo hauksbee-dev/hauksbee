@@ -97,6 +97,10 @@ pub enum FaultKind {
     /// device's max junction temperature. Treated as a continuous (sustained)
     /// rating: a single switching-edge power spike does not heat a junction.
     Overtemperature,
+    /// MOSFET gate-source voltage magnitude over `vgs_max`: the gate oxide's
+    /// absolute maximum, judged between the gate and the pin the part's card
+    /// labels source, whichever terminal the channel treats as source.
+    GateOvervoltage,
 }
 
 impl FaultKind {
@@ -111,6 +115,7 @@ impl FaultKind {
             Self::PinOvercurrent => "pin_overcurrent",
             Self::Short => "short",
             Self::Overtemperature => "overtemperature",
+            Self::GateOvervoltage => "gate_overvoltage",
         }
     }
 
@@ -126,6 +131,7 @@ impl FaultKind {
             "reverse_bias" => Self::ReverseBias,
             "pin_overcurrent" => Self::PinOvercurrent,
             "overtemperature" => Self::Overtemperature,
+            "gate_overvoltage" => Self::GateOvervoltage,
             "short" => Self::Short,
             _ => Self::Overcurrent,
         }
@@ -162,7 +168,7 @@ pub fn is_implausible(kind: FaultKind, value: f64) -> bool {
         | FaultKind::Overcurrent
         | FaultKind::SurgeCurrent
         | FaultKind::PinOvercurrent => 500.0,
-        FaultKind::Overvoltage | FaultKind::ReverseBias => 1e4,
+        FaultKind::Overvoltage | FaultKind::ReverseBias | FaultKind::GateOvervoltage => 1e4,
         FaultKind::Short => f64::INFINITY,
     };
     !value.is_finite() || value.abs() > bound
@@ -1786,6 +1792,10 @@ impl StressMonitor {
 struct OperatingPoint {
     /// Gate drive (V) folded into N-channel space. `None` for a non-MOSFET.
     vgs: Option<f64>,
+    /// `V(gate) - V(source)` (V) at the pin the card labels source, unfolded
+    /// and unswapped: what the datasheet's VGS absolute maximum is rated
+    /// between. `None` for a non-MOSFET.
+    gate_source_v: Option<f64>,
     /// Through-current magnitude (A).
     current_a: f64,
     /// Across-voltage, signed (V): for diodes, anode−cathode; for caps, the
@@ -1804,6 +1814,7 @@ impl OperatingPoint {
     const fn new(current_a: f64, voltage_v: f64, power_w: f64) -> Self {
         Self {
             vgs: None,
+            gate_source_v: None,
             current_a,
             voltage_v,
             power_w,
@@ -1958,6 +1969,7 @@ fn operating_point(
             let id = ids.abs().min(1e3);
             OperatingPoint {
                 vgs: Some(vgs),
+                gate_source_v: Some(node_v(*g) - node_v(*s)),
                 terminals: [id, 0.0, id],
                 ..OperatingPoint::new(id, vds, (vds_f * ids).abs().min(1e6))
             }
@@ -2080,6 +2092,9 @@ fn build_checks(meta: &DeviceMeta, op: &OperatingPoint, peak_a: f64, w: Option<f
             check(FaultKind::Overcurrent, op.current_a, r.max_current_a);
             check(FaultKind::Overvoltage, op.voltage_v.abs(), r.max_voltage_v);
             check(FaultKind::Overpower, op.power_w, r.max_power_w);
+            if let Some(vgs) = op.gate_source_v {
+                check(FaultKind::GateOvervoltage, vgs.abs(), r.vgs_max);
+            }
         }
         ComponentKind::Vreg => check(FaultKind::Overcurrent, op.current_a, r.max_current_a),
         // An analog switch is metered per package; the kinds after it get PER-PIN metas, not a package meta: an MCU or logic IC
@@ -3135,6 +3150,65 @@ mod monitor_temp_tests {
                 .map_or(0.0, |p| p.1)
         };
         operating_point(&circuit, &meta, &node_v, &|_| None)
+    }
+
+    /// A reverse-polarity P-FET on a 24 V input whose gate-source Zener clamps
+    /// at `clamp_v`: the gate sits `clamp_v` below the labelled source. Returns
+    /// the gate faults the monitor raises.
+    fn pfet_gate_faults(clamp_v: f64, vgs_max: Option<f64>) -> Vec<FaultEvent> {
+        let model = hauksbee_ir::MosfetModel {
+            polarity: hauksbee_ir::Polarity::P,
+            vto: 1.0,
+            kp: 1.0,
+            ..Default::default()
+        };
+        let mut circuit = Circuit::new();
+        let (d, g, s) = (circuit.node("LOAD"), circuit.node("G"), circuit.node("VIN"));
+        let device = circuit.add(Device::Mosfet {
+            name: "M1".into(),
+            d,
+            g,
+            s,
+            b: None,
+            model,
+        });
+        let ratings = Ratings {
+            max_voltage_v: Some(30.0),
+            vgs_max,
+            ..Default::default()
+        };
+        let mut monitor = StressMonitor::new(vec![DeviceMeta {
+            device,
+            ..meta("Q1", ComponentKind::Pmos, "", ratings)
+        }]);
+        let node_v = |n| {
+            [(s, 24.0), (d, 23.9), (g, 24.0 - clamp_v)]
+                .into_iter()
+                .find(|p| p.0 == n)
+                .map_or(0.0, |p| p.1)
+        };
+        (0..SUSTAIN_CHUNKS + 2)
+            .flat_map(|k| monitor.evaluate(&mut circuit, &node_v, &|_| None, f64::from(k) * 1e-3))
+            .filter(|f| f.kind == FaultKind::GateOvervoltage)
+            .collect()
+    }
+
+    /// The gate oxide's absolute maximum is judged on |V(G) - V(S)| at the
+    /// labelled source: an 18 V clamp on a +-12 V part raises once, a 10 V
+    /// clamp and a card that states no `vgs_max` raise nothing.
+    #[test]
+    fn gate_source_overvoltage_is_judged_against_vgs_max() {
+        let raised = pfet_gate_faults(18.0, Some(12.0));
+        assert_eq!(raised.len(), 1, "{raised:?}");
+        assert_eq!(raised[0].component, "Q1");
+        assert!((raised[0].value - 18.0).abs() < 1e-9, "{raised:?}");
+        assert!((raised[0].limit - 12.0).abs() < 1e-12);
+        assert!(pfet_gate_faults(10.0, Some(12.0)).is_empty());
+        assert!(pfet_gate_faults(18.0, None).is_empty());
+        assert_eq!(
+            FaultKind::from_str(FaultKind::GateOvervoltage.as_str()),
+            FaultKind::GateOvervoltage
+        );
     }
 
     /// The solver puts the channel behind rd/rs; reading it at the terminals

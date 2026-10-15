@@ -656,14 +656,16 @@ fn judge(bound: &mut BoundBoard, solved: &(Workspace, Vec<f64>)) -> Judged {
 
 /// The rating a fault is judged against, coarsely: continuous and surge
 /// current are one clause (current first, as the cause), then power,
-/// temperature and voltage.
+/// temperature, voltage and the gate's own rating, which a drain-source
+/// overvoltage on the same part must not hide.
 const fn kind_class(kind: FaultKind) -> u8 {
     match kind {
         FaultKind::Overcurrent | FaultKind::SurgeCurrent | FaultKind::PinOvercurrent => 0,
         FaultKind::Overpower => 1,
         FaultKind::Overtemperature => 2,
         FaultKind::Overvoltage | FaultKind::ReverseBias => 3,
-        FaultKind::Short => 4,
+        FaultKind::GateOvervoltage => 4,
+        FaultKind::Short => 5,
     }
 }
 
@@ -673,6 +675,7 @@ const fn verb(kind: FaultKind) -> &'static str {
         FaultKind::PinOvercurrent => "passes",
         FaultKind::Overpower => "dissipates",
         FaultKind::Overvoltage | FaultKind::ReverseBias => "sees",
+        FaultKind::GateOvervoltage => "sees a gate-source voltage of",
         FaultKind::Overtemperature => "reaches a junction temperature of",
         FaultKind::Short => "is shorted at",
     }
@@ -690,7 +693,10 @@ fn quantity(kind: FaultKind, v: f64) -> String {
     match kind {
         FaultKind::Overcurrent | FaultKind::SurgeCurrent | FaultKind::PinOvercurrent => amps(v),
         FaultKind::Overpower => format!("{:.0} mW", v * 1e3),
-        FaultKind::Overvoltage | FaultKind::ReverseBias | FaultKind::Short => format!("{v:.2} V"),
+        FaultKind::Overvoltage
+        | FaultKind::ReverseBias
+        | FaultKind::GateOvervoltage
+        | FaultKind::Short => format!("{v:.2} V"),
         FaultKind::Overtemperature => format!("{v:.0} C"),
     }
 }

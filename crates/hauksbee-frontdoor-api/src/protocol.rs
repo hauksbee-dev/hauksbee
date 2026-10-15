@@ -218,7 +218,8 @@ pub struct FaultInfo {
     /// Component reference designator (e.g. "D1").
     pub component: String,
     /// Fault kind: "overcurrent" | `"surge_current"` | "overpower" |
-    /// `"overvoltage"` | `"reverse_bias"` | `"pin_overcurrent"`.
+    /// `"overvoltage"` | `"reverse_bias"` | `"pin_overcurrent"` |
+    /// `"gate_overvoltage"`.
     pub kind: String,
     /// The offending live value (A, V, or W depending on kind).
     pub value: f64,
