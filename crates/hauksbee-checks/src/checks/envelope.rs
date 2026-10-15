@@ -22,6 +22,7 @@ use hauksbee_extract::{
 };
 use hauksbee_ir::evidence::{Assumption, ModelUncertainty};
 use hauksbee_models::derating::{temp_span, TempRef};
+use hauksbee_models::rating_basis::{self, Limit};
 use hauksbee_models::value::parse_value;
 use hauksbee_models::{
     ComponentKind, EnvelopeSeverity, ModelEntry, ModelLibrary, OperatingEnvelope,
@@ -59,6 +60,28 @@ pub(crate) const fn finding_severity(severity: EnvelopeSeverity) -> Severity {
         EnvelopeSeverity::Medium => Severity::Medium,
         EnvelopeSeverity::Note => Severity::Low,
     }
+}
+
+/// `f`, a finding that `m`'s part passed its card's `limit`, worded as the
+/// stated condition at low severity when that limit is a placeholder or
+/// guessed card's, not the part's own ([`rating_basis`]): a tool or model
+/// limit is never a board fault. `subject` says what was seen and `rating`
+/// what it was held to. A note already at low severity is left as it is.
+pub(crate) fn stated_if_stand_in(
+    mut f: LintFinding,
+    m: &ModelEntry,
+    limit: Limit,
+    subject: &str,
+    rating: &str,
+) -> LintFinding {
+    if let Some(s) = m.ratings.basis.stand_in_for(limit) {
+        if f.severity != Severity::Low {
+            let part = f.refs.first().cloned().unwrap_or_default();
+            f.severity = Severity::Low;
+            f.message = rating_basis::condition(&part, s, subject, rating);
+        }
+    }
+    f
 }
 
 /// `severity`, lowered to `cap` when it is more severe.
@@ -615,6 +638,8 @@ fn envelope_lint_with_tolerance(
 
     for (comp, model) in st.parts(board) {
         let net_of = |role| role_net_id(comp, model, role).and_then(|id| board.net(id));
+        // A stand-in card's window is no measure of the part's own supply.
+        let own = model.ratings.basis.judges(Limit::Envelope);
         for envelope in binding(&model.envelope, ambient_c) {
             match envelope {
                 OperatingEnvelope::SupplyRange {
@@ -637,7 +662,7 @@ fn envelope_lint_with_tolerance(
                             }
                             // No level known: a candidate for the static
                             // starved-rail estimate, from the card's draw.
-                            if matches!(knowledge, RailKnowledge::Unknown) {
+                            if own && matches!(knowledge, RailKnowledge::Unknown) {
                                 unleveled.entry(net_id).or_default().push(Starved {
                                     finding: usize::MAX,
                                     reference: comp.reference.clone(),
@@ -706,7 +731,7 @@ fn envelope_lint_with_tolerance(
                     };
                     // A solved rail that never came up to this part's minimum:
                     // a candidate for one rail-level starvation finding.
-                    if resolver.solved(net_id).is_some() && range.max_v < *min_v - min_tol {
+                    if own && resolver.solved(net_id).is_some() && range.max_v < *min_v - min_tol {
                         starved.entry(net_id).or_default().push(Starved {
                             finding: report.findings.len(),
                             reference: comp.reference.clone(),
@@ -714,21 +739,25 @@ fn envelope_lint_with_tolerance(
                             draw_a: static_draw_a(model),
                         });
                     }
-                    report.findings.push(LintFinding {
+                    let seen = format!(
+                        "{} role {pin} on '{}' presents {:.3}..{:.3} V, outside the {:.3}..{:.3} V operating envelope",
+                        comp.reference, net.name, range.min_v, range.max_v, min_v, max_v
+                    );
+                    let finding = LintFinding {
                         check: LintCheck::OperatingEnvelope,
                         severity,
-                        message: format!(
-                            "{} role {pin} on '{}' presents {:.3}..{:.3} V, outside the {:.3}..{:.3} V operating envelope; basis: \"{basis}\".{fix}",
-                            comp.reference,
-                            net.name,
-                            range.min_v,
-                            range.max_v,
-                            min_v,
-                            max_v
-                        ),
+                        message: format!("{seen}; basis: \"{basis}\".{fix}"),
                         refs: vec![comp.reference.clone()],
                         nets: vec![net.name.clone()],
-                    });
+                    };
+                    let rating = format!("{min_v:.3}..{max_v:.3} V supply");
+                    report.findings.push(stated_if_stand_in(
+                        finding,
+                        model,
+                        Limit::Envelope,
+                        &seen,
+                        &rating,
+                    ));
                 }
                 OperatingEnvelope::RailOrder {
                     lower,
@@ -755,7 +784,11 @@ fn envelope_lint_with_tolerance(
                     if known.len() != 2 || known[0].max_v <= known[1].min_v {
                         continue;
                     }
-                    report.findings.push(LintFinding {
+                    let seen = format!(
+                        "{} has '{}' at up to {:.3} V above '{}' at {:.3} V, against its {lower} <= {upper} rail order",
+                        comp.reference, lower_net.name, known[0].max_v, upper_net.name, known[1].min_v
+                    );
+                    let finding = LintFinding {
                         check: LintCheck::OperatingEnvelope,
                         severity: finding_severity(envelope.severity()),
                         message: format!(
@@ -770,7 +803,15 @@ fn envelope_lint_with_tolerance(
                         ),
                         refs: vec![comp.reference.clone()],
                         nets: vec![lower_net.name.clone(), upper_net.name.clone()],
-                    });
+                    };
+                    let rating = format!("{lower} <= {upper} rail-order");
+                    report.findings.push(stated_if_stand_in(
+                        finding,
+                        model,
+                        Limit::Envelope,
+                        &seen,
+                        &rating,
+                    ));
                 }
                 // Supply-relative input windows need the level ON the input
                 // pins, not the rail interval this resolver derives: they are

@@ -589,7 +589,13 @@ fn switch_plan(card: &Card, value: &str, on: &str) -> Plan {
         let net = match role.as_str() {
             r if r == a => input.clone(),
             r if r == b => output.clone(),
-            "s1" | "s1_1" => {
+            // The second lane of a shared-select DPDT mux mirrors the first: the
+            // binder stamps the two-lane arm only when every terminal is wired,
+            // and otherwise falls back to bridging whichever two nets it sorts
+            // first, which depends on the card's pad order, not on the part.
+            "com_2" => input.clone(),
+            "s0_2" => output.clone(),
+            "s1" | "s1_1" | "s1_2" => {
                 second = Some("OUT2");
                 "OUT2".to_string()
             }
@@ -602,8 +608,14 @@ fn switch_plan(card: &Card, value: &str, on: &str) -> Plan {
         let id = rig.net(&net);
         pins.push(pin(pad, id));
     }
-    rig.parts
-        .push(component("U1", value, "Package_TO_SOT_SMD:SOT-23-6", pins));
+    // A card that records its own package (a ten-pad mux, say) is held to its
+    // own outline, not to the rig's SOT-23-6, which has no pads past six.
+    let footprint = if card.declares_package() {
+        ""
+    } else {
+        "Package_TO_SOT_SMD:SOT-23-6"
+    };
+    rig.parts.push(component("U1", value, footprint, pins));
     if rig.nets.iter().any(|(_, n)| n == "ILIM") {
         rig.two("R9", "10k", RES, "ILIM", "GND");
     }

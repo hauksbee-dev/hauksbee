@@ -24,7 +24,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use hauksbee_bind::binder::{bind_board, BoundBoard};
 use hauksbee_bind::stress::{
-    bjt_currents, strip_unit_suffix, FaultEvent, FaultKind, GateDrive, RegulatorHeat, StressMonitor,
+    bjt_currents, strip_unit_suffix, FaultEvent, FaultKind, GateDrive, RegulatorHeat,
+    StandInExceedance, StressMonitor,
 };
 use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};
 use hauksbee_ir::{DeviceId, NodeId};
@@ -193,6 +194,9 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
     let mut unsolved = Vec::new();
     let mut impossible: BTreeMap<String, String> = BTreeMap::new();
     let mut under: BTreeMap<String, (GateDrive, Vec<String>)> = BTreeMap::new();
+    // part -> the stated condition for its first limit passed that was a
+    // placeholder or guessed card's, not its own: never a failing finding.
+    let mut stated: BTreeMap<String, String> = BTreeMap::new();
     for ((label, registers_high), strong_label) in STATES.into_iter().zip(STRONG_STATES) {
         // The states run in order on the one bound board: the second starts
         // from the first's settled circuit and re-settles after its change.
@@ -204,8 +208,9 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
             unsolved.push(label);
             continue;
         };
-        let (overstressed, under_driven, absurd) = judge(state, &x);
+        let (overstressed, under_driven, absurd, stand_in) = judge(state, &x);
         note_absurd(&mut impossible, absurd);
+        note_stand_in(&mut stated, stand_in);
         for (drive, nets) in under_driven {
             let worst = under
                 .entry(drive.reference.clone())
@@ -233,8 +238,9 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
             continue;
         }
         if let Some(x) = settle(state) {
-            let (strong_over, _, absurd) = judge(state, &x);
+            let (strong_over, _, absurd, stand_in) = judge(state, &x);
             note_absurd(&mut impossible, absurd);
+            note_stand_in(&mut stated, stand_in);
             for (part, clauses, nets) in strong_over {
                 if weak.contains(&part) {
                     continue;
@@ -250,6 +256,11 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
         set_drive(state, false);
     }
     let conditional = unknown_state_faults(&mut bound, &by_part);
+    let reported: Vec<&String> = by_part.keys().chain(conditional.keys()).collect();
+    let stated: Vec<LintFinding> = (stated.into_iter())
+        .filter(|(part, _)| !reported.contains(&part))
+        .map(|(part, condition)| stand_in_condition(part, condition))
+        .collect();
     let rows = (by_part.into_iter().map(|row| (row, Severity::High)))
         .chain(conditional.into_iter().map(|row| (row, Severity::Medium)));
     let mut findings: Vec<LintFinding> = rows.map(rest_finding).collect();
@@ -261,6 +272,7 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
             .into_iter()
             .map(|(part, clause)| model_error(part, &clause)),
     );
+    findings.extend(stated);
     if !unsolved.is_empty() {
         findings.push(LintFinding {
             check: LintCheck::DcOverstress,
@@ -319,6 +331,29 @@ fn model_error(part: String, clause: &str) -> LintFinding {
         ),
         refs: vec![part],
         nets: Vec::new(),
+    }
+}
+
+/// The note for a part held past a limit that was a placeholder or guessed
+/// card's, not its own: the stated condition, at low severity, so it never
+/// fails the board ([`hauksbee_models::rating_basis`]).
+fn stand_in_condition(part: String, condition: String) -> LintFinding {
+    LintFinding {
+        check: LintCheck::DcOverstress,
+        severity: Severity::Low,
+        message: condition,
+        refs: vec![part],
+        nets: Vec::new(),
+    }
+}
+
+/// Keep the first stand-in exceedance seen for each part, as its condition.
+fn note_stand_in(into: &mut BTreeMap<String, String>, events: Vec<StandInExceedance>) {
+    for e in events {
+        let c = &e.fault.component;
+        let part = strip_unit_suffix(c.split(':').next().unwrap_or(c));
+        into.entry(part.to_string())
+            .or_insert_with(|| e.condition());
     }
 }
 
@@ -390,6 +425,8 @@ fn unknown_state_faults(
     if set_unknown_state_loads(bound, true) {
         if let Some(x) = settle(bound) {
             for (part, clauses, nets) in judge(bound, &x).0 {
+                // A stand-in limit passed only here is no more a fault than at
+                // rest; the monitor already kept it out of the trips.
                 if !at_rest.contains_key(&part) {
                     conditional.insert(part, (vec![UNKNOWN_STATE], clauses, nets));
                 }
@@ -507,11 +544,13 @@ fn gate_underdrive(
 }
 
 /// What one settled state shows: the parts held past a rating there, the
-/// gates conducting under-driven, and the values too large to be physical.
+/// gates conducting under-driven, the values too large to be physical, and
+/// the limits passed that were a stand-in card's, not the part's own.
 type Judged = (
     Vec<(String, Vec<String>, Vec<String>)>,
     Vec<(GateDrive, Vec<String>)>,
     Vec<FaultEvent>,
+    Vec<StandInExceedance>,
 );
 
 /// Each part the monitor saw conducting under-driven, with its gate net.
@@ -651,7 +690,7 @@ fn judge(bound: &mut BoundBoard, solved: &(Workspace, Vec<f64>)) -> Judged {
             (part, clauses, nets)
         })
         .collect();
-    (overstressed, under, monitor.implausible)
+    (overstressed, under, monitor.implausible, monitor.stand_in)
 }
 
 /// The rating a fault is judged against, coarsely: continuous and surge
@@ -929,5 +968,82 @@ mod tests {
             assert!(message.contains("hold current"), "{message}");
             assert!(message.contains("trips"), "{message}");
         }
+    }
+
+    /// An LED the board names only "LED" binds the generic placeholder card,
+    /// whose 25 mA is no datasheet's: ~60 mA through it is the stated
+    /// condition, at low severity, never a failing finding.
+    #[test]
+    fn a_placeholder_rating_passed_is_a_stated_condition_not_a_fault() {
+        let r = part("R1", "47R", &[("1", 2), ("2", 3)]);
+        let report = series_path(r, part("D1", "LED", &[("A", 3), ("K", 1)]));
+        let found = findings_on(&report, "D1");
+        assert!(!found.is_empty(), "{:#?}", report.findings);
+        assert!(
+            found.iter().all(|f| f.severity == Severity::Low),
+            "{:#?}",
+            report.findings
+        );
+        let stated = found
+            .iter()
+            .find(|f| hauksbee_models::rating_basis::is_condition(&f.message))
+            .unwrap_or_else(|| panic!("no stated condition: {:#?}", report.findings));
+        assert!(
+            stated.message.contains("judged against a generic")
+                && stated.message.contains("give D1 its own model"),
+            "{}",
+            stated.message
+        );
+    }
+
+    /// The part's own datasheet card: past its rating fails, inside it passes.
+    #[test]
+    fn an_own_card_rating_passed_fails_and_inside_it_passes() {
+        let over = diode_at("1N4148", "22R");
+        let found = findings_on(&over, "D1");
+        assert_eq!(found.len(), 1, "{:#?}", over.findings);
+        assert_eq!(found[0].severity, Severity::High, "{}", found[0].message);
+        assert!(!hauksbee_models::rating_basis::is_condition(
+            &found[0].message
+        ));
+        let inside = diode_at("1N4148", "43R");
+        assert!(
+            findings_on(&inside, "D1").is_empty(),
+            "{:#?}",
+            inside.findings
+        );
+    }
+
+    /// A power FET the library knows only by its package binds the generic
+    /// placeholder card (30 V, no datasheet's). Held off on a 48 V rail it sees
+    /// 48 V: judged against that stand-in, this is the stated condition naming
+    /// the part and the card, never a failing finding, because the fitted part
+    /// may be rated far past it.
+    #[test]
+    fn a_power_fet_on_the_generic_placeholder_past_30_v_is_a_condition() {
+        let nets = [(1, "GND"), (2, "+48V"), (3, "/DRAIN")];
+        let pull = part("R1", "10k", &[("1", 2), ("2", 3)]);
+        let mut fet = part("Q1", "NFET-UNCARDED", &[("G", 1), ("D", 3), ("S", 1)]);
+        fet.footprint = "Package_TO_SOT_SMD:TO-252-2".into();
+        let report = dc_stress_lint(&board(&nets, vec![pull, fet]), &ModelLibrary::builtin());
+        let found = findings_on(&report, "Q1");
+        assert!(!found.is_empty(), "{:#?}", report.findings);
+        assert!(
+            found.iter().all(|f| f.severity == Severity::Low),
+            "{:#?}",
+            report.findings
+        );
+        let stated = (found.iter())
+            .find(|f| hauksbee_models::rating_basis::is_condition(&f.message))
+            .unwrap_or_else(|| panic!("no stated condition: {:#?}", report.findings));
+        assert!(
+            stated
+                .message
+                .contains("judged against a generic 30 V voltage rating")
+                && stated.message.contains("generic_nmos_power_pkg")
+                && stated.message.contains("give Q1 its own model"),
+            "{}",
+            stated.message
+        );
     }
 }

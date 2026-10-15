@@ -160,6 +160,7 @@ fn drc_short_evidence_is_geometry_causal_and_cites_the_layout_artifact() {
             severity: "serious".into(),
             plain: "3V3 shorts GND".into(),
             fix: "separate copper".into(),
+            refs: Vec::new(),
         }],
         violations: vec![],
         at_limit: vec![],
@@ -214,6 +215,7 @@ fn schematic_provenance_is_causal_only_to_the_declared_contact() {
         severity: if net_a == "GND" { "note" } else { "serious" }.into(),
         plain: plain.into(),
         fix: String::new(),
+        refs: Vec::new(),
     };
     let drc = DrcStructured {
         clearance_rule_mm: 0.2,
@@ -346,6 +348,7 @@ fn downstream_mcu_evidence_struct_literals_keep_the_legacy_field_contract() {
         adc_pin: HashMap::new(),
         module: false,
         max_supply_v: None,
+        supply_stand_in: None,
         min_supply_v: None,
         supply_floors: HashMap::new(),
     };

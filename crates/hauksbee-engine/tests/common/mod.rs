@@ -22,6 +22,8 @@ pub fn demo_firmware() -> PathBuf {
 ///
 /// - U1: `ATmega328P` (DIP-28 pad map), VCC/AVCC on +5V, GND pads on GND,
 ///   PB5 (pad 19) on net "D13", ADC0 (pad 23) on net "ADC0".
+/// - Y1 16 MHz crystal across XTAL1/XTAL2 (pads 9/10), so the demo firmware
+///   (built for 16 MHz) runs at the clock the board states.
 /// - R1 330Ω from D13 to `LED_A`.
 /// - D1 `RED_LED` from `LED_A` (anode) to GND (cathode).
 /// - R2 10k from +5V to ADC0, R3 10k from ADC0 to GND (a 2.5 V divider).
@@ -34,6 +36,8 @@ pub const SYNTH_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.
   (net 3 "D13")
   (net 4 "LED_A")
   (net 5 "ADC0")
+  (net 6 "XTAL1")
+  (net 7 "XTAL2")
 
   (module Package_DIP:DIP-28_W7.62mm (layer F.Cu)
     (at 100 100)
@@ -41,10 +45,20 @@ pub const SYNTH_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.
     (fp_text value ATmega328P (at 0 2) (layer F.Fab))
     (pad 7  smd rect (at -3 0) (net 2 "+5V"))
     (pad 8  smd rect (at -3 1) (net 1 "GND"))
+    (pad 9  smd rect (at -3 2) (net 6 "XTAL1"))
+    (pad 10 smd rect (at -3 3) (net 7 "XTAL2"))
     (pad 19 smd rect (at 3 0) (net 3 "D13"))
     (pad 20 smd rect (at 3 1) (net 2 "+5V"))
     (pad 22 smd rect (at 3 2) (net 1 "GND"))
     (pad 23 smd rect (at 3 3) (net 5 "ADC0"))
+  )
+
+  (module Crystal:Crystal_HC49-4H_Vertical (layer F.Cu)
+    (at 100 120)
+    (fp_text reference Y1 (at 0 0) (layer F.SilkS))
+    (fp_text value 16MHz (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (net 6 "XTAL1"))
+    (pad 2 thru_hole circle (at 4.9 0) (net 7 "XTAL2"))
   )
 
   (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)

@@ -88,7 +88,7 @@ fn descriptor(c: &Component, pad: &str) -> String {
 }
 
 fn is_rail_name(name: &str) -> bool {
-    is_ground(name) || hauksbee_bind::binder::power_rail_voltage(name).is_some()
+    is_ground(name) || hauksbee_models::netclass::is_supply(name)
 }
 
 /// What a net touches, with the instance erased.

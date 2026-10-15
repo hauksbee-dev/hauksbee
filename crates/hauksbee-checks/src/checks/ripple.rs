@@ -35,6 +35,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use hauksbee_extract::{ExtractedBoard, SiCheck, SiFinding, SiReport, SiSeverity};
+use hauksbee_models::rating_basis::Limit;
 use hauksbee_models::ModelLibrary;
 
 use super::converter::{detect_converters_with_abstentions, BulkCap, ConverterStage, Topology};
@@ -86,7 +87,10 @@ fn input_cap_ripple_rating(
         .component(cap_ref)
         .and_then(|comp| AssemblyState::of(comp).fitted())
         .and_then(|part| resolve(lib, part).model)
-        .and_then(|model| model.ratings.max_ripple_current_a)
+        .and_then(|model| {
+            let r = &model.ratings;
+            r.basis.judged(Limit::RippleCurrent, r.max_ripple_current_a)
+        })
 }
 
 /// Attribute the converter's output current `I_out` (A) from a citeable source

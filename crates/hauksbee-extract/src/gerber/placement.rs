@@ -57,13 +57,11 @@ fn split_csv(line: &str) -> Vec<String> {
     split_delimited(line, sniff_delimiter(line))
 }
 
-/// Normalise a header cell for matching: lowercase, strip spaces/underscores/
-/// punctuation and a trailing unit in parens.
+/// A header cell squeezed for alias and substring matching: the shared
+/// [`hauksbee_models::matcher::normalise_key`] without its separators, so
+/// `"Center-X(mm)"` is `centerxmm` and contains the alias `centerx`.
 fn norm(h: &str) -> String {
-    h.to_ascii_lowercase()
-        .chars()
-        .filter(char::is_ascii_alphanumeric)
-        .collect()
+    hauksbee_models::matcher::normalise_key(h).replace('_', "")
 }
 
 fn find_col(headers: &[String], aliases: &[&str]) -> Option<usize> {

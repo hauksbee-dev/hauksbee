@@ -232,7 +232,8 @@ fn a_gating_warning_fails_the_web_headline_as_it_fails_the_json() {
 
 /// An LED a microcontroller pin drives directly is lit by whatever level the
 /// firmware writes, so ordering the board does not fix its meaning: it stays
-/// NOT COVERED but adds no condition (blinky keeps its clean bill).
+/// NOT COVERED but adds no condition (blinky's only condition is that its
+/// copper was spaced against default rules, having no project file beside it).
 #[test]
 fn a_firmware_driven_indicator_adds_no_condition() {
     let path = crate::support::board("../hauksbee-ci/examples/boards/blinky.kicad_pcb");
@@ -241,5 +242,11 @@ fn a_firmware_driven_indicator_adds_no_condition() {
     let note = v["triage"]["not_covered"].as_str().unwrap_or_default();
     assert!(note.contains(LINE), "{note}");
     assert_eq!(v["verdict"], "pass", "{v:#}");
-    assert!(v.get("verdict_conditions").is_none(), "{v:#}");
+    let conditions = v["verdict_conditions"].as_array().expect("conditions");
+    assert!(
+        conditions.iter().all(|c| c
+            .as_str()
+            .is_some_and(|c| c.starts_with("copper spacing was judged against a DEFAULT"))),
+        "{v:#}"
+    );
 }

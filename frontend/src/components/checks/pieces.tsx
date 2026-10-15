@@ -5,7 +5,6 @@ import type { ResultEntity } from '../../lib/result-links'
 import { EntityChip, ResultLinkContext } from '../report/ResultLinks'
 import { causeGroups, openPartCount, showOpenParts, withoutIds } from './Remedies'
 import { summarizeErrorBudget } from '../../lib/report-view'
-import { checkKind, tomlToBuilder } from '../../lib/check-spec'
 import { VerdictBadge } from '../../motion'
 import { Term } from '../ui'
 
@@ -246,71 +245,6 @@ export function AssertionEvidence({ result, assumptions, inventory, repeats, sta
           )}
         </details>
       )}
-    </div>
-  )
-}
-
-/** The left column while raw-edit mode owns the spec: a live, read-only
- *  summary of what the raw TOML currently says, so the column is not a blank
- *  void. Falls back to a plain sentence when the spec uses vocabulary the
- *  builder cannot parse. */
-export function RawModeSummary({ rawText }: { rawText: string }) {
-  const parsed = useMemo(() => tomlToBuilder(rawText), [rawText])
-  const line = (label: string, body: string) => (
-    <div className="mt-2">
-      <span style={{ color: 'var(--silk)' }}>{label}:</span> {body}
-    </div>
-  )
-  return (
-    <div
-      className="hb-card px-4 py-4 text-[13px] leading-relaxed"
-      style={{ color: 'var(--silk-dim)' }}
-      data-testid="raw-summary"
-    >
-      <div className="text-[11px] font-bold tracking-widest uppercase mb-2" style={{ color: 'var(--silk-faint)' }}>
-        What the raw spec says
-      </div>
-      {parsed ? (
-        <>
-          <div>
-            <b style={{ color: 'var(--silk)', fontWeight: 600 }}>{parsed.name}</b>
-            {' '}· run length {parsed.duration} ms
-          </div>
-          {parsed.supplies.length > 0
-            && line('Power supplies', parsed.supplies.map(s => `${s.net} at ${s.volts} V`).join(', '))}
-          {parsed.peripherals.length > 0
-            && line('Interactions', parsed.peripherals.map(p => `${p.id} (${p.kind}) on ${p.net}`).join(', '))}
-          {parsed.sensors.length > 0 && line(
-            'Register-map devices',
-            parsed.sensors.map(s => `${s.id}${s.controller ? ` on ${s.controller}` : ''}`).join(', '),
-          )}
-          <ul className="mt-2 pl-4" style={{ listStyleType: 'disc' }}>
-            {parsed.checks.map((c, i) => {
-              const meta = checkKind(c.kind)
-              const subject = c.net ? ` on ${c.net}` : c.ref ? ` for ${c.ref}` : ''
-              return (
-                <li key={i} className="my-0.5">
-                  {meta?.label ?? c.kind}{subject}
-                  <code className="text-[10px] ml-1.5" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
-                    {c.kind}
-                  </code>
-                </li>
-              )
-            })}
-            {parsed.checks.length === 0 && <li>no assertions yet</li>}
-          </ul>
-        </>
-      ) : (
-        <div>
-          The spec uses vocabulary beyond the visual builder (tolerances, scenarios,
-          overrides ...), so it cannot be summarized here.
-        </div>
-      )}
-      <div className="mt-3 text-[12px]" style={{ color: 'var(--silk-faint)' }}>
-        The raw TOML on the right is the source of truth now. The visual builder comes
-        back when the spec fits its vocabulary (the “back to the builder” switch on the
-        pane).
-      </div>
     </div>
   )
 }

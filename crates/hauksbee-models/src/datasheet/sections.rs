@@ -18,9 +18,9 @@ use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, TableLike, Value};
 use super::{
     behavioral_family_base_kind, behavioral_hint_for_kind, conventions_for_kind,
     digital_hint_for_kind, extract_toml_block, format_examples_for_kind, optional_params_for_kind,
-    param_bounds_for_kind, pin_roles_for_kind, required_params_for_kind, run_and_record, Workspace,
-    ENVELOPE_RULES, EXTRACTION_RULES, PIN_NUMBERING, PIN_ROLE_GUIDANCE, RATINGS_RULES,
-    SOURCE_QUANTITY_GUIDANCE,
+    param_bounds_for_kind, pin_roles_for_kind, rating_key_guide, required_params_for_kind,
+    run_and_record, Workspace, ENVELOPE_RULES, EXTRACTION_RULES, PIN_NUMBERING, PIN_ROLE_GUIDANCE,
+    RATINGS_RULES, SOURCE_QUANTITY_GUIDANCE,
 };
 use crate::extract_config::Resolved;
 use crate::extract_harness as harness;
@@ -360,8 +360,9 @@ fn prompt(part: &str, kind: &str, section: &str, known: &str) -> String {
     let (owns, topics, images, guide) = match section {
         "identity" => (
             format!(
-                "`id = \"{lower}\"`, `kind = \"{base}\"`, `[models.match]` (`value_re = '(?i)^{re}$'`), \
-                 `[models.pins]` and `[[models.source.pinout]]`"
+                "`id = \"{lower}\"`, `kind = \"{base}\"`, `[models.match]` (`value_re = '(?i)^{re}'`: {}), \
+                 `[models.pins]` and `[[models.source.pinout]]`",
+                crate::validation::MATCH_PATTERN_RULE
             ),
             "pin functions or package pinout, ordering or package information",
             "",
@@ -383,7 +384,7 @@ fn prompt(part: &str, kind: &str, section: &str, known: &str) -> String {
             format!(
                 "{roles}\nName an envelope pin by a role of the identity agent's `[models.pins]`. \
                  Ratings are for its package.\n\n{RATINGS_RULES}\n{}\n\n{ENVELOPE_RULES}\n\n{EXTRACTION_RULES}",
-                crate::schema::Ratings::KEY_GUIDE
+                rating_key_guide(kind)
             ),
         ),
         "switching" => (
@@ -904,5 +905,71 @@ vol = { max = 0.55, unit = "V", conditions = "IOL = 24 mA; VI = VIL; VCCA = 3 V;
         let merged = merge(&parts).unwrap();
         assert!(merged.gaps.is_empty(), "{:?}", merged.gaps);
         std::fs::write(dir.join("merged.toml"), merged.card).unwrap();
+    }
+
+    /// The rating keys a prompt offers: its `  key  # meaning` guide lines.
+    fn offered(prompt: &str) -> Vec<&'static str> {
+        let guide_line = |k: &str, l: &str| {
+            let rest = l.trim_start().strip_prefix(k);
+            rest.is_some_and(|r| r.trim_start().starts_with('#'))
+        };
+        crate::schema::Ratings::keys()
+            .filter(|k| prompt.lines().any(|l| guide_line(k, l)))
+            .collect()
+    }
+
+    /// Whether validation accepts `key` stated on a card of `kind`.
+    fn validation_accepts(kind: crate::schema::ComponentKind, key: &str) -> bool {
+        let value = if key == "polarized" { "true" } else { "1.0" };
+        let ratings: crate::schema::Ratings = toml::from_str(&format!("{key} = {value}")).unwrap();
+        let entry = crate::schema::ModelEntry {
+            kind,
+            ratings,
+            ..Default::default()
+        };
+        let errors = crate::validation::validate(&entry)
+            .err()
+            .unwrap_or_default();
+        !errors
+            .iter()
+            .any(|e| e.message.contains(&format!("rating '{key}'")))
+    }
+
+    /// Prompts cannot ask for what validation rejects, and cannot omit what it
+    /// wants: for every kind, the keys both prompts offer are exactly the keys
+    /// validation accepts, and every key validation expects is offered.
+    #[test]
+    fn prompts_offer_exactly_the_rating_keys_validation_accepts() {
+        for kind in crate::schema::ComponentKind::ALL {
+            let name = serde_json::to_value(kind).unwrap();
+            let name = name.as_str().unwrap();
+            let full = super::super::build_prompt("X1", name, "");
+            let ratings_brief = prompt("X1", name, "ratings", "");
+            let accepted: Vec<&str> = crate::schema::Ratings::keys()
+                .filter(|k| validation_accepts(kind, k))
+                .collect();
+            assert_eq!(offered(&full), accepted, "full prompt for {name}");
+            assert_eq!(
+                offered(&ratings_brief),
+                accepted,
+                "ratings brief for {name}"
+            );
+            for (key, _) in crate::validation::expected_ratings(kind) {
+                assert!(
+                    accepted.contains(key),
+                    "{name} expects {key}, validation rejects it"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn one_wording_for_the_scalar_of_a_tagged_rating() {
+        let brief = prompt("X1", "diode", "ratings", "");
+        assert_eq!(
+            brief.matches(standard_condition!()).count(),
+            2,
+            "KEY_GUIDE and RATINGS_RULES"
+        );
     }
 }

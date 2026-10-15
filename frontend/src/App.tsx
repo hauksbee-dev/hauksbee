@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { SessionRail } from './components/SessionSwitcher'
 import type { AppView } from './components/Sidebar'
 import { UploadView } from './components/UploadView'
 import { BoardView } from './components/BoardView'
-import { ChecksView, checksStorageKey } from './components/ChecksView'
+import { checksStorageKey } from './lib/checks-storage'
 import { ChecksLinks } from './components/checks/ChecksLinks'
 import type { ChecksSummary } from './components/ChecksView'
 import { DepsPanel } from './components/DepsPanel'
@@ -22,6 +22,7 @@ import type { SavedSession } from './lib/session-store'
 import { BOARD_ACCEPT_ATTR } from './lib/board-formats'
 import { BoardTargetIcon, PlayIcon } from './components/Icons'
 import { api } from './lib/api'
+import { CheckHostContext, type CheckHost } from './lib/check-catalog'
 import type { BoardRequest, QueuedLiveRegisterMap, QueuedRequest, WebReport } from './types/report'
 import type { ActionResultMsg } from './types/protocol'
 
@@ -36,6 +37,10 @@ import type { ActionResultMsg } from './types/protocol'
 // (co-sim backends and oracles on this machine). Views stay MOUNTED once
 // opened (hidden, not unmounted) so the viewer camera, the checks results and
 // the sim's fault log all survive navigation.
+
+// The Checks view (the builder, its TOML parser and the spec editor) loads once
+// a report is in, never as part of the first paint.
+const ChecksView = lazy(() => import('./components/ChecksView').then(m => ({ default: m.ChecksView })))
 
 interface Boot {
   report: WebReport | null
@@ -162,6 +167,23 @@ function Shell({ boot }: { boot: Boot }) {
 
   const { report } = session
   const reportOk = report?.ok === true
+
+  // What the board surfaces need to make a check in place: the design's own files
+  // (a measurement runs on them), the spec as the Checks view holds it, and the
+  // names and ratings the offers are built from.
+  const checkHost = useMemo<CheckHost>(() => ({
+    queue: queueRequest,
+    openChecks: () => setView('checks'),
+    board: session.boardFile,
+    firmware: session.firmwareFile,
+    schematic: session.schematicFile,
+    supplemental: session.supplementalFiles,
+    specToml: spec?.toml ?? null,
+    nets: report?.nets ?? [],
+    supplies: report?.supplies ?? [],
+    ratings: report?.component_ratings ?? {},
+  }), [queueRequest, session.boardFile, session.firmwareFile, session.schematicFile,
+    session.supplementalFiles, spec, report?.nets, report?.supplies, report?.component_ratings])
 
   const showSim = useCallback(() => {
     setSimMounted(true)
@@ -295,6 +317,7 @@ function Shell({ boot }: { boot: Boot }) {
     : view === 'sim' ? (sessionBoard ?? session.boardLabel) : session.boardLabel
 
   return (
+    <CheckHostContext.Provider value={checkHost}>
     <div className="flex h-screen overflow-hidden" style={{ background: 'var(--canvas)', color: 'var(--silk)' }}>
       <Sidebar
         nav={{
@@ -450,6 +473,7 @@ function Shell({ boot }: { boot: Boot }) {
           {reportOk && report && (
             <div style={{ display: view === 'checks' ? 'block' : 'none', height: '100%' }}>
               <ChecksLinks report={report} onShow={showBoard} selectNet={session.setSelectedNet} selectComponent={session.setSelectedComponent}>
+              <Suspense fallback={null}>
               <ChecksView
                 // Remount per board (the key doubles as the localStorage key):
                 // the panel's mount-time restore is then authoritative, and one
@@ -461,8 +485,6 @@ function Shell({ boot }: { boot: Boot }) {
                 schematicFile={session.schematicFile}
                 supplementalFiles={session.supplementalFiles}
                 avrAvailable={avrAvailable}
-                selectedNet={session.selectedNet}
-                selectedComponent={session.selectedComponent}
                 pending={requests.items}
                 onPendingConsumed={requests.consume}
                 liveRegisterMapAvailable={simMounted && sessionMatchesCurrent}
@@ -472,6 +494,7 @@ function Shell({ boot }: { boot: Boot }) {
                 onSpec={setSpec}
                 onModelSaved={session.reanalyzeCurrent}
               />
+              </Suspense>
               </ChecksLinks>
             </div>
           )}
@@ -486,7 +509,6 @@ function Shell({ boot }: { boot: Boot }) {
             <div style={{ display: view === 'sim' ? 'block' : 'none', height: '100%' }}>
               <SimView
                 onQueue={queueRequest}
-                onOpenChecks={() => setView('checks')}
                 pendingLiveRegisterMaps={queuedLiveRegisterMaps.items}
                 onLiveRegisterMapsConsumed={queuedLiveRegisterMaps.consume}
                 onLiveActionResult={setLiveActionResult}
@@ -495,6 +517,9 @@ function Shell({ boot }: { boot: Boot }) {
                 sessionMatchesCurrent={sessionMatchesCurrent}
                 modelCoverage={report?.model_coverage ?? null}
                 componentAssertions={report?.component_assertions ?? null}
+                report={reportOk ? report : null}
+                specToml={spec?.toml ?? null}
+                engineVersion={engineVersion}
                 onRelaunch={reportOk && session.liveMode !== 'none' ? relaunchWithCurrent : undefined}
               />
             </div>
@@ -537,5 +562,6 @@ function Shell({ boot }: { boot: Boot }) {
         onChange={e => { const f = e.target.files?.[0]; if (f) session.handleFirmware(f); e.target.value = '' }}
       />
     </div>
+    </CheckHostContext.Provider>
   )
 }

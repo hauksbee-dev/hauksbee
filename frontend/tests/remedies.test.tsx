@@ -10,7 +10,8 @@ import type { RemedyActions } from '../src/components/checks/Remedies'
 import { RunResults } from '../src/components/checks/RunResults'
 import { AssertionEvidence, parseMeasures } from '../src/components/checks/pieces'
 import { identityScaffold, tomlIssues } from '../src/components/WritePart'
-import { buildToml, scaffoldRows, supplyToml, tomlToBuilder } from '../src/lib/check-spec'
+import { buildToml, scaffoldRows, supplyToml } from '../src/lib/check-spec'
+import { tomlToBuilder } from '../src/lib/spec-model'
 import type { EvidenceAssumption, Remedy, RunResponse } from '../src/types/report'
 
 const assumption = (id: string, kind: string, remedy: Remedy | undefined, replacement = 'do the thing'): EvidenceAssumption => ({

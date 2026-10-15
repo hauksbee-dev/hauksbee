@@ -13267,3 +13267,2745 @@ pins = { "1" = "CPL", "2" = "CPH", "3" = "VM", "4" = "VDRAIN", "5" = "VCP", "6" 
 [models.coverage]
 implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]
 missing = ["gate_drive", "charge_pump", "dvdd_regulator", "vgls_regulator", "shunt_amplifiers", "spi_registers", "sleep_mode", "fault_logic", "logic_levels"]
+
+# ── PCF8563: NXP I2C real-time clock/calendar (HVSON10 / SO8 / TSSOP8) ──
+# NXP PCF8563 Rev. 11.1 (19 January 2026), sha256 2ed5d1b0a1051d0e81399417c4ff0ced0658fa36e13c0487670f9cb6dfb4f1d4. Drafted by the extraction pipeline
+# (codex gpt-6-luna, --kind digital on the second run) and reviewed against the PDF: the three pin maps (Table 3), the limiting values (Table 28) and
+# the 250 nA typical standby current. Identity only: the clock, alarm and timer registers are not modelled. Hand edits: value_re and orderable_re
+# accept a board's BS / T / TS suffix; vih/vil are 0.7/0.3 x VDD at 3.3 V (the draft wrote a bare 0.7 V); supply_static_ua is the 250 nA standby draw (the draft used the 800 uA active bound).
+[[models]]
+id = "pcf8563_bs4"
+kind = "digital"
+description = "PCF8563BS/4 in HVSON10; identity only because this stateful I2C RTC, calendar, alarms, timer, interrupt, and clock output cannot be represented by the bounded digital logic schema; does not model those behaviors."
+variant_of = "pcf8563"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "bounded_digital_logic_model"
+reason = "ABSTAIN: the datasheet describes a stateful I2C register interface and clock/calendar functions that the bounded digital logic schema cannot represent"
+[[models.source.pinout]]
+package = "HVSON10"
+pins = { "1" = "OSCI", "2" = "OSCO", "3" = "n.c.", "4" = "INT", "5" = "VSS", "6" = "SDA", "7" = "SCL", "8" = "CLKOUT", "9" = "VDD", "10" = "n.c." }
+
+[[models.source.characteristic]]
+parameter = "VDD supply voltage"
+min = 1.0
+max = 5.5
+unit = "V"
+conditions = "Interface inactive; fSCL = 0 Hz; Tamb = 25 °C; footnote [1]"
+basis = "Table 29, Supply voltage, min/max"
+[[models.source.characteristic]]
+parameter = "VDD supply voltage"
+min = 1.8
+max = 5.5
+unit = "V"
+conditions = "Interface active; fSCL = 400 kHz; TA = -40 °C to +85 °C"
+basis = "Table 29, Supply voltage, min/max"
+[[models.source.characteristic]]
+parameter = "VDD supply voltage for clock data integrity"
+max = 5.5
+unit = "V"
+conditions = "Clock data integrity; Tamb = 25 °C; lower limit Vlow"
+basis = "Table 29, Supply voltage, max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+max = 800
+unit = "μA"
+conditions = "Interface active; fSCL = 400 kHz; TA = -40 °C to +85 °C"
+basis = "Table 29, Supply current, max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+max = 200
+unit = "μA"
+conditions = "Interface active; fSCL = 100 kHz"
+basis = "Table 29, Supply current, max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 275
+max = 550
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT disabled; Tamb = 25 °C; VDD = 5.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 250
+max = 500
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT disabled; Tamb = 25 °C; VDD = 3.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 225
+max = 450
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT disabled; Tamb = 25 °C; VDD = 2.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 500
+max = 750
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT disabled; Tamb = -40 °C to +85 °C; VDD = 5.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 400
+max = 650
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT disabled; Tamb = -40 °C to +85 °C; VDD = 3.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 400
+max = 600
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT disabled; Tamb = -40 °C to +85 °C; VDD = 2.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 825
+max = 1600
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT enabled at 32 kHz; Tamb = 25 °C; VDD = 5.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 550
+max = 1000
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT enabled at 32 kHz; Tamb = 25 °C; VDD = 3.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 425
+max = 800
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT enabled at 32 kHz; Tamb = 25 °C; VDD = 2.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 950
+max = 1700
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT enabled at 32 kHz; Tamb = -40 °C to +85 °C; VDD = 5.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 650
+max = 1100
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT enabled at 32 kHz; Tamb = -40 °C to +85 °C; VDD = 3.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+typ = 500
+max = 900
+unit = "nA"
+conditions = "Interface inactive (fSCL = 0 Hz); CLKOUT enabled at 32 kHz; Tamb = -40 °C to +85 °C; VDD = 2.0 V"
+basis = "Table 29, Supply current, typ/max"
+[[models.source.characteristic]]
+parameter = "VIL low-level input voltage"
+min = -0.5
+unit = "V"
+conditions = "Upper limit +0.3 VDD"
+basis = "Table 29, LOW-level input voltage, min"
+[[models.source.characteristic]]
+parameter = "VIH high-level input voltage"
+min = 0.7
+max = 5.5
+unit = "V"
+conditions = "Lower limit 0.7 VDD"
+basis = "Table 29, HIGH-level input voltage, min/max"
+[[models.source.characteristic]]
+parameter = "ILI input leakage current"
+min = -1
+typ = 0
+max = 1
+unit = "μA"
+conditions = "VI = VDD or VSS"
+basis = "Table 29, Input leakage current, min/typ/max"
+[[models.source.characteristic]]
+parameter = "Ci input capacitance"
+max = 7
+unit = "pF"
+conditions = "Tested on a sample basis, footnote [3]"
+basis = "Table 29, Input capacitance, max"
+[[models.source.characteristic]]
+parameter = "IOL low-level output current"
+min = 3
+unit = "mA"
+conditions = "Output sink current; VOL = 0.4 V; VDD = 5 V; pin SDA"
+basis = "Table 29, LOW-level output current, min"
+[[models.source.characteristic]]
+parameter = "IOL low-level output current"
+min = 1
+unit = "mA"
+conditions = "Output sink current; VOL = 0.4 V; VDD = 5 V; pin INT"
+basis = "Table 29, LOW-level output current, min"
+[[models.source.characteristic]]
+parameter = "IOL low-level output current"
+min = 1
+unit = "mA"
+conditions = "Output sink current; VOL = 0.4 V; VDD = 5 V; pin CLKOUT"
+basis = "Table 29, LOW-level output current, min"
+[[models.source.characteristic]]
+parameter = "ILO output leakage current"
+min = -1
+typ = 0
+max = 1
+unit = "μA"
+conditions = "VO = VDD or VSS"
+basis = "Table 29, Output leakage current, min/typ/max"
+[[models.source.characteristic]]
+parameter = "Vlow low voltage"
+typ = 0.9
+max = 1.0
+unit = "V"
+conditions = "Tamb = 25 °C; sets bit VL"
+basis = "Table 29, Low voltage, typ/max"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, HBM"
+min = -3500
+max = 3500
+unit = "V"
+conditions = "HVSON10 (PCF8563BS/4); pass level"
+basis = "Table 28, ESD HBM, package row [1]"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, CDM"
+min = 2000
+max = 2000
+unit = "V"
+conditions = "HVSON10 (PCF8563BS/4); pass level"
+basis = "Table 28, ESD CDM, package row [2]"
+
+[[models.source.references]]
+title = "PCF8563.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "2ed5d1b0a1051d0e81399417c4ff0ced0658fa36e13c0487670f9cb6dfb4f1d4"
+
+[models.match]
+value_re = '(?i)^PCF8563'
+
+[models.variant]
+orderable_re = '(?i)^PCF8563BS'
+orderable = ["PCF8563BS/4"]
+package = "HVSON10"
+basis = "Table 1, Ordering information"
+
+[models.params]
+identity_only = true
+warning = "Stateful I2C register, clock/calendar, alarm, timer, and output behavior is not representable by the bounded digital logic schema."
+unlocked_by = "A validated stateful I2C RTC model with register, timing, and calendar semantics."
+supply_static_ua = 0.25  # PCF8563 Table 29: IDD 250 nA typ, interface inactive, CLKOUT off, VDD = 3.0 V, 25 C
+vih = 2.31  # Table 29: VIH min 0.7 x VDD, evaluated at VDD = 3.3 V
+vil = 0.99  # Table 29: VIL max 0.3 x VDD, evaluated at VDD = 3.3 V
+
+[models.ratings]
+max_voltage_v = 6.5 # Source: Table 28, Supply voltage, absolute value of +6.5 V maximum
+max_current_a = 0.05 # Source: Table 28, Supply current, absolute maximum of +50 mA
+max_pin_current_a = 0.01 # Source: Table 28, Input current and output current, absolute maximum of +10 mA
+max_power_w = 0.3 # Source: Table 28, Total power dissipation, 300 mW maximum
+
+[models.pins]
+"1" = "osci"
+"2" = "osco"
+"3" = "nc" # n.c.
+"4" = "int_n" # INT is open-drain and active LOW
+"5" = "vss"
+"6" = "sda" # Serial data input and output (bidirectional)
+"7" = "scl"
+"8" = "clkout" # Open-drain clock output
+"9" = "vdd"
+"10" = "nc" # n.c.
+
+[models.coverage]
+implements = []
+missing = ["i2c_register_interface", "rtc_calendar", "alarm", "timer", "interrupt_output", "programmable_clock_output", "oscillator_and_frequency_divider", "power_on_reset", "voltage_low_detection", "propagation_delay_and_timing_races"]
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.0
+max_v = 5.5
+conditions = "Interface inactive; fSCL = 0 Hz; Tamb = 25 °C"
+abs_max_v = 6.5
+basis = "Table 29, Supply voltage; Table 28, Supply voltage"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.8
+max_v = 5.5
+conditions = "Interface active; fSCL = 400 kHz; TA = -40 °C to +85 °C"
+abs_max_v = 6.5
+basis = "Table 29, Supply voltage; Table 28, Supply voltage"
+
+[[models]]
+id = "pcf8563_so8"
+kind = "digital"
+description = "PCF8563T/5 and PCF8563T/F4 in SO8; identity only because this stateful I2C RTC, calendar, alarms, timer, interrupt, and clock output cannot be represented by the bounded digital logic schema; does not model those behaviors."
+variant_of = "pcf8563"
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "bounded_digital_logic_model"
+reason = "ABSTAIN: the datasheet describes a stateful I2C register interface and clock/calendar functions that the bounded digital logic schema cannot represent"
+[[models.source.pinout]]
+package = "SO8"
+pins = { "1" = "OSCI", "2" = "OSCO", "3" = "INT", "4" = "VSS", "5" = "SDA", "6" = "SCL", "7" = "CLKOUT", "8" = "VDD" }
+[[models.source.characteristic]]
+parameter = "VDD supply voltage"
+min = 1.0
+max = 5.5
+unit = "V"
+conditions = "Interface inactive; fSCL = 0 Hz; Tamb = 25 °C; footnote [1]"
+basis = "Table 29, Supply voltage, min/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+max = 800
+unit = "μA"
+conditions = "Interface active; fSCL = 400 kHz"
+basis = "Table 29, Supply current, max"
+[[models.source.characteristic]]
+parameter = "VIH high-level input voltage"
+max = 5.5
+unit = "V"
+conditions = "Lower limit 0.7 VDD"
+basis = "Table 29, HIGH-level input voltage, min/max"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, HBM"
+min = -3500
+max = 3500
+unit = "V"
+conditions = "SO8 (PCF8563T/F4); pass level"
+basis = "Table 28, ESD HBM, package row [1]"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, HBM"
+min = -2000
+max = 2000
+unit = "V"
+conditions = "SO8 (PCF8563T/5); pass level"
+basis = "Table 28, ESD HBM, package row [1]"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, CDM"
+min = -1000
+max = 1000
+unit = "V"
+conditions = "SO8 (PCF8563T/F4); pass level"
+basis = "Table 28, ESD CDM, package row [2]"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, CDM"
+min = -1500
+max = 1500
+unit = "V"
+conditions = "SO8 (PCF8563T/5); pass level"
+basis = "Table 28, ESD CDM, package row [2]"
+
+[[models.source.references]]
+title = "PCF8563.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "2ed5d1b0a1051d0e81399417c4ff0ced0658fa36e13c0487670f9cb6dfb4f1d4"
+[models.match]
+value_re = '(?i)^PCF8563'
+[models.variant]
+orderable_re = '(?i)^PCF8563T(?:/|$)'
+orderable = ["PCF8563T/5", "PCF8563T/F4"]
+package = "SO8"
+basis = "Table 1, Ordering information"
+[models.params]
+identity_only = true
+warning = "Stateful I2C register, clock/calendar, alarm, timer, and output behavior is not representable by the bounded digital logic schema."
+unlocked_by = "A validated stateful I2C RTC model with register, timing, and calendar semantics."
+vih = 2.31  # Table 29: VIH min 0.7 x VDD, evaluated at VDD = 3.3 V
+vil = 0.99  # Table 29: VIL max 0.3 x VDD, evaluated at VDD = 3.3 V
+supply_static_ua = 0.25  # PCF8563 Table 29: IDD 250 nA typ, interface inactive, CLKOUT off, VDD = 3.0 V, 25 C
+
+[models.ratings]
+max_voltage_v = 6.5 # Source: Table 28, Supply voltage, absolute value of +6.5 V maximum
+max_current_a = 0.05 # Source: Table 28, Supply current, absolute maximum of +50 mA
+max_pin_current_a = 0.01 # Source: Table 28, Input current and output current, absolute maximum of +10 mA
+max_power_w = 0.3 # Source: Table 28, Total power dissipation, 300 mW maximum
+[models.pins]
+"1" = "osci"
+"2" = "osco"
+"3" = "int_n" # INT is open-drain and active LOW
+"4" = "vss"
+"5" = "sda" # Serial data input and output (bidirectional)
+"6" = "scl"
+"7" = "clkout" # Open-drain clock output
+"8" = "vdd"
+[models.coverage]
+implements = []
+missing = ["i2c_register_interface", "rtc_calendar", "alarm", "timer", "interrupt_output", "programmable_clock_output", "oscillator_and_frequency_divider", "power_on_reset", "voltage_low_detection", "propagation_delay_and_timing_races"]
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.0
+max_v = 5.5
+conditions = "Interface inactive; fSCL = 0 Hz; Tamb = 25 °C"
+abs_max_v = 6.5
+basis = "Table 29, Supply voltage; Table 28, Supply voltage"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.8
+max_v = 5.5
+conditions = "Interface active; fSCL = 400 kHz; TA = -40 °C to +85 °C"
+abs_max_v = 6.5
+basis = "Table 29, Supply voltage; Table 28, Supply voltage"
+
+[[models]]
+id = "pcf8563_tssop8"
+kind = "digital"
+description = "PCF8563TS/4 and PCF8563TS/5 in TSSOP8; identity only because this stateful I2C RTC, calendar, alarms, timer, interrupt, and clock output cannot be represented by the bounded digital logic schema; does not model those behaviors."
+variant_of = "pcf8563"
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "bounded_digital_logic_model"
+reason = "ABSTAIN: the datasheet describes a stateful I2C register interface and clock/calendar functions that the bounded digital logic schema cannot represent"
+[[models.source.pinout]]
+package = "TSSOP8"
+pins = { "1" = "OSCI", "2" = "OSCO", "3" = "INT", "4" = "VSS", "5" = "SDA", "6" = "SCL", "7" = "CLKOUT", "8" = "VDD" }
+[[models.source.characteristic]]
+parameter = "VDD supply voltage"
+min = 1.0
+max = 5.5
+unit = "V"
+conditions = "Interface inactive; fSCL = 0 Hz; Tamb = 25 °C; footnote [1]"
+basis = "Table 29, Supply voltage, min/max"
+[[models.source.characteristic]]
+parameter = "IDD supply current"
+max = 800
+unit = "μA"
+conditions = "Interface active; fSCL = 400 kHz"
+basis = "Table 29, Supply current, max"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, HBM"
+min = -3500
+max = 3500
+unit = "V"
+conditions = "TSSOP8 (PCF8563TS/4); pass level"
+basis = "Table 28, ESD HBM, package row [1]"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, HBM"
+min = -2000
+max = 2000
+unit = "V"
+conditions = "TSSOP8 (PCF8563TS/5); pass level"
+basis = "Table 28, ESD HBM, package row [1]"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, CDM"
+min = -1500
+max = 1500
+unit = "V"
+conditions = "TSSOP8 (PCF8563TS/4); pass level"
+basis = "Table 28, ESD CDM, package row [2]"
+[[models.source.characteristic]]
+parameter = "VESD electrostatic discharge voltage, CDM"
+min = -1750
+max = 1750
+unit = "V"
+conditions = "TSSOP8 (PCF8563TS/5); pass level"
+basis = "Table 28, ESD CDM, package row [2]"
+
+[[models.source.references]]
+title = "PCF8563.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "2ed5d1b0a1051d0e81399417c4ff0ced0658fa36e13c0487670f9cb6dfb4f1d4"
+[models.match]
+value_re = '(?i)^PCF8563'
+[models.variant]
+orderable_re = '(?i)^PCF8563TS'
+orderable = ["PCF8563TS/4", "PCF8563TS/5"]
+package = "TSSOP8"
+basis = "Table 1, Ordering information"
+[models.params]
+identity_only = true
+warning = "Stateful I2C register, clock/calendar, alarm, timer, and output behavior is not representable by the bounded digital logic schema."
+unlocked_by = "A validated stateful I2C RTC model with register, timing, and calendar semantics."
+vih = 2.31  # Table 29: VIH min 0.7 x VDD, evaluated at VDD = 3.3 V
+vil = 0.99  # Table 29: VIL max 0.3 x VDD, evaluated at VDD = 3.3 V
+supply_static_ua = 0.25  # PCF8563 Table 29: IDD 250 nA typ, interface inactive, CLKOUT off, VDD = 3.0 V, 25 C
+
+[models.ratings]
+max_voltage_v = 6.5 # Source: Table 28, Supply voltage, absolute value of +6.5 V maximum
+max_current_a = 0.05 # Source: Table 28, Supply current, absolute maximum of +50 mA
+max_pin_current_a = 0.01 # Source: Table 28, Input current and output current, absolute maximum of +10 mA
+max_power_w = 0.3 # Source: Table 28, Total power dissipation, 300 mW maximum
+[models.pins]
+"1" = "osci"
+"2" = "osco"
+"3" = "int_n" # INT is open-drain and active LOW
+"4" = "vss"
+"5" = "sda" # Serial data input and output (bidirectional)
+"6" = "scl"
+"7" = "clkout" # Open-drain clock output
+"8" = "vdd"
+[models.coverage]
+implements = []
+missing = ["i2c_register_interface", "rtc_calendar", "alarm", "timer", "interrupt_output", "programmable_clock_output", "oscillator_and_frequency_divider", "power_on_reset", "voltage_low_detection", "propagation_delay_and_timing_races"]
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.0
+max_v = 5.5
+conditions = "Interface inactive; fSCL = 0 Hz; Tamb = 25 °C"
+abs_max_v = 6.5
+basis = "Table 29, Supply voltage; Table 28, Supply voltage"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.8
+max_v = 5.5
+conditions = "Interface active; fSCL = 400 kHz; TA = -40 °C to +85 °C"
+abs_max_v = 6.5
+basis = "Table 29, Supply voltage; Table 28, Supply voltage"
+
+# ── PCA9635: NXP 16-channel Fm+ I2C LED driver, TSSOP28 ──
+# NXP PCA9635 Rev. 7.1 (27 July 2021), sha256 15110f5e5ce3e955a589bec76c9b1fa1f4c54c8c7525c0994861a5c99b6e5696. Drafted by the extraction pipeline
+# (codex gpt-6-luna) and reviewed against the PDF: all 28 pins (Table 3), VDD 2.3-5.5 V / 6.0 V abs max, ISS 400 mA, 25 mA per LED pin, Ptot 400 mW and the 2.5 mA operating IDD (Tables 17, 18).
+# Supply draw only; the I2C interface and LED outputs are not modelled. Hand edit: value_re unanchored (the eurorack-pmod board writes the value as 'PCA9635 LED DRIVER').
+[[models]]
+id = "pca9635"
+kind = "digital"
+description = "NXP PCA9635 16-channel I2C LED driver; models VDD supply draw only and does not model I2C control, LED drive, PWM dimming or blinking, or output-enable behavior."
+
+[models.match]
+value_re = '(?i)^PCA9635'
+
+[models.params]
+supply_current_a = 0.0025 # Table 18, IDD operating mode/no load/fSCL=1 MHz; typ at VDD=2.3 V, 3.3 V, and 5.5 V
+supply_on_v = 2.3 # Table 18, recommended supply voltage minimum
+warning = "source-bound supply-draw model: VDD operating current is 2.5 mA typ at 2.3 V, 3.3 V, and 5.5 V with no load and fSCL=1 MHz; only supply draw and the 2.3 V to 5.5 V operating range are executable; I2C communication, LED output drive and logic states, individual and group PWM, oscillator behavior, and OE control are not modeled"
+
+[models.pins]
+"1" = "a0"
+"2" = "a1"
+"3" = "a2"
+"4" = "a3"
+"5" = "a4"
+"6" = "led0"
+"7" = "led1"
+"8" = "led2"
+"9" = "led3"
+"10" = "led4"
+"11" = "led5"
+"12" = "led6"
+"13" = "led7"
+"14" = "gnd"
+"15" = "led8"
+"16" = "led9"
+"17" = "led10"
+"18" = "led11"
+"19" = "led12"
+"20" = "led13"
+"21" = "led14"
+"22" = "led15"
+"23" = "oe_n"
+"24" = "a5"
+"25" = "a6"
+"26" = "scl"
+"27" = "sda"
+"28" = "vdd"
+
+[models.ratings]
+max_voltage_v = 6.0 # Table 17, VDD supply voltage, maximum +6.0 V
+max_current_a = 0.4 # Table 17, ISS ground supply current, maximum 400 mA
+max_pin_current_a = 0.025 # Table 17, IO(LEDn) output current per LED pin, maximum 25 mA
+max_power_w = 0.4 # Table 17, Ptot total power dissipation, maximum 400 mW
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.3
+max_v = 5.5
+abs_max_v = 6.0
+basis = "Table 18, VDD supply voltage row, 2.3 V to 5.5 V; Table 17, VDD absolute maximum +6.0 V"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vdd"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vdd / supply_on_v))"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = "https://www.nxp.com/docs/en/data-sheet/PCA9635.pdf"
+title = "NXP PCA9635 16-bit Fm+ I2C-bus LED driver, Rev. 7.1, 27 July 2021"
+locator = "Table 3 Pin description pp. 5-6; Table 1 Ordering information p. 3; Table 17 Limiting values p. 24; Table 18 Static characteristics p. 25"
+sha256 = "15110f5e5ce3e955a589bec76c9b1fa1f4c54c8c7525c0994861a5c99b6e5696"
+
+[[models.source.references]]
+title = "PCA9635.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "15110f5e5ce3e955a589bec76c9b1fa1f4c54c8c7525c0994861a5c99b6e5696"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_current_a"
+reason = "Table 18 gives IDD typical 2.5 mA and maximum 10 mA at VDD=2.3 V, 3.3 V, and 5.5 V, with operating mode, no load, fSCL=1 MHz; no minimum is specified and standby current is a separate mode"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "The datasheet publishes no validated model error interval; only VDD supply draw is modeled"
+
+[[models.source.pinout]]
+package = "TSSOP28 (PCA9635PW / PCA9635PW/Q900)"
+pins = { "1" = "A0", "2" = "A1", "3" = "A2", "4" = "A3", "5" = "A4", "6" = "LED0", "7" = "LED1", "8" = "LED2", "9" = "LED3", "10" = "LED4", "11" = "LED5", "12" = "LED6", "13" = "LED7", "14" = "VSS", "15" = "LED8", "16" = "LED9", "17" = "LED10", "18" = "LED11", "19" = "LED12", "20" = "LED13", "21" = "LED14", "22" = "LED15", "23" = "OE", "24" = "A5", "25" = "A6", "26" = "SCL", "27" = "SDA", "28" = "VDD" }
+
+[models.coverage]
+implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]
+missing = ["i2c_interface", "led_output_drive", "individual_pwm", "group_dimming_and_blinking", "output_enable", "oscillator_behavior", "logic_levels", "timing"]
+
+# ── MOC3043M: onsemi 6-pin DIP zero-cross triac driver optocoupler (400 V) ──
+# onsemi MOC3031M/MOC3043M family datasheet (Rev. 4, September 2022), sha256 609997436d5eaff127fca5079f4cb1fe724c42feada3c13d4b7ba4d2590abd7e. The extraction pipeline
+# (codex gpt-6-luna) drafted it but its validator rejected the draft three times; hand-fixed from that draft and checked against the PDF: pins 1 anode, 2 cathode, 3 NC, 4/6 main terminals,
+# 5 NC (substrate, do not connect); VDRM 400 V, total PD 250 mW, IF 60 mA, ITM 100 mA, TJ 100 C. Identity only: the LED-triggered zero-cross triac output is not modelled.
+# [[models]] entry 'moc3043m': characteristic 'VISO, isolation voltage' writes a supply-relative limit as a number: record each printed number with its sign in its column (±5 is min = -5 and max = 5), never delete the record; a supply-relative limit (0.7 VDD, VDD + 0.5 V) is no number: quote it in `conditions` and omit that column (a row left with none becomes an `unknown` uncertainty record quoting it), never a rail as `unit`
+
+[[models]]
+id = "moc3043m"
+kind = "digital"
+description = "onsemi MOC3043M zero-cross triac driver optocoupler, 6-pin DIP; identity-only because its optically triggered bilateral triac output cannot be represented by the digital logic-level model, and the datasheet supplies no digital VIH/VIL/VOH/VOL or propagation-delay specs."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = "https://www.onsemi.com/pdf/datasheet/moc3031m-d.pdf"
+title = "onsemi 6-Pin DIP Zero-Cross Triac Driver Output Optocoupler (250/400 Volt Peak), MOC3031M/D, September 2022, Rev. 4"
+locator = "Description and pin schematic p. 1; Safety and Insulation Ratings and Absolute Maximum Ratings p. 2; Electrical Characteristics p. 3; Ordering Information p. 8"
+sha256 = "609997436d5eaff127fca5079f4cb1fe724c42feada3c13d4b7ba4d2590abd7e"
+
+[[models.source.references]]
+title = "MOC3043M.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "609997436d5eaff127fca5079f4cb1fe724c42feada3c13d4b7ba4d2590abd7e"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "Datasheet publishes no validated model error interval; this identity-only card does not simulate optotriac behavior."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "digital_logic_behavior"
+reason = "ABSTAIN: datasheet specifies an optically triggered bilateral triac driver, not logic-level outputs; VIH, VIL, VOH, VOL, and propagation delay are not specified."
+
+[[models.source.pinout]]
+package = "DIP 6-Pin (Pb-Free)"
+pins = { "1" = "ANODE", "2" = "CATHODE", "3" = "N/C", "4" = "MAIN TERM.", "5" = "NC*", "6" = "MAIN TERM." }
+
+[models.match]
+value_re = "(?i)^MOC3043M"
+
+[models.params]
+identity_only = true
+warning = "ABSTAIN: this device is an LED-triggered zero-cross bilateral triac driver, not a digital logic-level device; the required digital behavior and thresholds are not specified or representable by this model."
+unlocked_by = "A source-backed optotriac/zero-cross trigger model that represents the LED input, inhibit window, and bilateral triac output."
+
+[models.pins]
+# Pin numbering checked against the page 1 schematic and the page 1 DIP package drawings.
+"1" = "anode"
+"2" = "cathode"
+"3" = "nc"
+"4" = "main_term_a"
+"5" = "nc_substrate" # NC*: do not connect (triac substrate).
+"6" = "main_term_b"
+
+[models.ratings]
+max_voltage_v = 400.0 # Source: Absolute Maximum Ratings, VDRM, MOC3043M, 400 V.
+max_power_w = 0.25 # Source: Absolute Maximum Ratings, total device PD at TA=25°C, 250 mW.
+max_current_a = 0.1 # Source: Absolute Maximum Ratings, ITM peak repetitive on-state current, 100 mA peak (hand-added)
+max_junction_temp_c = 100.0 # Source: Absolute Maximum Ratings, TJ range, −40°C to +100°C.
+
+[[models.source.characteristic]]
+parameter = "VPR, input-to-output test voltage, Method A"
+typ = 1275
+unit = "Vpeak"
+conditions = "VIORM × 1.6 = VPR; type and sample test, tm = 10 s; partial discharge < 5 pC"
+basis = "Safety and Insulation Ratings, Method A, value column"
+
+[[models.source.characteristic]]
+parameter = "VPR, input-to-output test voltage, Method B"
+typ = 1594
+unit = "Vpeak"
+conditions = "VIORM × 1.875 = VPR; 100% production test, tm = 1 s; partial discharge < 5 pC"
+basis = "Safety and Insulation Ratings, Method B, value column"
+
+[[models.source.characteristic]]
+parameter = "VIORM, maximum working insulation voltage"
+typ = 850
+unit = "Vpeak"
+conditions = "Safety and insulation rating"
+basis = "Safety and Insulation Ratings, VIORM row, value column"
+
+[[models.source.characteristic]]
+parameter = "VIOTM, highest allowable over-voltage"
+typ = 6000
+unit = "Vpeak"
+conditions = "Safety and insulation rating"
+basis = "Safety and Insulation Ratings, VIOTM row, value column"
+
+[[models.source.characteristic]]
+parameter = "External creepage"
+min = 7
+unit = "mm"
+conditions = "Safety and insulation rating"
+basis = "Safety and Insulation Ratings, External Creepage row, minimum"
+
+[[models.source.characteristic]]
+parameter = "External clearance"
+min = 7
+unit = "mm"
+conditions = "Standard package"
+basis = "Safety and Insulation Ratings, External Clearance row, minimum"
+
+[[models.source.characteristic]]
+parameter = "External clearance"
+min = 10
+unit = "mm"
+conditions = "Option TV, 0.4-inch lead spacing"
+basis = "Safety and Insulation Ratings, External Clearance for Option TV row, minimum"
+
+[[models.source.characteristic]]
+parameter = "DTI, distance through insulation (insulation thickness)"
+min = 0.5
+unit = "mm"
+conditions = "Safety and insulation rating"
+basis = "Safety and Insulation Ratings, DTI row, minimum"
+
+[[models.source.characteristic]]
+parameter = "RIO, insulation resistance"
+min = 1.0e9
+unit = "ohm"
+conditions = "At TS; VIO = 500 V"
+basis = "Safety and Insulation Ratings, RIO row, >1e9 Ω"
+
+[[models.source.characteristic]]
+parameter = "TSTG, storage temperature"
+min = -40
+max = 125
+unit = "°C"
+conditions = "All devices"
+basis = "Absolute Maximum Ratings, TSTG row, min/max"
+
+[[models.source.characteristic]]
+parameter = "TOPR, operating temperature"
+min = -40
+max = 85
+unit = "°C"
+conditions = "All devices"
+basis = "Absolute Maximum Ratings, TOPR row, min/max"
+
+[[models.source.characteristic]]
+parameter = "TJ, junction temperature range"
+min = -40
+max = 100
+unit = "°C"
+conditions = "All devices"
+basis = "Absolute Maximum Ratings, TJ row, min/max"
+
+[[models.source.characteristic]]
+parameter = "Pollution degree"
+typ = 2
+unit = "degree"
+conditions = "DIN VDE 0110/1.89"
+basis = "Safety and Insulation Ratings, Pollution Degree row"
+
+[[models.source.characteristic]]
+parameter = "Comparative tracking index (CTI)"
+typ = 175
+unit = "CTI"
+conditions = "Safety and insulation rating"
+basis = "Safety and Insulation Ratings, Comparative Tracking Index row"
+
+[[models.source.characteristic]]
+parameter = "TSOL, lead solder temperature"
+max = 260
+unit = "°C"
+conditions = "260°C for 10 seconds; all devices"
+basis = "Absolute Maximum Ratings, TSOL row, printed value"
+
+[[models.source.characteristic]]
+parameter = "Total device power dissipation derating above 25°C"
+max = 2.94
+unit = "mW/°C"
+conditions = "TA above 25°C; all devices"
+basis = "Absolute Maximum Ratings, total device PD derate row, printed value"
+
+[[models.source.characteristic]]
+parameter = "IF, continuous forward current"
+max = 60
+unit = "mA"
+conditions = "Emitter; all devices"
+basis = "Absolute Maximum Ratings, Emitter IF row, value"
+
+[[models.source.characteristic]]
+parameter = "VR, reverse voltage"
+max = 6
+unit = "V"
+conditions = "Emitter; all devices"
+basis = "Absolute Maximum Ratings, Emitter VR row, value"
+
+[[models.source.characteristic]]
+parameter = "Emitter power dissipation derating above 25°C"
+max = 1.41
+unit = "mW/°C"
+conditions = "Emitter; TA above 25°C; all devices"
+basis = "Absolute Maximum Ratings, Emitter PD derate row, printed value"
+
+[[models.source.characteristic]]
+parameter = "Emitter total power dissipation at 25°C ambient"
+max = 120
+unit = "mW"
+conditions = "Emitter; TA=25°C; all devices"
+basis = "Absolute Maximum Ratings, Emitter PD row, value"
+
+[[models.source.characteristic]]
+parameter = "ITSM, peak non-repetitive surge current"
+max = 1
+unit = "Apeak"
+conditions = "Detector; 60 Hz sine-wave surge cycle; all devices"
+basis = "Absolute Maximum Ratings, Detector ITSM row, value"
+
+[[models.source.characteristic]]
+parameter = "ITM, peak repetitive on-state current"
+max = 100
+unit = "mApeak"
+conditions = "Detector; all devices"
+basis = "Absolute Maximum Ratings, Detector ITM row, value"
+
+[[models.source.characteristic]]
+parameter = "Detector power dissipation derating above 25°C"
+max = 1.76
+unit = "mW/°C"
+conditions = "Detector; TA above 25°C; all devices"
+basis = "Absolute Maximum Ratings, Detector PD derate row, printed value"
+
+[[models.source.characteristic]]
+parameter = "Detector total power dissipation at 25°C ambient"
+max = 150
+unit = "mW"
+conditions = "Detector; TA=25°C; all devices"
+basis = "Absolute Maximum Ratings, Detector PD row, value"
+
+[[models.source.characteristic]]
+parameter = "VF, input forward voltage"
+typ = 1.25
+max = 1.50
+unit = "V"
+conditions = "TA=25°C; IF=30 mA; all devices"
+basis = "Electrical Characteristics, Emitter VF row, typ/max"
+
+[[models.source.characteristic]]
+parameter = "IR, reverse leakage current"
+typ = 0.01
+max = 100
+unit = "µA"
+conditions = "TA=25°C; VR=6 V; all devices"
+basis = "Electrical Characteristics, Emitter IR row, typ/max"
+
+[[models.source.characteristic]]
+parameter = "IDRM1, peak blocking current, either direction"
+max = 100
+unit = "nA"
+conditions = "TA=25°C; VDRM=600 V; IF=0; Note 1; all devices"
+basis = "Electrical Characteristics, Detector IDRM1 row, max"
+
+[[models.source.characteristic]]
+parameter = "VTM, peak on-state voltage, either direction"
+typ = 1.8
+max = 3.0
+unit = "V"
+conditions = "TA=25°C; ITM=100 mA peak; IF=0; all devices"
+basis = "Electrical Characteristics, Detector VTM row, typ/max"
+
+[[models.source.characteristic]]
+parameter = "dv/dt, critical rate of rise of off-state voltage"
+min = 1000
+typ = 2000
+unit = "V/µs"
+conditions = "TA=25°C; IF=0; static dv/dt; Note 2; all devices"
+basis = "Electrical Characteristics, Detector dv/dt row, min/typ"
+
+[[models.source.characteristic]]
+parameter = "IFT, LED trigger current"
+max = 5
+unit = "mA"
+conditions = "TA=25°C; main terminal voltage=3 V; MOC3043M; Note 3"
+basis = "Electrical Characteristics, Transfer Characteristics IFT row, MOC3043M max"
+
+[[models.source.characteristic]]
+parameter = "IH, holding current, either direction"
+typ = 400
+unit = "µA"
+conditions = "TA=25°C; all devices"
+basis = "Electrical Characteristics, Transfer Characteristics IH row, typ"
+
+[[models.source.characteristic]]
+parameter = "VIH, inhibit voltage"
+max = 20
+unit = "V"
+conditions = "TA=25°C; IF=rated IFT; MT1−MT2 voltage above which device will not trigger off-state; all devices"
+basis = "Electrical Characteristics, Zero Crossing Characteristics VIH row, max"
+
+[[models.source.characteristic]]
+parameter = "IDRM2, leakage in inhibited state"
+max = 2
+unit = "mA"
+conditions = "TA=25°C; IF=rated IFT; rated VDRM off-state; all devices"
+basis = "Electrical Characteristics, Zero Crossing Characteristics IDRM2 row, max"
+
+[[models.source.characteristic]]
+parameter = "VISO, isolation voltage"
+min = 4170
+unit = "V"
+conditions = "AC RMS; t=1 minute; pins 1 and 2 common, pins 4, 5, and 6 common; Note 4; all devices"
+basis = "Electrical Characteristics, Isolation Characteristics VISO row, min"
+
+[models.coverage]
+implements = ["identity", "pinout", "absolute_maximum_ratings", "datasheet_characteristics"]
+missing = ["led_input_transfer", "optical_isolation_behavior", "zero_crossing_inhibit_behavior", "bilateral_triac_trigger_output", "triac_load_behavior", "propagation_delay"]
+
+# ── MA600: Monolithic Power 3.3 V magnetic angle sensor, QFN-16 ──
+# MPS MA600 Rev. 1.0 (6/28/2023), sha256 aa5502025fab4c7bd73d750877d9fc0dd9df5e65fe4577810e4eaf8f115ccf1c. Drafted by the extraction pipeline (codex gpt-6-luna,
+# second run with --kind digital) and reviewed against the PDF: 16 pins + E-PAD (Pin Functions), supply 3.0-3.6 V / 4.6 V abs max, VIH/VIL/VOH/VOL, 7.5 mA typical supply current.
+# Identity only: angle sensing and the SPI register protocol are not modelled. Hand edit: value_re unanchored.
+[[models]]
+id = "ma600"
+kind = "digital"
+description = "MA600 configurable magnetic angle sensor, QFN-16 (3mmx3mm). Identity-only: does not model magnetic angle conversion, SPI register protocol, encoder outputs, configurable digital I/O behavior, or propagation timing; ABSTAIN: the datasheet does not provide a single bounded truth table for its configurable sensor and output behavior."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "Datasheet publishes no validated model error interval."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "tpd_s"
+reason = "ABSTAIN: the datasheet does not state a digital I/O propagation delay."
+
+[[models.source.pinout]]
+package = "QFN-16 (3mmx3mm)"
+pins = { "1" = "IO1", "2" = "IO2", "3" = "IO3", "4" = "COPI", "5" = "/CS", "6" = "IO4", "7" = "CIPO", "8" = "GND", "9" = "IO5", "10" = "TEST", "11" = "CK100", "12" = "SCLK", "13" = "DVDD", "14" = "AVDD", "15" = "IO6", "16" = "NC", "17" = "E-PAD" }
+
+[models.match]
+value_re = '(?i)^MA600'
+
+[models.params]
+identity_only = true
+warning = "ABSTAIN: the configurable sensor, register, and encoder behavior cannot be represented by the bounded digital logic schema."
+unlocked_by = "A bounded behavioral model requires a specified register configuration and corresponding truth table."
+vih = { min = 2.5, max = 5.5, unit = "V", conditions = "Electrical Characteristics, Digital I/O; VAVDD = VDVDD = 3.3 V; TA = -40°C to +125°C; typical values at TA = 25°C unless noted", basis = "Electrical Characteristics, Input high voltage (VIH), min/max" }
+vil = { min = -0.3, max = 0.8, unit = "V", conditions = "Electrical Characteristics, Digital I/O; VAVDD = VDVDD = 3.3 V; TA = -40°C to +125°C; typical values at TA = 25°C unless noted", basis = "Electrical Characteristics, Input low voltage (VIL), min/max" }
+voh = { min = 2.4, unit = "V", conditions = "Push-pull option, IOH = 12 mA; VAVDD = VDVDD = 3.3 V; TA = -40°C to +125°C; typical values at TA = 25°C unless noted", basis = "Electrical Characteristics, Output high voltage (VOH_PP), min" }
+vol = { max = 0.4, unit = "V", conditions = "Push-pull option, IOL = 12 mA; VAVDD = VDVDD = 3.3 V; TA = -40°C to +125°C; typical values at TA = 25°C unless noted", basis = "Electrical Characteristics, Output low voltage (VOL_PP), max" }
+supply_static_ua = { min = 5.5, typ = 7.5, max = 9.5, unit = "mA", conditions = "TA = 25°C", basis = "Electrical Characteristics, Supply current (IAVDD + IDVDD), min/typ/max" }
+supply_pin = "13"
+gnd_pin = "8"
+
+[models.ratings]
+max_voltage_v = 4.6 # Source: Absolute Maximum Ratings, Supply voltage (VAVDD, VDVDD), upper limit; printed range -0.5 V to +4.6 V
+max_power_w = 2.0 # Source: Absolute Maximum Ratings, Continuous power dissipation (TA = 25°C)
+max_junction_temp_c = 125.0
+
+[models.pins]
+"1" = "io1" # IO1 bidirectional digital I/O.
+"2" = "io2" # IO2 bidirectional digital I/O.
+"3" = "io3" # IO3 bidirectional digital I/O.
+"4" = "copi" # COPI, SPI data in; internal pull-down.
+"5" = "cs_n" # /CS, SPI chip selection; internal pull-up.
+"6" = "io4" # IO4 bidirectional digital I/O.
+"7" = "cipo" # CIPO, SPI data out; push-pull when SPI active, pull-down when idle.
+"8" = "gnd"
+"9" = "io5" # IO5 bidirectional digital I/O.
+"10" = "test" # TEST; connect to GND.
+"11" = "ck100" # CK100 clock output reference for speed calculation.
+"12" = "sclk" # SCLK, SPI clock; internal pull-down.
+"13" = "vdd" # DVDD, digital 3.3 V supply.
+"14" = "vdd" # AVDD, analog 3.3 V supply; shared 3.3 V rail in typical application.
+"15" = "io6" # IO6 bidirectional digital I/O.
+"16" = "nc"
+"17" = "e_pad" # E-PAD, no connection; float.
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 4.6
+basis = "Recommended Operating Conditions, VAVDD and VDVDD supply voltage; Absolute Maximum Ratings, supply voltage upper limit"
+
+[[models.source.characteristic]]
+parameter = "VDD_UVLO, VDD under-voltage lockout threshold"
+max = 2.9
+unit = "V"
+conditions = "VDD rising, VAVDD = VDVDD"
+basis = "Electrical Characteristics, VDD under-voltage lockout (UVLO) threshold, max"
+
+[[models.source.characteristic]]
+parameter = "VDD_UVLO_HYS, VDD UVLO hysteresis"
+min = 60
+unit = "mV"
+conditions = "VAVDD = VDVDD"
+basis = "Electrical Characteristics, VDD UVLO hysteresis, min"
+
+[[models.source.characteristic]]
+parameter = "Supply current drift"
+typ = 0.006
+unit = "mA/°C"
+conditions = "TA = -40°C to +125°C"
+basis = "Electrical Characteristics, Supply current drift, typ"
+
+[[models.source.characteristic]]
+parameter = "RPU, pull-up resistor"
+typ = 80
+unit = "kΩ"
+conditions = "VI = GND; push-pull option"
+basis = "Electrical Characteristics, Pull-up resistor (RPU), typ"
+
+[[models.source.characteristic]]
+parameter = "RPD, pull-down resistor"
+typ = 30
+unit = "kΩ"
+conditions = "VI = DVDD; push-pull option"
+basis = "Electrical Characteristics, Pull-down resistor (RPD), typ"
+
+[[models.source.characteristic]]
+parameter = "TR, rising edge slew rate"
+typ = 0.7
+unit = "V/ns"
+conditions = "CLOAD = 50 pF; push-pull option"
+basis = "Electrical Characteristics, Rising edge slew rate, typ"
+
+[[models.source.characteristic]]
+parameter = "TF, falling edge slew rate"
+typ = 0.7
+unit = "V/ns"
+conditions = "CLOAD = 50 pF; push-pull option"
+basis = "Electrical Characteristics, Falling edge slew rate, typ"
+
+[[models.source.characteristic]]
+parameter = "VOH_OD, output high voltage"
+max = 5.5
+unit = "V"
+conditions = "Open-drain option; supplied by external pull-up resistor"
+basis = "Electrical Characteristics, Open-Drain Option, Output high voltage, max"
+
+[[models.source.characteristic]]
+parameter = "VOL_OD, output low voltage"
+max = 0.4
+unit = "V"
+conditions = "Open-drain option; IOL = 12 mA"
+basis = "Electrical Characteristics, Open-Drain Option, Output low voltage, max"
+
+[[models.source.characteristic]]
+parameter = "Open-drain leakage current"
+typ = 100
+unit = "nA"
+conditions = "Open-drain option"
+basis = "Electrical Characteristics, Open-drain leakage current, typ"
+
+[[models.source.characteristic]]
+parameter = "Supply voltage absolute maximum"
+min = -0.5
+max = 4.6
+unit = "V"
+conditions = "VAVDD, VDVDD"
+basis = "Absolute Maximum Ratings, Supply voltage, printed limits"
+
+[[models.source.characteristic]]
+parameter = "Input pin voltage absolute maximum"
+min = -0.5
+max = 6.0
+unit = "V"
+conditions = "VI"
+basis = "Absolute Maximum Ratings, Input pin voltage, printed limits"
+
+[[models.source.characteristic]]
+parameter = "Output pin voltage absolute maximum"
+min = -0.5
+max = 6.0
+unit = "V"
+conditions = "VO"
+basis = "Absolute Maximum Ratings, Output pin voltage, printed limits"
+
+[[models.source.characteristic]]
+parameter = "Lead temperature"
+max = 260
+unit = "°C"
+conditions = "Absolute maximum rating"
+basis = "Absolute Maximum Ratings, Lead temperature, max"
+
+[[models.source.characteristic]]
+parameter = "Operating temperature"
+min = -40
+max = 125
+unit = "°C"
+conditions = "Device operating temperature"
+basis = "Absolute Maximum Ratings, Operating temperature, printed limits"
+
+[[models.source.characteristic]]
+parameter = "Maximum magnetic field"
+max = 200
+unit = "mT"
+conditions = "Absolute maximum rating"
+basis = "Absolute Maximum Ratings, Maximum magnetic field, max"
+
+[[models.source.characteristic]]
+parameter = "Human body model ESD rating"
+min = -2
+max = 2
+unit = "kV"
+conditions = "HBM"
+basis = "Absolute Maximum Ratings, ESD Ratings, Human body model, ±2 kV"
+
+[[models.source.characteristic]]
+parameter = "Charged-device model ESD rating"
+min = -2
+max = 2
+unit = "kV"
+conditions = "CDM"
+basis = "Absolute Maximum Ratings, ESD Ratings, Charged-device model, ±2 kV"
+
+[[models.source.characteristic]]
+parameter = "Operating junction temperature"
+min = -40
+max = 125
+unit = "°C"
+conditions = "Recommended operating conditions"
+basis = "Recommended Operating Conditions, Operating junction temp (TJ), printed limits"
+
+[[models.source.references]]
+title = "MA600.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "aa5502025fab4c7bd73d750877d9fc0dd9df5e65fe4577810e4eaf8f115ccf1c"
+
+[models.coverage]
+implements = ["identity", "package_pinout", "supply_range", "digital_io_voltage_limits", "supply_current"]
+missing = ["magnetic_angle_sensing", "spi_register_protocol", "encoder_outputs", "configurable_digital_io", "propagation_delay"]
+
+# CY8CMBR3108 CapSense controller (Infineon datasheet): drafted by the extraction pipeline with --kind digital (auto kind gave a bare sensor spec), hand-fixed: value_re unanchored, vih/vil taken at VDD = 3.0 V to match voh/vol.
+[[models]]
+id = "cy8cmbr3108"
+kind = "digital"
+description = "CY8CMBR3108 in 16-pin QFN (CY8CMBR3108-LQXI); identity-only because the configurable CapSense controller, I2C protocol, and sensor-dependent GPO/HI behavior cannot be represented by the bounded digital logic contract; ABSTAIN: datasheet does not state a general propagation delay."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "Datasheet publishes no validated model error interval."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "tpd_s"
+reason = "ABSTAIN: datasheet does not state a general propagation delay for the CY8CMBR3108 outputs. I2C data-valid timing is protocol timing, not general output propagation delay."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vih_xres"
+reason = "Table 15 gives VIH_XRES as 0.7 × VDD, a supply-relative value without a single numeric voltage."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vil_xres"
+reason = "Table 15 gives VIL_XRES as 0.3 × VDD, a supply-relative value without a single numeric voltage."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vhysxres_at_vdd_le_4_5"
+reason = "Table 15 gives typical VHYSXRES as 0.05 × VDD mV for VDD ≤ 4.5 V, a supply-relative value."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vih_i2c"
+reason = "Table 20 gives VIH_I2C as 0.7 × VDD, a supply-relative value without a single numeric voltage."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "VOL_I2C_L, output LOW voltage, low supply range"
+reason = "Table 20 gives VOL_I2C_L as 0.2 × VDD for VDD < 2 V, a supply-relative value without a single numeric voltage."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "i2c_vhys_hv"
+reason = "Table 20 gives I2C_VHYS_HV as 0.05 × VDD mV for 2 V ≤ VDD ≤ 4.5 V, a supply-relative value."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "i2c_vhys_lv"
+reason = "Table 20 gives I2C_VHYS_LV as 0.1 × VDD mV for VDD < 2 V, a supply-relative value."
+
+[[models.source.pinout]]
+package = "16-pin QFN"
+pins = { "1" = "CS0/PS0", "2" = "CS1/PS1", "3" = "CMOD", "4" = "VCC", "5" = "VDDIO", "6" = "VDD", "7" = "VSS", "8" = "CS4/GPO0", "9" = "CS5/GPO1", "10" = "CS6/GPO2", "11" = "CS7/GPO3/SH", "12" = "CS2/GUARD", "13" = "CS3", "14" = "I2C SDA", "15" = "I2C SCL", "16" = "HI/BUZ", "17" = "Center Pad" }
+
+[[models.source.characteristic]]
+parameter = "VDD_MAX, maximum VDD-pin voltage relative to VSS"
+min = -0.5
+max = 6.0
+unit = "V"
+conditions = "−40 °C to +85 °C TA, absolute maximum"
+basis = "Table 12, VDD_MAX, min/max"
+
+[[models.source.characteristic]]
+parameter = "VDDIO_MAX, maximum VDDIO-pin voltage relative to VSS"
+min = 0.5
+max = 6.0
+unit = "V"
+conditions = "−40 °C to +85 °C TA, absolute maximum"
+basis = "Table 12, VDDIO_MAX, min/max"
+
+[[models.source.characteristic]]
+parameter = "VCC_MAX, maximum VCC-pin voltage relative to VSS"
+min = -0.5
+max = 1.89
+unit = "V"
+conditions = "Absolute maximum"
+basis = "Table 12, VCC_MAX, min/max"
+
+[[models.source.characteristic]]
+parameter = "VIO, DC input voltage relative to VSS on I/O"
+min = -0.5
+unit = "V"
+conditions = "−40 °C to +85 °C TA, absolute maximum; max is VDD + 0.5 V"
+basis = "Table 12, VIO, min; symbolic max"
+
+[[models.source.characteristic]]
+parameter = "ESD_HBM, electrostatic discharge, human body model"
+min = 2200
+unit = "V"
+conditions = "Human body model ESD"
+basis = "Table 12, ESD_HBM, min"
+
+[[models.source.characteristic]]
+parameter = "ESD_CDM, electrostatic discharge, charged device model"
+min = 500
+unit = "V"
+conditions = "Charged device model ESD"
+basis = "Table 12, ESD_CDM, min"
+
+[[models.source.characteristic]]
+parameter = "I_LU, latch-up current limits"
+min = -140
+max = 140
+unit = "mA"
+conditions = "Maximum/minimum current to any input or output, pin-to-pin or pin-to-supply"
+basis = "Table 12, I_LU, min/max"
+
+[[models.source.characteristic]]
+parameter = "I_IO, current per GPIO"
+max = 25
+unit = "mA"
+conditions = ""
+basis = "Table 12, I_IO, max"
+
+[[models.source.characteristic]]
+parameter = "TO, operation temperature"
+min = -40
+typ = 25
+max = 85
+unit = "°C"
+conditions = "Ambient temperature inside system enclosure"
+basis = "Table 13, TO, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "TJ, junction temperature"
+min = -40
+max = 100
+unit = "°C"
+conditions = ""
+basis = "Table 13, TJ, min/max"
+
+[[models.source.characteristic]]
+parameter = "VDD, chip supply voltage"
+min = 1.71
+typ = 1.8
+max = 1.89
+unit = "V"
+conditions = "VCC shorted to VDD"
+basis = "Table 14, VDD, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "VDD, chip supply voltage"
+min = 1.8
+max = 5.5
+unit = "V"
+conditions = "VCC not shorted to VDD; VCC connected to 0.1 µF decoupling capacitor"
+basis = "Table 14, VDD, min/max"
+
+[[models.source.characteristic]]
+parameter = "VDDIO, supply voltage I/O"
+min = 1.71
+unit = "V"
+conditions = "1.71 V < VDD < 1.89 V; max = VDD"
+basis = "Table 14, VDDIO, min; symbolic max"
+
+[[models.source.characteristic]]
+parameter = "VDDIO, supply voltage I/O"
+min = 1.71
+unit = "V"
+conditions = "1.8 V < VDD < 5.5 V; max = VDD"
+basis = "Table 14, VDDIO, min; symbolic max"
+
+[[models.source.characteristic]]
+parameter = "VDD_RIPPLE, maximum allowed ripple on power supply, DC to 10 MHz"
+min = -50
+max = 50
+unit = "mV"
+conditions = "+25 °C TA, VDD > 2 V, sensitivity ≥ 0.1 pF; printed limit ±50 mV"
+basis = "Table 14, VDD_RIPPLE, max"
+
+[[models.source.characteristic]]
+parameter = "VDD_RIPPLE, maximum allowed ripple on power supply, DC to 10 MHz"
+min = -25
+max = 25
+unit = "mV"
+conditions = "+25 °C TA, VDD > 1.75 V, CP < 20 pF, sensitivity = 0.4 pF; printed limit ±25 mV"
+basis = "Table 14, VDD_RIPPLE, max"
+
+[[models.source.characteristic]]
+parameter = "CEFC, external regulator voltage bypass capacitor"
+typ = 0.1
+unit = "µF"
+conditions = "X5R ceramic ±10% or better"
+basis = "Table 14, CEFC, typ"
+
+[[models.source.characteristic]]
+parameter = "CEXC, power supply decoupling capacitor on VDD"
+typ = 1
+unit = "µF"
+conditions = "X5R ceramic or better"
+basis = "Table 14, CEXC, typ"
+
+[[models.source.characteristic]]
+parameter = "CIN_XRES, input capacitance on XRES pin"
+max = 7
+unit = "pF"
+conditions = ""
+basis = "Table 15, CIN_XRES, max"
+
+[[models.source.characteristic]]
+parameter = "VHYSXRES, input voltage hysteresis on XRES pin"
+min = 200
+unit = "mV"
+conditions = "VDD > 4.5 V"
+basis = "Table 15, VHYSXRES, min"
+
+[[models.source.characteristic]]
+parameter = "RPULLUP, pull-up resistor"
+min = 3.5
+typ = 5.6
+max = 8.5
+unit = "kΩ"
+conditions = ""
+basis = "Table 15, RPULLUP, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "VOH, output voltage HIGH level"
+min = 2.4
+unit = "V"
+conditions = "IOH = −4 mA at 3 V VDD; printed as VDD − 0.6 V, converted at VDD = 3 V"
+basis = "Table 16, VOH, min"
+
+[[models.source.characteristic]]
+parameter = "VOH, output voltage HIGH level"
+min = 1.3
+unit = "V"
+conditions = "IOH = −1 mA at 1.8 V VDD; printed as VDD − 0.5 V, converted at VDD = 1.8 V"
+basis = "Table 16, VOH, min"
+
+[[models.source.characteristic]]
+parameter = "VOL, output voltage LOW level"
+max = 0.6
+unit = "V"
+conditions = "IOL = 4 mA at 1.8 V VDD"
+basis = "Table 16, VOL, max"
+
+[[models.source.characteristic]]
+parameter = "VOL, output voltage LOW level"
+max = 0.6
+unit = "V"
+conditions = "IOL = 10 mA at 3 V VDD"
+basis = "Table 16, VOL, max"
+
+[[models.source.characteristic]]
+parameter = "CPIN, pin capacitance"
+typ = 3
+max = 7
+unit = "pF"
+conditions = "All VDD, all packages, all I/Os"
+basis = "Table 16, CPIN, typ/max"
+
+[[models.source.characteristic]]
+parameter = "ITOT_GPIO, maximum total sink chip current"
+max = 85
+unit = "mA"
+conditions = ""
+basis = "Table 16, ITOT_GPIO, max"
+
+[[models.source.characteristic]]
+parameter = "TSR_POWER_UP, power supply slew rate at power-up and power-down"
+min = 1
+max = 67
+unit = "V/ms"
+conditions = "−40 °C ≤ TA ≤ 85 °C, all VDD"
+basis = "Table 17, TSR_POWER_UP, min/max"
+
+[[models.source.characteristic]]
+parameter = "TXRES, external reset pulse width"
+min = 5
+unit = "µs"
+conditions = "−40 °C ≤ TA ≤ 85 °C, all VDD"
+basis = "Table 18, TXRES, min"
+
+[[models.source.characteristic]]
+parameter = "FSCLI2C_FM, I2C SCL clock frequency"
+min = 0
+max = 400
+unit = "kHz"
+conditions = ""
+basis = "Table 20, FSCLI2C_FM, min/max"
+
+[[models.source.characteristic]]
+parameter = "THDSTAI2C_FM, repeated START hold time"
+min = 0.6
+unit = "µs"
+conditions = "After this period, the first clock pulse is generated"
+basis = "Table 20, THDSTAI2C_FM, min"
+
+[[models.source.characteristic]]
+parameter = "TSUSTAI2C_FM, repeated START setup time"
+min = 0.6
+unit = "µs"
+conditions = ""
+basis = "Table 20, TSUSTAI2C_FM, min"
+
+[[models.source.characteristic]]
+parameter = "TLOWI2C_FM, SCL low period"
+min = 1.3
+unit = "µs"
+conditions = ""
+basis = "Table 20, TLOWI2C_FM, min"
+
+[[models.source.characteristic]]
+parameter = "THIGHI2C_FM, SCL high period"
+min = 0.6
+unit = "µs"
+conditions = ""
+basis = "Table 20, THIGHI2C_FM, min"
+
+[[models.source.characteristic]]
+parameter = "THDDATI2C, data hold time"
+min = 0
+unit = "µs"
+conditions = ""
+basis = "Table 20, THDDATI2C, min"
+
+[[models.source.characteristic]]
+parameter = "TSUDATI2C_FM, data setup time"
+min = 100
+unit = "ns"
+conditions = ""
+basis = "Table 20, TSUDATI2C_FM, min"
+
+[[models.source.characteristic]]
+parameter = "TSUSTOI2C_FM, I2C STOP setup time"
+min = 0.6
+unit = "µs"
+conditions = ""
+basis = "Table 20, TSUSTOI2C_FM, min"
+
+[[models.source.characteristic]]
+parameter = "CB_FM, capacitive load for each I2C bus line"
+max = 400
+unit = "pF"
+conditions = ""
+basis = "Table 20, CB_FM, max"
+
+[[models.source.characteristic]]
+parameter = "TVDDATI2C_FM, data valid time"
+max = 0.9
+unit = "µs"
+conditions = ""
+basis = "Table 20, TVDDATI2C_FM, max"
+
+[[models.source.characteristic]]
+parameter = "TVDACKI2C_FM, data valid acknowledge time"
+max = 0.9
+unit = "µs"
+conditions = ""
+basis = "Table 20, TVDACKI2C_FM, max"
+
+[[models.source.characteristic]]
+parameter = "TSPI2C_FM, input filter spike suppression width"
+max = 50
+unit = "ns"
+conditions = ""
+basis = "Table 20, TSPI2C_FM, max"
+
+[[models.source.characteristic]]
+parameter = "TBUFI2C_FM, bus-free time between STOP and START"
+min = 1.3
+unit = "µs"
+conditions = ""
+basis = "Table 20, TBUFI2C_FM, min"
+
+[[models.source.characteristic]]
+parameter = "VIL_I2C, input LOW voltage"
+min = -0.5
+unit = "V"
+conditions = "2-mA sink; max = 0.3 × VDD (symbolic)"
+basis = "Table 20, VIL_I2C, min; symbolic max"
+
+[[models.source.characteristic]]
+parameter = "VOL_I2C_H, output LOW voltage, high supply range"
+max = 0.4
+unit = "V"
+conditions = "VDD > 2 V, 3-mA sink"
+basis = "Table 20, VOL_I2C_H, max"
+
+[[models.source.characteristic]]
+parameter = "IOL_I2C_FM, I2C output low current"
+min = 6
+unit = "mA"
+conditions = "Fast Mode, 1.71 V ≤ VDD ≤ 5.5 V, load = CB_SM, VOL = 0.6 V"
+basis = "Table 20, IOL_I2C_FM, min"
+
+[[models.source.characteristic]]
+parameter = "I2C_VHYS_5V5, I2C input hysteresis"
+min = 200
+unit = "mV"
+conditions = "Fast and standard mode speeds; 4.5 V < VDD < 5.5 V"
+basis = "Table 20, I2C_VHYS_5V5, min"
+
+[[models.source.characteristic]]
+parameter = "TJA, package theta JA"
+rating = "theta_ja_c_per_w"
+typ = 49.6
+unit = "°C/W"
+conditions = "16-pin QFN"
+package = "QFN-16"
+basis = "Table 23, TJA, typ"
+
+[[models.source.characteristic]]
+parameter = "TJC, package theta JC"
+typ = 5.9
+unit = "°C/W"
+conditions = "16-pin QFN"
+basis = "Table 23, TJC, typ"
+
+[[models.source.references]]
+title = "CY8CMBR3108.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "6a2ad6d86294751fcaea1cdcc2af28565d26a2514b2f2a0e5f2d7d1287535042"
+
+[models.match]
+value_re = '(?i)^CY8CMBR3108'
+
+[models.params]
+identity_only = true
+warning = "Identity-only datasheet card: preserves the 16-QFN pinout, supply conditions, and published electrical limits; fixed electrical levels are corner values, not universal bounds. It does not simulate CapSense sensing/configuration, I2C transactions, sensor-dependent GPO/HI behavior, or propagation delay."
+unlocked_by = "A behavioral contract for the configurable CapSense controller and its I2C/register semantics."
+voh = 2.4 # Source: Table 16, VOH min, VDD=3 V and IOH=−4 mA; VDD−0.6 V
+vol = 0.6 # Source: Table 16, VOL max, VDD=3 V and IOL=10 mA
+supply_pin = "6"
+gnd_pin = "7"
+vih = 2.1  # Tables 15/20: VIH = 0.7 x VDD, evaluated at VDD = 3.0 V (the corner voh/vol use)
+vil = 0.9  # Tables 15/20: VIL = 0.3 x VDD, evaluated at VDD = 3.0 V (the corner voh/vol use)
+
+[models.ratings]
+max_voltage_v = 6.0 # Source: Table 12, VDD_MAX, max, VDD relative to VSS
+max_pin_current_a = 0.025 # Source: Table 12, I_IO, max, per GPIO
+max_junction_temp_c = 100.0 # Source: Table 13, TJ, max
+theta_ja_c_per_w = 49.6 # Source: Table 23, 16-pin QFN, TJA typ
+
+[models.pins]
+# The numbered pin-function table and its 16-QFN top-view diagram agree with Figure 13's CY8CMBR3108 (16-QFN) application schematic.
+"1" = "cs0_ps0" # CS0/PS0; CapSense button/proximity sensor, controls GPO0
+"2" = "cs1_ps1" # CS1/PS1; CapSense button/proximity sensor, controls GPO1
+"3" = "cmod" # CMOD; external modulator capacitor
+"4" = "vcc" # VCC; internal regulator output
+"5" = "vddio" # VDDIO; power for I2C and HI lines
+"6" = "vdd" # VDD; primary power
+"7" = "vss" # VSS; ground
+"8" = "cs4_gpo0" # CS4/GPO0; CapSense button/GPO
+"9" = "cs5_gpo1" # CS5/GPO1; CapSense button/GPO
+"10" = "cs6_gpo2" # CS6/GPO2; CapSense button/GPO
+"11" = "cs7_gpo3_sh" # CS7/GPO3/SH; CapSense button/GPO/shield electrode; SPO1 in register map
+"12" = "cs2_guard" # CS2/GUARD; CapSense button, controls GPO2/guard sensor; functions as XRES during boot-up
+"13" = "cs3" # CS3; CapSense button, controls GPO3
+"14" = "i2c_sda" # I2C SDA; I2C data
+"15" = "i2c_scl" # I2C SCL; I2C clock
+"16" = "hi_buz" # HI/BUZ; host interrupt/buzzer output; SPO0 in register map
+"17" = "center_pad" # Center Pad; connect to VSS for best mechanical, thermal, and electrical performance
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.8
+max_v = 5.5
+basis = "Table 14, VDD chip supply voltage, VCC not shorted to VDD; VCC connected to 0.1 µF decoupling capacitor"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.71
+max_v = 1.89
+conditions = "TA = −40 °C to +85 °C; VCC shorted to VDD"
+basis = "Table 14, VDD chip supply voltage, VCC shorted to VDD"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vddio"
+min_v = 1.71
+max_v = 5.5
+conditions = "TA = −40 °C to +85 °C; VDD = 5.5 V; VDDIO ≤ VDD"
+basis = "Table 14, VDDIO supply voltage I/O and VDD chip supply voltage maximum"
+
+[[models.envelope]]
+kind = "rail_order"
+lower = "vddio"
+upper = "vdd"
+basis = "Power Supply Information, VDDIO should not be powered at a voltage higher than VDD; Figure 13 connections"
+
+[models.coverage]
+implements = ["pin_identity", "published_electrical_limits", "supply_conditions"]
+missing = ["capsense_sensing", "register_configuration", "i2c_protocol", "sensor_dependent_gpo_behavior", "host_interrupt_behavior", "buzzer_waveform", "output_propagation_delay"]
+
+# MAX17048 1-cell fuel gauge (Maxim/ADI DS 19-6171 Rev 7): extraction pipeline with --kind digital after the auto sensor kind gave a bare spec; hand-fixed: unique ids per package, unanchored value_re, packages told apart by footprint_re instead of an undeterminable variant set.
+[[models]]
+id = "max17048_tdfn"
+kind = "digital"
+description = "MAX17048 1-cell ModelGauge fuel gauge in 8 TDFN-EP; identity-only because the stateful I2C register protocol and fuel-gauge behavior cannot be represented by the bounded Boolean logic schema; does not model state-of-charge estimation, battery dynamics, I2C transactions, alerts, or timing."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "logic_model"
+reason = "ABSTAIN: the datasheet describes stateful I2C register transactions and a fuel-gauge algorithm, not a Boolean logic function."
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "tpd_s"
+reason = "ABSTAIN: the datasheet does not state an output propagation-delay value."
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.pinout]]
+package = "8 TDFN-EP"
+pins = { "1" = "CTG", "2" = "CELL", "3" = "VDD", "4" = "GND", "5" = "ALRT", "6" = "QSTRT", "7" = "SCL", "8" = "SDA", "EP" = "EP" }
+
+[models.match]
+value_re = '(?i)^MAX17048'
+footprint_re = '(?i)(DFN|SON)[-_]?0?8([^0-9]|$)'
+
+[models.params]
+identity_only = true
+warning = "ABSTAIN: stateful I2C register protocol and fuel-gauge behavior cannot be represented by the bounded Boolean logic schema."
+unlocked_by = "A schema for stateful I2C register transactions and the ModelGauge algorithm."
+vih = 1.4 # Source: Electrical Characteristics, SDA/SCL/QSTRT Input Logic-High, min column
+vil = 0.5 # Source: Electrical Characteristics, SDA/SCL/QSTRT Input Logic-Low, max column
+vol = 0.4 # Source: Electrical Characteristics, SDA/ALRT Output Logic-Low, max column, IOL = 4mA
+supply_static_ua = 23 # Source: Electrical Characteristics, Supply Current IDD1, active mode, typ column
+open_collector = true # Source: Pin/Bump Descriptions, ALRT and SDA are open-drain
+supply_pin = "3" # Source: Pin/Bump Descriptions, TDFN VDD pin 3
+gnd_pin = "4" # Source: Pin/Bump Descriptions, TDFN GND pin 4
+
+[models.ratings]
+max_voltage_v = 6.0 # Source: Absolute Maximum Ratings, All Other Pins to GND, +6V (VDD supply pin)
+max_pin_current_a = 0.02 # Source: Absolute Maximum Ratings, Continuous Sink Current, SDA and ALRT, 20mA
+
+[models.pins]
+"1" = "ctg" # CTG; connect to ground
+"2" = "cell" # CELL; connect to positive battery terminal; MAX17048 not internally connected
+"3" = "vdd" # VDD power-supply input and voltage-sense input; connect to positive battery terminal
+"4" = "gnd" # GND; connect to negative battery terminal
+"5" = "alrt_n" # ALRT; open-drain active-low alert output
+"6" = "qstrt" # QSTRT; quick-start input
+"7" = "scl" # SCL; I2C clock input
+"8" = "sda" # SDA; open-drain I2C data input/output
+"EP" = "ep" # EP exposed pad; connect to GND
+
+[models.coverage]
+implements = ["package_identity", "pin_identity", "absolute_maximum_ratings"]
+missing = ["state_of_charge_estimation", "battery_dynamics", "i2c_register_protocol", "alert_behavior", "digital_timing"]
+
+[[models.source.characteristic]]
+parameter = "CELL to GND absolute maximum"
+min = -0.3
+max = 12.0
+unit = "V"
+conditions = "Absolute stress limit, referenced to GND"
+basis = "Absolute Maximum Ratings, CELL to GND, min/max"
+[[models.source.characteristic]]
+parameter = "All other pins to GND absolute maximum"
+min = -0.3
+max = 6.0
+unit = "V"
+conditions = "Absolute stress limit, referenced to GND"
+basis = "Absolute Maximum Ratings, All Other Pins to GND, min/max"
+[[models.source.characteristic]]
+parameter = "Continuous sink current, SDA and ALRT"
+max = 20
+unit = "mA"
+conditions = "Continuous sink current"
+basis = "Absolute Maximum Ratings, Continuous Sink Current, max"
+[[models.source.characteristic]]
+parameter = "Operating temperature range"
+min = -40
+max = 85
+unit = "°C"
+conditions = "Operating"
+basis = "Absolute Maximum Ratings, Operating Temperature Range, min/max"
+[[models.source.characteristic]]
+parameter = "Storage temperature range"
+min = -55
+max = 125
+unit = "°C"
+conditions = "Storage"
+basis = "Absolute Maximum Ratings, Storage Temperature Range, min/max"
+[[models.source.characteristic]]
+parameter = "Lead temperature, TDFN only"
+max = 300
+unit = "°C"
+conditions = "Soldering, 10s; TDFN only"
+basis = "Absolute Maximum Ratings, Lead Temperature, max"
+[[models.source.characteristic]]
+parameter = "Soldering temperature, reflow"
+max = 260
+unit = "°C"
+conditions = "Reflow"
+basis = "Absolute Maximum Ratings, Soldering Temperature, max"
+[[models.source.characteristic]]
+parameter = "Supply voltage VDD"
+min = 2.5
+max = 4.5
+unit = "V"
+conditions = "TA = -20°C to +70°C unless noted"
+basis = "Electrical Characteristics, Supply Voltage, min/max"
+[[models.source.characteristic]]
+parameter = "Fuel-gauge SOC reset configuration range VRESET"
+min = 2.28
+max = 3.48
+unit = "V"
+conditions = "Configuration range, 40mV steps"
+basis = "Electrical Characteristics, Fuel-Gauge SOC Reset, configuration row min/max"
+[[models.source.characteristic]]
+parameter = "Fuel-gauge SOC reset trimmed value VRESET"
+min = 2.85
+typ = 3.0
+max = 3.15
+unit = "V"
+conditions = "Trimmed at 3V"
+basis = "Electrical Characteristics, Fuel-Gauge SOC Reset, trimmed row min/typ/max"
+[[models.source.characteristic]]
+parameter = "Data I/O pins SCL, SDA, ALRT"
+min = -0.3
+max = 5.5
+unit = "V"
+conditions = "All voltages referenced to GND"
+basis = "Electrical Characteristics, Data I/O Pins, min/max"
+[[models.source.characteristic]]
+parameter = "Supply current IDD0"
+typ = 0.5
+max = 2
+unit = "µA"
+conditions = "Sleep mode, TA ≤ +50°C"
+basis = "Electrical Characteristics, Supply Current, IDD0 sleep row, typ/max"
+[[models.source.characteristic]]
+parameter = "Supply current IDD0"
+typ = 3
+max = 5
+unit = "µA"
+conditions = "Hibernate mode, reset comparator disabled (VRESET.Dis = 1)"
+basis = "Electrical Characteristics, Supply Current, IDD0 hibernate disabled row, typ/max"
+[[models.source.characteristic]]
+parameter = "Supply current IDD0"
+typ = 4
+unit = "µA"
+conditions = "Hibernate mode, reset comparator enabled (VRESET.Dis = 0)"
+basis = "Electrical Characteristics, Supply Current, IDD0 hibernate enabled row, typ"
+[[models.source.characteristic]]
+parameter = "Supply current IDD1"
+typ = 23
+max = 40
+unit = "µA"
+conditions = "Active mode"
+basis = "Electrical Characteristics, Supply Current, IDD1 active row, typ/max"
+[[models.source.characteristic]]
+parameter = "Time-base accuracy tERR"
+min = -3.5
+typ = 1.0
+max = 3.5
+unit = "%"
+conditions = "Active and hibernate modes; printed typ is ±1%"
+basis = "Electrical Characteristics, Time Base Accuracy, min/typ/max"
+[[models.source.characteristic]]
+parameter = "ADC sample period"
+typ = 250
+unit = "ms"
+conditions = "Active mode"
+basis = "Electrical Characteristics, ADC Sample Period, active row, typ"
+[[models.source.characteristic]]
+parameter = "ADC sample period"
+typ = 45
+unit = "s"
+conditions = "Hibernate mode"
+basis = "Electrical Characteristics, ADC Sample Period, hibernate row, typ"
+[[models.source.characteristic]]
+parameter = "Voltage error VERR"
+min = -7.5
+max = 7.5
+unit = "mV/cell"
+conditions = "VCELL = 3.6V, TA = +25°C; 16x averaging"
+basis = "Electrical Characteristics, Voltage Error, first row min/max"
+[[models.source.characteristic]]
+parameter = "Voltage error VERR"
+min = -20
+max = 20
+unit = "mV/cell"
+conditions = "Second listed row; no separate condition printed"
+basis = "Electrical Characteristics, Voltage Error, second row min/max"
+[[models.source.characteristic]]
+parameter = "Voltage-measurement resolution"
+typ = 1.25
+unit = "mV/cell"
+conditions = "Voltage measurement"
+basis = "Electrical Characteristics, Voltage-Measurement Resolution, typ"
+[[models.source.characteristic]]
+parameter = "Voltage-measurement range, MAX17048 VDD pin"
+min = 2.5
+max = 5
+unit = "V"
+conditions = "MAX17048 VDD pin"
+basis = "Electrical Characteristics, Voltage-Measurement Range, MAX17048 row min/max"
+[[models.source.characteristic]]
+parameter = "Input logic-high threshold VIH"
+min = 1.4
+unit = "V"
+conditions = "SDA, SCL, QSTRT input"
+basis = "Electrical Characteristics, Input Logic-High, min"
+[[models.source.characteristic]]
+parameter = "Input logic-low threshold VIL"
+max = 0.5
+unit = "V"
+conditions = "SDA, SCL, QSTRT input"
+basis = "Electrical Characteristics, Input Logic-Low, max"
+[[models.source.characteristic]]
+parameter = "Output logic-low voltage VOL"
+max = 0.4
+unit = "V"
+conditions = "SDA, ALRT output; IOL = 4mA"
+basis = "Electrical Characteristics, Output Logic-Low, max"
+[[models.source.characteristic]]
+parameter = "Bus low-detection current IPD"
+typ = 0.2
+max = 0.4
+unit = "µA"
+conditions = "VSDA = VSCL = 0.4V; current always present"
+basis = "Electrical Characteristics, Bus Low-Detection Current, typ/max"
+[[models.source.characteristic]]
+parameter = "Bus low-detection timeout tSLEEP"
+min = 1.75
+max = 2.5
+unit = "s"
+conditions = "Note 6"
+basis = "Electrical Characteristics, Bus Low-Detection Timeout, min/max"
+[[models.source.characteristic]]
+parameter = "I2C SCL clock frequency fSCL"
+min = 0
+max = 400
+unit = "kHz"
+conditions = "Note 7"
+basis = "Electrical Characteristics (I2C Interface), SCL Clock Frequency, min/max"
+[[models.source.characteristic]]
+parameter = "I2C bus free time tBUF"
+min = 1.3
+unit = "µs"
+conditions = "STOP to START"
+basis = "Electrical Characteristics (I2C Interface), Bus Free Time, min"
+[[models.source.characteristic]]
+parameter = "I2C repeated START hold time tHD:STA"
+min = 0.6
+unit = "µs"
+conditions = "Note 8"
+basis = "Electrical Characteristics (I2C Interface), START Hold Time, min"
+[[models.source.characteristic]]
+parameter = "I2C SCL low period tLOW"
+min = 1.3
+unit = "µs"
+conditions = "SCL clock"
+basis = "Electrical Characteristics (I2C Interface), Low Period, min"
+[[models.source.characteristic]]
+parameter = "I2C SCL high period tHIGH"
+min = 0.6
+unit = "µs"
+conditions = "SCL clock"
+basis = "Electrical Characteristics (I2C Interface), High Period, min"
+[[models.source.characteristic]]
+parameter = "I2C repeated START setup time tSU:STA"
+min = 0.6
+unit = "µs"
+conditions = "Repeated START"
+basis = "Electrical Characteristics (I2C Interface), Repeated START Setup Time, min"
+[[models.source.characteristic]]
+parameter = "I2C data hold time tHD:DAT"
+min = 0
+max = 0.9
+unit = "µs"
+conditions = "Notes 9 and 10"
+basis = "Electrical Characteristics (I2C Interface), Data Hold Time, min/max"
+[[models.source.characteristic]]
+parameter = "I2C data setup time tSU:DAT"
+min = 100
+unit = "ns"
+conditions = "Note 9"
+basis = "Electrical Characteristics (I2C Interface), Data Setup Time, min"
+[[models.source.characteristic]]
+parameter = "I2C rise time tR"
+min = 20
+max = 300
+unit = "ns"
+conditions = "Printed minimum 20 + 0.1CB ns; SDA and SCL"
+basis = "Electrical Characteristics (I2C Interface), Rise Time, min formula/max"
+[[models.source.characteristic]]
+parameter = "I2C fall time tF"
+min = 20
+max = 300
+unit = "ns"
+conditions = "Printed minimum 20 + 0.1CB ns; SDA and SCL"
+basis = "Electrical Characteristics (I2C Interface), Fall Time, min formula/max"
+[[models.source.characteristic]]
+parameter = "I2C STOP setup time tSU:STO"
+min = 0.6
+unit = "µs"
+conditions = "STOP condition"
+basis = "Electrical Characteristics (I2C Interface), STOP Setup Time, min"
+[[models.source.characteristic]]
+parameter = "I2C spike width suppressed tSP"
+min = 0
+max = 50
+unit = "ns"
+conditions = "Input filter; Note 11"
+basis = "Electrical Characteristics (I2C Interface), Spike Pulse Widths Suppressed, min/max"
+[[models.source.characteristic]]
+parameter = "I2C capacitive load per bus line CB"
+max = 400
+unit = "pF"
+conditions = "Each bus line; Note 12"
+basis = "Electrical Characteristics (I2C Interface), Capacitive Load, max"
+[[models.source.characteristic]]
+parameter = "SCL/SDA input capacitance CB,IN"
+max = 60
+unit = "pF"
+conditions = "SCL and SDA input"
+basis = "Electrical Characteristics (I2C Interface), SCL/SDA Input Capacitance, max"
+
+[[models.source.references]]
+title = "MAX17048.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "70dc8eef0e012276dcdc58b6dce64af08258304bcf865ceace64e856b8029330"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.5
+max_v = 4.5
+abs_max_v = 6.0
+basis = "Electrical Characteristics, Supply Voltage row (VDD = 2.5V to 4.5V)"
+
+[[models]]
+id = "max17048_wlp"
+kind = "digital"
+description = "MAX17048 1-cell ModelGauge fuel gauge in 8 WLP; identity-only because the stateful I2C register protocol and fuel-gauge behavior cannot be represented by the bounded Boolean logic schema; does not model state-of-charge estimation, battery dynamics, I2C transactions, alerts, or timing."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "logic_model"
+reason = "ABSTAIN: the datasheet describes stateful I2C register transactions and a fuel-gauge algorithm, not a Boolean logic function."
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "tpd_s"
+reason = "ABSTAIN: the datasheet does not state an output propagation-delay value."
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.pinout]]
+package = "8 WLP"
+pins = { "A1" = "CTG", "A2" = "CELL", "A3" = "VDD", "A4" = "GND", "B1" = "SDA", "B2" = "SCL", "B3" = "QSTRT", "B4" = "ALRT" }
+
+[[models.source.references]]
+title = "MAX17048.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "70dc8eef0e012276dcdc58b6dce64af08258304bcf865ceace64e856b8029330"
+
+[models.match]
+value_re = '(?i)^MAX17048'
+footprint_re = '(?i)(WLP|WLCSP|UCSP|CSP|BGA)'
+
+[models.params]
+identity_only = true
+warning = "ABSTAIN: stateful I2C register protocol and fuel-gauge behavior cannot be represented by the bounded Boolean logic schema."
+unlocked_by = "A schema for stateful I2C register transactions and the ModelGauge algorithm."
+vih = 1.4 # Source: Electrical Characteristics, SDA/SCL/QSTRT Input Logic-High, min column
+vil = 0.5 # Source: Electrical Characteristics, SDA/SCL/QSTRT Input Logic-Low, max column
+vol = 0.4 # Source: Electrical Characteristics, SDA/ALRT Output Logic-Low, max column, IOL = 4mA
+supply_static_ua = 23 # Source: Electrical Characteristics, Supply Current IDD1, active mode, typ column
+open_collector = true # Source: Pin/Bump Descriptions, ALRT and SDA are open-drain
+supply_pin = "A3" # Source: Pin/Bump Descriptions, WLP VDD bump A3
+gnd_pin = "A4" # Source: Pin/Bump Descriptions, WLP GND bump A4
+
+[models.ratings]
+max_voltage_v = 6.0 # Source: Absolute Maximum Ratings, All Other Pins to GND, +6V (VDD supply pin)
+max_pin_current_a = 0.02 # Source: Absolute Maximum Ratings, Continuous Sink Current, SDA and ALRT, 20mA
+
+[models.pins]
+"A1" = "ctg" # CTG; connect to ground
+"A2" = "cell" # CELL; connect to positive battery terminal; MAX17048 not internally connected
+"A3" = "vdd" # VDD power-supply input and voltage-sense input; connect to positive battery terminal
+"A4" = "gnd" # GND; connect to negative battery terminal
+"B1" = "sda" # SDA; open-drain I2C data input/output
+"B2" = "scl" # SCL; I2C clock input
+"B3" = "qstrt" # QSTRT; quick-start input
+"B4" = "alrt_n" # ALRT; open-drain active-low alert output
+
+[models.coverage]
+implements = ["package_identity", "pin_identity", "absolute_maximum_ratings"]
+missing = ["state_of_charge_estimation", "battery_dynamics", "i2c_register_protocol", "alert_behavior", "digital_timing"]
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.5
+max_v = 4.5
+abs_max_v = 6.0
+basis = "Electrical Characteristics, Supply Voltage row (VDD = 2.5V to 4.5V)"
+
+# CAT24M01 1-Mbit I2C EEPROM (onsemi datasheet): extraction pipeline with --kind digital after the auto sensor kind gave a bare spec; accepted as drafted (pin map identical for SOIC, TSSOP and UDFN).
+[[models]]
+id = "cat24m01"
+kind = "digital"
+description = "CAT24M01 1-Mbit I2C EEPROM, SOIC-8 JEDEC package; identity-only because this digital schema cannot represent its bidirectional serial memory bus, EEPROM read/write protocol, or stored contents. The datasheet shows the same 8-pin assignment for TSSOP-8 and UDFN-8."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "EEPROM contents and I2C memory protocol require bidirectional bus and memory-state behavior that the digital logic schema cannot represent; datasheet publishes no validated model error interval"
+
+[[models.source.pinout]]
+package = "SOIC-8, JEDEC"
+pins = { "1" = "NC", "2" = "A1", "3" = "A2", "4" = "VSS", "5" = "SDA", "6" = "SCL", "7" = "WP", "8" = "VCC" }
+
+[models.match]
+value_re = '(?i)^CAT24M01'
+
+[models.params]
+identity_only = true
+warning = "EEPROM memory transactions and stored data are outside the executable digital logic schema."
+unlocked_by = "A schema supporting bidirectional I2C memory state and EEPROM writes."
+supply_pin = "8"
+gnd_pin = "4"
+
+[models.ratings]
+max_voltage_v = 6.5 # Source: Table 1, voltage on any pin with respect to ground, maximum
+max_junction_temp_c = 150.0 # Source: Table 1, TJ maximum
+
+[models.pins]
+"1" = "nc" # Pin Configuration, pin 1; NC
+"2" = "a1" # Pin Configuration and Pin Function table, A1 device address
+"3" = "a2" # Pin Configuration and Pin Function table, A2 device address
+"4" = "vss" # Pin Configuration and Pin Function table, VSS ground
+"5" = "sda" # Pin Configuration and Pin Function table, SDA serial data, bidirectional/open-drain in transmit mode
+"6" = "scl" # Pin Configuration and Pin Function table, SCL serial clock input
+"7" = "wp" # Pin Configuration and Pin Function table, WP write protect input
+"8" = "vcc" # Pin Configuration and Pin Function table, VCC power supply
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.8
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Table 3, D.C. Operating Characteristics, VCC range"
+
+[models.coverage]
+implements = ["identity", "pin_assignment", "supply_range", "absolute_maximum_voltage", "maximum_junction_temperature"]
+missing = ["i2c_memory_protocol", "bidirectional_sda_behavior", "memory_contents", "write_cycle_and_write_protection", "ecc_correction"]
+
+[[models.source.characteristic]]
+parameter = "TSTG, storage temperature range"
+min = -65
+max = 150
+unit = "°C"
+conditions = "Absolute maximum ratings"
+basis = "Table 1, Storage Temperature Range, min/max"
+
+[[models.source.characteristic]]
+parameter = "Voltage on any pin with respect to ground"
+min = -0.5
+max = 6.5
+unit = "V"
+conditions = "DC; note 1 additionally permits transient undershoot to -1.5 V and overshoot to VCC + 1.5 V for less than 20 ns"
+basis = "Table 1, Voltage on any Pin with Respect to Ground, min/max"
+
+[[models.source.characteristic]]
+parameter = "NEND, endurance"
+min = 1000000
+unit = "Program/Erase Cycles"
+conditions = "Page mode, VCC = 5 V, TA = 25 °C"
+basis = "Table 2, NEND minimum; notes 3 and 4"
+
+[[models.source.characteristic]]
+parameter = "TDR, data retention"
+min = 100
+unit = "Years"
+conditions = "Reliability characteristic"
+basis = "Table 2, TDR minimum"
+
+[[models.source.characteristic]]
+parameter = "ICCR, read current"
+max = 1
+unit = "mA"
+conditions = "Read, fSCL = 400 kHz / 1 MHz"
+basis = "Table 3, ICCR maximum"
+
+[[models.source.characteristic]]
+parameter = "ICCW, write current"
+max = 3.5
+unit = "mA"
+conditions = "VCC = 1.8 V"
+basis = "Table 3, ICCW maximum"
+
+[[models.source.characteristic]]
+parameter = "ICCW, write current"
+max = 5.0
+unit = "mA"
+conditions = "VCC = 5.5 V"
+basis = "Table 3, ICCW maximum"
+
+[[models.source.characteristic]]
+parameter = "ISB, standby current"
+max = 2
+unit = "µA"
+conditions = "All I/O pins at GND or VCC, TA = -40 °C to +85 °C"
+basis = "Table 3, ISB maximum"
+
+[[models.source.characteristic]]
+parameter = "ISB, standby current"
+max = 5
+unit = "µA"
+conditions = "All I/O pins at GND or VCC, TA = -40 °C to +125 °C"
+basis = "Table 3, ISB maximum"
+
+[[models.source.characteristic]]
+parameter = "IL, I/O pin leakage"
+max = 1
+unit = "µA"
+conditions = "Pin at GND or VCC, TA = -40 °C to +85 °C"
+basis = "Table 3, IL maximum"
+
+[[models.source.characteristic]]
+parameter = "IL, I/O pin leakage"
+max = 2
+unit = "µA"
+conditions = "Pin at GND or VCC, TA = -40 °C to +125 °C"
+basis = "Table 3, IL maximum"
+
+[[models.source.characteristic]]
+parameter = "VIL1, input low voltage"
+min = -0.5
+unit = "V"
+conditions = "VCC = 2.5 V to 5.5 V; maximum = 0.3 VCC"
+basis = "Table 3, VIL1 minimum and maximum"
+
+[[models.source.characteristic]]
+parameter = "VIL2, input low voltage"
+min = -0.5
+unit = "V"
+conditions = "VCC = 1.8 V to <2.5 V; maximum = 0.25 VCC"
+basis = "Table 3, VIL2 minimum and maximum"
+
+[[models.source.characteristic]]
+parameter = "VOL1, output low voltage"
+max = 0.4
+unit = "V"
+conditions = "VCC ≥ 2.5 V, IOL = 3.0 mA"
+basis = "Table 3, VOL1 maximum"
+
+[[models.source.characteristic]]
+parameter = "VOL2, output low voltage"
+max = 0.2
+unit = "V"
+conditions = "VCC < 2.5 V, IOL = 1.0 mA"
+basis = "Table 3, VOL2 maximum"
+
+[[models.source.references]]
+title = "CAT24M01.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "eff48c0a3d1e82322c5eb1f2700d3e671d4e770264dfc72bc8b80ff398dcc888"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "VIH1"
+reason = "ABSTAIN: Table 3 prints only supply-relative thresholds (minimum 0.7 VCC and maximum VCC + 0.5 V), with no absolute voltage values"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "VIH2"
+reason = "ABSTAIN: Table 3 prints only supply-relative thresholds (minimum 0.75 VCC and maximum VCC + 0.5 V), with no absolute voltage values"
+
+# 24AA025UID 2-Kbit I2C EEPROM with unique ID (Microchip DS20005202A, copy from a distributor mirror because the Microchip URLs return 403): extraction pipeline with --kind digital, hand-fixed into two cards (8-lead and 6-lead SOT-23 pad numbering) gated by footprint_re; vih/vil at VCC = 3.3 V.
+[[models]]
+id = "24aa025uid_8pin"
+kind = "digital"
+description = "24AA025UID (8-lead PDIP/SOIC) 2-Kbit I2C serial EEPROM with preprogrammed 32-bit unique ID and 16-byte page write buffer; identity-only because the schema cannot represent EEPROM/I2C stateful bus behavior; does not model memory contents, serial protocol, unique-ID access, or write timing. ABSTAIN: no package was specified."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+
+[[models.source.pinout]]
+package = "8-lead PDIP/SOIC"
+pins = { "1" = "A0", "2" = "A1", "3" = "A2", "4" = "Vss", "5" = "SDA", "6" = "SCL", "7" = "NC", "8" = "Vcc" }
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "Datasheet publishes no validated model error interval."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "package"
+reason = "The datasheet lists 8-lead PDIP, 8-lead SOIC, and 6-lead SOT-23; one card per pad numbering (8-lead and 6-lead); the 5-lead SOT-23 is 24AA02UID only and has no card; footprint_re gates which card binds."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vhys"
+reason = "ABSTAIN: Table 1-1 specifies hysteresis only as 0.05 VCC, a supply-relative value with no absolute voltage."
+
+[[models.source.characteristic]]
+parameter = "Absolute maximum storage temperature"
+min = -65
+max = 150
+unit = "°C"
+conditions = "Storage temperature"
+basis = "Absolute Maximum Ratings, storage temperature"
+
+[[models.source.characteristic]]
+parameter = "Absolute maximum ambient temperature with power applied"
+min = -40
+max = 85
+unit = "°C"
+conditions = "Power applied"
+basis = "Absolute Maximum Ratings, ambient temperature with power applied"
+
+[[models.source.characteristic]]
+parameter = "Absolute maximum input/output voltage relative to VSS"
+min = -0.3
+unit = "V"
+conditions = "Maximum is VCC + 1.0 V relative to VSS"
+basis = "Absolute Maximum Ratings, all inputs and outputs w.r.t. VSS"
+
+[[models.source.characteristic]]
+parameter = "ESD protection on all pins"
+min = 4
+unit = "kV"
+conditions = "All pins"
+basis = "Absolute Maximum Ratings, ESD protection"
+
+[[models.source.characteristic]]
+parameter = "Recommended VCC operating range"
+min = 1.7
+max = 5.5
+unit = "V"
+conditions = "Industrial temperature range"
+basis = "Table 1-1 DC Characteristics, Industrial (I) conditions"
+
+[[models.source.characteristic]]
+parameter = "Maximum clock frequency"
+max = 400
+unit = "kHz"
+conditions = "100 kHz for VCC < 2.5 V"
+basis = "Device Selection Table, 24AA025UID Max. Clock Frequency; Note 1"
+
+[[models.source.characteristic]]
+parameter = "Operating temperature range"
+min = -40
+max = 85
+unit = "°C"
+conditions = "Industrial (I)"
+basis = "Device Selection Table, Temp. Ranges"
+
+[[models.source.characteristic]]
+parameter = "ILI, input leakage current"
+min = -1
+max = 1
+unit = "µA"
+conditions = "VIN = VSS or VCC; printed ±1 µA"
+basis = "Table 1-1, D5, max"
+
+[[models.source.characteristic]]
+parameter = "ILO, output leakage current"
+min = -1
+max = 1
+unit = "µA"
+conditions = "VOUT = VSS or VCC; printed ±1 µA"
+basis = "Table 1-1, D6, max"
+
+[[models.source.characteristic]]
+parameter = "CIN, COUT, pin capacitance"
+max = 10
+unit = "pF"
+conditions = "All inputs/outputs; VCC = 5.0 V, TA = 25°C, FCLK = 1 MHz; periodically sampled, not 100% tested"
+basis = "Table 1-1, D7, max"
+
+[[models.source.characteristic]]
+parameter = "ICC write, operating current"
+typ = 0.1
+max = 3
+unit = "mA"
+conditions = "VCC = 5.5 V, SCL = 400 kHz"
+basis = "Table 1-1, D8, typ/max"
+
+[[models.source.characteristic]]
+parameter = "ICC read, operating current"
+typ = 0.05
+max = 1
+unit = "mA"
+conditions = "Table 1-1 does not specify additional conditions for D9"
+basis = "Table 1-1, D9, typ/max"
+
+[[models.source.characteristic]]
+parameter = "ICCS, standby current"
+typ = 0.01
+max = 1
+unit = "µA"
+conditions = "Industrial; SDA = SCL = VCC; A0, A1, A2 = VSS"
+basis = "Table 1-1, D10, typ/max"
+
+[[models.source.references]]
+title = "24AA025UID.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "ec80c624e7ab04dad80e6bdb867f7afbe3ab79616cdecb41ebeba346f2710aeb"
+
+[models.match]
+value_re = "(?i)^24AA025UID"
+footprint_re = '''(?ix)
+    (SOIC|SO|SOP|DIP|PDIP|DIL) [-_]? 0?8 ([^0-9]|$)
+  | [-_] 8N ([^0-9]|$)
+'''
+
+[models.params]
+identity_only = true
+warning = "Identity-only datasheet card: the EEPROM's stateful I2C memory behavior cannot be represented by the digital logic schema."
+unlocked_by = "Specify a package and use a behavioral EEPROM/I2C model that represents storage and protocol state."
+vih = 2.31 # Table 1-1, D1: VIH = 0.7 VCC, evaluated at VCC = 3.3 V
+vil = 0.99 # Table 1-1, D2: VIL = 0.3 VCC, evaluated at VCC = 3.3 V
+vol = { max = 0.40, unit = "V", conditions = "IOL = 3.0 mA, VCC = 2.5 V", basis = "Table 1-1, D4, max" }
+supply_static_ua = 1 # Table 1-1 ICCS standby current, max 1 uA (typ 0.01 uA); the 0.1 mA typ is the write current
+
+[models.ratings]
+max_voltage_v = 6.5 # Source: Absolute Maximum Ratings, VCC
+
+[models.pins]
+# Table 2-1, PDIP and SOIC columns. The 6-pin SOT-23 numbers the pads differently and has its own card below.
+"1" = "a0"
+"2" = "a1"
+"3" = "a2"
+"4" = "vss"
+"5" = "sda"
+"6" = "scl"
+"7" = "nc"
+"8" = "vcc"
+
+[models.coverage]
+implements = []
+missing = ["eeprom_storage", "i2c_serial_protocol", "unique_id_access", "write_cycle_timing", "package_specific_pad_binding"]
+
+[[models]]
+id = "24aa025uid_sot23_6"
+kind = "digital"
+description = "24AA025UID (6-lead SOT-23) 2-Kbit I2C serial EEPROM with preprogrammed 32-bit unique ID and 16-byte page write buffer; identity-only because the schema cannot represent EEPROM/I2C stateful bus behavior; does not model memory contents, serial protocol, unique-ID access, or write timing. ABSTAIN: no package was specified."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+
+[[models.source.pinout]]
+package = "SOT-23-6"
+pins = { "1" = "SCL", "2" = "Vss", "3" = "SDA", "4" = "A1", "5" = "A0", "6" = "Vcc" }
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "Datasheet publishes no validated model error interval."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "package"
+reason = "The datasheet lists 8-lead PDIP, 8-lead SOIC, and 6-lead SOT-23; one card per pad numbering (8-lead and 6-lead); the 5-lead SOT-23 is 24AA02UID only and has no card; footprint_re gates which card binds."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vhys"
+reason = "ABSTAIN: Table 1-1 specifies hysteresis only as 0.05 VCC, a supply-relative value with no absolute voltage."
+
+[[models.source.characteristic]]
+parameter = "Absolute maximum storage temperature"
+min = -65
+max = 150
+unit = "°C"
+conditions = "Storage temperature"
+basis = "Absolute Maximum Ratings, storage temperature"
+
+[[models.source.characteristic]]
+parameter = "Absolute maximum ambient temperature with power applied"
+min = -40
+max = 85
+unit = "°C"
+conditions = "Power applied"
+basis = "Absolute Maximum Ratings, ambient temperature with power applied"
+
+[[models.source.characteristic]]
+parameter = "Absolute maximum input/output voltage relative to VSS"
+min = -0.3
+unit = "V"
+conditions = "Maximum is VCC + 1.0 V relative to VSS"
+basis = "Absolute Maximum Ratings, all inputs and outputs w.r.t. VSS"
+
+[[models.source.characteristic]]
+parameter = "ESD protection on all pins"
+min = 4
+unit = "kV"
+conditions = "All pins"
+basis = "Absolute Maximum Ratings, ESD protection"
+
+[[models.source.characteristic]]
+parameter = "Recommended VCC operating range"
+min = 1.7
+max = 5.5
+unit = "V"
+conditions = "Industrial temperature range"
+basis = "Table 1-1 DC Characteristics, Industrial (I) conditions"
+
+[[models.source.characteristic]]
+parameter = "Maximum clock frequency"
+max = 400
+unit = "kHz"
+conditions = "100 kHz for VCC < 2.5 V"
+basis = "Device Selection Table, 24AA025UID Max. Clock Frequency; Note 1"
+
+[[models.source.characteristic]]
+parameter = "Operating temperature range"
+min = -40
+max = 85
+unit = "°C"
+conditions = "Industrial (I)"
+basis = "Device Selection Table, Temp. Ranges"
+
+[[models.source.characteristic]]
+parameter = "ILI, input leakage current"
+min = -1
+max = 1
+unit = "µA"
+conditions = "VIN = VSS or VCC; printed ±1 µA"
+basis = "Table 1-1, D5, max"
+
+[[models.source.characteristic]]
+parameter = "ILO, output leakage current"
+min = -1
+max = 1
+unit = "µA"
+conditions = "VOUT = VSS or VCC; printed ±1 µA"
+basis = "Table 1-1, D6, max"
+
+[[models.source.characteristic]]
+parameter = "CIN, COUT, pin capacitance"
+max = 10
+unit = "pF"
+conditions = "All inputs/outputs; VCC = 5.0 V, TA = 25°C, FCLK = 1 MHz; periodically sampled, not 100% tested"
+basis = "Table 1-1, D7, max"
+
+[[models.source.characteristic]]
+parameter = "ICC write, operating current"
+typ = 0.1
+max = 3
+unit = "mA"
+conditions = "VCC = 5.5 V, SCL = 400 kHz"
+basis = "Table 1-1, D8, typ/max"
+
+[[models.source.characteristic]]
+parameter = "ICC read, operating current"
+typ = 0.05
+max = 1
+unit = "mA"
+conditions = "Table 1-1 does not specify additional conditions for D9"
+basis = "Table 1-1, D9, typ/max"
+
+[[models.source.characteristic]]
+parameter = "ICCS, standby current"
+typ = 0.01
+max = 1
+unit = "µA"
+conditions = "Industrial; SDA = SCL = VCC; A0, A1, A2 = VSS"
+basis = "Table 1-1, D10, typ/max"
+
+[[models.source.references]]
+title = "24AA025UID.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "ec80c624e7ab04dad80e6bdb867f7afbe3ab79616cdecb41ebeba346f2710aeb"
+
+[models.match]
+value_re = "(?i)^24AA025UID"
+footprint_re = '(?i)SOT[-_]?23[-_]?6([^0-9]|$)'
+
+[models.params]
+identity_only = true
+warning = "Identity-only datasheet card: the EEPROM's stateful I2C memory behavior cannot be represented by the digital logic schema."
+unlocked_by = "Specify a package and use a behavioral EEPROM/I2C model that represents storage and protocol state."
+vih = 2.31 # Table 1-1, D1: VIH = 0.7 VCC, evaluated at VCC = 3.3 V
+vil = 0.99 # Table 1-1, D2: VIL = 0.3 VCC, evaluated at VCC = 3.3 V
+vol = { max = 0.40, unit = "V", conditions = "IOL = 3.0 mA, VCC = 2.5 V", basis = "Table 1-1, D4, max" }
+supply_static_ua = 1 # Table 1-1 ICCS standby current, max 1 uA (typ 0.01 uA); the 0.1 mA typ is the write current
+
+[models.ratings]
+max_voltage_v = 6.5 # Source: Absolute Maximum Ratings, VCC
+
+[models.pins]
+# Table 2-1, 6-Pin SOT-23 column (A2 is not connected on this package).
+"1" = "scl"
+"2" = "vss"
+"3" = "sda"
+"4" = "a1"
+"5" = "a0"
+"6" = "vcc"
+
+[models.coverage]
+implements = []
+missing = ["eeprom_storage", "i2c_serial_protocol", "unique_id_access", "write_cycle_timing", "package_specific_pad_binding"]
+
+# VEML7700 ambient light sensor (Vishay datasheet): extraction pipeline with --kind digital (identity only); hand-fixed: value_re unanchored; pins 1 SCL, 2 VDD, 3 GND, 4 SDA and the 4 V abs max checked against the PDF.
+[[models]]
+id = "veml7700"
+kind = "digital"
+description = "VEML7700 surface-mount ambient light sensor, matching ordering codes VEML7700-TR and VEML7700-TT; identity-only because the I2C register protocol, ambient-light conversion, and measurement/interrupt behavior are not represented by the bounded digital logic schema."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "Datasheet publishes no validated model error interval"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "voh"
+reason = "ABSTAIN: datasheet does not state an I2C output high level"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vol"
+reason = "ABSTAIN: datasheet gives a low-level sink current but does not state an output low voltage"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "tpd_s"
+reason = "ABSTAIN: datasheet does not state a logic propagation delay"
+
+[[models.source.pinout]]
+package = "side view"
+pins = { "1" = "SCL", "2" = "VDD", "3" = "GND", "4" = "SDA" }
+
+[[models.source.characteristic]]
+parameter = "Tamb, operation temperature range"
+min = -25
+max = 85
+unit = "°C"
+conditions = "Tamb = 25 °C unless otherwise specified"
+basis = "Absolute Maximum Ratings, operation temperature range, min/max"
+
+[[models.source.characteristic]]
+parameter = "Tstg, storage temperature range"
+min = -25
+max = 85
+unit = "°C"
+conditions = "Tamb = 25 °C unless otherwise specified"
+basis = "Absolute Maximum Ratings, storage temperature range, min/max"
+
+[[models.source.characteristic]]
+parameter = "VDD, recommended operating supply voltage"
+min = 2.5
+typ = 3.3
+max = 3.6
+unit = "V"
+conditions = "Tamb = 25 °C unless otherwise specified"
+basis = "Basic Characteristics, Supply voltage, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "Isd, shut down current"
+typ = 0.5
+unit = "μA"
+conditions = "VDD = 3.3 V; light conditions: dark"
+basis = "Basic Characteristics, Shut down current, typ; note (2)"
+
+[[models.source.characteristic]]
+parameter = "IDD, operation mode current"
+typ = 2
+unit = "μA"
+conditions = "VDD = 3.3 V, PSM = 11, refresh time 4100 ms; light source: white LED"
+basis = "Basic Characteristics, Operation mode current, typ; note (1)"
+
+[[models.source.characteristic]]
+parameter = "IDD, operation mode current"
+typ = 8
+unit = "μA"
+conditions = "VDD = 3.3 V, PSM = 00, refresh time 600 ms; light source: white LED"
+basis = "Basic Characteristics, Operation mode current, typ; note (1)"
+
+[[models.source.characteristic]]
+parameter = "IDD, operation mode current"
+typ = 45
+unit = "μA"
+conditions = "VDD = 3.3 V, PSM_EN = 0, refresh time 100 ms; light source: white LED"
+basis = "Basic Characteristics, Operation mode current, typ; note (1)"
+
+[[models.source.characteristic]]
+parameter = "fSCL, I2C clock rate range"
+min = 10
+max = 400
+unit = "kHz"
+conditions = "Standard and fast mode"
+basis = "Basic Characteristics, I2C clock rate range, min/max"
+
+[[models.source.characteristic]]
+parameter = "Vih, I2C bus input H-level range"
+min = 1.3
+max = 3.6
+unit = "V"
+conditions = "VDD = 3.3 V"
+basis = "Basic Characteristics, I2C bus input H-level range, min/max"
+
+[[models.source.characteristic]]
+parameter = "Vil, I2C bus input L-level range"
+min = -0.3
+max = 0.4
+unit = "V"
+conditions = "VDD = 3.3 V"
+basis = "Basic Characteristics, I2C bus input L-level range, min/max"
+
+[[models.source.characteristic]]
+parameter = "Iol, digital current out (low, current sink)"
+min = 3
+unit = "mA"
+conditions = ""
+basis = "Basic Characteristics, Digital current out (low, current sink), min"
+
+[[models.source.characteristic]]
+parameter = "Digital resolution (LSB count)"
+typ = 0.0042
+unit = "lx/step"
+conditions = "ALS_GAIN = x2, ALS_IT = 800 ms"
+basis = "Basic Characteristics, Digital resolution (LSB count), typ"
+
+[[models.source.characteristic]]
+parameter = "EVmax, detectable maximum illuminance"
+typ = 140000
+unit = "lx"
+conditions = "ALS_GAIN = x1/8, ALS_IT = 25 ms"
+basis = "Basic Characteristics, Detectable maximum illuminance, typ"
+
+[[models.source.characteristic]]
+parameter = "Dark offset"
+typ = 3
+unit = "step"
+conditions = "ALS_GAIN = x2, ALS_IT = 800 ms; light conditions: dark"
+basis = "Basic Characteristics, Dark offset, typ; note (2)"
+
+[[models.source.references]]
+title = "VEML7700.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "f338cf7d5911828a2f2ac8ae8324049380c852e34aa5afa43ac92c98ffe827d1"
+
+[models.match]
+value_re = '(?i)^VEML7700'
+
+[models.params]
+vih = { min = 1.3, max = 3.6, unit = "V", conditions = "VDD = 3.3 V", basis = "Basic Characteristics, I2C bus input H-level range, min/max" }
+vil = { min = -0.3, max = 0.4, unit = "V", conditions = "VDD = 3.3 V", basis = "Basic Characteristics, I2C bus input L-level range, min/max" }
+supply_pin = "2"
+gnd_pin = "3"
+identity_only = true
+warning = "Identity and sourced electrical limits only; no executable model of the sensor or I2C register transactions."
+unlocked_by = "Required digital behavior includes an I2C memory/register protocol and sensor conversion, which the available bounded logic schema cannot represent; datasheet does not state output VOH, output VOL, or propagation delay."
+supply_static_ua = { typ = 2, unit = "μA", conditions = "VDD = 3.3 V, PSM = 11, refresh time 4100 ms; white LED light source", basis = "Basic Characteristics, Operation mode current, typ; note (1)" }
+
+[models.ratings]
+max_voltage_v = 4.0 # Source: Absolute Maximum Ratings, Supply voltage, max
+max_power_w = 0.05 # Source: Absolute Maximum Ratings, Total power dissipation, max
+max_junction_temp_c = 100.0 # Source: Absolute Maximum Ratings, Junction temperature, max
+
+[models.pins]
+"1" = "scl" # SCL clock; package pinning and Fig. 1 block diagram agree.
+"2" = "vdd"
+"3" = "gnd"
+"4" = "sda" # SDA data; package pinning and Fig. 1 block diagram agree.
+
+[models.coverage]
+implements = ["pin_identity", "supply_limits", "input_thresholds"]
+missing = ["i2c_register_protocol", "ambient_light_conversion", "measurement_timing", "interrupt_behavior", "output_logic_levels", "propagation_delay"]
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.5
+max_v = 3.6
+abs_max_v = 4.0
+basis = "Basic Characteristics, Supply voltage; Absolute Maximum Ratings, Supply voltage"

@@ -4,8 +4,6 @@ import { useSimSession } from './hooks/useSimSession'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './components/BoardViewer'
 import { TransportBar } from './components/TransportBar'
 import { SelectionCard } from './components/SelectionCard'
-import { QueuedConstraintModal } from './components/ConstraintModal'
-import type { ConstraintDraft } from './components/ConstraintEditor'
 import { NetPanel } from './components/NetPanel'
 import { SerialConsole } from './components/SerialConsole'
 import { SolverControlsPanel } from './components/SolverControlsPanel'
@@ -13,17 +11,27 @@ import { InputSourcesPanel } from './components/InputSourcesPanel'
 import { ProbeScopePanel } from './components/ProbeScopePanel'
 import { FaultPanel } from './components/FaultPanel'
 import { PowerPanel } from './components/PowerPanel'
-import { RailCard, useRailCards } from './components/sim/RailCard'
+import { Dock, readDockTab, type DockTab } from './components/sim/Dock'
+import { seedFrom } from './components/sim/session-seed'
+import {
+  provenanceFor, scopeCsv, serialTxt, faultsJson, downloadText, downloadCanvas, provenanceLines,
+  type SerialLine,
+} from './components/sim/sim-export'
+import { ExportMenu, FaultCountChip, RunForButton, SupplyChip, useRunFor } from './components/sim/SessionTools'
+import type { ScopeExport } from './components/ProbeScopePanel'
+import { faultUnit } from './components/FaultPanel'
+import { ResultLinkContext, type ResultLinkHandlers } from './components/report/ResultLinks'
+import { vocabulary, type ResultEntity } from './lib/result-links'
 import { McuChips } from './components/sim/McuChips'
 import { SimStatusBar } from './components/sim/StatusBar'
 import {
   BoardPlaceholder, ForeignSessionBanner, ServerErrorBanner, ShortsBanner,
 } from './components/sim/Banners'
 import {
-  CpuIcon, SlidersIcon, PowerIcon, ProbeIcon, BoltIcon, TerminalIcon, LayersIcon,
+  CpuIcon, SlidersIcon, PowerIcon, BoltIcon, TerminalIcon, LayersIcon,
 } from './components/Icons'
-import type { ActionResultMsg } from './types/protocol'
-import type { BoardRequest, ModelCoverageSnapshot, QueuedLiveRegisterMap } from './types/report'
+import type { ActionResultMsg, PowerSupplyWire } from './types/protocol'
+import type { BoardRequest, ModelCoverageSnapshot, QueuedLiveRegisterMap, WebReport } from './types/report'
 import { envelopesFromHistory, envelopeSource, readNet } from './lib/net-state'
 import { coverageFor, modelsOnNet } from './lib/report-view'
 import { peripheralPrefix } from './lib/check-spec'
@@ -42,23 +50,23 @@ export interface SimShellStatus {
   connected: boolean
 }
 
-// The live-sim view: transport row, the board as the hero surface, and the
-// right rail of instrument cards (MCU, inputs, power, scope, nets, faults,
-// serial, solver). Mounting it opens the sim WebSocket (via useSimulation), so
+// The live-sim view: transport row, the board and its scope as the one
+// working surface, and a tabbed dock for the secondary instruments (inputs,
+// power, serial, faults, nets, solver), one open at a time. It continues the
+// analysis on screen: the checks' supplies and the nets the checks and
+// findings name are applied when a session starts (sim/session-seed.ts). Mounting it opens the sim WebSocket (via useSimulation), so
 // the shell only mounts it once a live board is actually being served, and
 // keeps it mounted (hidden) so the session's fault log and scope survive
 // navigation. The accumulated session state lives in hooks/useSimSession.
 export default function SimView({
-  onQueue, onOpenChecks,
+  onQueue,
   pendingLiveRegisterMaps = [], onLiveRegisterMapsConsumed, onLiveActionResult,
   onStatus, expectedBoard, sessionMatchesCurrent, onRelaunch, modelCoverage,
-  componentAssertions,
+  componentAssertions, report, specToml, engineVersion = null,
 }: {
   /** Hand a click on the live board to the checks builder. Absent on the
    *  standalone demo server. */
   onQueue?: (request: BoardRequest) => void
-  /** Open the shared full Checks view from the constraint modal. */
-  onOpenChecks?: () => void
   pendingLiveRegisterMaps?: QueuedLiveRegisterMap[]
   onLiveRegisterMapsConsumed?: (upToSeq: number) => void
   /** Engine-confirmed receipts, forwarded to the scenario row that originated
@@ -81,6 +89,11 @@ export default function SimView({
   /** Exact assertion support retained from the analysis that launched this
    *  session. Missing data fails closed in the selection card. */
   componentAssertions?: Record<string, string[]> | null
+  /** The analysis this session continues (seed, co-sim overlay, provenance). */
+  report?: WebReport | null
+  /** The checks spec on screen: its supplies and duration seed the session. */
+  specToml?: string | null
+  engineVersion?: string | null
 } = {}) {
   const {
     connected, boardInfo, frame: liveFrame, status, send, replay, backlog,
@@ -93,13 +106,30 @@ export default function SimView({
     send: sendWrapped, selectedFaultRef, setSelectedFaultRef, sessionEpoch,
   } = session
 
-  const cards = useRailCards()
+  const seed = useMemo(() => seedFrom(report, specToml), [report, specToml])
+  const checksSupplies = useMemo(
+    () => Object.fromEntries(seed.supplies.map(sp => [sp.net, sp.wire])) as Record<string, PowerSupplyWire>,
+    [seed],
+  )
+  const probeReasons = useMemo(() => Object.fromEntries(seed.probes.map(p => [p.net, p.why])), [seed])
+  // What each rail runs: the launch map, then every change this page sent.
+  const [supplyEdits, setSupplyEdits] = useState<Record<string, PowerSupplyWire>>({})
+  const [supplyGen, setSupplyGen] = useState(0)
+  const runningSupplies = useMemo(
+    () => ({ ...(boardInfo?.power_supplies ?? {}), ...supplyEdits }),
+    [boardInfo, supplyEdits],
+  )
+  const [dockTab, setDockTab] = useState(() => readDockTab('serial'))
+  const [serial, setSerial] = useState<SerialLine[]>([])
+  const decoders = useRef(new Map<string, TextDecoder>())
+  const scopeRef = useRef<ScopeExport>(null)
+  const runFor = useRunFor(sendWrapped, liveFrame)
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
   const [selectedFp, setSelectedFp] = useState<FootprintInfo | null>(null)
-  const [constraintDraft, setConstraintDraft] = useState<(Partial<ConstraintDraft> & Pick<ConstraintDraft, 'kind'>) | null>(null)
   // A 316 px instrument rail consumes the entire work surface on a phone.
   // Start it collapsed there so Drive it live still lands on the board; the
   // labelled 18 px toggle keeps every instrument one tap away.
+  const [narrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 640)
   const [railOpen, setRailOpen] = useState(
     () => typeof window === 'undefined' || window.innerWidth >= 640,
   )
@@ -112,18 +142,84 @@ export default function SimView({
   useEffect(() => {
     setSelectedNet(null)
     setSelectedFp(null)
+    setSupplyEdits({})
+    setSerial([])
+    decoders.current = new Map()
   }, [sessionEpoch])
+
+  const applyChecksSupplies = useCallback(() => {
+    const nets = boardInfo?.power_supplies ?? {}
+    const applied: Record<string, PowerSupplyWire> = {}
+    for (const sp of seed.supplies) {
+      if (!(sp.net in nets)) continue
+      send({ type: 'SetPowerSupply', net: sp.net, supply: sp.wire })
+      applied[sp.net] = sp.wire
+    }
+    setSupplyEdits(prev => ({ ...prev, ...applied }))
+    setSupplyGen(g => g + 1)
+  }, [boardInfo, seed, send])
+
+  // Seed a fresh session from the analysis, once: the checks' supplies, and
+  // probes on the nets the checks and findings name. Waits for the rejoin
+  // backlog (authoritative for probes) and leaves a session that already has
+  // probes or faults, or that belongs to another board, as it is.
+  const seededEpoch = useRef(-1)
+  useEffect(() => {
+    if (!boardInfo || !backlog || replay || sessionMatchesCurrent === false) return
+    if (seededEpoch.current === sessionEpoch) return
+    seededEpoch.current = sessionEpoch
+    if ((backlog.probes ?? []).length > 0 || (backlog.faults ?? []).length > 0) return
+    applyChecksSupplies()
+    for (const p of seed.probes) if (boardInfo.nets.includes(p.net)) addProbe(p.net)
+  }, [boardInfo, backlog, replay, sessionMatchesCurrent, sessionEpoch, applyChecksSupplies, seed, addProbe])
+
+  // The serial transcript, stamped in sim time: kept here so the console and
+  // its export are the same lines.
+  useEffect(() => {
+    if (!liveFrame?.uart) return
+    const { uart, t } = liveFrame
+    // Decoded once, outside the updater: the decoders carry split UTF-8
+    // sequences across frames, so they must see each chunk exactly once.
+    const chunks = Object.entries(uart).filter(([, bytes]) => bytes.length > 0).map(([mcu, bytes]) => {
+      let dec = decoders.current.get(mcu)
+      if (!dec) decoders.current.set(mcu, (dec = new TextDecoder()))
+      return [mcu, dec.decode(new Uint8Array(bytes), { stream: true })] as const
+    })
+    if (chunks.length === 0) return
+    setSerial(prev => {
+      const next = [...prev]
+      for (const [mcu, text] of chunks) {
+        let lastIdx = -1
+        for (let i = next.length - 1; i >= 0; i--) if (next[i].mcu === mcu && next[i].dir === 'rx') { lastIdx = i; break }
+        const parts = text.split(/(?<=\n)/)
+        for (const part of parts) {
+          const last = lastIdx >= 0 ? next[lastIdx] : null
+          if (last && !last.text.endsWith('\n')) {
+            next[lastIdx] = { ...last, text: last.text + part }
+          } else {
+            next.push({ t, mcu, dir: 'rx', text: part })
+            lastIdx = next.length - 1
+          }
+        }
+      }
+      return next.length > 5000 ? next.slice(-5000) : next
+    })
+  }, [liveFrame])
+
+  const sendSerial = useCallback((mcu: string, text: string) => {
+    const data = Array.from(new TextEncoder().encode(`${text}\n`))
+    send({ type: 'Serial', mcu, data })
+    setSerial(prev => [...prev, { t: status?.sim_time ?? 0, mcu, dir: 'tx', text }])
+  }, [send, status])
 
   // A live click both changes the running circuit NOW and saves the same
   // change into the replayable scenario, under one stable id, so immediate
   // exploration and deterministic replay never drift into two experiments.
   // The server refuses any unsupported/unknown net.
   const queueAndApply = useCallback((request: BoardRequest) => {
-    // A check is never appended straight from a click: the card only knows the
-    // kind and the net, so the exact assertion is edited in place first.
-    if (request.type === 'check') {
-      setConstraintDraft(request)
-    } else if (request.type === 'peripheral') {
+    // A check is made in place in the card (the exact assertion, edited there),
+    // so what arrives here is already complete: it is queued as written.
+    if (request.type === 'peripheral') {
       if (!request.net) return
       liveInteractionSeq.current += 1
       const stem = request.net.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 28) || 'NET'
@@ -240,9 +336,9 @@ export default function SimView({
   // A part that recovered keeps its row in the log but stops glowing.
   const faultedRefs = activeFaultRefs.size === 0 ? undefined : activeFaultRefs
 
-  // The FAULTS card badge counts what the card lists: fault CONDITIONS
-  // (component + kind entries). The header chips / status bar / nav badge count
-  // faulted PARTS, and say so; the two numbers legitimately differ.
+  // The Faults tab badge counts what the table lists: fault CONDITIONS
+  // (component + kind entries). The transport chip / status bar / nav badge
+  // count faulted PARTS, and say so; the two numbers legitimately differ.
   const faultBadge = faultLog.length > 0 ? (
     <span
       className="text-[10px] font-bold px-1.5 rounded-full tnum"
@@ -254,253 +350,340 @@ export default function SimView({
   ) : undefined
 
   // The session was live and the socket has since dropped. Distinct from "not
-  // connected yet": the first is a loss to report, the second is a wait. The
-  // whole surface (canvas, banner, rail) reads this so it stops presenting the
-  // empty cards of a dead session as though they described a real board.
+  // connected yet": the first is a loss to report, the second is a wait.
   const sessionLost = everHadSession && !connected
 
-  return (
-    <div className="flex flex-col h-full overflow-hidden" style={{ background: 'var(--canvas)' }}>
-      <TransportBar
-        connected={connected}
-        boardInfo={boardInfo}
-        status={status}
-        // In a replay the capture-time throughput would read as the playback
-        // rate; the speed control already owns that number. The rates come off
-        // the LIVE frame: a retained frame's rates describe the moment it was
-        // computed, and the bar is reporting how the loop is doing now.
-        realtimeFactor={replay ? null : liveFrame?.realtime_factor ?? null}
-        requestedFactor={replay ? null : liveFrame?.requested_factor ?? null}
-        rateLimited={replay ? false : liveFrame?.rate_limited ?? false}
-        send={sendWrapped}
-        replay={replay}
-        // A recording has a real timeline to scrub; the retained-frame walk is
-        // for the live sim, which has none.
-        history={replay ? undefined : history}
-      />
+  // Chips anywhere in the view point at (hover) and frame (click) their part
+  // or net on the live board, as on the result panel.
+  const [pointed, setPointed] = useState<ResultEntity | null>(null)
+  const [frameTarget, setFrameTarget] = useState<{ refs: string[]; nets: string[]; seq: number } | null>(null)
+  const frameSeq = useRef(0)
+  const goTo = useCallback((entity: ResultEntity) => {
+    frameSeq.current += 1
+    if (entity.kind === 'part') {
+      setSelectedNet(null)
+      setFrameTarget({ refs: [entity.ref], nets: [], seq: frameSeq.current })
+    } else {
+      setSelectedFp(null)
+      setSelectedNet(entity.net)
+      setFrameTarget({ refs: [], nets: [entity.net], seq: frameSeq.current })
+    }
+  }, [])
+  const links = useMemo<ResultLinkHandlers>(() => ({
+    vocab: report ? vocabulary(report) : null,
+    onPoint: setPointed,
+    onGo: goTo,
+  }), [report, goTo])
+  const pointedRefs = useMemo(() => {
+    const refs = pointed?.kind === 'part' ? [pointed.ref] : []
+    return selectedFaultRef && !refs.includes(selectedFaultRef) ? [...refs, selectedFaultRef] : refs
+  }, [pointed, selectedFaultRef])
+  const pointedNets = useMemo(() => (pointed?.kind === 'net' ? [pointed.net] : []), [pointed])
+  const selectFault = useCallback((ref: string | null) => {
+    setSelectedFaultRef(ref)
+    if (ref) goTo({ kind: 'part', ref })
+  }, [setSelectedFaultRef, goTo])
 
-      {sessionMatchesCurrent === false && sessionBoard && (
-        <ForeignSessionBanner
-          sessionBoard={sessionBoard}
-          expectedBoard={expectedBoard}
-          onRelaunch={onRelaunch}
-        />
+  const openTab = useCallback((id: string) => {
+    setDockTab(id)
+    setRailOpen(true)
+  }, [])
+
+  // Every export opens with the same provenance (sim time, supplies, firmware
+  // and board hashes, engine and model versions).
+  const provenance = () => provenanceFor(report, sessionBoard, engineVersion, status?.sim_time ?? 0, runningSupplies)
+  const stem = (sessionBoard || report?.file_name || 'board').replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9_-]+/g, '_')
+  const exportItems = [
+    {
+      id: 'scope-csv', label: 'Scope traces (.csv)', disabled: probes.length === 0,
+      run: () => {
+        const sr = scopeRef.current?.series()
+        if (sr) downloadText(`${stem}-scope.csv`, scopeCsv(provenance(), sr), 'text/csv')
+      },
+    },
+    {
+      id: 'scope-png', label: 'Scope picture (.png)', disabled: probes.length === 0,
+      run: () => {
+        const c = scopeRef.current?.png(provenanceLines(provenance()))
+        if (c) downloadCanvas(c, `${stem}-scope.png`)
+      },
+    },
+    {
+      id: 'serial', label: 'Serial output (.txt)', disabled: mcus.length === 0,
+      run: () => downloadText(`${stem}-serial.txt`, serialTxt(provenance(), serial, seed.cosim), 'text/plain'),
+    },
+    {
+      id: 'faults', label: 'Fault log (.json)',
+      run: () => downloadText(`${stem}-faults.json`, faultsJson(provenance(), faultLog, faultUnit), 'application/json'),
+    },
+  ]
+
+  const tools = boardInfo && (
+    <>
+      {!replay && hasSupplies && (
+        <SupplyChip running={runningSupplies} checks={seed.supplies.filter(sp => sp.net in (boardInfo.power_supplies ?? {}))}
+          onUseChecks={applyChecksSupplies} onOpen={() => openTab('power')} />
       )}
-      {serverError && <ServerErrorBanner message={serverError} />}
-      {shorts && <ShortsBanner shorts={shorts} />}
+      {!replay && seed.durationS !== null && (
+        <RunForButton seconds={seed.durationS} busy={runFor.busy} onRun={() => runFor.start(seed.durationS!)} />
+      )}
+      <FaultCountChip parts={faultCount} conditions={faultLog.length} onOpen={() => openTab('faults')} />
+      <ExportMenu items={exportItems} />
+    </>
+  )
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* Board canvas (dominant center) */}
-        <div
-          className="flex-1 relative min-w-0 overflow-hidden"
-          style={boardFullscreen
-            ? { position: 'fixed', inset: 0, zIndex: 60, background: 'var(--instrument)' }
-            : undefined}
-        >
-          {boardUrl === null ? (
-            <BoardPlaceholder sessionLost={sessionLost} expectedBoard={expectedBoard} onRelaunch={onRelaunch} />
-          ) : (
-            <BoardViewer
-              boardFile={boardUrl}
-              frame={frame}
-              boardInfo={boardInfo}
-              selectedNet={selectedNet}
-              onFootprintClick={info => { setSelectedFp(info); setSelectedNet(null) }}
-              // A trace click replaces a part selection and vice versa: one
-              // floating panel at a time.
-              onNetClick={net => { setSelectedNet(net); if (net) setSelectedFp(null) }}
-              faultedRefs={faultedRefs}
-              fullscreen={boardFullscreen}
-              onToggleFullscreen={() => setBoardFullscreen(v => !v)}
-            />
-          )}
+  const selection = !!(selectedFp || selectedNet)
+  // On a wide screen the card lives in the dock, so a selection opens it. A
+  // phone keeps the board in view instead and shows the card as a sheet.
+  useEffect(() => {
+    if (selection && !narrow && !boardFullscreen) setRailOpen(true)
+  }, [selection, narrow, boardFullscreen])
+  const card = (
+    <SelectionCard
+      net={selectedFp ? null : selectedNet}
+      docked={!boardFullscreen}
+      // What the net actually is, not just a number: driven, moving, or
+      // unobservable on this backend (see lib/net-state.ts).
+      reading={selectedNet && !selectedFp ? readNet(frame, selectedNet, netEnvelopes) : undefined}
+      component={selectedFp}
+      boundKind={selectedFp ? boardInfo?.component_kinds?.[selectedFp.ref] ?? null : null}
+      assertionCapabilities={selectedFp ? componentAssertions?.[selectedFp.ref] ?? [] : []}
+      modelCoverage={coverageFor(modelCoverage, selectedFp?.ref)}
+      netModels={selectedFp ? [] : modelsOnNet(modelCoverage, selectedNet)}
+      onQueue={onQueue && queueAndApply}
+      peripheralMode="live-and-scenario"
+      onAddProbe={addProbe}
+      onClose={() => { setSelectedFp(null); setSelectedNet(null) }}
+      onPickNet={net => { setSelectedFp(null); setSelectedNet(net) }}
+    />
+  )
 
-          {/* Floating selection card: same language as the report map. */}
-          {(selectedFp || selectedNet) && (
-            <div className="absolute left-3 z-10 flex items-end pointer-events-none" style={{ top: TOOLBAR_CLEARANCE, bottom: 36 }}>
-              <div className="pointer-events-auto" style={{ maxHeight: '100%', display: 'flex' }}>
-                <SelectionCard
-                  net={selectedFp ? null : selectedNet}
-                  // What the net actually is, not just a number: driven, moving,
-                  // or unobservable on this backend (see lib/net-state.ts).
-                  reading={selectedNet && !selectedFp ? readNet(frame, selectedNet, netEnvelopes) : undefined}
-                  component={selectedFp}
-                  boundKind={selectedFp ? boardInfo?.component_kinds?.[selectedFp.ref] ?? null : null}
-                  assertionCapabilities={selectedFp ? componentAssertions?.[selectedFp.ref] ?? [] : []}
-                  modelCoverage={coverageFor(modelCoverage, selectedFp?.ref)}
-                  netModels={selectedFp ? [] : modelsOnNet(modelCoverage, selectedNet)}
-                  onQueue={onQueue && queueAndApply}
-                  peripheralMode="live-and-scenario"
-                  onAddProbe={addProbe}
-                  onClose={() => { setSelectedFp(null); setSelectedNet(null) }}
-                  onPickNet={net => { setSelectedFp(null); setSelectedNet(net) }}
+  const tabs: DockTab[] = [
+    ...(replay ? [{
+      id: 'recorded', label: 'Recorded', icon: <PowerIcon size={12} />,
+      body: (
+        <div className="px-3 py-2.5 text-[11px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
+          Inputs, power rails and solver options were set when this session was
+          captured from the real engine; a recording cannot take new ones.
+          Install hauksbee to turn the knobs on your own boards.
+        </div>
+      ),
+    }] : [
+      {
+        id: 'inputs', label: 'Inputs', icon: <SlidersIcon size={12} />,
+        body: (
+          <InputSourcesPanel boardInfo={boardInfo} send={send}
+            onAttach={(kind, net) => queueAndApply({ type: 'peripheral', kind, net })} />
+        ),
+      },
+      ...(hasSupplies ? [{
+        id: 'power', label: 'Power', icon: <PowerIcon size={12} />,
+        body: (
+          <PowerPanel key={supplyGen} boardInfo={boardInfo} frame={frame} send={send} supplies={runningSupplies}
+            onSupply={(net, wire) => setSupplyEdits(prev => ({ ...prev, [net]: wire }))}
+            checksSupplies={checksSupplies} />
+        ),
+      }] : []),
+    ]),
+    ...(mcus.length > 0 ? [{
+      id: 'serial', label: 'Serial', icon: <TerminalIcon size={12} />,
+      body: (
+        <div style={{ height: '100%', minHeight: 260 }}>
+          <SerialConsole mcus={mcus} lines={serial} analysis={seed.cosim} onSend={sendSerial}
+            onClear={mcu => setSerial(prev => prev.filter(l => l.mcu !== mcu))} readOnly={!!replay} />
+        </div>
+      ),
+    }] : []),
+    {
+      id: 'faults', label: 'Faults', icon: <BoltIcon size={12} />, badge: faultBadge,
+      body: (
+        <FaultPanel faults={faultLog} activeRefs={activeFaultRefs} unsupportedReasons={frame?.unsupported_reasons}
+          notes={frame?.notes} onClear={clearFaults} onFaultComponentSelect={selectFault} selectedFaultRef={selectedFaultRef} />
+      ),
+    },
+    {
+      id: 'nets', label: 'Nets', icon: <LayersIcon size={12} />,
+      body: (
+        <NetPanel frame={frame} selectedNet={selectedNet} onSelectNet={net => { setSelectedNet(net); if (net) setSelectedFp(null) }}
+          envelopes={netEnvelopes} envelopeSource={netEnvelopeSource} />
+      ),
+    },
+    ...(!replay ? [{
+      id: 'solver', label: 'Solver', icon: <CpuIcon size={12} />,
+      body: <SolverControlsPanel controls={status?.options ?? null} send={send} />,
+    }] : []),
+  ]
+
+  return (
+    <ResultLinkContext.Provider value={links}>
+      <div className="flex flex-col h-full overflow-hidden" style={{ background: 'var(--canvas)' }}>
+        <TransportBar
+          connected={connected}
+          boardInfo={boardInfo}
+          status={status}
+          // In a replay the capture-time throughput would read as the playback
+          // rate; the speed control already owns that number. The rates come
+          // off the LIVE frame: a retained frame's rates describe the moment it
+          // was computed, and the bar is reporting how the loop is doing now.
+          realtimeFactor={replay ? null : liveFrame?.realtime_factor ?? null}
+          requestedFactor={replay ? null : liveFrame?.requested_factor ?? null}
+          rateLimited={replay ? false : liveFrame?.rate_limited ?? false}
+          send={sendWrapped}
+          replay={replay}
+          // A recording has a real timeline to scrub; the retained-frame walk
+          // is for the live sim, which has none.
+          history={replay ? undefined : history}
+          tools={tools}
+        />
+
+        {sessionMatchesCurrent === false && sessionBoard && (
+          <ForeignSessionBanner
+            sessionBoard={sessionBoard}
+            expectedBoard={expectedBoard}
+            onRelaunch={onRelaunch}
+          />
+        )}
+        {serverError && <ServerErrorBanner message={serverError} />}
+        {shorts && <ShortsBanner shorts={shorts} />}
+
+        <div className="flex flex-1 overflow-hidden">
+          {/* The working surface: the board, and its scope under it. On a
+              phone the open dock takes the screen instead of squeezing both. */}
+          <div className={`flex-1 min-w-0 flex flex-col overflow-hidden${railOpen ? ' max-sm:hidden' : ''}`}>
+            <div
+              className="flex-1 relative min-w-0 min-h-0 overflow-hidden"
+              style={boardFullscreen
+                ? { position: 'fixed', inset: 0, zIndex: 60, background: 'var(--instrument)' }
+                : undefined}
+            >
+              {boardUrl === null ? (
+                <BoardPlaceholder sessionLost={sessionLost} expectedBoard={expectedBoard} onRelaunch={onRelaunch} />
+              ) : (
+                <BoardViewer
+                  boardFile={boardUrl}
+                  frame={frame}
+                  boardInfo={boardInfo}
+                  selectedNet={selectedNet}
+                  onFootprintClick={info => { setSelectedFp(info); setSelectedNet(null) }}
+                  // A trace click replaces a part selection and vice versa: one
+                  // floating panel at a time.
+                  onNetClick={net => { setSelectedNet(net); if (net) setSelectedFp(null) }}
+                  faultedRefs={faultedRefs}
+                  pointedRefs={pointedRefs}
+                  pointedNets={pointedNets}
+                  frameTarget={frameTarget}
+                  fullscreen={boardFullscreen}
+                  onToggleFullscreen={() => setBoardFullscreen(v => !v)}
                 />
+              )}
+
+              {/* Full-screen board: no room for a dock, so the card floats. */}
+              {boardFullscreen && selection && (
+                <div className="absolute left-3 z-10 flex items-end pointer-events-none" style={{ top: TOOLBAR_CLEARANCE, bottom: 36 }}>
+                  <div className="pointer-events-auto" style={{ maxHeight: '100%', display: 'flex' }}>{card}</div>
+                </div>
+              )}
+
+              {/* Board overlay hints. While an input has focus the keyboard
+                  shortcuts are suppressed, so the hint dims and says why. */}
+              <div
+                className="absolute bottom-9 md:bottom-2 left-2 max-w-[calc(100%-1rem)] text-[10px] px-2 py-1 rounded pointer-events-none"
+                style={{
+                  background: 'var(--overlay-hint-bg)',
+                  color: inputFocused ? 'var(--overlay-hint-dim)' : 'var(--overlay-chip-text)',
+                  border: '1px solid var(--overlay-hint-border)',
+                  opacity: inputFocused ? 0.65 : 1,
+                  transition: 'opacity 0.2s ease, color 0.2s ease',
+                }}
+              >
+                {inputFocused
+                  ? 'shortcuts paused, click away from the input to use Space / N'
+                  : 'Space=play/pause · N=step · scroll=zoom · drag=pan · hover=probe'}
               </div>
             </div>
-          )}
 
-          {constraintDraft && onQueue && (
-            <QueuedConstraintModal initial={constraintDraft} onQueue={onQueue}
-              onClose={() => setConstraintDraft(null)} onOpenChecks={onOpenChecks} />
-          )}
+            {narrow && !railOpen && !boardFullscreen && selection && (
+              <div data-testid="selection-dock" className="shrink-0 overflow-y-auto p-2 max-h-[45%]"
+                style={{ borderTop: '1px solid var(--hairline)', background: 'var(--canvas)' }}>
+                {card}
+              </div>
+            )}
 
-          {/* Board overlay hints. While an input has focus the keyboard
-              shortcuts are suppressed, so the hint dims and says why. On a
-              narrow canvas it lifts above the viewer's footprint/net count chip
-              (bottom-right) instead of wrapping underneath it. */}
-          <div
-            className="absolute bottom-9 md:bottom-2 left-2 max-w-[calc(100%-1rem)] text-[10px] px-2 py-1 rounded pointer-events-none"
-            style={{
-              background: 'var(--overlay-hint-bg)',
-              color: inputFocused ? 'var(--overlay-hint-dim)' : 'var(--overlay-chip-text)',
-              border: '1px solid var(--overlay-hint-border)',
-              opacity: inputFocused ? 0.65 : 1,
-              transition: 'opacity 0.2s ease, color 0.2s ease',
-            }}
-          >
-            {inputFocused
-              ? 'shortcuts paused, click away from the input to use Space / N'
-              : 'Space=play/pause · N=step · scroll=zoom · drag=pan · hover=probe'}
+            {boardUrl !== null && (
+              <div className="shrink-0" data-testid="sim-scope" style={{ borderTop: '1px solid var(--hairline)', background: 'var(--surface)' }}>
+                <ProbeScopePanel
+                  boardInfo={boardInfo}
+                  frame={frame}
+                  probes={probes}
+                  probeReasons={probeReasons}
+                  faults={faultLog}
+                  onAddProbe={addProbe}
+                  onRemoveProbe={removeProbe}
+                  exportRef={scopeRef}
+                  height={narrow ? 96 : 150}
+                />
+              </div>
+            )}
           </div>
+
+          <button
+            onClick={() => setRailOpen(o => !o)}
+            className="hb-press flex items-center justify-center shrink-0"
+            style={{
+              width: 18,
+              background: 'var(--surface)',
+              borderLeft: '1px solid var(--hairline)',
+              color: 'var(--silk-faint)',
+              fontSize: 10,
+              cursor: 'pointer',
+            }}
+            aria-label={railOpen ? 'Collapse the instrument dock' : 'Expand the instrument dock'}
+            title={railOpen ? 'Collapse the instrument dock' : 'Expand the instrument dock'}
+          >
+            {railOpen ? '›' : '‹'}
+          </button>
+
+          {railOpen && (
+            <div className="shrink-0 flex flex-col min-h-0 w-[340px] max-sm:w-auto max-sm:flex-1 max-sm:min-w-0"
+              style={{ borderLeft: '1px solid var(--hairline)', background: 'var(--canvas)' }}>
+              {/* Without this the dock's panels ("No nets loaded") read as
+                  findings ABOUT the board rather than as a lost connection. */}
+              {sessionLost && (
+                <Callout
+                  tone="err"
+                  testId="rail-session-lost"
+                  title="Session ended"
+                  className="m-2 px-3 py-2.5 text-[12px] shrink-0"
+                  style={{ color: 'var(--silk)' }}
+                >
+                  These panels are empty because the live link dropped, not
+                  because the board has nothing on it.
+                </Callout>
+              )}
+              {/* A selection is what the dock is about until it is closed: the
+                  card (assert on it, probe it, drive it) takes the panel. */}
+              {!boardFullscreen && selection ? (
+                <div data-testid="selection-dock" className="flex-1 min-h-0 overflow-y-auto p-2">{card}</div>
+              ) : (
+                <Dock
+                  tabs={tabs}
+                  active={dockTab}
+                  onActivate={setDockTab}
+                  header={mcus.length > 0 ? <McuChips mcus={mcus} frame={frame} uartActive={uartActive} running={running} /> : undefined}
+                />
+              )}
+            </div>
+          )}
         </div>
 
-        <button
-          onClick={() => setRailOpen(o => !o)}
-          className="hb-press flex items-center justify-center shrink-0"
-          style={{
-            width: 18,
-            background: 'var(--surface)',
-            borderLeft: '1px solid var(--hairline)',
-            color: 'var(--silk-faint)',
-            fontSize: 10,
-            cursor: 'pointer',
-          }}
-          aria-label={railOpen ? 'Collapse the control rail' : 'Expand the control rail'}
-          title={railOpen ? 'Collapse the control rail' : 'Expand the control rail'}
-        >
-          {railOpen ? '›' : '‹'}
-        </button>
-
-        {/* Right rail: the instrument cards */}
-        {railOpen && (
-          <div
-            className="flex flex-col gap-2.5 shrink-0 overflow-y-auto p-2.5"
-            style={{
-              width: 316,
-              borderLeft: '1px solid var(--hairline)',
-              background: 'var(--canvas)',
-              // Snap the scroll to card starts, and hold the rail's own padding
-              // clear of the top edge, so a card never comes to rest clipped
-              // mid-input: the first thing at the top is always a card header.
-              scrollSnapType: 'y proximity',
-              scrollPaddingTop: 10,
-            }}
-          >
-            {/* Without this the rail's cards ("No nets loaded", an empty scope)
-                read as findings ABOUT the board rather than as the aftermath of
-                a lost connection. */}
-            {sessionLost && (
-              <Callout
-                tone="err"
-                testId="rail-session-lost"
-                title="Session ended"
-                className="px-3 py-2.5 text-[12px] shrink-0"
-                style={{ color: 'var(--silk)' }}
-              >
-                These cards are empty because the live link dropped, not because
-                the board has nothing on it.
-              </Callout>
-            )}
-
-            {mcus.length > 0 && (
-              <RailCard id="mcu" title="MCU" icon={<CpuIcon size={13} />} cards={cards}>
-                <McuChips mcus={mcus} frame={frame} uartActive={uartActive} />
-              </RailCard>
-            )}
-
-            {/* Input-shaped panels only against a live engine: in a replay the
-                knobs would silently do nothing, so instead of disabled controls
-                the rail says plainly what a recording is. */}
-            {replay ? (
-              <RailCard id="recorded" title="Recorded run" icon={<PowerIcon size={13} />} cards={cards}>
-                <div className="px-3 py-2.5 text-[11px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
-                  Inputs, power rails and solver options were set when this
-                  session was captured from the real engine; a recording
-                  cannot take new ones. Install hauksbee to turn the knobs on
-                  your own boards.
-                </div>
-              </RailCard>
-            ) : (
-              <>
-                <RailCard id="inputs" title="Inputs" icon={<SlidersIcon size={13} />} cards={cards}>
-                  <InputSourcesPanel boardInfo={boardInfo} send={send} />
-                </RailCard>
-
-                {hasSupplies && (
-                  <RailCard id="power" title="Power rails" icon={<PowerIcon size={13} />} cards={cards}>
-                    <PowerPanel boardInfo={boardInfo} frame={frame} send={send} />
-                  </RailCard>
-                )}
-              </>
-            )}
-
-            <RailCard id="scope" title="Scope" icon={<ProbeIcon size={13} />} cards={cards}>
-              <ProbeScopePanel
-                boardInfo={boardInfo}
-                frame={frame}
-                probes={probes}
-                onAddProbe={addProbe}
-                onRemoveProbe={removeProbe}
-              />
-            </RailCard>
-
-            <RailCard id="nets" title="Net voltages" icon={<LayersIcon size={13} />} defaultOpen={false} cards={cards}>
-              <NetPanel
-                frame={frame}
-                selectedNet={selectedNet}
-                onSelectNet={setSelectedNet}
-                envelopes={netEnvelopes}
-                envelopeSource={netEnvelopeSource}
-              />
-            </RailCard>
-
-            <RailCard id="faults" title="Faults" icon={<BoltIcon size={13} />} badge={faultBadge} cards={cards}>
-              <FaultPanel
-                faults={faultLog}
-                activeRefs={activeFaultRefs}
-                unsupportedReasons={frame?.unsupported_reasons}
-                notes={frame?.notes}
-                onClear={clearFaults}
-                onFaultComponentSelect={setSelectedFaultRef}
-                selectedFaultRef={selectedFaultRef}
-              />
-            </RailCard>
-
-            <RailCard id="serial" title="Serial console" icon={<TerminalIcon size={13} />} cards={cards}>
-              <div style={{ height: 300 }}>
-                <SerialConsole mcus={mcus} frames={frames} send={send} readOnly={!!replay} />
-              </div>
-            </RailCard>
-
-            {!replay && (
-              <RailCard id="solver" title="Solver" icon={<SlidersIcon size={13} />} defaultOpen={false} cards={cards}>
-                <SolverControlsPanel controls={status?.options ?? null} send={send} />
-              </RailCard>
-            )}
-          </div>
-        )}
+        <SimStatusBar
+          sessionLost={sessionLost}
+          frame={frame}
+          probes={probes}
+          faultCount={faultCount}
+          boardInfo={boardInfo}
+        />
       </div>
-
-      <SimStatusBar
-        running={running}
-        sessionLost={sessionLost}
-        simTime={status?.sim_time ?? 0}
-        frame={frame}
-        replay={!!replay}
-        probes={probes}
-        faultCount={faultCount}
-        boardInfo={boardInfo}
-      />
-    </div>
+    </ResultLinkContext.Provider>
   )
 }

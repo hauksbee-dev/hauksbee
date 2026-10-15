@@ -1581,3 +1581,206 @@ max = 300.0
 unit = ""
 conditions = "IC = 150 mA, VCE = 10 V"
 basis = "Diodes MMBT2222A DS30041 Rev. 18-2, Electrical Characteristics, hFE at IC = 150 mA, VCE = 10 V"
+
+# ── MPSA92: onsemi 300 V PNP high-voltage transistor, TO-92 ──
+# onsemi MPSA92/MPSA93 datasheet (CASE 29-11), sha256 95e4cabbe6fb5f09b07a3345cdd0e8b885e7082cdf7400cdde410e40d2691f25. Drafted by the extraction
+# pipeline (codex gpt-6-luna) and reviewed against the PDF: VCEO/VCBO -300 V, VEBO -5 V, IC -500 mA, PD 625 mW, RthetaJA 200 / RthetaJC 83.3 C/W, hFE and Ccb rows.
+# The sheet contradicts itself on the pin order (page-1 lead drawing E-B-C; page-5 Style 14 E-C-B); the page-1 drawing is used. Hand edit: value_re unanchored.
+[[models]]
+id = "mpsa92"
+kind = "bjt_pnp"
+description = "MPSA92 PNP high-voltage silicon transistor in TO-92; models forward-active gain from the MPSA92 hFE row and a typical VBE(on) curve fit, but does not model reverse gain, breakdown behavior, capacitance dynamics, or thermal behavior. Pin order follows the page-1 lead drawing (1=emitter, 2=base, 3=collector); the page-5 Style 14 outline lists 1=emitter, 2=collector, 3=base."
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "reverse_gain"
+reason = "ABSTAIN: datasheet does not state a reverse hFE row"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "thermal_behavior"
+reason = "ABSTAIN: datasheet does not publish a thermal transient model"
+[[models.source.characteristic]]
+parameter = "V(BR)CEO collector-emitter breakdown voltage"
+min = -300
+unit = "Vdc"
+conditions = "MPSA92, IC = -1.0 mAdc, IB = 0"
+basis = "Electrical Characteristics, Collector-Emitter Breakdown Voltage, min column"
+[[models.source.characteristic]]
+parameter = "VCEO collector-emitter voltage rating"
+max = -300
+unit = "Vdc"
+conditions = "MPSA92"
+basis = "Maximum Ratings, Collector-Emitter Voltage, MPSA92 row, value column"
+[[models.source.characteristic]]
+parameter = "VCBO collector-base voltage rating"
+max = -300
+unit = "Vdc"
+conditions = "MPSA92"
+basis = "Maximum Ratings, Collector-Base Voltage, MPSA92 row, value column"
+[[models.source.characteristic]]
+parameter = "VEBO emitter-base voltage rating"
+max = -5.0
+unit = "Vdc"
+conditions = ""
+basis = "Maximum Ratings, Emitter-Base Voltage, value column"
+[[models.source.characteristic]]
+parameter = "IC collector current continuous"
+max = -500
+unit = "mAdc"
+conditions = ""
+basis = "Maximum Ratings, Collector Current—Continuous, value column"
+[[models.source.characteristic]]
+parameter = "VCBO collector-base breakdown voltage"
+min = -300
+unit = "Vdc"
+conditions = "MPSA92, IC = -100 uAdc, IE = 0"
+basis = "Electrical Characteristics, Collector-Base Breakdown Voltage, min column"
+[[models.source.characteristic]]
+parameter = "VEBO emitter-base breakdown voltage"
+min = -5.0
+unit = "Vdc"
+conditions = "IE = -100 uAdc, IC = 0"
+basis = "Electrical Characteristics, Emitter-Base Breakdown Voltage, min column"
+[[models.source.characteristic]]
+parameter = "ICBO collector cutoff current"
+max = -0.25
+unit = "uAdc"
+conditions = "MPSA92, VCB = -200 Vdc, IE = 0"
+basis = "Electrical Characteristics, Collector Cutoff Current, max column"
+[[models.source.characteristic]]
+parameter = "IEBO emitter cutoff current"
+max = -0.1
+unit = "uAdc"
+conditions = "VEB = -3.0 Vdc, IC = 0"
+basis = "Electrical Characteristics, Emitter Cutoff Current, max column"
+[[models.source.characteristic]]
+parameter = "hFE DC current gain"
+min = 25
+unit = "unitless"
+conditions = "MPSA92, IC = -1.0 mAdc, VCE = -10 Vdc"
+basis = "Electrical Characteristics, DC Current Gain, min column, All Types"
+[[models.source.characteristic]]
+parameter = "hFE DC current gain"
+min = 40
+unit = "unitless"
+conditions = "MPSA92, IC = -10 mAdc, VCE = -10 Vdc"
+basis = "Electrical Characteristics, DC Current Gain, min column, All Types"
+[[models.source.characteristic]]
+parameter = "hFE DC current gain"
+min = 25
+unit = "unitless"
+conditions = "MPSA92, IC = -30 mAdc, VCE = -10 Vdc"
+basis = "Electrical Characteristics, DC Current Gain, min column, MPSA92"
+[[models.source.characteristic]]
+parameter = "VCE(sat) collector-emitter saturation voltage"
+max = -0.5
+unit = "Vdc"
+conditions = "MPSA92, IC = -20 mAdc, IB = -2.0 mAdc"
+basis = "Electrical Characteristics, Collector-Emitter Saturation Voltage, max column"
+[[models.source.characteristic]]
+parameter = "VBE(sat) base-emitter saturation voltage"
+max = -0.9
+unit = "Vdc"
+conditions = "IC = -20 mAdc, IB = -2.0 mAdc"
+basis = "Electrical Characteristics, Base-Emitter Saturation Voltage, max column"
+[[models.source.characteristic]]
+parameter = "fT current-gain bandwidth product"
+min = 50
+unit = "MHz"
+conditions = "IC = -10 mAdc, VCE = -20 Vdc, f = 100 MHz"
+basis = "Electrical Characteristics, Small-Signal Characteristics, min column"
+[[models.source.characteristic]]
+parameter = "Ccb collector-base capacitance"
+max = 6.0
+unit = "pF"
+conditions = "MPSA92, VCB = -20 Vdc, IE = 0, f = 1.0 MHz"
+basis = "Electrical Characteristics, Small-Signal Characteristics, max column"
+[[models.source.characteristic]]
+parameter = "PD total device dissipation, derate above TA = 25 C"
+max = 5.0
+unit = "mW/C"
+conditions = "TA = 25 C; derate above 25 C"
+basis = "Maximum Ratings, Total Device Dissipation at TA = 25 C, derate row"
+[[models.source.characteristic]]
+parameter = "PD total device dissipation at TA = 25 C"
+rating = "max_power_w"
+max = 625
+unit = "mW"
+conditions = "TA = 25 C"
+basis = "Maximum Ratings, Total Device Dissipation at TA = 25 C, max column"
+[[models.source.characteristic]]
+parameter = "PD total device dissipation at TC = 25 C"
+rating = "max_power_w"
+max = 1.5
+unit = "W"
+conditions = "TC = 25 C"
+basis = "Maximum Ratings, Total Device Dissipation at TC = 25 C, max column"
+[[models.source.characteristic]]
+parameter = "PD total device dissipation, derate above TC = 25 C"
+max = 12
+unit = "mW/C"
+conditions = "TC = 25 C; derate above 25 C"
+basis = "Maximum Ratings, Total Device Dissipation at TC = 25 C, derate row"
+[[models.source.characteristic]]
+parameter = "TJ operating junction temperature range lower limit"
+min = -55
+unit = "C"
+conditions = "Operating and Storage Junction Temperature Range"
+basis = "Maximum Ratings, Operating and Storage Junction Temperature Range, lower limit"
+[[models.source.characteristic]]
+parameter = "RthetaJA junction-to-ambient thermal resistance"
+max = 200
+unit = "C/W"
+conditions = "TO-92"
+basis = "Thermal Characteristics, Thermal Resistance Junction-to-Ambient, max column"
+[[models.source.characteristic]]
+parameter = "RthetaJC junction-to-case thermal resistance"
+max = 83.3
+unit = "C/W"
+conditions = "TO-92"
+basis = "Thermal Characteristics, Thermal Resistance Junction-to-Case, max column"
+[[models.source.characteristic]]
+parameter = "Tstg storage temperature range"
+min = -55
+max = 150
+unit = "C"
+conditions = "Operating and Storage Junction Temperature Range"
+basis = "Maximum Ratings, Operating and Storage Junction Temperature Range, min/max columns"
+[[models.source.pinout]]
+package = "TO-92"
+pins = { "1" = "EMITTER", "2" = "BASE", "3" = "COLLECTOR" }
+
+[[models.source.references]]
+title = "MPSA92.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "95e4cabbe6fb5f09b07a3345cdd0e8b885e7082cdf7400cdde410e40d2691f25"
+[models.match]
+value_re = '(?i)^MPSA92'
+[models.params]
+is = 4.0e-14 # Source: fitted to typical Figure 4 VBE(on) curve at IC = 0.1, 1, 10 mA, TJ = 25 C, VCE = 10 V; curve-read VBE about 0.56, 0.62, 0.68 V
+bf = 25 # Source: Electrical Characteristics, DC Current Gain, MPSA92 gain group, min column, IC = −30 mAdc, VCE = −10 Vdc
+nf = 1.01 # Source: fitted to typical Figure 4 VBE(on) curve at IC = 0.1, 1, 10 mA, TJ = 25 C, VCE = 10 V; curve-read VBE about 0.56, 0.62, 0.68 V
+tf = 3.1831e-9  # derived: tf = 1/(2π·fT), 'fT current-gain bandwidth product' min 50 MHz (IC = -10 mAdc, VCE = -20 Vdc, f = 100 MHz)
+cjc = 6e-12  # derived: cjc = 'Ccb collector-base capacitance' max 6 pF (MPSA92, VCB = -20 Vdc, IE = 0, f = 1.0 MHz), no bias printed, read as zero bias
+[models.ratings]
+max_current_a = 0.5 # Source: Maximum Ratings, Collector Current—Continuous, |−500 mAdc|
+max_power_w = 0.625 # Source: Maximum Ratings, Total Device Dissipation at TA = 25 C, 625 mW
+max_voltage_v = 300.0 # Source: Maximum Ratings, Collector-Emitter Voltage MPSA92, |−300 Vdc|
+max_junction_temp_c = 150.0 # Source: Maximum Ratings, Operating and Storage Junction Temperature Range, upper limit
+theta_ja_c_per_w = 200.0 # Source: Thermal Characteristics, Junction-to-Ambient
+theta_jc_c_per_w = 83.3 # Source: Thermal Characteristics, Junction-to-Case
+[models.pins]
+# The datasheet disagrees with itself: the page-1 lead drawing (and the common MPSA42/92 TO-92 pinout) is 1 = emitter, 2 = base, 3 = collector;
+# the page-5 Style 14 outline lists 1 = emitter, 2 = collector, 3 = base. The page-1 drawing is used; a board whose symbol disagrees is a wiring finding.
+"1" = "emitter"
+"2" = "base"
+"3" = "collector"
+[models.coverage]
+implements = ["forward_active_gain"]
+missing = ["reverse_gain", "breakdown_behavior", "capacitance_dynamics", "thermal_behavior"]

@@ -1563,7 +1563,28 @@ impl BoardEvidence {
         references: &[String],
         budget: Option<ErrorBudget>,
     ) -> Result<Option<EvidenceMap>, EvidenceError> {
-        match self.simulation_map(assertion, nets, references, budget) {
+        self.check_simulation_map_if_mapped(assertion, nets, references, budget, None)
+    }
+
+    /// [`Self::check_simulation_map`] with the unmapped case of
+    /// [`Self::simulation_map_if_mapped`]: `None` when the subject resolves to
+    /// no board net. Every analysis that maps a solver result back onto the
+    /// board (co-sim, thermal, AC) goes through one of these two, so a subject
+    /// the board does not carry never aborts a run that solved.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the traversal, map or artifact list fails
+    /// validation.
+    pub(crate) fn check_simulation_map_if_mapped(
+        &self,
+        assertion: impl Into<String>,
+        nets: &[String],
+        references: &[String],
+        budget: Option<ErrorBudget>,
+        check_scope: Option<(&str, &str)>,
+    ) -> Result<Option<EvidenceMap>, EvidenceError> {
+        match self.check_simulation_map(assertion, nets, references, budget, check_scope) {
             Ok(map) => Ok(Some(map)),
             Err(EvidenceError::Empty {
                 field: "simulation_map.nets",
@@ -2779,6 +2800,7 @@ mod tests {
                 between: "track to track".into(),
                 plain: "A and B are below clearance".into(),
                 fix: "increase spacing".into(),
+                refs: Vec::new(),
             }],
             at_limit: Vec::new(),
             version_warning: None,

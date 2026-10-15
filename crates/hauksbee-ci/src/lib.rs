@@ -742,6 +742,9 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     // which are built from the sweep's own sentences only.
     let mut verdict_conditions = verdict_conditions;
     verdict_conditions.extend(assertions::host_paced_conditions(&results));
+    // A guessed AVR core clock puts every delay, baud rate and PWM period in
+    // the run at risk of being off by the clock ratio: never a clean pass.
+    verdict_conditions.extend(union_across(&outcomes, |o| &o.clock_assumptions));
     Ok(CiResult {
         spec_name: spec.name.clone(),
         board: spec.board.display().to_string(),

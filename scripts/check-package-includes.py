@@ -20,24 +20,14 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import workspace_crates  # noqa: E402
+
 REPO = Path(__file__).resolve().parent.parent
 
-# Mirrors scripts/make-public.sh CRATES_ORDER (the authoritative publish set).
-CRATES = [
-    "vendor/kicad-forge/crates/forge-sexpr",
-    "vendor/kicad-forge/crates/forge-model",
-    "vendor/kicad-forge/crates/forge-codegen",
-    "crates/hauksbee-ir",
-    "crates/hauksbee-testkit",
-    "crates/hauksbee-solve",
-    "crates/hauksbee-models",
-    "crates/hauksbee-extract",
-    "crates/hauksbee-mcu",
-    "crates/hauksbee-server",
-    "crates/hauksbee-engine",
-    "crates/hauksbee-ci",
-    "crates/hauksbee-mcp",
-]
+# The publish set: every publishable crate `cargo metadata` reports, the
+# vendored forge crates included (scripts/workspace_crates.py).
+CRATES = [p["dir"] for p in workspace_crates.publish_order(*workspace_crates.load())]
 
 INCLUDE = re.compile(r'include_(?:str|bytes)!\s*\(\s*"([^"]+)"\s*\)')
 

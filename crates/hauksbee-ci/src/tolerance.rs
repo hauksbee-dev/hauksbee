@@ -52,6 +52,7 @@ use crate::error::SpecError;
 use crate::spec::Spec;
 use hauksbee_engine::variant_sweep::OpenSet;
 use hauksbee_extract::ExtractedBoard;
+use hauksbee_ir::units::format_engineering;
 
 /// Full-factorial corner enumeration is capped at `2^CORNER_CAP` runs.
 ///
@@ -161,7 +162,11 @@ impl SampledValue {
             Some(Corner::Max) => "(max)",
             None => "",
         };
-        format!("{}={}{tag}", self.reference, format_engineering(self.si))
+        format!(
+            "{}={}{tag}",
+            self.reference,
+            format_engineering(self.si, "")
+        )
     }
 }
 
@@ -897,57 +902,6 @@ impl SplitMix {
     }
 }
 
-/// Format an SI value in engineering notation for reports: 10900 -> "10.9k",
-/// 1.82e-8 -> "18.2n". Three significant digits; trailing zeros trimmed.
-#[must_use]
-pub fn format_engineering(v: f64) -> String {
-    const SUFFIX: &[(f64, &str)] = &[
-        (1e9, "G"),
-        (1e6, "M"),
-        (1e3, "k"),
-        (1.0, ""),
-        (1e-3, "m"),
-        (1e-6, "u"),
-        (1e-9, "n"),
-        (1e-12, "p"),
-    ];
-    if v == 0.0 || !v.is_finite() {
-        return format!("{v}");
-    }
-    // Three significant digits on the scaled mantissa (which lives in [1, 1000)).
-    let sig_digits = |m: f64| usize::from(m < 100.0) + usize::from(m < 10.0);
-    let round_to = |m: f64, digits: usize| {
-        let factor = [1.0, 10.0, 100.0][digits];
-        (m * factor).round() / factor
-    };
-
-    let mag = v.abs();
-    let mut idx = SUFFIX
-        .iter()
-        .position(|(s, _)| mag >= *s)
-        .unwrap_or(SUFFIX.len() - 1);
-    let mut mantissa = mag / SUFFIX[idx].0;
-    let mut digits = sig_digits(mantissa);
-    // Detect the carry: rounding the mantissa to `digits` decimals can push it up
-    // to 1000 (e.g. 999999 -> "1000k", 999.6 -> "1000"). When that happens promote
-    // to the next-larger suffix so the shown mantissa stays in [1, 1000), "1M"/"1k"
-    // rather than "1000k"/"1000". At the top suffix (G) there is nothing larger, so
-    // leave it (unreachable for realistic component tolerances).
-    if round_to(mantissa, digits) >= 1000.0 && idx > 0 {
-        idx -= 1;
-        mantissa = mag / SUFFIX[idx].0;
-        digits = sig_digits(mantissa);
-    }
-    let suffix = SUFFIX[idx].1;
-    let s = format!("{mantissa:.digits$}");
-    let s = if s.contains('.') {
-        s.trim_end_matches('0').trim_end_matches('.').to_string()
-    } else {
-        s
-    };
-    format!("{}{s}{suffix}", if v < 0.0 { "-" } else { "" })
-}
-
 /// One-line description of a plan's sampled set: `R1=10.9k, R2=9.4k`.
 pub fn describe_values(values: &[SampledValue]) -> String {
     values
@@ -1294,15 +1248,5 @@ mod tests {
         assert!(glob_match("R*", "R17") && glob_match("R*", "R") && !glob_match("R*", "C3"));
         assert!(glob_match("*", "anything"));
         assert!(glob_match("R1", "R1") && !glob_match("R1", "R12"));
-    }
-
-    #[test]
-    fn engineering_format_reads_naturally_and_carries_past_a_decade_edge() {
-        assert_eq!(format_engineering(10_900.0), "10.9k");
-        assert_eq!(format_engineering(1.82e-8), "18.2n");
-        assert_eq!(format_engineering(5.0), "5");
-        // Rounding the mantissa up to 1000 carries into the next suffix.
-        assert_eq!(format_engineering(999_999.0), "1M");
-        assert_eq!(format_engineering(-999_999.0), "-1M");
     }
 }

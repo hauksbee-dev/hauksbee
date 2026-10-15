@@ -121,3 +121,7 @@ path = "tests/main.rs"
 
 [lints]
 workspace = true
+
+[package.metadata.ci]
+# Which CI test shard runs this crate; scripts/workspace_crates.py builds the matrix from it.
+test-shard = "application"

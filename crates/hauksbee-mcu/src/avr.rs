@@ -985,12 +985,20 @@ impl AvrMcu {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Hook the standard `ATmega328P` ports (callers working with other MCUs
-    /// can call [`Self::register_port_hooks`] directly) after installing a
-    /// callback the port hooks feed.
+    /// Hook every port the core has, after installing a callback the port hooks
+    /// feed.
     fn hook_standard_ports(&mut self, install: impl FnOnce(&mut Callbacks)) {
         install(&mut self.shared().callbacks);
-        self.register_port_hooks(&['A', 'B', 'C', 'D']);
+        self.register_all_port_hooks();
+    }
+
+    /// Hook every GPIO port the core has (`PORTA` to `PORTH`, the letters
+    /// `port_hooks` can hook). simavr answers a port the part lacks with a null
+    /// IRQ, which [`Self::register_port_hooks`] skips, so no per-part port list
+    /// exists to drift from the silicon: an `ATtiny84`'s `PORTA` and an
+    /// `ATmega32U4`'s `PORTE` are hooked because the core has them.
+    pub fn register_all_port_hooks(&mut self) {
+        self.register_port_hooks(&['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']);
     }
 
     /// Load a `.hex` file by parsing it and flashing the MCU.

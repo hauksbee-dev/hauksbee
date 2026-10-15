@@ -36,8 +36,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use hauksbee_bind::binder::power_rail_voltage;
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
-    control_role, is_ground, is_test_point_or_hole, is_unconnected_net, pin_is_no_connect,
-    Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Pin, Severity,
+    control_role, is_connector_like, is_ground, is_logic_or_switch_ref, is_test_point_or_hole,
+    is_unconnected_net, pin_is_no_connect, Component, ExtractedBoard, LintCheck, LintFinding,
+    NetLintReport, Pin, Severity,
 };
 use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
 
@@ -152,8 +153,7 @@ fn display_name(function: &str) -> String {
 /// Would the extract-layer `FloatingControlPin` lint already report this pin?
 /// Mirrors its predicate so the two checks never report one pin twice.
 fn control_lint_covers(board: &ExtractedBoard, comp: &Component, pin: &Pin) -> bool {
-    let r = comp.reference.to_ascii_uppercase();
-    let active = r.starts_with('U') || r.starts_with("IC") || r.starts_with('Q');
+    let active = is_logic_or_switch_ref(comp);
     let Some(net) = pin.net.and_then(|id| board.net(id)) else {
         return false;
     };
@@ -204,14 +204,39 @@ pub fn floating_input_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLin
         }
     };
 
+    // The do-not-populate active parts (an IC, a transistor, a module or a
+    // connector) on an input's net. A keyboard marks its hand-soldered
+    // controller module DNP so the assembler skips it; the module still drives
+    // the input on the finished board. A DNP resistor is not one: it is the
+    // pull the assembled board leaves out, which is the fault itself.
+    let dnp_drivers = |p: &Pin| -> BTreeSet<&str> {
+        p.net
+            .filter(|&id| id != 0)
+            .map(|id| board.net_members(id))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(c, _)| {
+                matches!(AssemblyState::of(c), AssemblyState::DnpAbsent(_))
+                    && !is_test_point_or_hole(c)
+                    && (is_logic_or_switch_ref(c) || is_connector_like(c))
+            })
+            .map(|(c, _)| c.reference.as_str())
+            .collect()
+    };
+
     let mut report = NetLintReport::default();
     for (comp, pins) in &cmos {
-        let open: Vec<&InputPin<'_>> = pins
+        let (assumed, open): (Vec<&InputPin<'_>>, Vec<&InputPin<'_>>) = pins
             .iter()
             .filter(|p| !(p.pull_allowed && pin_is_no_connect(p.pin)))
             .filter(|p| !control_lint_covers(board, comp, p.pin))
             .filter(|p| floats(p.pin))
-            .collect();
+            .partition(|p| !dnp_drivers(p.pin).is_empty());
+        if !assumed.is_empty() {
+            report
+                .findings
+                .push(driven_only_by_dnp(board, comp, &assumed, &dnp_drivers));
+        }
         if open.is_empty() {
             continue;
         }
@@ -245,6 +270,44 @@ pub fn floating_input_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLin
         });
     }
     report
+}
+
+/// The stated condition for inputs whose only driver is a do-not-populate
+/// active part: the board works when that part is fitted by hand, and floats
+/// when it is left off.
+fn driven_only_by_dnp<'b>(
+    board: &'b ExtractedBoard,
+    comp: &Component,
+    pins: &[&InputPin<'_>],
+    dnp_drivers: &impl Fn(&Pin) -> BTreeSet<&'b str>,
+) -> LintFinding {
+    let drivers: BTreeSet<&str> = pins.iter().flat_map(|p| dnp_drivers(p.pin)).collect();
+    let drivers = drivers.into_iter().collect::<Vec<_>>().join(", ");
+    let nets: Vec<String> = pins
+        .iter()
+        .filter_map(|p| p.pin.net.and_then(|id| board.net(id)))
+        .map(|n| n.name.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let one = pins.len() == 1;
+    LintFinding {
+        check: LintCheck::FloatingInput,
+        severity: Severity::Low,
+        message: format!(
+            "{} {}: {} {} on {} {} driven only by {drivers}, marked do-not-populate. Assumed: {drivers} (or the module it represents) is fitted when the board is used; if it is left off, the {} {}, so add a pull resistor if that state matters.",
+            comp.reference,
+            comp.value,
+            if one { "input" } else { "inputs" },
+            compress_labels(pins.iter().map(|p| p.label.as_str())),
+            nets.join(", "),
+            if one { "is" } else { "are" },
+            if one { "input" } else { "inputs" },
+            if one { "floats" } else { "float" },
+        ),
+        refs: vec![comp.reference.clone()],
+        nets,
+    }
 }
 
 /// Join pin labels, collapsing runs of one prefix with consecutive numbers:
@@ -571,6 +634,75 @@ mod tests {
         u1.value = "74LS165".into();
         let report = floating_input_lint(&board(vec![u1], &[]), &ModelLibrary::builtin());
         assert!(report.is_clean(), "{:?}", report.findings);
+    }
+
+    /// One 74LVC1G125 whose A input (pad 2) sits on net 7 with `others`.
+    fn buffer_input_with(others: Vec<Component>) -> NetLintReport {
+        let u1 = Component {
+            reference: "U1".into(),
+            value: "74LVC1G125".into(),
+            pins: vec![
+                pin("1", Some(1), "~{OE}", "input"),
+                pin("2", Some(7), "A", "input"),
+                pin("3", Some(1), "GND", "power_in"),
+                pin("4", Some(3), "Y", "output"),
+                pin("5", Some(2), "VCC", "power_in"),
+            ],
+            ..Default::default()
+        };
+        let mut parts = vec![u1];
+        parts.extend(others);
+        let b = board(parts, &[(7, "SIG")]);
+        floating_input_lint(&b, &ModelLibrary::builtin())
+    }
+
+    #[test]
+    fn an_input_driven_only_by_a_dnp_module_is_a_stated_condition() {
+        // Legal control: the controller module is marked DNP because it is
+        // soldered by hand; it drives the input on the finished board.
+        let mut module = mcu_driving(&[7]);
+        module.reference = "MCU1".into();
+        module.dnp = true;
+        let r = buffer_input_with(vec![module]);
+        assert_eq!(r.findings.len(), 1, "{:?}", r.findings);
+        assert_eq!(r.findings[0].severity, Severity::Low);
+        assert!(
+            r.findings[0].message.contains("driven only by MCU1"),
+            "{}",
+            r.findings[0].message
+        );
+    }
+
+    #[test]
+    fn an_input_left_only_a_dnp_pull_or_nothing_still_floats() {
+        // A DNP pull-up is the pull the assembled board leaves out.
+        let pull = Component {
+            reference: "R1".into(),
+            value: "10k".into(),
+            lib_id: "Device:R".into(),
+            dnp: true,
+            pins: vec![
+                pin("1", Some(7), "", "passive"),
+                pin("2", Some(2), "", "passive"),
+            ],
+            ..Default::default()
+        };
+        // Another buffer's input is not a driver either.
+        let other = Component {
+            reference: "U2".into(),
+            value: "74LVC1G125".into(),
+            pins: vec![pin("2", Some(7), "A", "input")],
+            ..Default::default()
+        };
+        for others in [vec![pull], vec![], vec![other]] {
+            let r = buffer_input_with(others);
+            let high = r
+                .findings
+                .iter()
+                .filter(|f| f.refs == ["U1"] && f.severity == Severity::High)
+                .count();
+            assert_eq!(high, 1, "{:?}", r.findings);
+        }
     }
 
     #[test]

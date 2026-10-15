@@ -1268,6 +1268,7 @@ mod tests {
             adc_pin: HashMap::new(),
             module: false,
             max_supply_v: None,
+            supply_stand_in: None,
             min_supply_v: None,
             supply_floors: HashMap::new(),
         };

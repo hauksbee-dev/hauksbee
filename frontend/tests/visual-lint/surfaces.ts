@@ -186,7 +186,7 @@ export const APP_SURFACES: Surface[] = [
     what: 'the Checks panel after a run, with per-row pass/fail annotations',
     async reach(page) {
       await page.click('[data-testid="run-checks"]')
-      await page.waitForSelector('[data-testid="check-results"], [data-testid="builder-validation"]', { timeout: 30_000 })
+      await page.waitForSelector('[data-testid="run-details-toggle"], [data-testid="builder-validation"]', { timeout: 30_000 })
       await settle(page)
     },
   },
