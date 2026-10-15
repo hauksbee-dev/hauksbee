@@ -225,10 +225,28 @@ fn examine_strap(
     //     series resistor), so a clock is present at the reset latch window. We
     //     look across the net AND one series-resistor hop, because the real
     //     board puts a 10R between the oscillator and GPIO0.
-    if let Some(osc) = clock_source_reaching(board, net_id).filter(|o| o.reference != mcu.reference)
+    if let Some((osc, out)) =
+        clock_source_reaching(board, net_id).filter(|(o, _)| o.reference != mcu.reference)
     {
-        let what = format!("carries a free-running clock source {} ({}): a clock present at the reset latch can mis-strap the part", osc.reference, osc.value);
-        return push(Severity::High, what, vec![osc.reference.clone()]); // the clock is the dominant fault
+        let gates = enable_gates(board, osc, out);
+        if gates.is_empty() {
+            let what = format!("carries a free-running clock source {} ({}): a clock present at the reset latch can mis-strap the part", osc.reference, osc.value);
+            return push(Severity::High, what, vec![osc.reference.clone()]); // the clock is the dominant fault
+        }
+        // The oscillator's enable is driven by other parts, as boards gate it
+        // to hold the clock off through reset. Whether the gate opens only
+        // after the strap is latched is timing the netlist cannot show.
+        let what = format!(
+            "carries clock source {} ({}), whose enable is driven by {}: the clock is gated, \
+             so it mis-straps the part only if that gate releases before the strap is latched; \
+             confirm it holds the clock off until reset ends",
+            osc.reference,
+            osc.value,
+            gates.join(", ")
+        );
+        let mut refs = vec![osc.reference.clone()];
+        refs.extend(gates);
+        return push(Severity::Low, what, refs);
     }
 
     // (b) Pull resistors biasing the strap to the WRONG level for normal boot.
@@ -353,7 +371,7 @@ fn is_clock_oscillator(c: &Component) -> bool {
 /// "reach" the oscillator's VDD on the same rail and false-fire (the exact bug
 /// the GPIO15 pull-up exposed during calibration). So the oscillator must be
 /// reached on a *signal* net, via a pad that is not on a rail/ground.
-fn clock_source_reaching(board: &ExtractedBoard, net_id: i64) -> Option<&Component> {
+fn clock_source_reaching(board: &ExtractedBoard, net_id: i64) -> Option<(&Component, i64)> {
     // The strap net itself must not be a rail/ground (it never is for a strap,
     // but guard anyway so the membership scan is meaningful).
     if let Some(n) = board.net(net_id) {
@@ -363,7 +381,7 @@ fn clock_source_reaching(board: &ExtractedBoard, net_id: i64) -> Option<&Compone
     }
     // Direct: an oscillator drives this signal net via a non-power pad.
     if let Some(c) = oscillator_driving_net(board, net_id) {
-        return Some(c);
+        return Some((c, net_id));
     }
     // One series-resistor hop: a resistor with one pad on the strap net and the
     // other pad on a *signal* net (not a rail/ground) that an oscillator drives.
@@ -383,11 +401,42 @@ fn clock_source_reaching(board: &ExtractedBoard, net_id: i64) -> Option<&Compone
                 }
             }
             if let Some(c) = oscillator_driving_net(board, oid) {
-                return Some(c);
+                return Some((c, oid));
             }
         }
     }
     None
+}
+
+/// The parts that drive an oscillator's enable: on each of its signal nets
+/// other than the clock output `out`, every assembled active part (three or
+/// more connected pins, not a connector) besides the oscillator itself. A
+/// pull resistor alone is no gate: it holds the enable at one level.
+fn enable_gates(board: &ExtractedBoard, osc: &Component, out: i64) -> Vec<String> {
+    let mut gates: Vec<String> = Vec::new();
+    for id in osc.pins.iter().filter_map(|p| p.net) {
+        let Some(net) = board.net(id) else { continue };
+        if id == out
+            || is_ground_name(&net.name)
+            || is_rail_name(&net.name)
+            || is_unconnected_net(&net.name)
+        {
+            continue;
+        }
+        for (c, _) in board.net_members(id) {
+            let active = c.pins.iter().filter(|p| p.net.is_some()).count() >= 3;
+            if std::ptr::eq(c, osc)
+                || !active
+                || !AssemblyState::of(c).is_present()
+                || hauksbee_extract::is_connector_like(c)
+                || gates.contains(&c.reference)
+            {
+                continue;
+            }
+            gates.push(c.reference.clone());
+        }
+    }
+    gates
 }
 
 /// An assembled oscillator that touches `net_id` via a pad that is NOT one of
@@ -736,6 +785,38 @@ vih = [0.0, 2.0]
                     ],
                 ),
                 &[(High, &["gpio0", "CR1", "GPIO0"])],
+            ),
+            // The same clock with its enable held by a reset supervisor is
+            // gated: what is left to confirm is the release timing.
+            (
+                "gated clock on GPIO0",
+                strap_board(
+                    "+3V3",
+                    "/GPIO0",
+                    vec![
+                        esp32("25"),
+                        osc("CR1", 4),
+                        part("R36", "10R", &[("1", 4), ("2", 3)]),
+                        part("R34", "10k", &[("1", 2), ("2", 6)]),
+                        part("U8", "BD5230G", &[("1", 6), ("3", 1), ("5", 2)]),
+                    ],
+                ),
+                &[(Low, &["gpio0", "CR1", "gated", "U8"])],
+            ),
+            // A pull resistor alone on the enable is no gate.
+            (
+                "pulled-on clock on GPIO0",
+                strap_board(
+                    "+3V3",
+                    "/GPIO0",
+                    vec![
+                        esp32("25"),
+                        osc("CR1", 4),
+                        part("R36", "10R", &[("1", 4), ("2", 3)]),
+                        part("R34", "10k", &[("1", 2), ("2", 6)]),
+                    ],
+                ),
+                &[(High, &["gpio0", "CR1", "free-running"])],
             ),
             (
                 "pulled GPIO0",
