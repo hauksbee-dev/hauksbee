@@ -2555,22 +2555,24 @@ fn unnumbered_rows_to_unknowns(source: &mut toml_edit::Table) -> bool {
     true
 }
 
-/// A voltage row names `pins` but no `rating`: only a current row tagged with
+/// A non-current row names `pins` but no `rating`: only a current row tagged with
 /// one bounds a path, so the checker rejects the names. They go; whether any did.
-fn drop_pins_from_voltage_rows(source: &mut toml_edit::Table) -> bool {
+fn drop_pins_from_untagged_rows(source: &mut toml_edit::Table) -> bool {
     use toml_edit::Item;
     let rows = source
         .get_mut("characteristic")
         .and_then(Item::as_array_of_tables_mut);
-    let volts = |r: &toml_edit::Table| {
+    let not_current = |r: &toml_edit::Table| {
         let unit = r.get("unit").and_then(Item::as_str);
-        matches!(unit, Some("V" | "mV")) && !r.contains_key("rating") && r.contains_key("pins")
+        !matches!(unit, None | Some("A" | "mA" | "uA" | "nA" | "pA"))
+            && !r.contains_key("rating")
+            && r.contains_key("pins")
     };
     let mut dropped = false;
     for row in rows
         .into_iter()
         .flat_map(|rows| rows.iter_mut())
-        .filter(|r| volts(r))
+        .filter(|r| not_current(r))
     {
         dropped |= row.remove("pins").is_some();
     }
@@ -2664,9 +2666,9 @@ impl Reply<'_> {
             }
             if source
                 .as_table_mut()
-                .is_some_and(drop_pins_from_voltage_rows)
+                .is_some_and(drop_pins_from_untagged_rows)
             {
-                say!("[model-extract] voltage rows naming pins without a rating: pins dropped");
+                say!("[model-extract] rows naming pins without a rating: pins dropped");
                 repaired = true;
             }
             if source
@@ -3018,7 +3020,7 @@ fn run_tier(
     let staged = budget > 0;
     let _ = std::fs::remove_file(ws.path().join(harness::CONFIDENCE));
     let run = |p: &str| run_and_record(resolved, p, ws, budget, billing);
-    // A model card is first drafted by three section agents at once, merged
+    // A model card is first drafted by four section agents, merged
     // with no model call; a clean merge goes straight to the validator, a
     // flawed one to a fix agent told what the merge found.
     let mut merged_draft = None::<String>;
@@ -5824,8 +5826,8 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
     fn a_doubtful_haiku_draft_escalates_and_the_card_names_its_tier() {
         let (ran, models, summary, events) = run_ladder_fake(HAIKU_LADDER, "claude-haiku-5-5", "");
         let card = ran.unwrap();
-        // Haiku runs its three section agents; Sonnet takes over.
-        let mut expected = ["claude-haiku-5-5"; 3].to_vec();
+        // Haiku runs its four section agents; Sonnet takes over.
+        let mut expected = ["claude-haiku-5-5"; 4].to_vec();
         expected.push("claude-sonnet-5-5");
         assert_eq!(models, expected);
         assert!(card.starts_with("# extracted by claude-code claude-sonnet-5-5 (tier 2 of 3); escalated: self-reported low confidence: pin 3 unclear"), "{card}");
@@ -5842,6 +5844,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             "section identity",
             "section ratings",
             "section electrical",
+            "section switching",
         ] {
             assert!(events.contains(kind), "{kind} missing: {events}");
         }
@@ -5849,6 +5852,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let at = |s: &str| events.find(s).unwrap();
         assert!(at("section identity") < at("section ratings"));
         assert!(at("section identity") < at("section electrical"));
+        assert!(at("section identity") < at("section switching"));
     }
 
     /// A staged agent stopped at its budget after it wrote a valid card is not
@@ -5859,7 +5863,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let (ran, models, _, _) =
             run_ladder_fake_loud(HAIKU_LADDER, "", "", ("claude-haiku-5-5", ""));
         let card = ran.unwrap();
-        assert_eq!(models, ["claude-haiku-5-5"; 3], "three section agents");
+        assert_eq!(models, ["claude-haiku-5-5"; 4], "four section agents");
         assert!(
             card.starts_with("# extracted by claude-code claude-haiku-5-5 (tier 1 of 3)"),
             "{card}"
@@ -5901,18 +5905,19 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         assert!(done.contains("status = \"unknown\"") && done.contains("min = 0.7 VCC"));
     }
 
-    /// A voltage row naming pins but no rating loses the pins; a current row keeps them.
+    /// A non-current row (a voltage, a slew rate) naming pins but no rating loses the pins; a current row keeps them.
     #[test]
-    fn a_voltage_row_naming_pins_without_a_rating_drops_them() {
-        let mut doc: toml_edit::DocumentMut = "[[characteristic]]\nunit = \"V\"\npins = [\"a\"]\n\
+    fn a_row_naming_pins_without_a_rating_drops_them() {
+        let mut doc: toml_edit::DocumentMut =
+            "[[characteristic]]\nunit = \"ns/V\"\npins = [\"a\"]\n\
             [[characteristic]]\nunit = \"uA\"\npins = [\"a\"]\n"
-            .parse()
-            .unwrap();
-        assert!(drop_pins_from_voltage_rows(doc.as_table_mut()));
+                .parse()
+                .unwrap();
+        assert!(drop_pins_from_untagged_rows(doc.as_table_mut()));
         let rows = doc["characteristic"].as_array_of_tables().unwrap();
         assert!(!rows.get(0).unwrap().contains_key("pins"));
         assert!(rows.get(1).unwrap().contains_key("pins"));
-        assert!(!drop_pins_from_voltage_rows(doc.as_table_mut()));
+        assert!(!drop_pins_from_untagged_rows(doc.as_table_mut()));
     }
 
     /// A nominal param whose row prints only a max cannot be read: its row moves
@@ -5940,7 +5945,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
     #[test]
     fn a_missing_section_goes_to_a_fix_agent() {
         let (ran, models, _, _) = run_ladder_fake_loud(HAIKU_LADDER, "", "", ("", "ratings"));
-        assert_eq!(models, ["claude-haiku-5-5"; 4], "three sections, one fix");
+        assert_eq!(models, ["claude-haiku-5-5"; 5], "four sections, one fix");
         assert!(ran
             .unwrap()
             .starts_with("# extracted by claude-code claude-haiku-5-5 (tier 1 of 3)"));
@@ -5975,7 +5980,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         assert!(ran
             .unwrap()
             .starts_with("# extracted by claude-code claude-haiku-5-5 (tier 1 of 3)\n"));
-        assert_eq!(models.len(), 3);
+        assert_eq!(models.len(), 4);
     }
 
     /// Fake codex for the idle watchdog: attempt 1 stalls (with a helper

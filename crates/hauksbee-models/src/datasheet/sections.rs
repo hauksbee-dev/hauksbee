@@ -3,14 +3,15 @@
 //! One agent reading a whole datasheet, then writing the whole card, held 110k
 //! tokens of context. Each section agent has a narrow brief and its own sandbox
 //! copy: **identity** (id, kind, match, package, pin map) runs first and is
-//! small; **ratings** and **electrical** (params, rows, description) then run
-//! in parallel, each told the identity agent's keys, so the package and pad
-//! roles are one decision. [`merge`] joins the fragments with no model call.
+//! small; **ratings**, **electrical** (params, DC rows, description, behaviour) and
+//! **switching** (timing rows) then run in parallel, each told the identity
+//! agent's keys, so the package and pad roles are one decision. [`merge`] joins the fragments with no model call.
 //! Keys two fragments write differently are dropped and reported, never picked
 //! between; a fragment with no usable entry is reported too. Either sends the
 //! card to a fix agent first; a clean merge goes straight to the validator.
 
 use anyhow::{anyhow, bail, Result};
+use std::thread::ScopedJoinHandle;
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
 
 use super::{
@@ -24,7 +25,7 @@ use crate::extract_config::Resolved;
 use crate::extract_harness as harness;
 use crate::extract_progress as progress;
 
-pub(super) const NAMES: [&str; 3] = ["identity", "ratings", "electrical"];
+pub(super) const NAMES: [&str; 4] = ["identity", "ratings", "electrical", "switching"];
 
 /// What the merge made of the section fragments.
 #[derive(Debug)]
@@ -201,12 +202,22 @@ fn prompt(part: &str, kind: &str, section: &str, known: &str) -> String {
                 crate::schema::Ratings::KEY_GUIDE
             ),
         ),
+        "switching" => (
+            "a `[[models.source.characteristic]]` per row of the switching-characteristics table \
+             (propagation, enable, disable, transition and skew times, per supply pairing it \
+             prints) and per capacitance row"
+                .to_string(),
+            "switching characteristics and capacitance",
+            " At most two images.",
+            format!("{SOURCE_QUANTITY_GUIDANCE}\n\n{EXTRACTION_RULES}"),
+        ),
         _ => (
             "`description`, `[models.params]`, `[models.coverage]`, every behaviour table the kind \
              needs (`[models.logic]` for a digital part) and a \
-             `[[models.source.characteristic]]` per electrical-characteristic row"
+             `[[models.source.characteristic]]` per row of the DC electrical-characteristics \
+             table (the switching table's rows belong to the switching agent)"
                 .to_string(),
-            "electrical characteristics, switching characteristics",
+            "electrical characteristics, and the switching characteristics for the params",
             " At most two images.",
             format!(
                 "`description`: one line naming the part and its package, then `does not model ...` \
@@ -248,7 +259,7 @@ fn prompt(part: &str, kind: &str, section: &str, known: &str) -> String {
     )
 }
 
-/// Draft the card: identity first, then ratings and electrical at once, each
+/// Draft the card: identity first, then every other section at once, each
 /// agent in its own sandbox copy bounded to `budget` tokens of context.
 ///
 /// # Errors
@@ -288,19 +299,22 @@ pub(super) fn draft(
     let identity = run(NAMES[0], "")?;
     let known = identity.as_deref().and_then(entry).map(document);
     let known = known.unwrap_or_default();
-    let (ratings, electrical) = std::thread::scope(|scope| {
-        let ratings = scope.spawn(|| run(NAMES[1], &known));
-        let electrical = run(NAMES[2], &known);
-        let ratings = ratings
-            .join()
-            .map_err(|_| anyhow!("a section agent panicked"));
-        Ok::<_, anyhow::Error>((ratings??, electrical?))
-    })?;
-    merge(&[
-        (NAMES[0], identity),
-        (NAMES[1], ratings),
-        (NAMES[2], electrical),
-    ])
+    let drafted = std::thread::scope(|scope| {
+        let mut agents = Vec::new();
+        for name in &NAMES[1..] {
+            agents.push(scope.spawn(|| run(name, &known)));
+        }
+        agents
+            .into_iter()
+            .map(ScopedJoinHandle::join)
+            .collect::<Vec<_>>()
+    });
+    let mut sections = vec![(NAMES[0], identity)];
+    for (name, text) in NAMES[1..].iter().zip(drafted) {
+        let text = text.map_err(|_| anyhow!("a section agent panicked"))?;
+        sections.push((*name, text?));
+    }
+    merge(&sections)
 }
 
 #[cfg(test)]
@@ -415,5 +429,12 @@ mod tests {
         let later = prompt("SN74LVC1T45", "digital", "electrical", &known);
         assert!(later.contains("do not repeat them") && later.contains("\"1\" = \"vcca\""));
         assert!(!prompt("X1", "digital", "ratings", "").contains("do not repeat them"));
+        // The switching table's rows have one owner.
+        assert!(later.contains("belong to the switching agent"));
+        let timing = prompt("X1", "digital", "switching", &known);
+        assert!(
+            timing.contains("switching-characteristics table")
+                && !timing.contains("[models.logic]")
+        );
     }
 }
