@@ -13,3 +13,14 @@ test-group = "renode"
 [[profile.default.overrides]]
 filter = "binary(speed_gate)"
 threads-required = "num-test-threads"
+
+# qemu_clock_truth measures how faithfully the wall-paced QEMU backend credits
+# guest time. Virtual time there is wall-paced (no icount), so the ratio it
+# asserts on is a property of host pacing: when other tests share the CPUs the
+# vCPU is starved inside the cont->stop span, the host span over-credits, and
+# the ratio drifts (0.47 and 0.56 measured in full parallel runs, against the
+# 0.75..1.25 band it holds when it has the machine). That is the machine, not
+# the credit logic, so the test takes every thread, as speed_gate does.
+[[profile.default.overrides]]
+filter = "binary(it) & test(qemu_clock_truth)"
+threads-required = "num-test-threads"
