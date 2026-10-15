@@ -408,7 +408,7 @@ impl ExtractedBoard {
 // ---------------------------------------------------------------------------
 
 pub use hauksbee_models::netclass::{
-    has_signal_role_token, is_ground, is_positive_supply, is_supply, leaf as norm, rail_voltage,
+    is_ground, is_positive_supply, is_supply, leaf as norm, rail_voltage,
 };
 
 /// Is this component a plain two-terminal resistor (the kind that can be a
@@ -1944,8 +1944,9 @@ pub fn control_role(function: &str) -> Option<&'static str> {
     }
 }
 
-/// A part whose control pins the floating-control lint judges: an IC (`U`,
-/// `IC`, `MCU`) or a transistor (`Q`). The floating-inputs board check reads
+/// A part whose control pins the floating-control lint judges.
+///
+/// An IC (`U`, `IC`, `MCU`) or a transistor (`Q`). The floating-inputs board check reads
 /// the same predicate so the two never report one pin twice.
 #[must_use]
 pub fn is_logic_or_switch_ref(c: &Component) -> bool {

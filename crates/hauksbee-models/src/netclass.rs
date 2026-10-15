@@ -137,9 +137,10 @@ const SUPPLY_TOKENS: [&str; 15] = [
     "VPP", "VIO", "VMOT",
 ];
 
-/// A supply net, whether or not its name states the voltage: `+3V3`, `VDD`,
-/// `VBAT`, `AVDD`, `-12V`. Never ground, never a tap or an enable named after a
-/// rail. The predicate for "does this pull-up return to a rail", where the
+/// A supply net, whether or not its name states the voltage.
+///
+/// `+3V3`, `VDD`, `VBAT`, `AVDD`, `-12V`. Never ground, never a tap or an
+/// enable named after a rail. The predicate for "does this pull-up return to a rail", where the
 /// magnitude does not matter.
 #[must_use]
 pub fn is_supply(name: &str) -> bool {
@@ -193,9 +194,10 @@ pub fn may_be_supply(name: &str) -> bool {
         || (n.starts_with(|c: char| c.is_ascii_digit()) && n.contains('V'))
 }
 
-/// True when a net name carries an enable, status, monitor or select token
-/// (`3V3_EN`, `1V8_PG`, `3V3_SEL`, `5V_DET`), which makes it a signal named
-/// after a rail rather than the rail. Whole tokens only, so `VCCINT` is not an
+/// True when a net name carries an enable, status, monitor or select token.
+///
+/// `3V3_EN`, `1V8_PG`, `3V3_SEL`, `5V_DET`: a signal named after a rail rather
+/// than the rail. Whole tokens only, so `VCCINT` is not an
 /// interrupt line.
 #[must_use]
 pub fn has_signal_role_token(n: &str) -> bool {
