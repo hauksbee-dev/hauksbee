@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { WebReport } from '../types/report'
-import { reportVerdictTone, summarizeEvidence } from '../lib/report-view'
+import { plural, reportVerdictTone, summarizeEvidence } from '../lib/report-view'
 import type { SimShellStatus } from '../SimView'
 import type { ChecksSummary } from './ChecksView'
 import type { AppView } from './Sidebar'
@@ -202,7 +202,7 @@ export function ShellChips({
             // weaker verdict than the report gives.
             ? summarizeEvidence(report.evidence).undermined > 0
               ? { tone: 'warn' as const, label: 'analysis undermined' }
-              : { tone: 'warn' as const, label: report.total > 0 ? `${report.total} findings` : 'analysis qualified' }
+              : { tone: 'warn' as const, label: report.total > 0 ? plural(report.total, 'finding') : 'analysis qualified' }
             : { tone: 'ok' as const, label: 'analysis clean' }),
       })
     }

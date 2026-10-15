@@ -74,7 +74,7 @@
       "backend": "claude-code",
       "available": true,
       "detail": "/usr/local/bin/claude",
-      "install": "npm install -g @anthropic-ai/claude-code   # then: claude login",
+      "install": "npm install -g @anthropic-ai/claude-code   # then: claude auth login",
       "sends_data_to": "Anthropic, via the account claude is signed in with"
     },
     {

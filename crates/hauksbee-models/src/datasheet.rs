@@ -857,7 +857,9 @@ impl Backend {
     pub const fn install_hint(self) -> &'static str {
         match self {
             Self::Codex => "npm install -g @openai/codex   # then: codex login",
-            Self::ClaudeCode => "npm install -g @anthropic-ai/claude-code   # then: claude login",
+            Self::ClaudeCode => {
+                "npm install -g @anthropic-ai/claude-code   # then: claude auth login"
+            }
             Self::Agy => "install Antigravity from https://antigravity.google, then: agy install",
             Self::Api => {
                 "export OPENAI_API_KEY=...   # or name another variable with api.api_key_env"
