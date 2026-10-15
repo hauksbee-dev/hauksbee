@@ -502,7 +502,9 @@ pub struct RunOutcome {
     /// What a pass on this run rests on beyond its assertions: the open variant
     /// and corner sets the member sweep could not cross in full
     /// ([`crate::tolerance::VariantCoverage::conditions`]). The same sentences on
-    /// every member of a run; empty when every combination ran.
+    /// every member of a run; empty when every combination ran. Also each AVR
+    /// core clock the co-sim had to guess
+    /// ([`hauksbee_engine::scheduler::Scheduler::clock_assumptions`]).
     pub verdict_conditions: Vec<String>,
     /// Full `(t_s, volts)` waveforms for the nets any `hwtrace` assertion
     /// probes, sampled at the frame cadence (held-stale frames excluded, like
@@ -1001,7 +1003,15 @@ fn run_members(
         };
         // Every member carries the run-level condition: a pass rests on it
         // whichever member the report reads first.
+        // The run's own conditions (a guessed AVR clock, from the scheduler)
+        // stay; the shared ones are added to them.
+        let own = std::mem::take(&mut outcome.verdict_conditions);
         outcome.verdict_conditions.clone_from(&conditions);
+        for c in own {
+            if !outcome.verdict_conditions.contains(&c) {
+                outcome.verdict_conditions.push(c);
+            }
+        }
         outcomes.push(outcome);
     }
     Ok(outcomes)
@@ -2558,7 +2568,9 @@ fn run_one(
         sampled_values: plan.values.clone(),
         interior: plan.interior,
         variants: plan.variants.clone(),
-        verdict_conditions: Vec::new(),
+        // A guessed AVR core clock (no fuses, no crystal frequency): every
+        // verdict resting on this run's timing carries the sentence.
+        verdict_conditions: engine.scheduler().clock_assumptions().to_vec(),
         net_series,
         substitutions: engine
             .scheduler()

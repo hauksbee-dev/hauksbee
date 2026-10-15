@@ -16,6 +16,13 @@ backend = "simavr:atmega328p"
 # Oscillator the part boots from with no external clock parts; hauksbee-bind
 # mcu_clock reads it when the oscillator pins carry nothing.
 internal_clock = "internal 8 MHz RC oscillator"
+# The core clock the co-sim runs this part at when neither the firmware's fuses
+# (the ELF .fuse section) nor a crystal bound to XTAL1/XTAL2 state one: the
+# internal RC rate above, as a number. It is a GUESS about the real chip and is
+# disclosed as one in every result that rests on it. Microchip ATmega328P
+# DS40002061A section 9.2.1 "Default Clock Source" (PDF page 37): a part ships
+# with the 8.0 MHz RC and CKDIV8 programmed, i.e. 1.0 MHz; this key does not
+# assume CKDIV8, so a factory-fused part is 8x slower than the run.
 # Microchip ATmega328P DS40001984, "ADC Noise Canceler / Analog Input Circuitry":
 # the ADC is optimized for analog signals with an output impedance of
 # approximately 10 kOhm or less, because the 14 pF sample-and-hold capacitor is
@@ -98,11 +105,15 @@ description = "ATmega328P 8-bit AVR MCU, TQFP-32 or VQFN/MLF-32"
 [models.match]
 value_re     = "(?i)^ATmega328P?$"
 mpn_re       = "(?i)^ATmega328P"
-footprint_re = '(?i)(^|[:_ ])(L?TQFP|QFP|V?QFN|MLF)[-_]?32([^0-9]|$)'
+# Any QFP/QFN/MLF family name (TQFP, LQFP, VQFN, ...) followed by the lead count
+# 32: the family is a substring, not a word, so `Package_QFP:LQFP-32_7x7mm_P0.8mm`
+# and `TQFP32-08` both match while `QFN-320` and `TQFP-44` do not.
+footprint_re = '(?i)(QFP|QFN|MLF)[-_]*32([^0-9]|$)'
 
 [models.params]
 backend = "simavr:atmega328p"
 internal_clock = "internal 8 MHz RC oscillator"
+default_clock_hz = 8000000
 max_adc_source_impedance_ohms = 10000.0
 
 [models.pins]
@@ -157,6 +168,82 @@ basis = "Microchip ATmega328P DS40001984, Features, Operating Voltage 1.8-5.5 V;
 implements = ["avr_firmware_execution", "gpio_output_and_direction", "gpio_external_input", "uart_tx_and_rx", "cycle_exact_virtual_clock_and_timers", "watchdog_reboot", "adc_external_channels_0_to_5", "i2c_controller_bridge", "spi_controller_bridge"]
 missing = ["board_crystal_frequency_binding", "usb_device_controller", "silicon_power_current_profile", "silicon_timing_and_errata"]
 
+# ATmega328P in the 28-pad QFN/MLF (ordering code -MMH / -MMHR, package 28M1).
+#
+# Source: Microchip ATmega328P DS40002061A, section 1 "Pin Configurations",
+#   Figure 1-1 "28 MLF Top View" (PDF page 12), and section 38.8 ordering table
+#   (PDF page 635): ATmega328P-MMH is package 28M1, "28-pad, 4 x 4 x 1.0 body,
+#   Lead Pitch 0.45mm QFN/MLF".
+#
+# A THIRD NUMBERING. It is neither the DIP-28 one (pad 3 is VCC here, PD1 on the
+# DIP) nor the 32-pad one (pad 3 is GND there): PD3 is pad 1, PD4 pad 2, VCC
+# pad 3, GND pad 4, then PB6/PB7 on pads 5/6. The bottom pad is soldered to
+# ground. The footprint gate adds specificity, so this entry wins on a 28-pad
+# QFN/MLF footprint.
+[[models]]
+id = "atmega328p_28mlf"
+kind = "mcu"
+description = "ATmega328P 8-bit AVR MCU, 28-pad QFN/MLF (28M1)"
+
+[models.match]
+value_re     = "(?i)^ATmega328P?$"
+mpn_re       = "(?i)^ATmega328P"
+footprint_re = '(?i)(QFN|MLF)[-_]*28([^0-9]|$)'
+
+[models.params]
+backend = "simavr:atmega328p"
+internal_clock = "internal 8 MHz RC oscillator"
+default_clock_hz = 8000000
+max_adc_source_impedance_ohms = 10000.0
+
+[models.pins]
+"1"  = "pd3_int1_oc2b"
+"2"  = "pd4_t0_xck"
+"3"  = "vcc"
+"4"  = "gnd"
+"5"  = "pb6_xtal1"
+"6"  = "pb7_xtal2"
+"7"  = "pd5_t1_oc0b"
+"8"  = "pd6_ain0_oc0a"
+"9"  = "pd7_ain1"
+"10" = "pb0_icp1"
+"11" = "pb1_oc1a"
+"12" = "pb2_ss_oc1b"
+"13" = "pb3_mosi_oc2a"
+"14" = "pb4_miso"
+"15" = "pb5_sck"
+"16" = "avcc"
+"17" = "aref"
+"18" = "gnd2"
+"19" = "pc0_adc0"
+"20" = "pc1_adc1"
+"21" = "pc2_adc2"
+"22" = "pc3_adc3"
+"23" = "pc4_adc4_sda"
+"24" = "pc5_adc5_scl"
+"25" = "pc6_reset"
+"26" = "pd0_rxd"
+"27" = "pd1_txd"
+"28" = "pd2_int0"
+"29" = "gnd3"      # QFN/MLF bottom pad
+
+[models.ratings]
+max_pin_current_a = 0.04
+max_current_a = 0.2
+max_voltage_v = 6.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.8
+max_v = 5.5
+abs_max_v = 6.0
+basis = "Microchip ATmega328P DS40001984, Features, Operating Voltage 1.8-5.5 V; Absolute Maximum Ratings, Maximum Operating Voltage 6.0 V"
+
+[models.coverage]
+implements = ["avr_firmware_execution", "gpio_output_and_direction", "gpio_external_input", "uart_tx_and_rx", "cycle_exact_virtual_clock_and_timers", "watchdog_reboot", "adc_external_channels_0_to_5", "i2c_controller_bridge", "spi_controller_bridge"]
+missing = ["board_crystal_frequency_binding", "usb_device_controller", "silicon_power_current_profile", "silicon_timing_and_errata"]
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ATmega168 / ATmega168V in the 32-pin packages (32-pad MLF and 32-lead TQFP).
 #
@@ -190,6 +277,7 @@ value_re = "(?i)^ATmega168V?(MLF|[-_ ]?(10|20)?(AU|MU)R?)$"
 [models.params]
 backend = "simavr:atmega168"
 internal_clock = "internal 8 MHz RC oscillator"
+default_clock_hz = 8000000
 
 [models.pins]
 # Figure 5-4, 32-pin MLF Top View (Figure 5-3 TQFP is identical).
@@ -508,11 +596,9 @@ missing = ["firmware_cosim_core", "gpio_behaviour", "usb_device_controller", "gp
 #
 # DELIBERATELY NOT MODELLED: everything the co-sim does not read off the pad
 # map. The JTAG pins (PC2-PC5) carry their port role and nothing else, the
-# second USART is not distinguished from the first at this layer, and the clock
-# is whatever the AVR backend instantiates (16 MHz), NOT the 8 MHz crystal a
-# board may fit. That last one is the honest gap: firmware-timed results on a
-# non-16 MHz board are wrong by the clock ratio, and the fix is to carry the
-# crystal frequency through the MCU binding, not to guess it here.
+# second USART is not distinguished from the first at this layer. The core
+# clock is the firmware's fuses, else the crystal bound to the board, else this
+# card's `default_clock_hz` (the 8 MHz RC), the last disclosed as a guess.
 [[models]]
 id = "atmega1284p"
 kind = "mcu"
@@ -563,6 +649,7 @@ value_re = "(?i)^ATmega1284(P([-_]?(AU|MU|AUR|MUR))?|M|A)$"
 # distinct cores and this entry names the P.
 backend = "simavr:atmega1284p"
 internal_clock = "internal 8 MHz RC oscillator"
+default_clock_hz = 8000000
 
 [models.pins]
 # Section 5.1.2, 44-pad TQFP/VQFN. Cross-checked against the margay
@@ -670,6 +757,7 @@ value_re = "(?i)^ATmega1284(-(AU|MU|AUR|MUR))?$"
 # The non-P core, which simavr models separately from the P.
 backend = "simavr:atmega1284"
 internal_clock = "internal 8 MHz RC oscillator"
+default_clock_hz = 8000000
 
 [models.pins]
 # Identical to the ATmega1284P entry above: one datasheet, one pinout figure.
@@ -751,6 +839,9 @@ footprint_re = "(?i)Arduino.*Nano"
 # resolve the embedded MCU using the atmega328p entry above.
 backend = "simavr:atmega328p"
 module  = true        # flag: pin map is at the module header level
+# The module's own oscillator: Arduino Nano datasheet A000005, section 3.2
+# "Processor" (PDF page 8): "ATmega328 ... runs at a clock frequency of 16 MHz".
+default_clock_hz = 16000000
 
 [models.pins]
 # Arduino Nano pin header (A-side = left, B-side = right when USB at top)
@@ -858,8 +949,7 @@ basis = "Arduino Nano 3.0 reference design: 3V3 = FT232RL 3V3OUT, 3.0/3.3/3.6 V 
 # VCC. That is the honest reading of a module entry whose pin map stops at the
 # header: the two pins are named, and nothing pretends to know what is between
 # them. The RX/TX LEDs (PB0, PD5) and the USB connector are likewise off-map,
-# and the clock is the AVR backend's 16 MHz, which is right for a 5 V Pro Micro
-# and a factor of two fast for a 3.3 V one.
+# and the clock is the card's `default_clock_hz` (the Nano's own 16 MHz crystal).
 [[models]]
 id = "pro_micro"
 kind = "mcu"
@@ -869,13 +959,12 @@ description = "Pro Micro module (ATmega32U4 carrier, 24-pin 2x12 header)"
 # "ProMicro" is the value the Sofle and most keyboard projects carry, optionally
 # with the vendor name or the 5 V / 16 MHz speed grade spelled out.
 #
-# THE 3.3 V / 8 MHz SPELLINGS ARE DELIBERATELY NOT MATCHED. The AVR backend
-# instantiates every core at 16 MHz and emits no warning when the board asked for
-# something else (see the clock note above), so a value string that says 8 MHz out
-# loud is a board telling us its firmware timing would come out wrong by a factor
-# of two. Refusing it makes that an honest unresolved instead of a silent 2x error;
-# the bare "ProMicro" is genuinely ambiguous and is accepted, with the 16 MHz
-# assumption stated.
+# THE 3.3 V / 8 MHz SPELLINGS ARE DELIBERATELY NOT MATCHED. This card's
+# `default_clock_hz` is the 5 V part's 16 MHz, so a value string that says 8 MHz
+# out loud is a board telling us that clock would be wrong by a factor of two.
+# Refusing it makes that an honest unresolved instead of a 2x error; the bare
+# "ProMicro" is genuinely ambiguous and is accepted, and the run says its 16 MHz
+# is a guess.
 #
 # Elite-C and nice!nano are pin-compatible successors with DIFFERENT MCUs (a 32U4
 # with more flash, and an nRF52840), so neither is matched: an nRF on the AVR core
@@ -885,6 +974,10 @@ value_re = "(?i)^(SparkFun[ _-]?)?Pro[ _-]?Micro([ _-]?(5V|16MHz))?$"
 [models.params]
 backend = "simavr:atmega32u4"
 module  = true        # flag: pin map is at the module header level
+# The 5 V / 16 MHz Pro Micro (SparkFun DEV-12640 product page, "Speed: 16 MHz").
+# A bare "ProMicro" value is accepted under that assumption, so a run resting on
+# this clock says it is a guess; the 3.3 V / 8 MHz variant is not matched at all.
+default_clock_hz = 16000000
 
 [models.pins]
 # Header position 1..24. Positions 3, 4 and 23 are all GND (the module bonds
@@ -944,8 +1037,8 @@ basis = "Atmel-7766J ATmega16U4/32U4 datasheet, Features, Operating Voltages 2.7
 #   PD6 = ADC9, PD7 = ADC10, PB4..PB6 = ADC11..13).
 #
 # The pro_micro entry above is the same silicon behind a 24-pin header; this one
-# is the chip itself. The AVR backend runs every core at 16 MHz, so a 3.3 V /
-# 8 MHz board's firmware timing comes out 2x fast (the clock gap noted above).
+# is the chip itself, clocked by its fuses, a bound crystal, or the card's
+# `default_clock_hz` (8 MHz RC) when neither is stated.
 # The USB device controller is not modelled.
 [[models]]
 id = "atmega32u4"
@@ -958,6 +1051,7 @@ value_re = "(?i)^ATmega32U4([-_]?(AU|MU|AUR|MUR|RC))?$"
 [models.params]
 backend = "simavr:atmega32u4"
 internal_clock = "internal 8 MHz RC oscillator"
+default_clock_hz = 8000000
 
 [models.pins]
 "1"  = "pe6_ain0"
@@ -1032,8 +1126,8 @@ basis = "Atmel-7766J ATmega16U4/32U4 datasheet, Features, Operating Voltages 2.7
 # plus one footprint-gated entry per package whose map was read off Figure 1-1.
 # The footprint match adds specificity, so the package entry wins when it applies.
 #
-# The AVR backend runs the core at 16 MHz. An ATtiny85 on its internal 8 MHz
-# RC (or a Trinket's 16.5 MHz PLL) is therefore timed off by that ratio.
+# The core clock is the card's `default_clock_hz` (the internal 8 MHz RC) unless
+# a bound crystal states another. A Trinket's 16.5 MHz PLL is not modelled.
 [[models]]
 id = "attiny85"
 kind = "mcu"
@@ -1045,6 +1139,7 @@ value_re = "(?i)^ATtiny85V?([-_]?(10|20))?([-_]?(PU|SU|SUR|SH|SF|SN|S|P|MU|MUR|M
 [models.params]
 backend = "simavr:attiny85"
 internal_clock = "internal 8 MHz RC oscillator"
+default_clock_hz = 8000000
 
 [models.ratings]
 max_pin_current_a = 0.04  # 21.1 Absolute Maximum Ratings, DC current per I/O pin 40.0 mA
@@ -1063,6 +1158,7 @@ footprint_re = '(?i)(^|[:_])(P?DIP|DIL|SOIC|SOP|SO)[-_]?0?8([^0-9]|$)'
 [models.params]
 backend = "simavr:attiny85"
 internal_clock = "internal 8 MHz RC oscillator"
+default_clock_hz = 8000000
 
 [models.pins]
 "1" = "pb5_reset_adc0"
@@ -1100,6 +1196,7 @@ footprint_re = '(?i)(^|[:_])(V?QFN|MLF|WQFN)[-_]?20([^0-9]|$)'
 [models.params]
 backend = "simavr:attiny85"
 internal_clock = "internal 8 MHz RC oscillator"
+default_clock_hz = 8000000
 
 [models.pins]
 # Pads 3, 4, 6, 7, 9, 10, 13 and 16..20 are DNC.
