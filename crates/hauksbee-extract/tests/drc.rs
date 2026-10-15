@@ -326,6 +326,52 @@ fn native_net_tie_pad_groups_never_exempt_cross_group_contacts() {
     assert_short(&report, "B", "GND");
 }
 
+/// An older-library solder jumper with no net-tie metadata: pads on A and GND
+/// and, when `closed`, a small bridging pad of A drawn into the GND pad. A GND
+/// track runs onto the GND pad and overlaps the bridge as well.
+fn solder_jumper(footprint: &str, closed: bool) -> String {
+    let bridge = if closed {
+        r#"(pad "1" connect rect (at 0 0) (size 0.6 0.4) (layers "B.Cu") (net 1))"#
+    } else {
+        ""
+    };
+    format!(
+        r#"
+  (footprint "{footprint}" (layer "B.Cu") (at 20 20)
+    (property "Reference" "JP1" (at 0 0))
+    (property "Value" "Closed" (at 0 1))
+    (attr smd)
+    (pad "1" smd rect (at -0.762 0) (size 1.0 1.6) (layers "B.Cu") (net 1))
+    (pad "2" smd rect (at 0.762 0) (size 1.0 1.6) (layers "B.Cu") (net 3))
+    {bridge}
+  )
+  (segment (start 20.762 20) (end 20.1 20) (width 0.25) (layer "B.Cu") (net 3))
+"#
+    )
+}
+
+#[test]
+fn a_closed_solder_jumper_drawn_in_copper_is_a_tie_not_a_short() {
+    // The bridge is the jumper's designed state: A and GND are one node by
+    // construction, so neither the bridge meeting the GND pad nor the GND
+    // track reaching it is a short.
+    let report = drc(&solder_jumper("Jumpers:SJ_Closed", true));
+    assert_eq!(report.short_count(), 0, "{:?}", report.findings);
+}
+
+#[test]
+fn foreign_copper_on_an_open_jumper_or_an_ordinary_footprint_is_still_a_short() {
+    // Open jumper: no bridge, so the GND track reaching across onto pad 1 is
+    // a real A/GND short.
+    let open = drc(&solder_jumper("Jumpers:SJ", false).replace("(end 20.1 20)", "(end 19.2 20)"));
+    assert_eq!(open.short_count(), 1, "{:?}", open.findings);
+    assert_short(&open, "A", "GND");
+    // The same touching copper in an ordinary footprint is a short.
+    let ordinary = drc(&solder_jumper("Resistor_SMD:R_0603", true));
+    assert!(ordinary.short_count() >= 1, "{:?}", ordinary.findings);
+    assert_short(&ordinary, "A", "GND");
+}
+
 #[test]
 fn kicad_10_keyhole_antipad_keeps_the_isolated_pad_silent() {
     let report = ExtractedBoard::drc(KICAD_10_KEYHOLE_ANTIPAD_BOARD).expect("drc runs");
