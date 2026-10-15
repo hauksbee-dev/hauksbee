@@ -147,6 +147,15 @@ fn validate_vreg_capacitor_params(entry: &ModelEntry, p: &mut Problems) {
     }
 }
 
+/// Which of `keys` the card's `[models.params]` states, comma-separated.
+fn stated_params<'a>(entry: &ModelEntry, keys: impl Iterator<Item = &'a &'a str>) -> String {
+    let stated: Vec<&str> = keys
+        .copied()
+        .filter(|k| entry.params.0.contains_key(*k))
+        .collect();
+    stated.join(", ")
+}
+
 /// The enable-pin fields of a simple (ideal-source) regulator, read by the
 /// binder's enable gate. Thresholds come as a pair ordered for the polarity
 /// (guaranteed off on the far side of guaranteed on, so the gap between them is
@@ -166,16 +175,10 @@ fn validate_vreg_enable_params(entry: &ModelEntry, p: &mut Problems) {
     let params = &entry.params;
     // Named in the errors: a fixer told only "en_*" searched for that prefix,
     // missed `i_shdn_a`, and re-ran the checker three times.
-    let stated: Vec<&str> = KEYS
-        .iter()
-        .chain(&["i_shdn_a", "en_open"])
-        .copied()
-        .filter(|k| params.0.contains_key(*k))
-        .collect();
+    let stated = stated_params(entry, KEYS.iter().chain(&["i_shdn_a", "en_open"]));
     if entry.kind != ComponentKind::Vreg || stated.is_empty() {
         return;
     }
-    let stated = stated.join(", ");
     p.require(has_role(entry, "en") || has_role(entry, "shdn"), || {
         format!("enable params ({stated}) need an 'en' or 'shdn' role in [models.pins]")
     });
