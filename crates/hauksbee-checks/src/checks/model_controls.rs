@@ -285,7 +285,7 @@ mod tests {
     /// The usual ESP32-S3 auto-reset corner without its pull-up: the module's
     /// EN (pad 3) with the RC's capacitor, a reset button, the USB-serial
     /// bridge's NPN, a header pin, a test pad, a do-not-populate 10k and a
-    /// second board's CHIP_PU input.
+    /// second board's `CHIP_PU` input.
     fn esp32s3_enable(extra: Vec<Component>) -> Vec<LintFinding> {
         let mut input = pin_fn("3", EN, "CHIP_PU");
         input.kind = "input".into();
