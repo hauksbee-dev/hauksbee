@@ -8,12 +8,13 @@ import { PlusIcon } from '../Icons'
  *  CLI and the failure hints cannot disagree. Choosing one appends its example to
  *  the raw TOML; the parent does the writing and selects the first value to fill.
  *  Renders nothing when the server has no catalogue (an older or demo server). */
-export function MoreChecks({ onInsert }: {
+export function MoreChecks({ onInsert, added }: {
   onInsert: (entry: CatalogEntry) => void
+  /** The kind just added, so its "fill these in" note survives the switch to raw mode. */
+  added: CatalogEntry | null
 }) {
   const [kinds, setKinds] = useState<CatalogEntry[]>([])
   const [open, setOpen] = useState(false)
-  const [added, setAdded] = useState<CatalogEntry | null>(null)
 
   useEffect(() => {
     const abort = new AbortController()
@@ -51,14 +52,14 @@ export function MoreChecks({ onInsert }: {
         <ul
           data-testid="more-checks-list"
           className="hb-card view-enter mt-1 overflow-y-auto list-none p-0 m-0"
-          style={{ maxWidth: '100%', width: 520, maxHeight: 420, boxShadow: 'var(--shadow-pop)' }}
+          style={{ width: 'max(15rem, min(520px, calc(100vw - 17rem)))', maxHeight: 420, boxShadow: 'var(--shadow-pop)' }}
         >
           {kinds.map(k => (
             <li key={k.kind}>
               <button
                 type="button"
                 data-testid={`more-check-${k.kind}`}
-                onClick={() => { onInsert(k); setAdded(k); setOpen(false) }}
+                onClick={() => { onInsert(k); setOpen(false) }}
                 className="hb-press block w-full text-left px-3 py-2 cursor-pointer"
                 style={{ background: 'none', border: 'none' }}
                 onMouseEnter={e => { e.currentTarget.style.background = 'var(--copper-tint)' }}

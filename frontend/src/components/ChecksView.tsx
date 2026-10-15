@@ -256,6 +256,7 @@ export function ChecksView({
   const [rawText, setRawText] = useState(typeof saved?.rawText === 'string' ? saved.rawText : '')
   const [addOpen, setAddOpen] = useState(false)
   // The value to type over after a catalogue example lands in the raw text.
+  const [addedKind, setAddedKind] = useState<CatalogEntry | null>(null)
   const [rawSelect, setRawSelect] = useState<(RawSelection & { seq: number }) | null>(null)
   const [running, setRunning] = useState(false)
   // The last run's response, plus the exact spec text it ran, so results can
@@ -385,6 +386,7 @@ export function ChecksView({
     const { text, select } = appendExample(rawMode ? rawText : builtToml, entry.example, entry.required.map(f => f.name))
     setRawText(text)
     setRawMode(true)
+    setAddedKind(entry)
     setRawSelect(prev => (select ? { ...select, seq: (prev?.seq ?? 0) + 1 } : null))
   }
 
@@ -769,7 +771,10 @@ export function ChecksView({
             )}
 
             {rawMode ? (
-              <RawModeSummary rawText={rawText} />
+              <>
+                <RawModeSummary rawText={rawText} />
+                <div className="mt-4"><MoreChecks onInsert={insertCatalogExample} added={addedKind} /></div>
+              </>
             ) : (
               <>
                 {/* Spec identity */}
@@ -955,7 +960,7 @@ export function ChecksView({
                     </div>
                   )}
                 </div>
-                <MoreChecks onInsert={insertCatalogExample} />
+                <MoreChecks onInsert={insertCatalogExample} added={addedKind} />
                 </div>
               </>
             )}
