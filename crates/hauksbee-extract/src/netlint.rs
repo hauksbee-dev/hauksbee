@@ -1275,7 +1275,11 @@ fn is_transistor_pullup(board: &ExtractedBoard, c: &Component, net_id: i64) -> b
     }
     let role_net = |roles: &[&str]| {
         (c.pins.iter())
-            .filter(|p| roles.iter().any(|r| p.function.trim().eq_ignore_ascii_case(r)))
+            .filter(|p| {
+                roles
+                    .iter()
+                    .any(|r| p.function.trim().eq_ignore_ascii_case(r))
+            })
             .find_map(|p| p.net)
     };
     let (Some(out), Some(supply), Some(control)) = (
@@ -1290,14 +1294,18 @@ fn is_transistor_pullup(board: &ExtractedBoard, c: &Component, net_id: i64) -> b
     }
     let is_supply = |id: i64| {
         id != net_id
-            && board.net(id).is_some_and(|n| !is_ground(&n.name) && i2c_role(&n.name).is_none())
+            && board
+                .net(id)
+                .is_some_and(|n| !is_ground(&n.name) && i2c_role(&n.name).is_none())
             && net_is_raillike(board, id)
     };
     is_supply(supply)
         || members(board, supply).iter().any(|(r, _)| {
             AssemblyState::of(r).is_present()
                 && is_resistor(r)
-                && (r.pins.iter()).filter_map(|p| p.net).any(|o| o != supply && is_supply(o))
+                && (r.pins.iter())
+                    .filter_map(|p| p.net)
+                    .any(|o| o != supply && is_supply(o))
         })
 }
 
@@ -1726,11 +1734,18 @@ fn is_host_silicon(c: &Component) -> bool {
 /// out: they read as SD-card words too. A hierarchical KiCad name is judged by
 /// its leaf, so a sheet named for an SPI flash does not count.
 fn names_spi_role(name: &str) -> bool {
-    let leaf = if name.starts_with('/') { name.rsplit('/').next().unwrap_or(name) } else { name };
+    let leaf = if name.starts_with('/') {
+        name.rsplit('/').next().unwrap_or(name)
+    } else {
+        name
+    };
     let upper = leaf.to_ascii_uppercase();
     (upper.split(|c: char| !c.is_ascii_alphanumeric())).any(|word| {
         let word = word.trim_end_matches(|c: char| c.is_ascii_digit());
-        matches!(word, "SPI" | "MOSI" | "MISO" | "COPI" | "CIPO" | "PICO" | "POCI")
+        matches!(
+            word,
+            "SPI" | "MOSI" | "MISO" | "COPI" | "CIPO" | "PICO" | "POCI"
+        )
     })
 }
 
@@ -2717,12 +2732,30 @@ mod i2c_pullup_source_tests {
     /// `transistor` as the only other part on the line.
     fn bus_with(transistor: Component) -> ExtractedBoard {
         board(
-            &[(1, "EXP_SDA"), (2, "I2C_BIAS"), (3, "Net-(Q1-Pad2)"), (4, "VCC_MCU"), (5, "GND")],
+            &[
+                (1, "EXP_SDA"),
+                (2, "I2C_BIAS"),
+                (3, "Net-(Q1-Pad2)"),
+                (4, "VCC_MCU"),
+                (5, "GND"),
+            ],
             vec![
                 part("U1", "MCU", "", "QFN-40", vec![named("5", 1, "SDA")]),
                 part("U2", "TCA9535", "", "WQFN-24", vec![named("20", 1, "SDA")]),
-                part("R1", "100", "", "R_0603", vec![pin("1", Some(4)), pin("2", Some(3))]),
-                part("C1", "10u", "", "C_0805", vec![pin("1", Some(4)), pin("2", Some(5))]),
+                part(
+                    "R1",
+                    "100",
+                    "",
+                    "R_0603",
+                    vec![pin("1", Some(4)), pin("2", Some(3))],
+                ),
+                part(
+                    "C1",
+                    "10u",
+                    "",
+                    "C_0805",
+                    vec![pin("1", Some(4)), pin("2", Some(5))],
+                ),
                 transistor,
             ],
         )
@@ -2730,7 +2763,10 @@ mod i2c_pullup_source_tests {
 
     fn i2c_findings(b: &ExtractedBoard) -> Vec<Severity> {
         let report = b.net_lint();
-        report.of_check(LintCheck::MissingI2cPullup).map(|f| f.severity).collect()
+        report
+            .of_check(LintCheck::MissingI2cPullup)
+            .map(|f| f.severity)
+            .collect()
     }
 
     /// A PNP whose emitter reaches the rail through its current-setting
@@ -2801,8 +2837,14 @@ mod i2c_pullup_source_tests {
 
     #[test]
     fn module_socket_is_read_from_pad_rows_not_from_names() {
-        assert!(super::is_module_socket(&placed("U1", &two_row_socket_points())));
-        assert!(super::is_connector_like(&placed("U1", &two_row_socket_points())));
+        assert!(super::is_module_socket(&placed(
+            "U1",
+            &two_row_socket_points()
+        )));
+        assert!(super::is_connector_like(&placed(
+            "U1",
+            &two_row_socket_points()
+        )));
         // A 15 x 15 BGA and a 144-pin QFP have as many pins, spread over a
         // grid or four sides.
         let bga: Vec<(f64, f64)> = (0..225)
@@ -2842,11 +2884,18 @@ mod i2c_pullup_source_tests {
         let found: Vec<_> = report.of_check(LintCheck::MissingI2cPullup).collect();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].severity, Severity::Low);
-        assert!(found[0].message.contains("module socket"), "{}", found[0].message);
+        assert!(
+            found[0].message.contains("module socket"),
+            "{}",
+            found[0].message
+        );
         let bga: Vec<(f64, f64)> = (0..225)
             .map(|i| (f64::from(i % 15) * 0.8, f64::from(i / 15) * 0.8))
             .collect();
-        assert_eq!(i2c_findings(&with_host(placed("U1", &bga))), vec![Severity::Medium]);
+        assert_eq!(
+            i2c_findings(&with_host(placed("U1", &bga))),
+            vec![Severity::Medium]
+        );
     }
 }
 
@@ -3198,13 +3247,23 @@ mod sd_pullup_tests {
                         "U1",
                         "RP2040",
                         "QFN-56",
-                        vec![pin("1", Some(1)), pin("2", Some(2)), pin("3", Some(3)), pin("4", Some(4))],
+                        vec![
+                            pin("1", Some(1)),
+                            pin("2", Some(2)),
+                            pin("3", Some(3)),
+                            pin("4", Some(4)),
+                        ],
                     ),
                     part(
                         "J6",
                         "SOCKET",
                         "microSD_socket",
-                        vec![pin("3", Some(1)), pin("7", Some(2)), pin("8", Some(3)), pin("1", Some(4))],
+                        vec![
+                            pin("3", Some(1)),
+                            pin("7", Some(2)),
+                            pin("8", Some(3)),
+                            pin("1", Some(4)),
+                        ],
                     ),
                 ],
             )
@@ -3214,7 +3273,12 @@ mod sd_pullup_tests {
             report
                 .of_check(LintCheck::MissingSdPullup)
                 .filter(|f| f.message.contains("CMD") || f.message.contains("DAT0 net"))
-                .map(|f| (f.severity, f.message.contains(super::SPI_PULLUP_MESSAGE_MARKER)))
+                .map(|f| {
+                    (
+                        f.severity,
+                        f.message.contains(super::SPI_PULLUP_MESSAGE_MARKER),
+                    )
+                })
                 .collect()
         };
         let spi = socket_board([
@@ -3223,7 +3287,10 @@ mod sd_pullup_tests {
             "SDIO_DAT1",
             "SDIO_DAT2",
         ]);
-        assert_eq!(cmd_dat0(&spi), vec![(Severity::Low, true), (Severity::Low, true)]);
+        assert_eq!(
+            cmd_dat0(&spi),
+            vec![(Severity::Low, true), (Severity::Low, true)]
+        );
         let sdio = socket_board(["SDIO_CMD", "SDIO_DAT0", "SDIO_DAT1", "SDIO_DAT2"]);
         assert_eq!(
             cmd_dat0(&sdio),

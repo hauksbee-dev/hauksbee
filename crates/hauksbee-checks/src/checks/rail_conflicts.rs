@@ -105,8 +105,16 @@ mod tests {
         let found: Vec<_> = named.of_check(LintCheck::RailConflict).collect();
         assert_eq!(found.len(), 1, "{:?}", named.findings);
         assert_eq!(found[0].severity, Severity::Low);
-        assert!(found[0].message.contains("U2 (5.00 V)"), "{}", found[0].message);
-        assert!(found[0].message.contains("not fitted"), "{}", found[0].message);
+        assert!(
+            found[0].message.contains("U2 (5.00 V)"),
+            "{}",
+            found[0].message
+        );
+        assert!(
+            found[0].message.contains("not fitted"),
+            "{}",
+            found[0].message
+        );
         for rail in ["VOUT", "+12V"] {
             let fight = rail_conflict_lint(&board(rail), &lib);
             let found: Vec<_> = fight.of_check(LintCheck::RailConflict).collect();
