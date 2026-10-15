@@ -411,6 +411,53 @@ fn eagle_jumper_does_not_hide_ordinary_copper_crossing_over_its_pads() {
     );
 }
 
+/// EAGLE has no net-tie flag; a `SHORT`-style part is two abutting SMD pads
+/// with `cream="no"`. Paste-free abutting pads are a local tie whatever the
+/// library is called; the same pads with paste, or apart, are ordinary pads.
+#[test]
+fn eagle_paste_free_abutting_smds_are_a_local_tie() {
+    let pkg = |cream: &str, x2: f64| {
+        format!(
+            r#"<package name="LINK">
+  <smd name="1" x="0" y="0" dx="1" dy="1" layer="1"{cream}/>
+  <smd name="2" x="{x2}" y="0" dx="1" dy="1" layer="1"{cream}/>
+</package>"#
+        )
+    };
+    let elements = r#"<element name="JP1" library="lib" package="LINK" x="20" y="20"/>"#;
+    let wire_a = r#"<wire x1="0" y1="0" x2="10" y2="0" width="0.4" layer="1"/>"#;
+    let remote = r#"<wire x1="5" y1="-5" x2="5" y2="5" width="0.4" layer="1"/>"#;
+    // A second B wire over the A pad, used only on the open link.
+    let over_pad =
+        format!(r#"{remote}<wire x1="20" y1="17" x2="20" y2="23" width="0.2" layer="1"/>"#);
+    let no_cream = r#" cream="no""#;
+    let cases = [
+        (
+            pkg(no_cream, 0.9),
+            remote,
+            1,
+            "only the remote crossing remains",
+        ),
+        (
+            pkg("", 0.9),
+            remote,
+            2,
+            "pasted abutting pads short as well",
+        ),
+        (
+            pkg(no_cream, 1.2),
+            over_pad.as_str(),
+            2,
+            "an open link is no tie: B over its A pad shorts",
+        ),
+    ];
+    for (packages, wire_b, shorts, why) in cases {
+        let report = drc(&packages, elements, &jumper_signals(wire_a, wire_b));
+        assert_eq!(report.short_count(), shorts, "{why}: {:?}", report.findings);
+        assert_short(&report, "A", "B");
+    }
+}
+
 #[test]
 fn mirrored_package_pad_is_placed_on_the_bottom() {
     // A mirrored element (rot="MR0") flips its top-layer SMD onto the bottom

@@ -111,7 +111,7 @@ pub struct NetClassRule {
 /// The project file can assign nets to classes explicitly or by wildcard
 /// pattern. Once resolved to concrete net names, the pair rule is KiCad's
 /// conservative max(class A clearance, class B clearance), except the two
-/// halves of a same-class differential pair may use that class's
+/// halves of a same-class differential pair may use that class's narrower
 /// `diff_pair_gap`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClearanceRules {
@@ -214,14 +214,15 @@ impl ClearanceRules {
         if let Some(clearance) = self.global_clearance_override_mm {
             return clearance;
         }
-        if let Some(gap) = self.diff_pair_gap(net_a, net_b) {
-            return gap;
-        }
-        if let Some(pair) = self.class_pair_clearance(net_a, net_b) {
-            return pair;
-        }
-        self.clearance_for_net(net_a)
-            .max(self.clearance_for_net(net_b))
+        let rule = self.class_pair_clearance(net_a, net_b).unwrap_or_else(|| {
+            self.clearance_for_net(net_a)
+                .max(self.clearance_for_net(net_b))
+        });
+        // As in KiCad's implicit netclass rules, a diff-pair gap narrower than
+        // the clearance relaxes it between the halves; a wider gap is only the
+        // router's coupling target, never a stricter clearance.
+        self.diff_pair_gap(net_a, net_b)
+            .map_or(rule, |gap| gap.min(rule))
     }
 
     /// The explicit pair-matrix clearance for the two nets' classes, when both
@@ -2280,6 +2281,11 @@ struct NetTieGroup {
 #[derive(Default)]
 struct NetTieOwners {
     groups: Vec<NetTieGroup>,
+    /// Footprints with no solder paste on any pad. Paste-free pads are never
+    /// soldered to a part, so when such a footprint's own pads abut across
+    /// nets the contact is drawn copper (an EAGLE `SHORT`-style tie), resolved
+    /// against the placed geometry in [`Self::capture_geometry`].
+    paste_free: Vec<String>,
 }
 
 impl NetTieOwners {
@@ -2298,7 +2304,47 @@ impl NetTieOwners {
         });
     }
 
+    fn insert_paste_free(&mut self, owner: String) {
+        if !owner.is_empty() {
+            self.paste_free.push(owner);
+        }
+    }
+
+    /// A paste-free footprint is a copper tie when its own pads join every one
+    /// of its nets into a single island. Pads that merely sit close (an open
+    /// solder jumper) or that leave a net isolated stay ordinary pads.
+    fn bridged_nets(buckets: &LayerBuckets, owner: &str) -> Option<Vec<i64>> {
+        let pads: Vec<(&String, &Primitive)> = buckets
+            .by_layer
+            .iter()
+            .flat_map(|(layer, prims)| prims.iter().map(move |p| (layer, p)))
+            .filter(|(_, p)| p.owner == owner && p.kind == ItemKind::Pad && p.net != 0)
+            .collect();
+        let mut all: Vec<i64> = pads.iter().map(|(_, p)| p.net).collect();
+        all.sort_unstable();
+        all.dedup();
+        let mut joined = vec![all.first().copied()?];
+        while let Some(net) = pads.iter().find_map(|(la, a)| {
+            let inside = joined.contains(&a.net);
+            pads.iter()
+                .find(|(lb, b)| {
+                    la == lb
+                        && inside != joined.contains(&b.net)
+                        && is_touching(crate::gerber::geo::shape_gap(&a.shape, &b.shape))
+                })
+                .map(|(_, b)| if inside { b.net } else { a.net })
+        }) {
+            joined.push(net);
+        }
+        (all.len() >= 2 && joined.len() == all.len()).then_some(all)
+    }
+
     fn capture_geometry(&mut self, buckets: &LayerBuckets) {
+        for owner in std::mem::take(&mut self.paste_free) {
+            if let Some(nets) = Self::bridged_nets(buckets, &owner) {
+                self.insert(owner, nets);
+            }
+        }
         for group in &mut self.groups {
             for (layer, prims) in &buckets.by_layer {
                 for prim in prims {
@@ -2336,6 +2382,15 @@ impl NetTieOwners {
         if primitive.owner == group.owner {
             return true;
         }
+        // A foreign pad or via is attached where its copper overlaps the tie's
+        // pad of its own net (a tie placed inside a shunt's pad); a track only
+        // where it ends on that pad, so a track merely passing by is not.
+        if matches!(primitive.kind, ItemKind::Pad | ItemKind::Via) {
+            return geometry.iter().any(|(net, shape)| {
+                *net == primitive.net
+                    && is_touching(crate::gerber::geo::shape_gap(shape, &primitive.shape))
+            });
+        }
         let Shape::Capsule(capsule) = &primitive.shape else {
             return false;
         };
@@ -2355,11 +2410,26 @@ impl NetTieOwners {
                         tie.owner == group.owner
                             && Self::touches_geometry_at(geometry, Some(other.net), contact)
                     };
+                    // Two items both attached to the tie meet legally on its
+                    // copper, or anywhere along a tie pad that both overlap (a
+                    // Kelvin trace leaving a tie seated inside a shunt pad).
+                    // Pours are excluded from the latter: a pour touching the
+                    // tie and the other net elsewhere is a second tie point.
+                    let both_overlap_tie = || {
+                        a.kind != ItemKind::Zone
+                            && b.kind != ItemKind::Zone
+                            && geometry.iter().any(|(_, shape)| {
+                                use crate::gerber::geo::shape_gap;
+                                is_touching(shape_gap(shape, &a.shape))
+                                    && is_touching(shape_gap(shape, &b.shape))
+                            })
+                    };
                     enters_own_pad(a, b)
                         || enters_own_pad(b, a)
                         || (Self::owned_or_endpoint_attached(group, a, geometry)
                             && Self::owned_or_endpoint_attached(group, b, geometry)
-                            && Self::touches_geometry_at(geometry, None, contact))
+                            && (Self::touches_geometry_at(geometry, None, contact)
+                                || both_overlap_tie()))
                 })
         })
     }
@@ -2462,6 +2532,15 @@ fn insert_kicad_net_tie_groups(
     let legacy_zero_ohm = crate::dnp::is_explicit_zero_ohm_copper_link_fields(&value, &footprint);
     if legacy_zero_ohm {
         out.insert(owner, pad_nets.into_values());
+    } else if fp.find_all("pad").all(|pad| {
+        pad.arg_value(1).as_deref() == Some("smd")
+            && pad.find("layers").is_none_or(|layers| {
+                !(0..)
+                    .map_while(|i| layers.arg_value(i))
+                    .any(|layer| layer.ends_with(".Paste"))
+            })
+    }) {
+        out.insert_paste_free(owner);
     }
 }
 
@@ -2966,10 +3045,24 @@ pub mod eagle_drc {
             roundness: f64,
             rot_deg: f64,
             layer: i64,
+            /// Eagle `cream="no"`: no solder paste, so nothing is soldered here.
+            paste_free: bool,
         },
     }
 
     impl PkgItem {
+        /// Only an SMD pad with paste explicitly off counts; a through-hole
+        /// pad is soldered without paste, so it says nothing about intent.
+        const fn is_paste_free(&self) -> bool {
+            matches!(
+                self,
+                Self::Smd {
+                    paste_free: true,
+                    ..
+                }
+            )
+        }
+
         fn name(&self) -> &str {
             match self {
                 Self::Pad { name, .. } | Self::Smd { name, .. } => name,
@@ -3219,6 +3312,7 @@ pub mod eagle_drc {
                                             roundness: num(&a, "roundness").unwrap_or(0.0),
                                             rot_deg,
                                             layer,
+                                            paste_free: a.get("cream").is_some_and(|v| v == "no"),
                                         });
                                 }
                             }
@@ -3920,6 +4014,12 @@ pub mod eagle_drc {
                         .iter()
                         .filter_map(|((owner, _), net)| (owner == &el.name).then_some(*net)),
                 );
+            } else if parsed
+                .packages
+                .get(&(el.library.clone(), el.package.clone()))
+                .is_some_and(|items| items.iter().all(PkgItem::is_paste_free))
+            {
+                net_ties.insert_paste_free(el.name.clone());
             }
         }
         for el in &parsed.elements {

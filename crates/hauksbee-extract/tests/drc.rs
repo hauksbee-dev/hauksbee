@@ -432,6 +432,36 @@ fn same_class_diff_pair_uses_diff_pair_gap_not_full_clearance() {
 }
 
 #[test]
+fn a_diff_pair_gap_wider_than_clearance_never_tightens_it() {
+    // A coupled pair routed at 0.130 mm meets its 0.127 mm class clearance; the
+    // class's 0.145 mm diff-pair gap is a routing target, not a DRC minimum.
+    // At 0.100 mm the same pair is below the clearance and is still flagged.
+    for (edge_gap, flagged) in [(0.130, false), (0.100, true)] {
+        let items = format!(
+            r#"(segment (start 0 0) (end 10 0) (width 0.2) (layer "F.Cu") (net 1))
+  (segment (start 0 {y}) (end 10 {y}) (width 0.2) (layer "F.Cu") (net 2))"#,
+            y = 0.2 + edge_gap
+        );
+        let mut rules = ClearanceRules::new(0.127);
+        rules.add_class(NetClassRule {
+            name: "sense".to_string(),
+            clearance_mm: 0.127,
+            diff_pair_gap_mm: Some(0.145),
+        });
+        rules.assign_net("/USB/USB_D+", "sense");
+        rules.assign_net("/USB/USB_D-", "sense");
+        let doc = forge_sexpr::parse(&named_board(&items)).unwrap();
+        let report = hauksbee_extract::run_drc_with_clearance_rules(&doc, Some(rules));
+        assert_eq!(
+            !report.findings.is_empty(),
+            flagged,
+            "{edge_gap} mm: {:?}",
+            report.findings
+        );
+    }
+}
+
+#[test]
 fn kicad_pro_rules_apply_assignments_and_wildcard_patterns() {
     let pro = r#"{
       "net_settings": {
@@ -632,6 +662,106 @@ fn net_tie_exempts_an_item_only_inside_its_own_groups_pad() {
             r#"{tie}(segment (start 20.45 17) (end 20.45 23) (width 0.1) (layer "F.Cu") (net {net}))"#
         );
         assert_eq!(drc(&items).short_count() > 0, shorts, "{why}");
+    }
+}
+
+/// A Kelvin tie seated inside a shunt's pad: the shunt pad (B) overlaps the
+/// tie's B pad, and the A sense track leaving the tie's A pad runs across the
+/// shunt pad. That contact is the tie's own junction, not a short. The shunt
+/// pad is a 2 mm square at (20, 20); the tie pads sit at y 19.85 (A) and
+/// 20.15 (B), and the A trace runs from the tie down to y 18.
+#[test]
+fn net_tie_inside_a_foreign_pad_exempts_only_that_pads_own_net() {
+    let shunt = |y: f64, net: u32| {
+        format!(
+            r#"(footprint "Acme:Shunt" (layer "F.Cu") (at 20 {y})
+    (property "Reference" "R1" (at 0 0))
+    (pad "2" smd rect (at 0 0) (size 2 2) (layers "F.Cu" "F.Paste" "F.Mask") (net {net})))"#
+        )
+    };
+    let tie = r#"(footprint "Acme:Tie" (layer "F.Cu") (at 20 20)
+    (property "Reference" "NT1" (at 0 0))
+    (attr net_tie)
+    (net_tie_pad_groups "1, 2")
+    (pad "1" smd rect (at 0 -0.15) (size 0.25 0.25) (layers "F.Cu") (net 1))
+    (pad "2" smd rect (at 0 0.15) (size 0.25 0.25) (layers "F.Cu") (net 2)))
+  (segment (start 20 19.85) (end 20 18) (width 0.2) (layer "F.Cu") (net 1))"#;
+    let cases = [
+        (
+            20.0,
+            2,
+            0,
+            "B shunt pad holds the tie: the A trace meets it at the tie",
+        ),
+        (
+            18.5,
+            2,
+            1,
+            "B pad clear of the tie: the A trace crossing it shorts",
+        ),
+        (
+            20.0,
+            3,
+            1,
+            "GND is outside the tie group, so GND copper there shorts",
+        ),
+    ];
+    for (y, net, shorts, why) in cases {
+        let report = drc(&format!("{}\n  {tie}", shunt(y, net)));
+        assert_eq!(
+            usize::from(report.short_count() > 0),
+            shorts,
+            "{why}: {:?}",
+            report.findings
+        );
+    }
+}
+
+/// A footprint whose paste-free pads abut across nets is drawn copper (an
+/// EAGLE-style `SHORT` part), so its own contact is legal and stays local;
+/// the same pads with paste are a soldered part, and abutting pads short.
+#[test]
+fn paste_free_abutting_pads_are_a_local_tie_but_pasted_ones_short() {
+    let part = |layers: &str, x2: f64| {
+        format!(
+            r#"(footprint "Acme:Link" (layer "F.Cu") (at 20 20)
+    (property "Reference" "SH1" (at 0 0))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers {layers}) (net 1))
+    (pad "2" smd rect (at {x2} 0) (size 1 1) (layers {layers}) (net 2)))
+  (segment (start 0 0) (end 10 0) (width 0.4) (layer "F.Cu") (net 1))
+  (segment (start 5 -5) (end 5 5) (width 0.4) (layer "F.Cu") (net 2))"#
+        )
+    };
+    let no_paste = r#""F.Cu" "F.Mask""#;
+    let pasted = r#""F.Cu" "F.Paste" "F.Mask""#;
+    // An open paste-free link (pads 0.2 mm apart) crossed by a B track on
+    // its A pad is an ordinary short, not a tie.
+    let open_crossed = format!(
+        r#"{}
+  (segment (start 20 17) (end 20 23) (width 0.2) (layer "F.Cu") (net 2))"#,
+        part(no_paste, 1.2)
+    );
+    let cases = [
+        (
+            part(no_paste, 1.0),
+            1,
+            "the link's own contact is legal; the remote crossing remains",
+        ),
+        (
+            part(pasted, 1.0),
+            2,
+            "pasted abutting pads are a real short",
+        ),
+        (
+            open_crossed,
+            2,
+            "an open link is not a tie, so a B track over its A pad shorts",
+        ),
+    ];
+    for (items, shorts, why) in cases {
+        let report = drc(&items);
+        assert_eq!(report.short_count(), shorts, "{why}: {:?}", report.findings);
+        assert_short(&report, "A", "B");
     }
 }
 
