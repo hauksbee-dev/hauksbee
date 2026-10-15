@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: >-
+  If you use Hauksbee in published work, please cite it as below. To cite one
+  run, also give that run's record_id (the sha256 identifier in its
+  hauksbee.run-record/1 document).
+type: software
+title: Hauksbee
+abstract: >-
+  Hauksbee reconstructs the circuit a PCB's copper implements from native
+  design files, binds device models, solves it, and runs compiled firmware
+  against the solved board, reporting each finding with the evidence behind it.
+authors:
+  - name: hauksbee-dev
+version: 0.1.0-beta.6
+license: Apache-2.0
+repository-code: "https://github.com/hauksbee-dev/hauksbee"
+url: "https://github.com/hauksbee-dev/hauksbee"
+keywords:
+  - pcb
+  - eda
+  - simulation
+  - kicad
+  - hardware
+  - firmware co-simulation

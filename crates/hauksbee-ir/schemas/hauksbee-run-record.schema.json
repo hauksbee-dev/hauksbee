@@ -1,0 +1,2433 @@
+{
+  "$id": "hauksbee.run-record/1",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "Artifact": {
+      "description": "A file the run wrote.",
+      "properties": {
+        "path": {
+          "description": "Relative to the working directory the run was started in.",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/definitions/ArtifactOutput"
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "role",
+        "path"
+      ],
+      "type": "object"
+    },
+    "ArtifactId": {
+      "description": "Stable index into one validated run inventory. The inner index is private;\nonly [`EvidenceRegistry::add_artifact`] can mint one.",
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "ArtifactKind": {
+      "description": "The normalized input format. Shared by provenance producers and renderers.",
+      "enum": [
+        "ki_cad_pcb",
+        "ki_cad_schematic",
+        "ki_cad_netlist",
+        "eagle_board",
+        "altium_pcb_doc",
+        "gerber_archive",
+        "odb_plus_plus",
+        "ipc2581",
+        "ipc356",
+        "board_code",
+        "bom",
+        "placement",
+        "elf",
+        "intel_hex",
+        "toml"
+      ],
+      "type": "string"
+    },
+    "ArtifactOutput": {
+      "description": "What kind of file an [`Artifact`] is.",
+      "enum": [
+        "json",
+        "junit",
+        "sarif",
+        "codequality",
+        "kicad-report",
+        "bom-csv",
+        "markdown",
+        "html",
+        "waveforms",
+        "csv",
+        "manifest"
+      ],
+      "type": "string"
+    },
+    "ArtifactProvenance": {
+      "description": "One input artifact: what it was, what it gave the run, what in it was ignored, and which cross-checks it passed.",
+      "properties": {
+        "assumptions": {
+          "description": "Assumptions this artifact's limitations raised, by id, so the inventory\nrow and the assumption registry cross-reference instead of duplicating\ntext.",
+          "items": {
+            "$ref": "#/definitions/AssumptionId"
+          },
+          "type": "array"
+        },
+        "contributed": {
+          "description": "What it contributed.",
+          "items": {
+            "$ref": "#/definitions/Contribution"
+          },
+          "type": "array"
+        },
+        "cross_checks": {
+          "description": "Cross-checks run on it.",
+          "items": {
+            "$ref": "#/definitions/CrossCheck"
+          },
+          "type": "array"
+        },
+        "format": {
+          "description": "Exact normalized format when the parser-family token is not specific\nenough. Omitted for all legacy rows whose `kind` is already exact.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ignored": {
+          "description": "What in it was deliberately not used.",
+          "items": {
+            "$ref": "#/definitions/IgnoredInput"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ArtifactKind"
+            }
+          ],
+          "description": "Backward-compatible parser family. For the legacy Eagle XML family this\nremains `eagle_board`; consumers needing the exact document form use\n`format`, which distinguishes an Eagle schematic without expanding this\nclosed public enum before the planned first release."
+        },
+        "path": {
+          "description": "Path as the user gave it, not canonicalized: the report must read back\nin the user's own vocabulary.",
+          "type": "string"
+        },
+        "role": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ArtifactRole"
+            }
+          ],
+          "description": "The role it played."
+        },
+        "sha256": {
+          "description": "SHA-256 of the bytes read (of the archive, for archives). Empty only\nfor a gerber DIRECTORY, where there is no single file to hash.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "role"
+      ],
+      "type": "object"
+    },
+    "ArtifactRole": {
+      "description": "What role an input artifact played in the run.",
+      "oneOf": [
+        {
+          "const": "layout",
+          "description": "A board layout.",
+          "type": "string"
+        },
+        {
+          "const": "schematic",
+          "description": "A schematic.",
+          "type": "string"
+        },
+        {
+          "const": "netlist",
+          "description": "A netlist.",
+          "type": "string"
+        },
+        {
+          "const": "fab_archive",
+          "description": "A fabrication archive (gerbers, ODB++, IPC-2581).",
+          "type": "string"
+        },
+        {
+          "const": "firmware",
+          "description": "A firmware image.",
+          "type": "string"
+        },
+        {
+          "const": "bom",
+          "description": "A bill of materials.",
+          "type": "string"
+        },
+        {
+          "const": "placement",
+          "description": "A pick-and-place / component-position file.",
+          "type": "string"
+        },
+        {
+          "const": "variant",
+          "description": "An explicit assembly-variant decision (which references are fitted).",
+          "type": "string"
+        },
+        {
+          "const": "as_built",
+          "description": "A unit-specific as-built overlay applied after model binding.",
+          "type": "string"
+        },
+        {
+          "const": "spec",
+          "description": "A CI spec / assertion file.",
+          "type": "string"
+        },
+        {
+          "const": "waivers",
+          "description": "A waiver file.",
+          "type": "string"
+        },
+        {
+          "const": "model_pack",
+          "description": "A model pack or models directory.",
+          "type": "string"
+        },
+        {
+          "const": "soc_descriptor",
+          "description": "An MCU / `SoC` descriptor.",
+          "type": "string"
+        }
+      ]
+    },
+    "Assertion": {
+      "description": "One spec assertion (`hauksbee-ci`).",
+      "properties": {
+        "detail": {
+          "description": "The `hauksbee-ci --json` v2 `CiJsonAssertion`, verbatim."
+        },
+        "evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EvidenceLink"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "description": "Stable id: `<spec file>#<label>`.",
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/definitions/AssertionOutcome"
+        },
+        "spec_file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spec_line": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "outcome",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "AssertionOutcome": {
+      "description": "How one assertion came out.",
+      "oneOf": [
+        {
+          "enum": [
+            "pass",
+            "fail"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "invalid",
+          "description": "Its evidence was undermined or the run could not judge it.",
+          "type": "string"
+        },
+        {
+          "const": "waived",
+          "description": "It failed and a waiver covers it.",
+          "type": "string"
+        },
+        {
+          "const": "measured",
+          "description": "Measured with no limit to judge against.",
+          "type": "string"
+        }
+      ]
+    },
+    "Assumption": {
+      "description": "One thing the run took as true, or deliberately did not examine, without evidence for it, with the four sentences that say what, why, what it costs, and what would close it.",
+      "properties": {
+        "because": {
+          "description": "Why the run had to assume it, one sentence.",
+          "type": "string"
+        },
+        "consequence": {
+          "description": "What it does to results, one sentence.",
+          "type": "string"
+        },
+        "expires": {
+          "description": "Waived assumptions only: the `YYYY-MM-DD` the waiver lapses. `None` for\nevery run-derived kind, since an expiry on a machine observation would\nmean nothing.",
+          "type": "string"
+        },
+        "id": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AssumptionId"
+            }
+          ],
+          "description": "Stable id, `\"{kind_slug}:{subject}\"`."
+        },
+        "kind": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AssumptionKind"
+            }
+          ],
+          "description": "What kind of gap this is. Drives [`EvidenceStatus`]."
+        },
+        "remedy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Remedy"
+            }
+          ],
+          "description": "The same path as a typed action; `other` means follow `replacement`."
+        },
+        "replacement": {
+          "description": "The replacement path: what a user does so this stops being an\nassumption. Always actionable, never \"n/a\".",
+          "type": "string"
+        },
+        "scope": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Scope"
+            }
+          ],
+          "description": "What it taints."
+        },
+        "source": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AssumptionSource"
+            }
+          ],
+          "description": "Which pipeline stage raised it."
+        },
+        "statement": {
+          "description": "What is being taken as true, one sentence, present tense.",
+          "type": "string"
+        },
+        "term": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Term"
+            }
+          ],
+          "description": "The glossary term a reader sees: the kind's, or a constructor's\nnarrower one (`assumed_corner`)."
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "term",
+        "source",
+        "scope",
+        "statement",
+        "because",
+        "consequence",
+        "replacement",
+        "remedy"
+      ],
+      "type": "object"
+    },
+    "AssumptionId": {
+      "description": "Stable identity for one assumption within a run.\n\nDeterministic: `\"{kind_slug}:{subject}\"`, e.g. `\"open-part:R7\"`,\n`\"not-exercised:i2c0/U4\"`, `\"not-checked:drc\"`,\n`\"waived:si/controlled_impedance/DDR_CLK\"`. Re-running the same board yields\nthe same ids, so an acknowledgment file can name one, a diff can track one\nacross runs, and a renderer can cross-reference one.\n\nThe subject keeps its own case (a reference designator is `R7`, not `r7`)\nand reserved bytes are percent-encoded, so distinct subjects never collapse\nwhile the kind slug remains everything before the first `:`.\n\nA subject the board fails to name uniquely still needs a unique id, because\ntwo different gaps sharing one is a duplicate the registry rejects rather than\na cosmetic problem. Two shapes cover that: `open-part:unnamed~<hex>` when there\nis no designator at all, encoding the typed claim that distinguishes it, and\n`open-part:R7#2` for the second distinct claim on a designator the board\nreuses. Both are pure functions of the input, so a re-run of the same input\nmints the same bytes.\n\nThe ordinal form is the one exception to tracking a subject across BOARD\nREVISIONS, and it is a limit of the input rather than of the scheme: a\ndesignator carrying two claims does not identify either of them, so there is\nnothing stable to key on. Adding or removing a claim on that designator\nrenumbers the rest. A designator the board uses once is unaffected and keeps\nits bare `open-part:R7`.",
+      "type": "string"
+    },
+    "AssumptionKind": {
+      "description": "What kind of gap an [`Assumption`] records. The kind, not the wording, is\nwhat [`EvidenceMap::derive_status`] reads, so adding a variant is a policy\ndecision about what undermines a conclusion.",
+      "oneOf": [
+        {
+          "const": "open_part",
+          "description": "An unresolved part defaulted to an open circuit.",
+          "type": "string"
+        },
+        {
+          "const": "substitute_model",
+          "description": "A model stood in for the real part: an engine fallback entry, or a\nsubstitute MCU core.",
+          "type": "string"
+        },
+        {
+          "const": "inferred_pin_role",
+          "description": "A pin's role was inferred from the pin-rule table, not read from the\nschematic.",
+          "type": "string"
+        },
+        {
+          "const": "default_parameter",
+          "description": "A parameter took a documented default because the source carried no\nvalue.",
+          "type": "string"
+        },
+        {
+          "const": "fitted_by_default",
+          "description": "Every placed part was treated as fitted because the input carries no\nBOM or populate flag.",
+          "type": "string"
+        },
+        {
+          "const": "not_checked",
+          "description": "A whole check could not run on this input class and reported\n\"not checked\" instead of a vacuous green.",
+          "type": "string"
+        },
+        {
+          "const": "not_exercised",
+          "description": "The run happened but never exercised this element: a bus device never\naddressed, an ADC channel whose injections the backend dropped,\nfirmware that never executed.",
+          "type": "string"
+        },
+        {
+          "const": "reduced_fidelity",
+          "description": "The result was produced at reduced fidelity by a documented degraded\nmechanism: heuristic bus framing, a strapless MCU model, a net held by\nan ideal source.",
+          "type": "string"
+        },
+        {
+          "const": "operating_limit_violated",
+          "description": "This run MEASURED the part outside a requirement its card states: a\nfact about the BOARD, not an omission of the model, so it is critical.",
+          "type": "string"
+        },
+        {
+          "const": "parser_limitation",
+          "description": "The producing parser has a known limitation that can fabricate or miss\nfindings here.",
+          "type": "string"
+        },
+        {
+          "const": "waived",
+          "description": "A human overrode a finding, with a reason and an expiry. The gating\nmachinery stays in the waiver code; this is the surfaced record.",
+          "type": "string"
+        }
+      ]
+    },
+    "AssumptionSource": {
+      "description": "Which stage of the run raised the assumption. Mirrors the pipeline, so a\nreader can tell an input-format limitation from a binder guess from a co-sim\ncoverage gap.",
+      "oneOf": [
+        {
+          "const": "reader",
+          "description": "An input reader (extract).",
+          "type": "string"
+        },
+        {
+          "const": "binder",
+          "description": "The binder, turning connectivity plus models into a circuit.",
+          "type": "string"
+        },
+        {
+          "const": "scheduler",
+          "description": "The co-sim scheduler.",
+          "type": "string"
+        },
+        {
+          "const": "solver",
+          "description": "The analog solver.",
+          "type": "string"
+        },
+        {
+          "const": "check",
+          "description": "A check (DRC, SI, lint, ampacity, coverage).",
+          "type": "string"
+        },
+        {
+          "const": "user",
+          "description": "A human, through a waiver or an override.",
+          "type": "string"
+        }
+      ]
+    },
+    "Backend": {
+      "description": "An external simulator or oracle the run used.",
+      "properties": {
+        "name": {
+          "description": "`ngspice`, `simavr`, `qemu`, `renode`, `kicad-cli`, ...",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "SHA-256 of the binary, when it was hashed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "Check": {
+      "description": "A check or analysis a run can perform: the `check` of a finding and the\nnames in `scope.checks_run`.",
+      "oneOf": [
+        {
+          "enum": [
+            "drc",
+            "lint",
+            "si",
+            "resources",
+            "usb_c",
+            "thermal",
+            "ac",
+            "cosim"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "spec",
+          "description": "Spec assertions (`hauksbee-ci`).",
+          "type": "string"
+        },
+        {
+          "const": "evidence",
+          "description": "Run-level evidence findings (an undermined claim).",
+          "type": "string"
+        }
+      ]
+    },
+    "ClearanceRules": {
+      "description": "Where the DRC clearance came from.",
+      "properties": {
+        "source": {
+          "description": "`board`, `project`, `cli` or `defaulted`.",
+          "type": "string"
+        },
+        "value_mm": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    },
+    "Condition": {
+      "description": "A named condition or gap, with how to lift it.",
+      "properties": {
+        "how_to_lift": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Stable id, e.g. `default-clearance-rules`.",
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "type": "object"
+    },
+    "Contribution": {
+      "description": "One concrete thing an artifact contributed to the run.",
+      "properties": {
+        "detail": {
+          "description": "The specifics, one sentence, e.g. \"netlist read from the document's\n`LogicalNet` section, not reverse-engineered from copper\".",
+          "type": "string"
+        },
+        "what": {
+          "description": "What, as a stable slug: \"connectivity\", \"`copper_geometry`\",\n\"placements\", \"`component_values`\", \"`dnp_flags`\", \"`firmware_image`\",\n\"`net_names`\", \"`clearance_rules`\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "what",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "CrossCheck": {
+      "description": "A cross-check the reader ran between two sources, and whether they agreed.\n\nThe sources sit inside (or across) artifacts. A disagreement additionally\nraises a parser-limitation assumption; an agreement is positive evidence and\nbelongs in the inventory in its own right.",
+      "properties": {
+        "agreed": {
+          "description": "Whether the two sources agreed.",
+          "type": "boolean"
+        },
+        "detail": {
+          "description": "The specifics, one sentence.",
+          "type": "string"
+        },
+        "what": {
+          "description": "What was cross-checked.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "what",
+        "agreed",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "EntityKind": {
+      "description": "What results the assumption taints.\n\nScope is the input to the on-path decision: the causal-path traversal\ncompares an assertion's subject nets and refs against these, and only\nassumptions that match land in an [`EvidenceMap`].",
+      "oneOf": [
+        {
+          "const": "part",
+          "description": "A placed component or footprint.",
+          "type": "string"
+        },
+        {
+          "const": "pin",
+          "description": "One pin on a placed component.",
+          "type": "string"
+        },
+        {
+          "const": "bus",
+          "description": "A logical bus or peripheral.",
+          "type": "string"
+        },
+        {
+          "const": "artifact",
+          "description": "An input artifact.",
+          "type": "string"
+        },
+        {
+          "const": "board_object",
+          "description": "A board-level object that is not one of the narrower kinds.",
+          "type": "string"
+        }
+      ]
+    },
+    "EntityRef": {
+      "description": "A typed, non-empty causal subject.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/EntityKind"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    },
+    "ErrorBudget": {
+      "description": "How good a number is: integration tolerances, which method produced which time window, the accepted residual, the windows with no valid solution, and model uncertainty.",
+      "properties": {
+        "event_time_error_s": {
+          "description": "Worst-case timestamp error for events, seconds. Today this is the\nco-sim chunk quantization: an edge is observed at a chunk boundary.\nConstructed only from a finite, non-negative value.",
+          "format": "double",
+          "type": "number"
+        },
+        "failed_windows": {
+          "description": "Windows with NO valid solution: the run held stale values there. Any\nquantity read inside one of these is not a measurement.",
+          "items": {
+            "$ref": "#/definitions/TimeWindow"
+          },
+          "type": "array"
+        },
+        "methods": {
+          "description": "Which method produced which span. One entry for a homogeneous run.",
+          "items": {
+            "$ref": "#/definitions/WindowMethod"
+          },
+          "type": "array"
+        },
+        "model_uncertainty": {
+          "description": "Interval bounds models place on parameters behind these numbers.",
+          "items": {
+            "$ref": "#/definitions/ModelUncertainty"
+          },
+          "type": "array"
+        },
+        "residual": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Residual"
+            }
+          ],
+          "description": "The accepted Newton residual, when the producing path measured one.\nPresent only when the producer measured a finite, non-negative residual."
+        },
+        "tolerance": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/IntegrationTolerance"
+            }
+          ],
+          "description": "The solver settings the numbers were produced under."
+        }
+      },
+      "required": [
+        "tolerance"
+      ],
+      "type": "object"
+    },
+    "EvidenceGrade": {
+      "description": "How much a conclusion's evidence can be trusted.\n\nThe record's spelling of [`EvidenceStatus`]: `full` replaces that type's `clean`, which collided\nwith the verdict word \"clean\"; `clean` stays the wire word in `run --json`\nv3 and `hauksbee-ci --json` v2 until those documents become the record.",
+      "oneOf": [
+        {
+          "const": "full",
+          "description": "No assumption on the causal path.",
+          "type": "string"
+        },
+        {
+          "const": "qualified",
+          "description": "Assumptions on the path, none critical.",
+          "type": "string"
+        },
+        {
+          "const": "undermined",
+          "description": "A critical assumption on the path: no verdict.",
+          "type": "string"
+        }
+      ]
+    },
+    "EvidenceLink": {
+      "description": "Which evidence map a finding or assertion rests on, and its grade.",
+      "properties": {
+        "grade": {
+          "$ref": "#/definitions/EvidenceGrade"
+        },
+        "map_index": {
+          "description": "Index into `evidence.maps`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "grade"
+      ],
+      "type": "object"
+    },
+    "EvidenceMap": {
+      "description": "What one assertion rests on: the artifacts, models, parameters and assumptions on its causal path, its error budget, and the status derived from them.",
+      "properties": {
+        "artifacts": {
+          "description": "Indices into the run's `inventory`, causal only: the artifacts whose\ncontributions this assertion actually consumed. Omitted when empty, per\nthe module's serde convention: a check that reads no artifact says so by\ncarrying no key, and adding this skip after the schema publishes would be\nthe breaking change the once-only version bump is being saved for.",
+          "items": {
+            "$ref": "#/definitions/ArtifactId"
+          },
+          "type": "array"
+        },
+        "assertion": {
+          "description": "The assertion or finding this map belongs to.",
+          "type": "string"
+        },
+        "assumptions": {
+          "description": "On-path assumptions, by id into the run's assumption registry.",
+          "items": {
+            "$ref": "#/definitions/AssumptionId"
+          },
+          "type": "array"
+        },
+        "coverage": {
+          "description": "Statistical coverage wording for ensemble assertions. Not an\nassumption: an accurate statement of method.",
+          "type": "string"
+        },
+        "error_budget": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ErrorBudget"
+            }
+          ],
+          "description": "How good the numbers behind this assertion are."
+        },
+        "models": {
+          "description": "Models bound on the causal path.",
+          "items": {
+            "$ref": "#/definitions/ModelOnPath"
+          },
+          "type": "array"
+        },
+        "parameters": {
+          "description": "Parameters read on the causal path.",
+          "items": {
+            "$ref": "#/definitions/ParameterProvenance"
+          },
+          "type": "array"
+        },
+        "status": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/EvidenceStatus"
+            }
+          ],
+          "description": "How much this conclusion is entitled to claim, derived from the\nassumptions on its causal path."
+        }
+      },
+      "required": [
+        "assertion",
+        "status"
+      ],
+      "type": "object"
+    },
+    "EvidenceSpine": {
+      "description": "The evidence spine, as its own types serialize it.",
+      "properties": {
+        "assumptions": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/Assumption"
+          },
+          "type": "array"
+        },
+        "inventory": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ArtifactProvenance"
+          },
+          "type": "array"
+        },
+        "maps": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/EvidenceMap"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "EvidenceStatus": {
+      "description": "How much a conclusion is entitled to claim, derived from the assumptions on\nits causal path. Ordered by severity: `Clean < Qualified < Undermined`.\n\nUse [`EvidenceStatus::as_str`] on every surface. One of the surfaces this\nfeeds is hand-serialized JSON rather than serde output, and a module whose\npurpose is that surfaces cannot drift should not have five call sites\nspelling `\"undermined\"` themselves.",
+      "oneOf": [
+        {
+          "const": "clean",
+          "description": "No on-path assumptions. The conclusion stands on evidence alone.",
+          "type": "string"
+        },
+        {
+          "const": "qualified",
+          "description": "On-path assumptions exist but none is critical: the conclusion holds\nwith named caveats.",
+          "type": "string"
+        },
+        {
+          "const": "undermined",
+          "description": "A critical assumption sits on the causal path. The conclusion is not\nentitled to a verdict: invalid for analysis, exit-code-3 semantics.",
+          "type": "string"
+        }
+      ]
+    },
+    "Finding": {
+      "description": "One finding, normalised across checks.",
+      "properties": {
+        "blocking": {
+          "description": "The gate fails the run on it. A waived finding keeps the flag and\ncarries `waiver`; it does not fail the run.",
+          "type": "boolean"
+        },
+        "check": {
+          "$ref": "#/definitions/Check"
+        },
+        "evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EvidenceLink"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fix": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The stable group fingerprint (today's `JsonFinding.group`), e.g.\n`lint/unrouted_pad/serious/711e36fbcb84`. SARIF `partialFingerprints`,\nGitLab `fingerprint` and `hauksbee diff` all key on it.",
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "layer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location_mm": {
+          "description": "Board coordinates, millimetres.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "nets": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "plain": {
+          "description": "The plain-language version, when it differs.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "refs": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "severity": {
+          "$ref": "#/definitions/Severity"
+        },
+        "uuid_refs": {
+          "default": [],
+          "description": "CAD UUIDs of the footprints or pads involved.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "waiver": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Waiver"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "check",
+        "kind",
+        "severity",
+        "blocking",
+        "message"
+      ],
+      "type": "object"
+    },
+    "IgnoredInput": {
+      "description": "One member or section of an artifact that was deliberately not used.",
+      "properties": {
+        "what": {
+          "description": "The member: a file inside an archive, a section of a document, or a\nsibling file the reader saw and skipped.",
+          "type": "string"
+        },
+        "why": {
+          "description": "Why, one sentence.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "what",
+        "why"
+      ],
+      "type": "object"
+    },
+    "IntegrationMethod": {
+      "description": "The integration algorithm used for a solved window.",
+      "oneOf": [
+        {
+          "const": "trapezoidal",
+          "description": "Trapezoidal integration.",
+          "type": "string"
+        },
+        {
+          "const": "gear2",
+          "description": "Second-order Gear integration.",
+          "type": "string"
+        },
+        {
+          "const": "backward-euler",
+          "description": "Backward Euler integration.",
+          "type": "string"
+        },
+        {
+          "const": "reduced-step",
+          "description": "Backward Euler after reducing the step.",
+          "type": "string"
+        },
+        {
+          "const": "cold-start-backward-euler",
+          "description": "Backward Euler after rebuilding the local state.",
+          "type": "string"
+        },
+        {
+          "const": "subdivided-backward-euler",
+          "description": "Backward Euler over recursively subdivided chunks.",
+          "type": "string"
+        }
+      ]
+    },
+    "IntegrationTolerance": {
+      "description": "The solver's convergence and truncation-error settings for this result.",
+      "properties": {
+        "abstol": {
+          "description": "Absolute current tolerance, amps.",
+          "format": "double",
+          "type": "number"
+        },
+        "chgtol": {
+          "description": "Charge tolerance, coulombs (capacitor local truncation error).",
+          "format": "double",
+          "type": "number"
+        },
+        "reltol": {
+          "description": "Relative tolerance for Newton convergence and local-truncation-error\ncontrol.",
+          "format": "double",
+          "type": "number"
+        },
+        "vntol": {
+          "description": "Absolute voltage tolerance, volts.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "reltol",
+        "vntol",
+        "abstol",
+        "chgtol"
+      ],
+      "type": "object"
+    },
+    "MatchConfidence": {
+      "description": "Confidence in a model or parameter match.",
+      "enum": [
+        "exact",
+        "high",
+        "heuristic",
+        "guessed"
+      ],
+      "type": "string"
+    },
+    "Methods": {
+      "description": "How the numbers were produced: the record's Methods section.",
+      "properties": {
+        "clearance_rules": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ClearanceRules"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "corners": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "integration": {
+          "default": [],
+          "description": "Integration methods used (the primary first, then any fallbacks).",
+          "items": {
+            "$ref": "#/definitions/IntegrationMethod"
+          },
+          "type": "array"
+        },
+        "seeds": {
+          "default": [],
+          "items": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "solver": {
+          "description": "e.g. `MNA/Newton`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tolerances": {
+          "additionalProperties": {
+            "format": "double",
+            "type": "number"
+          },
+          "default": {},
+          "description": "Solver tolerances by name (`reltol`, `vntol`, `abstol`, `chgtol`, ...).",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "ModelIntervalKind": {
+      "description": "Interval bounds a model places on a derived quantity.\n\nThis is the socket for interval models: shaped before its producer exists so\nthat work lands in this vocabulary instead of inventing a second one.\n\nBoth bounds are real numbers. A one-sided datasheet limit (\"at least 100\")\nis [`ModelUncertainty::Unknown`] until a defensible other bound exists. A\nproducer must never turn a typical value or an invented physical cap into a\nguaranteed two-sided accuracy interval.",
+      "oneOf": [
+        {
+          "const": "specification-limits",
+          "description": "Published finite minimum and maximum specification limits.",
+          "type": "string"
+        },
+        {
+          "const": "empirical-error",
+          "description": "Finite error bounds established by empirical validation.",
+          "type": "string"
+        },
+        {
+          "const": "typical-range",
+          "description": "A published typical spread; informative, but not guaranteed.",
+          "type": "string"
+        },
+        {
+          "const": "estimated-range",
+          "description": "A finite engineering estimate; informative, but not validated.",
+          "type": "string"
+        }
+      ]
+    },
+    "ModelLayer": {
+      "description": "One layer of the model-resolution ladder.",
+      "oneOf": [
+        {
+          "enum": [
+            "builtin",
+            "pack",
+            "user-dir",
+            "user-config-dir",
+            "models-dir",
+            "spice",
+            "engine-fallback"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "unspecified",
+          "description": "The producer recorded a resolved model but not which ladder layer won.",
+          "type": "string"
+        }
+      ]
+    },
+    "ModelOnPath": {
+      "description": "A model on the causal path.",
+      "properties": {
+        "confidence": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MatchConfidence"
+            }
+          ],
+          "description": "How good the match was."
+        },
+        "layer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelLayer"
+            }
+          ],
+          "description": "Compatibility projection of [`Self::source`]'s storage layer."
+        },
+        "model_id": {
+          "description": "The model that bound.",
+          "type": "string"
+        },
+        "reference": {
+          "description": "The part it is bound to.",
+          "type": "string"
+        },
+        "source": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelSource"
+            }
+          ],
+          "description": "The canonical source, validation and uncertainty record."
+        },
+        "subject": {
+          "description": "Injective causal identity of the exact component occurrence.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject",
+        "reference",
+        "model_id",
+        "layer",
+        "source",
+        "confidence"
+      ],
+      "type": "object"
+    },
+    "ModelSource": {
+      "description": "Canonical provenance and accuracy record for one selected model. Every\nreport surface carries this object verbatim.",
+      "properties": {
+        "layer": {
+          "$ref": "#/definitions/ModelLayer"
+        },
+        "origin": {
+          "type": "string"
+        },
+        "tier": {
+          "$ref": "#/definitions/ModelSourceTier"
+        },
+        "uncertainty": {
+          "items": {
+            "$ref": "#/definitions/ModelUncertainty"
+          },
+          "type": "array"
+        },
+        "validation": {
+          "$ref": "#/definitions/ModelValidation"
+        }
+      },
+      "required": [
+        "tier",
+        "layer",
+        "origin",
+        "validation",
+        "uncertainty"
+      ],
+      "type": "object"
+    },
+    "ModelSourceTier": {
+      "description": "Semantic rung in the model-source policy.\n\nThis is deliberately distinct from [`ModelLayer`]: a layer says where bytes\nwere loaded from, while a tier says how authoritative the model is. An explicit user model remains the\noverride escape hatch; otherwise vendor SPICE and curated sources outrank an\nextracted draft, which outranks a deliberately estimated fallback.",
+      "enum": [
+        "open",
+        "estimated-fallback",
+        "interval-model",
+        "datasheet-derived",
+        "curated-library",
+        "curated-pack",
+        "vendor-spice",
+        "user-model"
+      ],
+      "type": "string"
+    },
+    "ModelUncertainty": {
+      "oneOf": [
+        {
+          "description": "A measured or source-published finite interval.",
+          "properties": {
+            "basis": {
+              "type": "string"
+            },
+            "high": {
+              "format": "double",
+              "type": "number"
+            },
+            "kind": {
+              "$ref": "#/definitions/ModelIntervalKind"
+            },
+            "low": {
+              "format": "double",
+              "type": "number"
+            },
+            "parameter": {
+              "type": "string"
+            },
+            "status": {
+              "const": "interval",
+              "type": "string"
+            },
+            "unit": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "parameter",
+            "low",
+            "high",
+            "unit",
+            "kind",
+            "basis"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "No defensible numeric interval is available. Unknown is data, never an\nomitted field and never a made-up percentage.",
+          "properties": {
+            "parameter": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "status": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "parameter",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ModelValidation": {
+      "description": "What validation the selected model has actually passed. These names say\nnothing about unmeasured accuracy: range checking is not curve validation.",
+      "enum": [
+        "unvalidated",
+        "physical-bounds-only",
+        "datasheet-curves",
+        "vendor-qualified"
+      ],
+      "type": "string"
+    },
+    "NetScope": {
+      "description": "The net and optional observation interval an assertion causally reads.",
+      "properties": {
+        "nets": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "window": {
+          "$ref": "#/definitions/TimeWindow"
+        }
+      },
+      "required": [
+        "nets"
+      ],
+      "type": "object"
+    },
+    "OverrideSource": {
+      "description": "How a user-authored override entered the run.",
+      "enum": [
+        "as_built",
+        "spec",
+        "cli"
+      ],
+      "type": "string"
+    },
+    "ParameterProvenance": {
+      "description": "Provenance for one bound parameter of one device.",
+      "properties": {
+        "origin": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ValueOrigin"
+            }
+          ],
+          "description": "Where the value came from."
+        },
+        "parameter": {
+          "description": "Reference-qualified, so an evidence map can select by part:\n\"R7.resistance\", \"U1.model\", \"Q2.beta\".",
+          "type": "string"
+        },
+        "subject": {
+          "description": "Injective causal identity of the component occurrence, when the\nproducer has one. Kept separate from human-readable `parameter` so a\nliteral reference cannot collide with generated display prose.",
+          "type": "string"
+        },
+        "value": {
+          "description": "Rendered value (\"10k\", \"TP4056\", \"1.2e-14 A\").",
+          "type": "string"
+        }
+      },
+      "required": [
+        "parameter",
+        "value",
+        "origin"
+      ],
+      "type": "object"
+    },
+    "ParameterRef": {
+      "description": "One model or input parameter on a specific causal subject.",
+      "properties": {
+        "parameter": {
+          "type": "string"
+        },
+        "subject": {
+          "$ref": "#/definitions/EntityRef"
+        }
+      },
+      "required": [
+        "subject",
+        "parameter"
+      ],
+      "type": "object"
+    },
+    "Part": {
+      "description": "One placed part and the model that stood in for it.",
+      "properties": {
+        "footprint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PartModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "None for a part with no usable model (it is in `scope.unjudged_refs`)."
+        },
+        "mpn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ratings": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/Rating"
+          },
+          "type": "array"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "uuid": {
+          "description": "The footprint UUID in the source CAD file.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "ref"
+      ],
+      "type": "object"
+    },
+    "PartModel": {
+      "description": "The model bound to a part, with the existing canonical provenance record.",
+      "properties": {
+        "confidence": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MatchConfidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "references": {
+          "default": [],
+          "description": "Datasheets and documents the model's numbers came from.",
+          "items": {
+            "$ref": "#/definitions/SourceReference"
+          },
+          "type": "array"
+        },
+        "source": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelSource"
+            }
+          ],
+          "description": "The evidence spine's model provenance, verbatim."
+        }
+      },
+      "required": [
+        "id",
+        "source"
+      ],
+      "type": "object"
+    },
+    "Rating": {
+      "description": "One rating checked on a part.",
+      "properties": {
+        "finding_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "format": "double",
+          "type": "number"
+        },
+        "margin": {
+          "description": "`limit - worst` in the rating's direction; negative is a violation.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "param": {
+          "description": "e.g. `Vds`, `Pd`, `Tj`.",
+          "type": "string"
+        },
+        "unit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "worst": {
+          "description": "Worst value the run saw; None when it was not judged.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "param",
+        "limit"
+      ],
+      "type": "object"
+    },
+    "Remedy": {
+      "description": "What a reader does to close an assumption, as data.\n\nThe web app turns it into a button, the CLI into a command\n([`Remedy::cli_hint`]). The prose\n[`Assumption::replacement`] stays the fallback, and `Other` means \"follow\nthe prose\".",
+      "oneOf": [
+        {
+          "description": "Declare a supply on `net` in the spec. `volts_hint` is the least the\npart behind it needs, when known.",
+          "properties": {
+            "net": {
+              "type": "string"
+            },
+            "type": {
+              "const": "add_supply",
+              "type": "string"
+            },
+            "volts_hint": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "net"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Write or draft a model for the part.",
+          "properties": {
+            "reference": {
+              "type": "string"
+            },
+            "type": {
+              "const": "add_model",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reference"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Put the manufacturer part number on the part.",
+          "properties": {
+            "reference": {
+              "type": "string"
+            },
+            "type": {
+              "const": "set_part_number",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reference"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Mark the part not fitted.",
+          "properties": {
+            "reference": {
+              "type": "string"
+            },
+            "type": {
+              "const": "mark_dnp",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reference"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Two different parts share `reference`; rename one in the design.\n`conflict` says how they differ.",
+          "properties": {
+            "conflict": {
+              "type": "string"
+            },
+            "reference": {
+              "type": "string"
+            },
+            "type": {
+              "const": "rename_duplicate",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reference",
+            "conflict"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Give the spec firmware to run.",
+          "properties": {
+            "type": {
+              "const": "add_firmware",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Supply a BOM that marks the parts that are not fitted.",
+          "properties": {
+            "type": {
+              "const": "add_bom",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Install a simulator backend (`hauksbee install <id>`).",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "install_backend",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Put the project's rules file (e.g. `.kicad_pro`) beside the board.",
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "type": {
+              "const": "provide_project_rules",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "file"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "No typed action: follow the assumption's `replacement` sentence.",
+          "properties": {
+            "type": {
+              "const": "other",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Residual": {
+      "description": "The final accepted Newton residual, worst node.",
+      "properties": {
+        "at": {
+          "description": "The node or branch carrying it, for the \"who\" question.",
+          "type": "string"
+        },
+        "max_abs": {
+          "description": "`max |f(x)|` over node KCL rows at acceptance, amperes.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "max_abs",
+        "at"
+      ],
+      "type": "object"
+    },
+    "RunScope": {
+      "description": "What the verdict covers, and what it does not.",
+      "properties": {
+        "checks_not_run": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/Check"
+          },
+          "type": "array"
+        },
+        "checks_run": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/Check"
+          },
+          "type": "array"
+        },
+        "not_covered": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/Condition"
+          },
+          "type": "array"
+        },
+        "partial": {
+          "description": "True when a single-check mode ran: the verdict covers `checks_run` only.",
+          "type": "boolean"
+        },
+        "unjudged_refs": {
+          "default": [],
+          "description": "Key parts with no usable model.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "partial"
+      ],
+      "type": "object"
+    },
+    "Scope": {
+      "oneOf": [
+        {
+          "description": "The whole run, e.g. every placed part treated as fitted because there\nwas no BOM at all.",
+          "properties": {
+            "type": {
+              "const": "board",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Specific typed subjects.",
+          "properties": {
+            "type": {
+              "const": "subjects",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/definitions/SubjectSet"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "One subject-qualified parameter.",
+          "properties": {
+            "type": {
+              "const": "parameter",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/definitions/ParameterRef"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Specific nets, optionally restricted to an observation window.",
+          "properties": {
+            "type": {
+              "const": "nets",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/definitions/NetScope"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "One named check (\"drc\", \"si\", \"lint\"), for `NotChecked` and `Waived`.",
+          "properties": {
+            "type": {
+              "const": "check",
+              "type": "string"
+            },
+            "value": {
+              "properties": {
+                "check": {
+                  "description": "The check name.",
+                  "type": "string"
+                },
+                "kind": {
+                  "description": "The specific rule inside the check, when the scope is that narrow.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "check"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Severity": {
+      "description": "How much a finding matters, on one ordered scale (`info` lowest,\n`serious` highest).\n\nWhether it fails the run is a separate flag,\n[`BLOCKING`]: the gate decides that per check (a lint warning can block, a\nDRC warning does not), and every renderer leads with it (\"2 blocking,\n0 serious, 2 worth a look\") so the headline and the verdict agree.",
+      "oneOf": [
+        {
+          "const": "info",
+          "description": "Context, not a problem.",
+          "type": "string"
+        },
+        {
+          "const": "note",
+          "description": "Worth knowing; no action expected.",
+          "type": "string"
+        },
+        {
+          "const": "warning",
+          "description": "Worth a look before ordering.",
+          "type": "string"
+        },
+        {
+          "const": "serious",
+          "description": "A real problem with the design.",
+          "type": "string"
+        }
+      ]
+    },
+    "Signoff": {
+      "description": "One approval of a sealed record.",
+      "properties": {
+        "by": {
+          "type": "string"
+        },
+        "on": {
+          "description": "RFC 3339 UTC time of the approval.",
+          "type": "string"
+        },
+        "record_sha256": {
+          "description": "The `record_id` the signer approved.",
+          "type": "string"
+        },
+        "statement": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "by",
+        "on",
+        "statement",
+        "record_sha256"
+      ],
+      "type": "object"
+    },
+    "SourceReference": {
+      "description": "A cited source: the model card's `[[models.source.references]]`.",
+      "properties": {
+        "locator": {
+          "description": "Page, table or figure, e.g. `p. 7, Table 3`.",
+          "type": "string"
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "title",
+        "locator"
+      ],
+      "type": "object"
+    },
+    "SubjectSet": {
+      "description": "A non-empty, deduplicated subject set.",
+      "items": {
+        "$ref": "#/definitions/EntityRef"
+      },
+      "type": "array"
+    },
+    "Term": {
+      "description": "A term a report can show a reader.\n\nThe wire name (`snake_case`) is what report JSON and the web app key on.\nDeclaration order is display order; `Term::iter()` lists every term (for a\nfull glossary endpoint).",
+      "oneOf": [
+        {
+          "enum": [
+            "pass",
+            "fail",
+            "invalid",
+            "open_part",
+            "substitute_model",
+            "reduced_fidelity",
+            "assumed_corner",
+            "not_exercised",
+            "not_checked",
+            "inferred_pin_role",
+            "default_parameter",
+            "fitted_by_default",
+            "operating_limit",
+            "parser_limitation",
+            "waived",
+            "default_rules",
+            "identity_only",
+            "executable_partial",
+            "scope_unspecified",
+            "report_only_exit"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "conditional_pass",
+          "description": "A pass that holds only under the listed assumptions (\"qualified\").",
+          "type": "string"
+        }
+      ]
+    },
+    "TimeWindow": {
+      "description": "A sim-time window, seconds, half-open `[start_s, end_s)`.",
+      "properties": {
+        "end_s": {
+          "description": "Window end, seconds, exclusive.",
+          "format": "double",
+          "type": "number"
+        },
+        "start_s": {
+          "description": "Window start, seconds.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "start_s",
+        "end_s"
+      ],
+      "type": "object"
+    },
+    "Tool": {
+      "description": "The program that produced the record.",
+      "properties": {
+        "arch": {
+          "description": "Target architecture (`x86_64`, `aarch64`).",
+          "type": "string"
+        },
+        "features": {
+          "default": [],
+          "description": "Compiled cargo features (which backends this binary can run).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "git": {
+          "description": "Git revision the binary was built from, when known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "`hauksbee`, `hauksbee-ci` or `hauksbee-server`.",
+          "type": "string"
+        },
+        "os": {
+          "description": "Target OS, as Rust names it (`linux`, `macos`, `windows`).",
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "os",
+        "arch"
+      ],
+      "type": "object"
+    },
+    "ValueOrigin": {
+      "description": "Where a bound parameter's value came from.",
+      "oneOf": [
+        {
+          "description": "Read from an input artifact, by index into the run inventory.",
+          "properties": {
+            "field": {
+              "description": "Which field of the artifact carried it.",
+              "type": "string"
+            },
+            "index": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ArtifactId"
+                }
+              ],
+              "description": "Index into the run's `inventory`."
+            },
+            "type": {
+              "const": "artifact",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "index",
+            "field"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "From a resolved model. `layer` is the model source layer (\"builtin\",\n\"pack\", \"user-dir\", \"user-config-dir\", \"models-dir\", \"spice\",\n\"engine-fallback\"); `confidence` is the match confidence's display form\n(\"exact\" through \"guessed\").",
+          "properties": {
+            "confidence": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/MatchConfidence"
+                }
+              ],
+              "description": "How good the match was."
+            },
+            "layer": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ModelLayer"
+                }
+              ],
+              "description": "Which layer of the model ladder it came from."
+            },
+            "model_id": {
+              "description": "The model that supplied it.",
+              "type": "string"
+            },
+            "type": {
+              "const": "model",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "model_id",
+            "layer",
+            "confidence"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A documented default, naming the assumption that records it.",
+          "properties": {
+            "assumption": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AssumptionId"
+                }
+              ],
+              "description": "The `DefaultParameter` assumption for this value."
+            },
+            "type": {
+              "const": "default",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "assumption"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The user overrode it (an as-built overlay, a spec field, a CLI flag).",
+          "properties": {
+            "type": {
+              "const": "user_override",
+              "type": "string"
+            },
+            "via": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/OverrideSource"
+                }
+              ],
+              "description": "How the override arrived."
+            }
+          },
+          "required": [
+            "type",
+            "via"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Verdict": {
+      "description": "The run's outcome in the [`crate::vocabulary`] words.",
+      "properties": {
+        "conditions": {
+          "default": [],
+          "description": "What a pass rests on. Non-empty exactly when `state` is\n`pass_conditional`.",
+          "items": {
+            "$ref": "#/definitions/Condition"
+          },
+          "type": "array"
+        },
+        "exit_code": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "exit_contract": {
+          "description": "The exit table `exit_code` belongs to.",
+          "type": "string"
+        },
+        "label": {
+          "description": "[`VerdictState::label`], stated so a reader needs no table.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why it is not a pass, and what to do next.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/definitions/VerdictState"
+        }
+      },
+      "required": [
+        "state",
+        "label",
+        "exit_code",
+        "exit_contract"
+      ],
+      "type": "object"
+    },
+    "VerdictState": {
+      "description": "What a run concluded. Ordered from best to worst for the reader: a pass,\na pass with named conditions, a fail, and the two outcomes that vouch for\nnothing (partly judged, invalid run).",
+      "oneOf": [
+        {
+          "const": "pass",
+          "description": "Every check in scope ran on trustworthy evidence and nothing blocks.",
+          "type": "string"
+        },
+        {
+          "const": "pass_conditional",
+          "description": "Nothing blocks, but the pass rests on named conditions.",
+          "type": "string"
+        },
+        {
+          "const": "fail",
+          "description": "At least one blocking finding or failed assertion.",
+          "type": "string"
+        },
+        {
+          "const": "partly_judged",
+          "description": "Nothing blocks among the checks that ran, but key parts were not judged.",
+          "type": "string"
+        },
+        {
+          "const": "invalid_run",
+          "description": "The run's own evidence is not trustworthy, so it vouches for nothing.",
+          "type": "string"
+        }
+      ]
+    },
+    "Waiver": {
+      "description": "An accepted risk.",
+      "properties": {
+        "approved_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "approved_on": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "ticket": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "until": {
+          "description": "ISO date the waiver expires.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    "WindowMethod": {
+      "description": "One window and the integration method that produced it.\n\nThe primary method covers most runs in a single entry; a per-chunk fallback\nladder contributes one entry per fallback-solved window, using that\nmachinery's own stable method names verbatim (\"trapezoidal\", \"gear2\",\n\"backward-euler\", \"reduced-step\", \"cold-start-backward-euler\",\n\"subdivided-backward-euler\").",
+      "properties": {
+        "method": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/IntegrationMethod"
+            }
+          ],
+          "description": "The method's stable name."
+        },
+        "window": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TimeWindow"
+            }
+          ],
+          "description": "The span this method produced."
+        }
+      },
+      "required": [
+        "window",
+        "method"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "hauksbee.run-record/1: one run of hauksbee or hauksbee-ci, the single document every report renders from. GENERATED from `RunRecord` in crates/hauksbee-ir/src/run_record.rs. Do not hand-edit; regenerate with: UPDATE_RUN_RECORD_SCHEMA=1 cargo test -p hauksbee-ir --test it run_record_schema_drift",
+  "properties": {
+    "artifacts": {
+      "default": [],
+      "description": "Files rendered or written by the run. Not covered by `record_id`.",
+      "items": {
+        "$ref": "#/definitions/Artifact"
+      },
+      "type": "array"
+    },
+    "assertions": {
+      "default": [],
+      "description": "`hauksbee-ci` spec assertions; empty for `hauksbee run`.",
+      "items": {
+        "$ref": "#/definitions/Assertion"
+      },
+      "type": "array"
+    },
+    "backends": {
+      "default": [],
+      "items": {
+        "$ref": "#/definitions/Backend"
+      },
+      "type": "array"
+    },
+    "evidence": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/EvidenceSpine"
+        }
+      ],
+      "default": {
+        "assumptions": [],
+        "inventory": [],
+        "maps": []
+      }
+    },
+    "findings": {
+      "default": [],
+      "items": {
+        "$ref": "#/definitions/Finding"
+      },
+      "type": "array"
+    },
+    "manifest": {
+      "description": "The engine's `RunManifest` v1 verbatim; null when none was captured.",
+      "properties": {
+        "manifest_id": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "schema_version": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "manifest_id"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "methods": {
+      "$ref": "#/definitions/Methods"
+    },
+    "parts": {
+      "default": [],
+      "items": {
+        "$ref": "#/definitions/Part"
+      },
+      "type": "array"
+    },
+    "record_id": {
+      "description": "`sha256:<hex>` of the canonical record without `record_id`,\n`artifacts` and `signoffs`. Empty until [`RunRecord::seal`].",
+      "type": "string"
+    },
+    "schema": {
+      "description": "Always [`RUN_RECORD_SCHEMA`].",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/definitions/RunScope"
+    },
+    "signoffs": {
+      "default": [],
+      "description": "Approvals appended after the run. Not covered by `record_id`.",
+      "items": {
+        "$ref": "#/definitions/Signoff"
+      },
+      "type": "array"
+    },
+    "started_utc": {
+      "description": "RFC 3339 UTC start time.",
+      "type": "string"
+    },
+    "tool": {
+      "$ref": "#/definitions/Tool"
+    },
+    "verdict": {
+      "$ref": "#/definitions/Verdict"
+    },
+    "wall_s": {
+      "description": "Wall-clock duration, seconds.",
+      "format": "double",
+      "type": "number"
+    }
+  },
+  "required": [
+    "schema",
+    "record_id",
+    "tool",
+    "started_utc",
+    "wall_s",
+    "manifest",
+    "methods",
+    "scope",
+    "verdict"
+  ],
+  "title": "hauksbee run record",
+  "type": "object"
+}

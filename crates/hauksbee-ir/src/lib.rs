@@ -20,8 +20,10 @@ pub mod docs_url;
 pub mod evidence;
 pub mod glossary;
 mod models;
+pub mod run_record;
 mod source;
 mod spice;
+pub mod vocabulary;
 
 pub use bexpr::CompiledExpr;
 pub use docs_url::docs_url;
