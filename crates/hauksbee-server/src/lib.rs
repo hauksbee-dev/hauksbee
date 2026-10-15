@@ -681,14 +681,13 @@ async fn no_board_handler() -> axum::response::Response {
 /// The `/boards/...` answer shared by every route: the file's text on a hit,
 /// the `{"available":false}` JSON miss otherwise (see [`live_board_handler`]).
 fn board_file_response(contents: Option<String>) -> axum::response::Response {
-    match contents {
-        Some(text) => ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], text).into_response(),
-        None => (
-            [(header::CONTENT_TYPE, "application/json")],
-            "{\"available\":false}",
-        )
-            .into_response(),
-    }
+    contents.map_or_else(
+        || {
+            let miss = "{\"available\":false}";
+            ([(header::CONTENT_TYPE, "application/json")], miss).into_response()
+        },
+        |text| ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], text).into_response(),
+    )
 }
 
 async fn handle_socket(mut socket: WebSocket, shared: Arc<Shared>) {
