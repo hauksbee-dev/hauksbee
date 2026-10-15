@@ -27,7 +27,7 @@ describe('C5.3 refusal contract', () => {
   })
 
   test('both analysis and checks views render the shared contract', () => {
-    const boardView = readFileSync(new URL('../src/components/report/ResultPanel.tsx', import.meta.url), 'utf8')
+    const boardView = readFileSync(new URL('../src/components/BoardView.tsx', import.meta.url), 'utf8')
     const reportView = readFileSync(new URL('../src/lib/report-view.ts', import.meta.url), 'utf8')
     const checksRun = readFileSync(new URL('../src/components/checks/RunResults.tsx', import.meta.url), 'utf8')
 
