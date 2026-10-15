@@ -252,33 +252,7 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
     let conditional = unknown_state_faults(&mut bound, &by_part);
     let rows = (by_part.into_iter().map(|row| (row, Severity::High)))
         .chain(conditional.into_iter().map(|row| (row, Severity::Medium)));
-    let mut findings: Vec<LintFinding> = rows
-        .map(|((part, (states, clauses, mut nets)), severity)| {
-            nets.sort();
-            nets.dedup();
-            let message = if severity == Severity::High {
-                format!(
-                    "{part} is overstressed with the board at rest, {}: {}",
-                    states.join(" and "),
-                    clauses.join("; ")
-                )
-            } else {
-                format!(
-                    "{part} is overstressed only {UNKNOWN_STATE}: {} (CONDITIONAL: the board \
-                     does not show that state, so the firmware decides whether it is reached; \
-                     with the loads at their declared draw it is within its ratings)",
-                    clauses.join("; ")
-                )
-            };
-            LintFinding {
-                check: LintCheck::DcOverstress,
-                severity,
-                message,
-                refs: vec![part],
-                nets,
-            }
-        })
-        .collect();
+    let mut findings: Vec<LintFinding> = rows.map(rest_finding).collect();
     findings.extend(
         (under.into_values()).filter_map(|(drive, nets)| gate_underdrive(&bound, &drive, nets)),
     );
@@ -301,6 +275,36 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
         });
     }
     NetLintReport { findings }
+}
+
+/// The finding for one part overstressed at rest (`High`) or only in the state
+/// the board does not show (`Medium`, conditional).
+fn rest_finding(
+    ((part, (states, clauses, mut nets)), severity): ((String, PartFaults), Severity),
+) -> LintFinding {
+    nets.sort();
+    nets.dedup();
+    let message = if severity == Severity::High {
+        format!(
+            "{part} is overstressed with the board at rest, {}: {}",
+            states.join(" and "),
+            clauses.join("; ")
+        )
+    } else {
+        format!(
+            "{part} is overstressed only {UNKNOWN_STATE}: {} (CONDITIONAL: the board \
+             does not show that state, so the firmware decides whether it is reached; \
+             with the loads at their declared draw it is within its ratings)",
+            clauses.join("; ")
+        )
+    };
+    LintFinding {
+        check: LintCheck::DcOverstress,
+        severity,
+        message,
+        refs: vec![part],
+        nets,
+    }
 }
 
 /// The low-severity note for a part whose computed stress no real part can see.
