@@ -3445,3 +3445,320 @@ vgs_th_max = 2.7 # Source: Electrical Characteristics, Gate Threshold Voltage ro
 [models.coverage]
 implements = ["nmos_channel"]
 missing = ["body_diode", "temperature_dependent_behavior", "switching_transients", "self_heating"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BSC014N04LS: Infineon OptiMOS 40 V N-channel power MOSFET, PG-TDSON-8.
+#
+# Source: Infineon BSC014N04LS datasheet, Revision 2.9, 2024-05-11 (the Chinese
+#   translation, whose tables are the English tables verbatim): Table 2 Maximum
+#   ratings p.3, Table 3 Thermal characteristics p.4, Table 4 Static
+#   characteristics and Table 5 Dynamic characteristics p.5. The package drawing
+#   (p.11-13) prints no pin numbers, so only the terminal names G, S and D are
+#   used, as the three board pads of the fitted LFPAK/TDSON footprint name them.
+#
+# Datasheet figures used (Tj = 25 C):
+#   VGS(th) = 1.2 min / 2.0 max @ VDS = VGS, ID = 250 uA (no typ: midpoint 1.6 V,
+#                                                           ASSUMED)             -> vto
+#   RDS(on) typ 1.5 mOhm (max 1.9) @ VGS = 4.5 V, ID = 50 A
+#   RDS(on) typ 1.1 mOhm (max 1.4) @ VGS = 10 V,  ID = 50 A
+#   gfs typ 230 S @ ID = 50 A;  Ciss 4300 / Crss 100 pF @ VDS = 20 V, f = 1 MHz
+#
+# kp from the typ rows (overdrives 2.9 V and 8.4 V with vto 1.6 V):
+#   kp = (1/2.9 - 1/8.4) / (0.0015 - 0.0011) = 564.4 A/V^2
+#   rd+rs = 0.0011 - 1/(564.4 * 8.4) = 0.889 mOhm, split evenly.
+# CROSS-CHECK: level-1 gm at 50 A is sqrt(2 * 564.4 * 50) = 237.6 S against the
+#   printed gfs typ 230 S (+3 %).
+# NOT MODELLED: the body diode (VSD 0.82 V typ), gate resistance (0.9 Ohm typ),
+#   lambda and avalanche.
+[[models]]
+id = "bsc014n04ls"
+kind = "nmos"
+description = "Infineon BSC014N04LS N-channel MOSFET PG-TDSON-8, 40 V, 1.1 mOhm typ @ Vgs=10 V"
+
+[models.match]
+value_re = "(?i)^BSC014N04LS(?:ATMA1)?$"
+
+[models.params]
+vto    = 1.6       # midpoint of VGS(th) 1.2 to 2.0 V (no typ printed), ASSUMED
+kp     = 564.4     # A/V^2, from the 4.5 V and 10 V RDS(on) typ rows (see above)
+rd     = 0.0004445 # half the 0.889 mOhm ohmic residue
+rs     = 0.0004445
+cgd    = 1.0e-10   # = Crss typ 100 pF, Table 5, VDS = 20 V, VGS = 0, f = 1 MHz
+cgs    = 4.2e-9    # = Ciss typ - Crss typ = 4300 - 100 pF, same condition
+
+[models.pins]
+# The datasheet drawing prints no pin numbers; G, S and D are the terminal names
+# the board footprint pads carry.
+"G" = "gate"
+"S" = "source"
+"D" = "drain"
+
+[models.ratings]
+max_current_a       = 33.0    # ID, VGS = 10 V, TA = 25 C on 6 cm2 Cu, RthJA 50 K/W (Table 2); 205 A at TC = 25 C
+max_surge_current_a = 820.0   # ID,pulse, TC = 25 C
+max_power_w         = 3.0     # Ptot, TA = 25 C, RthJA 50 K/W (115 W at TC = 25 C)
+max_voltage_v       = 40.0    # V(BR)DSS min
+theta_ja_c_per_w    = 50.0    # RthJA, 6 cm2 cooling area (Table 3)
+theta_jc_c_per_w    = 1.3     # RthJC bottom, max
+max_junction_temp_c = 175.0   # Tj, Tstg max
+rds_on_vgs          = 4.5     # lowest-VGS RDS(on) row (1.5 mOhm typ / 1.9 max @ 4.5 V)
+vgs_th_max          = 2.0     # VGS(th) max @ ID = 250 uA
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.infineon.com/assets/row/public/documents/24/49/infineon-bsc014n04ls-datasheet-cn.pdf"
+title = "Infineon BSC014N04LS OptiMOS 40 V 175 C N-channel power MOSFET datasheet, Revision 2.9, 2024-05-11 (Chinese translation of the English controlling document)"
+locator = "Table 2 Maximum ratings p.3; Table 3 Thermal characteristics p.4; Table 4 Static characteristics and Table 5 Dynamic characteristics p.5"
+sha256 = "5f88705f51262c52474ea7ceec021cab389ab5138b775e74189083e43152e8d8"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vto"
+reason = "the datasheet prints VGS(th) as 1.2 V min / 2.0 V max with no typ; the 1.6 V midpoint is assumed"
+[[models.source.pinout]]
+package = "PG-TDSON-8"
+pins = { "G" = "G", "S" = "S", "D" = "D" }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ZXMP6A13F: Diodes Incorporated 60 V P-channel enhancement-mode MOSFET, SOT23.
+#
+# Source: Diodes ZXMP6A13F datasheet DS32014 Rev. 7-2, November 2013: Product
+#   Summary and Maximum Ratings p.1-2, Thermal Characteristics p.2, Electrical
+#   Characteristics p.4. Every voltage and current is negative.
+#
+# The sheet prints only MAXIMUM RDS(on) (no typ) and VGS(th) as -1 min / -3 max,
+# so the fit below uses the maxima and the midpoint threshold and is therefore
+# conservative on conduction loss and ASSUMED on threshold:
+#   VGS(th) = -1 / -3 V @ VDS = VGS, ID = -250 uA  (midpoint -2.0 V, ASSUMED) -> vto
+#   RDS(on) max 0.400 Ohm @ VGS = -10 V, ID = -0.9 A
+#   RDS(on) max 0.600 Ohm @ VGS = -4.5 V, ID = -0.8 A
+#   gfs typ 1.8 S @ VDS = -15 V, ID = -0.9 A;  Ciss 219 / Crss 20.5 pF @ VDS = -30 V
+# kp, in magnitudes (overdrives 8.0 V and 2.5 V):
+#   kp = (1/2.5 - 1/8.0) / (0.600 - 0.400) = 1.375 A/V^2
+#   rd+rs = 0.400 - 1/(1.375 * 8.0) = 0.309 Ohm, split evenly.
+# CROSS-CHECK: level-1 gm at 0.9 A is sqrt(2 * 1.375 * 0.9) = 1.57 S against the
+#   printed gfs typ 1.8 S (-13 %, the maxima make the fit slightly weak).
+# NOT MODELLED: the body diode (VSD -0.85 V typ), lambda.
+[[models]]
+id = "zxmp6a13f"
+kind = "pmos"
+description = "Diodes ZXMP6A13F P-channel MOSFET SOT23, -60 V, -1.1 A, Rds(on) 0.4 Ohm max @ Vgs=-10 V"
+
+[models.match]
+value_re = "(?i)^ZXMP6A13F(?:TA|TC)?$"
+
+[models.params]
+vto    = -2.0      # midpoint of VGS(th) -1 to -3 V (no typ printed), ASSUMED
+kp     = 1.375     # A/V^2, from the -10 V and -4.5 V RDS(on) MAX rows (see above)
+rd     = 0.1545    # half the 0.309 Ohm ohmic residue
+rs     = 0.1545
+cgd    = 2.05e-11  # = Crss typ 20.5 pF, p.4, VDS = -30 V, VGS = 0, f = 1 MHz
+cgs    = 1.985e-10 # = Ciss typ - Crss typ = 219 - 20.5 pF, same condition
+
+[models.pins]
+# Pin Out on p.1 is a top view with no numbers; 1 G, 2 S, 3 D is the standard
+# SOT-23 single-MOSFET reading (assumed).
+"1" = "gate"
+"2" = "source"
+"3" = "drain"
+
+[models.ratings]
+max_current_a       = 0.8     # |ID|, VGS = -10 V, TA = 70 C (Note 7), the least favourable row (1.1 A at 25 C)
+max_surge_current_a = 4.0     # |IDM|
+max_power_w         = 0.625   # PD, Note 5
+max_voltage_v       = 60.0    # |VDSS|
+theta_ja_c_per_w    = 200.0   # RθJA, Note 5 (155 for Note 6)
+max_junction_temp_c = 150.0   # TJ, TSTG -55 to +150 C
+rds_on_vgs          = 4.5     # lowest |VGS| RDS(on) row (0.600 Ohm max @ VGS = -4.5 V)
+vgs_th_max          = 3.0     # |VGS(th)| max (-3 V) @ ID = -250 uA
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/ZXMP6A13F.pdf"
+title = "Diodes Incorporated ZXMP6A13F 60V P-Channel Enhancement Mode MOSFET, DS32014 Rev. 7-2, November 2013"
+locator = "p.1 Product Summary and Pin Out; p.2 Maximum Ratings and Thermal Characteristics; p.4 Electrical Characteristics"
+sha256 = "bb474f827be488a217d504d255741a9b8d7c7c4ba7988c7914d10a4c991140ce"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vto"
+reason = "the datasheet prints VGS(th) as -1 V min / -3 V max with no typ; the -2 V midpoint is assumed"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "rds_on"
+reason = "only maximum RDS(on) is printed (0.400 Ohm at -10 V, 0.600 Ohm at -4.5 V); kp, rd and rs are fitted to the maxima, so conduction loss is overstated"
+[[models.source.pinout]]
+package = "SOT23"
+standard = "JEDEC SOT-23 top view: 1 G and 2 S on the two-lead side, 3 D opposite (assumed; the drawing prints lead names only)"
+pins = { "1" = "G", "2" = "S", "3" = "D" }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DMG3415UFY4: Diodes Incorporated P-channel enhancement-mode MOSFET in the
+# X2-DFN2015-3 package, -16 V, gate ESD-protected (3 kV). "Not recommended for
+# new design" (successor DMP2045UFY4). A different die and package from the
+# SOT-23 DMG3415U above (-20 V, other capacitances and ratings).
+#
+# Source: Diodes Incorporated DMG3415UFY4 datasheet, DS31842 Rev. 7-3, March
+#   2018: Product Summary and Ordering Information p.1, Maximum Ratings and
+#   Thermal Characteristics and Electrical Characteristics p.2.
+#
+# Datasheet figures used (TA = +25 C; every voltage and current is negative):
+#   VGS(th) = -0.3 / -0.55 / -1.0 V   @ VDS = VGS, ID = -250 uA        -> vto
+#   RDS(on) typ 31 mOhm (max 39)      @ VGS = -4.5 V, ID = -4.0 A
+#   RDS(on) typ 40 mOhm (max 52)      @ VGS = -2.5 V, ID = -3.5 A
+#   RDS(on) typ 51 mOhm (max 65)      @ VGS = -1.8 V, ID = -2.0 A
+#   |Yfs| typ 7.9 S                   @ VDS = -5 V, ID = -2.5 A
+#   Ciss 282 pF / Coss 152 pF / Crss 38 pF  @ VDS = -10 V, VGS = 0, 1 MHz
+#   BVDSS -16 V, VGSS +/-8 V, IDM -12 A
+#
+# kp, in magnitudes, from the -4.5 V and -1.8 V typ rows (overdrives 3.95 V and
+# 1.25 V): kp = (1/1.25 - 1/3.95) / (0.051 - 0.031) = 27.34 A/V^2
+#   rd+rs = 0.031 - 1/(27.34 * 3.95) = 21.74 mOhm, split evenly.
+# (The three typ RDS(on) rows equal the SOT-23 DMG3415U's, so the fit is the
+#  same; the dies differ in capacitance and rating.)
+# OUT-OF-SAMPLE CHECK: the -2.5 V row (overdrive 1.95 V) lands at
+#   1/(27.34 * 1.95) + 0.02174 = 40.5 mOhm against a typ of 40 (+1.2 %).
+# The |Yfs| row DISAGREES and is recorded rather than hidden: the level-1 fit
+#   gives sqrt(2 * 27.34 * 2.5) = 11.7 S at ID = -2.5 A against a typ of 7.9 S.
+#   The RDS(on) route governs the conducted drop through a closed switch, the job
+#   this part does on a board, so it is used.
+# NOT MODELLED: the body diode, the gate ESD protection diode, `lambda`, and the
+# 250 Ohm gate resistance Rg.
+[[models]]
+id = "dmg3415ufy4"
+kind = "pmos"
+description = "DMG3415UFY4 P-channel MOSFET X2-DFN2015-3, -16V, -2.5A, Rds(on) 31mOhm typ @ Vgs=-4.5V"
+
+[models.match]
+# Adafruit's Eagle library writes the value without the final "4" ("DMG3415UFY",
+# adalogger Q3 on a DFN2015-3 land); DS31842 lists only DMG3415UFY4-7 (tape and
+# reel), and no other part shares the "DMG3415UFY" prefix.
+value_re = "(?i)^DMG3415UFY4?(-7)?$"
+
+[models.params]
+vto    = -0.55     # VGS(th) typ (V), NEGATIVE for P-channel (min -0.3, max -1.0)
+kp     = 27.34     # A/V^2, from the -4.5 V and -1.8 V typ RDS(on) rows (see above)
+rd     = 0.01087   # half the 21.74 mOhm ohmic residue
+rs     = 0.01087   # other half
+cgd    = 3.8e-11   # = Crss typ 38 pF, DS31842 Dynamic Characteristics (Note 8), VDS = -10 V, VGS = 0, f = 1 MHz
+cgs    = 2.44e-10  # = Ciss typ - Crss typ = 282 - 38 = 244 pF, same test condition
+
+[models.pins]
+# DS31842 prints top/bottom-view drawings with D on the single lead and G, S on
+# the two-lead side and no pin NUMBERS; the numbering below is the standard
+# single-MOSFET reading (1 G, 2 S on the two-lead side, 3 D on the single pad),
+# which is also how the board's DFN2015-3 land numbers them (pads 1 and 2 on one
+# side, the wider pad 3 opposite). ASSUMED.
+"1" = "gate"
+"2" = "source"
+"3" = "drain"
+
+[models.ratings]
+max_current_a       = 2.2     # |ID| continuous, VGS = -4.5 V, TA = 70 C (Note 6), the least favourable row (2.5 A at 25 C)
+max_surge_current_a = 12.0    # |IDM|
+max_power_w         = 0.65    # PD (Note 5, minimum pad layout)
+max_voltage_v       = 16.0    # |VDSS|
+theta_ja_c_per_w    = 197.0   # RthJA (Note 5), 95 for Note 6
+theta_jc_c_per_w    = 22.0    # RthJC (Note 6)
+max_junction_temp_c = 150.0   # TJ, TSTG -55 to +150 C
+rds_on_vgs          = 1.8     # lowest |VGS| RDS(on) row (51 mOhm typ / 65 max @ VGS = -1.8 V)
+vgs_th_max          = 1.0     # |VGS(th)| max (-1.0 V) @ ID = -250 uA
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/datasheet/download/DMG3415UFY4.pdf"
+title = "Diodes Incorporated DMG3415UFY4 P-Channel Enhancement Mode MOSFET, DS31842 Rev. 7-3, March 2018"
+locator = "p.1 Product Summary, Top/Bottom View and Ordering Information; p.2 Maximum Ratings, Thermal Characteristics, Electrical Characteristics"
+sha256 = "9e81cde7b1b7d7d53cf9f0bbb070072e1443127ea9ddc47db713cb4c33b05614"
+[[models.source.pinout]]
+package = "X2-DFN2015-3"
+standard = "top view: 1 G and 2 S on the two-lead side, 3 D on the single pad (assumed; the drawing prints lead names only)"
+pins = { "1" = "G", "2" = "S", "3" = "D" }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DMG2305UX: Diodes Incorporated P-channel enhancement-mode MOSFET, SOT-23,
+# -20 V, -4.2 A steady state at TA = 25 C.
+#
+# Source: Diodes Incorporated DMG2305UX datasheet, DS36196 Rev. 8-2, July 2021:
+#   Product Summary, Top View and Ordering Information p.1; Maximum Ratings,
+#   Thermal Characteristics and Electrical Characteristics p.2.
+#
+# Datasheet figures used (TA = +25 C; every voltage and current is negative):
+#   VGS(th) = -0.5 min / -0.9 max @ VDS = VGS, ID = -250 uA (no typ: -0.7 V
+#                                                  midpoint, ASSUMED)       -> vto
+#   RDS(on) typ 40 mOhm (max 52)  @ VGS = -4.5 V, ID = -4.2 A
+#   RDS(on) typ 52 mOhm (max 100) @ VGS = -2.5 V, ID = -3.4 A
+#   RDS(on) typ 68 mOhm (max 200) @ VGS = -1.8 V, ID = -2 A
+#   |YFS| typ 9 S                 @ VDS = -5 V, ID = -4 A
+#   Ciss 808 pF / Coss 85 pF / Crss 77 pF @ VDS = -15 V, VGS = 0, 1 MHz
+#   BVDSS -20 V, VGSS +/-8 V, IDM -15 A
+#
+# kp, in magnitudes, from the -4.5 V and -1.8 V typ rows (overdrives 3.8 V and
+# 1.1 V with vto -0.7 V): kp = (1/1.1 - 1/3.8) / (0.068 - 0.040) = 23.07 A/V^2
+#   rd+rs = 0.040 - 1/(23.07 * 3.8) = 28.59 mOhm, split evenly.
+# OUT-OF-SAMPLE CHECK: the -2.5 V row (overdrive 1.8 V) lands at
+#   1/(23.07 * 1.8) + 0.02859 = 52.7 mOhm against a typ of 52 (+1.3 %).
+# The |YFS| row DISAGREES and is recorded rather than hidden: the level-1 fit
+#   gives sqrt(2 * 23.07 * 4) = 13.6 S at ID = -4 A against a typ of 9 S; the
+#   RDS(on) route governs the conducted drop through a closed switch, so it is used.
+# NOT MODELLED: the body diode, lambda and the 15.2 Ohm gate resistance.
+[[models]]
+id = "dmg2305ux"
+kind = "pmos"
+description = "DMG2305UX P-channel MOSFET SOT-23, -20V, -4.2A, Rds(on) 40mOhm typ @ Vgs=-4.5V"
+
+[models.match]
+# DMG2305UX-7 / -13 are the tape-and-reel quantity codes in the Ordering
+# Information. SparkFun's Eagle libraries (MicroMod STM32 Q1, Thing Plus RP2040)
+# write the value as the parametric string "20V/4.2A/52mOhm/1.4W" while the
+# device name carries the part ("-DMG2305UX-7"); the four numbers are this
+# datasheet's BVDSS, steady-state ID, RDS(on) max at -4.5 V and PD (Note 5).
+value_re = "(?i)^(?:DMG2305UX(?:-7|-13)?|20V/4\\.2A/52m(?:Ω|ohm)/1\\.4W)$"
+
+[models.params]
+vto    = -0.7      # midpoint of VGS(th) -0.5 to -0.9 V (no typ printed), ASSUMED
+kp     = 23.07     # A/V^2, from the -4.5 V and -1.8 V typ RDS(on) rows (see above)
+rd     = 0.014296  # half the 28.59 mOhm ohmic residue
+rs     = 0.014296  # other half
+cgd    = 7.7e-11   # = Crss typ 77 pF, DS36196 Dynamic Characteristics (Note 8), VDS = -15 V, VGS = 0, f = 1 MHz
+cgs    = 7.31e-10  # = Ciss typ - Crss typ = 808 - 77 = 731 pF, same test condition
+
+[models.pins]
+# DS36196 prints a top-view drawing with D on the single lead and G, S on the
+# two-lead side and no pin NUMBERS; 1 G, 2 S, 3 D is the standard SOT-23 reading
+# the DMG3415U and DMG3404L cards use for the same Diodes outline. ASSUMED.
+"1" = "gate"
+"2" = "source"
+"3" = "drain"
+
+[models.ratings]
+max_current_a       = 3.3     # |ID| continuous, VGS = -4.5 V, steady state, TA = 70 C (Note 5), the least favourable row (4.2 A at 25 C)
+max_surge_current_a = 15.0    # |IDM|, 10 us pulse, duty 1 %
+max_power_w         = 1.4     # PD (Note 5)
+max_voltage_v       = 20.0    # |VDSS|
+theta_ja_c_per_w    = 90.0    # RthJA steady state (Note 5)
+theta_jc_c_per_w    = 33.0    # RthJC (Note 7)
+max_junction_temp_c = 150.0   # TJ, TSTG -55 to +150 C
+rds_on_vgs          = 1.8     # lowest |VGS| RDS(on) row (68 mOhm typ / 200 max @ VGS = -1.8 V)
+vgs_th_max          = 0.9     # |VGS(th)| max (-0.9 V) @ ID = -250 uA
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/datasheet/download/DMG2305UX.pdf"
+title = "Diodes Incorporated DMG2305UX P-Channel Enhancement Mode MOSFET, DS36196 Rev. 8-2, July 2021"
+locator = "p.1 Product Summary, Top View and Ordering Information; p.2 Maximum Ratings, Thermal Characteristics, Electrical Characteristics"
+sha256 = "7421a75157a2e700a217d1a20d075216abed29e81192bf7609d3df6dbb08eb2d"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vto"
+reason = "the datasheet prints VGS(th) as -0.5 V min / -0.9 V max with no typ; the -0.7 V midpoint is assumed"
+[[models.source.pinout]]
+package = "SOT23"
+standard = "JEDEC SOT-23 top view: 1 G and 2 S on the two-lead side, 3 D opposite (assumed; the drawing prints lead names only)"
+pins = { "1" = "G", "2" = "S", "3" = "D" }

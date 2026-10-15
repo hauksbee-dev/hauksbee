@@ -8081,3 +8081,89 @@ basis = "ZMR Series DS32195 Rev. 11-2, Recommended Operating Conditions, ZMR330 
 [models.coverage]
 implements = ["fixed_output_regulation", "supply_current", "absolute_ratings"]
 missing = ["dropout_characteristic", "line_load_regulation", "ripple_rejection", "output_noise", "current_limit", "thermal_shutdown"]
+
+# ── TPS54331: TI 3 A 28 V non-synchronous buck, SOIC-8 (D) / SO PowerPAD-8 (DDA) ──
+# Source: TI SLVS839H (July 2008, revised October 2023). Pin Functions Table 5-1
+# p.3 (the D and DDA packages share the pin order, the DDA adds PowerPAD pin 9,
+# which must be tied to GND), 6.1 Absolute Maximum Ratings and 6.3 Recommended
+# Operating Conditions p.4, 6.4 Thermal Information p.5, 6.5 Electrical
+# Characteristics p.5, 6.6 Switching Characteristics p.6.
+#
+# EN is "float this pin to enable" with an internal pull-up current (Table 5-1,
+# 6.5 input current rows), so no enable block is stated: the converter enable
+# reads a floating pin as low and would switch off a part the datasheet says is
+# running. The adjustable output is set by the board divider onto VSENSE
+# (0.8 V reference); the reference is never the output voltage. The catch diode
+# is the board's own.
+[[models]]
+id = "tps54331_adj"
+kind = "vreg"
+description = "TI TPS54331 3A 28V non-synchronous buck, SOIC-8/SO PowerPAD-8, adjustable (averaged board-feedback model)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tps54331.pdf"
+title = "TI TPS54331 3-A, 28-V Input, Step Down DC-DC Converter With Eco-mode, SLVS839H, July 2008, revised October 2023"
+locator = "Pin Functions Table 5-1 p.3; 6.1 Absolute Maximum Ratings and 6.3 Recommended Operating Conditions p.4; 6.4 Thermal Information p.5; 6.5 Electrical Characteristics p.5; 6.6 Switching Characteristics p.6"
+sha256 = "cf72dfd0ac69eec645b7b493de628dc1c3aa66f5f925a2ea9be6bb5c38260730"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "feedback_reference"
+low = 0.772
+high = 0.828
+unit = "V"
+kind = "specification-limits"
+basis = "TPS54331 SLVS839H 6.5 Voltage reference, 0.772 V min / 0.8 V typ / 0.828 V max"
+
+[models.match]
+# D (SOIC-8) and DDA (SO PowerPAD-8) packages, reel code R/T optional; the
+# TPS54331 "D"/"DDA" ordering codes share one pin order (Table 5-1).
+value_re = "(?i)^TPS54331(?:DDA|D)?[RT]?$"
+
+[models.params]
+warning = "source-bound averaged DC model: board feedback is executable; EN (internal pull-up, float enables), switching ripple, loop stability, soft-start, Eco-mode pulse skipping and protection transients are not modeled"
+iq_a = 110e-6          # 6.5 operating non-switching supply current, VSENSE = 0.85 V, typ
+
+[models.pins]
+"1" = "boot"
+"2" = "in"
+"3" = "en"
+"4" = "ss"
+"5" = "fb"           # VSENSE, inverting node of the error amplifier
+"6" = "comp"
+"7" = "gnd"
+"8" = "sw"           # PH, source of the high-side MOSFET
+"9" = "gnd_ep"       # PowerPAD (DDA package only), must be tied to GND
+
+[models.ratings]
+max_current_a = 3.0          # Features: 80 mOhm high-side MOSFET supports up to 3 A continuous
+max_voltage_v = 30.0         # 6.1 VIN abs max
+max_junction_temp_c = 150.0  # 6.1 / 6.3
+theta_ja_c_per_w = 48.7      # 6.4 RθJA, DDA (116.3 for the D package)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 3.5
+max_v = 28.0
+abs_max_v = 30.0
+basis = "TI TPS54331 SLVS839H, 6.3 Recommended Operating Conditions, VIN 3.5 V to 28 V; 6.1 Absolute Maximum Ratings, VIN 30 V"
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+vout_setpoint = 5.0          # placeholder seed only used with no FB divider on the board
+iout_limit_a = 3.0           # rated output; current-limit threshold 5.8 A typ (3.5 A min), 6.5
+max_duty = 0.90              # 6.6 maximum controllable duty ratio, BOOT-PH = 6 V, 90 % min (93 % typ)
+switching_hz = 570e3         # 6.6 switching frequency, VIN = 12 V, 25 C, typ
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 0.8                 # 6.5 voltage reference typ
+
+[models.coverage]
+implements = ["averaged_buck_dc", "board_feedback_divider", "output_current_ceiling", "reflected_input_power", "maximum_duty", "quiescent_current"]
+missing = ["en_uvlo_divider", "switching_ripple", "compensation_stability", "soft_start", "eco_mode", "cycle_by_cycle_peak_limit", "thermal_shutdown", "temperature_curves"]

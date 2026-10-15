@@ -532,6 +532,22 @@ value_re = "(?i)^H?N2x20$"
 "1" = "p1"
 "2" = "p2"
 
+[[models]]
+id = "header_rpi_40pin_2x20"
+kind = "connector"
+description = "Raspberry Pi 40-pin GPIO header (2x20, 2.54 mm), SparkFun RASPBERRY_PI_40BTM"
+
+[models.match]
+# SparkFun Eagle library spelling for the Raspberry Pi 2x20 GPIO header
+# (device RASPBERRY_PI_40BTM, "-NOHOLES" is the variant without mounting holes).
+value_re = "(?i)^RASPBERRY_PI_40BTM(?:-NOHOLES)?$"
+
+[models.pins]
+# A bare header carries no signal names of its own; only the first pad pair is
+# named so that the binder has a pad map, and the rest are the net's business.
+"1" = "p1"
+"2" = "p2"
+
 # ── Olimex ESP32-EVB REV-L connectors (no datasheet obtained) ────────────────
 #
 # The three parts below are connectors whose vendor part codes (a LiPo header, a
