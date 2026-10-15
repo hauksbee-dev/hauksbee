@@ -191,6 +191,7 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
     // part -> (state labels, clauses); one finding per physical part.
     let mut by_part: BTreeMap<String, PartFaults> = BTreeMap::new();
     let mut unsolved = Vec::new();
+    let mut impossible: BTreeMap<String, String> = BTreeMap::new();
     let mut under: BTreeMap<String, (GateDrive, Vec<String>)> = BTreeMap::new();
     for ((label, registers_high), strong_label) in STATES.into_iter().zip(STRONG_STATES) {
         // The states run in order on the one bound board: the second starts
@@ -203,7 +204,8 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
             unsolved.push(label);
             continue;
         };
-        let (overstressed, under_driven) = judge(state, &x);
+        let (overstressed, under_driven, absurd) = judge(state, &x);
+        note_absurd(&mut impossible, absurd);
         for (drive, nets) in under_driven {
             let worst = under
                 .entry(drive.reference.clone())
@@ -231,7 +233,9 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
             continue;
         }
         if let Some(x) = settle(state) {
-            for (part, clauses, nets) in judge(state, &x).0 {
+            let (strong_over, _, absurd) = judge(state, &x);
+            note_absurd(&mut impossible, absurd);
+            for (part, clauses, nets) in strong_over {
                 if weak.contains(&part) {
                     continue;
                 }
@@ -278,6 +282,17 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
     findings.extend(
         (under.into_values()).filter_map(|(drive, nets)| gate_underdrive(&bound, &drive, nets)),
     );
+    findings.extend(impossible.into_iter().map(|(part, clause)| LintFinding {
+        check: LintCheck::DcOverstress,
+        severity: Severity::Low,
+        message: format!(
+            "{part} {clause}, which no real part can see: this is a modelling or \
+             binding error (a wrong value or rating, or a part that is not fitted), not an \
+             overstress finding, so it was not reported as one"
+        ),
+        refs: vec![part],
+        nets: Vec::new(),
+    }));
     if !unsolved.is_empty() {
         findings.push(LintFinding {
             check: LintCheck::DcOverstress,
@@ -292,6 +307,20 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
         });
     }
     NetLintReport { findings }
+}
+
+/// Keep the first impossible value computed for each part, worded as a clause.
+fn note_absurd(into: &mut BTreeMap<String, String>, events: Vec<FaultEvent>) {
+    for f in events {
+        let part = strip_unit_suffix(f.component.split(':').next().unwrap_or(&f.component));
+        into.entry(part.to_string()).or_insert_with(|| {
+            if f.value.is_finite() {
+                format!("{} {}", verb(f.kind), quantity(f.kind, f.value))
+            } else {
+                format!("{} a non-finite value", verb(f.kind))
+            }
+        });
+    }
 }
 
 /// Move every logic output stamped at its card's weak-corner `ro` to its
@@ -464,10 +493,12 @@ fn gate_underdrive(
     })
 }
 
-/// What one settled state shows: the parts held past a rating there.
+/// What one settled state shows: the parts held past a rating there, the
+/// gates conducting under-driven, and the values too large to be physical.
 type Judged = (
     Vec<(String, Vec<String>, Vec<String>)>,
     Vec<(GateDrive, Vec<String>)>,
+    Vec<FaultEvent>,
 );
 
 /// Each part the monitor saw conducting under-driven, with its gate net.
@@ -607,7 +638,7 @@ fn judge(bound: &mut BoundBoard, solved: &(Workspace, Vec<f64>)) -> Judged {
             (part, clauses, nets)
         })
         .collect();
-    (overstressed, under)
+    (overstressed, under, monitor.implausible)
 }
 
 /// The rating a fault is judged against, coarsely: continuous and surge
@@ -754,6 +785,28 @@ mod tests {
             "{:#?}",
             report.findings
         );
+    }
+
+    /// Faulty: a diode fed through a near-zero resistance computes to kiloamps.
+    /// No part sees that: it is a model error, a low note and not an overstress
+    /// finding. The 22R control above is a real, serious one.
+    #[test]
+    fn an_impossible_current_is_a_model_error_not_an_overstress() {
+        let report = diode_at("1N4148", "0.0001R");
+        let found = findings_on(&report, "D1");
+        assert_eq!(found.len(), 1, "{:#?}", report.findings);
+        assert_eq!(found[0].severity, Severity::Low, "{}", found[0].message);
+        assert!(
+            found[0].message.contains("modelling or binding error"),
+            "{}",
+            found[0].message
+        );
+        assert!(hauksbee_bind::is_implausible(FaultKind::Overpower, 3.0e3));
+        assert!(hauksbee_bind::is_implausible(
+            FaultKind::Overtemperature,
+            4.0e3
+        ));
+        assert!(!hauksbee_bind::is_implausible(FaultKind::Overpower, 2.0));
     }
 
     /// Faulty: a steady ~200 mA through a DO-35 1N4148 is past its 150 mA

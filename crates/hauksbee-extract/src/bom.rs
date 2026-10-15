@@ -2196,8 +2196,7 @@ pub(crate) fn parse_populate(cell: &str, header_key: &str) -> Option<bool> {
 /// decision, not naming a part. Real: the survey found rows whose entire
 /// identity is the word `DNP`.
 fn populate_from_value(value: &str) -> Option<bool> {
-    let v = value.trim().to_ascii_lowercase();
-    (v == "dnp" || v == "dni" || v == "do not populate").then_some(false)
+    crate::dnp::value_marks_dnp(value).then_some(false)
 }
 
 /// True when a cell plausibly IS a manufacturer part number rather than a

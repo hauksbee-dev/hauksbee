@@ -1248,15 +1248,25 @@ struct RunArgs {
     no_fit: Vec<String>,
 
     /// Leave every DNP part out of the simulation, matching what a fab house
-    /// would build from the board file.
+    /// would build from the board file. This is the default; the flag only
+    /// says it out loud.
     ///
-    /// The default instead simulates DNP parts as fitted, because most DNP
-    /// footprints get placed eventually, while keeping near-zero-ohm links (0R
-    /// bridges, solder jumpers, ferrite beads) open, since fitting one of those
-    /// merges the nets it bridges. Every run prints which parts were fitted and
-    /// which were left open.
-    #[arg(long, conflicts_with = "fit_all_dnp", help_heading = "Do-not-populate")]
+    /// "DNP" here is anything the board file marks as not built: a DNP
+    /// attribute, excluded from the BOM or the board, or a value field of
+    /// `DNP`/`NC`/`DNF`. Every run prints which parts were left open.
+    #[arg(
+        long,
+        conflicts_with_all = ["fit_all_dnp", "fit_dnp"],
+        help_heading = "Do-not-populate"
+    )]
     honour_dnp: bool,
+
+    /// Simulate DNP parts as fitted, except near-zero-ohm links (0R bridges,
+    /// solder jumpers, ferrite beads), which stay open because fitting one
+    /// merges the nets it bridges. For a board whose DNP footprints will all be
+    /// placed.
+    #[arg(long, conflicts_with = "fit_all_dnp", help_heading = "Do-not-populate")]
+    fit_dnp: bool,
 
     /// Simulate every DNP part as fitted, including near-zero-ohm links.
     #[arg(long, help_heading = "Do-not-populate")]
@@ -1947,12 +1957,12 @@ fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
         serial_mcu: a.serial_mcu,
         fit: a.fit,
         no_fit: a.no_fit,
-        dnp_policy: if a.honour_dnp {
-            hauksbee_extract::dnp::DnpPolicy::Honour
-        } else if a.fit_all_dnp {
+        dnp_policy: if a.fit_all_dnp {
             hauksbee_extract::dnp::DnpPolicy::FitAll
-        } else {
+        } else if a.fit_dnp {
             hauksbee_extract::dnp::DnpPolicy::FitExceptLinks
+        } else {
+            hauksbee_extract::dnp::DnpPolicy::Honour
         },
     }
 }

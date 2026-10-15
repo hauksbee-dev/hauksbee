@@ -148,6 +148,26 @@ pub struct FaultEvent {
     pub destroyed: bool,
 }
 
+/// Whether a computed stress value is beyond anything a real part can see.
+///
+/// A non-finite number, hundreds of watts in one part, a junction hotter than
+/// silicon melts, hundreds of amps or ten kilovolts. Such a number is a modelling or
+/// binding error (a wrong value, a unit slip, a part fitted that was never
+/// built), not a finding about the circuit, so it is never raised as a fault.
+#[must_use]
+pub fn is_implausible(kind: FaultKind, value: f64) -> bool {
+    let bound = match kind {
+        FaultKind::Overtemperature => 1500.0,
+        FaultKind::Overpower
+        | FaultKind::Overcurrent
+        | FaultKind::SurgeCurrent
+        | FaultKind::PinOvercurrent => 500.0,
+        FaultKind::Overvoltage | FaultKind::ReverseBias => 1e4,
+        FaultKind::Short => f64::INFINITY,
+    };
+    !value.is_finite() || value.abs() > bound
+}
+
 /// Per-device metadata captured at bind time so the monitor can evaluate it.
 /// Built additively by the binder; the solver never sees it.
 #[derive(Debug, Clone)]
@@ -795,6 +815,9 @@ pub struct StressMonitor {
     reg_heat: Vec<Option<RegulatorHeat>>,
     /// What the board, not any one part's run, undermines: a rail nothing powered.
     pub board_caveats: Vec<Assumption>,
+    /// Faults whose value is physically impossible ([`is_implausible`]): kept
+    /// apart from the real ones so a caller can report a model error instead.
+    pub implausible: Vec<FaultEvent>,
 }
 
 /// How a regulator's dissipation is estimated.
@@ -1019,6 +1042,7 @@ impl StressMonitor {
             run: vec![RunStats::default(); n],
             reg_heat: vec![None; n],
             board_caveats: Vec::new(),
+            implausible: Vec::new(),
         }
     }
 
@@ -1295,6 +1319,23 @@ impl StressMonitor {
         circuit: &mut Circuit,
         faults: &mut Vec<FaultEvent>,
     ) -> bool {
+        if is_implausible(chk.kind, chk.value) {
+            // Not a fault: a model error, noted once per part and kind. The
+            // kind stays unraised so a plausible violation later still reports.
+            if !(self.implausible.iter())
+                .any(|e| e.kind == chk.kind && e.component == meta.reference)
+            {
+                self.implausible.push(FaultEvent {
+                    component: meta.reference.clone(),
+                    kind: chk.kind,
+                    value: chk.value,
+                    limit: chk.limit,
+                    t,
+                    destroyed: false,
+                });
+            }
+            return false;
+        }
         if self.tracks[i].raised.insert(chk.kind.as_str(), true) == Some(true) {
             return false;
         }
@@ -1683,7 +1724,7 @@ impl StressMonitor {
             }
             if track.over_chunks >= SUSTAIN_CHUNKS && !track.raised {
                 track.raised = true;
-                faults.push(FaultEvent {
+                let event = FaultEvent {
                     component: w.reference,
                     kind: FaultKind::Overvoltage,
                     value: v,
@@ -1692,7 +1733,12 @@ impl StressMonitor {
                     // Chip-cooking is not modeled destructively; the fault
                     // reports, the circuit is left intact.
                     destroyed: false,
-                });
+                };
+                if is_implausible(event.kind, v) {
+                    self.implausible.push(event);
+                } else {
+                    faults.push(event);
+                }
             }
         }
         faults

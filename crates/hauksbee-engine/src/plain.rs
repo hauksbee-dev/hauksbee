@@ -1381,7 +1381,7 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
             {
                 (
                     f.message.clone(),
-                    "The design contains the pull-up, but the part is marked do-not-populate, so the boards that come back from assembly do not have it fitted. Simulation fits DNP parts by default (they are usually placed eventually), which is why other results can look healthy while the real line floats.".to_string(),
+                    "The design contains the pull-up, but the part is marked do-not-populate, so the boards that come back from assembly do not have it fitted. This run fits DNP parts, which is why other results can look healthy while the real line floats.".to_string(),
                     "Either fit the resistor in this build (remove the DNP mark, or name it as fitted), or, if leaving it off is deliberate, document what else defines the line's level.".to_string(),
                 )
             }

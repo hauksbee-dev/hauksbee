@@ -1,8 +1,9 @@
 //! What happens to Do-Not-Populate parts, and whether the run says so.
 //!
 //! Most DNP footprints get placed eventually (a socketed module bought
-//! separately, a part stuffed by hand later), so the default simulates them as
-//! fitted. The exception is a near-zero-ohm link: a 0R bridge between two
+//! separately, a part stuffed by hand later), so `--fit-dnp` simulates them as
+//! fitted (the default leaves them out, as the source marked them). The
+//! exception is a near-zero-ohm link: a 0R bridge between two
 //! ground planes is the electrical decision itself, and fitting it would merge
 //! nets the designer split on purpose. Both halves are reported, never assumed.
 
@@ -53,7 +54,11 @@ fn board() -> ExtractedBoard {
 }
 
 #[test]
-fn the_default_fits_the_processor_and_leaves_the_link_open() {
+fn the_default_leaves_every_dnp_part_out_and_fit_except_links_fits_the_processor() {
+    let mut b = board();
+    let d = b.apply_dnp_policy(DnpPolicy::default(), &[], &[]).unwrap();
+    assert!(d.fitted.is_empty(), "the default fits nothing: {d:?}");
+    assert_eq!(d.left_open.len(), 2, "processor and link both stay out");
     let mut b = board();
     let d = b
         .apply_dnp_policy(DnpPolicy::FitExceptLinks, &[], &[])
@@ -180,7 +185,9 @@ fn a_skipped_sole_processor_warns_on_its_own_row() {
 #[test]
 fn a_left_open_link_contributes_nothing_and_its_absence_is_reported() {
     let mut b = board();
-    let d = b.apply_dnp_policy(DnpPolicy::default(), &[], &[]).unwrap();
+    let d = b
+        .apply_dnp_policy(DnpPolicy::FitExceptLinks, &[], &[])
+        .unwrap();
     assert_eq!(d.left_open[0].reference, "R7", "the link stays open");
 
     let bound = bind_board(&b, &ModelLibrary::builtin());
@@ -250,7 +257,7 @@ fn link_detection_covers_the_shapes_that_merge_nets() {
         .unwrap();
     assert!(
         d.fitted.iter().any(|p| p.reference == "R7"),
-        "a 10k is a component and gets fitted by default"
+        "a 10k is a component and gets fitted when the policy fits"
     );
 }
 

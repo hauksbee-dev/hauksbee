@@ -1288,7 +1288,7 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                 message: format!(
                     "I2C {role} net '{}' relies on {dnp_ref} for its pull-up, but {dnp_ref} \
                      is marked {DNP_PULLUP_MESSAGE_MARKER}: as assembled, the line floats \
-                     (simulation fits DNP parts by default, so other results may look fine)",
+                     (this run fits DNP parts, so other results may look fine)",
                     net.name
                 ),
                 refs: present_refs(&mem),
@@ -1826,7 +1826,7 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                 message: format!(
                     "SD card {role} net '{}' relies on {dnp_ref} for its pull-up, but \
                      {dnp_ref} is marked {DNP_PULLUP_MESSAGE_MARKER}: as assembled, the \
-                     line floats (simulation fits DNP parts by default, so other results \
+                     line floats (this run fits DNP parts, so other results \
                      may look fine)",
                     net.name
                 ),
@@ -2673,7 +2673,7 @@ mod sd_pullup_tests {
 
     /// A DNP pull-up must not silently clear the finding, on EITHER dnp
     /// policy. Under `--honour-dnp` the part is absent and the plain Medium
-    /// finding fires; under the default fit-except-links policy the part is
+    /// finding fires; under the fit-except-links policy the part is
     /// simulation-fitted, and the check must say the assembled board still
     /// floats instead of going green (the policy marks such parts with
     /// `DNP_FITTED_KEY` exactly so presence-class lints can tell).

@@ -12,10 +12,14 @@
 //!    these merges nets that the designer split on purpose, and the tool would
 //!    then report one ground plane on a board that has two.
 //!
-//! Because most DNP footprints eventually get placed, the default is to fit
-//! them, with case 2 carved out: a near-zero-ohm link is a topology decision,
-//! so it stays open unless asked for by name. Every run reports exactly which
-//! parts were fitted and which were left open, so the choice is never silent.
+//! The board file is the authority on what is built, so the default leaves
+//! every such part out of the circuit and every check: a part the source marks
+//! DNP, excludes from the BOM or the board, or whose value field says
+//! `DNP`/`NC`/`DNF` is not on the board that comes back from assembly, and
+//! simulating it produced rail conflicts and absurd dissipation from parts that
+//! do not exist. A part the user knows will be placed is named (`--fit R7`), or
+//! another policy is chosen. Every run reports exactly which parts were fitted
+//! and which were left open, so the choice is never silent.
 
 use crate::{Component, ExtractedBoard};
 use std::fmt::Write as _;
@@ -28,15 +32,14 @@ const LINK_OHMS: f64 = 0.5;
 /// How to treat DNP parts that were not named individually.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DnpPolicy {
-    /// Fit DNP parts, except near-zero-ohm links. The default: most DNP
-    /// footprints are placed eventually, and the exception is the one case
-    /// where fitting silently rewrites the board's topology.
-    #[default]
+    /// Fit DNP parts, except near-zero-ohm links: for a board whose DNP
+    /// footprints are all placed eventually.
     FitExceptLinks,
     /// Fit every DNP part, links included.
     FitAll,
     /// Leave every DNP part open, matching what the board file says a fab
-    /// house would build.
+    /// house would build. The default.
+    #[default]
     Honour,
 }
 
@@ -52,7 +55,10 @@ impl DnpPolicy {
                  the nets it bridges"
             }
             Self::FitAll => "every DNP part is simulated as fitted, including links",
-            Self::Honour => "DNP parts are left out of the simulation, matching the board file",
+            Self::Honour => {
+                "parts the board file marks not-fitted (DNP, excluded from the BOM or the board) \
+                 are left out of the simulation, as a fab house would build it"
+            }
         }
     }
 }
@@ -85,6 +91,10 @@ pub fn fitted_from_dnp_policy(c: &crate::Component) -> bool {
 /// BOM (`(in_bom no)` / `(attr exclude_from_bom)`).
 pub const EXCLUDED_FROM_BOM_KEY: &str = "hauksbee.excluded_from_bom";
 
+/// Property key set by the KiCad readers on a symbol the source keeps off the
+/// board (`(on_board no)`, a netlist `exclude_from_board` property).
+pub const EXCLUDED_FROM_BOARD_KEY: &str = "hauksbee.excluded_from_board";
+
 /// True when the part is not on the bill of materials as built.
 ///
 /// Either the source marks it DNP (and the fit policy only assumed it) or it
@@ -92,11 +102,53 @@ pub const EXCLUDED_FROM_BOM_KEY: &str = "hauksbee.excluded_from_bom";
 /// checks skip it.
 #[must_use]
 pub fn unbought(c: &crate::Component) -> bool {
-    c.dnp
-        || fitted_from_dnp_policy(c)
-        || c.properties
-            .iter()
-            .any(|(key, _)| key == EXCLUDED_FROM_BOM_KEY)
+    c.dnp || fitted_from_dnp_policy(c) || excluded_by_source(c)
+}
+
+/// The source keeps this part off the BOM or off the board.
+fn excluded_by_source(c: &crate::Component) -> bool {
+    (c.properties.iter()).any(|(k, _)| k == EXCLUDED_FROM_BOM_KEY || k == EXCLUDED_FROM_BOARD_KEY)
+}
+
+/// A value field that states a populate decision instead of naming a part.
+///
+/// `DNP`, `DNI`, `DNF`, `NC`, `N/C`, `not fitted`, or such a word beside a
+/// value (`10k (DNP)`, `DNP_100n`). Word-bounded, so a part number that merely
+/// contains the letters never matches.
+#[must_use]
+pub fn value_marks_dnp(value: &str) -> bool {
+    let lower = value.trim().to_ascii_lowercase();
+    let words: Vec<&str> = (lower.split(|c: char| !c.is_ascii_alphanumeric()))
+        .filter(|w| !w.is_empty())
+        .collect();
+    let padded = format!(" {} ", words.join(" "));
+    words
+        .iter()
+        .any(|w| matches!(*w, "dnp" | "dni" | "dnf" | "nopop"))
+        || matches!(
+            padded.as_str(),
+            " nc " | " n c " | " no load " | " noload " | " unpopulated "
+        )
+        || [
+            " do not populate ",
+            " do not fit ",
+            " do not install ",
+            " do not place ",
+            " not fitted ",
+            " not populated ",
+            " no fit ",
+        ]
+        .iter()
+        .any(|phrase| padded.contains(phrase))
+}
+
+/// Whether the source says this part is absent from the board that is built:
+/// DNP, excluded from the BOM or the board (with a connection to judge), or a
+/// value field that says so. A BOM-excluded part with no connected pin
+/// (fiducial, mounting hole, logo) is inert either way and is left alone.
+fn source_marks_absent(c: &crate::Component) -> bool {
+    let connected = || c.pins.iter().any(|p| p.net.is_some_and(|n| n != 0));
+    c.dnp || value_marks_dnp(&c.value) || (excluded_by_source(c) && connected())
 }
 
 /// Why one DNP part ended up fitted or open.
@@ -125,11 +177,11 @@ impl DnpReason {
     #[must_use]
     pub const fn describe(&self) -> &'static str {
         match self {
-            Self::Policy => "DNP, fitted by default",
+            Self::Policy => "DNP, fitted by this run's policy",
             Self::NamedFit => "DNP, fitted because you asked for it",
             Self::NamedOpen => "DNP, left open because you asked for it",
             Self::ZeroOhmLink => "DNP link (near 0 ohm), left open: fitting it merges nets",
-            Self::HonouredPolicy => "DNP, left open",
+            Self::HonouredPolicy => "marked not-fitted in the source, left open",
             Self::AlternativeFootprint => {
                 "DNP alternative footprint of a fitted part on the same nets, left open"
             }
@@ -435,6 +487,11 @@ impl ExtractedBoard {
             policy_line: policy.describe().to_string(),
             ..Default::default()
         };
+        // Every reader's own way of saying "not built here" becomes the one
+        // flag the rest of the pipeline reads.
+        for comp in &mut self.components {
+            comp.dnp = source_marks_absent(comp);
+        }
         let alternatives = alternative_footprints(&self.components);
         for comp in &mut self.components {
             // An explicit `no_fit` is also the assembly-variant seam: the
@@ -627,7 +684,7 @@ mod alternative_footprint_tests {
         let u6 = b.components.iter().find(|c| c.reference == "U6").unwrap();
         let u8 = b.components.iter().find(|c| c.reference == "U8").unwrap();
         assert!(u6.dnp, "the alternative footprint stays open");
-        assert!(!u8.dnp, "an ordinary DNP part is still fitted by default");
+        assert!(!u8.dnp, "an ordinary DNP part is fitted by this policy");
         assert!(format!("{decision:?}").contains("U6"));
         assert_eq!(
             DnpReason::from_policy_tag(DnpReason::AlternativeFootprint.policy_tag()),
@@ -749,5 +806,113 @@ mod jumper_class_tests {
                 "{value} is a link"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod source_absence_tests {
+    use super::{
+        value_marks_dnp, DnpPolicy, DnpReason, EXCLUDED_FROM_BOARD_KEY, EXCLUDED_FROM_BOM_KEY,
+    };
+    use crate::testutil::{board, part, pin};
+
+    /// Legal control: real values and part numbers are never read as a populate
+    /// decision, however many of the letters they share.
+    #[test]
+    fn real_values_are_not_dnp_marks() {
+        for value in [
+            "10k",
+            "100n",
+            "LM1117-3.3",
+            "DNP3-FUSE",
+            "ATmega328P",
+            "BNC",
+            "NCP1117",
+            "1N4148",
+            "",
+        ] {
+            assert!(!value_marks_dnp(value), "{value:?} names a part");
+        }
+    }
+
+    #[test]
+    fn value_fields_that_state_a_populate_decision_are_marks() {
+        for value in [
+            "DNP",
+            "dnf",
+            "NC",
+            "N/C",
+            "10k (DNP)",
+            "DNP_100n",
+            "Do not populate",
+            "not fitted",
+        ] {
+            assert!(value_marks_dnp(value), "{value:?} says not fitted");
+        }
+    }
+
+    fn two_regulators() -> crate::ExtractedBoard {
+        let nets = [(1, "GND"), (2, "+5V"), (3, "+3V3")];
+        let reg = |r: &str, value: &str| {
+            let pins = vec![pin("1", Some(1)), pin("2", Some(3)), pin("3", Some(2))];
+            part(r, value, "lib:LDO", "SOT-223", pins)
+        };
+        board(
+            &nets,
+            vec![reg("U1", "AMS1117-3.3"), reg("U2", "LM1117-3.3")],
+        )
+    }
+
+    /// Faulty: a second regulator the source keeps off the build (by value
+    /// field, BOM exclusion or board exclusion, not a `dnp` flag) is left out by
+    /// the default policy, so two sources never share a rail; the fitted one
+    /// and the named-fit override are unaffected.
+    #[test]
+    fn the_default_leaves_out_every_kind_of_source_exclusion() {
+        assert_eq!(DnpPolicy::default(), DnpPolicy::Honour);
+        for how in ["value", "bom", "board"] {
+            let mut b = two_regulators();
+            let u2 = b
+                .components
+                .iter_mut()
+                .find(|c| c.reference == "U2")
+                .unwrap();
+            match how {
+                "value" => u2.value = "DNP".into(),
+                "bom" => u2
+                    .properties
+                    .push((EXCLUDED_FROM_BOM_KEY.into(), String::new())),
+                _ => u2
+                    .properties
+                    .push((EXCLUDED_FROM_BOARD_KEY.into(), String::new())),
+            }
+            let d = b.apply_dnp_policy(DnpPolicy::default(), &[], &[]).unwrap();
+            assert_eq!(d.left_open.len(), 1, "{how}: {d:?}");
+            assert_eq!(d.left_open[0].reference, "U2", "{how}");
+            assert_eq!(d.left_open[0].reason, DnpReason::HonouredPolicy, "{how}");
+            assert!(b.component("U2").unwrap().dnp, "{how}");
+            assert!(!b.component("U1").unwrap().dnp, "{how}");
+        }
+        let mut b = two_regulators();
+        b.components[1].value = "DNP".into();
+        let d = b
+            .apply_dnp_policy(DnpPolicy::default(), &["U2".into()], &[])
+            .unwrap();
+        assert_eq!(d.fitted[0].reason, DnpReason::NamedFit);
+        assert!(!b.component("U2").unwrap().dnp);
+    }
+
+    /// Legal control: a BOM-excluded part with no connection (a fiducial, a
+    /// mounting hole) is inert and produces no decision line.
+    #[test]
+    fn an_unconnected_bom_excluded_part_is_left_alone() {
+        let mut b = two_regulators();
+        let mut h = part("H1", "MountingHole", "lib:H", "Hole", vec![pin("1", None)]);
+        h.properties
+            .push((EXCLUDED_FROM_BOM_KEY.into(), String::new()));
+        b.components.push(h);
+        let d = b.apply_dnp_policy(DnpPolicy::default(), &[], &[]).unwrap();
+        assert!(d.is_empty(), "{d:?}");
+        assert!(!b.component("H1").unwrap().dnp);
     }
 }
