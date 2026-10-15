@@ -1223,6 +1223,13 @@ pub struct Ratings {
     /// it feeds collapses, which the DC stress finding says in those words.
     #[serde(skip)]
     pub trips_over_current: bool,
+
+    /// Set by the binder, never by a card: whether these limits are the
+    /// part's own, or a placeholder or guessed card's stand-in, whose
+    /// exceedance is a stated condition and never a failing finding
+    /// ([`crate::rating_basis`]).
+    #[serde(skip)]
+    pub basis: crate::rating_basis::RatingBasis,
 }
 
 /// Severity requested by a sourced operating-envelope entry.
@@ -1347,7 +1354,10 @@ impl Ratings {
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        *self == Self::default()
+        Self {
+            basis: crate::rating_basis::RatingBasis::default(),
+            ..self.clone()
+        } == Self::default()
     }
 }
 

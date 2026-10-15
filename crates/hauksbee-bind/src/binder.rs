@@ -26,6 +26,7 @@ use hauksbee_ir::{
     BDep, BOutput, BjtModel, Circuit, CompiledExpr, Device, DeviceId, DiodeModel, MosLevel,
     MosfetModel, NodeId, Polarity, Rail, SourceKind,
 };
+use hauksbee_models::rating_basis::Limit;
 use hauksbee_models::schema::{CurrentProgram, CurrentProgramSemantics};
 use hauksbee_models::sensor_spec::StrapTie;
 use hauksbee_models::validation::repeatable_role;
@@ -89,6 +90,9 @@ pub struct McuBinding {
     /// a rail driven past the chip's abs-max Vcc raises an overvoltage fault
     /// instead of nothing.
     pub max_supply_v: Option<f64>,
+    /// The placeholder or guessed card `max_supply_v` came from, when it is
+    /// not the part's own: passing it is a stated condition, not a fault.
+    pub supply_stand_in: Option<hauksbee_models::rating_basis::StandIn>,
     /// Lowest recommended operating supply voltage (V) across the model's
     /// `supply_range` envelope rows, when it carries any. The co-sim's
     /// execution evidence reads a supply below this as "supply not valid", so
@@ -1338,9 +1342,18 @@ fn gather_device_meta(
 /// a caller cannot reach a model without having answered the three-state
 /// assembled-component question. DNP-absent and identity-unknown parts have no
 /// witness and therefore no model.
+///
+/// The model's ratings carry their [basis](hauksbee_models::rating_basis):
+/// whether they are the part's own card's, or a placeholder or guessed card's
+/// stand-in that no check may fail the board on.
 #[must_use]
 pub fn resolve(lib: &ModelLibrary, part: FittedComponent<'_>) -> hauksbee_models::Resolution {
-    library_resolution(lib, part.component())
+    let mut res = library_resolution(lib, part.component());
+    let basis = hauksbee_models::rating_basis::RatingBasis::of(&res);
+    if let Some(m) = res.model.as_mut() {
+        m.ratings.basis = basis;
+    }
+    res
 }
 
 /// What the library alone decides about one fitted part, shared by every board
@@ -1376,20 +1389,29 @@ impl PartFacts {
                 .fitted(&comp.reference, &comp.footprint, mounting);
             // A fuse or polyfuse limits by its hold current: the card's, else the
             // one its value states ("6V 0.5A"), so a load past it is a trip.
+            // A rating the value states is the part's own, so it stands in
+            // place of a stand-in card's and is judged ([`Limit`]).
             let mut ratings = m.ratings.clone();
+            let stand_in = ratings.basis.stand_in.is_some();
             if m.passive_class == Some(hauksbee_models::schema::PassiveClass::Fuse) {
                 ratings.trips_over_current = true;
-                ratings.max_current_a = ratings
-                    .max_current_a
-                    .or_else(|| hauksbee_models::value::parse_current_rating_a(&comp.value));
+                let stated = hauksbee_models::value::parse_current_rating_a(&comp.value);
+                if stated.is_some() && (stand_in || ratings.max_current_a.is_none()) {
+                    ratings.max_current_a = stated;
+                    ratings.basis.stated_on_board(Limit::Current);
+                }
             }
             // A capacitor's value often states its rated voltage ("10uF/16V");
-            // the card's rating, when it has one, wins.
+            // the card's rating, when it has one of its own, wins.
             let capacitor = m.passive_class
                 == Some(hauksbee_models::schema::PassiveClass::Capacitor)
                 || (m.kind == ComponentKind::Passive && passive_letter(comp) == Some('C'));
-            if capacitor && ratings.max_voltage_v.is_none() {
-                ratings.max_voltage_v = hauksbee_models::value::parse_voltage_rating_v(&comp.value);
+            if capacitor && (stand_in || ratings.max_voltage_v.is_none()) {
+                let stated = hauksbee_models::value::parse_voltage_rating_v(&comp.value);
+                if stated.is_some() {
+                    ratings.max_voltage_v = stated;
+                    ratings.basis.stated_on_board(Limit::Voltage);
+                }
             }
             Arc::new(Rated { ratings, derating })
         });
@@ -7402,6 +7424,7 @@ fn bind_mcu(
         adc_pin,
         module,
         max_supply_v: model.ratings.max_voltage_v,
+        supply_stand_in: model.ratings.basis.stand_in_for(Limit::Voltage).cloned(),
         min_supply_v: model
             .envelope
             .iter()

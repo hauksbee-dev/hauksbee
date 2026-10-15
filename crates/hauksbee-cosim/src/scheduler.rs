@@ -1392,6 +1392,7 @@ impl Scheduler {
                         reference: binding.reference.clone(),
                         node,
                         max_v,
+                        stand_in: binding.supply_stand_in.clone(),
                     });
                 }
             }
@@ -8562,6 +8563,7 @@ missing = ["measurement_registers"]
             adc_pin: HashMap::new(),
             module: false,
             max_supply_v: None,
+            supply_stand_in: None,
             min_supply_v: None,
             supply_floors: HashMap::new(),
         }

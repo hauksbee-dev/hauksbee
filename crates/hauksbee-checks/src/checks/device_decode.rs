@@ -83,6 +83,7 @@ use hauksbee_extract::{
     is_plain_resistor as is_source_classified_resistor, Component, ExtractedBoard, LintCheck,
     LintFinding, NetLintReport, Severity, INFORMATIONAL_MARKER,
 };
+use hauksbee_models::rating_basis::Limit;
 use hauksbee_models::value::parse_value;
 use hauksbee_models::{ComponentKind, ModelLibrary};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -662,7 +663,9 @@ fn tps25982_rated_connectors(
             };
             if let Some(model) = hauksbee_bind::binder::resolve(lib, part).model {
                 if model.kind == ComponentKind::Connector {
-                    if let Some(rating_a) = model.ratings.max_current_a.filter(|a| *a > 0.0) {
+                    let r = &model.ratings;
+                    let rating = r.basis.judged(Limit::Current, r.max_current_a);
+                    if let Some(rating_a) = rating.filter(|a| *a > 0.0) {
                         witnesses
                             .entry(component.reference.clone())
                             .or_insert_with(|| RatedConnector {

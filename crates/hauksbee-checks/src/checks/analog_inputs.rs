@@ -24,6 +24,7 @@ use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, Net, NetLintReport, Severity,
 };
 use hauksbee_ir::evidence::Assumption;
+use hauksbee_models::rating_basis::Limit;
 use hauksbee_models::OperatingEnvelope::InputCommonMode;
 use hauksbee_models::{ModelEntry, ModelLibrary, OperatingEnvelope};
 use std::collections::{BTreeSet, HashSet};
@@ -110,7 +111,13 @@ fn channel_flag(cx: &Ctx, c: &Component, m: &ModelEntry, e: &OperatingEnvelope) 
     let nets = seen.iter().map(|(n, _)| n.clone()).collect();
     let message = format!("{r} has every input of one channel above its common-mode range: {}, all above V('{rail}') {sup:.3} V - {headroom_v:.3} V = {limit:.3} V, so the output state it reports is not guaranteed; basis: \"{basis}\". Keep at least one input below that ceiling (divide the signal down, or move the pair to a lower rail).", shown.join(" and "));
     let severity = super::envelope::finding_severity(e.severity());
-    Some((finding(c, severity, nets, message), true))
+    let seen = format!(
+        "{r} has every input of one channel above V('{rail}') - {headroom_v:.3} V = {limit:.3} V"
+    );
+    let rating = format!("{headroom_v:.3} V common-mode headroom");
+    let f = finding(c, severity, nets, message);
+    let f = super::envelope::stated_if_stand_in(f, m, Limit::Envelope, &seen, &rating);
+    Some((f, true))
 }
 
 /// The ADC pin's flag, where the parallel resistance of the resistors feeding
@@ -130,7 +137,11 @@ fn adc_flag(cx: &Ctx, c: &Component, m: &ModelEntry, role: &str, limit: f64) -> 
     (!abstain && inv_r > 0.0 && 1.0 / inv_r > limit).then_some(())?;
     let message = format!("{r} pin role {role} (net '{}') is fed from {:.1} kOhm ({}), above the {:.1} kOhm maximum ADC source impedance its card declares, so the sample-and-hold cannot settle and the conversion is unreliable once channels are multiplexed or sampled quickly. Lower the divider, buffer it, or fit a >= {:.0} nF capacitor at the pin. The pin is taken as an ADC input from the card's pin role and the purely resistive net feeding it: the board does not record which pins firmware converts.", net.name, 1e-3 / inv_r, feeders.join(", "), limit / 1e3, ADC_HOLD_CAP_F * 1e9);
     let nets = vec![net.name.clone()];
-    Some((finding(c, Severity::Medium, nets, message), false))
+    let seen = format!("{r} pin role {role} is fed from {:.1} kOhm", 1e-3 / inv_r);
+    let rating = format!("{:.1} kOhm ADC source-impedance", limit / 1e3);
+    let f = finding(c, Severity::Medium, nets, message);
+    let f = super::envelope::stated_if_stand_in(f, m, Limit::Envelope, &seen, &rating);
+    Some((f, false))
 }
 
 /// Every ADC pin role the card names, judged against its impedance ceiling.
