@@ -412,10 +412,11 @@ fn eagle_jumper_does_not_hide_ordinary_copper_crossing_over_its_pads() {
 }
 
 /// EAGLE has no net-tie flag; a `SHORT`-style part is two abutting SMD pads
-/// with `cream="no"`. Paste-free abutting pads are a local tie whatever the
-/// library is called; the same pads with paste, or apart, are ordinary pads.
+/// with `cream="no" stop="no"`: covered copper nothing can be soldered to.
+/// Such pads are a local tie whatever the library is called; the same pads
+/// with a mask opening, or apart, are ordinary pads.
 #[test]
-fn eagle_paste_free_abutting_smds_are_a_local_tie() {
+fn eagle_bare_copper_abutting_smds_are_a_local_tie() {
     let pkg = |cream: &str, x2: f64| {
         format!(
             r#"<package name="LINK">
@@ -430,22 +431,22 @@ fn eagle_paste_free_abutting_smds_are_a_local_tie() {
     // A second B wire over the A pad, used only on the open link.
     let over_pad =
         format!(r#"{remote}<wire x1="20" y1="17" x2="20" y2="23" width="0.2" layer="1"/>"#);
-    let no_cream = r#" cream="no""#;
+    let bare = r#" cream="no" stop="no""#;
     let cases = [
         (
-            pkg(no_cream, 0.9),
+            pkg(bare, 0.9),
             remote,
             1,
             "only the remote crossing remains",
         ),
         (
-            pkg("", 0.9),
+            pkg(r#" cream="no""#, 0.9),
             remote,
             2,
-            "pasted abutting pads short as well",
+            "exposed abutting pads short as well",
         ),
         (
-            pkg(no_cream, 1.2),
+            pkg(bare, 1.2),
             over_pad.as_str(),
             2,
             "an open link is no tie: B over its A pad shorts",

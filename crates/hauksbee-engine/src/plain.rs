@@ -924,6 +924,7 @@ pub fn plain_drc_structured_with_rule_source(
     // "copper spacing (DRC)" into a different check name.
     let mut out = PlainReport::new("Copper spacing (DRC)");
     out.unvalidated.clone_from(&st.version_warning);
+    let st = &st.actionable_view(provenance);
 
     // Nothing to check is not the same as nothing wrong.
     //
@@ -1168,6 +1169,8 @@ pub(crate) fn render_drc_condensed_with_rule_source_and_unlock(
     /// How many clearance findings keep the full three-line gloss.
     const FULL: usize = 3;
 
+    let full = st;
+    let st = &st.actionable_view(provenance);
     let pr = plain_drc_structured_with_rule_source(st, provenance);
     let summary = format!(
         "Summary: {} short(s), {} net pair(s) below the clearance rule, {} at minimum \
@@ -1187,7 +1190,7 @@ pub(crate) fn render_drc_condensed_with_rule_source_and_unlock(
     if let Some(notice) = provenance.custom_rules_notice() {
         let _ = writeln!(lead, "{notice}");
     }
-    if let Some(note) = st.default_rule_flood_note(provenance) {
+    for note in full.default_rule_notes(provenance) {
         let _ = writeln!(lead, "{note}");
     }
 
@@ -1958,8 +1961,10 @@ mod tests {
     #[test]
     fn condensed_plain_drc_keeps_three_full_findings_and_aggregates_the_rest() {
         use crate::result::DrcStructured;
+        // 0.10 mm is under the default-rule spacing floor, so every group is an
+        // issue rather than an advisory note.
         let findings: Vec<_> = (0..50)
-            .map(|i| clearance(&format!("NET_{i}"), &format!("NET_{}", i + 100), 0.15))
+            .map(|i| clearance(&format!("NET_{i}"), &format!("NET_{}", i + 100), 0.10))
             .collect();
         let report = drc_report(findings);
         let st = DrcStructured::from_report(&report);

@@ -1221,6 +1221,12 @@ impl CustomRulesCoverage {
     }
 }
 
+/// The spacing floor (5 mil) applied when the board's own rules were not read.
+///
+/// A gap below a default rule but at or above this floor is no evidence of a
+/// problem, so it is noted rather than raised as an issue.
+pub const DEFAULT_RULE_SPACING_FLOOR_MM: f64 = 0.127;
+
 /// Machine-readable provenance for a reported clearance value.
 #[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct ClearanceRuleProvenance {
@@ -1318,6 +1324,13 @@ impl ClearanceRuleProvenance {
             self.source,
             ClearanceRuleSource::Defaulted | ClearanceRuleSource::ToolDefault
         )
+    }
+
+    /// A below-rule group measured only against a default rule whose tightest
+    /// gap still meets [`DEFAULT_RULE_SPACING_FLOOR_MM`]: noted, not an issue.
+    #[must_use]
+    pub fn is_advisory(&self, group: &DrcGroup) -> bool {
+        self.is_defaulted() && group.min_gap_mm >= DEFAULT_RULE_SPACING_FLOOR_MM - 1e-6
     }
 
     const fn missing_reason(&self) -> &'static str {
@@ -1815,6 +1828,58 @@ impl DrcStructured {
         }
     }
 
+    /// The groups a reader should act on: advisory default-rule groups (see
+    /// [`ClearanceRuleProvenance::is_advisory`]) are left out. The JSON keeps
+    /// every group; the human surfaces and the actionable count read this.
+    #[must_use]
+    pub fn actionable_view(&self, provenance: &ClearanceRuleProvenance) -> Self {
+        let mut view = self.clone();
+        view.violations.retain(|g| !provenance.is_advisory(g));
+        view
+    }
+
+    /// Below-rule groups that count toward `actionable_count`. Without a
+    /// recorded rule source every group counts.
+    #[must_use]
+    pub fn actionable_group_count(&self, provenance: Option<&ClearanceRuleProvenance>) -> usize {
+        self.violations
+            .iter()
+            .filter(|g| !provenance.is_some_and(|p| p.is_advisory(g)))
+            .count()
+    }
+
+    /// The default-rule lines a renderer prints before any finding.
+    #[must_use]
+    pub fn default_rule_notes(&self, provenance: &ClearanceRuleProvenance) -> Vec<String> {
+        [
+            self.default_rule_flood_note(provenance),
+            self.default_rule_advisory_note(provenance),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
+    /// One line accounting for the advisory groups, so leaving them out of
+    /// the issue list is stated rather than silent.
+    #[must_use]
+    pub fn default_rule_advisory_note(
+        &self,
+        provenance: &ClearanceRuleProvenance,
+    ) -> Option<String> {
+        let advisory: Vec<&DrcGroup> = self
+            .violations
+            .iter()
+            .filter(|g| provenance.is_advisory(g))
+            .collect();
+        let tightest = advisory.iter().map(|g| g.min_gap_mm).reduce(f64::min)?;
+        Some(format!(
+            "DEFAULT-RULE NOTE: {} net pair(s) are closer than the {:.3} mm default (tightest {tightest:.3} mm) but not closer than {DEFAULT_RULE_SPACING_FLOOR_MM:.3} mm (5 mil); without your rules that is no evidence of a problem, so they are not listed as issues.",
+            advisory.len(),
+            self.clearance_rule_mm,
+        ))
+    }
+
     /// The flood warning is evidence about this run, not a guess at the correct
     /// replacement rule. "Exceeds" is strict: exactly 10x does not qualify.
     #[must_use]
@@ -1857,7 +1922,7 @@ impl DrcStructured {
         if let Some(notice) = provenance.custom_rules_notice() {
             let _ = writeln!(s, "{notice}");
         }
-        if let Some(note) = self.default_rule_flood_note(provenance) {
+        for note in self.default_rule_notes(provenance) {
             let _ = writeln!(s, "{note}");
         }
         if let Some(w) = &self.version_warning {
@@ -2683,7 +2748,7 @@ impl JsonReport {
                     first.get_or_insert((&s.plain, &s.fix));
                 }
             }
-            actionable += drc.violations.len();
+            actionable += drc.actionable_group_count(self.clearance_rule_source.as_ref());
         }
         // Which undermined evidence flips the verdict to `invalid`: the maps
         // the RUN-LEVEL claim rests on (input coverage, bind completeness,
@@ -3333,6 +3398,57 @@ mod tests {
         assert!(js[0].fix.is_some());
         assert_eq!(js[1].severity, "warning");
         assert_eq!(js[1].refs, vec!["C3".to_string()]);
+    }
+
+    #[test]
+    fn default_rule_gaps_at_or_above_the_spacing_floor_are_noted_not_issues() {
+        // 0.130 mm under a 0.200 mm DEFAULT rule meets the 0.127 mm floor: a
+        // note, not an issue. 0.100 mm stays a warning, and against the
+        // project's own 0.200 mm rule 0.130 mm stays a warning too.
+        let defaulted = ClearanceRuleProvenance::defaulted(0.2, false);
+        let project = ClearanceRuleProvenance::project_file(0.2);
+        for (gap, provenance, issues) in [
+            (0.130, &defaulted, 0),
+            (0.100, &defaulted, 1),
+            (0.130, &project, 1),
+        ] {
+            let group = DrcGroup {
+                net_a: "SDA".into(),
+                net_b: "SCL".into(),
+                layer: "F.Cu".into(),
+                count: 1,
+                below_count: 1,
+                at_limit: false,
+                min_gap_mm: gap,
+                min_gap_loc_mm: [3.0, 4.0],
+                rule_mm: 0.2,
+                between: "track \u{2194} track".into(),
+                plain: String::new(),
+                fix: "increase spacing".into(),
+            };
+            let st = DrcStructured {
+                clearance_rule_mm: 0.2,
+                primitive_count: 20,
+                shorts: Vec::new(),
+                violations: vec![group],
+                at_limit: Vec::new(),
+                version_warning: None,
+                suppression_note: None,
+            };
+            let plain = crate::plain::plain_drc_structured_with_rule_source(&st, provenance);
+            assert_eq!(
+                plain.findings.len(),
+                issues,
+                "{gap} mm: {:?}",
+                plain.findings
+            );
+            let noted = st.default_rule_advisory_note(provenance).is_some();
+            assert_eq!(noted, issues == 0, "{gap} mm advisory note");
+            let mut jr = JsonReport::new("b", summary_with(Vec::new(), Vec::new()));
+            jr.drc = Some(st);
+            jr.clearance_rule_source = Some(provenance.clone());
+            assert_eq!(jr.verdict().3, issues, "{gap} mm actionable count");
+        }
     }
 
     #[test]

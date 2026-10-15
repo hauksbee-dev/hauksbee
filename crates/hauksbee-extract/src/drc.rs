@@ -2281,11 +2281,12 @@ struct NetTieGroup {
 #[derive(Default)]
 struct NetTieOwners {
     groups: Vec<NetTieGroup>,
-    /// Footprints with no solder paste on any pad. Paste-free pads are never
-    /// soldered to a part, so when such a footprint's own pads abut across
-    /// nets the contact is drawn copper (an EAGLE `SHORT`-style tie), resolved
-    /// against the placed geometry in [`Self::capture_geometry`].
-    paste_free: Vec<String>,
+    /// EAGLE parts whose every pad is bare copper (no paste, no mask opening).
+    /// Nothing can be soldered there, so when such a part's own pads abut
+    /// across nets the contact is drawn copper (a `SHORT`-style tie), resolved
+    /// against the placed geometry in [`Self::capture_geometry`]. KiCad has a
+    /// native net-tie declaration, so its footprints never take this route.
+    bare_copper: Vec<String>,
 }
 
 impl NetTieOwners {
@@ -2304,9 +2305,9 @@ impl NetTieOwners {
         });
     }
 
-    fn insert_paste_free(&mut self, owner: String) {
+    fn insert_bare_copper(&mut self, owner: String) {
         if !owner.is_empty() {
-            self.paste_free.push(owner);
+            self.bare_copper.push(owner);
         }
     }
 
@@ -2340,7 +2341,7 @@ impl NetTieOwners {
     }
 
     fn capture_geometry(&mut self, buckets: &LayerBuckets) {
-        for owner in std::mem::take(&mut self.paste_free) {
+        for owner in std::mem::take(&mut self.bare_copper) {
             if let Some(nets) = Self::bridged_nets(buckets, &owner) {
                 self.insert(owner, nets);
             }
@@ -2532,15 +2533,6 @@ fn insert_kicad_net_tie_groups(
     let legacy_zero_ohm = crate::dnp::is_explicit_zero_ohm_copper_link_fields(&value, &footprint);
     if legacy_zero_ohm {
         out.insert(owner, pad_nets.into_values());
-    } else if fp.find_all("pad").all(|pad| {
-        pad.arg_value(1).as_deref() == Some("smd")
-            && pad.find("layers").is_none_or(|layers| {
-                !(0..)
-                    .map_while(|i| layers.arg_value(i))
-                    .any(|layer| layer.ends_with(".Paste"))
-            })
-    }) {
-        out.insert_paste_free(owner);
     }
 }
 
@@ -3045,22 +3037,17 @@ pub mod eagle_drc {
             roundness: f64,
             rot_deg: f64,
             layer: i64,
-            /// Eagle `cream="no"`: no solder paste, so nothing is soldered here.
-            paste_free: bool,
+            /// Eagle `cream="no"` and `stop="no"`: covered copper with no
+            /// paste, so nothing can be soldered here.
+            bare: bool,
         },
     }
 
     impl PkgItem {
-        /// Only an SMD pad with paste explicitly off counts; a through-hole
-        /// pad is soldered without paste, so it says nothing about intent.
-        const fn is_paste_free(&self) -> bool {
-            matches!(
-                self,
-                Self::Smd {
-                    paste_free: true,
-                    ..
-                }
-            )
+        /// Only an SMD pad with paste and mask opening both off counts; a
+        /// through-hole pad is soldered without paste, so it says nothing.
+        const fn is_bare(&self) -> bool {
+            matches!(self, Self::Smd { bare: true, .. })
         }
 
         fn name(&self) -> &str {
@@ -3312,7 +3299,9 @@ pub mod eagle_drc {
                                             roundness: num(&a, "roundness").unwrap_or(0.0),
                                             rot_deg,
                                             layer,
-                                            paste_free: a.get("cream").is_some_and(|v| v == "no"),
+                                            bare: ["cream", "stop"]
+                                                .iter()
+                                                .all(|k| a.get(*k).is_some_and(|v| v == "no")),
                                         });
                                 }
                             }
@@ -4017,9 +4006,9 @@ pub mod eagle_drc {
             } else if parsed
                 .packages
                 .get(&(el.library.clone(), el.package.clone()))
-                .is_some_and(|items| items.iter().all(PkgItem::is_paste_free))
+                .is_some_and(|items| items.iter().all(PkgItem::is_bare))
             {
-                net_ties.insert_paste_free(el.name.clone());
+                net_ties.insert_bare_copper(el.name.clone());
             }
         }
         for el in &parsed.elements {
