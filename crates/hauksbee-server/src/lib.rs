@@ -1152,7 +1152,7 @@ mod rate_honesty_tests {
 
     use super::*;
     use crate::protocol::{BoardInfo, SimFrame, SolverControls};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
 
     /// An engine whose step burns `cost` wall seconds per sim second (so the
@@ -1167,6 +1167,21 @@ mod rate_honesty_tests {
         reset_fails: bool,
         controls: SolverControls,
         stepped: Arc<AtomicUsize>,
+        /// When set, `step` parks on this gate instead of sleeping: see
+        /// [`StepGate`].
+        gate: Option<StepGate>,
+    }
+
+    /// A step that is held in flight by the test instead of by a timer, so a
+    /// test can ask "did the runtime keep working WHILE a step was running?"
+    /// without comparing a stall to a wall-clock bound.
+    struct StepGate {
+        /// Set when `step` is entered.
+        entered: Arc<AtomicBool>,
+        /// Set when `step` returns, whether released or timed out.
+        returned: Arc<AtomicBool>,
+        /// The test releases the step by sending (or dropping the sender).
+        release: std::sync::mpsc::Receiver<()>,
     }
 
     impl TestEngine {
@@ -1180,6 +1195,7 @@ mod rate_honesty_tests {
                 reset_fails: false,
                 controls: SolverControls::default(),
                 stepped: Arc::default(),
+                gate: None,
             }
         }
     }
@@ -1203,6 +1219,14 @@ mod rate_honesty_tests {
         fn step(&mut self, dt: f64) -> SimFrame {
             if self.cost > 0.0 {
                 std::thread::sleep(Duration::from_secs_f64(dt * self.cost));
+            }
+            if let Some(gate) = &self.gate {
+                gate.entered.store(true, Ordering::SeqCst);
+                // The long timeout only bounds a broken test: a released step
+                // returns at once, and an inlined step (the defect under test)
+                // holds the runtime thread here until it expires.
+                let _ = gate.release.recv_timeout(Duration::from_secs(20));
+                gate.returned.store(true, Ordering::SeqCst);
             }
             self.sim_time += dt;
             self.steps += 1;
@@ -1359,35 +1383,71 @@ mod rate_honesty_tests {
         );
     }
 
-    /// One session whose step grinds for a second at a time must not stall
-    /// the rest of the runtime. The CURRENT-THREAD flavor is deliberate: with
-    /// the step inlined on the runtime, the worker holding tokio's I/O + timer
+    /// One session whose step is stuck in a long solve must not stall the
+    /// rest of the runtime. The CURRENT-THREAD flavor is deliberate: with the
+    /// step inlined on the runtime, the worker holding tokio's I/O + timer
     /// driver never parks and every timer freezes for the full step; on the
-    /// blocking pool they keep firing on time.
+    /// blocking pool they keep firing while the step is still running.
+    ///
+    /// The step is held in flight by the test (a gate it releases), not by a
+    /// timer, and the claim is an ordering one: five 20 ms timers complete
+    /// while the step is provably still running. That is independent of host
+    /// speed. A wall-clock bound on timer lateness cannot tell a blocked
+    /// runtime from a starved test thread on a loaded CI host (the previous
+    /// 400 ms bound failed intermittently under full-workspace parallel
+    /// load). With the step inlined, the test body cannot run until the
+    /// step's own 20 s gate timeout returns it, so `returned` is already set
+    /// when the timers are checked and the test fails.
     #[tokio::test]
     async fn a_grinding_step_does_not_stall_the_runtime() {
-        // Each ~33 ms frame step burns ~1 s of wall time.
-        let engine = TestEngine::new(30.0, false);
+        let (release_tx, release) = std::sync::mpsc::channel::<()>();
+        let (entered, returned) = (
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let mut engine = TestEngine::new(0.0, false);
+        engine.gate = Some(StepGate {
+            entered: entered.clone(),
+            returned: returned.clone(),
+            release,
+        });
         let stepped = engine.stepped.clone();
         let s = Session::start(engine);
         s.cmd.send(ClientMessage::Play).await.unwrap();
-        let mut worst = Duration::ZERO;
-        let t_end = std::time::Instant::now() + Duration::from_millis(1500);
-        while std::time::Instant::now() < t_end {
-            let t0 = std::time::Instant::now();
+
+        // Wait for the step to be in flight. Progress, not speed: the deadline
+        // only bounds a session that never steps at all.
+        let give_up = std::time::Instant::now() + Duration::from_secs(120);
+        while !entered.load(Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < give_up,
+                "the engine never stepped: this run measured nothing"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        // The step is now held open. The runtime must keep firing timers.
+        for _ in 0..5 {
             tokio::time::sleep(Duration::from_millis(20)).await;
-            worst = worst.max(t0.elapsed());
+        }
+        let stalled = returned.load(Ordering::SeqCst);
+        release_tx.send(()).unwrap();
+        assert!(
+            !stalled,
+            "the engine step finished before five 20 ms timers could fire: the sim loop \
+             is blocking the runtime"
+        );
+
+        // Releasing the step lets the session carry on and complete it.
+        let give_up = std::time::Instant::now() + Duration::from_secs(120);
+        while stepped.load(Ordering::Relaxed) < 1 {
+            assert!(
+                std::time::Instant::now() < give_up,
+                "the released step never completed"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
         s.task.abort();
-        assert!(
-            stepped.load(Ordering::Relaxed) >= 1,
-            "the engine never stepped: this run measured nothing"
-        );
-        assert!(
-            worst < Duration::from_millis(400),
-            "a 20 ms timer stalled {worst:?} while the engine stepped: the sim loop is \
-             blocking the runtime"
-        );
     }
 
     #[tokio::test]
