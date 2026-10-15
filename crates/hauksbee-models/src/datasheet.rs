@@ -2511,6 +2511,50 @@ enum Reply<'a> {
     Word,
 }
 
+/// A characteristic row printing no number (a supply-relative limit such as
+/// 0.7 VCC) becomes the `unknown` uncertainty record the checker asks for, its
+/// text quoted, instead of sending the whole draft back. Whether it moved any.
+fn unnumbered_rows_to_unknowns(source: &mut toml_edit::Table) -> bool {
+    use toml_edit::{ArrayOfTables, Item, Table};
+    let numbered = |r: &Table| ["min", "typ", "max"].iter().any(|k| r.contains_key(k));
+    let rows = source
+        .get("characteristic")
+        .and_then(Item::as_array_of_tables);
+    let bare: Vec<Table> = rows.map_or_else(Vec::new, |rows| {
+        rows.iter().filter(|r| !numbered(r)).cloned().collect()
+    });
+    if bare.is_empty() {
+        return false;
+    }
+    let records = source.entry("uncertainty");
+    let Some(records) = records
+        .or_insert(ArrayOfTables::new().into())
+        .as_array_of_tables_mut()
+    else {
+        return false;
+    };
+    let text = |r: &Table, k: &str| {
+        r.get(k)
+            .and_then(Item::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    for row in &bare {
+        let reason = format!("{} ({})", text(row, "conditions"), text(row, "basis"));
+        let parameter = text(row, "parameter");
+        let fields = [
+            ("status", "unknown"),
+            ("parameter", &parameter),
+            ("reason", &reason),
+        ];
+        records.push(Table::from_iter(fields));
+    }
+    if let Some(Item::ArrayOfTables(rows)) = source.get_mut("characteristic") {
+        rows.retain(numbered);
+    }
+    true
+}
+
 impl Reply<'_> {
     /// The TOML table the answer starts with (empty for a bare word).
     const fn table(self) -> &'static str {
@@ -2550,7 +2594,7 @@ impl Reply<'_> {
         let is_model = |r: &Table| r.get("parameter").and_then(Item::as_str) == Some("model");
         let why = "datasheet publishes no validated model error interval";
         let record = std::iter::zip(["status", "parameter", "reason"], ["unknown", "model", why]);
-        let mut inserted = false;
+        let (mut inserted, mut repaired) = (false, false);
         let tables: Vec<&mut Table> = match doc.get_mut(path) {
             Some(Item::ArrayOfTables(a)) => a.iter_mut().collect(),
             t => t.and_then(Item::as_table_mut).into_iter().collect(),
@@ -2562,9 +2606,16 @@ impl Reply<'_> {
                 for (k, v) in &blank {
                     if !t.contains_key(k) {
                         t.insert(k, v.clone());
-                        inserted = true;
+                        repaired = true;
                     }
                 }
+            }
+            if source
+                .as_table_mut()
+                .is_some_and(unnumbered_rows_to_unknowns)
+            {
+                say!("[model-extract] rows printing no number kept as unknown uncertainty records");
+                repaired = true;
             }
             let records = source.as_table_mut().map(|t| t.entry("uncertainty"));
             let records = records.map(|e| e.or_insert(ArrayOfTables::new().into()));
@@ -2579,6 +2630,7 @@ impl Reply<'_> {
         if inserted {
             say!("[model-extract] warning: model-error record missing; inserted the conservative unknown record");
         }
+        inserted |= repaired;
         // A param omitted where a cited row fixes it is filled, with its working,
         // and a diode law off its cited VF rows is replaced by their fit.
         let db =
@@ -5721,6 +5773,10 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         ] {
             assert!(events.contains(kind), "{kind} missing: {events}");
         }
+        // The identity agent runs alone first; the other two start after it.
+        let at = |s: &str| events.find(s).unwrap();
+        assert!(at("section identity") < at("section ratings"));
+        assert!(at("section identity") < at("section electrical"));
     }
 
     /// A staged agent stopped at its budget after it wrote a valid card is not
@@ -5754,6 +5810,23 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         };
         assert!(reply.check(&bare).is_err());
         assert!(reply.check(&reply.complete(bare)).is_ok());
+    }
+
+    /// A supply-relative limit prints no number: the row moves to an `unknown`
+    /// uncertainty record quoting it, as the checker prescribes, with no redraft.
+    #[test]
+    fn a_row_printing_no_number_becomes_an_unknown_record() {
+        let ex = FORMAT_EXAMPLES[0];
+        let row = "parameter = \"VIH\"\nunit = \"V\"\nconditions = \"min = 0.7 VCC\"\nbasis = \"Table 5.3\"";
+        let card = format!("{}\n[[models.source.characteristic]]\n{row}\n", ex.card);
+        let reply = Reply::Model {
+            part: ex.part,
+            kind: ex.kind,
+        };
+        assert!(reply.check(&card).is_err());
+        let done = reply.complete(card);
+        assert!(reply.check(&done).is_ok(), "{done}");
+        assert!(done.contains("status = \"unknown\"") && done.contains("min = 0.7 VCC"));
     }
 
     /// A section agent that wrote nothing is not papered over: a fix agent

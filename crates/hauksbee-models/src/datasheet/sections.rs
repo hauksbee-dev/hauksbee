@@ -1,20 +1,16 @@
-//! The staged harness's first stage: three section agents in parallel.
+//! The staged harness's first stage: a card drafted by section agents.
 //!
 //! One agent reading a whole datasheet, then writing the whole card, held 110k
-//! tokens of context at its peak. Each section agent has a narrow brief and its
-//! own sandbox copy, so its context holds only the pages its section needs:
-//!
-//! 1. **identity**: id, kind, match rule, package and pin map.
-//! 2. **ratings**: absolute maximum ratings, recommended operating conditions.
-//! 3. **electrical**: params, electrical-characteristic rows, description.
-//!
-//! Each writes a `[[models]]` fragment holding only its keys. [`merge`] joins
-//! them with no model call. Keys more than one fragment writes must agree; a
-//! disagreement is dropped from the card and reported, never resolved by picking
-//! one. A section that wrote nothing usable is reported too. Both force a fix
-//! agent to resolve them, and the usual lint and fix loop then runs on the card.
+//! tokens of context. Each section agent has a narrow brief and its own sandbox
+//! copy: **identity** (id, kind, match, package, pin map) runs first and is
+//! small; **ratings** and **electrical** (params, rows, description) then run
+//! in parallel, each told the identity agent's keys, so the package and pad
+//! roles are one decision. [`merge`] joins the fragments with no model call.
+//! Keys two fragments write differently are dropped and reported, never picked
+//! between; a fragment with no usable entry is reported too. Either sends the
+//! card to a fix agent first; a clean merge goes straight to the validator.
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
 
 use super::{
@@ -52,9 +48,8 @@ impl Merged {
             return String::new();
         }
         format!(
-            "\n\nmodel.toml was merged from three section agents that did not see each other's \
-             work. Resolve these from the datasheet first (a conflicting key is absent from \
-             model.toml; a missing section is absent too):\n- {}",
+            "\n\nmodel.toml was merged from section agents. Resolve these from the datasheet \
+             first (a conflicting key or missing section is absent from model.toml):\n- {}",
             all.join("\n- ")
         )
     }
@@ -109,17 +104,37 @@ fn join_tables(dst: &mut Table, src: &Table, path: &str, who: (&str, &str), out:
             (a, b) if plain(a) == plain(b) => {}
             (a, b) => {
                 let show = |i: &Item| i.to_string().trim().replace('\n', " ");
-                out.push(format!(
-                    "{at}: {} wrote {}, {} wrote {}",
-                    who.0,
-                    show(a),
-                    who.1,
-                    show(b)
-                ));
+                let (a, b) = (show(a), show(b));
+                out.push(format!("{at}: {} wrote {a}, {} wrote {b}", who.0, who.1));
                 dst.remove(key);
             }
         }
     }
+}
+
+/// The one `[[models]]` entry a fragment holds. An abstention's `identity_only`,
+/// `warning` and `unlocked_by` belong under `[models.params]`; one written at the
+/// top of the entry is moved there rather than sent to a fix agent.
+fn entry(raw: &str) -> Option<Table> {
+    let text = extract_toml_block(raw, "[[models]]");
+    let doc = text.parse::<DocumentMut>().ok()?;
+    let models = doc.get("models")?.as_array_of_tables()?;
+    let mut table = (models.len() == 1).then(|| models.get(0).cloned())??;
+    for key in ["identity_only", "warning", "unlocked_by"] {
+        if let Some(moved) = table.remove(key) {
+            let params = table.entry("params").or_insert(Item::Table(Table::new()));
+            params.as_table_like_mut()?.insert(key, moved);
+        }
+    }
+    Some(table)
+}
+
+fn document(card: Table) -> String {
+    let mut models = ArrayOfTables::new();
+    models.push(card);
+    let mut doc = DocumentMut::new();
+    doc.insert("models", Item::ArrayOfTables(models));
+    doc.to_string()
 }
 
 /// Join the sections' fragments (`None` = the agent wrote none) into one card.
@@ -128,13 +143,6 @@ fn join_tables(dst: &mut Table, src: &Table, path: &str, who: (&str, &str), out:
 ///
 /// Fails when no section wrote a usable `[[models]]` entry.
 pub(super) fn merge(sections: &[(&'static str, Option<String>)]) -> Result<Merged> {
-    let entry = |raw: &str| -> Option<Table> {
-        let doc = extract_toml_block(raw, "[[models]]")
-            .parse::<DocumentMut>()
-            .ok()?;
-        let models = doc.get("models")?.as_array_of_tables()?;
-        (models.len() == 1).then(|| models.get(0).cloned())?
-    };
     let (mut card, mut conflicts, mut missing) = (Table::new(), Vec::new(), Vec::new());
     let mut merged: Vec<&str> = Vec::new();
     for (name, raw) in sections {
@@ -142,46 +150,42 @@ pub(super) fn merge(sections: &[(&'static str, Option<String>)]) -> Result<Merge
             missing.push(*name);
             continue;
         };
-        join_tables(
-            &mut card,
-            &fragment,
-            "",
-            (&merged.join("+"), name),
-            &mut conflicts,
-        );
+        let who = (merged.join("+"), *name);
+        join_tables(&mut card, &fragment, "", (&who.0, who.1), &mut conflicts);
         merged.push(name);
     }
     if merged.is_empty() {
         bail!("no section agent wrote a usable [[models]] entry");
     }
-    let mut models = ArrayOfTables::new();
-    models.push(card);
-    let mut doc = DocumentMut::new();
-    doc.insert("models", Item::ArrayOfTables(models));
     Ok(Merged {
-        card: doc.to_string(),
+        card: document(card),
         conflicts,
         missing,
     })
 }
 
-/// The brief of one section agent.
-fn prompt(part: &str, kind: &str, section: &str) -> String {
+/// The brief of one section agent; `known` is what the identity agent wrote.
+fn prompt(part: &str, kind: &str, section: &str, known: &str) -> String {
     let base = behavioral_family_base_kind(kind).unwrap_or(kind);
     let (lower, re) = (part.to_lowercase(), regex::escape(&part.to_uppercase()));
     let roles = format!(
         "PIN ROLE NAMES for kind=\"{base}\": {}",
         pin_roles_for_kind(kind)
     );
-    let (owns, guide) = match section {
+    let (owns, topics, images, guide) = match section {
         "identity" => (
             format!(
                 "`id = \"{lower}\"`, `kind = \"{base}\"`, `[models.match]` (`value_re = '(?i)^{re}$'`), \
                  `[models.pins]` and `[[models.source.pinout]]`"
             ),
+            "pin functions or package pinout, ordering or package information",
+            "",
             format!(
-                "{roles}\n\n{PIN_ROLE_GUIDANCE}\n\n{PIN_NUMBERING}\n\nWrite `[models.pins]` and the \
-                 pinout for the package the orderable part number names.{}",
+                "{roles}\n\n{PIN_ROLE_GUIDANCE}\n\n{PIN_NUMBERING}\n\nMap the package the \
+                 orderable part number names. If it names none and the datasheet has several, \
+                 take the one whose pad map the most packages share, else the first listed. Name \
+                 each `package` with its pin count as printed (`SOT-23-6 (DBV)`: a bare `SOT-23` \
+                 reads as 3 pins).{}",
                 harness::CONFIDENCE_CLAUSE
             ),
         ),
@@ -189,23 +193,28 @@ fn prompt(part: &str, kind: &str, section: &str) -> String {
             "`[models.ratings]`, `[[models.envelope]]` and a `[[models.source.characteristic]]` \
              per absolute-maximum, thermal and recommended-operating row that has no key"
                 .to_string(),
+            "absolute maximum ratings, recommended operating conditions, and the thermal table",
+            " At most two images.",
             format!(
-                "{roles}\nName an envelope pin by the lowercase role of the pin table's printed \
-                 name; another agent writes the pin map with the same roles. Ratings are for the \
-                 package the orderable part number names.\n\n{RATINGS_RULES}\n{}\n\n{ENVELOPE_RULES}\n\n{EXTRACTION_RULES}",
+                "{roles}\nName an envelope pin by a role of the identity agent's `[models.pins]`. \
+                 Ratings are for its package.\n\n{RATINGS_RULES}\n{}\n\n{ENVELOPE_RULES}\n\n{EXTRACTION_RULES}",
                 crate::schema::Ratings::KEY_GUIDE
             ),
         ),
         _ => (
-            "`description`, `[models.params]`, `[models.coverage]` and a \
+            "`description`, `[models.params]`, `[models.coverage]`, every behaviour table the kind \
+             needs (`[models.logic]` for a digital part) and a \
              `[[models.source.characteristic]]` per electrical-characteristic row"
                 .to_string(),
+            "electrical characteristics, switching characteristics",
+            " At most two images.",
             format!(
                 "`description`: one line naming the part and its package, then `does not model ...` \
                  for each behaviour the params leave out (rule 4). A param that names a pad \
-                 (`supply_pin`, `gnd_pin`) takes the pad number the package's pin table prints. \
-                 `identity_only`, `warning` and `unlocked_by` go under `[models.params]`, never at \
-                 the top of the entry.\n\n\
+                 (`supply_pin`, `gnd_pin`) takes its pad number from the identity agent's \
+                 `[models.pins]`: the package it chose is the card's, so a part number that names \
+                 none is no reason for `identity_only`; behaviour you cannot model is. \
+                 `identity_only`, `warning` and `unlocked_by` go under `[models.params]`.\n\n\
                  For kind=\"{base}\", the required params are:\n{}{}\n{}\n{}\n\n{SOURCE_QUANTITY_GUIDANCE}\n\n\
                  {EXTRACTION_RULES}\n{}\n{}",
                 required_params_for_kind(kind),
@@ -217,23 +226,30 @@ fn prompt(part: &str, kind: &str, section: &str) -> String {
             ),
         ),
     };
+    let known = if known.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nThe identity agent wrote these keys (do not repeat them):\n```toml\n{known}```"
+        )
+    };
     let example = format_examples_for_kind(kind).first().map_or_else(String::new, |e| {
         format!("FORMAT EXAMPLE ONLY, a different part ({}); copy its shape, never its numbers:\n{}", e.part, e.card)
     });
     format!(
-        "You are one of three agents drafting the Hauksbee model card for {part} (kind `{kind}`) \
-         in parallel; none sees the others' work. YOUR SECTION: {section}. Write `model.toml` as a \
-         `[[models]]` entry holding ONLY these keys: {owns}. Leave every other key to the other \
-         agents. Do not run `hauksbee models lint`: a fragment fails it.\n\n\
-         Your context is small. Start from `page-index.md`, open `pages/page-NNN.txt` or \
-         `page-NNN.png` only for the pages your section needs (about 5k tokens per image), and \
-         never open `datasheet.pdf` or `datasheet.txt` whole. Omit what the datasheet does not \
-         state.\n\n{guide}\n\n{example}"
+        "You are one of the agents drafting the Hauksbee model card for {part} (kind `{kind}`). \
+         YOUR SECTION: {section}. Write `model.toml` as a `[[models]]` entry holding ONLY these \
+         keys: {owns}. Leave every other key to the other agents. Do not run `hauksbee models \
+         lint`: a fragment fails it.\n\n\
+         Your context is small. Start from `page-index.md` and open only the pages on {topics}: \
+         `pages/page-NNN.txt` first, `page-NNN.png` (about 5k tokens each) only for a table whose \
+         text columns are scrambled.{images} Never open `datasheet.pdf` or `datasheet.txt` whole. \
+         Omit what the datasheet does not state.{known}\n\n{guide}\n\n{example}"
     )
 }
 
-/// Run the three section agents at once, each in its own sandbox copy and
-/// bounded to `budget` tokens of context, and merge what they wrote.
+/// Draft the card: identity first, then ratings and electrical at once, each
+/// agent in its own sandbox copy bounded to `budget` tokens of context.
 ///
 /// # Errors
 ///
@@ -245,41 +261,46 @@ pub(super) fn draft(
     budget: u64,
     billing: crate::extract_usage::Billing,
 ) -> Result<Merged> {
-    let forks = NAMES
-        .iter()
-        .map(|_| ws.fork())
-        .collect::<Result<Vec<_>>>()?;
-    let written = std::thread::scope(|scope| {
-        // Collected so every agent is spawned before the first is joined.
-        #[allow(clippy::needless_collect)]
-        let jobs: Vec<_> = NAMES
-            .iter()
-            .zip(&forks)
-            .map(|(name, fork)| {
-                scope.spawn(move || {
-                    progress::event(
-                        "stage",
-                        serde_json::json!({"stage": format!("section {name}"), "agent": fork.label(), "attempt": 1, "attempts": 1}),
-                    );
-                    let brief = prompt(part, kind, name) + &harness::page_list(fork.path());
-                    // A stopped or failed agent keeps whatever it already wrote.
-                    if let Err(e) = run_and_record(resolved, &brief, fork, budget, billing) {
-                        say!("[model-extract] the {name} section agent ended early: {e:#}");
-                    }
-                    std::fs::read_to_string(fork.answer_path()).ok()
-                })
-            })
-            .collect();
-        jobs.into_iter()
-            .map(|j| j.join().ok().flatten())
-            .collect::<Vec<_>>()
-    });
-    // The pin-map agent's self-reported confidence is the card's.
-    let said = std::fs::read(forks[0].path().join(harness::CONFIDENCE));
-    if let Ok(said) = said {
-        std::fs::write(ws.path().join(harness::CONFIDENCE), said)?;
-    }
-    merge(&NAMES.iter().copied().zip(written).collect::<Vec<_>>())
+    let run = |name: &'static str, known: &str| -> Result<Option<String>> {
+        let fork = ws.fork()?;
+        let at = serde_json::json!({"stage": format!("section {name}"), "agent": fork.label(), "attempt": 1, "attempts": 1});
+        progress::event("stage", at);
+        let brief = prompt(part, kind, name, known) + &harness::page_list(fork.path());
+        // A stopped or failed agent keeps whatever it already wrote.
+        if let Err(e) = run_and_record(resolved, &brief, &fork, budget, billing) {
+            say!("[model-extract] the {name} section agent ended early: {e:#}");
+        }
+        let written = std::fs::read_to_string(fork.answer_path()).ok();
+        // The pin-map agent's self-reported confidence is the card's.
+        let said = std::fs::read(fork.path().join(harness::CONFIDENCE));
+        if let (Ok(said), true) = (said, name == NAMES[0]) {
+            std::fs::write(ws.path().join(harness::CONFIDENCE), said)?;
+        }
+        // A saved fragment replays the merge and the briefs for free.
+        if let (Some(dir), Some(text)) = (std::env::var_os("HAUKSBEE_SECTION_DUMP"), &written) {
+            let _ = std::fs::write(
+                std::path::Path::new(&dir).join(format!("{name}.toml")),
+                text,
+            );
+        }
+        Ok(written)
+    };
+    let identity = run(NAMES[0], "")?;
+    let known = identity.as_deref().and_then(entry).map(document);
+    let known = known.unwrap_or_default();
+    let (ratings, electrical) = std::thread::scope(|scope| {
+        let ratings = scope.spawn(|| run(NAMES[1], &known));
+        let electrical = run(NAMES[2], &known);
+        let ratings = ratings
+            .join()
+            .map_err(|_| anyhow!("a section agent panicked"));
+        Ok::<_, anyhow::Error>((ratings??, electrical?))
+    })?;
+    merge(&[
+        (NAMES[0], identity),
+        (NAMES[1], ratings),
+        (NAMES[2], electrical),
+    ])
 }
 
 #[cfg(test)]
@@ -296,11 +317,8 @@ mod tests {
         [models.params]\nvoh = 2.4\n[models.coverage]\nmissing = [\"timing\"]\n";
 
     fn sections(parts: [Option<&str>; 3]) -> Vec<(&'static str, Option<String>)> {
-        NAMES
-            .iter()
-            .copied()
-            .zip(parts.map(|p| p.map(str::to_string)))
-            .collect()
+        let parts = parts.map(|p| p.map(str::to_string));
+        NAMES.iter().copied().zip(parts).collect()
     }
 
     fn card(m: &Merged) -> toml::Table {
@@ -317,20 +335,15 @@ mod tests {
         assert_eq!(entry["ratings"]["max_voltage_v"].as_float(), Some(6.5));
         assert_eq!(entry["envelope"].as_array().map(Vec::len), Some(1));
         assert_eq!(entry["params"]["voh"].as_float(), Some(2.4));
-        assert!(
-            m.card.contains("# pin table") && m.card.contains("# Source: AMR"),
-            "{}",
-            m.card
-        );
+        assert!(m.card.contains("# pin table") && m.card.contains("# Source: AMR"));
     }
 
     #[test]
     fn keys_two_sections_agree_on_are_kept_and_lists_are_unioned() {
         let a = "[[models]]\nid = \"x1\"\n[models.coverage]\nmissing = [\"a\", \"b\"]\n\
             [[models.source.uncertainty]]\nparameter = \"model\"\n";
-        let b = "[[models]]\nid = \"x1\"\n[models.coverage]\nmissing = [\"b\", \"c\"]\n\
-            [[models.source.uncertainty]]\nparameter = \"model\"\n";
-        let m = merge(&sections([Some(a), Some(b), None])).unwrap();
+        let b = a.replace("\"a\", \"b\"", "\"b\", \"c\"");
+        let m = merge(&sections([Some(a), Some(&b), None])).unwrap();
         assert!(m.conflicts.is_empty(), "{:?}", m.conflicts);
         let entry = &card(&m)["models"][0];
         assert_eq!(entry["coverage"]["missing"].as_array().unwrap().len(), 3);
@@ -338,13 +351,17 @@ mod tests {
     }
 
     #[test]
-    fn a_keys_table_stays_its_own_table_after_the_merge() {
-        let a = "[[models]]\nid = \"x1\"\n[models.params]\nidentity_only = true\nwarning = \"w\"\n";
-        let m = merge(&sections([Some(a), Some(RATINGS), Some(IDENTITY)])).unwrap();
-        eprintln!("{}", m.card);
+    fn an_abstention_written_at_the_top_of_the_entry_moves_under_params() {
+        let a = "[[models]]\nid = \"x1\"\nidentity_only = true\nwarning = \"w\"\n\
+            [models.params]\nunlocked_by = \"u\"\n";
+        let b = "[[models]]\n[models.params]\nidentity_only = true\n";
+        let m = merge(&sections([Some(a), Some(b), None])).unwrap();
         let entry = &card(&m)["models"][0];
-        assert!(entry.get("identity_only").is_none(), "{}", m.card);
-        assert_eq!(entry["params"]["identity_only"].as_bool(), Some(true));
+        assert!(entry.get("identity_only").is_none() && entry.get("warning").is_none());
+        let params = entry["params"].as_table().unwrap();
+        assert_eq!(params["identity_only"].as_bool(), Some(true));
+        assert_eq!(params["warning"].as_str(), Some("w"));
+        assert!(m.conflicts.is_empty(), "{:?}", m.conflicts);
     }
 
     #[test]
@@ -356,11 +373,8 @@ mod tests {
         assert!(entry["pins"].get("1").is_none() && entry["pins"]["2"].as_str() == Some("gnd"));
         assert_eq!(entry["kind"].as_str(), Some("digital"));
         assert_eq!(m.conflicts.len(), 2, "{:?}", m.conflicts);
-        assert!(
-            m.conflicts[0].starts_with("id: identity wrote \"x1\", ratings wrote \"x2\""),
-            "{:?}",
-            m.conflicts
-        );
+        let first = "id: identity wrote \"x1\", ratings wrote \"x2\"";
+        assert!(m.conflicts[0].starts_with(first), "{:?}", m.conflicts);
         assert!(m.conflicts[1].starts_with("pins.1:"), "{:?}", m.conflicts);
         assert!(m.problems().contains("- id: identity wrote"));
     }
@@ -368,13 +382,14 @@ mod tests {
     #[test]
     fn a_section_with_nothing_usable_is_reported_missing() {
         let two = "[[models]]\nid = \"a\"\n[[models]]\nid = \"b\"\n";
-        for bad in [
+        let bad = [
             None,
             Some(""),
             Some("not toml ["),
             Some("id = \"x\"\n"),
             Some(two),
-        ] {
+        ];
+        for bad in bad {
             let m = merge(&sections([Some(IDENTITY), bad, Some(ELECTRICAL)])).unwrap();
             assert_eq!(m.missing, ["ratings"], "{bad:?}");
             assert!(m
@@ -387,22 +402,18 @@ mod tests {
     }
 
     #[test]
-    fn each_brief_is_narrow_and_names_only_its_own_section() {
+    fn each_brief_is_narrow_and_the_later_ones_carry_the_identity_keys() {
         let full = super::super::build_prompt("SN74LVC1T45", "digital", "");
+        let known = document(entry(IDENTITY).unwrap());
         for name in NAMES {
-            let brief = prompt("SN74LVC1T45", "digital", name);
-            assert!(brief.contains(&format!("YOUR SECTION: {name}")));
-            assert!(brief.len() < full.len(), "{name}");
-            assert_eq!(
-                brief.contains("PIN NUMBERING"),
-                name == "identity",
-                "{name}"
-            );
-            assert_eq!(
-                brief.contains("confidence.txt"),
-                name == "identity",
-                "{name}"
-            );
+            let brief = prompt("SN74LVC1T45", "digital", name, &known);
+            assert!(brief.contains(&format!("YOUR SECTION: {name}")) && brief.len() < full.len());
+            let own = name == "identity";
+            assert_eq!(brief.contains("PIN NUMBERING"), own, "{name}");
+            assert_eq!(brief.contains("confidence.txt"), own, "{name}");
         }
+        let later = prompt("SN74LVC1T45", "digital", "electrical", &known);
+        assert!(later.contains("do not repeat them") && later.contains("\"1\" = \"vcca\""));
+        assert!(!prompt("X1", "digital", "ratings", "").contains("do not repeat them"));
     }
 }

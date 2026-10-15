@@ -76,14 +76,14 @@ pub fn watch(model: &str, agent: &str, budget: u64) -> Watch {
     Box::new(move |line| {
         let v: Value = serde_json::from_str(line).ok()?;
         if v["type"] == "item.started" && v["item"]["type"] == "command_execution" {
-            tool_event("shell", &json!({ "command": v["item"]["command"] }));
+            tool_event("shell", &json!({ "command": v["item"]["command"] }), &agent);
         }
         if v["type"] != "assistant" {
             return None;
         }
         for c in v["message"]["content"].as_array().into_iter().flatten() {
             if c["type"] == "tool_use" {
-                tool_event(c["name"].as_str().unwrap_or("tool"), &c["input"]);
+                tool_event(c["name"].as_str().unwrap_or("tool"), &c["input"], &agent);
             }
         }
         let u = &v["message"]["usage"];
@@ -104,7 +104,7 @@ pub fn watch(model: &str, agent: &str, budget: u64) -> Watch {
     })
 }
 
-fn tool_event(name: &str, input: &Value) {
+fn tool_event(name: &str, input: &Value, agent: &str) {
     let detail = ["file_path", "command", "pattern"]
         .iter()
         .find_map(|k| input[k].as_str())
@@ -114,10 +114,16 @@ fn tool_event(name: &str, input: &Value) {
         .split_once("page-")
         .and_then(|(_, rest)| rest.split('.').next()?.parse::<usize>().ok());
     if name == "Read" {
-        event("read", json!({ "path": base, "page": page }));
+        event(
+            "read",
+            json!({ "path": base, "page": page, "agent": agent }),
+        );
     } else {
         let short: String = detail.chars().take(100).collect();
-        event("tool", json!({ "name": name, "detail": short }));
+        event(
+            "tool",
+            json!({ "name": name, "detail": short, "agent": agent }),
+        );
     }
 }
 
