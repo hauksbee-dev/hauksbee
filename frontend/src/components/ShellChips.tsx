@@ -211,7 +211,7 @@ export function ShellChips({
     if (report?.ok === true) {
       const tone = reportVerdictTone(report)
       const conditional = report.verdict === 'pass' && (report.verdict_conditions ?? []).some(c => c.trim() !== '')
-      let board: { term: StatusTerm; detail: string }
+      let board: { term: StatusTerm; detail: string; tone?: ChipTone }
       if (tone === 'error') {
         board = report.serious > 0
           ? { term: 'fail', detail: `${report.serious} serious` }
@@ -222,12 +222,15 @@ export function ShellChips({
           ? { term: 'invalid', detail: 'partly judged, not a pass' }
           : summarizeEvidence(report.evidence).undermined > 0
             ? { term: 'invalid', detail: 'evidence undermined' }
-            : { term: 'conditional_pass', detail: report.total > 0 ? plural(report.total, 'finding') : conditional ? 'rests on conditions' : '' }
+            : conditional
+              ? { term: 'conditional_pass', detail: report.total > 0 ? plural(report.total, 'finding') : 'rests on conditions' }
+              // Findings without conditions are qualifications on a pass, not a conditional pass.
+              : { term: 'pass', detail: report.total > 0 ? plural(report.total, 'finding') : 'analysis qualified', tone: 'warn' }
       } else {
         // A pass that rests on conditions is never the plain PASS.
         board = conditional ? { term: 'conditional_pass', detail: 'rests on conditions' } : { term: 'pass', detail: '' }
       }
-      parts.push({ key: 'board', tone: TERM_TONE[board.term], view: 'board', ...board })
+      parts.push({ key: 'board', view: 'board', ...board, tone: board.tone ?? TERM_TONE[board.term] })
     }
     if (checks) {
       const { passed, failed, invalid, measured = 0 } = checks

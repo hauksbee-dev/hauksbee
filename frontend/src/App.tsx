@@ -297,7 +297,7 @@ function Shell({ boot }: { boot: Boot }) {
     : view === 'sim' ? (sessionBoard ?? session.boardLabel) : session.boardLabel
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: 'var(--canvas)', color: 'var(--silk)' }}>
+    <div className="app-shell flex h-screen overflow-hidden" style={{ background: 'var(--canvas)', color: 'var(--silk)' }}>
       <Sidebar
         nav={{
           view,
@@ -315,7 +315,7 @@ function Shell({ boot }: { boot: Boot }) {
         sessions={<SessionRail state={sessions} onResume={resumeSession} />}
       />
 
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         {/* Title row: where you are, what board this is, live status, and the
             primary action. */}
         <header
@@ -331,10 +331,9 @@ function Shell({ boot }: { boot: Boot }) {
             </h1>
             {headerBoard && (
               <span
-                className="text-[12px] truncate"
-                // On a phone header this is the only place the board's name
-                // appears (the rail's identity card is icon-collapsed), and it
-                // gets ellipsed there: the full name stays reachable.
+                className="hidden sm:block text-[12px] truncate"
+                // Not on a phone: the one status chip needs the room, and the
+                // report below names the board in its own verdict card.
                 title={headerBoard}
                 style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}
               >
@@ -347,7 +346,7 @@ function Shell({ boot }: { boot: Boot }) {
 
           {/* The one status chip. It shrinks and ellipsizes its label before it
               pushes a header action off the row; the full text is its hover. */}
-          <div className="flex items-center min-w-0">
+          <div className="flex items-center min-w-0 max-sm:shrink-0">
             <ShellChips
               view={view}
               report={report}

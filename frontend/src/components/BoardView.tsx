@@ -492,7 +492,7 @@ export function BoardView({
                   it, so a part with many nets scrolls inside the card instead
                   of sliding under the Fit control. */}
               {(selectedNet || selectedComponent) && (
-                <div className="absolute left-3 z-10 flex items-end pointer-events-none" style={{ top: TOOLBAR_CLEARANCE, bottom: 12 }}>
+                <div className="selection-dock absolute left-3 z-10 flex items-end pointer-events-none" style={{ top: TOOLBAR_CLEARANCE, bottom: 12 }}>
                   <div className="pointer-events-auto" style={{ maxHeight: '100%', display: 'flex' }}>
                     <SelectionCard
                       net={selectedNet}

@@ -317,7 +317,7 @@ export default function SimView({
 
           {/* Floating selection card: same language as the report map. */}
           {(selectedFp || selectedNet) && (
-            <div className="absolute left-3 z-10 flex items-end pointer-events-none" style={{ top: TOOLBAR_CLEARANCE, bottom: 36 }}>
+            <div className="selection-dock absolute left-3 z-10 flex items-end pointer-events-none" style={{ top: TOOLBAR_CLEARANCE, bottom: 36 }}>
               <div className="pointer-events-auto" style={{ maxHeight: '100%', display: 'flex' }}>
                 <SelectionCard
                   net={selectedFp ? null : selectedNet}
