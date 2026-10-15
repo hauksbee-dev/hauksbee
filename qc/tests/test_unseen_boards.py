@@ -31,6 +31,13 @@ import qc.release_board_gates as release_gates
 import qc.value_grading as value_grading
 
 
+class ContainsTestCase(unittest.TestCase):
+    def assertAnyContains(self, needle: str, items) -> None:
+        self.assertTrue(
+            any(needle in item for item in items), f"{needle!r} not in {items!r}"
+        )
+
+
 @contextmanager
 def temp_base() -> Iterator[Path]:
     """A scratch directory for one test, removed when the block exits."""
@@ -352,7 +359,7 @@ def artifact_mutating_runner(mutate, exit_code: int = 0):
 
     return run
 
-class DiscoveryTests(unittest.TestCase):
+class DiscoveryTests(ContainsTestCase):
     @staticmethod
     def _alpha_header(*, cohort: str | None = None, license_confirmed: bool = False) -> str:
         """TOML shared by every single-'alpha'-board manifest below: same id,
@@ -780,7 +787,7 @@ expect = ["board.kicad_pcb"]
             self.assertEqual(source.read_bytes(), staged.read_bytes())
 
 
-class SelectionTests(unittest.TestCase):
+class SelectionTests(ContainsTestCase):
     def test_seeded_selection_is_repeatable_diverse_and_never_reuses_seen_boards(
         self,
     ) -> None:
@@ -886,7 +893,7 @@ class SelectionTests(unittest.TestCase):
             select_unseen(aliases, set(), count=5, seed="duplicate-content")
 
 
-class HistoryTests(unittest.TestCase):
+class HistoryTests(ContainsTestCase):
     def test_reservation_is_append_only_and_the_next_iteration_cannot_reuse_its_boards(
         self,
     ) -> None:
@@ -1161,7 +1168,7 @@ def run_corpus(
     )
 
 
-class CommandTests(unittest.TestCase):
+class CommandTests(ContainsTestCase):
     def test_release_orchestrator_api_is_available(self) -> None:
         self.assertTrue(hasattr(release_gates, "run_external_gate"))
         self.assertTrue(hasattr(release_gates, "run_corpus_gate"))
@@ -1919,6 +1926,19 @@ def gerber_archive(
         archive.writestr("README.txt", "fab notes\n")
 
 
+def film(flashes: int, header: str = "") -> str:
+    """A Gerber film of `flashes` aperture flashes, after an optional header."""
+    pads = "\n".join(f"X{1000 + i}Y2000D03*" for i in range(flashes))
+    return f"%FSLAX46Y46*%\n%MOMM*%\n{header}{pads}\nM02*\n"
+
+
+def write_zip(path: Path, members: dict[str, str]) -> Path:
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, body in members.items():
+            archive.writestr(name, body)
+    return path
+
+
 #: Facts for a board the gate can anchor: a placement count and a declared-net
 #: count that the default `journey_row` recovers in full. Used by tests whose
 #: subject is something other than the input-anchored floors, so they do not sit
@@ -2007,7 +2027,7 @@ def journey_row(
     return row
 
 
-class ValueContractTests(unittest.TestCase):
+class ValueContractTests(ContainsTestCase):
     """The gate grades delivered value, not only honesty."""
 
     def _assert_listed(self, grade, board, input_format, key, degraded) -> None:
@@ -2018,7 +2038,7 @@ class ValueContractTests(unittest.TestCase):
             [{"board": board, "input_format": input_format}], summary[key]
         )
         lines = release_gates.describe_degraded({"value_summary": summary})
-        self.assertTrue(any(degraded in line for line in lines))
+        self.assertAnyContains(degraded, lines)
 
     def grade(self, row: dict, *, input_format: str = "kicad_pcb", **kwargs):
         facts = kwargs.pop("facts", None)
@@ -2079,9 +2099,7 @@ class ValueContractTests(unittest.TestCase):
         grade = self.grade(row)
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(
-            any("named no model upload for" in reason for reason in grade.reasons)
-        )
+        self.assertAnyContains("named no model upload for", grade.reasons)
 
     def test_unbound_criticals_with_no_named_unlock_fail(self) -> None:
         row = journey_row(critical="1/14")
@@ -2089,9 +2107,7 @@ class ValueContractTests(unittest.TestCase):
         grade = self.grade(row)
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(
-            any("named no model upload for" in reason for reason in grade.reasons)
-        )
+        self.assertAnyContains("named no model upload for", grade.reasons)
 
     def test_one_unbound_critical_is_degraded_not_delivered(self) -> None:
         # 4 of 5 bound is not bench-grade, it is bench-grade on most of the
@@ -2104,25 +2120,19 @@ class ValueContractTests(unittest.TestCase):
         grade = self.grade(journey_row(components=0))
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(
-            any("none survived extraction" in reason for reason in grade.reasons)
-        )
+        self.assertAnyContains("none survived extraction", grade.reasons)
 
     def test_a_report_without_a_binding_summary_fails_on_a_partful_input(self) -> None:
         grade = self.grade(journey_row(critical=None))
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(
-            any("no model-binding summary" in reason for reason in grade.reasons)
-        )
+        self.assertAnyContains("no model-binding summary", grade.reasons)
 
     def test_a_simulation_clock_that_never_advances_fails(self) -> None:
         grade = self.grade(journey_row(before=0.0, after=0.0))
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(
-            any("never advanced" in reason for reason in grade.reasons)
-        )
+        self.assertAnyContains("never advanced", grade.reasons)
 
     #: A real KiCad board this repository ships, with a golden web report beside
     #: it naming exactly three components: U1, Q1, R1. It is also MINIFIED onto a
@@ -2241,9 +2251,7 @@ class ValueContractTests(unittest.TestCase):
 
         self.assertEqual(value_grading.FAILED, grade.grade)
         self.assertEqual(["R99"], grade.signals["components_not_in_the_input"])
-        self.assertTrue(
-            any("does not contain: R99" in r for r in grade.reasons)
-        )
+        self.assertAnyContains("does not contain: R99", grade.reasons)
 
     def test_the_real_board_grades_delivered_on_its_golden_report(self) -> None:
         root = Path(unseen_boards.__file__).resolve().parent.parent
@@ -2303,9 +2311,7 @@ class ValueContractTests(unittest.TestCase):
             # A tool cannot disclose this to itself: the report looks complete.
             grade = self.grade(journey_row(components=12), facts=facts)
             self.assertEqual(value_grading.FAILED, grade.grade)
-            self.assertTrue(
-                any("of the 100 placements" in reason for reason in grade.reasons)
-            )
+            self.assertAnyContains("of the 100 placements", grade.reasons)
 
             # Dropping the logos, fiducials and mounting holes is not a failure.
             kept = self.grade(journey_row(components=91), facts=facts)
@@ -2328,9 +2334,7 @@ class ValueContractTests(unittest.TestCase):
 
             self.assertEqual(value_grading.FAILED, grade.grade)
             self.assertEqual(12, grade.signals["recovered_components"])
-            self.assertTrue(
-                any("recovered 12 of the 100" in reason for reason in grade.reasons)
-            )
+            self.assertAnyContains("recovered 12 of the 100", grade.reasons)
 
     def test_unverified_identity_is_enumerated(self) -> None:
         # How often the identity check goes inert is itself worth disclosing: it
@@ -2384,8 +2388,8 @@ class ValueContractTests(unittest.TestCase):
             summary["firmware_expectation_lowered"],
         )
         lines = release_gates.describe_degraded({"value_summary": summary})
-        self.assertTrue(any("UNVERIFIED against the input" in line for line in lines))
-        self.assertTrue(any("expectation LOWERED" in line for line in lines))
+        self.assertAnyContains("UNVERIFIED against the input", lines)
+        self.assertAnyContains("expectation LOWERED", lines)
 
     def test_an_unclassified_format_does_not_escape_the_unanchored_cap(self) -> None:
         # The cap keyed on PARTFUL_FORMATS, so a format nobody had classified
@@ -2467,7 +2471,7 @@ class ValueContractTests(unittest.TestCase):
         self.assertEqual(value_grading.DEGRADED, grade.grade)
         self.assertIn(rare, grade.unlocks)
         # And the per-part sentences are still represented, not crowded out.
-        self.assertTrue(any("Add a model for" in u for u in grade.unlocks))
+        self.assertAnyContains("Add a model for", grade.unlocks)
         self.assertIn("retained report", grade.unlocks[-1])
 
     def test_an_uncorroborated_binding_claim_is_enumerated(self) -> None:
@@ -2563,7 +2567,7 @@ class ValueContractTests(unittest.TestCase):
         row["report"]["nets"] = ["GND"] * 9
         grade = self.grade(row)
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(any("net inventory repeats" in r for r in grade.reasons))
+        self.assertAnyContains("net inventory repeats", grade.reasons)
 
         row = journey_row(components=50)
         row["report"]["components"] = [{"reference": "R1"}] * 50
@@ -2573,9 +2577,7 @@ class ValueContractTests(unittest.TestCase):
                    "input_placements": 100},
         )
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(
-            any("component inventory repeats" in r for r in grade.reasons)
-        )
+        self.assertAnyContains("component inventory repeats", grade.reasons)
 
     def test_unnamed_placements_neither_repeat_nor_pad(self) -> None:
         # Two things at once. A real board carries placements with no reference
@@ -2646,9 +2648,7 @@ class ValueContractTests(unittest.TestCase):
         grade = self.grade(row)
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(
-            any("claims 40 components but lists 41" in r for r in grade.reasons)
-        )
+        self.assertAnyContains("claims 40 components but lists 41", grade.reasons)
 
     def test_unpositioned_components_are_not_a_defect(self) -> None:
         # `components` carries only what the reader could place, so a shorter
@@ -2666,9 +2666,7 @@ class ValueContractTests(unittest.TestCase):
         grade = self.grade(row)
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(
-            any("claims no critical parts" in reason for reason in grade.reasons)
-        )
+        self.assertAnyContains("claims no critical parts", grade.reasons)
 
     def test_a_board_with_genuinely_no_critical_parts_is_delivered(self) -> None:
         grade = self.grade(journey_row(critical="0/0"))
@@ -2685,7 +2683,7 @@ class ValueContractTests(unittest.TestCase):
         grade = self.grade(row)
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(any("named nowhere" in reason for reason in grade.reasons))
+        self.assertAnyContains("named nowhere", grade.reasons)
 
         row["report"]["assumptions"] = [
             {"kind": "open_part", "replacement": "Add models for the unbound parts."}
@@ -2727,9 +2725,7 @@ class ValueContractTests(unittest.TestCase):
         grade = self.grade(row)
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(
-            any("named no model upload for" in reason for reason in grade.reasons)
-        )
+        self.assertAnyContains("named no model upload for", grade.reasons)
 
     def test_a_placeholder_check_section_is_not_a_check(self) -> None:
         row = journey_row()
@@ -2737,8 +2733,8 @@ class ValueContractTests(unittest.TestCase):
         grade = self.grade(row)
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(any("has no title" in reason for reason in grade.reasons))
-        self.assertTrue(any("reached no verdict" in reason for reason in grade.reasons))
+        self.assertAnyContains("has no title", grade.reasons)
+        self.assertAnyContains("reached no verdict", grade.reasons)
 
     def test_a_name_derived_declared_count_cannot_fail_a_board(self) -> None:
         # A count taken from quoted names under-states, because KiCad leaves
@@ -2776,9 +2772,7 @@ class ValueContractTests(unittest.TestCase):
         grade = self.grade(row, facts=facts)
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(
-            any("from a file that declares 10" in r for r in grade.reasons)
-        )
+        self.assertAnyContains("from a file that declares 10", grade.reasons)
 
     def test_an_unnamed_open_part_still_keeps_a_board_off_delivered(self) -> None:
         # Skipping reference-less open parts entirely let an empty reference buy
@@ -2824,9 +2818,7 @@ class ValueContractTests(unittest.TestCase):
         grade = self.grade(row)
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(
-            any("claims 30 nets and names 2" in reason for reason in grade.reasons)
-        )
+        self.assertAnyContains("claims 30 nets and names 2", grade.reasons)
 
     def test_connectivity_is_measured_against_the_nets_the_file_declares(
         self,
@@ -2845,7 +2837,7 @@ class ValueContractTests(unittest.TestCase):
         grade = self.grade(row, facts=facts)
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(any("connectivity collapsed" in r for r in grade.reasons))
+        self.assertAnyContains("connectivity collapsed", grade.reasons)
 
         # A full reconstruction of the same file is fine.
         kept = journey_row(components=100, nets=120)
@@ -2965,9 +2957,7 @@ class ValueContractTests(unittest.TestCase):
             ]
             grade = self.grade(padded, input_format="eagle_brd", facts=facts)
             self.assertEqual(value_grading.FAILED, grade.grade)
-            self.assertTrue(
-                any("does not declare" in reason for reason in grade.reasons)
-            )
+            self.assertAnyContains("does not declare", grade.reasons)
 
     def test_net_identity_is_not_claimed_where_the_names_are_not_comparable(
         self,
@@ -3026,7 +3016,7 @@ class ValueContractTests(unittest.TestCase):
         grade = self.grade(journey_row(sections=0))
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(any("no check" in reason for reason in grade.reasons))
+        self.assertAnyContains("no check", grade.reasons)
 
     def test_a_section_that_is_not_a_section_fails(self) -> None:
         # A string where a check belongs is not a conclusion about the board, and
@@ -3101,7 +3091,7 @@ class ValueContractTests(unittest.TestCase):
         )
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(any("netlist input yielded 1" in r for r in grade.reasons))
+        self.assertAnyContains("netlist input yielded 1", grade.reasons)
 
     def test_a_bound_part_with_open_pins_degrades_rather_than_fails(self) -> None:
         # `bind.open_parts` holds two buckets, told apart by `bound`. A `bound`
@@ -3127,9 +3117,7 @@ class ValueContractTests(unittest.TestCase):
         self.assertEqual([], grade.reasons)
         self.assertEqual(["Q3"], grade.signals["resolved_open_parts"])
         # The unlock names a design change, because no upload closes this.
-        self.assertTrue(
-            any("Drive or connect the open pins of Q3" in u for u in grade.unlocks)
-        )
+        self.assertAnyContains("Drive or connect the open pins of Q3", grade.unlocks)
 
         # The UNBOUND bucket is unchanged: no model, nothing offered, fails.
         unbound = journey_row(critical="8/8")
@@ -3139,7 +3127,7 @@ class ValueContractTests(unittest.TestCase):
         ]
         failed = self.grade(unbound)
         self.assertEqual(value_grading.FAILED, failed.grade)
-        self.assertTrue(any("no model upload for U9" in r for r in failed.reasons))
+        self.assertAnyContains("no model upload for U9", failed.reasons)
 
     def test_unbound_parts_named_nowhere_with_nothing_offered_fail(self) -> None:
         # A shortfall the report never explained is not honest degradation.
@@ -3149,14 +3137,14 @@ class ValueContractTests(unittest.TestCase):
         grade = self.grade(row)
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(any("named nowhere" in r for r in grade.reasons))
+        self.assertAnyContains("named nowhere", grade.reasons)
 
     def test_a_layout_with_fewer_than_two_nets_fails(self) -> None:
         # The degenerate report no real layout produces: one part, one net.
         grade = self.grade(journey_row(components=1, nets=1, critical="0/0"))
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(any("fewer than the 2" in r for r in grade.reasons))
+        self.assertAnyContains("fewer than the 2", grade.reasons)
 
     def test_a_parallel_bank_with_many_parts_and_two_nets_is_fine(self) -> None:
         # A hundred capacitors across two rails is a real design. "More parts
@@ -3169,7 +3157,7 @@ class ValueContractTests(unittest.TestCase):
         grade = self.grade(journey_row(critical="9/2"))
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(any("malformed" in reason for reason in grade.reasons))
+        self.assertAnyContains("malformed", grade.reasons)
 
     def test_an_honest_refusal_still_passes(self) -> None:
         grade = self.grade(
@@ -3181,7 +3169,7 @@ class ValueContractTests(unittest.TestCase):
         self.assertEqual([], grade.reasons)
 
 
-class GerberValueContractTests(unittest.TestCase):
+class GerberValueContractTests(ContainsTestCase):
     """The ardep class: honest, exportable, and worth nothing at a bench."""
 
     def _gerber_grade(
@@ -3580,18 +3568,11 @@ class GerberValueContractTests(unittest.TestCase):
         # not exist, and an LED matrix or backplane is legitimately thousands of
         # pads on three or four nets.
         with tempfile.TemporaryDirectory() as raw:
-            staged = Path(raw) / "single-sided.zip"
-            pads = "\n".join(f"X{1000 + i}Y2000D03*" for i in range(1200))
-            with zipfile.ZipFile(staged, "w") as archive:
-                for name in (
-                    "matrix-F_Cu.gbr",
-                    "matrix-F_Mask.gbr",
-                    "matrix-F_Silkscreen.gbr",
-                    "matrix-F_Paste.gbr",
-                ):
-                    archive.writestr(
-                        name, f"%FSLAX46Y46*%\n%MOMM*%\n{pads}\nM02*\n"
-                    )
+            names = ("F_Cu", "F_Mask", "F_Silkscreen", "F_Paste")
+            staged = write_zip(
+                Path(raw) / "single-sided.zip",
+                {f"matrix-{name}.gbr": film(1200) for name in names},
+            )
             facts = value_grading.input_facts("gerber_archive", staged)
 
             self.assertEqual(1, facts["copper_layers"])
@@ -3612,15 +3593,11 @@ class GerberValueContractTests(unittest.TestCase):
         # ceiling derived from forty of those would fail a board with forty real
         # nets. Both bounds share the flash minimum for that reason.
         with tempfile.TemporaryDirectory() as raw:
-            staged = Path(raw) / "drawn.zip"
-            vias = "\n".join(f"X{1000 + i}Y2000D03*" for i in range(20))
-            with zipfile.ZipFile(staged, "w") as archive:
-                for layer in ("board-F_Cu.gbr", "board-B_Cu.gbr"):
-                    archive.writestr(
-                        layer,
-                        "%FSLAX46Y46*%\n%MOMM*%\nG36*\nX1000Y1000D02*\n"
-                        f"X9000Y9000D01*\nG37*\n{vias}\nM02*\n",
-                    )
+            drawn = film(20, "G36*\nX1000Y1000D02*\nX9000Y9000D01*\nG37*\n")
+            staged = write_zip(
+                Path(raw) / "drawn.zip",
+                {"board-F_Cu.gbr": drawn, "board-B_Cu.gbr": drawn},
+            )
             facts = value_grading.input_facts("gerber_archive", staged)
 
             self.assertEqual(40, facts["aperture_flashes"])
@@ -3634,15 +3611,11 @@ class GerberValueContractTests(unittest.TestCase):
         # package of two 3-flash and two 900-flash films reconstructing 30 nets
         # was failed for exceeding a ceiling of six.
         with tempfile.TemporaryDirectory() as raw:
-            staged = Path(raw) / "allegro.zip"
-            def film(flashes: int) -> str:
-                pads = "\n".join(f"X{1000 + i}Y2000D03*" for i in range(flashes))
-                return f"%FSLAX46Y46*%\n%MOMM*%\n{pads}\nM02*\n"
-            with zipfile.ZipFile(staged, "w") as archive:
-                archive.writestr("art1.ph", film(3))
-                archive.writestr("art2.ph", film(3))
-                archive.writestr("art3.ph", film(900))
-                archive.writestr("art4.ph", film(900))
+            staged = write_zip(
+                Path(raw) / "allegro.zip",
+                {"art1.ph": film(3), "art2.ph": film(3),
+                 "art3.ph": film(900), "art4.ph": film(900)},
+            )
             facts = value_grading.input_facts("gerber_archive", staged)
 
             self.assertFalse(facts["copper_classified"])
@@ -3655,9 +3628,7 @@ class GerberValueContractTests(unittest.TestCase):
             # The ceiling still bites on the whole package's flash count.
             over = self._gerber_grade(facts, nets=1807, axes=("gerber-only", "stm32"))
             self.assertEqual(value_grading.FAILED, over.grade)
-            self.assertTrue(
-                any("implausible reconstruction" in r for r in over.reasons)
-            )
+            self.assertAnyContains("implausible reconstruction", over.reasons)
 
     def test_the_unclassified_estimate_is_a_real_lower_bound(self) -> None:
         # An AVERAGE share is not a bound: two 1000-flash copper films beside
@@ -3665,15 +3636,9 @@ class GerberValueContractTests(unittest.TestCase):
         # real copper, which would raise the floor and fail a good 20-net board.
         # The two smallest films are a genuine lower bound on two copper films.
         with tempfile.TemporaryDirectory() as raw:
-            staged = Path(raw) / "mixed.zip"
-            def film(flashes: int) -> str:
-                pads = "\n".join(f"X{1000 + i}Y2000D03*" for i in range(flashes))
-                return f"%FSLAX46Y46*%\n%MOMM*%\n{pads}\nM02*\n"
-            with zipfile.ZipFile(staged, "w") as archive:
-                for index in range(2):
-                    archive.writestr(f"a{index}.gbr", film(1000))
-                for index in range(8):
-                    archive.writestr(f"b{index}.gbr", film(10000))
+            members = {f"a{index}.gbr": film(1000) for index in range(2)}
+            members |= {f"b{index}.gbr": film(10000) for index in range(8)}
+            staged = write_zip(Path(raw) / "mixed.zip", members)
             facts = value_grading.input_facts("gerber_archive", staged)
 
             self.assertFalse(facts["copper_classified"])
@@ -3695,15 +3660,11 @@ class GerberValueContractTests(unittest.TestCase):
         # is exactly what Allegro writes) had zero copper layers with everything
         # identified, so it reported zero copper flashes, skipped BOTH bounds and
         # disclosed nothing. That is the ardep escape hatch reachable by naming.
-        def film(flashes: int) -> str:
-            pads = "\n".join(f"X{1000 + i}Y2000D03*" for i in range(flashes))
-            return f"%FSLAX46Y46*%\n%MOMM*%\n{pads}\nM02*\n"
-
         with tempfile.TemporaryDirectory() as raw:
-            staged = Path(raw) / "all-route.zip"
-            with zipfile.ZipFile(staged, "w") as archive:
-                for index in range(4):
-                    archive.writestr(f"l{index}_route.gbr", film(1000))
+            staged = write_zip(
+                Path(raw) / "all-route.zip",
+                {f"l{index}_route.gbr": film(1000) for index in range(4)},
+            )
             facts = value_grading.input_facts("gerber_archive", staged)
 
             self.assertEqual(0, facts["copper_layers"])
@@ -3722,17 +3683,11 @@ class GerberValueContractTests(unittest.TestCase):
         # copper flash count to the lower bound and its floor to the clamp
         # minimum, on the very board this contract exists to catch. Four films
         # naming themselves as copper is enough to read the copper directly.
-        def film(flashes: int, header: str = "") -> str:
-            pads = "\n".join(f"X{1000 + i}Y2000D03*" for i in range(flashes))
-            return f"%FSLAX46Y46*%\n%MOMM*%\n{header}{pads}\nM02*\n"
-
         with tempfile.TemporaryDirectory() as raw:
-            staged = Path(raw) / "altium.zip"
-            with zipfile.ZipFile(staged, "w") as archive:
-                for index in range(4):
-                    archive.writestr(f"B_Copper_Signal_{index}.gbr", film(500))
-                # One film nothing can classify, as Altium leaves it.
-                archive.writestr("B.unknown", film(200, "G04 #@! TF.FilePolarity*\n"))
+            members = {f"B_Copper_Signal_{index}.gbr": film(500) for index in range(4)}
+            # One film nothing can classify, as Altium leaves it.
+            members["B.unknown"] = film(200, "G04 #@! TF.FilePolarity*\n")
+            staged = write_zip(Path(raw) / "altium.zip", members)
             facts = value_grading.input_facts("gerber_archive", staged)
 
             self.assertEqual(4, facts["copper_layers"])
@@ -3752,16 +3707,10 @@ class GerberValueContractTests(unittest.TestCase):
         # recognised copper film beside three unidentified ones gave a collapsed
         # package no floor and no disclosure, while the same package with zero
         # recognised films was correctly failed.
-        def film(flashes: int) -> str:
-            pads = "\n".join(f"X{1000 + i}Y2000D03*" for i in range(flashes))
-            return f"%FSLAX46Y46*%\n%MOMM*%\n{pads}\nM02*\n"
-
         with tempfile.TemporaryDirectory() as raw:
-            ambiguous = Path(raw) / "ambiguous.zip"
-            with zipfile.ZipFile(ambiguous, "w") as archive:
-                archive.writestr("top.gtl", film(500))
-                for index in range(3):
-                    archive.writestr(f"x{index}.gbr", film(500))
+            members = {"top.gtl": film(500)}
+            members |= {f"x{index}.gbr": film(500) for index in range(3)}
+            ambiguous = write_zip(Path(raw) / "ambiguous.zip", members)
             facts = value_grading.input_facts("gerber_archive", ambiguous)
 
             self.assertEqual(1, facts["copper_layers"])
@@ -3775,13 +3724,11 @@ class GerberValueContractTests(unittest.TestCase):
 
             # A genuine single-sided board, whose other films say what they are,
             # classifies completely and keeps its exemption.
-            single = Path(raw) / "single.zip"
-            with zipfile.ZipFile(single, "w") as archive:
-                archive.writestr("board-F_Cu.gbr", film(600))
-                for name in (
-                    "board-F_Mask.gbr", "board-F_Silkscreen.gbr", "board-F_Paste.gbr"
-                ):
-                    archive.writestr(name, film(600))
+            names = ("F_Cu", "F_Mask", "F_Silkscreen", "F_Paste")
+            single = write_zip(
+                Path(raw) / "single.zip",
+                {f"board-{name}.gbr": film(600) for name in names},
+            )
             honest = value_grading.input_facts("gerber_archive", single)
 
             self.assertTrue(honest["copper_classified"])
@@ -3816,9 +3763,7 @@ class GerberValueContractTests(unittest.TestCase):
                 axes=("kicad9", "gerber-only", "automotive", "stm32", "large"),
             )
             self.assertEqual(value_grading.FAILED, grade.grade)
-            self.assertTrue(
-                any("reconstruction collapsed" in r for r in grade.reasons)
-            )
+            self.assertAnyContains("reconstruction collapsed", grade.reasons)
             self.assertIs(False, grade.signals["reconstruction_floor_verified"])
             summary = value_grading.summarize([("mystery-package", grade)])
             self.assertEqual(1, len(summary["unverified_reconstruction"]))
@@ -3871,9 +3816,7 @@ class GerberValueContractTests(unittest.TestCase):
             )
 
             self.assertEqual(value_grading.FAILED, grade.grade)
-            self.assertTrue(
-                any("reconstruction collapsed" in reason for reason in grade.reasons)
-            )
+            self.assertAnyContains("reconstruction collapsed", grade.reasons)
             self.assertEqual(1924, grade.signals["reader_reported_flashes"])
 
     def test_rich_reconstruction_from_the_same_package_is_degraded_honest(
@@ -3933,9 +3876,7 @@ class GerberValueContractTests(unittest.TestCase):
             )
 
             self.assertEqual(value_grading.FAILED, grade.grade)
-            self.assertTrue(
-                any("implausible reconstruction" in reason for reason in grade.reasons)
-            )
+            self.assertAnyContains("implausible reconstruction", grade.reasons)
 
     def test_the_ceiling_sits_exactly_at_one_net_per_flashed_feature(self) -> None:
         # A net needs at least one flashed feature to sit on, so the ceiling is
@@ -3979,9 +3920,7 @@ class GerberValueContractTests(unittest.TestCase):
             )
 
             self.assertEqual(value_grading.FAILED, grade.grade)
-            self.assertTrue(
-                any("implausible reconstruction" in r for r in grade.reasons)
-            )
+            self.assertAnyContains("implausible reconstruction", grade.reasons)
 
     def test_a_model_unlock_is_not_quoted_for_a_fabrication_package(
         self,
@@ -4100,7 +4039,7 @@ def _kit_manifest(
     return root, manifest
 
 
-class FirmwareJourneyContractTests(unittest.TestCase):
+class FirmwareJourneyContractTests(ContainsTestCase):
     def test_a_manifest_may_pair_firmware_with_a_board(self) -> None:
         with temp_base() as base:
             root, manifest = _kit_manifest(base, firmware_expect="cosim")
@@ -4253,9 +4192,7 @@ class FirmwareJourneyContractTests(unittest.TestCase):
         grade = self._firmware_grade(firmware=self._firmware(), cosim=None)
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(
-            any("co-simulated nothing" in reason for reason in grade.reasons)
-        )
+        self.assertAnyContains("co-simulated nothing", grade.reasons)
 
     def test_cosim_that_drives_no_pin_fails(self) -> None:
         # No upload fixes an inert co-sim, so it cannot be honest degradation:
@@ -4272,7 +4209,7 @@ class FirmwareJourneyContractTests(unittest.TestCase):
         )
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(any("drove no pin" in reason for reason in grade.reasons))
+        self.assertAnyContains("drove no pin", grade.reasons)
 
     def test_load_only_without_a_stated_reason_fails(self) -> None:
         # Otherwise `load-only` excuses a malformed image, a loader crash and a
@@ -4288,7 +4225,7 @@ class FirmwareJourneyContractTests(unittest.TestCase):
         )
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(any("gave no reason" in reason for reason in grade.reasons))
+        self.assertAnyContains("gave no reason", grade.reasons)
 
     def test_load_only_carries_the_reason_the_report_stated(self) -> None:
         row = journey_row(
@@ -4331,7 +4268,7 @@ class FirmwareJourneyContractTests(unittest.TestCase):
         )
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(any("drove no pin" in reason for reason in grade.reasons))
+        self.assertAnyContains("drove no pin", grade.reasons)
 
     def test_a_cosim_that_states_no_analog_verdict_fails(self) -> None:
         # Omitting the verdict must not grade better than declaring it invalid,
@@ -4347,9 +4284,7 @@ class FirmwareJourneyContractTests(unittest.TestCase):
         )
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(
-            any("no analog validity verdict" in r for r in grade.reasons)
-        )
+        self.assertAnyContains("no analog validity verdict", grade.reasons)
 
     def test_a_cosim_whose_analog_solve_was_invalidated_is_degraded(self) -> None:
         # The unlock is the report's own per-part sentence, not one the gate
@@ -4366,7 +4301,7 @@ class FirmwareJourneyContractTests(unittest.TestCase):
         )
 
         self.assertEqual(value_grading.DEGRADED, grade.grade)
-        self.assertTrue(any("Add a model for U0" in unlock for unlock in grade.unlocks))
+        self.assertAnyContains("Add a model for U0", grade.unlocks)
 
     def test_pin_activity_the_page_never_rendered_fails(self) -> None:
         grade = self._firmware_grade(
@@ -4380,9 +4315,7 @@ class FirmwareJourneyContractTests(unittest.TestCase):
         )
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(
-            any("page did not render" in reason for reason in grade.reasons)
-        )
+        self.assertAnyContains("page did not render", grade.reasons)
 
     def test_serial_output_alone_is_not_pin_activity(self) -> None:
         # UART output is worth recording and is not a substitute for the one
@@ -4399,7 +4332,7 @@ class FirmwareJourneyContractTests(unittest.TestCase):
         )
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(any("drove no pin" in reason for reason in grade.reasons))
+        self.assertAnyContains("drove no pin", grade.reasons)
 
     def _firmware_grade(self, *, expect: str = "cosim", **kwargs):
         return value_grading.grade_board(
@@ -4480,9 +4413,7 @@ class FirmwareJourneyContractTests(unittest.TestCase):
         )
 
         self.assertEqual(value_grading.FAILED, grade.grade)
-        self.assertTrue(
-            any("named nothing that would make them usable" in r for r in grade.reasons)
-        )
+        self.assertAnyContains("named nothing that would make them usable", grade.reasons)
 
     def test_a_driven_pin_and_a_running_cosim_is_delivered(self) -> None:
         grade = self._firmware_grade(
@@ -4501,7 +4432,7 @@ class FirmwareJourneyContractTests(unittest.TestCase):
         self.assertEqual(value_grading.DELIVERED, grade.grade)
 
 
-class ValueGateWiringTests(unittest.TestCase):
+class ValueGateWiringTests(ContainsTestCase):
     """The grades reach the evidence document, the summary, and the exit code."""
 
     def _run(self, base: Path, runner):
