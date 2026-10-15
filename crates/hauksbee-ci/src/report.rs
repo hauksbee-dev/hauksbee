@@ -1547,53 +1547,13 @@ fn is_zero(n: &str) -> bool {
     n.parse::<f64>().map(|v| v == 0.0).unwrap_or(false)
 }
 
-/// One actionable "why / where to look" line for a failed assertion of the
-/// given `kind`. Points at the likely physical cause, one line per kind, not a
-/// full explanation engine. `None` for kinds that have no useful generic
-/// pointer.
+/// The catalogue's one-line "why it fails" for `kind`: the likely physical cause,
+/// one line per kind, not a full explanation engine. `None` for an unknown kind.
 ///
 /// Only reached once [`degenerate_hint`] has ruled out the outcomes where the
 /// check never measured anything: these lines all presume a real measurement.
 fn failure_hint(kind: &str) -> Option<String> {
-    Some(
-        match kind {
-            "voltage" => {
-                "the rail left its window; check the supply feeding this net and the load pulling it down."
-            }
-            "rail_window" => {
-                "the rail dipped/spiked or recovered/settled outside the window; check the scenario's load step and the decoupling on this net."
-            }
-            "boot_coverage" | "boot-coverage" => {
-                "the firmware never drove the control net in time; check `firmware = ...` points at the right image and the net is a GPIO the firmware actually drives."
-            }
-            "no_faults" => {
-                "the stress monitor tripped; the named component exceeded a rating (over-current / -voltage / -power / -temp / reverse-bias); check its part value and supply."
-            }
-            "max_current" => {
-                "the part drew more than its limit; check its load and the override value."
-            }
-            "max_temp" => {
-                "the junction ran hotter than the limit; check dissipation and the `ambient_c` assumption."
-            }
-            "uart" => {
-                "the expected UART text never appeared; check the firmware image and baud, and that the MCU booted."
-            }
-            "toggle" => {
-                "the net toggled the wrong number of times; check the firmware's drive rate and the deadline window."
-            }
-            "protection_trip" => {
-                "the supply's protection did/did not latch as asserted; check the supply's limits and the load that triggers it."
-            }
-            "phase_margin" => {
-                "the loop's phase margin missed the bound; check the compensation network and the `[ac]` sweep range."
-            }
-            "ac_gain" => {
-                "the small-signal gain missed the band; check the AC stimulus net and the sweep points."
-            }
-            _ => return None,
-        }
-        .to_string(),
-    )
+    crate::catalog::entry(kind).map(|e| e.fails_because.to_string())
 }
 
 /// One MCU's (or the chunk-sampled logic's) timing resolution, in the wording

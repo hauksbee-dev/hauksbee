@@ -131,7 +131,8 @@ pub fn check_route_with_design(check: DesignCheckRunner) -> Router {
     with_upload_guard(
         Router::new()
             .route("/api/check", post(check_handler))
-            .route("/api/ci/scaffold", post(scaffold_handler)),
+            .route("/api/ci/scaffold", post(scaffold_handler))
+            .route("/api/ci/catalog", get(catalog_handler)),
         check,
     )
 }
@@ -956,6 +957,37 @@ async fn check_handler(
             .into_design_upload()
             .map(|upload| check(upload, &spec))
             .map_err(str::to_string)
+    })
+    .await
+    {
+        Ok(json) => json_ok(json),
+        Err(response) => response,
+    }
+}
+
+/// GET `/api/ci/catalog`: every assertion kind with its fields and an example,
+/// the table `hauksbee-ci explain` prints. No board is involved, so the runner
+/// gets an empty upload and the catalogue marker.
+async fn catalog_handler(State(check): State<Arc<DesignCheckRunner>>) -> JsonResponse {
+    let empty = || NamedUpload {
+        name: String::new(),
+        bytes: Vec::new(),
+    };
+    let upload = DesignUpload {
+        board: empty(),
+        firmware: None,
+        schematic: None,
+        bom: None,
+        placement: None,
+        variant: None,
+        asbuilt: None,
+        models: Vec::new(),
+    };
+    match run_blocking("the catalogue task", move || {
+        Ok(check(
+            upload,
+            hauksbee_frontdoor_api::frontdoor::CATALOG_SPEC,
+        ))
     })
     .await
     {

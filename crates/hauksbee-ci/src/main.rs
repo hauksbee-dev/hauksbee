@@ -116,6 +116,18 @@ enum Command {
     #[command(verbatim_doc_comment)]
     Init(InitArgs),
 
+    /// List the assertion kinds, or show one with its fields and an example.
+    ///
+    /// With no KIND it prints every kind the spec loader accepts and what it
+    /// checks. With a KIND it prints that kind's required and optional fields,
+    /// what else the spec must declare, a TOML example that passes `check`, and
+    /// the usual reason it fails.
+    ///
+    /// Example:
+    ///   hauksbee-ci explain voltage
+    #[command(verbatim_doc_comment)]
+    Explain(ExplainArgs),
+
     /// Install the pre-commit gate into this repository.
     ///
     /// Detects which hook mechanism the repo uses: a repo with a
@@ -269,6 +281,17 @@ struct CheckArgs {
 }
 
 #[derive(Parser)]
+struct ExplainArgs {
+    /// The assertion kind to describe (for example `voltage`); omit to list them all.
+    #[arg(value_name = "KIND")]
+    kind: Option<String>,
+
+    /// Print the whole catalogue as one JSON object (the app reads this).
+    #[arg(long, conflicts_with = "kind")]
+    json: bool,
+}
+
+#[derive(Parser)]
 struct InitArgs {
     /// Board file to scaffold a spec from (.`kicad_pcb`, .`kicad_sch`, .net, .brd, .`PcbDoc`, .d356, .board).
     /// With no argument, looks for exactly one board file in the current
@@ -298,6 +321,7 @@ fn main() -> ExitCode {
         Command::Run(args) => cmd_run(args),
         Command::Check(args) => cmd_check(args),
         Command::Init(args) => cmd_init(args),
+        Command::Explain(args) => cmd_explain(&args),
         Command::Hook(HookCommand::Install) => {
             report(cwd().and_then(|cwd| integrate::hook_install(&cwd)))
         }
@@ -569,6 +593,25 @@ fn cmd_check(args: CheckArgs) -> ExitCode {
         }
     }
     ExitCode::from(worst)
+}
+
+/// `hauksbee-ci explain [kind]`: the assertion catalogue, from the table the report
+/// and the app read. An unknown kind is a usage error that names the nearest kind.
+fn cmd_explain(args: &ExplainArgs) -> ExitCode {
+    use hauksbee_ci::catalog;
+    report(match (&args.kind, args.json) {
+        (_, true) => Ok(catalog::to_json().to_string()),
+        (None, _) => Ok(catalog::render_list().trim_end().to_string()),
+        (Some(kind), _) => catalog::entry(kind)
+            .map(|e| catalog::render_entry(e).trim_end().to_string())
+            .ok_or_else(|| {
+                let kinds: Vec<&str> = catalog::CATALOG.iter().map(|e| e.kind).collect();
+                anyhow::anyhow!(
+                    "unknown assertion kind '{kind}'{}; see: hauksbee-ci explain",
+                    hauksbee_ci::error::did_you_mean_hint(kind, &kinds)
+                )
+            }),
+    })
 }
 
 /// `hauksbee-ci init <board>`: scaffold a starter spec and print where it landed.

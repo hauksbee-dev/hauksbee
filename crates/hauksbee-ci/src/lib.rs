@@ -26,6 +26,7 @@ use std::time::Instant;
 use hauksbee_ir::evidence::{Assumption, EvidenceMap, MatchConfidence, ModelLayer, ModelOnPath};
 
 pub mod assertions;
+pub mod catalog;
 pub mod check;
 pub mod error;
 pub mod examples;

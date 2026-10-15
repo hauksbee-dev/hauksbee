@@ -57,6 +57,10 @@ pub type DesignCheckRunner = Arc<dyn Fn(DesignUpload, &str) -> String + Send + S
 /// a TOML comment, so it is also a harmless spec to any runner that does not know it.
 pub const SCAFFOLD_SPEC: &str = "# hauksbee:scaffold";
 
+/// The spec body that asks a [`DesignCheckRunner`] for the assertion catalogue
+/// (what `hauksbee-ci explain --json` prints), with no board involved.
+pub const CATALOG_SPEC: &str = "# hauksbee:catalog";
+
 /// Everything a successful live-launch callback hands to the serving runtime.
 pub struct LiveLaunch {
     pub engine: Box<dyn Engine>,

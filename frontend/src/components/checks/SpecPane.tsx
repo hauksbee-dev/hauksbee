@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { downloadText } from '../../lib/report-export'
 import { tomlToBuilder } from '../../lib/check-spec'
 import type { BuilderState } from '../../lib/check-spec'
@@ -12,7 +12,7 @@ import type { RemedyActions } from './Remedies'
 // `firmware` path lines.
 
 export function SpecPane({
-  specText, specStem, specFileName, builtToml, rawMode, rawText, setRawText,
+  specText, specStem, specFileName, builtToml, rawMode, rawText, rawSelect, setRawText,
   onLeaveRawMode, onEnterRawMode, stale, running, canRun, preparing, pulseRun, remedyActions, remedyEditor, onRun,
   validationCount, result, runKey, workflowYml, workflowPinned, reportSerious,
 }: {
@@ -22,6 +22,8 @@ export function SpecPane({
   builtToml: string
   rawMode: boolean
   rawText: string
+  /** A range to select in the raw text (a catalogue example's first value to fill). */
+  rawSelect?: { start: number; end: number; seq: number } | null
   setRawText: (text: string) => void
   /** The parsed builder state when the raw TOML fits the builder's vocabulary,
    *  or null when going back would discard it. */
@@ -50,6 +52,16 @@ export function SpecPane({
   reportSerious: number
 }) {
   const [ciOpen, setCiOpen] = useState(false)
+  const rawRef = useRef<HTMLTextAreaElement>(null)
+  // Land the cursor on the value to fill in: select it and scroll its line into view.
+  useEffect(() => {
+    const box = rawRef.current
+    if (!rawSelect || !box) return
+    box.focus({ preventScroll: true })
+    box.setSelectionRange(rawSelect.start, rawSelect.end)
+    const line = box.value.slice(0, rawSelect.start).split('\n').length - 1
+    box.scrollTop = Math.max(0, line * 18 - box.clientHeight / 2)
+  }, [rawSelect?.seq]) // eslint-disable-line react-hooks/exhaustive-deps
   const download = (name: string, contents: string) =>
     downloadText(name, contents, 'text/plain;charset=utf-8')
 
@@ -102,6 +114,7 @@ export function SpecPane({
         {rawMode ? (
           <textarea
             data-testid="raw-toml"
+            ref={rawRef}
             value={rawText}
             onChange={e => setRawText(e.target.value)}
             spellCheck={false}

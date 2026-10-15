@@ -2312,7 +2312,7 @@ impl SupplySpec {
 /// The closed vocabulary of assertion kinds (canonical spellings only; the
 /// `boot-coverage` alias is folded onto `boot_coverage` before matching), used
 /// for the unknown-kind error's did-you-mean hint.
-const ASSERTION_KINDS: &[&str] = &[
+pub(crate) const ASSERTION_KINDS: &[&str] = &[
     "voltage",
     "uart",
     "toggle",
@@ -2374,7 +2374,7 @@ impl Assertion {
 
     // One independent rule per assertion kind; each arm is a short guard.
     #[allow(clippy::too_many_lines)]
-    fn validate(&self) -> Result<(), SpecError> {
+    pub(crate) fn validate(&self) -> Result<(), SpecError> {
         let kind = self.kind.as_str();
         let net = self.net.as_deref().unwrap_or("?");
         let has_bound = self.min.is_some() || self.max.is_some() || self.measurement();
@@ -2729,7 +2729,7 @@ impl Assertion {
             }
             other => {
                 return Err(SpecError::Invalid(format!(
-                    "unknown assertion kind '{other}'{} (expected {})",
+                    "unknown assertion kind '{other}'{} (expected {}); see: hauksbee-ci explain",
                     crate::error::did_you_mean_hint(other, ASSERTION_KINDS),
                     ASSERTION_KINDS.join("|")
                 )));

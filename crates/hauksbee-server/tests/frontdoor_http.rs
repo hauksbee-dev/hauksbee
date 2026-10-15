@@ -294,6 +294,22 @@ async fn scaffold_route_hands_the_runner_the_scaffold_marker() {
     );
 }
 
+/// The assertion catalogue is a plain GET: no board, just the marker the runner answers.
+#[tokio::test]
+async fn catalog_route_asks_the_runner_for_the_catalogue_marker() {
+    let check: frontdoor::DesignCheckRunner = Arc::new(|upload, spec| {
+        format!(
+            "{{\"ok\":true,\"catalog\":{},\"board_len\":{}}}",
+            spec == hauksbee_frontdoor_api::frontdoor::CATALOG_SPEC,
+            upload.board.bytes.len()
+        )
+    });
+    let addr = support::spawn_router(frontdoor::check_route_with_design(check)).await;
+    let resp = support::http(addr, &get_req("/api/ci/catalog"), &[]).await;
+    assert!(resp.contains("200 OK"), "should 200: {resp:.200}");
+    assert!(resp.contains("\"catalog\":true"), "{resp}");
+}
+
 #[tokio::test]
 async fn live_launch_threads_optional_eagle_schematic_to_the_launcher() {
     let launch: frontdoor::DesignLiveLauncher = Arc::new(|upload| match upload.schematic {

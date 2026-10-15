@@ -409,6 +409,10 @@ pub fn run_web_check_design(
     upload: hauksbee_frontdoor_api::frontdoor::DesignUpload,
     spec_fragment: &str,
 ) -> String {
+    // The catalogue needs no board and no staging: relay `hauksbee-ci explain --json`.
+    if spec_fragment.trim() == hauksbee_frontdoor_api::frontdoor::CATALOG_SPEC {
+        return run_ci_json(&["explain".as_ref(), "--json".as_ref()]);
+    }
     // Reserve a concurrency slot on entry. At the cap, refuse fast rather than
     // pile another emulator-spawning child onto a loaded box. `_slot` lives to
     // the end of the function, and its `Drop` releases the slot on every exit

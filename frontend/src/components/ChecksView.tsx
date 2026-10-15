@@ -23,6 +23,9 @@ import { InteractionBuilder } from './checks/InteractionBuilder'
 import { SensorBuilder } from './checks/SensorBuilder'
 import { AssertionGroups, hasNoGroups } from './checks/AssertionGroups'
 import { SpecPane } from './checks/SpecPane'
+import { MoreChecks } from './checks/MoreChecks'
+import { appendExample } from '../lib/ci-catalog'
+import type { CatalogEntry, RawSelection } from '../lib/ci-catalog'
 import type { RemedyActions } from './checks/Remedies'
 import { WritePart } from './WritePart'
 
@@ -252,6 +255,8 @@ export function ChecksView({
   const [rawMode, setRawMode] = useState(!!(saved?.rawMode && typeof saved.rawText === 'string'))
   const [rawText, setRawText] = useState(typeof saved?.rawText === 'string' ? saved.rawText : '')
   const [addOpen, setAddOpen] = useState(false)
+  // The value to type over after a catalogue example lands in the raw text.
+  const [rawSelect, setRawSelect] = useState<(RawSelection & { seq: number }) | null>(null)
   const [running, setRunning] = useState(false)
   // The last run's response, plus the exact spec text it ran, so results can
   // be flagged stale the moment the spec diverges.
@@ -372,6 +377,15 @@ export function ChecksView({
       return [...cs, row]
     })
     setAddOpen(false)
+  }
+
+  /** A catalogue kind the builder has no row for: its example goes into the raw
+   *  TOML (entering raw mode first), with its first required value selected. */
+  const insertCatalogExample = (entry: CatalogEntry) => {
+    const { text, select } = appendExample(rawMode ? rawText : builtToml, entry.example, entry.required.map(f => f.name))
+    setRawText(text)
+    setRawMode(true)
+    setRawSelect(prev => (select ? { ...select, seq: (prev?.seq ?? 0) + 1 } : null))
   }
 
   const updateCheck = (id: number, patch: Partial<CheckRow>) => {
@@ -910,7 +924,9 @@ export function ChecksView({
                   </div>
                 )}
 
-                {/* Global add menu: the whole vocabulary */}
+                {/* Global add menu: the builder's kinds, then every kind the engine
+                    knows (the catalogue), whose examples go into the raw TOML. */}
+                <div className="flex flex-wrap items-start gap-2">
                 <div className="relative">
                   <button
                     type="button"
@@ -939,6 +955,8 @@ export function ChecksView({
                     </div>
                   )}
                 </div>
+                <MoreChecks onInsert={insertCatalogExample} />
+                </div>
               </>
             )}
           </div>
@@ -950,6 +968,7 @@ export function ChecksView({
             builtToml={builtToml}
             rawMode={rawMode}
             rawText={rawText}
+            rawSelect={rawSelect}
             setRawText={setRawText}
             onEnterRawMode={() => setRawMode(true)}
             onLeaveRawMode={applyRawSpec}
