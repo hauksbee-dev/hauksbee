@@ -201,6 +201,24 @@ pub fn is_condition(message: &str) -> bool {
     message.contains(CONDITION_MARKER)
 }
 
+/// The words every surface reads an analysis that did not run to a result
+/// by; only [`not_judged`] writes them. A failed or abstaining analysis
+/// judged nothing, so the verdict built over it can never be a pass.
+pub const NOT_JUDGED_MARKER: &str = "not judged, which is not a pass";
+
+/// `what` (the analysis that did not run to a result, and the limits it
+/// therefore did not judge), marked so the verdict reads it as partly judged.
+#[must_use]
+pub fn not_judged(what: &str) -> String {
+    format!("{what}: {NOT_JUDGED_MARKER}")
+}
+
+/// Whether `message` says an analysis did not run to a result ([`not_judged`]).
+#[must_use]
+pub fn is_not_judged(message: &str) -> bool {
+    message.contains(NOT_JUDGED_MARKER)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

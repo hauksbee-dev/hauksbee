@@ -16,19 +16,24 @@
 //! whose card carries a rating (a junction's current, a driver pin's or switch
 //! channel's current, a resistor's wattage, a package's junction temperature)
 //! is judged by the physics the solver settled on. A board whose DC solve
-//! fails gets one low-severity note saying the pass did not run, not silence.
+//! fails, or whose named rails never come up in it, gets one low-severity note
+//! saying what was not judged ([`rating_basis::not_judged`]): never silence,
+//! and never a pass.
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 
 use std::collections::{BTreeMap, HashMap};
 
-use hauksbee_bind::binder::{bind_board, BoundBoard};
+use hauksbee_bind::binder::{
+    bind_board, held_off_rails, is_ground, power_rail_voltage, BoundBoard,
+};
 use hauksbee_bind::stress::{
     bjt_currents, strip_unit_suffix, FaultEvent, FaultKind, GateDrive, RegulatorHeat,
     StandInExceedance, StressMonitor,
 };
 use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};
 use hauksbee_ir::{DeviceId, NodeId};
+use hauksbee_models::rating_basis;
 use hauksbee_models::ModelLibrary;
 use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
 
@@ -197,6 +202,8 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
     // part -> the stated condition for its first limit passed that was a
     // placeholder or guessed card's, not its own: never a failing finding.
     let mut stated: BTreeMap<String, String> = BTreeMap::new();
+    // Named rails dead in every state solved: what the solve did not judge.
+    let mut dead: Option<BTreeMap<String, (f64, f64)>> = None;
     for ((label, registers_high), strong_label) in STATES.into_iter().zip(STRONG_STATES) {
         // The states run in order on the one bound board: the second starts
         // from the first's settled circuit and re-settles after its change.
@@ -208,6 +215,9 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
             unsolved.push(label);
             continue;
         };
+        let here = dead_rails(state, &x);
+        dead.get_or_insert_with(|| here.clone())
+            .retain(|net, _| here.contains_key(net));
         let (overstressed, under_driven, absurd, stand_in) = judge(state, &x);
         note_absurd(&mut impossible, absurd);
         note_stand_in(&mut stated, stand_in);
@@ -274,19 +284,71 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
     );
     findings.extend(stated);
     if !unsolved.is_empty() {
-        findings.push(LintFinding {
-            check: LintCheck::DcOverstress,
-            severity: Severity::Low,
-            message: format!(
-                "the board's DC operating point did not solve {}, so no part was checked \
-                 against its ratings there",
+        findings.push(not_judged_note(
+            &format!(
+                "the DC ratings check abstained {}: the board's DC operating point did not \
+                 solve, so no part was checked against its ratings there",
                 unsolved.join(" or ")
             ),
-            refs: Vec::new(),
-            nets: Vec::new(),
-        });
+            Vec::new(),
+        ));
     }
+    findings.extend(dead.filter(|d| !d.is_empty()).map(dead_rail_note));
     NetLintReport { findings }
+}
+
+/// A rail whose solved level is under this share of the level its name
+/// states did not come up in the solve.
+const DEAD_RAIL_SHARE: f64 = 0.5;
+
+/// The named rails (`+5V`, `3V3`) the solve `x` left below
+/// [`DEAD_RAIL_SHARE`] of their named level, each with (solved, named)
+/// volts. A rail the board itself holds off ([`held_off_rails`]) is off by
+/// design, not dead.
+fn dead_rails(bound: &BoundBoard, solved: &(Workspace, Vec<f64>)) -> BTreeMap<String, (f64, f64)> {
+    let held: Vec<String> = held_off_rails(bound).into_iter().map(|(n, _)| n).collect();
+    let (ws, x) = solved;
+    (bound.net_nodes.iter())
+        .filter(|(name, _)| !is_ground(name) && !held.contains(*name))
+        .filter_map(|(name, &node)| {
+            let named = power_rail_voltage(name).filter(|v| v.abs() >= 1.0)?;
+            let v = ws.layout.node(node).and_then(|i| x.get(i).copied())?;
+            // NaN compares false: a non-finite level is no rail either.
+            let up = v * named.signum() >= DEAD_RAIL_SHARE * named.abs();
+            (!up).then(|| (name.clone(), (v, named)))
+        })
+        .collect()
+}
+
+/// The note naming the rails no state brought up: the parts on them were
+/// held to their ratings at a dead rail, so none of them was judged.
+fn dead_rail_note(dead: BTreeMap<String, (f64, f64)>) -> LintFinding {
+    let rails: Vec<String> = (dead.iter())
+        .map(|(net, (v, named))| {
+            format!("'{net}' (solved at {v:.2} V; its name says {named:.2} V)")
+        })
+        .collect();
+    not_judged_note(
+        &format!(
+            "the DC ratings check abstained on the parts powered from {}: the rail did not \
+             come up in the solved operating point (an input with no declared source, or a \
+             supply the model could not start), so no part on it was checked against its \
+             ratings",
+            rails.join(", ")
+        ),
+        dead.into_keys().collect(),
+    )
+}
+
+/// The low-severity note that the pass did not run to a result for `what`.
+fn not_judged_note(what: &str, nets: Vec<String>) -> LintFinding {
+    LintFinding {
+        check: LintCheck::DcOverstress,
+        severity: Severity::Low,
+        message: rating_basis::not_judged(what),
+        refs: Vec::new(),
+        nets,
+    }
 }
 
 /// The finding for one part overstressed at rest (`High`) or only in the state
@@ -1044,6 +1106,44 @@ mod tests {
                 && stated.message.contains("give Q1 its own model"),
             "{}",
             stated.message
+        );
+    }
+
+    /// An LM1117-ADJ setting '+5V' from its divider, its input on `input`,
+    /// loading the rail with a 1k.
+    fn adj_ldo_from(input: &str) -> NetLintReport {
+        let nets = [(1, "GND"), (2, input), (3, "+5V"), (4, "/ADJ")];
+        let parts = vec![
+            part("U1", "LM1117", &[("1", 4), ("2", 3), ("3", 2)]),
+            part("R1", "240", &[("1", 3), ("2", 4)]),
+            part("R2", "715", &[("1", 4), ("2", 1)]),
+            part("R3", "1k", &[("1", 3), ("2", 1)]),
+        ];
+        dc_stress_lint(&board(&nets, parts), &ModelLibrary::builtin())
+    }
+
+    /// Faulty: nothing powers the regulator's input, so '+5V' never comes up
+    /// in the solve and every rating on it was held at a dead rail: the pass
+    /// says so as not judged (never silence, so never a pass). Legal control:
+    /// fed from +12V the rail comes up and nothing is said.
+    #[test]
+    fn a_rail_that_never_comes_up_is_not_judged_and_a_live_one_is_silent() {
+        use hauksbee_models::rating_basis::is_not_judged;
+        let dead = adj_ldo_from("/VIN_JACK");
+        let note = (dead.findings.iter())
+            .find(|f| is_not_judged(&f.message))
+            .unwrap_or_else(|| panic!("no not-judged note: {:#?}", dead.findings));
+        assert_eq!(note.severity, Severity::Low);
+        assert!(note.is_abstention(), "{}", note.message);
+        assert!(
+            note.nets == ["+5V"] || note.message.contains("did not solve"),
+            "{note:#?}"
+        );
+        let live = adj_ldo_from("+12V");
+        assert!(
+            !live.findings.iter().any(|f| is_not_judged(&f.message)),
+            "{:#?}",
+            live.findings
         );
     }
 }

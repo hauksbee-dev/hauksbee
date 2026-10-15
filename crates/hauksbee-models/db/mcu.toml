@@ -1956,6 +1956,16 @@ backend = "qemu:esp32s3"
 "26" = "gpio45"
 "16" = "gpio46"
 
+# The module's one supply pin, 3V3 (VDD33). Its abs max IS the recommended
+# ceiling, so a 5 V rail on it is past both.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 3.6
+basis = "Espressif ESP32-S3-WROOM-1/-1U Datasheet v1.8, Table 6-1 Absolute Maximum Ratings (VDD33 -0.3 to 3.6 V) and Table 6-2 Recommended Operating Conditions (VDD33 3.0 / 3.3 / 3.6 V)"
+
 # Ref: ESP32-S3 Technical Reference Manual v1.6, Table 2-9 "Strapping Pins";
 # ESP32-S3 datasheet v2.2 sec 3 "Boot Configurations" (Table 3-1: GPIO0 weak
 # pull-up; GPIO45, GPIO46 weak pull-down). GPIO0 high = SPI boot; GPIO46
