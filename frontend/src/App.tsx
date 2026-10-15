@@ -365,11 +365,12 @@ function Shell({ boot }: { boot: Boot }) {
             )}
           </div>
 
-          <div className="flex-1" />
+          <div className="flex-1 max-sm:hidden" />
 
-          {/* The one status chip. It shrinks and ellipsizes its label before it
-              pushes a header action off the row; the full text is its hover. */}
-          <div className="flex items-center min-w-0 max-sm:shrink-0">
+          {/* The one status chip. It takes the row's spare width (on a phone
+              all of it) and ellipsizes its label before it pushes the title or a
+              header action off the row; the full text is its hover. */}
+          <div className="flex items-center justify-end min-w-0 max-sm:flex-1">
             <ShellChips
               view={view}
               report={report}
