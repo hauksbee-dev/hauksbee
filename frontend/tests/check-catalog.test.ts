@@ -5,7 +5,8 @@ import {
   specBody, wouldFail,
   type CatalogField, type CatalogKind, type OfferContext,
 } from '../src/lib/check-catalog'
-import { checkKind, tomlToBuilder } from '../src/lib/check-spec'
+import { checkKind } from '../src/lib/check-spec'
+import { tomlToBuilder } from '../src/lib/spec-model'
 
 // A catalogue shaped like `GET /api/ci/catalog` (version 2), trimmed to the
 // fields the click-to-assert logic reads.
