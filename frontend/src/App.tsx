@@ -500,7 +500,6 @@ function Shell({ boot }: { boot: Boot }) {
             <div style={{ display: view === 'sim' ? 'block' : 'none', height: '100%' }}>
               <SimView
                 onQueue={queueRequest}
-                onOpenChecks={() => setView('checks')}
                 pendingLiveRegisterMaps={queuedLiveRegisterMaps.items}
                 onLiveRegisterMapsConsumed={queuedLiveRegisterMaps.consume}
                 onLiveActionResult={setLiveActionResult}

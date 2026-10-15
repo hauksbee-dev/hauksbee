@@ -47,7 +47,7 @@ export interface SimShellStatus {
 // keeps it mounted (hidden) so the session's fault log and scope survive
 // navigation. The accumulated session state lives in hooks/useSimSession.
 export default function SimView({
-  onQueue, onOpenChecks,
+  onQueue,
   pendingLiveRegisterMaps = [], onLiveRegisterMapsConsumed, onLiveActionResult,
   onStatus, expectedBoard, sessionMatchesCurrent, onRelaunch, modelCoverage,
   componentAssertions,
@@ -55,8 +55,6 @@ export default function SimView({
   /** Hand a click on the live board to the checks builder. Absent on the
    *  standalone demo server. */
   onQueue?: (request: BoardRequest) => void
-  /** Open the shared full Checks view from the constraint modal. */
-  onOpenChecks?: () => void
   pendingLiveRegisterMaps?: QueuedLiveRegisterMap[]
   onLiveRegisterMapsConsumed?: (upToSeq: number) => void
   /** Engine-confirmed receipts, forwarded to the scenario row that originated
