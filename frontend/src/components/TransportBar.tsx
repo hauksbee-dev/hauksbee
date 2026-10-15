@@ -95,11 +95,14 @@ interface TransportBarProps {
   /** Stepping back through retained frames. Absent for a replay source, which
    *  has a real timeline to scrub instead. */
   history?: HistoryReview
+  /** The session's own tools (supply, run length, faults, export), after the
+   *  sim time. */
+  tools?: React.ReactNode
 }
 
 export function TransportBar({
   connected, boardInfo, status, realtimeFactor, requestedFactor, rateLimited,
-  send, replay, history,
+  send, replay, history, tools,
 }: TransportBarProps) {
   // The rate this client asked for. Seeded from the session's own requested
   // factor when the server reports one, so joining a sim already set to 0.01x
@@ -297,7 +300,7 @@ export function TransportBar({
           realtime, the presets for the decade marks, and a box for an exact
           rate the slider cannot land on. */}
       <div className="flex flex-wrap items-center gap-2 min-w-0 max-w-full">
-        <span className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--silk-faint)' }}>speed</span>
+        <span className="text-[10px]" style={{ color: 'var(--silk-faint)' }} title="How much sim time passes per second of real time">sim time per real second</span>
         <input
           type="range"
           min={0}
@@ -381,6 +384,8 @@ export function TransportBar({
           </span>
         )}
       </div>
+
+      {tools && <div className="flex flex-wrap items-center gap-1.5 min-w-0 max-w-full">{tools}</div>}
 
       <div className="flex-1" />
 

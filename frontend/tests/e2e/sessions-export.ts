@@ -497,6 +497,8 @@ await browserFlow(flow, async (page, { base, browser }) => {
   wire[0]!.send(JSON.stringify({ type: 'Status', running: false, sim_time: 3, options: {
     temperature_c: 25, parasitics: false, junction_caps: false, tolerances: false, integration: 'trap', fixed_dt: 0, granularity: 1 } }))
   await lp.locator('[data-testid="transport-step-back"]').click()
+  // The fault count in the transport row opens the dock's fault table.
+  await lp.locator('[data-testid="sim-fault-count"]').click()
   await lp.locator('[data-testid="fault-row-active"]').click()
   const heldReview = await lp.locator('[data-testid="transport-review"]').innerText()
   const heldFaults = await lp.locator('[data-testid="fault-count-label"]').innerText()

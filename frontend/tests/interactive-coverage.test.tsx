@@ -293,7 +293,11 @@ test('live input sliders require an explicit engine source, not an input-looking
   }
   const guessed = renderToStaticMarkup(<InputSourcesPanel boardInfo={base} send={() => {}} />)
   expect(guessed).toContain('No buttons or signals are attached yet')
-  expect(guessed).toContain('pick a net, and attach it')
+  // Without an attach handler (the demo) there is no button to offer; with one,
+  // the attach is a button, not an instruction.
+  expect(guessed).not.toContain('Attach input')
+  const attachable = renderToStaticMarkup(<InputSourcesPanel boardInfo={base} send={() => {}} onAttach={() => {}} />)
+  expect(attachable).toContain('data-testid="attach-input-net"')
   expect(guessed).not.toContain('type="range"')
 
   const declared = renderToStaticMarkup(<InputSourcesPanel

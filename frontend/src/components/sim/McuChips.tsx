@@ -1,4 +1,5 @@
 import type { SimFrame } from '../../types/protocol'
+import { Term } from '../ui'
 
 /** One small-caps chip in the MCU card. */
 function Chip({ on, tone, title, children }: {
@@ -24,8 +25,9 @@ function Chip({ on, tone, title, children }: {
   )
 }
 
-/** MCU stat chips: what the co-sim is actually doing per MCU (backend, run
- *  state, recent UART traffic). Only real signals from the wire; no invented
+/** MCU stat chips, the live dock's header: what the co-sim is actually doing
+ *  per MCU (backend, run state, recent UART traffic), each state word a
+ *  glossary term. Only real signals from the wire; no invented
  *  frequency counters. */
 export function McuChips({ mcus, frame, uartActive }: {
   mcus: [string, string][]
@@ -33,7 +35,7 @@ export function McuChips({ mcus, frame, uartActive }: {
   uartActive: Set<string>
 }) {
   return (
-    <div className="px-3 py-2.5 flex flex-col gap-2">
+    <div className="px-3 py-2 flex flex-col gap-1.5 shrink-0" data-testid="mcu-chips" style={{ borderBottom: '1px solid var(--hairline)' }}>
       {mcus.map(([ref, backend]) => {
         const running = (frame?.component_states?.[ref]?.['running'] ?? 0) > 0
         const uart = uartActive.has(ref)
@@ -45,10 +47,10 @@ export function McuChips({ mcus, frame, uartActive }: {
             <Chip on tone="plain" title="Emulation backend">{backend}</Chip>
             <Chip on={running} tone="ok">
               {running && <span className="run-dot" style={{ width: 5, height: 5, borderRadius: 3, background: 'currentColor' }} />}
-              {running ? 'running' : 'halted'}
+              <Term id="mcu_halted" bare>{running ? 'running' : 'halted'}</Term>
             </Chip>
-            <Chip on={uart} tone="copper" title="UART traffic in the last two seconds">
-              uart {uart ? '●' : '○'}
+            <Chip on={uart} tone="copper">
+              <Term id="uart_activity" bare>{uart ? 'serial active' : 'serial quiet'}</Term>
             </Chip>
           </div>
         )
