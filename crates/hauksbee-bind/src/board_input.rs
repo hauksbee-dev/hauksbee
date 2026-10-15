@@ -269,7 +269,9 @@ const fn board_format(vendor: &'static str, exts: &'static [&'static str]) -> Ac
     }
 }
 
-/// The one accepted-formats table. Every refusal quotes it
+/// The one accepted-formats table.
+///
+/// Every refusal quotes it
 /// ([`supported_formats_sentence`]) and the web app reads it from
 /// `/api/startup` (`board_formats`) for its file picker, its drop-card copy and
 /// its client-side extension precheck, so the set cannot drift between the

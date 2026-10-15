@@ -250,6 +250,8 @@ pub fn suggested_models(backend: Backend) -> &'static [ModelChoice] {
     agent_spec(backend).map_or(OPENAI_MODELS, |a| a.models)
 }
 
+/// The prefix a model name needs for the API backend to compare it to the list.
+///
 /// The API backend serves any OpenAI-compatible endpoint (a local Ollama model,
 /// say), so only a model name with this prefix is compared against the list.
 /// Served to the Settings page as `options.model_hint_prefix` so the browser
