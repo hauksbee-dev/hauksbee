@@ -62,6 +62,8 @@ macro_rules! say {
     ($($arg:tt)*) => { progress::say(&format!($($arg)*)) };
 }
 
+mod sections;
+
 // How long one agent-CLI run may take before it is killed is
 // `extract_config::DEFAULT_TIMEOUT_SECS` (ten minutes), configurable per
 // machine. It is deliberately not scaled with rendered-page count: page count
@@ -191,6 +193,44 @@ impl Workspace {
     #[must_use]
     pub fn answer_path(&self) -> PathBuf {
         self.dir.path().join("model.toml")
+    }
+
+    /// The sandbox directory's name: which agent a streamed event belongs to.
+    #[must_use]
+    pub fn label(&self) -> String {
+        let name = self.dir.path().file_name().unwrap_or_default();
+        name.to_string_lossy().into_owned()
+    }
+
+    /// A private copy of this sandbox (PDF, text, pages, renders), so agents
+    /// running at once do not share `prompt.md` or the `model.toml` each writes.
+    fn fork(&self) -> Result<Self> {
+        fn copy_all(from: &Path, to: &Path) -> std::io::Result<()> {
+            for entry in std::fs::read_dir(from)? {
+                let entry = entry?;
+                let (src, dst) = (entry.path(), to.join(entry.file_name()));
+                if src.is_dir() {
+                    std::fs::create_dir_all(&dst)?;
+                    copy_all(&src, &dst)?;
+                } else {
+                    std::fs::copy(&src, &dst)?;
+                }
+            }
+            Ok(())
+        }
+        let parent = self.path().parent().unwrap_or_else(|| Path::new("."));
+        let dir = workspace_tempdir(parent, "hauksbee-extract-", "creating a section sandbox")?;
+        copy_all(self.path(), dir.path()).context("copying the sandbox for a section agent")?;
+        let moved = |p: &PathBuf| dir.path().join(p.file_name().unwrap_or_default());
+        Ok(Self {
+            pdf: moved(&self.pdf),
+            pages: self.pages.iter().map(moved).collect(),
+            selected_pages: self.selected_pages.clone(),
+            category_disclosures: self.category_disclosures.clone(),
+            has_text_dump: self.has_text_dump,
+            checker: self.checker.clone(),
+            dir,
+        })
     }
 }
 
@@ -1514,6 +1554,193 @@ datasheet leaves unresolved, or the identity-only abstention for an unresolved p
 abstaining on params never makes a resolved pin table unknown: a pad the pin table names
 keeps its source-named role. Never invent a pin role.";
 
+const RATINGS_RULES: &str = r#"[models.ratings]: these are the ONLY valid keys (any other key fails
+validation). Read them from the Absolute Maximum Ratings / Limiting Values and
+Thermal Characteristics tables, or the table a line names. Include every key the
+datasheet states for the selected package; omit a key it does not state (do NOT
+invent it). Ratings are magnitudes: for a limit printed negative (PNP, negative
+rail) write |value| and keep the printed sign in the source comment.
+max_junction_temp_c is the junction temperature limit, never a thermal-shutdown
+or protection threshold; where the absolute maximum says internally limited, it
+is the top of the operating junction range. A stated limit with no key here goes
+in a characteristic record (rule 0), never under an invented key. A rating
+printed for several conditions (TA, TC or TJ, board copper or mounting, package)
+is one characteristic per printed row with `rating = "<key>"`, its temperature in
+`conditions` and any `package` or `mounting` as printed. A current or power limit
+printed per path, channel or output is one row per path, `pins` naming its
+[models.pins] roles (IN1 to OUT: `pins = ["in1"]`), and a printed total a row
+without `pins`. Hauksbee sets each tagged key itself to its row at the standard
+condition (25 °C, the standard test board, else the least favourable), so write
+any tagged row there; it reads the rows at the scenario's temperature:"#;
+
+const ENVELOPE_RULES: &str = r"[[models.envelope]]: read the Recommended Operating Conditions and Absolute
+Maximum Ratings tables. Emit supply_range for every SUPPLY-class pin whose
+recommended minimum and maximum are both published, and rail_order for each
+explicit relation such as VCCA <= VCCB. From an op-amp's or comparator's
+VICR/CMVR row, emit one input_common_mode per channel: `supply` its positive
+supply, `inputs` that channel's two inputs, `headroom_v` the test supply minus
+the range's upper end (0 V to V+ - 1.5 V is 1.5; none reaching V+). Emit one
+supply_range or input_common_mode per printed temperature row, each with its
+`conditions` (TA = 25 °C; TA = −40 °C to 85 °C); the upper end is the guaranteed
+(min/max) cell, never typ (typ alone: omit the entry). Pins, supplies and inputs
+are roles from [models.pins], never pad numbers. Every `basis` names the exact
+table and row; add `abs_max_v` only when the absolute-maximum table publishes
+it. No table row to cite, no envelope: omit this section then, and never infer
+a bound from a typical value, application schematic, or family convention.";
+
+const PIN_NUMBERING: &str = r#"PIN NUMBERING, read this before you fill in [models.pins]:
+
+  The pin map is the one field where being wrong is worse than being absent: a
+  wrong map simulates a different circuit and still binds cleanly, so nobody
+  finds out. Treat it as the hardest part of this job, not the easiest.
+
+  P1. PREFER A NUMBERED TABLE. A pin-function or terminal table with a "Pin"/
+      "No."/"Terminal" column is the answer: use it and cite it. Do not
+      re-derive the numbering from a picture when a table exists.
+  P2. A PACKAGE DRAWING IS NOT A PIN TABLE. Drawings are routinely rotated 90
+      degrees, drawn from the BOTTOM, or drawn as a "front view" with the leads
+      pointing sideways. Reading such a figure top-to-bottom and calling the
+      first label pin 1 is the single most common way to get this wrong. If you
+      must use a figure:
+        - say which view it is (top / bottom / front) and which way it is
+          rotated, in the comment;
+        - work out where pin 1 actually is (the dot, the notch, the bevel, the
+          tab) and count from there in the direction the package standard
+          requires, not in the direction the labels happen to be printed;
+        - remember a bottom view mirrors the numbering left-to-right.
+  P3. CROSS-CHECK AGAINST A SECOND PLACE IN THE DOCUMENT. The typical
+      application schematic, the package outline, and the pin table should all
+      agree. Say in the comment which two you checked. If they disagree, do NOT
+      pick one: write the pin map you believe and add
+      `# UNRESOLVED: <figure A> says X, <figure B> says Y` on the affected
+      lines.
+  P4. NEAR-IDENTICAL PARTS OFTEN DIFFER. A negative regulator does not share
+      its positive sibling's pinout; a SOT-23 and a SOT-89 of the same part
+      often differ, and an MCU's 48-pin QFN and 64-pin QFP columns share
+      nothing. If the datasheet covers several packages, state which one
+      this map is for in the description, and pick the package the value/
+      footprint you were given implies (an ordering code's package letters
+      name it). A multi-variant datasheet takes the pin numbers from the
+      column or package drawing that matches the order code being carded,
+      and records that package in the pinout column: the CH340 sheet's
+      10-pin table column is the CH340K's ESSOP10 and swaps pads 4 and 6
+      against the CH340X's own MSOP-10 drawing. `models lint` warns when a
+      pinout column's package is not the card's. Every numbered map records its package (P6): the checker
+      holds the map against that package's pin count, and the board binds it
+      only to a footprint of that package.
+  P5. Still unsure? Say so in a comment on the pins block, never present a
+      guess as read: `# LOW CONFIDENCE: ...` helps, a confident wrong map hurts.
+  P6. ONE COLUMN PER PACKAGE. Record the pin table's column for your package,
+      every pad's name as printed (NC included; never unknown_pad_ in a
+      column), and when it prints a column per package record every column,
+      after [models.source]:
+        [[models.source.pinout]]
+        package = "<package as printed>"
+        pins = { "1" = "<printed name>", "2" = "<printed name>" }
+      The description names only your package. Read [models.pins] from that
+      package's own column and its own figure: a figure labelled with another
+      package is not yours, and the checker compares the two.
+  P7. LETTERS ONLY (G/S/D, B/C/E at unnumbered leads) with the view and pin 1
+      drawn: number [models.pins] by the package standard and name it and the
+      view in the P6 block (pins as printed); results mark those pins assumed:
+        standard = "JEDEC TO-236 top view: 1 lower-left, 2 lower-right, 3 top"
+      No view or pin 1 shown, or a two-pin diode (A/K): keep the letters.
+  P8. THE SWITCH NODE AND FEEDBACK ARE NOT THE OUTPUT. On a switching
+      converter or LED driver (buck, boost, buck-boost), the pin printed SW,
+      LX, PH or L1/L2 drives the inductor: map it 'sw', never 'out'. FB, VFB
+      or ADJ senses the output through a divider: map it 'fb' or 'adj', never
+      'out'. 'out' is only a pin the table calls the regulated output (VOUT,
+      OUT, or a VOS/SENSE pin tied to it); a non-synchronous boost, whose
+      output is past an external diode, has no 'out' pad at all. The binder
+      finds a buck's regulated rail past its inductor itself."#;
+
+const EXTRACTION_RULES: &str = r#"IMPORTANT RULES:
+0. Emit this machine-readable source block immediately after the model's description:
+     [models.source]
+     tier = "datasheet-derived"
+     validation = "physical-bounds-only"
+     [[models.source.uncertainty]]
+     status = "unknown"
+     parameter = "model"
+     reason = "datasheet publishes no validated model error interval"
+   (Validated model-error bounds the source publishes replace that record with
+   `status = "interval"`, `kind = "empirical-error"`, low, high, unit and basis.)
+   A param read from a printed row is written as that whole row, with only the
+   columns it prints, in its printed unit:
+     iq_a = { typ = 65, max = 90, unit = "uA", conditions = "VIN = 5 V", basis = "Table 7.5, IQ, typ/max" }
+   Hauksbee converts the unit, picks the column each param reads (the typ, else
+   the min/max midpoint; a guaranteed level such as vol or dropout_v its limit)
+   and derives the min/max interval: never pick a column, convert a unit or
+   write an interval yourself. A one-sided row is never a nominal. Every other
+   printed row of any table (ratings, thermal, each condition), key or no key,
+   is a characteristic record with the same fields, also on an identity-only
+   card (a breakdown row is not an absolute-maximum rating):
+     [[models.source.characteristic]]
+     parameter = "<datasheet symbol and name>"
+     max = 0.4  # only the printed columns among min, typ, max
+     unit = "<printed unit>"
+     conditions = "<the row's test conditions>"
+     basis = "<table/row citation>, <printed columns, e.g. typ/max>"
+   Each number keeps its printed sign in its printed column (±5 is min = -5,
+   max = 5; a "—" column stays out). A supply-relative limit (0.7 VDD, VDD + 0.5)
+   is no number: quote it in `conditions` and omit that column, never a rail as
+   `unit`. min <= typ <= max by signed value (a row printed negative may keep its
+   magnitude order); a threshold printed as an offset from another spec is a
+   signed offset, ascending, with that spec named in conditions. Never invent a
+   percentage, derive a bound from a typical value, or substitute a model clamp
+   for a published guarantee. `physical-bounds-only` is the whole validation claim.
+   A per-channel row (IN1, OUT2, CH2, channel B) is attributed by the channel its
+   own label names: a param, pin or law of channel 1 takes only rows labelled 1.
+1. Add a comment on each param/rating line citing where in the datasheet you found
+   the value, e.g.: `# Source: Table 6.3, typ column`
+2. Use only values explicitly stated in the datasheet; do NOT guess. A SPICE
+   model the sheet prints (.MODEL/.SUBCKT) is copied verbatim, citing it. Other
+   SPICE params (e.g. `is`, `n`, `rs`) you may derive from a stated operating
+   point (e.g. VBE at a known IC) or fit to a typical-characteristics figure
+   (e.g. an IF-VF or ID-VDS curve) read across its plotted range, saying so in
+   the comment with the figure, the points read and their conditions; a curve
+   reading is typical only, never a min/max, a rating or an uncertainty interval.
+   A diode is/n/rs law gives every printed VF row (typ, else max) within 10%; fit to
+   max rows alone, their basis adds "law fitted to guaranteed maxima, a conservative
+   stand-in for typical". Curve points may fix n outside a sub-decade printed range; rows win.
+   A BJT `is` comes only from a forward-active VBE(on) row or curve, lowest IC
+   first; never from VBE(sat) (saturated, forced beta) or a high-current point.
+   Record every fT, Cob/Ccb, Cib/Ceb, Ciss, Crss, CT, trr, V(BR) and VZ row as a
+   characteristic with its symbol, unit and bias: Hauksbee derives tf, cjc, cje,
+   cgd, cgs, cjo, tt and bv/ibv from them. A Schottky (name it in the
+   description) takes no tt: its trr is capacitive recovery, not stored charge.
+3. Identity-only is a last resort. A typ-only or max-only row is usable, cited
+   as printed; Hauksbee fits diode is/n/rs to VF rows and a MOSFET's vto/kp come
+   from VGS(th) and RDS(on) rows as above, so the checker refuses an identity-only
+   card whose cited rows suffice. Key [models.pins] by pad number wherever one is
+   printed (pin table, package drawing, beside the letters) or P7 numbers it; else
+   key by lead letters A/K, G/S/D or B/C/E and list `pad_numbers` in
+   [models.coverage] missing. A required param genuinely absent and not derivable or
+   fittable is never estimated: one missing param takes an `unknown` record where the
+   kind's params above allow one. Only when the kind's behaviour cannot be written
+   even so, emit an identity-only card (`identity_only = true`, `warning`,
+   `unlocked_by`) still carrying every field the datasheet states, and name the
+   missing fact as `ABSTAIN: datasheet does not state ...` in the description or an
+   unknown source record. A named abstention is correct; a guessed field is wrong.
+4. For every real behavior the selected schema and params do not represent,
+   the description must say `does not model ...` and name that behavior, and
+   `[models.coverage]` must list each as a snake_case id in `missing` (what the
+   card does model goes in `implements`, e.g. `missing = ["thermal_shutdown"]`). Do not
+   let a partial card read as a complete model of the component. Never delete a
+   sourced fact or drop a record between drafts to pass validation: fix the
+   record, or move the fact into a characteristic record (rule 0).
+5. Output ONLY the TOML block, starting with [[models]]; no prose, no markdown
+   fences, no leading or trailing text.
+6. A plain number (a rating, a derived or fitted value) is in the unit its key
+   or the param meanings name, else in A, V, W, s, F or ohm.
+7. The checker rejects params outside these physical bounds, and one sitting on
+   a bound unless a cited row prints it: a value the datasheet does not give is
+   omitted or an `unknown` record, never a placeholder at a bound. A |x| bound is on
+   the magnitude and accepts EITHER SIGN: write a signed value as the datasheet
+   states it. A negative regulator (79xx, any output below GND) takes a NEGATIVE
+   vout, e.g. -5.0 for an LM7905: it is stamped as a source against ground, so
+   the magnitude would make a negative supply into a second positive one."#;
+
 /// Whether the API backend has anything to work from: it cannot open the local
 /// PDF, so a prompt carrying the no-text sentinel would reach it with nothing
 /// but the sentinel itself.
@@ -1656,40 +1883,10 @@ For kind="{entry_kind}", the required params are:
 {required_params}{conventions}
 {optional_params}
 {digital_hint}
-[models.ratings]: these are the ONLY valid keys (any other key fails
-validation). Read them from the Absolute Maximum Ratings / Limiting Values and
-Thermal Characteristics tables, or the table a line names. Include every key the
-datasheet states for the selected package; omit a key it does not state (do NOT
-invent it). Ratings are magnitudes: for a limit printed negative (PNP, negative
-rail) write |value| and keep the printed sign in the source comment.
-max_junction_temp_c is the junction temperature limit, never a thermal-shutdown
-or protection threshold; where the absolute maximum says internally limited, it
-is the top of the operating junction range. A stated limit with no key here goes
-in a characteristic record (rule 0), never under an invented key. A rating
-printed for several conditions (TA, TC or TJ, board copper or mounting, package)
-is one characteristic per printed row with `rating = "<key>"`, its temperature in
-`conditions` and any `package` or `mounting` as printed. A current or power limit
-printed per path, channel or output is one row per path, `pins` naming its
-[models.pins] roles (IN1 to OUT: `pins = ["in1"]`), and a printed total a row
-without `pins`. Hauksbee sets each tagged key itself to its row at the standard
-condition (25 °C, the standard test board, else the least favourable), so write
-any tagged row there; it reads the rows at the scenario's temperature:
+{ratings_rules}
 {ratings_hint}
 
-[[models.envelope]]: read the Recommended Operating Conditions and Absolute
-Maximum Ratings tables. Emit supply_range for every SUPPLY-class pin whose
-recommended minimum and maximum are both published, and rail_order for each
-explicit relation such as VCCA <= VCCB. From an op-amp's or comparator's
-VICR/CMVR row, emit one input_common_mode per channel: `supply` its positive
-supply, `inputs` that channel's two inputs, `headroom_v` the test supply minus
-the range's upper end (0 V to V+ - 1.5 V is 1.5; none reaching V+). Emit one
-supply_range or input_common_mode per printed temperature row, each with its
-`conditions` (TA = 25 °C; TA = −40 °C to 85 °C); the upper end is the guaranteed
-(min/max) cell, never typ (typ alone: omit the entry). Pins, supplies and inputs
-are roles from [models.pins], never pad numbers. Every `basis` names the exact
-table and row; add `abs_max_v` only when the absolute-maximum table publishes
-it. No table row to cite, no envelope: omit this section then, and never infer
-a bound from a typical value, application schematic, or family convention.
+{envelope_rules}
 
 WHERE TO LOOK AND HOW TO READ IT:
 - Supply bounds belong in Recommended Operating Conditions.
@@ -1707,158 +1904,9 @@ WHERE TO LOOK AND HOW TO READ IT:
 
 {source_quantity_guidance}
 
-PIN NUMBERING, read this before you fill in [models.pins]:
+{pin_numbering}
 
-  The pin map is the one field where being wrong is worse than being absent: a
-  wrong map simulates a different circuit and still binds cleanly, so nobody
-  finds out. Treat it as the hardest part of this job, not the easiest.
-
-  P1. PREFER A NUMBERED TABLE. A pin-function or terminal table with a "Pin"/
-      "No."/"Terminal" column is the answer: use it and cite it. Do not
-      re-derive the numbering from a picture when a table exists.
-  P2. A PACKAGE DRAWING IS NOT A PIN TABLE. Drawings are routinely rotated 90
-      degrees, drawn from the BOTTOM, or drawn as a "front view" with the leads
-      pointing sideways. Reading such a figure top-to-bottom and calling the
-      first label pin 1 is the single most common way to get this wrong. If you
-      must use a figure:
-        - say which view it is (top / bottom / front) and which way it is
-          rotated, in the comment;
-        - work out where pin 1 actually is (the dot, the notch, the bevel, the
-          tab) and count from there in the direction the package standard
-          requires, not in the direction the labels happen to be printed;
-        - remember a bottom view mirrors the numbering left-to-right.
-  P3. CROSS-CHECK AGAINST A SECOND PLACE IN THE DOCUMENT. The typical
-      application schematic, the package outline, and the pin table should all
-      agree. Say in the comment which two you checked. If they disagree, do NOT
-      pick one: write the pin map you believe and add
-      `# UNRESOLVED: <figure A> says X, <figure B> says Y` on the affected
-      lines.
-  P4. NEAR-IDENTICAL PARTS OFTEN DIFFER. A negative regulator does not share
-      its positive sibling's pinout; a SOT-23 and a SOT-89 of the same part
-      often differ, and an MCU's 48-pin QFN and 64-pin QFP columns share
-      nothing. If the datasheet covers several packages, state which one
-      this map is for in the description, and pick the package the value/
-      footprint you were given implies (an ordering code's package letters
-      name it). A multi-variant datasheet takes the pin numbers from the
-      column or package drawing that matches the order code being carded,
-      and records that package in the pinout column: the CH340 sheet's
-      10-pin table column is the CH340K's ESSOP10 and swaps pads 4 and 6
-      against the CH340X's own MSOP-10 drawing. `models lint` warns when a
-      pinout column's package is not the card's. Every numbered map records its package (P6): the checker
-      holds the map against that package's pin count, and the board binds it
-      only to a footprint of that package.
-  P5. Still unsure? Say so in a comment on the pins block, never present a
-      guess as read: `# LOW CONFIDENCE: ...` helps, a confident wrong map hurts.
-  P6. ONE COLUMN PER PACKAGE. Record the pin table's column for your package,
-      every pad's name as printed (NC included; never unknown_pad_ in a
-      column), and when it prints a column per package record every column,
-      after [models.source]:
-        [[models.source.pinout]]
-        package = "<package as printed>"
-        pins = {{ "1" = "<printed name>", "2" = "<printed name>" }}
-      The description names only your package. Read [models.pins] from that
-      package's own column and its own figure: a figure labelled with another
-      package is not yours, and the checker compares the two.
-  P7. LETTERS ONLY (G/S/D, B/C/E at unnumbered leads) with the view and pin 1
-      drawn: number [models.pins] by the package standard and name it and the
-      view in the P6 block (pins as printed); results mark those pins assumed:
-        standard = "JEDEC TO-236 top view: 1 lower-left, 2 lower-right, 3 top"
-      No view or pin 1 shown, or a two-pin diode (A/K): keep the letters.
-  P8. THE SWITCH NODE AND FEEDBACK ARE NOT THE OUTPUT. On a switching
-      converter or LED driver (buck, boost, buck-boost), the pin printed SW,
-      LX, PH or L1/L2 drives the inductor: map it 'sw', never 'out'. FB, VFB
-      or ADJ senses the output through a divider: map it 'fb' or 'adj', never
-      'out'. 'out' is only a pin the table calls the regulated output (VOUT,
-      OUT, or a VOS/SENSE pin tied to it); a non-synchronous boost, whose
-      output is past an external diode, has no 'out' pad at all. The binder
-      finds a buck's regulated rail past its inductor itself.
-
-IMPORTANT RULES:
-0. Emit this machine-readable source block immediately after the model's description:
-     [models.source]
-     tier = "datasheet-derived"
-     validation = "physical-bounds-only"
-     [[models.source.uncertainty]]
-     status = "unknown"
-     parameter = "model"
-     reason = "datasheet publishes no validated model error interval"
-   (Validated model-error bounds the source publishes replace that record with
-   `status = "interval"`, `kind = "empirical-error"`, low, high, unit and basis.)
-   A param read from a printed row is written as that whole row, with only the
-   columns it prints, in its printed unit:
-     iq_a = {{ typ = 65, max = 90, unit = "uA", conditions = "VIN = 5 V", basis = "Table 7.5, IQ, typ/max" }}
-   Hauksbee converts the unit, picks the column each param reads (the typ, else
-   the min/max midpoint; a guaranteed level such as vol or dropout_v its limit)
-   and derives the min/max interval: never pick a column, convert a unit or
-   write an interval yourself. A one-sided row is never a nominal. Every other
-   printed row of any table (ratings, thermal, each condition), key or no key,
-   is a characteristic record with the same fields, also on an identity-only
-   card (a breakdown row is not an absolute-maximum rating):
-     [[models.source.characteristic]]
-     parameter = "<datasheet symbol and name>"
-     max = 0.4  # only the printed columns among min, typ, max
-     unit = "<printed unit>"
-     conditions = "<the row's test conditions>"
-     basis = "<table/row citation>, <printed columns, e.g. typ/max>"
-   Each number keeps its printed sign in its printed column (±5 is min = -5,
-   max = 5; a "—" column stays out). A supply-relative limit (0.7 VDD, VDD + 0.5)
-   is no number: quote it in `conditions` and omit that column, never a rail as
-   `unit`. min <= typ <= max by signed value (a row printed negative may keep its
-   magnitude order); a threshold printed as an offset from another spec is a
-   signed offset, ascending, with that spec named in conditions. Never invent a
-   percentage, derive a bound from a typical value, or substitute a model clamp
-   for a published guarantee. `physical-bounds-only` is the whole validation claim.
-   A per-channel row (IN1, OUT2, CH2, channel B) is attributed by the channel its
-   own label names: a param, pin or law of channel 1 takes only rows labelled 1.
-1. Add a comment on each param/rating line citing where in the datasheet you found
-   the value, e.g.: `# Source: Table 6.3, typ column`
-2. Use only values explicitly stated in the datasheet; do NOT guess. A SPICE
-   model the sheet prints (.MODEL/.SUBCKT) is copied verbatim, citing it. Other
-   SPICE params (e.g. `is`, `n`, `rs`) you may derive from a stated operating
-   point (e.g. VBE at a known IC) or fit to a typical-characteristics figure
-   (e.g. an IF-VF or ID-VDS curve) read across its plotted range, saying so in
-   the comment with the figure, the points read and their conditions; a curve
-   reading is typical only, never a min/max, a rating or an uncertainty interval.
-   A diode is/n/rs law gives every printed VF row (typ, else max) within 10%; fit to
-   max rows alone, their basis adds "law fitted to guaranteed maxima, a conservative
-   stand-in for typical". Curve points may fix n outside a sub-decade printed range; rows win.
-   A BJT `is` comes only from a forward-active VBE(on) row or curve, lowest IC
-   first; never from VBE(sat) (saturated, forced beta) or a high-current point.
-   Record every fT, Cob/Ccb, Cib/Ceb, Ciss, Crss, CT, trr, V(BR) and VZ row as a
-   characteristic with its symbol, unit and bias: Hauksbee derives tf, cjc, cje,
-   cgd, cgs, cjo, tt and bv/ibv from them. A Schottky (name it in the
-   description) takes no tt: its trr is capacitive recovery, not stored charge.
-3. Identity-only is a last resort. A typ-only or max-only row is usable, cited
-   as printed; Hauksbee fits diode is/n/rs to VF rows and a MOSFET's vto/kp come
-   from VGS(th) and RDS(on) rows as above, so the checker refuses an identity-only
-   card whose cited rows suffice. Key [models.pins] by pad number wherever one is
-   printed (pin table, package drawing, beside the letters) or P7 numbers it; else
-   key by lead letters A/K, G/S/D or B/C/E and list `pad_numbers` in
-   [models.coverage] missing. A required param genuinely absent and not derivable or
-   fittable is never estimated: one missing param takes an `unknown` record where the
-   kind's params above allow one. Only when the kind's behaviour cannot be written
-   even so, emit an identity-only card (`identity_only = true`, `warning`,
-   `unlocked_by`) still carrying every field the datasheet states, and name the
-   missing fact as `ABSTAIN: datasheet does not state ...` in the description or an
-   unknown source record. A named abstention is correct; a guessed field is wrong.
-4. For every real behavior the selected schema and params do not represent,
-   the description must say `does not model ...` and name that behavior, and
-   `[models.coverage]` must list each as a snake_case id in `missing` (what the
-   card does model goes in `implements`, e.g. `missing = ["thermal_shutdown"]`). Do not
-   let a partial card read as a complete model of the component. Never delete a
-   sourced fact or drop a record between drafts to pass validation: fix the
-   record, or move the fact into a characteristic record (rule 0).
-5. Output ONLY the TOML block, starting with [[models]]; no prose, no markdown
-   fences, no leading or trailing text.
-6. A plain number (a rating, a derived or fitted value) is in the unit its key
-   or the param meanings name, else in A, V, W, s, F or ohm.
-7. The checker rejects params outside these physical bounds, and one sitting on
-   a bound unless a cited row prints it: a value the datasheet does not give is
-   omitted or an `unknown` record, never a placeholder at a bound. A |x| bound is on
-   the magnitude and accepts EITHER SIGN: write a signed value as the datasheet
-   states it. A negative regulator (79xx, any output below GND) takes a NEGATIVE
-   vout, e.g. -5.0 for an LM7905: it is stamped as a source against ground, so
-   the magnitude would make a negative supply into a second positive one.
+{extraction_rules}
 {param_bounds}
 {behavioral_hint}
 OUTPUT (TOML only, starting with [[models]]):
@@ -1883,6 +1931,10 @@ OUTPUT (TOML only, starting with [[models]]):
         behavioral_hint = behavioral_hint_for_kind(kind),
         digital_hint = digital_hint_for_kind(kind),
         pin_role_guidance = PIN_ROLE_GUIDANCE,
+        ratings_rules = RATINGS_RULES,
+        envelope_rules = ENVELOPE_RULES,
+        pin_numbering = PIN_NUMBERING,
+        extraction_rules = EXTRACTION_RULES,
         source_quantity_guidance = SOURCE_QUANTITY_GUIDANCE,
     )
 }
@@ -2832,18 +2884,36 @@ fn run_tier(
     let staged = budget > 0;
     let _ = std::fs::remove_file(ws.path().join(harness::CONFIDENCE));
     let run = |p: &str| run_and_record(resolved, p, ws, budget, billing);
+    // A model card is first drafted by three section agents at once, merged
+    // with no model call; a clean merge goes straight to the validator, a
+    // flawed one to a fix agent told what the merge found.
+    let mut merged_draft = None::<String>;
     if staged && !ws.path().join(harness::NOTES).is_file() {
-        if let Reply::Model { part, kind } | Reply::Sensor { part, kind } = reply {
-            progress::phase("locating the pin map and key tables");
-            progress::event(
-                "stage",
-                serde_json::json!({"stage": "locate", "attempt": 1, "attempts": 1}),
-            );
-            let locate = harness::locate_prompt(part, kind, required_params_for_kind(kind));
-            run(&(locate + &harness::page_list(ws.path())))?;
-            if !ws.path().join(harness::NOTES).is_file() {
-                bail!("the locating agent wrote no {}", harness::NOTES);
+        match reply {
+            Reply::Model { part, kind } => {
+                progress::phase("drafting the card's sections in parallel");
+                let merged = sections::draft(resolved, ws, (part, kind), budget, billing)?;
+                let problems = merged.problems();
+                std::fs::write(ws.answer_path(), &merged.card)?;
+                std::fs::write(
+                    ws.path().join(harness::NOTES),
+                    format!("Section agents ran.{problems}\n"),
+                )?;
+                merged_draft = problems.is_empty().then_some(merged.card);
             }
+            Reply::Sensor { part, kind } => {
+                progress::phase("locating the pin map and key tables");
+                progress::event(
+                    "stage",
+                    serde_json::json!({"stage": "locate", "attempt": 1, "attempts": 1}),
+                );
+                let locate = harness::locate_prompt(part, kind, required_params_for_kind(kind));
+                run(&(locate + &harness::page_list(ws.path())))?;
+                if !ws.path().join(harness::NOTES).is_file() {
+                    bail!("the locating agent wrote no {}", harness::NOTES);
+                }
+            }
+            Reply::Word => {}
         }
     }
     let mut prompt = base_prompt.to_string();
@@ -2855,6 +2925,9 @@ fn run_tier(
     }
     let mut timed_out = None;
     let raw = validated_attempts(resolved.retries, &prompt, reply, (tool, staged), |p| {
+        if let Some(draft) = merged_draft.take() {
+            return Ok(draft);
+        }
         let answer = ws.answer_path();
         // A staged fix agent finds the failed draft where it will edit it, and
         // `previous.toml` as a copy; an unstaged retry starts clean.
@@ -3609,7 +3682,7 @@ pub fn run_agent_budgeted(
         // silence, as agy's single print is, so only codex gets the watchdog.
         (backend == Backend::Codex && resolved.idle_secs > 0)
             .then(|| Duration::from_secs(resolved.idle_secs)),
-        Some(harness::watch(&a.model, budget)),
+        Some(harness::watch(&a.model, &ws.label(), budget)),
     )?;
     if backend == Backend::Agy {
         agy_denial(&stdout, &log, ws)?;
@@ -5521,7 +5594,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
     const HAIKU_LADDER: &str = "claude-sonnet-5-5,claude-opus-5-5";
 
     /// Fake Claude Code for the ladder: every call logs its `--model`, writes
-    /// the locate notes and a valid card, and reports usage in a `result`
+    /// a valid card (a section agent's whole fragment), and reports usage in a `result`
     /// event; a model named in `doubtful` says `low` confidence, one in `bad`
     /// writes an invalid card. Returns the run, the models called in order,
     /// the plan/usage summary and the activity events.
@@ -5531,18 +5604,17 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         doubtful: &str,
         bad: &str,
     ) -> (Result<String>, Vec<String>, String, String) {
-        run_ladder_fake_loud(escalate, doubtful, bad, "")
+        run_ladder_fake_loud(escalate, doubtful, bad, ("", ""))
     }
 
     /// [`run_ladder_fake`] where a model named in `loud` also streams an
-    /// assistant turn far past any context budget, after its first call (so
-    /// after the locate stage) has written its files.
+    /// assistant turn far past any context budget, after it has written its files.
     #[cfg(unix)]
     fn run_ladder_fake_loud(
         escalate: &str,
         doubtful: &str,
         bad: &str,
-        loud: &str,
+        (loud, skip): (&str, &str),
     ) -> (Result<String>, Vec<String>, String, String) {
         use std::os::unix::fs::PermissionsExt;
         let _guard = MOCK_ENV.lock().unwrap();
@@ -5557,7 +5629,8 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
              printf '## Pin map\\n1 VCC\\n' > notes.md\ncp {draft:?} model.toml\necho high > confidence.txt\n\
              case \" {doubtful} \" in *\" $m \"*) printf 'low\\npin 3 unclear\\n' > confidence.txt;; esac\n\
              case \" {bad} \" in *\" $m \"*) printf '[[models]]\\nid = 1\\n' > model.toml;; esac\n\
-             if [ -f seen ]; then case \" {loud} \" in *\" $m \"*) echo '{over}'; sleep 20;; esac; fi\ntouch seen\n\
+             [ -n \"$SKIP_SECTION\" ] && grep -q \"YOUR SECTION: $SKIP_SECTION\" prompt.md && rm -f model.toml\n\
+             case \" {loud} \" in *\" $m \"*) echo '{over}'; sleep 20;; esac\n\
              echo '{result}' | sed \"s/MODEL/$m/\"\n"
         );
         for (path, text) in [
@@ -5576,6 +5649,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             // Haiku harness and its ladder on purpose.
             ("HAUKSBEE_CLAUDE_MODEL", "claude-haiku-5-5"),
             ("HAUKSBEE_CLAUDE_ESCALATE", escalate),
+            ("SKIP_SECTION", skip),
             (
                 crate::extract_progress::ENV_EVENTS,
                 events.to_str().unwrap(),
@@ -5616,11 +5690,10 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
     fn a_doubtful_haiku_draft_escalates_and_the_card_names_its_tier() {
         let (ran, models, summary, events) = run_ladder_fake(HAIKU_LADDER, "claude-haiku-5-5", "");
         let card = ran.unwrap();
-        // Haiku runs a locate stage then a draft; Sonnet reuses the notes.
-        assert_eq!(
-            models,
-            ["claude-haiku-5-5", "claude-haiku-5-5", "claude-sonnet-5-5"]
-        );
+        // Haiku runs its three section agents; Sonnet takes over.
+        let mut expected = ["claude-haiku-5-5"; 3].to_vec();
+        expected.push("claude-sonnet-5-5");
+        assert_eq!(models, expected);
         assert!(card.starts_with("# extracted by claude-code claude-sonnet-5-5 (tier 2 of 3); escalated: self-reported low confidence: pin 3 unclear"), "{card}");
         assert!(
             summary.contains('$') && !summary.contains("plan"),
@@ -5632,6 +5705,9 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             "\"usage\"",
             "\"escalate\"",
             "\"final\"",
+            "section identity",
+            "section ratings",
+            "section electrical",
         ] {
             assert!(events.contains(kind), "{kind} missing: {events}");
         }
@@ -5642,17 +5718,26 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
     #[cfg(unix)]
     #[test]
     fn a_stopped_agent_that_wrote_a_valid_card_is_not_redone() {
-        let (ran, models, _, _) = run_ladder_fake_loud(HAIKU_LADDER, "", "", "claude-haiku-5-5");
+        let (ran, models, _, _) =
+            run_ladder_fake_loud(HAIKU_LADDER, "", "", ("claude-haiku-5-5", ""));
         let card = ran.unwrap();
-        assert_eq!(
-            models,
-            ["claude-haiku-5-5", "claude-haiku-5-5"],
-            "locate, draft"
-        );
+        assert_eq!(models, ["claude-haiku-5-5"; 3], "three section agents");
         assert!(
             card.starts_with("# extracted by claude-code claude-haiku-5-5 (tier 1 of 3)"),
             "{card}"
         );
+    }
+
+    /// A section agent that wrote nothing is not papered over: a fix agent
+    /// takes the merged card on, and the card still comes from the first tier.
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_section_goes_to_a_fix_agent() {
+        let (ran, models, _, _) = run_ladder_fake_loud(HAIKU_LADDER, "", "", ("", "ratings"));
+        assert_eq!(models, ["claude-haiku-5-5"; 4], "three sections, one fix");
+        assert!(ran
+            .unwrap()
+            .starts_with("# extracted by claude-code claude-haiku-5-5 (tier 1 of 3)"));
     }
 
     /// When the stronger tier fails outright, the doubtful but valid draft is
@@ -5684,7 +5769,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         assert!(ran
             .unwrap()
             .starts_with("# extracted by claude-code claude-haiku-5-5 (tier 1 of 3)\n"));
-        assert_eq!(models.len(), 2);
+        assert_eq!(models.len(), 3);
     }
 
     /// Fake codex for the idle watchdog: attempt 1 stalls (with a helper

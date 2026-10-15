@@ -68,10 +68,11 @@ pub type Watch = Box<dyn FnMut(&str) -> Option<String> + Send>;
 ///
 /// Events come from Claude Code's `stream-json` (and codex's `--json`) lines;
 /// the budget (0 = none) is checked on every assistant turn, whose usage says
-/// how full the context now is.
+/// how full the context now is. `agent` names the sandbox, so parallel agents'
+/// usage events can be told apart.
 #[must_use]
-pub fn watch(model: &str, budget: u64) -> Watch {
-    let model = model.to_string();
+pub fn watch(model: &str, agent: &str, budget: u64) -> Watch {
+    let (model, agent) = (model.to_string(), agent.to_string());
     Box::new(move |line| {
         let v: Value = serde_json::from_str(line).ok()?;
         if v["type"] == "item.started" && v["item"]["type"] == "command_execution" {
@@ -93,7 +94,10 @@ pub fn watch(model: &str, budget: u64) -> Watch {
         ];
         let context: u64 = keys.iter().filter_map(|k| u[k].as_u64()).sum();
         if context > 0 {
-            event("usage", json!({ "model": model, "context": context }));
+            event(
+                "usage",
+                json!({ "model": model, "agent": agent, "context": context }),
+            );
         }
         (budget > 0 && context > budget)
             .then(|| format!("{model} passed its {budget}-token context budget ({context} tokens)"))
@@ -237,8 +241,8 @@ pub fn handoff(dir: &Path, staged: bool, escalated_because: Option<&str>) -> Str
     out += &page_list(dir);
     if !notes.trim().is_empty() {
         let trust = if staged {
-            "A locating agent read the datasheet first. The notes are your map and are below, so \
-             do not re-read them or `ls`. Open a page (page-NNN.png, or pages/page-NNN.txt where \
+            "Agents drafted model.toml from the datasheet first. Their notes are below, so do not \
+             re-read them or `ls`. Open a page (page-NNN.png, or pages/page-NNN.txt where \
              there is no image) only for a value the notes lack or flag as doubtful: each image \
              costs about 5k tokens of your small context. Do not open datasheet.pdf or \
              datasheet.txt whole; this overrides the instruction above."
@@ -336,7 +340,7 @@ mod tests {
 
     #[test]
     fn the_watcher_stops_a_run_past_its_budget_and_names_pages_read() {
-        let mut w = watch("claude-haiku-5-5", 1000);
+        let mut w = watch("claude-haiku-5-5", "a", 1000);
         let turn = |ctx: u64| {
             json!({"type": "assistant", "message": {
                 "content": [{"type": "tool_use", "name": "Read", "input": {"file_path": "/w/page-004.png"}}],
@@ -351,7 +355,7 @@ mod tests {
             "{stop}"
         );
         assert!(
-            watch("m", 0)(&turn(5_000_000)).is_none(),
+            watch("m", "a", 0)(&turn(5_000_000)).is_none(),
             "no budget, no stop"
         );
     }
