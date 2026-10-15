@@ -121,12 +121,7 @@ impl DynamicLoad {
 }
 
 impl Peripheral for DynamicLoad {
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn kind(&self) -> &'static str {
-        "dynamic_load"
-    }
+    peripheral_identity!("dynamic_load");
 
     fn pre_solve(&mut self, ctx: &mut TickCtx) {
         // Drive the sink along the profile's own waveform through this chunk

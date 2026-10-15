@@ -213,12 +213,7 @@ fn sanitize(name: &str) -> String {
 }
 
 impl Peripheral for VcdSink {
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn kind(&self) -> &'static str {
-        "vcd_sink"
-    }
+    peripheral_identity!("vcd_sink");
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // sim time is non-negative and far below 2^64 ps
     fn post_solve(&mut self, ctx: &mut TickCtx) {

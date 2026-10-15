@@ -106,12 +106,7 @@ impl Pushbutton {
 }
 
 impl Peripheral for Pushbutton {
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn kind(&self) -> &'static str {
-        "pushbutton"
-    }
+    peripheral_identity!("pushbutton");
 
     fn pre_solve(&mut self, ctx: &mut TickCtx) {
         // Start a pending transition at this chunk's time.
@@ -175,12 +170,7 @@ impl ToggleSwitch {
 }
 
 impl Peripheral for ToggleSwitch {
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn kind(&self) -> &'static str {
-        "toggle"
-    }
+    peripheral_identity!("toggle");
 
     fn pre_solve(&mut self, ctx: &mut TickCtx) {
         let r = if self.closed {
@@ -257,12 +247,7 @@ impl Potentiometer {
 }
 
 impl Peripheral for Potentiometer {
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn kind(&self) -> &'static str {
-        "potentiometer"
-    }
+    peripheral_identity!("potentiometer");
 
     fn pre_solve(&mut self, ctx: &mut TickCtx) {
         self.apply(ctx.circuit);
@@ -337,12 +322,7 @@ impl Encoder {
 }
 
 impl Peripheral for Encoder {
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn kind(&self) -> &'static str {
-        "encoder"
-    }
+    peripheral_identity!("encoder");
 
     fn pre_solve(&mut self, ctx: &mut TickCtx) {
         self.drive_phase(ctx.circuit);
@@ -463,12 +443,7 @@ fn noise_sample(seed: u64, counter: u64) -> f64 {
 }
 
 impl Peripheral for Stimulus {
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn kind(&self) -> &'static str {
-        "stimulus"
-    }
+    peripheral_identity!("stimulus");
 
     fn pre_solve(&mut self, ctx: &mut TickCtx) {
         // Sample at the chunk END (t+dt), the same zero-order-hold instant

@@ -34,6 +34,19 @@ use std::collections::HashMap;
 
 use hauksbee_ir::{Circuit, NodeId};
 
+/// The [`Peripheral::id`] and [`Peripheral::kind`] methods for a peripheral
+/// that keeps its id in an `id: String` field and has a fixed kind string.
+macro_rules! peripheral_identity {
+    ($kind:literal) => {
+        fn id(&self) -> &str {
+            &self.id
+        }
+        fn kind(&self) -> &'static str {
+            $kind
+        }
+    };
+}
+
 pub mod controls;
 pub mod i2c;
 pub mod load;

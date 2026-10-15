@@ -8574,6 +8574,21 @@ missing = ["measurement_registers"]
         Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler")
     }
 
+    /// Add one node per name to `circuit`, returning the nodes in the order
+    /// the names were given and the name-to-node map a bound board carries.
+    fn named_nodes<const N: usize>(
+        circuit: &mut Circuit,
+        names: [&str; N],
+    ) -> ([NodeId; N], HashMap<String, NodeId>) {
+        let mut by_name = HashMap::new();
+        let nodes = names.map(|name| {
+            let id = circuit.node(name);
+            by_name.insert(name.to_string(), id);
+            id
+        });
+        (nodes, by_name)
+    }
+
     pub(super) fn bound_board(
         name: &str,
         circuit: Circuit,
@@ -10650,16 +10665,13 @@ data_out = ["io0"]
     #[test]
     fn firmware_influence_follows_control_paths_and_stops_at_held_rails() {
         let mut circuit = Circuit::new();
-        let mut net_nodes = HashMap::new();
-        let mut net = |name: &str| {
-            let id = circuit.node(name);
-            net_nodes.insert(name.to_string(), id);
-            id
-        };
-        let [gpio, gate, load, vin, v3v3, vdd_mcu, avdd, en2, vsw, sense] = [
-            "GPIO", "GATE", "LOAD", "VIN", "V3V3", "VDD_MCU", "AVDD", "EN2", "VSW", "SENSE",
-        ]
-        .map(&mut net);
+        let ([gpio, gate, load, vin, v3v3, vdd_mcu, avdd, en2, vsw, sense], net_nodes) =
+            named_nodes(
+                &mut circuit,
+                [
+                    "GPIO", "GATE", "LOAD", "VIN", "V3V3", "VDD_MCU", "AVDD", "EN2", "VSW", "SENSE",
+                ],
+            );
         let gnd = NodeId::GROUND;
         // VIN: an independent supply. V3V3: an always-on regulator from VIN
         // that feeds the MCU through a ferrite (VDD_MCU) and an RC-filtered
@@ -10796,14 +10808,8 @@ data_out = ["io0"]
     fn a_dac_output_and_the_buffer_behind_it_follow_the_i2c_writes_that_set_it() {
         use crate::peripherals::register_map::tests::MINI_DAC_SPEC;
         let mut circuit = Circuit::new();
-        let mut net_nodes = HashMap::new();
-        let mut net = |name: &str| {
-            let id = circuit.node(name);
-            net_nodes.insert(name.to_string(), id);
-            id
-        };
-        let [sda, scl, vout, buf, load, vref] =
-            ["SDA", "SCL", "VOUT", "BUF", "LOAD", "VREF"].map(&mut net);
+        let ([sda, scl, vout, buf, load, vref], net_nodes) =
+            named_nodes(&mut circuit, ["SDA", "SCL", "VOUT", "BUF", "LOAD", "VREF"]);
         let gnd = NodeId::GROUND;
         circuit.add(Device::vsource("Vref", vref, gnd, SourceKind::Dc(2.5)));
         // A unity-gain buffer from the DAC output, loaded to ground and to the
@@ -10899,13 +10905,8 @@ data_out = ["io0"]
     #[test]
     fn firmware_influence_passes_a_zero_volt_series_ammeter_but_not_a_held_rail() {
         let mut circuit = Circuit::new();
-        let mut net_nodes = HashMap::new();
-        let mut net = |name: &str| {
-            let id = circuit.node(name);
-            net_nodes.insert(name.to_string(), id);
-            id
-        };
-        let [gpio, a, b, load, bus] = ["GPIO", "A", "B", "LOAD", "BUS"].map(&mut net);
+        let ([gpio, a, b, load, bus], net_nodes) =
+            named_nodes(&mut circuit, ["GPIO", "A", "B", "LOAD", "BUS"]);
         let gnd = NodeId::GROUND;
         circuit.add(Device::vsource("Vbus", bus, gnd, SourceKind::Dc(5.0)));
         circuit.add(Device::resistor("R1", gpio, a, 100.0));
@@ -10947,13 +10948,8 @@ data_out = ["io0"]
     #[test]
     fn a_uart_tx_line_the_firmware_sent_bytes_on_is_driven_and_seeds_the_walk() {
         let mut circuit = Circuit::new();
-        let mut net_nodes = HashMap::new();
-        let mut net = |name: &str| {
-            let id = circuit.node(name);
-            net_nodes.insert(name.to_string(), id);
-            id
-        };
-        let [tx, filt, other, rail] = ["UART_TX", "FILT", "OTHER", "RAIL"].map(&mut net);
+        let ([tx, filt, other, rail], net_nodes) =
+            named_nodes(&mut circuit, ["UART_TX", "FILT", "OTHER", "RAIL"]);
         let gnd = NodeId::GROUND;
         circuit.add(Device::vsource("Vrail", rail, gnd, SourceKind::Dc(3.3)));
         circuit.add(Device::resistor("R_RC", tx, filt, 10e3));
@@ -10997,13 +10993,8 @@ data_out = ["io0"]
     /// role), plus an unrelated divider, for the peripheral-activity tests.
     fn peripheral_sched(roles: &[(&str, &str)]) -> Scheduler {
         let mut circuit = Circuit::new();
-        let mut net_nodes = HashMap::new();
-        let mut net = |name: &str| {
-            let id = circuit.node(name);
-            net_nodes.insert(name.to_string(), id);
-            id
-        };
-        let [a, b, filt, other, rail] = ["LINE_A", "LINE_B", "FILT", "OTHER", "RAIL"].map(&mut net);
+        let ([a, b, filt, other, rail], net_nodes) =
+            named_nodes(&mut circuit, ["LINE_A", "LINE_B", "FILT", "OTHER", "RAIL"]);
         let gnd = NodeId::GROUND;
         circuit.add(Device::vsource("Vrail", rail, gnd, SourceKind::Dc(3.3)));
         circuit.add(Device::resistor("R_RC", a, filt, 10e3));
@@ -11060,16 +11051,12 @@ data_out = ["io0"]
     #[test]
     fn unobserved_peripheral_pads_on_a_host_paced_core_seed_the_walk() {
         let mut circuit = Circuit::new();
-        let mut net_nodes = HashMap::new();
-        let mut net = |name: &str| {
-            let id = circuit.node(name);
-            net_nodes.insert(name.to_string(), id);
-            id
-        };
-        let [a, filt, b, input_only, _lonely, drv, rail, other] = [
-            "LINE_A", "FILT", "LINE_B", "IN_ONLY", "LONELY", "DRV", "RAIL", "OTHER",
-        ]
-        .map(&mut net);
+        let ([a, filt, b, input_only, _lonely, drv, rail, other], net_nodes) = named_nodes(
+            &mut circuit,
+            [
+                "LINE_A", "FILT", "LINE_B", "IN_ONLY", "LONELY", "DRV", "RAIL", "OTHER",
+            ],
+        );
         let gnd = NodeId::GROUND;
         circuit.add(Device::vsource("Vrail", rail, gnd, SourceKind::Dc(3.3)));
         circuit.add(Device::resistor("R_RC", a, filt, 10e3));

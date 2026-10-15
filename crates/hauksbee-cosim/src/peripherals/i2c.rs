@@ -329,12 +329,7 @@ impl I2cBus {
 }
 
 impl Peripheral for I2cBus {
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn kind(&self) -> &'static str {
-        "i2c_bus"
-    }
+    peripheral_identity!("i2c_bus");
 
     #[allow(clippy::cast_precision_loss)] // state values are small counts, exact below 2^52
     fn state(&self) -> HashMap<String, f64> {
