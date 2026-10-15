@@ -6040,7 +6040,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             ["a.pdf", "agent", "draft", "c", "count", "helper.pid"].map(|f| dir.path().join(f));
         std::fs::write(&draft, ex.card).unwrap();
         let body = if chatty {
-            "for i in 1 2 3 4 5 6 7 8; do echo '{\"type\":\"tick\"}'; sleep 0.4; done\n\
+            "for i in 1 2 3 4 5 6 7 8; do echo '{\"type\":\"tick\"}'; sleep 0.2; done\n\
              cp DRAFT model.toml\n"
         } else {
             "if [ \"$n\" = 1 ]; then sleep 60 & echo $! > HELPER; wait; fi\n\
@@ -6057,7 +6057,13 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let env = [
             (extract_config::ENV_CONFIG_PATH, cfg.to_str().unwrap()),
             ("HAUKSBEE_CODEX_COMMAND", agent.to_str().unwrap()),
-            ("HAUKSBEE_EXTRACT_IDLE_SECS", "1"),
+            // The chatty agent's 0.2 s ticks sit far inside a 10 s idle window, so a
+            // loaded machine cannot stretch a gap into a stall; the stalling agent
+            // keeps a 1 s window so its kill is quick.
+            (
+                "HAUKSBEE_EXTRACT_IDLE_SECS",
+                if chatty { "10" } else { "1" },
+            ),
         ];
         for (k, v) in env {
             std::env::set_var(k, v);
