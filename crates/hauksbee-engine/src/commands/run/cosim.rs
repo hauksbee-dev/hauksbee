@@ -203,6 +203,32 @@ fn execute_and_collect_observations(
     })
 }
 
+/// A run the tool cannot qualify numerically is not judged: exit 3 with the
+/// refusal, as the web report refuses it, never an error or a failure.
+fn refuse_unqualified(
+    cfg: &RunConfig,
+    observations: &RunObservations,
+    error: &hauksbee_ir::evidence::EvidenceError,
+) -> ! {
+    let refusal = Refusal::new(
+        "numerically qualified firmware co-simulation conclusions",
+        error.to_string(),
+        vec!["Firmware loading and the printed digital observations remain available."],
+        "use finite, positive solver tolerances and run the co-simulation again",
+    );
+    if cfg.json {
+        let mut jr = JsonReport::new(&observations.board_name, observations.summary.clone());
+        jr.refusal = Some(refusal.clone());
+        println!("{}", jr.to_json());
+    } else {
+        eprintln!("{}", refusal.render_text());
+    }
+    crate::reports::ci_artifacts::exit_with_refusal(
+        crate::result::EXIT_INVALID_FOR_ANALYSIS,
+        &refusal,
+    )
+}
+
 fn assemble_evidence_and_ci_artifacts(
     cfg: &RunConfig,
     artifacts: &RunArtifacts,
@@ -212,7 +238,10 @@ fn assemble_evidence_and_ci_artifacts(
     let board_evidence = &sim.board_evidence;
     let engine = &mut sim.engine;
     let held_high_boot_nets = &observations.activity.boot_advisory.held_high_control_nets;
-    let budget = engine.scheduler().error_budget()?;
+    let budget = engine
+        .scheduler()
+        .error_budget()
+        .unwrap_or_else(|error| refuse_unqualified(cfg, observations, &error));
     let fault_findings = crate::result::fault_findings_json(&observations.faults);
     // The co-sim fault gate, asked of the findings the CI artifacts carry
     // rather than of the fault list beside them: `fault_findings_json`
