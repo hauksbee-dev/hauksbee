@@ -14,6 +14,10 @@ use crate::{sample_list, Component, ExtractedBoard};
 /// with; the reports key their "not routed yet" state off it.
 pub const NOT_ROUTED_MESSAGE_PREFIX: &str = "the board is not routed yet";
 
+/// The remedy for that whole-board state (not the single open connection of a
+/// routed board).
+pub const NOT_ROUTED_FIX: &str = "Route all the nets, pour and refill the zones, then run the layout editor's DRC until it reports no unconnected items.";
+
 /// Island findings itemised before the rest are summarised in one line.
 const MAX_ISLANDS: usize = 20;
 
@@ -90,9 +94,8 @@ fn copper_islands(text: &str, out: &mut Vec<LintFinding>) {
         out.push(finding(
             Severity::High,
             format!(
-                "{NOT_ROUTED_MESSAGE_PREFIX}, so it cannot be ordered as is: no copper joins its {} pad group(s) on {}. The circuit was checked as a netlist",
-                with_pads.len(),
-                sample_list(&nets)
+                "{NOT_ROUTED_MESSAGE_PREFIX}, so it cannot be ordered as is: no copper joins its {} pad group(s)",
+                with_pads.len()
             ),
             Vec::new(),
             nets,

@@ -2280,6 +2280,11 @@ pub fn lint_findings_json(report: &NetLintReport) -> Vec<JsonFinding> {
             plain: f.message.clone(),
             fix: if f.is_abstention() {
                 lint_abstention_hint(f.check).map(str::to_string)
+            } else if f
+                .message
+                .starts_with(hauksbee_extract::NOT_ROUTED_MESSAGE_PREFIX)
+            {
+                Some(hauksbee_extract::NOT_ROUTED_FIX.to_string())
             } else {
                 lint_fix_hint(f.check, f.severity).map(str::to_string)
             },

@@ -53,7 +53,7 @@ pub mod ipc2581;
 mod ipc356;
 pub mod kicad_dru;
 mod layout_lint;
-pub use layout_lint::NOT_ROUTED_MESSAGE_PREFIX;
+pub use layout_lint::{NOT_ROUTED_FIX, NOT_ROUTED_MESSAGE_PREFIX};
 mod netlint;
 mod netlist;
 pub mod netname;

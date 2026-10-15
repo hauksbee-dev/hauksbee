@@ -407,6 +407,58 @@ fn write_heads_up(out: &mut String, notes: &[HeadsUp]) {
 /// The notice a pre-layout board carries in place of its copper findings.
 pub const PRE_LAYOUT_NOTICE: &str = "This board isn't routed yet. Circuit, model and firmware checks ran on its netlist; copper checks (shorts, spacing) wait until it's routed.";
 
+/// The "Fix these first" item for the not-routed state: what to do, since the
+/// notice and the headline already say what the state is.
+pub const ROUTE_THE_BOARD: &str = "Route the board";
+
+fn is_unrouted_state(f: &PlainFinding) -> bool {
+    f.what
+        .starts_with(hauksbee_extract::NOT_ROUTED_MESSAGE_PREFIX)
+}
+
+/// The verdict reason when routing is the only cause listed.
+pub const PRE_LAYOUT_REASON: &str = "the board must be routed before it can be ordered.";
+
+/// The headline of a pre-layout board. The not-routed state is not a defect, so
+/// it is not counted; `total` / `serious` are the circuit findings only (see
+/// [`without_pre_layout`]).
+#[must_use]
+pub fn pre_layout_headline(total: usize, serious: usize) -> String {
+    let lead = "Not routed yet:";
+    let issues = if total == 1 { "issue" } else { "issues" };
+    match (total, serious) {
+        (0, _) => format!("{lead} the circuit checks found no problems."),
+        (_, 0) => format!("{lead} circuit checks found {total} {issues}, none serious."),
+        _ => format!("{lead} circuit checks found {total} {issues} ({serious} serious)."),
+    }
+}
+
+/// The report's `(total, serious)` without what a pre-layout board holds back:
+/// every copper finding (it says nothing until the board is routed) and the
+/// not-routed state itself.
+#[must_use]
+pub fn without_pre_layout(
+    copper: &PlainReport,
+    wiring: &PlainReport,
+    total: usize,
+    serious: usize,
+) -> (usize, usize) {
+    let held = |level: Option<PlainLevel>| {
+        let at = |f: &&PlainFinding| level.is_none_or(|l| f.level == l);
+        copper.findings.iter().filter(at).count()
+            + wiring
+                .findings
+                .iter()
+                .filter(|f| is_unrouted_state(f))
+                .filter(at)
+                .count()
+    };
+    (
+        total.saturating_sub(held(None)),
+        serious.saturating_sub(held(Some(PlainLevel::Serious))),
+    )
+}
+
 /// How many causes "Fix these first" lists.
 pub const FIX_FIRST_MAX: usize = 3;
 
@@ -501,10 +553,7 @@ pub fn fix_first(
     usbc: Option<&crate::checks::usb_c::UsbcReport>,
     si: &PlainReport,
 ) -> FixFirst {
-    let is_unrouted = |f: &PlainFinding| {
-        f.what
-            .starts_with(hauksbee_extract::NOT_ROUTED_MESSAGE_PREFIX)
-    };
+    let is_unrouted = is_unrouted_state;
     let pre_layout = wiring.findings.iter().any(is_unrouted);
     let usbc = usbc.and_then(usbc_finding);
     let copper = if pre_layout {
@@ -538,7 +587,11 @@ pub fn fix_first(
             .into_iter()
             .take(FIX_FIRST_MAX)
             .map(|(_, f, similar)| FixFirstItem {
-                what: f.what.clone(),
+                what: if is_unrouted(f) {
+                    ROUTE_THE_BOARD.to_string()
+                } else {
+                    f.what.clone()
+                },
                 why: f.why.clone(),
                 fix: f.fix.clone(),
                 x: f.loc_mm.map(|l| l[0]),
@@ -1354,6 +1407,16 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "This is a note about the state of the layout file (zones never filled, or leftover copper), not a connection a finished route left open.".to_string(),
                 "Refill the zones or remove the stray copper in the layout editor, save, and re-check.".to_string(),
             ),
+            LintCheck::UnroutedPad
+                if f.message
+                    .starts_with(hauksbee_extract::NOT_ROUTED_MESSAGE_PREFIX) =>
+            {
+                (
+                    f.message.clone(),
+                    "No track, via or copper pour joins any of the placed pads yet, so a board made from these files would connect nothing. The circuit checks ran on the netlist; the copper checks wait until it is routed.".to_string(),
+                    hauksbee_extract::NOT_ROUTED_FIX.to_string(),
+                )
+            }
             LintCheck::UnroutedPad => (
                 f.message.clone(),
                 "The pads are on the right net, but no track, via or copper pour actually reaches them. A board made from these files would leave the connection open: the ratsnest line the layout editor shows here was never routed.".to_string(),
@@ -2352,9 +2415,30 @@ mod tests {
         ]);
         let first = fix_first(&copper, &wiring, None, &PlainReport::default());
         let whats: Vec<_> = first.items.iter().map(|i| i.what.as_str()).collect();
-        assert_eq!(whats, ["floating pin", unrouted.as_str()]);
+        assert_eq!(whats, ["floating pin", ROUTE_THE_BOARD]);
         assert_eq!(first.notice, Some(PRE_LAYOUT_NOTICE));
         assert!(first.render().contains("isn't routed yet"));
+        // The state is said once (the notice); the item only says what to do.
+        assert!(!first.render().contains("pad groups"));
+        // The state is not a defect and the copper waits: neither is counted.
+        let (total, serious) = without_pre_layout(&copper, &wiring, 3, 3);
+        assert_eq!((total, serious), (1, 1));
+    }
+
+    #[test]
+    fn a_pre_layout_headline_frames_the_state_and_counts_only_circuit_issues() {
+        assert_eq!(
+            pre_layout_headline(0, 0),
+            "Not routed yet: the circuit checks found no problems."
+        );
+        assert_eq!(
+            pre_layout_headline(10, 0),
+            "Not routed yet: circuit checks found 10 issues, none serious."
+        );
+        assert_eq!(
+            pre_layout_headline(1, 1),
+            "Not routed yet: circuit checks found 1 issue (1 serious)."
+        );
     }
 
     #[test]

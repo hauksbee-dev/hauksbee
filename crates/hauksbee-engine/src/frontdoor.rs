@@ -710,9 +710,20 @@ impl WebReport {
         self.headline = verdict_headline(&verdict, &self.headline, self.serious);
         self.verdict = verdict.verdict.to_string();
         self.verdict_reason = verdict.reason;
+        // Routing is the only listed cause: the headline frames the state and the
+        // strip says what ran, so the reason names the blocker once, briefly.
+        if self.verdict == "fail"
+            && self.fix_first.notice.is_some()
+            && self.fix_first.items.len() == 1
+        {
+            self.verdict_reason = Some(crate::plain::PRE_LAYOUT_REASON.to_string());
+        }
         self.verdict_conditions = verdict.conditions;
     }
 }
+
+/// How a pre-layout headline starts (see `plain::pre_layout_headline`).
+const PRE_LAYOUT_HEADLINE_LEAD: &str = "Not routed yet:";
 
 /// Headlines that already say the run could not be judged.
 const BIND_OPEN_HEADLINE: &str = "No blocking issues, but active parts are unresolved; analog/AC/thermal results are not trustworthy. See the notes.";
@@ -736,7 +747,7 @@ fn verdict_headline(verdict: &crate::result::RunVerdict, current: &str, serious:
     ];
     match verdict.verdict {
         // A serious finding's headline already says to fix it before ordering.
-        "fail" if serious > 0 => current.to_string(),
+        "fail" if serious > 0 || current.starts_with(PRE_LAYOUT_HEADLINE_LEAD) => current.to_string(),
         "fail" => "Not OK to order: a finding fails the check gate; see the reason below.".to_string(),
         "invalid" if inconclusive.contains(&current) => current.to_string(),
         "invalid" => "Not conclusive: nothing found blocks ordering, but this run cannot vouch for the board; see the reason below.".to_string(),
@@ -1361,6 +1372,14 @@ fn analyze_normalized_with_context(
         .map(|s| s.findings.iter().filter(|f| f.level == "serious").count())
         .sum();
     let total: usize = sections.iter().map(|s| s.findings.len()).sum();
+    // An unrouted board holds its copper findings back and the not-routed state
+    // is not a defect, so neither counts as an issue.
+    let fix_first = crate::plain::fix_first(&drc_plain, &lint_plain, usbc.as_ref(), &si_plain);
+    let (total, serious) = if fix_first.notice.is_some() {
+        crate::plain::without_pre_layout(&drc_plain, &lint_plain, total, serious)
+    } else {
+        (total, serious)
+    };
 
     // The bind-role honesty data the CLI/JSON surfaces carry, in the web
     // shape, from the SAME bind computed above the sections. The web dropping
@@ -1436,6 +1455,12 @@ fn analyze_normalized_with_context(
     // actionable observation, so the headline must NOT read "Looks healthy".
     let has_heads_up = sections.iter().any(|s| !s.heads_up.is_empty());
     let mut headline = overall_headline(total, serious, has_heads_up, bind_web.active_path_open());
+    // On an unrouted board the frame leads; what the run could not judge is
+    // told by the bind banner and the evidence, not by a different headline.
+    let pre_layout = fix_first.notice.is_some();
+    if pre_layout {
+        headline = crate::plain::pre_layout_headline(total, serious);
+    }
     // Same run-level split as the JSON verdict: a finding-backed undermined
     // map is a badge on that finding, not run invalidity, so the headline only
     // escalates for undermined run-level claims (coverage, bind completeness).
@@ -1446,10 +1471,12 @@ fn analyze_normalized_with_context(
     // run-level claim overrides the headline whenever nothing serious does.
     // A pass that rests on conditions is headlined by the verdict, which names
     // them (see `verdict_headline`); assumed corners are not "qualified" news.
-    if serious == 0 && run_level_undermined {
-        headline = UNDERMINED_HEADLINE.to_string();
-    } else if total == 0 && evidence.conditions().is_empty() && evidence.has_caveats() {
-        headline = "No blocking findings, but some evidence is qualified; see the evidence limitations below.".to_string();
+    if !pre_layout {
+        if serious == 0 && run_level_undermined {
+            headline = UNDERMINED_HEADLINE.to_string();
+        } else if total == 0 && evidence.conditions().is_empty() && evidence.has_caveats() {
+            headline = "No blocking findings, but some evidence is qualified; see the evidence limitations below.".to_string();
+        }
     }
     // The `--check` machine document for this board: the web verdict is ITS
     // verdict, so the browser and `run --check --json` cannot disagree.
@@ -1503,7 +1530,7 @@ fn analyze_normalized_with_context(
         num_nets: bound.net_names.len(),
         clearance_rule_source,
         triage,
-        fix_first: crate::plain::fix_first(&drc_plain, &lint_plain, usbc.as_ref(), &si_plain),
+        fix_first,
         headline,
         run_level_undermined,
         serious,
@@ -1887,7 +1914,11 @@ fn analyze_with_firmware_context(
             .as_ref()
             .is_some_and(|b| !b.active_path_unresolved.is_empty());
         if gained_serious || !(evidence_invalid || report.run_level_undermined || bind_invalid) {
-            report.headline = headline;
+            report.headline = if report.fix_first.notice.is_some() {
+                crate::plain::pre_layout_headline(total, serious)
+            } else {
+                headline
+            };
         }
         report.serious = serious;
     } else if report.total == 0 {

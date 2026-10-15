@@ -107,7 +107,7 @@ export function ShellChips({
         testid: 'chip-findings',
         onClick: () => goTo('board'),
         ...(tone === 'error'
-          ? { tone: 'err' as const, label: report.serious > 0 ? `${report.serious} serious` : 'analysis failed' }
+          ? { tone: 'err' as const, label: report.serious > 0 ? `${report.serious} serious` : report.fix_first?.notice ? 'not routed yet' : 'analysis failed' }
           : tone === 'warning'
             // An undermined run-level claim is what the body headline leads
             // with ("invalid for analysis"); "qualified" beside it reads as a
