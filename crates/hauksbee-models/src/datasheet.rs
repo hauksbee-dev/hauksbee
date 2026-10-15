@@ -1972,11 +1972,20 @@ fn ratings_hint_for_kind(kind: &str) -> String {
         .iter()
         .map(|(k, what)| format!("{k} ({what})"))
         .collect();
+    // A driver or switch is a digital card with no logic; the card decides, so
+    // the prompt names the extra category rather than the checklist guessing.
+    let output_stage = if kind == crate::schema::ComponentKind::Digital {
+        " A part with a power output stage (motor, gate or LED driver, load switch, pack-FET \
+         driver) also states max_current_a, its rated continuous or peak output current from \
+         the Absolute Maximum Ratings or Electrical Characteristics."
+    } else {
+        ""
+    };
     format!(
         "{guide}\nRATINGS BY CATEGORY: check each of these in turn: {}. Each one the datasheet \
          prints goes in [models.ratings]; for one it does not print, add \
          [[models.source.uncertainty]] status = \"unknown\", parameter = \"<key>\", reason \
-         naming the tables you checked. A per-pin limit is never the rated current.",
+         naming the tables you checked. A per-pin limit is never the rated current.{output_stage}",
         list.join("; ")
     )
 }
@@ -2990,18 +2999,26 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
     // the prompt. Measured: given the drafting clause and page images, the
     // agent read the whole datasheet to answer it (430k to 790k input tokens,
     // over half of a part's total, and two idle kills).
-    let clause = if reply.table().is_empty() {
+    let (clause, staged_clause) = if reply.table().is_empty() {
         ws.pages.clear();
-        IDENTIFY_CLAUSE.to_string()
+        (IDENTIFY_CLAUSE.to_string(), IDENTIFY_CLAUSE.to_string())
     } else {
-        verification_clause(&ws, reply.table())
+        // A staged tier's drafting agents read pages by number and its fix agent
+        // edits a draft in place, so the clause it gets inlines no page text.
+        (
+            verification_clause(&ws, reply.table(), true),
+            verification_clause(&ws, reply.table(), false),
+        )
     };
     let agy_note = if chosen == Backend::Agy {
         agy_tool_note(&ws)
     } else {
         String::new()
     };
-    let base_prompt = format!("{agent_prompt}\n\n{clause}{agy_note}");
+    let prompts = Prompts {
+        single: format!("{agent_prompt}\n\n{clause}{agy_note}"),
+        staged: format!("{agent_prompt}\n\n{staged_clause}{agy_note}"),
+    };
     // The escalation ladder: each tier a model, the next tried only when this
     // one fails, times out, doubts itself or leaves its pin map unresolved. A
     // kind identification is one cheap call on the first model.
@@ -3025,13 +3042,13 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
     if billing == crate::extract_usage::Billing::Plan {
         crate::extract_plan::begin(chosen.name(), &command);
     }
-    run_ladder(&resolved, &base_prompt, reply, &ws, &ladder, billing)
+    run_ladder(&resolved, &prompts, reply, &ws, &ladder, billing)
 }
 
 /// The escalation ladder over `ladder`'s models in one sandbox (see `call_backend`).
 fn run_ladder(
     resolved: &Resolved,
-    base_prompt: &str,
+    prompts: &Prompts,
     reply: Reply<'_>,
     ws: &Workspace,
     ladder: &[String],
@@ -3057,7 +3074,7 @@ fn run_ladder(
         let last = i + 1 == tiers;
         let ran = run_tier(
             &tier,
-            (base_prompt, billing),
+            (prompts, billing),
             reply,
             ws,
             budget,
@@ -3126,12 +3143,22 @@ fn run_ladder(
     unreachable!("the last tier returns")
 }
 
+/// The drafting instruction in its two shapes: the single agent's, which
+/// inlines the selected pages' text, and a staged tier's, which does not (its
+/// section agents and its fix agent open pages by number, and a fix edits a
+/// draft in place: measured, inlined text is re-sent on every turn of a fix
+/// agent that mostly does not read it).
+struct Prompts {
+    single: String,
+    staged: String,
+}
+
 /// One model's attempt at the extraction in the shared sandbox: the staged
 /// harness when `budget` is set (locate, then draft and fix, each a fresh agent
 /// bounded to `budget` tokens of context), else one agent with the full prompt.
 fn run_tier(
     resolved: &Resolved,
-    (base_prompt, billing): (&str, crate::extract_usage::Billing),
+    (prompts, billing): (&Prompts, crate::extract_usage::Billing),
     reply: Reply<'_>,
     ws: &Workspace,
     budget: u64,
@@ -3175,7 +3202,7 @@ fn run_tier(
             Reply::Word => {}
         }
     }
-    let mut prompt = base_prompt.to_string();
+    let mut prompt = if staged { &prompts.staged } else { &prompts.single }.clone();
     if !reply.table().is_empty() {
         prompt += &harness::handoff(ws.path(), staged, escalated_because.map(String::as_str));
     }
@@ -3348,10 +3375,52 @@ fn envelope_schema() -> serde_json::Value {
     })
 }
 
+/// What a Claude Code drafting agent is told in place of `--json-schema`: its
+/// final message is the envelope as plain JSON. Empty for any other schema
+/// (the identification answer lives in model.toml).
+fn envelope_note(schema_path: &Path) -> String {
+    let schema = std::fs::read_to_string(schema_path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    let Some(schema) = schema.filter(|s| s["properties"]["status"].is_object()) else {
+        return String::new();
+    };
+    format!(
+        "\n\nYour final message is ONLY one JSON object with exactly these keys and no other \
+         text (no code fence): status ({}), confidence (high, medium or low: {}), reason \
+         (one sentence), questions (an array of strings, empty when you have none).",
+        schema["properties"]["status"]["enum"]
+            .as_array()
+            .map(|v| {
+                v.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            })
+            .unwrap_or_default(),
+        schema["properties"]["confidence"]["description"]
+            .as_str()
+            .unwrap_or_default()
+    )
+}
+
+/// The envelope a final message holds: the whole message, or the outermost
+/// `{...}` of one wrapped in a fence or a sentence. Only a reply whose
+/// `confidence` is one of the schema's three words is an envelope.
+fn envelope_in(text: &str) -> Option<serde_json::Value> {
+    let text = text.trim();
+    let braced = text.find('{').zip(text.rfind('}')).map(|(a, b)| &text[a..=b]);
+    let v = [Some(text), braced]
+        .into_iter()
+        .flatten()
+        .find_map(|t| serde_json::from_str::<serde_json::Value>(t).ok())?;
+    matches!(v["confidence"].as_str(), Some("high" | "medium" | "low")).then_some(v)
+}
+
 /// Announce a drafting agent's envelope, and keep its confidence where the
 /// ladder reads one when the agent wrote no `confidence.txt` itself.
 fn note_envelope(ws: &Workspace, text: &str) {
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(text.trim()) else {
+    let Some(v) = envelope_in(text) else {
         return;
     };
     let Some(level) = v["confidence"].as_str() else {
@@ -3382,8 +3451,13 @@ fn schema_flag(backend: Backend, exe: &Path) -> Option<&'static str> {
     static SEEN: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
     let (flag, help): (&'static str, &[&str]) = match backend {
         Backend::Codex => ("--output-schema", &["exec", "--help"]),
-        Backend::ClaudeCode => ("--json-schema", &["--help"]),
-        Backend::Agy | Backend::Api => return None,
+        // Claude Code's `--json-schema` is not constrained decoding: the CLI
+        // makes the model answer, then forces one more turn to call a
+        // StructuredOutput tool (validate and retry). Measured on staged
+        // section agents, that turn re-sends the whole context once per agent
+        // for a closing envelope the prompt can ask for in plain text
+        // (`envelope_note`), parsed and checked locally by `note_envelope`.
+        Backend::ClaudeCode | Backend::Agy | Backend::Api => return None,
     };
     // The unit tests' fake agents count their invocations; a probe is one more.
     if cfg!(test) {
@@ -3754,7 +3828,7 @@ pub fn supported_kinds() -> Vec<&'static str> {
 /// not "be accurate", which asks for nothing, but three specific acts: read
 /// each number back against the page it came from, test it against physics,
 /// and say out loud which values were never stated.
-fn verification_clause(ws: &Workspace, table: &str) -> String {
+fn verification_clause(ws: &Workspace, table: &str, inline: bool) -> String {
     let abstain = if table == "[sensor]" {
         "omit that register or field and name it in a `status = \"unknown\"` \
          `[[sensor.source.uncertainty]]` record whose reason starts `ABSTAIN:`"
@@ -3792,7 +3866,11 @@ fn verification_clause(ws: &Workspace, table: &str) -> String {
         // the few pages it needed by number.
         let (shown, how) = if ws.has_text_dump {
             (
-                "their text (pdftotext -layout) is below",
+                if inline {
+                    "their text (pdftotext -layout) is below"
+                } else {
+                    "their text is in `pages/page-NNN.txt`"
+                },
                 "`page-index.md` lists every other page's topics and `pages/page-NNN.txt` holds \
                  each page's text: read further pages by number, several in one command. Never \
                  print `datasheet.txt`, the PDF or `prompt.md` (this instruction); everything you \
@@ -3812,7 +3890,11 @@ fn verification_clause(ws: &Workspace, table: &str) -> String {
              `datasheet.pdf`. {how} If a needed fact is on an omitted page, read that page \
              before answering.{}",
             ws.pages.len(),
-            selected_page_text(ws),
+            if inline {
+                selected_page_text(ws)
+            } else {
+                String::new()
+            },
         )
     };
 
@@ -4101,7 +4183,10 @@ pub fn run_agent_budgeted(
     let Some(a) = resolved.agent(backend) else {
         bail!("the api backend is not an agent CLI");
     };
-    let stdin_text = agent_stdin(backend, prompt);
+    let mut stdin_text = agent_stdin(backend, prompt);
+    if backend == Backend::ClaudeCode {
+        stdin_text += &envelope_note(&ws.path().join(REPLY_SCHEMA));
+    }
     let tool = &a.command;
     let executable = which_path(tool)
         .with_context(|| format!("executable `{tool}` was not found; no fallback attempted"))?;
@@ -4170,11 +4255,8 @@ pub fn run_agent_budgeted(
             ])
             .env("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1")
             .env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
-            // Probed (2.1.300): not constrained decoding but a validated
-            // StructuredOutput tool call the CLI insists on, which adds turns.
-            if let Some(flag) = schema {
-                cmd.arg(flag).arg(std::fs::read_to_string(&schema_path)?);
-            }
+            // No `--json-schema` (see `schema_flag`): the envelope is asked for
+            // in the prompt, so the run has no forced extra turn.
         }
         Backend::Agy => {
             cmd.args(["--output-format", "text", "--mode", &a.permission_mode])
@@ -4405,8 +4487,9 @@ const WORKSPACE_NOTE: &str = "The supplied files and output location are in your
     The working directory sits inside the system temporary folder, which the sandbox policy \
     denies in general but grants for this directory: open its files rather than concluding \
     from the policy text that you cannot, and report a denial only after a read has failed. \
-    The selected pages' text is in the instruction; open a rendered page (page-NNN.png) only \
-    where that text leaves a table column or the pinout ambiguous. Write your answer to the file \
+    Where the instruction does not carry the page text, read pages/page-NNN.txt by number; \
+    open a rendered page (page-NNN.png) only where the text leaves a table column or the pinout \
+    ambiguous. Write your answer to the file \
     the instruction names (model.toml unless it names another).";
 
 /// Poll a spawned CLI agent to completion, killing its process tree at
@@ -4976,6 +5059,29 @@ mod tests {
         assert_eq!(harness::confidence(ws.path()).0, "low");
     }
 
+    /// Claude Code is asked for the envelope in the prompt, not through
+    /// `--json-schema` (a forced extra turn per agent), so a fenced or
+    /// sentence-wrapped envelope must still be read, and a non-envelope not.
+    #[test]
+    fn claude_envelope_comes_from_the_prompt_and_is_checked_locally() {
+        let dir = tempfile::tempdir().unwrap();
+        let (drafting, identify) = (dir.path().join("a.json"), dir.path().join("b.json"));
+        std::fs::write(&drafting, envelope_schema().to_string()).unwrap();
+        std::fs::write(&identify, identify_schema().to_string()).unwrap();
+        let note = envelope_note(&drafting);
+        assert!(note.contains("written | identity_only | not_written"), "{note}");
+        assert!(note.contains("low while the last checker run still reports a finding"));
+        assert_eq!(envelope_note(&identify), "");
+        assert_eq!(envelope_note(&dir.path().join("none.json")), "");
+        assert_eq!(schema_flag(Backend::ClaudeCode, Path::new("claude")), None);
+        let body = r#"{"status":"written","confidence":"medium","reason":"r","questions":["q"]}"#;
+        for text in [body.to_string(), format!("Done.\n```json\n{body}\n```")] {
+            assert_eq!(envelope_in(&text).unwrap()["confidence"], "medium", "{text}");
+        }
+        assert!(envelope_in(r#"{"confidence":"certain"}"#).is_none());
+        assert!(envelope_in("model.toml written").is_none());
+    }
+
     #[test]
     fn extract_toml_block_finds_the_entry() {
         for s in [
@@ -5208,10 +5314,10 @@ mod tests {
         let logic: crate::logic_spec::Logic = parsed["models"]["logic"].clone().try_into().unwrap();
         logic.validate().expect("the logic example validates");
         let ws = Workspace::scratch().unwrap();
-        let sensor = verification_clause(&ws, "[sensor]");
+        let sensor = verification_clause(&ws, "[sensor]", true);
         assert!(sensor.contains("[[sensor.source.uncertainty]]"));
         assert!(!sensor.contains("models.source") && !sensor.contains("identity-only"));
-        let footer = verification_clause(&ws, "[[models]]");
+        let footer = verification_clause(&ws, "[[models]]", true);
         let needles = "Prefer the supplied authoritative schema and datasheet \
             | Use ONLY the files in your working directory | No checker is provided \
             | Never let an external or stale schema override the supplied contract \
@@ -5220,7 +5326,7 @@ mod tests {
         assert!(!footer.contains("vendor source") && !footer.contains("diagnostic tools"));
         let mut ws = ws;
         ws.checker = Some("/opt/x/hauksbee".into());
-        let footer = verification_clause(&ws, "[[models]]");
+        let footer = verification_clause(&ws, "[[models]]", true);
         assert!(footer.contains("`'/opt/x/hauksbee' models lint model.toml`"));
         assert!(footer.contains("except its `is omitted but its cited row gives` lines"));
         assert!(footer.contains("Never run any other `hauksbee`"));
