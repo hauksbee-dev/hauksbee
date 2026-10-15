@@ -125,7 +125,7 @@ impl SpecError {
     pub fn cli_line(&self, spec: &str) -> String {
         match self {
             Self::BackendMissing(install) => format!(
-                "cannot run: {spec} needs an emulator that is not installed here, so nothing \
+                "INVALID - cannot run: {spec} needs an emulator that is not installed here, so nothing \
                  was run or judged (exit 3). {install}"
             ),
             _ => format!("hauksbee-ci: {spec}: {self}"),
@@ -295,7 +295,10 @@ mod tests {
     fn a_missing_emulator_opens_on_what_to_do_and_other_errors_keep_the_prefix() {
         let missing = SpecError::BackendMissing("run `hauksbee install renode`".into());
         let line = missing.cli_line("ci/stm32.toml");
-        assert!(line.starts_with("cannot run: ci/stm32.toml"), "{line}");
+        assert!(
+            line.starts_with("INVALID - cannot run: ci/stm32.toml"),
+            "{line}"
+        );
         assert!(line.contains("hauksbee install renode"), "{line}");
         let other = SpecError::Invalid("bad".into()).cli_line("ci/x.toml");
         assert_eq!(other, "hauksbee-ci: ci/x.toml: invalid spec: bad");

@@ -181,7 +181,18 @@ fn tripped_abort_forces_exit_3_even_when_assertions_pass() {
         .replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">");
-    for rendered in [result.render_human(), junit] {
+    // The terminal ends on the short footer (what is missing, the first fix, the
+    // rerun command); JUnit keeps the full structured contract.
+    let human = result.render_human();
+    for part in [
+        "INVALID - ",
+        refusal.missing_prerequisite.as_str(),
+        "\nfix first: ",
+        "\nthen rerun: ",
+    ] {
+        assert!(human.contains(part), "terminal lost {part:?}:\n{human}");
+    }
+    for rendered in [junit] {
         for field in [
             &refusal.claim,
             &refusal.missing_prerequisite,
