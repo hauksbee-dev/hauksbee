@@ -995,8 +995,8 @@ impl AvrMcu {
     /// Hook every GPIO port the core has (`PORTA` to `PORTH`, the letters
     /// [`port_hooks`] can hook). simavr answers a port the part lacks with a null
     /// IRQ, which [`Self::register_port_hooks`] skips, so no per-part port list
-    /// exists to drift from the silicon: an ATtiny84's `PORTA` and an
-    /// ATmega32U4's `PORTE` are hooked because the core has them.
+    /// exists to drift from the silicon: an `ATtiny84`'s `PORTA` and an
+    /// `ATmega32U4`'s `PORTE` are hooked because the core has them.
     pub fn register_all_port_hooks(&mut self) {
         self.register_port_hooks(&['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']);
     }

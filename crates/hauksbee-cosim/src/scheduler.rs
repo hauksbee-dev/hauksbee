@@ -9185,7 +9185,7 @@ missing = ["measurement_registers"]
     }
 
     /// No fuses and no crystal: the card's `default_clock_hz` (DS40002061A
-    /// section 9.2.1, PDF page 37: the ATmega328P's internal RC is 8.0 MHz) is
+    /// section 9.2.1, PDF page 37: the `ATmega328P`'s internal RC is 8.0 MHz) is
     /// used, not the old 16 MHz, and the guess is stated with the number, the
     /// part and the CKDIV8 caveat.
     #[test]
@@ -9222,7 +9222,7 @@ missing = ["measurement_registers"]
         }
     }
 
-    /// A module's card (Arduino Nano: ATmega328 "runs at a clock frequency of
+    /// A module's card (Arduino Nano: `ATmega328` "runs at a clock frequency of
     /// 16 MHz", A000005 section 3.2, PDF page 8) keeps its 16 MHz without a
     /// crystal on the bare chip's pins, and its sentence has no CKDIV8 caveat.
     #[test]

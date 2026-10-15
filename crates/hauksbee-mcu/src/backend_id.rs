@@ -1,7 +1,7 @@
 //! The one reader of an MCU backend id.
 //!
 //! A card names its emulator as `<kind>:<part>` (`simavr:atmega328p`,
-//! `renode:stm32f103`, `qemu:esp32`, `none:esp32s2`), and a SoC descriptor names
+//! `renode:stm32f103`, `qemu:esp32`, `none:esp32s2`), and a `SoC` descriptor names
 //! the same kind bare (`backend = "renode"`). Every consumer parses the string
 //! here, so a new kind or a changed spelling has one place to change and no
 //! caller keeps its own `strip_prefix`.

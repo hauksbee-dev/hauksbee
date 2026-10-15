@@ -1,4 +1,4 @@
-//! The ATmega328P pad map has two readers: the cards in `db/mcu.toml` (matched
+//! The `ATmega328P` pad map has two readers: the cards in `db/mcu.toml` (matched
 //! on the footprint) and the binder's hand-copied tables, which answer when the
 //! value carries an ordering-code suffix the cards' `value_re` does not spell
 //! (`ATmega328P-PU`). Until the binder reads only the card, the two must agree

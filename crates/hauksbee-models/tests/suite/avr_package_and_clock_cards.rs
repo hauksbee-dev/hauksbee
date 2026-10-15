@@ -1,7 +1,7 @@
 //! The AVR cards own two facts the rest of the tool reads: which pad map a
 //! package gets, and the core clock a part runs at when nothing else states one.
 //!
-//! Package: the ATmega328P ships in three numberings (DS40002061A section 1,
+//! Package: the `ATmega328P` ships in three numberings (DS40002061A section 1,
 //! Figure 1-1, PDF page 12): 28-pin PDIP, 32-lead TQFP / 32-pad MLF, and the
 //! 28-pad MLF. A footprint that names a package must reach that package's card;
 //! the emonTx V3.4 read "VCC = -1.8 V" when its TQFP-32 got the DIP numbering.
@@ -121,7 +121,9 @@ fn the_default_clock_number_matches_the_internal_clock_sentence() {
             .parse()
             .expect("number before MHz");
         assert!(
-            (card.params.get_f64("default_clock_hz").expect("hz") - mhz * 1e6).abs() < 1.0,
+            mhz.mul_add(-1e6, card.params.get_f64("default_clock_hz").expect("hz"))
+                .abs()
+                < 1.0,
             "{}: {sentence}",
             card.id
         );
