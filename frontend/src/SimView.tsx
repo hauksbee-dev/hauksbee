@@ -433,6 +433,11 @@ export default function SimView({
   )
 
   const selection = !!(selectedFp || selectedNet)
+  // On a wide screen the card lives in the dock, so a selection opens it. A
+  // phone keeps the board in view instead and shows the card as a sheet.
+  useEffect(() => {
+    if (selection && !narrow && !boardFullscreen) setRailOpen(true)
+  }, [selection, narrow, boardFullscreen])
   const card = (
     <SelectionCard
       net={selectedFp ? null : selectedNet}
@@ -597,7 +602,7 @@ export default function SimView({
               </div>
             </div>
 
-            {narrow && !boardFullscreen && selection && (
+            {narrow && !railOpen && !boardFullscreen && selection && (
               <div data-testid="selection-dock" className="shrink-0 overflow-y-auto p-2 max-h-[45%]"
                 style={{ borderTop: '1px solid var(--hairline)', background: 'var(--canvas)' }}>
                 {card}
@@ -657,7 +662,7 @@ export default function SimView({
               )}
               {/* A selection is what the dock is about until it is closed: the
                   card (assert on it, probe it, drive it) takes the panel. */}
-              {!narrow && !boardFullscreen && selection ? (
+              {!boardFullscreen && selection ? (
                 <div data-testid="selection-dock" className="flex-1 min-h-0 overflow-y-auto p-2">{card}</div>
               ) : (
                 <Dock
