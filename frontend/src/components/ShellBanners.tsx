@@ -90,8 +90,8 @@ export function LaunchErrorBanner({ error, onOpenEnv }: { error: string; onOpenE
             type="button"
             data-testid="launch-error-open-env"
             onClick={onOpenEnv}
-            className="hb-btn-primary hb-press px-3 text-[12px]"
-            style={{ height: 30 }}
+            className="hb-btn-primary hb-press px-3 py-1 text-[12px] text-left"
+            style={{ minHeight: 30 }}
           >
             Install {missing} on the Environment page
           </button>

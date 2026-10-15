@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { WebReport } from '../types/report'
-import { plural, reportVerdictTone, summarizeEvidence } from '../lib/report-view'
-import { TERM_TONE, TONE_RANK, useStatusLabel } from '../lib/status-vocab'
+import { boardVerdict, TERM_TONE, TONE_RANK, TONE_STYLE, useStatusLabel } from '../lib/status-vocab'
 import type { ChipTone, StatusTerm } from '../lib/status-vocab'
 import type { SimShellStatus } from '../SimView'
 import { useGlossary, useTermEntry } from './ui'
@@ -15,13 +14,6 @@ import type { AppView } from './Sidebar'
 // session) as rows that each go to their surface. The sim view is bound to the
 // SESSION's board while every other view is about the analyzed one, and
 // Environment and Settings are about this machine, so they carry no chip.
-
-const TONES: Record<ChipTone, React.CSSProperties> = {
-  ok: { background: 'var(--ok-bg)', border: '1px solid var(--ok-border)', color: 'var(--ok)' },
-  err: { background: 'var(--err-bg)', border: '1px solid var(--err-border)', color: 'var(--err)' },
-  warn: { background: 'var(--warn-bg)', border: '1px solid var(--warn-border)', color: 'var(--warn)' },
-  quiet: { background: 'var(--surface-2)', border: '1px solid var(--hairline)', color: 'var(--silk-dim)' },
-}
 
 interface Chip {
   label: string
@@ -132,7 +124,7 @@ function ChipPill({ chip }: { chip: Chip }) {
       // wraps to two lines inside a 24px pill and spills out the bottom of it,
       // so the chip keeps its own width and the row clips whole chips instead.
       className="hb-press inline-flex items-center gap-1.5 px-2.5 rounded-full text-[11px] font-semibold tnum whitespace-nowrap min-w-0 max-w-full"
-      style={{ ...TONES[chip.tone], height: 24, cursor: chip.onClick ? 'pointer' : 'default' }}
+      style={{ ...TONE_STYLE[chip.tone], height: 24, cursor: chip.onClick ? 'pointer' : 'default' }}
     >
       {chip.pulse && (
         <span className="run-dot" style={{ width: 6, height: 6, borderRadius: 3, background: 'currentColor', display: 'inline-block' }} />
@@ -209,27 +201,7 @@ export function ShellChips({
     }
   } else {
     if (report?.ok === true) {
-      const tone = reportVerdictTone(report)
-      const conditional = report.verdict === 'pass' && (report.verdict_conditions ?? []).some(c => c.trim() !== '')
-      let board: { term: StatusTerm; detail: string; tone?: ChipTone }
-      if (tone === 'error') {
-        board = report.serious > 0
-          ? { term: 'fail', detail: `${report.serious} serious` }
-          : report.fix_first?.notice ? { term: 'not_checked', detail: 'not routed yet' } : { term: 'fail', detail: 'analysis failed' }
-      } else if (tone === 'warning') {
-        // An undermined run-level claim is what the body headline leads with.
-        board = report.partly_judged
-          ? { term: 'invalid', detail: 'partly judged, not a pass' }
-          : summarizeEvidence(report.evidence).undermined > 0
-            ? { term: 'invalid', detail: 'evidence undermined' }
-            : conditional
-              ? { term: 'conditional_pass', detail: report.total > 0 ? plural(report.total, 'finding') : 'rests on conditions' }
-              // Findings without conditions are qualifications on a pass, not a conditional pass.
-              : { term: 'pass', detail: report.total > 0 ? plural(report.total, 'finding') : 'analysis qualified', tone: 'warn' }
-      } else {
-        // A pass that rests on conditions is never the plain PASS.
-        board = conditional ? { term: 'conditional_pass', detail: 'rests on conditions' } : { term: 'pass', detail: '' }
-      }
+      const board = boardVerdict(report)
       parts.push({ key: 'board', view: 'board', ...board, tone: board.tone ?? TERM_TONE[board.term] })
     }
     if (checks) {

@@ -4,7 +4,7 @@
 // once, and a stale server answers the same way everywhere.
 
 import type {
-  DepInfo, ExtractBackendsConfig, ExtractReady, ExtractSettings, LiveLaunchResponse, LiveStatus,
+  DepInfo, DepsEnvironment, ExtractBackendsConfig, ExtractReady, ExtractSettings, LiveLaunchResponse, LiveStatus,
   ModelSaveResult, RunResponse, ScaffoldResponse, SensorCatalogEntry, Startup, WebReport,
 } from '../types/report'
 import type { ClientMessage, ServerMessage } from '../types/protocol'
@@ -195,7 +195,7 @@ export const api = {
   /** Every assertion kind with its fields and a valid example (`hauksbee-ci explain`). */
   ciCatalog: (signal?: AbortSignal) => getJson<CatalogResponse>('/api/ci/catalog', { signal }),
   sensorSpecs: (signal: AbortSignal) => getJson<{ entries?: SensorCatalogEntry[] }>('/api/sensor-specs', { signal }),
-  deps: () => getJson<{ deps?: DepInfo[] }>('/api/deps'),
+  deps: () => getJson<{ deps?: DepInfo[]; environment?: DepsEnvironment }>('/api/deps'),
   depsInstall: (id: string, onFrame: (frame: SseFrame) => void) =>
     postSse(`/api/deps/install/${encodeURIComponent(id)}`, undefined, onFrame),
   extractReady: () => getJson<ExtractReady>('/api/models/extract/ready'),

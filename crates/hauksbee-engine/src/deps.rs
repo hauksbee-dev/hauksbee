@@ -414,6 +414,12 @@ fn probe_path_cli(spec: PathCliSpec) -> DepStatus {
 /// Claude Code, the second datasheet-to-model extractor backend: using it
 /// sends datasheet text to Anthropic, so [`PathCliSpec::privacy`] carries
 /// that honesty forward.
+/// Where "write a model by hand" is documented, as the public URL the page
+/// turns into a link (the one `docs_url` transform, not a repo path).
+fn extending_docs_url() -> String {
+    hauksbee_ir::docs_url::docs_url("docs/extending/")
+}
+
 fn probe_claude_code() -> DepStatus {
     probe_path_cli(PathCliSpec {
         bin: "claude",
@@ -423,8 +429,11 @@ fn probe_claude_code() -> DepStatus {
         cost: "free if you already pay for Claude: the CLI signs in with that account".to_string(),
         manual: "npm install -g @anthropic-ai/claude-code   # then: claude auth login".to_string(),
         privacy: "Using this sends the datasheet, and what the agent reads in its sandbox, to Anthropic. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.",
-        absent_detail: "claude not found on PATH. This is optional: extraction also runs via                  codex or an API key, and a model can always be written by hand (one                  TOML file, see docs/extending/)."
-            .to_string(),
+        absent_detail: format!(
+            "claude not found on PATH. This is optional: extraction also runs via codex or an API key, \
+             and a model can always be written by hand (one TOML file, see {}).",
+            extending_docs_url()
+        ),
         present_detail: "claude CLI found; sign-in is checked only when datasheet extraction is requested."
             .to_string(),
     })
@@ -444,8 +453,11 @@ fn probe_agy() -> DepStatus {
             .install_hint()
             .to_string(),
         privacy: "Using this sends the datasheet, and anything the agent reads (hauksbee does not confine agy; only its own unverified --sandbox applies), to Google. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.",
-        absent_detail: "agy not found on PATH. This is optional: extraction also runs via                  codex, Claude Code, or an API key, and a model can always be written by hand                  (one TOML file, see docs/extending/)."
-            .to_string(),
+        absent_detail: format!(
+            "agy not found on PATH. This is optional: extraction also runs via codex, Claude Code, \
+             or an API key, and a model can always be written by hand (one TOML file, see {}).",
+            extending_docs_url()
+        ),
         present_detail: "agy CLI found; sign-in is checked only when datasheet extraction is requested."
             .to_string(),
     })
@@ -488,12 +500,12 @@ fn probe_codex() -> DepStatus {
     };
     let Some(bin) = which_codex() else {
         return DepStatus {
-            detail: Some(
+            detail: Some(format!(
                 "codex not found on PATH. This is optional: every other part of hauksbee \
                  works without it, and a model can always be written by hand (one TOML \
-                 file, see docs/extending/)."
-                    .to_string(),
-            ),
+                 file, see {}).",
+                extending_docs_url()
+            )),
             ..base
         };
     };

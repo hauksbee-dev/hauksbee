@@ -10,7 +10,7 @@ import { QueuedConstraintModal } from './ConstraintModal'
 import type { ConstraintDraft } from './ConstraintEditor'
 import { DatasheetExtract } from './DatasheetExtract'
 import { WritePart } from './WritePart'
-import { acceptedFormatsSentence, withoutEngineFormatList } from '../lib/board-formats'
+import { DropBoardAgain, UploadFailure } from './UploadFailure'
 import { StaggerItem } from '../motion'
 import { ExportMenu } from './ExportMenu'
 import type { SpecSnapshot } from '../hooks/useSessions'
@@ -33,28 +33,6 @@ import { BoardMap } from './report/BoardMap'
 // Landing/UploadView owns getting a board in; everything here owns saying what
 // came back and letting the board be explored. The findings, the qualification
 // panels, the co-sim block and the fallback dot map live in ./report.
-
-/** The file-picker label the dead-end paths offer, styled as a button. */
-function DropBoardAgain({ testId, label, height }: { testId: string; label: string; height: number }) {
-  return (
-    <label
-      htmlFor="board-file"
-      data-testid={testId}
-      role="button"
-      tabIndex={0}
-      onKeyDown={e => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          document.getElementById('board-file')?.click()
-        }
-      }}
-      className="hb-btn-primary hb-press inline-flex items-center px-3.5 text-[13px] cursor-pointer"
-      style={{ height }}
-    >
-      {label}
-    </label>
-  )
-}
 
 export function BoardView({
   session, onQueue, onOpenChecks,
@@ -192,42 +170,7 @@ export function BoardView({
   const pointedRefs = useMemo(() => (pointed?.kind === 'part' ? [pointed.ref] : []), [pointed])
   const pointedNets = useMemo(() => (pointed?.kind === 'net' ? [pointed.net] : []), [pointed])
 
-  if (!r.ok) {
-    return (
-      <div className="h-full overflow-y-auto view-enter">
-        <div className="max-w-3xl mx-auto px-6 pt-8 pb-16">
-          <Callout tone="err" testId="report-verdict" className="px-4 py-3.5">
-            {r.error ? withoutEngineFormatList(r.error) : 'Could not read the file.'}
-          </Callout>
-          {r.import_failure && (
-            <Callout
-              tone="warn"
-              testId="import-failure"
-              className="mt-3"
-              title={`Import stopped at ${r.import_failure.stage}`}
-            >
-              {r.import_failure.excerpt && (
-                <pre className="mt-2 overflow-x-auto rounded px-3 py-2 text-[11px]" style={{ background: 'var(--canvas)', border: '1px solid var(--hairline)' }}>
-                  {r.import_failure.excerpt}
-                </pre>
-              )}
-              <div className="mt-2"><b>Suggested fix:</b> {r.import_failure.suggested_fix}</div>
-            </Callout>
-          )}
-          {/* The dead end must not be dead: offer the retry inline instead of
-              sending the user hunting for the header button. The accepted-format
-              list is the app's one copy (lib/board-formats), because the engine's
-              own refusal text omits formats it can in fact read. */}
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <DropBoardAgain testId="try-another-file" label="Try another file" height={32} />
-            <span className="text-[12px]" style={{ color: 'var(--silk-dim)' }}>
-              accepted: {acceptedFormatsSentence()}
-            </span>
-          </div>
-        </div>
-      </div>
-    )
-  }
+  if (!r.ok) return <UploadFailure report={r} session={session} />
 
   // Everything the run had to assume about a part, in one place: the parts with
   // no model, the variants the board leaves open, and what each model covers.

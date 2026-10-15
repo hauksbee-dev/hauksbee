@@ -15,6 +15,7 @@
 
 import type { WebReport } from '../types/report'
 import { api } from './api'
+import type { ChipTone, StatusTerm } from './status-vocab'
 
 const INDEX_KEY = 'hauksbee.sessions.v1'
 const CURRENT_KEY = 'hauksbee.sessions.current'
@@ -43,6 +44,14 @@ export interface SessionRow {
   hasReport: boolean
   /** How many assertions the saved spec carries, for the switcher's subtitle. */
   checkCount: number
+  /** The board verdict when the session was last written, in the glossary's
+   *  terms (`lib/status-vocab` `boardVerdict`). Optional: older sessions have none. */
+  verdict?: { term: StatusTerm; detail: string; tone: ChipTone } | null
+  /** SHA-256 of the board file the report was made from, and of the spec text.
+   *  What makes a session reproducible: the same bytes and the same spec give
+   *  the same run. Optional: older sessions have none. */
+  boardSha256?: string | null
+  specSha256?: string | null
 }
 
 /** The full record: a row plus everything that costs bytes. */
@@ -214,6 +223,7 @@ export function saveSession(session: SavedSession): SaveOutcome {
     id: rec.id, name: rec.name, createdAt: rec.createdAt, updatedAt: rec.updatedAt, analyzedAt: rec.analyzedAt,
     board: rec.board, firmwareName: rec.firmwareName, schematicName: rec.schematicName ?? null,
     hasReport: rec.report !== null, checkCount: rec.checkCount,
+    verdict: rec.verdict ?? null, boardSha256: rec.boardSha256 ?? null, specSha256: rec.specSha256 ?? null,
   }
   const rows = [row, ...listSessions().filter(r => r.id !== row.id)]
   for (const dropped of rows.slice(MAX_SESSIONS)) write(recordKey(dropped.id), null)
@@ -277,11 +287,73 @@ export function expectedBoardSha256(report: WebReport | null, fileName: string):
   return exact?.sha256?.toLowerCase() ?? null
 }
 
+/** Lowercase hex SHA-256 of some bytes or text. */
+export async function sha256Hex(data: Uint8Array | string): Promise<string> {
+  const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data
+  const digest = await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes).buffer)
+  return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
 export async function boardBytesMatchExpected(bytes: Uint8Array, expectedSha256: string): Promise<boolean> {
   if (!SHA256.test(expectedSha256)) return false
-  const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes).buffer)))
-    .map(byte => byte.toString(16).padStart(2, '0')).join('')
-  return digest === expectedSha256.toLowerCase()
+  return (await sha256Hex(bytes)) === expectedSha256.toLowerCase()
+}
+
+// ── Export and import ────────────────────────────────────────────────────────
+
+/** The portable form of a session: the record plus the hashes that name its
+ *  inputs, so a colleague (or a reviewer) can open the same run and see that
+ *  the board and the spec are the ones it was made from. */
+export const SESSION_BUNDLE_FORMAT = 'hauksbee-session'
+const SESSION_BUNDLE_VERSION = 1
+
+export function sessionBundle(id: string): { fileName: string; text: string } | null {
+  const rec = loadSession(id)
+  if (!rec) return null
+  const bundle = {
+    format: SESSION_BUNDLE_FORMAT,
+    version: SESSION_BUNDLE_VERSION,
+    exportedAt: new Date().toISOString(),
+    session: rec,
+  }
+  const stem = (rec.board.boardName || rec.board.fileName || 'session').replace(/[^\w.-]+/g, '-')
+  return { fileName: `${stem}.hauksbee-session.json`, text: JSON.stringify(bundle, null, 2) }
+}
+
+export type ImportOutcome =
+  | { ok: true; id: string; name: string }
+  | { ok: false; reason: string }
+
+/** Read a session bundle back in. A bundle whose spec no longer matches its own
+ *  recorded hash is refused: that file was edited after it was exported, and
+ *  opening it as the same run would be a false claim. */
+export async function importSessionBundle(text: string): Promise<ImportOutcome> {
+  let parsed: unknown
+  try { parsed = JSON.parse(text) } catch { return { ok: false, reason: 'that file is not JSON' } }
+  const bundle = parsed as { format?: unknown; version?: unknown; session?: Partial<SavedSession> }
+  if (bundle.format !== SESSION_BUNDLE_FORMAT || typeof bundle.session !== 'object' || bundle.session === null) {
+    return { ok: false, reason: 'that is not a Hauksbee session file' }
+  }
+  if (bundle.version !== SESSION_BUNDLE_VERSION) {
+    return { ok: false, reason: `that session file is version ${String(bundle.version)}; this app reads version ${SESSION_BUNDLE_VERSION}` }
+  }
+  const rec = bundle.session
+  if (typeof rec.id !== 'string' || !rec.board || typeof rec.board.fileName !== 'string' || typeof rec.name !== 'string') {
+    return { ok: false, reason: 'that session file is missing its board or name' }
+  }
+  if (rec.specSha256 && rec.spec && (await sha256Hex(rec.spec.toml)) !== rec.specSha256) {
+    return { ok: false, reason: 'the spec in that file no longer matches the hash recorded with it, so it was edited after export' }
+  }
+  const now = Date.now()
+  const outcome = saveSession({
+    ...(rec as SavedSession),
+    checksKey: rec.checksKey ?? `hauksbee.checks.${rec.id}`,
+    updatedAt: now,
+    createdAt: rec.createdAt ?? now,
+  })
+  if (outcome.kind === 'blocked') return { ok: false, reason: outcome.reason }
+  setCurrentSessionId(rec.id)
+  return { ok: true, id: rec.id, name: rec.name }
 }
 
 /** The board file for a saved session, IF this server still has it and the

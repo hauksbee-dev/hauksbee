@@ -678,6 +678,9 @@ export interface ExtractOptions {
   efforts: Record<string, string[]>
   permission_modes: Record<string, string[]>
   models: Record<string, ModelChoice[]>
+  /** Per backend, the name prefix of a model that is "listed" (a name that does
+   *  not start with it gets no "not in the list" hint). Absent from an older server. */
+  model_hint_prefix?: Record<string, string>
 }
 
 export interface ExtractSettingsKey {
@@ -815,6 +818,16 @@ export interface DepInfo {
   /** Datasheet-extraction CLIs only: from the CLI's own read-only status command.
    *  `not_checked` = the CLI has no status command. */
   sign_in?: 'signed_in' | 'not_signed_in' | 'not_checked' | null
+}
+
+/** The machine fingerprint beside the dependency rows in `GET /api/deps`: what
+ *  a sign-off record needs to name the tools a result came from. */
+export interface DepsEnvironment {
+  engine_version: string
+  exe_sha256: string | null
+  os: string
+  arch: string
+  doctor?: unknown
 }
 
 /** One bundled register-map behaviour, from `GET /api/sensor-specs`. */

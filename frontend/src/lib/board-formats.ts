@@ -99,5 +99,11 @@ export function endsWithAny(name: string, exts: readonly string[]): boolean {
  * its place. A message with no such clause is returned untouched.
  */
 export function withoutEngineFormatList(message: string): string {
-  return message.replace(/\s*Supported:.*$/s, '').trim() || message
+  return message
+    .replace(/\s*Supported:.*$/s, '')
+    // The reader's own "hauksbee reads a KiCad board, ... or a folder or zip of
+    // gerbers" clause is a second copy of the list (engine text; Batch D: serve
+    // a refusal code instead of matching prose).
+    .replace(/:\s*hauksbee reads a KiCad board[^]*?\bgerbers\b/, '')
+    .trim() || message
 }

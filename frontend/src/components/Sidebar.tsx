@@ -58,6 +58,8 @@ export function Sidebar({
     disabled?: boolean
     hint?: string
     badge?: number
+    /** The label in the phone tab bar, when the full one does not fit a cell. */
+    short?: string
   }[] = [
     { id: 'board', label: 'Board', icon: <BoardTargetIcon size={16} /> },
     {
@@ -71,7 +73,7 @@ export function Sidebar({
       hint: nav.simEnabled ? undefined : NEEDS_BOARD,
       badge: nav.faultCount > 0 ? nav.faultCount : undefined,
     },
-    { id: 'env', label: 'Environment', icon: <WrenchIcon size={16} /> },
+    { id: 'env', label: 'Environment', short: 'Env', icon: <WrenchIcon size={16} /> },
     { id: 'settings', label: 'Settings', icon: <GearIcon size={16} /> },
   ]
 
@@ -113,7 +115,14 @@ export function Sidebar({
           >
             <span style={{ display: 'inline-flex', flexShrink: 0 }}>{item.icon}</span>
             <span className="nav-label flex-1 min-w-0">
-              <span className="nav-name block">{item.label}</span>
+              {item.short ? (
+                <span className="nav-name has-short block">
+                  <span className="nav-full">{item.label}</span>
+                  <span className="nav-short" aria-hidden>{item.short}</span>
+                </span>
+              ) : (
+                <span className="nav-name block">{item.label}</span>
+              )}
               {item.disabled && item.hint && (
                 <span data-testid={`nav-${item.id}-note`} className="nav-note sidebar-label block text-[10px]" style={{ color: 'var(--silk-faint)' }}>
                   {item.hint}

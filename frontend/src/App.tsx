@@ -294,7 +294,7 @@ function Shell({ boot }: { boot: Boot }) {
   // one.
   const headerBoard = view === 'env' || view === 'settings'
     ? null
-    : view === 'sim' ? (sessionBoard ?? session.boardLabel) : session.boardLabel
+    : view === 'sim' ? (deck ? deck.name : sessionBoard ?? session.boardLabel) : session.boardLabel
 
   return (
     <div className="app-shell flex h-screen overflow-hidden" style={{ background: 'var(--canvas)', color: 'var(--silk)' }}>
@@ -327,7 +327,7 @@ function Shell({ boot }: { boot: Boot }) {
                 so it keeps its width and the board name (which has a tooltip
                 and a natural ellipsis point) gives ground first. */}
             <h1 className="text-[15px] font-semibold shrink-0" style={{ margin: 0, color: 'var(--silk)' }}>
-              {VIEW_TITLES[view]}
+              {view === 'sim' && deck ? 'Circuit sim' : VIEW_TITLES[view]}
             </h1>
             {headerBoard && (
               <span
@@ -371,7 +371,7 @@ function Shell({ boot }: { boot: Boot }) {
               name (visually hidden text, not an `aria-label`, so the `title`
               tooltip that names the glyph on hover or long-press matches the
               name instead of adding a second description). */}
-          {report && !session.busy && (
+          {reportOk && !session.busy && (
             <button
               type="button"
               data-testid="header-another-board"
@@ -499,7 +499,7 @@ function Shell({ boot }: { boot: Boot }) {
           {envVisited && (
             <div className="overflow-y-auto" style={{ display: view === 'env' ? 'block' : 'none', height: '100%' }}>
               <div className="max-w-3xl mx-auto px-6 pb-16 view-enter">
-                <DepsPanel engineVersion={engineVersion} />
+                <DepsPanel engineVersion={engineVersion} onOpenSettings={() => navigate('settings')} />
               </div>
             </div>
           )}
