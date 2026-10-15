@@ -823,8 +823,15 @@ fn the_web_report_of_a_partly_judged_board_names_its_scope() {
     let report = hauksbee_engine::frontdoor::analyze("verdict_fet_partial.kicad_pcb", &bytes);
     assert_eq!(report.verdict, "invalid", "{:?}", report.verdict_reason);
     assert!(report.partly_judged, "{:?}", report.verdict_reason);
-    assert!(report.headline.starts_with("Partly judged, not a pass"), "{}", report.headline);
-    let scope = report.judgement_scope.as_ref().expect("scope reaches the browser");
+    assert!(
+        report.headline.starts_with("Partly judged, not a pass"),
+        "{}",
+        report.headline
+    );
+    let scope = report
+        .judgement_scope
+        .as_ref()
+        .expect("scope reaches the browser");
     assert_eq!(scope.open_parts, ["Q1"]);
     assert_eq!(scope.electrical_dependent.len(), 4);
     let cli = json_doc(&run_board(&board, &["--check", "--json"]));
@@ -833,7 +840,10 @@ fn the_web_report_of_a_partly_judged_board_names_its_scope() {
         serde_json::to_value(scope).expect("scope serialises"),
         "the browser and --json state the same scope"
     );
-    assert_eq!(report.verdict_reason, cli["verdict_reason"].as_str().map(str::to_string));
+    assert_eq!(
+        report.verdict_reason,
+        cli["verdict_reason"].as_str().map(str::to_string)
+    );
 }
 
 #[test]
