@@ -54,6 +54,7 @@
 use std::collections::{HashMap, HashSet};
 
 use forge_sexpr::List;
+use hauksbee_ir::truncate_ellipsis;
 
 /// Copper weight in ounces per square foot. 1 oz = 35 um = 1.378 mil thick.
 pub const OZ_1: f64 = 1.0;
@@ -983,7 +984,13 @@ pub fn render_trace_capacity_report(rows: &[TraceCapacityRow]) -> String {
                 CopperKind::Poured => "poured",
                 CopperKind::None => "none",
             };
-            [truncate(&r.net, 40), kind.to_string(), width, cap, note]
+            [
+                truncate_ellipsis(&r.net, 40),
+                kind.to_string(),
+                width,
+                cap,
+                note,
+            ]
         })
         .collect();
     let headers = ["Net", "Copper", "Min width", "Cap @10C", "Note"];
@@ -1053,18 +1060,6 @@ pub fn render_trace_capacity_report_with_context(
         }
     }
     out
-}
-
-/// Cap a cell at `max` characters, marking the cut with an ellipsis instead of
-/// a silent mid-word chop.
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
-        t.push('\u{2026}');
-        t
-    }
 }
 
 #[cfg(test)]

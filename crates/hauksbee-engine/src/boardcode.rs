@@ -32,6 +32,7 @@ use hauksbee_models::ModelLibrary;
 
 use crate::binder::bind_board;
 use crate::engine::HauksbeeEngine;
+use crate::reports::truncate;
 use crate::stress::FaultEvent;
 
 pub use hauksbee_bind::boardcode::{
@@ -407,7 +408,7 @@ pub fn render_check_report(r: &CheckReport) -> String {
             let _ = writeln!(
                 s,
                 "│ {:<26} │ {:<12} │ {:>10.4} │ {:>10.4} │ {:<5} │",
-                trunc(&f.component, 26),
+                truncate(&f.component, 26),
                 f.kind.as_str(),
                 f.value,
                 f.limit,
@@ -424,14 +425,6 @@ pub fn render_check_report(r: &CheckReport) -> String {
         let _ = writeln!(s, "    qualified: {} {}", a.statement(), a.consequence());
     }
     s
-}
-
-fn trunc(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        s.chars().take(max).collect()
-    }
 }
 
 #[cfg(test)]

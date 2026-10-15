@@ -6,6 +6,7 @@
 use crate::runner::RunOutcome;
 use crate::spec::{Assertion, Spec};
 use hauksbee_engine::scheduler::PeripheralPad;
+use hauksbee_ir::truncate_ellipsis;
 use std::fmt::Write as _;
 
 /// The result of one assertion across all seeds.
@@ -2142,7 +2143,7 @@ fn uart_missing(a: &Assertion, out: &RunOutcome) -> bool {
 
 fn check_uart(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     let text = uart_text(a, out);
-    let preview = truncate(&text.replace(['\r', '\n'], "·"), 60);
+    let preview = truncate_ellipsis(&text.replace(['\r', '\n'], "·"), 60);
 
     if let Some(needle) = &a.contains {
         let ok = text.contains(needle);
@@ -2695,16 +2696,6 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Stri
         };
         let detail = format!("Tj({reference}) peak {tj:.1}C, within device max");
         (true, detail, None)
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
-        t.push('…');
-        t
     }
 }
 

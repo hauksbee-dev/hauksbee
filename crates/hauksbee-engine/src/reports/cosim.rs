@@ -7,6 +7,8 @@
 
 use std::{fmt::Write as _, path::Path};
 
+use hauksbee_ir::levenshtein;
+
 use super::truncate;
 use crate::engine::HauksbeeEngine;
 use crate::result::{CosimFailedWindow, CosimFallbackWindow, CosimJson, NetActivity};
@@ -302,8 +304,7 @@ pub fn validate_probes(
 /// Up to `limit` known net names closest to `target` by edit distance.
 ///
 /// Favours substring matches. A compact twin of the spec loader's net
-/// suggester, kept local because the engine binary cannot depend on the CI
-/// crate.
+/// suggester.
 #[must_use]
 pub fn nearest_nets(target: &str, known: &[String], limit: usize) -> Vec<String> {
     let t = target.to_ascii_lowercase();
@@ -329,31 +330,6 @@ pub fn nearest_nets(target: &str, known: &[String], limit: usize) -> Vec<String>
         .take(limit)
         .map(|(_, name)| name.clone())
         .collect()
-}
-
-/// Classic Levenshtein edit distance.
-#[must_use]
-pub fn levenshtein(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let (n, m) = (a.len(), b.len());
-    if n == 0 {
-        return m;
-    }
-    if m == 0 {
-        return n;
-    }
-    let mut prev: Vec<usize> = (0..=m).collect();
-    let mut cur = vec![0usize; m + 1];
-    for i in 1..=n {
-        cur[0] = i;
-        for j in 1..=m {
-            let cost = usize::from(a[i - 1] != b[j - 1]);
-            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
-        }
-        std::mem::swap(&mut prev, &mut cur);
-    }
-    prev[m]
 }
 
 /// Build the probe-CSV header row (`time_s` then one column per probed net).

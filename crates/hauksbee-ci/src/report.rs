@@ -1089,7 +1089,7 @@ impl CiResult {
         // `render_github_annotations` both special-case that state, and a JUnit
         // that said `failures="0" errors="0"` would be a false ALL-GREEN on the
         // one surface most CI dashboards actually read. Emit one synthetic
-        // errored testcase (the same `<error>` shape `render_junit_error` uses)
+        // errored testcase (the same `<error>` shape `junit_error_suite` uses)
         // and count it in tests/errors.
         let synthetic_abort = self.analog_abort && self.invalid_count() == 0;
         let errors = self.invalid_count() + usize::from(synthetic_abort);
@@ -1444,16 +1444,6 @@ pub fn junit_error_suite(name: &str, message: &str) -> JunitSuite {
         errors: 1,
         time_s: 0.0,
     }
-}
-
-/// A synthetic `JUnit` document for a single spec/board error (exit 2); the
-/// one-spec convenience over [`junit_error_suite`] + [`render_junit_document`].
-#[must_use]
-pub fn render_junit_error(message: &str) -> String {
-    render_junit_document(std::slice::from_ref(&junit_error_suite(
-        "spec error",
-        message,
-    )))
 }
 
 /// The one `why:` line a failed assertion gets, from the best source available:

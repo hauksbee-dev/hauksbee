@@ -49,7 +49,7 @@ pub struct PinDriver {
 /// `lo` is absent when the part's negative pin is ground. A sink-only
 /// (open-collector) driver has no `hi`: nothing is drawn from a supply. The scheduler sets
 /// both once per chunk from the mean current the driver delivered over the
-/// chunk before ([`PinDriver::set_draw`]), never from the live branch: read
+/// chunk before ([`DriverSupply::set`]), never from the live branch: read
 /// live, a load capacitor's `C*dV/dt` Newton residual would be mirrored onto
 /// the rail that feeds an upstream converter.
 #[derive(Debug, Clone, Copy)]
@@ -177,15 +177,6 @@ impl PinDriver {
             hi: None,
             lo: Some(circuit.add(leg)),
         });
-    }
-
-    /// Set the supply legs to the output current delivered: `sourced` (>= 0)
-    /// from `hi`, `sunk` (<= 0) into `lo`. A no-op without
-    /// [`PinDriver::route_supply`].
-    pub fn set_draw(&self, circuit: &mut Circuit, sourced: f64, sunk: f64) {
-        if let Some(supply) = self.supply {
-            supply.set(circuit, sourced, sunk);
-        }
     }
 
     /// Set the driver's target voltage. No-op while disabled.

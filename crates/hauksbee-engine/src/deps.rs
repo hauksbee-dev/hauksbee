@@ -890,8 +890,10 @@ fn probe_avr() -> DepStatus {
     }
 }
 
-#[cfg(feature = "qemu")]
-fn first_line(msg: &str) -> String {
+/// Collapse a possibly multi-line message to its first line, so a table stays
+/// one row per backend even if a resolver's message grows.
+#[cfg(any(feature = "qemu", feature = "renode"))]
+pub(crate) fn first_line(msg: &str) -> String {
     msg.lines().next().unwrap_or("").to_string()
 }
 

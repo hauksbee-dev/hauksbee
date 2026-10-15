@@ -231,7 +231,7 @@ fn absent_detail(err: &anyhow::Error, needed_for: &str, fix: &str) -> String {
     {
         format!("not installed (optional, only for {needed_for}). Fix: `{fix}`")
     } else {
-        one_line(&err.to_string())
+        crate::deps::first_line(&err.to_string())
     }
 }
 
@@ -325,12 +325,4 @@ fn extract_row() -> Backend {
             },
         ),
     }
-}
-
-/// Collapse a possibly multi-line message to its first line (discovery errors
-/// are one line today, but this keeps the doctor table one-row-per-backend even
-/// if a resolver's message grows).
-#[cfg(any(feature = "qemu", feature = "renode"))]
-fn one_line(msg: &str) -> String {
-    msg.lines().next().unwrap_or("").to_string()
 }

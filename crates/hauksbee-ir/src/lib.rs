@@ -36,6 +36,19 @@ pub use spice::{
 
 use serde::{Deserialize, Serialize};
 
+/// `s` unchanged when it fits in `max` characters, else its first `max - 1`
+/// characters followed by `…`, so the result is never longer than `max`.
+#[must_use]
+pub fn truncate_ellipsis(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
+        t.push('\u{2026}');
+        t
+    }
+}
+
 /// What a behavioral B-source's expression drives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BOutput {
@@ -1406,5 +1419,18 @@ impl Device {
     #[must_use]
     pub const fn is_event_driven(&self) -> bool {
         matches!(self, Self::Comparator { .. })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_ellipsis;
+
+    #[test]
+    fn ellipsis_keeps_short_text_and_caps_long_text_at_max() {
+        assert_eq!(truncate_ellipsis("abc", 3), "abc");
+        assert_eq!(truncate_ellipsis("abcd", 3), "ab\u{2026}");
+        assert_eq!(truncate_ellipsis("µΩµΩ", 3), "µΩ\u{2026}");
+        assert_eq!(truncate_ellipsis("abc", 0), "\u{2026}");
     }
 }

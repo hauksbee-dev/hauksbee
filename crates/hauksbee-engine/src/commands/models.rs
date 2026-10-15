@@ -1080,7 +1080,7 @@ fn layer_rank(layer: &str, resolved: bool) -> u8 {
 
 /// Natural sort key for a reference designator: alpha prefix, then the
 /// trailing integer numerically (R2 before R10), then the raw string.
-fn natural_ref_key(reference: &str) -> (String, u64, String) {
+pub(crate) fn natural_ref_key(reference: &str) -> (String, u64, String) {
     let split = reference
         .find(|c: char| c.is_ascii_digit())
         .unwrap_or(reference.len());

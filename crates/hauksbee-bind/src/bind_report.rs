@@ -15,6 +15,7 @@
 //! `hauksbee_engine::reports::bind`.
 
 use hauksbee_ir::evidence::{Assumption, ModelSource, ModelSourceTier};
+use hauksbee_ir::truncate_ellipsis;
 use hauksbee_models::Confidence;
 use serde::Serialize;
 use std::fmt::Write as _;
@@ -454,8 +455,8 @@ impl BindReport {
             .iter()
             .map(|r| {
                 let model = r.model_id.clone().unwrap_or_else(|| "-".to_string());
-                let val = truncate(&r.value, 18);
-                let out = truncate(&r.outcome.label(), 34);
+                let val = truncate_ellipsis(&r.value, 18);
+                let out = truncate_ellipsis(&r.outcome.label(), 34);
                 w_ref = w_ref.max(r.reference.len());
                 w_val = w_val.max(val.len());
                 w_mod = w_mod.max(model.len());
@@ -592,16 +593,6 @@ fn bulk_fallback_passive_kind(row: &BindRow) -> Option<&'static str> {
         Some("r_fallback") => Some("resistor"),
         Some("l_fallback") => Some("inductor"),
         _ => None,
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
-        t.push('…');
-        t
     }
 }
 

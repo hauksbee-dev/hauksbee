@@ -20,7 +20,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::path::Path;
 
+use crate::commands::models::natural_ref_key;
 use crate::reports::bind::{BindOutcome, BindReport};
+use crate::run_manifest::hex_digest;
 pub(crate) use hauksbee_bind::occurrence::{
     component_occurrence_subjects_for_references, OCCURRENCE_PREFIX,
 };
@@ -36,7 +38,6 @@ use hauksbee_ir::evidence::{
 };
 use hauksbee_models::variants::{Selection, Via};
 use hauksbee_models::Confidence;
-use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone)]
 struct ModelFact {
@@ -752,7 +753,7 @@ impl BoardEvidence {
     ) -> Result<Self, EvidenceError> {
         let path = path.as_ref();
         let (artifact_kind, role) = input_artifact_kind(path, kind);
-        let digest = hex_digest(&Sha256::digest(raw));
+        let digest = hex_digest(raw);
         let reader_assumptions = self
             .registry
             .assumptions()
@@ -801,7 +802,7 @@ impl BoardEvidence {
             path.to_string_lossy(),
             kind,
             ArtifactRole::Firmware,
-            hex_digest(&Sha256::digest(raw)),
+            hex_digest(raw),
             Vec::new(),
         )?
         .with_contributions(vec![Contribution {
@@ -837,7 +838,7 @@ impl BoardEvidence {
             // first release while adding an exact additive wire discriminator.
             ArtifactKind::EagleBoard,
             ArtifactRole::Schematic,
-            hex_digest(&Sha256::digest(raw)),
+            hex_digest(raw),
             Vec::new(),
         )?
         .with_format("eagle_schematic")
@@ -872,7 +873,7 @@ impl BoardEvidence {
             path.as_ref().to_string_lossy(),
             ArtifactKind::Toml,
             role,
-            hex_digest(&Sha256::digest(raw)),
+            hex_digest(raw),
             Vec::new(),
         )?
         .with_contributions(vec![contribution]);
@@ -1928,7 +1929,7 @@ impl BoardEvidence {
             assumption_groups.entry(key).or_default().extend(refs);
         }
         for ((kind, statement, because, consequence, replacement), mut refs) in assumption_groups {
-            refs.sort_by_key(|reference| natural_evidence_ref_key(reference));
+            refs.sort_by_key(|reference| natural_ref_key(reference));
             // A group of one names its part, so a fix quoting it (a spec line) stays exact.
             let named = |text: String| match refs.as_slice() {
                 [only] => text
@@ -1981,7 +1982,7 @@ impl BoardEvidence {
         }
         for ((model, tier, layer, origin, validation, accuracy), subjects) in model_groups {
             let mut refs: Vec<String> = subjects.into_values().collect();
-            refs.sort_by_key(|reference| natural_evidence_ref_key(reference));
+            refs.sort_by_key(|reference| natural_ref_key(reference));
             let count = refs.len();
             let _ = writeln!(
                 out,
@@ -2210,23 +2211,6 @@ fn normalize_part_statement(text: &str, refs: &[String]) -> String {
     normalized.replace("{part}", "each affected part")
 }
 
-fn natural_evidence_ref_key(reference: &str) -> (String, u64, String) {
-    let split = reference
-        .find(|character: char| character.is_ascii_digit())
-        .unwrap_or(reference.len());
-    let (prefix, digits) = reference.split_at(split);
-    (
-        prefix.to_ascii_uppercase(),
-        digits
-            .chars()
-            .take_while(char::is_ascii_digit)
-            .collect::<String>()
-            .parse()
-            .unwrap_or(u64::MAX),
-        reference.to_string(),
-    )
-}
-
 fn model_accuracy(source: &ModelSource) -> String {
     if source
         .uncertainty()
@@ -2252,14 +2236,6 @@ fn model_accuracy(source: &ModelSource) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     }
-}
-
-fn hex_digest(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
 }
 
 const fn confidence(value: Confidence) -> MatchConfidence {
@@ -2447,7 +2423,7 @@ fn classify_reader_note(
 
 /// Stable assumption key for a free-text note: the prefix plus the note's SHA-256.
 fn note_key(prefix: &str, note: &str) -> String {
-    format!("{prefix}/{}", hex_digest(&Sha256::digest(note.as_bytes())))
+    format!("{prefix}/{}", hex_digest(note.as_bytes()))
 }
 
 fn guessed_pin_role(message: &str) -> (String, String) {

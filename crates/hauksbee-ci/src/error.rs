@@ -9,7 +9,7 @@
 use std::fmt;
 
 pub use hauksbee_engine::commands::common::cap_context_width;
-use hauksbee_engine::reports::cosim::levenshtein;
+use hauksbee_ir::levenshtein;
 
 /// An error loading or validating a spec.
 #[derive(Debug)]

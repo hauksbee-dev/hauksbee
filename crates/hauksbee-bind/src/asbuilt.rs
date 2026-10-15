@@ -51,7 +51,7 @@ use serde::Deserialize;
 use toml::Spanned;
 
 use hauksbee_extract::{Component, ExtractedBoard, Pin};
-use hauksbee_ir::{Device, NodeId};
+use hauksbee_ir::{levenshtein, Device, NodeId};
 use hauksbee_models::value::parse_value;
 
 use crate::binder::BoundBoard;
@@ -1096,20 +1096,6 @@ fn near_matches(target: &str, known: &[String], limit: usize) -> Vec<String> {
         .collect()
 }
 
-fn levenshtein(a: &str, b: &str) -> usize {
-    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
-    for (i, ca) in a.iter().enumerate() {
-        let mut cur = vec![i + 1];
-        for (j, cb) in b.iter().enumerate() {
-            let cost = usize::from(ca != cb);
-            cur.push((prev[j] + cost).min(prev[j + 1] + 1).min(cur[j] + 1));
-        }
-        prev = cur;
-    }
-    prev[b.len()]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1242,13 +1228,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(overlay.line_of(&overlay.doc.replaces[0].reference), 4);
-    }
-
-    #[test]
-    fn levenshtein_basics() {
-        assert_eq!(levenshtein("kitten", "sitting"), 3);
-        assert_eq!(levenshtein("", "abc"), 3);
-        assert_eq!(levenshtein("same", "same"), 0);
     }
 
     /// Round-8 #6: an as-built `[[jumper]]` merging net `N` (`NodeId` 2) onto
