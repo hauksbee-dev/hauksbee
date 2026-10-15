@@ -1,5 +1,5 @@
 import type { ModelCoverageComponent, ModelCoverageSnapshot, WebImportDiagnostics } from '../../types/report'
-import { plural, stageWords } from '../../lib/report-view'
+import { openPartRef, plural, stageWords } from '../../lib/report-view'
 import type { ReportView } from '../../lib/report-view'
 import { displayNet } from '../../lib/net-name'
 import type { LocateFn } from './Findings'
@@ -9,19 +9,22 @@ import type { LocateFn } from './Findings'
 
 /** A report panel that opens itself when it has something the reader must
  *  see, and edges amber while that is unresolved. */
-function ReportPanel({ testId, title, summary, open, warn, children }: {
+export function ReportPanel({ testId, title, summary, open, warn, onToggle, children }: {
   testId: string
   title: string
   /** The count line beside the title. */
   summary: React.ReactNode
   open: boolean
   warn: boolean
+  /** Set where something outside the panel opens it (the open flag is then state). */
+  onToggle?: (open: boolean) => void
   children: React.ReactNode
 }) {
   return (
     <details
       data-testid={testId}
       open={open}
+      onToggle={onToggle && (e => onToggle(e.currentTarget.open))}
       className="mt-3 rounded-lg px-4 py-3"
       style={{
         border: `1px solid ${warn ? 'var(--warn-border)' : 'var(--hairline)'}`,
@@ -258,7 +261,7 @@ export function EvidencePanel({ evidence: { inventory, assumptions, summary, cav
     <ReportPanel
       testId="evidence-panel"
       title="Evidence & limitations"
-      open={summary.undermined > 0}
+      open={false}
       warn={summary.undermined > 0}
       summary={`${summary.clean} fully supported · ${summary.qualified} supported with limitations · ${summary.undermined} invalid`}
     >
@@ -282,6 +285,7 @@ export function EvidencePanel({ evidence: { inventory, assumptions, summary, cav
       {assumptions.map(assumption => (
         <div
           key={assumption.id}
+          data-testid={openPartRef(assumption) ? `open-part-${openPartRef(assumption)}` : undefined}
           className="mt-2 rounded-md px-3 py-2.5 text-[12px] leading-relaxed"
           style={{ border: '1px solid var(--hairline)', background: 'var(--canvas)' }}
         >

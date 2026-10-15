@@ -348,8 +348,8 @@ export function UploadView({ session, onOpenLive, sessions, onResume, avrAvailab
                   <code className="hb-inline">build/&lt;app&gt;.elf</code>. Arduino IDE: Sketch → Export Compiled Binary.
                 </div>
                 <div>
-                  Want this in a pipeline instead? <code className="hb-inline">hauksbee-ci init your_board.kicad_pcb</code>{' '}
-                  scaffolds a checked-in spec, see <code className="hb-inline">docs/ci/CI.md</code>.
+                  Want this in a pipeline instead? Set up checks from the report once your board loads, or run{' '}
+                  <code className="hb-inline">hauksbee-ci init your_board.kicad_pcb</code> to scaffold a checked-in spec.
                 </div>
               </div>
             </details>

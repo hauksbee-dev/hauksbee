@@ -15,9 +15,9 @@ import { StaggerItem } from '../motion'
 import { ExportMenu } from './ExportMenu'
 import type { SpecSnapshot } from '../hooks/useSessions'
 import { Callout, CopyButton, UploadBanners } from './ui'
-import { NoteBlock, SectionBlock } from './report/Findings'
+import { FixFirstCard, NoteBlock, PreLayoutStrip, SectionBlock } from './report/Findings'
 import { centerInScroller } from '../lib/scroll'
-import { EvidencePanel, ImportDiagnosticsPanel, ModelCoveragePanel } from './report/Panels'
+import { EvidencePanel, ImportDiagnosticsPanel, ModelCoveragePanel, ReportPanel } from './report/Panels'
 import { CosimBlock } from './report/CosimBlock'
 import { VerdictConditions } from './report/VerdictConditions'
 import { BoardMap } from './report/BoardMap'
@@ -96,7 +96,13 @@ export function BoardView({
   const [constraintDraft, setConstraintDraft] = useState<(Partial<ConstraintDraft> & Pick<ConstraintDraft, 'kind'>) | null>(null)
   const [authoringComponent, setAuthoringComponent] = useState<ModelCoverageComponent | null>(null)
   const [authoringSignal, setAuthoringSignal] = useState(0)
+  // The two collapsed groups something else can open: the parts the run had to
+  // guess at (the banner's link, an Extend click) and the evidence slots (the
+  // Next card's "add firmware").
+  const [guessOpen, setGuessOpen] = useState(false)
+  const [evidenceOpen, setEvidenceOpen] = useState(false)
   const authoringRef = useRef<HTMLDivElement>(null)
+  const guessRef = useRef<HTMLDivElement>(null)
   const focusSeq = useRef(0)
   const mapRef = useRef<HTMLDivElement>(null)
   const v = useMemo(() => reportView(r), [r])
@@ -120,6 +126,7 @@ export function BoardView({
   }, [setSelectedNet])
   const author = useCallback((component: ModelCoverageComponent) => {
     setAuthoringComponent(component)
+    setGuessOpen(true)
     setAuthoringSignal(value => value + 1)
   }, [])
 
@@ -159,6 +166,66 @@ export function BoardView({
       </div>
     )
   }
+
+  // Everything the run had to assume about a part, in one place: the parts with
+  // no model, the variants the board leaves open, and what each model covers.
+  const selections = r.bind?.open_selections ?? []
+  const coverageGaps = r.model_coverage?.components.filter(c => c.actionable_behavior_gap).length ?? 0
+  const guessN = v.openParts.length + selections.length + coverageGaps
+  const guessSummary = [
+    v.openParts.length > 0 && `${v.openParts.length} left out of the circuit`,
+    selections.length > 0 && `${plural(selections.length, 'variant')} not pinned`,
+    coverageGaps > 0 && `${plural(coverageGaps, 'model')} with gaps`,
+  ].filter(Boolean).join(' · ')
+  const guessBody = (
+    <div ref={guessRef}>
+      <OpenSelectionsBanner
+        selections={selections}
+        onQueue={restoredFrom ? undefined : request => { onQueue(request); onOpenChecks() }}
+      />
+
+      {r.model_coverage && (
+        <ModelCoveragePanel
+          coverage={r.model_coverage}
+          onSelect={component => {
+            const padNets = padNetsOf(component)
+            setSelectedNet(null)
+            setSelectedComponent({
+              ref: component.reference,
+              value: component.value,
+              lib_id: component.lib_id,
+              padNet: padNets[0] ?? null,
+              padNets,
+            })
+            const located = component.pins.find(pin => pin.position_mm)?.position_mm
+            if (located) locate(located[0], located[1], `${component.reference}: ${stageWords(component.stage)}`)
+          }}
+          onAuthor={author}
+        />
+      )}
+
+      {/* Directly under the line that says a model is missing: the offer to
+          draft one. This is the moment the user learns they need it, and the
+          only moment they have the part number and the datasheet in mind. */}
+      {!restoredFrom && (
+        <>
+          <DatasheetExtract
+            openParts={openParts}
+            onSaved={session.reanalyzeCurrent}
+            onOpenSettings={onOpenSettings}
+          />
+          <div className="mt-3" ref={authoringRef}>
+            <WritePart
+              onSaved={session.reanalyzeCurrent}
+              suggested={authoringComponent ?? openParts.find(part => !part.bound)}
+              openSignal={authoringSignal > 0 ? `${authoringComponent?.reference}:${authoringSignal}` : null}
+              boardLabel={boardLabel ?? r.file_name}
+            />
+          </div>
+        </>
+      )}
+    </div>
+  )
 
   const runCommand = `hauksbee run ${boardLabel ?? r.file_name} --serve`
 
@@ -209,6 +276,11 @@ export function BoardView({
           </div>
         </StaggerItem>
 
+        {v.preLayout && (
+          <PreLayoutStrip notice={v.preLayout.notice} copper={v.preLayout.copper} onLocate={boardUrl ? locate : undefined} />
+        )}
+        {v.fixFirst && <FixFirstCard fixFirst={v.fixFirst} onLocate={boardUrl ? locate : undefined} />}
+
         {!restoredFrom && (
           <div
             data-testid="static-next-step"
@@ -233,6 +305,16 @@ export function BoardView({
               >
                 Set up checks
               </button>
+              {boardFile && (
+                <button
+                  type="button"
+                  data-testid="open-evidence-next"
+                  onClick={() => setEvidenceOpen(true)}
+                  className="hb-btn hb-press ml-2 px-3 py-1.5 text-[12px]"
+                >
+                  Add firmware or other evidence
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -275,57 +357,36 @@ export function BoardView({
           </div>
         )}
 
-        {/* Keep the evidence contract beside the verdict and next action. The
-            report can offer the existing firmware/schematic slots, while the
-            inputs that only the CLI accepts are named without pretending the
-            browser can upload them. */}
-        <AdditionalEvidencePanel
-          placement="report"
-          {...evidenceSlots(session)}
-          boardName={boardLabel ?? r.file_name}
-          cosimRan={r.cosim?.ran}
-          showWebControls={!!boardFile && !restoredFrom}
-        />
-
         {/* Bind-honesty line. The verdict above is the page's one accent
             surface; this keeps its amber and its place above the fold, but as a
             single row under the verdict rather than a second shouting box. */}
         {v.bindOpen && (
-          <div className="mt-2 flex items-start gap-2 px-1 text-sm" style={{ color: 'var(--warn-strong)' }}>
+          <div
+            data-testid="open-parts-banner"
+            data-open-count={v.openParts.length || v.unresolved.length}
+            className="mt-2 flex items-start gap-2 px-1 text-sm"
+            style={{ color: 'var(--warn-strong)' }}
+          >
             <span className="shrink-0" style={{ display: 'inline-flex', marginTop: 3 }}>
               <WarningIcon size={14} />
             </span>
             <span style={{ color: 'var(--silk-dim)' }}>
-              <span style={{ color: 'var(--warn-strong)' }}>{v.unresolved.join(', ')}</span>{' '}
-              could not be bound or are left open on the live circuit. Analog / AC / thermal
-              results on their nets are not trustworthy.
+              <span style={{ color: 'var(--warn-strong)' }}>
+                {plural(v.openParts.length || v.unresolved.length, 'part')} left out of the circuit
+              </span>{' '}
+              (no model). {v.unresolved.join(', ')} {v.unresolved.length === 1 ? 'is an active part' : 'are active parts'},
+              so analog / AC / thermal results on their nets are not trustworthy.{' '}
+              <button
+                type="button"
+                data-testid="show-guessed-parts"
+                className="hb-press underline"
+                style={{ color: 'var(--copper-hi)', background: 'none', border: 'none', padding: 0 }}
+                onClick={() => { setGuessOpen(true); requestAnimationFrame(() => centerInScroller(guessRef.current)) }}
+              >
+                Show these parts
+              </button>
             </span>
           </div>
-        )}
-
-        <OpenSelectionsBanner
-          selections={r.bind?.open_selections ?? []}
-          onQueue={restoredFrom ? undefined : request => { onQueue(request); onOpenChecks() }}
-        />
-
-        {r.model_coverage && (
-          <ModelCoveragePanel
-            coverage={r.model_coverage}
-            onSelect={component => {
-              const padNets = padNetsOf(component)
-              setSelectedNet(null)
-              setSelectedComponent({
-                ref: component.reference,
-                value: component.value,
-                lib_id: component.lib_id,
-                padNet: padNets[0] ?? null,
-                padNets,
-              })
-              const located = component.pins.find(pin => pin.position_mm)?.position_mm
-              if (located) locate(located[0], located[1], `${component.reference}: ${stageWords(component.stage)}`)
-            }}
-            onAuthor={author}
-          />
         )}
 
         {/* Everything this report can become. Below the verdict AND below every
@@ -346,45 +407,11 @@ export function BoardView({
           />
         </div>
 
-        {/* Directly under the line that says a model is missing: the offer to
-            draft one. This is the moment the user learns they need it, and the
-            only moment they have the part number and the datasheet in mind. */}
-        {!restoredFrom && (
-          <>
-            <DatasheetExtract
-              openParts={openParts}
-              onSaved={session.reanalyzeCurrent}
-              onOpenSettings={onOpenSettings}
-            />
-            <div className="mt-3" ref={authoringRef}>
-              <WritePart
-                onSaved={session.reanalyzeCurrent}
-                suggested={authoringComponent ?? openParts.find(part => !part.bound)}
-                openSignal={authoringSignal > 0 ? `${authoringComponent?.reference}:${authoringSignal}` : null}
-                boardLabel={boardLabel ?? r.file_name}
-              />
-            </div>
-          </>
-        )}
-
         {/* Top-level honesty notes (minus the one the amber line above already
             says; see reportView). */}
         <div className="mt-3">
           {v.notes.map((n, i) => <NoteBlock key={i}>{n.message}</NoteBlock>)}
         </div>
-
-        {r.import_diagnostics && (
-          <ImportDiagnosticsPanel
-            diagnostics={r.import_diagnostics}
-            overlay={importOverlay}
-            selectedNet={selectedNet}
-            onToggleOverlay={() => setImportOverlay(value => !value)}
-            onLocate={locate}
-            onInspectNet={inspectImportNet}
-          />
-        )}
-
-        {v.evidence.has && <EvidencePanel evidence={v.evidence} />}
 
         {/* Board map: the real renderer (pads, outline, pan/zoom, layers)
             whenever the uploaded file is KiCad layout text; the dot map only
@@ -473,7 +500,7 @@ export function BoardView({
             report with fourteen sections must become readable in a quarter of a
             second, not walk down the page. The index starts at 1 because the
             verdict above is index 0, so the whole report reads as one arrival. */}
-        {v.sections.map((s, i) => (
+        {v.sections.filter(sec => sec !== v.preLayout?.copper).map((s, i) => (
           <StaggerItem key={i} index={i + 1}>
             <SectionBlock section={s} onLocate={boardUrl ? locate : undefined} />
           </StaggerItem>
@@ -504,6 +531,42 @@ export function BoardView({
             simMounted={simMounted}
           />
         )}
+
+        {guessN > 0 ? (
+          <ReportPanel
+            testId="guessed-parts"
+            title="Parts Hauksbee had to guess at"
+            summary={guessSummary}
+            open={guessOpen}
+            warn
+            onToggle={setGuessOpen}
+          >
+            {guessBody}
+          </ReportPanel>
+        ) : guessBody}
+
+        {r.import_diagnostics && (
+          <ImportDiagnosticsPanel
+            diagnostics={r.import_diagnostics}
+            overlay={importOverlay}
+            selectedNet={selectedNet}
+            onToggleOverlay={() => setImportOverlay(value => !value)}
+            onLocate={locate}
+            onInspectNet={inspectImportNet}
+          />
+        )}
+
+        {v.evidence.has && <EvidencePanel evidence={v.evidence} />}
+
+        <AdditionalEvidencePanel
+          placement="report"
+          {...evidenceSlots(session)}
+          boardName={boardLabel ?? r.file_name}
+          cosimRan={r.cosim?.ran}
+          showWebControls={!!boardFile && !restoredFrom}
+          open={evidenceOpen}
+          onOpenChange={setEvidenceOpen}
+        />
 
         {constraintDraft && (
           <QueuedConstraintModal initial={constraintDraft} onQueue={onQueue}

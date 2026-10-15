@@ -1,4 +1,4 @@
-import type { WebHeadsUp } from '../../types/report'
+import type { FixFirst, WebHeadsUp } from '../../types/report'
 import type { FindingGroup, SectionView } from '../../lib/report-view'
 
 // A report section and the cards in it. One card shape serves every kind of
@@ -116,6 +116,59 @@ export function FindingCard({ group: g, onLocate }: { group: FindingGroup; onLoc
         </ul>
       </details>
     </NoteCard>
+  )
+}
+
+/** The few causes to deal with before anything else, in the engine's order (the
+ *  CLI's FIX THESE FIRST block prints the same list). Each one carries its own
+ *  remedy and, when it has a spot, the way to see it. */
+export function FixFirstCard({ fixFirst, onLocate }: { fixFirst: FixFirst; onLocate?: LocateFn }) {
+  return (
+    <section
+      data-testid="fix-first"
+      className="mt-3 rounded-xl px-4 py-3"
+      style={{ border: '1px solid var(--err-border)', borderLeft: '4px solid var(--err)', background: 'var(--surface)' }}
+    >
+      <h2 className="text-[11px] font-bold tracking-widest uppercase mb-1" style={{ color: 'var(--err-strong)' }}>
+        Fix these first
+      </h2>
+      <ol className="pl-5 text-sm" style={{ listStyleType: 'decimal' }}>
+        {fixFirst.items.map((it, i) => (
+          <li key={i} data-testid="fix-first-item" className="mt-2">
+            <span className="font-semibold">{it.what}</span>
+            {it.similar > 0 && <span style={{ color: 'var(--silk-dim)' }}> (+{it.similar} more like this)</span>}
+            <LocateButton what={it.what} x={it.x} y={it.y} onLocate={onLocate} />
+            <div className="my-0.5"><b style={{ color: 'var(--silk-dim)', fontWeight: 600 }}>What to do:</b> {it.fix}</div>
+          </li>
+        ))}
+      </ol>
+      {fixFirst.more > 0 && (
+        <div className="mt-2 text-[12px]" style={{ color: 'var(--silk-dim)' }}>
+          …and {fixFirst.more} more serious {fixFirst.more === 1 ? 'cause' : 'causes'} in the findings below.
+        </div>
+      )}
+    </section>
+  )
+}
+
+/** A layout with placed pads and no copper: say what ran and what waits, and
+ *  keep the copper findings (counted) one click away instead of leading. */
+export function PreLayoutStrip({ notice, copper, onLocate }: { notice: string; copper: SectionView | null; onLocate?: LocateFn }) {
+  const held = copper?.groups.reduce((n, g) => n + g.items.length, 0) ?? 0
+  return (
+    <div
+      data-testid="prelayout-strip"
+      className="mt-3 rounded-lg px-4 py-2.5 text-[13px] leading-relaxed"
+      style={{ border: '1px solid var(--hairline)', borderLeft: '4px solid var(--note-accent)', background: 'var(--surface)', color: 'var(--silk-dim)' }}
+    >
+      {notice}
+      {copper && held > 0 && (
+        <details className="mt-1.5" data-testid="prelayout-copper">
+          <summary className="cursor-pointer text-[12px]">Copper findings held back ({held})</summary>
+          {copper.groups.map((g, i) => <FindingCard key={i} group={g} onLocate={onLocate} />)}
+        </details>
+      )}
+    </div>
   )
 }
 

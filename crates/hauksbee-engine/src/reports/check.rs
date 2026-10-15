@@ -232,6 +232,19 @@ impl CheckReport<'_> {
             }
             OutputMode::Plain => {
                 print!("{}", triage.render(&run_verdict));
+                let drc_plain = crate::plain::plain_drc_structured_with_rule_source(
+                    &drc_structured,
+                    &provenance,
+                );
+                let mut lint_plain = crate::plain_netlint(&lint);
+                lint_plain.unmodelled_critical.clone_from(&blockers);
+                let mut si_plain = crate::plain_si(&si);
+                si_plain.unmodelled_critical.clone_from(&blockers);
+                print!(
+                    "{}",
+                    crate::plain::fix_first(&drc_plain, &lint_plain, usbc.as_ref(), &si_plain)
+                        .render()
+                );
                 // Bind-role honesty (Marco): the plain persona surface must not hide
                 // that active ICs are unmodelled, otherwise `--check --plain` reads
                 // "healthy" while firmware/analog/AC/thermal on their nets are
@@ -270,12 +283,8 @@ impl CheckReport<'_> {
                 println!(
                     "\n== Connectivity / lint (incl. MCU resource conflicts, boot strap pins) =="
                 );
-                let mut lint_plain = crate::plain_netlint(&lint);
-                lint_plain.unmodelled_critical.clone_from(&blockers);
                 print!("{}", lint_plain.render());
                 println!("\n== Signal integrity ==");
-                let mut si_plain = crate::plain_si(&si);
-                si_plain.unmodelled_critical.clone_from(&blockers);
                 print!("{}", si_plain.render());
                 if let Some(u) = &usbc {
                     println!("\n== USB-C CC compliance ==");

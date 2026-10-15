@@ -197,7 +197,7 @@ export function DatasheetExtract({
           {draftable.map((p, i) => (
             <div
               key={p.reference}
-              data-testid={`open-part-${p.reference}`}
+              data-testid={`extract-part-${p.reference}`}
               className="px-3 py-2.5 flex items-start gap-3 flex-wrap"
               style={{ borderTop: i > 0 ? '1px solid var(--hairline)' : 'none' }}
             >

@@ -549,6 +549,10 @@ pub struct WebReport {
     /// The same structured order-decision buckets emitted by CLI report JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triage: Option<crate::plain::OrderTriage>,
+    /// The first few serious causes to fix, from the same ordering the CLI's
+    /// plain check report prints.
+    #[serde(default, skip_serializing_if = "crate::plain::FixFirst::is_empty")]
+    pub fix_first: crate::plain::FixFirst,
     /// The single overall headline across all sections.
     pub headline: String,
     /// Whether the STATIC analysis left an undermined run-level claim (input
@@ -1499,6 +1503,7 @@ fn analyze_normalized_with_context(
         num_nets: bound.net_names.len(),
         clearance_rule_source,
         triage,
+        fix_first: crate::plain::fix_first(&drc_plain, &lint_plain, usbc.as_ref(), &si_plain),
         headline,
         run_level_undermined,
         serious,
@@ -3878,6 +3883,7 @@ fn main {
         for key in [
             "assumptions",
             "evidence",
+            "fix_first",
             "glossary",
             "inventory",
             "import_diagnostics",

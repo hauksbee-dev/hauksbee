@@ -89,20 +89,22 @@ function OfferButton({ offer, onQueue }: {
 /** Pick the orderable variant a part really is: each option names the member,
  *  its orderable codes and the datasheet page that says so. A pick becomes an
  *  `[[override]] select` in the checks spec. */
-export function VariantPicker({ selection: s, onQueue }: {
+export function VariantPicker({ selection: s, onQueue, refs = [s.reference] }: {
   selection: WebOpenSelection
   onQueue: (request: BoardRequest) => void
+  /** Every part this one pick settles (a group of identical open parts). */
+  refs?: string[]
 }) {
   return (
     <select
       className="hb-input text-[12px]"
       style={{ maxWidth: '100%' }}
-      data-testid={`variant-picker-${s.reference}`}
-      aria-label={`${s.reference} variant`}
+      data-testid={refs.length > 1 ? 'variant-picker-group' : `variant-picker-${s.reference}`}
+      aria-label={`${refs.join(', ')} variant`}
       value=""
-      onChange={e => onQueue({ type: 'select', ref: s.reference, select: e.target.value })}
+      onChange={e => refs.forEach(ref => onQueue({ type: 'select', ref, select: e.target.value }))}
     >
-      <option value="" disabled>Pick the fitted {s.family} variant…</option>
+      <option value="" disabled>Pick the fitted {s.family} variant{refs.length > 1 ? ` for all ${refs.length}` : ''}…</option>
       {s.members.map(m => (
         <option key={m.id} value={m.id} disabled={m.verdict === 'C'}>
           {m.id}: {m.selector || 'no orderable codes'} · {m.basis}{m.verdict === 'C' ? ` (ruled out: ${m.reason})` : ''}
@@ -117,20 +119,49 @@ const selectionState = (s: WebOpenSelection) => s.same_pinout
   ? `simulated as ${s.members.find(m => m.verdict !== 'C')?.id ?? '?'}; CI checks every variant`
   : 'selection required: left open until you pick one'
 
+/** Parts that share a family, stand-in state and candidate list are one
+ *  question, asked once. */
+function groupSelections(selections: WebOpenSelection[]): WebOpenSelection[][] {
+  const groups = new Map<string, WebOpenSelection[]>()
+  for (const s of selections) {
+    const key = `${s.family}|${s.same_pinout}|${s.members.map(m => m.id).join(',')}`
+    groups.set(key, [...(groups.get(key) ?? []), s])
+  }
+  return [...groups.values()]
+}
+
 export function OpenSelectionsBanner({ selections, onQueue }: {
   selections: WebOpenSelection[]
   onQueue?: (request: BoardRequest) => void
 }) {
   if (selections.length === 0) return null
+  const row = (s: WebOpenSelection) => (
+    <div key={s.reference} className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+      <b>{s.reference}</b> <span style={{ fontFamily: 'var(--font-mono)' }}>{s.value}</span>
+      <span style={{ color: 'var(--silk-dim)' }}>{selectionState(s)}</span>
+      {onQueue && <VariantPicker selection={s} onQueue={onQueue} />}
+    </div>
+  )
   return (
     <Callout tone="warn" testId="open-selections" className="mt-3" title="Variant not pinned by the board">
-      {selections.map(s => (
-        <div key={s.reference} className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-          <b>{s.reference}</b> <span style={{ fontFamily: 'var(--font-mono)' }}>{s.value}</span>
-          <span style={{ color: 'var(--silk-dim)' }}>{selectionState(s)}</span>
-          {onQueue && <VariantPicker selection={s} onQueue={onQueue} />}
-        </div>
-      ))}
+      {groupSelections(selections).map(group => {
+        if (group.length === 1) return row(group[0])
+        const [first] = group
+        const refs = group.map(s => s.reference)
+        return (
+          <div key={refs.join()} data-testid="open-selection-group" className="mt-1">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <b>{group.length} {first.value} parts</b> ({refs.join(', ')})
+              <span style={{ color: 'var(--silk-dim)' }}>{selectionState(first)}</span>
+              {onQueue && <VariantPicker selection={first} onQueue={onQueue} refs={refs} />}
+            </div>
+            <details className="mt-1 text-[12px]">
+              <summary className="cursor-pointer" style={{ color: 'var(--silk-dim)' }}>Pick one by one</summary>
+              {group.map(row)}
+            </details>
+          </div>
+        )
+      })}
     </Callout>
   )
 }

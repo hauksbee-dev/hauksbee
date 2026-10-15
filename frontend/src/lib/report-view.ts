@@ -10,7 +10,7 @@
 // same `ReportView`, so they cannot disagree.
 
 import type {
-  CheckResult, ErrorBudget, ErrorBudgetWindow, EvidenceAssumption, EvidenceMap, JsonNote, ModelCoverageComponent,
+  CheckResult, ErrorBudget, ErrorBudgetWindow, EvidenceAssumption, EvidenceMap, FixFirst, JsonNote, ModelCoverageComponent,
   ModelCoverageSnapshot, ModelOnPath, RefusalContract, RunResponse, WebCosimSection, WebFallbackWindow, WebFinding,
   WebGpioNet, WebHeadsUp, WebImportObject, WebReport, WebSection, WebTimingCoverage,
 } from '../types/report'
@@ -299,6 +299,13 @@ export interface ReportView {
   /** Top-level notes, minus the bind-role note when the bind table already
    *  says it in full (the JSON carries both for CLI parity). */
   notes: JsonNote[]
+  /** The causes to fix first; null when there are none. */
+  fixFirst: FixFirst | null
+  /** A board with no copper yet: the engine's notice, and the copper section
+   *  the report folds under it (it stays in `sections` for the export). */
+  preLayout: { notice: string; copper: SectionView | null } | null
+  /** Open parts, from the evidence list: the one count every surface quotes. */
+  openParts: string[]
   refusalRows: [string, string][] | null
   sections: SectionView[]
   cosim: CosimView | null
@@ -326,6 +333,10 @@ function headlineWithoutConditions(headline: string, conditions: string[]): stri
   return headline.slice(0, headline.length - joined.length).trimEnd()
 }
 
+/** The designator an open-part assumption (`open-part:C2`) is about. */
+export const openPartRef = (a: EvidenceAssumption): string | null =>
+  a.kind === 'open_part' ? a.id.replace(/^open-part:/, '') : null
+
 export function reportView(r: WebReport): ReportView {
   const unresolved = r.bind?.active_path_unresolved ?? []
   const open = unresolved.length > 0
@@ -333,6 +344,9 @@ export function reportView(r: WebReport): ReportView {
   const assumptions = r.assumptions ?? []
   const inventory = r.inventory ?? []
   const conditions = (r.verdict_conditions ?? []).filter(c => c.trim() !== '')
+  const sections = (r.sections ?? []).map(sectionView)
+  const notice = r.fix_first?.notice
+  const copper = (notice && sections.find(s => s.title.startsWith('Copper spacing'))) || null
   return {
     tone: reportVerdictTone(r),
     palette: reportVerdictPalette(r),
@@ -346,7 +360,10 @@ export function reportView(r: WebReport): ReportView {
     bindOpen: open,
     notes: (r.notes ?? []).filter(n => !(open && n.kind === 'bind_role')),
     refusalRows: r.refusal ? refusalLines(r.refusal) : null,
-    sections: (r.sections ?? []).map(sectionView),
+    sections,
+    fixFirst: r.fix_first?.items.length ? r.fix_first : null,
+    preLayout: notice ? { notice, copper } : null,
+    openParts: assumptions.flatMap(a => openPartRef(a) ?? []),
     cosim: r.cosim ? cosimView(r.cosim, r.refusal) : null,
     evidence: {
       has: maps.length > 0 || assumptions.length > 0 || inventory.length > 0,

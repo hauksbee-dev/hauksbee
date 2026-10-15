@@ -341,6 +341,16 @@ export interface ModelCoverageSnapshot {
   authoring_targets: ModelCoverageComponent[]
 }
 
+/** What to fix first, from the engine's one ordering (the CLI prints the same).
+ *  `notice` is set on a board with placed pads and no copper: its copper
+ *  findings are held back until it is routed. */
+export interface FixFirst {
+  notice?: string
+  items: Array<WebFinding & { similar: number }>
+  /** Serious causes beyond the ones listed. */
+  more: number
+}
+
 export interface WebReport {
   ok: boolean
   error?: string | null
@@ -351,6 +361,7 @@ export interface WebReport {
   headline: string
   serious: number
   total: number
+  fix_first?: FixFirst
   sections: WebSection[]
   components: WebComponent[]
   import_diagnostics?: WebImportDiagnostics | null

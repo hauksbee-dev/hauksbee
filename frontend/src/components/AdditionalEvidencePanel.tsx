@@ -2,6 +2,7 @@ import { FirmwareJack } from './FirmwareJack'
 import { SchematicJack } from './SchematicJack'
 import type { InputHTMLAttributes } from 'react'
 import type { BoardSession } from '../hooks/useBoardSession'
+import { ReportPanel } from './report/Panels'
 
 /**
  * The evidence slots and their handlers, read off the session. Intake and
@@ -88,6 +89,8 @@ export function AdditionalEvidencePanel({
   boardName = null,
   cosimRan,
   showWebControls = true,
+  open = false,
+  onOpenChange,
 }: {
   placement: 'intake' | 'report'
   firmware: File | null
@@ -111,29 +114,14 @@ export function AdditionalEvidencePanel({
   cosimRan?: boolean
   /** Saved reports have no files behind them, so their slots are informational. */
   showWebControls?: boolean
+  /** The report placement is one collapsed row; whether it is open is the caller's. */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }) {
   void boardName
 
-  return (
-    <section
-      data-testid={`additional-evidence-${placement}`}
-      className={placement === 'intake' ? 'mt-5' : 'mt-3'}
-    >
-      <div
-        className="rounded-xl px-4 py-3.5"
-        style={{ border: '1px solid var(--hairline)', background: 'var(--surface)' }}
-      >
-        <div className="flex items-baseline justify-between gap-3 flex-wrap">
-          <h2
-            className="text-[11px] font-bold tracking-widest uppercase"
-            style={{ color: 'var(--silk-faint)', margin: 0 }}
-          >
-            Additional evidence
-          </h2>
-          <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
-            shared by report, Checks, and Live Sim
-          </span>
-        </div>
+  const body = (
+    <>
         <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
           Add any manufacturing, assembly, firmware, or model evidence you have.
           A change here re-runs the current board with the complete bundle.
@@ -214,7 +202,41 @@ export function AdditionalEvidencePanel({
             A PDF leaves this machine only after explicit consent.
           </div>
         </div>
+    </>
+  )
 
+  if (placement === 'report') {
+    return (
+      <ReportPanel
+        testId="additional-evidence-report"
+        title="Add more evidence"
+        summary="firmware · BOM · models"
+        open={open}
+        warn={false}
+        onToggle={onOpenChange}
+      >
+        {body}
+      </ReportPanel>
+    )
+  }
+  return (
+    <section data-testid="additional-evidence-intake" className="mt-5">
+      <div
+        className="rounded-xl px-4 py-3.5"
+        style={{ border: '1px solid var(--hairline)', background: 'var(--surface)' }}
+      >
+        <div className="flex items-baseline justify-between gap-3 flex-wrap">
+          <h2
+            className="text-[11px] font-bold tracking-widest uppercase"
+            style={{ color: 'var(--silk-faint)', margin: 0 }}
+          >
+            Additional evidence
+          </h2>
+          <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+            shared by report, Checks, and Live Sim
+          </span>
+        </div>
+        {body}
       </div>
     </section>
   )

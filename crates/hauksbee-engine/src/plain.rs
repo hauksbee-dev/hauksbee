@@ -404,6 +404,152 @@ fn write_heads_up(out: &mut String, notes: &[HeadsUp]) {
     }
 }
 
+/// The notice a pre-layout board carries in place of its copper findings.
+pub const PRE_LAYOUT_NOTICE: &str = "This board isn't routed yet. Circuit, model and firmware checks ran on its netlist; copper checks (shorts, spacing) wait until it's routed.";
+
+/// How many causes "Fix these first" lists.
+pub const FIX_FIRST_MAX: usize = 3;
+
+/// One cause to fix, with the findings that share its remedy folded in.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct FixFirstItem {
+    pub what: String,
+    pub why: String,
+    pub fix: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
+    /// Other serious findings with this remedy, listed once here.
+    pub similar: usize,
+}
+
+/// What to fix first, worst cause first. The one ordering the CLI report and
+/// the web report both print.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct FixFirst {
+    /// Set on a layout with placed pads and no copper: its copper findings are
+    /// not listed (they wait for routing) and `notice` says so.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notice: Option<&'static str>,
+    pub items: Vec<FixFirstItem>,
+    /// Serious causes beyond the ones listed.
+    pub more: usize,
+}
+
+impl FixFirst {
+    /// Nothing to show: no serious cause and no pre-layout notice.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.notice.is_none() && self.items.is_empty()
+    }
+
+    /// The `FIX THESE FIRST` block for the plain report, or nothing.
+    #[must_use]
+    pub fn render(&self) -> String {
+        if self.is_empty() {
+            return String::new();
+        }
+        let mut out = String::from("== FIX THESE FIRST ==\n");
+        if let Some(notice) = self.notice {
+            let _ = writeln!(out, "{notice}");
+        }
+        for (i, item) in self.items.iter().enumerate() {
+            let similar = match item.similar {
+                0 => String::new(),
+                n => format!(" (+{n} more like this)"),
+            };
+            let _ = writeln!(out, "{}. {}{similar}", i + 1, item.what);
+            let _ = writeln!(out, "     What to do: {}", item.fix);
+        }
+        if self.more > 0 {
+            let _ = writeln!(
+                out,
+                "...and {} more serious cause(s) in the sections below.",
+                self.more
+            );
+        }
+        out.push('\n');
+        out
+    }
+}
+
+/// The USB-C verdict as a finding, when it is serious.
+fn usbc_finding(usbc: &crate::checks::usb_c::UsbcReport) -> Option<PlainFinding> {
+    let (what, why, fix) = usbc.web_gloss().filter(|_| usbc.is_serious())?;
+    Some(PlainFinding {
+        level: PlainLevel::Serious,
+        what,
+        why,
+        fix,
+        loc_mm: None,
+        part: None,
+    })
+}
+
+/// Pick what to fix first from the serious findings of the report's sections.
+///
+/// Causes, not findings: findings with the same remedy in the same check family
+/// fold into one item. Copper comes first (a short wrecks a board), then wiring,
+/// USB-C and signal integrity. On a board with placed pads and no copper at all
+/// the copper findings are left out (they say nothing until it is routed) and
+/// "route it" goes last, after any real defect in the netlist.
+#[must_use]
+pub fn fix_first(
+    copper: &PlainReport,
+    wiring: &PlainReport,
+    usbc: Option<&crate::checks::usb_c::UsbcReport>,
+    si: &PlainReport,
+) -> FixFirst {
+    let is_unrouted = |f: &PlainFinding| {
+        f.what
+            .starts_with(hauksbee_extract::NOT_ROUTED_MESSAGE_PREFIX)
+    };
+    let pre_layout = wiring.findings.iter().any(is_unrouted);
+    let usbc = usbc.and_then(usbc_finding);
+    let copper = if pre_layout {
+        &[][..]
+    } else {
+        &copper.findings[..]
+    };
+    // (family order, unrouted last): sort is stable, so ties keep report order.
+    let mut serious: Vec<(usize, &PlainFinding)> =
+        [copper, &wiring.findings, usbc.as_slice(), &si.findings]
+            .into_iter()
+            .enumerate()
+            .flat_map(|(family, fs)| fs.iter().map(move |f| (family, f)))
+            .filter(|(_, f)| f.level == PlainLevel::Serious)
+            .collect();
+    serious.sort_by_key(|(family, f)| (is_unrouted(f), *family));
+    let mut causes: Vec<(usize, &PlainFinding, usize)> = Vec::new();
+    for (family, f) in serious {
+        match causes
+            .iter_mut()
+            .find(|c| c.0 == family && c.1.fix == f.fix)
+        {
+            Some(cause) => cause.2 += 1,
+            None => causes.push((family, f, 0)),
+        }
+    }
+    let more = causes.len().saturating_sub(FIX_FIRST_MAX);
+    FixFirst {
+        notice: pre_layout.then_some(PRE_LAYOUT_NOTICE),
+        items: causes
+            .into_iter()
+            .take(FIX_FIRST_MAX)
+            .map(|(_, f, similar)| FixFirstItem {
+                what: f.what.clone(),
+                why: f.why.clone(),
+                fix: f.fix.clone(),
+                x: f.loc_mm.map(|l| l[0]),
+                y: f.loc_mm.map(|l| l[1]),
+                similar,
+            })
+            .collect(),
+        more,
+    }
+}
+
 /// The compact decision surface at the front of a combined `--check --plain`
 /// report. It classifies findings that already exist; it never runs a check or
 /// derives a new electrical claim.
@@ -2135,5 +2281,87 @@ mod tests {
             clean.contains("\nOK TO ORDER: ") && !clean.contains(":\n"),
             "{clean}"
         );
+    }
+
+    fn found(level: PlainLevel, what: &str, fix: &str) -> PlainFinding {
+        PlainFinding {
+            level,
+            what: what.to_string(),
+            why: String::new(),
+            fix: fix.to_string(),
+            loc_mm: Some([1.0, 2.0]),
+            part: None,
+        }
+    }
+
+    fn report_of(findings: Vec<PlainFinding>) -> PlainReport {
+        PlainReport {
+            findings,
+            ..PlainReport::default()
+        }
+    }
+
+    #[test]
+    fn fix_first_leads_with_copper_then_wiring_and_folds_a_shared_remedy() {
+        use PlainLevel::{Note, Serious, Warning};
+        let copper = report_of(vec![
+            found(Warning, "tight gap", "widen it"),
+            found(Serious, "short A", "separate the copper"),
+            found(Serious, "short B", "separate the copper"),
+        ]);
+        let wiring = report_of(vec![
+            found(Note, "a note", "n/a"),
+            found(Serious, "floating pin", "tie it"),
+            found(Serious, "contention", "drop a driver"),
+        ]);
+        let si = report_of(vec![
+            found(Serious, "thin trace", "widen it"),
+            found(Serious, "fourth cause", "fix it"),
+        ]);
+        let first = fix_first(&copper, &wiring, None, &si);
+        let whats: Vec<_> = first.items.iter().map(|i| i.what.as_str()).collect();
+        assert_eq!(whats, ["short A", "floating pin", "contention"]);
+        assert_eq!(first.items[0].similar, 1, "short B folds into short A");
+        assert_eq!(first.more, 2, "two more causes beyond the three listed");
+        assert_eq!(first.items[0].x, Some(1.0));
+        assert!(first.notice.is_none());
+        let text = first.render();
+        assert!(
+            text.starts_with("== FIX THESE FIRST ==\n1. short A (+1 more like this)\n"),
+            "{text}"
+        );
+        assert!(text.contains("...and 2 more serious cause(s)"), "{text}");
+    }
+
+    #[test]
+    fn fix_first_holds_copper_back_on_an_unrouted_board_and_routes_last() {
+        use PlainLevel::Serious;
+        let copper = report_of(vec![found(Serious, "pad overlap", "separate the copper")]);
+        let unrouted = format!(
+            "{} (134 pad groups)",
+            hauksbee_extract::NOT_ROUTED_MESSAGE_PREFIX
+        );
+        let wiring = report_of(vec![
+            found(Serious, &unrouted, "route it"),
+            found(Serious, "floating pin", "tie it"),
+        ]);
+        let first = fix_first(&copper, &wiring, None, &PlainReport::default());
+        let whats: Vec<_> = first.items.iter().map(|i| i.what.as_str()).collect();
+        assert_eq!(whats, ["floating pin", unrouted.as_str()]);
+        assert_eq!(first.notice, Some(PRE_LAYOUT_NOTICE));
+        assert!(first.render().contains("isn't routed yet"));
+    }
+
+    #[test]
+    fn fix_first_is_silent_without_a_serious_finding() {
+        let quiet = report_of(vec![found(PlainLevel::Warning, "tight gap", "widen it")]);
+        let first = fix_first(
+            &quiet,
+            &PlainReport::default(),
+            None,
+            &PlainReport::default(),
+        );
+        assert!(first.is_empty());
+        assert_eq!(first.render(), "");
     }
 }

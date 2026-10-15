@@ -10,6 +10,10 @@ use crate::drc::connectivity::copper_connectivity_from_text;
 use crate::netlint::{LintCheck, LintFinding, NetLintReport, Severity};
 use crate::{sample_list, Component, ExtractedBoard};
 
+/// What the finding for a layout with placed pads and no copper at all begins
+/// with; the reports key their "not routed yet" state off it.
+pub const NOT_ROUTED_MESSAGE_PREFIX: &str = "the board is not routed yet";
+
 /// Island findings itemised before the rest are summarised in one line.
 const MAX_ISLANDS: usize = 20;
 
@@ -86,7 +90,7 @@ fn copper_islands(text: &str, out: &mut Vec<LintFinding>) {
         out.push(finding(
             Severity::High,
             format!(
-                "the board is not routed yet, so it cannot be ordered as is: no copper joins its {} pad group(s) on {}. The circuit was checked as a netlist",
+                "{NOT_ROUTED_MESSAGE_PREFIX}, so it cannot be ordered as is: no copper joins its {} pad group(s) on {}. The circuit was checked as a netlist",
                 with_pads.len(),
                 sample_list(&nets)
             ),
