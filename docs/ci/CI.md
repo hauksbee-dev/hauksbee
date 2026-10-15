@@ -1261,6 +1261,12 @@ hierarchy) ships at `crates/hauksbee-ci/examples/pic_programmer_schematic.toml`:
 hauksbee-ci run crates/hauksbee-ci/examples/pic_programmer_schematic.toml
 ```
 
+It exits 0 (GREEN). It judges only the input side of the board, the rail ahead
+of the 7805 and the input diode, because four parts of `pic_programmer` have no
+model (the LT1373 boost converter on VCC, a 24Cxx EEPROM socket and two PIC
+sockets). Asserting VCC itself, or `no_faults`, on this board is INVALID
+(exit 3) until those are modelled; `--json` lists them under `assumptions`.
+
 ### Load the hierarchy root, not a sub-sheet
 
 hauksbee loads a `.kicad_sch` board **by path** so its sheet hierarchy

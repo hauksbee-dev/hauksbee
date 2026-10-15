@@ -53,7 +53,7 @@ lets a genuine brownout on a weak supply be trusted as a real failure.
 |---|---|---|
 | `boot_gate_pass.toml` / `boot_gate_fail.toml` | `boot-coverage`: does the firmware drive a Hi-Z MOSFET gate in time? | PASS / FAIL |
 | `watchy_v15_display_res.toml` / `_undriven.toml` | `boot-coverage` on the real Watchy v1.5 e-paper RES# net (ESP32 QEMU backend) | PASS / FAIL |
-| `pic_programmer_schematic.toml` | schematic-stage CI: assert a `.kicad_sch` before any PCB exists | PASS |
+| `pic_programmer_schematic.toml` | schematic-stage CI: assert a `.kicad_sch` before any PCB exists. Judges the rail ahead of the 7805 and the input diode only; the board's LT1373, 24Cxx and PIC sockets have no model, so VCC and `no_faults` would be INVALID and are left out | PASS |
 
 A default (AVR-enabled) source build's bundle rewrites `boot_gate_pass.toml`
 beside a small packaged AVR fixture, so that PASS example runs directly from an

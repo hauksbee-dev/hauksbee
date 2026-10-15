@@ -105,11 +105,20 @@ fn schematic_example_spec_passes() {
         return;
     };
     let result = run(&support::run_config(spec.path().to_path_buf())).expect("schematic spec runs");
-    // Model gap: the LT1373 (U4), both PICs and the 24Cxx EEPROM have no model,
-    // so they are open on the VCC rail and the run is INVALID, not green. The
-    // numbers hold (VCC in range, no faults). `assert_green` once modelled.
-    support::assert_invalid_by_open_parts(&result, PIC_PROGRAMMER_OPEN);
+    // The example advertises GREEN (examples/ci-specs/README.md), so it must be.
+    // Its assertions are the ones the board can honestly support: the rail ahead
+    // of the 7805 and the input diode. None touches an open part, so none is
+    // undermined, and the four open parts must still be disclosed in the run.
+    support::assert_green(&result, "the shipped schematic example");
     assert_eq!(result.results.len(), 2);
+    assert!(result.results.iter().all(|r| r.passed && !r.invalid));
+    for part in PIC_PROGRAMMER_OPEN {
+        let id = format!("open-part:{part}");
+        assert!(
+            result.assumptions.iter().any(|a| a.id().as_str() == id),
+            "the open part {part} is no longer disclosed in the run's assumptions"
+        );
+    }
 }
 
 /// The headline guarantee: the same spec body, once against the `.kicad_sch`
@@ -151,8 +160,10 @@ fn schematic_and_pcb_agree() {
     }
 
     // And both must hold numerically (a vacuous agreement on two RED runs would
-    // also satisfy the loop above), and be INVALID for the same model gap
-    // (see `schematic_example_spec_passes`); `assert_green` once modelled.
+    // also satisfy the loop above). VCC and `no_faults` are the assertions the
+    // shipped example leaves out because the open parts undermine them, so this
+    // body must stay INVALID for exactly that model gap, not turn silently green;
+    // `assert_green` once U4 and the sockets are modelled.
     assert_eq!(sch_res.exit_code(), pcb_res.exit_code());
     support::assert_invalid_by_open_parts(&sch_res, PIC_PROGRAMMER_OPEN);
     support::assert_invalid_by_open_parts(&pcb_res, PIC_PROGRAMMER_OPEN);
