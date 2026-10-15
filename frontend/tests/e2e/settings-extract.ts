@@ -39,6 +39,9 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
   await page.waitForSelector('[data-testid="drop-zone"]', { timeout: 30_000 })
   await page.setInputFiles('#board-file', join(repo, 'crates/hauksbee-engine/tests/fixtures/plain_check_open_active_ic.kicad_pcb'))
   await page.waitForSelector('[data-testid="report-verdict"]', { timeout: 30_000 })
+  // The guessed-parts group starts collapsed; open it as a user would.
+  const closedParts = page.locator('[data-testid="guessed-parts"]:not([open]) > summary')
+  if (await closedParts.count()) await closedParts.click()
   await page.locator('[data-testid^="extract-start-"]').first().dispatchEvent('click')
   await page.click('[data-testid="extract-consent-accept"]')
   await page.setInputFiles('[data-testid="extract-file"]', join(repo, 'testdata/datasheets/1N4148.pdf'))
@@ -87,6 +90,9 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
     await page.waitForSelector('[data-testid="drop-zone"]', { timeout: 30_000 })
     await page.setInputFiles('#board-file', join(repo, 'crates/hauksbee-engine/tests/fixtures/plain_check_open_active_ic.kicad_pcb'))
     await page.waitForSelector('[data-testid="report-verdict"]', { timeout: 30_000 })
+    // The guessed-parts group starts collapsed; open it as a user would.
+    const closedParts = page.locator('[data-testid="guessed-parts"]:not([open]) > summary')
+    if (await closedParts.count()) await closedParts.click()
     await page.locator('[data-testid^="extract-start-"]').first().dispatchEvent('click')
     await page.click('[data-testid="extract-consent-accept"]')
     await page.setInputFiles('[data-testid="extract-file"]', join(repo, 'testdata/datasheets/1N4148.pdf'))

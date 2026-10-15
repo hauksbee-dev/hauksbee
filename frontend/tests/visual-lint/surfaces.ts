@@ -104,6 +104,9 @@ export const APP_SURFACES: Surface[] = [
       // Dispatch directly: the narrow phone layout scrolls and replaces this
       // row as the active card mounts, which can make Playwright keep waiting
       // for a now-detached click target even though the click already landed.
+      // The guessed-parts group starts collapsed; open it as a user would.
+      const closedParts = page.locator('[data-testid="guessed-parts"]:not([open]) > summary')
+      if (await closedParts.count()) await closedParts.click()
       await page.locator('[data-testid^="extract-start-"]').first().dispatchEvent('click')
       // The consent gate renders once /api/models/extract/ready answers, and a
       // real engine answers it by asking codex whether it is logged in, which
