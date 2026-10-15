@@ -203,23 +203,36 @@ pub(super) fn check_ground_islands(board: &ExtractedBoard, report: &mut NetLintR
     }
     let main_name = &board.nets[main].name;
     for (nets, refs) in islands.into_values() {
-        let refs: Vec<String> = refs.into_iter().collect();
-        let listed = nets
+        report
+            .findings
+            .push(island_finding(board, main_name, nets, refs));
+    }
+}
+
+/// The finding for one island of ground-named nets never joined to the main ground.
+fn island_finding(
+    board: &ExtractedBoard,
+    main_name: &str,
+    nets: Vec<String>,
+    refs: BTreeSet<String>,
+) -> LintFinding {
+    let refs: Vec<String> = refs.into_iter().collect();
+    let listed = nets
+        .iter()
+        .map(|n| format!("'{n}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    // A name alone proves nothing: a signal pair named for its return
+    // (`SNS_GND+`) is no ground. Only a ground word as the whole name or a
+    // ground-named pin makes this a fault; otherwise it is a question.
+    let proven = nets.iter().any(|n| {
+        board
+            .nets
             .iter()
-            .map(|n| format!("'{n}'"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        // A name alone proves nothing: a signal pair named for its return
-        // (`SNS_GND+`) is no ground. Only a ground word as the whole name or a
-        // ground-named pin makes this a fault; otherwise it is a question.
-        let proven = nets.iter().any(|n| {
-            board
-                .nets
-                .iter()
-                .any(|b| b.name == *n && ground_evidence(board, b))
-        });
-        let (severity, message) = if proven {
-            (
+            .any(|b| b.name == *n && ground_evidence(board, b))
+    });
+    let (severity, message) = if proven {
+        (
                 Severity::High,
                 format!(
                     "ground net {listed} ({}) is never joined to the board ground '{main_name}': no copper, \
@@ -228,8 +241,8 @@ pub(super) fn check_ground_islands(board: &ExtractedBoard, report: &mut NetLintR
                     refs.join(", "),
                 ),
             )
-        } else {
-            (
+    } else {
+        (
                 Severity::Low,
                 format!(
                     "{listed} ({}) has ground in its name but no ground pin, and nothing joins it to '{main_name}'. \
@@ -237,14 +250,13 @@ pub(super) fn check_ground_islands(board: &ExtractedBoard, report: &mut NetLintR
                     refs.join(", "),
                 ),
             )
-        };
-        report.findings.push(LintFinding {
-            check: LintCheck::GroundIsland,
-            severity,
-            message,
-            refs,
-            nets,
-        });
+    };
+    LintFinding {
+        check: LintCheck::GroundIsland,
+        severity,
+        message,
+        refs,
+        nets,
     }
 }
 
