@@ -1,0 +1,557 @@
+{
+ "ok": true,
+ "error": null,
+ "board_name": "verdict_fet_partial",
+ "file_name": "verdict_fet_partial.kicad_pcb",
+ "num_components": 4,
+ "num_nets": 5,
+ "clearance_rule_source": {
+  "source": "defaulted",
+  "value_mm": 0.2,
+  "project_file_found": false
+ },
+ "triage": {
+  "do_not_order": [],
+  "inspect": [],
+  "checked_ok": [],
+  "not_covered": "1 part lacks an executable simulation model; model-dependent firmware/analog/AC/thermal claims involving those parts are not covered. Copper geometry and datasheet decode rules do not require a simulation model. Clearance findings use DEFAULT rules, not your rules, because no usable .kicad_pro netclass rules were read."
+ },
+ "headline": "Partly judged, not a pass: nothing found blocks ordering among the checks this run could judge, but parts with no usable model leave the rest unjudged; see the reason below.",
+ "serious": 0,
+ "total": 0,
+ "sections": [
+  {
+   "title": "Copper spacing (DRC; DEFAULT rules, not your rules)",
+   "verdict": "CLEARANCE RULE SOURCE: DEFAULT 0.200 mm; this upload did not include a .kicad_pro, so your netclass rules were not read; these are default rules, not your rules. Upload the matching .kicad_pro alongside the board to check your netclass rules. Looks healthy: no copper spacing (drc) problems found.",
+   "findings": []
+  },
+  {
+   "title": "Connectivity & wiring",
+   "verdict": "INCONCLUSIVE: 1 current-carrying / active part(s) have no model (Q1), so a clean result here is not a clean bill. Draft models from their datasheets (`hauksbee models extract --unmodelled <board>`, or the Extend button in `hauksbee serve`), scaffold one by hand (`hauksbee models new`, then --models-dir), or supply BOM identity (--bom) to make this verdict conclusive.",
+   "findings": []
+  },
+  {
+   "title": "Signal integrity",
+   "verdict": "INCONCLUSIVE: 1 current-carrying / active part(s) have no model (Q1), so a clean result here is not a clean bill. Draft models from their datasheets (`hauksbee models extract --unmodelled <board>`, or the Extend button in `hauksbee serve`), scaffold one by hand (`hauksbee models new`, then --models-dir), or supply BOM identity (--bom) to make this verdict conclusive.",
+   "findings": []
+  }
+ ],
+ "components": [
+  {
+   "reference": "Q1",
+   "value": "XFET9999",
+   "x": 110,
+   "y": 100,
+   "rot": 0
+  },
+  {
+   "reference": "R1",
+   "value": "1k",
+   "x": 130,
+   "y": 100,
+   "rot": 0
+  },
+  {
+   "reference": "R2",
+   "value": "10k",
+   "x": 110,
+   "y": 115,
+   "rot": 0
+  },
+  {
+   "reference": "R3",
+   "value": "10k",
+   "x": 130,
+   "y": 115,
+   "rot": 0
+  }
+ ],
+ "import_diagnostics": {
+  "format": "text board / netlist",
+  "recovered": 4,
+  "partial": 0,
+  "unplaced": 0,
+  "missing_or_refused": 0,
+  "objects": [
+   {
+    "id": "Q1",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 110,
+    "y": 100,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GATE_CTRL",
+     "GND",
+     "LOAD_DRAIN"
+    ]
+   },
+   {
+    "id": "R1",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 130,
+    "y": 100,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "+5V",
+     "LOAD_DRAIN"
+    ]
+   },
+   {
+    "id": "R2",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 110,
+    "y": 115,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GATE_CTRL",
+     "GND"
+    ]
+   },
+   {
+    "id": "R3",
+    "status": "recovered",
+    "confidence": "high",
+    "x": 130,
+    "y": 115,
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "nets": [
+     "GND",
+     "VB"
+    ]
+   }
+  ]
+ },
+ "bind": {
+  "critical_parts_bound": "0/0",
+  "active_path_unresolved": [
+   "Q1"
+  ],
+  "open_parts": [
+   {
+    "reference": "Q1",
+    "value": "XFET9999",
+    "reason": "no model",
+    "consequence": "Q1 defaults to OPEN; nets through it are isolated in simulation",
+    "active_ic": false,
+    "bound": false
+   }
+  ]
+ },
+ "model_coverage": {
+  "schema_version": 1,
+  "summary": {
+   "active_connected": 0,
+   "identified": 0,
+   "executable_available": 0,
+   "unresolved": 0,
+   "identity_only": 0,
+   "executable_scope_unspecified": 0,
+   "executable_partial": 0,
+   "executable_declared": 0,
+   "ignored": 0,
+   "actionable_behavior_gaps": 0,
+   "authoring_targets": 1,
+   "requirements_total": 0,
+   "requirements_met": 0,
+   "requirements_unmet": 0
+  },
+  "components": [],
+  "authoring_targets": [
+   {
+    "reference": "Q1",
+    "value": "XFET9999",
+    "lib_id": "Package_TO_SOT_SMD:SOT-23",
+    "footprint": "Package_TO_SOT_SMD:SOT-23",
+    "stage": "unresolved",
+    "actionable_behavior_gap": true,
+    "model_id": null,
+    "model_kind": null,
+    "layer": "-",
+    "origin": "-",
+    "source": {
+     "tier": "open",
+     "layer": "unspecified",
+     "origin": "unresolved",
+     "validation": "unvalidated",
+     "uncertainty": [
+      {
+       "status": "unknown",
+       "parameter": "Q1.model",
+       "reason": "no model resolved; the component is explicitly open"
+      }
+     ]
+    },
+    "pins": [
+     {
+      "number": "G",
+      "function": "",
+      "kind": "",
+      "net": "GATE_CTRL",
+      "position_mm": [
+       110,
+       100
+      ]
+     },
+     {
+      "number": "D",
+      "function": "",
+      "kind": "",
+      "net": "LOAD_DRAIN",
+      "position_mm": [
+       111,
+       100
+      ]
+     },
+     {
+      "number": "S",
+      "function": "",
+      "kind": "",
+      "net": "GND",
+      "position_mm": [
+       112,
+       100
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ "inventory": [
+  {
+   "path": "verdict_fet_partial.kicad_pcb",
+   "kind": "ki_cad_pcb",
+   "role": "layout",
+   "sha256": "ed23596a2fbf442d1b1ef5b819ad85a3ff016f355d41e0c00d6ddc28ea31e88f",
+   "contributed": [
+    {
+     "what": "connectivity",
+     "detail": "component and net incidence consumed by binding and electrical checks"
+    },
+    {
+     "what": "copper_geometry",
+     "detail": "layout geometry consumed by geometry-bearing checks"
+    }
+   ]
+  }
+ ],
+ "assumptions": [
+  {
+   "id": "open-part:Q1",
+   "kind": "open_part",
+   "term": "open_part",
+   "source": "binder",
+   "scope": {
+    "type": "subjects",
+    "value": [
+     {
+      "kind": "part",
+      "id": "Q1"
+     }
+    ]
+   },
+   "statement": "Q1 (XFET9999) is treated as an open circuit.",
+   "because": "No model.",
+   "consequence": "Nets through Q1 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
+   "replacement": "Add a model for Q1 (draft one from its datasheet with `hauksbee models extract`, or the web UI's Extend button), or mark it DNP if the board does not fit it.",
+   "remedy": {
+    "type": "add_model",
+    "reference": "Q1"
+   }
+  }
+ ],
+ "glossary": [
+  {
+   "term": "pass",
+   "label": "PASS",
+   "short": "The check held, and nothing it depends on had to be guessed.",
+   "what_to_do": "Nothing. Keep the check so a later change that breaks it is caught."
+  },
+  {
+   "term": "fail",
+   "label": "FAIL",
+   "short": "The board was simulated and the check did not hold. This is a finding about your design.",
+   "what_to_do": "Read the reason under the check: it names the net or part and what was seen. Fix the design (or the limit, if the limit is wrong) and rerun."
+  },
+  {
+   "term": "invalid",
+   "label": "INVALID",
+   "short": "Hauksbee refused to give this a pass or fail, because something it rests on was not simulated (an open part, an unpowered regulator, firmware that never ran). It is not a failure of your board.",
+   "what_to_do": "Close the named gap and rerun."
+  },
+  {
+   "term": "conditional_pass",
+   "label": "Conditional pass",
+   "short": "Passed, but only under the assumptions listed.",
+   "what_to_do": "Each assumption names what would make the pass unconditional."
+  },
+  {
+   "term": "open_part",
+   "label": "Open part",
+   "short": "A part with no model. It is left out of the circuit (treated as not there), so readings on its nets show the board without it.",
+   "what_to_do": "Give it a model (draft one from its datasheet), or mark it DNP if the board does not fit it."
+  },
+  {
+   "term": "substitute_model",
+   "label": "Stand-in model",
+   "short": "No model matched this exact part, so a similar one stood in. Where the two differ, results describe the stand-in.",
+   "what_to_do": "Add a model for the real part, or name the exact part fitted."
+  },
+  {
+   "term": "reduced_fidelity",
+   "label": "Reduced fidelity",
+   "short": "This part or result was simulated with a simpler stand-in. It is good enough for the claim shown, but not for finer ones.",
+   "what_to_do": "Usually nothing. To tighten it, give the run what the entry asks for."
+  },
+  {
+   "term": "assumed_corner",
+   "label": "Assumed corner",
+   "short": "The board names only the kind of part (e.g. 'LED'), so Hauksbee checked a high and a low plausible part.",
+   "what_to_do": "Put the real part number on it to check that part instead."
+  },
+  {
+   "term": "not_exercised",
+   "label": "Not exercised",
+   "short": "The run never reached this (a regulator with no input supply, a bus never addressed, firmware that never ran), so there is no result for it.",
+   "what_to_do": "Supply what the entry names (a supply, firmware, a stimulus) and rerun."
+  },
+  {
+   "term": "not_checked",
+   "label": "Not checked",
+   "short": "This check could not run on these inputs. No findings here does not mean there are none.",
+   "what_to_do": "Give the run the input the entry names and rerun."
+  },
+  {
+   "term": "inferred_pin_role",
+   "label": "Inferred pin role",
+   "short": "Nothing said what this pin does, so Hauksbee went by the usual pin order for the package.",
+   "what_to_do": "If that is wrong for this part, name the pin roles in its model."
+  },
+  {
+   "term": "default_parameter",
+   "label": "Default value",
+   "short": "A value the inputs did not give was set to a documented default.",
+   "what_to_do": "Set the real value in the part's model or in the spec."
+  },
+  {
+   "term": "fitted_by_default",
+   "label": "Assumed fitted",
+   "short": "With no BOM, every placed part is treated as fitted, including any left off the real board.",
+   "what_to_do": "Supply a BOM that marks the parts that are not fitted."
+  },
+  {
+   "term": "operating_limit",
+   "label": "Outside part limits",
+   "short": "The run measured a part outside a limit its datasheet sets, so results that depend on it are not trusted.",
+   "what_to_do": "Bring the part inside the named limit (change the circuit or the part)."
+  },
+  {
+   "term": "parser_limitation",
+   "label": "Reader limitation",
+   "short": "The file reader has a known gap here, so findings in this area may be missing or wrong.",
+   "what_to_do": "Re-export from a supported tool version, or confirm these findings by hand."
+  },
+  {
+   "term": "waived",
+   "label": "Waived",
+   "short": "Someone accepted this finding by hand, with a reason and an end date. It does not fail the run until that date.",
+   "what_to_do": "Fix the finding before the waiver ends, or renew it with a fresh reason."
+  },
+  {
+   "term": "default_rules",
+   "label": "Default rules",
+   "short": "The board's own spacing and width rules were not available, so checks used Hauksbee's defaults.",
+   "what_to_do": "Put the project's .kicad_pro next to the board so its own rules are used."
+  },
+  {
+   "term": "identity_only",
+   "label": "Identity only",
+   "short": "Hauksbee knows the part and its pins, but not what it does, so it stays open in simulation.",
+   "what_to_do": "Give its model behaviour (draft it from the datasheet) to simulate it."
+  },
+  {
+   "term": "executable_partial",
+   "label": "Partly modelled",
+   "short": "The part simulates, but only some of what it does is modelled.",
+   "what_to_do": "Results that need the rest are not evidence; extend the model to cover them."
+  },
+  {
+   "term": "scope_unspecified",
+   "label": "Scope not stated",
+   "short": "The part simulates, but its model does not say which behaviours it covers, so Hauksbee cannot tell which results it vouches for.",
+   "what_to_do": "List what the model covers in its card."
+  },
+  {
+   "term": "report_only_exit",
+   "label": "Report only",
+   "short": "This command reports problems but still exits 0, so a script or CI job will not fail on them.",
+   "what_to_do": "Add --strict to make serious findings fail the build."
+  }
+ ],
+ "evidence": [
+  {
+   "assertion": "Static analysis covered 5 extracted nets",
+   "models": [
+    {
+     "subject": "R1",
+     "reference": "R1",
+     "model_id": "resistor_tht",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "passives",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "resistor_tht.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "subject": "R2",
+     "reference": "R2",
+     "model_id": "resistor_tht",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "passives",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "resistor_tht.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "subject": "R3",
+     "reference": "R3",
+     "model_id": "resistor_tht",
+     "layer": "builtin",
+     "source": {
+      "tier": "curated-library",
+      "layer": "builtin",
+      "origin": "passives",
+      "validation": "physical-bounds-only",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "resistor_tht.model",
+        "reason": "the source publishes no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    }
+   ],
+   "parameters": [
+    {
+     "subject": "R1",
+     "parameter": "R1.model",
+     "value": "resistor_tht",
+     "origin": {
+      "type": "model",
+      "model_id": "resistor_tht",
+      "layer": "builtin",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "subject": "R2",
+     "parameter": "R2.model",
+     "value": "resistor_tht",
+     "origin": {
+      "type": "model",
+      "model_id": "resistor_tht",
+      "layer": "builtin",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "subject": "R3",
+     "parameter": "R3.model",
+     "value": "resistor_tht",
+     "origin": {
+      "type": "model",
+      "model_id": "resistor_tht",
+      "layer": "builtin",
+      "confidence": "guessed"
+     }
+    }
+   ],
+   "assumptions": [
+    "open-part:Q1"
+   ],
+   "status": "undermined"
+  }
+ ],
+ "notes": [
+  {
+   "kind": "bind_role",
+   "message": "Current-carrying / active part(s) left open on the live circuit: Q1. Analog/AC/thermal results on their nets are NOT trustworthy."
+  }
+ ],
+ "nets": [
+  "+5V",
+  "GATE_CTRL",
+  "GND",
+  "LOAD_DRAIN",
+  "VB"
+ ],
+ "component_kinds": {
+  "R1": "passive",
+  "R2": "passive",
+  "R3": "passive"
+ },
+ "component_assertions": {
+  "R1": [
+   "max_current",
+   "max_temp"
+  ],
+  "R2": [
+   "max_current",
+   "max_temp"
+  ],
+  "R3": [
+   "max_current",
+   "max_temp"
+  ]
+ },
+ "supplies": [
+  {
+   "net": "+5V",
+   "volts": 5
+  }
+ ],
+ "verdict_reason": "PARTLY JUDGED (not a pass): nothing found blocks ordering among the checks this run could judge. Partly judged: Q1 has no usable model, so the checks it could change are not judged: wiring and value checks on the 3 net(s) it connects to (GATE_CTRL, GND, LOAD_DRAIN), and electrical checks (levels, ratings, rails) on the 4 of 5 net(s) it can reach through the circuit (+5V, GATE_CTRL, GND, LOAD_DRAIN). The other 3 of 10 net checks were judged. Draft the model(s) with `hauksbee models extract --unmodelled <board>` to judge the rest.",
+ "verdict": "invalid",
+ "partly_judged": true,
+ "judgement_scope": {
+  "open_parts": [
+   "Q1"
+  ],
+  "nets": 5,
+  "wiring_dependent": [
+   "GATE_CTRL",
+   "GND",
+   "LOAD_DRAIN"
+  ],
+  "electrical_dependent": [
+   "+5V",
+   "GATE_CTRL",
+   "GND",
+   "LOAD_DRAIN"
+  ]
+ }
+}

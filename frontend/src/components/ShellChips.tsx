@@ -206,10 +206,13 @@ export function ShellChips({
             // An undermined run-level claim is what the body headline leads
             // with ("invalid for analysis"); "qualified" beside it reads as a
             // weaker verdict than the report gives.
-            ? summarizeEvidence(report.evidence).undermined > 0
+            ? report.partly_judged
+              ? { tone: 'warn' as const, label: 'partly judged, not a pass' }
+              : summarizeEvidence(report.evidence).undermined > 0
               ? { tone: 'warn' as const, label: 'analysis undermined', term: 'invalid' }
               : { tone: 'warn' as const, label: report.total > 0 ? plural(report.total, 'finding') : 'analysis qualified' }
-            : { tone: 'ok' as const, label: 'analysis clean' }),
+            // A pass that rests on conditions is never the plain "clean" the chip says for none.
+            : { tone: 'ok' as const, label: report.verdict_conditions?.some(c => c.trim() !== '') ? 'clean, conditionally' : 'analysis clean' }),
       })
     }
     if (checks) {

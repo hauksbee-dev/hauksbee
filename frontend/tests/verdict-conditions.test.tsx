@@ -8,6 +8,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { ShellChips } from '../src/components/ShellChips'
 import { PartlyJudged, VerdictConditions } from '../src/components/report/VerdictConditions'
 import { buildReportHtml } from '../src/lib/report-export'
 import { explainReport, reportView } from '../src/lib/report-view'
@@ -173,5 +174,34 @@ describe('partly judged', () => {
     const html = buildReportHtml(exportInput(partly))
     expect(html).toContain('PARTLY JUDGED (not a pass)')
     expect(html).toContain('Q1 has no usable model')
+  })
+})
+
+describe('the header chip', () => {
+  const noop = () => {}
+  const chip = (report: WebReport) =>
+    renderToStaticMarkup(
+      <ShellChips
+        view="board"
+        report={report}
+        checks={null}
+        sim={{ running: false, faults: 0, connected: false, sessionBoard: null } as never}
+        simMounted={false}
+        simOffline={false}
+        sessionBoard={null}
+        sessionMatchesCurrent={false}
+        currentBoard={null}
+        serverLiveActive={false}
+        goTo={noop}
+        onOpenLiveSession={noop}
+        onDriveLive={noop}
+      />,
+    )
+
+  test('a conditional pass is not "clean" and a partly judged run is not "undermined"', () => {
+    expect(chip(conditional)).toContain('clean, conditionally')
+    expect(chip(unconditional)).not.toContain('conditionally')
+    expect(chip(partly)).toContain('partly judged, not a pass')
+    expect(chip(partly)).not.toContain('analysis undermined')
   })
 })
