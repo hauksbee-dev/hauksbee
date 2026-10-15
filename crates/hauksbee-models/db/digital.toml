@@ -12819,7 +12819,7 @@ parameter = "model"
 reason = "datasheet publishes no validated model error interval; only the VCC bus-idle supply current is modelled. The thermal pad key (9, EP) is the CAD convention, the datasheet numbers no pad; RthetaJA is the SOIC (D) figure, the least favourable of the three packages"
 [[models.source.pinout]]
 package = "SOIC-8 (D) / SOT-23-THIN-8 (DDF) / VSON-8 (DRB)"
-pins = { "1" = "TXD", "2" = "GND", "3" = "VCC", "4" = "RXD", "5" = "NC / VIO", "6" = "CANL", "7" = "CANH", "8" = "S" }
+pins = { "1" = "TXD", "2" = "GND", "3" = "VCC", "4" = "RXD", "5" = "NC / VIO", "6" = "CANL", "7" = "CANH", "8" = "S", "9" = "Exposed thermal pad (VSON-8 only)", "EP" = "Exposed thermal pad (VSON-8 only)" }
 
 [models.coverage]
 implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]
@@ -12977,7 +12977,7 @@ parameter = "model"
 reason = "datasheet publishes no validated model error interval; only the VDD supply draw is modelled. The die pad key (9, EP) is the CAD convention: the datasheet gives it no number"
 [[models.source.pinout]]
 package = "DFN-8 (2.5 x 2.5 mm)"
-pins = { "1" = "SDA", "2" = "ADDR", "3" = "ALERT", "4" = "SCL", "5" = "VDD", "6" = "nRESET", "7" = "R", "8" = "VSS" }
+pins = { "1" = "SDA", "2" = "ADDR", "3" = "ALERT", "4" = "SCL", "5" = "VDD", "6" = "nRESET", "7" = "R", "8" = "VSS", "9" = "Exposed die pad", "EP" = "Exposed die pad" }
 
 [models.coverage]
 implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]
@@ -13262,7 +13262,7 @@ parameter = "model"
 reason = "datasheet publishes no validated model error interval; only the VM and VDRAIN supply draws are modelled"
 [[models.source.pinout]]
 package = "WQFN-40 (RTA)"
-pins = { "1" = "CPL", "2" = "CPH", "3" = "VM", "4" = "VDRAIN", "5" = "VCP", "6" = "GHA", "7" = "SHA", "8" = "GLA", "9" = "SPA", "10" = "SNA", "11" = "SNB", "12" = "SPB", "13" = "GLB", "14" = "SHB", "15" = "GHB", "16" = "GHC", "17" = "SHC", "18" = "GLC", "19" = "SPC", "20" = "SNC", "21" = "SOC", "22" = "SOB", "23" = "SOA", "24" = "VREF", "25" = "AGND", "26" = "nFAULT", "27" = "SDO", "28" = "SDI", "29" = "SCLK", "30" = "nSCS", "31" = "ENABLE", "32" = "INHA", "33" = "INLA", "34" = "INHB", "35" = "INLB", "36" = "INHC", "37" = "INLC", "38" = "DVDD", "39" = "GND", "40" = "VGLS" }
+pins = { "1" = "CPL", "2" = "CPH", "3" = "VM", "4" = "VDRAIN", "5" = "VCP", "6" = "GHA", "7" = "SHA", "8" = "GLA", "9" = "SPA", "10" = "SNA", "11" = "SNB", "12" = "SPB", "13" = "GLB", "14" = "SHB", "15" = "GHB", "16" = "GHC", "17" = "SHC", "18" = "GLC", "19" = "SPC", "20" = "SNC", "21" = "SOC", "22" = "SOB", "23" = "SOA", "24" = "VREF", "25" = "AGND", "26" = "nFAULT", "27" = "SDO", "28" = "SDI", "29" = "SCLK", "30" = "nSCS", "31" = "ENABLE", "32" = "INHA", "33" = "INLA", "34" = "INHB", "35" = "INLB", "36" = "INHC", "37" = "INLC", "38" = "DVDD", "39" = "GND", "40" = "VGLS", "41" = "Exposed thermal pad", "EP" = "Exposed thermal pad" }
 
 [models.coverage]
 implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]
