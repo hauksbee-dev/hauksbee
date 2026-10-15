@@ -2134,7 +2134,9 @@ kind = "mcu"
 description = "Espressif ESP32-C3 (RISC-V RV32IMC), package not recognised"
 
 [models.match]
-value_re = "(?i)^ESP32[-_ ]?C3([-_ ]?(WROOM|MINI).*)?$"
+# The bare chip also carries its ordering code (ESP32-C3 Series Datasheet v2.4,
+# Table 1-1 Series Comparison: ESP32-C3FN4, -C3FH4, -C3FH4AZ, -C3FH4X, -C3FH8X).
+value_re = "(?i)^ESP32[-_ ]?C3(F[NH][48](AZ|X)?|[-_ ]?(WROOM|MINI).*)?$"
 
 [models.params]
 backend = "qemu:esp32c3"
@@ -2259,8 +2261,12 @@ kind = "mcu"
 description = "Espressif ESP32-C3 bare chip, QFN32 5x5 mm"
 
 [models.match]
-value_re = "(?i)^ESP32[-_ ]?C3([-_ ]?(WROOM|MINI).*)?$"
-footprint_re = '(?i)(^|:)V?QFN[-_]?32([-_]1EP)?[-_]5x5mm[-_]P0\.5mm'
+# Every ordering code shares one QFN32 pad map for the roles below (Figures
+# 2-1 and 2-2 differ only on the unbonded pins 19-24 of -C3FH4X/-C3FH4AZ). The
+# footprint names the 5x5 mm, 0.5 mm-pitch QFN32 in KiCad's spelling or in
+# the EasyEDA/LCSC one ("QFN-32_L5.0-W5.0-P0.50-...").
+value_re = "(?i)^ESP32[-_ ]?C3(F[NH][48](AZ|X)?|[-_ ]?(WROOM|MINI).*)?$"
+footprint_re = '(?i)(^|:)V?QFN[-_]?32(([-_]1EP)?[-_]5x5mm[-_]P0\.5mm|[-_]L5\.0[-_]W5\.0[-_]P0\.50)'
 
 [models.params]
 backend = "qemu:esp32c3"

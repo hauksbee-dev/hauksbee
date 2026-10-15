@@ -251,6 +251,8 @@ fn esp_strap_maps_follow_the_package() {
         "ESP32-C3-MINI-1|RF_Module:ESP32-C3-MINI-1|esp32c3_mini1|5=gpio2 22=gpio8 23=gpio9 3=vdd",
         "ESP32-C3|RF_Module:ESP32-C3-WROOM-02|esp32c3_wroom02|16=gpio2 7=gpio8 8=gpio9 1=vdd",
         "ESP32-C3|QFN-32-1EP_5x5mm_P0.5mm_EP3.7x3.7mm|esp32c3_qfn32|6=gpio2 14=gpio8 15=gpio9 17=vdd",
+        // Ordering-code value and the EasyEDA/LCSC footprint spelling.
+        "ESP32-C3FH4|lcsc:QFN-32_L5.0-W5.0-P0.50-BL-EP3.7|esp32c3_qfn32|6=gpio2 14=gpio8 15=gpio9 17=vdd",
         "ESP32-D0WD-V3|QFN-48-1EP_5x5mm_P0.35mm_EP3.7x3.7mm|esp32_qfn48|23=gpio0 22=gpio2 19=vdd",
         "ESP32-WROOM-32E||esp32_wroom|25=gpio0 24=gpio2 35=p01_txd 34=p03_rxd",
         "ESP32-PICO-D4||esp32_pico|23=gpio0 22=gpio2 19=vdd",
