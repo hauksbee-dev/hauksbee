@@ -20,7 +20,12 @@ import { centerInScroller } from '../lib/scroll'
 import { EvidencePanel, ImportDiagnosticsPanel, ModelCoveragePanel, ReportPanel } from './report/Panels'
 import { CosimBlock } from './report/CosimBlock'
 import { NextStep } from './report/NextStep'
-import { ExplainVerdict, PartlyJudged, VerdictConditions } from './report/VerdictConditions'
+import { ResultPanel } from './report/ResultPanel'
+import { ResultLinkContext } from './report/ResultLinks'
+import type { ResultLinkHandlers } from './report/ResultLinks'
+import { overlayHasContent, resultOverlay, vocabulary } from '../lib/result-links'
+import type { ResultEntity } from '../lib/result-links'
+import { cliCommand } from '../lib/result-export'
 import { BoardMap } from './report/BoardMap'
 
 // The Board view with a report in hand: the viewer as the hero surface (with
@@ -132,6 +137,60 @@ export function BoardView({
     setGuessOpen(true)
     setAuthoringSignal(value => value + 1)
   }, [])
+
+  // The result panel's reach into the board: what a link points at (hover),
+  // what it framed last (click), and the result's own layer on the map.
+  const [overlayOn, setOverlayOn] = useState(true)
+  const [pointed, setPointed] = useState<ResultEntity | null>(null)
+  const [frameTarget, setFrameTarget] = useState<{ refs: string[]; nets: string[]; seq: number } | null>(null)
+  const frameSeq = useRef(0)
+  const overlay = useMemo(() => resultOverlay(r, v), [r, v])
+  const showGuessed = useCallback(() => {
+    setGuessOpen(true)
+    requestAnimationFrame(() => centerInScroller(guessRef.current))
+  }, [])
+  const resultLinks = useMemo<ResultLinkHandlers>(() => ({
+    vocab: vocabulary(r),
+    onPoint: setPointed,
+    onGo: entity => {
+      frameSeq.current += 1
+      if (entity.kind === 'part') {
+        const row = coverageFor(r.model_coverage, entity.ref)
+        const padNets = row ? padNetsOf(row) : []
+        setSelectedNet(null)
+        setSelectedComponent({
+          ref: entity.ref,
+          value: row?.value ?? r.components?.find(c => c.reference === entity.ref)?.value ?? '',
+          lib_id: row?.lib_id ?? '',
+          padNet: padNets[0] ?? null,
+          padNets,
+        })
+        setFrameTarget({ refs: [entity.ref], nets: [], seq: frameSeq.current })
+      } else {
+        setSelectedComponent(null)
+        setSelectedNet(entity.net)
+        setFrameTarget({ refs: [], nets: [entity.net], seq: frameSeq.current })
+      }
+      centerInScroller(mapRef.current)
+    },
+    onGiveModel: restoredFrom ? undefined : ref => {
+      const row = coverageFor(r.model_coverage, ref)
+      if (row) author(row)
+      else showGuessed()
+    },
+    variantRefs: new Set((r.bind?.open_selections ?? []).map(s => s.reference)),
+    onPickVariant: restoredFrom ? undefined : showGuessed,
+    checkOffer: entity => {
+      if (entity.kind === 'net') return { kind: 'voltage', net: entity.net, label: `net ${entity.net} must sit at a voltage` }
+      const caps = r.component_assertions?.[entity.ref] ?? []
+      if (caps.includes('max_current')) return { kind: 'max_current', ref: entity.ref, label: `${entity.ref} must stay under a current` }
+      if (caps.includes('max_temp')) return { kind: 'max_temp', ref: entity.ref, label: `${entity.ref} must stay cool` }
+      return null
+    },
+    onAddCheck: offer => setConstraintDraft({ kind: offer.kind, net: offer.net ?? '', ref: offer.ref ?? '' }),
+  }), [r, restoredFrom, author, showGuessed, setSelectedNet, setSelectedComponent])
+  const pointedRefs = useMemo(() => (pointed?.kind === 'part' ? [pointed.ref] : []), [pointed])
+  const pointedNets = useMemo(() => (pointed?.kind === 'net' ? [pointed.net] : []), [pointed])
 
   if (!r.ok) {
     return (
@@ -257,28 +316,39 @@ export function BoardView({
           className="mb-4"
         />
 
-        {/* Verdict headline. The report's parts arrive staggered ONCE, when the
-            report itself is new: keyed on the run, so clicking a net on the map
-            does not re-run the entry. */}
+        {/* The board result: verdict, coverage, the rows that qualify it, and
+            what it can become (board overlay, export, CLI command). Its parts
+            and nets are live links to the map below. The report's parts arrive
+            staggered ONCE, when the report itself is new: keyed on the run, so
+            clicking a net on the map does not re-run the entry. Everything this
+            report can become sits in the panel's action bar: below every line
+            that qualifies the verdict, since those say how much to trust what
+            is about to be exported. */}
         <StaggerItem index={0}>
-          <div
-            data-testid="report-verdict"
-            className="rounded-xl px-4 py-3.5"
-            style={{ border: `1px solid ${v.palette.border}`, background: v.palette.background, fontSize: 15.5 }}
-          >
-            {v.headline}
-            {v.reason && !v.partlyJudged && (
-              <div className="text-[13px] mt-1.5" data-testid="report-verdict-reason" title={v.reason} style={{ color: 'var(--silk)' }}>
-                {v.reasonBrief}
-              </div>
-            )}
-            <VerdictConditions conditions={v.conditions} />
-            <PartlyJudged scope={v.partlyJudged} />
-            {explanation && <ExplainVerdict explanation={explanation} />}
-            <div className="text-xs mt-1.5 tnum" data-testid="report-inventory" style={{ color: 'var(--silk-dim)' }}>
-              {v.title} · {plural(r.num_components, 'part')} · {plural(r.num_nets, 'net')}
-            </div>
-          </div>
+          <ResultLinkContext.Provider value={resultLinks}>
+            <ResultPanel
+              report={r}
+              view={v}
+              explanation={explanation}
+              onLocate={boardUrl ? locate : undefined}
+              overlay={boardUrl && overlayHasContent(overlay) ? { on: overlayOn, onToggle: () => setOverlayOn(on => !on) } : undefined}
+              command={cliCommand({ board: boardLabel ?? r.file_name, firmware: firmwareFile?.name ?? restoredFrom?.firmwareName ?? null })}
+              onOpenChecks={onOpenChecks}
+              exportSlot={(
+                <ExportMenu
+                  report={r}
+                  boardLabel={boardLabel}
+                  firmwareName={firmwareFile?.name ?? restoredFrom?.firmwareName ?? null}
+                  analyzedAt={session.analyzedAt}
+                  engineVersion={engineVersion}
+                  spec={spec}
+                  checks={checks}
+                  sessionName={sessionName}
+                  restored={restoredFrom !== null}
+                />
+              )}
+            />
+          </ResultLinkContext.Provider>
         </StaggerItem>
 
         {v.preLayout && (
@@ -369,24 +439,6 @@ export function BoardView({
           </div>
         )}
 
-        {/* Everything this report can become. Below the verdict AND below every
-            line that qualifies it (the restored-session caveat, the unbound-parts
-            warning): those say how much to trust what is about to be exported,
-            so they are not something to read after the download button. */}
-        <div className="mt-3">
-          <ExportMenu
-            report={r}
-            boardLabel={boardLabel}
-            firmwareName={firmwareFile?.name ?? restoredFrom?.firmwareName ?? null}
-            analyzedAt={session.analyzedAt}
-            engineVersion={engineVersion}
-            spec={spec}
-            checks={checks}
-            sessionName={sessionName}
-            restored={restoredFrom !== null}
-          />
-        </div>
-
         {/* Top-level honesty notes (minus the one the amber line above already
             says; see reportView). */}
         <div className="mt-3">
@@ -429,6 +481,10 @@ export function BoardView({
                   padNet: fp.padNet, padNets: fp.padNets,
                 })}
                 onEmptyBoard={onEmptyBoard}
+                pointedRefs={pointedRefs}
+                pointedNets={pointedNets}
+                frameTarget={frameTarget}
+                resultOverlay={overlayOn ? overlay : null}
               />
               {/* Floating selection card, same language as the live sim. A
                   strip that starts below the viewer toolbar and ends at the
@@ -458,6 +514,31 @@ export function BoardView({
                 </div>
               )}
             </div>
+            {overlayOn && overlayHasContent(overlay) && (
+              <div data-testid="result-legend" className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]" style={{ color: 'var(--silk-dim)' }}>
+                <span className="font-semibold" style={{ color: 'var(--silk-faint)' }}>Result on the board:</span>
+                {overlay.openRefs.length > 0 && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span aria-hidden="true" style={{ width: 12, height: 9, border: '1.5px dashed var(--warn)', borderRadius: 2 }} />no model
+                  </span>
+                )}
+                {overlay.unjudgedNets.length > 0 && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span aria-hidden="true" style={{ width: 14, height: 0, borderTop: '2px dashed var(--warn)' }} />not judged
+                  </span>
+                )}
+                {Object.values(overlay.findingNets).includes('serious') || Object.values(overlay.findingRefs).includes('serious') ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span aria-hidden="true" style={{ width: 14, height: 3, background: 'var(--err)', borderRadius: 2 }} />serious finding
+                  </span>
+                ) : null}
+                {Object.values(overlay.findingNets).includes('warning') || Object.values(overlay.findingRefs).includes('warning') ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span aria-hidden="true" style={{ width: 14, height: 3, background: 'var(--warn)', borderRadius: 2 }} />warning
+                  </span>
+                ) : null}
+              </div>
+            )}
             <div className="mt-1.5 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
               Click the map (or hold ctrl) to zoom · drag to pan · hover a trace to see its net · click a trace or part to inspect it, drive it, probe it or check it
             </div>

@@ -1,7 +1,8 @@
 import { useEffect, useEffectEvent, useRef, useState, useCallback, useMemo } from 'react'
 import { NO_LAYOUT, NO_LAYOUT_HINT, parseKicadPcb } from '../lib/kicad-parser'
 import type { ParsedBoard } from '../lib/kicad-parser'
-import { segmentsByNet } from '../lib/board-geometry'
+import { extentOf, segmentsByNet } from '../lib/board-geometry'
+import type { ResultOverlay } from '../lib/result-links'
 import type { FootprintInfo } from '../lib/board-geometry'
 import { makeCamera, fitScaleFor, zoomCamera, wheelZoomFactor, maxScaleFor, MIN_SCALE } from '../lib/camera'
 import type { Camera } from '../lib/camera'
@@ -73,6 +74,16 @@ interface BoardViewerProps {
    *  "86 footprints (82 parts)" so the two numbers on screen explain each other
    *  instead of contradicting each other. */
   partCount?: number
+  /** Parts and nets something outside the canvas points at (the result
+   *  panel's links, on hover): drawn in the same highlight ink as the cursor's
+   *  own hover, so a link and the board answer as one. */
+  pointedRefs?: readonly string[]
+  pointedNets?: readonly string[]
+  /** Frame these parts and nets (camera fit to their extent). A new `seq`
+   *  re-frames even the same target. */
+  frameTarget?: { refs: readonly string[]; nets: readonly string[]; seq: number } | null
+  /** The board result laid out on the board; null or absent draws nothing. */
+  resultOverlay?: ResultOverlay | null
 }
 
 const PARTICLE_COUNT = 4
@@ -90,6 +101,7 @@ export function BoardViewer({
   fullscreen = false, onToggleFullscreen,
   wheelMode = 'always',
   partCount,
+  pointedRefs, pointedNets, frameTarget, resultOverlay,
 }: BoardViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
@@ -311,6 +323,31 @@ export function BoardViewer({
   const showActivityRef = useRef(showActivity)
   showActivityRef.current = showActivity
   const markerRef = useRef<{ x: number; y: number; label?: string } | null>(null)
+  const pointedRef = useRef({ refs: pointedRefs ?? [], nets: pointedNets ?? [] })
+  pointedRef.current = { refs: pointedRefs ?? [], nets: pointedNets ?? [] }
+  const resultOverlayRef = useRef(resultOverlay)
+  resultOverlayRef.current = resultOverlay
+
+  // Frame what the result panel pointed at: the camera fits the parts' boxes
+  // and the nets' copper with a margin, never closer than the focus close-up.
+  useEffect(() => {
+    if (!frameTarget || !board || !canvasRef.current) return
+    const box = extentOf(board, frameTarget.refs, frameTarget.nets)
+    if (!box) return
+    const { width: cw, height: ch } = canvasRef.current.getBoundingClientRect()
+    if (cw < 2 || ch < 2) return
+    const margin = 6
+    const w = Math.max(box.x2 - box.x1, 1) + margin * 2
+    const h = Math.max(box.y2 - box.y1, 1) + margin * 2
+    const scale = Math.min(maxScaleFor(fitScaleRef.current), fitScaleRef.current * 5, Math.min(cw / w, ch / h))
+    userMovedCamera.current = true
+    zoomTarget.current = null
+    setCamera({
+      scale,
+      panX: cw / 2 - ((box.x1 + box.x2) / 2) * scale,
+      panY: ch / 2 - ((box.y1 + box.y2) / 2) * scale,
+    })
+  }, [frameTarget, frameTarget?.seq, board, setCamera])
 
   // "Show on board": jump the camera to the finding's spot at a readable
   // close-up and keep a pulsing marker there. Counts as a user move (the
@@ -441,6 +478,9 @@ export function BoardViewer({
       const hlNets = new Set<string>()
       if (selectedNet) hlNets.add(selectedNet)
       if (hoveredNet.current) hlNets.add(hoveredNet.current)
+      for (const net of pointedRef.current.nets) hlNets.add(net)
+      const hoverRefs = new Set(pointedRef.current.refs)
+      if (hoveredRef.current) hoverRefs.add(hoveredRef.current)
 
       // Which net, if any, has earned the flow animation. It is a statement
       // about `net_currents` and nothing else: a net flows when the frame
@@ -513,12 +553,17 @@ export function BoardViewer({
         componentStates: frame?.component_states,
         componentKinds: boardInfoRef.current?.component_kinds,
         faultedRefs: faultedRefsRef.current,
-        hoverRefs: hoveredRef.current ? new Set([hoveredRef.current]) : undefined,
+        hoverRefs: hoverRefs.size > 0 ? hoverRefs : undefined,
+        result: resultOverlayRef.current,
         animTime: animTimeRef.current,
         showActivity: showActivityRef.current,
         renderOpts: renderOptsRef.current,
         marker: markerRef.current,
         importMarkers,
+      }
+      // Test hook, like __hbCam: what the overlay is drawing this frame.
+      ;(window as unknown as { __hbOverlay?: unknown }).__hbOverlay = {
+        highlightNets: [...hlNets], hoverRefs: [...hoverRefs], result: resultOverlayRef.current ?? null,
       }
 
       ensureStatic(canvas, now)

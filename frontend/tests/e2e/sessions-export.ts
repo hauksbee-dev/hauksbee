@@ -111,9 +111,9 @@ await browserFlow(flow, async (page, { base, browser }) => {
   await page.click('[data-testid="nav-board"]')
   await openExportMenu(page)
   const itemCount = await page.locator('[data-testid="export-menu"] [role="menuitem"]').count()
-  const expectedItems = expectWorkflowExport ? 4 : 3
+  const expectedItems = expectWorkflowExport ? 6 : 5
   ok(expectWorkflowExport
-    ? 'a release build offers all four files once a spec exists'
+    ? 'a release build offers all six files once a spec exists'
     : 'a development build omits the credential-bearing workflow export',
   itemCount === expectedItems, `${itemCount} items`)
   await shoot(page, '02-export-menu')
@@ -144,6 +144,20 @@ await browserFlow(flow, async (page, { base, browser }) => {
     await page.click('[data-testid="export-open"]')
     ymlPath = await grab('export-workflow')
   }
+
+  // The result as the CI states it: the `run --check --json` document and a
+  // Markdown summary, both carrying the verdict the panel shows.
+  await page.click('[data-testid="export-open"]')
+  const checkPath = await grab('export-check-json')
+  const checkDoc = JSON.parse(readFileSync(checkPath, 'utf8')) as Record<string, unknown>
+  ok('the CI verdict JSON has the run --check --json verdict fields',
+    ['ok', 'verdict', 'serious_count', 'actionable_count'].every(k => k in checkDoc), Object.keys(checkDoc).slice(0, 8).join(','))
+  await page.click('[data-testid="export-open"]')
+  const mdPath = await grab('export-markdown')
+  const mdText = readFileSync(mdPath, 'utf8')
+  const shownTag = (await page.locator('[data-testid="result-tag"]').textContent() ?? '').trim()
+  ok('the Markdown summary carries the verdict the panel shows',
+    mdPath.endsWith('.md') && mdText.includes(`**${shownTag}**`), `${shownTag} / ${mdText.split('\n').find(l => l.includes('VERDICT')) ?? ''}`)
 
   // ── 3. The exported HTML is self-contained ──────────────────────────────
   step('the exported HTML renders standalone, off a file:// URL, with no network')

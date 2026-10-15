@@ -22,6 +22,15 @@ const failing = fixture('analyze-conditional-fail.json')
 const unconditional = fixture('analyze-watchy.json')
 const partly = fixture('analyze-partly-judged.json')
 
+/** The result panel's source from its verdict section to its action bar. */
+const resultCard = () => {
+  const panel = readFileSync(new URL('../src/components/report/ResultPanel.tsx', import.meta.url), 'utf8')
+  return panel.slice(panel.indexOf('data-testid="report-verdict"'), panel.indexOf('data-testid="result-actions"'))
+}
+
+/** The names a rendered chip list shows, in order (each chip is a button). */
+const chipNames = (html: string) => [...html.matchAll(/data-testid="result-link"[^>]*data-name="([^"]+)"/g)].map(m => m[1])
+
 const CONDITION = 'Q1 passes across assumed corners (generic_pmos_sot_corner_high_vth, generic_pmos_sot_corner_low_vth); put the MPN on Q1 to remove this assumption.'
 
 const exportInput = (report: WebReport) => ({
@@ -87,10 +96,9 @@ describe('verdict conditions', () => {
     expect(view.conditions).toEqual([CONDITION])
   })
 
-  test('the analysis view mounts the list inside the verdict card, before the inventory line', () => {
-    const board = readFileSync(new URL('../src/components/BoardView.tsx', import.meta.url), 'utf8')
-    const card = board.slice(board.indexOf('data-testid="report-verdict"'), board.indexOf('data-testid="report-inventory"'))
-    expect(card).toContain('<VerdictConditions conditions={v.conditions} />')
+  test('the analysis view mounts the list inside the result panel, above its action bar', () => {
+    expect(resultCard()).toContain('<VerdictConditions conditions={v.conditions} />')
+    expect(readFileSync(new URL('../src/components/BoardView.tsx', import.meta.url), 'utf8')).toContain('<ResultPanel')
   })
 
   test('the exported report lists the conditions and a clean one lists none', () => {
@@ -135,7 +143,8 @@ describe('partly judged', () => {
     const html = renderToStaticMarkup(<PartlyJudged scope={reportView(partly).partlyJudged} />)
     expect(html).toContain('data-testid="report-partly-judged"')
     expect(html).toContain('Not a pass: partly judged')
-    expect(html).toContain('No usable model: </span>Q1')
+    expect(html).toContain('No usable model: </span>')
+    expect(chipNames(html.slice(html.indexOf('partly-judged-open')))[0]).toBe('Q1')
     expect(html).toContain('electrical checks (levels, ratings, rails)')
     expect(html).toMatch(/Judged: <\/span>\d+ of \d+ net checks/)
     // A warning, not the quiet note accent of a conditional pass and not an error.
@@ -149,8 +158,10 @@ describe('partly judged', () => {
     const html = renderToStaticMarkup(
       <PartlyJudged scope={{ openParts: ['U1', 'U2'], wiring: ['A'], electrical: nets, judged: 4, total: 20 }} />,
     )
-    expect(html).toContain('N0, N1, N2, N3, N4, N5 and 3 more')
-    expect(html).toContain('title="N0, N1, N2, N3, N4, N5, N6, N7, N8"')
+    const electrical = html.slice(html.indexOf('partly-judged-electrical'), html.indexOf('partly-judged-judged'))
+    expect(chipNames(electrical)).toEqual(['N0', 'N1', 'N2', 'N3', 'N4', 'N5'])
+    expect(electrical).toContain('and 3 more')
+    expect(electrical).toContain('title="N0, N1, N2, N3, N4, N5, N6, N7, N8"')
     expect(html).toContain('on 1 net:')
     expect(html).toContain('on 9 nets:')
     expect(html).toContain('give U1, U2 models.')
@@ -164,8 +175,7 @@ describe('partly judged', () => {
   })
 
   test('the analysis view mounts the block inside the verdict card and drops the clipped reason', () => {
-    const board = readFileSync(new URL('../src/components/BoardView.tsx', import.meta.url), 'utf8')
-    const card = board.slice(board.indexOf('data-testid="report-verdict"'), board.indexOf('data-testid="report-inventory"'))
+    const card = resultCard()
     expect(card).toContain('<PartlyJudged scope={v.partlyJudged} />')
     expect(card).toContain('v.reason && !v.partlyJudged')
   })

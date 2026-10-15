@@ -712,6 +712,12 @@ pub struct WebReport {
     /// verdict. Absent when every key part is modelled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judgement_scope: Option<crate::scope::JudgementScope>,
+    /// The `run --check --json` document this verdict was derived from (with
+    /// any firmware co-sim faults folded in), rendered by the same
+    /// `JsonReport::to_json` the CLI prints, so the browser's "CI verdict as
+    /// JSON" export is the CI's own document rather than a re-derivation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_report: Option<serde_json::Value>,
     /// The `--check` machine document for the static board, which the verdict
     /// is derived from. Firmware co-sim faults are folded into a copy of it
     /// when the verdict is derived, never into this one.
@@ -760,6 +766,7 @@ impl WebReport {
             machine.findings.get_or_insert_with(Vec::new).extend(faults);
         }
         let verdict = machine.run_verdict();
+        self.check_report = serde_json::from_str(&machine.to_json()).ok();
         self.pre_verdict_headline.clone_from(&self.headline);
         self.headline = verdict_headline(&verdict, &self.headline, self.serious);
         self.verdict = verdict.verdict.to_string();

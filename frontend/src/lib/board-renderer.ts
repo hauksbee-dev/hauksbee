@@ -15,7 +15,9 @@ import { allStrokes } from './kicad-parser'
 import { boxesByRef, labelAnchor, LABEL_MIN_PX } from './board-geometry'
 import type { FootprintBox } from './board-geometry'
 import type { ImportMarker } from './report-view'
+import type { ResultLevel, ResultOverlay } from './result-links'
 import { getLayerStyle, isCopperLayer, boardTheme } from './layer-colors'
+import { cssToken } from './theme-tokens'
 
 const LAYER_ORDER = [
   'B.Cu', 'In4.Cu', 'In3.Cu', 'In2.Cu', 'In1.Cu', 'F.Cu',
@@ -316,6 +318,73 @@ export interface OverlayData {
   /** Layer/pad visibility, shared with the static pass so the overlay never
    *  paints activity on copper the user hid. */
   renderOpts?: RenderOptions
+  /** The board result laid out spatially (the report's "Show result on
+   *  board"): parts with no model, nets not judged, what findings name. */
+  result?: ResultOverlay | null
+}
+
+/** The board result's layer: drawn under the highlight and hover passes, so
+ *  a part or net the reader points at still answers on top of it. Colours are
+ *  the app's own severity tokens. */
+function drawResultLayer(ctx: Ctx, board: ParsedBoard, cam: Camera, result: ResultOverlay, renderOpts?: RenderOptions) {
+  const warn = cssToken('--warn') || '#fbbf24'
+  const err = cssToken('--err') || '#f87171'
+  const ink = (level: ResultLevel) => (level === 'serious' ? err : warn)
+  const tracks = [...board.segments, ...board.arcs].filter(t => layerOn(t.layer, renderOpts))
+  ctx.save()
+  // Nets not judged: dashed, muted copper over the trace, so "this was not
+  // looked at" reads as a property of the copper itself.
+  const unjudged = new Set(result.unjudgedNets)
+  if (unjudged.size > 0) {
+    ctx.setLineDash([5, 4])
+    ctx.globalAlpha = 0.75
+    for (const t of tracks) if (t.netName && unjudged.has(t.netName)) drawTrack(ctx, cam, t, warn, undefined)
+    ctx.setLineDash([])
+    ctx.globalAlpha = 1
+  }
+  // Nets a finding names: solid, in the finding's severity.
+  for (const t of tracks) {
+    const level = t.netName ? result.findingNets[t.netName] : undefined
+    if (level) drawTrack(ctx, cam, t, ink(level), undefined)
+  }
+  ctx.shadowBlur = 0
+  const boxes = boxesByRef(board)
+  const outline = (ref: string, color: string, dashed: boolean, tag: string | null) => {
+    const box = boxes.get(ref)
+    if (!box) return
+    const [bx, by, bw, bh] = boxRect(cam, box, 5)
+    ctx.strokeStyle = color
+    ctx.lineWidth = 2
+    ctx.setLineDash(dashed ? [6, 4] : [])
+    ctx.strokeRect(bx, by, bw, bh)
+    ctx.setLineDash([])
+    if (!tag) return
+    const fontPx = 10
+    ctx.font = `600 ${fontPx}px ui-monospace, monospace`
+    const w = ctx.measureText(tag).width + 8
+    ctx.fillStyle = color
+    ctx.beginPath()
+    ctx.roundRect(bx, by - fontPx - 7, w, fontPx + 6, 3)
+    ctx.fill()
+    ctx.fillStyle = boardTheme().bg
+    ctx.fillText(tag, bx + 4, by - 5)
+  }
+  for (const [ref, level] of Object.entries(result.findingRefs)) outline(ref, ink(level), false, null)
+  for (const ref of result.openRefs) outline(ref, warn, true, 'no model')
+  for (const p of result.points) {
+    const [sx, sy] = ws(cam, p)
+    if (offscreenCircle(ctx, sx, sy, 10)) continue
+    ctx.beginPath()
+    ctx.arc(sx, sy, 6, 0, Math.PI * 2)
+    ctx.fillStyle = ink(p.level)
+    ctx.globalAlpha = 0.85
+    ctx.fill()
+    ctx.globalAlpha = 1
+    ctx.lineWidth = 1.5
+    ctx.strokeStyle = boardTheme().bg
+    ctx.stroke()
+  }
+  ctx.restore()
 }
 
 function heatColor(t: number): string {
@@ -381,6 +450,8 @@ export function renderDynamicOverlay(ctx: Ctx, board: ParsedBoard, cam: Camera, 
     }
     ctx.shadowBlur = 0
   }
+
+  if (overlay.result) drawResultLayer(ctx, board, cam, overlay.result, renderOpts)
 
   // Highlighted nets: copper, vias, pads drawn bright.
   if (hasHighlight) {

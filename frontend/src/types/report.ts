@@ -419,6 +419,44 @@ export interface WebReport {
   judgement_scope?: JudgementScope
   /** Every term the page can explain, in the engine's words. */
   glossary?: GlossaryRow[]
+  /** The `run --check --json` document this verdict was derived from, as the
+   *  CLI prints it (same serializer). Absent from older engines and from
+   *  sessions saved before it existed; the export then rebuilds the verdict
+   *  fields from this report. */
+  check_report?: CheckReportJson | null
+}
+
+/** One finding of the `run --check --json` document. */
+export interface CheckReportFinding {
+  check: string
+  kind: string
+  /** "serious" | "warning" | "info" */
+  severity: string
+  nets?: string[]
+  location_mm?: [number, number] | null
+  layer?: string | null
+  refs?: string[]
+  actionable?: boolean
+  message: string
+  plain?: string
+  fix?: string | null
+}
+
+/** The `run --check --json` document (`hauksbee-run-report.schema.json`):
+ *  the fields the browser reads, the rest passed through untouched. */
+export interface CheckReportJson {
+  ok: boolean
+  verdict: 'pass' | 'fail' | 'invalid'
+  partly_judged?: boolean
+  verdict_reason?: string
+  serious_count: number
+  actionable_count: number
+  schema_version?: number
+  board?: string
+  findings?: CheckReportFinding[]
+  verdict_conditions?: string[]
+  judgement_scope?: JudgementScope
+  [field: string]: unknown
 }
 
 /** The key parts with no usable model, and the nets whose checks they could

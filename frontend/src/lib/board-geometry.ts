@@ -190,6 +190,33 @@ export function footprintAt(board: ParsedBoard, boxes: FootprintBox[], bx: numbe
   return best ?? pickFootprintBox(boxes, bx, by)
 }
 
+/** The board-mm box around some parts and the copper of some nets (tracks,
+ *  arcs, vias, pads), for framing them; null when none of them is drawn. */
+export function extentOf(
+  board: ParsedBoard, refs: readonly string[], nets: readonly string[],
+): { x1: number; y1: number; x2: number; y2: number } | null {
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity
+  const take = (x: number, y: number) => {
+    x1 = Math.min(x1, x); y1 = Math.min(y1, y); x2 = Math.max(x2, x); y2 = Math.max(y2, y)
+  }
+  const boxes = boxesByRef(board)
+  for (const ref of refs) {
+    const box = boxes.get(ref)
+    if (box) { take(box.x1, box.y1); take(box.x2, box.y2) }
+  }
+  const wanted = new Set(nets)
+  if (wanted.size > 0) {
+    for (const t of [...board.segments, ...board.arcs]) {
+      if (t.netName && wanted.has(t.netName)) { take(t.start.x, t.start.y); take(t.end.x, t.end.y) }
+    }
+    for (const v of board.vias) if (v.netName && wanted.has(v.netName)) take(v.at.x, v.at.y)
+    for (const fp of board.footprints) {
+      for (const pad of fp.pads) if (pad.netName && wanted.has(pad.netName)) take(pad.at.x, pad.at.y)
+    }
+  }
+  return x1 === Infinity ? null : { x1, y1, x2, y2 }
+}
+
 /** netName → its routed segments, for the flow animation. */
 export function segmentsByNet(board: ParsedBoard): Map<string, Segment[]> {
   const idx = new Map<string, Segment[]>()
