@@ -5350,7 +5350,7 @@ uncertainty = [
         let error = parse_and_validate_reply(no_source, "BCM847BS", "bjt_npn").unwrap_err();
         assert!(error.to_string().contains("rule 0"), "{error:#}");
         // Completion adds the record to every entry lacking one, keeps the rest.
-        let (part, kind) = ("X", "bjt_npn");
+        let (part, kind) = ("BCM847BS", "bjt_npn");
         let model = Reply::Model { part, kind };
         // (Lead-lettered pads: a numbered map would also need its package column.)
         let lettered = no_source.replace(
