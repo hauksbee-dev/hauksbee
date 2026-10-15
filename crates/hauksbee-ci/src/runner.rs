@@ -1095,7 +1095,8 @@ fn load_normalized_board(
         // (the path came from the spec's `board` key, not argv).
         BoardInputError::NotFound { path } => SpecError::Io(format!(
             "no board file at '{path}' (resolved from the spec's `board` key). \
-                 Check that path; it is taken relative to the spec file's directory"
+                 Check that path; it is taken relative to the spec file's directory{}",
+            corpus_hint(&path)
         )),
         BoardInputError::Io { path, message } => {
             SpecError::Io(format!("reading board {path}: {message}"))
@@ -1106,6 +1107,33 @@ fn load_normalized_board(
         // self-contained, file-naming message.
         other => SpecError::Invalid(other.to_string()),
     })
+}
+
+/// For a board missing from `board-corpus/` (downloaded, never shipped), the
+/// command that downloads it: the corpus manifest's board whose directory holds
+/// the path, else the script alone. Empty for any other path.
+fn corpus_hint(path: &str) -> String {
+    const DIR: &str = "board-corpus/";
+    let Some((root, rel)) = path.split_once(DIR) else {
+        return String::new();
+    };
+    let manifest = std::fs::read_to_string(Path::new(root).join("corpus.toml"))
+        .ok()
+        .and_then(|text| text.parse::<toml::Table>().ok());
+    let id = manifest
+        .as_ref()
+        .and_then(|m| m.get("board")?.as_array())
+        .and_then(|boards| {
+            boards.iter().find_map(|b| {
+                let id = b.get("id")?.as_str()?;
+                let dest = b.get("dest").and_then(toml::Value::as_str).unwrap_or(id);
+                rel.starts_with(&format!("{dest}/")).then_some(id)
+            })
+        });
+    let only = id.map_or_else(String::new, |id| format!(" --only {id}"));
+    format!(
+        ". This board is in the downloadable corpus; get it with: scripts/fetch-corpus.sh{only}"
+    )
 }
 
 /// Best-effort: is `sch` a sub-sheet referenced by another `.kicad_sch`? If so,
@@ -2196,16 +2224,20 @@ fn run_one(
     let mut net_series: HashMap<String, Vec<(f64, f64)>> = HashMap::new();
 
     // The transient is where the minutes go, so it is the phase worth reporting
-    // on. Label it with the ensemble member when there is more than one, since
-    // otherwise the bar appears to restart from zero for no visible reason.
-    let mut tick = crate::progress::Ticker::new(if member_count > 1 {
-        format!("simulating (member {} of {member_count})", plan.seed + 1)
-    } else {
-        "simulating".to_string()
-    });
+    // on. Name the ensemble member, since otherwise board time appears to
+    // restart from zero for no visible reason.
+    let mut tick = crate::progress::Ticker::new(
+        "simulating",
+        total_s,
+        if member_count > 1 {
+            format!("seed {}/{member_count}", plan.seed + 1)
+        } else {
+            "seed 1/1".to_string()
+        },
+    );
 
     while t < total_s - 1e-12 {
-        tick.at(t / total_s);
+        tick.at(t);
         let frame = engine.step(frame_dt);
         let t_ms = frame.t * 1000.0;
 
@@ -2378,7 +2410,6 @@ fn run_one(
 
         t += frame_dt;
     }
-    tick.done();
     engine.scheduler_mut().refresh_execution_evidence();
 
     // Analog-validity outcome. The refusal is carried in the outcome and
@@ -4528,5 +4559,21 @@ mod spi_cs_source_tests {
             msg.contains("U55") && msg.contains("SPI peripheral"),
             "{msg}"
         );
+    }
+
+    #[test]
+    fn a_missing_corpus_board_says_how_to_download_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("corpus.toml"),
+            "[[board]]\nid = \"demos\"\n[[board]]\nid = \"watchy_v1\"\ndest = \"watchy/v1\"\n",
+        )
+        .expect("manifest");
+        let root = dir.path().display();
+        let hint = |rel: &str| corpus_hint(&format!("{root}/board-corpus/{rel}"));
+        assert!(hint("demos/a/b.kicad_pcb").ends_with("fetch-corpus.sh --only demos"));
+        assert!(hint("watchy/v1/W.kicad_pcb").ends_with("fetch-corpus.sh --only watchy_v1"));
+        assert!(hint("unknown/x.kicad_pcb").ends_with("fetch-corpus.sh"));
+        assert_eq!(corpus_hint("/tmp/elsewhere/board.kicad_pcb"), "");
     }
 }

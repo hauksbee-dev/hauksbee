@@ -357,8 +357,21 @@ impl CheckReport<'_> {
             // the last thing `--check` prints answers "is my board ok" without
             // scrolling back through four sections. --json is unchanged (its
             // consumers read the structured findings).
+            // A failing verdict that still exits 0 says so on its own line, in the
+            // words the glossary gives that term, so a CI log reader who sees
+            // "failing" and a green job learns why and what to add.
+            let report_only = if !strict && would_gate {
+                format!(
+                    " (exit 0: report only. {})",
+                    hauksbee_ir::glossary::Term::ReportOnlyExit
+                        .entry()
+                        .what_to_do
+                )
+            } else {
+                String::new()
+            };
             println!(
-                "\n{}",
+                "\n{}{report_only}",
                 verdict_line(
                     &run_verdict,
                     (serious, worth_a_look),
@@ -366,7 +379,6 @@ impl CheckReport<'_> {
                 )
             );
         }
-        super::note_ungated_findings(strict, would_gate);
         if strict && would_gate {
             super::strict_gate_exit(
                 mode,

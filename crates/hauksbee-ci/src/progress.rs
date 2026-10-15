@@ -1,25 +1,36 @@
 //! Say what a run is doing while it does it.
 //!
 //! A co-simulation is minutes of work with nothing to show until it finishes:
-//! on a large board a newcomer's first run takes minutes. A
-//! silent process that runs that long is indistinguishable from a hung one, and
-//! the reasonable thing for a first-time user to do with a hung process is kill
-//! it.
+//! on a large board a newcomer's first run takes minutes, and a CI job can run
+//! for eleven. A silent process that runs that long is indistinguishable from a
+//! hung one, and the reasonable thing to do with a hung process is kill it.
 //!
 //! Progress goes to **stderr**, never stdout, so `--json` output stays a clean
 //! parse and a redirect keeps working. It is off unless something installs a
-//! sink, so a piped or CI run stays quiet by default and only a human at a
-//! terminal pays for the noise.
+//! sink. At a terminal the run narrates its phases and prints one line every
+//! ten seconds while simulating; with stderr redirected (a CI log) only that
+//! heartbeat survives, once a minute, so a log never fills with progress yet a
+//! long run is never silent.
 
 use std::io::{IsTerminal, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 type Sink = Box<dyn FnMut(&str) + Send>;
 
+/// Phase narration ("reading the board"): a human at a terminal only.
 static SINK: Mutex<Option<Sink>> = Mutex::new(None);
+/// The simulation heartbeat: also wanted in a redirected CI log.
+static BEAT: Mutex<Option<Sink>> = Mutex::new(None);
+/// Seconds between heartbeat lines.
+static BEAT_EVERY_SECS: AtomicU64 = AtomicU64::new(10);
 
-/// Install a sink, or `None` to go quiet again. Tests use this to capture.
+/// Heartbeat spacing at a terminal, and in a log file.
+const TTY_BEAT: Duration = Duration::from_secs(10);
+const LOG_BEAT: Duration = Duration::from_secs(60);
+
+/// Install a phase sink, or `None` to go quiet again. Tests use this to capture.
 ///
 /// # Panics
 ///
@@ -29,23 +40,33 @@ pub fn set_sink(sink: Option<Sink>) {
     *SINK.lock().expect("progress sink") = sink;
 }
 
-/// Install the default sink: overwrite one line on stderr, if stderr is a
-/// terminal. A redirected stderr gets nothing rather than a file full of
-/// carriage returns.
-pub fn to_stderr() {
-    if !std::io::stderr().is_terminal() {
-        return;
-    }
-    set_sink(Some(Box::new(|line: &str| {
-        // \r to the start, then erase to end of line: a short line after a long
-        // one must not leave the long one's tail on screen.
-        let mut err = std::io::stderr();
-        let _ = write!(err, "\r{line}\x1b[K");
-        let _ = err.flush();
-    })));
+/// Install the heartbeat sink, printed at most once per `every`.
+fn set_heartbeat(sink: Option<Sink>, every: Duration) {
+    BEAT_EVERY_SECS.store(every.as_secs(), Ordering::Relaxed);
+    *BEAT.lock().expect("progress heartbeat") = sink;
 }
 
-/// True when anything is listening. Callers can skip formatting work.
+fn print_line(line: &str) {
+    let mut err = std::io::stderr();
+    let _ = writeln!(err, "{line}");
+    let _ = err.flush();
+}
+
+/// Install the default sinks on stderr.
+///
+/// At a terminal: phase lines and a heartbeat every 10 s. Redirected: a
+/// heartbeat every 60 s, as plain lines, and nothing else, so a log file
+/// collects no carriage returns and no chatter.
+pub fn to_stderr() {
+    if std::io::stderr().is_terminal() {
+        set_sink(Some(Box::new(print_line)));
+        set_heartbeat(Some(Box::new(print_line)), TTY_BEAT);
+    } else {
+        set_heartbeat(Some(Box::new(print_line)), LOG_BEAT);
+    }
+}
+
+/// True when anything is listening for phase lines.
 ///
 /// # Panics
 ///
@@ -55,81 +76,73 @@ pub fn enabled() -> bool {
     SINK.lock().expect("progress sink").is_some()
 }
 
-fn emit(line: &str) {
+/// A one-off line: a phase starting, a board loaded.
+///
+/// # Panics
+///
+/// Panics if the sink mutex is poisoned.
+pub fn say(line: &str) {
     if let Some(sink) = SINK.lock().expect("progress sink").as_mut() {
         sink(line);
     }
 }
 
-/// A one-off line: a phase starting, a board loaded.
-pub fn say(line: &str) {
-    if enabled() {
-        emit(line);
-        end_line();
-    }
-}
-
-/// Finish the current line so ordinary output starts on a fresh one.
-fn end_line() {
-    if enabled() && std::io::stderr().is_terminal() {
-        let _ = writeln!(std::io::stderr());
-    }
-}
-
-/// Tracks one long phase and reports how far through it is.
-///
-/// Emits only when the whole-number percentage changes, so a loop that runs a
-/// hundred thousand frames costs a hundred writes rather than a hundred
-/// thousand. It also holds off entirely for the first moment: a phase that
-/// finishes quickly should not flash a progress line at all.
+/// Reports a long simulation: one line per heartbeat interval saying how much
+/// board time has run, which ensemble member it is, and how long it has taken.
 pub struct Ticker {
     label: String,
+    detail: String,
+    total_s: f64,
     started: Instant,
-    last_pct: Option<u8>,
+    last: Instant,
 }
 
-/// Below this, a phase is fast enough that reporting on it is just noise.
-const QUIET_FOR: Duration = Duration::from_millis(750);
-
 impl Ticker {
-    pub fn new(label: impl Into<String>) -> Self {
+    /// `total_s` is the board time the phase will cover; `detail` names the
+    /// ensemble member (`seed 2/16`).
+    pub fn new(label: impl Into<String>, total_s: f64, detail: impl Into<String>) -> Self {
+        let now = Instant::now();
         Self {
             label: label.into(),
-            started: Instant::now(),
-            last_pct: None,
+            detail: detail.into(),
+            total_s,
+            started: now,
+            last: now,
         }
     }
 
-    /// Report progress through the phase. `frac` is 0.0 to 1.0.
-    // `frac` is clamped to [0, 1], so the whole percentage fits a u8.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    pub fn at(&mut self, frac: f64) {
-        if !enabled() {
+    /// Report progress through the phase: `t_s` of board time has run. Emits at
+    /// most once per heartbeat interval, so a loop that calls it every frame
+    /// costs a clock read, and a phase that finishes quickly prints nothing.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the heartbeat mutex is poisoned.
+    pub fn at(&mut self, t_s: f64) {
+        let every = Duration::from_secs(BEAT_EVERY_SECS.load(Ordering::Relaxed));
+        if self.last.elapsed() < every {
             return;
         }
+        let mut beat = BEAT.lock().expect("progress heartbeat");
+        let Some(sink) = beat.as_mut() else {
+            return;
+        };
+        self.last = Instant::now();
         let elapsed = self.started.elapsed();
-        if elapsed < QUIET_FOR {
-            return;
-        }
-        let frac = frac.clamp(0.0, 1.0);
-        let pct = (frac * 100.0) as u8;
-        if self.last_pct == Some(pct) {
-            return;
-        }
-        self.last_pct = Some(pct);
-        emit(&format!(
-            "  {} {pct:>3}%{}",
+        let frac = if self.total_s > 0.0 {
+            t_s / self.total_s
+        } else {
+            0.0
+        };
+        sink(&format!(
+            "  ... {}: {t_s:.3} / {:.3} s board time ({}), {} elapsed{}",
             self.label,
+            self.total_s,
+            self.detail,
+            human_secs(elapsed.as_secs_f64()),
             remaining(elapsed, frac)
         ));
-    }
-
-    /// Close the phase out, clearing the line if one was ever drawn.
-    pub fn done(self) {
-        if self.last_pct.is_some() {
-            emit("");
-            end_line();
-        }
+        drop(beat);
     }
 }
 
@@ -145,7 +158,7 @@ fn remaining(elapsed: Duration, frac: f64) -> String {
     if left < 1.0 {
         return String::new();
     }
-    format!("  about {} left", human_secs(left))
+    format!(", about {} left", human_secs(left))
 }
 
 // A non-negative duration in seconds, rounded to whole seconds on purpose.
@@ -167,7 +180,9 @@ mod tests {
     /// The tests share one process-wide sink, so they must not interleave.
     static SERIAL: StdMutex<()> = StdMutex::new(());
 
-    fn capture() -> (
+    fn capture(
+        every: Duration,
+    ) -> (
         Arc<StdMutex<Vec<String>>>,
         std::sync::MutexGuard<'static, ()>,
     ) {
@@ -176,9 +191,12 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let lines = Arc::new(StdMutex::new(Vec::new()));
         let sink = Arc::clone(&lines);
-        set_sink(Some(Box::new(move |l: &str| {
-            sink.lock().expect("capture").push(l.to_string());
-        })));
+        set_heartbeat(
+            Some(Box::new(move |l: &str| {
+                sink.lock().expect("capture").push(l.to_string());
+            })),
+            every,
+        );
         (lines, guard)
     }
 
@@ -188,49 +206,51 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         set_sink(None);
+        set_heartbeat(None, TTY_BEAT);
         assert!(!enabled());
         // Must neither panic nor write.
         say("nobody should see this");
-        let mut t = Ticker::new("phase");
+        let mut t = Ticker::new("phase", 1.0, "seed 1/1");
         t.at(0.5);
-        t.done();
         drop(guard);
 
-        let (lines, _guard) = capture();
-        let mut t = Ticker::new("quick");
+        let (lines, _guard) = capture(TTY_BEAT);
+        let mut t = Ticker::new("quick", 1.0, "seed 1/1");
         for i in 0..=100 {
             t.at(f64::from(i) / 100.0);
         }
-        t.done();
-        set_sink(None);
+        set_heartbeat(None, TTY_BEAT);
         assert!(
             lines.lock().unwrap().is_empty(),
-            "a phase over in microseconds must not flash a progress line: {:?}",
+            "a phase over in microseconds must not print a progress line: {:?}",
             lines.lock().unwrap()
         );
     }
 
     #[test]
-    fn a_slow_phase_reports_once_per_percent() {
-        let (lines, _guard) = capture();
-        let mut t = Ticker::new("slow");
-        // Backdate the start so the phase counts as slow without sleeping.
-        t.started = Instant::now().checked_sub(Duration::from_secs(10)).unwrap();
-        for i in 0..=10_000 {
-            t.at(f64::from(i) / 10_000.0);
+    fn a_slow_phase_prints_one_line_per_interval_with_board_time_and_member() {
+        let (lines, _guard) = capture(Duration::from_secs(10));
+        let mut t = Ticker::new("simulating", 0.2, "seed 2/16");
+        // Backdate the last line so the first interval has already passed.
+        t.started = Instant::now().checked_sub(Duration::from_secs(30)).unwrap();
+        t.last = t.started;
+        for i in 0..=1000 {
+            t.at(0.2 * f64::from(i) / 1000.0);
         }
-        t.done();
-        set_sink(None);
+        set_heartbeat(None, TTY_BEAT);
         let got = lines.lock().unwrap().clone();
-        let ticks = got.iter().filter(|l| !l.is_empty()).count();
         assert_eq!(
-            ticks, 101,
-            "0% through 100% inclusive, once each, whatever the call rate"
+            got.len(),
+            1,
+            "one line per interval, however often it is called: {got:?}"
         );
+        let line = &got[0];
         assert!(
-            got[0].contains("slow"),
-            "the label names the phase: {got:?}"
+            line.contains("simulating: 0.000 / 0.200 s board time"),
+            "{line}"
         );
+        assert!(line.contains("(seed 2/16)"), "{line}");
+        assert!(line.contains("30s elapsed"), "{line}");
     }
 
     #[test]

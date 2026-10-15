@@ -187,6 +187,11 @@ struct RunArgs {
     #[arg(long)]
     quiet: bool,
 
+    /// Also print each assertion's numeric error budget and the provenance of
+    /// every model behind it (hidden by default; JSON and `JUnit` always carry them).
+    #[arg(long, short = 'v')]
+    verbose: bool,
+
     /// Print the run result as one JSON object on stdout instead of the human
     /// report (the web checks panel and any tool consume this). Exit codes are
     /// unchanged; a spec/board error prints `{"ok":false,"error":...}`. The
@@ -349,11 +354,12 @@ fn cmd_run(mut args: RunArgs) -> ExitCode {
         }
     }
 
-    // A co-sim is minutes of silence otherwise, which reads as a hang. Only for
-    // a human watching: `--quiet` asked for silence, `--json` output is parsed,
-    // and a CI log wants the result rather than a hundred progress lines. The
-    // sink itself also declines a non-terminal stderr.
-    if !args.quiet && !args.json && std::env::var_os("GITHUB_ACTIONS").is_none() {
+    // A co-sim is minutes of silence otherwise, which reads as a hang. At a
+    // terminal it narrates phases and prints a line every 10 s; with stderr
+    // redirected (a CI log) only a once-a-minute heartbeat survives, so a log
+    // never fills with progress but a long run is never silent. `--quiet` asked
+    // for silence and `--json` output is parsed, so both stay quiet.
+    if !args.quiet && !args.json {
         hauksbee_ci::progress::to_stderr();
     }
 
@@ -388,7 +394,10 @@ fn cmd_run(mut args: RunArgs) -> ExitCode {
                     if multi {
                         println!("=== {} ===", spec.display());
                     }
-                    print!("{}", result.render_human());
+                    print!(
+                        "{}",
+                        result.render_human_for(args.verbose, Some(&spec.display().to_string()))
+                    );
                 }
                 if args.junit.is_some() {
                     suites.push(result.junit_suite());
@@ -421,7 +430,7 @@ fn cmd_run(mut args: RunArgs) -> ExitCode {
                         hauksbee_ci::report::CiJsonError::new(e.to_string()).render_json()
                     );
                 }
-                eprintln!("hauksbee-ci: {}: {e}", spec.display());
+                eprintln!("{}", e.cli_line(&spec.display().to_string()));
                 // Emit JUnit even on this error path when --junit was
                 // requested: a CI that only reads the Checks/JUnit tab would
                 // otherwise see nothing at all for an exit-2 (a desynced spec,
@@ -477,7 +486,7 @@ fn cmd_run(mut args: RunArgs) -> ExitCode {
 
     // A GREEN run ends by pointing at whichever repo wiring (pre-commit hook,
     // GitHub workflow) is missing, and says nothing when both are in place.
-    // RED runs end with the per-kind docs pointer inside the report instead.
+    // RED and INVALID runs end with the fix inside the report instead.
     if worst == 0 && !args.quiet && !args.json {
         if let Some(step) = cwd()
             .ok()

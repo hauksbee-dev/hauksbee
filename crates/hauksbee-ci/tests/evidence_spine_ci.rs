@@ -93,7 +93,16 @@ fn production_numeric_assertion_carries_inventory_causal_map_and_error_budget() 
         }),
         "the canonical source record reaches CI JSON: {models:?}"
     );
-    let human = result.render_human();
+    // The default terminal report keeps the numerics out of a first-time
+    // reader's way and says how to get them; `--verbose` renders the same
+    // numerical qualification as JSON.
+    let concise = result.render_human();
+    assert!(
+        !concise.contains("error budget:") && !concise.contains("source=curated-library"),
+        "{concise}"
+    );
+    assert!(concise.contains("--verbose"), "{concise}");
+    let human = result.render_human_verbose();
     assert!(human.contains("source=curated-library"), "{human}");
     assert!(human.contains("uncertainty unknown"), "{human}");
     assert!(

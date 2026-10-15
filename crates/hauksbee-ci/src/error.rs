@@ -118,6 +118,20 @@ impl SpecError {
         move |e| Self::Io(format!("{context}: {e}"))
     }
 
+    /// The line the CLI prints on stderr for this error from `spec`. A missing
+    /// emulator is not a flaw in the spec, so it opens with what to do about it
+    /// rather than the `hauksbee-ci: <spec>:` prefix every spec error carries.
+    #[must_use]
+    pub fn cli_line(&self, spec: &str) -> String {
+        match self {
+            Self::BackendMissing(install) => format!(
+                "cannot run: {spec} needs an emulator that is not installed here, so nothing \
+                 was run or judged (exit 3). {install}"
+            ),
+            _ => format!("hauksbee-ci: {spec}: {self}"),
+        }
+    }
+
     /// CLI exit code for this pre-verdict error. A typed solver refusal means
     /// the requested analysis is invalid (3); other setup/spec errors remain 2.
     pub fn exit_code(&self) -> i32 {
@@ -275,6 +289,16 @@ mod tests {
         assert!(text.starts_with("INVALID"), "{text}");
         assert!(!text.contains("invalid spec"), "{text}");
         assert!(text.contains("hauksbee install renode"), "{text}");
+    }
+
+    #[test]
+    fn a_missing_emulator_opens_on_what_to_do_and_other_errors_keep_the_prefix() {
+        let missing = SpecError::BackendMissing("run `hauksbee install renode`".into());
+        let line = missing.cli_line("ci/stm32.toml");
+        assert!(line.starts_with("cannot run: ci/stm32.toml"), "{line}");
+        assert!(line.contains("hauksbee install renode"), "{line}");
+        let other = SpecError::Invalid("bad".into()).cli_line("ci/x.toml");
+        assert_eq!(other, "hauksbee-ci: ci/x.toml: invalid spec: bad");
     }
 
     fn names(list: &[&str]) -> Vec<String> {

@@ -1940,9 +1940,7 @@ fn check_peripheral(a: &Assertion, out: &RunOutcome) -> (bool, String) {
                  models no matching bus controller, so the firmware's bus traffic \
                  never reached it and its state is the power-on default. A pass \
                  here would vouch for a co-sim path that never ran; add the bus \
-                 controller to the SoC descriptor ({}) or drop this \
-                 assertion.",
-                hauksbee_ir::docs_url("docs/cosim/MCU.md")
+                 controller to the SoC descriptor or drop this assertion."
             ),
         );
     }

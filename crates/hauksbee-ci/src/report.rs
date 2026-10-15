@@ -707,7 +707,16 @@ impl CiResult {
         self.evidence.iter().find(|map| map.assertion() == label)
     }
 
-    fn evidence_text(&self, label: &str, explained: &mut ExplainedAssumptions) -> String {
+    /// The evidence lines under one assertion. The numeric error budget and the
+    /// per-model provenance lines are for a reviewer, so a first-time reader
+    /// only gets them under `verbose`; `hidden` records that some were left out.
+    fn evidence_text(
+        &self,
+        label: &str,
+        explained: &mut ExplainedAssumptions,
+        verbose: bool,
+        hidden: &mut bool,
+    ) -> String {
         let Some(map) = self.evidence_for(label) else {
             return String::new();
         };
@@ -726,6 +735,10 @@ impl CiResult {
                 };
                 let _ = write!(out, "\n[{id}] {}{explanation}", assumption.statement());
             }
+        }
+        if !verbose {
+            *hidden |= map.error_budget().is_some() || !map.models().is_empty();
+            return out;
         }
         if let Some(budget) = map.error_budget() {
             out.push_str("\nerror budget: ");
@@ -866,8 +879,27 @@ impl CiResult {
         }
     }
 
+    /// The terminal report a first-time reader gets: verdict, the one thing to
+    /// do, and the evidence under each assertion without the numeric error
+    /// budget or per-model provenance (those are for a reviewer; see
+    /// [`CiResult::render_human_for`]).
     #[must_use]
     pub fn render_human(&self) -> String {
+        self.render_human_for(false, None)
+    }
+
+    /// The terminal report with the numeric error budget and model provenance
+    /// under every assertion, as `--verbose` prints it.
+    #[must_use]
+    pub fn render_human_verbose(&self) -> String {
+        self.render_human_for(true, None)
+    }
+
+    /// The terminal report. `verbose` restores the error budget and per-model
+    /// lines; `spec` is the path to print in the "then rerun" line of an
+    /// INVALID run (the command the reader types next).
+    #[must_use]
+    pub fn render_human_for(&self, verbose: bool, spec: Option<&str>) -> String {
         let mut out = format!(
             "hauksbee-ci: {}\n  board: {}\n  seeds: {}\n",
             self.spec_name, self.board, self.seeds
@@ -878,6 +910,7 @@ impl CiResult {
         out.push_str(&self.dead_rail_banner());
         out.push('\n');
         let mut explained = ExplainedAssumptions::new();
+        let mut hidden = false;
         for r in &self.results {
             let mark = if r.invalid {
                 "INVALID"
@@ -891,7 +924,8 @@ impl CiResult {
                 "FAIL"
             };
             let _ = writeln!(out, "  [{mark}] {}\n        {}", r.label, r.detail);
-            for line in self.evidence_text(&r.label, &mut explained).lines() {
+            let evidence = self.evidence_text(&r.label, &mut explained, verbose, &mut hidden);
+            for line in evidence.lines() {
                 let _ = writeln!(out, "        {line}");
             }
             // On a real red (not a pass, not an INVALID refusal), add one
@@ -910,6 +944,11 @@ impl CiResult {
         }
         let total = self.results.len();
         let passed = self.pass_count();
+        if hidden {
+            out.push_str(
+                "  (numeric error budgets and model provenance are hidden; --verbose shows them)\n",
+            );
+        }
         // An analog abort that no assertion happened to cover still forces a
         // refusal, so surface it plainly rather than printing a misleading GREEN.
         if self.analog_abort && self.invalid_count() == 0 {
@@ -917,9 +956,6 @@ impl CiResult {
                 "  analog co-sim aborted (solve failed on too many chunks in a row); \
                  the run is INVALID for analysis\n",
             );
-        }
-        if let Some(refusal) = self.refusal() {
-            let _ = writeln!(out, "\n{}", refusal.render_text());
         }
         for (tag, msg) in self.honesty_notes() {
             let _ = writeln!(out, "  {tag}: {msg}");
@@ -955,22 +991,67 @@ impl CiResult {
                 self.elapsed.as_secs_f64(),
             );
         }
-        if let Some(reason) = self.verdict_reason() {
-            let _ = writeln!(out, "reason: {reason}");
-        }
-        // A RED report ends with where to read about the failing check: the
-        // assertion catalog's section for the first gating failure's kind.
-        if verdict == "RED" {
-            if let Some(r) = self.gating_failures().next() {
-                let _ = writeln!(
-                    out,
-                    "next: the \"{}\" section of {} explains this check and its knobs",
-                    r.kind,
-                    hauksbee_ir::docs_url("docs/ci/CI.md")
-                );
+        // An INVALID run ends on what to do about it; a RED run on the fix for
+        // its first gating failure. Both are the last thing a CI log shows.
+        if let Some(footer) = self.invalid_footer(spec) {
+            out.push_str(&footer);
+        } else {
+            let reason = self.verdict_reason();
+            if let Some(reason) = &reason {
+                let _ = writeln!(out, "reason: {reason}");
+            }
+            // The reason often already ends in this very sentence: say it once.
+            let fix = self.gating_failures().next().and_then(why_line);
+            if let Some(fix) =
+                fix.filter(|f| reason.as_deref().is_none_or(|r| !r.contains(f.as_str())))
+            {
+                let _ = writeln!(out, "fix: {fix}");
             }
         }
         out
+    }
+
+    /// What an INVALID run ends on: what the term means (the words the web app
+    /// uses), what was missing, the one fix to make first (the first
+    /// undermining assumption's typed remedy), and the command to rerun.
+    fn invalid_footer(&self, spec: Option<&str>) -> Option<String> {
+        use hauksbee_ir::evidence::AssumptionKind as K;
+        let refusal = self.refusal()?;
+        let invalid_map = self
+            .results
+            .iter()
+            .find(|r| r.invalid)
+            .and_then(|r| self.evidence_for(&r.label));
+        let undermining = |a: &&hauksbee_ir::evidence::Assumption| {
+            matches!(
+                a.kind(),
+                K::OpenPart
+                    | K::SubstituteModel
+                    | K::NotChecked
+                    | K::NotExercised
+                    | K::FittedByDefault
+                    | K::OperatingLimitViolated
+            )
+        };
+        let fix = invalid_map
+            .into_iter()
+            .flat_map(hauksbee_ir::evidence::EvidenceMap::assumptions)
+            .filter_map(|id| self.assumptions.iter().find(|a| a.id() == id))
+            .find(undermining)
+            .map_or_else(
+                || refusal.next_action.clone(),
+                hauksbee_ir::evidence::Assumption::cli_hint,
+            );
+        let rerun = spec.map_or_else(
+            || "the same spec".to_string(),
+            |path| format!("hauksbee-ci run {path}"),
+        );
+        Some(format!(
+            "INVALID - {}\nmissing: {}\nfix first: {fix}\nthen rerun: {rerun}\n\
+             (exit code 3 = refused, not failed. `--verbose` adds the numeric detail.)\n",
+            hauksbee_ir::glossary::Term::Invalid.entry().short,
+            refusal.missing_prerequisite,
+        ))
     }
 
     /// `JUnit` XML: each assertion is a `<testcase>`, failures carry a
@@ -1011,7 +1092,7 @@ impl CiResult {
             self.elapsed.as_secs_f64()
         );
         for r in &self.results {
-            let evidence = self.evidence_text(&r.label, &mut HashSet::default());
+            let evidence = self.evidence_text(&r.label, &mut HashSet::default(), true, &mut false);
             let gating = !r.passed && !r.invalid && r.waived.is_none();
             // The body is the measured detail, then (on a gating red) the
             // `why:` line, then the evidence. Plenty of people only ever read
@@ -1454,66 +1535,52 @@ fn is_zero(n: &str) -> bool {
 }
 
 /// One actionable "why / where to look" line for a failed assertion of the
-/// given `kind`. Points at the likely physical cause and the assertion-catalog
-/// section to read, one line, per kind, not a full explanation engine. `None`
-/// for kinds that have no useful generic pointer.
+/// given `kind`. Points at the likely physical cause, one line per kind, not a
+/// full explanation engine. `None` for kinds that have no useful generic
+/// pointer.
 ///
 /// Only reached once [`degenerate_hint`] has ruled out the outcomes where the
 /// check never measured anything: these lines all presume a real measurement.
 fn failure_hint(kind: &str) -> Option<String> {
-    let url = hauksbee_ir::docs_url("docs/ci/CI.md");
-    Some(match kind {
-        "voltage" => format!(
-            "the rail left its window; check the supply feeding this net \
-            and the load pulling it down ({url}, \"voltage\")."
-        ),
-        "rail_window" => format!(
-            "the rail dipped/spiked or recovered/settled outside the window; check the \
-            scenario's load step and the decoupling on this net ({url}, \
-            \"rail_window\")."
-        ),
-        "boot_coverage" | "boot-coverage" => format!(
-            "the firmware never drove the control net in time; check \
-            `firmware = ...` points at the right image and the net is a GPIO the \
-            firmware actually drives ({url}, \"boot_coverage\" caveat)."
-        ),
-        "no_faults" => format!(
-            "the stress monitor tripped; the named component exceeded a \
-            rating (over-current / -voltage / -power / -temp / reverse-bias); check \
-            its part value and supply ({url}, \"no_faults\")."
-        ),
-        "max_current" => format!(
-            "the part drew more than its limit; check its load and the \
-            override value ({url}, \"max_current\")."
-        ),
-        "max_temp" => format!(
-            "the junction ran hotter than the limit; check dissipation and \
-            the `ambient_c` assumption ({url}, \"max_temp\")."
-        ),
-        "uart" => format!(
-            "the expected UART text never appeared; check the firmware image \
-            and baud, and that the MCU booted ({url}, \"uart\")."
-        ),
-        "toggle" => format!(
-            "the net toggled the wrong number of times; check the firmware's \
-            drive rate and the deadline window ({url}, \"toggle\")."
-        ),
-        "protection_trip" => format!(
-            "the supply's protection did/did not latch as asserted; \
-            check the supply's limits and the load that triggers it ({url}, \
-            \"protection_trip\")."
-        ),
-        "phase_margin" => format!(
-            "the loop's phase margin missed the bound; check the \
-            compensation network and the `[ac]` sweep range ({url}, \
-            \"phase_margin\")."
-        ),
-        "ac_gain" => format!(
-            "the small-signal gain missed the band; check the AC stimulus \
-            net and the sweep points ({url}, \"ac_gain\")."
-        ),
-        _ => return None,
-    })
+    Some(
+        match kind {
+            "voltage" => {
+                "the rail left its window; check the supply feeding this net and the load pulling it down."
+            }
+            "rail_window" => {
+                "the rail dipped/spiked or recovered/settled outside the window; check the scenario's load step and the decoupling on this net."
+            }
+            "boot_coverage" | "boot-coverage" => {
+                "the firmware never drove the control net in time; check `firmware = ...` points at the right image and the net is a GPIO the firmware actually drives."
+            }
+            "no_faults" => {
+                "the stress monitor tripped; the named component exceeded a rating (over-current / -voltage / -power / -temp / reverse-bias); check its part value and supply."
+            }
+            "max_current" => {
+                "the part drew more than its limit; check its load and the override value."
+            }
+            "max_temp" => {
+                "the junction ran hotter than the limit; check dissipation and the `ambient_c` assumption."
+            }
+            "uart" => {
+                "the expected UART text never appeared; check the firmware image and baud, and that the MCU booted."
+            }
+            "toggle" => {
+                "the net toggled the wrong number of times; check the firmware's drive rate and the deadline window."
+            }
+            "protection_trip" => {
+                "the supply's protection did/did not latch as asserted; check the supply's limits and the load that triggers it."
+            }
+            "phase_margin" => {
+                "the loop's phase margin missed the bound; check the compensation network and the `[ac]` sweep range."
+            }
+            "ac_gain" => {
+                "the small-signal gain missed the band; check the AC stimulus net and the sweep points."
+            }
+            _ => return None,
+        }
+        .to_string(),
+    )
 }
 
 /// One MCU's (or the chunk-sampled logic's) timing resolution, in the wording
@@ -1721,12 +1788,66 @@ mod tests {
                 result.json_report().verdict_reason.as_deref(),
                 Some(reason.as_str())
             );
-            assert!(result.render_human().contains(&format!("reason: {reason}")));
+            // The terminal says the same thing as a fix: RED keeps the sentence
+            // and adds the fix line; INVALID ends on the footer that names the
+            // one fix to make first and the command to rerun.
+            let human = result.render_human();
+            if result.exit_code() == 1 {
+                assert!(human.contains(&format!("reason: {reason}")), "{human}");
+                assert!(
+                    human.contains("; next: ") || human.contains("\nfix: "),
+                    "{human}"
+                );
+            } else {
+                assert!(human.contains("\nfix first: "), "{human}");
+                assert!(human.contains("\nthen rerun: "), "{human}");
+            }
             assert!(result.render_junit().contains(&xml_escape(&reason)));
             assert!(result
                 .render_github_annotations()
                 .contains(&gh_escape(&reason)));
         }
+    }
+
+    /// A red run states the fix and never sends the reader to a docs page.
+    #[test]
+    fn a_red_report_ends_on_the_fix_not_a_link() {
+        let red = ci_result(vec![failing("voltage", "+5V: min=3.100V < required 4.75V")]);
+        let human = red.render_human();
+        let last = human.lines().last().unwrap_or_default();
+        assert!(last.contains("next: the rail left its window"), "{last}");
+        assert!(!human.contains("http"), "{human}");
+        assert!(!human.contains("next: the \""), "{human}");
+        for kind in [
+            "voltage",
+            "uart",
+            "toggle",
+            "max_temp",
+            "ac_gain",
+            "no_faults",
+        ] {
+            let hint = failure_hint(kind).expect("a hint");
+            assert!(!hint.contains("http"), "{kind}: {hint}");
+        }
+    }
+
+    /// The INVALID footer names the fix and the rerun command; with the spec
+    /// path known it prints the exact command.
+    #[test]
+    fn an_invalid_report_ends_on_the_fix_and_the_rerun_command() {
+        let mut invalid = ci_result(vec![AssertResult {
+            invalid: true,
+            ..failing("voltage", "INVALID evidence: U1 has no model")
+        }]);
+        invalid.analog_abort = true;
+        let human = invalid.render_human_for(false, Some("ci/power.toml"));
+        assert!(human.contains("\nfix first: "), "{human}");
+        assert!(
+            human.contains("\nthen rerun: hauksbee-ci run ci/power.toml\n"),
+            "{human}"
+        );
+        assert!(human.contains("exit code 3"), "{human}");
+        assert!(!human.contains("http"), "{human}");
     }
 
     /// Honesty notes (an MCU substitution, a co-sim coverage hole, measured
@@ -1838,7 +1959,7 @@ mod tests {
         let mut result = ci_result(vec![r]);
         result.evidence = vec![map];
 
-        let human = result.render_human();
+        let human = result.render_human_verbose();
         assert!(
             human.contains("model Via [subject=\"component:v1:Via:2\"]=via_model_b"),
             "human report lost identity: {human}"

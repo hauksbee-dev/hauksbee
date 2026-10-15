@@ -12,6 +12,43 @@ use super::{
 use crate::commands::run::preloaded_board_file;
 use hauksbee_extract::ExtractedBoard;
 
+/// The `--check --plain` report, printed in place of a dashboard nobody can see.
+fn print_plain_check(
+    cfg: &RunConfig,
+    run_inputs: &RunInputs,
+    artifacts: &RunArtifacts,
+) -> anyhow::Result<()> {
+    eprintln!(
+        "note: stdout is not a terminal, so there is no interactive dashboard; printing the \
+         --check --plain report instead (exit codes are the same). Choose a surface with \
+         --check, --report, --json or --serve."
+    );
+    let board = artifacts
+        .asbuilt_board
+        .as_ref()
+        .unwrap_or(&run_inputs.board);
+    let inputs = crate::reports::StaticInputs {
+        board_path: &cfg.board,
+        board,
+        text: &run_inputs.text,
+        raw: &run_inputs.raw,
+        input_kind: run_inputs.input_kind,
+        altium_present: run_inputs.is_altium,
+        lib: &run_inputs.lib,
+        reader_notes: &run_inputs.reader_notes,
+        inputs: &run_inputs.inputs,
+    };
+    crate::reports::check::emit_with_schematic_quiet(
+        &inputs,
+        crate::reports::OutputMode::Plain,
+        cfg.strict,
+        cfg.verbose,
+        cfg.oracle,
+        false,
+        artifacts.schematic_ties.as_ref(),
+    )
+}
+
 pub fn emit_or_serve(
     cfg: &RunConfig,
     run_inputs: &RunInputs,
@@ -27,19 +64,13 @@ pub fn emit_or_serve(
     let is_board_code = run_inputs.is_board_code;
     let schematic_ties = &artifacts.schematic_ties;
     let mut engine = sim.engine;
-    // Non-TTY invocation with no report flag and no explicit --serve: rather than
-    // silently starting a websocket server a pipe / CI can't use (the "something
-    // different" §7 warns about), print a two-line hint pointing at the report
-    // surfaces and exit cleanly. A TTY would have launched the TUI above; an
-    // explicit --serve keeps the historical websocket behaviour untouched.
+    // Non-TTY invocation with no report flag and no explicit --serve: a pipe or
+    // CI job cannot use the interactive dashboard or a websocket server, and an
+    // empty stdout with exit 0 reads as success. Print the plain-language
+    // `--check` report instead (same exit codes), and say once, on stderr, that
+    // this default was applied and how to choose another surface.
     if !stdout_is_tty && !cfg.serve {
-        eprintln!(
-            "hauksbee run: stdout is not a terminal, so there is no interactive dashboard to show."
-        );
-        eprintln!(
-                "  For a report add a flag: --check (all static checks) · --report (what was modelled) · --check --plain (prose) · --json (machine); or --serve for the browser UI."
-            );
-        return Ok(());
+        return print_plain_check(cfg, run_inputs, artifacts);
     }
 
     // The preloaded live session must run the board AS BUILT: run the same
