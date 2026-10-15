@@ -22,6 +22,7 @@ pub mod glossary;
 mod models;
 mod source;
 mod spice;
+pub mod units;
 
 pub use bexpr::CompiledExpr;
 pub use docs_url::docs_url;

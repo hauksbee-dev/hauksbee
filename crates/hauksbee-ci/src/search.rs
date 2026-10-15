@@ -48,7 +48,8 @@ use crate::assertions::AssertResult;
 use crate::error::SpecError;
 use crate::runner::RunOutcome;
 use crate::spec::{Assertion, Spec};
-use crate::tolerance::{format_engineering, SampledValue, SeedPlan};
+use crate::tolerance::{SampledValue, SeedPlan};
+use hauksbee_ir::units::format_engineering;
 
 /// The most members a search grid may expand to (before tolerance crossing).
 pub const MAX_GRID: usize = 256;
@@ -156,7 +157,7 @@ impl Condition {
     pub fn describe(&self) -> String {
         let unit = if self.amps { "A" } else { "V" };
         let leaf = self.net.rsplit('/').next().unwrap_or(&self.net);
-        format!("{leaf}={}{unit}", format_engineering(self.value))
+        format!("{leaf}={}{unit}", format_engineering(self.value, ""))
     }
 }
 
@@ -259,7 +260,7 @@ pub fn relation(
             ..shell
         };
     };
-    let value = |v: f64| format!("{} {unit}", format_engineering(v));
+    let value = |v: f64| format!("{} {unit}", format_engineering(v, ""));
     let mut detail = format!(
         "{subject} is {} at {} but {} at {}; {} of {judged} neighbouring pair(s) violate",
         value(*v_lo),
@@ -1073,7 +1074,7 @@ fn explain(
                     |(_, v)| format!("threshold {v:.2} V"),
                 )
             },
-            |v| format_engineering(*v),
+            |v| format_engineering(*v, ""),
         );
         let mut line = format!("culprit {rank}: {r} ({what}): +10% moves it {d:+.3} V");
         if let Some((_, vt)) = probe.switches.values().flatten().find(|(s, _)| s == r) {
@@ -1146,11 +1147,11 @@ fn solve(
     let Some((log_scale, reading)) = last else {
         return Ok(format!("fix: {part} could not be solved"));
     };
-    let value = format_engineering(base * log_scale.exp());
+    let value = format_engineering(base * log_scale.exp(), "");
     Ok(if reading.passed {
         format!(
             "fix: {part} {} -> {value} meets the intent (rerun: {})",
-            format_engineering(base),
+            format_engineering(base, ""),
             reading.detail
         )
     } else {
