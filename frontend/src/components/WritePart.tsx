@@ -96,7 +96,7 @@ const KIND_CHOICES: [id: string, what: string][] = [
   ['nmos', 'N-channel MOSFET'], ['pmos', 'P-channel MOSFET'],
   ['vreg', 'regulator, LDO, charger'], ['opamp', 'op-amp'], ['comparator', 'comparator'],
   ['timer', '555-class timer'], ['analog_switch', 'analogue or load switch'],
-  ['digital', 'logic gate or digital part'], ['dac', 'DAC'], ['adc', 'ADC'],
+  ['digital', 'logic or digital part'], ['dac', 'DAC'], ['adc', 'ADC'],
   ['shift_register', 'shift register'], ['mcu', 'microcontroller'], ['connector', 'connector'],
 ]
 
@@ -422,10 +422,7 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
   const visibleCheck: CheckState = isModelCheckCurrent(check, body, bodyFormat)
     ? check
     : { phase: 'checking', body, format: bodyFormat }
-  const issues = useMemo(
-    () => (visibleCheck.phase === 'bad' && bodyFormat === 'toml' ? tomlIssues(body, visibleCheck.error) : []),
-    [visibleCheck, body, bodyFormat],
-  )
+  const issues = visibleCheck.phase === 'bad' && bodyFormat === 'toml' ? tomlIssues(body, visibleCheck.error) : []
 
   // Escape closes the editor, the same key that dismisses every other in-page
   // surface. Bound on the document, only while open, and an Escape a native
@@ -485,8 +482,8 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
 
   return (
     <div data-testid="write-part" className="rounded-xl px-4 py-3.5 mt-3" style={{ border: '1px solid var(--hairline)', background: 'var(--surface)' }}>
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <span className="text-[13px] font-semibold" style={{ color: 'var(--silk)' }}>
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+        <span className="text-[13px] font-semibold min-w-0" style={{ color: 'var(--silk)' }}>
           {suggested ? <>Model {suggested.reference}{suggested.value && <span style={{ color: 'var(--silk-dim)', fontWeight: 400 }}> · {suggested.value}</span>}</> : 'Write a part model'}
         </span>
         <button type="button" data-testid="write-part-close" onClick={() => setOpen(false)} className="hb-btn hb-press px-2.5 text-[12px]" style={{ height: 26 }}>
@@ -503,9 +500,9 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
             aria-selected={tab === id}
             data-testid={`model-tab-${id}`}
             onClick={() => switchTo(id)}
-            className="hb-press px-2.5 text-[12px] whitespace-nowrap"
+            className="hb-press px-2.5 py-1 text-[12px] text-left max-w-full"
             style={{
-              height: 30, background: 'none', border: 'none', marginBottom: -1,
+              minHeight: 30, background: 'none', border: 'none', marginBottom: -1,
               borderBottom: `2px solid ${tab === id ? 'var(--copper)' : 'transparent'}`,
               color: tab === id ? 'var(--silk)' : 'var(--silk-faint)', fontWeight: tab === id ? 600 : 400,
             }}
@@ -522,7 +519,7 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
           <div className="flex flex-wrap items-center gap-1.5 mb-2" data-testid="kind-picker">
             <span className="text-[12px]" style={{ color: 'var(--silk-dim)' }}>Simulate it as</span>
             <select
-              className="hb-input text-[12px]"
+              className="hb-input text-[12px] flex-1 min-w-0 basis-40"
               aria-label="Kind of part"
               data-testid="kind-select"
               value={format === 'spice' ? 'spice' : kind ?? ''}
@@ -532,11 +529,11 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
                 setFormat('toml')
                 if (v === '') { setKind(null); setTexts(t => ({ ...t, write: identityScaffold(suggested) })) } else void pick(v)
               }}
-              style={{ height: 28, maxWidth: '100%' }}
+              style={{ height: 28, maxWidth: 260 }}
             >
-              <option value="">nothing yet (identity only)</option>
+              <option value="">identity only</option>
               {KIND_CHOICES.map(([id, what]) => <option key={id} value={id}>{what}</option>)}
-              <option value="spice">a SPICE deck I have</option>
+              <option value="spice">a SPICE deck</option>
             </select>
           </div>
         )}
@@ -591,7 +588,7 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
               data-testid="write-part-save"
               disabled={drafting || visibleCheck.phase !== 'ok' || part.trim().length === 0}
               onClick={() => void save()}
-              className="hb-press rounded-lg px-3.5 text-[12px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+              className="hb-press rounded-lg px-3.5 text-[12px] font-semibold whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
               style={{ height: 30, background: 'linear-gradient(180deg, var(--copper-hi), var(--copper))', color: 'var(--on-copper)', border: 'none' }}
             >
               Save to my models

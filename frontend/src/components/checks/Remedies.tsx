@@ -43,7 +43,9 @@ export const withoutIds = (text: string) => text.replace(/\b[a-z][a-z_-]*:(?=[A-
 function targetOf(a: EvidenceAssumption): { part?: string; pin?: string; net?: string } {
   const r = a.remedy
   if (r && 'net' in r) return { net: r.net }
-  const raw = r && 'reference' in r ? r.reference : a.id.replace(/^[a-z_-]+:/, '')
+  const prefixed = /^[a-z_-]+:(.+)$/.exec(a.id)?.[1]
+  const raw = r && 'reference' in r ? r.reference : prefixed
+  if (!raw) return {}
   const [ref] = raw.split('@')
   const [part, pin] = ref.split('/')
   return pin ? { part, pin: `${part}/${pin}` } : part ? { part } : {}
@@ -90,8 +92,8 @@ export function OpenPartsEntry({ groups, blocking, onOpen }: { groups: CauseGrou
       data-testid="open-parts-entry"
       data-count={open}
       onClick={onOpen}
-      className="hb-chip hb-press inline-flex items-center gap-1.5 px-2.5 text-[12px] whitespace-nowrap"
-      style={{ height: 30, color: blocking ? 'var(--warn-strong)' : undefined }}
+      className="hb-chip hb-press inline-flex items-center gap-1.5 px-2.5 py-1 text-[12px] text-left max-w-full"
+      style={{ minHeight: 30, color: blocking ? 'var(--warn-strong)' : undefined }}
     >
       {what}{blocking ? ' block judgement' : ' qualify this run'}
     </button>
