@@ -757,7 +757,7 @@ The extractor fails loudly and usefully:
   `hauksbee models backend set timeout_secs=...`) with a
   message to tighten the prompt or switch backend.
 - **Idle stall**: codex runs stream JSONL events (`codex exec --json`). If no
-  event arrives for `idle_secs` (default 150; `hauksbee models backend set
+  event arrives for `idle_secs` (default 300; `hauksbee models backend set
   idle_secs=...`, `0` turns it off), the run's whole process tree is killed and
   the call is retried once on the same prompt, spending one of the extraction's
   `retries` attempts. The retry is announced on stderr like any other retry

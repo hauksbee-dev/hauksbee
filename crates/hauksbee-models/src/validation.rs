@@ -554,7 +554,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         || "params.identity_only must be a boolean".into(),
     );
     if !identity_only && !digital_has_behavior(entry) {
-        p.push("digital model has no executable behavior; add [models.logic] (for example, the builtin 74hc14 card declares inputs, outputs, and [models.logic.comb]) or set params.identity_only = true with warning and unlocked_by so binding leaves the part open");
+        p.push("digital model has no executable behavior; add [models.logic] (for example, the builtin 74hc14 card declares inputs, outputs, and [models.logic.comb]); for a driver or power IC whose outputs are not logic, a supply-draw law (params supply_current_a and supply_on_v, and a [[models.behavioral.laws]] current law from the supply role to gnd); or set params.identity_only = true with warning and unlocked_by so binding leaves the part open");
     }
     if identity_only {
         for key in ["warning", "unlocked_by"] {
@@ -1337,6 +1337,10 @@ fn check_required_pins(entry: &ModelEntry, p: &mut Problems) {
     });
 }
 
+/// The fix for a switching regulator drafted as a simple one: its pads hold a
+/// switch node but no regulated output, which only a converter block binds.
+pub const SWITCHER_FIX: &str = ". This pin map has a switch node (SW/PH/LX), so the part is a switching regulator: its regulated rail is past the inductor, on no pad of the IC. Keep the switch node 'sw' and add [models.behavioral.converter] with topology (\"buck\", \"boost\" or \"buck_boost\"), out_pin = \"sw\", in_pin = \"in\", vout_setpoint (a seed used only when the board has no feedback divider) and, for an adjustable part, [models.behavioral.converter.feedback] with pin = \"fb\" and vref_v = the feedback reference; drop vout/vref/dropout_v from [models.params]";
+
 /// Why a card's pin map leaves it OPEN at bind time: one line per role the
 /// binder's path for its kind reads (`bind_vreg`, `bind_adj_vreg`, the device
 /// binders) that the map does not declare.
@@ -1400,10 +1404,14 @@ pub fn missing_pin_roles(entry: &ModelEntry) -> Vec<String> {
     let missing = required
         .iter()
         .filter(|f| !f.iter().any(|n| declared.contains(&fold_role(n))));
+    // A switching regulator mapped as a simple one: its rail is past the
+    // inductor, so the way out is the converter block, never an invented pad.
+    let switcher = vreg && conv.is_none() && entry.pins.values().any(|r| switch_node(r));
     let why = |f: &&[&str]| {
         let (role, kind, names) = (f[0], entry.kind, f.join(" / "));
         let adj = (role == "gnd" && declared.contains("adj")).then_some(". A fixed-output part's ADJ/GND pin is its ground: map it 'gnd'; 'adj' is for an adjustable card (vref, no vout)");
-        format!("[models.pins] declares no '{role}' pin (a {kind:?} needs it); the part would bind OPEN. Accepted role names: {names}{}", adj.unwrap_or_default())
+        let sw = (role == "out" && switcher).then_some(SWITCHER_FIX);
+        format!("[models.pins] declares no '{role}' pin (a {kind:?} needs it); the part would bind OPEN. Accepted role names: {names}{}", adj.or(sw).unwrap_or_default())
     };
     missing.map(why).collect()
 }
@@ -2204,6 +2212,12 @@ mod tests {
         pins(&mut sink, &[("1", "in"), ("2", "gate"), ("3", "gnd")]);
         sink.behavioral.pins.insert("gate".into(), crate::behavioral::BehavioralPin::default());
         rejects(&sink, "declares no 'out' pin");
+        // A buck mapped as a linear regulator is told the converter way out,
+        // never to invent an `out` pad.
+        let mut buck = vreg(&[]);
+        pins(&mut buck, &[("1", "in"), ("2", "sw"), ("3", "gnd"), ("4", "fb")]);
+        rejects(&buck, "add [models.behavioral.converter] with topology");
+        assert!(!missing_pin_roles(&sink).concat().contains("converter"));
 
         rejects(
             &entry(AnalogSwitch, &[("ron", 5000.0), ("roff", 2000.0)]),

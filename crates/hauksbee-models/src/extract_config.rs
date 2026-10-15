@@ -54,7 +54,12 @@ pub const ENV_BACKEND: &str = "HAUKSBEE_EXTRACT_BACKEND";
 pub const DEFAULT_RETRIES: usize = 2;
 pub const DEFAULT_TIMEOUT_SECS: u64 = 900;
 /// Silence on a streaming agent run (codex `--json`) before it is killed and retried.
-pub const DEFAULT_IDLE_SECS: u64 = 150;
+///
+/// codex emits an event per finished item and nothing while one is being
+/// generated, so writing a whole card (one file-change item of several thousand
+/// output tokens at high effort) is a normal silence. At 150 s, three of four
+/// parts in one round were killed mid-write and restarted from page one.
+pub const DEFAULT_IDLE_SECS: u64 = 300;
 pub const DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
 pub const DEFAULT_API_MODEL: &str = "gpt-6.1-sol";
 pub const DEFAULT_API_KEY_ENV: &str = "OPENAI_API_KEY";
@@ -507,7 +512,7 @@ impl ExtractConfig {
             KeyInfo::new(
                 "idle_secs",
                 "silent seconds on a streaming run before kill + one retry (0 = off)",
-                "150",
+                "300",
             ),
         ];
         for a in AGENTS {

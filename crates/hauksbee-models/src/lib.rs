@@ -45,6 +45,7 @@ mod conventions;
 pub mod datasheet;
 pub mod derating;
 pub mod extract_config;
+pub mod extract_examples;
 pub mod extract_harness;
 pub mod extract_output;
 pub mod extract_plan;
