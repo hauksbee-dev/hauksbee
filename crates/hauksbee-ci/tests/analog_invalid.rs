@@ -158,7 +158,7 @@ fn tripped_abort_forces_exit_3_even_when_assertions_pass() {
     assert!(
         refusal
             .missing_prerequisite
-            .contains("converged analog solve"),
+            .contains("analog solve stopped converging"),
         "{refusal:#?}"
     );
     assert!(

@@ -463,36 +463,49 @@ impl CiResult {
         let evidence = count(&open_part);
         let timing = count(&|r| r.detail.starts_with("INVALID: timing coverage refusal:"));
         let paced = count(&|r| r.detail.contains("INVALID: host-paced clock:"));
+        // The first open part behind it, when the run carries one (`open-part:C2`).
+        let first_open = self
+            .assumptions
+            .iter()
+            .find(|a| a.kind() == hauksbee_ir::evidence::AssumptionKind::OpenPart)
+            .map(|a| a.id().to_string())
+            .and_then(|id| {
+                let part = id.split_once(':')?.1;
+                Some(part.split('~').next().unwrap_or(part).to_string())
+            })
+            .map_or_else(String::new, |part| {
+                format!("; the first open part is {part}")
+            });
         let missing = if self.analog_abort {
             format!(
-                "a converged analog solve through the run; the consecutive-failure abort tripped and {invalid} assertion(s) were marked INVALID"
+                "the analog solve stopped converging and the consecutive-failure abort tripped, so {invalid} assertion(s) were marked INVALID"
             )
         } else if no_firmware + evidence + timing + paced == invalid {
             let mut parts = Vec::new();
             if no_firmware > 0 {
                 parts.push(format!(
-                    "firmware that runs on the MCU; {no_firmware} assertion(s) rest on it and this spec names none"
+                    "this spec names no firmware, so the MCU never ran and {no_firmware} assertion(s) rest on it"
                 ));
             }
             if evidence > 0 {
                 parts.push(format!(
-                    "every critical assumption under those assertions closed; {evidence} assertion(s) rest on an unresolved (open) part or a violated datasheet limit"
+                    "{evidence} assertion(s) rest on an unresolved (open) part or a violated datasheet limit{first_open}"
                 ));
             }
             if timing > 0 {
                 parts.push(format!(
-                    "a backend that can measure the requested timing; {timing} assertion(s) were refused"
+                    "the backend cannot measure the requested timing, so {timing} assertion(s) were refused"
                 ));
             }
             if paced > 0 {
                 parts.push(format!(
-                    "a run long enough for the host-paced firmware to get there, a claim that does not hang on where a simulated-time window falls in the firmware's progress, or a backend whose clock does not depend on the host; {paced} assertion(s) were left unjudged"
+                    "the host-paced firmware had not reached the claimed simulated-time window (its clock depends on the host, not on the board), so {paced} assertion(s) were left unjudged"
                 ));
             }
             parts.join("; ")
         } else {
             format!(
-                "a converged analog solve across every assertion window; {invalid} assertion(s) overlapped held-stale analog spans"
+                "the analog solve did not converge for part of the assertion window, so {invalid} assertion(s) overlapped a span where values were held from the last good solve{first_open}"
             )
         };
         let mut partial = vec![
@@ -1047,7 +1060,7 @@ impl CiResult {
             |path| format!("hauksbee-ci run {path}"),
         );
         Some(format!(
-            "INVALID - {}\nmissing: {}\nfix first: {fix}\nthen rerun: {rerun}\n\
+            "INVALID - {}\nwhy: {}\nfix first: {fix}\nthen rerun: {rerun}\n\
              (exit code 3 = refused, not failed. `--verbose` adds the numeric detail.)\n",
             hauksbee_ir::glossary::Term::Invalid.entry().short,
             refusal.missing_prerequisite,
@@ -1807,6 +1820,29 @@ mod tests {
                 .render_github_annotations()
                 .contains(&gh_escape(&reason)));
         }
+    }
+
+    /// The refusal for held-stale analog spans reads as a clause that says what
+    /// went wrong, and names the first open part when the run carries one.
+    #[test]
+    fn the_analog_refusal_says_what_was_missing_and_names_the_open_part() {
+        let mut invalid = result("rail", "voltage", false, "held-stale");
+        invalid.invalid = true;
+        let mut run = ci_result(vec![invalid]);
+        let plain = run.refusal().unwrap().missing_prerequisite;
+        assert_eq!(
+            plain,
+            "the analog solve did not converge for part of the assertion window, so 1 \
+             assertion(s) overlapped a span where values were held from the last good solve"
+        );
+        run.assumptions
+            .push(hauksbee_ir::evidence::Assumption::open_part(
+                "C2",
+                "100n",
+                "two parts share the designator",
+            ));
+        let named = run.refusal().unwrap().missing_prerequisite;
+        assert!(named.ends_with("; the first open part is C2"), "{named}");
     }
 
     /// A red run states the fix and never sends the reader to a docs page.
