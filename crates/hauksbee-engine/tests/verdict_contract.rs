@@ -1036,7 +1036,7 @@ fn github_annotations_agree_with_a_specialist_surfaces_verdict() {
     // on a line the reader has already seen.
     let art = Artifacts::new("out");
     let out = run_board_in_actions(
-        &unbound(),
+        &unbound_everywhere(),
         &art.with_junit(&["--check", "--json", "--strict"]),
     );
     let err = stderr(&out);
