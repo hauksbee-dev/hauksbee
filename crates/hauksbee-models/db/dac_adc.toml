@@ -404,3 +404,254 @@ basis = "TI SLASEX3A 6.3 VDD 1.7 V to 5.5 V; 6.1 VDD -0.3 V to 6 V"
 [models.coverage]
 implements = ["pin_roles", "supply_ranges", "absolute_ratings"]
 missing = ["dac_registers", "serial_interface", "vout_iout_outputs", "nvm", "gpio_functions", "internal_reference", "four_level_address"]
+
+# HX711 24-bit load-cell ADC (AVIA datasheet, SparkFun mirror): extraction pipeline attempt 1, kind adc, identity plus limits; hand-fixed: value_re unanchored, PD_SCK timing rows renamed because the 'PD' in the name makes the rating lint mistake them for power-dissipation ratings. Pin table 1-16 and the 2.6-5.5 V supplies checked against the PDF.
+[[models]]
+id = "hx711"
+kind = "adc"
+description = "AVIA HX711 in SOP-16L; identity and sourced operating limits only. Does not model differential conversion, serial data/control behavior, programmable channel and gain selection, oscillator, or analog supply regulation. ABSTAIN: the datasheet does not state an SPI mode or absolute-maximum ratings."
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "spi_mode"
+reason = "ABSTAIN: datasheet describes a pin-driven serial interface but does not state an SPI mode"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vref_int"
+reason = "ABSTAIN: the schema reads vref_int as unitless, while the datasheet states only the VBG voltage of 1.25 V; that voltage is retained as a characteristic"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vsup_min_v"
+reason = "Table 2 gives VSUP minimum 2.6 V while Table 1 Pin Description gives VSUP 2.7 V; both stated ranges are retained separately"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "input_range"
+reason = "ABSTAIN: Table 2 gives full scale as ±0.5(AVDD/GAIN); page 4 gives separate Channel A/B ranges for specified gains at AVDD=5 V, so there is no single fixed input range"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "input_common_mode"
+reason = "ABSTAIN: Table 2 bounds common mode relative to AGND and AVDD (AGND+1.2 V to AVDD−1.3 V), not by fixed numeric endpoints"
+[[models.source.pinout]]
+package = "SOP-16L"
+# Page 2 image rendering omits table glyphs; labels follow supplied Pin Description text, cross-checked against Fig. 1. Package drawing dot marks pin 1.
+pins = { "1" = "VSUP", "2" = "BASE", "3" = "AVDD", "4" = "VFB", "5" = "AGND", "6" = "VBG", "7" = "INA-", "8" = "INA+", "9" = "INB-", "10" = "INB+", "11" = "PD_SCK", "12" = "DOUT", "13" = "XO", "14" = "XI", "15" = "RATE", "16" = "DVDD" }
+[models.match]
+value_re = "(?i)^HX711"
+[models.params]
+identity_only = true
+warning = "identity and sourced constraints only; ADC conversion and serial behavior are not modeled"
+unlocked_by = "a validated model of the HX711 differential conversion and pin-driven serial interface"
+bits = 24 # Source: Table 2, output data coding, 24-bit format
+supply_static_ua = { typ = 1400, unit = "µA", conditions = "Normal operation; analog supply current including regulator", basis = "Table 2, Analog supply current (including regulator), Normal, typ column" }
+[models.ratings]
+[models.pins]
+# Pin Description table cross-checked against Fig. 1 typical application block diagram; package outline marks pin 1.
+"1" = "vsup"
+"2" = "base"
+"3" = "avdd"
+"4" = "vfb"
+"5" = "agnd"
+"6" = "vbg"
+"7" = "ina_minus"
+"8" = "ina_plus"
+"9" = "inb_minus"
+"10" = "inb_plus"
+"11" = "pd_sck"
+"12" = "dout"
+"13" = "xo"
+"14" = "xi"
+"15" = "rate"
+"16" = "dvdd"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vsup"
+min_v = 2.6
+max_v = 5.5
+basis = "Table 2, Power supply voltage, VSUP row"
+[[models.envelope]]
+kind = "supply_range"
+pin = "avdd"
+min_v = 2.6
+max_v = 5.5
+basis = "Table 2, Power supply voltage, AVDD row"
+[[models.envelope]]
+kind = "supply_range"
+pin = "dvdd"
+min_v = 2.6
+max_v = 5.5
+basis = "Table 2, Power supply voltage, DVDD row"
+[[models.source.characteristic]]
+parameter = "VBG reference bypass output"
+typ = 1.25
+unit = "V"
+conditions = "Reference bypass (VBG)"
+basis = "Table 2, Reference bypass (VBG), typ column"
+[[models.source.characteristic]]
+parameter = "VSUP supply range"
+min = 2.7
+max = 5.5
+unit = "V"
+conditions = "Pin Description states regulator supply 2.7–5.5 V"
+basis = "Table 1, VSUP Pin Description"
+[[models.source.characteristic]]
+parameter = "Channel A full scale differential input range"
+min = -0.02
+max = 0.02
+unit = "V"
+conditions = "AVDD = 5 V, gain = 128; printed ±20 mV"
+basis = "Analog Inputs, Channel A, gain 128, AVDD=5V"
+[[models.source.characteristic]]
+parameter = "Channel A full scale differential input range"
+min = -0.04
+max = 0.04
+unit = "V"
+conditions = "AVDD = 5 V, gain = 64; printed ±40 mV"
+basis = "Analog Inputs, Channel A, gain 64, AVDD=5V"
+[[models.source.characteristic]]
+parameter = "Channel B full scale differential input range"
+min = -0.08
+max = 0.08
+unit = "V"
+conditions = "AVDD = 5 V, fixed gain = 32; printed ±80 mV"
+basis = "Analog Inputs, Channel B, gain 32, AVDD=5V"
+[[models.source.characteristic]]
+parameter = "Output data rate, internal oscillator"
+typ = 10
+unit = "Hz"
+conditions = "RATE = 0"
+basis = "Table 2, Output data rate, Internal Oscillator RATE=0, typ column"
+[[models.source.characteristic]]
+parameter = "Output data rate, internal oscillator"
+typ = 80
+unit = "Hz"
+conditions = "RATE = DVDD"
+basis = "Table 2, Output data rate, Internal Oscillator RATE=DVDD, typ column"
+[[models.source.characteristic]]
+parameter = "Output settling time"
+typ = 400
+unit = "ms"
+conditions = "RATE = 0; after power-up, reset, input channel change, or gain change"
+basis = "Table 2, Output settling time, RATE=0, typ column; Note 1"
+[[models.source.characteristic]]
+parameter = "Output settling time"
+typ = 50
+unit = "ms"
+conditions = "RATE = DVDD; after power-up, reset, input channel change, or gain change"
+basis = "Table 2, Output settling time, RATE=DVDD, typ column; Note 1"
+[[models.source.characteristic]]
+parameter = "Input offset drift"
+typ = 0.2
+unit = "mV"
+conditions = "Gain = 128"
+basis = "Table 2, Input offset drift, Gain=128, typ column"
+[[models.source.characteristic]]
+parameter = "Input offset drift"
+typ = 0.4
+unit = "mV"
+conditions = "Gain = 64"
+basis = "Table 2, Input offset drift, Gain=64, typ column"
+[[models.source.characteristic]]
+parameter = "Input noise"
+typ = 50
+unit = "nV(rms)"
+conditions = "Gain = 128, RATE = 0"
+basis = "Table 2, Input noise, Gain=128 RATE=0, typ column"
+[[models.source.characteristic]]
+parameter = "Input noise"
+typ = 90
+unit = "nV(rms)"
+conditions = "Gain = 128, RATE = DVDD"
+basis = "Table 2, Input noise, Gain=128 RATE=DVDD, typ column"
+[[models.source.characteristic]]
+parameter = "Input offset temperature drift"
+min = -6
+max = 6
+unit = "nV/°C"
+conditions = "Input offset, Gain = 128; printed ±6"
+basis = "Table 2, Temperature drift, Input offset (Gain=128), printed ±6"
+[[models.source.characteristic]]
+parameter = "Gain temperature drift"
+min = -5
+max = 5
+unit = "ppm/°C"
+conditions = "Gain = 128; printed ±5"
+basis = "Table 2, Temperature drift, Gain (Gain=128), printed ±5"
+[[models.source.characteristic]]
+parameter = "Input common mode rejection"
+typ = 100
+unit = "dB"
+conditions = "Gain = 128, RATE = 0"
+basis = "Table 2, Input common mode rejection, Gain=128 RATE=0, typ column"
+[[models.source.characteristic]]
+parameter = "Power supply rejection"
+typ = 100
+unit = "dB"
+conditions = "Gain = 128, RATE = 0"
+basis = "Table 2, Power supply rejection, Gain=128 RATE=0, typ column"
+[[models.source.characteristic]]
+parameter = "Crystal or external clock frequency"
+min = 1
+typ = 11.0592
+max = 20
+unit = "MHz"
+conditions = "Crystal or external clock"
+basis = "Table 2, Crystal or external clock frequency, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "Analog supply current (including regulator)"
+typ = 0.3
+unit = "µA"
+conditions = "Power down"
+basis = "Table 2, Analog supply current (including regulator), Power down, typ column"
+[[models.source.characteristic]]
+parameter = "Digital supply current"
+typ = 100
+unit = "µA"
+conditions = "Normal operation"
+basis = "Table 2, Digital supply current, Normal, typ column"
+[[models.source.characteristic]]
+parameter = "Digital supply current"
+typ = 0.2
+unit = "µA"
+conditions = "Power down"
+basis = "Table 2, Digital supply current, Power down, typ column"
+[[models.source.characteristic]]
+parameter = "DOUT falling edge to serial clock pin rising edge edge separation"
+min = 0.1
+unit = "µs"
+conditions = "Serial interface timing"
+basis = "Table 4, T1, min column"
+[[models.source.characteristic]]
+parameter = "serial clock pin rising edge to DOUT data ready latency"
+max = 0.1
+unit = "µs"
+conditions = "Serial interface timing"
+basis = "Table 4, T2, max column"
+[[models.source.characteristic]]
+parameter = "serial clock pin high pulse width"
+min = 0.2
+typ = 1
+max = 50
+unit = "µs"
+conditions = "Serial interface timing"
+basis = "Table 4, T3, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "serial clock pin low pulse width"
+min = 0.2
+typ = 1
+unit = "µs"
+conditions = "Serial interface timing"
+basis = "Table 4, T4, min/typ columns"
+
+[[models.source.references]]
+title = "HX711.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "6050e88a5e938ff9ac3292bfbc9fea2afa0ca73d1a649d5398ae8de5ab7c017e"
+[models.coverage]
+implements = ["identity", "supply_ranges"]
+missing = ["differential_conversion", "serial_data_and_control", "channel_and_gain_selection", "oscillator_clock", "analog_supply_regulation", "power_down_control"]

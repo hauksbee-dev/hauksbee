@@ -20,7 +20,7 @@ use hauksbee_models::ModelLibrary;
 #[test]
 fn synthetic_board_binds() {
     let board = ExtractedBoard::from_auto(common::SYNTH_BOARD).expect("parse synth board");
-    assert_eq!(board.components.len(), 5, "U1, R1, D1, R2, R3");
+    assert_eq!(board.components.len(), 6, "U1, Y1, R1, D1, R2, R3");
     let lib = ModelLibrary::builtin();
     let bound = bind_board(&board, &lib);
 

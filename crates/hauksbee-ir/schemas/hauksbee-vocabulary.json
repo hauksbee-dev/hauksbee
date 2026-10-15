@@ -1,0 +1,412 @@
+{
+  "schema": "hauksbee.vocabulary/1",
+  "exit_contract": "hauksbee/1",
+  "verdicts": [
+    {
+      "id": "pass",
+      "label": "pass",
+      "meaning": "Every check in scope ran on trustworthy evidence and nothing blocks.",
+      "aliases": [
+        "pass",
+        "clean",
+        "GREEN",
+        "OK TO ORDER",
+        "analysis clean"
+      ],
+      "ci_alias": "GREEN",
+      "exit_code": 0
+    },
+    {
+      "id": "pass_conditional",
+      "label": "pass, conditionally",
+      "meaning": "Nothing blocks, but the pass rests on named conditions (default rules, guessed or fallback models); each condition says how to lift it.",
+      "aliases": [
+        "clean, conditionally",
+        "GREEN, conditionally",
+        "OK TO ORDER, conditionally",
+        "conditional_pass"
+      ],
+      "ci_alias": "GREEN, conditionally",
+      "exit_code": 0
+    },
+    {
+      "id": "fail",
+      "label": "fail",
+      "meaning": "At least one blocking finding or failed assertion.",
+      "aliases": [
+        "fail",
+        "failing",
+        "RED",
+        "FAIL",
+        "DO NOT ORDER"
+      ],
+      "ci_alias": "RED",
+      "exit_code": 1
+    },
+    {
+      "id": "partly_judged",
+      "label": "partly judged, not a pass",
+      "meaning": "Nothing blocks among the checks that ran, but key parts have no usable model, so the checks they could change were not judged.",
+      "aliases": [
+        "PARTLY JUDGED",
+        "partly judged, not a pass"
+      ],
+      "ci_alias": null,
+      "exit_code": 3
+    },
+    {
+      "id": "invalid_run",
+      "label": "invalid run, not a pass",
+      "meaning": "The run's own evidence is not trustworthy (a refusal, an undermined claim, a failed simulation), so it vouches for nothing either way.",
+      "aliases": [
+        "invalid",
+        "inconclusive",
+        "INCONCLUSIVE",
+        "NOT CONCLUSIVE",
+        "INVALID",
+        "analysis undermined",
+        "invalid for analysis"
+      ],
+      "ci_alias": null,
+      "exit_code": 3
+    }
+  ],
+  "evidence_grades": [
+    {
+      "id": "full",
+      "label": "full evidence",
+      "meaning": "The conclusion stands on evidence alone: nothing on its causal path was assumed.",
+      "aliases": [
+        "clean"
+      ]
+    },
+    {
+      "id": "qualified",
+      "label": "qualified evidence",
+      "meaning": "The conclusion holds with named caveats: assumptions sit on its path, none critical.",
+      "aliases": [
+        "analysis qualified"
+      ]
+    },
+    {
+      "id": "undermined",
+      "label": "undermined evidence",
+      "meaning": "A critical assumption sits on the causal path, so the conclusion gets no verdict.",
+      "aliases": [
+        "UNDERMINED",
+        "analysis undermined"
+      ]
+    }
+  ],
+  "severities": [
+    {
+      "id": "serious",
+      "label": "serious",
+      "meaning": "A real problem with the design.",
+      "aliases": [
+        "High"
+      ],
+      "sarif_level": "error",
+      "kicad_severity": "error"
+    },
+    {
+      "id": "warning",
+      "label": "worth a look",
+      "meaning": "Worth a look before ordering.",
+      "aliases": [
+        "Medium"
+      ],
+      "sarif_level": "warning",
+      "kicad_severity": "warning"
+    },
+    {
+      "id": "note",
+      "label": "note",
+      "meaning": "Worth knowing; no action expected.",
+      "aliases": [
+        "Low",
+        "[note]"
+      ],
+      "sarif_level": "note",
+      "kicad_severity": "info"
+    },
+    {
+      "id": "info",
+      "label": "info",
+      "meaning": "Context, not a problem.",
+      "aliases": [
+        "Info"
+      ],
+      "sarif_level": "note",
+      "kicad_severity": "info"
+    }
+  ],
+  "blocking": {
+    "id": "blocking",
+    "label": "blocking",
+    "meaning": "The gate fails the run on this finding unless it is waived. Independent of severity: a gating warning blocks.",
+    "aliases": [
+      "gating",
+      "blocking problem"
+    ]
+  },
+  "exit_codes": [
+    {
+      "id": "pass",
+      "label": "pass",
+      "meaning": "Pass or conditional pass.",
+      "aliases": [
+        "clean or report-only (hauksbee)",
+        "GREEN (hauksbee-ci)"
+      ],
+      "code": 0
+    },
+    {
+      "id": "fail",
+      "label": "fail",
+      "meaning": "Fail: a blocking finding or a failed assertion.",
+      "aliases": [
+        "input error (hauksbee)",
+        "RED (hauksbee-ci)"
+      ],
+      "code": 1
+    },
+    {
+      "id": "usage",
+      "label": "usage or input error",
+      "meaning": "Usage, spec or input error: the run did not start.",
+      "aliases": [
+        "strict findings or usage error (hauksbee)",
+        "spec, usage or output error (hauksbee-ci)"
+      ],
+      "code": 2
+    },
+    {
+      "id": "invalid_run",
+      "label": "not judged",
+      "meaning": "Partly judged or invalid run: not a pass, and not a fail.",
+      "aliases": [
+        "invalid for analysis"
+      ],
+      "code": 3
+    },
+    {
+      "id": "tool_fault",
+      "label": "tool fault",
+      "meaning": "Internal error in hauksbee itself; please report it.",
+      "aliases": [],
+      "code": 4
+    }
+  ],
+  "checks": [
+    {
+      "id": "drc",
+      "label": "Design rules (DRC)",
+      "meaning": "Copper geometry against the clearance and width rules: shorts, spacing, unrouted pads.",
+      "aliases": [
+        "--drc"
+      ]
+    },
+    {
+      "id": "lint",
+      "label": "Connectivity lint",
+      "meaning": "The netlist the copper implements: floating inputs, unpowered parts, wrong values.",
+      "aliases": [
+        "--lint"
+      ]
+    },
+    {
+      "id": "si",
+      "label": "Signal integrity",
+      "meaning": "Signal integrity of fast nets: impedance, length and coupling.",
+      "aliases": [
+        "--si"
+      ]
+    },
+    {
+      "id": "resources",
+      "label": "MCU resources",
+      "meaning": "MCU pins and peripherals the board uses, against what the part provides.",
+      "aliases": [
+        "--resources"
+      ]
+    },
+    {
+      "id": "usb_c",
+      "label": "USB-C",
+      "meaning": "USB-C configuration: CC resistors, VBUS and the receptacle wiring.",
+      "aliases": [
+        "--usb-c",
+        "usb_c_cc"
+      ]
+    },
+    {
+      "id": "thermal",
+      "label": "Thermal",
+      "meaning": "Dissipation and temperature rise of each part against its ratings.",
+      "aliases": [
+        "--thermal"
+      ]
+    },
+    {
+      "id": "ac",
+      "label": "AC response",
+      "meaning": "Small-signal frequency response of the solved circuit.",
+      "aliases": [
+        "--ac"
+      ]
+    },
+    {
+      "id": "cosim",
+      "label": "Firmware co-simulation",
+      "meaning": "Compiled firmware run against the solved board, with ratings checked over time.",
+      "aliases": [
+        "co-sim",
+        "--headless"
+      ]
+    },
+    {
+      "id": "spec",
+      "label": "Spec assertions",
+      "meaning": "The assertions a hauksbee-ci spec states, each judged against the run.",
+      "aliases": [
+        "ci",
+        "assertion"
+      ]
+    },
+    {
+      "id": "evidence",
+      "label": "Evidence",
+      "meaning": "Claims whose own evidence is undermined, reported as findings.",
+      "aliases": []
+    }
+  ],
+  "glossary": [
+    {
+      "term": "pass",
+      "label": "PASS",
+      "short": "The check held, and nothing it depends on had to be guessed.",
+      "what_to_do": "Nothing. Keep the check so a later change that breaks it is caught."
+    },
+    {
+      "term": "fail",
+      "label": "FAIL",
+      "short": "The board was simulated and the check did not hold. This is a finding about your design.",
+      "what_to_do": "Read the reason under the check: it names the net or part and what was seen. Fix the design (or the limit, if the limit is wrong) and rerun."
+    },
+    {
+      "term": "invalid",
+      "label": "INVALID",
+      "short": "Hauksbee refused to give this a pass or fail, because something it rests on was not simulated (an open part, an unpowered regulator, firmware that never ran). It is not a failure of your board.",
+      "what_to_do": "Close the named gap and rerun."
+    },
+    {
+      "term": "conditional_pass",
+      "label": "Conditional pass",
+      "short": "Passed, but only under the assumptions listed.",
+      "what_to_do": "Each assumption names what would make the pass unconditional."
+    },
+    {
+      "term": "open_part",
+      "label": "Open part",
+      "short": "A part with no model. It is left out of the circuit (treated as not there), so readings on its nets show the board without it.",
+      "what_to_do": "Give it a model (draft one from its datasheet), or mark it DNP if the board does not fit it."
+    },
+    {
+      "term": "substitute_model",
+      "label": "Stand-in model",
+      "short": "No model matched this exact part, so a similar one stood in. Where the two differ, results describe the stand-in.",
+      "what_to_do": "Add a model for the real part, or name the exact part fitted."
+    },
+    {
+      "term": "reduced_fidelity",
+      "label": "Reduced fidelity",
+      "short": "This part or result was simulated with a simpler stand-in. It is good enough for the claim shown, but not for finer ones.",
+      "what_to_do": "Usually nothing. To tighten it, give the run what the entry asks for."
+    },
+    {
+      "term": "assumed_corner",
+      "label": "Assumed corner",
+      "short": "The board names only the kind of part (e.g. 'LED'), so Hauksbee checked a high and a low plausible part.",
+      "what_to_do": "Put the real part number on it to check that part instead."
+    },
+    {
+      "term": "not_exercised",
+      "label": "Not exercised",
+      "short": "The run never reached this (a regulator with no input supply, a bus never addressed, firmware that never ran), so there is no result for it.",
+      "what_to_do": "Supply what the entry names (a supply, firmware, a stimulus) and rerun."
+    },
+    {
+      "term": "not_checked",
+      "label": "Not checked",
+      "short": "This check could not run on these inputs. No findings here does not mean there are none.",
+      "what_to_do": "Give the run the input the entry names and rerun."
+    },
+    {
+      "term": "inferred_pin_role",
+      "label": "Inferred pin role",
+      "short": "Nothing said what this pin does, so Hauksbee went by the usual pin order for the package.",
+      "what_to_do": "If that is wrong for this part, name the pin roles in its model."
+    },
+    {
+      "term": "default_parameter",
+      "label": "Default value",
+      "short": "A value the inputs did not give was set to a documented default.",
+      "what_to_do": "Set the real value in the part's model or in the spec."
+    },
+    {
+      "term": "fitted_by_default",
+      "label": "Assumed fitted",
+      "short": "With no BOM, every placed part is treated as fitted, including any left off the real board.",
+      "what_to_do": "Supply a BOM that marks the parts that are not fitted."
+    },
+    {
+      "term": "operating_limit",
+      "label": "Outside part limits",
+      "short": "The run measured a part outside a limit its datasheet sets, so results that depend on it are not trusted.",
+      "what_to_do": "Bring the part inside the named limit (change the circuit or the part)."
+    },
+    {
+      "term": "parser_limitation",
+      "label": "Reader limitation",
+      "short": "The file reader has a known gap here, so findings in this area may be missing or wrong.",
+      "what_to_do": "Re-export from a supported tool version, or confirm these findings by hand."
+    },
+    {
+      "term": "waived",
+      "label": "Waived",
+      "short": "Someone accepted this finding by hand, with a reason and an end date. It does not fail the run until that date.",
+      "what_to_do": "Fix the finding before the waiver ends, or renew it with a fresh reason."
+    },
+    {
+      "term": "default_rules",
+      "label": "Default rules",
+      "short": "The board's own spacing and width rules were not available, so checks used Hauksbee's defaults.",
+      "what_to_do": "Put the project's .kicad_pro next to the board so its own rules are used."
+    },
+    {
+      "term": "identity_only",
+      "label": "Identity only",
+      "short": "Hauksbee knows the part and its pins, but not what it does, so it stays open in simulation.",
+      "what_to_do": "Give its model behaviour (draft it from the datasheet) to simulate it."
+    },
+    {
+      "term": "executable_partial",
+      "label": "Partly modelled",
+      "short": "The part simulates, but only some of what it does is modelled.",
+      "what_to_do": "Results that need the rest are not evidence; extend the model to cover them."
+    },
+    {
+      "term": "scope_unspecified",
+      "label": "Scope not stated",
+      "short": "The part simulates, but its model does not say which behaviours it covers, so Hauksbee cannot tell which results it vouches for.",
+      "what_to_do": "List what the model covers in its card."
+    },
+    {
+      "term": "report_only_exit",
+      "label": "Report only",
+      "short": "This command reports problems but still exits 0, so a script or CI job will not fail on them.",
+      "what_to_do": "Add --strict to make serious findings fail the build."
+    }
+  ]
+}

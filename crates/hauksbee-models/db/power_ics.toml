@@ -386,51 +386,223 @@ pull_ohms = 100000.0
 
 # ── bq76952: TI battery AFE / stack monitor ───────────────────────────────────
 #
-# Source: Texas Instruments bq76952 datasheet, SLUSDX9C (Rev C, 2021).
-# 16-series battery monitor and protector with integrated AFE, coulomb counter,
-# and I2C/SPI interface.
-#
-# NOTE: The internal AFE behaviour (voltage measurement, protection FET control,
-# coulomb counter, I2C register map) is NOT fully modeled here. This is a
-# MINIMAL RESOLVING ENTRY: the part binds with correct ratings and a pin subset
-# so dissipation / Tj / supply-voltage checking become possible. An extracted
-# or hand-written behavioral block would be needed for pack-level simulation.
-# This entry is honest about what it does and does not model.
-#
-# Key absolute maximum ratings (bq76952 datasheet Table 7.1):
-#   VPACK (battery stack input) abs max = 85V
-#   VREGx digital supply abs max = 3.8V
-#   Tj max = 125C
+# TI BQ76952 SLUSE13B (January 2020, revised November 2021), sha256 5d89ba9a52308a06a4361157e715061cf4f9e7292990248d4d6b66123156e3a9. Drafted by the
+# extraction pipeline (codex gpt-6-luna) and reviewed against the PDF: the 48-pin PFB (TQFP) map (all 48 pads,
+# Table 6-1), BAT 85 V abs max, ISS 75 mA, TJ 150 C, RthetaJA 66 C/W and the 286 uA typical NORMAL-mode current were
+# checked. It REPLACES the earlier identity-only entry, whose 64-pin map was not this part's. Hand edit: value_re
+# accepts an orderable suffix (BQ76952PFBR). Cell measurement, protection, FET drivers and the LDOs are not modelled;
+# only the BAT supply draw is.
 [[models]]
 id = "bq76952"
 kind = "digital"
-description = "TI bq76952 battery AFE / monitor (minimal-resolve; internal AFE not modeled)"
+description = "Texas Instruments BQ76952 battery monitor and protector, 48-pin TQFP (PFB): models only the typical NORMAL-mode BAT supply draw; does not model cell measurement, protection decisions, cell balancing, high-side FET drive, charge pump, LDO outputs, communications, or configurable pin behavior."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/bq76952.pdf"
+title = "Texas Instruments BQ76952 3-Series to 16-Series High Accuracy Battery Monitor and Protector, SLUSE13B, January 2020, revised November 2021"
+locator = "Sections 3 and 5; Table 6-1 p.4-6; Tables 7-1 to 7-4 p.7-10"
+sha256 = "5d89ba9a52308a06a4361157e715061cf4f9e7292990248d4d6b66123156e3a9"
+
+[[models.source.references]]
+title = "BQ76952.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "5d89ba9a52308a06a4361157e715061cf4f9e7292990248d4d6b66123156e3a9"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "The datasheet specifies a configurable battery-monitor/protector with multiple communications and protection modes; the bounded logic schema cannot represent its behavior. Only the typical NORMAL-mode BAT supply draw is represented. No validated model error interval is published."
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_current_a"
+reason = "Table 7-5 provides only a typical NORMAL-mode current of 286 uA at TA=25 C and VBAT=59.2 V under the listed configuration; it prints no min/max."
+[[models.source.pinout]]
+package = "PFB (TQFP), 48 pins"
+pins = { "1" = "VC15", "2" = "VC14", "3" = "VC13", "4" = "VC12", "5" = "VC11", "6" = "VC10", "7" = "VC9", "8" = "VC8", "9" = "VC7", "10" = "VC6", "11" = "VC5", "12" = "VC4", "13" = "VC3", "14" = "VC2", "15" = "VC1", "16" = "VC0", "17" = "VSS", "18" = "SRP", "19" = "NC", "20" = "SRN", "21" = "TS1", "22" = "TS2", "23" = "TS3", "24" = "REG18", "25" = "ALERT", "26" = "SCL", "27" = "SDA", "28" = "HDQ", "29" = "CFETOFF", "30" = "DFETOFF", "31" = "DCHG", "32" = "DDSG", "33" = "RST_SHUT", "34" = "REG2", "35" = "REG1", "36" = "REGIN", "37" = "BREG", "38" = "FUSE", "39" = "PDSG", "40" = "PCHG", "41" = "LD", "42" = "PACK", "43" = "DSG", "44" = "NC", "45" = "CHG", "46" = "CP1", "47" = "BAT", "48" = "VC16" }
+[[models.source.characteristic]]
+parameter = "maximum cell balancing current through a single cell"
+max = 100
+unit = "mA"
+conditions = "VC0-VC16"
+basis = "Table 7-1 Absolute Maximum Ratings, maximum"
+[[models.source.characteristic]]
+parameter = "functional temperature, TFUNC"
+min = -40
+max = 85
+unit = "C"
+conditions = "over operating free-air temperature range unless otherwise noted"
+basis = "Table 7-1 Absolute Maximum Ratings, min/max"
+[[models.source.characteristic]]
+parameter = "junction temperature, TJ"
+min = -55
+unit = "C"
+conditions = ""
+basis = "Table 7-1 Absolute Maximum Ratings, min"
+[[models.source.characteristic]]
+parameter = "storage temperature, TSTG"
+min = -55
+max = 150
+unit = "C"
+conditions = ""
+basis = "Table 7-1 Absolute Maximum Ratings, min/max"
+[[models.source.characteristic]]
+parameter = "electrostatic discharge, HBM"
+min = -1000
+max = 1000
+unit = "V"
+conditions = "all pins; ANSI/ESDA/JEDEC JS-001"
+basis = "Table 7-2 ESD Ratings, value"
+[[models.source.characteristic]]
+parameter = "electrostatic discharge, CDM"
+min = -250
+max = 250
+unit = "V"
+conditions = "all pins; ANSI/ESDA/JEDEC JS-002"
+basis = "Table 7-2 ESD Ratings, value"
+[[models.source.characteristic]]
+parameter = "junction-to-case (top) thermal resistance, RthetaJC(top)"
+typ = 19.6
+unit = "C/W"
+conditions = "PFB (TQFP), 48 pins"
+basis = "Table 7-4 Thermal Information, BQ76952"
+[[models.source.characteristic]]
+parameter = "sleep mode supply current, ISLEEP_1"
+typ = 41
+unit = "uA"
+conditions = "TA=25 C, VBAT=59.2 V; periodic protections/monitoring, no pack current, REG1/REG2 OFF, CHG OFF, DSG ON in 11 V overdrive mode, no communication, Power:Sleep:Voltage Time=5 s"
+basis = "Table 7-5 Supply Current, ISLEEP_1, typ"
+[[models.source.characteristic]]
+parameter = "sleep mode supply current"
+min = 24
+max = 41
+unit = "uA"
+conditions = "multiple SLEEP mode options; typical battery-pack operating-range conditions"
+basis = "Section 1 Features, multiple SLEEP mode options"
+[[models.source.characteristic]]
+parameter = "deep sleep mode supply current"
+min = 9
+max = 10
+unit = "uA"
+conditions = "multiple DEEPSLEEP mode options; typical battery-pack operating-range conditions"
+basis = "Section 1 Features, multiple DEEPSLEEP mode options"
+[[models.source.characteristic]]
+parameter = "shutdown mode supply current"
+typ = 1
+unit = "uA"
+conditions = "typical battery-pack operating-range conditions"
+basis = "Section 1 Features, SHUTDOWN mode"
+[[models.source.characteristic]]
+parameter = "junction-to-board thermal resistance, RthetaJB"
+typ = 29.3
+unit = "C/W"
+conditions = "PFB (TQFP), 48 pins"
+basis = "Table 7-4 Thermal Information, BQ76952"
+[[models.source.characteristic]]
+parameter = "junction-to-top characterization parameter, PsiJT"
+typ = 0.8
+unit = "C/W"
+conditions = "PFB (TQFP), 48 pins"
+basis = "Table 7-4 Thermal Information, BQ76952"
+[[models.source.characteristic]]
+parameter = "junction-to-board characterization parameter, PsiJB"
+typ = 29.1
+unit = "C/W"
+conditions = "PFB (TQFP), 48 pins"
+basis = "Table 7-4 Thermal Information, BQ76952"
 
 [models.match]
-value_re = "(?i)^bq76952"
+value_re = "(?i)^BQ76952"
 
 [models.params]
-identity_only = true
-warning = "bq76952 has no generic executable device behavior; only identity and sourced metadata are available"
-unlocked_by = "a validated executable model for bq76952"
-
-[models.pins]
-# TQFP-64 / VQFN-64. Subset required for supply / voltage checking.
-# Source: bq76952 datasheet SLUSDX9C, Table 8.1 Pin Functions.
-"1"  = "pack_p"   # PACK+ (battery pack positive input)
-"2"  = "pack_n"   # PACK- / REGSRC (battery pack negative / regulator source)
-"27" = "vreg1"    # VREG1 (3.3V regulated supply output)
-"28" = "vreg2"    # VREG2 (3.3V regulated supply for AFE)
-"33" = "sda"      # I2C SDA
-"34" = "scl"      # I2C SCL
-"57" = "dsg"      # DSG (discharge FET drive)
-"58" = "chg"      # CHG (charge FET drive)
-"64" = "ts1"      # TS1 (temperature sense 1)
+supply_current_a = { typ = 286, unit = "uA", conditions = "TA=25 C, VBAT=59.2 V; regular measurements/protections active, REG1=3.3 V no load, REG2=OFF, CHG and DSG ON in 11 V overdrive mode, FASTADC=0, no communication", basis = "Table 7-5 Supply Current, INORMAL, typ" }
+supply_on_v = 4.7 # Source: Table 7-3 Recommended Operating Conditions, VBAT normal-operation minimum
+warning = "source-bound supply-draw model: Table 7-5 NORMAL-mode BAT current typ is represented; the linear ramp below the 4.7 V recommended minimum is a bounded model convention, not a datasheet current curve. Cell monitoring, protection, balancing, FET drivers, charge pump, LDOs, communications, shutdown/sleep currents, and configurable pin behavior are not modeled."
 
 [models.ratings]
-# Source: bq76952 datasheet SLUSDX9C, Table 7.1 Absolute Maximum Ratings
-max_voltage_v       = 85.0    # VPACK abs max (V), datasheet, stack voltage limit
-max_junction_temp_c = 125.0   # Tj max (C), datasheet
+max_voltage_v = 85.0 # Source: Table 7-1, BAT supply voltage maximum VSS+85 V
+max_current_a = 0.075 # Source: Table 7-1, maximum VSS current ISS 75 mA
+max_junction_temp_c = 150.0 # Source: Table 7-1, junction temperature TJ maximum
+theta_ja_c_per_w = 66.0 # Source: Table 7-4, PFB (TQFP), 48 pins, RthetaJA
+
+[models.pins]
+"1" = "vc15"
+"2" = "vc14"
+"3" = "vc13"
+"4" = "vc12"
+"5" = "vc11"
+"6" = "vc10"
+"7" = "vc9"
+"8" = "vc8"
+"9" = "vc7"
+"10" = "vc6"
+"11" = "vc5"
+"12" = "vc4"
+"13" = "vc3"
+"14" = "vc2"
+"15" = "vc1"
+"16" = "vc0"
+"17" = "vss"
+"18" = "srp"
+"19" = "nc19" # NC, not connected to silicon
+"20" = "srn"
+"21" = "ts1" # Thermistor input or general-purpose ADC input
+"22" = "ts2" # Thermistor input, shutdown wake input, or general-purpose ADC input
+"23" = "ts3" # Thermistor input or general-purpose ADC input
+"24" = "reg18"
+"25" = "alert" # Also HDQ I/O, thermistor/ADC input, or general-purpose digital output
+"26" = "scl" # Also SPI_SCLK
+"27" = "sda" # Also SPI_MISO
+"28" = "hdq" # Also SPI_MOSI, thermistor/ADC input, or general-purpose digital I/O
+"29" = "cfetoff" # Also SPI_CS, thermistor/ADC input, or general-purpose digital I/O
+"30" = "dfetoff" # Also BOTHOFF, thermistor/ADC input, or general-purpose digital I/O
+"31" = "dchg" # Also thermistor/ADC input or general-purpose digital output
+"32" = "ddsg" # Also thermistor/ADC input or general-purpose digital output
+"33" = "rst_shut"
+"34" = "reg2" # Programmable 1.8 V, 2.5 V, 3.0 V, 3.3 V, or 5.0 V LDO output
+"35" = "reg1" # Programmable 1.8 V, 2.5 V, 3.0 V, 3.3 V, or 5.0 V LDO output
+"36" = "regin" # Input for REG1 and REG2 LDOs
+"37" = "breg" # Base control signal for external preregulator transistor
+"38" = "fuse" # Fuse sense and drive
+"39" = "pdsg" # Predischarge PFET control
+"40" = "pchg" # Precharge PFET control
+"41" = "ld" # Load detect pin
+"42" = "pack"
+"43" = "dsg" # NMOS discharge FET drive output
+"44" = "nc44" # NC, not connected to silicon
+"45" = "chg" # NMOS charge FET drive output
+"46" = "cp1" # Charge pump capacitor
+"47" = "bat"
+"48" = "vc16"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "bat"
+min_v = 4.7
+max_v = 80.0
+abs_max_v = 85.0
+conditions = "TA = -40 C to 85 C; normal operation; operation to 80 V is supported when the charge pump is not operating; with charge pump active, reduce VBAT to keep CP1, CHG, and DSG within their maximum specified voltages."
+basis = "Table 7-3 Recommended Operating Conditions, VBAT supply voltage, normal operation; Table 7-1 Absolute Maximum Ratings, BAT"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "bat"
+min_v = 10.0
+max_v = 12.0
+conditions = "TA = 25 °C; OTP programming (OTP programming temperature is -40 °C to 45 °C)."
+basis = "Table 7-3 Recommended Operating Conditions, VBAT supply voltage (OTP programming)"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "bat"
+b = "vss"
+expr = "supply_current_a * min(1.0, max(0.0, v_bat / supply_on_v))"
+
+[models.coverage]
+implements = ["pin_roles", "normal_mode_supply_current", "supply_range", "absolute_ratings"]
+missing = ["cell_voltage_measurement", "stack_voltage_measurement", "current_measurement", "temperature_measurement", "protection_thresholds_and_delays", "cell_balancing", "high_side_fet_drivers", "charge_pump", "chemical_fuse_drive", "ldo_outputs", "i2c_spi_hdq_communications", "configurable_pin_behavior", "sleep_and_shutdown_modes", "logic_levels", "timing"]
 
 # ── LM5107 / LM5109: TI half-bridge gate drivers ─────────────────────────────
 #

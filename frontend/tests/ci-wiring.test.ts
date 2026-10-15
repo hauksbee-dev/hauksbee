@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 const frontend = join(dirname(fileURLToPath(import.meta.url)), '..')
 const repository = join(frontend, '..')
 
-type PackageManifest = { scripts?: Record<string, string> }
+type PackageManifest = { version: string; scripts?: Record<string, string> }
 
 describe('frontend release gates', () => {
   const manifest = JSON.parse(
@@ -117,8 +117,8 @@ describe('frontend release gates', () => {
     expect(generated).not.toContain('secrets.')
     expect(generated).not.toContain('hauksbee-token')
     expect(generated).toContain('hauksbee-ref: 0123456789abcdef0123456789abcdef01234567')
-    expect(generated).toContain('hauksbee-version: v0.1.0-beta.6')
-    expect(generated).not.toContain('ref: v0.1.0-beta.6')
+    expect(generated).toContain(`hauksbee-version: v${manifest.version}`)
+    expect(generated).not.toContain(`ref: v${manifest.version}`)
     for (const inputPath of ['**/*.xml', '**/*.zip', '**/*.tgz', '**/*.tar.gz', '**/*.tar']) {
       expect(generated).toContain(`"${inputPath}"`)
     }

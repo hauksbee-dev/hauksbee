@@ -62,6 +62,19 @@ fn boards_dir() -> PathBuf {
         .join("boards")
 }
 
+/// The `.kicad_pcb` a board's exports were made from. A board whose example
+/// revision has since moved on (blinky gained its 16 MHz crystal) keeps the
+/// revision `kicad-cli` exported, frozen beside the exports: the exports cannot
+/// be regenerated without KiCad, and an agreement test compares like with like.
+fn board_path(board: &str) -> PathBuf {
+    let frozen = fixtures().join(format!("{board}.kicad_pcb"));
+    if frozen.is_file() {
+        frozen
+    } else {
+        boards_dir().join(format!("{board}.kicad_pcb"))
+    }
+}
+
 fn read_text(p: &Path) -> String {
     let bytes = std::fs::read(p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
     if p.extension().is_some_and(|e| e == "gz") {
@@ -76,7 +89,7 @@ fn read_text(p: &Path) -> String {
 
 /// The KiCad reading of an example board: ground truth.
 fn native(board: &str) -> ExtractedBoard {
-    let p = boards_dir().join(format!("{board}.kicad_pcb"));
+    let p = board_path(board);
     ExtractedBoard::from_kicad_pcb(&read_text(&p)).expect("the KiCad reader is ground truth")
 }
 
@@ -642,7 +655,7 @@ fn both_formats_are_detected_by_content_through_the_registry() {
 
     // And neither claims the other's file, nor any other format's.
     for other in [
-        &read_text(&boards_dir().join("blinky.kicad_pcb")).into_bytes()[..],
+        &read_text(&board_path("blinky")).into_bytes()[..],
         b"<eagle version=\"9.0\"><drawing/></eagle>",
         b"317GND              R1    -1    D0472PA00X+019000Y+029450X0945Y0945R180S0\n",
     ] {

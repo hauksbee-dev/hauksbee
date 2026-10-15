@@ -53,6 +53,7 @@ jobs:
       vscode: ${{ steps.plan.outputs.vscode }}
       speed: ${{ steps.plan.outputs.speed }}
       full: ${{ steps.plan.outputs.full }}
+      test_matrix: ${{ steps.matrix.outputs.test_matrix }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -73,6 +74,15 @@ jobs:
               --base "$BASE_SHA" --head "$GITHUB_SHA" \
               --github-output "$GITHUB_OUTPUT"
           fi
+      # The test shards come from each crate's [package.metadata.ci] test-shard
+      # via `cargo metadata`, so a new crate cannot be left out of the matrix
+      # (a crate with no shard fails here). Metadata needs no compiler, so the
+      # preinstalled toolchain stands in for the one rust-toolchain.toml pins.
+      - id: matrix
+        name: derive the test matrix from the workspace
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: echo "test_matrix=$(python3 scripts/workspace_crates.py test-matrix)" >> "$GITHUB_OUTPUT"
 
   fmt:
     name: cargo fmt
@@ -96,6 +106,12 @@ jobs:
       # authoritative copies by each crate's tests/packaged_asset_sync.rs.
       - name: enforce publish-set includes stay inside their crates
         run: python3 scripts/check-package-includes.py
+      # One source per fact: the crate lists come from `cargo metadata` and
+      # every copied version or pin is checked against the file that owns it.
+      - name: enforce derived crate lists and single-sourced release facts
+        run: |
+          python3 scripts/check-release-facts.py
+          python3 scripts/test_release_lists.py
       - name: prove change-aware CI remains fail-closed
         run: python3 scripts/test_ci_change_plan.py
       - name: prove bundled integration tests retain every source file
@@ -168,23 +184,12 @@ jobs:
     timeout-minutes: 40
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # A single Linux workspace build exhausts the standard runner while
-          # linking every integration-test binary. Split those binaries across
-          # two fresh runners; dependencies are still compiled from the same
-          # lockfile and each public package remains covered.
-          - os: ubuntu-latest
-            suite: foundations
-            packages: >-
-              -p hauksbee-ir -p hauksbee-solve -p hauksbee-extract
-              -p hauksbee-models -p hauksbee-testkit -p hauksbee-mcu
-              -p hauksbee-ci
-          - os: ubuntu-latest
-            suite: application
-            packages: >-
-              -p hauksbee-frontdoor-api -p hauksbee-server
-              -p hauksbee-engine -p hauksbee-mcp
+      # A single Linux workspace build exhausts the standard runner while
+      # linking every integration-test binary, so the workspace crates split
+      # across fresh runners (dependencies still compile from the same
+      # lockfile). Which crate runs in which shard is that crate's own
+      # [package.metadata.ci] test-shard; the plan job turns it into this matrix.
+      matrix: ${{ fromJSON(needs.plan.outputs.test_matrix) }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -205,14 +210,7 @@ jobs:
       # gate runs them for real with HAUKSBEE_REQUIRE_CORPUS=1.
       - name: cargo test (${{ matrix.suite }})
         shell: bash
-        run: |
-          packages="${{ matrix.packages }}"
-          if [[ "${{ matrix.suite }}" == "foundations" ]] && \
-             cargo metadata --no-deps --format-version 1 | \
-               jq -e '.packages | any(.name == "hauksbee-tarski")' >/dev/null; then
-            packages="$packages -p hauksbee-tarski"
-          fi
-          cargo test $packages
+        run: cargo test ${{ matrix.packages }}
 
   macos:
     name: native macOS workspace candidate gate

@@ -14,5 +14,11 @@ mod evidence_surface;
 mod mos_classification;
 #[path = "node_interning.rs"]
 mod node_interning;
+#[path = "run_record_schema_drift.rs"]
+mod run_record_schema_drift;
+#[path = "run_record.rs"]
+mod run_record_tests;
 #[path = "serde_roundtrip.rs"]
 mod serde_roundtrip;
+#[path = "vocabulary.rs"]
+mod vocabulary_tests;

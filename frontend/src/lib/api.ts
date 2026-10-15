@@ -8,7 +8,6 @@ import type {
   ModelSaveResult, RunResponse, ScaffoldResponse, SensorCatalogEntry, Startup, WebReport,
 } from '../types/report'
 import type { ClientMessage, ServerMessage } from '../types/protocol'
-import type { CatalogResponse } from './ci-catalog'
 import { buildBoardUpload, type SupplementalDesignFiles } from './board-upload'
 
 /** What to show a user for a thrown value of unknown type. */
@@ -192,8 +191,6 @@ export const api = {
   /** The starter spec's supplies for an uploaded board: the answer of
    *  `hauksbee-ci init`, so the builder starts from what the CLI would write. */
   scaffold: (upload: FormData, signal?: AbortSignal) => postForm<ScaffoldResponse>('/api/ci/scaffold', upload, signal),
-  /** Every assertion kind with its fields and a valid example (`hauksbee-ci explain`). */
-  ciCatalog: (signal?: AbortSignal) => getJson<CatalogResponse>('/api/ci/catalog', { signal }),
   sensorSpecs: (signal: AbortSignal) => getJson<{ entries?: SensorCatalogEntry[] }>('/api/sensor-specs', { signal }),
   deps: () => getJson<{ deps?: DepInfo[]; environment?: DepsEnvironment }>('/api/deps'),
   depsInstall: (id: string, onFrame: (frame: SseFrame) => void) =>

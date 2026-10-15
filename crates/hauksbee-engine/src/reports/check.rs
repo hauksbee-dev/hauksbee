@@ -193,11 +193,7 @@ impl CheckReport<'_> {
         // An unvalidated board format (KiCad 10+) yields possibly-phantom shorts
         // that do not gate unless KiCad's own DRC confirms the exact net pair; the
         // unmatched caveat is printed instead.
-        let would_gate = if combined {
-            drc_gate_fails(&drc, qualification.as_ref()) || findings_gate(&lint, &si, usbc.as_ref())
-        } else {
-            check_gate_fails(&drc_structured, &lint, &si, usbc.as_ref())
-        };
+        let would_gate = check_gate_fails(&drc_structured, &lint, &si, usbc.as_ref());
         // The machine document, assembled for EVERY output mode: its verdict is
         // the single derivation the plain triage headline and the closing
         // VERDICT line read, so no human surface can say something the `--json`
@@ -207,6 +203,7 @@ impl CheckReport<'_> {
             &bound.name,
             &summary,
             &drc_structured,
+            Some(&provenance),
             &actual_findings,
             would_gate,
         )
@@ -214,6 +211,11 @@ impl CheckReport<'_> {
         .with_evidence(&evidence)
         // A pass over hardware-fixed indicator meaning nobody stated rests on it.
         .with_condition(crate::checks::indicators::intent_condition(&indicators))
+        // So does a pass on copper judged against default spacing rules.
+        .with_condition(super::drc::default_rules_condition(
+            &drc_structured,
+            &provenance,
+        ))
         .with_judgement_scope(crate::scope::JudgementScope::of(board, &bound, &blockers));
         let run_verdict = jr.run_verdict();
         match mode {
@@ -233,14 +235,21 @@ impl CheckReport<'_> {
             }
             OutputMode::Plain => {
                 print!("{}", triage.render(&run_verdict));
+                // The scope banner once, above every section; each model-dependent
+                // section then points back at it instead of repeating it.
+                if !blockers.is_empty() {
+                    println!("{}\n", crate::result::inconclusive_verdict(&blockers));
+                }
                 let drc_plain = crate::plain::plain_drc_structured_with_rule_source(
                     &drc_structured,
                     &provenance,
                 );
                 let mut lint_plain = crate::plain_netlint(&lint);
                 lint_plain.unmodelled_critical.clone_from(&blockers);
+                lint_plain.inconclusive_said_above = true;
                 let mut si_plain = crate::plain_si(&si);
                 si_plain.unmodelled_critical.clone_from(&blockers);
+                si_plain.inconclusive_said_above = true;
                 print!(
                     "{}",
                     crate::plain::fix_first(&drc_plain, &lint_plain, usbc.as_ref(), &si_plain)
@@ -315,6 +324,15 @@ impl CheckReport<'_> {
                     }
                 );
                 print!("{}", summary.render_banner());
+                // What this run did not cover, and the scope banner, once and
+                // above every section: the default report states the same scope
+                // `--plain` does, in its own words.
+                if !triage.not_covered.is_empty() {
+                    println!("NOT COVERED: {}", triage.not_covered);
+                }
+                if !blockers.is_empty() {
+                    println!("{}", crate::result::inconclusive_verdict(&blockers));
+                }
                 println!("\n== {} ==", drc_structured.section_title(&provenance));
                 if unrouted {
                     println!("{}", super::UNROUTED_COPPER_NOTE);
@@ -332,12 +350,12 @@ impl CheckReport<'_> {
                 // Verdict first in each model-dependent section: the extract body's
                 // "no findings." must sit under the refusal, not above it.
                 if !blockers.is_empty() {
-                    println!("{}", crate::result::inconclusive_verdict(&blockers));
+                    println!("{}", crate::plain::INCONCLUSIVE_SEE_TOP);
                 }
                 print!("{}", hauksbee_extract::render_netlint(&lint));
                 println!("\n== Signal integrity ==");
                 if !blockers.is_empty() {
-                    println!("{}", crate::result::inconclusive_verdict(&blockers));
+                    println!("{}", crate::plain::INCONCLUSIVE_SEE_TOP);
                 }
                 print!("{}", hauksbee_extract::render_si(&si));
                 if let Some(u) = &usbc {
@@ -380,6 +398,10 @@ impl CheckReport<'_> {
                 )
             );
         }
+        super::note_unvouched_exit(
+            strict,
+            run_verdict.partial || run_verdict.verdict == "invalid",
+        );
         if strict && would_gate {
             super::strict_gate_exit(
                 mode,
@@ -433,10 +455,15 @@ pub(crate) fn check_gate_fails(
 /// and this surface's own strict gate. One constructor for the JSON output, for
 /// the verdict the plain triage and the closing line carry, and for the web
 /// report's verdict.
+///
+/// `findings` is the complete list the gate reads: every copper short and
+/// clearance group comes first, with its location, layer and pad owners, so
+/// SARIF, `JUnit` and annotations carry what `--strict` fails on.
 pub(crate) fn machine_report(
     board_name: &str,
     summary: &BindSummary,
     drc: &DrcStructured,
+    provenance: Option<&crate::result::ClearanceRuleProvenance>,
     findings: &[crate::result::JsonFinding],
     would_gate: bool,
 ) -> JsonReport {
@@ -444,7 +471,9 @@ pub(crate) fn machine_report(
         .with_bind_verdict_gate()
         .with_surface_gate(would_gate);
     jr.drc = Some(drc.clone());
-    jr.findings = Some(findings.to_vec());
+    let mut all = super::drc::drc_findings(drc, provenance);
+    all.extend_from_slice(findings);
+    jr.findings = Some(all);
     jr
 }
 
@@ -585,7 +614,7 @@ pub fn gather_findings_with_schematic(
     lib: &ModelLibrary,
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<Vec<crate::result::JsonFinding>> {
-    let (_, mut drc) = super::run_drc(board_path, board, text, raw, altium_present)?;
+    let (clearance_input, mut drc) = super::run_drc(board_path, board, text, raw, altium_present)?;
 
     // The companion schematic's declarations, applied before anything reads the
     // findings. Reclassifies, never deletes: a covered contact keeps its layer,
@@ -606,8 +635,15 @@ pub fn gather_findings_with_schematic(
     let mut waivers = load_waivers(board_path);
     let _ = apply_static_waivers(&mut waivers, &mut lint, &mut si, &mut drc);
 
-    let mut findings: Vec<crate::result::JsonFinding> =
-        drc_short_findings(&drc, qualification.as_ref());
+    let provenance =
+        super::clearance_provenance(clearance_input.as_ref(), board_path, text, drc.clearance_mm);
+    let structured = DrcStructured::from_report_with_ties(
+        &drc,
+        qualification.as_ref(),
+        text.contains("<eagle") && schematic_ties.is_none(),
+    )
+    .with_clearance_rule_provenance(&provenance);
+    let mut findings = super::drc::drc_findings(&structured, Some(&provenance));
     findings.extend(lint_findings_json(&lint));
     findings.extend(si_findings_json(&si));
     findings.extend(usbc.as_ref().and_then(usbc_finding_json));
@@ -719,91 +755,6 @@ pub(crate) fn waive_drc(
     report.findings = kept;
     excluded.extend(waived);
     excluded
-}
-
-/// The copper shorts as machine findings.
-///
-/// An unvalidated board format's shorts may be phantom, so they are graded
-/// `warning` and marked non-gating: the copper gate excuses them and the CI
-/// artifacts have to agree. The exit-code side asks this function rather than
-/// re-reading the version warning, on both surfaces that gate on copper:
-/// [`drc_gate_fails`] is the copper half of the `--check` gate and the whole of
-/// `--drc`'s.
-///
-/// One copper route does NOT come through here: a short never enters a
-/// `--json` document's `findings` array (it is rendered as `drc.shorts`), and
-/// [`crate::result::JsonReport::verdict_with_waivers`] counts those shorts into
-/// `serious_count` behind its own copy of the same `version_warning` check. That
-/// shape carries no gating flag, and its severity vocabulary differs too (the
-/// phantom grade there is `note`, not `warning`). The two copies read one field
-/// and are pinned from both sides, but a change to the phantom rule has to be
-/// made in both places.
-pub(crate) fn drc_short_findings(
-    drc: &hauksbee_extract::DrcReport,
-    qualification: Option<&hauksbee_extract::DrcTieQualification>,
-) -> Vec<crate::result::JsonFinding> {
-    let phantom = drc.version_warning.is_some();
-    drc.shorts()
-        .map(|f| {
-            let authorized_tie = qualification.and_then(|ties| ties.tie_for(f));
-            let declared_tie = qualification.and_then(|ties| ties.declaration_for(f));
-            let tie_note = |what: &str| {
-                declared_tie.map_or_else(String::new, |tie| {
-                    format!(
-                        "; the schematic names this pair {what} ({})",
-                        tie.declaration
-                    )
-                })
-            };
-            // Only board-local physical authority can downgrade a short. A
-            // companion Eagle schematic names a net pair but cannot locate
-            // the intended join, so it remains actionable/gating context.
-            let severity = match (authorized_tie, phantom) {
-                (Some(_), _) => "note",
-                (None, true) => "warning",
-                (None, false) => "serious",
-            };
-            crate::result::JsonFinding {
-                check: "drc".to_string(),
-                kind: "short".to_string(),
-                severity: severity.to_string(),
-                nets: vec![f.net_a_name.clone(), f.net_b_name.clone()],
-                location_mm: None,
-                layer: Some(f.layer.clone()),
-                refs: Vec::new(),
-                // A board-authorized join is not actionable; a schematic-only
-                // declaration remains actionable because its location is unknown.
-                actionable: authorized_tie.is_none(),
-                message: format!(
-                    "copper short: {} touches {} on {}{}",
-                    f.net_a_name,
-                    f.net_b_name,
-                    f.layer,
-                    tie_note("but does not authorize the physical location")
-                ),
-                plain: format!(
-                    "two different nets ({} and {}) are touching on layer {}{}",
-                    f.net_a_name,
-                    f.net_b_name,
-                    f.layer,
-                    tie_note("without locating the intended join")
-                ),
-                fix: None,
-            }
-        })
-        .collect()
-}
-
-/// The copper gate: a real (non-phantom) short fails it. Derived from
-/// [`drc_short_findings`], so the exit code and the CI artifact count the same
-/// shorts. Shared with `--drc`, which gates on copper alone.
-pub(crate) fn drc_gate_fails(
-    drc: &hauksbee_extract::DrcReport,
-    qualification: Option<&hauksbee_extract::DrcTieQualification>,
-) -> bool {
-    drc_short_findings(drc, qualification)
-        .iter()
-        .any(crate::result::JsonFinding::gates)
 }
 
 /// What a static pass cannot see, said at the end of one.
@@ -1079,7 +1030,8 @@ mod tests {
         let mut findings = lint_findings_json(lint);
         findings.extend(si_findings_json(si));
         let would_gate = super::super::lint_fails(lint) || super::super::si_fails(si);
-        let mut jr = super::machine_report("synthetic", &summary, &drc, &findings, would_gate);
+        let mut jr =
+            super::machine_report("synthetic", &summary, &drc, None, &findings, would_gate);
         jr.verdict_conditions = conditions.iter().map(ToString::to_string).collect();
         // A scope over `nets` named nets, one of which ("VB") the open parts touch.
         let jr = jr.with_judgement_scope(scope_nets.map(|nets| crate::scope::JudgementScope {

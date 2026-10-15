@@ -1783,7 +1783,9 @@
             "identity_only",
             "executable_partial",
             "scope_unspecified",
-            "report_only_exit"
+            "report_only_exit",
+            "mcu_halted",
+            "uart_activity"
           ],
           "type": "string"
         },

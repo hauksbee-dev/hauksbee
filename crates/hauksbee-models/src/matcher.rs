@@ -47,7 +47,7 @@ impl CompiledEntry {
         let property_res = rules
             .properties
             .iter()
-            .map(|(key, pattern)| ci(pattern).map(|re| (normalise_property_key(key), re)))
+            .map(|(key, pattern)| ci(pattern).map(|re| (normalise_key(key), re)))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             entry,
@@ -75,8 +75,10 @@ impl CompiledEntry {
                 query_lid == lid
             }
         });
-        // European comma-decimal is normalised before the value regex runs.
-        let value = normalise_value_str(field(q.value.as_ref()));
+        // A comma is normalised before the value regex runs, by the same rule
+        // the value parser uses: "4,7k" is 4.7k, "10,000" and "4,700uF" are
+        // thousands groupings.
+        let value = crate::value::normalise_comma_decimal(field(q.value.as_ref()));
         // A part value often carries its package as a trailing parenthesis
         // ("BAT54A(SOT23-3)"). The rule may name the whole string or only the
         // part, so it matches if either spelling does.
@@ -88,7 +90,7 @@ impl CompiledEntry {
         let properties_ok = self.property_res.iter().all(|(expected_key, regex)| {
             q.properties
                 .iter()
-                .find(|(key, _)| normalise_property_key(key) == *expected_key)
+                .find(|(key, _)| normalise_key(key) == *expected_key)
                 .is_some_and(|(_, value)| regex.is_match(value))
         });
         // A footprint-only card for a discrete semiconductor guesses the part from
@@ -347,11 +349,6 @@ fn branch_constrainedness(branch: &str) -> u32 {
     score
 }
 
-/// Normalise common BOM variations before regex matching.
-fn normalise_value_str(s: &str) -> String {
-    s.replace(',', ".") // European decimal comma → point
-}
-
 /// The value without a trailing parenthesised package, when that is what the
 /// parenthesis is: a package family followed by a digit ("(SOT23-3)",
 /// "(QFN32)", "(SOIC-8_150mil)"), or SMA/SMB/SMC. Anything else in
@@ -370,8 +367,22 @@ fn strip_package_suffix(value: &str) -> Option<&str> {
         .map(|m| m.as_str())
 }
 
-fn normalise_property_key(s: &str) -> String {
-    s.trim().to_ascii_lowercase().replace([' ', '-'], "_")
+/// The one key normaliser for property names and table headers.
+///
+/// Lowercase, every run of non-alphanumerics folded to one `_`, trimmed. `"Mid X"`,
+/// `"mid-x"` and `"MID_X"` are all `mid_x`; `"Reference(s)"` is `reference_s`.
+#[must_use]
+pub fn normalise_key(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.trim().chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.is_empty() && !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    out.truncate(out.trim_end_matches('_').len());
+    out
 }
 
 // ── ComponentQuery ────────────────────────────────────────────────────────────
@@ -398,39 +409,7 @@ pub struct ComponentQuery {
     pub reference: Option<String>,
 }
 
-/// Whether a reference designator names an active IC (prefix U / IC / MCU),
-/// matching the binder's MCU-candidate convention.
-#[must_use]
-pub fn is_active_ic_ref(reference: &str) -> bool {
-    // Eagle names any element the designer left unnamed `U$12`, and that covers
-    // mounting holes, fiducials, logos, frames and test points. They take the
-    // `U` prefix without being parts at all, so counting them inflated the
-    // active-IC denominator by 17x on a real SparkFun board (69 "active ICs"
-    // where the board has four). Any `<letters>$<digits>` reference is
-    // machine-generated, never a designator someone chose.
-    if is_tool_generated_ref(reference) {
-        return false;
-    }
-    let prefix: String = reference
-        .chars()
-        .take_while(char::is_ascii_alphabetic)
-        .map(|c| c.to_ascii_uppercase())
-        .collect();
-    matches!(prefix.as_str(), "U" | "IC" | "MCU")
-}
-
-/// Whether a reference is a CAD tool's placeholder for an unnamed element
-/// (Eagle's `U$12` form) rather than a designator a person assigned.
-#[must_use]
-pub fn is_tool_generated_ref(reference: &str) -> bool {
-    let Some((head, tail)) = reference.split_once('$') else {
-        return false;
-    };
-    !head.is_empty()
-        && head.chars().all(|c| c.is_ascii_alphabetic())
-        && !tail.is_empty()
-        && tail.chars().all(|c| c.is_ascii_digit())
-}
+pub use crate::refdes::{is_active_ic_ref, is_tool_generated_ref};
 
 impl ComponentQuery {
     /// Convenience constructor with the most common fields.
@@ -463,6 +442,40 @@ mod tests {
             ..Default::default()
         })
         .expect("compiles")
+    }
+
+    #[test]
+    fn one_key_normaliser_for_properties_and_headers() {
+        for (raw, want) in [
+            ("Mid X", "mid_x"),
+            ("mid-x", "mid_x"),
+            (" MID_X ", "mid_x"),
+            ("Reference(s)", "reference_s"),
+            ("Center-X(mm)", "center_x_mm"),
+            ("\u{feff}Designator", "designator"),
+        ] {
+            assert_eq!(super::normalise_key(raw), want, "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn value_commas_follow_the_value_parser() {
+        let value_re = |re: &str, value: &str| {
+            let compiled = entry(
+                ComponentKind::Passive,
+                MatchRules {
+                    value_re: Some(re.to_string()),
+                    ..Default::default()
+                },
+            );
+            compiled.matches(&ComponentQuery {
+                value: Some(value.to_string()),
+                ..Default::default()
+            })
+        };
+        assert!(value_re("^4\\.7k$", "4,7k"), "European decimal comma");
+        assert!(value_re("^4700uF$", "4,700uF"), "thousands grouping");
+        assert!(!value_re("^4\\.700uF$", "4,700uF"), "never 1000x small");
     }
 
     #[test]

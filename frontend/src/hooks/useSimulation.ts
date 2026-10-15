@@ -89,7 +89,9 @@ function useLiveSimulation(): SimulationState {
       onOpen: () => setConnected(true),
       onMessage: msg => {
         switch (msg.type) {
-          case 'BoardInfo': setBoardInfo(msg); break
+          // A re-broadcast after an input is attached can carry an empty
+          // name; the board has not changed, so the name it had stays.
+          case 'BoardInfo': setBoardInfo(prev => (!msg.name && prev?.name ? { ...msg, name: prev.name } : msg)); break
           // Always a fresh object (even when empty) so the consumer's
           // seed-from-backlog effect re-fires per (re)connect.
           case 'Backlog':

@@ -7,18 +7,39 @@
 //! selection. Environment values are hashed: replay can prove the selector is
 //! the same without publishing a username-bearing path. Timestamps, cwd,
 //! hostname, PATH, debug flags, and secrets never enter the document.
+//!
+//! Paths are portable. Inputs and path-valued arguments are stored relative to
+//! the project root (the git checkout containing the working directory, else
+//! the working directory itself), or `~/...` under the home directory, so a
+//! manifest replays from a colleague's checkout. Absolute paths from older
+//! manifests are still read as they are. Each resolved backend (simavr, QEMU,
+//! Renode, ngspice, kicad-cli, freerouting) is recorded with its version and
+//! the SHA-256 of its binary, found by the same discovery `hauksbee doctor` uses.
+//!
+//! A finished run can also leave an [`Outcome`] in its manifest (verdict, exit
+//! code, gating findings). It is not part of the manifest id: the manifest stays
+//! the reproduction identity, and the outcome only gives `reproduce` something
+//! to compare with.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
+/// Schema 2 adds `root_hint`, `backends` and `outcome`, and stores paths relative
+/// to the project root. Schema 1 documents remain readable.
+pub const MANIFEST_SCHEMA_VERSION: u32 = 2;
+const OLDEST_READABLE_SCHEMA: u32 = 1;
+
+/// When set, a finished run writes its [`Outcome`] as JSON to this path. It is
+/// how `reproduce` reads the replayed run's result without parsing its report.
+pub const OUTCOME_FILE_ENV: &str = "HAUKSBEE_OUTCOME_FILE";
 
 /// Environment selectors which change input/model/backend resolution. Values
 /// are never serialized directly; see [`EnvironmentContract`]. API credentials
@@ -155,6 +176,33 @@ pub struct EnvironmentContract {
     pub selectors: Vec<EnvironmentSelector>,
 }
 
+/// One external program a run may have used, as the engine resolved it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackendRevision {
+    pub name: String,
+    /// The tool's own version string, when it reports one.
+    pub version: Option<String>,
+    /// Hex SHA-256 of the executable (or jar). `None` for a backend linked into
+    /// this binary, whose version is its source commit.
+    pub sha256_of_binary: Option<String>,
+}
+
+/// What a finished run concluded. Informational: it is excluded from the
+/// manifest id and only used for comparison by `reproduce`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Outcome {
+    /// `pass`, `fail`, `invalid` or `error`.
+    pub verdict: String,
+    pub exit_code: i32,
+    /// Hex SHA-256 of the run record this run wrote. `null` until the run
+    /// record exists; [`note_record_sha256`] is the hook that fills it.
+    pub record_sha256: Option<String>,
+    /// Sorted, stable ids of the findings that gated the run (finding group
+    /// fingerprints, or `spec[i]:<assertion>` for CI specs).
+    #[serde(default)]
+    pub gating_findings: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Invocation {
     pub argv: Vec<String>,
@@ -174,10 +222,20 @@ pub struct RunManifest {
     /// in `inputs`, while this gives a user-visible name/version inventory.
     pub plugins: Vec<PluginRevision>,
     pub build: BuildContract,
+    /// Names the project root that `inputs` and `invocation` paths are relative
+    /// to, without giving its location on the capturing machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_hint: Option<String>,
     pub environment: EnvironmentContract,
+    /// External programs available when the run was captured.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub backends: Vec<BackendRevision>,
     pub inputs: Vec<HashedInput>,
     pub invocation: Invocation,
     pub reproduce: String,
+    /// Set by [`finish_outcome`] when the run ends; not part of the id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<Outcome>,
 }
 
 impl RunManifest {
@@ -189,10 +247,22 @@ impl RunManifest {
     /// Returns an error if the command is empty, if an input is a symlink or
     /// cannot be read or hashed, if two inputs share a role and path, or if the
     /// manifest cannot be serialized to compute its id.
-    pub fn capture(mut request: ManifestRequest) -> Result<Self> {
+    pub fn capture(request: ManifestRequest) -> Result<Self> {
+        Self::capture_at(request, &project_root())
+    }
+
+    /// As [`Self::capture`], with paths made relative to `root` instead of the
+    /// project root found from the working directory.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::capture`], and if `root` cannot be resolved.
+    pub fn capture_at(mut request: ManifestRequest, root: &Path) -> Result<Self> {
         if request.command.is_empty() {
             bail!("manifest command must contain argv[0]");
         }
+        let root = fs::canonicalize(root)
+            .with_context(|| format!("resolving project root '{}'", root.display()))?;
         request.feature_flags.sort();
         request.feature_flags.dedup();
 
@@ -201,6 +271,9 @@ impl RunManifest {
             .iter()
             .map(hash_input)
             .collect::<Result<Vec<_>>>()?;
+        for input in &mut inputs {
+            input.path = portable_path(Path::new(&input.path), &root);
+        }
         inputs.sort_by(|a, b| (&a.role, &a.path).cmp(&(&b.role, &b.path)));
         for pair in inputs.windows(2) {
             if pair[0].role == pair[1].role && pair[0].path == pair[1].path {
@@ -229,13 +302,24 @@ impl RunManifest {
                 target_arch: std::env::consts::ARCH.to_string(),
                 features: request.feature_flags,
             },
+            root_hint: Some(root_hint(&root)),
             environment: capture_environment(),
+            backends: crate::commands::doctor::resolved_backends(),
             inputs,
             invocation: Invocation {
-                argv: request.command,
-                options: request.options,
+                argv: request
+                    .command
+                    .iter()
+                    .map(|arg| portable_argument(arg, &root))
+                    .collect(),
+                options: request
+                    .options
+                    .into_iter()
+                    .map(|(key, value)| (key, portable_value(value, &root)))
+                    .collect(),
             },
             reproduce: "hauksbee reproduce <manifest.json>".to_string(),
+            outcome: None,
         };
         manifest.manifest_id = manifest.computed_id()?;
         Ok(manifest)
@@ -278,11 +362,12 @@ impl RunManifest {
             format!("resolving manifest output directory '{}'", parent.display())
         })?;
         let output = output_parent.join(path.file_name().unwrap_or_else(|| OsStr::new("")));
+        let root = project_root();
         for input in &self.inputs {
             if input.kind != "directory" {
                 continue;
             }
-            let input_dir = fs::canonicalize(&input.path)
+            let input_dir = fs::canonicalize(resolve_stored_path(&input.path, &root))
                 .with_context(|| format!("resolving hashed input directory '{}'", input.path))?;
             if output.starts_with(&input_dir) {
                 bail!(
@@ -309,6 +394,8 @@ impl RunManifest {
                 anyhow::anyhow!("persisting manifest '{}': {}", path.display(), e.error)
             }
         })?;
+        // The run that wrote this manifest records its outcome here when it ends.
+        lock_pending().manifest = Some((path.to_path_buf(), self.clone()));
         Ok(())
     }
 
@@ -324,10 +411,11 @@ impl RunManifest {
             fs::read(path).with_context(|| format!("reading run manifest '{}'", path.display()))?;
         let manifest: Self = serde_json::from_slice(&bytes)
             .with_context(|| format!("parsing run manifest '{}'", path.display()))?;
-        if manifest.schema_version != MANIFEST_SCHEMA_VERSION {
+        if !(OLDEST_READABLE_SCHEMA..=MANIFEST_SCHEMA_VERSION).contains(&manifest.schema_version) {
             bail!(
-                "unsupported manifest schema_version {} (this build supports {})",
+                "unsupported manifest schema_version {} (this build supports {} to {})",
                 manifest.schema_version,
+                OLDEST_READABLE_SCHEMA,
                 MANIFEST_SCHEMA_VERSION
             );
         }
@@ -349,23 +437,52 @@ impl RunManifest {
     /// Returns an error if an input can no longer be read or hashed, or if its
     /// kind, digest, size or file count differs from the recorded value.
     pub fn verify_inputs(&self) -> Result<()> {
+        self.verify_inputs_at(&project_root())
+    }
+
+    /// As [`Self::verify_inputs`], resolving stored relative paths against `root`.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::verify_inputs`].
+    pub fn verify_inputs_at(&self, root: &Path) -> Result<()> {
+        match self.input_changes_at(root).into_iter().next() {
+            Some(change) => bail!("{change}"),
+            None => Ok(()),
+        }
+    }
+
+    /// Every recorded input that no longer matches, one line each: unreadable,
+    /// or a different kind, digest, size or file count. Empty means all match.
+    #[must_use]
+    pub fn input_changes_at(&self, root: &Path) -> Vec<String> {
+        let mut changes = Vec::new();
         for expected in &self.inputs {
-            let actual = hash_input(&ManifestInput::new(&expected.role, &expected.path))?;
+            let actual = match hash_input(&ManifestInput::new(
+                &expected.role,
+                resolve_stored_path(&expected.path, root),
+            )) {
+                Ok(actual) => actual,
+                Err(e) => {
+                    changes.push(format!(
+                        "input '{}' cannot be read at '{}': {e:#}",
+                        expected.role, expected.path
+                    ));
+                    continue;
+                }
+            };
             if actual.kind != expected.kind
                 || actual.digest != expected.digest
                 || actual.size_bytes != expected.size_bytes
                 || actual.file_count != expected.file_count
             {
-                bail!(
+                changes.push(format!(
                     "input '{}' digest mismatch at '{}': expected {}, found {}",
-                    expected.role,
-                    expected.path,
-                    expected.digest.value,
-                    actual.digest.value
-                );
+                    expected.role, expected.path, expected.digest.value, actual.digest.value
+                ));
             }
         }
-        Ok(())
+        changes
     }
 
     /// Check that the reproducibility environment selectors match this process.
@@ -422,9 +539,47 @@ impl RunManifest {
         Ok(())
     }
 
+    /// Backends recorded here whose version or binary differs on this machine.
+    /// Drift is information for the reader, not a reason to refuse a replay: the
+    /// outcome comparison is the real test.
+    #[must_use]
+    pub fn backend_drift(&self) -> Vec<String> {
+        if self.backends.is_empty() {
+            return Vec::new();
+        }
+        let current = crate::commands::doctor::resolved_backends();
+        let describe = |b: &BackendRevision| {
+            let version = b.version.as_deref().unwrap_or("unknown version");
+            b.sha256_of_binary.as_deref().map_or_else(
+                || version.to_string(),
+                |sha| format!("{version}, sha256 {}", &sha[..sha.len().min(12)]),
+            )
+        };
+        self.backends
+            .iter()
+            .filter_map(
+                |recorded| match current.iter().find(|c| c.name == recorded.name) {
+                    None => Some(format!(
+                        "backend {} was {} when recorded; it is not installed here",
+                        recorded.name,
+                        describe(recorded)
+                    )),
+                    Some(now) if now != recorded => Some(format!(
+                        "backend {} was {} when recorded; here it is {}",
+                        recorded.name,
+                        describe(recorded),
+                        describe(now)
+                    )),
+                    Some(_) => None,
+                },
+            )
+            .collect()
+    }
+
     fn computed_id(&self) -> Result<String> {
         let mut unsigned = self.clone();
         unsigned.manifest_id.clear();
+        unsigned.outcome = None;
         let bytes = serde_json::to_vec(&unsigned).context("serializing manifest identity")?;
         Ok(format!("sha256:{}", hex_digest(&bytes)))
     }
@@ -554,17 +709,27 @@ pub fn board_sidecar_inputs(board: &Path, role_prefix: &str) -> Vec<ManifestInpu
     inputs
 }
 
-/// Verify and execute a manifest through one of the two fixed run binaries.
+/// Exit code of `reproduce` when the replay does not match the recorded outcome.
+pub const EXIT_REPRODUCE_DIFF: i32 = 1;
+
+/// Verify, re-run and compare a manifest through one of the two fixed run
+/// binaries.
 ///
 /// The document cannot nominate an arbitrary program: only `hauksbee` and
 /// `hauksbee-ci` are accepted, and `argv[0]` must agree with the signed tool
-/// name. On success the process exits with the replayed run's code.
+/// name. The run executes from the project root, so root-relative paths
+/// resolve. When the manifest recorded an [`Outcome`], a `MATCH` or `DIFF`
+/// verdict is printed to stderr (the replayed run's own report keeps stdout) and
+/// the process exits 0 on a match and [`EXIT_REPRODUCE_DIFF`] on a difference.
+/// Recorded input bytes that no longer match are a difference too, and in that
+/// case the run is not repeated. A manifest with no recorded outcome exits with
+/// the replayed run's own code. Timings and other report text are never compared.
 ///
 /// # Errors
 ///
 /// Returns an error if the manifest fails [`RunManifest::read_verified`], names
-/// an unsupported tool or a mismatched `argv[0]`, fails the tool, environment or
-/// input verification, or if the executable cannot be located or launched.
+/// an unsupported tool or a mismatched `argv[0]`, fails the tool or environment
+/// verification, or if the executable cannot be located or launched.
 pub fn reproduce(path: &Path) -> Result<()> {
     let manifest = RunManifest::read_verified(path)?;
     if !matches!(manifest.tool.name.as_str(), "hauksbee" | "hauksbee-ci") {
@@ -575,7 +740,15 @@ pub fn reproduce(path: &Path) -> Result<()> {
     }
     manifest.verify_tool(&ToolIdentity::workspace(&manifest.tool.name))?;
     manifest.verify_environment()?;
-    manifest.verify_inputs()?;
+    let root = project_root();
+    for note in manifest.backend_drift() {
+        eprintln!("note: {note}");
+    }
+    let changed = manifest.input_changes_at(&root);
+    if !changed.is_empty() {
+        report_diff(&manifest, &changed);
+        std::process::exit(EXIT_REPRODUCE_DIFF);
+    }
 
     let current = std::env::current_exe().context("locating the hauksbee executable")?;
     let executable = if manifest.tool.name == "hauksbee" {
@@ -594,11 +767,335 @@ pub fn reproduce(path: &Path) -> Result<()> {
         if manifest.inputs.len() == 1 { "" } else { "s" },
         manifest.tool.name
     );
+    let outcome_file = tempfile::NamedTempFile::new().context("creating the outcome file")?;
     let status = std::process::Command::new(&executable)
         .args(manifest.invocation.argv.iter().skip(1))
+        .current_dir(&root)
+        .env(OUTCOME_FILE_ENV, outcome_file.path())
         .status()
         .with_context(|| format!("launching '{}'", executable.display()))?;
-    std::process::exit(status.code().unwrap_or(3));
+    let code = status.code().unwrap_or(3);
+    let Some(recorded) = &manifest.outcome else {
+        eprintln!(
+            "reproduced: exit {code}; this manifest recorded no outcome to compare with \
+             (re-emit it with --emit-manifest to get MATCH or DIFF)"
+        );
+        std::process::exit(code);
+    };
+    // A replay that died before reaching its end-of-run hook left nothing in the
+    // file; the exit code alone still compares.
+    let observed = fs::read(outcome_file.path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Outcome>(&bytes).ok())
+        .unwrap_or_else(|| Outcome {
+            verdict: outcome_verdict(&manifest.tool.name, code, false).to_string(),
+            exit_code: code,
+            record_sha256: None,
+            gating_findings: Vec::new(),
+        });
+    let differences = compare_outcomes(recorded, &observed);
+    if differences.is_empty() {
+        eprintln!(
+            "MATCH  verdict {}, exit {}, {} gating finding{} (manifest {})",
+            observed.verdict,
+            observed.exit_code,
+            observed.gating_findings.len(),
+            if observed.gating_findings.len() == 1 {
+                ""
+            } else {
+                "s"
+            },
+            manifest.manifest_id
+        );
+        std::process::exit(0);
+    }
+    report_diff(&manifest, &differences);
+    std::process::exit(EXIT_REPRODUCE_DIFF);
+}
+
+fn report_diff(manifest: &RunManifest, differences: &[String]) {
+    eprintln!(
+        "DIFF  this run does not reproduce manifest {}",
+        manifest.manifest_id
+    );
+    for line in differences {
+        eprintln!("  {line}");
+    }
+}
+
+/// What differs between a recorded outcome and an observed one: verdict, exit
+/// code, and gating findings by id. Empty means they match. Other fields, such
+/// as `record_sha256`, are not compared.
+#[must_use]
+pub fn compare_outcomes(recorded: &Outcome, observed: &Outcome) -> Vec<String> {
+    const SHOWN: usize = 10;
+    let mut lines = Vec::new();
+    if recorded.verdict != observed.verdict {
+        lines.push(format!(
+            "verdict: {} -> {}",
+            recorded.verdict, observed.verdict
+        ));
+    }
+    if recorded.exit_code != observed.exit_code {
+        lines.push(format!(
+            "exit code: {} -> {}",
+            recorded.exit_code, observed.exit_code
+        ));
+    }
+    for (label, from, to) in [
+        (
+            "new gating finding",
+            &observed.gating_findings,
+            &recorded.gating_findings,
+        ),
+        (
+            "gating finding gone",
+            &recorded.gating_findings,
+            &observed.gating_findings,
+        ),
+    ] {
+        let only: Vec<&String> = from.iter().filter(|id| !to.contains(id)).collect();
+        lines.extend(only.iter().take(SHOWN).map(|id| format!("{label}: {id}")));
+        if only.len() > SHOWN {
+            lines.push(format!("{label}: and {} more", only.len() - SHOWN));
+        }
+    }
+    lines
+}
+
+/// The verdict word for a finished run.
+///
+/// `hauksbee` exits 2 for findings and 1
+/// for bad input; `hauksbee-ci` exits 1 for a red assertion and 2 for a spec
+/// error; both use 3 for a run that cannot be trusted. Gating findings under a
+/// non-strict exit 0 are still a failing verdict.
+#[must_use]
+pub fn outcome_verdict(tool: &str, exit_code: i32, has_gating: bool) -> &'static str {
+    match (tool, exit_code) {
+        (_, 3) => "invalid",
+        ("hauksbee-ci", 1) | ("hauksbee", 2) => "fail",
+        (_, 0) if has_gating => "fail",
+        (_, 0) => "pass",
+        _ => "error",
+    }
+}
+
+#[derive(Default)]
+struct Pending {
+    manifest: Option<(PathBuf, RunManifest)>,
+    gating: BTreeMap<String, Vec<String>>,
+    record_sha256: Option<String>,
+    finished: bool,
+}
+
+static PENDING: Mutex<Pending> = Mutex::new(Pending {
+    manifest: None,
+    gating: BTreeMap::new(),
+    record_sha256: None,
+    finished: false,
+});
+
+fn lock_pending() -> std::sync::MutexGuard<'static, Pending> {
+    PENDING.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Whether this process will record an outcome when it ends: it wrote a
+/// manifest with `--emit-manifest`, or `reproduce` asked for one. Callers use it
+/// to gather findings they would otherwise skip.
+#[must_use]
+pub fn tracking_outcome() -> bool {
+    lock_pending().manifest.is_some() || std::env::var_os(OUTCOME_FILE_ENV).is_some()
+}
+
+/// Replace the gating finding ids for `scope` (an empty scope for a single-run
+/// tool, `spec[i]` for the i-th CI spec). Cheap and safe to call when nothing is
+/// tracked.
+pub fn note_gating_findings(scope: &str, ids: impl IntoIterator<Item = String>) {
+    lock_pending()
+        .gating
+        .insert(scope.to_string(), ids.into_iter().collect());
+}
+
+/// Hook for the run record: once a run has written its record, pass the record's
+/// hex SHA-256 here and the manifest's outcome carries it.
+pub fn note_record_sha256(hex: impl Into<String>) {
+    lock_pending().record_sha256 = Some(hex.into());
+}
+
+/// Record how the run ended, once, in the manifest it wrote (and in the file
+/// `reproduce` named, if any). Failure to record never changes the run's exit
+/// code; it is reported on stderr.
+pub fn finish_outcome(tool: &str, exit_code: i32) {
+    let outcome_file = std::env::var_os(OUTCOME_FILE_ENV).map(PathBuf::from);
+    let (manifest, outcome) = {
+        let mut pending = lock_pending();
+        if pending.finished || (pending.manifest.is_none() && outcome_file.is_none()) {
+            return;
+        }
+        pending.finished = true;
+        let mut gating: Vec<String> = pending
+            .gating
+            .iter()
+            .flat_map(|(scope, ids)| {
+                ids.iter().map(move |id| {
+                    if scope.is_empty() {
+                        id.clone()
+                    } else {
+                        format!("{scope}:{id}")
+                    }
+                })
+            })
+            .collect();
+        gating.sort();
+        gating.dedup();
+        let outcome = Outcome {
+            verdict: outcome_verdict(tool, exit_code, !gating.is_empty()).to_string(),
+            exit_code,
+            record_sha256: pending.record_sha256.take(),
+            gating_findings: gating,
+        };
+        (pending.manifest.take(), outcome)
+    };
+    if let Some(file) = outcome_file {
+        if let Err(e) = serde_json::to_vec(&outcome)
+            .map_err(anyhow::Error::from)
+            .and_then(|bytes| fs::write(&file, bytes).map_err(anyhow::Error::from))
+        {
+            eprintln!(
+                "warning: could not write the run outcome to '{}': {e}",
+                file.display()
+            );
+        }
+    }
+    if let Some((path, mut manifest)) = manifest {
+        manifest.outcome = Some(outcome);
+        if let Err(e) = replace_with_outcome(&path, &manifest) {
+            eprintln!(
+                "warning: could not record the run outcome in manifest '{}': {e:#}",
+                path.display()
+            );
+        }
+    }
+}
+
+/// Atomically replace the manifest this run wrote with the same manifest plus
+/// its outcome. It refuses if the file on disk is no longer exactly that
+/// manifest, so nothing else's evidence is ever overwritten.
+fn replace_with_outcome(path: &Path, manifest: &RunManifest) -> Result<()> {
+    let on_disk = RunManifest::read_verified(path)?;
+    if on_disk.manifest_id != manifest.manifest_id || on_disk.outcome.is_some() {
+        bail!("the file is no longer the manifest this run wrote");
+    }
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+    temp.write_all(manifest.canonical_json()?.as_bytes())?;
+    temp.as_file_mut().sync_all()?;
+    temp.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
+
+/// The directory manifest paths are relative to: the git checkout containing the
+/// working directory, else the working directory.
+#[must_use]
+pub fn project_root() -> PathBuf {
+    let cwd = std::env::current_dir()
+        .and_then(fs::canonicalize)
+        .unwrap_or_else(|_| PathBuf::from("."));
+    cwd.ancestors()
+        .find(|dir| dir.join(".git").exists())
+        .map_or_else(|| cwd.clone(), Path::to_path_buf)
+}
+
+fn root_hint(root: &Path) -> String {
+    let name = root.file_name().map_or_else(
+        || "project".to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    let kind = if root.join(".git").exists() {
+        "git checkout root"
+    } else {
+        "working directory"
+    };
+    format!("{name} ({kind})")
+}
+
+fn slash_path(path: &Path) -> String {
+    let joined = path
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
+    if joined.is_empty() {
+        ".".to_string()
+    } else {
+        joined
+    }
+}
+
+/// `path` as stored: relative to `root`, else `~/...` under the home
+/// directory, else unchanged.
+fn portable_path(path: &Path, root: &Path) -> String {
+    if let Ok(relative) = path.strip_prefix(root) {
+        return slash_path(relative);
+    }
+    let home = std::env::var_os("HOME").and_then(|h| fs::canonicalize(h).ok());
+    if let Some(relative) = home.as_deref().and_then(|h| path.strip_prefix(h).ok()) {
+        return format!("~/{}", slash_path(relative));
+    }
+    path.display().to_string()
+}
+
+/// The inverse of [`portable_path`]. Absolute paths (older manifests) are kept.
+fn resolve_stored_path(stored: &str, root: &Path) -> PathBuf {
+    if let Some(rest) = stored.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    let path = Path::new(stored);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    }
+}
+
+fn relative_to_root(text: &str, root: &Path) -> String {
+    let path = Path::new(text);
+    match path.strip_prefix(root) {
+        Ok(relative) if path.is_absolute() => slash_path(relative),
+        _ => text.to_string(),
+    }
+}
+
+/// An argv token with an absolute path under `root` made root-relative, also
+/// inside `--flag=PATH`.
+fn portable_argument(arg: &str, root: &Path) -> String {
+    match arg.split_once('=') {
+        Some((flag, value)) if flag.starts_with("--") => {
+            format!("{flag}={}", relative_to_root(value, root))
+        }
+        _ => relative_to_root(arg, root),
+    }
+}
+
+fn portable_value(value: serde_json::Value, root: &Path) -> serde_json::Value {
+    use serde_json::Value;
+    match value {
+        Value::String(text) => Value::String(relative_to_root(&text, root)),
+        Value::Array(items) => {
+            Value::Array(items.into_iter().map(|v| portable_value(v, root)).collect())
+        }
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(k, v)| (k, portable_value(v, root)))
+                .collect(),
+        ),
+        other => other,
+    }
 }
 
 fn capture_environment() -> EnvironmentContract {
@@ -739,4 +1236,157 @@ pub(crate) fn bytes_to_hex(bytes: &[u8]) -> String {
         write!(&mut out, "{byte:02x}").expect("writing to String cannot fail");
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(board: &Path, argument: &str) -> ManifestRequest {
+        ManifestRequest {
+            tool: ToolIdentity::new("hauksbee", "0.1.0", Some("0123456789ab")),
+            command: vec!["hauksbee".into(), "run".into(), argument.into()],
+            options: BTreeMap::from([("board".into(), serde_json::json!(argument))]),
+            inputs: vec![ManifestInput::new("board", board)],
+            feature_flags: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn paths_under_the_root_are_stored_relative_and_resolve_in_a_copy() {
+        let first = tempfile::tempdir().unwrap();
+        let board = first.path().join("sub/board.kicad_pcb");
+        fs::create_dir(first.path().join("sub")).unwrap();
+        fs::write(&board, "bytes\n").unwrap();
+        let root = fs::canonicalize(first.path()).unwrap();
+        let arg = root.join("sub/board.kicad_pcb").display().to_string();
+
+        let manifest = RunManifest::capture_at(request(&board, &arg), first.path()).unwrap();
+        assert_eq!(manifest.inputs[0].path, "sub/board.kicad_pcb");
+        assert_eq!(manifest.invocation.argv[2], "sub/board.kicad_pcb");
+        assert_eq!(
+            manifest.invocation.options["board"],
+            serde_json::json!("sub/board.kicad_pcb")
+        );
+        assert!(manifest.root_hint.is_some());
+        assert!(!manifest
+            .canonical_json()
+            .unwrap()
+            .contains(root.to_str().unwrap()));
+
+        let second = tempfile::tempdir().unwrap();
+        fs::create_dir(second.path().join("sub")).unwrap();
+        fs::copy(&board, second.path().join("sub/board.kicad_pcb")).unwrap();
+        manifest.verify_inputs_at(second.path()).unwrap();
+        assert!(manifest.input_changes_at(second.path()).is_empty());
+
+        fs::write(second.path().join("sub/board.kicad_pcb"), "bytez\n").unwrap();
+        let changes = manifest.input_changes_at(second.path());
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        assert!(changes[0].contains("digest mismatch"), "{changes:?}");
+    }
+
+    #[test]
+    fn schema_one_manifests_with_absolute_paths_still_verify() {
+        let dir = tempfile::tempdir().unwrap();
+        let board = dir.path().join("board.kicad_pcb");
+        fs::write(&board, "bytes\n").unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        // The root does not contain the board, so its path stays absolute, as in
+        // every manifest written before schema 2.
+        let mut old = RunManifest::capture_at(
+            request(&board, &board.display().to_string()),
+            elsewhere.path(),
+        )
+        .unwrap();
+        old.schema_version = 1;
+        old.root_hint = None;
+        old.backends.clear();
+        old.outcome = None;
+        old.manifest_id = old.computed_id().unwrap();
+        let json = old.canonical_json().unwrap();
+        assert!(!json.contains("root_hint") && !json.contains("backends"));
+        assert!(!json.contains("outcome"));
+
+        let file = elsewhere.path().join("old.json");
+        fs::write(&file, json).unwrap();
+        let loaded = RunManifest::read_verified(&file).unwrap();
+        assert!(Path::new(&loaded.inputs[0].path).is_absolute());
+        loaded.verify_inputs_at(elsewhere.path()).unwrap();
+        assert!(loaded.outcome.is_none());
+    }
+
+    #[test]
+    fn the_outcome_is_recorded_once_without_changing_the_manifest_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let board = dir.path().join("board.kicad_pcb");
+        fs::write(&board, "bytes\n").unwrap();
+        let manifest =
+            RunManifest::capture_at(request(&board, &board.display().to_string()), dir.path())
+                .unwrap();
+        let file = dir.path().join("m.json");
+        manifest.write_new(&file).unwrap();
+        assert!(tracking_outcome());
+
+        note_gating_findings("", ["lint/unrouted_pad/serious/711e36fbcb84".to_string()]);
+        note_gating_findings("spec[1]", ["bus voltage".to_string()]);
+        finish_outcome("hauksbee", 2);
+        finish_outcome("hauksbee", 0); // take-once: a later call changes nothing
+
+        let on_disk = RunManifest::read_verified(&file).unwrap();
+        assert_eq!(on_disk.manifest_id, manifest.manifest_id);
+        let outcome = on_disk.outcome.expect("outcome recorded");
+        assert_eq!(outcome.verdict, "fail");
+        assert_eq!(outcome.exit_code, 2);
+        assert_eq!(outcome.record_sha256, None);
+        assert_eq!(
+            outcome.gating_findings,
+            [
+                "lint/unrouted_pad/serious/711e36fbcb84",
+                "spec[1]:bus voltage"
+            ]
+        );
+        assert!(fs::read_to_string(&file)
+            .unwrap()
+            .contains("\"record_sha256\": null"));
+    }
+
+    fn outcome(verdict: &str, exit_code: i32, findings: &[&str]) -> Outcome {
+        Outcome {
+            verdict: verdict.into(),
+            exit_code,
+            record_sha256: None,
+            gating_findings: findings.iter().map(|f| (*f).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn outcomes_compare_on_verdict_exit_code_and_gating_findings_only() {
+        let base = outcome("fail", 2, &["a", "b"]);
+        let mut same = outcome("fail", 2, &["a", "b"]);
+        same.record_sha256 = Some("ff".into());
+        assert!(compare_outcomes(&base, &same).is_empty());
+
+        let diff = compare_outcomes(&base, &outcome("pass", 0, &["b", "c"]));
+        assert_eq!(
+            diff,
+            [
+                "verdict: fail -> pass",
+                "exit code: 2 -> 0",
+                "new gating finding: c",
+                "gating finding gone: a",
+            ]
+        );
+    }
+
+    #[test]
+    fn verdict_words_follow_each_tools_exit_codes() {
+        assert_eq!(outcome_verdict("hauksbee", 0, false), "pass");
+        assert_eq!(outcome_verdict("hauksbee", 0, true), "fail");
+        assert_eq!(outcome_verdict("hauksbee", 2, false), "fail");
+        assert_eq!(outcome_verdict("hauksbee", 1, false), "error");
+        assert_eq!(outcome_verdict("hauksbee-ci", 1, false), "fail");
+        assert_eq!(outcome_verdict("hauksbee-ci", 2, false), "error");
+        assert_eq!(outcome_verdict("hauksbee-ci", 3, false), "invalid");
+    }
 }

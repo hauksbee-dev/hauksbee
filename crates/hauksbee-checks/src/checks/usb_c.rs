@@ -420,39 +420,10 @@ pub fn extract_sink_termination(board: &ExtractedBoard) -> Option<SinkTerminatio
     })
 }
 
-/// Whether a net name denotes a ground reference. Recognises the common
-/// ground-family names a USB-C Rd can return to: GND, the analog/digital splits
-/// (GNDA/AGND, GNDD/DGND), power/earth grounds (GNDPWR/PGND/EGND), shield/USB
-/// grounds, and numbered grounds (GND1, GND2, ...). Deliberately conservative:
-/// it matches only names whose alphabetic-only core is exactly a ground token,
-/// so a signal like "`GND_SENSE`" or "GNDLED" (an LED return that is *not* the
-/// system ground) does not masquerade as ground and credit a phantom Rd.
-fn is_ground_name(name: &str) -> bool {
-    // Drop digits and separators so "GND1", "GNDA_2", "GND-3" all reduce to
-    // their alphabetic core ("GND", "GNDA", "GND").
-    let core: String = name
-        .to_ascii_uppercase()
-        .chars()
-        .filter(char::is_ascii_alphabetic)
-        .collect();
-    matches!(
-        core.as_str(),
-        "GND"
-            | "GNDA"
-            | "AGND"
-            | "GNDD"
-            | "DGND"
-            | "GNDPWR"
-            | "PGND"
-            | "EGND"
-            | "GNDREF"
-            | "SGND"
-            | "GNDUSB"
-            | "USBGND"
-            | "VSS"
-            | "VSSA"
-    )
-}
+// A ground reference a USB-C Rd can return to: the one ground table
+// (`hauksbee_models::netclass`), so `GND_SENSE` or an LED return never credits
+// a phantom Rd.
+use hauksbee_models::netclass::is_ground as is_ground_name;
 
 /// All net ids that are ground references on the board (see [`is_ground_name`]).
 fn ground_net_ids(board: &ExtractedBoard) -> std::collections::HashSet<i64> {

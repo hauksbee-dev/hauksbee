@@ -11,7 +11,8 @@
 //! revisions (REV-A..D, L). Investigation separated real geometry from unsafe
 //! suppression: ordinary same-footprint pads are checked normally; only an
 //! explicitly named local copper-link footprint (`0R_0603`, with a matching 0R
-//! value) can exempt its own geometry. The exemption is owner- and location-
+//! value, or a solder-jumper footprint whose own pads already touch, the
+//! closed `SJ_Closed` of those boards) can exempt its own geometry. The exemption is owner- and location-
 //! scoped, so another collision between the same nets still fires. The remaining
 //! recorded contacts live in `SHORT_EXCEPTIONS` with evidence and an expiry.
 
@@ -72,32 +73,14 @@ struct ShortException {
 /// One entry, and it is a REAL zero-gap contact, not a measurement artefact.
 ///
 /// Surfaced by adding the touching band to the shorts test (see
-/// `hauksbee_extract::SHORT_TOUCH_EPS_MM`): the gap measures 9.769962616701378e-15
-/// mm, so the old `gap <= 0.0` test filed it as a clearance note and the corpus
+/// `hauksbee_extract::SHORT_TOUCH_EPS_MM`): the gap measures about 1e-14 mm, so
+/// the old `gap <= 0.0` test filed it as a clearance note and the corpus
 /// was called short-clean on the strength of a rounding error. The right response
 /// is to record it, not to widen the test back until it disappears.
-const SHORT_EXCEPTIONS: &[ShortException] = &[
-    ShortException {
-        board: "ESP32-EVB_Rev_",
-        nets: ("Net-(400MA_E1-Pad1)", "GND"),
-        reason: "A GND track meets pad 1 of 400MA_E1 at a measured 9.8e-15 mm on \
-             B.Cu. 400MA_E1 is a CLOSED SOLDER JUMPER (footprint \
-             OLIMEX_Jumpers-FP:SJ_Closed, value \"Closed\"): its pad 1 is on \
-             Net-(400MA_E1-Pad1), its pad 2 is on GND, and a third bridging pad \
-             joins them in copper. Those two nets are therefore connected BY \
-             DESIGN, 0.76 mm away, and GND copper reaching the jumper's other \
-             pad is the same connection arriving from the other side. The \
-             geometry is real and the report is right about it; the board is not \
-             faulty. Removing it properly needs the link-class recogniser \
-             (hauksbee-engine's is_jumper_or_net_tie, already used to exempt \
-             these parts from placeholder_value) to be reachable from the DRC, \
-             which is a cross-crate change this exception holds the place for.",
-        until: "2027-08-01",
-    },
-    ShortException {
-        board: "vme-wren.kicad_pcb",
-        nets: ("P3V3", "/FP_IO7"),
-        reason: "TRUE POSITIVE, and it stays reported. A P3V3 via barrel meets a \
+const SHORT_EXCEPTIONS: &[ShortException] = &[ShortException {
+    board: "vme-wren.kicad_pcb",
+    nets: ("P3V3", "/FP_IO7"),
+    reason: "TRUE POSITIVE, and it stays reported. A P3V3 via barrel meets a \
              /FP_IO7 track on In4.Cu at a measured 5.7e-15 mm: a via touching a \
              different net's inner-layer copper, which is a short by any reading. \
              It is excused here only because of what the file is. vme-wren is a \
@@ -106,9 +89,8 @@ const SHORT_EXCEPTIONS: &[ShortException] = &[
              premise is that SHIPPED, reviewed boards are short-clean, and a \
              finding on a demo neither confirms nor refutes that. The finding is \
              correct and is not being suppressed anywhere a user would see it.",
-        until: "2027-08-01",
-    },
-];
+    until: "2027-08-01",
+}];
 
 impl ShortException {
     fn matches(&self, board_file: &str, a: &str, b: &str) -> bool {

@@ -200,7 +200,7 @@ impl<T: Clone> StampCache<T> {
 
 /// Run `cmd` to completion but give up (and kill it) after `limit`. Status
 /// commands print a few lines, so reading the pipes only after exit is safe.
-fn output_within(cmd: &mut Command, limit: Duration) -> Option<std::process::Output> {
+pub(crate) fn output_within(cmd: &mut Command, limit: Duration) -> Option<std::process::Output> {
     use std::io::Read;
     let mut child = cmd
         .stdin(Stdio::null())
@@ -797,7 +797,7 @@ fn probe_esp_qemu() -> DepStatus {
 
 /// Locate ngspice the way the differential harness documents its lookup:
 /// `$NGSPICE`, then PATH, then the known per-OS install locations.
-fn find_ngspice() -> Option<PathBuf> {
+pub(crate) fn find_ngspice() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("NGSPICE") {
         let pb = PathBuf::from(&p);
         if pb.is_file() {

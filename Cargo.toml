@@ -35,7 +35,7 @@ version = "0.1.0-beta.6"
 edition = "2021"
 license = "Apache-2.0"
 # Every crate inherits these, so the shared metadata is stated once and cannot
-# drift between the eight published crates. `description` is deliberately NOT
+# drift between the published crates. `description` is deliberately NOT
 # here: each crate describes what it actually does.
 repository = "https://github.com/hauksbee-dev/hauksbee"
 homepage = "https://github.com/hauksbee-dev/hauksbee"

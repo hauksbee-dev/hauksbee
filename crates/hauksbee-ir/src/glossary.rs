@@ -52,6 +52,8 @@ pub enum Term {
     ExecutablePartial,
     ScopeUnspecified,
     ReportOnlyExit,
+    McuHalted,
+    UartActivity,
 }
 
 /// One glossary row: a term's display label, what it means, and what to do.
@@ -198,6 +200,20 @@ impl Term {
                 "This command reports problems but still exits 0, so a script or CI job will \
                  not fail on them.",
                 "Add --strict to make serious findings fail the build.",
+            ),
+            Self::McuHalted => (
+                "Halted",
+                "The emulated microcontroller is not executing firmware right now: the \
+                 simulation is paused, the firmware has stopped (a fault, a sleep it never \
+                 wakes from, or the end of main), or its supply is below the operating range.",
+                "Press play; if it stays halted while the sim runs, check the MCU's supply rail \
+                 and the serial output for a crash message.",
+            ),
+            Self::UartActivity => (
+                "UART traffic",
+                "The microcontroller sent or received bytes on its serial port (UART) in the last \
+                 two seconds of real time; the console shows what it printed.",
+                "Open the Serial tab to read the output or type input to the firmware.",
             ),
         };
         TermEntry {

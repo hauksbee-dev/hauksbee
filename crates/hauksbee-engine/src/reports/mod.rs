@@ -583,6 +583,21 @@ pub fn note_ungated_findings(strict: bool, would_gate: bool) {
     }
 }
 
+/// The exit-3 counterpart of [`note_ungated_findings`].
+///
+/// A run the verdict cannot vouch for (partly judged, or inconclusive over
+/// unmodelled key parts) still exits 0 without `--strict`, and a CI log reader
+/// must not read that 0 as a pass. Said once on stderr, so stdout stays the
+/// report.
+pub fn note_unvouched_exit(strict: bool, unvouched: bool) {
+    if !strict && unvouched {
+        eprintln!(
+            "note: exit 0 only because --strict is off: this run is partly judged or \
+             inconclusive, not a pass. Add --strict to exit 3 on it (3 = invalid for analysis)."
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use hauksbee_extract::{

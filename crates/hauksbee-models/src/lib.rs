@@ -39,8 +39,18 @@
 //! println!("{}", res);
 //! ```
 
+/// The one wording of how a rating's scalar is chosen among its printed rows: the
+/// extraction prompt (`KEY_GUIDE`, `RATINGS_RULES`) and the validator's message
+/// all embed it, so they cannot disagree.
+macro_rules! standard_condition {
+    () => {
+        "the row at the standard condition (25 °C, the standard test board), else the least favourable row the part number allows"
+    };
+}
+
 pub mod behavioral;
 mod check;
+pub mod chip_size;
 mod conventions;
 pub mod datasheet;
 pub mod derating;
@@ -54,11 +64,14 @@ pub mod extract_usage;
 pub mod logic_spec;
 pub mod matcher;
 pub mod mcu_modules;
+pub mod netclass;
 pub mod pack;
 pub mod package;
 pub mod param_names;
 pub mod pin_rules;
 pub mod profile;
+pub mod rating_basis;
+pub mod refdes;
 pub mod schema;
 pub mod sensor_spec;
 pub mod spice_input;
@@ -782,6 +795,75 @@ impl ModelLibrary {
             memo.insert(q.clone(), r.clone());
         }
         r
+    }
+
+    /// The MCU cards, in load order.
+    fn mcu_cards(&self) -> impl Iterator<Item = &ModelEntry> {
+        (self.entries.iter())
+            .map(|le| &le.compiled.entry)
+            .filter(|e| e.kind == ComponentKind::Mcu)
+    }
+
+    /// The core clock (Hz) an MCU card gives as `default_clock_hz`: what the
+    /// part runs at when neither its firmware's fuses nor a crystal on the board
+    /// state a clock. It belongs to the card, so every consumer (the co-sim's AVR
+    /// core above all) reads it here and no run keeps a clock of its own.
+    ///
+    /// `requested_part` is the component's value. The card it resolves to wins;
+    /// a value no card matches (an ordering code such as `ATmega328P-PU`) takes
+    /// the clock the cards of the same `backend` and `module` shape agree on, and
+    /// `None` when they disagree or none states one.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // a positive, finite Hz
+    pub fn mcu_default_clock_hz(
+        &self,
+        backend: &str,
+        requested_part: &str,
+        module: bool,
+    ) -> Option<u64> {
+        let hz = |e: &ModelEntry| {
+            (e.params.get_f64("default_clock_hz"))
+                .filter(|h| h.is_finite() && *h >= 1.0)
+                .map(|h| h.round() as u64)
+        };
+        let on_backend = |e: &ModelEntry| e.params.get_str("backend") == Some(backend);
+        let mut query = ComponentQuery::new(
+            None::<String>,
+            Some(requested_part.to_string()),
+            None::<String>,
+        );
+        query.mpn = Some(requested_part.to_string());
+        if let Some(h) = (self.resolve(&query).model.as_ref())
+            .filter(|m| on_backend(m))
+            .and_then(hz)
+        {
+            return Some(h);
+        }
+        let mut agreed = None;
+        for card in self
+            .mcu_cards()
+            .filter(|e| on_backend(e) && e.params.get_bool("module").unwrap_or(false) == module)
+        {
+            match (agreed, hz(card)) {
+                (_, None) => {}
+                (None, found) => agreed = found,
+                (Some(a), Some(h)) if a != h => return None,
+                (Some(_), Some(_)) => {}
+            }
+        }
+        agreed
+    }
+
+    /// The simavr cores the cards name (`backend = "simavr:<part>"`), sorted and
+    /// unique: the AVR parts this build has a card for.
+    #[must_use]
+    pub fn simavr_parts(&self) -> Vec<String> {
+        let parts: std::collections::BTreeSet<String> = self
+            .mcu_cards()
+            .filter_map(|e| e.params.get_str("backend")?.strip_prefix("simavr:"))
+            .map(str::to_string)
+            .collect();
+        parts.into_iter().collect()
     }
 
     /// Drop every remembered resolution: the entries they were answered from
