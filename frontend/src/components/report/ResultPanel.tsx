@@ -302,7 +302,7 @@ export function ResultPanel({
           className="inline-flex items-center gap-1.5 rounded-lg px-2 text-[11px] min-w-0"
           data-testid="result-cli"
           title={command}
-          style={{ height: 30, border: '1px solid var(--hairline)', background: 'var(--code-bg)', color: 'var(--silk-dim)', maxWidth: '100%' }}
+          style={{ height: 30, border: '1px solid var(--hairline)', background: 'var(--code-bg)', color: 'var(--silk-dim)', maxWidth: '100%', flex: '1 1 220px' }}
         >
           <TerminalIcon size={12} />
           <code className="truncate" style={{ fontFamily: 'var(--font-mono)' }}>{command}</code>

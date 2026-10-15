@@ -4129,6 +4129,8 @@ fn main {
             "triage",
             "verdict",
             "verdict_reason",
+            // The CLI's own `run --check --json` document, sent alongside.
+            "check_report",
         ] {
             object.remove(key);
         }
