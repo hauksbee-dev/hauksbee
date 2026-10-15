@@ -1943,14 +1943,20 @@ footprint_re = '(?i)ESP32[-_]?S3[-_]?WROOM[-_]?[12]'
 
 [models.params]
 backend = "qemu:esp32s3"
+# ESP32-S3-WROOM-1/-1U Datasheet v1.8, Table 3-1: EN (pad 3) "High: on, enables
+# the chip. Low: off ... Do not leave the EN pin floating." The module has no
+# pull on it; sec 9 "Peripheral Schematics" asks for an RC delay on the board
+# (R = 10 kOhm, C = 1 uF).
+must_not_float_roles = "en"
 
 [models.pins]
 # ESP32-S3-WROOM-1/-1U Datasheet v1.8, Table 3-1 "Pin Definitions" (and the
-# KiCad RF_Module:ESP32-S3-WROOM-1 symbol): GND = 1, 3V3 = 2, IO3 = 15,
+# KiCad RF_Module:ESP32-S3-WROOM-1 symbol): GND = 1, 3V3 = 2, EN = 3, IO3 = 15,
 # IO46 = 16, IO45 = 26, IO0 = 27 (verified vs Watchy v3 BOOT net). Pads 6/7
 # are IO6/IO7; they were mapped as GPIO46/GPIO45 before.
 "1"  = "vss"
 "2"  = "vdd"
+"3"  = "en"
 "27" = "gpio0"
 "15" = "gpio3"
 "26" = "gpio45"
@@ -1996,12 +2002,17 @@ footprint_re = '(?i)(^|:)V?QFN[-_]?56([-_]1EP)?[-_]7x7mm[-_]P0\.4mm'
 
 [models.params]
 backend = "qemu:esp32s3"
+# ESP32-S3 Series Datasheet v2.2, Table 2-10 "Analog Pins": CHIP_PU (pin 4)
+# "High: on ... Low: off ... Do not leave the CHIP_PU pin floating." Table 2-1
+# lists no reset-time pull on it (GPIO0 beside it shows WPU).
+must_not_float_roles = "en"
 
 [models.pins]
-# ESP32-S3 Series Datasheet v2.2, Table 2-1 "Pin Overview": GPIO0 = 5 and
-# GPIO3 = 8 (powered by VDD3P3_RTC = 20), GPIO45 = 51 and GPIO46 = 52 (powered
-# by VDD3P3_CPU = 46), GND = 57 (exposed pad). `vdd` is VDD3P3_RTC: it powers
-# GPIO0, the one strap with sourced VIL/VIH.
+# ESP32-S3 Series Datasheet v2.2, Table 2-1 "Pin Overview": CHIP_PU = 4,
+# GPIO0 = 5 and GPIO3 = 8 (powered by VDD3P3_RTC = 20), GPIO45 = 51 and
+# GPIO46 = 52 (powered by VDD3P3_CPU = 46), GND = 57 (exposed pad). `vdd` is
+# VDD3P3_RTC: it powers GPIO0, the one strap with sourced VIL/VIH.
+"4"  = "en"
 "20" = "vdd"
 "57" = "vss"
 "5"  = "gpio0"
