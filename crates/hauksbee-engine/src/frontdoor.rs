@@ -673,6 +673,12 @@ pub struct WebReport {
     /// same flag `run --check --json` prints. Absent otherwise.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub partly_judged: bool,
+    /// What a PARTLY JUDGED run judged and what it did not (the open parts and
+    /// the nets whose checks they could change): the same object `run --check
+    /// --json` prints, so the browser names the judged scope beside the
+    /// verdict. Absent when every key part is modelled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judgement_scope: Option<crate::scope::JudgementScope>,
     /// The `--check` machine document for the static board, which the verdict
     /// is derived from. Firmware co-sim faults are folded into a copy of it
     /// when the verdict is derived, never into this one.
@@ -725,6 +731,7 @@ impl WebReport {
         self.headline = verdict_headline(&verdict, &self.headline, self.serious);
         self.verdict = verdict.verdict.to_string();
         self.partly_judged = verdict.partial;
+        self.judgement_scope.clone_from(&machine.judgement_scope);
         self.verdict_reason = verdict.reason;
         // Routing is the only blocking problem: the headline frames the state and
         // the strip says what ran, so the reason names the blocker once, briefly.
@@ -1432,6 +1439,7 @@ fn analyze_normalized_with_context(
         Ok(evidence) => evidence,
         Err(error) => return (unreadable(file_name, error), drc),
     };
+    let (evidence, display_only_coverage) = evidence;
 
     // Notes: bind-role caveat (active IC open on the live circuit). These mirror
     // the CLI/JSON `notes` so the web never silently omits an honesty annotation.
@@ -1506,7 +1514,7 @@ fn analyze_normalized_with_context(
     }
     // The `--check` machine document for this board: the web verdict is ITS
     // verdict, so the browser and `run --check --json` cannot disagree.
-    let machine = crate::reports::check::machine_report(
+    let mut machine = crate::reports::check::machine_report(
         &board.name,
         &bind_summary,
         &drc_structured,
@@ -1520,6 +1528,9 @@ fn analyze_normalized_with_context(
         bound,
         &verdict_blockers,
     ));
+    if display_only_coverage {
+        machine.evidence.clear();
+    }
 
     let components = board
         .components
@@ -1639,7 +1650,7 @@ fn with_web_evidence_maps(
     drc_structured: &crate::result::DrcStructured,
     qualification: Option<&hauksbee_extract::DrcTieQualification>,
     actual_findings: &[crate::result::JsonFinding],
-) -> Result<crate::evidence::BoardEvidence, String> {
+) -> Result<(crate::evidence::BoardEvidence, bool), String> {
     let coverage_error = |error| format!("could not build coverage evidence: {error}");
     let mut actual_maps = evidence
         .maps_for_drc_with_ties(drc_structured, qualification)
@@ -1660,10 +1671,13 @@ fn with_web_evidence_maps(
             actual_maps.push(map);
         }
     }
-    if actual_maps.is_empty() {
+    // The static coverage map is there so the evidence list is never empty; the
+    // `--check` verdict has no such map, so it must not count toward the web's.
+    let display_only = actual_maps.is_empty();
+    if display_only {
         actual_maps.push(evidence.static_coverage_map().map_err(coverage_error)?);
     }
-    Ok(evidence.with_maps(actual_maps))
+    Ok((evidence.with_maps(actual_maps), display_only))
 }
 
 /// Run the full static analysis, then (when the board has a bound MCU on an
