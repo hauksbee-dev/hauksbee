@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  assertBlock, badNumbers, countAsserts, fixFor, groupOf, isReferenceNet, KIND_GROUPS, measureAs, missingRequired,
+  assertBlock, badNumbers, countAsserts, fixFor, groupOf, isReferenceNet, isSkippedNet, KIND_GROUPS, measureAs, missingRequired,
   needMet, nominalFromName, offersForNet, offersForPart, prefill, rankNets, requestFor, resolveDefault, scenarioIds,
   specBody, wouldFail,
   type CatalogField, type CatalogKind, type OfferContext,
@@ -66,6 +66,12 @@ describe('nets', () => {
   test('reference nets are never offered a voltage', () => {
     for (const net of ['GND', '/GND', 'AGND', 'DGND', '/PGND', 'VSS', '0V', 'EARTH']) expect(isReferenceNet(net)).toBe(true)
     for (const net of ['/+3V3', '/D13', 'VBUS']) expect(isReferenceNet(net)).toBe(false)
+  })
+
+  test('pins the layout left unconnected are never offered either', () => {
+    expect(isSkippedNet('unconnected-(U1-NC-Pad4)')).toBe(true)
+    expect(isSkippedNet('/+3V3')).toBe(false)
+    expect(rankNets(['unconnected-(U1-NC-Pad4)', '/+3V3'], new Set(['/+3V3']))).toEqual(['/+3V3'])
   })
 
   test('a rail name states its voltage', () => {
