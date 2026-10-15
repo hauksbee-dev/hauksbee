@@ -421,9 +421,10 @@ pub fn device_decode_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLint
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Margin over a card's programming ceiling before the programmed current is
-/// called out of range. It covers a 5 % resistor and E-series rounding of a
+/// called out of range. It covers a 5 % resistor and E96 rounding of a
 /// resistor chosen to sit at the ceiling (on a 1000 V / R law, 2.0k asks
-/// exactly 0.50 A and the E24 neighbour 1.8k asks 0.56 A).
+/// exactly 0.50 A and the E96 neighbour 1.91k asks 0.52 A); the E24 step
+/// below, 1.8k at 0.56 A, is past it and is reported.
 const PROGRAM_DOMAIN_GRACE: f64 = 1.10;
 
 /// The smallest resistance whose equation current is at most `ceiling_a`, by
@@ -1656,12 +1657,12 @@ mod program_domain_tests {
         );
     }
 
-    /// Legal controls: the datasheet's 2k (exactly the ceiling), the E24 1.8k
+    /// Legal controls: the datasheet's 2k (exactly the ceiling), the E96 1.91k
     /// inside the grace, and an ordinary 10k all stay silent; so does an
     /// unparseable resistor and an unfitted one.
     #[test]
     fn in_range_or_unreadable_prog_resistors_stay_silent() {
-        for prog in ["2k", "1.8k", "10k", "RC0603", "DNP"] {
+        for prog in ["2k", "1.91k", "10k", "RC0603", "DNP"] {
             let report = lint(&charger_board("MCP73831T-2ACI/OT", prog));
             assert_eq!(
                 report.of_check(LintCheck::DeviceDecode).count(),
