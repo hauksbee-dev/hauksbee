@@ -1203,3 +1203,342 @@ unit = "°C/W"
 conditions = "DBV package, TA above 25 °C"
 package = "SOT-23-5"
 basis = "DERIVED 1/(0.0031 W/°C): SLVS235A page 5 Dissipation Rating Table, DBV derating factor 3.1 mW/°C; the D-package figure is not applicable to this card"
+
+# FSUSB30 (Fairchild/onsemi Rev. 1.1.8), drafted by the extraction pipeline (codex gpt-6-luna), reviewed against the PDF:
+# MSOP/MicroPak/UMLP pin maps, ron 6.5 typ, VCC 3.0-4.3 V, abs max 5.5 V checked. Hand edits: orderable_re no longer ends in $ (the SparkFun value is FSUSB30MUX_MSOP10); vth is the VIL/VIH midpoint, not the one-sided VIH min.
+[[models]]
+id = "fsusb30_micropak"
+kind = "analog_switch"
+description = "FSUSB30 MicroPak variant; models DC DPDT resistance and control threshold, but does not model output-enable disconnect behavior, power-off protection, USB timing, bandwidth, crosstalk, capacitance, or voltage-dependent switch behavior."
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "IOZ OFF State Leakage"
+min = -2.0
+max = 2.0
+unit = "uA"
+conditions = "0 <= Dn, HSD1n, HSD2n <= VCC; VCC = 4.3 V"
+basis = "DC Electrical Characteristics, IOZ row, min/max"
+[[models.source.characteristic]]
+parameter = "VIH Input Voltage HIGH"
+min = 1.3
+unit = "V"
+conditions = "VCC = 3.0 V to 3.6 V; TA = -40 C to +85 C"
+basis = "DC Electrical Characteristics, VIH row, min"
+[[models.source.characteristic]]
+parameter = "VIH Input Voltage HIGH"
+min = 1.7
+unit = "V"
+conditions = "VCC = 4.3 V; TA = -40 C to +85 C"
+basis = "DC Electrical Characteristics, VIH row, min"
+[[models.source.characteristic]]
+parameter = "VIL Input Voltage LOW"
+max = 0.5
+unit = "V"
+conditions = "VCC = 3.0 V to 3.6 V; TA = -40 C to +85 C"
+basis = "DC Electrical Characteristics, VIL row, max"
+[[models.source.characteristic]]
+parameter = "VIL Input Voltage LOW"
+max = 0.7
+unit = "V"
+conditions = "VCC = 4.3 V; TA = -40 C to +85 C"
+basis = "DC Electrical Characteristics, VIL row, max"
+[[models.source.characteristic]]
+parameter = "IOFF Power OFF Leakage Current"
+min = -2.0
+max = 2.0
+unit = "uA"
+conditions = "VSW = 0 V to 4.3 V; VCC = 0 V"
+basis = "DC Electrical Characteristics, IOFF row, min/max"
+[[models.source.characteristic]]
+parameter = "RON Switch On Resistance"
+typ = 6.5
+max = 10.0
+unit = "ohm"
+conditions = "VSW = 0.4 V; ION = -8 mA; VCC = 3.0 V; typical at 25 C"
+basis = "DC Electrical Characteristics, RON row, typ/max"
+[[models.source.characteristic]]
+parameter = "RON Switch On Resistance"
+max = 7.0
+unit = "ohm"
+conditions = "VSW = 0 V; IO = 30 mA; VCC = 3.6 V"
+basis = "DC Electrical Characteristics, RON row, max"
+[[models.source.characteristic]]
+parameter = "Delta RON"
+typ = 0.35
+unit = "ohm"
+conditions = "VSW = 0.4 V; ION = -8 mA; VCC = 3.0 V"
+basis = "DC Electrical Characteristics, Delta RON row, typ"
+[[models.source.characteristic]]
+parameter = "RON Flatness"
+typ = 2.0
+unit = "ohm"
+conditions = "VSW = 0.0 V to 1.0 V; ION = -8 mA; VCC = 3.0 V"
+basis = "DC Electrical Characteristics, RON Flatness row, typ"
+[[models.source.pinout]]
+package = "MicroPak"
+pins = { "1" = "S", "2" = "HSD1+", "3" = "HSD2+", "4" = "D+", "5" = "GND", "6" = "D-", "7" = "HSD2-", "8" = "HSD1-", "9" = "OE", "10" = "VCC" }
+
+[[models.source.references]]
+title = "FSUSB30.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "48a1fe29102d1e8ccb82fd1064588e9fd5e004ee7cb357e9bb8eacd5f35da840"
+[models.match]
+value_re = '(?i)^FSUSB30'
+footprint_re = '(?i)(MICROPAK|UFDFN|UDFN)'
+[models.params]
+ron = 6.5 # Source: DC Electrical Characteristics, RON typ, VSW = 0.4 V, ION = -8 mA, VCC = 3.0 V, 25 C
+roff = 2150000.0 # Source: DC Electrical Characteristics, IOZ max = 2 uA at VCC = 4.3 V; Roff = V/I
+vth = 0.9 # midpoint of VIL max 0.5 V and VIH min 1.3 V at VCC = 3.0-3.6 V (hand edit: draft used the one-sided VIH min)
+[models.ratings]
+max_voltage_v = 5.5 # Source: Absolute Maximum Ratings, VCC maximum +5.5 V
+[models.pins]
+"1" = "ctrl" # S, select
+"2" = "s0_1" # HSD1+
+"3" = "s1_1" # HSD2+
+"4" = "com_1" # D+
+"5" = "gnd"
+"6" = "com_2" # D-
+"7" = "s1_2" # HSD2-
+"8" = "s0_2" # HSD1-
+"9" = "oe_n" # OE, HIGH disconnects
+"10" = "vcc"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 3.0
+max_v = 4.3
+abs_max_v = 5.5
+basis = "Recommended Operating Conditions, VCC Supply Voltage row"
+[models.coverage]
+implements = ["dpdt_channel_selection", "on_resistance", "off_state_leakage", "control_threshold"]
+missing = ["output_enable_disconnect", "power_off_protection", "switching_timing", "signal_bandwidth", "crosstalk", "signal_capacitance", "voltage_dependent_switch_behavior"]
+[[models]]
+id = "fsusb30_msop"
+kind = "analog_switch"
+description = "FSUSB30 MSOP variant; models DC DPDT resistance and control threshold, but does not model output-enable disconnect behavior, power-off protection, USB timing, bandwidth, crosstalk, capacitance, or voltage-dependent switch behavior."
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "IOZ OFF State Leakage"
+min = -2.0
+max = 2.0
+unit = "uA"
+conditions = "0 <= Dn, HSD1n, HSD2n <= VCC; VCC = 4.3 V"
+basis = "DC Electrical Characteristics, IOZ row, min/max"
+[[models.source.characteristic]]
+parameter = "VIH Input Voltage HIGH"
+min = 1.3
+unit = "V"
+conditions = "VCC = 3.0 V to 3.6 V; TA = -40 C to +85 C"
+basis = "DC Electrical Characteristics, VIH row, min"
+[[models.source.characteristic]]
+parameter = "VIH Input Voltage HIGH"
+min = 1.7
+unit = "V"
+conditions = "VCC = 4.3 V; TA = -40 C to +85 C"
+basis = "DC Electrical Characteristics, VIH row, min"
+[[models.source.characteristic]]
+parameter = "VIL Input Voltage LOW"
+max = 0.5
+unit = "V"
+conditions = "VCC = 3.0 V to 3.6 V; TA = -40 C to +85 C"
+basis = "DC Electrical Characteristics, VIL row, max"
+[[models.source.characteristic]]
+parameter = "VIL Input Voltage LOW"
+max = 0.7
+unit = "V"
+conditions = "VCC = 4.3 V; TA = -40 C to +85 C"
+basis = "DC Electrical Characteristics, VIL row, max"
+[[models.source.characteristic]]
+parameter = "IOFF Power OFF Leakage Current"
+min = -2.0
+max = 2.0
+unit = "uA"
+conditions = "VSW = 0 V to 4.3 V; VCC = 0 V"
+basis = "DC Electrical Characteristics, IOFF row, min/max"
+[[models.source.characteristic]]
+parameter = "RON Switch On Resistance"
+typ = 6.5
+max = 10.0
+unit = "ohm"
+conditions = "VSW = 0.4 V; ION = -8 mA; VCC = 3.0 V; typical at 25 C"
+basis = "DC Electrical Characteristics, RON row, typ/max"
+[[models.source.characteristic]]
+parameter = "RON Switch On Resistance"
+max = 7.0
+unit = "ohm"
+conditions = "VSW = 0 V; IO = 30 mA; VCC = 3.6 V"
+basis = "DC Electrical Characteristics, RON row, max"
+[[models.source.characteristic]]
+parameter = "Delta RON"
+typ = 0.35
+unit = "ohm"
+conditions = "VSW = 0.4 V; ION = -8 mA; VCC = 3.0 V"
+basis = "DC Electrical Characteristics, Delta RON row, typ"
+[[models.source.characteristic]]
+parameter = "RON Flatness"
+typ = 2.0
+unit = "ohm"
+conditions = "VSW = 0.0 V to 1.0 V; ION = -8 mA; VCC = 3.0 V"
+basis = "DC Electrical Characteristics, RON Flatness row, typ"
+[[models.source.pinout]]
+package = "MSOP"
+pins = { "1" = "S", "2" = "HSD1+", "3" = "HSD2+", "4" = "D+", "5" = "GND", "6" = "D-", "7" = "HSD2-", "8" = "HSD1-", "9" = "OE", "10" = "VCC" }
+
+[[models.source.references]]
+title = "FSUSB30.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "48a1fe29102d1e8ccb82fd1064588e9fd5e004ee7cb357e9bb8eacd5f35da840"
+[models.match]
+value_re = '(?i)^FSUSB30'
+footprint_re = '(?i)(MSOP|VSSOP)[-_]?0?10([^0-9]|$)'
+[models.params]
+ron = 6.5 # Source: DC Electrical Characteristics, RON typ, VSW = 0.4 V, ION = -8 mA, VCC = 3.0 V, 25 C
+roff = 2150000.0 # Source: DC Electrical Characteristics, IOZ max = 2 uA at VCC = 4.3 V; Roff = V/I
+vth = 0.9 # midpoint of VIL max 0.5 V and VIH min 1.3 V at VCC = 3.0-3.6 V (hand edit: draft used the one-sided VIH min)
+[models.ratings]
+max_voltage_v = 5.5 # Source: Absolute Maximum Ratings, VCC maximum +5.5 V
+[models.pins]
+"1" = "ctrl" # S, select
+"2" = "s0_1" # HSD1+
+"3" = "s1_1" # HSD2+
+"4" = "com_1" # D+
+"5" = "gnd"
+"6" = "com_2" # D-
+"7" = "s1_2" # HSD2-
+"8" = "s0_2" # HSD1-
+"9" = "oe_n" # OE, HIGH disconnects
+"10" = "vcc"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 3.0
+max_v = 4.3
+abs_max_v = 5.5
+basis = "Recommended Operating Conditions, VCC Supply Voltage row"
+[models.coverage]
+implements = ["dpdt_channel_selection", "on_resistance", "off_state_leakage", "control_threshold"]
+missing = ["output_enable_disconnect", "power_off_protection", "switching_timing", "signal_bandwidth", "crosstalk", "signal_capacitance", "voltage_dependent_switch_behavior"]
+[[models]]
+id = "fsusb30_umlp"
+kind = "analog_switch"
+description = "FSUSB30 UMLP variant; models DC DPDT resistance and control threshold, but does not model output-enable disconnect behavior, power-off protection, USB timing, bandwidth, crosstalk, capacitance, or voltage-dependent switch behavior."
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "IOZ OFF State Leakage"
+min = -2.0
+max = 2.0
+unit = "uA"
+conditions = "0 <= Dn, HSD1n, HSD2n <= VCC; VCC = 4.3 V"
+basis = "DC Electrical Characteristics, IOZ row, min/max"
+[[models.source.characteristic]]
+parameter = "VIH Input Voltage HIGH"
+min = 1.3
+unit = "V"
+conditions = "VCC = 3.0 V to 3.6 V; TA = -40 C to +85 C"
+basis = "DC Electrical Characteristics, VIH row, min"
+[[models.source.characteristic]]
+parameter = "VIH Input Voltage HIGH"
+min = 1.7
+unit = "V"
+conditions = "VCC = 4.3 V; TA = -40 C to +85 C"
+basis = "DC Electrical Characteristics, VIH row, min"
+[[models.source.characteristic]]
+parameter = "VIL Input Voltage LOW"
+max = 0.5
+unit = "V"
+conditions = "VCC = 3.0 V to 3.6 V; TA = -40 C to +85 C"
+basis = "DC Electrical Characteristics, VIL row, max"
+[[models.source.characteristic]]
+parameter = "VIL Input Voltage LOW"
+max = 0.7
+unit = "V"
+conditions = "VCC = 4.3 V; TA = -40 C to +85 C"
+basis = "DC Electrical Characteristics, VIL row, max"
+[[models.source.characteristic]]
+parameter = "IOFF Power OFF Leakage Current"
+min = -2.0
+max = 2.0
+unit = "uA"
+conditions = "VSW = 0 V to 4.3 V; VCC = 0 V"
+basis = "DC Electrical Characteristics, IOFF row, min/max"
+[[models.source.characteristic]]
+parameter = "RON Switch On Resistance"
+typ = 6.5
+max = 10.0
+unit = "ohm"
+conditions = "VSW = 0.4 V; ION = -8 mA; VCC = 3.0 V; typical at 25 C"
+basis = "DC Electrical Characteristics, RON row, typ/max"
+[[models.source.characteristic]]
+parameter = "RON Switch On Resistance"
+max = 7.0
+unit = "ohm"
+conditions = "VSW = 0 V; IO = 30 mA; VCC = 3.6 V"
+basis = "DC Electrical Characteristics, RON row, max"
+[[models.source.characteristic]]
+parameter = "Delta RON"
+typ = 0.35
+unit = "ohm"
+conditions = "VSW = 0.4 V; ION = -8 mA; VCC = 3.0 V"
+basis = "DC Electrical Characteristics, Delta RON row, typ"
+[[models.source.characteristic]]
+parameter = "RON Flatness"
+typ = 2.0
+unit = "ohm"
+conditions = "VSW = 0.0 V to 1.0 V; ION = -8 mA; VCC = 3.0 V"
+basis = "DC Electrical Characteristics, RON Flatness row, typ"
+[[models.source.pinout]]
+package = "UMLP"
+pins = { "1" = "HSD1+", "2" = "HSD2+", "3" = "D+", "4" = "GND", "5" = "D-", "6" = "HSD2-", "7" = "HSD1-", "8" = "OE", "9" = "VCC", "10" = "Sel" }
+
+[[models.source.references]]
+title = "FSUSB30.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "48a1fe29102d1e8ccb82fd1064588e9fd5e004ee7cb357e9bb8eacd5f35da840"
+[models.match]
+value_re = '(?i)^FSUSB30'
+footprint_re = '(?i)(UMLP|UQFN|UTQFN|MLP)'
+[models.params]
+ron = 6.5 # Source: DC Electrical Characteristics, RON typ, VSW = 0.4 V, ION = -8 mA, VCC = 3.0 V, 25 C
+roff = 2150000.0 # Source: DC Electrical Characteristics, IOZ max = 2 uA at VCC = 4.3 V; Roff = V/I
+vth = 0.9 # midpoint of VIL max 0.5 V and VIH min 1.3 V at VCC = 3.0-3.6 V (hand edit: draft used the one-sided VIH min)
+[models.ratings]
+max_voltage_v = 5.5 # Source: Absolute Maximum Ratings, VCC maximum +5.5 V
+[models.pins]
+"1" = "s0_1" # HSD1+
+"2" = "s1_1" # HSD2+
+"3" = "com_1" # D+
+"4" = "gnd"
+"5" = "com_2" # D-
+"6" = "s1_2" # HSD2-
+"7" = "s0_2" # HSD1-
+"8" = "oe_n" # OE, HIGH disconnects
+"9" = "vcc"
+"10" = "ctrl" # Sel, select
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 3.0
+max_v = 4.3
+abs_max_v = 5.5
+basis = "Recommended Operating Conditions, VCC Supply Voltage row"
+[models.coverage]
+implements = ["dpdt_channel_selection", "on_resistance", "off_state_leakage", "control_threshold"]
+missing = ["output_enable_disconnect", "power_off_protection", "switching_timing", "signal_bandwidth", "crosstalk", "signal_capacitance", "voltage_dependent_switch_behavior"]

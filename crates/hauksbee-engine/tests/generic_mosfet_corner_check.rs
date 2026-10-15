@@ -33,7 +33,16 @@ fn a_full_gate_drive_passes_on_the_corner_condition() {
     let doc = json("generic_pmos_switch_gate_0v.kicad_pcb");
     assert_eq!(doc["verdict"], "pass", "{doc:#}");
     assert_eq!(doc["ok"], true);
-    assert_eq!(doc["verdict_conditions"], serde_json::json!([CONDITION]));
+    // The corner condition, plus only the default-spacing-rules one (the
+    // fixture has no project file beside it).
+    let conditions = doc["verdict_conditions"].as_array().expect("conditions");
+    assert_eq!(conditions[0], CONDITION, "{doc:#}");
+    assert!(
+        conditions[1..].iter().all(|c| c
+            .as_str()
+            .is_some_and(|c| c.starts_with("copper spacing was judged against a DEFAULT"))),
+        "{doc:#}"
+    );
     // The swept assumption is qualified; the unswept stand-in one is gone.
     let ids: Vec<&str> = (doc["assumptions"].as_array().unwrap().iter())
         .filter_map(|a| a["id"].as_str())
@@ -83,7 +92,12 @@ fn the_web_report_carries_the_same_corner_verdicts() {
     };
     let pass = analyze("generic_pmos_switch_gate_0v.kicad_pcb");
     assert_eq!(pass.serious, 0, "{:?}", pass.sections);
-    assert_eq!(pass.verdict_conditions, [CONDITION]);
+    assert_eq!(pass.verdict_conditions[0], CONDITION);
+    assert_eq!(
+        serde_json::json!(pass.verdict_conditions),
+        json("generic_pmos_switch_gate_0v.kicad_pcb")["verdict_conditions"],
+        "the web and the CLI rest the pass on the same conditions"
+    );
     assert!(pass.headline.contains(CONDITION), "{}", pass.headline);
     let fail = analyze("generic_pmos_switch_gate_2v5.kicad_pcb");
     assert_eq!(fail.serious, 1, "{:?}", fail.sections);

@@ -109,3 +109,143 @@ fn invalid_explicit_schematic_aborts_before_manifest_creation() {
     let err = stderr(&output);
     assert!(err.contains("not an Eagle .sch"), "{err}");
 }
+
+/// Run the compiled binary from `dir`, so relative paths resolve against it.
+fn run_in(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
+    std::process::Command::new(crate::support::bin())
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("hauksbee binary runs")
+}
+
+fn copy_board_into(dir: &std::path::Path) {
+    std::fs::copy(
+        board("../../testdata/boards/button_pullup.kicad_pcb"),
+        dir.join("board.kicad_pcb"),
+    )
+    .unwrap();
+}
+
+#[test]
+fn manifest_paths_are_project_relative_and_replay_from_a_copy_elsewhere() {
+    let original = tempfile::tempdir().unwrap();
+    copy_board_into(original.path());
+    let emitted = run_in(
+        original.path(),
+        &[
+            "run",
+            "board.kicad_pcb",
+            "--report",
+            "--json",
+            "--emit-manifest",
+            "m.json",
+        ],
+    );
+    assert_ok(&emitted);
+
+    let text = std::fs::read_to_string(original.path().join("m.json")).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let original_root = original.path().canonicalize().unwrap();
+    assert!(
+        !text.contains(original_root.to_str().unwrap()),
+        "the capturing directory must not be in the manifest: {text}"
+    );
+    assert_eq!(doc["inputs"][0]["path"], "board.kicad_pcb");
+    assert!(doc["root_hint"].as_str().is_some(), "{text}");
+    let outcome = &doc["outcome"];
+    assert!(
+        outcome["verdict"]
+            .as_str()
+            .is_some_and(|v| v == "pass" || v == "fail"),
+        "{text}"
+    );
+    assert_eq!(outcome["exit_code"], 0);
+    assert!(
+        outcome
+            .get("record_sha256")
+            .is_some_and(serde_json::Value::is_null),
+        "record_sha256 is null until the run record lands: {text}"
+    );
+
+    // A second directory with the same bytes; the first is gone by then.
+    let copy = tempfile::tempdir().unwrap();
+    copy_board_into(copy.path());
+    std::fs::copy(original.path().join("m.json"), copy.path().join("m.json")).unwrap();
+    drop(original);
+    let replay = run_in(copy.path(), &["reproduce", "m.json"]);
+    assert_ok(&replay);
+    let err = stderr(&replay);
+    assert!(err.contains("MATCH"), "{err}");
+    assert!(!err.contains("DIFF"), "{err}");
+}
+
+#[test]
+fn reproduce_reports_diff_and_exits_nonzero_when_an_input_byte_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    copy_board_into(dir.path());
+    assert_ok(&run_in(
+        dir.path(),
+        &[
+            "run",
+            "board.kicad_pcb",
+            "--report",
+            "--emit-manifest",
+            "m.json",
+        ],
+    ));
+
+    let board_path = dir.path().join("board.kicad_pcb");
+    let mut bytes = std::fs::read(&board_path).unwrap();
+    bytes.push(b'\n');
+    std::fs::write(&board_path, bytes).unwrap();
+
+    let replay = run_in(dir.path(), &["reproduce", "m.json"]);
+    assert_eq!(replay.status.code(), Some(1), "{}", stderr(&replay));
+    let err = stderr(&replay);
+    assert!(err.contains("DIFF"), "{err}");
+    assert!(err.contains("digest mismatch"), "{err}");
+    assert!(err.contains("board.kicad_pcb"), "{err}");
+}
+
+#[test]
+fn reproduce_reports_the_verdict_exit_code_and_findings_that_differ() {
+    let dir = tempfile::tempdir().unwrap();
+    copy_board_into(dir.path());
+    assert_ok(&run_in(
+        dir.path(),
+        &[
+            "run",
+            "board.kicad_pcb",
+            "--report",
+            "--emit-manifest",
+            "m.json",
+        ],
+    ));
+
+    // The outcome is not part of the manifest id, so it can be edited without
+    // invalidating the manifest: pretend the original run had failed.
+    let path = dir.path().join("m.json");
+    let mut doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let recorded_verdict = doc["outcome"]["verdict"].as_str().unwrap().to_string();
+    doc["outcome"]["verdict"] = "invalid".into();
+    doc["outcome"]["exit_code"] = 3.into();
+    doc["outcome"]["gating_findings"] =
+        serde_json::json!(["lint/unrouted_pad/serious/111111111111"]);
+    std::fs::write(&path, serde_json::to_vec_pretty(&doc).unwrap()).unwrap();
+
+    let replay = run_in(dir.path(), &["reproduce", "m.json"]);
+    assert_eq!(replay.status.code(), Some(1), "{}", stderr(&replay));
+    let err = stderr(&replay);
+    assert!(err.contains("DIFF"), "{err}");
+    assert!(
+        err.contains(&format!("verdict: invalid -> {recorded_verdict}")),
+        "{err}"
+    );
+    assert!(err.contains("exit code: 3 -> 0"), "{err}");
+    assert!(
+        err.contains("gating finding gone: lint/unrouted_pad/serious/111111111111"),
+        "{err}"
+    );
+}

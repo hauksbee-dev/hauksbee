@@ -833,6 +833,12 @@ pub fn bind_board_driven(
             .then_with(|| a.0.cmp(b.0))
     });
     let mut conflicts = domains.conflicts(&circuit);
+    crate::rail_owner::mark_unfitted_alternates(
+        &mut conflicts,
+        &circuit,
+        &report.regulators,
+        |net| power_nets.get(net).copied(),
+    );
     for &(name, volts, node, _) in &supply_names {
         if !domains.drivers_of(node).is_empty() {
             continue;
@@ -843,6 +849,7 @@ pub fn bind_board_driven(
                 conflicts.push(crate::rail_owner::RailConflict {
                     parts: Vec::new(),
                     nets: vec![leg.net_name.clone(), name.clone()],
+                    unfitted_alternate: None,
                     message: format!(
                         "'{name}' ({volts:.2} V by name) and '{}' ({held:.2} V) are one rail \
                          through a series conductor; only '{}' takes a supply, so '{name}' \
@@ -879,7 +886,11 @@ pub fn bind_board_driven(
             String::new(),
             Confidence::Exact,
             BindOutcome::Skipped {
-                reason: "rail driven by more than one source".to_string(),
+                reason: if c.unfitted_alternate.is_some() {
+                    "rail drawn with an alternate regulator footprint".to_string()
+                } else {
+                    "rail driven by more than one source".to_string()
+                },
             },
         );
         row.warning = Some(c.message.clone());

@@ -439,7 +439,7 @@ fn cmd_run(mut args: RunArgs) -> ExitCode {
     // Per-spec verdict lines for the aggregate summary.
     let mut verdicts: Vec<(String, u8)> = Vec::new();
 
-    for spec in &args.specs {
+    for (index, spec) in args.specs.iter().enumerate() {
         let cfg = RunConfig {
             spec: spec.clone(),
             seed: args.seed,
@@ -466,6 +466,16 @@ fn cmd_run(mut args: RunArgs) -> ExitCode {
                 if args.junit.is_some() {
                     suites.push(result.junit_suite());
                 }
+                // What gated this spec, by assertion label, for the manifest's
+                // recorded outcome (waived reds do not gate).
+                hauksbee_engine::run_manifest::note_gating_findings(
+                    &format!("spec[{index}]"),
+                    result
+                        .results
+                        .iter()
+                        .filter(|r| (!r.passed || r.invalid) && r.waived.is_none())
+                        .map(|r| r.label.clone()),
+                );
                 // Annotations are a human surface, so they go to stderr, which
                 // GitHub reads workflow commands from just as it does stdout.
                 // On stdout they were corrupting the one contract this binary
@@ -526,6 +536,7 @@ fn cmd_run(mut args: RunArgs) -> ExitCode {
                 "hauksbee-ci: could not write JUnit XML to {}: {e}",
                 path.display()
             );
+            hauksbee_engine::run_manifest::finish_outcome("hauksbee-ci", i32::from(2u8.max(worst)));
             return ExitCode::from(2u8.max(worst));
         }
         if !args.quiet && !args.json {
@@ -560,6 +571,7 @@ fn cmd_run(mut args: RunArgs) -> ExitCode {
         }
     }
 
+    hauksbee_engine::run_manifest::finish_outcome("hauksbee-ci", i32::from(worst));
     ExitCode::from(worst)
 }
 
@@ -783,21 +795,49 @@ fn capture_manifest(args: &RunArgs) -> anyhow::Result<hauksbee_engine::run_manif
     }
     inputs.extend(implicit_model_inputs());
 
+    // Paths are recorded absolute here and made project-relative by the
+    // manifest, so an option never names the capturing directory.
+    let base = std::env::current_dir()?;
+    let absolute = |path: &PathBuf| base.join(path);
+    // The ensemble each spec runs, resolved even when it is the default: the
+    // seed count and the Monte-Carlo or corner mode decide which members run.
+    let mut ensembles = Vec::new();
+    for (index, spec_path) in args.specs.iter().enumerate() {
+        let spec = hauksbee_ci::Spec::load(spec_path)?;
+        ensembles.push(serde_json::json!({
+            "spec": index,
+            "seeds": spec.ensemble_seed_count(),
+            "mode": format!("{:?}", spec.ensemble_mode()?),
+        }));
+    }
     let options = BTreeMap::from([
+        ("ensembles".into(), serde_json::json!(ensembles)),
         ("example".into(), serde_json::json!(args.example)),
         ("json".into(), serde_json::json!(args.json)),
-        ("junit".into(), serde_json::json!(args.junit)),
-        ("models_dir".into(), serde_json::json!(args.models_dir)),
+        (
+            "junit".into(),
+            serde_json::json!(args.junit.as_ref().map(absolute)),
+        ),
+        (
+            "models_dir".into(),
+            serde_json::json!(args.models_dir.as_ref().map(absolute)),
+        ),
         ("quiet".into(), serde_json::json!(args.quiet)),
         ("seed".into(), serde_json::json!(args.seed)),
-        ("spice_models".into(), serde_json::json!(args.spice_models)),
-        ("waveforms".into(), serde_json::json!(args.waveforms)),
+        (
+            "spice_models".into(),
+            serde_json::json!(args.spice_models.iter().map(absolute).collect::<Vec<_>>()),
+        ),
+        (
+            "waveforms".into(),
+            serde_json::json!(args.waveforms.as_ref().map(absolute)),
+        ),
         (
             "specs".into(),
             if args.example.is_some() {
                 serde_json::json!([])
             } else {
-                serde_json::json!(args.specs)
+                serde_json::json!(args.specs.iter().map(absolute).collect::<Vec<_>>())
             },
         ),
     ]);
@@ -819,7 +859,6 @@ fn capture_manifest(args: &RunArgs) -> anyhow::Result<hauksbee_engine::run_manif
         .chain(args.spice_models.iter().cloned())
         .chain(args.junit.iter().cloned())
         .collect::<Vec<_>>();
-    let base = std::env::current_dir()?;
     RunManifest::capture(ManifestRequest {
         tool: ToolIdentity::workspace("hauksbee-ci"),
         command: absolutize_argv_paths(

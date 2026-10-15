@@ -6,8 +6,6 @@ import { WarningIcon } from './Icons'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './BoardViewer'
 import { OpenSelectionsBanner, SelectionCard } from './SelectionCard'
 import { AdditionalEvidencePanel, evidenceSlots } from './AdditionalEvidencePanel'
-import { QueuedConstraintModal } from './ConstraintModal'
-import type { ConstraintDraft } from './ConstraintEditor'
 import { DatasheetExtract } from './DatasheetExtract'
 import { WritePart } from './WritePart'
 import { acceptedFormatsSentence, withoutEngineFormatList } from '../lib/board-formats'
@@ -99,7 +97,6 @@ export function BoardView({
   // it is a "let me look at this properly" gesture, not a setting.
   const [mapFullscreen, setMapFullscreen] = useState(false)
   const [importOverlay, setImportOverlay] = useState(false)
-  const [constraintDraft, setConstraintDraft] = useState<(Partial<ConstraintDraft> & Pick<ConstraintDraft, 'kind'>) | null>(null)
   const [authoringComponent, setAuthoringComponent] = useState<ModelCoverageComponent | null>(null)
   const [authoringSignal, setAuthoringSignal] = useState(0)
   // The two collapsed groups something else can open: the parts the run had to
@@ -149,10 +146,11 @@ export function BoardView({
     setGuessOpen(true)
     requestAnimationFrame(() => centerInScroller(guessRef.current))
   }, [])
-  const resultLinks = useMemo<ResultLinkHandlers>(() => ({
-    vocab: vocabulary(r),
-    onPoint: setPointed,
-    onGo: entity => {
+  // "Add as check" on a result row lands on the same CheckThis dock a click on
+  // the map does, with that offer already open: one way to add a check.
+  const [checkIntent, setCheckIntent] = useState<{ kind: string; seq: number } | null>(null)
+  const resultLinks = useMemo<ResultLinkHandlers>(() => {
+    const go = (entity: ResultEntity) => {
       frameSeq.current += 1
       if (entity.kind === 'part') {
         const row = coverageFor(r.model_coverage, entity.ref)
@@ -172,7 +170,11 @@ export function BoardView({
         setFrameTarget({ refs: [], nets: [entity.net], seq: frameSeq.current })
       }
       centerInScroller(mapRef.current)
-    },
+    }
+    return {
+    vocab: vocabulary(r),
+    onPoint: setPointed,
+    onGo: go,
     onGiveModel: restoredFrom ? undefined : ref => {
       const row = coverageFor(r.model_coverage, ref)
       if (row) author(row)
@@ -187,8 +189,12 @@ export function BoardView({
       if (caps.includes('max_temp')) return { kind: 'max_temp', ref: entity.ref, label: `${entity.ref} must stay cool` }
       return null
     },
-    onAddCheck: offer => setConstraintDraft({ kind: offer.kind, net: offer.net ?? '', ref: offer.ref ?? '' }),
-  }), [r, restoredFrom, author, showGuessed, setSelectedNet, setSelectedComponent])
+    onAddCheck: offer => {
+      go(offer.ref ? { kind: 'part', ref: offer.ref } : { kind: 'net', net: offer.net ?? '' })
+      setCheckIntent(prev => ({ kind: offer.kind, seq: (prev?.seq ?? 0) + 1 }))
+    },
+    }
+  }, [r, restoredFrom, author, showGuessed, setSelectedNet, setSelectedComponent])
   const pointedRefs = useMemo(() => (pointed?.kind === 'part' ? [pointed.ref] : []), [pointed])
   const pointedNets = useMemo(() => (pointed?.kind === 'net' ? [pointed.net] : []), [pointed])
 
@@ -287,6 +293,30 @@ export function BoardView({
         </>
       )}
     </div>
+  )
+
+  // One card, docked beside or under the map (floating over it only when the map
+  // is full screen). A check made here is queued without leaving the board; the
+  // Checks view shows it when asked to.
+  const card = (
+    <SelectionCard
+      net={selectedNet}
+      component={selectedComponent}
+      docked={!mapFullscreen}
+      boundKind={selectedComponent ? r.component_kinds?.[selectedComponent.ref] ?? null : null}
+      assertionCapabilities={selectedComponent ? r.component_assertions?.[selectedComponent.ref] ?? [] : []}
+      modelCoverage={coverageFor(r.model_coverage, selectedComponent?.ref)}
+      openSelection={r.bind?.open_selections?.find(s => s.reference === selectedComponent?.ref)}
+      netModels={modelsOnNet(r.model_coverage, selectedNet)}
+      openOffer={checkIntent}
+      onQueue={request => {
+        onQueue(request)
+        if (request.type !== 'check' && request.type !== 'assert') onOpenChecks()
+      }}
+      onAuthorModel={author}
+      onClose={() => { setSelectedNet(null); setSelectedComponent(null) }}
+      onPickNet={setSelectedNet}
+    />
   )
 
   const runCommand = `hauksbee run ${boardLabel ?? r.file_name} --serve`
@@ -450,6 +480,12 @@ export function BoardView({
             as the fallback for formats the client cannot draw. */}
         {boardUrl ? (
           <section className="mt-6">
+            {/* The map and the selection card side by side where there is room
+                (a right rail at 1100 px and up), the card under the map below
+                that. Never over the map, so the part you picked stays in view;
+                only the full-screen map, which has no room to spare, floats it. */}
+            <div className="flex flex-col gap-3 min-[1100px]:flex-row min-[1100px]:items-start">
+            <div className="min-w-0 flex-1 w-full">
             <div
               ref={mapRef}
               className={mapFullscreen ? 'overflow-hidden' : 'rounded-xl overflow-hidden'}
@@ -486,31 +522,9 @@ export function BoardView({
                 frameTarget={frameTarget}
                 resultOverlay={overlayOn ? overlay : null}
               />
-              {/* Floating selection card, same language as the live sim. A
-                  strip that starts below the viewer toolbar and ends at the
-                  bottom of the map: the card sits at its foot and grows up into
-                  it, so a part with many nets scrolls inside the card instead
-                  of sliding under the Fit control. */}
-              {(selectedNet || selectedComponent) && (
+              {mapFullscreen && (selectedNet || selectedComponent) && (
                 <div className="absolute left-3 z-10 flex items-end pointer-events-none" style={{ top: TOOLBAR_CLEARANCE, bottom: 12 }}>
-                  <div className="pointer-events-auto" style={{ maxHeight: '100%', display: 'flex' }}>
-                    <SelectionCard
-                      net={selectedNet}
-                      component={selectedComponent}
-                      boundKind={selectedComponent ? r.component_kinds?.[selectedComponent.ref] ?? null : null}
-                      assertionCapabilities={selectedComponent ? r.component_assertions?.[selectedComponent.ref] ?? [] : []}
-                      modelCoverage={coverageFor(r.model_coverage, selectedComponent?.ref)}
-                      openSelection={r.bind?.open_selections?.find(s => s.reference === selectedComponent?.ref)}
-                      netModels={modelsOnNet(r.model_coverage, selectedNet)}
-                      onQueue={request => {
-                        if (request.type === 'check') setConstraintDraft(request)
-                        else { onQueue(request); onOpenChecks() }
-                      }}
-                      onAuthorModel={author}
-                      onClose={() => { setSelectedNet(null); setSelectedComponent(null) }}
-                      onPickNet={setSelectedNet}
-                    />
-                  </div>
+                  <div className="pointer-events-auto" style={{ maxHeight: '100%', display: 'flex' }}>{card}</div>
                 </div>
               )}
             </div>
@@ -539,6 +553,16 @@ export function BoardView({
                 ) : null}
               </div>
             )}
+            </div>
+            {!mapFullscreen && (selectedNet || selectedComponent) && (
+              <div
+                data-testid="selection-dock"
+                className="w-full min-[1100px]:sticky min-[1100px]:top-3 min-[1100px]:w-[340px] min-[1100px]:shrink-0"
+              >
+                {card}
+              </div>
+            )}
+            </div>
             <div className="mt-1.5 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
               Click the map (or hold ctrl) to zoom · drag to pan · hover a trace to see its net · click a trace or part to inspect it, drive it, probe it or check it
             </div>
@@ -628,11 +652,6 @@ export function BoardView({
           open={evidenceOpen}
           onOpenChange={setEvidenceOpen}
         />
-
-        {constraintDraft && (
-          <QueuedConstraintModal initial={constraintDraft} onQueue={onQueue}
-            onClose={() => setConstraintDraft(null)} onOpenChecks={onOpenChecks} />
-        )}
       </div>
     </div>
   )

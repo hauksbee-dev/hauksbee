@@ -31,6 +31,17 @@ use serde::Serialize;
 
 use crate::binder::{is_canonical_ground, BoundBoard};
 
+/// The scope line a single-check surface (`--drc`, `--thermal`, `--ac`)
+/// carries beside its verdict: that verdict covers `check` alone, so a pass
+/// there is not a pass for the board.
+#[must_use]
+pub fn single_check_note(check: &str) -> String {
+    format!(
+        "SCOPE: this verdict covers {check} only; the other checks were not run, so it is \
+         not a verdict on the board. Run --check for the whole-board verdict."
+    )
+}
+
 /// What a run with unmodelled key parts could still judge, per named net.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct JudgementScope {

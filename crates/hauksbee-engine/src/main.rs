@@ -1110,7 +1110,11 @@ struct RunArgs {
     /// (magnitude dB + phase) table for `--ac-node`, then exits. Drive is a
     /// unit AC source on every independent source in the circuit.
     ///
-    /// Example: hauksbee run board.kicad_pcb --ac 10:1e6:20 --ac-node OUT
+    /// Frequencies use engineering notation, not SPICE's: `1M` and `1MEG` are
+    /// 1 MHz, `1m` is 1 mHz, `1mhz` is refused as ambiguous. The parsed sweep
+    /// is echoed (`AC sweep 10 Hz to 1 MHz, 20 points/decade`).
+    ///
+    /// Example: hauksbee run board.kicad_pcb --ac 10:1M:20 --ac-node OUT
     #[arg(
         long,
         value_name = "FSTART:FSTOP:POINTS",
@@ -1849,6 +1853,13 @@ fn main() -> anyhow::Result<()> {
             InstallCommand::Renode { yes } => hauksbee_engine::commands::install::renode(yes),
         },
     };
+    // A run that wrote a manifest records how it ended in that manifest.
+    hauksbee_engine::run_manifest::finish_outcome(
+        "hauksbee",
+        result
+            .as_ref()
+            .map_or_else(hauksbee_engine::commands::run::error_exit_code, |()| 0),
+    );
     if let Err(e) = &result {
         if json {
             // serde_json escapes the message so the object is always well-formed.

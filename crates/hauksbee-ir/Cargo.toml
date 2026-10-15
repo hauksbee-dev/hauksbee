@@ -15,7 +15,10 @@ rust-version.workspace = true
 [dependencies]
 strum = { version = "0.27", features = ["derive"] }
 serde = { workspace = true }
-serde_json = { workspace = true }
+# `float_roundtrip`: a run record's `record_id` is re-verified after the record
+# is read back from disk, which needs every f64 to parse to the exact bits it
+# was written from (the default parser may be one ULP off).
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 sha2 = "0.11"
 # The evidence spine (`evidence.rs`) is the one vocabulary every producer and
 # renderer reads, and it reaches the published `--json` contract, which has a
@@ -33,9 +36,18 @@ thiserror = { workspace = true }
 # must never enter the published Apache-2.0 permissive shape.
 evalexpr = { version = "=11.3.1", default-features = false }
 
+[dev-dependencies]
+# The run-record drift test validates emitted records against the generated
+# schema, the same validator and version hauksbee-ci's report drift test uses.
+jsonschema = { version = "0.49", default-features = false }
+
 [[test]]
 name = "it"
 path = "tests/main.rs"
 
 [lints]
 workspace = true
+
+[package.metadata.ci]
+# Which CI test shard runs this crate; scripts/workspace_crates.py builds the matrix from it.
+test-shard = "foundations"

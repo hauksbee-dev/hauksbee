@@ -80,6 +80,8 @@ mod cosim_comparator_flip;
 mod cosim_failed_chunk;
 #[path = "cosim_fallback_chunk.rs"]
 mod cosim_fallback_chunk;
+#[path = "cosim_not_judged.rs"]
+mod cosim_not_judged;
 #[path = "cosim_spi_cs_frames_transactions.rs"]
 mod cosim_spi_cs_frames_transactions;
 #[path = "datasheet_validation.rs"]
@@ -108,6 +110,8 @@ mod extract_consent;
 mod failed_chunk_reason;
 #[path = "faults.rs"]
 mod faults;
+#[path = "findings_complete.rs"]
+mod findings_complete;
 #[path = "generic_led_corners.rs"]
 mod generic_led_corners;
 #[path = "generic_mosfet_corner_check.rs"]

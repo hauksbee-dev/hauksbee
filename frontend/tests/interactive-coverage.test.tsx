@@ -189,7 +189,10 @@ test('a live trace click offers a scope probe and repeatable checks together', a
   />)
   expect(html).toContain('data-testid="selection-add-probe"')
   expect(html).toContain('Watch this trace live')
-  expect(html).toContain('data-testid="assert-rail_window"')
+  // Checks come from the assertion catalogue (see check-catalog.test.ts), which
+  // the static render has not loaded; the card itself never opens a dialog.
+  expect(html).not.toContain('constraint-modal')
+  expect(html).not.toContain('aria-modal')
   expect(html).toContain('data-testid="selection-add-stimulus"')
   expect(html).toContain('Drive this trace in a co-sim scenario')
   expect(html).toContain('data-testid="selection-add-supply"')
@@ -207,20 +210,9 @@ test('a live trace click offers a scope probe and repeatable checks together', a
   expect(liveHtml).toContain('Power this trace now at 3.3 V and save the supply')
 })
 
-test('component constraint offers fail closed against engine capabilities', async () => {
-  const { assertionOffers } = await import('../src/components/SelectionCard')
-  const component = { ref: 'U2', value: '74HC595', lib_id: '74xx:74HC595' }
-  expect(assertionOffers(null, component, []).map(offer => offer.kind)).toEqual([])
-  expect(assertionOffers(null, component, ['max_temp']).map(offer => offer.kind)).toEqual(['max_temp'])
-
-  const resistor = { ref: 'R1', value: '10k', lib_id: 'Device:R', padNet: '+5V' }
-  expect(assertionOffers(null, resistor, ['max_current', 'max_temp']).map(offer => offer.kind)).toEqual([
-    'max_current', 'max_temp', 'voltage',
-  ])
-})
-
 test('visual interaction builder round-trips a real stimulus and timeline', async () => {
-  const { buildToml, tomlToBuilder } = await import('../src/lib/check-spec')
+  const { buildToml } = await import('../src/lib/check-spec')
+  const { tomlToBuilder } = await import('../src/lib/spec-model')
   const peripheral = {
     rowId: 1, id: 'STIM_IN', kind: 'stimulus' as const, net: '/SENSE', to: 'GND',
     waveform: 'sine' as const, offset: '1.65', amplitude: '0.25', freq_hz: '1000',
@@ -236,7 +228,8 @@ test('visual interaction builder round-trips a real stimulus and timeline', asyn
 })
 
 test('visual bus-device builder embeds exact local spec bytes and round-trips inputs', async () => {
-  const { buildToml, tomlToBuilder } = await import('../src/lib/check-spec')
+  const { buildToml } = await import('../src/lib/check-spec')
+  const { tomlToBuilder } = await import('../src/lib/spec-model')
   const sensor = {
     rowId: 1,
     id: 'U7_ACCEL',

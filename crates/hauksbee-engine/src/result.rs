@@ -1488,6 +1488,9 @@ pub struct DrcShort {
     pub plain: String,
     /// Suggested remediation, mirroring `JsonFinding.fix`.
     pub fix: String,
+    /// The parts whose pads form the contact, for the finding's `refs`.
+    #[serde(skip)]
+    pub refs: Vec<String>,
 }
 
 const ORACLE_AGREEMENT_MARKER: &str = "ORACLE AGREEMENT: ";
@@ -1548,6 +1551,9 @@ pub struct DrcGroup {
     pub plain: String,
     /// Suggested remediation, mirroring `JsonFinding.fix`.
     pub fix: String,
+    /// The parts whose pads are in the group, for the finding's `refs`.
+    #[serde(skip)]
+    pub refs: Vec<String>,
 }
 
 /// `"3 locations"` / `"1 location"`: how many places one grouped clearance
@@ -1658,7 +1664,16 @@ impl DrcStructured {
             f64,
             [f64; 2],
             (hauksbee_extract::ItemKind, hauksbee_extract::ItemKind),
+            std::collections::BTreeSet<String>,
         );
+        // The pad owners at one contact; tracks, vias and zones own none.
+        let owners = |f: &hauksbee_extract::DrcFinding| {
+            [&f.item_a.owner, &f.item_b.owner]
+                .into_iter()
+                .filter(|o| !o.is_empty())
+                .cloned()
+                .collect::<std::collections::BTreeSet<String>>()
+        };
         let mut shorts = Vec::new();
         let mut groups: BTreeMap<(String, String, String), Group> = BTreeMap::new();
 
@@ -1743,6 +1758,7 @@ impl DrcStructured {
                              so the trace/pad spacing clears the clearance rule"
                             .to_string(),
                         },
+                        refs: owners(f).into_iter().collect(),
                     });
                 }
                 ViolationKind::Clearance => {
@@ -1760,8 +1776,10 @@ impl DrcStructured {
                         f.required_clearance_mm,
                         [f.x, f.y],
                         (f.item_a.kind, f.item_b.kind),
+                        std::collections::BTreeSet::new(),
                     ));
                     e.0 += 1;
+                    e.6.extend(owners(f));
                     if below {
                         e.1 += 1;
                     }
@@ -1781,8 +1799,10 @@ impl DrcStructured {
 
         let mut violations = Vec::new();
         let mut at_limit = Vec::new();
-        for ((net_a, net_b, layer), (count, below_count, min_gap, rule, min_gap_loc, kinds)) in
-            groups
+        for (
+            (net_a, net_b, layer),
+            (count, below_count, min_gap, rule, min_gap_loc, kinds, refs),
+        ) in groups
         {
             let any_below = below_count > 0;
             let mut group = DrcGroup {
@@ -1798,6 +1818,7 @@ impl DrcStructured {
                 between: format!("{} \u{2194} {}", kinds.0.as_str(), kinds.1.as_str()),
                 plain: String::new(),
                 fix: String::new(),
+                refs: refs.into_iter().collect(),
             };
             group.plain = group.label();
             group.fix = if any_below {
@@ -2779,7 +2800,11 @@ impl JsonReport {
         // The first gating finding's plain words and fix, for the reason sentence.
         let mut first: Option<(&str, &str)> = None;
         if let Some(findings) = &self.findings {
-            for f in findings {
+            // DRC findings mirror `self.drc`, which is counted below.
+            for f in findings
+                .iter()
+                .filter(|f| self.drc.is_none() || f.check != "drc")
+            {
                 // Waiving a note would suppress information without changing
                 // any outcome, which is cost with no benefit, so only the
                 // `serious` grade is offered a waiver here. That is narrower
@@ -3506,6 +3531,7 @@ mod tests {
                 between: "track \u{2194} track".into(),
                 plain: String::new(),
                 fix: "increase spacing".into(),
+                refs: Vec::new(),
             };
             let st = DrcStructured {
                 clearance_rule_mm: 0.2,
@@ -3658,6 +3684,7 @@ mod tests {
             severity: "serious".into(),
             plain: "GND shorts VCC on F.Cu at (1.00, 2.00) mm (gap 0.000 mm)".into(),
             fix: "separate the two nets' copper".into(),
+            refs: Vec::new(),
         };
         let js = serde_json::to_string(&short).unwrap();
         assert!(js.contains("\"plain\"") && js.contains("\"fix\""), "{js}");
@@ -3674,6 +3701,7 @@ mod tests {
             rule_mm: 0.2,
             plain: String::new(),
             fix: String::new(),
+            refs: Vec::new(),
         };
         assert!(!group.label().is_empty());
     }

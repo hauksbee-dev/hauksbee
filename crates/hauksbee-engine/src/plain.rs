@@ -140,12 +140,21 @@ pub struct PlainReport {
     /// sites that hold a bind report set this; renderers with no bind context
     /// leave it empty and are unchanged.
     pub unmodelled_critical: Vec<String>,
+    /// The report already printed the INCONCLUSIVE banner for
+    /// `unmodelled_critical` once, above every section, so this section says
+    /// [`INCONCLUSIVE_SEE_TOP`] instead of repeating it.
+    pub inconclusive_said_above: bool,
     /// A report-wide qualification that changes how the finding count may be
     /// read. Copper findings on a newer-than-validated board format are kept
     /// visible but demoted, so the headline must explain that demotion in the
     /// same breath as the severity count.
     pub unvalidated: Option<String>,
 }
+
+/// What a model-dependent section says when the INCONCLUSIVE banner naming the
+/// unmodelled parts was already printed once, above every section.
+pub const INCONCLUSIVE_SEE_TOP: &str =
+    "Not a clean bill: key parts have no model (see INCONCLUSIVE at the top).";
 
 /// De-escape `KiCad`'s label escapes so a plain sentence names the net the way
 /// the schematic does. `KiCad` writes a literal `/` inside a label as `{slash}`
@@ -170,7 +179,18 @@ impl PlainReport {
             findings: Vec::new(),
             heads_up: Vec::new(),
             unmodelled_critical: Vec::new(),
+            inconclusive_said_above: false,
             unvalidated: None,
+        }
+    }
+
+    /// The INCONCLUSIVE banner for this section: in full, or as a pointer to
+    /// the one printed above every section.
+    fn inconclusive(&self) -> String {
+        if self.inconclusive_said_above {
+            INCONCLUSIVE_SEE_TOP.to_string()
+        } else {
+            crate::result::inconclusive_verdict(&self.unmodelled_critical)
         }
     }
 
@@ -291,7 +311,7 @@ impl PlainReport {
             // Actionable heads-up notes stay on the verdict line: INCONCLUSIVE
             // must not hide the one observation the user may have come to check.
             if !self.unmodelled_critical.is_empty() {
-                let mut v = crate::result::inconclusive_verdict(&self.unmodelled_critical);
+                let mut v = self.inconclusive();
                 if !self.heads_up.is_empty() {
                     let hn = self.heads_up.len();
                     let things = if hn == 1 { "thing" } else { "things" };
@@ -329,11 +349,7 @@ impl PlainReport {
         // but the coverage hole must still be said out loud: fixing the listed
         // findings would otherwise flip the verdict straight to a vacuous pass.
         if !self.findings.is_empty() && !self.unmodelled_critical.is_empty() {
-            let _ = writeln!(
-                s,
-                "{}",
-                crate::result::inconclusive_verdict(&self.unmodelled_critical)
-            );
+            let _ = writeln!(s, "{}", self.inconclusive());
         }
         if !self.findings.is_empty() {
             let _ = writeln!(s);
@@ -2249,6 +2265,7 @@ mod tests {
             severity: severity.into(),
             plain: format!("GND shorts {net_b}"),
             fix: "separate the copper".into(),
+            refs: Vec::new(),
         }
     }
 
@@ -2273,6 +2290,7 @@ mod tests {
                     between: "track ↔ track".into(),
                     plain: String::new(),
                     fix: "increase spacing".into(),
+                    refs: Vec::new(),
                 })
                 .collect(),
             at_limit: Vec::new(),

@@ -615,3 +615,93 @@ value_re = "(?i)^MISB-SWMM-5B-LF$"
 "4" = "id"
 "5" = "gnd"
 "0" = "shell"
+
+# ── JST XH S4B-XH-A: 4-circuit side-entry wire-to-board header ──
+# JST XH connector family datasheet (eXH.pdf, jst-mfg.com), sha256 9426b136902f11900825077535e5c65032b7fbc31ffb59c5e9e1f463bb20fb90. Drafted by the extraction pipeline
+# (codex gpt-6-luna) and checked against the PDF: 3 A AC/DC (AWG #22), 250 V, four circuits (the S4B-XH-A row of the order table). Hand edits: value_re accepts the (LF)(SN)
+# suffix the openrz67 board carries; the draft's pin labels were tidied; the withstanding-voltage unit is V (AC in the conditions). No contact physics is modelled.
+[[models]]
+id = "s4b-xh-a"
+kind = "connector"
+description = "Four-circuit side-entry XH header; records circuit pin mapping, but does not model mating mechanics or contact electrical performance."
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.pinout]]
+package = "4-circuit side-entry header, C = 9.2 mm (S4B-XH-A)"
+pins = { "1" = "circuit 1", "2" = "circuit 2", "3" = "circuit 3", "4" = "circuit 4" }
+[[models.source.characteristic]]
+parameter = "Contact resistance, initial value"
+max = 10
+unit = "mΩ"
+conditions = "initial value"
+basis = "Page 1, Specifications, contact resistance, max"
+[[models.source.characteristic]]
+parameter = "Contact resistance, after environmental tests"
+max = 20
+unit = "mΩ"
+conditions = "after environmental tests"
+basis = "Page 1, Specifications, contact resistance, max"
+[[models.source.characteristic]]
+parameter = "Insulation resistance"
+min = 1000
+unit = "MΩ"
+conditions = ""
+basis = "Page 1, Specifications, insulation resistance, min"
+[[models.source.characteristic]]
+parameter = "Withstanding voltage"
+min = 1000
+unit = "V"
+conditions = "AC; one minute; no breakdown or flashover"
+basis = "Page 1, Specifications, withstanding voltage"
+[[models.source.characteristic]]
+parameter = "Temperature range"
+min = -25
+max = 85
+unit = "°C"
+conditions = "including temperature rise while applying electrical current"
+basis = "Page 1, Specifications, temperature range"
+[[models.source.characteristic]]
+parameter = "Applicable wire conductor size"
+min = 22
+max = 30
+unit = "AWG"
+conditions = "printed range: AWG #30 to AWG #22"
+basis = "Page 1, Specifications, applicable wire range; numeric AWG values"
+[[models.source.characteristic]]
+parameter = "Applicable wire insulation outside diameter"
+min = 0.9
+max = 1.9
+unit = "mm"
+conditions = ""
+basis = "Page 1, Specifications, applicable wire range"
+[[models.source.characteristic]]
+parameter = "Applicable PC board thickness"
+min = 1.6
+unit = "mm"
+conditions = ""
+basis = "Page 1, Specifications, applicable PC board thickness"
+
+[[models.source.references]]
+title = "S4B-XH-A.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "9426b136902f11900825077535e5c65032b7fbc31ffb59c5e9e1f463bb20fb90"
+[models.match]
+value_re = "(?i)^S4B[-_ ]?XH[-_ ]?A"
+[models.params]
+# The four physical positions are enumerated in [models.pins], matching the four-circuit order row on page 5.
+[models.ratings]
+max_current_a = 3.0 # Source: Page 1, Specifications, current rating, AC/DC, AWG #22
+max_voltage_v = 250.0 # Source: Page 1, Specifications, voltage rating, AC/DC
+[models.pins]
+"1" = "contact_1" # Page 5 side-entry drawing: No. 1 circuit arrow; cross-checked with page 2 PCB layout (mounting-surface view).
+"2" = "contact_2"
+"3" = "contact_3"
+"4" = "contact_4"
+[models.coverage]
+implements = ["connector_pin_mapping"]
+missing = ["mating_mechanics", "contact_electrical_performance"]
