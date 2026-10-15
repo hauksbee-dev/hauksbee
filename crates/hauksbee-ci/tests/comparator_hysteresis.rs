@@ -295,34 +295,44 @@ fn a_failure_on_a_board_outside_a_datasheet_limit_is_a_failure_that_names_it() {
 /// the feed resistor and the most it may be.
 #[test]
 fn a_rail_starved_through_its_feed_resistor_fails_naming_the_feed() {
-    let fixture = std::fs::read_to_string(support::repo(
-        "crates/hauksbee-ci/tests/fixtures/lm339_vicr_pair_high.board",
-    ))
-    .expect("read fixture");
-    // U1's VCC (pad 3) moves to its own rail VDD_A, fed from V5 through 10 k:
-    // the card's 0.8 mA static draw would drop 8 V across it, past the 3 V
-    // between the 5 V feed and the LM339's 2 V minimum supply.
-    let u1_vcc = "pad \"3\" thru_hole circle at 7.62 0 size 1.7 1.7 drill 1.0 \
-                  layers [F.Cu B.Cu] net \"V5\"";
-    assert!(fixture.contains(u1_vcc), "fixture layout changed");
-    let feed = support::comp(
+    // Three LMV7219s (SNOS458I: 1.1 mA typ each at 5 V, 2.7 V minimum supply;
+    // SOT-23-5 pads 1 OUT, 2 V-, 3 IN+, 4 IN-, 5 V+) on VDD_A, fed from V5
+    // through 1 k: their 3.3 mA would drop 3.3 V, past the 2.3 V between the
+    // 5 V feed and their minimum. Inputs sit at 0 V, inside the common-mode
+    // range at any supply, so the starved rail is the only limit broken.
+    let sot = "Package_TO_SOT_SMD:SOT-23-5";
+    let r0805 = "Resistor_SMD:R_0805_2012Metric";
+    let mut parts = String::new();
+    for i in 1..=3_usize {
+        let out = format!("OUT{i}");
+        let pads = support::pad(1, &out)
+            + &support::pad(2, "GND")
+            + &support::pad(3, "GND")
+            + &support::pad(4, "GND")
+            + &support::pad(5, "VDD_A");
+        parts += &support::comp(&format!("U{i}"), sot, "LMV7219", 20 * i, pads);
+        let load = support::pad(1, &out) + &support::pad(2, "GND");
+        parts += &support::comp(&format!("RL{i}"), r0805, "10k", 20 * i + 10, load);
+    }
+    parts += &support::comp(
         "RFEED",
-        "Resistor_SMD:R_0805_2012Metric",
-        "10k",
-        220,
+        r0805,
+        "1k",
+        100,
         support::pad(1, "V5") + &support::pad(2, "VDD_A"),
     );
-    let bypass = support::comp(
+    parts += &support::comp(
         "CA",
         "Capacitor_SMD:C_0805_2012Metric",
         "100nF",
-        250,
+        120,
         support::pad(1, "VDD_A") + &support::pad(2, "GND"),
     );
-    let board = fixture
-        .replace(u1_vcc, &u1_vcc.replace("\"V5\"", "\"VDD_A\""))
-        .replace("    net \"GND\"\n", "    net \"GND\"\n    net \"VDD_A\"\n")
-        .replace("\n}\n", &format!("{feed}{bypass}\n}}\n"));
+    let nets = ["V5", "VDD_A", "GND", "OUT1", "OUT2", "OUT3"].map(|n| format!("net \"{n}\"\n"));
+    let board = format!(
+        "board version 20171130\nfn main {{\n{}{parts}}}\n",
+        nets.concat()
+    );
     let path = support::write_tmp("starved_feed.board", &board);
     let r = support::run_body(
         "starved.toml",
@@ -346,6 +356,6 @@ fn a_rail_starved_through_its_feed_resistor_fails_naming_the_feed() {
     let why = hauksbee_ci::report::why_line(row).unwrap_or_default();
     assert!(
         why.contains("'VDD_A' is starved") && why.contains("RFEED") && why.contains("no more than"),
-        "the failure must name the starved rail, its feed and the fix: {why}"
+        "the failure must name the starved rail, its feed and the fix: {why}\n{human}"
     );
 }
