@@ -2555,6 +2555,36 @@ fn unnumbered_rows_to_unknowns(source: &mut toml_edit::Table) -> bool {
     true
 }
 
+/// A param written as a printed row its name cannot read (a nominal printing
+/// only a max, a unit it does not convert) moves to a characteristic record of
+/// the same name, as the checker prescribes. Whether it moved any of `keys`.
+fn unreadable_params_to_rows(entry: &mut toml_edit::Table, keys: &[&str]) -> bool {
+    use toml_edit::{ArrayOfTables, Item, Table, Value};
+    let mut moved = false;
+    for key in keys {
+        let found = entry.get("params").and_then(Item::as_table_like);
+        let mut row = match found.and_then(|p| p.get(key)) {
+            Some(Item::Value(Value::InlineTable(t))) => t.clone().into_table(),
+            Some(Item::Table(t)) => t.clone(),
+            _ => continue,
+        };
+        row.insert("parameter", toml_edit::value(*key));
+        let source = entry.entry("source").or_insert(Item::Table(Table::new()));
+        let rows = source.as_table_mut().map(|t| t.entry("characteristic"));
+        let rows = rows.and_then(|e| {
+            e.or_insert(ArrayOfTables::new().into())
+                .as_array_of_tables_mut()
+        });
+        let Some(rows) = rows else { continue };
+        rows.push(row);
+        if let Some(params) = entry.get_mut("params").and_then(Item::as_table_like_mut) {
+            params.remove(key);
+        }
+        moved = true;
+    }
+    moved
+}
+
 impl Reply<'_> {
     /// The TOML table the answer starts with (empty for a bare word).
     const fn table(self) -> &'static str {
@@ -2638,6 +2668,19 @@ impl Reply<'_> {
         let models = doc.get_mut(path).and_then(Item::as_array_of_tables_mut);
         let tables = models.into_iter().flat_map(ArrayOfTables::iter_mut);
         for (original, table) in db.iter().zip(tables) {
+            let rows = original.params.rows();
+            let unread: Vec<&str> = rows
+                .filter(|(k, r)| crate::param_names::row_value(k, r).is_err())
+                .map(|(k, _)| k)
+                .collect();
+            if unreadable_params_to_rows(table, &unread) {
+                say!(
+                    "[model-extract] {}: params {} cannot read their rows; kept as characteristics",
+                    original.id,
+                    unread.join(", ")
+                );
+                inserted = true;
+            }
             // An identity-only abstention the card's own cited rows make needless
             // (they fix every required param) becomes the model those rows give:
             // the params are derived below rather than the reply refused.
@@ -5827,6 +5870,25 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let done = reply.complete(card);
         assert!(reply.check(&done).is_ok(), "{done}");
         assert!(done.contains("status = \"unknown\"") && done.contains("min = 0.7 VCC"));
+    }
+
+    /// A nominal param whose row prints only a max cannot be read: its row moves
+    /// to a characteristic of the same name, never dropped.
+    #[test]
+    fn a_param_row_its_name_cannot_read_becomes_a_characteristic() {
+        let card = "[[models]]\nid = \"q\"\nkind = \"digital\"\n[models.params]\n\
+            supply_static_ua = { max = 4.0, unit = \"uA\", conditions = \"c\", basis = \"b\" }\n\
+            [models.source]\ntier = \"datasheet-derived\"\nvalidation = \"physical-bounds-only\"\n";
+        let reply = Reply::Model {
+            part: "q",
+            kind: "digital",
+        };
+        let done: toml::Table = toml::from_str(&reply.complete(card.into())).unwrap();
+        let entry = &done["models"][0];
+        assert!(entry["params"].get("supply_static_ua").is_none());
+        let row = &entry["source"]["characteristic"][0];
+        assert_eq!(row["parameter"].as_str(), Some("supply_static_ua"));
+        assert_eq!(row["max"].as_float(), Some(4.0));
     }
 
     /// A section agent that wrote nothing is not papered over: a fix agent
