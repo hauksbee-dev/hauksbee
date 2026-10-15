@@ -92,10 +92,10 @@ pub use kicad_dru::{
 };
 pub use netlint::{
     control_role, is_capacitor, is_connector_like, is_ground, is_led, is_led_identity,
-    is_placeholder_value, is_resistor, is_test_point_or_hole, is_unconnected_net, norm,
-    pin_is_no_connect, render_netlint, LintCheck, LintFinding, NetLintReport, Severity,
-    ABSTENTION_MARKER, CHECK_BEFORE_ORDERING, DNP_PULLUP_MESSAGE_MARKER, INFORMATIONAL_MARKER,
-    SPI_PULLUP_MESSAGE_MARKER,
+    is_logic_or_switch_ref, is_placeholder_value, is_resistor, is_test_point_or_hole,
+    is_unconnected_net, norm, pin_is_no_connect, render_netlint, LintCheck, LintFinding,
+    NetLintReport, Severity, ABSTENTION_MARKER, CHECK_BEFORE_ORDERING, DNP_PULLUP_MESSAGE_MARKER,
+    INFORMATIONAL_MARKER, SPI_PULLUP_MESSAGE_MARKER,
 };
 pub use si::{
     cl_board_pf, cl_series, i2c_rise_time_ns, render_si, routed_length_mm, SiCheck, SiFinding,
@@ -762,34 +762,7 @@ pub(crate) fn name_unescaper(producer: &str) -> impl Fn(&str) -> String {
     }
 }
 
-fn unescape_kicad_name(s: &str) -> String {
-    const TABLE: &[(&str, &str)] = &[
-        ("{dblquote}", "\""),
-        ("{quote}", "'"),
-        ("{lt}", "<"),
-        ("{gt}", ">"),
-        ("{backslash}", "\\"),
-        ("{slash}", "/"),
-        ("{bar}", "|"),
-        ("{colon}", ":"),
-        ("{space}", " "),
-        ("{dollar}", "$"),
-        ("{tab}", "\t"),
-        ("{return}", "\n"),
-        // `{brace}` last: a `{` restored earlier must not start a new token.
-        ("{brace}", "{"),
-    ];
-    if !s.contains('{') {
-        return s.to_string();
-    }
-    let mut out = s.to_string();
-    for (token, ch) in TABLE {
-        if out.contains(token) {
-            out = out.replace(token, ch);
-        }
-    }
-    out
-}
+use netname::unescape_net_name as unescape_kicad_name;
 
 /// Collapse components that share a reference designator into one.
 ///

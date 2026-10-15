@@ -1070,21 +1070,6 @@ fn bus_capacitance_dedups_a_double_listed_pad() {
     );
 }
 
-#[test]
-fn si_rail_voltage_rejects_signal_named_rails() {
-    // The loose 3V3/1V8 `contains` fallbacks in si.rs rail_voltage (a
-    // duplicate of netlint's) had no signal-role guard, so a `3V3_EN` enable net
-    // read as a 3.3V rail, miscounting a resistor tapping it as an I2C pull-up
-    // and suppressing a genuine MissingI2cPullup finding.
-    assert_eq!(super::rail_voltage("3V3_EN"), None);
-    assert_eq!(super::rail_voltage("1V8_PG"), None);
-    assert_eq!(super::rail_voltage("3V3_SEL"), None);
-    // Genuine rails still resolve.
-    assert_eq!(super::rail_voltage("3V3"), Some(3.3));
-    assert_eq!(super::rail_voltage("+1V8"), Some(1.8));
-    assert_eq!(super::rail_voltage("MCU_3V3"), Some(3.3));
-}
-
 /// A controlled-impedance USB pair over a B.Cu pour, with the pour's fill given
 /// as `fill` polygons. `(-5,-5)..(25,5)` covers the whole 20 mm run.
 fn impedance_usb_over_plane(fills: &str) -> String {

@@ -32,6 +32,8 @@
 
 use std::collections::BTreeMap;
 
+use hauksbee_models::netclass;
+use hauksbee_models::refdes::RefClass;
 use regex::Regex;
 
 use crate::netlint::{LintCheck, LintFinding, NetLintReport, Severity};
@@ -418,71 +420,11 @@ fn net_role_is_4wire_spi(name: &str) -> bool {
 
 /// Is this net a power rail or ground? The inference must NEVER traverse such a
 /// net: a rail/ground touches almost every part, so following it would make
-/// every MCU pin "reach" every connector (the false-positive factory the probe
-/// exposed). Mirrors the netlint rail/ground name conventions.
+/// every MCU pin "reach" every connector. The one net table
+/// (`hauksbee_models::netclass`), so `5V_EN` or `PWR_3V3_OK` is a signal here
+/// exactly as it is in netlint.
 fn is_rail_or_ground(name: &str) -> bool {
-    let leaf = name
-        .trim()
-        .rsplit('/')
-        .next()
-        .unwrap_or(name)
-        .to_ascii_uppercase();
-    // A leading '+' is unambiguously a rail (+3V3, +5V, +VBAT).
-    if leaf.starts_with('+') {
-        return true;
-    }
-    // Token-match (not substring) so a signal net whose name merely embeds a
-    // supply token - "5V_EN", "VDD_SENSE", "PWR_3V3_OK" - is NOT mistaken for a
-    // rail (which would wrongly stop the signal trace). A leg of a divider on
-    // such a net would otherwise be a silent false negative.
-    let toks: Vec<&str> = leaf
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|t| !t.is_empty())
-        .collect();
-    // A pure voltage-code token like "3V3" / "1V8" / "5V0" / "5V" (digit V digit*).
-    let is_voltage_code = |t: &str| {
-        let b = t.as_bytes();
-        b.len() >= 2
-            && b[0].is_ascii_digit()
-            && b.contains(&b'V')
-            && b.iter().all(|&c| c.is_ascii_digit() || c == b'V')
-    };
-    let is_supply_token = |t: &str| {
-        t.starts_with("GND")
-            || matches!(
-                t,
-                "AGND"
-                    | "DGND"
-                    | "PGND"
-                    | "VSS"
-                    | "VCC"
-                    | "VDD"
-                    | "VBUS"
-                    | "VBAT"
-                    | "VSYS"
-                    | "VIN"
-                    | "VDDA"
-                    | "VDDIO"
-                    | "VREF"
-                    | "VCC3V3"
-                    | "VCC5V"
-            )
-    };
-    // A standalone supply token is a rail. A voltage code (5V, 3V3) is a rail
-    // ONLY when it is the whole name (every token is a voltage code or supply
-    // token, possibly with a "VCC"/"VDD" prefix), so a signal like "5V_EN" or
-    // "PG_5V" - which carries a non-supply word - is correctly NOT a rail.
-    if toks.iter().any(|t| is_supply_token(t)) {
-        return true;
-    }
-    if toks
-        .iter()
-        .all(|t| is_voltage_code(t) || is_supply_token(t) || *t == "0")
-        && toks.iter().any(|t| is_voltage_code(t))
-    {
-        return true;
-    }
-    leaf == "0"
+    netclass::is_ground(name) || netclass::is_supply(name)
 }
 
 /// Walk the signal net a used MCU pin is on and, if a single unambiguous
@@ -677,16 +619,7 @@ fn net_has_series_passive(board: &ExtractedBoard, net_id: i64, exclude_ref: &str
 
 /// A plain two-terminal R / L / C (the series elements of a filter / divider).
 fn is_two_terminal_passive(c: &Component) -> bool {
-    let r = c.reference.to_ascii_uppercase();
-    let connected = c.pins.iter().filter(|p| p.net.is_some()).count();
-    connected == 2
-        && ((r.starts_with('R')
-            && !r.starts_with("RV")
-            && !r.starts_with("RN")
-            && !r.starts_with("RM")
-            && !r.starts_with("RP"))
-            || r.starts_with('L')
-            || (r.starts_with('C') && !r.starts_with("CN") && !r.starts_with("CON")))
+    RefClass::of(&c.reference).is_rlc() && c.pins.iter().filter(|p| p.net.is_some()).count() == 2
 }
 
 /// A part we follow ONE hop through while tracing a signal: a two-terminal
@@ -696,19 +629,11 @@ fn is_two_terminal_passive(c: &Component) -> bool {
 /// *series* coupling cap continues the signal), or a small line buffer / single
 /// level-shift FET. Resistor networks / varistors are excluded.
 fn is_series_bridge(c: &Component) -> bool {
-    let r = c.reference.to_ascii_uppercase();
     let v = c.value.to_ascii_lowercase();
     let lib = c.lib_id.to_ascii_lowercase();
     let connected = c.pins.iter().filter(|p| p.net.is_some()).count();
     // Two-terminal series R / L / C.
-    if (r.starts_with('R')
-        && !r.starts_with("RV")
-        && !r.starts_with("RN")
-        && !r.starts_with("RM")
-        && !r.starts_with("RP"))
-        || r.starts_with('L')
-        || (r.starts_with('C') && !r.starts_with("CN") && !r.starts_with("CON"))
-    {
+    if RefClass::of(&c.reference).is_rlc() {
         return connected == 2;
     }
     // A small logic line buffer (74LVC125 / 74LVC1Gxx) or a single level-shift

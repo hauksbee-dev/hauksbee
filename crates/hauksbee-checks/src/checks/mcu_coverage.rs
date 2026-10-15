@@ -54,14 +54,12 @@ const MCU_FAMILY_PREFIXES: &[&str] = &[
 ];
 
 /// Does this reference designator name an active IC (`U*` / `IC*` / `MCU*`)?
-/// Guards against a connector or test point whose value happens to mention a
-/// chip. The set mirrors the binder's own MCU-candidate refdes prefixes so a
-/// part the binder treats as an MCU is not invisible to this check.
+/// The binder's MCU-candidate predicate, so a part the binder treats as an MCU
+/// is never invisible to this check. An Eagle placeholder (`U$2`) also counts
+/// here: it says nothing either way, and the MCU-family value gate decides.
 fn is_active_ic_refdes(reference: &str) -> bool {
-    let r = reference.to_ascii_uppercase();
-    // Strip to the leading alphabetic prefix.
-    let prefix: String = r.chars().take_while(char::is_ascii_alphabetic).collect();
-    prefix == "U" || prefix == "IC" || prefix == "MCU"
+    hauksbee_models::refdes::is_active_ic_ref(reference)
+        || hauksbee_models::refdes::is_tool_generated_ref(reference)
 }
 
 /// Families with a boot-mode pin sampled by hardware at reset; the surface the
