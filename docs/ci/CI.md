@@ -1544,6 +1544,12 @@ model-dependent surfaces exit 3, because their machine `verdict` field reads
 `invalid` for the unbound part and an exit code that disagreed with the document
 beside it would give a pipeline two answers. If the run ALSO gates on a
 finding, `fail` outranks the unbound part on both: verdict `fail`, exit 2.
+`--check` scopes the refusal: it judges the net checks the unbound parts
+cannot change and reads `pass` (exit 0, also under `--strict`) with a
+"Partly judged" condition naming the parts and the nets left unjudged, and
+its JUnit carries that sentence as a `qualified` evidence testcase rather than
+a failure. Gate on `judgement_scope` being absent if a pipeline must refuse any
+partly judged board (`docs/analysis/JSON_OUTPUT.md`).
 
 The copper (`--drc`) and descriptive (`--report`) surfaces are exempt on both:
 copper reads the layout and owes nothing to device models, and `--report`

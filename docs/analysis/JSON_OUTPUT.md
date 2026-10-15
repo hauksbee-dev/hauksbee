@@ -133,6 +133,17 @@ descriptive (`--report`) surfaces are exempt, on both the verdict and the exit
 code: copper reads the layout, and `--report` describes the binding rather than
 judging it (`docs/ci/CI.md` states that boundary).
 
+`--check` (and the web report) scope that refusal instead of applying it to the
+whole board. `judgement_scope` names the open parts, the named-net count, the
+nets they have a pin on (`wiring_dependent`: wiring/value checks not judged)
+and every net they reach through any part's pins, stopping only at the analysis
+ground (`electrical_dependent`: levels, ratings and rails not judged). When any
+net check is left over, `verdict` judges those: `pass` with the scope's
+"Partly judged: ..." sentence as the first `verdict_conditions` entry (the
+closing line reads `VERDICT: clean where judged`), or `fail` with the same
+sentence after "Also:" in `verdict_reason`. Only when the open parts reach every
+net check does the verdict stay `invalid`.
+
 Read `verdict` together with `notes` and the `bind` fields, never on its own:
 `thermal.valid: true` under `--thermal --no-strict-thermal` means the table is
 usable, not that the coverage is complete, and the top-level `verdict` can

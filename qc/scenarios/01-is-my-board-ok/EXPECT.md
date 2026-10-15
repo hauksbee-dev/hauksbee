@@ -32,8 +32,10 @@ sentence:
   unlocks a conclusive answer. The three SI heads-up notes underneath are still
   real, and the INCONCLUSIVE line must retain its "Plus 3 things worth a look"
   pointer rather than burying them.
-- The closing verdict line says "inconclusive", not "clean", for the same
-  reason.
+- The closing verdict line says "clean where judged", never plain "clean":
+  it judges the checks U1 provably cannot change and says, in the same
+  sentence, that U1 has no usable model, which nets' wiring and electrical
+  checks were therefore not judged, and how to draft the model.
 
 Each finding underneath is three parts: what it is, why it matters, what to do.
 He never has to ask "so is that bad?".

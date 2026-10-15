@@ -564,18 +564,23 @@ fn web_front_door_refuses_a_clean_bill_over_an_unbound_fet() {
 }
 
 #[test]
-fn check_closing_verdict_is_inconclusive_not_clean() {
+fn check_closing_verdict_is_scoped_not_clean() {
     let b = unbound();
     let out = run_board(&b, &["--check"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let text = stdout(&out);
+    // Q1 reaches every net electrically, so only the wiring of the one net it
+    // has no pin on (+5V) is judged, and the closing line says exactly that.
     assert!(
-        text.contains("VERDICT: inconclusive") && text.contains("Q1"),
-        "the closing line refuses the clean claim and names the part:\n{text}"
+        text.contains("VERDICT: clean where judged")
+            && text.contains("Partly judged: Q1 has no usable model")
+            && text.contains("NO electrical check was judged")
+            && text.contains("The other 1 of 8 net checks were judged"),
+        "the closing line scopes the claim and names the part:\n{text}"
     );
     assert!(
-        !text.contains("VERDICT: clean"),
-        "no clean bill over an unmodelled current-carrying part:\n{text}"
+        !text.contains("VERDICT: clean:"),
+        "no plain clean bill over an unmodelled current-carrying part:\n{text}"
     );
     // Bound side: the clean verdict returns.
     let out = run_board(&bound(), &["--check"]);
@@ -630,7 +635,7 @@ fn junit_agrees_with_the_json_verdict_about_bind_blockers() {
     // Scenario 08's inverse: an invalid JSON verdict must show red in the
     // JUnit file too, not a green test-report tab beside a red dashboard.
     let art = Artifacts::new("out");
-    let out = run_board(&unbound(), &art.with_junit(&["--check"]));
+    let out = run_board(&unbound(), &art.with_junit(&["--lint"]));
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let xml = art.xml();
     assert!(
@@ -641,6 +646,16 @@ fn junit_agrees_with_the_json_verdict_about_bind_blockers() {
         !junit_all_green(&xml),
         "the JUnit root must not read all-green beside an invalid JSON verdict: {}",
         junit_root(&xml)
+    );
+    // `--check` scopes the same blocker into a partly judged pass, so its
+    // JUnit carries the scope as a qualified, non-failing entry instead.
+    let art = Artifacts::new("check");
+    let out = run_board(&unbound(), &art.with_junit(&["--check"]));
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    let xml = art.xml();
+    assert!(
+        xml.contains("QUALIFIED evidence: Partly judged: Q1") && junit_all_green(&xml),
+        "the scoped blocker reads as a qualified entry beside a pass:\n{xml}"
     );
 }
 
@@ -744,8 +759,15 @@ fn si_strict_exit_agrees_with_the_si_verdict_on_both_sides_of_the_bind_gate() {
 
 #[test]
 fn check_strict_exit_agrees_with_the_check_verdict_on_both_sides_of_the_bind_gate() {
-    assert_gate_matches_verdict(&["--check"], &unbound(), "invalid");
+    // The unbound FET leaves one net check judged: a partly judged pass, exit 0.
+    assert_gate_matches_verdict(&["--check"], &unbound(), "pass");
     assert_gate_matches_verdict(&["--check"], &bound(), "pass");
+    // With a pin on every net it leaves nothing to judge: invalid, exit 3.
+    assert_gate_matches_verdict(
+        &["--check"],
+        &fixture("verdict_fet_everywhere.kicad_pcb"),
+        "invalid",
+    );
 }
 
 #[test]

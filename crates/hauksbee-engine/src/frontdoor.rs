@@ -769,6 +769,11 @@ fn verdict_headline(verdict: &crate::result::RunVerdict, current: &str, serious:
         "invalid" if inconclusive.contains(&current) => current.to_string(),
         "invalid" => "Not conclusive: nothing found blocks ordering, but this run cannot vouch for the board; see the reason below.".to_string(),
         _ if verdict.conditions.is_empty() => current.to_string(),
+        _ if verdict.partial => format!(
+            "Partly judged: nothing found blocks ordering among the checks this run could \
+             judge. {}",
+            verdict.conditions.join(" ")
+        ),
         _ => {
             let conditions = verdict.conditions.join(" ");
             if current == overall_headline(0, 0, false, false) {
@@ -1505,7 +1510,12 @@ fn analyze_normalized_with_context(
         crate::reports::check::check_gate_fails(&drc_structured, &lint, &si, usbc.as_ref()),
     )
     .with_evidence(&evidence)
-    .with_condition(crate::checks::indicators::intent_condition(&indicators));
+    .with_condition(crate::checks::indicators::intent_condition(&indicators))
+    .with_judgement_scope(crate::scope::JudgementScope::of(
+        board,
+        bound,
+        &verdict_blockers,
+    ));
 
     let components = board
         .components

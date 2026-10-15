@@ -723,6 +723,11 @@ impl OrderTriage {
                 "OK TO ORDER: nothing found that blocks ordering or needs inspecting first."
                     .to_string()
             }
+            "pass" if verdict.partial => format!(
+                "PARTLY JUDGED: nothing found that blocks ordering among the checks this run \
+                 could judge. {}",
+                verdict.conditions.join(" ")
+            ),
             "pass" => format!(
                 "OK TO ORDER, conditionally: nothing found that blocks ordering or needs \
                  inspecting first; this rests on: {}",

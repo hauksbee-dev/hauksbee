@@ -21,7 +21,8 @@ critical active part has no executable model.
 This is also the one surface where the internal names belong. `bind.mcu_bound`
 is exactly right here and exactly wrong in the plain report, which scenario 01
 checks from the other side. Watchy must report `critical_parts_bound = "5/6"`,
-`verdict = "invalid"`, and the unresolved U1/SR2HARU entry must say that the
+`verdict = "pass"` with a `judgement_scope` naming U1 and a first verdict
+condition saying which checks it leaves unjudged, and the unresolved U1/SR2HARU entry must say that the
 matched `sr2` card carries identity metadata but no executable behaviour.
 Blinky provides the affirmative JSON control: it validates against the same
 schema while reporting `ok = true`, `verdict = "pass"`, and one of one critical
@@ -37,9 +38,10 @@ asserted by running it twice and comparing, not by reasoning about it.
 ## The JUnit
 
 Well-formed XML with a `testsuites` root, real `testsuite` and `testcase`
-elements, and counts that agree with the verdict. Watchy's JUnit has one
-`undermined U1` evidence failure even though the static command itself exits 0:
-that failure is how a test-report UI preserves the invalid evidence verdict.
+elements, and counts that agree with the verdict. Watchy's JUnit has a
+`qualified U1` evidence testcase and no failure, matching its partly judged
+pass: the testcase is how a test-report UI shows which checks U1 leaves
+unjudged.
 Blinky is the genuinely executable green control and has `failures="0"`. The
 failing assertion spec separately has `failures="1"` while its process exits 1.
 A JUnit file claiming an all-green suite for invalid or failing evidence is the

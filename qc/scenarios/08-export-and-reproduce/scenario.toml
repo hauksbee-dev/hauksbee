@@ -8,8 +8,9 @@ XML as well-formed XML with honest counts.
 success = """
 The JSON carries a schema_version, parses, and validates against
 crates/hauksbee-engine/schemas/hauksbee-run-report.schema.json. Watchy's
-identity-only SR2 is exported honestly as an invalid result and as an evidence
-failure in JUnit. A genuinely executable existing board remains a green export
+identity-only SR2 is exported honestly as a partly judged pass whose scope and
+condition name U1 and what it leaves unjudged, and as a qualified evidence
+testcase in JUnit. A genuinely executable existing board remains a green export
 control. Two runs of the same board produce byte-identical JSON.
 """
 
@@ -24,10 +25,11 @@ json_schema = "crates/hauksbee-engine/schemas/hauksbee-run-report.schema.json"
 json_required_keys = [
   "schema_version", "board", "bind", "ok", "verdict", "serious_count", "actionable_count",
 ]
-json_equals = { "schema_version" = 3, "verdict" = "invalid", "ok" = false, "serious_count" = 0, "bind.mcu_bound" = true, "bind.critical_parts_bound" = "5/6", "bind.active_path_unresolved.6.reference" = "U1", "bind.active_path_unresolved.6.value" = "SR2HARU", "bind.active_path_unresolved.6.active_ic" = true }
+json_equals = { "schema_version" = 3, "verdict" = "pass", "ok" = true, "serious_count" = 0, "judgement_scope.open_parts.0" = "U1", "bind.mcu_bound" = true, "bind.critical_parts_bound" = "5/6", "bind.active_path_unresolved.6.reference" = "U1", "bind.active_path_unresolved.6.value" = "SR2HARU", "bind.active_path_unresolved.6.active_ic" = true }
 # The JSON surface is where the internal names belong. Pin the unsupported
 # reason itself: identity metadata is not executable behaviour.
 contains = [
+  "Partly judged: U1 has no usable model",
   "identity matched model 'sr2' but behavior is unavailable",
   "sr2 has no generic executable device behavior",
 ]
@@ -77,12 +79,12 @@ exit = 0
 max_seconds = 30
 xml_file = "watchy.xml"
 xml_required_tags = ["testsuite", "testcase"]
-xml_root_attrs = { failures = "1" }
+xml_root_attrs = { failures = "0" }
 file_matches = { "watchy.xml" = [
   "^<\\?xml version=\"1\\.0\" encoding=\"UTF-8\"\\?>",
-  "<testsuites name=\"hauksbee watchy\\.kicad_pcb\" tests=\"[0-9]+\" failures=\"1\" errors=\"0\">",
-  "<testcase name=\"undermined U1\" classname=\"evidence\">",
-  "<failure message=\"INVALID evidence: INCONCLUSIVE: 1 current-carrying / active part\\(s\\) have no model \\(U1\\)",
+  "<testsuites name=\"hauksbee watchy\\.kicad_pcb\" tests=\"[0-9]+\" failures=\"0\" errors=\"0\">",
+  "<testcase name=\"qualified U1\" classname=\"evidence\">",
+  "QUALIFIED evidence: Partly judged: U1 has no usable model",
 ] }
 
 [[step]]

@@ -1977,6 +1977,45 @@
       ],
       "type": "object"
     },
+    "JudgementScope": {
+      "description": "What a run with unmodelled key parts could still judge, per named net.",
+      "properties": {
+        "electrical_dependent": {
+          "description": "Nets an open part can reach through any part's pins (stopping at the\nanalysis ground): their electrical checks are not judged.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "nets": {
+          "description": "Named nets on the board. Each carries two claims: its wiring/value\nchecks and its electrical checks.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "open_parts": {
+          "description": "The key parts with no usable model the judgement is scoped around.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "wiring_dependent": {
+          "description": "Nets an open part has a pin on: their wiring/value checks are not judged.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "open_parts",
+        "nets",
+        "wiring_dependent",
+        "electrical_dependent"
+      ],
+      "type": "object"
+    },
     "MatchConfidence": {
       "description": "Confidence in a model or parameter match.",
       "enum": [
@@ -3152,6 +3191,17 @@
         "$ref": "#/definitions/ArtifactProvenance"
       },
       "type": "array"
+    },
+    "judgement_scope": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/JudgementScope"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Which net checks the run judged when key parts have no usable model:\nthe open parts, and the nets whose wiring/value or electrical checks\nthey could change (not judged). With some claim judged, the verdict\njudges the rest instead of refusing the whole board, and the first\nverdict condition (or the failing reason) names what was not judged.\nAdditive; omitted when every key part is modelled."
     },
     "notes": {
       "description": "Info-level notes (bind roles, co-sim substitution, coverage caveats, SI\ninfo) that must never be silently absent but never gate a CI pipeline.\nAdditive + `skip_serializing_if` so the schema stays backward-compatible.",

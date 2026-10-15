@@ -216,24 +216,42 @@ fn gather_ci_artifact_findings(
     } else {
         blockers
     };
+    // The `--check` verdict judges around open parts it can scope (see
+    // `crate::scope`), so its CI artifact carries the scope as a qualified,
+    // non-gating badge instead of a red INVALID test, matching the verdict.
+    let scope = (surface == SelectedSurface::Check)
+        .then(|| crate::scope::JudgementScope::of(board, &bound, &blockers))
+        .flatten()
+        .filter(|s| s.scopes(&blockers));
     if ci_surface_is_model_dependent(surface) && !blockers.is_empty() {
+        let (kind, severity, message) = scope.map_or_else(
+            || {
+                let invalid = crate::result::inconclusive_verdict(&blockers);
+                (
+                    "undermined",
+                    "serious",
+                    format!("INVALID evidence: {invalid}"),
+                )
+            },
+            |s| {
+                (
+                    "qualified",
+                    "warning",
+                    format!("QUALIFIED evidence: {}", s.condition()),
+                )
+            },
+        );
         findings.push(crate::result::JsonFinding {
             check: "evidence".into(),
-            kind: "undermined".into(),
-            severity: "serious".into(),
+            kind: kind.into(),
+            severity: severity.into(),
             nets: Vec::new(),
             location_mm: None,
             layer: None,
             refs: blockers.clone(),
             actionable: true,
-            message: format!(
-                "INVALID evidence: {}",
-                crate::result::inconclusive_verdict(&blockers)
-            ),
-            plain: format!(
-                "INVALID evidence: {}",
-                crate::result::inconclusive_verdict(&blockers)
-            ),
+            plain: message.clone(),
+            message,
             fix: Some("supply device models or BOM identity for the named parts".into()),
         });
     }
