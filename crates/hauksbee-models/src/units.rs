@@ -142,18 +142,6 @@ pub fn scale_between(unit: &str, want: &str) -> Option<f64> {
 
 fn prefixed_unit(token: &str) -> Option<(f64, &'static str)> {
     const BASES: &[&str] = &["V", "A", "W", "F", "s", "Hz", "ohm", "S", "H"];
-    const PREFIXES: &[(char, f64)] = &[
-        ('f', 1e-15),
-        ('p', 1e-12),
-        ('n', 1e-9),
-        ('u', 1e-6),
-        ('µ', 1e-6),
-        ('μ', 1e-6),
-        ('m', 1e-3),
-        ('k', 1e3),
-        ('M', 1e6),
-        ('G', 1e9),
-    ];
     let token = ["PP", "pp", "rms", "RMS"]
         .iter()
         .find_map(|s| token.strip_suffix(s))
@@ -163,10 +151,8 @@ fn prefixed_unit(token: &str) -> Option<(f64, &'static str)> {
     if let Some(b) = base(&token) {
         return Some((1.0, b));
     }
-    let mut chars = token.chars();
-    let prefix = chars.next()?;
-    let scale = PREFIXES.iter().find(|(c, _)| *c == prefix)?.1;
-    base(chars.as_str()).map(|b| (scale, b))
+    let (scale, _, rest) = hauksbee_ir::units::split_prefix(&token)?;
+    base(rest).map(|b| (scale, b))
 }
 
 /// The prefixed unit a row's own text says its numbers were converted from

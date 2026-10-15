@@ -320,6 +320,8 @@ pub(crate) fn emit_quiet(
     // the JSON surface's `no_signal_path_nets` list (text/JSON parity).
     let mut no_path_nets: Vec<String> = Vec::new();
     let mut requested_nets = 0usize;
+    // Echo the parsed sweep so `1M` reading as mega (not SPICE milli) is visible.
+    println!("AC sweep {spec}");
     for (net, bode) in &per_net {
         if bode.is_empty() {
             eprintln!("warning: net '{net}' not found in circuit; skipping");
