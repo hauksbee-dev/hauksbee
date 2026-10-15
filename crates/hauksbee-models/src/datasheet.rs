@@ -440,6 +440,14 @@ fn run_inner(mut args: Args) -> Result<PathBuf> {
     }
     progress::start();
     let pdf_text = extract_pdf_text(&args.pdf);
+    if let Some(why) = wrong_datasheet(&args.part, &args.aliases, &pdf_text) {
+        bail!(
+            "{why}: this looks like the wrong datasheet for {}. Nothing was sent; fetch the \
+             datasheet that names {} and run again.",
+            args.part,
+            args.part
+        );
+    }
 
     // An empty kind means "you work it out". Being made to classify a part
     // before the tool will look at it is a barrier at exactly the wrong
@@ -447,11 +455,16 @@ fn run_inner(mut args: Args) -> Result<PathBuf> {
     // person asking for a model is precisely the one who may not know which
     // of our categories their part falls into.
     if args.kind_str.trim().is_empty() {
-        args.kind_str = identify_kind(&args, &pdf_text)?;
+        let identified = identify_kind(&args, &pdf_text)?;
+        args.kind_str = card_kind(&identified).to_string();
         say!(
-            "[model-extract] identified {} as kind '{}'",
+            "[model-extract] identified {} as kind '{identified}'{}",
             args.part,
-            args.kind_str
+            if identified == args.kind_str {
+                String::new()
+            } else {
+                format!("; drafting the '{}' card a board binds", args.kind_str)
+            }
         );
     }
     say!(
@@ -534,6 +547,118 @@ fn run_inner(mut args: Args) -> Result<PathBuf> {
         out_path.display()
     ));
     Ok(out_path)
+}
+
+/// The kind an identified part is drafted as. A register-map sensor kind gives
+/// a bare `[sensor]` spec no board binds (no match, pads or ratings): measured,
+/// five round-3 parts (an RTC, a fuel gauge, an EEPROM, a touch controller, an
+/// encoder) identified that way came back without a card, and each `digital`
+/// rerun bound. So an identified sensor is drafted as the digital card; the
+/// spec stays available by asking for its kind with `--kind`.
+fn card_kind(identified: &str) -> &str {
+    if is_sensor_kind(identified) {
+        "digital"
+    } else {
+        identified
+    }
+}
+
+/// The part-number stem a datasheet must print for `part`: its first
+/// alphanumeric token through its last digit (`PCF8563BS` → `PCF8563`,
+/// `BSS84-7-F` → `BSS84`), upper-cased; none under four characters (`S4B-XH-A`
+/// is a template position, not a searchable name).
+fn part_stem(part: &str) -> Option<String> {
+    let token = part
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .find(|t| !t.is_empty())?;
+    let end = token.rfind(|c: char| c.is_ascii_digit())? + 1;
+    let stem = token[..end].to_ascii_uppercase();
+    (stem.len() >= 4 && stem.chars().any(|c| c.is_ascii_alphabetic())).then_some(stem)
+}
+
+/// A stem's family: through its first run of letters (`MPSA42` → `MPSA`,
+/// `24AA025` → `24AA`).
+fn stem_family(stem: &str) -> &str {
+    let first_letter = stem.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(0);
+    let end = stem[first_letter..]
+        .find(|c: char| !c.is_ascii_alphabetic())
+        .map_or(stem.len(), |n| first_letter + n);
+    &stem[..end]
+}
+
+/// Whether a printed part stem names `stem`: equal, or a family name it
+/// begins (`TPS6213` / `TPS6213x` for `TPS62130`, `STM32F103x8` for
+/// `STM32F103C8T6`, an `x` standing for any one character).
+fn names_stem(printed: &str, stem: &str) -> bool {
+    printed.len() >= 5.min(stem.len())
+        && printed.len() <= stem.len()
+        && printed
+            .chars()
+            .zip(stem.chars())
+            .all(|(p, s)| p == s || p == 'X')
+}
+
+/// Why `pdf_text` is not `part`'s datasheet, checked before anything is sent:
+/// its title block names another part of the same family and `part` appears
+/// only as a complementary or related part, or nowhere (measured: a file saved
+/// as MPSA42 was the MPSA92 sheet, naming MPSA42 only as its complementary
+/// NPN). A family name covering the part (`TPS6213x`) is the part's own sheet.
+/// A name too short to search, or a PDF with no text layer, is not judged.
+fn wrong_datasheet(part: &str, aliases: &[String], pdf_text: &str) -> Option<String> {
+    let stem = part_stem(part)?;
+    if pdf_text == PDF_TEXT_UNAVAILABLE || pdf_text.len() < 2000 {
+        return None;
+    }
+    let lines: Vec<&str> = pdf_text.lines().filter(|l| !l.trim().is_empty()).collect();
+    let related = |i: usize| {
+        lines[i.saturating_sub(3)..=i].iter().any(|l| {
+            let l = l.to_lowercase();
+            l.contains("complement") || l.contains("komplement")
+        })
+    };
+    let wanted: Vec<String> = std::iter::once(stem.clone())
+        .chain(aliases.iter().filter_map(|a| part_stem(a)))
+        .collect();
+    let stems = |l: &str| -> Vec<String> {
+        l.split(|c: char| !c.is_ascii_alphanumeric())
+            .filter_map(part_stem)
+            .collect()
+    };
+    let names = |l: &str| {
+        let squashed: String = l
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_uppercase())
+            .collect();
+        wanted
+            .iter()
+            .any(|w| squashed.contains(w.as_str()) || stems(l).iter().any(|p| names_stem(p, w)))
+    };
+    let mentioned = |own: bool| {
+        lines
+            .iter()
+            .enumerate()
+            .any(|(i, l)| names(l) && (!own || !related(i)))
+    };
+    if mentioned(true) {
+        return None;
+    }
+    let page_one = pdf_text.split('\u{000c}').next().unwrap_or_default();
+    let family = stem_family(&stem);
+    let other = page_one
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .take(6)
+        .flat_map(stems)
+        .find(|s| s != &stem && family.len() >= 2 && stem_family(s) == family)?;
+    let anywhere = if mentioned(false) {
+        "only as a complementary or related part"
+    } else {
+        "nowhere"
+    };
+    Some(format!(
+        "the PDF's title names {other}, and {part} appears in it {anywhere}"
+    ))
 }
 
 /// Whether `path` starts with the `%PDF-` magic, whatever its extension says.
@@ -1656,8 +1781,9 @@ const PIN_NUMBERING: &str = r#"PIN NUMBERING, read this before you fill in [mode
   P7. LETTERS ONLY (G/S/D, B/C/E at unnumbered leads) with the view and pin 1
       drawn: number [models.pins] by the package standard and name it and the
       view in the P6 block (pins as printed); results mark those pins assumed:
-        standard = "JEDEC TO-236 top view: 1 lower-left, 2 lower-right, 3 top"
-      No view or pin 1 shown, or a two-pin diode (A/K): keep the letters.
+        standard = "<the package's standard, from the P7 table below>"
+      The checker refuses letters on a package that table lists. Otherwise,
+      with no view or pin 1 shown, or a two-pin diode (A/K): keep the letters.
   P8. THE SWITCH NODE AND FEEDBACK ARE NOT THE OUTPUT. On a switching
       converter or LED driver (buck, boost, buck-boost), the pin printed SW,
       LX, PH or L1/L2 drives the inductor: map it 'sw', never 'out'. FB, VFB
@@ -1953,7 +2079,7 @@ OUTPUT (TOML only, starting with [[models]]):
         pin_role_guidance = PIN_ROLE_GUIDANCE,
         ratings_rules = RATINGS_RULES,
         envelope_rules = ENVELOPE_RULES,
-        pin_numbering = PIN_NUMBERING,
+        pin_numbering = pin_numbering(),
         extraction_rules = EXTRACTION_RULES,
         source_quantity_guidance = SOURCE_QUANTITY_GUIDANCE,
         match_rule = crate::validation::MATCH_PATTERN_RULE,
@@ -2027,12 +2153,26 @@ fn ratings_hint_for_kind(kind: &str) -> String {
 
 /// Rule 7, from the checker's own rules: a hand copy once capped `kp` at 1.0
 /// while the checker (rightly, for power FETs) allowed 1000.
+/// The value-plausibility rules follow, from the table the validator holds a
+/// draft to ([`crate::plausibility::RULES`]).
 fn param_bounds_for_kind(kind: &str) -> String {
     let lines = component_kind(kind).map_or_else(Vec::new, crate::validation::param_bounds);
+    let plausibility = crate::plausibility::prompt_guide();
     if lines.is_empty() {
-        return "   (none for this kind)".into();
+        return format!("   (none for this kind)\n{plausibility}");
     }
-    format!("   - {}", lines.join("\n   - "))
+    format!("   - {}\n{plausibility}", lines.join("\n   - "))
+}
+
+/// [`PIN_NUMBERING`] with the package-split rule and the P7 lead-numbering
+/// table the checker holds a draft to ([`crate::validation::PACKAGE_SPLIT_RULE`],
+/// [`crate::validation::LEAD_STANDARDS`]).
+fn pin_numbering() -> String {
+    format!(
+        "{PIN_NUMBERING}\n  P4 SPLIT: {}.\n  P7 TABLE (package: standard lead numbering):\n{}",
+        crate::validation::PACKAGE_SPLIT_RULE,
+        crate::validation::lead_standards_guide()
+    )
 }
 
 /// The schema kind a prompt kind resolves to (a behavioural family to its base).
@@ -3361,7 +3501,9 @@ fn run_and_record(
 ) -> Result<String> {
     use crate::extract_usage as usage;
     let (chosen, model) = (resolved.backend, resolved.model());
-    let ran = run_agent_budgeted(resolved, prompt, ws, budget);
+    let ran = with_backoff(&BACKOFF, || {
+        run_agent_budgeted(resolved, prompt, ws, budget)
+    });
     let stdout = ran.as_ref().map(String::as_str).unwrap_or_default();
     let said = match chosen {
         Backend::ClaudeCode => {
@@ -3402,6 +3544,70 @@ fn run_and_record(
         note_envelope(ws, text);
     }
     said
+}
+
+/// The waits before re-running an agent whose CLI failed on a transient
+/// backend error. Measured: a seven-minute codex outage ("Reconnecting... 5/5
+/// (workspace routing discovery failed)") failed six runs at once, retries
+/// unspent, where a few minutes' wait would have carried every one through.
+const BACKOFF: [Duration; 3] = [
+    Duration::from_secs(30),
+    Duration::from_secs(90),
+    Duration::from_secs(240),
+];
+
+/// What a backend says when it, not the request, failed for now: a dropped
+/// connection, an overloaded or rerouting service, a short rate limit.
+const TRANSIENT_BACKEND: &[&str] = &[
+    "reconnecting",
+    "routing discovery failed",
+    "rate limit",
+    "too many requests",
+    "overloaded",
+    "service unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "internal server error",
+    "temporarily unavailable",
+    "connection reset",
+    "connection refused",
+    "connection closed",
+    "stream disconnected",
+    "error sending request",
+    "network error",
+    "econnreset",
+    "etimedout",
+];
+
+/// Whether `e` is a backend failure worth waiting out: never a timeout, an
+/// idle stall or a budget stop (the attempt loop owns those), nor a usage limit.
+fn transient_backend_error(e: &anyhow::Error) -> bool {
+    if e.is::<TimedOut>() || e.is::<IdleStalled>() || e.is::<harness::Stopped>() {
+        return false;
+    }
+    let text = format!("{e:#}").to_lowercase();
+    !text.contains("usage limit") && TRANSIENT_BACKEND.iter().any(|p| text.contains(p))
+}
+
+/// `call`, re-run after each of `delays` while it fails on a transient backend
+/// error; the last failure, or any other, is returned as is.
+fn with_backoff<T>(delays: &[Duration], mut call: impl FnMut() -> Result<T>) -> Result<T> {
+    for (n, delay) in delays.iter().enumerate() {
+        match call() {
+            Err(e) if transient_backend_error(&e) => {
+                say!(
+                    "[model-extract] transient backend error ({e:#}); waiting {}s before \
+                     try {} of {}",
+                    delay.as_secs(),
+                    n + 2,
+                    delays.len() + 1
+                );
+                std::thread::sleep(*delay);
+            }
+            done => return done,
+        }
+    }
+    call()
 }
 
 /// The JSON Schema an agent's final message must match, written into the
@@ -3622,6 +3828,7 @@ fn validated_attempts(
     // A draft that passed the checker but drew lint warnings is redrafted once with
     // them quoted; if that redraft fails, this one stands.
     let mut accepted: Option<String> = None;
+    let mut previous_failure: Option<String> = None;
     for attempt in 1..=retries + 1 {
         let started = Instant::now();
         announce_attempt(attempt, retries + 1, reply);
@@ -3692,7 +3899,25 @@ fn validated_attempts(
                 accepted = Some(raw);
             }
             Err(_) if accepted.is_some() => return Ok(accepted.unwrap_or_default()),
+            // A redraft identical to the failure it was told to fix ignores the
+            // feedback: measured, three identical BSS84 drafts. Another attempt
+            // at this tier would repeat it, so the tier stops and the ladder
+            // escalates (or, on its last tier, the draft is refused).
+            Err(e) if previous_failure.as_deref() == Some(raw.trim()) => {
+                return Err(Rejected {
+                    tool: tool.to_string(),
+                    attempts: attempt,
+                    error: format!(
+                        "attempt {attempt} returned the previous failing draft unchanged, so \
+                         this tier is not acting on the feedback: {e:#}"
+                    ),
+                    draft: raw,
+                    kept: None,
+                }
+                .into())
+            }
             Err(e) if attempt <= retries => {
+                previous_failure = Some(raw.trim().to_string());
                 say!("[model-extract] attempt {attempt} failed: {e:#}; retrying with feedback...");
                 prompt = format!(
                     "{base_prompt}\n\n{}",
@@ -4929,6 +5154,9 @@ fn parse_and_validate_reply(raw: &str, part: &str, kind_str: &str) -> Result<Mod
             bail!("{misplaced}");
         }
     }
+    if let Some(problem) = crate::plausibility::raw_problems(&text).first() {
+        bail!("implausible value: {problem}");
+    }
     let db: crate::schema::DbFile = toml::from_str(&text).with_context(|| {
         format!(
             "the reply for {part} did not deserialize as a hauksbee [[models]] db file (the \
@@ -4949,13 +5177,56 @@ fn parse_and_validate_reply(raw: &str, part: &str, kind_str: &str) -> Result<Mod
         bail!(
             "no [models.match] value_re or mpn_re matches '{part}', the name this card was \
              requested for, so a board naming the part that way would never bind it. Widen the \
-             pattern to accept '{part}' as well as the ordering codes it already accepts"
+             pattern to accept '{part}' as well as the ordering codes it already accepts: for \
+             example value_re = '{}', ending in (?:[-_ /]|$) only where a longer sibling part \
+             number shares that prefix",
+            names_part_pattern(part)
         );
     }
     if let Some(problem) = crate::variants::lint(&all).into_iter().next() {
         bail!("variant set in the reply for {part}: {problem}");
     }
+    if let Some(problem) = ambiguous_cards(&all, part) {
+        bail!("{problem}");
+    }
     Ok(first)
+}
+
+/// Cards in one reply that a board could not tell apart: a repeated id (the
+/// second shadows the first), or two independent cards (no `variant_of`, no
+/// `footprint_re`) that both accept the requested name, so which one binds
+/// depends on file order. Measured: two package cards both `id = "max17048"`.
+fn ambiguous_cards(entries: &[ModelEntry], part: &str) -> Option<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    if let Some(dup) = entries.iter().find(|e| !seen.insert(e.id.as_str())) {
+        return Some(format!(
+            "two [[models]] entries share id '{}': every card needs its own id (a package or \
+             variant suffix such as '{}_<package>')",
+            dup.id, dup.id
+        ));
+    }
+    let loose: Vec<&str> = entries
+        .iter()
+        .filter(|e| e.variant_of.is_none() && e.r#match.footprint_re.is_none())
+        .filter(|e| names_part(std::slice::from_ref(*e), part))
+        .map(|e| e.id.as_str())
+        .collect();
+    (loose.len() > 1).then(|| {
+        format!(
+            "cards {} all accept '{part}' and nothing on the board tells them apart, so the \
+             one that binds would depend on file order: make them one variant set (shared \
+             variant_of with [models.variant]), gate each by footprint_re, or narrow each \
+             value_re to its own suffix",
+            loose.join(", ")
+        )
+    })
+}
+
+/// A start-anchored pattern accepting `part` and every longer ordering code it
+/// begins: the corrected value a names-part refusal quotes. Measured: told only
+/// to "widen the pattern", a drafter returned the same `^BSS84-(7|13)-F$` twice.
+fn names_part_pattern(part: &str) -> String {
+    format!("(?i)^{}", regex::escape(part.trim()))
 }
 
 /// Whether some entry's `value_re` or `mpn_re` accepts `part` itself (an
@@ -5004,6 +5275,10 @@ fn check_reply_entry(entry: &ModelEntry, part: &str, kind_str: &str) -> Result<(
         bail!("reply for {part} has no model-error record (rule 0)");
     }
     supply_relative_rows(entry.source.as_ref())?;
+    let implausible = crate::plausibility::problems(entry);
+    if !implausible.is_empty() {
+        bail!("implausible values: {}", implausible.join(" | "));
+    }
     let refit = crate::param_names::diode_refit(entry).map(|[is, n, rs]| format!("diode is/n/rs are absent or over 10% off the cited VF rows, which fit is = {is:.4e}, n = {n:.4}, rs = {rs:.4}"));
     if let Some(why) = refit.or_else(|| crate::param_names::ron_miss(entry)) {
         bail!("{why}");
@@ -6903,6 +7178,147 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let (result, runs, _) = run_idle_fake(true);
         result.unwrap();
         assert_eq!(runs, 1);
+    }
+
+    /// Round 3: the file saved as MPSA42.pdf was the MPSA92 sheet (its page-1
+    /// text below, as pdftotext gives it), naming MPSA42 only as the
+    /// complementary NPN. A family sheet naming its part deep inside (JST XH,
+    /// S4B-XH-A) and an RTC sheet naming its ordering code are not judged wrong.
+    #[test]
+    fn a_datasheet_for_another_part_is_refused_before_drafting() {
+        let filler =
+            "Characteristics Kennwerte Collector-Emitter cutoff current IC = 1 mA\n".repeat(40);
+        let mpsa92 = format!(
+            "MPSA92\nMPSA92\nHigh Voltage PNP Transistors\nHochspannungs-PNP-Transistoren\nIC\n= - 500 mA\nhFE1 > 40\n\
+             Version 2017-11-21\n{filler}2 x 1.27\nDimensions - Maße [mm]\n\nRecommended complementary NPN transistors\n\
+             Empfohlene komplementäre NPN-Transistoren\n\nMPSA42\n\u{000c}"
+        );
+        let why = wrong_datasheet("MPSA42", &[], &mpsa92).expect("refused");
+        assert!(
+            why.contains("MPSA92") && why.contains("complementary"),
+            "{why}"
+        );
+        assert_eq!(wrong_datasheet("MPSA92", &[], &mpsa92), None);
+        assert_eq!(wrong_datasheet("MPSA92-AT", &[], &mpsa92), None);
+        // Another family's part is not judged by this sheet's title.
+        assert_eq!(wrong_datasheet("BC547", &[], &mpsa92), None);
+        // A family title with a wildcard covers its orderable codes.
+        let mcu = format!("STM32F103x8\nSTM32F103xB\nMedium-density performance line\n{filler}");
+        assert_eq!(wrong_datasheet("STM32F103C8T6", &[], &mcu), None);
+        let buck = format!("TPS6213x 3-V to 17-V 3-A Step-Down Converter\n{filler}");
+        assert_eq!(wrong_datasheet("TPS62130RGTR", &[], &buck), None);
+        // JST's XH family sheet names S4B-XH-A only in its ordering table.
+        let xh = format!("XH CONNECTOR\n2.5 mm pitch/Wire-to-Board connectors\n{filler}S4B-XH-A\n");
+        assert_eq!(wrong_datasheet("S4B-XH-A", &[], &xh), None);
+        let rtc = format!("PCF8563\nReal-time clock/calendar\n{filler}PCF8563BS/4 HVSON10\n");
+        assert_eq!(wrong_datasheet("PCF8563BS", &[], &rtc), None);
+        assert_eq!(wrong_datasheet("MPSA42", &[], PDF_TEXT_UNAVAILABLE), None);
+        assert_eq!(part_stem("24AA025UIDT").as_deref(), Some("24AA025"));
+        assert_eq!(stem_family("24AA025"), "24AA");
+    }
+
+    /// Round 3: five parts identified as register-map sensors came back as bare
+    /// specs no board binds; an identified sensor is drafted as a digital card.
+    #[test]
+    fn an_identified_sensor_is_drafted_as_a_card() {
+        assert_eq!(card_kind("i2c_sensor"), "digital");
+        assert_eq!(card_kind("spi_sensor"), "digital");
+        assert_eq!(card_kind("vreg"), "vreg");
+    }
+
+    /// Round 3: BSS84 returned the same `^BSS84-(7|13)-F$` draft three times.
+    /// The second identical failure stops the tier (for the ladder to escalate),
+    /// and the refusal quotes a corrected pattern.
+    #[test]
+    fn an_unchanged_failing_redraft_stops_the_tier() {
+        let mut calls = 0;
+        let err = validated_attempts(5, "p", Reply::Word, ("codex", false), |_| {
+            calls += 1;
+            Ok("either vreg or digital".into())
+        })
+        .unwrap_err();
+        assert_eq!(calls, 2, "{err:#}");
+        let rejected = err.downcast::<Rejected>().unwrap();
+        assert!(rejected.error.contains("unchanged"), "{}", rejected.error);
+        // A changed redraft is retried as before.
+        let mut calls = 0;
+        let word = validated_attempts(2, "p", Reply::Word, ("codex", false), |_| {
+            calls += 1;
+            Ok(["either vreg or digital", "vreg or digital", "vreg"][calls - 1].into())
+        });
+        assert_eq!((word.unwrap(), calls), ("vreg".to_string(), 3));
+        let pattern = regex::Regex::new(&names_part_pattern("BSS84")).unwrap();
+        let mut reel = vec![ModelEntry::default()];
+        reel[0].r#match.value_re = Some("^BSS84-(7|13)-F$".into());
+        assert!(!names_part(&reel, "BSS84"));
+        reel[0].r#match.value_re = Some(pattern.as_str().into());
+        assert!(names_part(&reel, "BSS84") && pattern.is_match("BSS84-7-F"));
+    }
+
+    /// Round 3: two package cards both drafted as `id = "max17048"`, and two
+    /// independent cards accepting one bare name.
+    #[test]
+    fn cards_a_board_cannot_tell_apart_are_refused() {
+        let card = |id: &str, re: &str| {
+            let mut e = ModelEntry {
+                id: id.into(),
+                ..ModelEntry::default()
+            };
+            e.r#match.value_re = Some(re.into());
+            e
+        };
+        let re = "(?i)^(?:MAX17048|MAX17048[GX]\\+(T10)?)$";
+        let dup = [card("max17048", re), card("max17048", re)];
+        let why = ambiguous_cards(&dup, "MAX17048").unwrap();
+        assert!(why.contains("share id 'max17048'"), "{why}");
+        let loose = [card("max17048_tdfn", re), card("max17048_wlp", re)];
+        assert!(ambiguous_cards(&loose, "MAX17048")
+            .unwrap()
+            .contains("file order"));
+        let mut gated = loose.clone();
+        gated[1].r#match.footprint_re = Some("(?i)WLP".into());
+        assert_eq!(ambiguous_cards(&gated, "MAX17048"), None);
+        let mut set = loose;
+        for e in &mut set {
+            e.variant_of = Some("max17048".into());
+        }
+        assert_eq!(ambiguous_cards(&set, "MAX17048"), None);
+        let own = [
+            card("mic_adj", "(?i)^MIC5205$"),
+            card("mic_3v3", "(?i)^MIC5205-3\\.3"),
+        ];
+        assert_eq!(ambiguous_cards(&own, "MIC5205"), None);
+    }
+
+    /// Round 3: codex's "Reconnecting... 5/5 (workspace routing discovery
+    /// failed)" exit is waited out; a refused request or a timeout is not.
+    #[test]
+    fn a_transient_backend_error_is_retried_after_a_wait() {
+        let outage = "codex exited with status exit status: 1: {\"type\":\"error\",\"message\":\"Reconnecting... 5/5 (workspace routing discovery failed)\"}";
+        let mut calls = 0;
+        let got = with_backoff(&[Duration::ZERO, Duration::ZERO], || {
+            calls += 1;
+            if calls < 3 {
+                Err(anyhow::anyhow!("{outage}"))
+            } else {
+                Ok("vreg")
+            }
+        });
+        assert_eq!((got.unwrap(), calls), ("vreg", 3));
+        let mut calls = 0;
+        let err = with_backoff(&[Duration::ZERO; 3], || -> Result<()> {
+            calls += 1;
+            Err(anyhow::anyhow!("{outage}"))
+        });
+        assert!(err.is_err() && calls == 4);
+        for permanent in [
+            anyhow::anyhow!("codex exited with status 1: model 'x' does not exist"),
+            anyhow::anyhow!("You've hit your usage limit; rate limit resets in 3 days"),
+            TimedOut("codex".into(), 900, None).into(),
+            IdleStalled("codex".into(), 300).into(),
+        ] {
+            assert!(!transient_backend_error(&permanent), "{permanent:#}");
+        }
     }
 
     #[test]

@@ -1518,6 +1518,66 @@ fn own_pinout(entry: &ModelEntry) -> Result<Option<&Pinout>, String> {
     Ok(Some(own))
 }
 
+/// How a sheet whose packages number their pads differently is carded: the
+/// prompts (P4, the pins section) and [`draft_pin_map_problems`] quote it.
+/// Measured: one 8-pin PDIP/SOIC map written for an EEPROM whose SOT-23-6
+/// numbers the same signals differently, so a SOT-23 board bound wrong pads.
+pub const PACKAGE_SPLIT_RULE: &str = "when the part number names no package and its packages \
+    number their pads differently, write one [[models]] card per numbering, each with its own \
+    [models.pins], its own [[models.source.pinout]] column, the package in its description and a \
+    [models.match] footprint_re naming that package's footprints (e.g. '(?i)SOT-?23' or \
+    '(?i)(SOIC|SO|DIP)-?8'); packages sharing one numbering share one card, and none takes \
+    another's map";
+
+/// Whether two pin-table columns number their pads differently: another pad
+/// set, or a pad both print under different names.
+fn numbering_differs(a: &Pinout, b: &Pinout) -> bool {
+    let plain = |s: &str| s.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
+    a.pins.len() != b.pins.len()
+        || a.pins.iter().any(|(pad, name)| {
+            b.pins
+                .get(pad)
+                .is_none_or(|other| plain(other) != plain(name))
+        })
+}
+
+/// The lead numbering a package standard fixes, for a sheet printing only lead
+/// letters on a drawn view: the one table the P7 prompt rule quotes and
+/// [`draft_pin_map_problems`] cites, keyed by [`crate::package::package_body`] name.
+pub const LEAD_STANDARDS: &[(&str, &str)] = &[
+    (
+        "SOT-23",
+        "JEDEC TO-236 top view: 1 lower-left, 2 lower-right, 3 top",
+    ),
+    (
+        "SOT-223",
+        "JEDEC TO-261 top view, leads down: 1, 2, 3 left to right, 4 the tab",
+    ),
+    (
+        "SOT-89",
+        "JEDEC TO-243 top view, leads down: 1, 2, 3 left to right, the tab joined to 2",
+    ),
+];
+
+/// The package body `package` spells and its [`LEAD_STANDARDS`] numbering.
+#[must_use]
+pub fn lead_standard(package: &str) -> Option<(&'static str, &'static str)> {
+    let body = crate::package::package_body(package)?.name;
+    LEAD_STANDARDS
+        .iter()
+        .copied()
+        .find(|(name, _)| *name == body)
+}
+
+/// The P7 table as prompt lines.
+#[must_use]
+pub fn lead_standards_guide() -> String {
+    let lines = LEAD_STANDARDS
+        .iter()
+        .map(|(p, s)| format!("        {p}: {s}"));
+    lines.collect::<Vec<_>>().join("\n")
+}
+
 /// The package a card's `[models.pins]` is read for.
 ///
 /// That is `[models.variant] package`, else its own `[[models.source.pinout]]` column's package. Kept on
@@ -1885,9 +1945,24 @@ pub fn adjustable_seed_problem(entry: &ModelEntry) -> Option<String> {
 /// A numbered pin map of three or more pads on an IC or discrete records the package it was read
 /// for, as that package's `[[models.source.pinout]]` column, so the checker can
 /// hold the map against it and the binder against the footprint.
+///
+/// A map keyed only by lead letters (G/S/D, B/C/E) on a package whose standard
+/// fixes the lead numbering ([`LEAD_STANDARDS`]) is numbered by it (prompt rule
+/// P7): a footprint numbers its pads, so letters bind nothing. Measured: a
+/// SOT-223 MOSFET drafted with `"G"`, `"S"`, `"D"` keys under a drawn top view.
 #[must_use]
 pub fn draft_pin_map_problems(entry: &ModelEntry) -> Vec<String> {
     use ComponentKind::{Connector, Ignore, Passive};
+    let lettered = entry.pins.len() >= 3
+        && entry
+            .pins
+            .keys()
+            .all(|k| !k.chars().any(|c| c.is_ascii_digit()));
+    let standard = pin_package(entry).and_then(lead_standard);
+    if let Some((package, standard)) = standard.filter(|_| lettered) {
+        let keys: Vec<&str> = entry.pins.keys().map(String::as_str).collect();
+        return vec![format!("[models.pins] is keyed by lead letters ({}) on a {package} part: a board footprint numbers its pads, so letters bind nothing. Number the pins by the package standard, {standard}, read against the datasheet's drawn view, and record `standard = \"{standard}\"` in the [[models.source.pinout]] column (its pins as printed), per P7", keys.join(", "))];
+    }
     let numbered = entry
         .pins
         .keys()
@@ -1900,11 +1975,24 @@ pub fn draft_pin_map_problems(entry: &ModelEntry) -> Vec<String> {
     let Ok(Some(own)) = own_pinout(entry) else {
         return vec!["[models.pins] numbers its pads but records no [[models.source.pinout]] column it is read from: add the column for the package this map is for (package = as printed, pins = the names it prints), so the map can be checked against that package and the board's footprint".into()];
     };
+    let package = &own.package;
+    let gated = entry.r#match.footprint_re.is_some()
+        || entry.variant.as_ref().is_some_and(|v| v.package.is_some());
+    let renumbered = pinouts(entry)
+        .iter()
+        .filter(|o| !std::ptr::eq(*o, own) && numbering_differs(o, own));
+    let others: Vec<&str> = renumbered.map(|o| o.package.as_str()).collect();
+    if !gated && !others.is_empty() {
+        return vec![format!(
+            "[models.pins] is read from '{package}', but the column(s) {} number their pads \
+             differently, and this card names no package a board could be held to: {PACKAGE_SPLIT_RULE}",
+            others.join(", ")
+        )];
+    }
     let unread: Vec<&str> = (own.pins.iter())
         .filter(|(_, name)| name.starts_with("unknown_pad_"))
         .map(|(pad, _)| pad.as_str())
         .collect();
-    let package = &own.package;
     let why = format!("[[models.source.pinout]] '{package}' records pads {} as unknown_pad_: a column records the names its pin table prints for this package; a pad left unread means the map was not read from this package's column", unread.join(", "));
     (!unread.is_empty()).then_some(why).into_iter().collect()
 }
@@ -3101,6 +3189,45 @@ pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
         let vague = card(&[("\"3\" = \"en\"", "\"3\" = \"unknown_pad_3\""), ("\"4\" = \"nc\"", "\"4\" = \"unknown_pad_4\"")]);
         assert!(unknown_pads_warning(&vague).is_some_and(|w| w.contains("2 of 5 pads") && w.contains("supply checks")));
         assert!(unknown_pads_warning(&card(&[])).is_none());
+    }
+
+    fn drafted(toml: &str) -> ModelEntry {
+        let db: crate::schema::DbFile = toml::from_str(toml).expect("a db file");
+        db.models.into_iter().next().expect("an entry")
+    }
+
+    /// Round 3: a SOT-223 MOSFET drafted with lead letters under a drawn top
+    /// view (ZXMP10A17G, "Pin Out - Top View" D/G/S). A package with no
+    /// standard in the table keeps its letters (P7).
+    #[test]
+    fn letter_keyed_pins_on_a_standard_package_are_numbered() {
+        let card = |package: &str| {
+            drafted(&format!("[[models]]\nid = \"x\"\nkind = \"pmos\"\ndescription = \"P-channel MOSFET in {package}\"\n[models.pins]\n\"G\" = \"gate\"\n\"S\" = \"source\"\n\"D\" = \"drain\"\n[models.source]\ntier = \"datasheet-derived\"\n[[models.source.pinout]]\npackage = \"{package}\"\npins = {{ \"G\" = \"G\", \"S\" = \"S\", \"D\" = \"D\" }}\n"))
+        };
+        let problems = draft_pin_map_problems(&card("SOT223 (Type DN)"));
+        assert!(
+            problems[0].contains("lead letters (D, G, S)") && problems[0].contains("JEDEC TO-261"),
+            "{problems:?}"
+        );
+        assert!(draft_pin_map_problems(&card("TO-247")).is_empty());
+        assert_eq!(lead_standard("SOT-23").map(|s| s.0), Some("SOT-23"));
+        assert_eq!(lead_standard("SOT-23-6"), None);
+    }
+
+    /// Round 3: one 8-pin PDIP/SOIC map for an EEPROM whose SOT-23-6 numbers
+    /// the same signals differently (24AA025UID Table 2-1). Gated by its
+    /// footprint, the card holds only boards of its own package.
+    #[test]
+    fn one_map_for_several_numberings_is_refused() {
+        let card = |gate: &str| {
+            drafted(&format!("[[models]]\nid = \"x\"\nkind = \"digital\"\ndescription = \"EEPROM in PDIP/SOIC\"\n[models.match]\nvalue_re = '(?i)^24AA025UID'\n{gate}\n[models.pins]\n\"1\" = \"a0\"\n\"2\" = \"a1\"\n\"3\" = \"a2\"\n\"4\" = \"vss\"\n\"5\" = \"sda\"\n\"6\" = \"scl\"\n\"7\" = \"wp\"\n\"8\" = \"vcc\"\n[models.source]\ntier = \"datasheet-derived\"\n[[models.source.pinout]]\npackage = \"PDIP/SOIC\"\npins = {{ \"1\" = \"A0\", \"2\" = \"A1\", \"3\" = \"A2\", \"4\" = \"VSS\", \"5\" = \"SDA\", \"6\" = \"SCL\", \"7\" = \"WP\", \"8\" = \"VCC\" }}\n[[models.source.pinout]]\npackage = \"SOT-23-6\"\npins = {{ \"1\" = \"SCL\", \"2\" = \"VSS\", \"3\" = \"SDA\", \"4\" = \"A1\", \"5\" = \"A0\", \"6\" = \"VCC\" }}\n"))
+        };
+        let problems = draft_pin_map_problems(&card(""));
+        assert!(
+            problems[0].contains("SOT-23-6") && problems[0].contains("footprint_re"),
+            "{problems:?}"
+        );
+        assert!(draft_pin_map_problems(&card("footprint_re = '(?i)(SOIC|SO|DIP)-?8'")).is_empty());
     }
 
     /// Also: a vout row wider than an accuracy band (either sign), a rating
