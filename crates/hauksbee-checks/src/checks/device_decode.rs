@@ -1606,7 +1606,7 @@ mod program_domain_tests {
 
     /// An MCP73831 linear charger (SOT-23-5: 1 STAT, 2 VSS, 3 VBAT, 4 VDD,
     /// 5 PROG) with `prog` as its PROG resistor to ground. The card's law is
-    /// I_REG = 1000 V / R_PROG with a 0.5 A programmed-operation ceiling.
+    /// `I_REG = 1000 V / R_PROG` with a 0.5 A programmed-operation ceiling.
     fn charger_board(value: &str, prog: &str) -> String {
         format!(
             r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
