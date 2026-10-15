@@ -166,7 +166,7 @@ fn cards(part: &str) -> Vec<Card> {
 
 /// Up to [`LIMIT`] library cards of `kind` for the datasheet's part class.
 ///
-/// The class is a [`PATTERNS`] entry its front page names; the closest
+/// The class is a `PATTERNS` entry its front page names; the closest
 /// descriptions come first (shared words weighted by rarity), never a card
 /// already matching `part`. Empty when the front page names no such class: the generic
 /// guidance covers the rest, and a loose likeness only adds noise.
