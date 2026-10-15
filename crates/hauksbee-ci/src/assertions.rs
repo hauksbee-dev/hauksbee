@@ -2536,7 +2536,7 @@ fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<S
 /// would always miss and silently drop a safety assert into its no-data branch.
 /// Ties break on the unit key so the reported unit is stable across `HashMap`
 /// iteration order.
-fn peak_for_ref(
+pub(crate) fn peak_for_ref(
     map: &std::collections::HashMap<String, f64>,
     reference: &str,
 ) -> Option<(String, f64)> {

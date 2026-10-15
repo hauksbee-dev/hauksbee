@@ -529,7 +529,7 @@ where
 /// A struct's serialized field names (renames applied, `#[serde(skip)]` fields
 /// absent), read off the JSON schema it already derives, so the swallowed-key
 /// hint above can never drift from the struct definition.
-fn struct_fields<T: JsonSchema>() -> Vec<String> {
+pub(crate) fn struct_fields<T: JsonSchema>() -> Vec<String> {
     schemars::schema_for!(T)
         .as_object()
         .and_then(|s| s.get("properties")?.as_object())

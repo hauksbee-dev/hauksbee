@@ -61,6 +61,21 @@ pub const SCAFFOLD_SPEC: &str = "# hauksbee:scaffold";
 /// (what `hauksbee-ci explain --json` prints), with no board involved.
 pub const CATALOG_SPEC: &str = "# hauksbee:catalog";
 
+/// The spec body that asks a [`DesignCheckRunner`] for the editor's JSON Schema of a
+/// spec, with the catalogue's words attached (`hauksbee-ci explain --schema`).
+pub const SCHEMA_SPEC: &str = "# hauksbee:schema";
+
+/// The first line of a spec body that asks a [`DesignCheckRunner`] to lint the TOML
+/// that follows it (`hauksbee-ci lint`); no board is involved.
+pub const LINT_SPEC: &str = "# hauksbee:lint";
+
+/// The first line of a spec body that asks a [`DesignCheckRunner`] to read one
+/// assertion's value off a single run (`hauksbee-ci measure`).
+///
+/// The line is the marker, a space and the assertion's index; the spec fragment
+/// follows as for a check. It is a TOML comment, so the staged spec stays valid.
+pub const MEASURE_SPEC: &str = "# hauksbee:measure";
+
 /// Everything a successful live-launch callback hands to the serving runtime.
 pub struct LiveLaunch {
     pub engine: Box<dyn Engine>,

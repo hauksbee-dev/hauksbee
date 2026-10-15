@@ -33,6 +33,8 @@ pub mod examples;
 pub mod hwtrace;
 pub mod init;
 pub mod integrate;
+pub mod lint;
+pub mod measure;
 pub mod progress;
 pub mod report;
 pub mod runner;

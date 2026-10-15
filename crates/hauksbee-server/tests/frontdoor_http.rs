@@ -310,6 +310,96 @@ async fn catalog_route_asks_the_runner_for_the_catalogue_marker() {
     assert!(resp.contains("\"catalog\":true"), "{resp}");
 }
 
+/// The editor's schema is a plain GET answered by the runner on the schema marker.
+#[tokio::test]
+async fn schema_route_asks_the_runner_for_the_schema_marker() {
+    let check: frontdoor::DesignCheckRunner = Arc::new(|_, spec| {
+        format!(
+            "{{\"schema\":{}}}",
+            spec == hauksbee_frontdoor_api::frontdoor::SCHEMA_SPEC
+        )
+    });
+    let addr = support::spawn_router(frontdoor::check_route_with_design(check)).await;
+    let resp = support::http(addr, &get_req("/api/ci/schema"), &[]).await;
+    assert!(
+        resp.contains("200 OK") && resp.contains("\"schema\":true"),
+        "{resp}"
+    );
+}
+
+/// Lint takes the buffer as JSON and hands the runner the marker line, then the buffer.
+#[tokio::test]
+async fn lint_route_hands_the_runner_the_buffer_after_the_marker() {
+    let check: frontdoor::DesignCheckRunner = Arc::new(|_, spec| {
+        let (head, body) = spec.split_once('\n').unwrap_or((spec, ""));
+        serde_json::json!({
+            "marker": head == hauksbee_frontdoor_api::frontdoor::LINT_SPEC,
+            "buffer": body,
+        })
+        .to_string()
+    });
+    let addr = support::spawn_router(frontdoor::check_route_with_design(check)).await;
+    let post = |body: &str| {
+        format!(
+            "POST /api/ci/lint HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+    };
+    let resp = support::http(
+        addr,
+        &post("{\"toml\":\"[[assert]]\\nkind=\\\"x\\\"\"}"),
+        &[],
+    )
+    .await;
+    assert!(
+        resp.contains("200 OK") && resp.contains("\"marker\":true"),
+        "{resp}"
+    );
+    assert!(
+        resp.contains("\"buffer\":\"[[assert]]\\nkind=\\\"x\\\"\""),
+        "{resp}"
+    );
+    let bad = support::http(addr, &post("{\"nope\":1}"), &[]).await;
+    assert!(
+        bad.contains("\"ok\":false") && bad.contains("`toml`"),
+        "{bad}"
+    );
+    let cross = "POST /api/ci/lint HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
+                 Sec-Fetch-Site: cross-site\r\nContent-Length: 2\r\n\r\n{}";
+    assert!(support::http(addr, cross, &[]).await.contains("403"));
+}
+
+/// A measurement is the check upload plus `?assertion=N`; the runner is told which
+/// assertion by the marker line and gets the spec after it.
+#[tokio::test]
+async fn measure_route_names_the_assertion_to_the_runner() {
+    let check: frontdoor::DesignCheckRunner = Arc::new(|upload, spec| {
+        let (head, body) = spec.split_once('\n').unwrap_or((spec, ""));
+        serde_json::json!({
+            "head": head, "spec": body, "board_len": upload.board.bytes.len(),
+        })
+        .to_string()
+    });
+    let addr = support::spawn_router(frontdoor::check_route_with_design(check)).await;
+    let boundary = "----hauksbee-measure-boundary";
+    let body = multipart_body(
+        boundary,
+        &[
+            ("board", "b.kicad_pcb", b"board"),
+            ("spec", "spec.toml", b"duration_ms = 10\n"),
+        ],
+    );
+    let req = multipart_post("/api/ci/measure?assertion=2", boundary, body.len());
+    let resp = support::http(addr, &req, &body).await;
+    assert!(resp.contains("200 OK"), "{resp:.200}");
+    assert!(resp.contains("\"head\":\"# hauksbee:measure 2\""), "{resp}");
+    assert!(resp.contains("\"spec\":\"duration_ms = 10\\n\""), "{resp}");
+    let req = multipart_post("/api/ci/measure", boundary, body.len());
+    let missing = support::http(addr, &req, &body).await;
+    assert!(missing.contains("?assertion=N"), "{missing}");
+}
+
 #[tokio::test]
 async fn live_launch_threads_optional_eagle_schematic_to_the_launcher() {
     let launch: frontdoor::DesignLiveLauncher = Arc::new(|upload| match upload.schematic {

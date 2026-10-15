@@ -343,7 +343,7 @@ fn push_spec_error(diags: &mut Vec<Diagnostic>, text: &str, err: &SpecError) {
 /// crate's real error surface (tested word by word), so classifying on their
 /// stable phrasing is deliberate: the taxonomy lives HERE, in one place,
 /// rather than threaded through every error construction site.
-fn classify_invalid(msg: &str) -> &'static str {
+pub(crate) fn classify_invalid(msg: &str) -> &'static str {
     if msg.contains("references unknown component") {
         "unknown-ref"
     } else if msg.contains("unknown assertion kind")
@@ -394,7 +394,7 @@ fn classify_invalid(msg: &str) -> &'static str {
 /// the trailing `...; did you mean: R1, R9?` of the net / reference suggesters.
 /// The punctuation that introduced the clause goes with it, so what is left
 /// reads as a finished sentence rather than trailing a stray `(` or `;`.
-fn split_did_you_mean(msg: &str) -> (String, Option<String>) {
+pub(crate) fn split_did_you_mean(msg: &str) -> (String, Option<String>) {
     let Some(start) = msg.find("did you mean") else {
         return (msg.to_string(), None);
     };
@@ -419,7 +419,7 @@ fn split_did_you_mean(msg: &str) -> (String, Option<String>) {
 
 /// For serde's "unknown field ..., expected ..." message: suggest the nearest
 /// expected field name, when one is within typo distance.
-fn unknown_field_fix(msg: &str) -> Option<String> {
+pub(crate) fn unknown_field_fix(msg: &str) -> Option<String> {
     // Message shape: unknown field `typo`, expected one of `a`, `b`, ...
     let mut ticks = msg.split('`');
     let _ = ticks.next()?; // "unknown field "

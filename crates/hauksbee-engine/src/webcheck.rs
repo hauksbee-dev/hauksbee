@@ -413,6 +413,20 @@ pub fn run_web_check_design(
     if spec_fragment.trim() == hauksbee_frontdoor_api::frontdoor::CATALOG_SPEC {
         return run_ci_json(&["explain".as_ref(), "--json".as_ref()]);
     }
+    // The editor's schema and lint need no board and no slot either.
+    if spec_fragment.trim() == hauksbee_frontdoor_api::frontdoor::SCHEMA_SPEC {
+        return run_ci_json(&["explain".as_ref(), "--schema".as_ref()]);
+    }
+    if let Some(body) = spec_fragment
+        .trim_start()
+        .strip_prefix(hauksbee_frontdoor_api::frontdoor::LINT_SPEC)
+    {
+        return lint_buffer(body.split_once('\n').map_or("", |(_, rest)| rest));
+    }
+    let measure = match measure_request(spec_fragment) {
+        Ok(m) => m,
+        Err(msg) => return err_json(&msg),
+    };
     // Reserve a concurrency slot on entry. At the cap, refuse fast rather than
     // pile another emulator-spawning child onto a loaded box. `_slot` lives to
     // the end of the function, and its `Drop` releases the slot on every exit
@@ -439,6 +453,12 @@ pub fn run_web_check_design(
     // spawning hauksbee-ci. The CLI keeps full power; only this path is leashed.
     if let Err(msg) = validate_web_limits(spec_fragment) {
         return err_json(&msg);
+    }
+
+    // A reading already taken for these exact inputs is replayed, not re-run.
+    let cache_key = measure.and_then(|index| measure_cache_key(&upload, spec_fragment, index));
+    if let Some(hit) = cache_key.as_deref().and_then(measure_cache_get) {
+        return hit;
     }
 
     // A fresh unpredictable staging dir (created 0700 with O_EXCL semantics),
@@ -518,13 +538,147 @@ pub fn run_web_check_design(
         let board_path = dir.join(&board_file);
         return run_ci_json(&["init".as_ref(), board_path.as_os_str(), "--json".as_ref()]);
     }
+    if let Some(index) = measure {
+        let index = index.to_string();
+        let reading = run_ci_json_within(
+            &[
+                "measure".as_ref(),
+                spec_path.as_os_str(),
+                "--assertion".as_ref(),
+                index.as_ref(),
+            ],
+            MEASURE_TIMEOUT,
+        );
+        if let Some(key) = cache_key {
+            measure_cache_put(key, &reading);
+        }
+        return reading;
+    }
     run_ci_json(&["run".as_ref(), spec_path.as_os_str(), "--json".as_ref()])
+}
+
+/// How long a measurement may run before it is stopped: it is one nominal run, so a
+/// minute of waiting means something is wrong.
+const MEASURE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Lint the editor's buffer: write it to a private file and relay `hauksbee-ci lint`.
+fn lint_buffer(toml: &str) -> String {
+    let dir = match tempfile::TempDir::new() {
+        Ok(d) => d,
+        Err(e) => return err_json(&format!("could not create a working dir: {e}")),
+    };
+    let path = dir.path().join("buffer.toml");
+    if let Err(e) = std::fs::write(&path, toml) {
+        return err_json(&format!("could not stage the buffer: {e}"));
+    }
+    run_ci_json(&["lint".as_ref(), path.as_os_str()])
+}
+
+/// The assertion index a measurement is for: `# hauksbee:measure N` on the first line.
+/// `Ok(None)` when the fragment is not a measurement request.
+fn measure_request(spec_fragment: &str) -> Result<Option<usize>, String> {
+    let Some(rest) = spec_fragment
+        .trim_start()
+        .strip_prefix(hauksbee_frontdoor_api::frontdoor::MEASURE_SPEC)
+    else {
+        return Ok(None);
+    };
+    let first = rest.lines().next().unwrap_or("").trim();
+    first.parse().map(Some).map_err(|_| {
+        format!("a measurement names the assertion to read, `# hauksbee:measure N`; got '{first}'")
+    })
+}
+
+/// How many readings are kept; a full cache is emptied, not grown.
+const MEASURE_CACHE_CAP: usize = 64;
+
+type ReadingCache = std::sync::Mutex<std::collections::HashMap<String, String>>;
+
+fn measure_cache() -> &'static ReadingCache {
+    static CACHE: std::sync::OnceLock<ReadingCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// What a reading depends on, hashed: this build, every uploaded byte, the spec
+/// without its assertions, and the one assertion without its bounds (a reading
+/// never depends on a bound, so editing one must not re-run the simulation).
+fn measure_cache_key(
+    upload: &hauksbee_frontdoor_api::frontdoor::DesignUpload,
+    spec_fragment: &str,
+    index: usize,
+) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let mut table = toml::from_str::<toml::Table>(spec_fragment).ok()?;
+    let mut chosen = table
+        .remove("assert")?
+        .as_array()?
+        .get(index)?
+        .as_table()?
+        .clone();
+    for bound in ["min", "max", "amps", "freq_hz", "min_toggles", "tolerance"] {
+        chosen.remove(bound);
+    }
+    let mut hash = Sha256::new();
+    hash.update(env!("CARGO_PKG_VERSION").as_bytes());
+    let files = std::iter::once(&upload.board)
+        .chain(upload.firmware.iter())
+        .chain(upload.schematic.iter())
+        .chain(upload.bom.iter())
+        .chain(upload.placement.iter())
+        .chain(upload.variant.iter())
+        .chain(upload.asbuilt.iter())
+        .chain(upload.models.iter());
+    for file in files {
+        hash.update(b"\0file\0");
+        hash.update(file.name.as_bytes());
+        hash.update(b"\0");
+        hash.update(&file.bytes);
+    }
+    hash.update(b"\0spec\0");
+    hash.update(table.to_string().as_bytes());
+    hash.update(b"\0assert\0");
+    hash.update(chosen.to_string().as_bytes());
+    Some(crate::run_manifest::bytes_to_hex(&hash.finalize()))
+}
+
+/// A cached reading, marked `cached` with the time the lookup took.
+fn measure_cache_get(key: &str) -> Option<String> {
+    let started = std::time::Instant::now();
+    let stored = measure_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(key)
+        .cloned()?;
+    let mut reading: serde_json::Value = serde_json::from_str(&stored).ok()?;
+    reading["cached"] = true.into();
+    reading["t_ms"] = (started.elapsed().as_secs_f64() * 1000.0).into();
+    Some(reading.to_string())
+}
+
+/// Keep a successful reading; a refusal is never cached (the inputs may be fixed
+/// without changing a byte that the key sees, such as an emulator coming up).
+fn measure_cache_put(key: String, reading: &str) {
+    if !reading.contains("\"ok\":true") {
+        return;
+    }
+    let mut cache = measure_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if cache.len() >= MEASURE_CACHE_CAP {
+        cache.clear();
+    }
+    cache.insert(key, reading.to_string());
 }
 
 /// Spawn `hauksbee-ci <args>` (which prints one JSON object), drain it under
 /// the check deadline, and relay that object, or an `{"ok":false,...}` that
 /// carries the real failure.
 fn run_ci_json(args: &[&std::ffi::OsStr]) -> String {
+    run_ci_json_within(args, CHECK_TIMEOUT)
+}
+
+/// [`run_ci_json`] with its own deadline.
+fn run_ci_json_within(args: &[&std::ffi::OsStr], timeout: std::time::Duration) -> String {
     let bin = ci_binary();
     let child = std::process::Command::new(&bin)
         .args(args)
@@ -577,12 +731,12 @@ fn run_ci_json(args: &[&std::ffi::OsStr]) -> String {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
-                if started.elapsed() > CHECK_TIMEOUT {
+                if started.elapsed() > timeout {
                     stop_child(&mut child);
                     return err_json(&format!(
                         "the check run exceeded {}s and was stopped; shorten duration_ms \
                          or run it from the CLI: hauksbee-ci run <spec>",
-                        CHECK_TIMEOUT.as_secs()
+                        timeout.as_secs()
                     ));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
@@ -1081,5 +1235,102 @@ kind = "no_faults"
             true,
             "{json}"
         );
+    }
+
+    fn measure_upload() -> hauksbee_frontdoor_api::frontdoor::DesignUpload {
+        hauksbee_frontdoor_api::frontdoor::DesignUpload {
+            board: hauksbee_frontdoor_api::frontdoor::NamedUpload {
+                name: "b.kicad_pcb".into(),
+                bytes: b"board".to_vec(),
+            },
+            firmware: None,
+            schematic: None,
+            bom: None,
+            placement: None,
+            variant: None,
+            asbuilt: None,
+            models: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_measure_request_names_its_assertion() {
+        assert_eq!(measure_request("name = \"x\"\n"), Ok(None));
+        assert_eq!(
+            measure_request("# hauksbee:measure 3\n[[assert]]"),
+            Ok(Some(3))
+        );
+        assert!(measure_request("# hauksbee:measure\n").is_err());
+        assert!(measure_request("# hauksbee:measure -1\n").is_err());
+    }
+
+    /// A reading depends on everything but the bounds: editing a bound must hit the
+    /// cache, editing the net, the circuit or an uploaded byte must not.
+    #[test]
+    fn the_measure_cache_key_ignores_bounds_and_nothing_else() {
+        let base = "# hauksbee:measure 0\nduration_ms = 10\n\n[[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = 4.0\n";
+        let key = |upload: &hauksbee_frontdoor_api::frontdoor::DesignUpload, fragment: &str| {
+            measure_cache_key(upload, fragment, 0)
+        };
+        let upload = measure_upload();
+        let first = key(&upload, base).expect("a key");
+        assert_eq!(
+            Some(first.clone()),
+            key(&upload, &base.replace("4.0", "4.5"))
+        );
+        assert_eq!(
+            Some(first.clone()),
+            key(&upload, &base.replace("min = 4.0", "min = 4.0\nmax = 5.5"))
+        );
+        assert_ne!(
+            Some(first.clone()),
+            key(&upload, &base.replace("+5V", "+3V3"))
+        );
+        assert_ne!(Some(first.clone()), key(&upload, &base.replace("10", "20")));
+        let mut other = measure_upload();
+        other.board.bytes = b"board2".to_vec();
+        assert_ne!(Some(first), key(&other, base));
+        assert_eq!(measure_cache_key(&upload, base, 5), None);
+    }
+
+    /// The second identical measurement is answered from the cache without spawning
+    /// the CI binary, and says so; a refusal is never kept.
+    #[cfg(unix)]
+    #[test]
+    fn a_repeated_measurement_is_replayed_from_the_cache() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _serial = serial_guard();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let counter = dir.path().join("runs");
+        let stub = dir.path().join("hauksbee-ci");
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/bin/sh\necho x >> '{}'\n\
+                 echo '{{\"ok\":true,\"value\":5.0,\"cached\":false,\"t_ms\":900.0}}'\n",
+                counter.display()
+            ),
+        )
+        .expect("write stub");
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::env::set_var("HAUKSBEE_CI_BIN", &stub);
+        // A board name no other test uses, so the process-wide cache cannot already hold it.
+        let mut upload = measure_upload();
+        upload.board.name = "measure-cache-test.kicad_pcb".into();
+        let fragment = "# hauksbee:measure 0\nduration_ms = 10\n\n[[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\n";
+        let first = run_web_check_design(upload.clone(), fragment);
+        let again = run_web_check_design(upload, &format!("{fragment}min = 4.5\n"));
+        std::env::remove_var("HAUKSBEE_CI_BIN");
+        let first: serde_json::Value = serde_json::from_str(&first).unwrap();
+        let again: serde_json::Value = serde_json::from_str(&again).unwrap();
+        assert_eq!(first["cached"], false, "{first}");
+        assert_eq!(again["cached"], true, "{again}");
+        assert_eq!(again["value"], 5.0);
+        assert!(again["t_ms"].as_f64().unwrap() < 50.0, "{again}");
+        assert_eq!(std::fs::read_to_string(counter).unwrap().lines().count(), 1);
+
+        measure_cache_put("refusal".into(), "{\"ok\":false,\"error\":\"no\"}");
+        assert!(measure_cache_get("refusal").is_none());
     }
 }
