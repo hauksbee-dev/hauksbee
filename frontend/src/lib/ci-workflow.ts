@@ -68,7 +68,6 @@ jobs:
         with:
           hauksbee-ref: ${commit}
           hauksbee-version: ${tag}
-          hauksbee-token: \${{ secrets.HAUKSBEE_BETA_TOKEN }}
           spec: ci/${specStem}.toml
           junit: hauksbee-ci-results.xml
           publish-report: \${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}

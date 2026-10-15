@@ -1227,11 +1227,21 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         )
 
         frontend_workflow = (ROOT / "frontend/src/lib/ci-workflow.ts").read_text()
+        # The generator renders one commit into both the Action reference and
+        # the ref input, and only ever receives the build's release commit
+        # (never a tag), refusing to export when it is not a full commit.
         self.assertIn(
-            "uses: ${ACTION_REPOSITORY}/integrations/github-action@${RELEASE_COMMIT}",
+            "uses: ${ACTION_REPOSITORY}/integrations/github-action@${commit}",
             frontend_workflow,
         )
+        self.assertIn("hauksbee-ref: ${commit}", frontend_workflow)
+        self.assertIn(
+            "renderWorkflow(specStem, RELEASE_COMMIT, RELEASE_TAG)", frontend_workflow
+        )
+        self.assertIn("/^[0-9a-f]{40}$/.test(RELEASE_COMMIT)", frontend_workflow)
         self.assertNotIn("PRIVATE_TOKEN_SECRET", frontend_workflow)
+        self.assertNotIn("secrets.", frontend_workflow)
+        self.assertNotIn("hauksbee-token", frontend_workflow)
         version = (ROOT / "frontend/src/lib/version.ts").read_text()
         self.assertNotIn("secrets.HAUKSBEE_READ_TOKEN", version)
 

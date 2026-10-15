@@ -240,10 +240,8 @@ export function SpecPane({
             </button>
           )}
           <div className="text-[12px] mt-2 leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
-            The workflow reads one repository secret. Add{' '}
-            <code className="hb-inline">HAUKSBEE_BETA_TOKEN</code> in Settings, a GitHub token
-            with read access to the Hauksbee beta repository; the action stops on its first
-            step without it.
+            The workflow needs no secret or token: the Action and its release assets are public
+            and pinned to one commit.
           </div>
         </div>
       )}

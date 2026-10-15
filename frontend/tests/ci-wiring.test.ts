@@ -111,11 +111,11 @@ describe('frontend release gates', () => {
     expect(generated).toContain(
       'uses: hauksbee-dev/hauksbee/integrations/github-action@0123456789abcdef0123456789abcdef01234567',
     )
-    // The beta repository is private, so the action refuses to start without a
-    // credential. Exactly one secret may appear, and it is the one the setup
-    // panel and the Action README tell the user to create.
-    expect(generated).toContain('hauksbee-token: ${{ secrets.HAUKSBEE_BETA_TOKEN }}')
-    expect(generated.match(/secrets\./g)).toHaveLength(1)
+    // The Action and its release assets are public, so the workflow carries
+    // no credential at all; the Action falls back to the calling workflow's
+    // own token for downloads.
+    expect(generated).not.toContain('secrets.')
+    expect(generated).not.toContain('hauksbee-token')
     expect(generated).toContain('hauksbee-ref: 0123456789abcdef0123456789abcdef01234567')
     expect(generated).toContain('hauksbee-version: v0.1.0-beta.6')
     expect(generated).not.toContain('ref: v0.1.0-beta.6')
