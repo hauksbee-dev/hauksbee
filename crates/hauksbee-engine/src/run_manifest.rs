@@ -863,7 +863,9 @@ pub fn compare_outcomes(recorded: &Outcome, observed: &Outcome) -> Vec<String> {
     lines
 }
 
-/// The verdict word for a finished run. `hauksbee` exits 2 for findings and 1
+/// The verdict word for a finished run.
+///
+/// `hauksbee` exits 2 for findings and 1
 /// for bad input; `hauksbee-ci` exits 1 for a red assertion and 2 for a spec
 /// error; both use 3 for a run that cannot be trusted. Gating findings under a
 /// non-strict exit 0 are still a failing verdict.
@@ -1240,10 +1242,10 @@ pub(crate) fn bytes_to_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    fn request(board: &Path, argument: String) -> ManifestRequest {
+    fn request(board: &Path, argument: &str) -> ManifestRequest {
         ManifestRequest {
             tool: ToolIdentity::new("hauksbee", "0.1.0", Some("0123456789ab")),
-            command: vec!["hauksbee".into(), "run".into(), argument.clone()],
+            command: vec!["hauksbee".into(), "run".into(), argument.into()],
             options: BTreeMap::from([("board".into(), serde_json::json!(argument))]),
             inputs: vec![ManifestInput::new("board", board)],
             feature_flags: Vec::new(),
@@ -1259,7 +1261,7 @@ mod tests {
         let root = fs::canonicalize(first.path()).unwrap();
         let arg = root.join("sub/board.kicad_pcb").display().to_string();
 
-        let manifest = RunManifest::capture_at(request(&board, arg), first.path()).unwrap();
+        let manifest = RunManifest::capture_at(request(&board, &arg), first.path()).unwrap();
         assert_eq!(manifest.inputs[0].path, "sub/board.kicad_pcb");
         assert_eq!(manifest.invocation.argv[2], "sub/board.kicad_pcb");
         assert_eq!(
@@ -1293,7 +1295,7 @@ mod tests {
         // The root does not contain the board, so its path stays absolute, as in
         // every manifest written before schema 2.
         let mut old = RunManifest::capture_at(
-            request(&board, board.display().to_string()),
+            request(&board, &board.display().to_string()),
             elsewhere.path(),
         )
         .unwrap();
@@ -1320,7 +1322,7 @@ mod tests {
         let board = dir.path().join("board.kicad_pcb");
         fs::write(&board, "bytes\n").unwrap();
         let manifest =
-            RunManifest::capture_at(request(&board, board.display().to_string()), dir.path())
+            RunManifest::capture_at(request(&board, &board.display().to_string()), dir.path())
                 .unwrap();
         let file = dir.path().join("m.json");
         manifest.write_new(&file).unwrap();

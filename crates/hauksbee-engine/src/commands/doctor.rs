@@ -27,7 +27,7 @@ struct Backend {
 }
 
 impl Backend {
-    fn new(
+    const fn new(
         name: &'static str,
         status: &'static str,
         detail: String,
@@ -169,8 +169,10 @@ pub fn backends_json() -> serde_json::Value {
     serde_json::json!({ "tool": tool, "backends": arr })
 }
 
-/// The installed backends a run can use, with version and binary hash, as the
-/// run manifest records them. Same discovery as [`run`]; the extraction row is
+/// The installed backends a run can use, with version and binary hash.
+///
+/// This is what the
+/// run manifest records. Same discovery as [`run`]; the extraction row is
 /// left out (it names a service, not a tool whose bytes decide a result). The
 /// built-in AVR backend is `simavr` at its source commit.
 #[must_use]
@@ -295,7 +297,7 @@ fn probe_qemu(kind: QemuKind) -> Backend {
     }
 }
 
-/// Renode (STM32 / nRF52 / SiFive RISC-V, i.e. ARM Cortex-M and RISC-V).
+/// Renode, the ARM Cortex-M and RISC-V firmware co-sim.
 fn probe_renode() -> Backend {
     const SUMMARY: &str = "STM32 / nRF52 / RISC-V firmware co-sim";
     #[cfg(feature = "renode")]
