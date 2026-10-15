@@ -5743,12 +5743,11 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
     #[test]
     fn a_source_table_opened_by_a_pinout_still_gets_its_tier() {
         let ex = FORMAT_EXAMPLES[0];
-        let bare: String = ex
+        let kept = ex
             .card
             .lines()
-            .filter(|l| !l.starts_with("tier = ") && !l.starts_with("validation = "))
-            .map(|l| format!("{l}\n"))
-            .collect();
+            .filter(|l| !l.starts_with("tier = ") && !l.starts_with("validation = "));
+        let bare = kept.collect::<Vec<_>>().join("\n");
         let reply = Reply::Model {
             part: ex.part,
             kind: ex.kind,
