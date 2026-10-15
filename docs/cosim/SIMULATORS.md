@@ -51,7 +51,11 @@ separately installed binary is absent, rather than failing.
 
 ## Quick install
 
-hauksbee can fetch either external backend itself. No shell script is needed:
+hauksbee can fetch either external backend itself. In the app, the Environment
+page shows what is found and has an Install button where one applies;
+`hauksbee doctor --backends` prints the same discovery from a terminal (see
+[Verifying the install](#verifying-the-install)). From a terminal no shell
+script is needed:
 
 ```
 hauksbee install esp-qemu          # prompts; add --yes for CI
@@ -78,11 +82,6 @@ fetched, or carries no line for that asset, the installer says so on stderr and
 proceeds **without** hash verification, leaving TLS and the esp32-machine check
 as the gates. So do not read "verifies the sha256" as unconditional: an offline
 or rate-limited GitHub degrades it, loudly, rather than failing the install.
-
-On an ESP32-family board, `hauksbee run --firmware` offers the same install
-inline when it finds the emulator missing on an interactive terminal (declining
-keeps the loud install-guidance error). Every "not found" error from either
-backend names its `hauksbee install` subcommand, so the fix is in the message.
 
 To install everything at once (Renode + QEMU, optionally AVR), run:
 
@@ -226,37 +225,14 @@ conventional paths:
 
 ## Verifying the install
 
-Ask the binary itself. `hauksbee doctor --backends` runs the engine's own
-`find_qemu` / `find_renode`, so it can never disagree with what a co-sim would
-resolve, and prints one tab-separated `NAME<TAB>STATUS<TAB>PATH-OR-HINT` line
-per backend (add `--json` for machine consumption). Paths and versions depend
-on the host; the output shape is:
-
-```
-$ hauksbee doctor --backends
-hauksbee co-sim backends (resolved by the engine's own discovery)
-    avr           ATmega / ATtiny firmware co-sim
-avr	disabled	not in this build (the permissive, Apache-2.0 download drops the GPL simavr backend). For AVR co-sim, build from source with libsimavr (scripts/install-sims.sh --avr)
-    qemu-xtensa   ESP32 / ESP32-S3 firmware co-sim (Espressif QEMU fork)
-qemu-xtensa	ok	<path-to-qemu-system-xtensa>
-    qemu-riscv32  ESP32-C3 firmware co-sim (Espressif QEMU fork)
-qemu-riscv32	ok	<path-to-qemu-system-riscv32>
-    renode        STM32 / nRF52840 / RISC-V firmware co-sim
-renode	ok	<path-to-renode>
-```
-
-That `avr` line is the permissive shape's; a source build with `scripts/install-sims.sh --avr` reports `avr	builtin	simavr linked into this binary` instead.
-
-The indented lines are the human header on stderr; the flush lines are the
-machine-readable report on stdout. A backend that resolves to mainline QEMU is
-reported absent here exactly as the co-sim rejects it. Anything missing is one
-command away: `hauksbee install renode` or `hauksbee install esp-qemu`.
-
-The shell script has an equivalent check mode:
-
-```
-scripts/install-sims.sh --check
-```
+Ask the binary itself. `hauksbee doctor --backends` (or the Environment page in
+the app) runs the engine's own `find_qemu` / `find_renode`, so it can never
+disagree with what a co-sim would resolve, and prints one tab-separated
+`NAME<TAB>STATUS<TAB>PATH-OR-HINT` line per backend (add `--json` for machine
+consumption). A backend that resolves to mainline QEMU is reported absent
+exactly as the co-sim rejects it, and anything missing is one command away:
+`hauksbee install renode` or `hauksbee install esp-qemu`. The shell script has
+an equivalent check mode, `scripts/install-sims.sh --check`.
 
 For QEMU specifically, confirm the Espressif fork is in place:
 
@@ -279,25 +255,11 @@ cargo test -p hauksbee-engine --test esp32_qemu_cosim  -- --nocapture
 
 ## macOS Gatekeeper note
 
-The Renode DMG is not notarized by default. After copying the app bundle, the
-installer runs:
-
-```
-xattr -dr com.apple.quarantine ~/renode-portable/Renode.app
-```
-
-Without this step, Gatekeeper blocks the binary on first launch with "cannot
-be opened because the developer cannot be verified." The quarantine flag is a
-per-file extended attribute. Removing it does not disable system-wide
-Gatekeeper.
-
-If you installed Renode yourself and hauksbee hangs or fails to spawn it, run
-the `xattr` command above manually.
-
-The installer also uses `ditto` (not `cp -R`) to copy the app bundle.
-`ditto` preserves extended attributes and the symlinks inside the bundle
-that `cp -R` silently breaks on macOS (this causes a dylib permission error
-at runtime).
+The Renode DMG is not notarized. The installers clear the quarantine flag
+themselves (`xattr -dr com.apple.quarantine ~/renode-portable/Renode.app`); the
+manual steps below include it too. If you installed Renode some other way and
+hauksbee hangs or fails to spawn it, run that command by hand. It removes a
+per-file attribute and does not disable system-wide Gatekeeper.
 
 ---
 
@@ -321,6 +283,9 @@ If you prefer not to run the script, the steps below are what it does.
    hdiutil detach /tmp/renode_mnt
    xattr -dr com.apple.quarantine ~/renode-portable/Renode.app
    ```
+
+   Use `ditto`, not `cp -R`: `cp -R` silently breaks the symlinks inside the bundle
+   on macOS (a dylib permission error at runtime).
 
 3. Verify: `~/renode-portable/Renode.app/Contents/MacOS/renode --version`
 

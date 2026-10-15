@@ -234,11 +234,12 @@ are in the [board-as-code README](../../examples/board-as-code/README.md).
 
 | Spec | Demonstrates | Verdict |
 |---|---|---|
-| [`blinky.toml`](../../crates/hauksbee-ci/examples/blinky.toml) | Rail + UART + blink + no-faults assertions (the template spec) | **GREEN** |
-| [`olimex_wifi_burst_transient.toml`](../../examples/ci-specs/olimex_wifi_burst_transient.toml) | Scenario/transient: a `rail_window` assertion riding an ESP32 WiFi burst | **GREEN** |
-| [`boot_gate_pass`](../../crates/hauksbee-ci/examples/boot_gate_pass.toml) / [`fail`](../../crates/hauksbee-ci/examples/boot_gate_fail.toml) | `boot_coverage`: does the firmware drive a Hi-Z gate in time? | **GREEN** / **RED** |
-| [`watchy_v15_display_res`](../../crates/hauksbee-ci/examples/watchy_v15_display_res.toml) / [`undriven`](../../crates/hauksbee-ci/examples/watchy_v15_display_res_undriven.toml) † | `boot_coverage` on the real Watchy v1.5 e-paper RES# (ESP32 QEMU) | **GREEN** / **RED** |
-| [`pic_programmer_schematic.toml`](../../crates/hauksbee-ci/examples/pic_programmer_schematic.toml) † | Schematic-stage CI on a `.kicad_sch` (no PCB yet) | **GREEN** |
+| [`blinky.toml`](../../crates/hauksbee-ci/examples/blinky.toml) | Rail + UART + blink + no-faults assertions (the template spec) | **GREEN** (exit 0) |
+| [`olimex_wifi_burst_transient.toml`](../../examples/ci-specs/olimex_wifi_burst_transient.toml) | Scenario/transient: a `rail_window` assertion riding an ESP32 WiFi burst | **GREEN** (exit 0) |
+| [`boot_gate_pass`](../../crates/hauksbee-ci/examples/boot_gate_pass.toml) / [`fail`](../../crates/hauksbee-ci/examples/boot_gate_fail.toml) | `boot_coverage`: does the firmware drive a Hi-Z gate in time? | **GREEN** (exit 0) / **RED** (exit 1) |
+| [`watchy_v15_display_res`](../../crates/hauksbee-ci/examples/watchy_v15_display_res.toml) / [`undriven`](../../crates/hauksbee-ci/examples/watchy_v15_display_res_undriven.toml) † | `boot_coverage` on the real Watchy v1.5 e-paper RES# (ESP32 QEMU) | **GREEN** (exit 0) / **RED** (exit 1) |
+| [`pic_programmer_schematic.toml`](../../crates/hauksbee-ci/examples/pic_programmer_schematic.toml) † | Schematic-stage CI on a `.kicad_sch` (no PCB yet) | **GREEN** (exit 0) |
+| [`watchy.toml`](../../crates/hauksbee-ci/examples/watchy.toml) | The first spec on a fresh clone: a vendored fabricated board whose unmodelled parts make the run refuse | **INVALID** (exit 3) |
 
 † These three specs require the external developer board corpus and the
 Espressif QEMU backend. They are not included in the public release bundle, and
