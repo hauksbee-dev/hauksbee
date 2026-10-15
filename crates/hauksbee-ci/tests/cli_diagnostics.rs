@@ -6,7 +6,7 @@
 //! optional, a C library's opinion leaking through unattributed, findings in
 //! phase order rather than file order, and a frequency computed from one edge.
 
-use crate::support::{bin, blinky_board, repo_root, stderr, stdout};
+use crate::support::{bin, blinky_board, stderr, stdout};
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -223,13 +223,14 @@ fn check_help_admits_that_a_toml_level_error_reports_alone() {
 
 // L10: two toggles is one period and one is no period at all, but the
 // arithmetic happily divided anyway and reported "~0.50 Hz from 1 toggles".
+#[cfg(feature = "avr")] // boots the AVR demo firmware
 #[test]
 fn a_frequency_is_refused_when_there_are_too_few_toggles_to_measure_one() {
     // The demo firmware boots but the run is 5 ms, far under its 100 ms blink
     // half-period, so D13 never completes an edge pair. (With no firmware at
     // all the toggle is not exercised and the run is INVALID instead; that is
     // covered by `no_firmware_spec`.)
-    let hex = repo_root().join("testdata/firmware/demo/demo.hex");
+    let hex = crate::support::repo_root().join("testdata/firmware/demo/demo.hex");
     let dir = dir_with_spec(&format!(
         "firmware = '{}'\nmcu = \"atmega328p\"\n\n[[supply]]\nnet = \"+5V\"\nkind = \"bench\"\nvolts = 5.0\n\n\
          [[assert]]\nkind = \"toggle\"\nnet = \"D13\"\nfreq_hz = 5.0\n",
