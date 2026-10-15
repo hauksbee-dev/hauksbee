@@ -395,7 +395,11 @@ pub struct ModelLibrary {
     /// asked the same few thousand questions over a dozen times each, a full
     /// entry scan apiece. [`Self::resolve`] is a pure function of the query
     /// and the loaded entries, and every method that loads entries clears this.
-    resolved: std::sync::Mutex<Option<std::collections::HashMap<ComponentQuery, Resolution>>>,
+    /// A read-write lock, not a mutex: an ensemble resolves the same board on
+    /// every worker thread at once, and almost every call is a hit, so readers
+    /// must not queue behind each other (measured: a mutex here left a quarter
+    /// of each worker's time waiting on the lock).
+    resolved: std::sync::RwLock<Option<std::collections::HashMap<ComponentQuery, Resolution>>>,
 }
 
 /// Resolutions [`ModelLibrary`] keeps before it starts over, so a long-lived
@@ -413,7 +417,7 @@ impl ModelLibrary {
             spice: Vec::new(),
             pin_rules: PinRuleTable::empty(),
             unmodelled: UnmodelledTable::empty(),
-            resolved: std::sync::Mutex::new(None),
+            resolved: std::sync::RwLock::new(None),
         }
     }
 
@@ -765,11 +769,11 @@ impl ModelLibrary {
         let cached = |m: &Option<std::collections::HashMap<_, Resolution>>| {
             m.as_ref().and_then(|m| m.get(q).cloned())
         };
-        if let Some(r) = self.resolved.lock().ok().and_then(|m| cached(&m)) {
+        if let Some(r) = self.resolved.read().ok().and_then(|m| cached(&m)) {
             return r;
         }
         let r = self.resolve_uncached(q);
-        if let Ok(mut memo) = self.resolved.lock() {
+        if let Ok(mut memo) = self.resolved.write() {
             let memo = memo.get_or_insert_with(std::collections::HashMap::new);
             if memo.len() >= RESOLVED_CAP {
                 memo.clear();

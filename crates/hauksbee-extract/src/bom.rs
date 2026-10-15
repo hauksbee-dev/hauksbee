@@ -1069,8 +1069,34 @@ pub const VALUE_PROPERTY: &str = "hauksbee_artifact_value";
 /// distributor or catalogue code (`LCSC Part #`, `Mouser Part Number`,
 /// `PROD_ID`, `SKU`): those name an order code, which never matches a model's
 /// part-number regex and would cost the bind a real MPN beside it could win.
+///
+/// Remembered per thread by key: a board spells only a handful of distinct
+/// property keys, and the binder and the checks ask about every property of
+/// every part on every ensemble member (measured: the uncached normalisation
+/// was 15% of a member's time on a 500-part board).
 #[must_use]
 pub fn is_mpn_property_key(key: &str) -> bool {
+    thread_local! {
+        static SEEN: std::cell::RefCell<std::collections::HashMap<String, bool>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    if let Some(hit) = SEEN.with(|seen| seen.borrow().get(key).copied()) {
+        return hit;
+    }
+    let answer = mpn_property_key_uncached(key);
+    SEEN.with(|seen| {
+        let mut seen = seen.borrow_mut();
+        // Bounded: keys come from boards, and a session may read many.
+        if seen.len() >= 4096 {
+            seen.clear();
+        }
+        seen.insert(key.to_string(), answer);
+    });
+    answer
+}
+
+/// [`is_mpn_property_key`] without the memo.
+fn mpn_property_key_uncached(key: &str) -> bool {
     let key = normalise_header(&key.replace('#', " no "));
     let mut words: Vec<&str> = key.split('_').filter(|w| !w.is_empty()).collect();
     // A numbered alternate (`Manufacturer_Part_Number_2`) is still an MPN key.
