@@ -8167,3 +8167,327 @@ vref_v = 0.8                 # 6.5 voltage reference typ
 [models.coverage]
 implements = ["averaged_buck_dc", "board_feedback_divider", "output_current_ceiling", "reflected_input_power", "maximum_duty", "quiescent_current"]
 missing = ["en_uvlo_divider", "switching_ripple", "compensation_stability", "soft_start", "eco_mode", "cycle_by_cycle_peak_limit", "thermal_shutdown", "temperature_curves"]
+
+# ═══ round-2 coverage cards (generated block begins) ═══
+
+# ── LMR38010: TI 1 A 80 V synchronous buck, SO PowerPAD-8 (DDA), adjustable ──────
+# Source: TI SNVSC73B (January 2022, revised September 2023), sha256
+# b8b6dced113ffb83012e0d38187af8b807dab8cbfa8b842e3af54387f98d7418 (byte-identical to the ti.com lmr38010.pdf symlink).
+# Table 6-1 pins p.3, 7.1 Absolute Maximum Ratings and 7.3 Recommended Operating Conditions p.4, 7.4 thermal p.5, 7.5 Electrical
+# Characteristics p.5. The three orderables (LMR38010SDDAR, FDDAR, FSDDAR) differ only in forced-PWM and spread-spectrum options and
+# share the pin map; the PDF prints no fixed-output version, so every one is adjustable and the bare board value "LMR38010" is
+# matched as the family. VREF = 1.0 V is a FEEDBACK REFERENCE (Eq. 1, RFBT = (VOUT - VREF)/VREF x RFBB), never an output voltage: the
+# output is read from the board's own divider. EN has no internal pull-up or pull-down printed and "cannot be left open or floating".
+# DELIBERATELY NOT MODELLED: the PG output, RT/SYNC (fSW is set by an RT resistor, so the switching frequency below is the 49.9 kOhm
+# figure), soft-start, FPWM/PFM light-load behaviour, spread spectrum, UVLO hysteresis and the current limit shape.
+[[models]]
+id = "lmr38010_dda"
+kind = "vreg"
+description = "TI LMR38010 1A 80V synchronous buck, SO PowerPAD-8, adjustable (averaged board-feedback model)"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lmr38010.pdf"
+title = "TI LMR38010 4.2-V to 80-V, 1-A, Synchronous SIMPLE SWITCHER Power Converter with 40-uA IQ, SNVSC73B, January 2022, revised September 2023"
+locator = "Table 6-1 Pin Functions p.3; 7.1 Absolute Maximum Ratings and 7.3 Recommended Operating Conditions p.4; 7.4 Thermal Information and 7.5 Electrical Characteristics p.5; Eq. 1 p.11"
+sha256 = "b8b6dced113ffb83012e0d38187af8b807dab8cbfa8b842e3af54387f98d7418"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "feedback_reference"
+low = 0.99
+high = 1.01
+unit = "V"
+kind = "specification-limits"
+basis = "LMR38010 SNVSC73B 7.5, VREF 0.99 V min / 1 V typ / 1.01 V max (FPWM, VIN 4.2 V to 80 V, TJ = 25 C)"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the board-divider DC rail, the input current and the ratings are modelled and the dynamics are not"
+
+[models.match]
+value_re = "(?i)^LMR38010(?:F?S?DDA[RT]?)?$"
+
+[models.params]
+warning = "source-bound averaged DC model: the output is the board's own FB divider against the 1.0 V feedback reference; EN threshold, PG, RT/SYNC (the frequency shown is the 49.9 kOhm figure), switching ripple, loop stability, soft-start, FPWM/PFM behaviour and protection transients are not modeled"
+iq_a = 40e-6           # 7.5 IQ non-switching, VEN = 3.3 V, PFM variant (typ)
+
+[models.pins]
+"1" = "gnd"
+"2" = "en"
+"3" = "in"
+"4" = "rt"            # RT/SYNC
+"5" = "fb"
+"6" = "pg"
+"7" = "cb"            # BOOT
+"8" = "sw"
+"9" = "gnd_ep"        # exposed thermal pad, connect to system ground
+"EP" = "gnd_ep2"
+
+[models.ratings]
+max_current_a = 1.0          # 7.3 IOUT 0 to 1 A
+max_voltage_v = 85.0         # 7.1 VIN to PGND abs max
+max_junction_temp_c = 150.0  # 7.1
+theta_ja_c_per_w = 42.9      # 7.4 RthetaJA, DDA HSOIC-8
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 4.2
+max_v = 80.0
+abs_max_v = 85.0
+basis = "TI LMR38010 SNVSC73B, 7.3 Recommended Operating Conditions VIN 4.2 V to 80 V; 7.1 Absolute Maximum Ratings VIN -0.3 V to 85 V"
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+vout_setpoint = 5.0          # placeholder seed only used with no FB divider on the board
+iout_limit_a = 1.0           # rated output; high-side limit 1.6 A typ (1.3 min)
+max_duty = 0.97              # 7.6 DMAX typ
+switching_hz = 525e3         # 7.5 FOSC typ at RT = 49.9 kOhm
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 1.0                 # 7.5 VREF typ: a feedback reference, never the output voltage
+
+[models.behavioral.converter.enable]
+pin = "en"
+high_threshold_v = 1.25      # 7.5 VEN-H rising typ (1.1 min / 1.4 max)
+
+[models.coverage]
+implements = ["averaged_buck_dc", "board_feedback_divider", "enable_gating", "output_current_ceiling", "reflected_input_power", "maximum_duty", "quiescent_current"]
+missing = ["power_good_output", "rt_sync_frequency", "switching_ripple", "compensation_stability", "soft_start", "fpwm_pfm_modes", "spread_spectrum", "cycle_by_cycle_peak_limit", "uvlo_hysteresis", "thermal_shutdown", "temperature_curves"]
+
+# ── TPS63031: TI 1 A single-inductor buck-boost, FIXED 3.3 V, VSON-10 (DSK) ──────
+# Source: TI SLVS696D (October 2008, revised April 2020), sha256
+# 7332b6b39605281419571ff4564e6bda5217dbaa2458b77b130bb81956d20a54 (byte-identical to the ti.com tps63031.pdf symlink). Table 1
+# p.3: TPS63030DSK is the adjustable part and TPS63031DSK the 3.3 V fixed one; this card matches only the 3.3 V part, so FB
+# (pin 10), which the pin table says "must be connected to VOUT on fixed output voltage versions", senses the output directly and
+# the 3.3 V is the part's own regulated output (7.5: 3.267 / 3.3 / 3.333 V), not a feedback reference. The 500 mV reference in the
+# table is the TPS63030's. Pin table p.3 (1 VOUT, 2 L2, 3 PGND, 4 L1, 5 VIN, 6 EN, 7 PS/SYNC, 8 VINA, 9 GND, 10 FB; the exposed pad is
+# connected to PGND), 7.1 Absolute Maximum Ratings p.4 (7 V), 7.3 Recommended Operating Conditions p.4 (VIN and VINA 1.8 to 5.5 V),
+# 7.4 Thermal p.4 (60.7 C/W, DSK), 7.5 p.5 (IQ 25 uA typ into VIN and VINA, 4 uA typ into VOUT; EN VIH 1.2 V min).
+# The datasheet prints no output-current row in its recommended conditions; the 800 mA figure is the step-down feature claim (VIN 3.6
+# to 5.5 V) and the average switch current limit is 1 A typ (900 min, 1300 max). VINA must be powered from VIN: only VIN is metered.
+[[models]]
+id = "tps63031_dsk"
+kind = "vreg"
+description = "TI TPS63031 1A single-inductor buck-boost, fixed 3.3V, VSON-10 DSK (averaged model)"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tps63031.pdf"
+title = "TI TPS6303x High Efficiency Single Inductor Buck-Boost Converter With 1-A Switches, SLVS696D, October 2008, revised April 2020"
+locator = "Table 1 Output Voltage Options and Pin Functions p.3; 7.1 Absolute Maximum Ratings and 7.3 Recommended Operating Conditions p.4; 7.4 Thermal Information p.4; 7.5 Electrical Characteristics p.5"
+sha256 = "7332b6b39605281419571ff4564e6bda5217dbaa2458b77b130bb81956d20a54"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.267
+high = 3.333
+unit = "V"
+kind = "specification-limits"
+basis = "TPS63031 SLVS696D 7.5, output voltage 3.267 V min / 3.3 V typ / 3.333 V max (PS/SYNC = VIN)"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the output setpoint, enable threshold and ratings are modelled; efficiency, the switching frequency (2.4 MHz typ) and the load-dependent regulation are not"
+
+[models.match]
+value_re = "(?i)^TPS63031(?:DSK)?[RT]?$"
+
+[models.params]
+warning = "source-bound averaged DC model of the FIXED 3.3 V part: the 3.3 V output, EN and the 1.8 V to 5.5 V input range are executable; the 1 A average switch current limit is applied as a rating, VINA is not metered separately, PS/SYNC (power save), UVLO hysteresis, soft-start, efficiency (not printed in the tables read) and protection transients are not modeled"
+iq_a = 25e-6           # 7.5 IQ into VIN and VINA, IOUT = 0, VIN = 3.6 V, typ (35 uA max)
+
+[models.pins]
+"1" = "out"
+"2" = "l2"
+"3" = "pgnd"
+"4" = "l1"
+"5" = "in"
+"6" = "en"
+"7" = "ps_sync"
+"8" = "vina"
+"9" = "gnd"
+"10" = "fb"           # tied to VOUT on the fixed 3.3 V version
+"11" = "pgnd2"        # exposed thermal pad, connected to PGND (CAD numbering; the datasheet gives it no number)
+"EP" = "pgnd3"
+
+[models.ratings]
+max_current_a = 1.0          # 7.5 average switch current limit 1.0 A typ
+max_voltage_v = 7.0          # 7.1 abs max on VIN, VINA, L1, L2, VOUT, EN, FB
+max_junction_temp_c = 125.0  # 7.3 TJ -40 to 125 C
+theta_ja_c_per_w = 60.7      # 7.4 RthetaJA, DSK
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 1.8
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI TPS63031 SLVS696D, 7.3 Recommended Operating Conditions VIN and VINA 1.8 V to 5.5 V; 7.1 Absolute Maximum Ratings 7 V"
+
+[models.behavioral.converter]
+topology = "buck_boost"
+out_pin = "out"
+in_pin = "in"
+vout_setpoint = 3.3          # 7.5 VOUT typ, fixed version
+iout_limit_a = 1.0           # average switch current limit, typ
+switching_hz = 2.4e6         # 7.5 oscillator frequency typ
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 3.3                 # fixed version: FB is tied to VOUT and senses it directly (7.5 VOUT typ)
+
+[models.behavioral.converter.enable]
+pin = "en"
+high_threshold_v = 1.2       # 7.5 VIH EN min
+
+[models.coverage]
+implements = ["averaged_buck_boost_dc", "fixed_output_sense", "enable_gating", "reflected_input_power", "quiescent_current"]
+missing = ["power_save_mode", "sync_input", "switching_ripple", "compensation_stability", "soft_start", "efficiency_curve", "uvlo_hysteresis", "thermal_shutdown", "temperature_curves"]
+
+# ── MIC5205 (bare part number = ADJUSTABLE), SOT-23-5 ────────────────────────
+# Microchip (Micrel) 150 mA low-noise LDO. The Product Identification System of the
+# datasheet says "<blank> = Adjustable": a value of just "MIC5205" or "MIC5205YM5" is the
+# adjustable part, with pin 4 = ADJ (BYP on the fixed versions). The output is set by the
+# board's divider, VOUT = 1.242 V x (R2/R1 + 1) (Eq. 4-7, section 4.8); 1.242 V is a
+# FEEDBACK REFERENCE, never an output voltage, so no vout is carried. Fixed versions
+# (MIC5205-3.3 and the other voltage codes) have their own cards or stay unresolved.
+# Source: Microchip MIC5205 DS20005785A (2017), sha256
+# 7bfb39b0988910199bfb8bc1920148712a61eb21489994b82eddeddde2d36c5e (the copy read; the
+# 3.3 V card cites revision B and the electrical figures used here are the same).
+# Table 3-1 pin function table, Table 1-1 Electrical Characteristics pp.3-4, 4.8 p.11. No download URL is
+# recorded: the file read is a distributor mirror copy kept with the coverage notes.
+# The datasheet's ADJ-pin bias current and the reference tolerance are not tabulated in the
+# pages read, so the 1.242 V carries no interval and the divider error is not bounded.
+[[models]]
+id = "mic5205_adj"
+kind = "vreg"
+description = "MIC5205 low-noise LDO, 150mA, adjustable (bare part number), SOT-23-5; rail set by the board divider against 1.242V"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "feedback_reference"
+reason = "the reference is quoted as 1.242 V in Eq. 4-7 with no min/max printed in the pages read; the output accuracy of 1 % or 2 % applies to a specified fixed VOUT"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the divider-set DC rail, enable gating, the supply draw and the ratings are modelled"
+
+[models.match]
+value_re = "(?i)^MIC5205(?:YM5|M5)?(?:[- ]?(?:T[RXYU]|ADJ))?$"
+
+[models.params]
+warning = "the bare MIC5205 part number is the ADJUSTABLE version: the rail is the board's own divider against a 1.242 V feedback reference; if this board's part is actually a fixed-voltage version, put the full orderable part number (for example MIC5205-3.3YM5) in the value so the right card is used"
+vref      = 1.242    # feedback reference, Eq. 4-7 (VOUT = 1.242 V x (R2/R1 + 1)); never an output voltage
+dropout_v = 0.35     # max @ IL = 150 mA over temperature (275 mV max at 25 C)
+iq_a      = 80.0e-6  # IGND typ @ IL = 100 uA (125 uA max), Table 1-1
+en_on_v   = 2.0      # VIH regulator enabled, 2.0 V min, Table 1-1
+en_off_v  = 0.18     # VIL regulator shutdown, 0.18 V max over temperature (0.4 V at 25 C)
+en_open   = "off"    # Table 3-1: "logic-low or open = shutdown"
+i_shdn_a  = 1.0e-8   # IGND typ 0.01 uA, VEN <= 0.4 V (shutdown)
+
+[models.pins]
+# Table 3-1, ADJUSTABLE version: pin 4 is ADJ (the feedback input).
+"1" = "in"
+"2" = "gnd"
+"3" = "en"
+"4" = "fb"
+"5" = "out"
+
+[models.ratings]
+max_current_a = 0.15         # guaranteed output current
+max_voltage_v = 20.0         # Absolute Maximum Ratings, VIN -20 V to +20 V
+max_junction_temp_c = 125.0
+theta_ja_c_per_w = 220.0     # SOT-23-5 mounted on a PC board (Note 1)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 2.5
+max_v = 16.0
+abs_max_v = 20.0
+basis = "Microchip MIC5205 DS20005785A, Operating Ratings, input voltage VIN +2.5 V to +16 V; Absolute Maximum Ratings, VIN -20 V to +20 V"
+
+# ── LM1117 (bare part number or -ADJ = ADJUSTABLE) ───────────────────────────
+# TI 800 mA LDO. The fixed versions carry their voltage in the part number
+# (LM1117-3.3, LM1117-5.0, ...); a bare "LM1117" or "LM1117-ADJ" is the adjustable
+# version whose ADJ pin (pin 1) is referenced to the OUTPUT: VREF = 1.25 V sits between OUT and
+# ADJ, so the board's own R1/R2 divider and the ADJ-pin current set the rail
+# (VOUT = VREF x (1 + R2/R1) + IADJ x R2). Like the LM317 card this maps no gnd pin.
+# 1.25 V is a reference, never an output voltage.
+# Source: TI LM1117 SNOS412Q (February 2000, revised January 2023), sha256
+# c117f5dd97fd15e62c0dee3adbf1af60480a128a10a0f9a9c28aafb8220ec3aa (byte-identical to the
+# ti.com lm1117.pdf symlink). Table 6-1 Pin Functions p.3 (ADJ/GND 1, VOUT 2 and tab, VIN 3 on
+# TO-252, SOT-223, TO-263 and TO-220), 7.1 p.4 (VIN 20 V abs max), 7.3 p.4 (VIN 15 V),
+# 7.4 p.4 thermal, 7.5 Electrical Characteristics p.5 (VREF 1.238/1.25/1.262 V, dropout 1.2 V
+# typ and 1.3 V max at 800 mA, minimum load 1.7 mA typ and 5 mA max, adjust pin current 60 uA
+# typ and 120 uA max). The WSON package numbers the pins differently and is not matched by pin.
+# CAVEAT: a bare "LM1117" on a board is read as the adjustable part. If the board really
+# uses a fixed-voltage LM1117 whose value string omits the voltage, put the full part number
+# (LM1117-3.3) in the value; with pin 1 grounded this card would read the rail as 1.25 V.
+[[models]]
+id = "lm1117_adj"
+kind = "vreg"
+description = "TI LM1117 800mA adjustable LDO (bare part number or -ADJ), ADJ-referenced; rail set by the board divider against 1.25V"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lm1117.pdf"
+title = "TI LM1117 800-mA, Low-Dropout Linear Regulator, SNOS412Q, February 2000, revised January 2023"
+locator = "Table 6-1 Pin Functions p.3; 7.1 Absolute Maximum Ratings, 7.3 Recommended Operating Conditions and 7.4 Thermal Information p.4; 7.5 Electrical Characteristics p.5; 8 Detailed Description p.13"
+sha256 = "c117f5dd97fd15e62c0dee3adbf1af60480a128a10a0f9a9c28aafb8220ec3aa"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vref"
+low = 1.238
+high = 1.262
+unit = "V"
+kind = "specification-limits"
+basis = "LM1117-ADJ SNOS412Q 7.5, VREF 1.238 V min / 1.25 V typ / 1.262 V max (IOUT = 10 mA, VIN - VOUT = 2 V, TJ = 25 C; 1.225 to 1.27 V over line, load and temperature)"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the divider-set DC rail, the ADJ-pin current, the dropout and the ratings are modelled"
+
+[models.match]
+value_re = "(?i)^LM1117(?:[A-Z]{1,3})?(?:[- ]?ADJ)?(?:/NOPB)?$"
+
+[models.params]
+warning = "the bare LM1117 part number is read as the ADJUSTABLE version: the rail is the board's own divider against a 1.25 V reference; if this board's part is a fixed-voltage LM1117 with its voltage omitted from the value, put the full part number (for example LM1117-3.3) in the value so the right card is used"
+vref      = 1.25     # VREF typ, 7.5 (1.238 min / 1.262 max at 25 C): a feedback reference, never an output voltage
+iadj_a    = 60.0e-6  # adjust pin current typ (120 uA max), 7.5
+dropout_v = 1.3      # VIN - VOUT max @ IOUT = 800 mA over temperature (1.2 V typ)
+
+[models.pins]
+# Table 6-1: pin 1 ADJ/GND (ADJ on this card), 2 VOUT, 3 VIN; the SOT-223 tab is pin 4 on a
+# 4-pin footprint and is the output, left unmapped here like the LM317 card.
+"1" = "fb"
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 0.8          # rated output, 7.5 dropout/current-limit rows (800 mA)
+min_current_a = 0.005        # minimum load current, ADJ version: 1.7 mA typ, 5 mA max over temperature (VIN = 15 V)
+max_voltage_v = 20.0         # 7.1 maximum input voltage, VIN to GND (15 V operating, 7.3)
+max_junction_temp_c = 125.0  # 7.3 TJ range 0 to 125 C
+theta_ja_c_per_w = 61.6      # 7.4 RθJA, DCY (SOT-223); 23.8 TO-220, 45.1 TO-252, 39.3 WSON, 41.3 TO-263
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.0
+max_v = 15.0
+abs_max_v = 20.0
+basis = "TI LM1117 SNOS412Q, 7.3 Recommended Operating Conditions VIN (to GND) 15 V maximum, no minimum printed; 7.1 Absolute Maximum Ratings VIN 20 V"

@@ -435,6 +435,18 @@ impl ExtractedBoard {
                     if !c.properties.iter().any(|(k, _)| k == key) {
                         c.properties.push((key.to_string(), number.clone()));
                     }
+                    // A family name the library device completes with its
+                    // variant (`MIC5205` + `MIC5205-3.3V`): the device is the
+                    // part, and the bare family would read as another variant.
+                    let head = c.value.trim().len();
+                    if head > 0
+                        && number.len() > head + 1
+                        && number.is_char_boundary(head)
+                        && number[..head].eq_ignore_ascii_case(c.value.trim())
+                        && number[head..].starts_with('-')
+                    {
+                        c.value.clone_from(&number);
+                    }
                 }
             }
             for (reference, pad, name, kind) in pads {

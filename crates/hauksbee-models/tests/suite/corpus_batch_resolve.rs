@@ -173,11 +173,22 @@ fn polarity_and_die_boundaries_are_not_crossed() {
     // family name says nothing about its output and must stay unresolved rather
     // than inherit a fixed one.
     // A bare family name also leaves the package, and so the pin map, open.
-    for indeterminate in ["MIC5205", "LM1117", "MCP1700", "TLV62568"] {
+    for indeterminate in ["MCP1700", "TLV62568"] {
         assert!(
             by_value(indeterminate).is_none_or(|m| m.kind != ComponentKind::Vreg),
             "{indeterminate} has no determinable output voltage and must not \
              bind to a fixed-output vreg entry"
+        );
+    }
+    // The bare MIC5205 and LM1117 numbers are the families' ADJUSTABLE parts, so
+    // they bind only to cards whose rail is the board's own divider against a
+    // feedback reference, and those carry no output voltage of their own.
+    for (value, card) in [("MIC5205", "mic5205_adj"), ("LM1117", "lm1117_adj")] {
+        let m = by_value(value).unwrap_or_else(|| panic!("{value} binds its adjustable card"));
+        assert_eq!(m.id, card);
+        assert!(
+            m.params.get_f64("vout").is_none(),
+            "{value}: an adjustable card must not carry a fixed output voltage"
         );
     }
     // An adjustable buck may bind, but only to a board-feedback card whose rail

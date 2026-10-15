@@ -3765,8 +3765,8 @@ reason = "Table 5.3 gives the 3V3OUT band (2.97 to 3.63 V) and 4 the 50 mA limit
 [models.match]
 # "FT231XQ" is the QFN-20 ordering code and "FT231XS" the SSOP-20 one; the two
 # have DIFFERENT pin orders, so only the Q (and the bare "FT231X-Q" spelling the
-# margay datalogger uses) may borrow this map. The SSOP part resolves to nothing
-# until it gets its own entry.
+# margay datalogger uses) may borrow this map. The SSOP part has its own card,
+# ft231xs.
 value_re = "(?i)^FT231X[-_ ]?Q([A-Z0-9-]*)?$"
 
 [models.params]
@@ -3833,6 +3833,152 @@ and the VCCIO levels are modelled"""
 # Eagle's QFN20 land (the margay datalogger's) calls it "EP".
 "EP" = "gnd3"       # exposed pad (Eagle spelling)
 "21" = "gnd4"       # the same exposed pad, datasheet and KiCad numbering
+
+[models.ratings]
+# Table 5.1. VCCIO's -0.3 to 4.0 V is the TIGHTER of the two supply limits, and
+# there is no per-domain field on this schema, so the tighter one is recorded
+# here; the per-domain limits are in the envelopes below.
+max_voltage_v = 4.0
+max_pin_current_a = 0.022   # DC output current, outputs
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.97
+max_v = 5.5
+abs_max_v = 5.5
+basis = "FTDI FT231X FT_000565 v1.2, Table 5.3 VCC operating supply 2.97 V to 5.5 V; Table 5.1 VCC supply voltage -0.3 V to +5.5 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vccio"
+min_v = 1.62
+max_v = 3.63
+abs_max_v = 4.0
+basis = "FTDI FT231X FT_000565 v1.2, Table 5.3 VCCIO operating supply 1.62 V to 3.63 V; Table 5.1 VCCIO IO voltage -0.3 V to +4.0 V"
+
+# Internal 3.3 V LDO (Table 3.1, 4, Table 5.3). With VCC above 3.3 V it holds
+# 3V3OUT at 3.3 V; with VCC at 3.3 V the datasheet makes 3V3OUT an input tied to
+# VCC, which `min(v_vcc, 3.3)` reproduces with no current between them. The
+# 1 Ohm source resistance is assumed (see the uncertainty above); at or below
+# `rail_owner::SERIES_OHMS` it makes the law the supply of the net it drives, so
+# a rail fed only from 3V3OUT takes no name-derived ideal source beside it.
+[[models.behavioral.laws]]
+name = "ldo_3v3out"
+kind = "voltage"
+a = "v3v3out"
+b = "gnd"
+expr = "max(0.0, min(v_vcc, 3.3))"
+r_ohms = 1.0
+
+# Table 3.3 note 1: input pins are pulled to VCCIO through internal ~75 kOhm
+# resistors (Table 5.4 Rpu 40 / 75 / 190 kOhm min / typ / max).
+[models.behavioral.pins.rxd]
+pull_to = "vccio"
+pull_ohms = 75000.0
+
+[models.behavioral.pins.cts_n]
+pull_to = "vccio"
+pull_ohms = 75000.0
+
+[models.behavioral.pins.dsr_n]
+pull_to = "vccio"
+pull_ohms = 75000.0
+
+[models.behavioral.pins.dcd_n]
+pull_to = "vccio"
+pull_ohms = 75000.0
+
+[models.behavioral.pins.ri_n]
+pull_to = "vccio"
+pull_ohms = 75000.0
+
+[models.coverage]
+implements = ["pin_roles", "vccio_logic_levels", "internal_3v3_ldo", "input_pullups", "operating_supply_current", "supply_ranges", "absolute_ratings"]
+missing = ["usb_stack", "uart_traffic", "txd_rts_dtr_drive", "cbus_functions", "ldo_dropout", "reset_generator", "usb_suspend_current", "vccio_1v8_2v5_levels"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FT231XS: the SSOP-20 ordering code of the same FTDI FT231X bridge as the FT231XQ
+# card above. Source: the same FT_000565 Version 1.2 datasheet (sha256
+# 8999a05c9ad906a0183c02a27f48b1d056623c876dd28d565c027f7510f0b3f9, re-fetched
+# byte-identical from web.archive.org); the pin map is 3.2 "20-LD SSOP Package"
+# (Figure 3.2) and Tables 3.4 to 3.6 (pp.9-10). Everything electrical (VCC and VCCIO
+# domains, the 3V3OUT LDO, the ~75 kOhm input pull-ups, ICC, levels) is
+# package-independent in the datasheet and is the FT231XQ card's, with the same
+# caveats. The SSOP has no exposed pad and its pad order differs from the QFN.
+[[models]]
+id = "ft231xs"
+kind = "digital"
+description = "FTDI FT231X USB-to-UART bridge, SSOP-20 (pad map, VCCIO levels, internal 3V3OUT LDO and input pull-ups; no USB stack)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ftdichip.com/wp-content/uploads/2020/08/DS_FT231X.pdf"
+title = "FTDI FT231X USB to Full Handshake UART IC datasheet, FT_000565 Version 1.2"
+locator = "3.2 SSOP Schematic Symbol and Tables 3.4-3.6 pp.9-10; 4 +3.3V LDO Regulator p.13; Table 5.1 p.16; Table 5.3 p.17; Table 5.4 p.18"
+sha256 = "8999a05c9ad906a0183c02a27f48b1d056623c876dd28d565c027f7510f0b3f9"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "ldo_output_resistance"
+reason = "Table 5.3 gives the 3V3OUT band (2.97 to 3.63 V) and 4 the 50 mA limit, but no load regulation, dropout or current limit; the 1 Ohm source resistance is assumed (it drops 50 mV at the rated 50 mA, inside the band), and VCC below 3.3 V is passed through without a dropout"
+
+[models.match]
+# FT231XS is the SSOP-20 ordering code (1.2 Part Numbers and 9.2 SSOP-20 Package Markings); the QFN-20 FT231XQ has its own card because the pin orders differ.
+value_re = "(?i)^FT231X[-_ ]?S([A-Z0-9-]*)?$"
+
+[models.params]
+# Table 5.4, VCCIO = 3.3 V column. See the note above before trusting these on a
+# board with a lower I/O rail.
+voh   = 2.97     # min, at the table's IOH = 2 mA test current. The four VOH rows
+                 # in that table are DRIVE-STRENGTH settings (4/8/12/16 mA, which
+                 # the MTP selects), not load currents, so this is not a claim
+                 # that the pin holds 2.97 V into 16 mA.
+vol   = 0.4      # max, same table and same 2 mA test current
+vih   = 2.0      # min (LVTTL)
+vil   = 0.8      # max
+supply_static_ua = 8000.0  # Table 5.3 ICC1 typ, normal operation (8.4 mA max);
+                           # USB-suspend ICC2 is 125 uA and is not the operating figure
+# `supply_pin`/`gnd_pin` record WHICH pads the draw belongs to, for a reader; they
+# are not what the engine meters against. `bind_digital` takes the supply leg's
+# nets from the ROLES (`vcc`/`vdd` and `gnd`/`vss`), which is why pad 15 is named
+# `vcc` and pad 6 `gnd` above. The datasheet gives no VCC/VCCIO split of the 8 mA,
+# so the whole figure sits on the core supply either way.
+supply_pin = "15"          # VCC
+gnd_pin    = "6"
+# Said as a `warning` and not only in these comments because comments reach no
+# report surface: `entry_warning` puts this on the bind report and on the
+# evidence map, where a reader deciding whether a UART result means anything
+# will actually meet it.
+warning = """the USB stack is not modelled: TXD, RTS# and DTR# carry no driver \
+and the bridge sources or answers no UART traffic, so a result that depends on \
+data arriving through it is not evidence; the 3V3OUT LDO, the input pull-ups \
+and the VCCIO levels are modelled"""
+
+[models.pins]
+# 3.2 / Tables 3.4 to 3.6, SSOP-20 (the pad numbers are the package's pin numbers).
+"1"  = "dtr_n"      # modem-status output
+"2"  = "rts_n"      # flow-control output
+"3"  = "vccio"      # I/O-ring supply, 1.62 to 3.63 V; sets every level
+"4"  = "rxd"        # UART data in (to the IC)
+"5"  = "ri_n"       # ring indicator input
+"6"  = "gnd"
+"7"  = "dsr_n"      # modem-status input
+"8"  = "dcd_n"      # modem-status input
+"9"  = "cts_n"      # flow-control input
+"10" = "cbus2"      # configurable; factory default TXLED#
+"11" = "usbdp"      # USB D+; no USB stack
+"12" = "usbdm"      # USB D-
+"13" = "v3v3out"    # internal 3.3 V LDO output, 50 mA (behavioral law below)
+"14" = "reset_n"    # active-low reset input
+"15" = "vcc"        # core supply, 2.97 to 5.5 V
+"16" = "gnd2"
+"17" = "cbus1"      # configurable; factory default RXLED#
+"18" = "cbus0"      # configurable; factory default TXDEN
+"19" = "cbus3"      # configurable; factory default SLEEP#
+# Outputs are NOT y-prefixed for the reason given on the FT231XQ card.
+"20" = "txd"        # UART data out (not driven)
 
 [models.ratings]
 # Table 5.1. VCCIO's -0.3 to 4.0 V is the TIGHTER of the two supply limits, and
@@ -12441,3 +12587,683 @@ pins = { "1" = "SDIN1", "2" = "SDIN2", "3" = "TVDD", "4" = "VSS2", "5" = "AVDRV"
 [models.coverage]
 implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]
 missing = ["adc_paths", "dac_paths", "serial_audio_port", "control_port", "power_down_state", "avdrv_regulator", "logic_levels"]
+
+# ═══ round-2 coverage cards (generated block begins) ═══
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SN65HVD230: TI 3.3 V CAN transceiver with standby mode, SOIC-8 (D). Source: TI SLOS346O (March 2001, revised April 2018),
+# sha256 e98fc0c59168c035d7958111924dae7e21e46ab45bdfd6400aef048299d6d716 (byte-identical to the ti.com symlink). Pin Functions p.5
+# (1 D, 2 GND, 3 VCC, 4 R, 5 Vref, 6 CANL, 7 CANH, 8 RS), 8.1 Absolute Maximum Ratings p.5, 8.3 Recommended Operating Conditions
+# p.6 (VCC 3 to 3.6 V), 8.4 Thermal Information p.6 (RthetaJA 76.8 C/W for the 230), 8.5 ICC p.7 (dominant and recessive, no load,
+# 10 mA typ / 17 mA max; standby 370 uA typ with V(Rs) = VCC), 8.6 receiver VOH 2.4 V min at IO = -8 mA, p.7.
+# The SN65HVD231 (sleep) and SN65HVD232 (no standby, pins 5 and 8 NC) share this PDF and are NOT matched: their pin 5 and 8 roles differ.
+# The card is a bus-idle model: the recessive supply current is executable and R reads high. The 2.4 V RXD level is the datasheet
+# MINIMUM VOH at -8 mA, not a typical value, so a board that loads RXD lightly sees a little more than this.
+[[models]]
+id = "sn65hvd230_soic8"
+kind = "digital"
+description = "TI SN65HVD230 3.3 V CAN transceiver, SOIC-8 (D): VCC supply draw and recessive RXD (bus levels, standby, slope control not modelled)"
+
+[models.match]
+value_re = "(?i)^SN65HVD230(?:D|DR|DRG4)?$"
+
+[models.params]
+supply_current_a = 0.01
+supply_on_v = 3.0
+warning = "source-bound bus-idle model: the 10 mA typ recessive supply current (17 mA max, no load; 370 uA typ in standby with Rs at VCC), the 3.0 V to 3.6 V VCC range and an RXD that reads high (recessive, 2.4 V min VOH) are executable; dominant transmission, CANH/CANL levels, the Vref output (VCC/2), Rs slope control and standby, and receiver switching are not represented"
+
+[models.pins]
+"1" = "d"
+"2" = "gnd"
+"3" = "vcc"
+"4" = "r"
+"5" = "vref"
+"6" = "canl"
+"7" = "canh"
+"8" = "rs"
+
+[models.ratings]
+max_voltage_v = 6.0
+theta_ja_c_per_w = 76.8
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 6.0
+basis = "TI SN65HVD230 SLOS346O, 8.3 Recommended Operating Conditions VCC 3 V to 3.6 V; 8.1 Absolute Maximum Ratings VCC -0.3 V to 6 V"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vcc"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vcc / supply_on_v))"
+
+[[models.behavioral.laws]]
+name = "r_recessive_high"
+kind = "voltage"
+a = "r"
+b = "gnd"
+expr = "max(0.0, v_vcc - 0.9)"
+r_ohms = 112.0
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn65hvd230.pdf"
+title = "TI SN65HVD230, SN65HVD231, SN65HVD232 3.3-V CAN Bus Transceivers, SLOS346O, March 2001, revised April 2018"
+locator = "Pin Functions p.5; 8.1 Absolute Maximum Ratings p.5; 8.3 Recommended Operating Conditions and 8.4 Thermal Information p.6; 8.5 Driver ICC and 8.6 Receiver p.7"
+sha256 = "e98fc0c59168c035d7958111924dae7e21e46ab45bdfd6400aef048299d6d716"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_current_a"
+reason = "SLOS346O 8.5 prints ICC typ and max only (10 mA / 17 mA, dominant and recessive, no load) and no min column; the typ is used, and a driven bus at 60 Ohm draws more in the dominant state"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; only the bus-idle supply current and the recessive R level are modelled, and the 2.4 V level is the datasheet minimum VOH at IO = -8 mA"
+[[models.source.pinout]]
+package = "SOIC-8 (D)"
+pins = { "1" = "D", "2" = "GND", "3" = "VCC", "4" = "R", "5" = "Vref", "6" = "CANL", "7" = "CANH", "8" = "RS" }
+
+[models.coverage]
+implements = ["pin_roles", "supply_current", "supply_range", "recessive_rxd_output", "absolute_ratings"]
+missing = ["dominant_transmit", "bus_levels", "vref_output", "standby_mode", "slope_control", "timing", "logic_levels"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SN65HVD75: TI 3.3 V half-duplex RS-485 transceiver, 20 Mbps, D (SOIC-8), DGK (VSSOP-8) and DRB (VSON-8), all numbered alike. Source:
+# TI SLLSE11H (March 2012, revised March 2019), sha256 b46f5803fa8302f98d7461799d078be59a41112191461519bcf4c464743e60a6
+# (byte-identical to the ti.com symlink). Pin table p.4 (1 R, 2 RE, 3 DE, 4 D, 5 GND, 6 A, 7 B, 8 VCC), 5.1 Absolute Maximum Ratings p.5
+# (VCC -0.5 to 5 V), 5.3 Recommended Operating Conditions p.5 (VCC 3 to 3.6 V), thermal p.6, supply current p.7 (driver and receiver
+# enabled, no load: 750 uA typ / 950 uA max; both disabled 0.1 uA typ). The SN65HVD72 and SN65HVD78 share the PDF and are not matched.
+# RE and DE are NOT modelled: the draw is the enabled figure whatever they read. RthetaJA differs by package (110.7 SOIC, 168.7 VSSOP,
+# 40 VSON); the value rule cannot tell them apart, so the least favourable (VSSOP) is recorded.
+[[models]]
+id = "sn65hvd75_8pin"
+kind = "digital"
+description = "TI SN65HVD75 3.3 V RS-485 transceiver, 8-pin SOIC/VSSOP/VSON: VCC supply draw (driver, receiver, bus levels not modelled)"
+
+[models.match]
+value_re = "(?i)^SN65HVD75(?:D|DR|DGK|DGKR|DRB|DRBR)?$"
+
+[models.params]
+supply_current_a = 0.00075
+supply_on_v = 3.0
+warning = "source-bound supply-draw model: the enabled quiescent VCC current (750 uA typ, 950 uA max, driver and receiver enabled, no load) and the 3.0 V to 3.6 V VCC range are executable; the driver output, receiver output, DE/RE gating (0.1 uA when both are disabled), bus levels and a loaded driver (which draws far more) are not represented"
+
+[models.pins]
+"1" = "r"
+"2" = "re_n"
+"3" = "de"
+"4" = "d"
+"5" = "gnd"
+"6" = "a"
+"7" = "b"
+"8" = "vcc"
+
+[models.ratings]
+max_voltage_v = 5.0
+max_junction_temp_c = 170.0
+theta_ja_c_per_w = 168.7
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 5.0
+basis = "TI SN65HVD75 SLLSE11H, 5.3 Recommended Operating Conditions VCC 3 V to 3.6 V; 5.1 Absolute Maximum Ratings VCC -0.5 V to 5 V"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vcc"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vcc / supply_on_v))"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn65hvd75.pdf"
+title = "TI SN65HVD72, SN65HVD75, SN65HVD78 3.3-V Supply RS-485 With IEC ESD Protection, SLLSE11H, March 2012, revised March 2019"
+locator = "Pin Functions p.4; 5.1 Absolute Maximum Ratings and 5.3 Recommended Operating Conditions p.5; 5.4 Thermal Information p.6; 5.6 Supply Current p.7"
+sha256 = "b46f5803fa8302f98d7461799d078be59a41112191461519bcf4c464743e60a6"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_current_a"
+reason = "SLLSE11H prints quiescent ICC typ and max only (750 uA / 950 uA enabled, 0.1 uA / 2 uA disabled), no min column; the enabled typ is used"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; only the VCC supply draw is modelled"
+[[models.source.pinout]]
+package = "SOIC-8 (D) / VSSOP-8 (DGK) / VSON-8 (DRB)"
+pins = { "1" = "R", "2" = "RE", "3" = "DE", "4" = "D", "5" = "GND", "6" = "A", "7" = "B", "8" = "VCC" }
+
+[models.coverage]
+implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]
+missing = ["driver_output", "receiver_output", "de_re_gating", "bus_levels", "failsafe", "logic_levels", "timing"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TCAN1057A-Q1 and TCAN1057AV-Q1: TI automotive fault-protected CAN FD transceivers in D (SOIC-8), DDF (SOT-23-THIN-8) and DRB (VSON-8),
+# all numbered alike. Source: TI SLLSFM8C (February 2021, revised October 2024), sha256
+# a3e276a7879d64c0939cafe1a65784f6f6990fdc97e38426a2e8719c4488f4b5 (byte-identical to the ti.com tcan1057a-q1.pdf symlink). Pin Functions
+# Table 4-1 p.4 (1 TXD, 2 GND, 3 VCC, 4 RXD, 5 NC or VIO, 6 CANL, 7 CANH, 8 S), 5.1 Absolute Maximum Ratings p.5, 5.4 Recommended
+# Operating Conditions p.5 (VCC 4.5 to 5.5 V), 5.5 Thermal Information p.6, 5.6 supply current p.6 (normal recessive 4.5 mA typ / 7.5 mA max).
+# The PDF does not print the board value "TCAN1057AEV-Q1" (no "EV" suffix in its orderable table, p.26); it is read as this family, whose
+# pin map is the same for every package. Pin 5 is VIO on the AV parts and NC on the others; only VCC is metered here.
+[[models]]
+id = "tcan1057a_q1_8pin"
+kind = "digital"
+description = "TI TCAN1057A-Q1 / TCAN1057AV-Q1 CAN FD transceiver, 8-pin: VCC supply draw and silent-mode-free bus-idle current (bus levels not modelled)"
+
+[models.match]
+value_re = "(?i)^TCAN1057A?E?V?(?:DR|DDFR|DRBR)?-?Q1$"
+
+[models.params]
+supply_current_a = 0.0045
+supply_on_v = 4.5
+warning = "source-bound bus-idle model: the normal-mode recessive VCC current (4.5 mA typ, 7.5 mA max, TXD high, S low) and the 4.5 V to 5.5 V VCC range are executable; dominant transmission (45 mA typ into 60 Ohm), silent mode (2.1 mA max), the VIO supply on AV parts, CANH/CANL levels and RXD are not represented, and the board value TCAN1057AEV-Q1 is read as this family because the datasheet does not print that suffix"
+
+[models.pins]
+"1" = "txd"
+"2" = "gnd"
+"3" = "vcc"
+"4" = "rxd"
+"5" = "vio"
+"6" = "canl"
+"7" = "canh"
+"8" = "s"
+"9" = "gnd2"
+"EP" = "gnd3"
+
+[models.ratings]
+max_voltage_v = 6.0
+max_junction_temp_c = 165.0
+theta_ja_c_per_w = 127.5
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 4.5
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI TCAN1057A-Q1 SLLSFM8C, 5.4 Recommended Operating Conditions VCC 4.5 V to 5.5 V; 5.1 Absolute Maximum Ratings VCC -0.3 V to 6 V"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vcc"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vcc / supply_on_v))"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tcan1057a-q1.pdf"
+title = "TI TCAN1057A-Q1 Automotive Fault-Protected CAN FD Transceiver, SLLSFM8C, February 2021, revised October 2024"
+locator = "Table 4-1 Pin Functions p.4; 5.1 Absolute Maximum Ratings and 5.4 Recommended Operating Conditions p.5; 5.5 Thermal Information and 5.6 Electrical Characteristics supply current p.6"
+sha256 = "a3e276a7879d64c0939cafe1a65784f6f6990fdc97e38426a2e8719c4488f4b5"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_current_a"
+reason = "SLLSFM8C 5.6 prints supply current typ and max only (normal recessive 4.5 mA / 7.5 mA, dominant 45 mA / 70 mA into 60 Ohm), no min column; the recessive typ is used"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; only the VCC bus-idle supply current is modelled. The thermal pad key (9, EP) is the CAD convention, the datasheet numbers no pad; RthetaJA is the SOIC (D) figure, the least favourable of the three packages"
+[[models.source.pinout]]
+package = "SOIC-8 (D) / SOT-23-THIN-8 (DDF) / VSON-8 (DRB)"
+pins = { "1" = "TXD", "2" = "GND", "3" = "VCC", "4" = "RXD", "5" = "NC / VIO", "6" = "CANL", "7" = "CANH", "8" = "S" }
+
+[models.coverage]
+implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]
+missing = ["dominant_transmit", "silent_mode", "vio_supply", "bus_levels", "rxd_output", "logic_levels", "timing"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PCA9557: TI 8-bit I2C and SMBus I/O expander with reset, D (SOIC-16), DB (SSOP-16), DGV (TVSOP-16) and PW (TSSOP-16), all numbered alike
+# (Table 4-1, p.4). Source: TI SCPS133K (December 2005, revised December 2024), sha256
+# 1f41dbe8f20f14a22b8de420221260edaa3388d70ea8bef0bc99d62eefb14e6d (byte-identical to the ti.com symlink). The RGV and RGY (VQFN)
+# packages number their pads differently (Table 4-2, p.5) and are NOT matched. 5.1 Absolute Maximum Ratings p.6 (VCC -0.5 to 6 V),
+# 5.3 Recommended Operating Conditions p.6 (VCC 2.3 to 5.5 V), 5.4 Thermal p.7 (PW 98.0 C/W), 5.5 supply current p.7 (operating, fSCL =
+# 400 kHz, no load: 12 uA typ / 22 uA max at 3.6 V; standby 0.25 uA typ). I2C address 0011 A2 A1 A0 (Table 7-2, p.19).
+# Power-on and reset leave every I/O an input (p.15), so no I/O pin is driven: the pins carry roles and no drivers.
+[[models]]
+id = "pca9557_16pin"
+kind = "digital"
+description = "TI PCA9557 8-bit I2C I/O expander, 16-pin SOIC/SSOP/TSSOP (D, DB, DGV, PW): VCC supply draw (register map and I/O drive not modelled)"
+
+[models.match]
+value_re = "(?i)^PCA9557(?:D|DB|DGV|PW)[RT]?(?:[ _-]IO[ _-]EXPANDER)?$"
+
+[models.params]
+supply_current_a = 1.2e-05
+supply_on_v = 2.3
+warning = "source-bound supply-draw model: the operating VCC current (12 uA typ, 22 uA max at 3.6 V, fSCL = 400 kHz, no load) and the 2.3 V to 5.5 V VCC range are executable; the I2C register map, the 0x18-0x1F address strap, the I/O drive (all pins power up as inputs; P0 is open-drain) and logic levels are not represented"
+
+[models.pins]
+"1" = "scl"
+"2" = "sda"
+"3" = "a0"
+"4" = "a1"
+"5" = "a2"
+"6" = "p0"
+"7" = "p1"
+"8" = "gnd"
+"9" = "p2"
+"10" = "p3"
+"11" = "p4"
+"12" = "p5"
+"13" = "p6"
+"14" = "p7"
+"15" = "reset_n"
+"16" = "vcc"
+
+[models.ratings]
+max_voltage_v = 6.0
+max_pin_current_a = 0.05
+theta_ja_c_per_w = 98.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.3
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI PCA9557 SCPS133K, 5.3 Recommended Operating Conditions VCC 2.3 V to 5.5 V; 5.1 Absolute Maximum Ratings VCC -0.5 V to 6 V"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vcc"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vcc / supply_on_v))"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/pca9557.pdf"
+title = "TI PCA9557 Remote 8-Bit I2C and SMBus Low-Power I/O Expander With Reset and Configuration Registers, SCPS133K, December 2005, revised December 2024"
+locator = "Table 4-1 Pin Functions p.4; 5.1 Absolute Maximum Ratings and 5.3 Recommended Operating Conditions p.6; 5.4 Thermal Information and 5.5 Electrical Characteristics p.7; Table 7-2 address p.19"
+sha256 = "1f41dbe8f20f14a22b8de420221260edaa3388d70ea8bef0bc99d62eefb14e6d"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_current_a"
+reason = "SCPS133K 5.5 prints ICC typ and max only (12 uA / 22 uA operating at 3.6 V and 400 kHz, 8 uA / 20 uA at 2.7 V), no min column; the 3.6 V typ is used and it scales with fSCL"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; only the VCC supply draw is modelled. The datasheet prints no internal pull-up on any pin (RESET and P0 want external pull-ups)"
+[[models.source.pinout]]
+package = "SOIC-16 (D) / SSOP-16 (DB) / TVSOP-16 (DGV) / TSSOP-16 (PW)"
+pins = { "1" = "SCL", "2" = "SDA", "3" = "A0", "4" = "A1", "5" = "A2", "6" = "P0", "7" = "P1", "8" = "GND", "9" = "P2", "10" = "P3", "11" = "P4", "12" = "P5", "13" = "P6", "14" = "P7", "15" = "RESET", "16" = "VCC" }
+
+[models.coverage]
+implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]
+missing = ["register_map", "i2c_address_strap", "io_drive", "open_drain_p0", "reset_behaviour", "logic_levels"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SHT3x-DIS: Sensirion humidity and temperature sensor, DFN 2.5 x 2.5 mm, 8 pads; SHT30, SHT31 and SHT35 differ in accuracy class and share the pin
+# map and electrical table. Source: Sensirion Datasheet SHT3x-DIS, Version 7 (December 2022), sha256
+# 095b1853e7f4328f5897c9ca6c392a7dd8b0202eda66b0a2629f9cb840dd496d (byte-identical to the Sensirion Datasheet_SHT3x_DIS.pdf). Table 7
+# pin assignment p.8 (1 SDA, 2 ADDR, 3 ALERT, 4 SCL, 5 VDD, 6 nRESET with an internal 50 kOhm pull-up to VDD, 7 R "no electrical
+# function, connect to VSS", 8 VSS; the die pad is internally connected to VSS, 3.3), Table 3 p.6 (VDD 2.15 to 5.5 V; IDD measuring
+# 600 uA typ / 1500 uA max; idle 0.2 uA typ), Table 6 p.7 (VDD abs max -0.3 to 6 V). I2C address 0x44 (ADDR low) or 0x45 (ADDR high),
+# ADDR must not float (Table 8, p.9). No thermal resistance is printed.
+[[models]]
+id = "sht3x_dis_dfn8"
+kind = "digital"
+description = "Sensirion SHT30/SHT31/SHT35-DIS humidity and temperature sensor, DFN-8: VDD supply draw (measurement data and I2C not modelled)"
+
+[models.match]
+value_re = "(?i)^SHT3[015](?:-DIS)?(?:-[BF][0-9.]*K?S?)?$"
+
+[models.params]
+supply_current_a = 0.0006
+supply_on_v = 2.15
+warning = "source-bound supply-draw model: the measuring-state VDD current (600 uA typ, 1.5 mA max) and the 2.15 V to 5.5 V VDD range are executable; the humidity and temperature results, I2C, the ADDR strap (0x44 / 0x45), ALERT and nRESET behaviour and the idle state (0.2 uA typ) are not represented"
+
+[models.pins]
+"1" = "sda"
+"2" = "addr"
+"3" = "alert"
+"4" = "scl"
+"5" = "vdd"
+"6" = "nreset"
+"7" = "nc"
+"8" = "gnd"
+"9" = "gnd2"
+"EP" = "gnd3"
+
+[models.ratings]
+max_voltage_v = 6.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 2.15
+max_v = 5.5
+abs_max_v = 6.0
+basis = "Sensirion SHT3x-DIS Version 7, Table 3 supply voltage 2.15 V to 5.5 V; Table 6 absolute maximum VDD -0.3 V to 6 V"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vdd"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vdd / supply_on_v))"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://sensirion.com/media/documents/213E6A3B/63A5A569/Datasheet_SHT3x_DIS.pdf"
+title = "Sensirion Datasheet SHT3x-DIS Humidity and Temperature Sensor, Version 7, December 2022"
+locator = "Table 7 pin assignment p.8; Table 3 electrical specifications p.6; Table 6 absolute maximum ratings p.7; Table 8 I2C addresses p.9; Table 23 ordering p.19"
+sha256 = "095b1853e7f4328f5897c9ca6c392a7dd8b0202eda66b0a2629f9cb840dd496d"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_current_a"
+reason = "SHT3x-DIS Version 7 Table 3 prints IDD typ and max only (measuring 600 uA / 1500 uA, idle 0.2 uA typ, 1.7 uA average at one measurement per second), no min column; the measuring typ is used"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; only the VDD supply draw is modelled. The die pad key (9, EP) is the CAD convention: the datasheet gives it no number"
+[[models.source.pinout]]
+package = "DFN-8 (2.5 x 2.5 mm)"
+pins = { "1" = "SDA", "2" = "ADDR", "3" = "ALERT", "4" = "SCL", "5" = "VDD", "6" = "nRESET", "7" = "R", "8" = "VSS" }
+
+[models.coverage]
+implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]
+missing = ["measurement_results", "i2c_register_map", "i2c_address_strap", "alert_output", "nreset_pullup", "idle_current", "logic_levels"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TPS629203: TI 300 mA, 3 to 17 V buck converter with DCS-Control, DRL (SOT-5X3, 8 pins). Source: TI SLVSGE2 (March 2022), sha256
+# 6259170f807fe9c84a89eed09ac613757b27a574d1daf708fa2e36d070dae7f7 (byte-identical to the ti.com symlink). Table 6-1 pins p.3 (1 FB/VSET,
+# 2 PG, 3 VOS, 4 SW, 5 GND, 6 VIN, 7 EN, 8 MODE/S-CONF), 6.1 Absolute Maximum Ratings p.4, 6.3 Recommended Operating Conditions p.4 (VIN 3 to
+# 17 V, VOUT 0.4 to 5.5 V, 0.3 A), 6.4 thermal p.4 (120 C/W JEDEC), 6.5 IQ p.5 (4 uA typ, not switching).
+# ONE ORDERABLE, TWO WAYS TO SET THE OUTPUT. The MODE/S-CONF pin resistor selects either an external FB divider (reference 0.6 V,
+# Table 8-1 rows 1 to 8) or an internal divider programmed by a resistor on VSET (Table 8-2, rows 9 to 16 of Table 8-1), read once at EN. The
+# output voltage therefore depends on a resistor pair that this card does not decode, so NO converter block is stamped: stamping the 0.6 V
+# feedback reference with an absent divider would turn a reference into an output voltage. Only the quiescent input draw is modelled and the
+# rail the part feeds stays whatever the rest of the board gives it.
+[[models]]
+id = "tps629203_drl"
+kind = "digital"
+description = "TI TPS629203 300 mA 3-17 V buck converter, 8-pin SOT-5X3 (DRL): VIN quiescent draw (output voltage set by FB divider or VSET resistor is not modelled)"
+
+[models.match]
+value_re = "(?i)^TPS629203(?:DRL)?[RT]?$"
+
+[models.params]
+supply_current_a = 4e-06
+supply_on_v = 3.0
+warning = "source-bound supply-draw model: the non-switching VIN quiescent current (4 uA typ) and the 3 V to 17 V VIN range are executable; the output voltage (set by an FB divider or a VSET resistor read at enable, which this card does not decode), the regulation loop, the load-dependent input current, PG, mode selection and protection are not represented, so the output rail is not driven by this part"
+
+[models.pins]
+"1" = "fb_vset"
+"2" = "pg"
+"3" = "vos"
+"4" = "sw"
+"5" = "gnd"
+"6" = "vin"
+"7" = "en"
+"8" = "mode"
+
+[models.ratings]
+max_voltage_v = 18.0
+max_current_a = 0.3
+theta_ja_c_per_w = 120.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vin"
+min_v = 3.0
+max_v = 17.0
+abs_max_v = 18.0
+basis = "TI TPS629203 SLVSGE2, 6.3 Recommended Operating Conditions VIN 3 V to 17 V; 6.1 Absolute Maximum Ratings VIN -0.3 V to 18 V"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vin"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vin / supply_on_v))"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/tps629203.pdf"
+title = "TI TPS629203 300-mA, 3-V to 17-V Low IQ Buck Converter with DCS-Control, SLVSGE2, March 2022"
+locator = "Table 6-1 Pin Functions p.3; 6.1 Absolute Maximum Ratings, 6.3 Recommended Operating Conditions and 6.4 Thermal Information p.4; 6.5 Electrical Characteristics p.5; Tables 8-1 and 8-2 pp.11-12"
+sha256 = "6259170f807fe9c84a89eed09ac613757b27a574d1daf708fa2e36d070dae7f7"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_current_a"
+reason = "SLVSGE2 6.5 prints IQ typ only (4 uA, power-save, not switching; 5 mA typ when switching at VIN = 12 V), no min or max; the input current of a loaded converter is not modelled"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; only the quiescent VIN draw is modelled"
+[[models.source.pinout]]
+package = "SOT-5X3 (DRL), 8 pins"
+pins = { "1" = "FB/VSET", "2" = "PG", "3" = "VOS", "4" = "SW", "5" = "GND", "6" = "VIN", "7" = "EN", "8" = "MODE/S-CONF" }
+
+[models.coverage]
+implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]
+missing = ["output_voltage_setting", "regulation_loop", "load_input_current", "power_good", "mode_selection", "protection", "logic_levels"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SN65HVD35: TI 3.3 V full-duplex RS-485 driver and receiver with enables, 1 Mbps, SOIC-14 (D) only. Source: TI SLLS665M (September 2005,
+# revised February 2023), sha256 4f90059e9caf3d071da3f3fffb884873787493502290e1909eb2e89cf95b3cb9 (byte-identical to the ti.com symlink). Table 6-1 Pin
+# Functions p.6 (1 NC, 2 R, 3 RE, 4 DE, 5 D, 6 and 7 GND, 8 NC, 9 Y, 10 Z, 11 B, 12 A, 13 and 14 VCC; the doubled pins are internally tied,
+# p.5), 7.1 Absolute Maximum Ratings p.7 (VCC -0.3 to 6 V), 7.3 Recommended Operating Conditions p.8 (VCC 3 to 3.6 V), 7.4 Thermal p.8
+# (93.2 C/W for the 14-pin D), 7.8 Supply Current p.11 (driver and receiver enabled: 6.5 mA MAX for the 34/35, no typ printed). The same
+# PDF covers the SN65HVD30 to SN65HVD34, which differ in enables and speed and are NOT matched. The 6.5 mA is the MAXIMUM and is used
+# because the sheet prints no typical for this row.
+[[models]]
+id = "sn65hvd35_soic14"
+kind = "digital"
+description = "TI SN65HVD35 3.3 V full-duplex RS-485 transceiver, SOIC-14 (D): VCC supply draw (driver, receiver, bus levels not modelled)"
+
+[models.match]
+value_re = "(?i)^SN65HVD35(?:D|DR)?$"
+
+[models.params]
+supply_current_a = 0.0065
+supply_on_v = 3.0
+warning = "source-bound supply-draw model: the VCC current with driver and receiver enabled (6.5 mA, the printed MAXIMUM, no typical is given) and the 3.0 V to 3.6 V VCC range are executable; the driver output (Y, Z), the receiver output (R), DE/RE gating (1 uA max in standby), bus levels and a loaded driver are not represented"
+
+[models.pins]
+"1" = "nc"
+"2" = "r"
+"3" = "re_n"
+"4" = "de"
+"5" = "d"
+"6" = "gnd"
+"7" = "gnd2"
+"8" = "nc2"
+"9" = "bus_y"
+"10" = "bus_z"
+"11" = "b"
+"12" = "a"
+"13" = "vcc"
+"14" = "vcc2"
+
+[models.ratings]
+max_voltage_v = 6.0
+theta_ja_c_per_w = 93.2
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 6.0
+basis = "TI SN65HVD35 SLLS665M, 7.3 Recommended Operating Conditions VCC 3 V to 3.6 V; 7.1 Absolute Maximum Ratings VCC -0.3 V to 6 V"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vcc"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vcc / supply_on_v))"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn65hvd35.pdf"
+title = "TI SN65HVD3x 3.3-V Full-Duplex RS-485 Drivers and Receivers, SLLS665M, September 2005, revised February 2023"
+locator = "Table 6-1 Pin Functions p.6; 7.1 Absolute Maximum Ratings p.7; 7.3 Recommended Operating Conditions and 7.4 Thermal Information p.8; 7.8 Supply Current p.11"
+sha256 = "4f90059e9caf3d071da3f3fffb884873787493502290e1909eb2e89cf95b3cb9"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_current_a"
+reason = "SLLS665M 7.8 prints only a MAX for the SN65HVD34/35 driver-and-receiver-enabled row (6.5 mA) and no typ or min; the max is used"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; only the VCC supply draw is modelled. Pins 6/7 and 13/14 are internally tied (p.5) so each pair is keyed as two roles of the same net"
+[[models.source.pinout]]
+package = "SOIC-14 (D)"
+pins = { "1" = "NC", "2" = "R", "3" = "RE", "4" = "DE", "5" = "D", "6" = "GND", "7" = "GND", "8" = "NC", "9" = "Y", "10" = "Z", "11" = "B", "12" = "A", "13" = "VCC", "14" = "VCC" }
+
+[models.coverage]
+implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]
+missing = ["driver_output", "receiver_output", "de_re_gating", "bus_levels", "failsafe", "logic_levels", "timing"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DRV8353S: TI 100 V three-phase smart gate driver, SPI variant, 40-pin WQFN with exposed pad (RTA), no buck regulator. Source: TI SLVSDY6A
+# (August 2018, revised June 2019), sha256 8bb3a1d29ec9ea079d0ef452a2a0c614511f37575756b11a03646d8a82ed758c (byte-identical to the ti.com
+# symlink). The package is the 40-pin RTA, NOT a 32-pin part (the 32-pin RTV is the DRV8350S). Pin table p.6-7 (the 40 pads in order: CPL,
+# CPH, VM, VDRAIN, VCP, GHA, SHA, GLA, SPA, SNA, SNB, SPB, GLB, SHB, GHB, GHC, SHC, GLC, SPC, SNC, SOC, SOB, SOA, VREF, AGND, nFAULT,
+# SDO, SDI, SCLK, nSCS, ENABLE, INHA, INLA, INHB, INLB, INHC, INLC, DVDD, GND, VGLS); 7.1 Absolute Maximum Ratings p.10; 7.3 Recommended
+# Operating Conditions p.11 (VM 9 to 75 V, VDRAIN 7 to 100 V); 7.4 Thermal p.11 (26.1 C/W for RTA); 7.5 supply current p.12 (IVM 8.5 mA typ
+# and IVDRAIN 1.9 mA typ at 48 V, ENABLE high, inputs low; sleep 20 uA typ). The exposed pad has no row in the pin table: key "41" is the
+# CAD numbering the board used and "EP" the Eagle spelling.
+# DVDD (5 V, up to 10 mA externally), VGLS (the 11 V low-side regulator), the charge pump VCP and the gate pins are NOT driven.
+[[models]]
+id = "drv8353s_wqfn40"
+kind = "digital"
+description = "TI DRV8353S 100 V three-phase smart gate driver (SPI), 40-pin WQFN (RTA): VM and VDRAIN supply draws (gate drive, shunt amplifiers, regulators, SPI not modelled)"
+
+[models.match]
+value_re = "(?i)^DRV8353S(?:RTA[RT]?)?$"
+
+[models.params]
+vm_current_a = 0.0085
+vdrain_current_a = 0.0019
+vm_on_v = 9.0
+vdrain_on_v = 7.0
+warning = "source-bound supply-draw model: the awake VM current (8.5 mA typ, 13 mA max at VM = VDRAIN = 48 V, ENABLE high, inputs low) and VDRAIN current (1.9 mA typ) with the 9 V to 75 V VM and 7 V to 100 V VDRAIN ranges are executable; the gate drivers, charge pump, DVDD and VGLS regulators, shunt amplifiers, SPI registers, ENABLE sleep mode (20 uA) and fault logic are not represented, so the half-bridge gates carry no drive"
+
+[models.pins]
+"1" = "cpl"
+"2" = "cph"
+"3" = "vm"
+"4" = "vdrain"
+"5" = "vcp"
+"6" = "gha"
+"7" = "sha"
+"8" = "gla"
+"9" = "spa"
+"10" = "sna"
+"11" = "snb"
+"12" = "spb"
+"13" = "glb"
+"14" = "shb"
+"15" = "ghb"
+"16" = "ghc"
+"17" = "shc"
+"18" = "glc"
+"19" = "spc"
+"20" = "snc"
+"21" = "soc"
+"22" = "sob"
+"23" = "soa"
+"24" = "vref"
+"25" = "agnd"
+"26" = "nfault"
+"27" = "sdo"
+"28" = "sdi"
+"29" = "sclk"
+"30" = "ncs"
+"31" = "enable"
+"32" = "inha"
+"33" = "inla"
+"34" = "inhb"
+"35" = "inlb"
+"36" = "inhc"
+"37" = "inlc"
+"38" = "dvdd"
+"39" = "gnd"
+"40" = "vgls"
+"41" = "gnd_ep"
+"EP" = "gnd_ep2"
+
+[models.ratings]
+max_voltage_v = 80.0
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 26.1
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vm"
+min_v = 9.0
+max_v = 75.0
+abs_max_v = 80.0
+basis = "TI DRV835x SLVSDY6A, 7.3 Recommended Operating Conditions VVM 9 V to 75 V; 7.1 Absolute Maximum Ratings VM -0.3 V to 80 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdrain"
+min_v = 7.0
+max_v = 100.0
+abs_max_v = 102.0
+basis = "TI DRV835x SLVSDY6A, 7.3 Recommended Operating Conditions VVDRAIN 7 V to 100 V; 7.1 Absolute Maximum Ratings VDRAIN -0.3 V to 102 V"
+
+[[models.behavioral.laws]]
+name = "vm_draw"
+kind = "current"
+a = "vm"
+b = "gnd"
+expr = "vm_current_a * min(1.0, max(0.0, v_vm / vm_on_v))"
+
+[[models.behavioral.laws]]
+name = "vdrain_draw"
+kind = "current"
+a = "vdrain"
+b = "gnd"
+expr = "vdrain_current_a * min(1.0, max(0.0, v_vdrain / vdrain_on_v))"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/drv8353.pdf"
+title = "TI DRV835x 100-V Three-Phase Smart Gate Driver, SLVSDY6A, August 2018, revised June 2019"
+locator = "Pin Functions pp.6-7; 7.1 Absolute Maximum Ratings p.10; 7.3 Recommended Operating Conditions and 7.4 Thermal Information p.11; 7.5 Electrical Characteristics p.12"
+sha256 = "8bb3a1d29ec9ea079d0ef452a2a0c614511f37575756b11a03646d8a82ed758c"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_current_a"
+reason = "SLVSDY6A 7.5 prints IVM 8.5 mA typ / 13 mA max and IVDRAIN 1.9 mA typ / 4 mA max at 48 V, no min; the typs are used at any supply, and they will read high at the 12 V a low-voltage board runs VM at"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; only the VM and VDRAIN supply draws are modelled"
+[[models.source.pinout]]
+package = "WQFN-40 (RTA)"
+pins = { "1" = "CPL", "2" = "CPH", "3" = "VM", "4" = "VDRAIN", "5" = "VCP", "6" = "GHA", "7" = "SHA", "8" = "GLA", "9" = "SPA", "10" = "SNA", "11" = "SNB", "12" = "SPB", "13" = "GLB", "14" = "SHB", "15" = "GHB", "16" = "GHC", "17" = "SHC", "18" = "GLC", "19" = "SPC", "20" = "SNC", "21" = "SOC", "22" = "SOB", "23" = "SOA", "24" = "VREF", "25" = "AGND", "26" = "nFAULT", "27" = "SDO", "28" = "SDI", "29" = "SCLK", "30" = "nSCS", "31" = "ENABLE", "32" = "INHA", "33" = "INLA", "34" = "INHB", "35" = "INLB", "36" = "INHC", "37" = "INLC", "38" = "DVDD", "39" = "GND", "40" = "VGLS" }
+
+[models.coverage]
+implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]
+missing = ["gate_drive", "charge_pump", "dvdd_regulator", "vgls_regulator", "shunt_amplifiers", "spi_registers", "sleep_mode", "fault_logic", "logic_levels"]

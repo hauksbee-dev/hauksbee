@@ -224,3 +224,24 @@ REF / ANODE pads SLVS543 Table 5-1 gives for it (for the TL432 the same table's 
 TL432x columns: DBZ CATHODE 2 / REF 1 / ANODE 3, DBV CATHODE 4 / REF 5 / \
 ANODE 2, PK CATHODE 1 / REF 3 / ANODE 2).
 """
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AP2112 / AP2112K with no voltage in the value: Diodes Inc. 600 mA fixed-output LDO.
+# The Ordering Information table (Diodes AP2112 datasheet, sha256
+# ef8d376f2ec356e29172eb9e053819a0ebdcc576dba7fc9ab0505c568427920f) lists five
+# SOT25 outputs (AP2112K-1.2, -1.8, -2.5, -2.6, -3.3), so the bare number does not
+# say what rail the part makes. The 3.3 V part has its own card and matches only a
+# value that spells the voltage.
+[[unmodelled]]
+id = "ap2112_voltage_unspecified"
+value_re = "(?i)^AP2112K?$"
+because = """
+the value names the AP2112 family without its output-voltage code, and the \
+family is fixed-output in 1.2 V, 1.8 V, 2.5 V, 2.6 V and 3.3 V versions with the \
+same pin map, so the rail this part produces cannot be read from the board file. \
+Choosing one would state a supply voltage the design may not have.
+"""
+unlocked_by = """
+The full orderable part number in the value or MPN field (for example \
+AP2112K-3.3TRG1), which selects the right card.
+"""

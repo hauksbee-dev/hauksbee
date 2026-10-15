@@ -221,20 +221,41 @@ pub fn embedded_part_number(deviceset: &str, device: &str, technology: &str) -> 
     let continues = device.is_empty()
         || (device.starts_with(|c: char| c.is_ascii_alphabetic()) && !is_shape_code(device));
     if !continues {
+        // A voltage code (`3.3V`) after a deviceset that is itself a part
+        // number (`MIC5205` + `3.3V`) is the family's output-voltage suffix.
+        if is_voltage_code(device) && !deviceset.contains(['*', '?']) {
+            let head = strip_class_words(deviceset);
+            if looks_like_part_number(head) {
+                return Some(format!("{head}-{device}"));
+            }
+        }
         return None;
     }
     let full = eagle_device_name(deviceset, device, technology);
-    // Drop leading letter-only words: the class the library files the part
-    // under, never part of the number.
-    let mut rest = full.as_str();
+    let rest = strip_class_words(&full);
+    looks_like_part_number(rest).then(|| rest.to_string())
+}
+
+/// Drop leading letter-only words: the class the library files the part
+/// under, never part of the number.
+fn strip_class_words(full: &str) -> &str {
+    let mut rest = full;
     while let Some(i) = rest.find(['-', '_']) {
         if !rest[..i].chars().all(|c| c.is_ascii_alphabetic()) {
             break;
         }
         rest = &rest[i + 1..];
     }
-    let rest = rest.trim_matches(|c: char| c == '-' || c == '_');
-    looks_like_part_number(rest).then(|| rest.to_string())
+    rest.trim_matches(|c: char| c == '-' || c == '_')
+}
+
+/// Whether `text` is a bare output-voltage code such as `3.3V`, `5V` or `1.8V`.
+fn is_voltage_code(text: &str) -> bool {
+    text.strip_suffix(['V', 'v']).is_some_and(|n| {
+        n.starts_with(|c: char| c.is_ascii_digit())
+            && n.chars().all(|c| c.is_ascii_digit() || c == '.')
+            && n.matches('.').count() <= 1
+    })
 }
 
 /// Package words that, followed by a pin count or size, name a shape.
@@ -956,6 +977,17 @@ mod tests {
             embedded_part_number("V_REG_AP2112", "K-3.3V", "").as_deref(),
             Some("AP2112K-3.3V")
         );
+        // A voltage-code device on a part-number deviceset is its voltage suffix.
+        assert_eq!(
+            embedded_part_number("MIC5205", "3.3V", "").as_deref(),
+            Some("MIC5205-3.3V")
+        );
+        assert_eq!(
+            embedded_part_number("V_REG_LM1117", "5V", "").as_deref(),
+            Some("LM1117-5V")
+        );
+        assert_eq!(embedded_part_number("VREG", "3.3V", ""), None);
+        assert_eq!(embedded_part_number("MIC5205", "SOT23", ""), None);
     }
 
     /// The ties [`declared_net_ties`] reads from `text`, which must parse.
