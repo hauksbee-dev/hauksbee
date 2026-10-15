@@ -581,28 +581,31 @@ fn cap_group_finding(nodes: &[CapNode]) -> LintFinding {
             )
         },
     );
-    let (severity, message) = if let Some(pads) = &first.off_board {
-        (
-            Severity::Low,
-            format!(
-                "{subject} {held}, and the circuit they sit in reaches no ground or supply on this \
-                 board: it meets the board only at {}. Its DC level is set by whatever is wired to \
-                 those pads, which this board cannot show. Assumed: the external wiring gives the \
-                 node a DC path; if nothing does, add a bleed resistor across the capacitor.",
-                text(pads),
-            ),
-        )
-    } else {
-        (
-            Severity::Medium,
-            format!(
-                "{subject} {held}: no resistor, supply or driver gives the node a DC level or drains \
-                 it, so charge from leakage, input bias current, a diode or a power-up edge stays on \
-                 it and its voltage is undefined (a diode only ratchets it one way). Add a bias or \
-                 bleed resistor to a rail or ground, or remove the capacitor.",
-            ),
-        )
-    };
+    let (severity, message) = first.off_board.as_ref().map_or_else(
+        || {
+            (
+                Severity::Medium,
+                format!(
+                    "{subject} {held}: no resistor, supply or driver gives the node a DC level or drains \
+                     it, so charge from leakage, input bias current, a diode or a power-up edge stays on \
+                     it and its voltage is undefined (a diode only ratchets it one way). Add a bias or \
+                     bleed resistor to a rail or ground, or remove the capacitor.",
+                ),
+            )
+        },
+        |pads| {
+            (
+                Severity::Low,
+                format!(
+                    "{subject} {held}, and the circuit they sit in reaches no ground or supply on this \
+                     board: it meets the board only at {}. Its DC level is set by whatever is wired to \
+                     those pads, which this board cannot show. Assumed: the external wiring gives the \
+                     node a DC path; if nothing does, add a bleed resistor across the capacitor.",
+                    text(pads),
+                ),
+            )
+        },
+    );
     LintFinding {
         check: LintCheck::CapNoDcPath,
         severity,
