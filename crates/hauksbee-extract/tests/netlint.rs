@@ -283,7 +283,7 @@ lint_tests! {
       (node (ref U1) (pin 2)) (node (ref J1) (pin 2)))"#;
 
     /// A system-on-module plugged into the carrier brings its own bus pulls,
-    /// however its value spells "SoM" (the `MCU` twin above stays Medium).
+    /// whatever case its value uses for `SoM` (the `MCU` twin above stays Medium).
     i2c_to_a_plug_in_som_is_low: MissingI2cPullup == 2 @ Low;
     r"
     (comp (ref U1) (value Nitrogen8M_SOM) (footprint footprints:TE_1473149-4))
