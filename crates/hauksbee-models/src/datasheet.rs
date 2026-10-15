@@ -511,6 +511,9 @@ fn run_inner(mut args: Args) -> Result<PathBuf> {
         if let Some(warning) = crate::validation::unknown_pads_warning(&entry) {
             say!("[model-extract] warning: {warning}");
         }
+        for warning in crate::validation::missing_rating_warnings(&entry) {
+            say!("[model-extract] warning: [models.ratings] {warning}");
+        }
         let id = entry.id;
         (
             output::finalise(&raw, part, &args.aliases, &args.pdf)?,
@@ -1764,8 +1767,9 @@ fn prompt_for_agent_backend(prompt: &str) -> String {
     };
     format!(
         "{before}{DATASHEET_TEXT_BEGIN}\n\
-         [Not embedded for this local agent backend. Read the attached page images first. \
-         If a needed fact is absent, find its page in page-index.md and read that page.]\n\
+         [Not embedded whole for this local agent backend: the selected pages are under \
+         \"Before you answer\" below. If a needed fact is absent, find its page in \
+         page-index.md and read that page.]\n\
          {DATASHEET_TEXT_END}{after}"
     )
 }
@@ -1933,7 +1937,7 @@ OUTPUT (TOML only, starting with [[models]]):
         conventions = conventions_for_kind(kind),
         optional_params = optional_params_for_kind(kind),
         pin_roles = pin_roles_for_kind(kind),
-        ratings_hint = crate::schema::Ratings::KEY_GUIDE,
+        ratings_hint = ratings_hint_for_kind(kind),
         param_bounds = param_bounds_for_kind(kind),
         behavioral_hint = behavioral_hint_for_kind(kind),
         digital_hint = digital_hint_for_kind(kind),
@@ -1943,6 +1947,31 @@ OUTPUT (TOML only, starting with [[models]]):
         pin_numbering = PIN_NUMBERING,
         extraction_rules = EXTRACTION_RULES,
         source_quantity_guidance = SOURCE_QUANTITY_GUIDANCE,
+    )
+}
+
+/// The rating keys that apply to the kind, then its rating categories as a
+/// checklist. Measured: two tiers both dropped a printed TJ maximum, and one
+/// put a per-pin limit where the rated output current belonged.
+fn ratings_hint_for_kind(kind: &str) -> String {
+    let Some(kind) = component_kind(kind) else {
+        return crate::schema::Ratings::KEY_GUIDE.to_string();
+    };
+    let guide = crate::validation::rating_guide(kind);
+    let expected = crate::validation::expected_ratings(kind);
+    if expected.is_empty() {
+        return guide;
+    }
+    let list: Vec<String> = expected
+        .iter()
+        .map(|(k, what)| format!("{k} ({what})"))
+        .collect();
+    format!(
+        "{guide}\nRATINGS BY CATEGORY: check each of these in turn: {}. Each one the datasheet \
+         prints goes in [models.ratings]; for one it does not print, add \
+         [[models.source.uncertainty]] status = \"unknown\", parameter = \"<key>\", reason \
+         naming the tables you checked. A per-pin limit is never the rated current.",
+        list.join("; ")
     )
 }
 
@@ -2259,8 +2288,11 @@ node 'sw' (BOOT 'boot', VSENSE/FB 'fb', COMP 'comp', SS 'ss', EN 'en') and add:
   topology = "buck"            # or "boost" / "buck_boost"
   out_pin = "sw"
   in_pin = "in"
-  vout_setpoint = <V>          # the fixed output, or for an adjustable part a
-                               # seed used only when the board has no divider
+  vout_setpoint = <V>          # the fixed output; for an adjustable part the
+                               # datasheet's typical-application output (cite
+                               # it), a seed for a board with no divider, and
+                               # NEVER the reference: vout_setpoint = vref_v
+                               # declares a fixed part whose FB senses VOUT
   iout_limit_a = <A>           # rated output current (optional)
   max_duty = <0..1>            # maximum duty cycle row (optional)
   switching_hz = <Hz>          # switching frequency row (optional)
@@ -2940,6 +2972,13 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
         ws.pages.len()
     );
     let agent_prompt = prompt_for_agent_backend(prompt);
+    // The reply's shape, enforced by a backend that can (see `schema_flag`).
+    let schema = if reply.table().is_empty() {
+        identify_schema()
+    } else {
+        envelope_schema()
+    };
+    std::fs::write(ws.path().join(REPLY_SCHEMA), schema.to_string())?;
     // Naming the kind is one word read off the front page, whose text is in
     // the prompt. Measured: given the drafting clause and page images, the
     // agent read the whole datasheet to answer it (430k to 790k input tokens,
@@ -3224,7 +3263,7 @@ fn run_and_record(
     let (chosen, model) = (resolved.backend, resolved.model());
     let ran = run_agent_budgeted(resolved, prompt, ws, budget);
     let stdout = ran.as_ref().map(String::as_str).unwrap_or_default();
-    match chosen {
+    let said = match chosen {
         Backend::ClaudeCode => {
             let result = harness::claude_result(stdout);
             let per_model = result
@@ -3258,7 +3297,136 @@ fn run_and_record(
             usage::record(chosen.name(), model, billing, None);
             ran
         }
+    };
+    if let Ok(text) = &said {
+        note_envelope(ws, text);
     }
+    said
+}
+
+/// The JSON Schema an agent's final message must match, written into the
+/// sandbox by the step that wants one and enforced only by a backend that can.
+const REPLY_SCHEMA: &str = "reply-schema.json";
+
+/// The identification reply: one supported kind, or `unsupported`.
+fn identify_schema() -> serde_json::Value {
+    let mut kinds = supported_kinds();
+    kinds.push("unsupported");
+    serde_json::json!({
+        "type": "object",
+        "properties": {"kind": {"type": "string", "enum": kinds}},
+        "required": ["kind"],
+        "additionalProperties": false
+    })
+}
+
+/// A drafting agent's closing envelope. The card itself stays in model.toml
+/// and the validator stays its authority: its pin and parameter maps are keyed
+/// by free text, which a strict schema (every key named) cannot express.
+fn envelope_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "status": {"type": "string", "enum": ["written", "identity_only", "not_written"]},
+            "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+            "reason": {"type": "string"},
+            "questions": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["status", "confidence", "reason", "questions"],
+        "additionalProperties": false
+    })
+}
+
+/// Announce a drafting agent's envelope, and keep its confidence where the
+/// ladder reads one when the agent wrote no `confidence.txt` itself.
+fn note_envelope(ws: &Workspace, text: &str) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text.trim()) else {
+        return;
+    };
+    let Some(level) = v["confidence"].as_str() else {
+        return;
+    };
+    let reason = v["reason"].as_str().unwrap_or_default();
+    let status = v["status"].as_str().unwrap_or("unstated");
+    say!("[model-extract] reply envelope: {status}, confidence {level}: {reason}");
+    for q in v["questions"].as_array().into_iter().flatten() {
+        say!(
+            "[model-extract] agent question: {}",
+            q.as_str().unwrap_or_default()
+        );
+    }
+    let path = ws.path().join(harness::CONFIDENCE);
+    if !path.is_file() {
+        let _ = std::fs::write(path, format!("{level}\n{reason}\n"));
+    }
+}
+
+/// The flag with which `exe` constrains its final message to a JSON Schema, if
+/// this install has one: probed once per executable from its help text and
+/// disclosed. Without it the reply is checked by the validator alone; it is
+/// never a reason to switch provider.
+fn schema_flag(backend: Backend, exe: &Path) -> Option<&'static str> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
+    let (flag, help): (&'static str, &[&str]) = match backend {
+        Backend::Codex => ("--output-schema", &["exec", "--help"]),
+        Backend::ClaudeCode => ("--json-schema", &["--help"]),
+        Backend::Agy | Backend::Api => return None,
+    };
+    // The unit tests' fake agents count their invocations; a probe is one more.
+    if cfg!(test) {
+        return None;
+    }
+    let mut seen = SEEN.get_or_init(Mutex::default).lock().ok()?;
+    let has = *seen.entry(exe.to_path_buf()).or_insert_with(|| {
+        let has = help_mentions(exe, help, flag);
+        let how = if has {
+            "the reply's shape is schema-constrained, then validated"
+        } else {
+            "the reply is checked by the validator alone"
+        };
+        let verb = if has { "takes" } else { "lacks" };
+        say!("[model-extract] {} {verb} {flag}: {how}", exe.display());
+        has
+    });
+    drop(seen);
+    has.then_some(flag)
+}
+
+/// Whether `exe <args>` prints `flag` within five seconds.
+fn help_mentions(exe: &Path, args: &[&str], flag: &str) -> bool {
+    use std::io::Read;
+    let dir = std::env::temp_dir().join("hauksbee-flag-probe");
+    let _ = std::fs::create_dir_all(&dir);
+    let spawned = Command::new(exe)
+        .args(args)
+        .current_dir(&dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn();
+    let Ok(mut child) = spawned else {
+        return false;
+    };
+    let mut pipe = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        if let Some(p) = pipe.as_mut() {
+            let _ = p.read_to_string(&mut text);
+        }
+        text
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return reader.join().is_ok_and(|t| t.contains(flag));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    false
 }
 
 /// Fetch, validate, and retry with feedback: one loop for every backend.
@@ -3603,10 +3771,7 @@ fn verification_clause(ws: &Workspace, table: &str) -> String {
                     }))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!(
-                    "- page-{:03}.png is PDF page {}: {}",
-                    page.number, page.number, reasons
-                )
+                format!("- PDF page {}: {}", page.number, reasons)
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -3614,23 +3779,29 @@ fn verification_clause(ws: &Workspace, table: &str) -> String {
         // Measured: an unbounded agent printed the whole dump, and every later
         // turn re-sent it (500k+ input tokens per draft); the hand-writer read
         // the few pages it needed by number.
-        let text_dump = if ws.has_text_dump {
-            "`page-index.md` lists every page's topics and `pages/page-NNN.txt` holds each \
-             page's text: find the page there and read only it. Never print `datasheet.txt` or \
-             the PDF whole; everything you read is re-sent on every later turn."
+        let (shown, how) = if ws.has_text_dump {
+            (
+                "their text (pdftotext -layout) is below",
+                "`page-index.md` lists every other page's topics and `pages/page-NNN.txt` holds \
+                 each page's text: read further pages by number, several in one command. Never \
+                 print `datasheet.txt`, the PDF or `prompt.md` (this instruction); everything you \
+                 read is re-sent on every later turn. The renders are `page-NNN.png`: open one \
+                 only where the text leaves a table's columns or the pinout ambiguous.",
+            )
         } else {
-            "No separate text dump was available."
+            (
+                "their renders are attached",
+                "No text layer was available: read values off the IMAGES for anything in a table \
+                 or pinout.",
+            )
         };
         format!(
-            "{} relevance-selected page image(s) are attached:\n{}\n\nPer-category coverage:\n{}\n\nThis is not \
-             the whole datasheet. The complete PDF is `datasheet.pdf`. {} If a needed \
-             fact is on an omitted page, read that page before answering. \
-             Read values off the IMAGES for anything that lives in a table or pinout: \
-             text extraction loses which column a number belonged to.",
+            "{} relevance-selected page(s); {shown}:\n{inventory}\n\nPer-category coverage:\n\
+             {category_coverage}\n\nThis is not the whole datasheet. The complete PDF is \
+             `datasheet.pdf`. {how} If a needed fact is on an omitted page, read that page \
+             before answering.{}",
             ws.pages.len(),
-            inventory,
-            category_coverage,
-            text_dump
+            selected_page_text(ws),
         )
     };
 
@@ -3660,6 +3831,38 @@ fn verification_clause(ws: &Workspace, table: &str) -> String {
             pin/package ambiguity but must not turn a guess into data.\n\n         Write the final answer to `model.toml` in your working directory as one \
          TOML document and nothing else."
     )
+}
+
+/// The selected pages' text, inline, so the agent starts with the tables it
+/// needs instead of spending turns opening them (each turn re-sends all).
+fn selected_page_text(ws: &Workspace) -> String {
+    use std::fmt::Write as _;
+    const CAP: usize = 48_000;
+    if !ws.has_text_dump {
+        return String::new();
+    }
+    let mut out = String::new();
+    for page in &ws.selected_pages {
+        let path = ws.path().join(format!("pages/page-{:03}.txt", page.number));
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        if out.len() + text.len() > CAP {
+            let n = page.number;
+            let _ = write!(
+                out,
+                "\n\n[page {n} and later omitted for length: read them by number]"
+            );
+            break;
+        }
+        let _ = write!(
+            out,
+            "\n\n===== PDF page {} =====\n{}",
+            page.number,
+            text.trim_end()
+        );
+    }
+    out
 }
 
 /// The identification call's instruction in place of the drafting one.
@@ -3887,11 +4090,15 @@ pub fn run_agent_budgeted(
     let Some(a) = resolved.agent(backend) else {
         bail!("the api backend is not an agent CLI");
     };
-    let pointer = String::from_utf8_lossy(AGENT_POINTER);
+    let stdin_text = agent_stdin(backend, prompt);
     let tool = &a.command;
     let executable = which_path(tool)
         .with_context(|| format!("executable `{tool}` was not found; no fallback attempted"))?;
-    let mut cmd = Command::new(std::path::absolute(executable)?);
+    let exe = std::path::absolute(executable)?;
+    let mut cmd = Command::new(&exe);
+    let schema_path = ws.path().join(REPLY_SCHEMA);
+    let schema = schema_path.is_file().then(|| schema_flag(backend, &exe));
+    let schema = schema.flatten();
     match backend {
         Backend::Codex => {
             // `--json` streams one JSONL event per step; the idle watchdog reads that stream.
@@ -3917,7 +4124,14 @@ pub fn run_agent_budgeted(
             for feature in CODEX_DISABLED_FEATURES {
                 cmd.args(["--disable", feature]);
             }
-            for page in &ws.pages {
+            // One value, so it goes before the many-valued `--image`.
+            if let Some(flag) = schema {
+                cmd.arg(flag).arg(&schema_path);
+            }
+            // With a text layer the selected pages' text is in the prompt and the
+            // renders stay on disk: measured, seven attached renders cost about
+            // 2.4k input tokens each on EVERY turn of the session.
+            for page in ws.pages.iter().filter(|_| !ws.has_text_dump) {
                 cmd.arg("--image").arg(page);
             }
         }
@@ -3945,13 +4159,18 @@ pub fn run_agent_budgeted(
             ])
             .env("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1")
             .env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
+            // Probed (2.1.300): not constrained decoding but a validated
+            // StructuredOutput tool call the CLI insists on, which adds turns.
+            if let Some(flag) = schema {
+                cmd.arg(flag).arg(std::fs::read_to_string(&schema_path)?);
+            }
         }
         Backend::Agy => {
             cmd.args(["--output-format", "text", "--mode", &a.permission_mode])
                 .arg("--sandbox")
                 .args(["--model", &a.model, "--effort", &a.effort, "--add-dir"])
                 .arg(ws.path())
-                .arg(format!("--print={pointer}"));
+                .arg(format!("--print={}", agent_pointer()));
         }
         Backend::Api => unreachable!("handled above"),
     }
@@ -3962,7 +4181,7 @@ pub fn run_agent_budgeted(
         tool,
         &mut cmd,
         ws,
-        prompt,
+        (prompt, &stdin_text),
         &log,
         Duration::from_secs(resolved.timeout_secs),
         // Codex streams an event per step; claude streams one per turn, and a
@@ -4107,7 +4326,10 @@ pub fn smoke_test(resolved: &Resolved, progress: &mut dyn FnMut(&str)) -> Result
 /// via /proc/<pid>/cmdline and visible to `ps -ww` on macOS, and a 40,000
 /// character datasheet excerpt would undo the consent the user gave to send it
 /// to one vendor; it would also brush `ARG_MAX`), stdin carries only a pointer to
-/// that file, and the answer is expected in `model.toml`.
+/// that file (codex and Claude Code get the whole prompt on stdin, which is no
+/// argv either: measured, an agent told to read the file spent two turns
+/// re-reading a truncated `cat` of it, and every later turn re-sent both), and
+/// the answer is expected in `model.toml`.
 ///
 /// stderr goes to `log`, a FILE: not a pipe, because nothing reads a pipe until
 /// the child has exited, so a ten-minute agentic run overflows the 64 KiB
@@ -4119,7 +4341,7 @@ fn run_cli_agent(
     tool: &str,
     cmd: &mut Command,
     ws: &Workspace,
-    prompt: &str,
+    (prompt, stdin_text): (&str, &str),
     log: &Path,
     timeout: Duration,
     idle: Option<Duration>,
@@ -4144,23 +4366,37 @@ fn run_cli_agent(
     // the pointer is short and secret-free, so argv is fine there. Its pipe
     // is still written and closed so a CLI that does read stdin sees EOF.
     if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(AGENT_POINTER);
+        let _ = stdin.write_all(stdin_text.as_bytes());
     }
     wait_for_cli_backend(child, tool, log, (timeout, idle), watch)
 }
 
-/// The stdin instruction every agent run receives. The pages are on disk
-/// beside the PDF (codex also gets them attached with `--image`), so one
-/// pointer serves every CLI (agy gets it as the `--print` value instead).
-const AGENT_POINTER: &[u8] = b"Read prompt.md in your working directory and follow it exactly. \
-    The supplied files and output location are in that working directory; read nothing outside \
+/// What goes on the agent's stdin: the prompt itself, except for agy, whose
+/// prompt goes on argv and so is only a pointer to prompt.md.
+fn agent_stdin(backend: Backend, prompt: &str) -> String {
+    if backend == Backend::Agy {
+        agent_pointer()
+    } else {
+        format!("{WORKSPACE_NOTE}\n\n{prompt}")
+    }
+}
+
+/// agy's instruction (its `--print` value): a pointer to prompt.md, since its
+/// prompt goes on argv. codex and Claude Code get the prompt itself on stdin.
+fn agent_pointer() -> String {
+    format!("Read prompt.md in your working directory and follow it exactly. {WORKSPACE_NOTE}")
+}
+
+/// What every agent run is told about its working directory, ahead of the
+/// prompt (inline) or the pointer to it.
+const WORKSPACE_NOTE: &str = "The supplied files and output location are in your working directory; read nothing outside \
     it, use the file tools available to you, and report any denied required read or write instead of claiming success. \
     The working directory sits inside the system temporary folder, which the sandbox policy \
     denies in general but grants for this directory: open its files rather than concluding \
     from the policy text that you cannot, and report a denial only after a read has failed. \
-    Read values off the rendered page images (page-*.png) for anything that lives in a table \
-    or pinout, with datasheet.pdf available in the same directory. Write your answer to the file prompt.md names \
-    (model.toml unless it names another).";
+    The selected pages' text is in the instruction; open a rendered page (page-NNN.png) only \
+    where that text leaves a table column or the pinout ambiguous. Write your answer to the file \
+    the instruction names (model.toml unless it names another).";
 
 /// Poll a spawned CLI agent to completion, killing its process tree at
 /// `timeout` (or, when `idle` is set, after that long with no stdout), and
@@ -4582,6 +4818,9 @@ fn check_reply_entry(entry: &ModelEntry, part: &str, kind_str: &str) -> Result<(
     if !problems.is_empty() {
         bail!("pin map: {}", problems.join("; "));
     }
+    if let Some(problem) = crate::validation::adjustable_seed_problem(entry) {
+        bail!("{problem}");
+    }
     // The lint checks the behaviour block too; a card it would refuse is no draft.
     if !entry.logic.is_empty() {
         entry
@@ -4703,6 +4942,27 @@ mod tests {
         }
         assert!(validate_api_key_env_name("OPENAI_API_KEY").is_ok());
         assert!(validate_api_key_env_name("_KEY2").is_ok());
+    }
+
+    #[test]
+    fn reply_schemas_are_strict_and_parse_back() {
+        // Strict structured output requires every property named as required
+        // and no others allowed; a lax schema is refused by the backend.
+        for schema in [identify_schema(), envelope_schema()] {
+            let props = schema["properties"].as_object().unwrap();
+            let required = schema["required"].as_array().unwrap();
+            assert_eq!(props.len(), required.len(), "{schema}");
+            assert_eq!(schema["additionalProperties"], false);
+        }
+        let kinds = identify_schema()["properties"]["kind"]["enum"].clone();
+        assert!(kinds.as_array().unwrap().iter().any(|k| k == "unsupported"));
+        assert_eq!(kinds_named(r#"{"kind":"vreg"}"#), ["vreg"]);
+        let ws = Workspace::scratch().unwrap();
+        note_envelope(
+            &ws,
+            r#"{"status":"written","confidence":"low","reason":"two packages","questions":[]}"#,
+        );
+        assert_eq!(harness::confidence(ws.path()).0, "low");
     }
 
     #[test]
@@ -5724,7 +5984,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             a.model,
             a.effort,
             ws.path().display(),
-            String::from_utf8_lossy(AGENT_POINTER)
+            agent_pointer()
         );
         let output = run_agent_once(&resolved, "fake prompt", &ws).unwrap();
         assert_eq!(output.trim_end(), expected);
@@ -6417,7 +6677,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         );
         let local = prompt_for_agent_backend(&model_prompt);
         assert!(!local.contains(noise));
-        assert!(local.contains("Read the attached page images first"));
+        assert!(local.contains("the selected pages are under"));
         assert!(local.contains("find its page in page-index.md"));
         assert!(local.len() < model_prompt.len());
 
