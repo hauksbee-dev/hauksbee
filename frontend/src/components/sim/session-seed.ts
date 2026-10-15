@@ -111,7 +111,7 @@ export function seedFrom(report: WebReport | null | undefined, specToml: string 
     supplies: specToml ? spec.supplies : [],
     durationS: specToml ? spec.durationS : null,
     probes: probes.slice(0, MAX_SEED_PROBES),
-    cosim: cosim ? { seconds: cosim.seconds_simulated, uart: cosim.uart_output, toggles } : null,
+    cosim: cosim ? { seconds: Number(cosim.seconds_simulated.toPrecision(3)), uart: cosim.uart_output, toggles } : null,
   }
 }
 

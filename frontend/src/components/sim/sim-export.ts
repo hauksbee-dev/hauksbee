@@ -38,7 +38,7 @@ export function provenanceFor(
     .map(c => `${c.reference} = ${c.model_id} (${c.source.layer}, ${c.source.origin})`)
   for (const pk of packs) models.unshift(`pack ${pk.path}${pk.sha256 ? ` sha256 ${pk.sha256}` : ''}`)
   return {
-    board: board ?? report?.file_name ?? null,
+    board: board || report?.file_name || null,
     boardSha256: bd?.sha256 ?? null,
     firmware: fw ? fw.path.split(/[\\/]/).pop() ?? fw.path : null,
     firmwareSha256: fw?.sha256 ?? null,

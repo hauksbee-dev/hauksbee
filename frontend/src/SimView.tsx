@@ -398,7 +398,7 @@ export default function SimView({
   // Every export opens with the same provenance (sim time, supplies, firmware
   // and board hashes, engine and model versions).
   const provenance = () => provenanceFor(report, sessionBoard, engineVersion, status?.sim_time ?? 0, runningSupplies)
-  const stem = (sessionBoard ?? 'board').replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9_-]+/g, '_')
+  const stem = (sessionBoard || report?.file_name || 'board').replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9_-]+/g, '_')
   const exportItems = [
     {
       id: 'scope-csv', label: 'Scope traces (.csv)', disabled: probes.length === 0,
