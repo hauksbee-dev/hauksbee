@@ -82,13 +82,13 @@ export type SaveOutcome =
 
 // ── Storage ──────────────────────────────────────────────────────────────────
 
-const isBrowser = typeof localStorage !== 'undefined'
+const isBrowser = () => typeof localStorage !== 'undefined'
 
 /** Storage is a convenience, never a thing worth breaking the app over: every
  *  access is guarded, and a corrupt or unreadable value reads as absent. */
 function readJson<T>(key: string): T | null {
   try {
-    const raw = isBrowser ? localStorage.getItem(key) : null
+    const raw = isBrowser() ? localStorage.getItem(key) : null
     return raw ? (JSON.parse(raw) as T) : null
   } catch {
     return null
@@ -96,7 +96,7 @@ function readJson<T>(key: string): T | null {
 }
 
 function write(key: string, value: string | null): boolean {
-  if (!isBrowser) return false
+  if (!isBrowser()) return false
   try {
     if (value === null) localStorage.removeItem(key)
     else localStorage.setItem(key, value)
@@ -122,7 +122,7 @@ const listeners = new Set<() => void>()
 function readSnapshot(): SessionsSnapshot {
   const rows = readJson<SessionRow[]>(INDEX_KEY)
   let currentId: string | null = null
-  try { currentId = isBrowser ? localStorage.getItem(CURRENT_KEY) : null } catch { /* absent */ }
+  try { currentId = isBrowser() ? localStorage.getItem(CURRENT_KEY) : null } catch { /* absent */ }
   return {
     rows: (Array.isArray(rows) ? rows : [])
       .filter(r => r && typeof r.id === 'string' && r.board && typeof r.board.fileName === 'string')
@@ -201,7 +201,7 @@ export const countAsserts = (toml: string | null | undefined): number => (toml?.
  *  kept so the UI can say it; a silent partial save is the failure mode this
  *  whole store exists to avoid. */
 export function saveSession(session: SavedSession): SaveOutcome {
-  if (!isBrowser) return { kind: 'blocked', reason: 'this browser has no local storage' }
+  if (!isBrowser()) return { kind: 'blocked', reason: 'this browser has no local storage' }
   const key = recordKey(session.id)
   const attempts: [SavedSession, SaveOutcome][] = [
     [session, { kind: 'saved' }],

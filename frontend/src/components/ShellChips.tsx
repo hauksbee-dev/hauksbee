@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { WebReport } from '../types/report'
-import { boardVerdict, TERM_TONE, TONE_RANK, TONE_STYLE, useStatusLabel } from '../lib/status-vocab'
+import { boardVerdict, TONE_RANK, TONE_STYLE, useStatusLabel } from '../lib/status-vocab'
 import type { ChipTone, StatusTerm } from '../lib/status-vocab'
 import type { SimShellStatus } from '../SimView'
 import { useGlossary, useTermEntry } from './ui'
@@ -200,10 +200,8 @@ export function ShellChips({
       parts.push({ key: 'sim', tone: 'quiet', detail: `live: ${sessionBoard}`, view: 'sim', pulse: sim.running })
     }
   } else {
-    if (report?.ok === true) {
-      const board = boardVerdict(report)
-      parts.push({ key: 'board', view: 'board', ...board, tone: board.tone ?? TERM_TONE[board.term] })
-    }
+    const board = report ? boardVerdict(report) : null
+    if (board) parts.push({ key: 'board', view: 'board', term: board.term, detail: board.detail, tone: board.tone })
     if (checks) {
       const { passed, failed, invalid, measured = 0 } = checks
       // A green checks result must never sit beside the report's own serious
