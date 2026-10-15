@@ -31,6 +31,46 @@ fn ac_loop_models() -> PathBuf {
     board("tests/fixtures/ac_loop_models")
 }
 
+/// Sweeps the one-pole AC-loop fixture (1 Hz to 1e8 Hz, models dir attached)
+/// with the extra flags appended.
+fn ac_loop_sweep(extra: &[&str]) -> std::process::Output {
+    let models = ac_loop_models();
+    let mut args = vec!["--models-dir", models.to_str().unwrap(), "--ac", "1:1e8:50"];
+    args.extend_from_slice(extra);
+    run_board(&ac_loop_board(), &args)
+}
+
+/// A tracked firmware fixture, asserted present before a run boots it.
+#[cfg(feature = "avr")]
+fn firmware(rel: &str) -> PathBuf {
+    let fw = board(rel);
+    assert!(
+        fw.exists(),
+        "required tracked firmware fixture: {}",
+        fw.display()
+    );
+    fw
+}
+
+/// Headless boot of `brd` with firmware `fw` for `seconds`, plus `flags`.
+#[cfg(feature = "avr")]
+fn boot_run(
+    brd: &std::path::Path,
+    fw: &std::path::Path,
+    seconds: &str,
+    flags: &[&str],
+) -> std::process::Output {
+    let mut args = vec![
+        "run",
+        brd.to_str().unwrap(),
+        "--firmware",
+        fw.to_str().unwrap(),
+    ];
+    args.extend_from_slice(&["--headless", "--seconds", seconds]);
+    args.extend_from_slice(flags);
+    run(&args)
+}
+
 #[test]
 fn ampacity_prints_capacity_only_report() {
     let path = std::env::temp_dir().join(format!(
@@ -227,20 +267,7 @@ fn ac_all_requested_nodes_missing_text_errors_and_exits_three() {
 
 #[test]
 fn ac_loop_cli_reports_real_one_pole_phase_margin() {
-    let models = ac_loop_models();
-    let out = run_board(
-        &ac_loop_board(),
-        &[
-            "--models-dir",
-            models.to_str().unwrap(),
-            "--ac",
-            "1:1e8:50",
-            "--ac-node",
-            "OUT",
-            "--ac-loop",
-            "OUT",
-        ],
-    );
+    let out = ac_loop_sweep(&["--ac-node", "OUT", "--ac-loop", "OUT"]);
 
     assert!(
         out.status.success(),
@@ -273,7 +300,6 @@ fn ac_csv_is_written_even_with_json() {
     // legitimately wants structured JSON on stdout AND a CSV artifact on disk.
     // A CSV writer placed AFTER the `--json` early return drops the CSV whenever
     // both are passed: never written, no diagnostic, exit 0.
-    let models = ac_loop_models();
     let csv_path = std::env::temp_dir().join(format!(
         "hauksbee_ac_csv_{}_{}.csv",
         std::process::id(),
@@ -283,20 +309,13 @@ fn ac_csv_is_written_even_with_json() {
             .as_nanos()
     ));
     let _ = std::fs::remove_file(&csv_path);
-    let out = run_board(
-        &ac_loop_board(),
-        &[
-            "--models-dir",
-            models.to_str().unwrap(),
-            "--ac",
-            "1:1e8:50",
-            "--ac-node",
-            "OUT",
-            "--ac-csv",
-            csv_path.to_str().unwrap(),
-            "--json",
-        ],
-    );
+    let out = ac_loop_sweep(&[
+        "--ac-node",
+        "OUT",
+        "--ac-csv",
+        csv_path.to_str().unwrap(),
+        "--json",
+    ]);
     assert!(
         out.status.success(),
         "valid AC sweep must succeed; status={:?}; stderr={}",
@@ -331,21 +350,7 @@ fn ac_partial_json_surfaces_a_not_found_node() {
     // R12: a valid sweep that requests one REAL net (OUT) and one that doesn't
     // exist must still name the missing net in the JSON; the text path warns
     // "net not found", so the JSON must not silently drop it.
-    let models = ac_loop_models();
-    let out = run_board(
-        &ac_loop_board(),
-        &[
-            "--models-dir",
-            models.to_str().unwrap(),
-            "--ac",
-            "1:1e8:50",
-            "--ac-node",
-            "OUT",
-            "--ac-node",
-            "/NONEXISTENT",
-            "--json",
-        ],
-    );
+    let out = ac_loop_sweep(&["--ac-node", "OUT", "--ac-node", "/NONEXISTENT", "--json"]);
     assert!(
         out.status.success(),
         "a partially-valid sweep (one real net) still succeeds; stderr={}",
@@ -540,25 +545,10 @@ fn strict_gate_ignores_shorts_on_unvalidated_kicad10_but_not_validated() {
 #[test]
 fn boot_advisory_emits_note_and_strict_boot_gates() {
     let b = board("../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
-    let fw = board("../../testdata/firmware/boot_gate_a/boot_gate.hex");
-    assert!(
-        fw.exists(),
-        "required tracked firmware fixture: {}",
-        fw.display()
-    );
-    let (b, fw) = (b.to_str().unwrap(), fw.to_str().unwrap());
+    let fw = firmware("../../testdata/firmware/boot_gate_a/boot_gate.hex");
 
     // Advisory present in JSON, and NOT a gate by default.
-    let out = run(&[
-        "run",
-        b,
-        "--firmware",
-        fw,
-        "--headless",
-        "--seconds",
-        "0.05",
-        "--json",
-    ]);
+    let out = boot_run(&b, &fw, "0.05", &["--json"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("\"boot_control_net\""),
@@ -567,16 +557,7 @@ fn boot_advisory_emits_note_and_strict_boot_gates() {
     expect_err(&out, 0, &[]);
 
     // --strict-boot escalates it to exit 2.
-    let strict = run(&[
-        "run",
-        b,
-        "--firmware",
-        fw,
-        "--headless",
-        "--seconds",
-        "0.05",
-        "--strict-boot",
-    ]);
+    let strict = boot_run(&b, &fw, "0.05", &["--strict-boot"]);
     expect_err(&strict, 2, &[]);
 }
 
@@ -590,23 +571,9 @@ fn boot_advisory_emits_note_and_strict_boot_gates() {
 #[test]
 fn default_text_headless_surfaces_the_boot_hazard() {
     let b = board("../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
-    let fw = board("../../testdata/firmware/boot_gate_a/boot_gate.hex");
-    assert!(
-        fw.exists(),
-        "required tracked firmware fixture: {}",
-        fw.display()
-    );
-    let (b, fw) = (b.to_str().unwrap(), fw.to_str().unwrap());
+    let fw = firmware("../../testdata/firmware/boot_gate_a/boot_gate.hex");
     // No --json, no --plain: the plain-text default persona.
-    let out = run(&[
-        "run",
-        b,
-        "--firmware",
-        fw,
-        "--headless",
-        "--seconds",
-        "0.05",
-    ]);
+    let out = boot_run(&b, &fw, "0.05", &[]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("BOOT HAZARD") && stdout.contains("GATE_CTRL"),
@@ -624,24 +591,8 @@ fn default_text_headless_surfaces_the_boot_hazard() {
 #[test]
 fn clean_firmware_raises_no_boot_advisory() {
     let b = board("../hauksbee-ci/examples/boards/blinky.kicad_pcb");
-    let fw = board("../../testdata/firmware/demo/demo.hex");
-    assert!(
-        fw.exists(),
-        "required tracked firmware fixture: {}",
-        fw.display()
-    );
-    let (b, fw) = (b.to_str().unwrap(), fw.to_str().unwrap());
-    let out = run(&[
-        "run",
-        b,
-        "--firmware",
-        fw,
-        "--headless",
-        "--seconds",
-        "0.1",
-        "--json",
-        "--strict-boot",
-    ]);
+    let fw = firmware("../../testdata/firmware/demo/demo.hex");
+    let out = boot_run(&b, &fw, "0.1", &["--json", "--strict-boot"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         !stdout.contains("\"boot_control_net\""),
@@ -661,27 +612,11 @@ fn clean_firmware_raises_no_boot_advisory() {
 #[test]
 fn boot_state_panel_reports_gate_drive_state() {
     let b = board("../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
-    let fw_a = board("../../testdata/firmware/boot_gate_a/boot_gate.hex");
-    let fw_b = board("../../testdata/firmware/boot_gate_b/boot_gate.hex");
-    assert!(
-        fw_a.exists() && fw_b.exists(),
-        "required tracked firmware fixtures: {}, {}",
-        fw_a.display(),
-        fw_b.display()
-    );
-    let b = b.to_str().unwrap();
+    let fw_a = firmware("../../testdata/firmware/boot_gate_a/boot_gate.hex");
+    let fw_b = firmware("../../testdata/firmware/boot_gate_b/boot_gate.hex");
 
     // Variant A: gate driven HIGH and held -> plain panel + json say so.
-    let plain = run(&[
-        "run",
-        b,
-        "--firmware",
-        fw_a.to_str().unwrap(),
-        "--headless",
-        "--seconds",
-        "0.05",
-        "--plain",
-    ]);
+    let plain = boot_run(&b, &fw_a, "0.05", &["--plain"]);
     let p = String::from_utf8_lossy(&plain.stdout);
     assert!(
         p.contains("Power-up state of MOSFET"),
@@ -693,16 +628,7 @@ fn boot_state_panel_reports_gate_drive_state() {
     );
     expect_err(&plain, 0, &[]);
 
-    let js = run(&[
-        "run",
-        b,
-        "--firmware",
-        fw_a.to_str().unwrap(),
-        "--headless",
-        "--seconds",
-        "0.05",
-        "--json",
-    ]);
+    let js = boot_run(&b, &fw_a, "0.05", &["--json"]);
     let j = String::from_utf8_lossy(&js.stdout);
     assert!(
         j.contains("\"boot_gates\"") && j.contains("\"driven_high\""),
@@ -710,16 +636,7 @@ fn boot_state_panel_reports_gate_drive_state() {
     );
 
     // Variant B: gate never driven -> floating.
-    let floating = run(&[
-        "run",
-        b,
-        "--firmware",
-        fw_b.to_str().unwrap(),
-        "--headless",
-        "--seconds",
-        "0.05",
-        "--plain",
-    ]);
+    let floating = boot_run(&b, &fw_b, "0.05", &["--plain"]);
     let f = String::from_utf8_lossy(&floating.stdout);
     assert!(
         f.contains("GATE_CTRL") && f.contains("floating"),
@@ -737,12 +654,7 @@ fn boot_state_panel_reports_gate_drive_state() {
 #[cfg(feature = "avr")]
 #[test]
 fn boot_panel_reports_high_even_with_a_gate_pulldown() {
-    let fw = board("../../testdata/firmware/boot_gate_a/boot_gate.hex");
-    assert!(
-        fw.exists(),
-        "required tracked firmware fixture: {}",
-        fw.display()
-    );
+    let fw = firmware("../../testdata/firmware/boot_gate_a/boot_gate.hex");
     let out = run_board(
         &board("tests/fixtures/boot_gate_pulldown.kicad_pcb"),
         &[

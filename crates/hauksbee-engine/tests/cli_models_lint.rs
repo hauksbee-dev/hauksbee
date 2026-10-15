@@ -24,6 +24,32 @@ fn pic_programmer_board() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/boards/pic_programmer.kicad_pcb")
 }
 
+/// Lints `path`, asserts the exit code, and returns the output for content checks.
+fn lint_exits(path: &std::path::Path, code: i32) -> String {
+    let (got, out) = lint(path);
+    assert_eq!(
+        got,
+        code,
+        "{}: lint must exit {code}; output:\n{out}",
+        path.display()
+    );
+    out
+}
+
+/// Runs `hauksbee models <sub> <board> <extra..>`.
+fn models_run(sub: &str, board: &std::path::Path, extra: &[&str]) -> std::process::Output {
+    let mut args = vec!["models", sub, board.to_str().unwrap()];
+    args.extend_from_slice(extra);
+    run(&args)
+}
+
+/// Runs `hauksbee models new U3 --board <board> <extra..>`.
+fn models_new_u3(board: &std::path::Path, extra: &[&str]) -> std::process::Output {
+    let mut args = vec!["models", "new", "U3", "--board", board.to_str().unwrap()];
+    args.extend_from_slice(extra);
+    run(&args)
+}
+
 /// One broken fixture per validation category, with the named-error substring
 /// the lint output must carry.
 #[test]
@@ -76,11 +102,7 @@ fn lint_names_every_broken_category() {
 #[test]
 fn builtin_digital_db_lints_clean() {
     let db = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hauksbee-models/db/digital.toml");
-    let (code, out) = lint(&db);
-    assert_eq!(
-        code, 0,
-        "builtin digital.toml must lint clean; output:\n{out}"
-    );
+    let out = lint_exits(&db, 0);
     for id in ["74hc595", "74hc165", "74hc125", "74hc27", "74hc02"] {
         assert!(
             out.contains(&format!("model '{id}': ok")),
@@ -96,11 +118,7 @@ fn builtin_digital_db_lints_clean() {
 #[test]
 fn builtin_diode_db_lints_without_errors_on_the_4148_and_lm4040_cards() {
     let db = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hauksbee-models/db/diodes.toml");
-    let (code, out) = lint(&db);
-    assert_eq!(
-        code, 0,
-        "builtin diodes.toml must lint without errors:\n{out}"
-    );
+    let out = lint_exits(&db, 0);
     assert!(out.contains(" 0 finding(s)"), "no finding line:\n{out}");
     for line in out.lines() {
         assert!(
@@ -124,8 +142,7 @@ fn lint_refuses_a_model_with_no_real_match_rule() {
         "[[models]]\nid = \"test_r\"\nkind = \"passive\"\n[models.match]\nvalue = [\"^10k$\"]\n",
     )
     .unwrap();
-    let (code, out) = lint(&path);
-    assert_eq!(code, 2, "a non-binding model is a lint finding:\n{out}");
+    let out = lint_exits(&path, 2);
     assert!(out.contains("no match rules"), "{out}");
 }
 
@@ -134,15 +151,7 @@ fn scaffold_does_not_infer_model_kind_from_reference_letter() {
     let dir = tempfile::tempdir().unwrap();
     let scaffold = dir.path().join("u3.toml");
     let board = pic_programmer_board();
-    let made = run(&[
-        "models",
-        "new",
-        "U3",
-        "--board",
-        board.to_str().unwrap(),
-        "--out",
-        scaffold.to_str().unwrap(),
-    ]);
+    let made = models_new_u3(&board, &["--out", scaffold.to_str().unwrap()]);
     assert_ok(&made);
     let text = std::fs::read_to_string(&scaffold).unwrap();
     assert!(text.contains("kind = \"choose_kind\""), "{text}");
@@ -154,17 +163,10 @@ fn scaffold_does_not_infer_model_kind_from_reference_letter() {
     assert!(out.contains("unknown kind 'choose_kind'"), "{out}");
 
     let explicit = dir.path().join("u3-vreg.toml");
-    let made = run(&[
-        "models",
-        "new",
-        "U3",
-        "--board",
-        board.to_str().unwrap(),
-        "--kind",
-        "vreg",
-        "--out",
-        explicit.to_str().unwrap(),
-    ]);
+    let made = models_new_u3(
+        &board,
+        &["--kind", "vreg", "--out", explicit.to_str().unwrap()],
+    );
     assert_ok(&made);
     let text = std::fs::read_to_string(explicit).unwrap();
     assert!(text.contains("kind = \"vreg\""), "{text}");
@@ -183,15 +185,7 @@ fn scaffold_emits_unknown_provenance_and_a_pack_without_writing_elsewhere() {
     let dir = tempfile::tempdir().unwrap();
     let pack = dir.path().join("acme-pack");
     let board = pic_programmer_board();
-    let made = run(&[
-        "models",
-        "new",
-        "U3",
-        "--board",
-        board.to_str().unwrap(),
-        "--pack-dir",
-        pack.to_str().unwrap(),
-    ]);
+    let made = models_new_u3(&board, &["--pack-dir", pack.to_str().unwrap()]);
     assert_ok(&made);
 
     let manifest = pack.join("pack.toml");
@@ -228,15 +222,7 @@ fn scaffold_emits_unknown_provenance_and_a_pack_without_writing_elsewhere() {
     );
     assert!(out.contains("unknown kind 'choose_kind'"), "{out}");
 
-    let second = run(&[
-        "models",
-        "new",
-        "U3",
-        "--board",
-        board.to_str().unwrap(),
-        "--pack-dir",
-        pack.to_str().unwrap(),
-    ]);
+    let second = models_new_u3(&board, &["--pack-dir", pack.to_str().unwrap()]);
     assert!(!second.status.success(), "overwrite must be refused");
     let second_out = String::from_utf8_lossy(&second.stderr);
     assert!(second_out.contains("refusing to overwrite"), "{second_out}");
@@ -247,14 +233,11 @@ fn prepare_yes_writes_only_the_printed_pack_plan() {
     let dir = tempfile::tempdir().unwrap();
     let pack = dir.path().join("prepared-pack");
     let board = pic_programmer_board();
-    let out = run(&[
-        "models",
+    let out = models_run(
         "prepare",
-        board.to_str().unwrap(),
-        "--pack-dir",
-        pack.to_str().unwrap(),
-        "--yes",
-    ]);
+        &board,
+        &["--pack-dir", pack.to_str().unwrap(), "--yes"],
+    );
     assert_ok(&out);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -328,13 +311,7 @@ fn prepare_without_yes_refuses_a_non_tty_before_writing() {
     let dir = tempfile::tempdir().unwrap();
     let pack = dir.path().join("prepared-pack");
     let board = pic_programmer_board();
-    let out = run(&[
-        "models",
-        "prepare",
-        board.to_str().unwrap(),
-        "--pack-dir",
-        pack.to_str().unwrap(),
-    ]);
+    let out = models_run("prepare", &board, &["--pack-dir", pack.to_str().unwrap()]);
     assert!(!out.status.success());
     let combined = combined(&out);
     assert!(combined.contains("stdin is not a terminal"), "{combined}");
@@ -349,14 +326,11 @@ fn prepare_refuses_overwrite_without_touching_existing_files() {
     let manifest = pack.join("pack.toml");
     std::fs::write(&manifest, "sentinel").unwrap();
     let board = pic_programmer_board();
-    let out = run(&[
-        "models",
+    let out = models_run(
         "prepare",
-        board.to_str().unwrap(),
-        "--pack-dir",
-        pack.to_str().unwrap(),
-        "--yes",
-    ]);
+        &board,
+        &["--pack-dir", pack.to_str().unwrap(), "--yes"],
+    );
     assert!(!out.status.success());
     let combined = combined(&out);
     assert!(combined.contains("refusing to overwrite"), "{combined}");
@@ -420,15 +394,16 @@ missing = ["switching_ripple", "current_limit", "soft_start"]
     )
     .unwrap();
     let board = pic_programmer_board();
+    let coverage = |extra: &[&str]| {
+        let dir = models_dir.to_str().unwrap();
+        models_run(
+            "coverage",
+            &board,
+            &[&["--models-dir", dir][..], extra].concat(),
+        )
+    };
 
-    let out = run(&[
-        "models",
-        "coverage",
-        board.to_str().unwrap(),
-        "--models-dir",
-        models_dir.to_str().unwrap(),
-        "--json",
-    ]);
+    let out = coverage(&["--json"]);
     assert_ok(&out);
     let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(report["schema_version"], 4);
@@ -468,16 +443,7 @@ missing = ["switching_ripple", "current_limit", "soft_start"]
         row("U1")
     );
 
-    let met = run(&[
-        "models",
-        "coverage",
-        board.to_str().unwrap(),
-        "--models-dir",
-        models_dir.to_str().unwrap(),
-        "--require",
-        "U4:nominal_dc_output",
-        "--json",
-    ]);
+    let met = coverage(&["--require", "U4:nominal_dc_output", "--json"]);
     assert!(
         met.status.success(),
         "declared implemented capability should pass: {}",
@@ -487,16 +453,7 @@ missing = ["switching_ripple", "current_limit", "soft_start"]
     assert_eq!(met_report["summary"]["requirements_met"], 1);
     assert_eq!(met_report["requirements"][0]["met"], true);
 
-    let missing = run(&[
-        "models",
-        "coverage",
-        board.to_str().unwrap(),
-        "--models-dir",
-        models_dir.to_str().unwrap(),
-        "--require",
-        "U4:switching_ripple",
-        "--json",
-    ]);
+    let missing = coverage(&["--require", "U4:switching_ripple", "--json"]);
     assert!(
         !missing.status.success(),
         "an explicitly missing capability must fail closed"
@@ -509,16 +466,17 @@ missing = ["switching_ripple", "current_limit", "soft_start"]
         .unwrap()
         .contains("explicitly declares"));
 
-    let out = run(&[
-        "models",
+    let out = models_run(
         "prepare",
-        board.to_str().unwrap(),
-        "--models-dir",
-        models_dir.to_str().unwrap(),
-        "--pack-dir",
-        pack.to_str().unwrap(),
-        "--yes",
-    ]);
+        &board,
+        &[
+            "--models-dir",
+            models_dir.to_str().unwrap(),
+            "--pack-dir",
+            pack.to_str().unwrap(),
+            "--yes",
+        ],
+    );
     assert!(out.status.success(), "{}", combined(&out));
     let inventory: serde_json::Value = serde_json::from_slice(
         &std::fs::read(pack.join("inventory.json")).expect("inventory written"),
@@ -569,8 +527,7 @@ fn lint_refuses_unrecognized_toml() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("neither.toml");
     std::fs::write(&path, "[something_else]\nx = 1\n").unwrap();
-    let (code, _out) = lint(&path);
-    assert_eq!(code, 1, "unrecognized TOML shape must be a hard error");
+    lint_exits(&path, 1);
 }
 
 /// The descriptor inspection must state, per part, what the co-sim will and will
@@ -591,8 +548,7 @@ fn lint_refuses_unrecognized_toml() {
 fn soc_inspection_states_the_clock_cross_check_and_the_watchdog_fidelity() {
     let stock_path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hauksbee-mcu/db/mcu/nrf52840.soc.toml");
-    let (code, out) = lint(&stock_path);
-    assert_eq!(code, 0, "the shipped descriptor must lint clean:\n{out}");
+    let out = lint_exits(&stock_path, 0);
     assert!(
         out.contains(
             "clock: 64000000 Hz (cross-checked at load against the platform's own \
@@ -622,11 +578,7 @@ fn soc_inspection_states_the_clock_cross_check_and_the_watchdog_fidelity() {
     // TIMx-at-72MHz divergence) must have its own sentence quoted verbatim.
     let f103_path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hauksbee-mcu/db/mcu/stm32f103.soc.toml");
-    let (code, out) = lint(&f103_path);
-    assert_eq!(
-        code, 0,
-        "the shipped F103 descriptor must lint clean:\n{out}"
-    );
+    let out = lint_exits(&f103_path, 0);
     assert!(
         out.contains(
             "timing: The STM32F103 TIMx timer blocks run at the post-PLL 72 MHz in this \
@@ -679,11 +631,7 @@ fn soc_inspection_states_the_clock_cross_check_and_the_watchdog_fidelity() {
 fn qemu_soc_inspection_names_register_direction_and_mailbox_boundaries() {
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hauksbee-mcu/db/mcu/esp32.soc.toml");
-    let (code, out) = lint(&path);
-    assert_eq!(
-        code, 0,
-        "the shipped ESP32 descriptor must lint clean:\n{out}"
-    );
+    let out = lint_exits(&path, 0);
     assert!(
         out.contains("peripheral out 0x3ff44004 + enable 0x3ff44020"),
         "real output level and direction addresses must be inspectable:\n{out}"
