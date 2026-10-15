@@ -40,11 +40,6 @@ fn ground_role(role: &str) -> bool {
     r.starts_with("gnd") || r.ends_with("gnd") || r.starts_with("vss") || r == "ground"
 }
 
-fn ground_named(name: &str) -> bool {
-    let leaf = name.rsplit('/').next().unwrap_or(name).to_ascii_uppercase();
-    ["GND", "VSS", "GROUND"].iter().any(|g| leaf.contains(g)) || leaf == "0"
-}
-
 fn unknown_role(role: Option<&String>) -> bool {
     role.is_none_or(|r| r.starts_with("unknown_pad_"))
 }
@@ -111,7 +106,9 @@ fn ground_misfit(comp: &Component, model: &ModelEntry, net: NetView) -> Option<S
             .collect()
     };
     let grounds = pads(&|role, _| role.is_some_and(|r| ground_role(r)));
-    let grounded = |v: Option<&Seen>| v.is_some_and(|(g, name)| *g || ground_named(name));
+    let grounded = |v: Option<&Seen>| {
+        v.is_some_and(|(g, name)| *g || hauksbee_models::netclass::is_ground(name))
+    };
     if grounds.is_empty() || grounds.iter().any(|(_, v)| grounded(v.as_ref())) {
         return None;
     }

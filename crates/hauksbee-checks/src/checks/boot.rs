@@ -212,9 +212,7 @@ fn rail_name_and_level(board: &ExtractedBoard, net_id: i64) -> Option<(String, B
         return None;
     }
     let net = board.nets.iter().find(|n| n.id == net_id)?;
-    let n = net.name.to_ascii_uppercase();
-    let is_ground = n.starts_with("GND") || n.ends_with("GND") || n.starts_with("VSS");
-    let level = if is_ground {
+    let level = if hauksbee_models::netclass::is_ground(&net.name) {
         BiasLevel::Low
     } else {
         BiasLevel::High
@@ -248,33 +246,18 @@ pub fn net_drives_a_switch(board: &ExtractedBoard, net_name: &str) -> bool {
     })
 }
 
-/// Whether a net id names a power rail or ground. Grounds: the GND/AGND/VSS
-/// family. Rails: a leading '+', a `V…`/`…V` name (VCC/VDD/VBAT/VMOT/VSYS/VIN
-/// and bare voltages like 12V/3V3/5V/1V8). The broad `V`-name rule is
-/// deliberately inclusive, a missed rail would mis-read a real pull as "no
-/// bias" and over-flag, so on the zero-FP surface we err toward recognising
-/// rails (a false rail only *suppresses* an advisory, the safe direction here is
-/// the opposite, hence breadth).
+/// Whether a net id names a power rail or ground, in the broad form
+/// (`netclass::may_be_supply`): a missed rail would mis-read a real pull as "no
+/// bias" and over-flag, while a false rail only suppresses an advisory.
 fn is_power_or_ground_net(board: &ExtractedBoard, net_id: i64) -> bool {
-    let Some(net) = board.nets.iter().find(|n| n.id == net_id) else {
-        return false;
-    };
-    let n = net.name.to_ascii_uppercase();
-    // Ground family.
-    if n.starts_with("GND") || n.ends_with("GND") || n.starts_with("VSS") {
-        return true;
-    }
-    // Explicit '+' rail (e.g. "+3V3", "+5V", "+12V").
-    if n.starts_with('+') {
-        return true;
-    }
-    // V-prefixed rails (VCC/VDD/VBAT/VMOT/VSYS/VIN/VIO/VREF…) and bare voltage
-    // names with a digit and a 'V' (e.g. "12V", "3V3", "5V0", "1V8", "9V").
-    let v_named = n.starts_with('V') && n.len() >= 2;
-    let voltage_named = n.contains('V')
-        && n.chars().next().is_some_and(|c| c.is_ascii_digit())
-        && n.chars().any(|c| c.is_ascii_digit());
-    v_named || voltage_named
+    board
+        .nets
+        .iter()
+        .find(|n| n.id == net_id)
+        .is_some_and(|net| {
+            hauksbee_models::netclass::is_ground(&net.name)
+                || hauksbee_models::netclass::may_be_supply(&net.name)
+        })
 }
 
 /// The pad number of a transistor's *control* terminal (a MOSFET gate / BJT

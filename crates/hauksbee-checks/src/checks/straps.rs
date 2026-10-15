@@ -36,7 +36,7 @@
 //! clock-driver detection still works - it keys on the *component* (an
 //! oscillator), not a pin electrical type - but the reduced visibility is noted.
 
-use super::{is_ground_name, is_unconnected_net, norm};
+use super::{is_ground_name, is_unconnected_net};
 use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
 };
@@ -283,25 +283,12 @@ fn examine_strap(
     }
 }
 
-/// A two-terminal resistor (ref R*, not RV/RT/RN/RP/RM, two connected pads, not
-/// a ferrite/inductor), and assembled (not DNP). Mirrors the extract lint's
-/// `is_resistor` plus a DNP guard. Shared with the boot check's bias-resistor
-/// predicate, a varistor (RV) or thermistor (RT) to ground sets no DC level
-/// and must never be credited as a bias.
+/// A plain two-terminal resistor on the shared part-class ladder
+/// (`hauksbee_extract::is_plain_resistor`), and assembled (not DNP). Shared with
+/// the boot check's bias-resistor predicate: a varistor or thermistor to ground
+/// sets no DC level and is never credited as a bias.
 pub(crate) fn is_assembled_resistor(c: &Component) -> bool {
-    if !AssemblyState::of(c).is_present() {
-        return false;
-    }
-    let r = c.reference.to_ascii_uppercase();
-    let lib = c.lib_id.to_ascii_lowercase();
-    let is_r_ref = r.starts_with('R')
-        && !r.starts_with("RV")
-        && !r.starts_with("RT")
-        && !r.starts_with("RN")
-        && !r.starts_with("RP")
-        && !r.starts_with("RM");
-    let connected = c.pins.iter().filter(|p| p.net.is_some()).count();
-    is_r_ref && connected == 2 && !lib.contains("ferrite") && !lib.contains("inductor")
+    AssemblyState::of(c).is_present() && hauksbee_extract::is_plain_resistor(c)
 }
 
 /// Is this component a *powered oscillator* (a free-running clock source), as
@@ -335,10 +322,9 @@ fn is_clock_oscillator(c: &Component) -> bool {
         || v.contains("MHZ")
         || v.contains("OSC")
         || v.contains("XO")
-        // Olimex's value string is "Q50MHz/..."; ref CR* / X* / Y* / OSC* are
-        // the usual oscillator designators.
+        // Olimex's value string is "Q50MHz/..." (caught by MHZ above). CR is
+        // the IEEE diode designator, so it is not an oscillator by itself.
         || r.starts_with("OSC")
-        || r.starts_with("CR")
         || (r.starts_with('X') && v.contains("MHZ"))
         || (r.starts_with('Y') && v.contains("MHZ"))
 }
@@ -572,30 +558,11 @@ fn judge_divider(
 
 // ── Small net-name helpers (local copies; the extract versions are private) ──
 
-/// Is this net name a power rail? Every use in this file is boolean ("is the
-/// far side of this pull / this hop a rail"), so this is a predicate, not a
-/// voltage table. Breadth matches boot.rs's `is_power_or_ground_net`, and for
-/// the same calibration reason: an exact-name table (3V3/5V/1V8 plus
-/// VCC/VBUS-gated forms) misses VBAT/VSYS/VMOT/VIN and bare voltages (9V/12V),
-/// so a correct pull-up to "VBAT" reads as a signal net, which both lets the
-/// clock-reach hop wander onto a rail (a spurious HIGH clock finding through an
-/// oscillator's VDD) and hides a genuine wrong-direction pull from `wrong_pull`.
-fn is_rail_name(name: &str) -> bool {
-    let n = norm(name);
-    // Ground is its own family, never a rail.
-    if is_ground_name(name) {
-        return false;
-    }
-    // Explicit '+' rail (e.g. "+3V3", "+5V", "+12V").
-    if n.starts_with('+') {
-        return true;
-    }
-    // V-prefixed rails (VCC/VDD/VBAT/VMOT/VSYS/VIN/VIO/VREF…) and bare voltage
-    // names starting with a digit and carrying a 'V' ("12V", "3V3", "9V").
-    let v_named = n.starts_with('V') && n.len() >= 2;
-    let voltage_named = n.contains('V') && n.chars().next().is_some_and(|c| c.is_ascii_digit());
-    v_named || voltage_named
-}
+// Is the far side of this pull or hop a rail? The broad form shared with the
+// boot check (`netclass::may_be_supply`): an exact-voltage table misses VBAT,
+// VSYS and VMOT, which lets the clock-reach hop wander onto a rail and hides a
+// genuine wrong-direction pull.
+use hauksbee_models::netclass::may_be_supply as is_rail_name;
 
 /// True when the only thing on `net_id` is `mcu` itself, no resistor, no other
 /// component, nothing that could define a level. Such a strap net is floating

@@ -29,7 +29,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use hauksbee_bind::binder::{is_ground, power_rail_voltage, BoundBoard};
+use hauksbee_bind::binder::{is_ground, BoundBoard};
 use hauksbee_bind::stress::strip_unit_suffix;
 use hauksbee_bind::{BindOutcome, BindRow};
 use hauksbee_extract::assembly::AssemblyState;
@@ -74,7 +74,7 @@ fn open_reason(comp: &Component, row: &BindRow) -> Option<&'static str> {
 
 /// A rail or ground: not a current path between two parts.
 fn is_rail(net: &str) -> bool {
-    is_ground(net) || super::is_ground_name(net) || power_rail_voltage(net).is_some()
+    is_ground(net) || hauksbee_models::netclass::is_supply(net)
 }
 
 /// Most fitted parts a net may carry and still read as one part's load path

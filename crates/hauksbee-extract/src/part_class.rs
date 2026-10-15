@@ -76,6 +76,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use hauksbee_models::refdes::RefClass;
 use hauksbee_models::schema::PassiveClass;
 use hauksbee_models::{ComponentKind, ComponentQuery, ModelLibrary};
 
@@ -130,22 +131,7 @@ pub fn connected_pads(c: &Component) -> usize {
     seen.len()
 }
 
-/// The reference designator with a single mirror-prefix stripped, uppercased.
-///
-/// Split-keyboard layouts (Corne / crkbd, Lily58) duplicate the right half with
-/// a lowercase `r` prefix (`rC2`, `rY1`, `rR3`, `rU1`), so the string rung must
-/// see `C2`/`Y1`/`R3`/`U1` underneath, otherwise `rC2` reads as an `R`-prefixed
-/// part and a mirrored decoupling cap is misclassified. Only a lowercase `r`
-/// immediately before an uppercase designator letter counts, so a genuine
-/// `R5` / `RV1` is untouched.
-pub fn ref_designator(reference: &str) -> String {
-    let r = reference.trim();
-    let bytes = r.as_bytes();
-    if bytes.len() >= 2 && bytes[0] == b'r' && bytes[1].is_ascii_uppercase() {
-        return r[1..].to_ascii_uppercase();
-    }
-    r.to_ascii_uppercase()
-}
+pub use hauksbee_models::refdes::designator as ref_designator;
 
 /// Public rung-ladder answer to "is this record a plain two-terminal
 /// resistor?".
@@ -401,39 +387,17 @@ fn from_strings(c: &Component) -> PartClass {
     if lib.contains("inductor") {
         return PartClass::Passive(PassiveClass::Inductor);
     }
-    let r = ref_designator(&c.reference);
-    // Inductors before capacitors and resistors: `L*` is unambiguous, and the
-    // value rung relies on this answer to tell a coil spelled `10u` from a
-    // capacitor spelled the same way.
-    if r.starts_with('L') && !r.starts_with("LED") {
-        return PartClass::Passive(PassiveClass::Inductor);
+    // The designator prefix, from the one table (`hauksbee_models::refdes`):
+    // `LED1` is not an inductor, `CR1` is a diode (IEEE 315), `RV`/`RT`/`RN`
+    // are not plain resistors. A part in one of those ranges that IS a plain
+    // resistor is caught by rung 2 instead of being lost here.
+    match RefClass::of(&c.reference) {
+        RefClass::Inductor => PartClass::Passive(PassiveClass::Inductor),
+        RefClass::FerriteBead => PartClass::Passive(PassiveClass::FerriteBead),
+        RefClass::Capacitor => PartClass::Passive(PassiveClass::Capacitor),
+        RefClass::Resistor => PartClass::Passive(PassiveClass::Resistor),
+        _ => PartClass::Unknown,
     }
-    // Ferrite beads are conventionally `FB*`, and read ohmic, so they must not
-    // reach the resistor branch.
-    if r.starts_with("FB") {
-        return PartClass::Passive(PassiveClass::FerriteBead);
-    }
-    // Capacitors first. `CN`/`CON` are connector conventions, and `CR` is the
-    // MIL-STD/ANSI designator for a DIODE, which the engine's binder already
-    // documents ("a `CR1` zener must never reach the C-first-letter capacitor
-    // heuristic"); reading a zener as a bypass cap is the same class of error as
-    // reading a capacitor as a pull-up.
-    if r.starts_with('C') && !r.starts_with("CN") && !r.starts_with("CON") && !r.starts_with("CR") {
-        return PartClass::Passive(PassiveClass::Capacitor);
-    }
-    // Resistors, minus the exclusion list: varistors (RV), thermistors (RT), and
-    // resistor networks / arrays (RN/RP/RM/RA), none of which is a plain
-    // two-terminal resistor. `RA` belongs with the other array prefixes and was
-    // simply missing from the historical list. A part in one of those ranges
-    // that IS a plain resistor is now caught by rung 2 instead of being lost
-    // here.
-    let excluded = ["RV", "RT", "RN", "RP", "RM", "RA"]
-        .iter()
-        .any(|p| r.starts_with(p));
-    if r.starts_with('R') && !excluded {
-        return PartClass::Passive(PassiveClass::Resistor);
-    }
-    PartClass::Unknown
 }
 
 #[cfg(test)]

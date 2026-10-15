@@ -53,16 +53,10 @@ const MCU_FAMILY_PREFIXES: &[&str] = &[
     "RA2", "RA4", "RA6", "FE310", "GD32VF", "NUC1", "MM32", "HT32", "HC32",
 ];
 
-/// Does this reference designator name an active IC (`U*` / `IC*` / `MCU*`)?
-/// Guards against a connector or test point whose value happens to mention a
-/// chip. The set mirrors the binder's own MCU-candidate refdes prefixes so a
-/// part the binder treats as an MCU is not invisible to this check.
-fn is_active_ic_refdes(reference: &str) -> bool {
-    let r = reference.to_ascii_uppercase();
-    // Strip to the leading alphabetic prefix.
-    let prefix: String = r.chars().take_while(char::is_ascii_alphabetic).collect();
-    prefix == "U" || prefix == "IC" || prefix == "MCU"
-}
+// Does this reference designator name an active IC (`U*` / `IC*` / `MCU*`)?
+// The binder's own MCU-candidate predicate, so a part the binder treats as an
+// MCU is never invisible to this check.
+use hauksbee_models::refdes::is_active_ic_ref as is_active_ic_refdes;
 
 /// Families with a boot-mode pin sampled by hardware at reset; the surface the
 /// strap lint exists for. STM32 and its pin-compatible clones latch BOOT0; the

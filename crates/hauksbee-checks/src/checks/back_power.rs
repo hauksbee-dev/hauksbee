@@ -113,26 +113,13 @@ fn declared_pin_ceiling_v(model: &hauksbee_models::ModelEntry, role: &str) -> Op
         .reduce(f64::max)
 }
 
-/// A plain two-terminal, assembled resistor (ref R*, not RV/RT/RN/RP/RM).
+/// A plain two-terminal, assembled resistor, on the shared part-class ladder.
 /// Value parse is not needed here: the pull's EXISTENCE and its far rail are
 /// the evidence; its ohms only scale the clamp current.
 fn is_plain_resistor(c: &Component) -> bool {
     // Three-state contract: a DNP pull-up is absent and an identity-refused
     // record is unprovable; neither may count as a rail tie.
-    if !AssemblyState::of(c).is_present() {
-        return false;
-    }
-    let r = c.reference.to_ascii_uppercase();
-    let lib = c.lib_id.to_ascii_lowercase();
-    r.starts_with('R')
-        && !r.starts_with("RV")
-        && !r.starts_with("RT")
-        && !r.starts_with("RN")
-        && !r.starts_with("RP")
-        && !r.starts_with("RM")
-        && c.pins.iter().filter(|p| p.net.is_some()).count() == 2
-        && !lib.contains("ferrite")
-        && !lib.contains("inductor")
+    AssemblyState::of(c).is_present() && hauksbee_extract::is_plain_resistor(c)
 }
 
 /// The part's supply-domain voltage: the highest resolvable rail among its

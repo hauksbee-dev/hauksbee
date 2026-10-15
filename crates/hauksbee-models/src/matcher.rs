@@ -398,39 +398,7 @@ pub struct ComponentQuery {
     pub reference: Option<String>,
 }
 
-/// Whether a reference designator names an active IC (prefix U / IC / MCU),
-/// matching the binder's MCU-candidate convention.
-#[must_use]
-pub fn is_active_ic_ref(reference: &str) -> bool {
-    // Eagle names any element the designer left unnamed `U$12`, and that covers
-    // mounting holes, fiducials, logos, frames and test points. They take the
-    // `U` prefix without being parts at all, so counting them inflated the
-    // active-IC denominator by 17x on a real SparkFun board (69 "active ICs"
-    // where the board has four). Any `<letters>$<digits>` reference is
-    // machine-generated, never a designator someone chose.
-    if is_tool_generated_ref(reference) {
-        return false;
-    }
-    let prefix: String = reference
-        .chars()
-        .take_while(char::is_ascii_alphabetic)
-        .map(|c| c.to_ascii_uppercase())
-        .collect();
-    matches!(prefix.as_str(), "U" | "IC" | "MCU")
-}
-
-/// Whether a reference is a CAD tool's placeholder for an unnamed element
-/// (Eagle's `U$12` form) rather than a designator a person assigned.
-#[must_use]
-pub fn is_tool_generated_ref(reference: &str) -> bool {
-    let Some((head, tail)) = reference.split_once('$') else {
-        return false;
-    };
-    !head.is_empty()
-        && head.chars().all(|c| c.is_ascii_alphabetic())
-        && !tail.is_empty()
-        && tail.chars().all(|c| c.is_ascii_digit())
-}
+pub use crate::refdes::{is_active_ic_ref, is_tool_generated_ref};
 
 impl ComponentQuery {
     /// Convenience constructor with the most common fields.

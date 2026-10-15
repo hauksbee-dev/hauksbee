@@ -17,8 +17,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::{
-    is_ground, is_led, is_test_point_or_hole, is_unconnected_net, members, norm, parse_ohms,
-    pin_is_no_connect, rail_voltage, LintCheck, LintFinding, NetLintReport, Severity,
+    is_ground, is_led, is_positive_supply, is_test_point_or_hole, is_unconnected_net, members,
+    norm, parse_ohms, pin_is_no_connect, LintCheck, LintFinding, NetLintReport, Severity,
 };
 use crate::assembly::AssemblyState;
 use crate::dsu::Dsu;
@@ -416,9 +416,7 @@ fn level_through_resistor(board: &ExtractedBoard, net: i64) -> Option<(bool, Str
         if is_ground(&n.name) {
             Some((false, n.name.clone()))
         } else {
-            rail_voltage(&n.name)
-                .filter(|v| *v > 0.0)
-                .map(|_| (true, n.name.clone()))
+            is_positive_supply(&n.name).then(|| (true, n.name.clone()))
         }
     };
     if let Some(level) = classify(net) {

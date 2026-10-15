@@ -158,21 +158,6 @@ const fn is_digital_kind(kind: ComponentKind) -> bool {
     )
 }
 
-/// Canonical-ground net name, mirroring the extract layer's netlint helper.
-fn is_ground_net(name: &str) -> bool {
-    let n = name
-        .trim()
-        .trim_start_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or("")
-        .to_ascii_uppercase();
-    matches!(
-        n.as_str(),
-        "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "PGND" | "VSS" | "GNDIO" | "0"
-    ) || n.starts_with("GND")
-}
-
 /// The output roles of `model` that are tri-stateable, i.e. that the part can
 /// release to high impedance under an output-enable pin. Expanded from the
 /// `[models.logic.tristate]` group keys, which may be a single output name
@@ -247,7 +232,7 @@ pub fn scan(board: &ExtractedBoard, lib: &ModelLibrary) -> Scan {
                 continue;
             };
             let name = net_name.get(&id).copied().unwrap_or("");
-            if is_ground_net(name) || is_unconnected_net(name) {
+            if super::is_ground_name(name) || is_unconnected_net(name) {
                 part.pads_on_excluded_nets += 1;
                 continue;
             }

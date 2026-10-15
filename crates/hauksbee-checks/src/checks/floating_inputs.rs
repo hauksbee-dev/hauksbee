@@ -152,8 +152,7 @@ fn display_name(function: &str) -> String {
 /// Would the extract-layer `FloatingControlPin` lint already report this pin?
 /// Mirrors its predicate so the two checks never report one pin twice.
 fn control_lint_covers(board: &ExtractedBoard, comp: &Component, pin: &Pin) -> bool {
-    let r = comp.reference.to_ascii_uppercase();
-    let active = r.starts_with('U') || r.starts_with("IC") || r.starts_with('Q');
+    let active = hauksbee_extract::is_logic_or_switch_ref(comp);
     let Some(net) = pin.net.and_then(|id| board.net(id)) else {
         return false;
     };
