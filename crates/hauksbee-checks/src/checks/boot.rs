@@ -567,7 +567,15 @@ mod tests {
         Component {
             reference: reference.into(),
             value: "10k".into(),
-            pins: vec![pin(Some(a)), pin(Some(b))],
+            // Two distinct pads: the shared part-class ladder counts pads, not
+            // pin records.
+            pins: vec![
+                pin(Some(a)),
+                Pin {
+                    number: "2".into(),
+                    ..pin(Some(b))
+                },
+            ],
             ..Default::default()
         }
     }

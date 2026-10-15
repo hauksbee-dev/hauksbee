@@ -172,13 +172,15 @@ pub(super) fn check_ground_islands(board: &ExtractedBoard, report: &mut NetLintR
             .map(|(c, _)| c.reference.clone())
             .collect()
     };
-    // The board ground: a conventionally named ground (`GND`, `AGND`, `GND*`)
-    // ahead of any other return-named net, then the most-connected.
+    // The board ground: the net named plain `GND`/`VSS` first, then any other
+    // ground-family net (`AGND`, `SENSOR_GND`), then any other return-named
+    // net, then the most-connected. A busier `SENSOR_GND` is still the island.
     let Some(main) = (0..board.nets.len())
         .filter(|&i| grounds[i])
         .max_by_key(|&i| {
             let net = &board.nets[i];
             (
+                hauksbee_models::netclass::is_canonical_ground(&net.name),
                 is_ground(&net.name),
                 members(board, net.id).len(),
                 std::cmp::Reverse(i),
