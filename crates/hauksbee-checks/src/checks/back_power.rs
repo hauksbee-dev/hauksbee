@@ -186,6 +186,41 @@ fn pullups_to_rails(board: &ExtractedBoard, net_id: i64) -> Vec<(String, String,
     out
 }
 
+/// Resistor tolerance assumed for a divider's worst corner when the part
+/// states none: the common 5 % thick-film grade.
+const DIVIDER_TOLERANCE: f64 = 0.05;
+
+/// The highest level a resistor divider holds `net_id` at, when every plain
+/// resistor on it leads to a resolvable rail or to ground, at least one leads
+/// to ground, and every value reads as ohms: pull-ups at their low corner,
+/// pull-downs at their high corner. `None` when the net is not such a divider.
+fn divider_max_v(board: &ExtractedBoard, net_id: i64) -> Option<f64> {
+    let (mut sourced, mut conductance, mut grounded) = (0.0, 0.0, false);
+    for (c, _p) in board.net_members(net_id) {
+        if !is_plain_resistor(c) {
+            continue;
+        }
+        let far = c
+            .pins
+            .iter()
+            .filter_map(|p| p.net)
+            .find(|&id| id != net_id)?;
+        let name = &board.net(far)?.name;
+        let ohms = hauksbee_models::value::parse_value(&c.value)
+            .filter(|v| matches!(v.unit.as_deref(), None | Some("Ω")) && v.si > 0.0)?
+            .si;
+        if crate::checks::converter::is_ground_net(name) {
+            grounded = true;
+            conductance += 1.0 / (ohms * (1.0 + DIVIDER_TOLERANCE));
+        } else {
+            let g = 1.0 / (ohms * (1.0 - DIVIDER_TOLERANCE));
+            sourced += power_rail_voltage(name)? * g;
+            conductance += g;
+        }
+    }
+    (grounded && conductance > 0.0).then(|| sourced / conductance)
+}
+
 /// Run the back-powering lint over every modelled part on the board.
 #[must_use]
 pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
@@ -267,6 +302,12 @@ pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
             } else {
                 Severity::Medium
             };
+            // A divider that holds the pin within its supply at the worst
+            // resistor corner is how a higher rail is brought to an input: the
+            // clamp never conducts while the part is powered.
+            if divider_max_v(board, id).is_some_and(|v| !clamps(v)) {
+                continue;
+            }
             for (r_ref, rail_net, rail_v) in pullups_to_rails(board, id) {
                 if clamps(rail_v) && seen.insert((comp.reference.clone(), id, rail_net.clone())) {
                     report.findings.push(LintFinding {
@@ -421,6 +462,34 @@ mod tests {
             r.findings
         );
         assert_eq!(f[0].severity, Severity::Low);
+    }
+
+    /// Faulty/legal pair: a divider from +5V whose worst resistor corner
+    /// still holds the 3.3 V part's pin under its supply is how a higher rail
+    /// reaches an input, so it is silent; a lower leg too weak to pull the
+    /// pin under the clamp leaves the pull-up a back-powering fault.
+    #[test]
+    fn a_divider_holding_the_pin_within_its_supply_is_silent() {
+        let divider = |up: &str, down: &str| {
+            let text = esp32_board(3, Some(("R7", up, 3, 2)));
+            let lower = format!(
+                r#"
+  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
+    (at 130 100)
+    (fp_text reference R8 (at 0 0) (layer F.SilkS))
+    (fp_text value {down} (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 3 "/SENSOR_INT"))
+    (pad 2 smd rect (at 2 0) (net 1 "GND"))
+  )
+)"#
+            );
+            let body = text.trim_end().strip_suffix(')').expect("board closes");
+            run(&format!("{body}{lower}"))
+                .of_check(LintCheck::BackPower)
+                .count()
+        };
+        assert_eq!(divider("470k", "470k"), 0, "2.6 V at the worst corner");
+        assert_eq!(divider("10k", "100k"), 1, "4.6 V at the worst corner");
     }
 
     /// Clean side: the same pull-up to the part's OWN +3V3 rail is the

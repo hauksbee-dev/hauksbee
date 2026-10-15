@@ -5600,9 +5600,11 @@ fn stamp_charger(
         expr: CompiledExpr::compile(&draw).expect("charger draw compiles"),
         deps: vec![BDep::Volt(set), BDep::Volt(cc)],
     });
+    // The quiescent draw needs a supply to draw from: a plain current source
+    // on an input nothing feeds (a USB rail with no cable) pulls that rail
+    // below ground through whatever resistor holds it.
     if let Some(amps) = stage.iq_a.filter(|i| i.is_finite()) {
-        let name = format!("Iq_{reference}");
-        circuit.add(Device::isource(name, input, gnd, SourceKind::Dc(amps)));
+        supply_draw(circuit, format!("Iq_{reference}"), (input, gnd), amps);
     }
     let label = if stage.port {
         let capped = if ilim < programmed {

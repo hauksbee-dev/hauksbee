@@ -438,8 +438,8 @@ fn push_net_graphics(root: &List, nets: &mut NetResolver, buckets: &mut super::L
 }
 
 /// Pads a footprint itself joins: a net tie's pad groups and KiCad 9 jumper
-/// groups (explicit, or every pad sharing a number when the footprint says
-/// duplicate numbers are jumpers). Only pads already on one net are joined;
+/// groups (explicit, or every pad sharing a number unless the footprint says
+/// duplicate numbers are not jumpers). Only pads already on one net are joined;
 /// the tie between different nets is the short sweep's business.
 fn join_footprint_links(root: &List, items: &[ItemMeta], dsu: &mut Dsu) {
     let mut pads: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
@@ -472,14 +472,18 @@ fn join_footprint_links(root: &List, items: &[ItemMeta], dsu: &mut Dsu) {
                     atoms.collect()
                 }),
         );
+        // KiCad 9 writes the flag on every footprint; before it there was no
+        // way to say so, and a number shared by several lands (a connector
+        // shell's tabs, a split exposed pad) named one pin of the part, whose
+        // metal joins them. So only an explicit `no` leaves them to copper.
         if fp
             .find_value("duplicate_pad_numbers_are_jumpers")
             .as_deref()
-            == Some("yes")
+            != Some("no")
         {
             groups.extend(
                 pads.keys()
-                    .filter(|(o, _)| *o == owner)
+                    .filter(|(o, n)| *o == owner && !n.is_empty())
                     .map(|(_, n)| vec![(*n).to_string()]),
             );
         }

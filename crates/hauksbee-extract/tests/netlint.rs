@@ -107,6 +107,17 @@ lint_tests! {
     (comp (ref R13) (value R) (footprint Resistor_SMD:R_0402))
     (comp (ref C7) (value C) (footprint Capacitor_SMD:C_0402))",
     "";
+
+    /// A part ordered by its manufacturer part number is named by it, so the
+    /// generic symbol value beside it is not a value left unset; the same
+    /// value with only a distributor note still is.
+    placeholder_value_beside_a_part_number_is_not_unset: PlaceholderValue == 1;
+    r#"
+    (comp (ref L3) (value L) (footprint Inductor_SMD:L_0603)
+      (property (name "PartNumber") (value "BLM18AG601SN1D")))
+    (comp (ref L4) (value L) (footprint Inductor_SMD:L_0603)
+      (property (name "Distributor") (value "Mouser")))"#,
+    "";
 }
 
 #[test]
@@ -270,6 +281,18 @@ lint_tests! {
       (node (ref U1) (pin 1)) (node (ref J1) (pin 1)))
     (net (code 3) (name "SCL")
       (node (ref U1) (pin 2)) (node (ref J1) (pin 2)))"#;
+
+    /// A system-on-module plugged into the carrier brings its own bus pulls,
+    /// whatever case its value uses for `SoM` (the `MCU` twin above stays Medium).
+    i2c_to_a_plug_in_som_is_low: MissingI2cPullup == 2 @ Low;
+    r"
+    (comp (ref U1) (value Nitrogen8M_SOM) (footprint footprints:TE_1473149-4))
+    (comp (ref U5) (value PCF8523T) (footprint Package_SO:SOIC-8))",
+    r#"
+    (net (code 2) (name "DAC_SDA")
+      (node (ref U1) (pin 1)) (node (ref U5) (pin 5)))
+    (net (code 3) (name "DAC_SCL")
+      (node (ref U1) (pin 2)) (node (ref U5) (pin 6)))"#;
 
     /// A resistor with extra net-less footprint pads (the 0201 case that hid the
     /// ZSWatch pull-ups) is still recognised as a two-terminal pull-up.

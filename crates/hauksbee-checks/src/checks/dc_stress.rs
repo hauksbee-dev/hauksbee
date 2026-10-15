@@ -847,6 +847,57 @@ mod tests {
         );
     }
 
+    /// An MCP73831 whose input `input` is held by a 10k to ground, with its
+    /// charge LED from the input through 1k to STAT, plus a yellow LED `D2`
+    /// across +12V the wrong way round.
+    fn charger_with_led(input: &str) -> NetLintReport {
+        let nets = [
+            (1, "GND"),
+            (2, input),
+            (3, "V_BATT"),
+            (4, "/STAT"),
+            (5, "/PROG"),
+            (6, "/LED_A"),
+            (7, "+12V"),
+        ];
+        let parts = vec![
+            part(
+                "U3",
+                "MCP73831",
+                &[("1", 4), ("2", 1), ("3", 3), ("4", 2), ("5", 5)],
+            ),
+            part("R6", "2k", &[("1", 5), ("2", 1)]),
+            part("R15", "10k", &[("1", 2), ("2", 1)]),
+            part("R2", "1k", &[("1", 2), ("2", 6)]),
+            part("D1", "YELLOW LED", &[("A", 6), ("K", 4)]),
+            part("D2", "YELLOW LED", &[("A", 1), ("K", 7)]),
+        ];
+        dc_stress_lint(&board(&nets, parts), &ModelLibrary::builtin())
+    }
+
+    /// Legal control: a charger's quiescent draw on an input nothing feeds
+    /// (a USB rail with no cable) has no supply to draw from, so it does not
+    /// pull that rail below ground and reverse-bias the charge LED. Faulty:
+    /// the LED wired backwards across +12V is still over its 5 V reverse
+    /// rating.
+    #[test]
+    fn an_unfed_charger_input_does_not_reverse_its_led() {
+        for input in ["V_USB", "+5V"] {
+            let report = charger_with_led(input);
+            assert!(
+                findings_on(&report, "D1").is_empty(),
+                "{input}: {:#?}",
+                report.findings
+            );
+            assert_eq!(
+                findings_on(&report, "D2").len(),
+                1,
+                "{input}: {:#?}",
+                report.findings
+            );
+        }
+    }
+
     /// `value` on a fuse footprint feeding a load of `ohms` from +5V.
     fn fuse_at(value: &str, ohms: &str) -> NetLintReport {
         let mut f = part("F1", value, &[("1", 2), ("2", 3)]);

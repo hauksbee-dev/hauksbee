@@ -140,6 +140,32 @@ fn a_jumper_footprint_joins_its_same_net_pads() {
 }
 
 #[test]
+fn lands_sharing_a_number_are_one_pin_unless_the_footprint_says_not() {
+    // A connector shell: two tabs numbered alike, one routed to the net.
+    let shell = |flag: &str, second: &str| {
+        format!(
+            r#"  (footprint "lib:USB" (layer "F.Cu") (at 30 0) {flag}
+    (property "Reference" "J1")
+    (pad "0" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "A"))
+    (pad "{second}" smd rect (at 0 4) (size 1 1) (layers "F.Cu") (net 1 "A")))
+  (segment (start 10 0) (end 30 0) (width 0.25) (layer "F.Cu") (net 1))
+"#
+        )
+    };
+    let legacy = shell("", "0");
+    assert!(lint(&two_parts(&format!("{TRACK}{GND_TRACK}{legacy}"))).is_empty());
+    // KiCad 9 says outright that duplicate numbers are not jumpers, and a land
+    // with its own number is its own pin: both are left open.
+    for open in [
+        shell("(duplicate_pad_numbers_are_jumpers no)", "0"),
+        shell("", "1"),
+    ] {
+        let found = lint(&two_parts(&format!("{TRACK}{GND_TRACK}{open}")));
+        assert_eq!(high(&found).len(), 1, "{found:?}");
+    }
+}
+
+#[test]
 fn copper_graphic_with_a_net_conducts() {
     let poly = |net: &str| {
         format!(

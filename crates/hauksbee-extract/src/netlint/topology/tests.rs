@@ -129,6 +129,46 @@ fn a_link_ferrite_or_bridging_part_joins_the_grounds() {
     }
 }
 
+/// Faulty/legal pair: the second half of a split board drawn in the same file
+/// has its own ground and shares no net with the first half, so nothing on
+/// this board returns through it; once a signal runs between the halves, the
+/// unjoined ground is the fault again.
+#[test]
+fn a_separate_circuits_own_ground_is_not_an_island() {
+    let half = |link: i64| {
+        let mut b = island_board(vec![]);
+        b.nets.push(crate::Net::new(6, "GNDR"));
+        b.nets.push(crate::Net::new(7, "VCCR"));
+        b.components.push(part(
+            "rU1",
+            "MCU",
+            "MCU:X",
+            "LQFP-48",
+            vec![
+                named("1", 6, "GND"),
+                pin("2", Some(7)),
+                pin("3", Some(link)),
+            ],
+        ));
+        b.components.push(two("rC1", "100n", "Device:C", 7, 6));
+        b
+    };
+    let separate = half(7);
+    let found: Vec<_> = separate
+        .net_lint()
+        .of_check(LintCheck::GroundIsland)
+        .cloned()
+        .collect();
+    assert!(found.iter().all(|f| f.nets != ["GNDR"]), "{found:?}");
+    let linked = half(3);
+    let found: Vec<_> = linked
+        .net_lint()
+        .of_check(LintCheck::GroundIsland)
+        .cloned()
+        .collect();
+    assert!(found.iter().any(|f| f.nets == ["GNDR"]), "{found:?}");
+}
+
 #[test]
 fn a_capacitor_or_connector_is_not_a_join_and_a_named_domain_is_left_alone() {
     let b = island_board(vec![

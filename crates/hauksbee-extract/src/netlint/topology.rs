@@ -188,9 +188,24 @@ pub(super) fn check_ground_islands(board: &ExtractedBoard, report: &mut NetLintR
         return;
     };
     let main_root = dsu.find(main);
+    let circuits = Circuits::of(board, &index, &grounds);
+    let main_circuits: BTreeSet<usize> = (0..board.nets.len())
+        .filter(|&i| grounds[i] && dsu.find(i) == main_root)
+        .flat_map(|i| circuits.on_net(board.nets[i].id))
+        .collect();
     let mut islands: BTreeMap<usize, (Vec<String>, BTreeSet<String>)> = BTreeMap::new();
     for (i, net) in board.nets.iter().enumerate() {
         if !grounds[i] || separate_domain(&net.name) || dsu.find(i) == main_root {
+            continue;
+        }
+        // A ground whose parts share no signal or supply net with the main
+        // ground's parts is another circuit's own ground (the second half of a
+        // split keyboard drawn in one file, a board joined only by a cable):
+        // no return current on this board crosses between them.
+        if circuits
+            .on_net(net.id)
+            .all(|circuit| !main_circuits.contains(&circuit))
+        {
             continue;
         }
         let refs = loads(net.id);
@@ -206,6 +221,46 @@ pub(super) fn check_ground_islands(board: &ExtractedBoard, report: &mut NetLintR
         report
             .findings
             .push(island_finding(board, main_name, nets, refs));
+    }
+}
+
+/// Fitted parts grouped into circuits: two parts are one circuit when a
+/// non-ground net joins them, directly or through other parts.
+struct Circuits {
+    /// Part index -> its circuit.
+    circuit: Vec<usize>,
+    /// Net id -> indices of the fitted parts with a pin on it.
+    parts_on: HashMap<i64, Vec<usize>>,
+}
+
+impl Circuits {
+    fn of(board: &ExtractedBoard, index: &HashMap<i64, usize>, grounds: &[bool]) -> Self {
+        let parts = board.components.len();
+        let mut dsu = Dsu::new(parts + board.nets.len());
+        let mut parts_on: HashMap<i64, Vec<usize>> = HashMap::new();
+        for (ci, c) in board.components.iter().enumerate() {
+            if !AssemblyState::of(c).is_present() {
+                continue;
+            }
+            for id in nets_of(c) {
+                parts_on.entry(id).or_default().push(ci);
+                let Some(&ni) = index.get(&id) else { continue };
+                if id != 0 && !grounds[ni] && !is_unconnected_net(&board.nets[ni].name) {
+                    dsu.union(ci, parts + ni);
+                }
+            }
+        }
+        let circuit = (0..parts).map(|ci| dsu.find(ci)).collect();
+        Self { circuit, parts_on }
+    }
+
+    /// The circuits of the parts on `net_id`.
+    fn on_net(&self, net_id: i64) -> impl Iterator<Item = usize> + '_ {
+        self.parts_on
+            .get(&net_id)
+            .into_iter()
+            .flatten()
+            .map(|&ci| self.circuit[ci])
     }
 }
 

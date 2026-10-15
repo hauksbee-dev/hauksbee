@@ -2660,6 +2660,16 @@ level = "high"
 boot_select = true
 note = "QSPI_SS (flash CS) high = boot from flash (normal); held low = USB BOOTSEL"
 
+# The on-chip core regulator's output, wired off-chip to DVDD. It comes up at
+# 1.1 V and firmware only changes it on purpose, so a board naming the net after
+# another level ("+1V2") does not set the core voltage.
+[[models.supply_outputs]]
+role = "vreg_vout"
+nominal = 1.1
+min = 1.067
+max = 1.133
+basis = "RP2040 Datasheet build-date 2025-02-20 (build 3184e62-clean) §2.10.3 Output Voltage Select: output set to 1.1 V at initial power-on or following a reset; Table 192 ΔVREG_VOUT -3/+3 % of selected output voltage"
+
 # Each supply domain has its own recommended range, so co-sim judges the 1.1 V
 # DVDD core pads and the 3.3 V IOVDD pads each against their own row.
 [[models.envelope]]
