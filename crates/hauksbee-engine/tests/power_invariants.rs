@@ -667,6 +667,12 @@ fn run(plan: &Plan, lib: &ModelLibrary, model_id: &str) -> Outcome {
     let board = plan.rig.board();
     let bound = bind_board_with(&board, lib, &CustomRegistry::new());
     let path = path_of(&bound.circuit.devices);
+    if model_id.starts_with("fsusb30") {
+        for d in bound.circuit.devices.iter().filter(|d| d.name().contains("U1")) {
+            eprintln!("DIAG {model_id} {d:?}");
+        }
+        eprintln!("DIAG warning {:?}", bound.report.row("U1").map(|r| r.warning.clone()));
+    }
     let mut broken = Vec::new();
     let row = bound.report.row("U1");
     if row.and_then(|r| r.model_id.as_deref()) != Some(model_id) {
