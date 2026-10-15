@@ -74,7 +74,7 @@ describe('an unjudged run', () => {
   })
 
   test('keeps the engine sentence one click away', () => {
-    expect(html).toMatch(/<details[^>]*data-testid="checks-why"/)
+    expect(html).toMatch(/<details[^>]*data-testid="explain-verdict"/)
     expect(html).toContain('Q1 has no model.')
   })
 

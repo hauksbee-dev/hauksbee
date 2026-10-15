@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import type { WebReport } from '../types/report'
 import { plural, reportVerdictTone, summarizeEvidence } from '../lib/report-view'
 import type { SimShellStatus } from '../SimView'
+import { useGlossary, useTermEntry } from './ui'
 import type { ChecksSummary } from './ChecksView'
 import type { AppView } from './Sidebar'
 
@@ -30,6 +31,8 @@ interface Chip {
    *  with `actions`. */
   explain?: string
   actions?: { label: string; testid: string; onClick: () => void }[]
+  /** A glossary term the chip's verdict word is: its meaning becomes `explain`. */
+  term?: string
 }
 
 /** The chip's explanation and actions. Portalled and fixed-positioned: the
@@ -108,7 +111,9 @@ function ExplainedChip({ chip }: { chip: Chip }) {
 }
 
 function ChipButton({ chip }: { chip: Chip }) {
-  return chip.explain ? <ExplainedChip chip={chip} /> : <ChipPill chip={chip} />
+  const entry = useTermEntry(chip.term)
+  const shown = entry && !chip.explain ? { ...chip, explain: `${entry.short} What to do: ${entry.what_to_do}` } : chip
+  return shown.explain ? <ExplainedChip chip={shown} /> : <ChipPill chip={shown} />
 }
 
 function ChipPill({ chip }: { chip: Chip }) {
@@ -158,6 +163,7 @@ export function ShellChips({
   onOpenLiveSession: () => void
   onDriveLive: () => void
 }) {
+  useGlossary(report?.glossary)
   const chips: Chip[] = []
   // Fault chips count faulted PARTS (the card in the sim rail counts its own
   // fault conditions and labels itself); every surface must say what it counts.
@@ -201,7 +207,7 @@ export function ShellChips({
             // with ("invalid for analysis"); "qualified" beside it reads as a
             // weaker verdict than the report gives.
             ? summarizeEvidence(report.evidence).undermined > 0
-              ? { tone: 'warn' as const, label: 'analysis undermined' }
+              ? { tone: 'warn' as const, label: 'analysis undermined', term: 'invalid' }
               : { tone: 'warn' as const, label: report.total > 0 ? plural(report.total, 'finding') : 'analysis qualified' }
             : { tone: 'ok' as const, label: 'analysis clean' }),
       })
@@ -217,9 +223,9 @@ export function ShellChips({
         testid: 'chip-checks',
         onClick: () => goTo('checks'),
         ...(failed > 0
-          ? { tone: 'err' as const, label: `checks ${failed} failed` }
+          ? { tone: 'err' as const, label: `checks ${failed} failed`, term: 'fail' }
           : invalid > 0
-            ? { tone: 'warn' as const, label: `checks ${invalid} invalid` }
+            ? { tone: 'warn' as const, label: `checks ${invalid} invalid`, term: 'invalid' }
             : uncovered > 0
               ? { tone: 'warn' as const, label: `${label}, ${uncovered} serious uncovered` }
               : { tone: passed > 0 || measured === 0 ? 'ok' as const : 'quiet' as const, label }),

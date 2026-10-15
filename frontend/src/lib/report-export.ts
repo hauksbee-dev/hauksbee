@@ -14,7 +14,7 @@
 // module cannot drift from index.css the way a second copy of the tokens would.
 
 import type { WebReport } from '../types/report'
-import { plural, reportView } from './report-view'
+import { plural, reportTerms, reportView } from './report-view'
 import type { CosimView, FindingGroup, ReportView, SectionView } from './report-view'
 
 interface ReportExportInput {
@@ -330,6 +330,18 @@ function cosimHtml(c: CosimView | null): string {
   </section>`
 }
 
+/** The terms this report uses, in the engine's wording (the app's popover rows). */
+function glossaryHtml(report: WebReport, terms: string[]): string {
+  const rows = (report.glossary ?? []).filter(row => terms.includes(row.term))
+  return rows.length === 0 ? '' : `<section id="glossary">
+    <h2>Glossary</h2>
+    ${rows.map(row => `<div class="card" id="term-${esc(row.term)}">
+      <span class="tag" style="color:var(--copper)">${esc(row.label)}</span>
+      <div>${esc(row.short)} <b>What to do:</b> ${esc(row.what_to_do)}</div>
+    </div>`).join('\n    ')}
+  </section>`
+}
+
 function refusalHtml(rows: [string, string][] | null): string {
   if (!rows) return ''
   const body = rows
@@ -529,6 +541,8 @@ ${spec
       <pre>${esc(spec.toml)}</pre>
     </section>`
   : ''}
+
+${glossaryHtml(r, reportTerms(r, checks))}
 
 <footer>
   <p>

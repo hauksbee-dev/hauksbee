@@ -1,7 +1,8 @@
 import type { ModelCoverageComponent, ModelCoverageSnapshot, WebImportDiagnostics } from '../../types/report'
-import { openPartRef, plural, stageWords } from '../../lib/report-view'
+import { openPartRef, plural, stageTerm, stageWords } from '../../lib/report-view'
 import type { ReportView } from '../../lib/report-view'
 import { displayNet } from '../../lib/net-name'
+import { Term } from '../ui'
 import type { LocateFn } from './Findings'
 
 // The three collapsible panels that qualify a report: what the importer
@@ -228,10 +229,14 @@ export function ModelCoveragePanel({ coverage, onSelect, onAuthor }: {
               className="flex items-center justify-between gap-2"
               style={{ color: component.actionable_behavior_gap ? 'var(--warn-strong)' : 'var(--ok)' }}
             >
-              {cell(component, '', { color: 'inherit' }, undefined, <>
-                {stageWords(component.stage)}
-                {component.missing?.length ? ` · ${plural(component.missing.length, 'gap')}` : ''}
-              </>)}
+              {/* The stage word explains itself, so it is not inside the cell's
+                  own button (a button cannot hold a button); the rest of the
+                  cell still opens the inspection. */}
+              <span className="flex flex-wrap items-baseline gap-x-1">
+                <Term id={stageTerm(component.stage)}>{stageWords(component.stage)}</Term>
+                {cell(component, '', { color: 'inherit' }, undefined,
+                  component.missing?.length ? `· ${plural(component.missing.length, 'gap')}` : ' ')}
+              </span>
               {component.actionable_behavior_gap && (
                 <button
                   type="button"
@@ -291,6 +296,11 @@ export function EvidencePanel({ evidence: { inventory, assumptions, summary, cav
         >
           <div className="text-[10px] font-semibold" style={{ color: 'var(--warn-strong)', fontFamily: 'var(--font-mono)' }}>
             {assumption.id}
+            {assumption.term && (
+              <span className="ml-2 font-bold uppercase tracking-wide" style={{ fontFamily: 'var(--font-sans)' }}>
+                <Term id={assumption.term} />
+              </span>
+            )}
           </div>
           <div className="mt-1 font-semibold" style={{ color: 'var(--silk)' }}>{assumption.statement}</div>
           <div className="mt-1" style={{ color: 'var(--silk-dim)' }}><b>Why:</b> {assumption.because}</div>

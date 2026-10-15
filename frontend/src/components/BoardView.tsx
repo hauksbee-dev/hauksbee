@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BoardRequest, ModelCoverageComponent } from '../types/report'
-import { coverageFor, modelsOnNet, padNetsOf, plural, reportView, stageWords } from '../lib/report-view'
+import { coverageFor, explainReport, modelsOnNet, padNetsOf, plural, reportView, stageWords } from '../lib/report-view'
 import type { BoardSession } from '../hooks/useBoardSession'
 import { WarningIcon } from './Icons'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './BoardViewer'
@@ -14,12 +14,12 @@ import { acceptedFormatsSentence, withoutEngineFormatList } from '../lib/board-f
 import { StaggerItem } from '../motion'
 import { ExportMenu } from './ExportMenu'
 import type { SpecSnapshot } from '../hooks/useSessions'
-import { Callout, CopyButton, UploadBanners } from './ui'
+import { Callout, CopyButton, Term, UploadBanners, useGlossary } from './ui'
 import { FixFirstCard, NoteBlock, PreLayoutStrip, SectionBlock } from './report/Findings'
 import { centerInScroller } from '../lib/scroll'
 import { EvidencePanel, ImportDiagnosticsPanel, ModelCoveragePanel, ReportPanel } from './report/Panels'
 import { CosimBlock } from './report/CosimBlock'
-import { VerdictConditions } from './report/VerdictConditions'
+import { ExplainVerdict, VerdictConditions } from './report/VerdictConditions'
 import { BoardMap } from './report/BoardMap'
 
 // The Board view with a report in hand: the viewer as the hero surface (with
@@ -106,6 +106,8 @@ export function BoardView({
   const focusSeq = useRef(0)
   const mapRef = useRef<HTMLDivElement>(null)
   const v = useMemo(() => reportView(r), [r])
+  const explanation = useMemo(() => (r.ok ? explainReport(r) : null), [r])
+  useGlossary(r.glossary)
 
   useEffect(() => {
     if (authoringSignal === 0) return
@@ -270,6 +272,7 @@ export function BoardView({
               </div>
             )}
             <VerdictConditions conditions={v.conditions} />
+            {explanation && <ExplainVerdict explanation={explanation} />}
             <div className="text-xs mt-1.5 tnum" data-testid="report-inventory" style={{ color: 'var(--silk-dim)' }}>
               {v.title} · {plural(r.num_components, 'part')} · {plural(r.num_nets, 'net')}
             </div>
@@ -372,7 +375,7 @@ export function BoardView({
             </span>
             <span style={{ color: 'var(--silk-dim)' }}>
               <span style={{ color: 'var(--warn-strong)' }}>
-                {plural(v.openParts.length || v.unresolved.length, 'part')} left out of the circuit
+                <Term id="open_part">{plural(v.openParts.length || v.unresolved.length, 'part')} left out of the circuit</Term>
               </span>{' '}
               (no model). {v.unresolved.join(', ')} {v.unresolved.length === 1 ? 'is an active part' : 'are active parts'},
               so analog / AC / thermal results on their nets are not trustworthy.{' '}

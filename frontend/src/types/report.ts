@@ -403,6 +403,8 @@ export interface WebReport {
    *  board: a fail or an invalid run never reads as a pass in the browser.
    *  Absent on reports from engines that predate it. */
   verdict?: 'pass' | 'fail' | 'invalid'
+  /** Every term the page can explain, in the engine's words. */
+  glossary?: GlossaryRow[]
 }
 
 export interface WebSupply {
@@ -798,7 +800,16 @@ export interface RunResponse {
   timing_refusals?: string[]
   results?: CheckResult[]
   /** What the verdict and each assumption's terms mean, from hauksbee-ir. */
-  glossary?: Array<{ term: string; label: string; short: string; what_to_do: string }>
+  glossary?: GlossaryRow[]
+}
+
+/** One term's explanation, from `hauksbee_ir::glossary`: the words every
+ *  surface (CLI, JSON, export, this app) shows for it. */
+export interface GlossaryRow {
+  term: string
+  label: string
+  short: string
+  what_to_do: string
 }
 
 /** Plan usage as percent of a subscription's limits, for one moment. */

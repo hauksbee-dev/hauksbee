@@ -36,7 +36,9 @@ describe('C5.3 refusal contract', () => {
     expect(reportView).toContain('refusalRows: r.refusal ? refusalLines(r.refusal) : null')
     expect(boardView).toContain('v.refusalRows.map(')
     expect(boardView).toContain('data-testid="analysis-refusal-contract"')
-    expect(checksRun).toContain('refusalLines(result.refusal)')
+    // The Checks view shows the same contract rows inside Explain this verdict.
+    expect(reportView).toContain('evidence: refusal ? refusalLines(refusal) : []')
+    expect(checksRun).toContain('explainRun(result, overall, conditional)')
   })
 })
 

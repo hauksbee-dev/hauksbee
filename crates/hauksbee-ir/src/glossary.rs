@@ -219,6 +219,13 @@ pub fn for_terms(terms: impl IntoIterator<Item = Term>) -> Vec<TermEntry> {
     terms.into_iter().map(Term::entry).collect()
 }
 
+/// Every glossary row: what the web report embeds for its term popovers.
+#[must_use]
+pub fn all() -> Vec<TermEntry> {
+    use strum::IntoEnumIterator;
+    Term::iter().map(Term::entry).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -596,7 +596,7 @@ pub struct WebReport {
     /// First-class assumptions from the same evidence object as CLI JSON/plain.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assumptions: Vec<hauksbee_ir::evidence::Assumption>,
-    /// Plain-English explanations of the terms `assumptions` use.
+    /// Plain-English explanations of every term the page can show a popover for.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub glossary: Vec<hauksbee_ir::glossary::TermEntry>,
     /// Per-net evidence maps derived from actual board incidence.
@@ -1548,12 +1548,8 @@ fn analyze_normalized_with_context(
         model_coverage: Some(crate::commands::models::coverage_snapshot(board, lib)),
         inventory: evidence.inventory().to_vec(),
         assumptions: evidence.assumptions().to_vec(),
-        glossary: hauksbee_ir::glossary::for_terms(
-            evidence
-                .assumptions()
-                .iter()
-                .map(hauksbee_ir::evidence::Assumption::term),
-        ),
+        // Every term: the page also explains verdict words (INVALID, FAIL) and chips.
+        glossary: hauksbee_ir::glossary::all(),
         evidence: evidence.maps().to_vec(),
         notes,
         nets,
@@ -3944,6 +3940,15 @@ fn main {
         if !cosim.ran {
             assert!(cosim_says_no_mcu(&cosim), "{:?}", cosim.findings);
         }
+    }
+
+    #[test]
+    fn web_report_embeds_the_whole_glossary() {
+        let json = analyze_json("boot_gate.kicad_pcb", SHORTED);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let rows = value["glossary"].as_array().unwrap();
+        assert_eq!(rows.len(), hauksbee_ir::glossary::all().len());
+        assert!(rows.iter().any(|r| r["term"] == "invalid"));
     }
 
     /// Byte-for-byte golden of the plain .`kicad_pcb` web report; additive

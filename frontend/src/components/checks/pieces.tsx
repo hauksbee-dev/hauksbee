@@ -1,9 +1,10 @@
 import { useMemo } from 'react'
 import type { ArtifactProvenance, CheckResult, EvidenceAssumption } from '../../types/report'
-import { assumptionsForEvidence, describeModelSource } from '../../lib/report-view'
+import { assumptionsForEvidence, describeModelSource, evidenceStatusTerm } from '../../lib/report-view'
 import { summarizeErrorBudget } from '../../lib/report-view'
 import { checkKind, tomlToBuilder } from '../../lib/check-spec'
 import { VerdictBadge } from '../../motion'
+import { Term } from '../ui'
 
 // The small pieces the Checks view repeats: a labelled input, the PASS/FAIL
 // chip that rides on a row, and the evidence block under it.
@@ -51,17 +52,17 @@ export function Field({ label, value, onChange, width = 90, placeholder, invalid
 /** Inline PASS / FAIL / INVALID / MEASURED chip riding on a check row. */
 export function ResultChip({ result, stale }: { result: CheckResult; stale: boolean }) {
   const tone = result.invalid
-    ? { color: 'var(--warn)', bg: 'var(--warn-bg)', border: 'var(--warn-border)', label: 'INVALID' }
+    ? { color: 'var(--warn)', bg: 'var(--warn-bg)', border: 'var(--warn-border)', label: 'INVALID', term: 'invalid' }
     : result.measured
     ? { color: 'var(--silk-faint)', bg: 'var(--surface-2)', border: 'var(--hairline)', label: 'MEASURED' }
     : result.passed
-      ? { color: 'var(--ok)', bg: 'var(--ok-bg)', border: 'var(--ok-border)', label: 'PASS' }
-      : { color: 'var(--err)', bg: 'var(--err-bg)', border: 'var(--err-border)', label: 'FAIL' }
+      ? { color: 'var(--ok)', bg: 'var(--ok-bg)', border: 'var(--ok-border)', label: 'PASS', term: 'pass' }
+      : { color: 'var(--err)', bg: 'var(--err-bg)', border: 'var(--err-border)', label: 'FAIL', term: 'fail' }
   // The word swaps (PASS becoming FAIL on a re-run) inside a fixed grid cell,
   // so the row never reflows on a verdict change. The colour is not animated:
   // it is applied by the wrapper's style, which means the chip is the right
-  // colour on its first painted frame.
-  return (
+  // colour on its first painted frame. Hover or focus explains the word.
+  const badge = (
     <VerdictBadge
       data-testid="row-result"
       label={tone.label}
@@ -73,6 +74,7 @@ export function ResultChip({ result, stale }: { result: CheckResult; stale: bool
       }}
     />
   )
+  return tone.term ? <Term id={tone.term} bare>{badge}</Term> : badge
 }
 
 /** Canonical assertion evidence from the CI runner. Wording is rendered
@@ -105,16 +107,12 @@ export function AssertionEvidence({ result, assumptions, inventory, repeats, sta
         className="font-semibold uppercase tracking-wide"
         style={{ color: map.status === 'undermined' ? 'var(--warn)' : 'var(--silk-faint)' }}
       >
-        Evidence {map.status}{map.error_budget ? ' · numeric qualification' : ''}
+        Evidence <Term id={evidenceStatusTerm(map.status)}>{map.status}</Term>
       </div>
-      {map.error_budget && (
-        <div className="mt-1.5" data-testid="error-budget-summary">
-          {summarizeErrorBudget(map.error_budget).map(row => <div key={row}>{row}</div>)}
-        </div>
-      )}
       {linked.map(assumption => (
         <div key={assumption.id} className="mt-1.5">
           <code style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}>{assumption.id}</code>
+          {assumption.term && <> <Term id={assumption.term} /></>}
           <div style={{ color: 'var(--silk)' }}>{assumption.statement}</div>
           {repeats.has(assumption.id) ? '(explained above)' : <>
             <div>{assumption.because} {assumption.consequence}</div>
@@ -127,10 +125,22 @@ export function AssertionEvidence({ result, assumptions, inventory, repeats, sta
           Inputs: {artifacts.map(artifact => artifact.path.split('/').pop() ?? artifact.path).join(', ')}
         </div>
       )}
-      {(map.models ?? []).length > 0 && (
-        <div className="mt-1.5" data-testid="model-provenance" style={{ color: 'var(--silk-faint)' }}>
-          Models: {(map.models ?? []).map(describeModelSource).join('; ')}
-        </div>
+      {/* The numbers behind the verdict matter to a reviewer and bury the line
+          that matters to everyone else, so they open on request. */}
+      {(map.error_budget || (map.models ?? []).length > 0) && (
+        <details className="mt-1.5" data-testid="numeric-details">
+          <summary className="cursor-pointer" style={{ color: 'var(--silk-faint)' }}>Numeric details</summary>
+          {map.error_budget && (
+            <div className="mt-1" data-testid="error-budget-summary">
+              {summarizeErrorBudget(map.error_budget).map(row => <div key={row}>{row}</div>)}
+            </div>
+          )}
+          {(map.models ?? []).length > 0 && (
+            <div className="mt-1" data-testid="model-provenance" style={{ color: 'var(--silk-faint)' }}>
+              Models: {(map.models ?? []).map(describeModelSource).join('; ')}
+            </div>
+          )}
+        </details>
       )}
     </div>
   )

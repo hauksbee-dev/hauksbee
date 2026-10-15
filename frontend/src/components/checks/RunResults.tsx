@@ -1,6 +1,8 @@
 import type { RunResponse } from '../../types/report'
-import { overallVerdict, repeatedAssumptions, refusalLines, type Overall } from '../../lib/report-view'
+import { explainRun, overallVerdict, repeatedAssumptions, type Overall } from '../../lib/report-view'
 import { ArriveOnce } from '../../motion'
+import { useGlossary } from '../ui'
+import { ExplainVerdict } from '../report/VerdictConditions'
 import { AssertionEvidence, ResultChip } from './pieces'
 import { blockingRemedies, RemedyList, type RemedyActions } from './Remedies'
 
@@ -41,9 +43,10 @@ export function RunResults({ result, runKey, stale, rawMode, reportSerious, reme
   const repeats = repeatedAssumptions(results)
   const uncovered = overall === 'passed' && reportSerious > 0
   const remedies = overall === 'invalid' ? blockingRemedies(result) : []
-  const meaning = (result.glossary ?? []).find(g => g.term === 'invalid')
+  useGlossary(result.glossary)
   // A pass that rests on open parts the member sweep could not cross in full.
   const conditional = overall === 'passed' && (result.verdict_conditions ?? []).some(c => c.trim() !== '')
+  const explanation = result.ok ? explainRun(result, overall, conditional) : null
   const noteLines = (key: string, lines: string[] | undefined, prefix: string, color: string) =>
     (lines ?? []).map((line, i) => (
       <div key={`${key}${i}`} className="mt-1 text-[12px]" style={{ color }}>
@@ -90,38 +93,15 @@ export function RunResults({ result, runKey, stale, rawMode, reportSerious, reme
             </div>
             {remedies.length > 0 && remedyActions && <RemedyList items={remedies} actions={remedyActions} />}
             {remedies.length > 0 && remedyEditor}
-            {overall === 'invalid' && (result.verdict_reason || result.refusal || meaning) ? (
-              // The verdict, then the one thing to do (above); the engine's whole
-              // account of why is one click away.
-              <details className="mt-2 text-[12px]" data-testid="checks-why" open={remedies.length === 0}>
-                <summary className="cursor-pointer" style={{ color: 'var(--copper)' }}>Why?</summary>
-                {meaning && (
-                  <div className="mt-1.5" style={{ color: 'var(--silk)' }}>{meaning.short}</div>
-                )}
-                {result.verdict_reason && (
-                  <div className="mt-1.5" data-testid="checks-verdict-reason" style={{ color: 'var(--silk)' }}>
-                    {result.verdict_reason}
-                  </div>
-                )}
-                {result.refusal && (
-                  <div
-                    className="mt-2 rounded-lg px-3 py-2.5"
-                    data-testid="refusal-contract"
-                    style={{ background: 'var(--warn-bg)', border: '1px solid var(--warn-border)' }}
-                  >
-                    {refusalLines(result.refusal).map(([label, value]) => (
-                      <div key={label} className="mt-1 first:mt-0" style={{ color: 'var(--silk)' }}>
-                        <strong style={{ color: 'var(--warn-strong)' }}>{label}:</strong> {value}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </details>
-            ) : overall !== 'passed' && overall !== 'measured' && result.verdict_reason && (
+            {/* The verdict, then the one thing to do (above); why, and the
+                engine's whole account, is one click away. A failed run keeps
+                its reason in view: that sentence is the finding. */}
+            {overall === 'failed' && result.verdict_reason && (
               <div className="mt-2 text-[13px]" data-testid="checks-verdict-reason" style={{ color: 'var(--silk)' }}>
                 {result.verdict_reason}
               </div>
             )}
+            {explanation && <ExplainVerdict explanation={explanation} open={overall === 'invalid' && remedies.length === 0} />}
             {rawMode && results.map((x, i) => (
               <div
                 key={i}

@@ -400,6 +400,76 @@ export const padNetsOf = (component: ModelCoverageComponent): string[] =>
 /** A coverage stage as words. */
 export const stageWords = (stage: string) => stage.replaceAll('_', ' ')
 
+const STAGE_TERMS: Record<string, string> = {
+  unresolved: 'open_part', identity_only: 'identity_only', executable_partial: 'executable_partial',
+  executable_scope_unspecified: 'scope_unspecified',
+}
+/** The glossary term a coverage stage is an instance of, if it has one. */
+export const stageTerm = (stage: string): string | undefined => STAGE_TERMS[stage]
+
+/** The glossary term an evidence status is an instance of; a clean one needs no explaining. */
+export const evidenceStatusTerm = (status: string): string | undefined =>
+  status === 'qualified' ? 'conditional_pass' : status === 'undermined' ? 'invalid' : undefined
+
+/** The engine's reason ("<what>; next: <fix>.") as its two halves. */
+export function splitReason(reason: string | null | undefined): { what: string; next: string | null } {
+  const text = (reason ?? '').trim().replace(/\.$/, '')
+  const at = text.lastIndexOf('; next: ')
+  return at < 0 ? { what: text, next: null } : { what: text.slice(0, at), next: text.slice(at + 8) || null }
+}
+
+/** Under "Explain this verdict": a glossary term for what it means, why this
+ *  verdict, what to do next, and the refusal contract as evidence. */
+export interface VerdictExplanation {
+  term: string
+  why: string | null
+  doThis: string | null
+  evidence: [string, string][]
+}
+
+const sentence = (t: string) => (/[.!?…]$/.test(t) ? t : `${t}.`)
+
+/** Explain a refused ('invalid') or failed ('fail') verdict from the engine's
+ *  own sentences. */
+function explainVerdict(term: 'invalid' | 'fail', reason: string | undefined, refusal: RefusalContract | null | undefined): VerdictExplanation {
+  const { what, next } = splitReason(reason)
+  const cause = term === 'invalid' ? (refusal?.missing_prerequisite ?? what).replace(/\.$/, '') : what
+  // After "because", a sentence's first word is lower case unless it is a designator ("Q1").
+  const because = cause.replace(/^([A-Z])(?=[a-z]|\s)/, c => c.toLowerCase())
+  return {
+    term,
+    why: !cause ? null : term === 'invalid' ? `Not judged because ${because}.` : sentence(cause),
+    doThis: refusal?.next_action ?? (next ? sentence(next) : null),
+    evidence: refusal ? refusalLines(refusal) : [],
+  }
+}
+
+/** The board's verdict, explained when it is refused. A failing board states its
+ *  own cause, a conditional one lists its conditions, and an unrouted one is
+ *  explained by its headline and fix-first: none of those needs a panel. */
+export const explainReport = (r: WebReport): VerdictExplanation | null =>
+  r.verdict === 'invalid' && !r.fix_first?.notice ? explainVerdict('invalid', r.verdict_reason, r.refusal) : null
+
+/** The same for a checks run (a clean or measured-only run has nothing to explain). */
+export function explainRun(result: RunResponse, overall: Overall, conditional: boolean): VerdictExplanation | null {
+  if (overall === 'invalid' || overall === 'failed') {
+    return explainVerdict(overall === 'invalid' ? 'invalid' : 'fail', result.verdict_reason, result.refusal)
+  }
+  return overall === 'passed' && conditional
+    ? { term: 'conditional_pass', why: 'It rests on the condition listed below.', doThis: null, evidence: [] }
+    : null
+}
+
+/** Every glossary term a report shows (the export's appendix). */
+export function reportTerms(r: WebReport, checks?: { failed: number; invalid: number } | null): string[] {
+  const terms = new Set<string>()
+  for (const a of r.assumptions ?? []) if (a.term) terms.add(a.term)
+  for (const c of r.model_coverage?.components ?? []) if (stageTerm(c.stage)) terms.add(stageTerm(c.stage)!)
+  if (r.verdict === 'invalid' || summarizeEvidence(r.evidence).undermined > 0 || (checks?.invalid ?? 0) > 0) terms.add('invalid')
+  if ((checks?.failed ?? 0) > 0) terms.add('fail')
+  return [...terms]
+}
+
 export type Overall = 'passed' | 'measured' | 'invalid' | 'failed'
 
 /** The run's one-word verdict, from the per-assertion results when there are

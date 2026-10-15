@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
+import { createPortal } from 'react-dom'
+import type { GlossaryRow } from '../types/report'
 import { CheckIcon } from './Icons'
 import { ArriveOnce } from '../motion'
 
@@ -288,5 +290,104 @@ export function BusyLine({ children, className = '', color = 'var(--copper-hi)' 
     >
       <span className="slot-spin" /> {children}
     </div>
+  )
+}
+
+// ── Terms ────────────────────────────────────────────────────────────────────
+// Jargon explains itself where it appears, in the engine's own words (`glossary`
+// on the report, from hauksbee-ir); this file only decides how they are shown.
+
+let glossary: ReadonlyMap<string, GlossaryRow> = new Map()
+const glossaryListeners = new Set<() => void>()
+
+/** Make the engine's glossary available to every `Term` (a no-op for rows already held). */
+export function publishGlossary(rows: readonly GlossaryRow[] | undefined): void {
+  if (!rows || rows.every(r => glossary.get(r.term)?.short === r.short)) return
+  glossary = new Map([...glossary, ...rows.map(r => [r.term, r] as const)])
+  glossaryListeners.forEach(l => l())
+}
+
+/** Publish a report's glossary for as long as it is on screen. */
+export function useGlossary(rows: readonly GlossaryRow[] | undefined): void {
+  useEffect(() => publishGlossary(rows), [rows])
+}
+
+/** Forget every row (tests). */
+export function resetGlossary(): void {
+  glossary = new Map()
+  glossaryListeners.forEach(l => l())
+}
+
+/** The row for `id`, or undefined while the engine has not sent it (an older server): callers show plain words. */
+export function useTermEntry(id: string | undefined): GlossaryRow | undefined {
+  const subscribe = (l: () => void) => { glossaryListeners.add(l); return () => { glossaryListeners.delete(l) } }
+  const rows = useSyncExternalStore(subscribe, () => glossary, () => glossary)
+  return id ? rows.get(id) : undefined
+}
+
+/** A word the reader may not know: dotted underline; hover, keyboard focus or a
+ *  tap shows what it means and what to do. Esc, an outside press, a scroll or a
+ *  resize closes it. Without an entry it is its plain words. `bare` drops the
+ *  underline for a term that is already a badge. */
+export function Term({ id, children, bare = false }: { id: string | undefined; children?: React.ReactNode; bare?: boolean }) {
+  const entry = useTermEntry(id)
+  const tipId = useId()
+  const [at, setAt] = useState<DOMRect | null>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const show = () => setAt(trigger.current?.getBoundingClientRect() ?? null)
+  useEffect(() => {
+    if (!at) return
+    const hide = () => setAt(null)
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') hide() }
+    const onPress = (e: Event) => { if (!trigger.current?.contains(e.target as Node)) hide() }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('pointerdown', onPress)
+    window.addEventListener('resize', hide)
+    window.addEventListener('scroll', hide, true)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('pointerdown', onPress)
+      window.removeEventListener('resize', hide)
+      window.removeEventListener('scroll', hide, true)
+    }
+  }, [at])
+  if (!entry) return <>{children ?? id}</>
+  return (
+    <>
+      <button
+        ref={trigger}
+        type="button"
+        data-testid={`term-${entry.term}`}
+        aria-describedby={at ? tipId : undefined}
+        onMouseEnter={show}
+        onMouseLeave={() => setAt(null)}
+        onFocus={e => { if (e.currentTarget.matches(':focus-visible')) show() }}
+        onBlur={() => setAt(null)}
+        // A term inside a summary or a link must not also fire it.
+        onClick={e => { e.preventDefault(); e.stopPropagation(); show() }}
+        className={`hb-press inline cursor-help bg-transparent border-0 p-0 m-0 align-baseline text-left [font:inherit] [color:inherit] [letter-spacing:inherit] [text-transform:inherit] ${bare ? '' : 'underline decoration-dotted underline-offset-[3px]'}`}
+      >
+        {children ?? entry.label}
+      </button>
+      {at && createPortal(
+        <div
+          id={tipId}
+          role="tooltip"
+          data-testid={`term-popover-${entry.term}`}
+          className="rounded-lg px-3 py-2.5 text-[12px] leading-relaxed text-left font-normal normal-case tracking-normal pointer-events-none"
+          style={{
+            position: 'fixed', zIndex: 90, width: Math.min(300, window.innerWidth - 16), left: Math.max(8, Math.min(at.left, window.innerWidth - 308)),
+            // Under the term, or above it when it sits in the lower part of the screen.
+            ...(at.bottom > window.innerHeight - 180 ? { bottom: window.innerHeight - at.top + 6 } : { top: at.bottom + 6 }),
+            background: 'var(--surface)', border: '1px solid var(--hairline)', boxShadow: 'var(--shadow-pop)', color: 'var(--silk)',
+          }}
+        >
+          <div className="text-[10px] font-bold tracking-widest uppercase" style={{ color: 'var(--copper-hi)' }}>{entry.label}</div>
+          <div className="mt-0.5">{entry.short}</div>
+          <div className="mt-1" style={{ color: 'var(--silk-dim)' }}><b style={{ fontWeight: 600 }}>What to do:</b> {entry.what_to_do}</div>
+        </div>,
+        document.body,
+      )}
+    </>
   )
 }
