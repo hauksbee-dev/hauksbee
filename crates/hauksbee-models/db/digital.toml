@@ -2,15 +2,56 @@
 # params: voh, vol, vih, vil, tpd_s (propagation delay in seconds),
 #         supply_pin, gnd_pin, plus any function-specific params.
 
+# ═════════════════════════════════════════════════════════════════════════════
+# Auto-direction push-pull translators (the TI TXB010x family).
+#
+# Each data line is a pad on each port, and each port has a DC driver that
+# copies the other port's level through a 4 kOhm series resistor (TXB0101
+# SCES639F Figure 6-1; TXB0104 SCES650K and TXB0108 SCES643L draw the same
+# cell). The drivers are "designed to be weak, so that they can be overdriven
+# by an external driver" (SCES639F 6.3.1), which is how direction is sensed:
+# there is no DIR pin. The generic `[models.logic]` evaluator models that as
+# data:
+#   - every port pad is a declared OUTPUT (`a`, `b1`, ...), tri-stated by OE
+#     (high enables; Pin Functions "Pull OE low to place all outputs in
+#     3-state mode"), and `[models.logic] sense` names the input that samples
+#     the same pad, so both ports drive at once, each the level the other
+#     port reads;
+#   - `ro` is the 4.5 kOhm the datasheets' own loading equations use,
+#     "counting the variation of the serial resistor 4 kOhm" (SCES639F 7.2.2
+#     Eq. 1 and 2, SCES650K and SCES643L 8.2.2), so a pull-up R on a port
+#     driven low sits at VOL = VCC x 4.5k / (4.5k + R) and a pull-down at
+#     VOH = VCC x R / (R + 4.5k); `ro_strong` is the nominal 4 kOhm. An
+#     external driver stronger than the cell wins the pad, the sensed level
+#     follows it and the other port copies it; a pull or load stronger than
+#     the datasheets' "> 50 kOhm" rule (SCES639F 6.3.4) leaves the pad
+#     between VIL and VIH, which the logic-level check reports;
+#   - `voh` tracks VCCO with no drop (Eq. 1 with no pull-down) and `vol` is
+#     0 V (Eq. 2 with no pull-up); the light-load rows (VOH >= VCCO - 0.4 V at
+#     -20 uA, VOL <= 0.4 V at 20 uA) follow from the 4.5 kOhm;
+#   - `[models.level_rails]` reads the A port and OE at VCCA and the B port at
+#     VCCB (Pin Functions "Referenced to VCCA / VCCB"), with VIH = 0.65 x VCCI
+#     and VIL = 0.35 x VCCI for data and OE alike (5.3);
+#   - while either rail is below 1 V every output is high impedance, the
+#     family's VCC-isolation feature ("If either VCC input is at GND, all
+#     outputs are in the high-impedance state").
+# NOT MODELLED: the one-shot edge accelerators (about 10 ns at 70/50/40 Ohm,
+# SCES639F 6.3.1 and 7.4), so a capacitive load sees only the 4.5 kOhm DC
+# cell and edges are slower than real; propagation delay and data rate; Ioff
+# and the power-up transient; note (1)'s rule that an unused A/B pair be held
+# in the same state. The same note applies to every TXB card below.
+
 # ── TXB0101: 1-bit auto-direction level translator ─────────────────────────
-# Source: Texas Instruments TXB0101 datasheet SCES639F, Rev. F, 41-page PDF.
-# Section 4 Pin Configuration and Functions assigns VCCA to pin 1 (A-port
-# supply) and VCCB to pin 6 (B-port supply). Section 5.3 Recommended Operating
-# Conditions supplies both voltage ranges and note (2)'s VCCA <= VCCB order.
+# Source: Texas Instruments TXB0101 datasheet SCES639F (revised September
+# 2025): Features p.1; Pin Configuration notes B to E p.3; Pin Functions p.4;
+# 5.1 Absolute Maximum Ratings; 5.3 Recommended Operating Conditions; 6.3.1
+# Architecture and Figure 6-1; 6.3.4 Pullup or Pulldown Resistors; 7.2.2
+# Detailed Design Procedure Eq. (1) and (2); 7.3 Power Supply Recommendations
+# (OE to GND through a pull-down during power-up and power-down).
 [[models]]
-id = "txb0101_identity"
+id = "txb0101"
 kind = "digital"
-description = "TI TXB0101 1-bit bidirectional level translator (identity, pin map, and operating envelopes only)"
+description = "TI TXB0101 1-bit auto-direction bidirectional level translator, push-pull with weak DC drivers, SOT-23-6 / SC70-6 / SOT-5X3 / X2SON-6"
 
 [models.source]
 tier = "curated-library"
@@ -18,35 +59,57 @@ validation = "physical-bounds-only"
 [[models.source.references]]
 url = "https://www.ti.com/lit/ds/symlink/txb0101.pdf"
 title = "Texas Instruments TXB0101 datasheet, SCES639F, Rev. F"
-locator = "Section 4 Pin Configuration and Functions; Section 5.3 Recommended Operating Conditions"
+locator = "Pin Configuration notes p.3; Pin Functions p.4; 5.1; 5.3; 6.3.1 Architecture and Figure 6-1; 6.3.4; 7.2.2 Eq. (1) and (2); 7.3"
 sha256 = "a8f7bb9673ecd22e7bb8adb7600d15414718248632d97430c5a61ec970695fc1"
 [[models.source.uncertainty]]
 status = "unknown"
-parameter = "level_translation_behavior"
-reason = "direction sensing, edge acceleration, drive strength, timing, loading, and partial-power-down behavior are not modeled"
+parameter = "translation_timing"
+reason = "the one-shot edge accelerators, propagation delay, data rate, Ioff and power-up transients are not modelled; only the weak DC drivers, OE, the supply-referenced levels and VCC isolation are"
 
 [models.match]
-# Exact family value plus the exact KiCad DCK symbol spelling used by mito.
-value_re = "(?i)^TXB0101(?:DCK)?$"
+# DBV, DCK, DRL and DRY share the six-pin numbering below; the YZP DSBGA balls
+# are lettered and deliberately not matched. A trailing R or T is tape and reel.
+value_re = "(?i)^TXB0101(DBV|DCK|DRL|DRY)?[RT]?$"
 
 [models.params]
-identity_only = true
-warning = "TXB0101 is a level translator; only identity, the six-pin map, and sourced operating envelopes are modeled, not translation behavior or timing"
-unlocked_by = "a validated bidirectional TXB0101 translation model covering direction sensing, loading, timing, OE, and partial-power-down behavior"
+voh = 3.3          # VCCO at 3.3 V: Eq. (1) with no pull-down
+vol = 0.0          # Eq. (2) with no pull-up
+vih = 2.145        # 0.65 x 3.3 V (5.3)
+vil = 1.155        # 0.35 x 3.3 V (5.3)
+ro = 4500.0        # 7.2.2: 4.5 kOhm counts the variation of the 4 kOhm series resistor
+ro_strong = 4000.0 # Figure 6-1: the nominal 4 kOhm series resistor
+supply_pin = "1"
+gnd_pin = "2"
+
+[models.levels]
+# 5.3: data VIH = VCCI x 0.65, VIL = VCCI x 0.35; OE the same against VCCA.
+vih = [[1.2, 0.78], [5.5, 3.575]]
+vil = [[1.2, 0.42], [5.5, 1.925]]
+voh = [[1.2, 1.2], [5.5, 5.5]]
+
+[models.level_rails]
+vcca = ["a", "oe"]   # Pin Functions: A and OE referenced to VCCA
+vccb = ["b"]         # Pin Functions: B referenced to VCCB
 
 [models.pins]
-"1" = "vcca"  # Section 4: A-port supply voltage
+# Pin Functions, DBV / DCK / DRL / DRY.
+"1" = "vcca"  # A-port supply voltage
 "2" = "gnd"
 "3" = "a"
 "4" = "b"
 "5" = "oe"
-"6" = "vccb"  # Section 4: B-port supply voltage
+"6" = "vccb"  # B-port supply voltage
+
+[models.ratings]
+max_pin_current_a = 0.05      # IO continuous output current, 5.1
+max_voltage_v = 6.5           # VCCB abs max, 5.1 (VCCA 4.6 V, enveloped below)
 
 [[models.envelope]]
 kind = "supply_range"
 pin = "vcca"
 min_v = 1.2
 max_v = 3.6
+abs_max_v = 4.6
 basis = "TI TXB0101 SCES639F, Section 5.3 Recommended Operating Conditions, VCCA supply-voltage row"
 
 [[models.envelope]]
@@ -54,6 +117,7 @@ kind = "supply_range"
 pin = "vccb"
 min_v = 1.65
 max_v = 5.5
+abs_max_v = 6.5
 basis = "TI TXB0101 SCES639F, Section 5.3 Recommended Operating Conditions, VCCB supply-voltage row"
 
 [[models.envelope]]
@@ -61,6 +125,384 @@ kind = "rail_order"
 lower = "vcca"
 upper = "vccb"
 basis = "TI TXB0101 SCES639F, Section 5.3 Recommended Operating Conditions, note (2): VCCA must be less than or equal to VCCB"
+
+[models.logic]
+# Each port drives the level the other port reads, both at once (6.3.1).
+inputs = ["oe", "a_in", "b_in"]
+outputs = ["a", "b"]
+[models.logic.sense]
+a_in = "a"
+b_in = "b"
+[models.logic.comb]
+a = "b_in"
+b = "a_in"
+[models.logic.tristate]
+a = { enable = "oe", active = "high" }
+b = { enable = "oe", active = "high" }
+
+[models.coverage]
+implements = ["auto_direction", "weak_dc_drive", "tristate_enable", "dual_supply_levels", "vcc_isolation"]
+missing = ["one_shot_edge_acceleration", "propagation_timing", "ioff_leakage", "unused_pair_rule"]
+
+# ── TXB0102: 2-bit auto-direction level translator ─────────────────────────
+# Source: Texas Instruments TXB0102 datasheet SCES641E (revised October 2023):
+# Features p.1; Pin Configuration notes p.3; Table 4-2 Pin Functions DCT or
+# DCU; 5.1; 5.3; 7.3.1 Architecture; 7.3.5 Pullup or Pulldown Resistors;
+# 8.2.2 (the same 4.5 kOhm equations).
+[[models]]
+id = "txb0102"
+kind = "digital"
+description = "TI TXB0102 2-bit auto-direction bidirectional level translator, push-pull with weak DC drivers, SM8 / VSSOP-8"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/txb0102.pdf"
+title = "Texas Instruments TXB0102 datasheet, SCES641E, Rev. E"
+locator = "Pin Configuration notes p.3; Table 4-2 Pin Functions: DCT or DCU; 5.1; 5.3; 7.3.1 Architecture; 7.3.5; 8.2.2"
+sha256 = "087ff078abad8dd61e486e0d5ab998aaa63bfae5ce926a45fa40ec9e8233b140"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "translation_timing"
+reason = "the one-shot edge accelerators, propagation delay, data rate, Ioff and power-up transients are not modelled; only the weak DC drivers, OE, the supply-referenced levels and VCC isolation are"
+
+[models.match]
+# DCT and DCU share Table 4-2's numbering; the YZP balls are not matched.
+value_re = "(?i)^TXB0102(DCT|DCU)?[RT]?$"
+
+[models.params]
+voh = 3.3
+vol = 0.0
+vih = 2.145
+vil = 1.155
+ro = 4500.0
+ro_strong = 4000.0
+supply_pin = "3"
+gnd_pin = "2"
+
+[models.levels]
+vih = [[1.2, 0.78], [5.5, 3.575]]
+vil = [[1.2, 0.42], [5.5, 1.925]]
+voh = [[1.2, 1.2], [5.5, 5.5]]
+
+[models.level_rails]
+vcca = ["a1", "a2", "oe"]
+vccb = ["b1", "b2"]
+
+[models.pins]
+# Table 4-2, DCT / DCU.
+"1" = "b2"
+"2" = "gnd"
+"3" = "vcca"
+"4" = "a2"
+"5" = "a1"
+"6" = "oe"
+"7" = "vccb"
+"8" = "b1"
+
+[models.ratings]
+max_pin_current_a = 0.05
+max_voltage_v = 6.5
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcca"
+min_v = 1.2
+max_v = 3.6
+abs_max_v = 4.6
+basis = "TI TXB0102 SCES641E, 5.3 VCCA 1.2 V to 3.6 V; 5.1 VCCA -0.5 V to 4.6 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vccb"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI TXB0102 SCES641E, 5.3 VCCB 1.65 V to 5.5 V; 5.1 VCCB -0.5 V to 6.5 V"
+
+[[models.envelope]]
+kind = "rail_order"
+lower = "vcca"
+upper = "vccb"
+basis = "TI TXB0102 SCES641E, 5.3 note (2): VCCA must be less than or equal to VCCB"
+
+[models.logic]
+inputs = ["oe", "a1_in", "a2_in", "b1_in", "b2_in"]
+outputs = ["a1", "a2", "b1", "b2"]
+[models.logic.sense]
+a1_in = "a1"
+a2_in = "a2"
+b1_in = "b1"
+b2_in = "b2"
+[models.logic.comb]
+a1 = "b1_in"
+a2 = "b2_in"
+b1 = "a1_in"
+b2 = "a2_in"
+[models.logic.tristate]
+"a1..a2" = { enable = "oe", active = "high" }
+"b1..b2" = { enable = "oe", active = "high" }
+
+[models.coverage]
+implements = ["auto_direction", "weak_dc_drive", "tristate_enable", "dual_supply_levels", "vcc_isolation"]
+missing = ["one_shot_edge_acceleration", "propagation_timing", "ioff_leakage", "unused_pair_rule"]
+
+# ── TXB0104: 4-bit auto-direction level translator ─────────────────────────
+# Source: Texas Instruments TXB0104 datasheet SCES650K (revised March 2025):
+# Features p.1; Table 4-1 Pin Functions; 5.1; 5.3; 7.3.1 Architecture; 7.3.5
+# Pullup or Pulldown Resistors; 8.2.2 (VOH and VOL with the 4.5 kOhm).
+[[models]]
+id = "txb0104"
+kind = "digital"
+description = "TI TXB0104 4-bit auto-direction bidirectional level translator, push-pull with weak DC drivers, SOIC-14 / TSSOP-14 / VQFN-14"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/txb0104.pdf"
+title = "Texas Instruments TXB0104 datasheet, SCES650K, Rev. K"
+locator = "Table 4-1 Pin Functions; 5.1; 5.3; 7.3.1 Architecture; 7.3.5; 8.2.2"
+sha256 = "9a852f7bcc4104df0676d7ee3e4918429c3db2cbd79a5338aca0a1d34471e400"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "translation_timing"
+reason = "the one-shot edge accelerators, propagation delay, data rate, Ioff and power-up transients are not modelled; only the weak DC drivers, OE, the supply-referenced levels and VCC isolation are"
+
+[models.match]
+# D, PW, RGY, BQA and DYY share Table 4-1's numbering (pins 6 and 9 NC); RUT,
+# GXU/ZXU/NMN and YZT number differently and are not matched.
+value_re = "(?i)^TXB0104(D|PW|RGY|BQA|DYY)?[RT]?$"
+
+[models.params]
+voh = 3.3
+vol = 0.0
+vih = 2.145
+vil = 1.155
+ro = 4500.0
+ro_strong = 4000.0
+supply_pin = "1"
+gnd_pin = "7"
+
+[models.levels]
+vih = [[1.2, 0.78], [5.5, 3.575]]
+vil = [[1.2, 0.42], [5.5, 1.925]]
+voh = [[1.2, 1.2], [5.5, 5.5]]
+
+[models.level_rails]
+vcca = ["a1", "a2", "a3", "a4", "oe"]
+vccb = ["b1", "b2", "b3", "b4"]
+
+[models.pins]
+# Table 4-1, D / PW / RGY / BQA / DYY.
+"1" = "vcca"
+"2" = "a1"
+"3" = "a2"
+"4" = "a3"
+"5" = "a4"
+"7" = "gnd"
+"8" = "oe"
+"10" = "b4"
+"11" = "b3"
+"12" = "b2"
+"13" = "b1"
+"14" = "vccb"
+
+[models.ratings]
+max_pin_current_a = 0.05
+max_voltage_v = 6.5
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcca"
+min_v = 1.2
+max_v = 3.6
+abs_max_v = 4.6
+basis = "TI TXB0104 SCES650K, 5.3 VCCA 1.2 V to 3.6 V; 5.1 VCCA -0.5 V to 4.6 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vccb"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI TXB0104 SCES650K, 5.3 VCCB 1.65 V to 5.5 V; 5.1 VCCB -0.5 V to 6.5 V"
+
+[[models.envelope]]
+kind = "rail_order"
+lower = "vcca"
+upper = "vccb"
+basis = "TI TXB0104 SCES650K, 5.3 note (2): VCCA must be less than or equal to VCCB"
+
+[models.logic]
+inputs = ["oe", "a1_in", "a2_in", "a3_in", "a4_in", "b1_in", "b2_in", "b3_in", "b4_in"]
+outputs = ["a1", "a2", "a3", "a4", "b1", "b2", "b3", "b4"]
+[models.logic.sense]
+a1_in = "a1"
+a2_in = "a2"
+a3_in = "a3"
+a4_in = "a4"
+b1_in = "b1"
+b2_in = "b2"
+b3_in = "b3"
+b4_in = "b4"
+[models.logic.comb]
+a1 = "b1_in"
+a2 = "b2_in"
+a3 = "b3_in"
+a4 = "b4_in"
+b1 = "a1_in"
+b2 = "a2_in"
+b3 = "a3_in"
+b4 = "a4_in"
+[models.logic.tristate]
+"a1..a4" = { enable = "oe", active = "high" }
+"b1..b4" = { enable = "oe", active = "high" }
+
+[models.coverage]
+implements = ["auto_direction", "weak_dc_drive", "tristate_enable", "dual_supply_levels", "vcc_isolation"]
+missing = ["one_shot_edge_acceleration", "propagation_timing", "ioff_leakage", "unused_pair_rule"]
+
+# ── TXB0108: 8-bit auto-direction level translator ─────────────────────────
+# Source: Texas Instruments TXB0108 datasheet SCES643L (revised February
+# 2026): Features p.1; Pin Configuration notes; Table 4-1 Pin Functions; 5.1;
+# 5.3; 7.3.1 Architecture; 7.3.5 Pullup or Pulldown Resistors; 8.2.2.
+[[models]]
+id = "txb0108"
+kind = "digital"
+description = "TI TXB0108 8-bit auto-direction bidirectional level translator, push-pull with weak DC drivers, TSSOP-20 / VQFN-20"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/txb0108.pdf"
+title = "Texas Instruments TXB0108 datasheet, SCES643L, Rev. L"
+locator = "Pin Configuration notes; Table 4-1 Pin Functions; 5.1; 5.3; 7.3.1 Architecture; 7.3.5; 8.2.2"
+sha256 = "8f8720b78129d8b4f2ba45ec53cfa16cb511185019ae24eb25253422cf650556"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "translation_timing"
+reason = "the one-shot edge accelerators, propagation delay, data rate, Ioff and power-up transients are not modelled; only the weak DC drivers, OE, the supply-referenced levels and VCC isolation are"
+
+[models.match]
+# PW and RGY share Table 4-1's numbering; DQS, RUK and YZP are not matched.
+value_re = "(?i)^TXB0108(PW|RGY)?[RT]?$"
+
+[models.params]
+voh = 3.3
+vol = 0.0
+vih = 2.145
+vil = 1.155
+ro = 4500.0
+ro_strong = 4000.0
+supply_pin = "2"
+gnd_pin = "11"
+
+[models.levels]
+vih = [[1.2, 0.78], [5.5, 3.575]]
+vil = [[1.2, 0.42], [5.5, 1.925]]
+voh = [[1.2, 1.2], [5.5, 5.5]]
+
+[models.level_rails]
+vcca = ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "oe"]
+vccb = ["b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8"]
+
+[models.pins]
+# Table 4-1, PW / RGY.
+"1" = "a1"
+"2" = "vcca"
+"3" = "a2"
+"4" = "a3"
+"5" = "a4"
+"6" = "a5"
+"7" = "a6"
+"8" = "a7"
+"9" = "a8"
+"10" = "oe"
+"11" = "gnd"
+"12" = "b8"
+"13" = "b7"
+"14" = "b6"
+"15" = "b5"
+"16" = "b4"
+"17" = "b3"
+"18" = "b2"
+"19" = "vccb"
+"20" = "b1"
+
+[models.ratings]
+max_pin_current_a = 0.05
+max_voltage_v = 6.5
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcca"
+min_v = 1.2
+max_v = 3.6
+abs_max_v = 4.6
+basis = "TI TXB0108 SCES643L, 5.3 VCCA 1.2 V to 3.6 V; 5.1 VCCA -0.5 V to 4.6 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vccb"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI TXB0108 SCES643L, 5.3 VCCB 1.65 V to 5.5 V; 5.1 VCCB -0.5 V to 6.5 V"
+
+[[models.envelope]]
+kind = "rail_order"
+lower = "vcca"
+upper = "vccb"
+basis = "TI TXB0108 SCES643L, 5.3 note (2): VCCA must be less than or equal to VCCB"
+
+[models.logic]
+inputs = ["oe", "a1_in", "a2_in", "a3_in", "a4_in", "a5_in", "a6_in", "a7_in", "a8_in",
+  "b1_in", "b2_in", "b3_in", "b4_in", "b5_in", "b6_in", "b7_in", "b8_in"]
+outputs = ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8"]
+[models.logic.sense]
+a1_in = "a1"
+a2_in = "a2"
+a3_in = "a3"
+a4_in = "a4"
+a5_in = "a5"
+a6_in = "a6"
+a7_in = "a7"
+a8_in = "a8"
+b1_in = "b1"
+b2_in = "b2"
+b3_in = "b3"
+b4_in = "b4"
+b5_in = "b5"
+b6_in = "b6"
+b7_in = "b7"
+b8_in = "b8"
+[models.logic.comb]
+a1 = "b1_in"
+a2 = "b2_in"
+a3 = "b3_in"
+a4 = "b4_in"
+a5 = "b5_in"
+a6 = "b6_in"
+a7 = "b7_in"
+a8 = "b8_in"
+b1 = "a1_in"
+b2 = "a2_in"
+b3 = "a3_in"
+b4 = "a4_in"
+b5 = "a5_in"
+b6 = "a6_in"
+b7 = "a7_in"
+b8 = "a8_in"
+[models.logic.tristate]
+"a1..a8" = { enable = "oe", active = "high" }
+"b1..b8" = { enable = "oe", active = "high" }
+
+[models.coverage]
+implements = ["auto_direction", "weak_dc_drive", "tristate_enable", "dual_supply_levels", "vcc_isolation"]
+missing = ["one_shot_edge_acceleration", "propagation_timing", "ioff_leakage", "unused_pair_rule"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 

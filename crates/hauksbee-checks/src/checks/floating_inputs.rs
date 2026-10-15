@@ -12,7 +12,8 @@
 //! ## Evidence the check rests on
 //!
 //! - The part is CMOS logic: its value names a CMOS logic family (74HC/HCT/
-//!   AC/AHC/LVC/AUP/..., CD4000/HEF4000/MC14000, NC7S/NC7W tiny logic).
+//!   AC/AHC/LVC/AUP/..., CD4000/HEF4000/MC14000, NC7S/NC7W tiny logic, TI
+//!   `TXB010x` translators).
 //!   Bipolar and bus-hold families (74LS, 74ABT, 74LVT) are not judged.
 //! - The pin is an input: a `logic.inputs` role of the part's model card mapped
 //!   through the card's pin table, or a schematic pin whose electrical type is
@@ -63,7 +64,10 @@ pub fn is_cmos_logic_value(value: &str) -> bool {
         }
     }
     // Fairchild/onsemi and Toshiba tiny logic: NC7S.., NC7SZ.., NC7WZ.., TC7S...
-    if ["NC7S", "NC7W", "NC7N", "NC7P", "TC7S", "TC7W"]
+    // TI TXB010x push-pull translators: OE is a plain CMOS input with no
+    // internal pull (TXB0101 SCES639F 5.6, II +-1 uA; 7.3 asks for an OE
+    // pull-down), so it must not float either.
+    if ["NC7S", "NC7W", "NC7N", "NC7P", "TC7S", "TC7W", "TXB0"]
         .iter()
         .any(|p| v.starts_with(p))
     {
@@ -376,6 +380,7 @@ mod tests {
             "MC14066",
             "NC7SZ125",
             "74AUP1G04",
+            "TXB0101DCKR",
         ] {
             assert!(is_cmos_logic_value(v), "{v}");
         }
@@ -389,6 +394,55 @@ mod tests {
         ] {
             assert!(!is_cmos_logic_value(v), "{v}");
         }
+    }
+
+    /// A TXB0101 on +5V/GND with A and B driven, OE on net `oe`.
+    fn txb0101(oe: Option<i64>, kind: &str) -> Component {
+        let pins = vec![
+            pin("1", Some(2), "VCCA", "power_in"),
+            pin("2", Some(1), "GND", "power_in"),
+            pin("3", Some(3), "A", "bidirectional"),
+            pin("4", Some(3), "B", "bidirectional"),
+            pin("5", oe, "OE", kind),
+            pin("6", Some(2), "VCCB", "power_in"),
+        ];
+        Component {
+            reference: "U1".into(),
+            value: "TXB0101DCK".into(),
+            pins,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_txb_oe_left_open_floats_and_a_pulldown_ties_it() {
+        // SCES639F 7.3: OE "should be tied to GND through a pulldown resistor".
+        let open = board(
+            vec![txb0101(Some(9), "input+no_connect")],
+            &[(9, "unconnected-(U1-OE-Pad5)")],
+        );
+        let found = floating_input_lint(&open, &ModelLibrary::builtin()).findings;
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0]
+                .message
+                .starts_with("U1 TXB0101DCK: input OE is unconnected"),
+            "{}",
+            found[0].message
+        );
+        let pulldown = Component {
+            reference: "R1".into(),
+            value: "100k".into(),
+            pins: vec![
+                pin("1", Some(9), "", "passive"),
+                pin("2", Some(1), "", "passive"),
+            ],
+            ..Default::default()
+        };
+        let tied = board(vec![txb0101(Some(9), "input"), pulldown], &[(9, "OE")]);
+        assert!(floating_input_lint(&tied, &ModelLibrary::builtin())
+            .findings
+            .is_empty());
     }
 
     #[test]

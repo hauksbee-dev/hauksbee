@@ -12,17 +12,29 @@ use hauksbee_models::{schema::PassiveClass, ComponentKind, ModelLibrary, Operati
 
 #[test]
 fn txb0101_card_has_sourced_pin_roles_and_operating_envelopes() {
-    for value in ["TXB0101", "TXB0101DCK"] {
+    for value in ["TXB0101", "TXB0101DCK", "TXB0101DBVR"] {
         let model = expect_model(value);
-        assert_eq!(model.id, "txb0101_identity", "{value}");
+        assert_eq!(model.id, "txb0101", "{value}");
         assert_eq!(model.kind, ComponentKind::Digital, "{value}");
-        assert_eq!(model.params.get_bool("identity_only"), Some(true));
-        assert_pins(&model, &pins("1=vcca 6=vccb"));
+        assert_eq!(model.params.get_bool("identity_only"), None);
+        assert_pins(&model, &pins("1=vcca 2=gnd 3=a 4=b 5=oe 6=vccb"));
+        assert_eq!(model.logic.outputs, ["a", "b"], "both ports drive (6.3.1)");
+        assert_eq!(
+            model.params.get_f64("ro"),
+            Some(4500.0),
+            "7.2.2 Eq. (1)/(2)"
+        );
         assert_eq!(model.envelope.len(), 3);
 
         let rec = "Section 5.3 Recommended Operating Conditions";
-        assert!(has_supply_range(&model, "vcca", (1.2, 3.6), None, rec));
-        assert!(has_supply_range(&model, "vccb", (1.65, 5.5), None, rec));
+        assert!(has_supply_range(&model, "vcca", (1.2, 3.6), Some(4.6), rec));
+        assert!(has_supply_range(
+            &model,
+            "vccb",
+            (1.65, 5.5),
+            Some(6.5),
+            rec
+        ));
         assert!(model.envelope.iter().any(|entry| matches!(
             entry,
             OperatingEnvelope::RailOrder {

@@ -132,8 +132,10 @@ The pieces, and where each is specified:
   maps a supply role to the pin roles whose thresholds and output high level
   come from that rail rather than from `vcc`. While any named rail is
   unpowered, every output is high impedance (the xT45 VCC-isolation feature).
-  Parts that sense direction automatically (TXB/TXS/NTS) are not expressible
-  this way and stay identity-only.
+  A push-pull auto-direction translator (the TXB010x entries) uses the same
+  pieces with both ports always enabled, each driving the other's sensed
+  level through a weak `ro` that an external driver overdrives. The
+  open-drain TXS/NTS parts are not expressible this way yet.
 - **Latches**: cross-coupled `comb` expressions are legal (the SR latch).
   Give cycle participants a power-on level via `[models.logic.init]`.
 

@@ -581,13 +581,14 @@ fn is_resistor_array(c: &Component) -> bool {
 /// Is this an I2C level translator that provides its own bus pull-ups, so an
 /// external pull-up on the connected bus is optional rather than missing?
 ///
-/// Open-drain auto-direction translators (NXP `NTS010x`, TI TXS010x/TXB010x) and
+/// Open-drain auto-direction translators (NXP `NTS010x`, TI `TXS010x`) and
 /// buffered repeaters (PCA9517/PCA9617, LTC4311) integrate ~10 kOhm pull-ups to
 /// each Vcc. A bare pass-gate switch (PCA9306, PCA9509 pass type) does NOT, so
-/// it is deliberately excluded.
+/// it is deliberately excluded, as is the push-pull `TXB010x`: it has no pull-ups
+/// and "should not be used in applications such as I2C" (TXB0101 SCES639F 6.3.4).
 fn has_integrated_i2c_pullups(c: &Component) -> bool {
-    const FAMILIES: [&str; 7] = [
-        "NTS010", "TXS010", "TXB010", "PCA9517", "PCA9617", "LTC4311", "NVT2010",
+    const FAMILIES: [&str; 6] = [
+        "NTS010", "TXS010", "PCA9517", "PCA9617", "LTC4311", "NVT2010",
     ];
     let v = c.value.to_ascii_uppercase();
     FAMILIES.iter().any(|f| v.contains(f))
@@ -1219,7 +1220,7 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                 continue;
             }
             // A level translator with integrated pull-ups (NTS010x / TXS010x /
-            // TXB010x / PCA9517-class auto-direction parts) supplies the bus
+            // PCA9517-class auto-direction parts) supplies the bus
             // pull-up itself: an external resistor is optional, not missing. A
             // pure pass-gate (PCA9306) does NOT, so it is excluded from this.
             if has_integrated_i2c_pullups(c) {
@@ -1636,7 +1637,7 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                 has_emmc = true;
             }
             if is_sd_bus_switch(c) || has_integrated_i2c_pullups(c) {
-                // A pass-gate mux, or a TXS/TXB-class translator whose every
+                // A pass-gate mux, or a TXS-class translator whose every
                 // I/O carries its own ~10 k pull-up (they get dropped onto
                 // SD/SDIO lines too): either way, a discrete resistor is not
                 // the whole story on this net.

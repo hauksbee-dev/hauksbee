@@ -10,8 +10,9 @@
 //! card's flat `vil`/`vih` corner.
 //!
 //! The inputs judged are the ones a card DECLARES: an analog switch's control
-//! roles and the `inputs` of a `[models.logic]` block. A part with neither
-//! abstains, as does an input whose net or supply the oracle cannot answer for
+//! roles, the `inputs` of a `[models.logic]` block, and the bidirectional pads
+//! its `sense` map samples (a translator port reads as well as drives). A part
+//! with none abstains, as does an input whose net or supply the oracle cannot answer for
 //! and a part whose supply is not up.
 //!
 //! On a run the oracle gives each net the span it covered, so three shapes
@@ -37,7 +38,8 @@ const POWERED_V: f64 = 1.0;
 const EDGE_V: f64 = 1e-3;
 
 /// The roles of `m` that are logic inputs: an analog switch's control pins, or
-/// the declared inputs of a `[models.logic]` block that are real pads.
+/// the declared inputs of a `[models.logic]` block that are real pads, and the
+/// pads its `sense` map samples.
 fn input_roles(m: &ModelEntry) -> Vec<&str> {
     let is_pad = |r: &str| m.pins.values().any(|p| p == r);
     let ctrl = |r: &&String| {
@@ -46,7 +48,8 @@ fn input_roles(m: &ModelEntry) -> Vec<&str> {
     };
     let mut roles: Vec<&str> = match m.kind {
         ComponentKind::AnalogSwitch => m.pins.values().filter(ctrl).map(String::as_str).collect(),
-        _ => (m.logic.inputs.iter().map(String::as_str))
+        _ => (m.logic.inputs.iter().chain(m.logic.sense.values()))
+            .map(String::as_str)
             .filter(|r| is_pad(r))
             .collect(),
     };
@@ -174,7 +177,13 @@ fn part_flags(
             continue;
         };
         let r = &c.reference;
-        let message = format!("undefined logic level at {r} {role} (net '{net}'): it {how}, between VIL {vil:.3} V and VIH {vih:.3} V for VCC = {vcc:.3} V on '{rail}', so the part's datasheet guarantees no logic state there and it may read either way, toggle, or draw shoot-through current. Drive the input to a valid level for this supply (a stronger or level-shifted drive, a lower supply for the part, or a part with lower thresholds); the band is the card's {} read at VCC.", if m.levels.contains_key("vih") { "VCC-scaled [models.levels] table" } else { "vil/vih corner" });
+        // A pad the part also drives: a pull or load can fight that drive.
+        let own = (m.logic.outputs.iter().any(|o| o == role))
+            .then(|| m.params.get_f64("ro"))
+            .flatten()
+            .map(|ro| format!(" {r} also drives this pad through {ro:.0} Ohm; while it does, a pull-up, pull-down or load on the net that fights that drive holds the pad here, so keep any such resistor far above {ro:.0} Ohm or drive the net harder."))
+            .unwrap_or_default();
+        let message = format!("undefined logic level at {r} {role} (net '{net}'): it {how}, between VIL {vil:.3} V and VIH {vih:.3} V for VCC = {vcc:.3} V on '{rail}', so the part's datasheet guarantees no logic state there and it may read either way, toggle, or draw shoot-through current. Drive the input to a valid level for this supply (a stronger or level-shifted drive, a lower supply for the part, or a part with lower thresholds); the band is the card's {} read at VCC.{own}", if m.levels.contains_key("vih") { "VCC-scaled [models.levels] table" } else { "vil/vih corner" });
         let finding = LintFinding {
             check: LintCheck::OperatingEnvelope,
             severity: Severity::High,
@@ -270,6 +279,32 @@ mod tests {
         }
         // An unpowered part's inputs are not judged.
         assert!(one_switch(0.0, 0.5).0.findings.is_empty());
+    }
+
+    /// A TXB0101 (1 VCCA, 2 GND, 3 A, 4 B, 5 OE, 6 VCCB) translating 1.8 V to
+    /// 3.3 V with its B port at `b`: the findings on the B port.
+    fn txb_b_port(b: f64) -> Vec<LintFinding> {
+        let nets = &[(1, "GND"), (2, "VA"), (3, "VB"), (4, "A"), (5, "B")];
+        let pads = &[("1", 2), ("2", 1), ("3", 4), ("4", 5), ("5", 2), ("6", 3)];
+        let board = board(nets, vec![part("U1", "TXB0101DCKR", pads)]);
+        let volts = HashMap::from([("VA", 1.8), ("VB", 3.3), ("A", 0.0), ("B", b), ("GND", 0.0)]);
+        let span = |net: &str| volts.get(net).map(|&v| RailRange { min_v: v, max_v: v });
+        logic_level_lint(&board, &ModelLibrary::builtin(), &span).findings
+    }
+
+    #[test]
+    fn a_txb_port_pulled_against_its_weak_driver_is_undefined() {
+        // SCES639F 7.2.2 Eq. (2): A low, a 4.7 kOhm pull-up to 3.3 V holds B at
+        // 3.3 x 4.5k / (4.5k + 4.7k) = 1.614 V, inside 0.35/0.65 x 3.3 V.
+        let found = txb_b_port(3.3 * 4.5 / 9.2);
+        assert_eq!(found.len(), 1, "{found:?}");
+        let m = &found[0].message;
+        for says in ["U1 b", "'B'", "VIL 1.155 V", "VIH 2.145 V", "4500 Ohm"] {
+            assert!(m.contains(says), "{says:?} in {m}");
+        }
+        // The datasheet's 50 kOhm floor leaves 0.273 V: a valid low.
+        assert!(txb_b_port(3.3 * 4.5 / 54.5).is_empty());
+        assert!(txb_b_port(3.3).is_empty());
     }
 
     #[test]

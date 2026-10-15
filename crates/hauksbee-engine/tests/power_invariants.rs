@@ -1200,6 +1200,10 @@ const STATIC_INERT: &[&str] = &[
     "sn74avc1t45",
     "sn74lvc1t45",
     "74axp1t45",
+    "txb0101",
+    "txb0102",
+    "txb0104",
+    "txb0108",
 ];
 
 /// Every digital card with outputs: for each input pattern that drives an

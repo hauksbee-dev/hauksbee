@@ -104,6 +104,12 @@ pub struct TimingCoverage {
 /// evidence the moment it closes.
 const WEAK_DIGITAL_DRIVE_OHMS: f64 = 1e8;
 
+/// A model output this many times the MCU pin's resistance is overdriven, not
+/// fought: the pin holds the net within 1/(1 + ratio), under 5 %, of its own
+/// level. A `TXB010x` DC driver (4.5 kOhm, SCES639F 7.2.2) against a 50 Ohm pin
+/// is 90; a CMOS logic output (tens of Ohms) is about 1.
+const OVERDRIVE_RATIO: f64 = 20.0;
+
 /// A strict headless run (`--strict`) or hauksbee-ci aborts (exit 3,
 /// invalid-for-analysis) once the analog solve fails this many chunks in a row.
 ///
@@ -5999,12 +6005,18 @@ impl Scheduler {
     /// there (the zero-filled voltage seed would read an active-low OE as
     /// asserted), and firing on that fiction would be a false positive. The
     /// same honesty rule the plain digital-input sync applies.
+    ///
+    /// A model output at least [`OVERDRIVE_RATIO`] times weaker than the MCU
+    /// pin is not a fight: the pin holds the net within 1/(1 + ratio) of its
+    /// own level, which is how an auto-direction translator's deliberately
+    /// weak DC drivers are meant to be overdriven (TI SCES639F 6.3.1).
     fn detect_driver_contention(&mut self) {
         if self.sim_time <= 0.0 || self.digital.is_empty() || self.mcus.is_empty() {
             return;
         }
-        // Enabled modelled push-pull outputs per net node, as "REF.role".
-        let mut model_out: HashMap<u32, Vec<String>> = HashMap::new();
+        // Enabled modelled push-pull outputs per net node, as "REF.role" with
+        // the driver's output resistance.
+        let mut model_out: HashMap<u32, Vec<(String, f64)>> = HashMap::new();
         for d in &self.digital {
             for (role, drv) in &d.drivers {
                 if !drv.enabled {
@@ -6013,7 +6025,7 @@ impl Scheduler {
                 model_out
                     .entry(drv.net.0)
                     .or_default()
-                    .push(format!("{}.{role}", d.reference));
+                    .push((format!("{}.{role}", d.reference), drv.ron));
             }
         }
         if model_out.is_empty() {
@@ -6036,7 +6048,15 @@ impl Scheduler {
                 let Some(parts) = model_out.get(&node) else {
                     continue;
                 };
-                let mut parts = parts.clone();
+                let fights = |(_, ron): &&(String, f64)| *ron < OVERDRIVE_RATIO * drv.ron;
+                let mut parts: Vec<String> = parts
+                    .iter()
+                    .filter(fights)
+                    .map(|(p, _)| p.clone())
+                    .collect();
+                if parts.is_empty() {
+                    continue;
+                }
                 parts.sort();
                 self.contention_nets.insert(node);
                 found.push(DriverContention {
@@ -11511,6 +11531,92 @@ data_out = ["io0"]
             "{:?}",
             sched.driver_contentions()
         );
+    }
+
+    /// A TXB0101 (1 VCCA, 2 GND, 3 A, 4 B, 5 OE, 6 VCCB) with VCCA on +1V8, OE
+    /// on net index `oe`, VCCB on net index `vccb`, an optional resistor from B
+    /// to net index `r.1`, and the mock MCU driving `mcu_net` at `high_v`.
+    /// Nets: 1 GND, 2 +1V8, 3 +3V3, 4 A, 5 B, 6 `VB_OFF` (nothing powers it).
+    fn txb_scheduler(
+        oe: usize,
+        vccb: usize,
+        r: Option<(&str, usize)>,
+        (mcu_net, high_v): (&str, f64),
+    ) -> Scheduler {
+        let txb: &[(u8, u8, usize)] = &[
+            (1, 1, 2),
+            (2, 2, 1),
+            (3, 3, 4),
+            (4, 4, 5),
+            (5, 5, oe),
+            (6, 6, vccb),
+        ];
+        let mut parts: Vec<FixturePart<'_>> =
+            vec![("Package_TO_SOT_SMD:SOT-363", "U1", "TXB0101DCKR", 100, txb)];
+        let pads = r.map(|(_, to)| [(1, 0, to), (2, 2, 5)]);
+        if let (Some((value, _)), Some(pads)) = (r, pads.as_ref()) {
+            parts.push(("Resistor:R", "R1", value, 110, pads));
+        }
+        let text = pcb_fixture(&["", "GND", "+1V8", "+3V3", "A", "B", "VB_OFF"], &parts);
+        let mut sched = pulse_scheduler(&text, &[(('B', 1), mcu_net)]);
+        sched.mcus[0].logic_high_v = high_v;
+        sched
+    }
+
+    /// Drive the mock MCU pin `high`, settle, and read nets A and B.
+    fn txb_drive(sched: &mut Scheduler, high: bool) -> (f64, f64) {
+        sched.step(2.0 * DEFAULT_CHUNK_S);
+        preload_edges(sched, ('B', 1), &[(10, high)]);
+        sched.step(4.0 * DEFAULT_CHUNK_S);
+        let v = |n| sched.net_voltage(n).expect(n);
+        (v("A"), v("B"))
+    }
+
+    /// An auto-direction translator copies whichever port is driven to the
+    /// other at that port's rail, and the MCU overdriving its weak DC driver
+    /// is how it senses direction, not contention (TXB0101 SCES639F 6.3.1).
+    #[test]
+    fn a_txb_translates_either_way_and_is_overdriven_not_fought() {
+        for (high, b) in [(true, 3.3), (false, 0.0)] {
+            let mut sched = txb_scheduler(2, 3, None, ("A", 1.8));
+            let (_, got) = txb_drive(&mut sched, high);
+            assert!((got - b).abs() < 0.02, "A {high}: B at {got}");
+            assert!(
+                sched.driver_contentions().is_empty(),
+                "{:?}",
+                sched.driver_contentions()
+            );
+        }
+        let mut sched = txb_scheduler(2, 3, None, ("B", 3.3));
+        let (a, _) = txb_drive(&mut sched, true);
+        assert!((a - 1.8).abs() < 0.02, "B high: A at {a}");
+        assert!(sched.driver_contentions().is_empty());
+    }
+
+    /// The 4.5 kOhm cell against a pull or load: SCES639F 7.2.2 Eq. (2) puts B
+    /// at 3.3 x 4.5k / (4.5k + 4.7k) under a 4.7 kOhm pull-up with A low, and
+    /// Eq. (1) at 3.3 x 1k / (1k + 4.5k) into a 1 kOhm pull-down with A high.
+    /// OE low or VCCB off leaves B to a 100 kOhm pull-down.
+    #[test]
+    fn a_txb_port_sags_against_a_strong_pull_and_releases_on_oe_or_isolation() {
+        for (r, high, b) in [
+            (("4.7k", 3), false, 3.3 * 4.5 / 9.2),
+            (("1k", 1), true, 3.3 / 5.5),
+            (("100k", 1), true, 3.3 * 100.0 / 104.5),
+        ] {
+            let (_, got) = txb_drive(&mut txb_scheduler(2, 3, Some(r), ("A", 1.8)), high);
+            assert!(
+                (got - b).abs() < 0.02,
+                "{r:?}: B at {got}, Eq. gives {b:.3}"
+            );
+        }
+        for (oe, vccb) in [(1, 3), (2, 6)] {
+            let (_, got) = txb_drive(
+                &mut txb_scheduler(oe, vccb, Some(("100k", 1)), ("A", 1.8)),
+                true,
+            );
+            assert!(got < 0.02, "OE net {oe}, VCCB net {vccb}: B at {got}");
+        }
     }
 
     /// A board-side MCU on `PLAIN_INPUT_BOARD` whose reset role sits on `reset`
