@@ -658,16 +658,7 @@ async fn live_board_handler(
     State(hub): State<Arc<LiveHub>>,
     UrlPath(name): UrlPath<String>,
 ) -> axum::response::Response {
-    hub.board_file(&name).map_or_else(
-        || {
-            let miss = "{\"available\":false}";
-            ([(header::CONTENT_TYPE, "application/json")], miss).into_response()
-        },
-        |contents| {
-            let text_plain = "text/plain; charset=utf-8";
-            ([(header::CONTENT_TYPE, text_plain)], contents).into_response()
-        },
-    )
+    board_file_response(hub.board_file(&name))
 }
 
 /// GET `/boards/{name}/layout`: the drawable `KiCad` layout of a session whose
@@ -677,27 +668,27 @@ async fn live_layout_handler(
     State(hub): State<Arc<LiveHub>>,
     UrlPath(name): UrlPath<String>,
 ) -> axum::response::Response {
-    hub.layout_file(&name).map_or_else(
-        || {
-            let miss = "{\"available\":false}";
-            ([(header::CONTENT_TYPE, "application/json")], miss).into_response()
-        },
-        |contents| {
-            let text_plain = "text/plain; charset=utf-8";
-            ([(header::CONTENT_TYPE, text_plain)], contents).into_response()
-        },
-    )
+    board_file_response(hub.layout_file(&name))
 }
 
 /// GET `/boards/{name}` with no live session: the same `200 application/json`
 /// `{"available":false}` miss answer [`live_board_handler`] gives, so the resume
 /// probe gets the same shape whether or not a session exists.
 async fn no_board_handler() -> axum::response::Response {
-    (
-        [(header::CONTENT_TYPE, "application/json")],
-        "{\"available\":false}",
-    )
-        .into_response()
+    board_file_response(None)
+}
+
+/// The `/boards/...` answer shared by every route: the file's text on a hit,
+/// the `{"available":false}` JSON miss otherwise (see [`live_board_handler`]).
+fn board_file_response(contents: Option<String>) -> axum::response::Response {
+    match contents {
+        Some(text) => ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], text).into_response(),
+        None => (
+            [(header::CONTENT_TYPE, "application/json")],
+            "{\"available\":false}",
+        )
+            .into_response(),
+    }
 }
 
 async fn handle_socket(mut socket: WebSocket, shared: Arc<Shared>) {
