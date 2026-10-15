@@ -264,10 +264,10 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
   const terminal = () => page.locator('[data-testid="settings-terminal"]').innerText()
   await page.click('[data-testid="settings-escalate-none"]')
   ok('Never escalate is the terminal spelling of an empty ladder', (await terminal()).includes('claude-code.escalate=none'))
-  await page.click('[data-testid="settings-escalate-pick-claude-opus-5-5"]')
+  await page.click('[data-testid="settings-escalate-pick-claude-sonnet-5-5"]')
   await page.click('[data-testid="settings-escalate-pick-claude-haiku-5-5"]')
   ok('the terminal line spells the ladder comma-separated, in the order picked',
-    (await terminal()).includes('claude-code.escalate=claude-opus-5-5,claude-haiku-5-5'))
+    (await terminal()).includes('claude-code.escalate=claude-sonnet-5-5,claude-haiku-5-5'))
   ok('a picked model shows its position', (await page.locator('[data-testid="settings-escalate-pick-claude-haiku-5-5"]').innerText()).includes('2.'))
   await shoot(page, '05b-escalate')
   await page.click('[data-testid="settings-escalate-default"]')
