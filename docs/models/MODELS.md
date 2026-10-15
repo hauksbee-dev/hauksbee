@@ -76,20 +76,15 @@ prints them and `--json` exposes the same record without collapsing it.
 
 ## Pointing hauksbee at a datasheet
 
-The shortest path is the web report: drop a board, and any part with no model
-carries a "draft a model from a datasheet" button. It states what gets sent
-before it asks for the file.
-
-Beside it is "write a part yourself", for the two cases extraction does not
-serve: you already know the part, or you already have a model. It takes
-hauksbee's own TOML, checked as you type by the same validator that runs on
-save, so what passes there will save. It also takes SPICE, pasted or loaded
-from a `.lib`, `.mod`, `.cir`, `.sp` or `.ckt`. Subcircuits are supported:
-hauksbee flattens a `.subckt` at load, maps its ports to your nodes and
-recurses through nested calls, so a vendor part that ships as a subcircuit runs
-like any other. A SPICE deck is checked there rather than saved as a model,
-because a deck is something to simulate; turning one into a reusable part means
-writing the entry that claims your component.
+The shortest path is the web report: a part with no model carries a "Draft a
+model from a datasheet" button, which states what is sent and asks before it
+sends anything (see [From the browser](#from-the-browser)). Beside it, "Write a
+part yourself" takes hauksbee's own TOML, validated as you type by the same
+validator that runs on save, or SPICE pasted or loaded from a `.lib`, `.mod`,
+`.cir`, `.sp` or `.ckt`. A `.subckt` is flattened at load (ports mapped to your
+nodes, nested calls resolved). A SPICE deck is checked there rather than saved
+as a model, because a deck is something to simulate; turning one into a reusable
+part means writing the entry that claims your component.
 
 From a terminal:
 
@@ -421,12 +416,13 @@ hauksbee models lint acme-models/models/u3-*.toml
 hauksbee models add ./acme-models       # only after TODOs and license are complete
 ```
 
-The proving tests cover both paths: the generated file parses as TOML, the
-unresolved placeholder exits non-zero under the shared linter, explicit
-`--kind` still requires the kind's parameters, pack output has the expected
-layout, and a second invocation cannot overwrite an existing model or manifest.
 The board and the part documentation remain the authority; comments in a
 scaffold are prompts, not evidence.
+
+In the app, an unresolved part's **Write ... yourself** button opens the
+hand-written model editor for that part (see
+[Pointing hauksbee at a datasheet](#pointing-hauksbee-at-a-datasheet)). The
+commands above are the route for scripts, agents and packs.
 
 ### Inspect behavior, and gate the capability you actually need
 
@@ -600,71 +596,40 @@ in `inventory.json`; it is evidence, not an invented pin map.
 
 ## From the browser
 
-`hauksbee serve` makes model coverage part of the board itself. Click a coverage
-row, component, or trace to see the winning model, its validation stage,
-implemented and missing behavior, source reference, exact nets, and affected
-devices. A trace can become a live scope probe or a repeatable assertion in the
-same card. A component with a gap carries **Extend**: that opens a local draft;
-for a partial executable model the server copies the exact winning behavior
-before the user edits it. Drafting is read-only and deterministic. **Save** is
-the separate explicit write approval. None of this requires an LLM.
+`hauksbee serve` puts model work on the board itself, so the steps are not
+repeated here:
 
-The same board interaction builds the experiment. A selected trace can become
-a live scope probe, assertion, 50-ohm source, button, switch, or ideal scenario
-supply. A selected I²C/SPI component can open a register-map row: choose/paste
-local declarative TOML or select an exact checked-in behavior from the bundled
-picker, override physical inputs, and optionally provide an SPI
-controller and chip-select net. The browser can attach those exact validated
-bytes immediately to the running bus and keeps the identical `[[sensor]]` entry
-for replay. The row waits for a correlated engine receipt and shows acceptance
-or refusal beside the exact bytes; “sent” is not treated as success. Model
-cards may instead embed a validated
-`[models.peripheral] kind = "register_map"` block; exact resolution then makes
-the bus behavior automatic. Reusable cards can require strap roles high/low and
-derive an I²C address from a resolved supply/ground strap. Floating or ambiguous
-straps leave the behavior open with a named reason. Neither path guesses
-registers from a part name. The bundled picker is local and read-only, so this
-ordinary path needs neither a separate file nor an LLM.
+- **Coverage and gaps.** Click a coverage row, component or trace for the
+  winning model, its validation stage, implemented and missing behaviour and
+  source. A component with a gap carries **Extend**, which opens a local draft
+  (for a partial executable model, a copy of the exact winning behaviour).
+  Drafting is read-only and deterministic; **Save** is the separate write
+  approval. None of this needs an LLM.
+- **Writing a part.** "Write a part yourself" starts at a kind picker and
+  validates as you type (see above).
+- **Experiments.** A selected trace becomes a scope probe, assertion, 50-ohm
+  source, button, switch or scenario supply. A selected I²C/SPI component opens a
+  register-map row (paste TOML or pick a bundled behaviour); the browser attaches
+  the exact validated bytes to the running bus, keeps the identical `[[sensor]]`
+  entry for replay, and shows the engine's receipt, accepted or refused, beside
+  them. Cards may instead embed a validated `[models.peripheral] kind =
+  "register_map"` block, which then attaches automatically; strap roles can
+  derive an I²C address from a resolved supply/ground strap, and floating or
+  ambiguous straps leave the behaviour open with a named reason. Neither path
+  guesses registers from a part name.
+- **Datasheet extraction.** The panel checks the backend can run, shows the
+  consent notice (served verbatim by the engine from
+  `hauksbee_models::datasheet::CONSENT_NOTICE`, so the page cannot soften the
+  CLI's wording) and requires a click, takes the datasheet, part number and kind,
+  streams progress with an estimate, then shows the draft as a card with
+  citations and flagged assumptions. **Nothing is written until Accept**, which
+  calls `POST /api/models/save`: it re-validates the (editable) TOML, refuses to
+  overwrite an existing model, and writes one file into `~/.hauksbee/models/`.
+  Reject writes nothing.
 
-Where a datasheet can accelerate authoring, the page also offers the optional
-extraction workflow. It holds the same consent contract as the CLI. The flow is
-fixed in this order, and the order is the contract:
-
-1. **Can it run at all**, from `GET /api/models/extract/ready`. The selected
-   backend and any missing CLI, authentication, or API-key requirement are
-   shown before the file picker.
-2. **The consent notice**, served verbatim from
-   `hauksbee_models::datasheet::CONSENT_NOTICE` so the page cannot soften the
-   CLI's wording, plus backend-specific cost and privacy information. An
-   explicit click is required.
-3. **The datasheet**, the part number (prefilled from the board's value field)
-   and the kind (a picker generated from the engine's own kind list, so it
-   cannot offer a kind the extractor rejects).
-4. **Progress**, streamed from `POST /api/models/extract` as Server-Sent
-   events, the same framing the dependency installs use. The agent is silent
-   for minutes, so the stream carries `phase: <what>` lines (reading, rendering
-   pages, identifying the kind, drafting, checking, redrafting with feedback)
-   and an `estimate: <secs>` line: the median of recent successful runs,
-   scaled by page count (0.5-2x), kept in `extract-history.txt` beside
-   `extract.toml`; 180 s with no history. The page shows an estimated bar that
-   eases to 90% by the estimate and then creeps, labelled "about N min left
-   (estimate)" and then "taking longer than usual"; it fills only when the
-   draft arrives. `hauksbee models extract` shows the same phase and typical
-   time on a stderr spinner at a terminal, or a plain line every 30 s when
-   stderr is not one.
-5. **Review**. The draft comes back as a model card: every value with the
-   datasheet citation beside it, every value the model admitted it assumed
-   flagged separately, the provenance shown as `datasheet-extracted`, and the
-   whole TOML editable. **Nothing has been written at this point.**
-6. **Accept or reject**. Accept calls `POST /api/models/save`, which
-   re-validates the TOML it is handed (the card is editable, so it is not
-   necessarily what the extractor produced), refuses to overwrite an existing
-   model, and writes one file into `~/.hauksbee/models/`. Reject writes
-   nothing.
-
-The extraction itself is the same `hauksbee_models::datasheet` code the CLI
-runs. Local agent backends (claude-code, agy, codex) read the copied PDF, text, and selected page
-renders in a scratch workspace; the API backend receives extracted text and
+The extraction is the same `hauksbee_models::datasheet` code the CLI runs. Local
+agent backends (claude-code, agy, codex) read the copied PDF, text and selected
+page renders in a scratch workspace; the API backend receives extracted text and
 instructions at the configured endpoint. The web plumbing is
 `crates/hauksbee-engine/src/webextract.rs` and
 `crates/hauksbee-server/src/frontdoor.rs` (`datasheet_routes`).

@@ -256,6 +256,34 @@ stderr with what is missing. They never pass quietly.
 A handful of boards carry no redistribution rights at all, so they are absent
 from the manifest. Nothing in the public test suite depends on them.
 
+### Corpus gates for the static checks
+
+Release candidates also run browser and unseen-board gates. Those gates retain
+their own content-addressed receipts; they do not imply that the static-check
+corpus below ran, and the static corpus does not imply browser coverage.
+
+The bring-up CI in [docs/ci/CI.md](docs/ci/CI.md) runs firmware on a board under
+assertions. The static checks (`--drc`, `--lint`, `--si`) have a separate,
+complementary enforcement layer: a zero-false-positive corpus gate, the standing
+discipline that a check ships only if it raises no findings on the famous corpus
+(the fetched corpus of well-known open-hardware boards, `corpus.toml`, which is
+treated as known-good). These are encoded as corpus-gated cargo tests rather
+than spec assertions:
+
+- **DRC clearance tolerance**: `cargo test -p hauksbee-extract --test drc`
+  (boundary/at-rule/sub-rule cases) plus the `drc_corpus` / `eagle_drc_corpus`
+  sweeps stay green. The at-rule noise drops (bms-c1 137 -> 0, pd-sink 66 -> 4).
+- **Trace ampacity + input-cap ripple** (`--si` checks 6, 7):
+  `HAUKSBEE_REQUIRE_CORPUS=1 cargo test -p hauksbee-engine --test si_ampacity_ripple`
+  asserts the checks fire on a genuinely undersized routed trace and raise
+  **zero findings** across the famous corpus (the
+  `famous_corpus_has_no_ampacity_or_ripple_findings` sweep is the assertion).
+  The hand-checked mppt-1210 C1 1.66x ripple case is a unit test in
+  `checks::ripple`.
+- **Device-decode** (`--lint`): `cargo test -p hauksbee-engine device_decode`
+  pins the CYPD3177 Table-2 decode against hand-derived detent values from the
+  datasheet.
+
 ## Adding support for hardware we do not have
 
 Most of what hauksbee knows about the physical world is data, and adding to it is

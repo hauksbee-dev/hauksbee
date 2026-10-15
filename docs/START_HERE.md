@@ -83,20 +83,10 @@ covers the three files hauksbee needs at most, where each comes from (KiCad
 PlatformIO firmware), a recommended repo layout, and the one local command
 that runs it. CI wrappers are optional, and you add them later.
 
-## Your next five reads
+## Where to read next
 
-1. [`docs/about/CAPABILITIES.md`](about/CAPABILITIES.md): the authoritative
-   scope and per-backend evidence matrix.
-2. [`docs/about/ARCHITECTURE.md`](about/ARCHITECTURE.md): how a board or fab
-   input becomes an extracted circuit, bound model set, solve, and co-simulation.
-3. [`docs/models/MODELS.md`](models/MODELS.md): inspect unresolved parts,
-   scaffold or extract a model, validate it, and prove that it binds.
-4. [`docs/analysis/RUN_MANIFESTS.md`](analysis/RUN_MANIFESTS.md): bind a run to
-   its exact inputs, configuration, tool revision, and simulator selection.
-5. [`docs/ci/EXAMPLES.md`](ci/EXAMPLES.md): runnable examples and, when useful,
-   the CI/spec surface over the same engine.
-
-From there, the rest of `docs/` covers each capability in depth:
+[`DOCS_MAP.md`](DOCS_MAP.md) maps every doc to the question it answers. The
+main capability docs:
 
 | File | Covers |
 |---|---|

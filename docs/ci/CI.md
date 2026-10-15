@@ -53,7 +53,6 @@ PATH), or grab the prebuilt release bundle and skip the build entirely.
   [the zero-config gate](#the-zero-config-gate-artifacts-without-a-spec)
 - [Exit codes (the pipeline contract)](#exit-codes-the-pipeline-contract)
 - [Limitations](#limitations)
-- [For contributors: the static-check corpus gates](#for-contributors-the-static-check-corpus-gates)
 
 ## How a check runs
 
@@ -527,42 +526,104 @@ against that analytic envelope (`crates/hauksbee-ci/tests/tolerance.rs`).
 ### Assertions: `[[assert]]`
 
 At least one is required (a check with no assertions passes vacuously, so the
-loader rejects it). Each `kind`:
+loader rejects it). Each has a `kind` from a closed set of nineteen. The field
+reference for each kind is in the product, so it is not repeated here:
 
-**`voltage`**: a net within bounds, optionally only after the rail settles.
-
-```toml
-[[assert]]
-kind = "voltage"
-net = "VDD_A"
-min = 4.9            # and/or max
-after_ms = 50        # only sample at/after this time
+```bash
+hauksbee-ci explain               # every kind, one line each
+hauksbee-ci explain rail_window   # its required and optional fields, what else the
+                                  # spec must declare, a TOML example that passes
+                                  # `hauksbee-ci check`, and why it usually fails
+hauksbee-ci explain --json        # the whole catalogue, as the app reads it
 ```
 
-A `min` checks the worst (lowest) the net dipped to in the window. A `max`
-checks the worst (highest) it rose to. On a net that firmware drives from a
-host-paced ESP32 core, `after_ms` is not judged and the level is read over the
-whole run instead; see "Deadlines on a host-paced clock are not verdicts" below.
+The web app's "Add a check" has a "More checks" list built from the same
+catalogue; each entry inserts its example into the raw TOML. A misspelled
+`kind` in a spec is refused with `see: hauksbee-ci explain`, and a failed
+assertion's `why:` line falls back to the catalogue's "when it fails" sentence
+when the check has no measured shortfall to report. A test pins the catalogue to the loader's kind
+list and runs every example through the spec validator, so the catalogue cannot
+drift from the code.
 
-**`pulse_width`**: the width, in milliseconds, of the first COMPLETE pulse on a
-net at or after `after_ms`. The threshold and the interpolated crossing times
-are the ones the `toggle` frequency path uses, so a width and a rate read off
-the same net agree, and the reported `+-` is that path's grid residual (one
-sample step at each end of the interval).
+| `kind` | Checks that | Read more |
+|---|---|---|
+| `voltage` | a net stays within `min` / `max`, optionally only after `after_ms` | |
+| `rail_window` | a rail survives a `[[scenario]]` load step: floor, brief dips, recovery, overvoltage spikes | [TRANSIENTS.md](../checks/TRANSIENTS.md) |
+| `no_faults` | the stress monitor raised no over-current, over-voltage, over-power, reverse-bias or over-temperature fault | |
+| `max_current` | a resistor's or diode's peak current stays under `amps` | |
+| `max_temp` | a part's steady-state junction temperature stays under `celsius` | [THERMAL.md](../checks/THERMAL.md) |
+| `uart` | firmware serial output contains a string or matches a regex | |
+| `toggle` | a net toggles at `freq_hz`, or at least `min_toggles` times | |
+| `pulse_width` | the first complete pulse on a net has a set width | |
+| `boot_coverage` | the firmware drives a control net to a level within a deadline of reset | [Boot coverage](#boot-coverage-watching-the-firmware-define-a-hi-z-control-net) |
+| `protection_trip` | a battery or e-fuse protection cutoff fired, or must not have | [TRANSIENTS.md](../checks/TRANSIENTS.md) |
+| `peripheral` | an attached device's end-of-run state, by `id` and `field` | [PERIPHERALS.md](../cosim/PERIPHERALS.md) |
+| `phase_margin`, `ac_gain` | small-signal loop margin and gain, from an `[ac]` sweep | [AC_ANALYSIS.md](../analysis/AC_ANALYSIS.md#ci) |
+| `model_coverage` | enough of the board bound to a real device model | |
+| `hwtrace` | the simulation agrees with a scope trace you captured | [add-a-hardware-trace.md](../extending/add-a-hardware-trace.md) |
+| `logic_level`, `fires`, `increases`, `decreases` | an intended outcome holds across operating conditions | [Outcome search](#outcome-search-say-what-the-board-is-for) |
 
-```toml
-[[assert]]
-kind = "pulse_width"
-net = "OUT"
-level = "high"       # or "low"; default "high"
-after_ms = 1.0       # optional: ignore everything before this
-min = 10.15          # optional, ms
-max = 11.44          # optional, ms
-```
+What `explain` does not say, per kind:
 
-If the window holds no complete pulse -- no opening edge, or none closing it
-before the run ends -- the check REFUSES and reports no width. A refusal never
-passes; lengthen `duration_ms` or move `after_ms`.
+- **`voltage`**: a `min` checks the worst (lowest) the net dipped to in the
+  window, a `max` the worst (highest) it rose to. On a net that firmware drives
+  from a host-paced ESP32 core, `after_ms` is not judged and the level is read
+  over the whole run instead; see
+  [Backend reach](#backend-reach-stated-honestly).
+- **`pulse_width`**: the threshold and interpolated crossing times are the ones
+  the `toggle` frequency path uses, so a width and a rate read off the same net
+  agree; the reported `+-` is that path's grid residual (one sample step at
+  each end). If the window holds no complete pulse (no opening edge, or none
+  closing it before the run ends) the check REFUSES and reports no width. A
+  refusal never passes: lengthen `duration_ms` or move `after_ms`.
+- **`uart`**: this `mcu` (which MCU's UART to read, by reference) is
+  load-bearing, unlike the top-level `mcu` key, which is an informational note
+  nothing reads. On a host-paced ESP32 core, text that never appeared is
+  INVALID rather than a FAIL (the firmware may only be slow on this host), and
+  text that did appear is a PASS that names the run window as not judged.
+  simavr and Renode keep the hard verdict.
+- **`toggle`**: a COUNT is trustworthy on every backend. A FREQUENCY rests on
+  the backend's clock rate matching the part, which is measured on
+  `simavr:atmega328p` and every Renode platform (the clock-truth gates: SysTick
+  on the STM32/nRF parts, `mtime` on the FE310, stock pico-sdk timing on the
+  RP2040). The ESP32 family is the exception: its virtual time is wall-paced and
+  host-load dependent, the run says so as a timing coverage warning, and on a
+  firmware-driven net a `freq_hz` band (or a count above one) is reported but
+  not judged; only "it toggled at all" keeps a hard verdict.
+  [LIMITATIONS.md](../about/LIMITATIONS.md) tells the full clock story. On a
+  poll backend a `toggle` must declare `timing.min_pulse_us`.
+- **`max_temp`**: `Tj = Tambient + P * theta_JA`, with the ambient set once per
+  spec by the top-level `ambient_c` key (default 25 C). `celsius` may be omitted
+  only when the part's model carries a real datasheet Tj(max); on a part bound
+  to a generic fallback model that form is refused at load, because the
+  per-package default ceiling sits above where the overpower monitor trips, so
+  it could never fail. A `max_temp` whose target never dissipates measurably
+  fails with "the guard was never evaluated" rather than passing vacuously.
+- **`boot_coverage`**: also requires no stress fault during the boot window
+  before the net is first driven. `boot-coverage` remains accepted as an alias;
+  new specs and waivers should use `boot_coverage`.
+- **`model_coverage`**: pins the coverage your board reaches, so a part that
+  loses its model fails the build instead of simulating a hole. `min_critical`
+  is the metric that matters (it counts active ICs: an unbound regulator
+  changes the answer, an unbound 0402 resistor usually does not).
+  `max_active_unresolved` counts unresolved parts whose pins touch a real node.
+  At least one threshold is required; the loader rejects an assertion with none.
+  A failure names the parts, because that list is the next action (real output
+  against the bundled Watchy board):
+
+  ```
+  [FAIL] model_coverage
+        active ICs bound 4/6 (66.7%), floor 100.0%; 8 unresolved on connected nets (limit 0): M1, L1, C9, U6, AE1, C7, R12, U1
+  ```
+
+  Each name is either a model you can write, which takes one TOML file and no
+  recompile ([extending/](../extending/README.md)), or a part whose vendor keeps
+  its model closed. The report tells the two apart by naming both.
+- **`rail_window`**: the `[[scenario]]` it judges over is a complete block of
+  its own: `part` (required, the component drawing the load) plus a load
+  `profile`, built-in or defined inline as a `[[profile]]`. Profiles and the
+  rest of the scenario fields are documented in
+  [TRANSIENTS.md](../checks/TRANSIENTS.md).
 
 #### Outcome search: say what the board is for
 
@@ -703,191 +764,6 @@ Refusals and evidence still apply. A measurement whose evidence is undermined
 is reported as INVALID exactly like a bounded assertion, and a measurement the
 run could not take (no samples, too few edges) refuses rather than reporting a
 number it did not measure.
-
-**`uart`**: the firmware's serial output contains a string or matches a regex.
-
-```toml
-[[assert]]
-kind = "uart"
-contains = "hauksbee-demo v1"   # or: matches = "v\\d+\\.\\d+"
-mcu = "U1"                      # optional; defaults to all MCUs
-```
-
-This `mcu` (which MCU's UART to read, by reference) is load-bearing, unlike
-the top-level `mcu` key, which is an informational note nothing reads.
-
-On a host-paced ESP32 core, text that never appeared is INVALID rather than a
-FAIL (the firmware may only be slow on this host), and text that did appear is a
-PASS that names the run window as not judged; see "Deadlines on a host-paced
-clock" below. simavr and Renode keep the hard verdict.
-
-**`toggle`**: a net toggles at an expected frequency (a blink check) or a
-minimum number of times. A COUNT is trustworthy on every backend. A FREQUENCY
-rests on the backend's clock rate matching the part, which is measured on
-`simavr:atmega328p` and every Renode platform (the clock-truth gates: SysTick
-on the STM32/nRF parts, `mtime` on the FE310, stock pico-sdk timing on the
-RP2040). The ESP32 family is the exception: its virtual time is wall-paced
-and host-load dependent, the run says so as a timing coverage warning, and on a
-firmware-driven net a `freq_hz` band (or a count above one) is reported but not
-judged; only "it toggled at all" keeps a hard verdict (see "Deadlines on a
-host-paced clock" below). `docs/about/LIMITATIONS.md` tells the full clock story.
-
-```toml
-[[assert]]
-kind = "toggle"
-net = "D13"
-freq_hz = 5.0        # or: min_toggles = 8
-tolerance = 0.25     # a fraction of freq_hz in (0, 1]; default 25%
-```
-
-**`no_faults`**: the stress monitor raised no over-current / over-voltage /
-over-power / reverse-bias / over-temperature faults across the run.
-
-```toml
-[[assert]]
-kind = "no_faults"
-```
-
-**`max_current`**: a component's peak through-current stays below a ceiling.
-(Tracked for resistors and diodes. Other kinds are covered by `no_faults`.)
-
-```toml
-[[assert]]
-kind = "max_current"
-ref = "R1"
-amps = 0.02
-```
-
-**`max_temp`**: a component's steady-state junction temperature
-(`Tj = Tambient + P * theta_JA`) stays below an explicit `celsius` ceiling.
-The ambient is set once per spec with the top-level `ambient_c` key (default
-25 C). See [THERMAL.md](../checks/THERMAL.md) for the model.
-
-```toml
-ambient_c = 70          # top-level: hot-enclosure ambient for the whole run
-
-[[assert]]
-kind = "max_temp"
-ref = "U1"
-celsius = 125           # your ceiling; the form to reach for first
-```
-
-`celsius` may be omitted only when the part's model carries a real datasheet
-Tj(max): the check then gates on the device's own limit. On a part bound to a
-generic fallback model that form is refused at load, because the per-package
-default ceiling sits above where the overpower monitor trips, so it could
-never fail: a green that checks nothing. A `max_temp` whose target never
-dissipates measurably during the run fails with "the guard was never
-evaluated" rather than passing vacuously.
-
-**`boot_coverage`**: a control net (a gate / enable / reset / chip-select) that
-the firmware must *actively drive* to a defined level within a deadline of
-reset, with no stress fault during the boot window before it is first driven.
-
-```toml
-[[assert]]
-kind = "boot_coverage"
-net = "GATE_CTRL"     # the control net to watch
-min = 3.0             # the driven level (V) the firmware must reach
-deadline_ms = 20.0    # by this long after reset
-```
-
-The assertion kind is `boot_coverage`; `boot-coverage` remains accepted as an
-alias. New specs and waivers should use `boot_coverage`.
-
-See [the boot_coverage section](#boot-coverage-watching-the-firmware-define-a-hi-z-control-net) for what problem this solves and the two-sided demo.
-
-**`model_coverage`**: how much of the board bound to a real device model.
-
-Analogue accuracy is capped by model availability, and part of that cap is
-outside your control: many vendors encrypt their SPICE and IBIS models. What
-you can control is whether the number is visible and whether it is allowed to
-fall. Pin the coverage your board currently reaches; if a new part drops
-coverage, the build says so instead of quietly simulating a hole.
-
-```toml
-[[assert]]
-kind = "model_coverage"
-min_critical = 1.0          # every active IC binds to a real model
-max_active_unresolved = 0   # nothing unresolved sits on a connected net
-# min_resolved = 0.85       # optional: all parts, as a board-wide trend line
-```
-
-`min_critical` is the metric that matters. An unbound regulator changes the
-answer, an unbound 0402 resistor usually does not, so the ratio counts active
-ICs rather than every part on the board. `max_active_unresolved` counts the
-unresolved parts whose pins touch a real node, which are the ones whose open
-default actually moves the solve.
-
-A failure names the parts, because that list is the next action (this is the
-real output of the spec above against the bundled Watchy board):
-
-```
-[FAIL] model_coverage
-      active ICs bound 4/6 (66.7%), floor 100.0%; 8 unresolved on connected nets (limit 0): M1, L1, C9, U6, AE1, C7, R12, U1
-```
-
-Each name is either a model you can write, which takes one TOML file and no
-recompile ([extending/](../extending/README.md)), or a part whose vendor keeps
-its model closed. Those need different responses, and the report tells them
-apart by naming both.
-
-At least one threshold is required. An assertion with none would sit in a spec
-looking like a coverage gate while checking nothing, which is the failure this
-assertion exists to prevent, so the spec loader rejects it.
-
-**`phase_margin` / `ac_gain`**: small-signal loop-stability and frequency-response
-gates, driven by an `[ac]` sweep block on the spec. `phase_margin` bounds the
-feedback loop's phase margin (degrees) and `ac_gain` bounds a net's magnitude
-(dB) at a frequency. The spec format and worked assertions live in
-[AC_ANALYSIS.md](../analysis/AC_ANALYSIS.md#ci), since the sweep block is documented
-alongside the analysis it drives.
-
-**`rail_window`**: over a transient `[[scenario]]` window, a rail's min/max
-voltage stays within bounds; optional dip and recovery limits bound undervoltage,
-while `spike_above` / `spike_for_max_ms` and `settle_to` /
-`settle_within_ms` bound overvoltage. The scenario it judges over is a complete block of
-its own: `part` (required, the component drawing the load) plus a load
-`profile`, built-in or defined inline as a `[[profile]]`. Profiles and the rest
-of the scenario fields are documented in
-[TRANSIENTS.md](../checks/TRANSIENTS.md).
-
-```toml
-[[scenario]]
-id = "load_step"
-part = "U5"               # required: the part the load current attaches to
-profile = "esp32_boot_wifi"  # built-in profile id, or an inline [[profile]]
-supply_net = "VBUS"       # optional; inferred from the part's power pins
-start_ms = 1.0
-
-[[assert]]
-kind = "rail_window"
-net = "VBUS"
-scenario = "load_step"    # the [[scenario]] whose window to judge over
-min = 3.0                 # brownout floor
-dip_below = 3.1           # optionally: how long it may sit below a level
-for_max_ms = 5
-recover_to = 3.2
-recover_within_ms = 20
-# Optional overvoltage bounds (strict `>` spike, inclusive `<=` settle):
-# spike_above = 3.6
-# spike_for_max_ms = 2
-# settle_to = 3.4
-# settle_within_ms = 10
-```
-
-**`protection_trip`**: a battery/e-fuse protection cutoff fired (or must NOT
-have fired) within a scenario window, `supply_net`, `expect_trip = true|false`,
-optional `scenario`.
-
-**`peripheral`**: a bus-slave / sensor / VCD-sink peripheral's end-of-run state,
-by `id` and `field` (e.g. a `vcd_sink`'s `transitions` count, an EEPROM's last
-address). Pairs with a `[[peripheral]]` block below.
-
-**`hwtrace`**: compare the simulated waveform against a captured scope trace
-(features like period / rise-time / overshoot within tolerance), `trace =
-"trace.toml"`. See [the hardware-trace docs](../../testdata/hwtraces) for the
-capture format.
 
 Beyond `[[assert]]`, a spec can also declare **`[[peripheral]]`** (attach an I2C/
 SPI slave model, a VCD waveform sink, or an ADC feed to the co-sim),
@@ -1345,10 +1221,9 @@ would write. `hauksbee-ci init` ends by offering both.
 
 A run tells you which of the two is still missing. A GREEN run closes with
 `next: gate commits locally too: hauksbee-ci hook install` until the hook is
-there, and goes quiet once the hook and the workflow both exist. A RED run closes
-with a link to the section of this document covering the assertion kind that
-failed, so the report points at its own documentation rather than making you
-search for it.
+there, and goes quiet once the hook and the workflow both exist. A RED run puts a
+`why:` line under each failed assertion naming the usual cause, and
+`hauksbee-ci explain <kind>` has that kind's fields and a working example.
 
 What `github-action` writes is deliberately small but production-safe: it takes
 the auto-detect path for a repo with one spec or one board, filters out changes
@@ -1437,29 +1312,55 @@ the end of each binary's `--help`):
 
 | exit | `hauksbee-ci run` / `check` | `hauksbee run` / `check` |
 |---|---|---|
-| 0 | every assertion held; check: every spec valid | clean, or report-only without `--strict` |
+| 0 | every assertion held (or every failure is waived); check: every spec valid | clean, or report-only without `--strict` |
 | 1 | an assertion failed (RED) | input error: a board or input could not be read |
 | 2 | spec/board error, usage error, unwritable output; check: any diagnostic | findings under `--strict`, or a usage error |
 | 3 | invalid for analysis | invalid for analysis |
 
-A closed stdout (`... | head`) ends either binary quietly with exit 141
-(128 + SIGPIPE) and no panic message. `hauksbee check <board>` is shorthand for
-`hauksbee run --check <board>`.
+- A closed stdout (`... | head`) ends either binary quietly with exit 141
+  (128 + SIGPIPE) and no panic message. `hauksbee check <board>` is shorthand
+  for `hauksbee run --check <board>`.
+- `hauksbee-ci run` has no `--strict`, deliberately: a board used outside its
+  datasheet, or an unmodelled part that can move the very net under assertion,
+  must not need a flag before the exit code says so. A multi-spec invocation
+  exits with the worst code of the set, severity 3 > 2 > 1 > 0.
+  [RECIPES.md](RECIPES.md) maps exit 3 to "unstable" rather than a plain red in
+  GitLab, Jenkins, Azure DevOps and Buildkite.
+- A waived failure exits 0 while its own result still reports `passed: false`;
+  [JSON_OUTPUT.md](JSON_OUTPUT.md) says how to read the three verdict fields
+  together. An INVALID result (exit 3) can never be waived.
+- `hauksbee run` static reports (`--lint`, `--drc`, `--si`, `--usb-c`,
+  `--check`, bare `--json`) are **report commands: they exit 0 even when they
+  print a serious finding**, unless you pass `--strict` (alias
+  `--fail-on-findings`). Gating a pipeline on `hauksbee run` without `--strict`
+  gates on nothing; the CLI says so on stderr when it prints a gate-grade
+  finding without it. `--strict` gates on `--drc` true copper shorts,
+  `--lint` high/medium findings, `--si` any real finding, `--usb-c` a serious CC
+  verdict, and `--check` / bare `--json` the union of these.
+- Keep exit 1 and exit 2 apart in a pipeline: 1 means your input was never
+  analysed, 2 usually means it was analysed and the board is at fault. Usage
+  errors (an unknown option, two report flags at once, a board file with no
+  subcommand) also exit 2 and analyse nothing, so a step that treats 1 and 2
+  alike will report a broken file path as a broken board.
+- The `verdict` in `--json` and the exit code agree wherever the gate is armed
+  (`fail` is 2, `invalid` is 3, `pass` is 0). The few places they deliberately
+  part company, and what `invalid` means on the model-dependent surfaces, are
+  in [JSON_OUTPUT.md](../analysis/JSON_OUTPUT.md#top-level-verdict).
+  `--thermal` gates on coverage by default; see [THERMAL.md](../checks/THERMAL.md).
 
-The detail for each follows.
+### What makes an assertion INVALID (exit 3)
 
-`hauksbee-ci run <spec.toml>` is the gate for specs (assertions):
-
-| exit | meaning |
-|---|---|
-| 0 | every assertion held, or every failure is covered by an active waiver (GREEN) |
-| 1 | at least one assertion failed and no active waiver covers it (RED) |
-| 2 | spec / board error (desynced spec, missing board, bad TOML), a usage error, or a requested output file (`--junit`, `--sarif`) that could not be written |
-| 3 | invalid for analysis: the analog solve aborted, an assertion's evaluation window overlapped a failed solve span, an assertion's evidence is `undermined`, or a host-paced clock (ESP32 QEMU) cannot judge the claim: firmware content that is absent at the end of the run, or a level that holds only inside its window (`INVALID: host-paced clock:`); the result is not trustworthy and the run refuses to pretend |
+For `hauksbee-ci run`, exit 3 means the result cannot be trusted: the analog
+solve aborted, an assertion's evaluation window overlapped a failed solve span,
+an assertion's evidence is `undermined`, or a host-paced clock (ESP32 QEMU)
+cannot judge the claim (firmware content absent at the end of the run, or a
+level that holds only inside its window, `INVALID: host-paced clock:`). It does
+not require the whole solve to have failed: one assertion whose window
+overlapped one failed chunk is enough, because its answer rests on voltages
+nobody solved.
 
 `undermined` is not a flag anyone opts into; it is derived from the assumptions
-on an assertion's own causal path, and two of those kinds are worth naming here
-because both used to read green:
+on an assertion's own causal path:
 
 | on the asserted net | evidence | verdict |
 |---|---|---|
@@ -1490,135 +1391,6 @@ any of that MCU's pins, rails, reset or clock, or on the chain powering it,
 undermines it, and an unmodelled part elsewhere on the board does not.
 Assertions with no subject at all (`no_faults`, model coverage) take the whole
 board.
-
-There is no `--strict` on `hauksbee-ci run`, deliberately: a board used outside
-its datasheet, or an unmodelled part that can move the very net under
-assertion, must not need a flag before the exit code says so.
-
-
-Two of those rows are easy to misread from the table alone. A waived failure
-exits 0 while its own result still reports `passed: false`, so a consumer reading
-per-assertion results sees a failure on a green build: that is deliberate, and
-`docs/ci/JSON_OUTPUT.md` says how to read the three verdict fields together.
-Exit 3 does not require the solve to have given up entirely; a single assertion
-whose window overlapped one failed chunk is enough, which is the point, because
-that assertion's answer rests on voltages nobody solved.
-
-A multi-spec invocation (`hauksbee-ci run ci/*.toml`) exits with the worst
-code of the set, severity order 3 > 2 > 1 > 0. Copy-paste pipeline blocks for
-GitLab CI, Jenkins, Azure DevOps, and Buildkite (including how each maps
-exit 3 to "unstable" rather than a plain red) live in
-[RECIPES.md](RECIPES.md).
-
-`hauksbee run <board>` static reports (`--lint`, `--drc`, `--si`, `--usb-c`,
-`--check`, bare `--json`) are **report commands: they exit 0 even when they
-print a serious finding**, unless you pass `--strict` (alias
-`--fail-on-findings`). Gating a pipeline on `hauksbee run` without `--strict`
-gates on nothing. When a gate-grade finding is printed without `--strict`,
-the CLI says so on stderr.
-
-| exit | meaning |
-|---|---|
-| 0 | clean, or a report-only run without `--strict` |
-| 1 | the run never happened: the board could not be read (unrecognized format, a Git LFS pointer, a missing file, an ASCII-Protel `.PcbDoc`) or the analysis could not be set up |
-| 2 | gate-grade findings, under `--strict` (or `--strict-boot` for the boot-safety advisory; co-sim stress faults also gate under `--strict`, and they outrank a zero-activity refusal: a run that saw faults was analysable). Also a usage error, such as two report flags at once |
-| 3 | invalid for analysis (aborted analog solve, zero-activity co-sim under `--strict` that raised no faults, thermal table with no usable coverage, a PARTIAL-coverage `--thermal` result, undermined run-level evidence under `--strict`, or unbound verdict-critical parts on a model-dependent surface under `--strict`, including a PARTLY JUDGED `--check`, see below) |
-
-`--thermal` gates on coverage **by default**: a partial-coverage table (real
-rows while an active power IC on the live circuit is open or unresolved) exits
-3, because a table that understates the true thermal load must not read as
-"runs cool". Bind the named power ICs or pass `--no-strict-thermal` for a
-report-only result. The INCONCLUSIVE coverage caveat remains on stderr and in
-the JSON `notes`. `--strict-thermal` is accepted as an equivalent explicit
-selection of the default policy.
-
-The INCONCLUSIVE verdict never moves an exit code on its own. When
-current-carrying / active parts have no model, `--lint` / `--si` / `--check`
-print "INCONCLUSIVE: N current-carrying / active part(s) have no model (U3,
-Q1, ...)" instead of a clean bill, and the same sentence rides the JSON
-`notes` (kind `coverage`). Without `--strict` the exit code stays 0: prose
-honesty and exit-code policy are deliberately separate contracts, and making
-INCONCLUSIVE alone exit non-zero would change what `--lint` and `--si` mean to
-every pipeline that calls them without `--strict`. Under `--strict` those same
-model-dependent surfaces exit 3, because their machine `verdict` field reads
-`invalid` for the unbound part and an exit code that disagreed with the document
-beside it would give a pipeline two answers. If the run ALSO gates on a
-finding, `fail` outranks the unbound part on both: verdict `fail`, exit 2.
-`--check` scopes the refusal: it judges the net checks the unbound parts
-cannot change, so a finding there still fails (exit 2). With nothing found and
-at least one electrical check judged, the run is PARTLY JUDGED, never a pass:
-verdict `invalid` with `partly_judged: true`, exit 3 under `--strict`, a
-`partly_judged` failing testcase in the JUnit file ("PARTLY JUDGED (not a
-pass): ..."), and a `hauksbee PARTLY JUDGED` error annotation in GitHub
-Actions (`docs/analysis/JSON_OUTPUT.md`).
-
-The copper (`--drc`) and descriptive (`--report`) surfaces are exempt on both:
-copper reads the layout and owes nothing to device models, and `--report`
-describes the binding rather than judging it, so it never gates and its verdict
-never turns the incomplete binding it prints into a refusal.
-
-Exit 1 and exit 2 are worth keeping apart in a pipeline: 1 means your input was
-never analysed, and 2 usually means it was analysed and the board is at fault.
-The exception is the usage errors listed in the table above, which also exit 2
-and analyse nothing. There are three such groups. First, every invocation the
-argument parser rejects: an unknown option, or any of the declared
-mutually-exclusive flag pairs such as two report flags at once. Second, two
-hand-written guards that name the corrected command instead of a parse error, for
-a board file passed with no subcommand and a board file passed to `check-code`.
-Third, three malformed-input or self-check exits that are not usage errors at
-all: `hauksbee sim` on a deck the loader rejects, `hauksbee models lint` on its
-own finding count, and `hauksbee-ci run` on a spec/board error. A CI step that
-treats exit 1 and exit 2 alike as "hardware failed" will report a broken file
-path as a broken board.
-
-What `--strict` gates on, per report: `--drc` true copper shorts (clearance
-notes never gate), `--lint` high/medium findings, `--si` any real finding,
-`--usb-c` a serious CC verdict, and `--check` / bare `--json` the union of
-these. On a board format newer than the validated range (KiCad 10+),
-possibly-phantom shorts do not gate. The printed caveat says to cross-check.
-
-Each gate is per surface, and when it is armed it agrees with that surface's
-own machine verdict on the same board: `fail` exits 2, `invalid` exits 3, `pass`
-exits 0. Those gates are deliberately wider than the `serious` severity
-(`--lint` gates on medium findings, `--si` on any real finding), so a run gating
-on a `warning`-severity finding reads `verdict: "fail"` in the very document its
-exit code was printed beside, and the `--junit`/`--sarif` files it archives mark
-that finding failed.
-
-The `gating` flag makes every finding-backed surface agree. Terminal conditions
-that are not findings use the same final outcome path: `--strict-boot` becomes a
-typed co-sim finding, while no-placement, no-processor, timing, AC, thermal,
-zero-activity and analog-abort outcomes finalize a JUnit `<error>`, SARIF
-`hauksbee/invalid-for-analysis` result and GitHub error annotation. Invocation
-errors use `hauksbee/run-error` and retain their actual exit code. A pending
-error document occupies every accepted output path until that final write, so
-there is no stale-file exception for a path that passed identity validation.
-
-Do not use a non-strict run to predict a strict one. On the static surfaces the
-document does not change with the flag (a refusing verdict prints beside exit 0
-without `--strict`), so reading it there is at worst incomplete. On the co-sim
-path it is misleading: the zero-activity and analog-abort refusals are only
-constructed under `--strict` and the boot advisory is only gate-grade under
-`--strict-boot`, so none of the three reaches the document until its flag is
-passed. What the run found on its own, bind blockers and raised faults, is in
-the document either way.
-In the other direction, `--thermal --no-strict-thermal` opts out of the
-PARTIAL-coverage escalation permanently, so that document can read `invalid` at
-exit 0 whatever else is passed; a thermal table with no usable coverage at all
-still exits 3 through the flag. Run the gate you intend to gate on. `--report`
-has no gate of its own; a board with no component placement still refuses before
-any surface renders.
-
-Two co-sim paths deliberately keep exit 3 over a `fail` document, because there
-the run is not analysable even though it observed faults: an aborted analog
-solve (the faults may come from the windows the solve failed on) and a runtime
-timing refusal. Everywhere else an armed gate and its verdict agree, including
-the zero-activity refusal, which yields to the faults it saw (exit 2) because
-the analog solve behind them was sound. These three resolve the same collision
-differently on purpose, per what the run could actually judge; note that
-`hauksbee-ci` merges codes ACROSS specs the other way (3 > 2, above), because
-there the question is which spec's result is least trustworthy rather than what
-one run concluded.
 
 ## Limitations
 
@@ -1654,35 +1426,3 @@ one run concluded.
   nets over buses extracts those nets split into their members (it never
   over-connects). Cross-validated corpus projects without buses match their
   layout net-for-net. See `docs/ingest/SCHEMATICS.md`.
-
-## For contributors: the static-check corpus gates
-
-Release candidates also run browser and unseen-board gates. Those gates retain
-their own content-addressed receipts; they do not imply that the static-check
-corpus below ran, and the static corpus does not imply browser coverage.
-
-This section is about hauksbee's own test discipline, not about writing specs.
-The bring-up CI this page documents runs *firmware on a board under
-assertions*. The static checks (`--drc`, `--lint`, `--si`) have a separate,
-complementary enforcement layer: a **zero-false-positive corpus gate**, the
-standing discipline that a check ships only if it raises no findings on the
-famous corpus (the fetched corpus of well-known open-hardware boards,
-`corpus.toml`, which is treated as known-good). These are encoded as
-corpus-gated cargo tests rather than spec assertions:
-
-- **DRC clearance tolerance**: `cargo test -p hauksbee-extract --test drc`
-  (boundary/at-rule/sub-rule cases) plus the `drc_corpus` / `eagle_drc_corpus`
-  sweeps stay green. The at-rule noise drops (bms-c1 137 -> 0, pd-sink 66 -> 4).
-- **Trace ampacity + input-cap ripple** (`--si` checks 6, 7):
-  `HAUKSBEE_REQUIRE_CORPUS=1 cargo test -p hauksbee-engine --test si_ampacity_ripple`
-  asserts the checks fire on a genuinely undersized routed trace and raise
-  **zero findings** across the famous corpus (the
-  `famous_corpus_has_no_ampacity_or_ripple_findings` sweep is the assertion).
-  The hand-checked mppt-1210 C1 1.66x ripple case is a unit test in
-  `checks::ripple`.
-- **Device-decode** (`--lint`): `cargo test -p hauksbee-engine device_decode`
-  pins the CYPD3177 Table-2 decode against hand-derived detent values from the
-  datasheet.
-
-Run `HAUKSBEE_REQUIRE_CORPUS=1` to turn a missing corpus into a hard failure so
-none of these gates can vacuously green-out.
