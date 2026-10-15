@@ -330,7 +330,7 @@ export function TransportBar({
           style={{ width: 58, fontFamily: 'var(--font-mono)', padding: '2px 5px' }}
         />
         <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>x</span>
-        <div className="flex flex-wrap items-center gap-0.5 max-sm:hidden">
+        <div className="flex flex-wrap items-center gap-0.5">
           {SPEED_PRESETS.map(p => (
             <button
               key={p}
