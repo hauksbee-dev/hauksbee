@@ -99,6 +99,9 @@ export function isReferenceNet(net: string): boolean {
   return /^[+-]?(?:[ADPS]?GND[A-Z0-9_]*|VSS[A-Z0-9_]*|0V|EARTH|COM)$/i.test(baseName(net))
 }
 
+/** A net no check is worth asking about: a ground, or a pin the layout left unconnected. */
+export const isSkippedNet = (net: string): boolean => isReferenceNet(net) || /^unconnected-/i.test(net)
+
 /** A rail by its name: `+3V3`, `5V`, `VCC`, `VBUS`, `VDDA`... */
 export function looksLikeSupply(net: string): boolean {
   const base = baseName(net)
@@ -120,7 +123,7 @@ export function rankNets(nets: readonly string[], supplyNets: ReadonlySet<string
     if (supplyNets.has(net) || looksLikeSupply(net)) return 0
     return /OUT|TX|MOSI|SCK|SCL|PWM|LED|DRV|GATE|^D\d+$/i.test(baseName(net)) ? 1 : 2
   }
-  return [...new Set(nets)].filter(n => !isReferenceNet(n))
+  return [...new Set(nets)].filter(n => !isSkippedNet(n))
     .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
 }
 
@@ -241,7 +244,7 @@ const sorted = (offers: Offer[]) => [...offers.filter(o => !o.blocked), ...offer
 
 /** Every check that applies to a net, blocked ones last with the reason. */
 export function offersForNet(net: string, ctx: OfferContext, pin?: string): Offer[] {
-  if (isReferenceNet(net)) return []
+  if (isSkippedNet(net)) return []
   return sorted(ctx.kinds.filter(e => e.targets.includes('net'))
     // A protection cutoff belongs to a supply; a captured trace is picked from the menu.
     .filter(e => e.kind !== 'hwtrace' && (e.kind !== 'protection_trip' || ctx.supplyNets.has(net) || looksLikeSupply(net)))
@@ -276,7 +279,7 @@ export function offersForPart(
   })
   const voltage = ctx.kinds.find(e => e.kind === 'voltage')
   // A pad the user pointed at comes first and says which pin it is.
-  const picked = padNet && !isReferenceNet(padNet) ? padNet : undefined
+  const picked = padNet && !isSkippedNet(padNet) ? padNet : undefined
   const ranked = rankNets(nets, ctx.supplyNets).filter(n => n !== picked)
   const onNets: Offer[] = voltage
     ? [...(picked ? [picked] : []), ...ranked.slice(0, netLimit - (picked ? 1 : 0))].map(net => ({
