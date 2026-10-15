@@ -341,8 +341,11 @@ fn board_limit_failure(
             " ({others} more violated limit(s) on this outcome's path are listed under evidence.)"
         )
     };
+    // Worded as a finding on the outcome's path, not as THE cause: the
+    // measured shortfall (when there is one) leads the line, and a limit
+    // broken elsewhere on the path may or may not be what produced it.
     Some(format!(
-        "this outcome does not hold as designed, because the board runs a part outside its \
+        "this outcome does not hold as designed; its path also runs a part outside its \
          datasheet limit. {} {}{more}",
         root.statement(),
         root.because(),
@@ -767,7 +770,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
             .filter(|map| map.is_undermined() && !any_dead_rail)
             .and_then(|map| board_limit_failure(result, map, evidence.assumptions(), today))
         {
-            // The measured shortfall stays first; the limit says why.
+            // The measured shortfall stays first; the broken limit follows.
             result.why = Some(match result.why.take() {
                 Some(measured) => format!("{measured}; {cause}"),
                 None => cause,
