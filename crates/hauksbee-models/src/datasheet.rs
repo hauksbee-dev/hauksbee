@@ -581,7 +581,9 @@ fn build_sensor_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
     bus = "i2c"
     i2c_address = 0x??         # the 7-bit address (default/all-pins-low value)
   and a [sensor.protocol] block:
-    style = "i2c_pointer"      # master writes the register addr, then reads N bytes"#
+    style = "i2c_pointer"      # master writes the register addr, then reads N bytes
+                               # (every I2C sensor: a command-driven part with no
+                               # registers keeps it and states [sensor.read_frame])"#
     };
 
     format!(
@@ -638,6 +640,10 @@ OPTIONAL BLOCKS (add one only when the datasheet specifies every field it needs)
     [[sensor.write_command.field]] name, bits; [sensor.write_command.update] state = "expr"
   [[sensor.output]] name, channel, expr   # driven-voltage law over state
   [sensor.read_frame] per_channel, bytes = ["expr", ...]   # instead of registers
+    # A command-driven part (write a command, then read the result) states its
+    # measurement read here: one expr per byte in wire order (e.g. the high and
+    # low byte of the raw word). A CRC byte the expr cannot compute is left out
+    # and named in [sensor.source]; never a reason to write no frame at all.
   write_register and write_command are mutually exclusive.
   [sensor.pins] "<pad number>" = "<role>"   # the package's pin table, every pad
     # Bus roles: scl, sda (I2C) or cs, sck, mosi, miso (SPI), named exactly so.
@@ -2519,7 +2525,8 @@ fn required_params_for_kind(kind: &str) -> &'static str {
              for identity-only"
         }
         "balancer" => "(the leak law is in [models.behavioral]; no required numeric params)",
-        _ => "(see db/README.md for kind-specific requirements)",
+        // Never a file the sandbox lacks: an agent sent to db/README.md asked for it.
+        _ => "(no kind-specific required params beyond the format below)",
     }
 }
 
@@ -3328,7 +3335,11 @@ fn envelope_schema() -> serde_json::Value {
         "type": "object",
         "properties": {
             "status": {"type": "string", "enum": ["written", "identity_only", "not_written"]},
-            "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+            "confidence": {
+                "type": "string",
+                "enum": ["high", "medium", "low"],
+                "description": "low while the last checker run still reports a finding"
+            },
             "reason": {"type": "string"},
             "questions": {"type": "array", "items": {"type": "string"}}
         },

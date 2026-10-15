@@ -826,7 +826,8 @@ impl SensorSpec {
                 && s.write_commands.is_empty()
                 && s.read_frame.is_none()),
             "a sensor needs at least one [[sensor.register]], [[sensor.write_register]], \
-             [[sensor.write_command]], or a [sensor.read_frame]"
+             [[sensor.write_command]], or a [sensor.read_frame]; a command-driven part with no \
+             register map states what a measurement read returns as [sensor.read_frame]"
         );
 
         self.validate_pins()?;
