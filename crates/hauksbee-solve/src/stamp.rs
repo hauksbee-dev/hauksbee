@@ -887,14 +887,7 @@ fn stamp_behavioral<S: StampSink>(
                 .layout
                 .branch(id)
                 .expect("V-output behavioral source owns a branch unknown");
-            if let Some(pi) = ctx.layout.node(p) {
-                sink.g(pi, br, 1.0);
-                sink.g(br, pi, 1.0);
-            }
-            if let Some(ni) = ctx.layout.node(n) {
-                sink.g(ni, br, -1.0);
-                sink.g(br, ni, -1.0);
-            }
+            stamp_branch_incidence(sink, ctx, br, p, n);
             for (g, col) in partials.iter().zip(&cols) {
                 if let Some(col) = col {
                     sink.g(br, *col, -*g);
@@ -1064,6 +1057,26 @@ fn stamp_inductor<S: StampSink>(
     }
 }
 
+/// The branch incidence an ideal voltage-source branch `br` shares with
+/// every voltage-defined device: `+1` in the p KCL row and `-1` in the n row,
+/// mirrored in the branch row.
+fn stamp_branch_incidence<S: StampSink>(
+    sink: &mut S,
+    ctx: &StampCtx,
+    br: usize,
+    p: NodeId,
+    n: NodeId,
+) {
+    if let Some(pi) = ctx.layout.node(p) {
+        sink.g(pi, br, 1.0);
+        sink.g(br, pi, 1.0);
+    }
+    if let Some(ni) = ctx.layout.node(n) {
+        sink.g(ni, br, -1.0);
+        sink.g(br, ni, -1.0);
+    }
+}
+
 fn stamp_vsource<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
@@ -1073,16 +1086,7 @@ fn stamp_vsource<S: StampSink>(
     sink: &mut S,
 ) {
     let br = ctx.layout.branch(id).expect("vsource has a branch unknown");
-    let pi = ctx.layout.node(p);
-    let ni = ctx.layout.node(n);
-    if let Some(pi) = pi {
-        sink.g(pi, br, 1.0);
-        sink.g(br, pi, 1.0);
-    }
-    if let Some(ni) = ni {
-        sink.g(ni, br, -1.0);
-        sink.g(br, ni, -1.0);
-    }
+    stamp_branch_incidence(sink, ctx, br, p, n);
     let val = source_value(ctx, kind) * ctx.src_scale;
     sink.i(br, val);
 }
@@ -1107,14 +1111,7 @@ fn stamp_vcvs<S: StampSink>(
     sink: &mut S,
 ) {
     let br = ctx.layout.branch(id).expect("vcvs has a branch unknown");
-    if let Some(pi) = ctx.layout.node(p) {
-        sink.g(pi, br, 1.0);
-        sink.g(br, pi, 1.0);
-    }
-    if let Some(ni) = ctx.layout.node(n) {
-        sink.g(ni, br, -1.0);
-        sink.g(br, ni, -1.0);
-    }
+    stamp_branch_incidence(sink, ctx, br, p, n);
     if let Some(cpi) = ctx.layout.node(cp) {
         sink.g(br, cpi, -gain);
     }
@@ -1147,14 +1144,7 @@ fn stamp_ccvs<S: StampSink>(
         .layout
         .branch(ctrl_src)
         .expect("ccvs control source owns a branch unknown");
-    if let Some(pi) = ctx.layout.node(p) {
-        sink.g(pi, br, 1.0);
-        sink.g(br, pi, 1.0);
-    }
-    if let Some(ni) = ctx.layout.node(n) {
-        sink.g(ni, br, -1.0);
-        sink.g(br, ni, -1.0);
-    }
+    stamp_branch_incidence(sink, ctx, br, p, n);
     sink.g(br, cbr, -transres);
 }
 
