@@ -7,17 +7,18 @@ import { specStemFor, workflowExportAvailable, workflowPreviewYaml, workflowYaml
 import { EmptyState } from '../motion'
 import { buildCheckUpload, buildPortableCheckSpec } from '../lib/board-upload'
 import type { SupplementalDesignFiles } from '../lib/board-upload'
-import { sessionIdFor } from '../lib/session-store'
+import { checksStorageKey } from '../lib/checks-storage'
 import { api, errorText } from '../lib/api'
 import {
-  appendOp, assertToml, buildToml, CHECK_KINDS, checkOps, componentCapabilityIssues, CONSTRAINT_KEYS,
-  emptyCheck, emptyPeripheral, emptySensor, normalizeSavedCheck, overrideOps, overrideToml, peripheralIssues,
-  peripheralOps, peripheralToml, railPolarity, readSpec, rootOps, rowIssues, sensorIssues, sensorOps, sensorToml,
-  scaffoldRows, supplyKvs, supplyOps, supplyToml, USB_PROFILES,
+  assertToml, buildToml, CHECK_KINDS, componentCapabilityIssues, CONSTRAINT_KEYS, emptyCheck, emptyPeripheral,
+  emptySensor, normalizeSavedCheck, overrideToml, peripheralIssues, peripheralToml, railPolarity, rowIssues,
+  sensorIssues, sensorToml, scaffoldRows, supplyKvs, supplyToml, USB_PROFILES,
 } from '../lib/check-spec'
-import type {
-  CheckRow, OverrideRow, PeripheralRow, RowIssue, SensorRow, SpecModel, SupplyRow,
-} from '../lib/check-spec'
+import type { CheckRow, OverrideRow, PeripheralRow, RowIssue, SensorRow, SupplyRow } from '../lib/check-spec'
+import {
+  appendOp, checkOps, overrideOps, peripheralOps, readSpec, rootOps, sensorOps, supplyOps,
+} from '../lib/spec-model'
+import type { SpecModel } from '../lib/spec-model'
 import { applyOps, readCst } from '../lib/toml-cst'
 import type { PatchOp } from '../lib/toml-cst'
 import { BuilderSection, Field, RemoveButton } from './checks/pieces'
@@ -126,14 +127,7 @@ function FirmwareRunChoice({ firmware, include, avrAvailable, running, onChange 
   )
 }
 
-/** Storage key for a board's saved checks. The file name alone collides for
- *  common names (every project has a board.kicad_pcb), so a cheap fingerprint
- *  from the report disambiguates. The shell also uses this as the view's React
- *  key so it remounts per board: the mount-time restore is then authoritative
- *  and one board's state can never leak into another's. */
-export function checksStorageKey(report: WebReport): string {
-  return `hauksbee.checks.${sessionIdFor(report)}`
-}
+export { checksStorageKey }
 
 /** Drop one row's entry from a validation map, leaving the map alone when it
  *  has nothing to say about that row. */

@@ -25,10 +25,16 @@ main_gz=$(gz "${mains[0]}")
 editor_gz=0
 if [ "${#editors[@]}" -eq 1 ]; then
   editor_gz=$(gz "${editors[0]}")
-  # Chunks the editor imports that the main chunk does not (a vendor split).
+  # Chunks only the editor imports (a vendor split of its own); a chunk another
+  # chunk also imports loads without the editor and is not counted here.
   for dep in $(grep -oE '"\./[A-Za-z0-9_.-]+\.js"' "${editors[0]}" | tr -d '"' | sed 's#^\./##' | sort -u); do
-    case "$dep" in index-*) continue ;; esac
-    [ -f "$assets/$dep" ] && editor_gz=$((editor_gz + $(gz "$assets/$dep")))
+    [ -f "$assets/$dep" ] || continue
+    shared=0
+    for other in "$assets"/*.js; do
+      [ "$other" = "${editors[0]}" ] || [ "$other" = "$assets/$dep" ] && continue
+      if grep -q "\"\./$dep\"" "$other"; then shared=1; break; fi
+    done
+    [ "$shared" -eq 0 ] && editor_gz=$((editor_gz + $(gz "$assets/$dep")))
   done
 else
   echo "bundle-size: expected one TomlEditor chunk in $assets, found ${#editors[@]}" >&2

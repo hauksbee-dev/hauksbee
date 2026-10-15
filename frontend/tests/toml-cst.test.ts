@@ -8,9 +8,8 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { applyOp, assertHeaderOffsets, pathAt, readCst } from '../src/lib/toml-cst'
 import type { PatchOp, TablePath } from '../src/lib/toml-cst'
-import {
-  appendOp, assertToml, checkOps, emptyCheck, readSpec, rootOps, supplyOps, tomlToBuilder,
-} from '../src/lib/check-spec'
+import { assertToml, emptyCheck } from '../src/lib/check-spec'
+import { appendOp, checkOps, readSpec, rootOps, supplyOps, tomlToBuilder } from '../src/lib/spec-model'
 import { hoverAt, suggest } from '../src/lib/toml-schema-assist'
 
 /** A small deterministic PRNG (mulberry32), so a failure reproduces. */

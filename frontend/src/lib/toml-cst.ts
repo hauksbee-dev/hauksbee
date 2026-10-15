@@ -271,13 +271,6 @@ export function applyOps(text: string, ops: readonly PatchOp[]): string {
  *  the characters it produces). */
 export const tomlStringLiteral = (v: string) => JSON.stringify(v)
 
-/** A TOML number literal exactly as typed, or null when TOML would reject it
- *  (`1.`, `.5`, `-`, `1e`): only a valid literal is ever written. */
-export function tomlNumberLiteral(v: string): string | null {
-  const t = v.trim()
-  return /^[+-]?(0|[1-9](_?\d)*)(\.\d(_?\d)*)?([eE][+-]?\d(_?\d)*)?$/.test(t) ? t : null
-}
-
 /** The lexical context at `offset`, for completion and hover. Lexical on
  *  purpose: while someone types, the text usually does not parse. */
 export interface CursorPath {
