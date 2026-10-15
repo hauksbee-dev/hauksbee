@@ -241,7 +241,9 @@ pub(crate) fn emit_quiet(
         if bode.is_empty() || ac_is_all_sentinel(bode) {
             continue;
         }
-        ac_maps.push(evidence.simulation_map(
+        // A solver node the board does not hold (blank, merged) keeps its
+        // Bode rows; it just has no board location to back a map.
+        ac_maps.extend(evidence.simulation_map_if_mapped(
             format!("AC response for net {net}"),
             std::slice::from_ref(net),
             &[],
@@ -308,6 +310,7 @@ pub(crate) fn emit_quiet(
             not_found_nets: not_found,
             coverage,
         });
+        jr.push_coverage_note(crate::scope::single_check_note("AC"));
         println!("{}", jr.to_json());
         return Ok(());
     }
@@ -317,6 +320,8 @@ pub(crate) fn emit_quiet(
     // the JSON surface's `no_signal_path_nets` list (text/JSON parity).
     let mut no_path_nets: Vec<String> = Vec::new();
     let mut requested_nets = 0usize;
+    // Echo the parsed sweep so `1M` reading as mega (not SPICE milli) is visible.
+    println!("AC sweep {spec}");
     for (net, bode) in &per_net {
         if bode.is_empty() {
             eprintln!("warning: net '{net}' not found in circuit; skipping");

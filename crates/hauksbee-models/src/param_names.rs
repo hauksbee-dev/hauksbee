@@ -503,11 +503,9 @@ pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
     out.extend(law_warning(entry, rows).or_else(|| ron_miss(entry)));
     out.extend(gain_warning(entry, rows));
     out.extend(channel_slips(entry, rows));
-    let rating = |r: &&Characteristic| {
-        ["ID", "PD", "Ptot", "RθJA", "RthJA"]
-            .iter()
-            .any(|s| symbol(r, s))
-    };
+    // The rows the completion step reads as ratings (`implied_rating`): the symbol
+    // AND the key's unit, so a `PD_SCK` pulse width or a `mW/C` derating slope is none.
+    let rating = |r: &&Characteristic| crate::derating::implied_rating(r).is_some();
     out.extend(rows.iter().filter(|r| r.rating.is_none()).filter(rating).map(|r| format!("characteristic '{}' prints a rating: tag it rating = \"<key>\" (max_current_a, max_power_w, theta_ja_c_per_w) with its temperature, package or mounting, so Hauksbee reads the row for the scenario's temperature", r.parameter)));
     derived.retain(|d| !entry.params.0.contains_key(d.0));
     for (n, v, how) in derived {
@@ -1607,5 +1605,24 @@ mod tests {
         }
         assert!(files > 0, "no [[models]] db file was read from {dir:?}");
         assert!(offenders.is_empty(), "{}", offenders.join("\n"));
+    }
+
+    /// A row is an untagged rating by its symbol and the key's unit: a `PD_SCK` pulse
+    /// width (us) and a `PD` derating slope (mW/°C) are not power limits, a `PD` in
+    /// mW is.
+    #[test]
+    fn a_rating_lint_reads_the_unit_not_the_pin_name() {
+        let warns = |row: &str| {
+            let rows = cited(row);
+            let e = entry("digital", "supply_static_ua = 1.0", &rows);
+            source_warnings(&e)
+                .iter()
+                .any(|w| w.contains("prints a rating"))
+        };
+        assert!(!warns("PD_SCK input high time ; max = 50 ; us ; VBG = 1 V"));
+        assert!(!warns(
+            "PD derate above 25 °C ; typ = 2 ; mW/°C ; TA > 25 °C"
+        ));
+        assert!(warns("PD power dissipation ; max = 250 ; mW ; TA = 25 °C"));
     }
 }

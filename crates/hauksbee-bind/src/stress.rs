@@ -53,6 +53,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use hauksbee_ir::evidence::{Assumption, AssumptionSource, Scope, Subject};
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
+use hauksbee_models::chip_size;
 use hauksbee_models::derating::{Carrier, Curve, Derating, TempRef};
 use hauksbee_models::schema::{ComponentKind, Ratings};
 use hauksbee_solve::{mos_body_vth, mos_channel};
@@ -476,8 +477,8 @@ pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
     // ("R_0201_0603Metric"), imperial 01005 → metric 0402. So the smallest
     // packages MUST be matched first, before the larger imperial tokens they
     // embed as a metric suffix, or they are silently over-rated.
-    if let Some(w) = imperial_chip_watts(|code| f.contains(code)) {
-        return chip(w);
+    if let Some(w) = chip_size::find_imperial(|code| f.contains(code)) {
+        return chip(w.watts);
     }
     // A DIN body code IS size evidence, and the codes are not interchangeable:
     // DIN0204 is a 1/8 W body while DIN0207 is 1/4 W, so treating them alike
@@ -497,31 +498,6 @@ pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
     // suppresses a real one (if it is higher). It becomes a named coverage
     // gap instead, which is the honest form of not knowing.
     unknown()
-}
-
-/// Every imperial chip size code the rating table recognises, smallest body
-/// first (the ordering [`resistor_power_from_footprint`] depends on), and the
-/// standard rating (W) that body carries.
-const IMPERIAL_CHIP_WATTS: &[(&str, f64)] = &[
-    ("01005", 1.0 / 32.0),
-    ("0201", 1.0 / 20.0),
-    ("0402", 1.0 / 16.0),
-    ("0603", 1.0 / 10.0),
-    ("0805", 1.0 / 8.0),
-    ("1206", 1.0 / 4.0),
-    ("1210", 1.0 / 2.0),
-    ("2010", 3.0 / 4.0),
-    ("2512", 1.0),
-    ("1812", 1.0),
-    ("2220", 1.0),
-];
-
-/// The rating of the first [`IMPERIAL_CHIP_WATTS`] code `wanted` accepts.
-fn imperial_chip_watts(wanted: impl Fn(&str) -> bool) -> Option<f64> {
-    IMPERIAL_CHIP_WATTS
-        .iter()
-        .find(|(code, _)| wanted(code))
-        .map(|(_, w)| *w)
 }
 
 /// The chip rating for a footprint that carries only the METRIC size code.
@@ -548,20 +524,6 @@ fn trailing_digits(s: &str) -> String {
 }
 
 fn classify_metric_only(f: &str) -> MetricCode {
-    // (metric code, imperial equivalent, rating W)
-    const TABLE: &[(&str, f64)] = &[
-        ("0402", 1.0 / 32.0), // imperial 01005
-        ("0603", 1.0 / 20.0), // imperial 0201
-        ("1005", 1.0 / 16.0), // imperial 0402
-        ("1608", 1.0 / 10.0), // imperial 0603
-        ("2012", 1.0 / 8.0),  // imperial 0805
-        ("3216", 1.0 / 4.0),  // imperial 1206
-        ("3225", 1.0 / 2.0),  // imperial 1210
-        ("5025", 3.0 / 4.0),  // imperial 2010
-        ("6332", 1.0),        // imperial 2512
-        ("4532", 1.0),        // imperial 1812
-        ("5750", 1.0),        // imperial 2220
-    ];
     // The metric code is the digit run immediately before "METRIC".
     let Some(idx) = f.find("METRIC") else {
         return MetricCode::Absent;
@@ -581,15 +543,12 @@ fn classify_metric_only(f: &str) -> MetricCode {
     let before = &f[..idx - metric.len()];
     if let Some(prev) = before.strip_suffix('_') {
         let prev_token = trailing_digits(prev);
-        if !prev_token.is_empty() && imperial_chip_watts(|c| c == prev_token).is_some() {
+        if !prev_token.is_empty() && chip_size::is_imperial_code(&prev_token) {
             // The imperial token is authoritative; leave it to the imperial pass.
             return MetricCode::Absent;
         }
     }
-    match TABLE.iter().find(|(code, _)| *code == metric.as_str()) {
-        Some((_, w)) => MetricCode::Rated(*w),
-        None => MetricCode::Unrecognised,
-    }
+    chip_size::by_metric(&metric).map_or(MetricCode::Unrecognised, |c| MetricCode::Rated(c.watts))
 }
 
 /// The rating of a recognised DIN axial resistor body, from its DIN code.

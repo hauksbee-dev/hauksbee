@@ -2533,6 +2533,15 @@ fn insert_kicad_net_tie_groups(
     let legacy_zero_ohm = crate::dnp::is_explicit_zero_ohm_copper_link_fields(&value, &footprint);
     if legacy_zero_ohm {
         out.insert(owner, pad_nets.into_values());
+        return;
+    }
+
+    // A solder-jumper or link footprint without native metadata (older
+    // libraries' `SJ_Closed`): it is a tie only where its own pads already
+    // touch, the closing bridge drawn in copper. An open jumper's pads stay
+    // ordinary pads, so foreign copper on them is still a short.
+    if crate::dnp::is_jumper_or_net_tie_fields(&value, "", &footprint) {
+        out.insert_bare_copper(owner);
     }
 }
 

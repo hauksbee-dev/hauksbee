@@ -39,8 +39,18 @@
 //! println!("{}", res);
 //! ```
 
+/// The one wording of how a rating's scalar is chosen among its printed rows: the
+/// extraction prompt (`KEY_GUIDE`, `RATINGS_RULES`) and the validator's message
+/// all embed it, so they cannot disagree.
+macro_rules! standard_condition {
+    () => {
+        "the row at the standard condition (25 °C, the standard test board), else the least favourable row the part number allows"
+    };
+}
+
 pub mod behavioral;
 mod check;
+pub mod chip_size;
 mod conventions;
 pub mod datasheet;
 pub mod derating;

@@ -67,6 +67,24 @@ pub struct AcSpec {
     pub sweep: Sweep,
 }
 
+/// The sweep as the user should read it back: `1 Hz to 1 MHz, 20 points/decade`.
+impl std::fmt::Display for AcSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let per = match self.sweep {
+            Sweep::Decade => "points/decade",
+            Sweep::Octave => "points/octave",
+            Sweep::Linear => "points, linear",
+        };
+        write!(
+            f,
+            "{} to {}, {} {per}",
+            hauksbee_ir::units::format_engineering(self.fstart, "Hz"),
+            hauksbee_ir::units::format_engineering(self.fstop, "Hz"),
+            self.points
+        )
+    }
+}
+
 impl AcSpec {
     /// Parse a `<fstart>:<fstop>:<points>` triple (the CLI surface). An optional
     /// trailing `:lin` selects linear spacing; default is per-decade.
@@ -83,22 +101,16 @@ impl AcSpec {
                 "expected <fstart>:<fstop>:<points>[:lin], got '{s}'"
             )));
         }
-        // Engineering suffixes are first-class: `1k:10meg:20` is how an
-        // engineer types a sweep, and SPICE has accepted the vocabulary for
-        // fifty years. Plain floats still parse (parse_spice_number handles
-        // both).
-        let fstart: f64 = hauksbee_ir::parse_spice_number(parts[0]).ok_or_else(|| {
-            SolveError::invalid(format!(
-                "bad fstart '{}' (try e.g. 1k, 10meg, 2.5e6)",
-                parts[0]
-            ))
-        })?;
-        let fstop: f64 = hauksbee_ir::parse_spice_number(parts[1]).ok_or_else(|| {
-            SolveError::invalid(format!(
-                "bad fstop '{}' (try e.g. 1k, 10meg, 2.5e6)",
-                parts[1]
-            ))
-        })?;
+        // Engineering notation (hauksbee_ir::units), not SPICE grammar: `1M` is
+        // 1 MHz here, as in every spec and datasheet. The caller echoes the
+        // parsed sweep via `Display` so the reading is never silent.
+        let freq = |label: &str, tok: &str| {
+            hauksbee_ir::units::parse_quantity(tok, "Hz").map_err(|e| {
+                SolveError::invalid(format!("bad {label} {e} (try e.g. 1k, 1M, 2.5e6)"))
+            })
+        };
+        let fstart = freq("fstart", parts[0])?;
+        let fstop = freq("fstop", parts[1])?;
         let points: usize = parts[2]
             .parse()
             .map_err(|_| SolveError::invalid(format!("bad points '{}'", parts[2])))?;
@@ -1251,11 +1263,20 @@ mod ac_spec_suffix_tests {
     use super::AcSpec;
 
     #[test]
-    fn engineering_suffixes_parse_like_spice() {
+    fn engineering_suffixes_parse_in_engineering_notation() {
         let spec = AcSpec::parse("1k:10meg:20").expect("suffixes are first-class");
         assert_eq!(spec.fstart.to_bits(), 1e3f64.to_bits());
         assert_eq!(spec.fstop.to_bits(), 10e6f64.to_bits());
         assert_eq!(spec.points, 20);
+        // `1M` is mega on the CLI (SPICE would read it as milli), and the
+        // echo says so.
+        let spec = AcSpec::parse("1:1M:20").expect("1M is mega");
+        assert_eq!(spec.fstop.to_bits(), 1e6f64.to_bits());
+        assert_eq!(spec.to_string(), "1 Hz to 1 MHz, 20 points/decade");
+        let lin = AcSpec::parse("10:2k2:50:lin").expect("RKM form");
+        assert_eq!(lin.to_string(), "10 Hz to 2.2 kHz, 50 points, linear");
+        let err = AcSpec::parse("1:1mhz:20").unwrap_err();
+        assert!(err.to_string().contains("ambiguous"), "{err}");
         // Plain floats still work, and garbage still fails loudly.
         assert!(AcSpec::parse("100:1e6:10").is_ok());
         let err = AcSpec::parse("banana:1e6:10").unwrap_err();
