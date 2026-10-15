@@ -13,6 +13,7 @@
 //   HB_LINT_BASE=http://127.0.0.1:3001 \
 //     bun run visual-lint                    # against a real `hauksbee serve`
 //   HB_LINT_SITE=0 bun run visual-lint       # skip the marketing site pass
+//   HB_LINT_SHOTS=1 bun run visual-lint      # also screenshot passing surfaces, to look at
 //
 // Exit code is 1 if anything at `error` severity fired. `info` findings
 // (deliberate ellipsis truncation) are printed and do not fail.
@@ -103,7 +104,8 @@ async function runPass(
         ? { ...f, severity: 'info' as const, detail: `${f.detail} [allowed: ${allowed.why}]` }
         : f
     })
-    const shot = graded.some(f => f.severity === 'error') ? await shoot(page, id, viewport) : null
+    const shot = process.env.HB_LINT_SHOTS === '1' || graded.some(f => f.severity === 'error')
+      ? await shoot(page, id, viewport) : null
     for (const f of graded) rows.push({ ...f, surface: id, viewport: viewport.name, shot })
   }
 

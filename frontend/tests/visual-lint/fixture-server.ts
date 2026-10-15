@@ -120,6 +120,24 @@ async function api(req: Request, url: URL): Promise<Response | null> {
   }
   if (p === '/api/models/extract/ready' && method === 'GET') return fixture('extract-ready.json')
   if (p === '/api/models/check' && method === 'POST') return fixture('models-check.json')
+  if (p === '/api/models/draft' && method === 'POST') {
+    // The real endpoint is a local deterministic scaffold for the chosen part
+    // and kind: valid apart from the values only the datasheet can give.
+    const r = await req.json() as { reference?: string; value?: string; kind?: string }
+    const value = r.value ?? 'PART'
+    const id = `${(r.reference ?? 'x').toLowerCase()}_${value.toLowerCase()}`
+    return json({
+      ok: true,
+      read_only: true,
+      toml: [
+        `# ${r.reference ?? 'Part'} ${value}: scaffold. Fill every TODO from the datasheet.`,
+        '[[models]]', `id = "${id}"`, `kind = "${r.kind ?? ''}"`, `description = "${value}, written by hand"`,
+        '', '[models.match]', `value_re = "^${value}$"`, '',
+        '[models.pins]', '# TODO: one entry per pin, named as the datasheet names it.', '',
+        '[models.ratings]', '# TODO: absolute maximum ratings, with the datasheet page.', '',
+      ].join('\n'),
+    })
+  }
   if (p === '/api/models/save' && method === 'POST') {
     return json({ ok: true, path: '/home/runner/.hauksbee/models/lint.toml' })
   }

@@ -124,8 +124,8 @@ export const APP_SURFACES: Surface[] = [
     },
   },
   {
-    id: 'write-part',
-    what: 'the "write a part yourself" editor, TOML with the live validator',
+    id: 'write-part-kind',
+    what: 'the "write a part yourself" editor opening on its kind picker',
     async reach(page) {
       const close = page.locator('[data-testid="extract-close"]')
       if (await close.count() > 0) await close.first().click()
@@ -135,11 +135,25 @@ export const APP_SURFACES: Surface[] = [
         throw new Error(`manual model editor did not name its selected part: ${opener}`)
       }
       await page.click('[data-testid="write-part-open"]')
-      await page.waitForSelector('[data-testid="write-part-toml"]')
+      // The editor opens on "what kind of part is it?": a reference letter does
+      // not say, so no TOML appears until the author chooses.
+      await page.waitForSelector('[data-testid="kind-picker"]')
+      await page.locator('[data-testid="kind-picker"]').scrollIntoViewIfNeeded()
+      await settle(page)
+    },
+  },
+  {
+    id: 'write-part',
+    what: 'the "write a part yourself" editor, TOML with the live validator',
+    async reach(page) {
+      await page.click('[data-testid="kind-digital"]')
+      // The scaffold is requested from the server, and the box is busy (and
+      // still holds the generic starter) until it lands.
+      await page.waitForSelector('[data-testid="write-part-toml"]:not([aria-busy="true"])')
       const name = await page.locator('[data-testid="write-part-name"]').inputValue()
       const starter = await page.locator('[data-testid="write-part-toml"]').inputValue()
       if (name !== 'XLOGIC9999' || !starter.includes('id = "u1_xlogic9999"') ||
-          !starter.includes('kind = "choose_kind"') || !starter.includes('value_re = "^XLOGIC9999$"')) {
+          !starter.includes('kind = "digital"') || !starter.includes('value_re = "^XLOGIC9999$"')) {
         throw new Error(`manual model editor did not scaffold the selected U1: name=${name}, starter=${starter}`)
       }
       // The validator is debounced 400ms; wait for its verdict to land so the
@@ -181,7 +195,9 @@ export const APP_SURFACES: Surface[] = [
     async reach(page) {
       const panel = page.locator('[data-testid="ci-setup-panel"]')
       if (!(await panel.isVisible())) {
-        await page.locator('button', { hasText: 'Set up GitHub CI' }).first().click()
+        // The report's Next card keeps its own, hidden "Set up GitHub CI" on
+        // the Board view, so take the one a user can see.
+        await page.locator('button:visible', { hasText: 'Set up GitHub CI' }).first().click()
       }
       await panel.waitFor({ state: 'visible' })
       await panel.scrollIntoViewIfNeeded()
