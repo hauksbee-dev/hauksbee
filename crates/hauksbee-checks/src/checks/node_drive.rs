@@ -18,7 +18,11 @@
 //!   there. Any other part on the node (a resistor, an unmodelled IC pin, a
 //!   connector, a supply) is treated as a possible path and the node is not
 //!   reported. Capacitors alone (a series pair for voltage rating) are a
-//!   deliberate pattern and stay silent.
+//!   deliberate pattern and stay silent. When the node's whole island (every
+//!   net its parts join) reaches no ground or supply and meets the board only
+//!   at test pads or connector pins, the circuit is powered from whatever is
+//!   wired to those pads, so there is no on-board level to miss: the node is
+//!   stated as a note naming the pads instead of a warning.
 //! - **Floating gate or select** ([`LintCheck::FloatingGate`]): a MOSFET gate
 //!   or analog-switch select whose node holds nothing but MCU pins, connector
 //!   pins and other gates: no pull resistor, supply or other driver. While
@@ -439,6 +443,71 @@ struct CapNode {
     name: String,
     caps: BTreeSet<String>,
     others: BTreeSet<String>,
+    /// Test pads and connectors that are the island's only way to the
+    /// outside, when the island reaches no ground or supply on the board.
+    off_board: Option<BTreeSet<String>>,
+}
+
+/// For each net, the test pads and connectors of its island when that island
+/// (nets joined through any fitted part, pads and connectors included) holds
+/// no ground or supply net. Absent when the island reaches a level or has no
+/// pad at all (a fully closed island stays a warning).
+fn off_board_islands(idx: &Index<'_>) -> HashMap<i64, BTreeSet<String>> {
+    fn find(parent: &mut HashMap<i64, i64>, n: i64) -> i64 {
+        let mut root = n;
+        while let Some(&p) = parent.get(&root).filter(|&&p| p != root) {
+            root = p;
+        }
+        parent.insert(n, root);
+        root
+    }
+    let mut parent: HashMap<i64, i64> = HashMap::new();
+    let fitted = || {
+        idx.board
+            .components
+            .iter()
+            .filter(|c| AssemblyState::of(c).is_present())
+    };
+    for c in fitted() {
+        let nets: Vec<i64> = c
+            .pins
+            .iter()
+            .filter_map(|p| p.net.filter(|&n| n != 0))
+            .collect();
+        for w in nets.windows(2) {
+            let (a, b) = (find(&mut parent, w[0]), find(&mut parent, w[1]));
+            if a != b {
+                parent.insert(a, b);
+            }
+        }
+        if let Some(&n) = nets.first() {
+            find(&mut parent, n);
+        }
+    }
+    let nets: Vec<i64> = parent.keys().copied().collect();
+    let mut leveled: BTreeSet<i64> = BTreeSet::new();
+    for &n in &nets {
+        if idx.level(n).is_some() {
+            leveled.insert(find(&mut parent, n));
+        }
+    }
+    let mut pads: HashMap<i64, BTreeSet<String>> = HashMap::new();
+    for c in fitted().filter(|c| is_test_point_or_hole(c) || is_connector_like(c)) {
+        for n in c.pins.iter().filter_map(|p| p.net.filter(|&n| n != 0)) {
+            let root = find(&mut parent, n);
+            pads.entry(root).or_default().insert(c.reference.clone());
+        }
+    }
+    nets.into_iter()
+        .filter_map(|n| {
+            let root = find(&mut parent, n);
+            if leveled.contains(&root) {
+                None
+            } else {
+                pads.get(&root).map(|p| (n, p.clone()))
+            }
+        })
+        .collect()
 }
 
 /// Nodes held only by capacitor plates, high-impedance inputs and diode
@@ -447,6 +516,7 @@ struct CapNode {
 fn cap_node_findings(idx: &Index<'_>) -> Vec<LintFinding> {
     let mut nets: Vec<i64> = idx.by_net.keys().copied().collect();
     nets.sort_unstable();
+    let islands = off_board_islands(idx);
     let mut groups: BTreeMap<Vec<String>, Vec<CapNode>> = BTreeMap::new();
     for net in nets {
         let name = idx.name(net);
@@ -457,8 +527,9 @@ fn cap_node_findings(idx: &Index<'_>) -> Vec<LintFinding> {
             name: name.to_string(),
             caps: BTreeSet::new(),
             others: BTreeSet::new(),
+            off_board: islands.get(&net).cloned(),
         };
-        let mut shape = Vec::new();
+        let mut shape = vec![format!("off-board:{}", node.off_board.is_some())];
         let mut open = false;
         for (c, p) in idx.members(net) {
             match classify_load(idx, c, p) {
@@ -498,21 +569,44 @@ fn cap_group_finding(nodes: &[CapNode]) -> LintFinding {
     } else {
         format!("{} nets ({}) each have", nodes.len(), list_text(&names))
     };
+    let held = format!(
+        "only capacitor plates ({}){} on them",
+        text(&first.caps),
+        if first.others.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " and high-impedance inputs or diode cathodes ({})",
+                text(&first.others)
+            )
+        },
+    );
+    let (severity, message) = if let Some(pads) = &first.off_board {
+        (
+            Severity::Low,
+            format!(
+                "{subject} {held}, and the circuit they sit in reaches no ground or supply on this \
+                 board: it meets the board only at {}. Its DC level is set by whatever is wired to \
+                 those pads, which this board cannot show. Assumed: the external wiring gives the \
+                 node a DC path; if nothing does, add a bleed resistor across the capacitor.",
+                text(pads),
+            ),
+        )
+    } else {
+        (
+            Severity::Medium,
+            format!(
+                "{subject} {held}: no resistor, supply or driver gives the node a DC level or drains \
+                 it, so charge from leakage, input bias current, a diode or a power-up edge stays on \
+                 it and its voltage is undefined (a diode only ratchets it one way). Add a bias or \
+                 bleed resistor to a rail or ground, or remove the capacitor.",
+            ),
+        )
+    };
     LintFinding {
         check: LintCheck::CapNoDcPath,
-        severity: Severity::Medium,
-        message: format!(
-            "{subject} only capacitor plates ({}){} on them: no resistor, supply or driver gives \
-             the node a DC level or drains it, so charge from leakage, input bias current, a diode or \
-             a power-up edge stays on it and its voltage is undefined (a diode only ratchets it \
-             one way). Add a bias or bleed resistor to a rail or ground, or remove the capacitor.",
-            text(&first.caps),
-            if first.others.is_empty() {
-                String::new()
-            } else {
-                format!(" and high-impedance inputs or diode cathodes ({})", text(&first.others))
-            },
-        ),
+        severity,
+        message,
         refs: nodes
             .iter()
             .flat_map(|n| n.caps.iter().chain(&n.others))
@@ -520,7 +614,11 @@ fn cap_group_finding(nodes: &[CapNode]) -> LintFinding {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect(),
-        nets: names.iter().take(MAX_NETS).map(|n| (*n).to_string()).collect(),
+        nets: names
+            .iter()
+            .take(MAX_NETS)
+            .map(|n| (*n).to_string())
+            .collect(),
     }
 }
 
@@ -775,6 +873,58 @@ mod tests {
             &[(10, "MID"), (11, "IN")],
         );
         assert!(of(&found, LintCheck::CapNoDcPath).is_empty(), "{found:#?}");
+    }
+
+    fn test_pad(reference: &str, node: i64) -> Component {
+        part(
+            reference,
+            "TestPoint",
+            "Connector:TestPoint",
+            &[("1", node)],
+        )
+    }
+
+    #[test]
+    fn a_capacitor_and_diode_fed_only_through_test_pads_is_a_stated_condition() {
+        // An LED with a capacitor across it, wired to the outside world only
+        // through pads: nothing on this board can set its level, so the node
+        // is stated as a note naming the pads, not raised as a warning.
+        let across = |r: &str| part(r, "100n", "Device:C", &[("1", 11), ("2", 10)]);
+        let found = run(
+            vec![
+                across("C1"),
+                diode("D1", 11, 10),
+                test_pad("TP1", 10),
+                test_pad("TP2", 11),
+            ],
+            &[(10, "K"), (11, "A")],
+        );
+        let hits = of(&found, LintCheck::CapNoDcPath);
+        assert_eq!(hits.len(), 1, "{found:#?}");
+        assert_eq!(hits[0].severity, Severity::Low);
+        assert!(hits[0].message.contains("TP1, TP2"), "{}", hits[0].message);
+        // The same cell with its anode pad replaced by a ground return reaches
+        // a level on the board: the undefined node is the board's own fault.
+        let found = run(
+            vec![
+                across("C1"),
+                diode("D1", GND, 10),
+                cap("C2", 10),
+                test_pad("TP1", 10),
+            ],
+            &[(10, "K")],
+        );
+        let hits = of(&found, LintCheck::CapNoDcPath);
+        assert_eq!(hits.len(), 1, "{found:#?}");
+        assert_eq!(hits[0].severity, Severity::Medium);
+        // A closed island with no pad at all stays a warning too.
+        let found = run(
+            vec![across("C1"), diode("D1", 11, 10)],
+            &[(10, "K"), (11, "A")],
+        );
+        let hits = of(&found, LintCheck::CapNoDcPath);
+        assert_eq!(hits.len(), 1, "{found:#?}");
+        assert_eq!(hits[0].severity, Severity::Medium);
     }
 
     #[test]
