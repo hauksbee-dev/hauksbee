@@ -348,6 +348,7 @@ impl RailDomains {
             out.push(RailConflict {
                 parts: parts.iter().map(|p| p.by.clone()).collect(),
                 nets: parts.iter().map(net).collect(),
+                unfitted_alternate: None,
                 message: format!(
                     "{} drive one rail: each sets its voltage, so they fight and the rail's \
                      current splits between them by solver stiffness, not by the board; the \
@@ -453,6 +454,76 @@ pub struct RailConflict {
     pub nets: Vec<String>,
     /// What fights and what it does to the result.
     pub message: String,
+    /// The part read as an alternate footprint that is not fitted, when the
+    /// conflict is two regulators for one rail of which only one matches it
+    /// ([`mark_unfitted_alternates`]). A stated assumption, not a fight.
+    pub unfitted_alternate: Option<String>,
+}
+
+/// Relative difference within which two voltages are the same nominal value.
+const SAME_NOMINAL: f64 = 0.05;
+
+/// Mark regulator conflicts that are one regulator drawn twice.
+///
+/// Boards often carry two footprints for one regulator (a TO-220 beside an
+/// SOT-23) and fit one. When the two take the same input, drive the same
+/// rail, regulate to DIFFERENT voltages, and the rail's name states exactly
+/// one of those voltages, the other part cannot be what the designer meant to
+/// hold that rail: it reads as the unfitted alternate whose value field was
+/// never updated. Two regulators at the same voltage, or a rail whose name
+/// matches neither or both, stay a fight. `rail_volts` is the voltage a net's
+/// name states.
+pub fn mark_unfitted_alternates(
+    conflicts: &mut [RailConflict],
+    circuit: &Circuit,
+    regulators: &[crate::bind_report::SimpleRegulator],
+    rail_volts: impl Fn(&str) -> Option<f64>,
+) {
+    let same = |a: f64, b: f64| (a - b).abs() <= SAME_NOMINAL * a.abs().max(b.abs());
+    for conflict in conflicts.iter_mut() {
+        let [first, second] = conflict.parts.as_slice() else {
+            continue;
+        };
+        let fixed = |part: &str| {
+            let reg = regulators.iter().find(|r| r.reference == part)?;
+            if reg.adj_return.is_some() {
+                return None;
+            }
+            match circuit.devices.get(reg.source.0 as usize)? {
+                Device::Vsource {
+                    kind: SourceKind::Dc(v),
+                    ..
+                } => Some((reg.input, v.abs())),
+                _ => None,
+            }
+        };
+        let (Some((in_a, v_a)), Some((in_b, v_b))) = (fixed(first), fixed(second)) else {
+            continue;
+        };
+        let named: Vec<Option<f64>> = conflict.nets.iter().map(|n| rail_volts(n)).collect();
+        let Some(Some(v_rail)) = named.first().copied() else {
+            continue;
+        };
+        if in_a != in_b
+            || same(v_a, v_b)
+            || !named.iter().all(|v| v.is_some_and(|v| same(v, v_rail)))
+        {
+            continue;
+        }
+        let (keep, keep_v, alternate, alternate_v) = match (same(v_a, v_rail), same(v_b, v_rail)) {
+            (true, false) => (first, v_a, second, v_b),
+            (false, true) => (second, v_b, first, v_a),
+            _ => continue,
+        };
+        conflict.message = format!(
+            "{alternate} ({alternate_v:.2} V) and {keep} ({keep_v:.2} V) take the same input \
+             and drive '{}', which is named for {v_rail:.2} V: {alternate} reads as an \
+             alternate footprint that is not fitted. If both are fitted they fight; name \
+             the part that is not fitted (--no-fit) to confirm",
+            conflict.nets[0]
+        );
+        conflict.unfitted_alternate = Some(alternate.clone());
+    }
 }
 
 fn find(root: &mut [usize], mut i: usize) -> usize {

@@ -113,8 +113,10 @@ fn excluded_by_source(c: &crate::Component) -> bool {
 /// A value field that states a populate decision instead of naming a part.
 ///
 /// `DNP`, `DNI`, `DNF`, `NC`, `N/C`, `not fitted`, or such a word beside a
-/// value (`10k (DNP)`, `DNP_100n`). Word-bounded, so a part number that merely
-/// contains the letters never matches.
+/// value (`10k (DNP)`, `DNP_100n`). "Stuff" is the other assembly verb for
+/// populate (`NOSTUFF`, `DNS`, `do not stuff`), so its negations count too.
+/// Word-bounded, so a part number that merely contains the letters never
+/// matches.
 #[must_use]
 pub fn value_marks_dnp(value: &str) -> bool {
     let lower = value.trim().to_ascii_lowercase();
@@ -124,10 +126,10 @@ pub fn value_marks_dnp(value: &str) -> bool {
     let padded = format!(" {} ", words.join(" "));
     words
         .iter()
-        .any(|w| matches!(*w, "dnp" | "dni" | "dnf" | "nopop"))
+        .any(|w| matches!(*w, "dnp" | "dni" | "dnf" | "dns" | "nopop" | "nostuff"))
         || matches!(
             padded.as_str(),
-            " nc " | " n c " | " no load " | " noload " | " unpopulated "
+            " nc " | " n c " | " no load " | " noload " | " unpopulated " | " unstuffed "
         )
         || [
             " do not populate ",
@@ -137,6 +139,9 @@ pub fn value_marks_dnp(value: &str) -> bool {
             " not fitted ",
             " not populated ",
             " no fit ",
+            " no stuff ",
+            " do not stuff ",
+            " not stuffed ",
         ]
         .iter()
         .any(|phrase| padded.contains(phrase))
@@ -829,6 +834,8 @@ mod source_absence_tests {
             "BNC",
             "NCP1117",
             "1N4148",
+            "STUFF",
+            "STUFFING-1",
             "",
         ] {
             assert!(!value_marks_dnp(value), "{value:?} names a part");
@@ -846,6 +853,10 @@ mod source_absence_tests {
             "DNP_100n",
             "Do not populate",
             "not fitted",
+            "NOSTUFF",
+            "DNS",
+            "10k NO STUFF",
+            "do not stuff",
         ] {
             assert!(value_marks_dnp(value), "{value:?} says not fitted");
         }
