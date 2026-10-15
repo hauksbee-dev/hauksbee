@@ -28,67 +28,21 @@ class Gate:
     timeout_seconds: int = 600
 
 
+def _cosim_gate(name: str, package: str, feature: str, test: str) -> Gate:
+    """Build one co-simulation gate that runs a single exact test in one feature build."""
+
+    command = ("cargo", "test", "-p", package, "--no-default-features", "--features", feature,
+               "--test", "it", test, "--", "--exact", "--nocapture", "--test-threads=1")
+    return Gate(name=name, command=command, expected_test=test)
+
+
 GATES = (
-    Gate(
-        name="renode-rp2040-adc",
-        command=(
-            "cargo",
-            "test",
-            "-p",
-            "hauksbee-mcu",
-            "--no-default-features",
-            "--features",
-            "renode",
-            "--test",
-            "it",
-            "renode_rp2040_adc::rp2040_adc_injection_reaches_firmware",
-            "--",
-            "--exact",
-            "--nocapture",
-            "--test-threads=1",
-        ),
-        expected_test="renode_rp2040_adc::rp2040_adc_injection_reaches_firmware",
-    ),
-    Gate(
-        name="qemu-xtensa-i2c",
-        command=(
-            "cargo",
-            "test",
-            "-p",
-            "hauksbee-engine",
-            "--no-default-features",
-            "--features",
-            "qemu",
-            "--test",
-            "it",
-            "i2c_sensor_cosim_qemu::esp32_i2c_firmware_drives_gpio_from_temperature",
-            "--",
-            "--exact",
-            "--nocapture",
-            "--test-threads=1",
-        ),
-        expected_test="i2c_sensor_cosim_qemu::esp32_i2c_firmware_drives_gpio_from_temperature",
-    ),
-    Gate(
-        name="qemu-riscv32-circuit",
-        command=(
-            "cargo",
-            "test",
-            "-p",
-            "hauksbee-engine",
-            "--no-default-features",
-            "--features",
-            "qemu",
-            "--test",
-            "it",
-            "esp32_qemu_cosim::esp32c3_full_cosim_through_solved_circuit",
-            "--",
-            "--exact",
-            "--nocapture",
-            "--test-threads=1",
-        ),
-        expected_test="esp32_qemu_cosim::esp32c3_full_cosim_through_solved_circuit",
-    ),
+    _cosim_gate("renode-rp2040-adc", "hauksbee-mcu", "renode",
+                "renode_rp2040_adc::rp2040_adc_injection_reaches_firmware"),
+    _cosim_gate("qemu-xtensa-i2c", "hauksbee-engine", "qemu",
+                "i2c_sensor_cosim_qemu::esp32_i2c_firmware_drives_gpio_from_temperature"),
+    _cosim_gate("qemu-riscv32-circuit", "hauksbee-engine", "qemu",
+                "esp32_qemu_cosim::esp32c3_full_cosim_through_solved_circuit"),
 )
 
 

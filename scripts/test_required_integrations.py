@@ -31,6 +31,12 @@ HOST_QEMU_TAG = (
     "esp-develop-9.2.2-20250817" if _INTEL_MAC else "esp-develop-9.2.2-20260417"
 )
 HOST_QEMU_DIR_VERSION = HOST_QEMU_TAG.replace("-", "_")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+WORKFLOWS = REPO_ROOT / ".github" / "workflows"
+
+
+def _integration_job(workflow: str) -> str:
+    return workflow.split("  required-integrations:", 1)[1].split("\n  release:", 1)[0]
 
 
 # A root that double-forks a SIGTERM-ignoring daemon into its own session,
@@ -66,6 +72,10 @@ def _passing_gate(command: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
         f"test {gate.expected_test} ... ok\n"
         "test result: ok. 1 passed; 0 failed\n",
     )
+
+
+def _run(command, **kwargs) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, text=True, capture_output=True, check=False, **kwargs)
 
 
 class RequiredIntegrationEvidenceTests(unittest.TestCase):
@@ -159,12 +169,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             self.assertNotIn("avr", commands[name])
 
     def test_required_backend_cache_tracks_installer_and_version_manifest(self) -> None:
-        workflow = (
-            Path(__file__).resolve().parents[1]
-            / ".github"
-            / "workflows"
-            / "corpus-gate.yml"
-        ).read_text()
+        workflow = (WORKFLOWS / "corpus-gate.yml").read_text()
         bundle = (Path(__file__).resolve().parent / "bundle.sh").read_text()
         cache_key = next(
             line for line in workflow.splitlines() if "key: required-sims-" in line
@@ -178,17 +183,10 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         self.assertIn("~/.cache/hauksbee/simulator-archives", workflow)
 
     def test_tag_release_requires_same_sha_real_integration_evidence(self) -> None:
-        workflow = (
-            Path(__file__).resolve().parents[1]
-            / ".github"
-            / "workflows"
-            / "release.yml"
-        ).read_text()
+        workflow = (WORKFLOWS / "release.yml").read_text()
 
         self.assertIn("required-integrations:", workflow)
-        integration_job = workflow.split("  required-integrations:", 1)[1].split(
-            "\n  release:", 1
-        )[0]
+        integration_job = _integration_job(workflow)
         self.assertIn(
             "ref: ${{ needs.resolve-source.outputs.source_sha }}", integration_job
         )
@@ -234,15 +232,8 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
                     self.assertRegex(line, pinned)
 
     def test_release_required_integrations_cover_every_release_platform(self) -> None:
-        workflow = (
-            Path(__file__).resolve().parents[1]
-            / ".github"
-            / "workflows"
-            / "release.yml"
-        ).read_text()
-        integration_job = workflow.split("  required-integrations:", 1)[1].split(
-            "\n  release:", 1
-        )[0]
+        workflow = (WORKFLOWS / "release.yml").read_text()
+        integration_job = _integration_job(workflow)
 
         for label in (
             "linux-x86_64",
@@ -490,72 +481,38 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             return required_integrations.main(["--expected-sha", "a" * 40])
 
     def _run_provenance_helper(self, *args: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
+        return _run(
             [
                 sys.executable,
-                str(
-                    Path(__file__).resolve().parents[1]
-                    / "crates/hauksbee-engine/assets/scripts/simulator-provenance.py"
-                ),
+                str(REPO_ROOT / "crates/hauksbee-engine/assets/scripts/simulator-provenance.py"),
                 *args,
             ],
-            text=True,
-            capture_output=True,
-            check=False,
         )
 
     def _assert_unsafe_archive(self, result: subprocess.CompletedProcess[str]) -> None:
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unsafe archive", result.stderr)
 
-    def test_archive_validator_rejects_parent_traversal_member(self) -> None:
-        with tempfile.TemporaryDirectory() as raw_tmp:
-            archive = Path(raw_tmp) / "traversal.tar"
-            with tarfile.open(archive, "w") as stream:
-                member = tarfile.TarInfo("../outside")
-                member.size = 0
-                stream.addfile(member)
-            result = self._run_provenance_helper("archive", str(archive))
+    def test_archive_validator_rejects_unsafe_tar_members(self) -> None:
+        qemu = "qemu/bin/qemu-system-xtensa"
+        cases = (
+            ("parent traversal member", "../outside", tarfile.REGTYPE, "", []),
+            ("escaping symlink", qemu, tarfile.SYMTYPE, "/tmp/unverified-qemu", []),
+            ("symlink under stripped parent", "renode/link", tarfile.SYMTYPE,
+             "../outside", ["--strip-components", "1"]),
+            ("escaping hardlink", qemu, tarfile.LNKTYPE, "../../outside", []),
+        )
+        for label, name, kind, linkname, extra in cases:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as raw_tmp:
+                archive = Path(raw_tmp) / "unsafe.tar"
+                with tarfile.open(archive, "w") as stream:
+                    member = tarfile.TarInfo(name)
+                    member.type = kind
+                    member.linkname = linkname
+                    stream.addfile(member)
+                result = self._run_provenance_helper("archive", *extra, str(archive))
 
-        self._assert_unsafe_archive(result)
-
-    def test_archive_validator_rejects_escaping_tar_symlink(self) -> None:
-        with tempfile.TemporaryDirectory() as raw_tmp:
-            archive = Path(raw_tmp) / "symlink.tar"
-            with tarfile.open(archive, "w") as stream:
-                member = tarfile.TarInfo("qemu/bin/qemu-system-xtensa")
-                member.type = tarfile.SYMTYPE
-                member.linkname = "/tmp/unverified-qemu"
-                stream.addfile(member)
-            result = self._run_provenance_helper("archive", str(archive))
-
-        self._assert_unsafe_archive(result)
-
-    def test_archive_validator_accounts_for_stripped_parent_components(self) -> None:
-        with tempfile.TemporaryDirectory() as raw_tmp:
-            archive = Path(raw_tmp) / "strip-symlink.tar"
-            with tarfile.open(archive, "w") as stream:
-                member = tarfile.TarInfo("renode/link")
-                member.type = tarfile.SYMTYPE
-                member.linkname = "../outside"
-                stream.addfile(member)
-            result = self._run_provenance_helper(
-                "archive", "--strip-components", "1", str(archive)
-            )
-
-        self._assert_unsafe_archive(result)
-
-    def test_archive_validator_rejects_escaping_tar_hardlink(self) -> None:
-        with tempfile.TemporaryDirectory() as raw_tmp:
-            archive = Path(raw_tmp) / "hardlink.tar"
-            with tarfile.open(archive, "w") as stream:
-                member = tarfile.TarInfo("qemu/bin/qemu-system-xtensa")
-                member.type = tarfile.LNKTYPE
-                member.linkname = "../../outside"
-                stream.addfile(member)
-            result = self._run_provenance_helper("archive", str(archive))
-
-        self._assert_unsafe_archive(result)
+                self._assert_unsafe_archive(result)
 
     def test_archive_validator_rejects_escaping_zip_path_and_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -622,21 +579,9 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
                     "HAUKSBEE_QEMU_RISCV32": str(Path(raw_tmp) / "missing-riscv32"),
                 }
             )
-            matching = subprocess.run(
-                command,
-                env=verifier_env,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
+            matching = _run(command, env=verifier_env)
             command[-1] = "b" * 40
-            mismatched = subprocess.run(
-                command,
-                env=verifier_env,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
+            mismatched = _run(command, env=verifier_env)
 
         self.assertEqual(matching.returncode, 0, matching.stdout + matching.stderr)
         self.assertNotEqual(mismatched.returncode, 0)
@@ -679,11 +624,15 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         }
         with tempfile.TemporaryDirectory() as raw_tmp:
             evidence = Path(raw_tmp) / "windows.json"
+
+            def verify() -> list[str]:
+                return required_integrations._verify_evidence(
+                    evidence, "a" * 40, expected_platform="windows-x86_64"
+                )
+
             evidence.write_text(json.dumps(base))
             self.assertEqual(
-                required_integrations._verify_evidence(
-                    evidence, "a" * 40, expected_platform="windows-x86_64"
-                ),
+                verify(),
                 [
                     "Windows backend evidence for HAUKSBEE_RENODE has the wrong artifact SHA-256",
                     "Windows backend evidence for HAUKSBEE_RENODE has the wrong install-tree SHA-256",
@@ -707,18 +656,11 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
                 install_tree_sha256="4f02f4495f50ddf3baed71de29192932bd09053f0a1df498b854e0f5be0d8171",
             )
             evidence.write_text(json.dumps(base))
-            self.assertEqual(
-                required_integrations._verify_evidence(
-                    evidence, "a" * 40, expected_platform="windows-x86_64"
-                ),
-                [],
-            )
+            self.assertEqual(verify(), [])
 
             evidence.write_bytes(b"\xef\xbb\xbf" + json.dumps(base).encode())
             self.assertEqual(
-                required_integrations._verify_evidence(
-                    evidence, "a" * 40, expected_platform="windows-x86_64"
-                ),
+                verify(),
                 [],
                 "Windows PowerShell 5.1 writes UTF-8 JSON with a BOM",
             )
@@ -730,9 +672,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
                 broken = dict(base)
                 broken[field] = value
                 evidence.write_text(json.dumps(broken))
-                problems = required_integrations._verify_evidence(
-                    evidence, "a" * 40, expected_platform="windows-x86_64"
-                )
+                problems = verify()
                 self.assertTrue(problems, f"accepted invalid {field}: {value!r}")
 
     def _fake_backend(self, directory: Path, name: str, version: str) -> Path:
@@ -749,6 +689,14 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         )
         path.chmod(0o755)
         return path
+
+    def _fake_backend_set(self, directory: Path) -> tuple[Path, Path, Path]:
+        qemu = f"QEMU emulator version 9.2.2 ({HOST_QEMU_DIR_VERSION})"
+        return (
+            self._fake_backend(directory, "renode", "Renode v1.16.1.16858"),
+            self._fake_backend(directory, "qemu-system-xtensa", qemu),
+            self._fake_backend(directory, "qemu-system-riscv32", qemu),
+        )
 
     def _verified_receipt(
         self,
@@ -795,30 +743,14 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         if require_pinned:
             command.append("--require-pinned")
         command.extend(args)
-        return subprocess.run(
-            command,
-            env=env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        return _run(command, env=env)
 
     def test_required_check_rejects_self_reported_exact_installed_versions(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
-            renode = self._fake_backend(tmp, "renode", "Renode v1.16.1.16858")
-            xtensa = self._fake_backend(
-                tmp,
-                "qemu-system-xtensa",
-                f"QEMU emulator version 9.2.2 ({HOST_QEMU_DIR_VERSION})",
-            )
-            riscv = self._fake_backend(
-                tmp,
-                "qemu-system-riscv32",
-                f"QEMU emulator version 9.2.2 ({HOST_QEMU_DIR_VERSION})",
-            )
+            renode, xtensa, riscv = self._fake_backend_set(tmp)
 
             result = self._run_sim_check(
                 env_updates={
@@ -850,17 +782,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             tmp = Path(raw_tmp)
             renode_sums = tmp / "renode-checksums.txt"
             qemu_sums = tmp / "qemu-checksums.txt"
-            renode = self._fake_backend(tmp, "renode", "Renode v1.16.1.16858")
-            xtensa = self._fake_backend(
-                tmp,
-                "qemu-system-xtensa",
-                f"QEMU emulator version 9.2.2 ({HOST_QEMU_DIR_VERSION})",
-            )
-            riscv = self._fake_backend(
-                tmp,
-                "qemu-system-riscv32",
-                f"QEMU emulator version 9.2.2 ({HOST_QEMU_DIR_VERSION})",
-            )
+            renode, xtensa, riscv = self._fake_backend_set(tmp)
             self._verified_receipt(
                 renode, "renode", "1.16.1", renode_sums, "renode-test.asset"
             )
@@ -970,9 +892,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
                 "--require-pinned",
                 "--emit-required-paths",
             ]
-            first = subprocess.run(
-                command, env=env, text=True, capture_output=True, check=False
-            )
+            first = _run(command, env=env)
             first_paths = dict(
                 line.removeprefix("REQUIRED_BACKEND_PATH ").split("=", 1)
                 for line in first.stdout.splitlines()
@@ -997,9 +917,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             cached_xtensa = next((tmp / "cache").glob("*-qemu-xtensa-softmmu-*.tar.xz"))
             cached_xtensa.write_bytes(b"corrupt cache entry")
 
-            second = subprocess.run(
-                command, env=env, text=True, capture_output=True, check=False
-            )
+            second = _run(command, env=env)
             second_paths = dict(
                 line.removeprefix("REQUIRED_BACKEND_PATH ").split("=", 1)
                 for line in second.stdout.splitlines()
@@ -1047,13 +965,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             (isolated / "install-sims.sh").chmod(0o755)
             env = os.environ.copy()
             env["HOME"] = str(tmp / "home")
-            result = subprocess.run(
-                [str(isolated / "install-sims.sh"), "--help"],
-                env=env,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
+            result = _run([str(isolated / "install-sims.sh"), "--help"], env=env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_external_command_timeout_is_bounded_and_explicit(self) -> None:
