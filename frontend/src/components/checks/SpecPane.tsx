@@ -129,7 +129,8 @@ export function SpecPane({
           </button>
           <button
             type="button"
-            className="hb-btn hb-press px-3 py-1.5 text-[13px] max-w-full truncate"
+            className="hb-btn hb-press px-3 py-1.5 text-[13px] max-w-full"
+            style={{ whiteSpace: 'normal', overflowWrap: 'anywhere', textAlign: 'left' }}
             onClick={() => download(specFileName, specText)}
           >
             Download {specStem}.toml
