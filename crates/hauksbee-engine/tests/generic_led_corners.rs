@@ -67,8 +67,14 @@ fn stated_on_d1(found: &[LintFinding]) -> &LintFinding {
 fn an_led_overdriven_at_every_corner_is_a_stated_condition() {
     let found = overstress("+5V", "10");
     stated_on_d1(&found);
+    // Every finding on the LED is a condition; R1's own package wattage, which
+    // the low-Vf corner passes, is a real (conditional) finding and stays one.
+    let mut on_d1 = found.iter().filter(|f| f.refs == ["D1"]);
+    assert!(on_d1.all(|f| f.severity == Severity::Low), "{found:#?}");
     assert!(
-        found.iter().all(|f| f.severity == Severity::Low),
+        found
+            .iter()
+            .any(|f| f.refs == ["R1"] && f.severity == Severity::Medium),
         "{found:#?}"
     );
 }
