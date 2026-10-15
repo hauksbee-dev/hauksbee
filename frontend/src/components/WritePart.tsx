@@ -519,7 +519,7 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
           <div className="flex flex-wrap items-center gap-1.5 mb-2" data-testid="kind-picker">
             <span className="text-[12px]" style={{ color: 'var(--silk-dim)' }}>Simulate it as</span>
             <select
-              className="hb-input text-[12px] flex-1 min-w-0 basis-40"
+              className="hb-input text-[12px] w-full"
               aria-label="Kind of part"
               data-testid="kind-select"
               value={format === 'spice' ? 'spice' : kind ?? ''}
@@ -588,8 +588,8 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
               data-testid="write-part-save"
               disabled={drafting || visibleCheck.phase !== 'ok' || part.trim().length === 0}
               onClick={() => void save()}
-              className="hb-press rounded-lg px-3.5 text-[12px] font-semibold whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ height: 30, background: 'linear-gradient(180deg, var(--copper-hi), var(--copper))', color: 'var(--on-copper)', border: 'none' }}
+              className="hb-press rounded-lg px-3.5 py-1 text-[12px] font-semibold max-w-full disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ minHeight: 30, background: 'linear-gradient(180deg, var(--copper-hi), var(--copper))', color: 'var(--on-copper)', border: 'none' }}
             >
               Save to my models
             </button>
