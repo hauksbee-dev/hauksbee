@@ -696,12 +696,12 @@ mod tests {
         };
         for others in [vec![pull], vec![], vec![other]] {
             let r = buffer_input_with(others);
-            let high: Vec<_> = r
+            let high = r
                 .findings
                 .iter()
                 .filter(|f| f.refs == ["U1"] && f.severity == Severity::High)
-                .collect();
-            assert_eq!(high.len(), 1, "{:?}", r.findings);
+                .count();
+            assert_eq!(high, 1, "{:?}", r.findings);
         }
     }
 

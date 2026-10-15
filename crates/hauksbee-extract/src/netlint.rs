@@ -856,27 +856,31 @@ const fn passive_word(family: char) -> &'static str {
 fn designator_footprint_finding(c: &Component, prefix: char, family: char) -> LintFinding {
     let pads: std::collections::BTreeSet<&str> = c.pins.iter().map(|p| p.number.as_str()).collect();
     let shared_chip = package_code(&c.footprint).filter(|_| pads.len() == 2);
-    let (severity, message) = match shared_chip {
-        Some(size) => (
-            Severity::Low,
-            format!(
-                "{} is a {prefix} designator on a {family} chip land '{}'. Same {size} chip \
-                 size, so the part fits; the land is the generic {} variant. Rename the \
-                 footprint to the {} land if the BOM tooling keys on it",
-                c.reference,
-                c.footprint,
-                passive_word(family),
-                passive_word(prefix)
-            ),
-        ),
-        None => (
-            Severity::Medium,
-            format!(
-                "{} is a {prefix} designator but uses {family} footprint '{}'",
-                c.reference, c.footprint
-            ),
-        ),
-    };
+    let (severity, message) = shared_chip.map_or_else(
+        || {
+            (
+                Severity::Medium,
+                format!(
+                    "{} is a {prefix} designator but uses {family} footprint '{}'",
+                    c.reference, c.footprint
+                ),
+            )
+        },
+        |size| {
+            (
+                Severity::Low,
+                format!(
+                    "{} is a {prefix} designator on a {family} chip land '{}'. Same {size} chip \
+                     size, so the part fits; the land is the generic {} variant. Rename the \
+                     footprint to the {} land if the BOM tooling keys on it",
+                    c.reference,
+                    c.footprint,
+                    passive_word(family),
+                    passive_word(prefix)
+                ),
+            )
+        },
+    );
     LintFinding {
         check: LintCheck::DesignatorFootprintMismatch,
         severity,
