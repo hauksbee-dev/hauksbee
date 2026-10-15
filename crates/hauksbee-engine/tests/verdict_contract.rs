@@ -813,6 +813,29 @@ fn a_partly_judged_board_is_never_a_pass_on_any_surface() {
     );
 }
 
+/// The browser's report is the same answer: PARTLY JUDGED (`invalid`,
+/// `partly_judged`, never a pass), with the judged scope the CLI JSON carries,
+/// rather than the generic "evidence is undermined" refusal.
+#[test]
+fn the_web_report_of_a_partly_judged_board_names_its_scope() {
+    let board = partly_judged();
+    let bytes = std::fs::read(&board).expect("fixture readable");
+    let report = hauksbee_engine::frontdoor::analyze("verdict_fet_partial.kicad_pcb", &bytes);
+    assert_eq!(report.verdict, "invalid", "{:?}", report.verdict_reason);
+    assert!(report.partly_judged, "{:?}", report.verdict_reason);
+    assert!(report.headline.starts_with("Partly judged, not a pass"), "{}", report.headline);
+    let scope = report.judgement_scope.as_ref().expect("scope reaches the browser");
+    assert_eq!(scope.open_parts, ["Q1"]);
+    assert_eq!(scope.electrical_dependent.len(), 4);
+    let cli = json_doc(&run_board(&board, &["--check", "--json"]));
+    assert_eq!(
+        cli["judgement_scope"],
+        serde_json::to_value(scope).expect("scope serialises"),
+        "the browser and --json state the same scope"
+    );
+    assert_eq!(report.verdict_reason, cli["verdict_reason"].as_str().map(str::to_string));
+}
+
 #[test]
 fn drc_strict_exit_agrees_with_the_copper_verdict_the_bind_gate_never_touches() {
     // The exemption, both halves: the unbound FET that invalidates --lint/--si

@@ -67,14 +67,18 @@ const analyzeOpen = await fetch(`${base}/api/analyze`, {
 })
 write('analyze-openparts.json', await analyzeOpen.json())
 
-// Two reports for the verdict card's conditions: the pMOS switch board whose
+// Three reports for the verdict card's qualifiers: the pMOS switch board whose
 // part is named only by class (a pass that rests on assumed corners, so the
 // report carries `verdict_conditions`), and the same switch with too little
-// gate drive (a fail, which carries none). The boards live with the engine's
-// own tests, which pin the same premise.
+// gate drive (a fail, which carries none), and a board with an unmodelled
+// key part (PARTLY JUDGED). The boards live with the engine's own tests, which
+// pin the same premise.
 for (const [name, fixture] of [
   ['generic_pmos_switch_gate_0v', 'analyze-conditional-pass.json'],
   ['generic_pmos_switch_gate_2v5', 'analyze-conditional-fail.json'],
+  // A key part with no usable model, and a rail it cannot reach: PARTLY JUDGED
+  // (`partly_judged` and `judgement_scope`), never a pass.
+  ['verdict_fet_partial', 'analyze-partly-judged.json'],
 ] as const) {
   const file = `${name}.kicad_pcb`
   const bytesOf = await Bun.file(join(here, `../../../crates/hauksbee-engine/tests/fixtures/${file}`)).arrayBuffer()

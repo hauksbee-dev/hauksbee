@@ -85,10 +85,12 @@ async function api(req: Request, url: URL): Promise<Response | null> {
     const name = uploaded?.name ?? null
     if (uploaded) liveBoards.set(uploaded.name, uploaded.text)
     // The two pMOS switch boards replay their own captured reports: a
-    // conditional pass (with `verdict_conditions`) and a fail (without).
+    // conditional pass (with `verdict_conditions`), a fail (without) and a
+    // partly judged run (`partly_judged` with its `judgement_scope`).
     const which = name?.includes('open_active_ic') ? 'analyze-openparts.json'
       : name?.includes('pmos_switch_gate_0v') ? 'analyze-conditional-pass.json'
       : name?.includes('pmos_switch_gate_2v5') ? 'analyze-conditional-fail.json'
+      : name?.includes('verdict_fet_partial') ? 'analyze-partly-judged.json'
       : 'analyze-watchy.json'
     const captured = await file(join(FIXTURES, which)).json() as Record<string, unknown>
     const layoutSha256 = uploaded
