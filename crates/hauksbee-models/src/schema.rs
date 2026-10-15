@@ -320,16 +320,18 @@ pub enum PeripheralSpec {
         mosi_role: String,
         #[serde(default = "default_miso_role")]
         miso_role: String,
-        /// Board straps that must resolve directly to a known supply or ground
-        /// before this bus personality is attached. This is how one portable
-        /// card safely expresses e.g. CSB=high selects I2C.
+        /// Board straps that select this bus personality, e.g. CSB=high
+        /// selects I2C. A strap the board holds at the other level (directly,
+        /// through a closed link, or by a pull) leaves the personality
+        /// unattached; one it does not hold (floating or driven by another
+        /// part) attaches it with the level disclosed as assumed.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         required_high_roles: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         required_low_roles: Vec<String>,
         /// Optional I2C address-select strap. All three fields are an
-        /// all-or-none contract; the binder refuses a floating or otherwise
-        /// unresolved strap instead of choosing a plausible address.
+        /// all-or-none contract; a floating or otherwise unresolved strap
+        /// takes the spec's default address, disclosed as assumed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         address_select_role: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

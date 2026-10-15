@@ -184,6 +184,33 @@ pub fn parse_current_rating_a(s: &str) -> Option<f64> {
         })
 }
 
+/// The voltage rating a part's value string states, in volts, or `None`.
+///
+/// `"10uF/16V"`, `"47uF+/6.3V+"` and `"100n 50V"` give 16, 6.3 and 50: a
+/// capacitor value often carries its rated voltage beside the capacitance.
+/// Whitespace, `/`, `_`, `,` and `+` separate tokens; a token must be a number
+/// followed by `V` (or `kV`), so a capacitance or part number is skipped.
+///
+/// ```
+/// use hauksbee_models::value::parse_voltage_rating_v;
+/// assert_eq!(parse_voltage_rating_v("10uF/16V"), Some(16.0));
+/// assert_eq!(parse_voltage_rating_v("47uF+/6.3V+"), Some(6.3));
+/// assert_eq!(parse_voltage_rating_v("47u"), None);
+/// ```
+#[must_use]
+pub fn parse_voltage_rating_v(s: &str) -> Option<f64> {
+    s.split(|c: char| c.is_whitespace() || matches!(c, '/' | '_' | ',' | '+'))
+        .find_map(|token| {
+            let t = token.to_ascii_uppercase();
+            let (number, scale) = match t.strip_suffix("KV") {
+                Some(n) => (n, 1e3),
+                None => (t.strip_suffix('V')?, 1.0),
+            };
+            let volts = number.parse::<f64>().ok()? * scale;
+            (volts.is_finite() && volts > 0.0).then_some(volts)
+        })
+}
+
 /// A JEDEC semiconductor part number of the `<digit>N<serial>` family (1N4007,
 /// 2N3904, 3N201): exactly one leading digit, then `N`/`n`, then 3 or more serial
 /// digits and nothing else. The 3-digit floor keeps genuine RKM nano values
