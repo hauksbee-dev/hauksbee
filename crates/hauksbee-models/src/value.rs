@@ -80,7 +80,7 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
         .find_map(|(i, _)| {
             let package = v[i + 1..].split('-').next()?;
             let package = package.strip_suffix('T').unwrap_or(package);
-            (i > 0 && FOOTPRINT_SIZE_CODES.contains(&package)).then_some(&v[..i])
+            (i > 0 && crate::chip_size::is_imperial_code(package)).then_some(&v[..i])
         })
         .unwrap_or(v);
     // A JEDEC semiconductor part number ("1N4007", "1N5819", "2N3904", "2N7000")
@@ -248,18 +248,12 @@ fn digit_run(b: &[u8]) -> usize {
 /// EIA imperial chip-size codes that leak into BOM value fields ("0402",
 /// "`0402_47k`"). `"0402".parse::<f64>()` is 402, silently accepting one binds
 /// a 47 kΩ part at 402 Ω.
-const FOOTPRINT_SIZE_CODES: [&str; 9] = [
-    "0201", "0402", "0603", "0805", "1206", "1210", "1812", "2010", "2512",
-];
-
 /// If `s` starts with a chip-size code, return what follows: `Some("")` for a
 /// bare code, `Some(rest)` when a `_`/`-`/space separator follows (the real
 /// value). `None` when the leading digits are NOT a size code ("12065" and
 /// "0402.5" are ordinary numbers).
 fn strip_size_code(s: &str) -> Option<&str> {
-    let rest = FOOTPRINT_SIZE_CODES
-        .iter()
-        .find_map(|code| s.strip_prefix(code))?;
+    let rest = (crate::chip_size::CHIP_SIZES.iter()).find_map(|c| s.strip_prefix(c.imperial))?;
     match rest.chars().next() {
         None => Some(rest),
         Some('_' | '-' | ' ' | '\t') => Some(rest[1..].trim_start()),
