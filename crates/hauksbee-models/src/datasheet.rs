@@ -2297,7 +2297,8 @@ When an output needs several conditions at once (a direction-controlled bus
 transceiver with an output enable drives each side only while OE is active AND
 DIR selects that side), add `and = [{ pin = "input_role", active = "low" }]`:
 every listed condition must be active together with `enable`. For bidirectional
-pins, declare each as an output plus a sensed input via `[models.logic.sense]`.
+pins, declare each as an output (`a`) plus a sensed input (`a_in`, listed in `inputs`) and
+map the input to its output in `[models.logic.sense]` (`a_in = "a"`, never `a = "a_in"`).
 An open-drain or open-collector output has no VOH (the board pull-up sets its
 high level): give it the constant `0` and a tristate entry enabled exactly while
 it sinks, as `od_out` below; abstain if no single input decides that. For a
@@ -4405,6 +4406,13 @@ fn check_reply_entry(entry: &ModelEntry, part: &str, kind_str: &str) -> Result<(
     if !problems.is_empty() {
         bail!("pin map: {}", problems.join("; "));
     }
+    // The lint checks the behaviour block too; a card it would refuse is no draft.
+    if !entry.logic.is_empty() {
+        entry
+            .logic
+            .validate()
+            .map_err(|e| anyhow::anyhow!("[models.logic]: {e}"))?;
+    }
     Ok(())
 }
 
@@ -5941,6 +5949,39 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let row = &entry["source"]["characteristic"][0];
         assert_eq!(row["parameter"].as_str(), Some("supply_static_ua"));
         assert_eq!(row["max"].as_float(), Some(4.0));
+    }
+
+    /// A behaviour block the lint refuses (a bidirectional pin's sense written
+    /// backwards, as a real Haiku run did) fails the draft check too, so the fix
+    /// loop sees it rather than a card that lints dirty being kept.
+    #[test]
+    fn a_logic_block_the_lint_refuses_fails_the_draft_check() {
+        let ex = FORMAT_EXAMPLES
+            .iter()
+            .find(|e| e.kind == "digital")
+            .unwrap();
+        let keep = |l: &&str| {
+            !["identity_only", "warning = ", "unlocked_by"]
+                .iter()
+                .any(|k| l.starts_with(k))
+        };
+        let card = ex.card.lines().filter(keep).collect::<Vec<_>>().join("\n");
+        let with = |sense: &str| {
+            format!(
+                "{card}\n[models.logic]\ninputs = [\"dir\", \"a_in\"]\noutputs = [\"a\", \"b\"]\n\
+                 [models.logic.comb]\na = \"dir\"\nb = \"a_in\"\n[models.logic.sense]\n{sense}\n"
+            )
+        };
+        let reply = Reply::Model {
+            part: ex.part,
+            kind: ex.kind,
+        };
+        reply.check(&with("a_in = \"a\"")).unwrap();
+        let err = format!("{:#}", reply.check(&with("a = \"a_in\"")).unwrap_err());
+        assert!(
+            err.contains("[models.logic]") && err.contains("sense"),
+            "{err}"
+        );
     }
 
     /// A section agent that wrote nothing is not papered over: a fix agent
