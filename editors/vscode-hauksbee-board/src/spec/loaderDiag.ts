@@ -21,7 +21,6 @@
 //   hauksbee-ci: ci/x.toml: spec references net(s) not found on the board:
 //     'VCCC' (in assert); did you mean: ADC0?
 
-import type { Sev } from "../mapping";
 import type { SpecIssue } from "./lint";
 import { normaliseKind } from "./lint";
 import {
@@ -281,12 +280,4 @@ function matchesTarget(row: TomlTable, target: string): boolean {
   return [row.net, row.supply_net, row.ref, row.id, row.name, row.trace].some(
     (v) => v === target
   );
-}
-
-/** Severity of a loader diagnostic, exported for the status-bar summary. */
-export function worstSeverity(issues: SpecIssue[]): Sev | undefined {
-  if (issues.some((i) => i.severity === "error")) return "error";
-  if (issues.some((i) => i.severity === "warning")) return "warning";
-  if (issues.length > 0) return "info";
-  return undefined;
 }

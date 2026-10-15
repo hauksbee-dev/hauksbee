@@ -172,12 +172,6 @@ export function typeIncludes(node: SchemaNode | undefined, t: string): boolean {
   return Array.isArray(node.type) ? node.type.includes(t) : node.type === t;
 }
 
-export function allowsNull(node: SchemaNode | undefined): boolean {
-  if (!node) return true;
-  if (typeIncludes(node, "null")) return true;
-  return !!node.anyOf?.some((a) => a.type === "null");
-}
-
 function label(node: SchemaNode, inner: SchemaNode | undefined): string {
   if (typeIncludes(node, "array")) {
     if (inner?.properties) return "array of tables";

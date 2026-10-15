@@ -156,35 +156,6 @@ def tree_scan(repo, exts, max_files=40):
     return out
 
 
-def harvest_tree(bucket, repos, exts, max_files=40, max_mb=40):
-    jobs = []
-    for repo in repos:
-        found = tree_scan(repo, exts, max_files=max_files)
-        print(f"[{bucket}] tree {repo} -> {len(found)}", flush=True)
-        for repo_, ref, path, sha, _sz in found:
-            jobs.append((bucket, repo_, ref, path, sha, max_mb))
-    got = 0
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        for row in ex.map(lambda a: download(*a), jobs):
-            if row:
-                _manifest_rows.append(row)
-                got += 1
-    print(f"[{bucket}]   downloaded {got}", flush=True)
-    flush_manifest()
-    return got
-
-
-def repo_search(query, pages=2, per_page=50):
-    names = []
-    for page in range(1, pages + 1):
-        res = gh("search/repositories", {"q": query, "per_page": per_page, "page": page})
-        time.sleep(2)
-        if not res or not res.get("items"):
-            break
-        names += [i["full_name"] for i in res["items"]]
-    return names
-
-
 def flush_manifest():
     os.makedirs(CORPUS, exist_ok=True)
     with open(MANIFEST, "w") as fh:
