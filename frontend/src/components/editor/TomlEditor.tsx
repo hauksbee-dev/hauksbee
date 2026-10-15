@@ -98,6 +98,15 @@ class ResultMarker extends GutterMarker {
   }
 }
 
+/** Sizes the results gutter; never shown, so it carries no result. */
+const spacer = new class extends GutterMarker {
+  toDOM() {
+    const el = document.createElement('span')
+    el.className = 'cm-hb-result'
+    return el
+  }
+}()
+
 function resultMarkers(view: EditorView): RangeSet<GutterMarker> {
   const results = view.state.field(resultsField)
   const text = view.state.doc.toString()
@@ -207,7 +216,7 @@ export default function TomlEditor(props: TomlEditorProps) {
       const url = live.current.lintUrl === undefined ? '/api/ci/lint' : live.current.lintUrl
       if (!url) return []
       // Parse errors show at once; the server's checks wait for a pause in typing.
-      await sleep(250)
+      await sleep(120)
       if (v.state.doc !== state.doc) return []
       let answer: LintAnswer | null = null
       try {
@@ -262,7 +271,7 @@ export default function TomlEditor(props: TomlEditorProps) {
       gutter({
         class: 'cm-hb-results',
         markers: resultMarkers,
-        initialSpacer: () => new ResultMarker({ status: 'pass', label: '' }),
+        initialSpacer: () => spacer,
         domEventHandlers: {
           mousedown: (v, line) => {
             const starts = assertHeaderOffsets(v.state.doc.toString())
