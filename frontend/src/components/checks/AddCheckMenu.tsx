@@ -14,13 +14,12 @@ const menuOffer = (entry: CatalogKind): Offer => ({ kind: entry.kind, entry, tex
  * the subject left for you to name. A kind whose prerequisite the spec lacks is
  * greyed with the reason and, where one exists, a button that adds it.
  *
- * Without a catalogue (an older server) it shows the builder's own short list.
+ * The kinds, their groups and their words are the served catalogue's; with no
+ * catalogue (the server did not answer) the menu says so rather than keep a second list.
  */
-export function AddCheckMenu({ open, onOpenChange, legacy, onLegacyAdd }: {
+export function AddCheckMenu({ open, onOpenChange }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  legacy: ReadonlyArray<{ kind: string; label: string; hint: string }>
-  onLegacyAdd: (kind: string) => void
 }) {
   const host = useCheckHost()
   const kinds = useCatalog()
@@ -55,16 +54,11 @@ export function AddCheckMenu({ open, onOpenChange, legacy, onLegacyAdd }: {
           style={{ width: 460, maxWidth: '100%', maxHeight: '70vh', boxShadow: 'var(--shadow-pop)' }}
           onKeyDown={event => { if (event.key === 'Escape' && !picked) close() }}
         >
-          {!kinds && legacy.map(k => (
-            <button
-              key={k.kind} type="button" onClick={() => onLegacyAdd(k.kind)}
-              className="hb-press block w-full text-left px-3 py-2 cursor-pointer"
-              style={{ background: 'none', border: 'none' }}
-            >
-              <div className="text-[13px]" style={{ color: 'var(--silk)' }}>{k.label}</div>
-              <div className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>{k.hint}</div>
-            </button>
-          ))}
+          {!kinds && (
+            <div data-testid="add-check-unavailable" className="px-3 py-3 text-[12px]" style={{ color: 'var(--silk-faint)' }}>
+              The list of checks has not loaded. Reload the page, or check that the hauksbee server is running.
+            </div>
+          )}
           {kinds && picked && (
             <div className="flex flex-col gap-2 px-3 py-3">
               <div className="flex items-center justify-between gap-2">

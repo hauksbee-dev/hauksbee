@@ -211,7 +211,8 @@ test('a live trace click offers a scope probe and repeatable checks together', a
 })
 
 test('visual interaction builder round-trips a real stimulus and timeline', async () => {
-  const { buildToml, tomlToBuilder } = await import('../src/lib/check-spec')
+  const { buildToml } = await import('../src/lib/check-spec')
+  const { tomlToBuilder } = await import('../src/lib/spec-model')
   const peripheral = {
     rowId: 1, id: 'STIM_IN', kind: 'stimulus' as const, net: '/SENSE', to: 'GND',
     waveform: 'sine' as const, offset: '1.65', amplitude: '0.25', freq_hz: '1000',
@@ -227,7 +228,8 @@ test('visual interaction builder round-trips a real stimulus and timeline', asyn
 })
 
 test('visual bus-device builder embeds exact local spec bytes and round-trips inputs', async () => {
-  const { buildToml, tomlToBuilder } = await import('../src/lib/check-spec')
+  const { buildToml } = await import('../src/lib/check-spec')
+  const { tomlToBuilder } = await import('../src/lib/spec-model')
   const sensor = {
     rowId: 1,
     id: 'U7_ACCEL',

@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ConstraintEditor, constraintIssues, emptyConstraint } from '../src/components/ConstraintEditor'
-import { buildToml, tomlToBuilder } from '../src/lib/check-spec'
+import { buildToml } from '../src/lib/check-spec'
+import { tomlToBuilder } from '../src/lib/spec-model'
 
 describe('shared constraint editor', () => {
   test('uses the Checks preflight for a voltage constraint', () => {

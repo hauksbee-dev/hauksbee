@@ -1,34 +1,41 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { downloadText } from '../../lib/report-export'
-import { tomlToBuilder } from '../../lib/check-spec'
-import type { BuilderState } from '../../lib/check-spec'
 import { RunResults } from './RunResults'
 import type { RunResponse } from '../../types/report'
 import type { RemedyActions } from './Remedies'
+import type { GutterResult } from '../editor/TomlEditor'
 
-// The right-hand column: the spec TOML as it currently stands, the run/download
-// actions, the run's verdict, and the GitHub CI setup. What this pane shows IS
-// the file the Download button writes, byte for byte, including the `board` and
-// `firmware` path lines.
+// The editor loads on first use, never in the app's first paint.
+const TomlEditor = lazy(() => import('../editor/TomlEditor'))
+
+// The right-hand column: the spec TOML, live and editable beside the builder
+// (both edit the same text), the run/download actions, the run's verdict, and
+// the GitHub CI setup. The Download button writes the path lines shown above
+// the editor followed by the editor's text, byte for byte.
 
 export function SpecPane({
-  specText, specStem, specFileName, builtToml, rawMode, rawText, rawSelect, setRawText,
-  onLeaveRawMode, onEnterRawMode, stale, running, canRun, preparing, pulseRun, remedyActions, remedyEditor, onRun,
+  specText, specStem, specFileName, bodyText, onBodyChange, pathLines, select, nets, refs, gutter, onGutterClick,
+  showAllResults, stale, running, canRun, preparing, pulseRun, remedyActions, remedyEditor, onRun,
   validationCount, result, runKey, workflowYml, workflowPinned, reportSerious,
 }: {
+  /** The portable file: `pathLines` then the body. */
   specText: string
   specStem: string
   specFileName: string
-  builtToml: string
-  rawMode: boolean
-  rawText: string
-  /** A range to select in the raw text (a catalogue example's first value to fill). */
-  rawSelect?: { start: number; end: number; seq: number } | null
-  setRawText: (text: string) => void
-  /** The parsed builder state when the raw TOML fits the builder's vocabulary,
-   *  or null when going back would discard it. */
-  onLeaveRawMode: (parsed: BuilderState | null) => void
-  onEnterRawMode: () => void
+  /** The spec body: the one source of truth the builder and the editor share. */
+  bodyText: string
+  onBodyChange: (text: string) => void
+  /** The `board = ...` lines the download adds for the checked-in copy. */
+  pathLines: string
+  /** A range to select in the editor (a catalogue example's first value to fill). */
+  select?: { start: number; end: number; seq: number } | null
+  nets: readonly string[]
+  refs: readonly string[]
+  /** The last run's verdict per [[assert]], for the editor's gutter. */
+  gutter: readonly (GutterResult | null)[]
+  onGutterClick: (assertIndex: number) => void
+  /** List every result under the verdict (some assertions have no builder row). */
+  showAllResults: boolean
   stale: boolean
   running: boolean
   canRun: boolean
@@ -52,16 +59,6 @@ export function SpecPane({
   reportSerious: number
 }) {
   const [ciOpen, setCiOpen] = useState(false)
-  const rawRef = useRef<HTMLTextAreaElement>(null)
-  // Land the cursor on the value to fill in: select it and scroll its line into view.
-  useEffect(() => {
-    const box = rawRef.current
-    if (!rawSelect || !box) return
-    box.focus({ preventScroll: true })
-    box.setSelectionRange(rawSelect.start, rawSelect.end)
-    const line = box.value.slice(0, rawSelect.start).split('\n').length - 1
-    box.scrollTop = Math.max(0, line * 18 - box.clientHeight / 2)
-  }, [rawSelect?.seq]) // eslint-disable-line react-hooks/exhaustive-deps
   const download = (name: string, contents: string) =>
     downloadText(name, contents, 'text/plain;charset=utf-8')
 
@@ -71,83 +68,69 @@ export function SpecPane({
     <div className="min-w-0">
     <div className="sticky top-0 checks-spec">
       <div className="hb-card overflow-hidden">
-        <div className="flex items-center justify-between px-3 py-2" style={{ borderBottom: '1px solid var(--hairline)' }}>
-          <div className="text-[11px] font-bold tracking-widest uppercase inline-flex items-center gap-2" style={{ color: 'var(--silk-faint)' }}>
+        <div className="flex items-center justify-between gap-2 px-3 py-2" style={{ borderBottom: '1px solid var(--hairline)' }}>
+          <div className="text-[11px] font-bold tracking-widest uppercase inline-flex items-center gap-2 min-w-0" style={{ color: 'var(--silk-faint)' }}>
             <span
               style={{
-                width: 7, height: 7, borderRadius: 4, display: 'inline-block',
+                width: 7, height: 7, borderRadius: 4, display: 'inline-block', flexShrink: 0,
                 background: stale ? 'var(--warn)' : 'var(--ok)',
               }}
               title={stale
                 ? 'The spec changed since the last run'
                 : 'These are the assertions that run, and this is the file the download writes'}
             />
-            spec.toml
+            <span className="truncate">{specFileName}</span>
           </div>
-          <button
-            type="button"
-            data-testid="raw-toggle"
-            className="hb-press text-[11px] cursor-pointer"
-            style={{ color: 'var(--copper)', background: 'none', border: 'none' }}
-            onClick={() => {
-              if (!rawMode) {
-                setRawText(builtToml)
-                onEnterRawMode()
-                return
-              }
-              // Raw is the source of truth on a successful parse: an
-              // intentionally emptied list clears the builder rows too. When it
-              // does not parse, going back DISCARDS it, so ask first.
-              const parsed = tomlToBuilder(rawText)
-              if (parsed) onLeaveRawMode(parsed)
-              else if (window.confirm(
-                'This TOML uses features the visual builder does not cover '
-                + '(tolerances, scenarios, overrides...). Going back to the '
-                + 'builder will DISCARD the raw text. Continue?')) {
-                onLeaveRawMode(null)
-              }
-            }}
-          >
-            {rawMode ? '← back to the builder' : 'edit raw →'}
-          </button>
+          <span className="text-[11px] shrink-0" style={{ color: 'var(--silk-faint)' }}>
+            type here or use the builder
+          </span>
         </div>
-        {rawMode ? (
-          <textarea
-            data-testid="raw-toml"
-            ref={rawRef}
-            value={rawText}
-            onChange={e => setRawText(e.target.value)}
-            spellCheck={false}
-            className="w-full block p-3"
-            style={{
-              background: 'var(--code-bg)', border: 'none', outline: 'none', resize: 'vertical',
-              color: 'var(--silk)', minHeight: 260, maxHeight: '46vh',
-              fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.5,
-            }}
-          />
-        ) : (
-          // What this pane shows IS the file the Download button
-          // writes, byte for byte, including the `board` (and
-          // `firmware`) path lines.
+        {pathLines && (
           <pre
-            data-testid="spec-preview"
-            className="p-3 m-0 overflow-auto text-[12px] leading-relaxed"
-            style={{
-              background: 'var(--code-bg)', color: 'var(--silk-dim)',
-              fontFamily: 'var(--font-mono)', maxHeight: '46vh',
-            }}
+            data-testid="spec-paths"
+            title="Added by the Download button for the checked-in copy. A run here uses this session's uploads."
+            className="m-0 px-3 pt-2 pb-1.5 text-[11px] leading-relaxed overflow-x-auto"
+            style={{ background: 'var(--code-bg)', color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)', borderBottom: '1px dashed var(--hairline)' }}
           >
-            {specText}
+            {pathLines.replace(/\n$/, '')}
           </pre>
         )}
+        <Suspense fallback={
+          <pre
+            data-testid="toml-editor-loading"
+            className="p-3 m-0 overflow-auto text-[12px] leading-relaxed"
+            style={{ background: 'var(--code-bg)', color: 'var(--silk-dim)', fontFamily: 'var(--font-mono)', maxHeight: '46vh' }}
+          >
+            {bodyText}
+          </pre>
+        }>
+          <TomlEditor
+            value={bodyText}
+            onChange={onBodyChange}
+            nets={nets}
+            refs={refs}
+            results={gutter}
+            onResultClick={onGutterClick}
+            select={select}
+            testId="toml-editor"
+            ariaLabel={`${specFileName}, the checks spec`}
+          />
+        </Suspense>
       </div>
-      {!rawMode && (
-        <div className="mt-1.5 text-[12px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
-          This is the file the Download button writes. Running from here uses the
-          design inputs already uploaded in this session, so the path lines are for
-          the checked-in copy.
-        </div>
-      )}
+      {/* The exact bytes the Download button writes, whole. */}
+      <details className="mt-1.5 text-[12px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
+        <summary className="cursor-pointer">
+          The file as downloaded. Running from here uses the design inputs already uploaded
+          in this session, so the path lines are for the checked-in copy.
+        </summary>
+        <pre
+          data-testid="spec-preview"
+          className="hb-code mt-1.5 p-3 overflow-auto text-[11px] leading-relaxed"
+          style={{ maxHeight: '30vh' }}
+        >
+          {specText}
+        </pre>
+      </details>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
@@ -180,7 +163,7 @@ export function SpecPane({
           (running from here needs the board uploaded in this session)
         </div>
       )}
-      {!rawMode && validationCount > 0 && (
+      {validationCount > 0 && (
         <div
           data-testid="builder-validation"
           className="mt-3 rounded-lg px-3 py-2.5 text-[13px]"
@@ -192,7 +175,7 @@ export function SpecPane({
       )}
 
       {result && <RunResults
-        result={result} runKey={runKey} stale={stale} rawMode={rawMode} reportSerious={reportSerious}
+        result={result} runKey={runKey} stale={stale} rawMode={showAllResults} reportSerious={reportSerious}
         remedyActions={remedyActions} remedyEditor={remedyEditor}
       />}
 

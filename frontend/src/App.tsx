@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { SessionRail } from './components/SessionSwitcher'
 import type { AppView } from './components/Sidebar'
 import { UploadView } from './components/UploadView'
 import { BoardView } from './components/BoardView'
-import { ChecksView, checksStorageKey } from './components/ChecksView'
+import { checksStorageKey } from './lib/checks-storage'
 import type { ChecksSummary } from './components/ChecksView'
 import { DepsPanel } from './components/DepsPanel'
 import { SettingsView } from './components/SettingsView'
@@ -36,6 +36,10 @@ import type { ActionResultMsg } from './types/protocol'
 // (co-sim backends and oracles on this machine). Views stay MOUNTED once
 // opened (hidden, not unmounted) so the viewer camera, the checks results and
 // the sim's fault log all survive navigation.
+
+// The Checks view (the builder, its TOML parser and the spec editor) loads once
+// a report is in, never as part of the first paint.
+const ChecksView = lazy(() => import('./components/ChecksView').then(m => ({ default: m.ChecksView })))
 
 interface Boot {
   report: WebReport | null
@@ -465,6 +469,7 @@ function Shell({ boot }: { boot: Boot }) {
 
           {reportOk && report && (
             <div style={{ display: view === 'checks' ? 'block' : 'none', height: '100%' }}>
+              <Suspense fallback={null}>
               <ChecksView
                 // Remount per board (the key doubles as the localStorage key):
                 // the panel's mount-time restore is then authoritative, and one
@@ -476,8 +481,6 @@ function Shell({ boot }: { boot: Boot }) {
                 schematicFile={session.schematicFile}
                 supplementalFiles={session.supplementalFiles}
                 avrAvailable={avrAvailable}
-                selectedNet={session.selectedNet}
-                selectedComponent={session.selectedComponent}
                 pending={requests.items}
                 onPendingConsumed={requests.consume}
                 liveRegisterMapAvailable={simMounted && sessionMatchesCurrent}
@@ -487,6 +490,7 @@ function Shell({ boot }: { boot: Boot }) {
                 onSpec={setSpec}
                 onModelSaved={session.reanalyzeCurrent}
               />
+              </Suspense>
             </div>
           )}
 

@@ -55,10 +55,9 @@ await browserFlow({ out: OUT, viewport: { width: 1440, height: 900 } }, async pa
   const addCheck = page.locator('[data-testid="report-verdict-condition"] [data-testid="result-add-check"]')
   if (await addCheck.count() > 0) {
     await addCheck.first().click()
-    ok('"Add as check" opens the check editor', await page.waitForSelector('[data-testid="constraint-modal"]', { timeout: 5_000 }).then(() => true, () => false))
-    await page.keyboard.press('Escape')
+    ok('"Add as check" opens that check in the board dock', await page.waitForSelector('[data-testid="check-this"] button[aria-expanded="true"]', { timeout: 5_000 }).then(() => true, () => false))
+    ok('and no modal', await page.locator('[data-testid="constraint-modal"], [aria-modal="true"]').count() === 0)
     await settle(page, 300)
-    if (await page.locator('[data-testid="constraint-modal"]').count() > 0) await page.click('[data-testid="constraint-modal-backdrop"]', { position: { x: 5, y: 5 } })
   }
   await shoot(page, '01-conditional-desktop')
 
