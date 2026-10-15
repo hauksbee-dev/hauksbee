@@ -27,11 +27,15 @@ contains = [
   "boot window clean",
   "[PASS] no stress faults raised",
   "GREEN",
+  "CONDITION",
+  "default_clock_hz",
 ]
 matches = [
   # The time it was driven at has to be reported, not just "in time".
   "driven to >= 3 V at [0-9.]+ ms \\(<= 20 ms\\)",
-  "^GREEN - 2/2 assertions passed in [0-9.]+s$",
+  # The demo board has no crystal and the firmware no fuses, so the clock is the
+  # card's default: a disclosed assumption, so the pass is conditional and says why.
+  "^GREEN, conditionally - 2/2 assertions passed in [0-9.]+s$",
 ]
 not_contains = ["[FAIL]", "RED"]
 
