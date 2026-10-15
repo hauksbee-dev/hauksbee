@@ -95,33 +95,22 @@ export function CosimBlock({ cosim: c, liveAvailable, onDriveLive, simMounted }:
               </tbody>
             </table>
           )}
-          {/* The story continues past the summary: what to do with a finished
-              co-sim, so landing firmware is a beginning, not a dead end. */}
-          <div
-            data-testid="cosim-next"
-            className="mt-3 rounded-lg px-4 py-2.5 text-[13px]"
-            style={{ border: '1px solid var(--hairline)', borderLeft: '4px solid var(--copper)', background: 'var(--surface)', color: 'var(--silk-dim)' }}
-          >
-            <b style={{ color: 'var(--copper-hi)', fontWeight: 600 }}>Where to go from here:</b>{' '}
-            {liveAvailable && (
-              <>
-                <button
-                  type="button"
-                  onClick={onDriveLive}
-                  className="hb-press cursor-pointer"
-                  style={{
-                    background: 'none', border: 'none', padding: 0, color: 'var(--copper-hi)',
-                    textDecoration: 'underline', textDecorationColor: 'var(--copper-deep)', fontSize: 13,
-                  }}
-                >
-                  {simMounted ? 'open the live sim' : 'drive it live'}
-                </button>
-                {' '}to boot this firmware interactively (scope, serial console, sliders), or{' '}
-              </>
-            )}
-            turn what you just saw into repeatable checks in the Checks view; a UART print, a
-            blink, a rail that must hold. The same spec then runs in CI on every push.
-          </div>
+          {liveAvailable && (
+            <div data-testid="cosim-next" className="mt-3 text-[13px]" style={{ color: 'var(--silk-dim)' }}>
+              <button
+                type="button"
+                onClick={onDriveLive}
+                className="hb-press cursor-pointer"
+                style={{
+                  background: 'none', border: 'none', padding: 0, color: 'var(--copper-hi)',
+                  textDecoration: 'underline', textDecorationColor: 'var(--copper-deep)', fontSize: 13,
+                }}
+              >
+                {simMounted ? 'Open the live sim' : 'Drive it live'}
+              </button>
+              {' '}to boot this firmware interactively (scope, serial console, sliders).
+            </div>
+          )}
         </>
       ) : (
         c.notRanLines.map((line, i) => <NoteBlock key={i} tag="Co-sim not available">{line}</NoteBlock>)

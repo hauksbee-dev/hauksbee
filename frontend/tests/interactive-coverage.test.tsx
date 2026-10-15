@@ -108,7 +108,9 @@ test.skipIf(!hasFrontdoorReport)('the browser renders every structured timing qu
   expect(html).toContain('PWL replay refused on net /CLK')
   expect(html).toContain('Fallback-qualified windows')
   expect(html).toContain('0.012 V')
-  expect(html).toContain('does not prove powered behavior')
+  // The firmware ran, so the Next card offers its observations as checks; it no longer asks for firmware.
+  expect(html).toContain('Turn what it did into checks')
+  expect(html).not.toMatch(/add firmware/i)
   expect(html).toContain('Set up checks')
 
   const errors: string[] = []

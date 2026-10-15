@@ -257,6 +257,9 @@ pub struct WebGpioNet {
     pub volts: f64,
     /// True if the net toggled at least once (the firmware drove it).
     pub driven: bool,
+    /// Level changes seen over the run; with `seconds_simulated`, a measured rate.
+    #[serde(default)]
+    pub toggles: u64,
 }
 
 /// The firmware co-sim result, attached to [`WebReport::cosim`].
@@ -2987,6 +2990,7 @@ fn top_gpio_nets(
             name: name.clone(),
             volts: net_volts.get(name).copied().unwrap_or(0.0),
             driven: st.toggles > 0,
+            toggles: st.toggles,
         })
         .collect()
 }

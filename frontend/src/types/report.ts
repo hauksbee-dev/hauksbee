@@ -82,6 +82,8 @@ export interface WebGpioNet {
   name: string
   volts: number
   driven: boolean
+  /** Level changes over the run; absent on engines that predate it. */
+  toggles?: number
 }
 
 export interface WebFailedWindow {
@@ -690,7 +692,8 @@ export interface CheckConstraints {
  *  while a check judges it, and a register-map device needs a human-authored
  *  spec before it can run. Nothing here is guessed from a part name. */
 export type BoardRequest =
-  | ({ type: 'check'; kind: string; net?: string; ref?: string } & CheckConstraints)
+  /** `run_ms`: the spec's run length, raised when the check needs a longer window. */
+  | ({ type: 'check'; kind: string; net?: string; ref?: string; run_ms?: string } & CheckConstraints)
   | { type: 'peripheral'; id?: string; kind: 'stimulus' | 'pushbutton' | 'toggle'; net?: string; ref?: string }
   | { type: 'sensor'; id: string; ref?: string; modelId?: string | null }
   /** An ideal scenario supply: the checks runner rebuilds the circuit with it

@@ -443,6 +443,8 @@ export function ChecksView({
           if (value !== undefined) row[key] = value
         }
         row.rail_polarity = railPolarity(row)
+        // A check that needs a longer window (a blink rate) raises the run length, never lowers it.
+        if (r.run_ms) setDuration(d => Number(r.run_ms) > Number(d) ? r.run_ms! : d)
         checkRows.push(row)
         raw += assertToml(row)
       } else if (r.type === 'peripheral') {

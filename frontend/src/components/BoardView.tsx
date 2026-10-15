@@ -19,6 +19,7 @@ import { FixFirstCard, NoteBlock, PreLayoutStrip, SectionBlock } from './report/
 import { centerInScroller } from '../lib/scroll'
 import { EvidencePanel, ImportDiagnosticsPanel, ModelCoveragePanel, ReportPanel } from './report/Panels'
 import { CosimBlock } from './report/CosimBlock'
+import { NextStep } from './report/NextStep'
 import { ExplainVerdict, VerdictConditions } from './report/VerdictConditions'
 import { BoardMap } from './report/BoardMap'
 
@@ -285,41 +286,16 @@ export function BoardView({
         {v.fixFirst && <FixFirstCard fixFirst={v.fixFirst} onLocate={boardUrl ? locate : undefined} />}
 
         {!restoredFrom && (
-          <div
-            data-testid="static-next-step"
-            className="mt-3 rounded-lg px-4 py-2.5 text-[13px] leading-relaxed"
-            style={{ border: '1px solid var(--hairline)', borderLeft: '4px solid var(--copper)', background: 'var(--surface)', color: 'var(--silk-dim)' }}
-          >
-            <b style={{ color: 'var(--copper-hi)', fontWeight: 600 }}>Next:</b>{' '}
-            turn this report into repeatable pass/fail rules and CI.
-            This static report does not prove powered behavior, brownout, overheating, or
-            firmware timing; add firmware and run those checks before treating them as verified.
-            {boardFile && (
-              <> Terminal scaffold:{' '}
-                <code className="hb-inline break-all">hauksbee-ci init {boardFile.name}</code>.
-              </>
-            )}
-            <div className="mt-2">
-              <button
-                type="button"
-                data-testid="open-checks-next"
-                onClick={onOpenChecks}
-                className="hb-btn-primary hb-press px-3 py-1.5 text-[12px]"
-              >
-                Set up checks
-              </button>
-              {boardFile && (
-                <button
-                  type="button"
-                  data-testid="open-evidence-next"
-                  onClick={() => setEvidenceOpen(true)}
-                  className="hb-btn hb-press ml-2 px-3 py-1.5 text-[12px]"
-                >
-                  Add firmware or other evidence
-                </button>
-              )}
-            </div>
-          </div>
+          <NextStep
+            report={r}
+            firmwareName={firmwareFile?.name ?? null}
+            boardName={boardFile?.name ?? null}
+            checks={checks}
+            specFile={spec?.fileName ?? null}
+            onQueue={onQueue}
+            onOpenChecks={onOpenChecks}
+            onOpenEvidence={() => setEvidenceOpen(true)}
+          />
         )}
 
         {/* A report that came out of storage rather than out of a run. It says
