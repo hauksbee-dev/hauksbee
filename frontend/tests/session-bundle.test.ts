@@ -78,6 +78,9 @@ test('a read error names a place and the file shows the text there', async () =>
   expect(snip?.lineNo).toBe(2)
   expect(snip?.text).toBe('  (bad thing')
   expect(snip?.caret).toBe(3)
+  // An error at the very end of the file lands on an empty line: show the last real one.
+  const eof = await snippetAt(new Blob(['(a\n  (b\n']), { line: 3, byte: 9 })
+  expect(eof).toEqual({ lineNo: 2, text: '  (b', caret: 4 })
 })
 
 test('a pass with findings but no conditions is a pass, not a conditional pass', () => {

@@ -428,7 +428,7 @@ fn probe_claude_code() -> DepStatus {
         unlocks: "datasheet-to-model extraction (`hauksbee models extract`, the web Extend flow) via the Claude Code CLI",
         cost: "free if you already pay for Claude: the CLI signs in with that account".to_string(),
         manual: "npm install -g @anthropic-ai/claude-code   # then: claude auth login".to_string(),
-        privacy: "Using this sends the datasheet, and what the agent reads in its sandbox, to Anthropic. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.",
+        privacy: "Using this sends the datasheet, and what the agent reads in its sandbox, to Anthropic. Nothing is sent unless you ask for an extraction, and hauksbee never runs it on its own.",
         absent_detail: format!(
             "claude not found on PATH. This is optional: extraction also runs via codex or an API key, \
              and a model can always be written by hand (one TOML file, see {}).",
@@ -449,10 +449,10 @@ fn probe_agy() -> DepStatus {
         name: "Antigravity (datasheet extraction)",
         unlocks: "datasheet-to-model extraction (`hauksbee models extract`, the web Extend flow) via Antigravity's `agy` CLI",
         cost: "free if you already use Antigravity: agy signs in with your Google account".to_string(),
-        manual: hauksbee_models::datasheet::Backend::Agy
-            .install_hint()
-            .to_string(),
-        privacy: "Using this sends the datasheet, and anything the agent reads (hauksbee does not confine agy; only its own unverified --sandbox applies), to Google. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.",
+        // Antigravity installs from its own site, not a terminal command; the
+        // install prose is served with the backend, so there is nothing to copy.
+        manual: String::new(),
+        privacy: "Using this sends the datasheet, and anything the agent reads (hauksbee does not confine agy; only its own unverified --sandbox applies), to Google. Nothing is sent unless you ask for an extraction, and hauksbee never runs it on its own.",
         absent_detail: format!(
             "agy not found on PATH. This is optional: extraction also runs via codex, Claude Code, \
              or an API key, and a model can always be written by hand (one TOML file, see {}).",

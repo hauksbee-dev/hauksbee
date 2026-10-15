@@ -474,7 +474,11 @@ function BackendRows({ backends, selected, onSelect, deps, depsApi }: {
                     <span style={{ color: 'var(--silk-faint)' }}>Cost: </span>{dep.cost}
                   </div>
                 )}
-                {dep?.manual && (!dep.present || signedOut) && <TerminalCommand command={dep.manual} testId="settings-backend-copy" />}
+                {dep?.manual && (!dep.present || signedOut) && (
+                  <div className="text-[11px]" style={{ color: 'var(--silk-dim)' }}>
+                    <TerminalCommand command={dep.manual} testId="settings-backend-copy" />
+                  </div>
+                )}
                 <InstallProgress id={b.backend} install={depsApi.install} />
               </div>
             )}

@@ -31,15 +31,20 @@ export async function snippetAt(file: Blob, loc: ParseLocation): Promise<Snippet
     ? lines.findIndex(l => byte >= l.start && byte <= l.end)
     : loc.line !== null ? loc.line - 1 : -1
   if (index < 0 || index >= lines.length) return null
-  const { start: s, end: e } = lines[index]
   const decoder = new TextDecoder()
-  let text = decoder.decode(bytes.slice(s, e)).replace(/\r$/, '')
-  let caret = byte !== null ? decoder.decode(bytes.slice(s, byte)).length : null
+  const lineText = (i: number) => decoder.decode(bytes.slice(lines[i].start, lines[i].end)).replace(/\r$/, '')
+  // "Unclosed list" is reported at the end of the file, on an empty line: the
+  // text worth showing is the last line that has any, with the caret after it.
+  let at = index
+  while (at > 0 && lineText(at).trim() === '') at--
+  const moved = at !== index
+  let text = lineText(at)
+  let caret = moved ? text.length : byte !== null ? decoder.decode(bytes.slice(lines[at].start, byte)).length : null
   if (text.length > WINDOW) {
     const from = Math.max(0, Math.min((caret ?? 0) - Math.floor(WINDOW / 2), text.length - WINDOW))
     const more = from + WINDOW < text.length
     text = `${from > 0 ? '…' : ''}${text.slice(from, from + WINDOW)}${more ? '…' : ''}`
     if (caret !== null) caret = caret - from + (from > 0 ? 1 : 0)
   }
-  return { lineNo: index + 1, text, caret }
+  return { lineNo: at + 1, text, caret }
 }
