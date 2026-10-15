@@ -76,6 +76,8 @@ mod common;
 mod contention_lint_corpus;
 #[path = "cosim_comparator_flip.rs"]
 mod cosim_comparator_flip;
+#[path = "cosim_not_judged.rs"]
+mod cosim_not_judged;
 #[path = "cosim_failed_chunk.rs"]
 mod cosim_failed_chunk;
 #[path = "cosim_fallback_chunk.rs"]
