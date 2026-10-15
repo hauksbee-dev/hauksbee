@@ -759,8 +759,19 @@ fn every_power_card_balances_power_and_owns_its_rail() {
             let high = run(&switch_plan(card, &value, "+3.3V"), &lib, &card.id);
             if high.broken.iter().any(|b| b.starts_with("output")) {
                 run(&switch_plan(card, &value, "GND"), &lib, &card.id)
-            } else {
+            } else if high.broken.is_empty() {
                 high
+            } else {
+                // A select that routes the input to the unloaded throw leaves
+                // the output rail held by its own supply, so no "output" error
+                // fires; the active-low polarity is the other way to enable the
+                // part, and the card must hold every invariant in one of them.
+                let low = run(&switch_plan(card, &value, "GND"), &lib, &card.id);
+                if low.broken.is_empty() {
+                    low
+                } else {
+                    high
+                }
             }
         } else if let Some(plan) = vreg_plan(card, &value) {
             run(&plan, &lib, &card.id)
