@@ -7,7 +7,7 @@
 //   │ the rest of the headline                                                 │
 //   │ (ring) net checks judged  (ring) key parts modelled  (n) serious · found │
 //   ├ rows: partly judged scope / conditions / findings, with actions ─────────┤
-//   └ [Show result on board] [Export ▾] [Copy CLI command] [Open Checks] ──────┘
+//   └ [Result on map] [Export ▾] [Copy CLI command] [Open Checks] ──────┘
 //
 // The words are the engine's: the tag is what `VERDICT: <tag>:` prints, the
 // title and subtitle are the headline cut at its first colon, and every row is
@@ -154,7 +154,7 @@ function FindingRows({ groups, onLocate }: {
   )
 }
 
-/** The "Show result on board" switch. */
+/** The "Result on map" switch. */
 function OverlaySwitch({ on, onToggle }: { on: boolean; onToggle: () => void }) {
   return (
     <button
@@ -163,12 +163,13 @@ function OverlaySwitch({ on, onToggle }: { on: boolean; onToggle: () => void }) 
       aria-checked={on}
       data-testid="result-overlay-toggle"
       onClick={onToggle}
-      className="hb-btn hb-press inline-flex items-center gap-2 px-2.5 text-[12px] whitespace-nowrap"
+      title="Draw this result on the board map: parts with no model, nets not judged, findings by severity"
+      className="hb-btn hb-press inline-flex items-center gap-2 px-2.5 text-[12px] whitespace-nowrap min-w-0 max-w-full"
       style={{ height: 30, color: on ? 'var(--silk)' : undefined }}
     >
       <span
         aria-hidden="true"
-        className="relative inline-block rounded-full"
+        className="relative inline-block rounded-full shrink-0"
         style={{ width: 26, height: 14, background: on ? 'var(--copper)' : 'var(--hairline)', transition: 'background 0.15s' }}
       >
         <span
@@ -176,7 +177,7 @@ function OverlaySwitch({ on, onToggle }: { on: boolean; onToggle: () => void }) 
           style={{ top: 2, left: on ? 14 : 2, width: 10, height: 10, background: 'var(--surface)', transition: 'left 0.15s' }}
         />
       </span>
-      Show result on board
+      <span className="truncate">Result on map</span>
     </button>
   )
 }

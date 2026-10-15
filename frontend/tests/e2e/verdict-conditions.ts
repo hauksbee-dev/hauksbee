@@ -98,7 +98,7 @@ await browserFlow({ out: OUT, viewport: { width: 1440, height: 900 } }, async pa
   const partly = page.locator('[data-testid="report-verdict"] [data-testid="report-partly-judged"]')
   ok('the partly judged block sits inside the verdict card', await partly.count() === 1)
   const partlyText = await partly.innerText()
-  ok('it says it is not a pass', partlyText.includes('Not a pass: partly judged'), partlyText)
+  ok('it says it is not a pass', /not a pass: partly judged/i.test(partlyText), partlyText)
   ok('it names the part with no usable model', (await page.locator('[data-testid="partly-judged-open"]').innerText()).includes('Q1'))
   ok('it says what was not judged', await page.locator('[data-testid="partly-judged-electrical"]').count() === 1)
   ok('it says what was judged', /Judged: \d+ of \d+ net checks/.test(await page.locator('[data-testid="partly-judged-judged"]').innerText()))
