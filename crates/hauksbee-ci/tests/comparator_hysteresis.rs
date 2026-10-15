@@ -253,3 +253,108 @@ fn sourced_supply_envelopes_follow_the_solved_rails() {
         assert!(human.contains(says), "{case}: {human}");
     }
 }
+
+/// The other half of the VICR row above: a limit the run measured as violated
+/// refuses a PASS, but a FAIL on that board is the board's own failure and
+/// must say so. Refusing it as "not a failure of your board" (exit 3) hid
+/// exactly the faults an outcome spec is written to find. Here IN+ sits above
+/// IN- with both above the ceiling, so OUT idles high on its pull-up and an
+/// outcome asking for it low fails, naming the limit as the reason.
+#[test]
+fn a_failure_on_a_board_outside_a_datasheet_limit_is_a_failure_that_names_it() {
+    let board = support::repo("crates/hauksbee-ci/tests/fixtures/lm339_vicr_pair_high.board");
+    let r = support::run_body(
+        "vicr fail.toml",
+        &format!(
+            "name = \"vicr fail\"\nboard = {}\nduration_ms = 5\n\
+             [[supply]]\nnet = \"V5\"\nkind = \"ideal\"\nvolts = 5.0\n\
+             [[assert]]\nname = \"out low\"\nkind = \"voltage\"\nnet = \"OUT\"\n\
+             min = 0.0\nmax = 1.0\n",
+            support::toml_path(&board),
+        ),
+    );
+    let human = r.render_human();
+    assert_eq!(r.exit_code(), 1, "{human}");
+    let row = support::row(&r, "out low");
+    assert!(!row.passed && !row.invalid, "{row:?}");
+    let why = hauksbee_ci::report::why_line(row).unwrap_or_default();
+    assert!(
+        why.contains("does not hold as designed")
+            && why.contains("every input of one channel above its common-mode range"),
+        "the failure must name the violated limit as its cause: {why}"
+    );
+    assert!(human.contains("[FAIL] out low"), "{human}");
+    assert!(!human.contains("not a failure of your board"), "{human}");
+}
+
+/// A supply rail fed from a powered rail through a resistor too large for its
+/// parts' draw is STARVED, a board fault, not an unpowered rail the spec
+/// forgot: the run solves it where the feed leaves it, never banners it as
+/// "nothing powered them" (which sends the user to declare a supply that
+/// would hide the fault), and an outcome that needs the rail up fails naming
+/// the feed resistor and the most it may be.
+#[test]
+fn a_rail_starved_through_its_feed_resistor_fails_naming_the_feed() {
+    // Three LMV7219s (SNOS458I: 1.1 mA typ each at 5 V, 2.7 V minimum supply;
+    // SOT-23-5 pads 1 OUT, 2 V-, 3 IN+, 4 IN-, 5 V+) on VDD_A, fed from +5V
+    // through 1 k: their 3.3 mA would drop 3.3 V, past the 2.3 V between the
+    // 5 V feed and their minimum. Inputs sit at 0 V, inside the common-mode
+    // range at any supply, so the starved rail is the only limit broken.
+    let sot = "Package_TO_SOT_SMD:SOT-23-5";
+    let r0805 = "Resistor_SMD:R_0805_2012Metric";
+    let mut parts = String::new();
+    for i in 1..=3_usize {
+        let out = format!("OUT{i}");
+        let pads = support::pad(1, &out)
+            + &support::pad(2, "GND")
+            + &support::pad(3, "GND")
+            + &support::pad(4, "GND")
+            + &support::pad(5, "VDD_A");
+        parts += &support::comp(&format!("U{i}"), sot, "LMV7219", 20 * i, pads);
+        let load = support::pad(1, &out) + &support::pad(2, "GND");
+        parts += &support::comp(&format!("RL{i}"), r0805, "10k", 20 * i + 10, load);
+    }
+    parts += &support::comp(
+        "RFEED",
+        r0805,
+        "1k",
+        100,
+        support::pad(1, "+5V") + &support::pad(2, "VDD_A"),
+    );
+    parts += &support::comp(
+        "CA",
+        "Capacitor_SMD:C_0805_2012Metric",
+        "100nF",
+        120,
+        support::pad(1, "VDD_A") + &support::pad(2, "GND"),
+    );
+    let nets = ["+5V", "VDD_A", "GND", "OUT1", "OUT2", "OUT3"].map(|n| format!("net \"{n}\"\n"));
+    let board = format!(
+        "board version 20171130\nfn main {{\n{}{parts}}}\n",
+        nets.concat()
+    );
+    let path = support::write_tmp("starved_feed.board", &board);
+    let r = support::run_body(
+        "starved.toml",
+        &format!(
+            "name = \"starved\"\nboard = {}\nduration_ms = 5\n\
+             [[assert]]\nname = \"analog rail is up\"\nkind = \"voltage\"\nnet = \"VDD_A\"\n\
+             min = 4.5\nmax = 5.5\n",
+            support::toml_path(&path),
+        ),
+    );
+    let human = r.render_human();
+    assert!(
+        r.dead_rails.is_empty(),
+        "VDD_A is fed through RFEED: {:?}\n{human}",
+        r.dead_rails
+    );
+    assert!(!human.contains("UNPOWERED RAIL"), "{human}");
+    assert_eq!(r.exit_code(), 1, "{human}");
+    let row = support::row(&r, "analog rail is up");
+    let why = hauksbee_ci::report::why_line(row).unwrap_or_default();
+    assert!(
+        why.contains("'VDD_A' is starved") && why.contains("RFEED") && why.contains("no more than"),
+        "the failure must name the starved rail, its feed and the fix: {why}\n{human}"
+    );
+}

@@ -69,19 +69,34 @@ fn vka_in(case: &str, rs: &str, div: bool, refnet: &str, (min, max): (f64, f64),
     // SOLVED, not declared: on every starved board (9k1, 100k), on no other.
     let flag = human.contains("requires for regulation");
     assert_eq!(flag, rs != "1k", "{case}: min-current flag");
-    // Not decoration: a MEASURED IKmin violation undermines (exit 3), while the
-    // model's own documented omissions stay a qualified pass at exit 0.
+    // Not decoration: a MEASURED IKmin violation undermines a pass (exit 3),
+    // while the model's own documented omissions stay a qualified pass at
+    // exit 0. A band the starved board MISSES is the board's own failure
+    // (exit 1), and its why names the violated minimum as the cause.
     let row = support::row(&r, "vka");
     if refnet != "GND" {
-        assert_eq!(r.exit_code(), i32::from(flag) * 3, "{case}: exit code");
-        // The starved boards are honestly INVALID (the row's numbers can pass
-        // while the IKmin violation undermines them); every other board's row
+        let want_exit = match (flag, row.passed) {
+            (false, _) => 0,
+            (true, true) => 3,
+            (true, false) => 1,
+        };
+        assert_eq!(r.exit_code(), want_exit, "{case}: exit code");
+        // A starved board's pass is honestly INVALID (the row's numbers can
+        // pass while the IKmin violation undermines them); every other row
         // must be fully valid, so a pass below is a green one.
         assert_eq!(
-            row.invalid, flag,
-            "{case}: INVALID exactly when starved: {}",
+            row.invalid,
+            flag && row.passed,
+            "{case}: INVALID exactly when a starved board passes: {}",
             row.detail
         );
+        if flag && !row.passed {
+            let why = hauksbee_ci::report::why_line(row).unwrap_or_default();
+            assert!(
+                why.to_lowercase().contains("requires for regulation"),
+                "{case}: the failure must name the starved minimum: {why}"
+            );
+        }
     }
     row.passed
 }

@@ -32,26 +32,37 @@ fn board_with_a_nameless_rail(dir: &Path) -> PathBuf {
     two_rail_board(dir.join("nameless_rail.net"), "VCC", "VDD_A")
 }
 
-/// A KiCad netlist of eight 10k resistors, each from `rail` (pin 2) to
-/// `unpriced` (pin 1), written to `path`.
+/// A KiCad netlist of eight 10k resistors, each from `unpriced` (pin 1) to a
+/// return net `RTN` (pin 2), and a ninth from `rail` to its own load net,
+/// written to `path`.
+///
+/// Nothing ties `unpriced` to `rail`. A resistor straight from a powered rail
+/// FEEDS a net: the run solves it at whatever level that feed leaves it,
+/// which is the board's own answer rather than a dead rail (a rail starved
+/// through too large a feed is a board fault the run must show, not hide
+/// behind "add a supply"). So `unpriced` here is powered by nothing at all.
 fn two_rail_board(path: PathBuf, rail: &str, unpriced: &str) -> PathBuf {
-    let mut nodes_rail = String::new();
     let mut nodes_unpriced = String::new();
+    let mut nodes_return = String::new();
     let mut comps = String::new();
-    for i in 1..=8 {
+    for i in 1..=9 {
         let _ = writeln!(
             comps,
             "    (comp (ref \"R{i}\") (value \"10k\") \
              (footprint \"Resistor_SMD:R_0603_1608Metric\") \
              (libsource (lib \"Device\") (part \"R\")))"
         );
-        let _ = writeln!(nodes_unpriced, "      (node (ref \"R{i}\") (pin \"1\"))");
-        let _ = writeln!(nodes_rail, "      (node (ref \"R{i}\") (pin \"2\"))");
+        if i < 9 {
+            let _ = writeln!(nodes_unpriced, "      (node (ref \"R{i}\") (pin \"1\"))");
+            let _ = writeln!(nodes_return, "      (node (ref \"R{i}\") (pin \"2\"))");
+        }
     }
     let net = format!(
         "(export (version \"E\")\n  (components\n{comps}  )\n  (nets\n\
-         \x20   (net (code \"1\") (name \"{rail}\")\n{nodes_rail})\n\
-         \x20   (net (code \"2\") (name \"{unpriced}\")\n{nodes_unpriced})\n  ))\n"
+         \x20   (net (code \"1\") (name \"{rail}\")\n      (node (ref \"R9\") (pin \"1\")))\n\
+         \x20   (net (code \"2\") (name \"{unpriced}\")\n{nodes_unpriced})\n\
+         \x20   (net (code \"4\") (name \"RTN\")\n{nodes_return})\n\
+         \x20   (net (code \"5\") (name \"RAIL_LOAD\")\n      (node (ref \"R9\") (pin \"2\")))\n  ))\n"
     );
     std::fs::write(&path, net).expect("write board");
     path

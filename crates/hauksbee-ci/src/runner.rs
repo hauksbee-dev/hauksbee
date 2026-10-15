@@ -717,6 +717,14 @@ fn dc_definitions_for_spec(
 
 /// [`unpowered_supply_nets`] for a run: anything the spec powers or drives has
 /// had its question answered, whatever the name says.
+///
+/// A rail a board resistor feeds straight from a powered rail is not
+/// unpowered either: the run solves it at whatever level the feed and its
+/// load leave it, which is the board's own answer. Calling it dead would tell
+/// the reader to add a `[[supply]]` and distrust the run, when a rail that
+/// sags through too large a feed resistor is exactly the board fault the run
+/// exists to show (the supply-envelope check names it as starved). A
+/// regulator the board holds off stays dead whatever else touches its output.
 fn dead_rails(board: &ExtractedBoard, bound: &BoundBoard, spec: &Spec) -> Vec<String> {
     let answered: Vec<&str> = spec
         .supplies
@@ -724,7 +732,40 @@ fn dead_rails(board: &ExtractedBoard, bound: &BoundBoard, spec: &Spec) -> Vec<St
         .map(|s| s.net.as_str())
         .chain(spec.net_drives.iter().map(|d| d.net.as_str()))
         .collect();
+    let held_off: Vec<String> = hauksbee_engine::held_off_rails(bound)
+        .into_iter()
+        .map(|(net, _)| net)
+        .collect();
+    let powered: std::collections::HashSet<NodeId> = bound
+        .supplies
+        .iter()
+        .map(|leg| leg.net_name.as_str())
+        .chain(answered.iter().copied())
+        .filter_map(|net| bound.node(net))
+        .collect();
     unpowered_supply_nets(board, bound, &answered)
+        .into_iter()
+        .filter(|rail| {
+            held_off.contains(rail)
+                || !bound
+                    .node(rail)
+                    .is_some_and(|node| resistor_fed(bound, node, &powered))
+        })
+        .collect()
+}
+
+/// Whether a board resistor ties `node` directly to one of the `powered` nodes.
+fn resistor_fed(
+    bound: &BoundBoard,
+    node: NodeId,
+    powered: &std::collections::HashSet<NodeId>,
+) -> bool {
+    bound.circuit.iter().any(|(_, device)| match device {
+        Device::Resistor { a, b, .. } => {
+            (*a == node && powered.contains(b)) || (*b == node && powered.contains(a))
+        }
+        _ => false,
+    })
 }
 
 /// Run the spec and return one [`RunOutcome`] per seed (>=1).
