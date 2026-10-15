@@ -830,9 +830,60 @@ fn footprint_family(footprint: &str) -> Option<char> {
 
 fn package_code(footprint: &str) -> Option<&'static str> {
     let fp = footprint.to_ascii_lowercase();
-    ["0201", "0402", "0603", "0805", "1206", "1210"]
-        .into_iter()
-        .find(|code| fp.contains(code))
+    [
+        "0201", "0402", "0603", "0805", "1206", "1210", "1812", "2010", "2512",
+    ]
+    .into_iter()
+    .find(|code| fp.contains(code))
+}
+
+/// The passive a family letter names, for a sentence.
+const fn passive_word(family: char) -> &'static str {
+    match family {
+        'R' => "resistor",
+        'C' => "capacitor",
+        _ => "inductor",
+    }
+}
+
+/// A designator on another passive's footprint, and how much it matters.
+///
+/// Two-terminal R, C and L chips of one EIA size share one IPC chip land
+/// within tenths of a millimetre, so an `L5` on `R_0603` fits and solders:
+/// that is a library naming note. A land with no chip size code (a radial, a
+/// power-inductor body, a named package) or a part that is not two pads may
+/// really not fit, which stays a warning.
+fn designator_footprint_finding(c: &Component, prefix: char, family: char) -> LintFinding {
+    let pads: std::collections::BTreeSet<&str> = c.pins.iter().map(|p| p.number.as_str()).collect();
+    let shared_chip = package_code(&c.footprint).filter(|_| pads.len() == 2);
+    let (severity, message) = match shared_chip {
+        Some(size) => (
+            Severity::Low,
+            format!(
+                "{} is a {prefix} designator on a {family} chip land '{}'. Same {size} chip \
+                 size, so the part fits; the land is the generic {} variant. Rename the \
+                 footprint to the {} land if the BOM tooling keys on it",
+                c.reference,
+                c.footprint,
+                passive_word(family),
+                passive_word(prefix)
+            ),
+        ),
+        None => (
+            Severity::Medium,
+            format!(
+                "{} is a {prefix} designator but uses {family} footprint '{}'",
+                c.reference, c.footprint
+            ),
+        ),
+    };
+    LintFinding {
+        check: LintCheck::DesignatorFootprintMismatch,
+        severity,
+        message,
+        refs: vec![c.reference.clone()],
+        nets: Vec::new(),
+    }
 }
 
 fn parse_capacitance_uf(value: &str) -> Option<f64> {
@@ -961,16 +1012,9 @@ fn check_design_file_qc(board: &ExtractedBoard, report: &mut NetLintReport) {
 
         if let Some(family) = footprint_family(&c.footprint) {
             if family != prefix {
-                report.findings.push(LintFinding {
-                    check: LintCheck::DesignatorFootprintMismatch,
-                    severity: Severity::Medium,
-                    message: format!(
-                        "{} is a {} designator but uses {} footprint '{}'",
-                        c.reference, prefix, family, c.footprint
-                    ),
-                    refs: vec![c.reference.clone()],
-                    nets: Vec::new(),
-                });
+                report
+                    .findings
+                    .push(designator_footprint_finding(c, prefix, family));
             }
         }
 
