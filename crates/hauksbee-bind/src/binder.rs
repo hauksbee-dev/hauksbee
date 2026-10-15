@@ -2259,6 +2259,36 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
             if pins.len() > 2 {
                 return None;
             }
+            // A Zener's reverse breakdown is its function. Bound as a 110 V
+            // signal diode it silently loses every clamp it provides, so a
+            // part marked as a Zener (its value or symbol says so, or its
+            // value is only a voltage) keeps the stated voltage as its
+            // breakdown, and one with no stated voltage stays unmodelled.
+            let zener = zener_mark(comp);
+            if matches!(zener, ZenerMark::Unstated) {
+                return None;
+            }
+            if let ZenerMark::Volts(vz) = zener {
+                let mut params = diode_1n4148_params();
+                params.set_f64("bv", vz);
+                params.set_f64("ibv", ZENER_FALLBACK_KNEE_A);
+                return Some(make_entry(
+                    "zener_diode_fallback",
+                    ComponentKind::Diode,
+                    &format!(
+                        "generic Zener diode (engine fallback: breakdown {vz} V from the \
+                         part's value, knee current ASSUMED {} mA, forward junction \
+                         estimated from the 1N4148 card; put the ordering code on the \
+                         component to replace it)",
+                        ZENER_FALLBACK_KNEE_A * 1e3
+                    ),
+                    params,
+                    [("1", "cathode"), ("2", "anode")]
+                        .into_iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
+                ));
+            }
             return Some(make_entry(
                 "signal_diode_1n4148_fallback",
                 ComponentKind::Diode,
@@ -2687,6 +2717,57 @@ fn diode_1n4148_params() -> hauksbee_models::Params {
     p.set_f64("tt", 3.48e-9);
     p.set_f64("bv", 110.0);
     p
+}
+
+/// Knee current given to a Zener bound by the engine fallback. ASSUMED: an
+/// estimate for small-signal Zeners, not read from any datasheet; it only
+/// keeps the knee sharp enough that the clamp sits at the stated voltage.
+const ZENER_FALLBACK_KNEE_A: f64 = 0.005;
+
+/// Whether a diode is marked as a Zener, and the breakdown voltage it states.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ZenerMark {
+    /// Not marked as a Zener. A rating string on another diode (`SS34 40V 3A`)
+    /// is not a Zener mark.
+    NotZener,
+    /// A Zener whose voltage the board does not state (`BZT52C18` on a
+    /// `D_Zener` symbol), which must not be guessed.
+    Unstated,
+    /// The value states this many volts (`18V Zener 200mW`, or a value that is
+    /// only a voltage, `5.1V` / `5V1`, which on a diode is a Zener's voltage).
+    Volts(f64),
+}
+
+fn zener_mark(comp: &Component) -> ZenerMark {
+    let says_zener = |s: &str| s.to_ascii_lowercase().contains("zener");
+    let value = comp.value.trim();
+    // A value that is only a voltage: `18V`, `5.1V`, or the RKM `5V1`.
+    let only_voltage = value
+        .chars()
+        .all(|c| c.is_ascii_digit() || matches!(c, '.' | 'V' | 'v'))
+        .then(|| {
+            let (whole, frac) = value.split_once(['V', 'v'])?;
+            let digits = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+            if frac.is_empty() {
+                whole.parse::<f64>().ok()
+            } else if digits(whole) && digits(frac) {
+                format!("{whole}.{frac}").parse::<f64>().ok()
+            } else {
+                None
+            }
+        })
+        .flatten();
+    if !(only_voltage.is_some() || says_zener(value) || says_zener(symbol_name(&comp.lib_id))) {
+        return ZenerMark::NotZener;
+    }
+    let stated = only_voltage.or_else(|| {
+        says_zener(value)
+            .then(|| hauksbee_models::value::parse_voltage_rating_v(value))
+            .flatten()
+    });
+    stated
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .map_or(ZenerMark::Unstated, ZenerMark::Volts)
 }
 
 /// Construct a [`ModelEntry`] for an engine-layer fallback. Centralised so a
@@ -12434,6 +12515,46 @@ style = "i2c_pointer"
         assert_eq!(passive_letter(&part("PC2", "PC817", &two)), None);
         assert_eq!(passive_letter(&part("PC3", "CAP", &two)), None);
         assert!(fallback_entry(&part("PC3", "CAP", &two)).is_none());
+    }
+
+    /// A Zener bound by the fallback clamps at the voltage its value states,
+    /// not at a signal diode's 110 V; one whose voltage the board does not
+    /// state stays unmodelled; a rating string on a rectifier is not a Zener.
+    #[test]
+    fn zener_fallback_keeps_the_stated_breakdown() {
+        let diode = |value: &str, lib_id: &str| Component {
+            footprint: "Diode_SMD:D_SOD-123".into(),
+            lib_id: lib_id.into(),
+            pins: vec![pin("1", 1), pin("2", 2)],
+            ..comp("D3", value)
+        };
+        for (value, lib_id, vz) in [
+            ("18V Zener 200mW", "Device:D", 18.0),
+            ("10V Zener 200mW", "Device:D", 10.0),
+            ("5.1V", "Device:D", 5.1),
+            ("5V1", "Device:D_Zener", 5.1),
+        ] {
+            let entry = fallback_entry(&diode(value, lib_id)).expect("a stated Zener binds");
+            assert_eq!(entry.kind, ComponentKind::Diode, "{value}");
+            let bv = entry.params.get_f64("bv").expect("bv");
+            assert!(
+                (bv - vz).abs() < 1e-9,
+                "{value}: breakdown {bv} V, want {vz} V"
+            );
+            assert!(
+                entry.params.get_f64("ibv").is_some_and(|i| i > 0.0),
+                "{value}: knee"
+            );
+        }
+        // Marked as a Zener, voltage not stated: not guessed.
+        assert!(fallback_entry(&diode("BZT52C18", "Device:D_Zener")).is_none());
+        assert!(fallback_entry(&diode("Zener", "Device:D")).is_none());
+        // Controls: a generic diode keeps the signal-diode card.
+        for (value, lib_id) in [("D", "Device:D"), ("1N4148W", "Device:D")] {
+            let entry = fallback_entry(&diode(value, lib_id)).expect("binds");
+            assert_eq!(entry.id, "signal_diode_1n4148_fallback", "{value}");
+            assert_eq!(entry.params.get_f64("bv"), Some(110.0), "{value}");
+        }
     }
 
     #[test]
