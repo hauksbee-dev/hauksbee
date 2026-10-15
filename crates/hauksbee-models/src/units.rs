@@ -112,12 +112,29 @@ pub fn gain_ratio(x: f64, unit: &str) -> Option<f64> {
     }
 }
 
+/// The words a printed unit may carry after its base (`VAC`, `VACRMS`, `Vrms`,
+/// `µVPP`, `Vpk`): how the quantity is measured, not what it is. Read through by
+/// [`si_unit`], so `rail_relative_unit` never takes `VACRMS` for a supply named ACRMS.
+const UNIT_QUALIFIERS: &[&str] = &[
+    "acrms", "dcrms", "rms", "p-p", "pp", "pk", "peak", "ac", "dc",
+];
+
+/// `token` without one trailing qualifier ([`UNIT_QUALIFIERS`], any case), when a
+/// base remains.
+fn strip_qualifier(token: &str) -> Option<&str> {
+    UNIT_QUALIFIERS.iter().find_map(|q| {
+        let at = token.len().checked_sub(q.len()).filter(|at| *at > 0)?;
+        let tail = token.get(at..)?;
+        tail.eq_ignore_ascii_case(q).then(|| &token[..at])
+    })
+}
+
 /// A unit naming a supply or an expression on one (`VDD`, `VCC+0.3`), not a
 /// physical quantity: its number would read as a ratio or offset of an unstated rail.
 pub fn rail_relative_unit(unit: &str) -> bool {
     let after_v = unit.trim().strip_prefix('V').unwrap_or_default();
     let rail = after_v.starts_with(|c: char| c.is_ascii_uppercase() || c == '-');
-    si_unit(unit).is_none() && !matches!(after_v, "AC" | "DC") && (rail || unit.contains('+'))
+    si_unit(unit).is_none() && (rail || unit.contains('+'))
 }
 
 /// `AΩ` or `mA·kΩ` is volts: the current-resistance product a programming
@@ -154,11 +171,10 @@ fn prefixed_unit(token: &str) -> Option<(f64, &'static str)> {
         ('M', 1e6),
         ('G', 1e9),
     ];
-    let token = ["PP", "pp", "rms", "RMS"]
-        .iter()
-        .find_map(|s| token.strip_suffix(s))
-        .unwrap_or(token)
-        .replace('Ω', "ohm");
+    let mut token = token.replace('Ω', "ohm");
+    while let Some(bare) = strip_qualifier(&token) {
+        token = bare.to_string();
+    }
     let base = |t: &str| BASES.iter().copied().find(|b| *b == t);
     if let Some(b) = base(&token) {
         return Some((1.0, b));
@@ -467,6 +483,22 @@ fn product(a: Dim, b: Dim, divide: bool) -> Dim {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An AC or RMS voltage is volts (an isolation rating in `VACRMS`), not a rail;
+    /// a supply name or an expression on one still is.
+    #[test]
+    fn qualified_voltage_units_are_volts_and_rails_stay_rails() {
+        for unit in [
+            "V", "VAC", "VDC", "VACRMS", "Vrms", "mVPP", "Vpk", "kVACRMS",
+        ] {
+            assert!(!rail_relative_unit(unit), "{unit}");
+            assert_eq!(si_unit(unit).map(|u| u.1), Some("V"), "{unit}");
+        }
+        assert_eq!(si_unit("kVACRMS"), Some((1e3, "V")));
+        for unit in ["VDD", "VCC", "VCC+0.3", "VIN-0.5", "V+0.3"] {
+            assert!(rail_relative_unit(unit), "{unit}");
+        }
+    }
 
     #[test]
     fn wrong_units_are_named_and_correct_or_unjudgeable_laws_pass() {

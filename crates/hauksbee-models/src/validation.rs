@@ -1778,6 +1778,21 @@ pub fn rating_applies(kind: ComponentKind, key: &str) -> bool {
     }
 }
 
+/// How a drafted card's `value_re` / `mpn_re` is anchored: the extraction prompt
+/// states it and [`without_end_anchor`] enforces it, so the two cannot disagree.
+pub const MATCH_PATTERN_RULE: &str = "Anchor the pattern at the START only, never the end: \
+    a board value or orderable code carries a suffix (package, reel, grade, a description), \
+    so `^PART$` binds nothing but the bare name.";
+
+/// `pattern` without the end anchor [`MATCH_PATTERN_RULE`] forbids, or `None` when it
+/// ends with none (an escaped `\$` is a literal dollar, not an anchor).
+#[must_use]
+pub fn without_end_anchor(pattern: &str) -> Option<&str> {
+    let bare = pattern.strip_suffix('$')?;
+    let slashes = bare.bytes().rev().take_while(|b| *b == b'\\').count();
+    (slashes % 2 == 0).then_some(bare)
+}
+
 /// The rating keys that apply to `kind` ([`rating_applies`]): the ones validation
 /// accepts, and the ones the prompt may offer.
 #[must_use]

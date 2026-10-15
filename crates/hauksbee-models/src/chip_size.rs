@@ -2,7 +2,7 @@
 //!
 //! Three places used to restate it: the stress monitor's resistor ratings (by
 //! imperial code, and by the metric-only code), the thermal monitor's size-derived
-//! theta_JA, and the BOM-value parser's size codes that leak into a value field.
+//! `theta_JA`, and the BOM-value parser's size codes that leak into a value field.
 //! `docs/checks/THERMAL.md` renders its chip tables from this list (`tests/suite/docs_generated.rs`).
 
 /// One chip body: its two size codes, the standard resistor rating it carries and
@@ -15,7 +15,7 @@ pub struct ChipSize {
     pub metric: &'static str,
     /// The standard resistor rating (W).
     pub watts: f64,
-    /// Still-air theta_JA (C/W); `None` where no figure has been derived.
+    /// Still-air `theta_JA` (C/W); `None` where no figure has been derived.
     pub theta_ja_c_per_w: Option<f64>,
 }
 
@@ -33,8 +33,9 @@ const fn chip(
     }
 }
 
-/// Every chip size recognised, smallest body first. The order is load-bearing:
-/// `KiCad` pairs the imperial code with its metric twin, and 01005's metric code
+/// Every chip size recognised, smallest body first.
+///
+/// The order is load-bearing: `KiCad` pairs the imperial code with its metric twin, and 01005's metric code
 /// IS 0402 (`R_01005_0402Metric`), so a substring search must meet 01005 before
 /// 0402; and a smaller body is the hotter, so a lookup that stops at the first hit
 /// errs on the safe side.

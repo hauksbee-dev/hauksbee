@@ -360,8 +360,9 @@ fn prompt(part: &str, kind: &str, section: &str, known: &str) -> String {
     let (owns, topics, images, guide) = match section {
         "identity" => (
             format!(
-                "`id = \"{lower}\"`, `kind = \"{base}\"`, `[models.match]` (`value_re = '(?i)^{re}$'`), \
-                 `[models.pins]` and `[[models.source.pinout]]`"
+                "`id = \"{lower}\"`, `kind = \"{base}\"`, `[models.match]` (`value_re = '(?i)^{re}'`: {}), \
+                 `[models.pins]` and `[[models.source.pinout]]`",
+                crate::validation::MATCH_PATTERN_RULE
             ),
             "pin functions or package pinout, ordering or package information",
             "",
@@ -908,14 +909,12 @@ vol = { max = 0.55, unit = "V", conditions = "IOL = 24 mA; VI = VIL; VCCA = 3 V;
 
     /// The rating keys a prompt offers: its `  key  # meaning` guide lines.
     fn offered(prompt: &str) -> Vec<&'static str> {
-        let guide_line = |k: &str| {
-            let rest = |l: &str| l.trim_start().strip_prefix(k).map(str::trim_start);
-            prompt
-                .lines()
-                .any(|l| rest(l).is_some_and(|r| r.starts_with('#')))
+        let guide_line = |k: &str, l: &str| {
+            let rest = l.trim_start().strip_prefix(k);
+            rest.is_some_and(|r| r.trim_start().starts_with('#'))
         };
         crate::schema::Ratings::keys()
-            .filter(|k| guide_line(k))
+            .filter(|k| prompt.lines().any(|l| guide_line(k, l)))
             .collect()
     }
 
