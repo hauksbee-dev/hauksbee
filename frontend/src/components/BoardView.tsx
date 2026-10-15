@@ -20,7 +20,7 @@ import { centerInScroller } from '../lib/scroll'
 import { EvidencePanel, ImportDiagnosticsPanel, ModelCoveragePanel, ReportPanel } from './report/Panels'
 import { CosimBlock } from './report/CosimBlock'
 import { NextStep } from './report/NextStep'
-import { ExplainVerdict, VerdictConditions } from './report/VerdictConditions'
+import { ExplainVerdict, PartlyJudged, VerdictConditions } from './report/VerdictConditions'
 import { BoardMap } from './report/BoardMap'
 
 // The Board view with a report in hand: the viewer as the hero surface (with
@@ -267,12 +267,13 @@ export function BoardView({
             style={{ border: `1px solid ${v.palette.border}`, background: v.palette.background, fontSize: 15.5 }}
           >
             {v.headline}
-            {v.reason && (
+            {v.reason && !v.partlyJudged && (
               <div className="text-[13px] mt-1.5" data-testid="report-verdict-reason" title={v.reason} style={{ color: 'var(--silk)' }}>
                 {v.reasonBrief}
               </div>
             )}
             <VerdictConditions conditions={v.conditions} />
+            <PartlyJudged scope={v.partlyJudged} />
             {explanation && <ExplainVerdict explanation={explanation} />}
             <div className="text-xs mt-1.5 tnum" data-testid="report-inventory" style={{ color: 'var(--silk-dim)' }}>
               {v.title} · {plural(r.num_components, 'part')} · {plural(r.num_nets, 'net')}

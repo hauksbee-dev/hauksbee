@@ -7,7 +7,7 @@
 // engine's glossary words), why this one, and what to do next, with the raw
 // evidence one more click down.
 
-import type { VerdictExplanation } from '../../lib/report-view'
+import type { PartlyJudgedView, VerdictExplanation } from '../../lib/report-view'
 import { useTermEntry } from '../ui'
 
 export function VerdictConditions({ conditions }: { conditions: string[] }) {
@@ -30,6 +30,67 @@ export function VerdictConditions({ conditions }: { conditions: string[] }) {
         </li>
       ))}
     </ul>
+  )
+}
+
+const SHOWN_NETS = 6
+
+/** "a, b, c and 2 more", with the whole list in the tooltip. */
+function NetList({ nets }: { nets: string[] }) {
+  const shown = nets.slice(0, SHOWN_NETS).join(', ')
+  const more = nets.length - SHOWN_NETS
+  return <span title={nets.join(', ')}>{more > 0 ? `${shown} and ${more} more` : shown}</span>
+}
+
+/** A PARTLY JUDGED run is not a pass, so it gets its own block in the warning
+ *  colour (not the quiet note accent a conditional pass uses): the parts with
+ *  no usable model, what that left unjudged, and what was judged. The CLI and
+ *  `--json` carry the same scope as one sentence. */
+export function PartlyJudged({ scope }: { scope: PartlyJudgedView | null }) {
+  if (!scope) return null
+  const { openParts, wiring, electrical, judged, total } = scope
+  const many = openParts.length !== 1
+  return (
+    <div
+      data-testid="report-partly-judged"
+      role="note"
+      className="mt-2 pl-3 text-[13px] leading-relaxed"
+      style={{ color: 'var(--silk)', borderLeft: '3px solid var(--warn)', overflowWrap: 'anywhere' }}
+    >
+      <div className="font-semibold" data-testid="partly-judged-label" style={{ color: 'var(--warn)' }}>
+        Not a pass: partly judged
+      </div>
+      {openParts.length > 0 && (
+        <div data-testid="partly-judged-open">
+          <span className="font-semibold" style={{ color: 'var(--silk-dim)' }}>No usable model: </span>
+          {openParts.join(', ')}
+        </div>
+      )}
+      {wiring.length > 0 && (
+        <div data-testid="partly-judged-wiring">
+          <span className="font-semibold" style={{ color: 'var(--silk-dim)' }}>Not judged, wiring and value checks on {wiring.length} {wiring.length === 1 ? 'net' : 'nets'}: </span>
+          <NetList nets={wiring} />
+        </div>
+      )}
+      {electrical.length > 0 && (
+        <div data-testid="partly-judged-electrical">
+          <span className="font-semibold" style={{ color: 'var(--silk-dim)' }}>Not judged, electrical checks (levels, ratings, rails) on {electrical.length} {electrical.length === 1 ? 'net' : 'nets'}: </span>
+          <NetList nets={electrical} />
+        </div>
+      )}
+      {total > 0 && (
+        <div data-testid="partly-judged-judged">
+          <span className="font-semibold" style={{ color: 'var(--silk-dim)' }}>Judged: </span>
+          {judged} of {total} net checks
+        </div>
+      )}
+      {openParts.length > 0 && (
+        <div data-testid="partly-judged-next">
+          <span className="font-semibold" style={{ color: 'var(--silk-dim)' }}>To judge the rest: </span>
+          give {openParts.join(', ')} {many ? 'models' : 'a model'}.
+        </div>
+      )}
+    </div>
   )
 }
 

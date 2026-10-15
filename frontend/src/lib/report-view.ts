@@ -278,6 +278,20 @@ export interface ImportMarker {
   nets: string[]
 }
 
+/** A partly judged run's scope, for the verdict card: which parts have no
+ *  usable model and what that left unjudged. */
+export interface PartlyJudgedView {
+  /** The key parts with no usable model. */
+  openParts: string[]
+  /** Nets whose wiring/value checks were not judged. */
+  wiring: string[]
+  /** Nets whose electrical checks (levels, ratings, rails) were not judged. */
+  electrical: string[]
+  /** Net checks judged, of `total` (each net has a wiring and an electrical claim). */
+  judged: number
+  total: number
+}
+
 export interface ReportView {
   tone: ReportVerdictTone
   palette: { border: string; background: string }
@@ -289,6 +303,9 @@ export interface ReportView {
   /** The assumptions a pass rests on, one sentence each; empty for an
    *  unconditional report and for a verdict that is not a pass. */
   conditions: string[]
+  /** Set when the run is PARTLY JUDGED (never a pass): what was and was not
+   *  judged. Null for every other verdict. */
+  partlyJudged: PartlyJudgedView | null
   /** `board_name`, else the file name. */
   title: string
   /** "3 parts, 4 nets" */
@@ -337,6 +354,23 @@ function headlineWithoutConditions(headline: string, conditions: string[]): stri
 export const openPartRef = (a: EvidenceAssumption): string | null =>
   a.kind === 'open_part' ? a.id.replace(/^open-part:/, '') : null
 
+/** The judged scope of a PARTLY JUDGED run: the same numbers the engine's
+ *  "Partly judged: ..." sentence states (`2 * nets` claims, less the dependent ones). */
+function partlyJudgedView(r: WebReport): PartlyJudgedView | null {
+  if (!r.partly_judged) return null
+  const scope = r.judgement_scope
+  const total = 2 * (scope?.nets ?? 0)
+  const wiring = scope?.wiring_dependent ?? []
+  const electrical = scope?.electrical_dependent ?? []
+  return {
+    openParts: scope?.open_parts ?? [],
+    wiring,
+    electrical,
+    judged: Math.max(0, total - wiring.length - electrical.length),
+    total,
+  }
+}
+
 export function reportView(r: WebReport): ReportView {
   const unresolved = r.bind?.active_path_unresolved ?? []
   const open = unresolved.length > 0
@@ -355,6 +389,7 @@ export function reportView(r: WebReport): ReportView {
     palette: reportVerdictPalette(r),
     headline: headlineWithoutConditions(reportVerdictHeadline(r), conditions),
     conditions,
+    partlyJudged: partlyJudgedView(r),
     reason,
     reasonBrief: reason ? briefReason(reason) : null,
     title: r.board_name || r.file_name,
@@ -445,10 +480,11 @@ function explainVerdict(term: 'invalid' | 'fail', reason: string | undefined, re
 }
 
 /** The board's verdict, explained when it is refused. A failing board states its
- *  own cause, a conditional one lists its conditions, and an unrouted one is
- *  explained by its headline and fix-first: none of those needs a panel. */
+ *  own cause, a conditional one lists its conditions, a partly judged one names
+ *  its judged scope, and an unrouted one is explained by its headline and
+ *  fix-first: none of those needs a panel. */
 export const explainReport = (r: WebReport): VerdictExplanation | null =>
-  r.verdict === 'invalid' && !r.fix_first?.notice ? explainVerdict('invalid', r.verdict_reason, r.refusal) : null
+  r.verdict === 'invalid' && !r.partly_judged && !r.fix_first?.notice ? explainVerdict('invalid', r.verdict_reason, r.refusal) : null
 
 /** The same for a checks run (a clean or measured-only run has nothing to explain). */
 export function explainRun(result: RunResponse, overall: Overall, conditional: boolean): VerdictExplanation | null {

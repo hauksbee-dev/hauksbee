@@ -410,8 +410,27 @@ export interface WebReport {
    *  board: a fail or an invalid run never reads as a pass in the browser.
    *  Absent on reports from engines that predate it. */
   verdict?: 'pass' | 'fail' | 'invalid'
+  /** True when the verdict is PARTLY JUDGED: `invalid`, never a pass. Some key
+   *  parts have no usable model, so the checks they could change were not
+   *  judged; `judgement_scope` says which. The same flag `--json` prints. */
+  partly_judged?: boolean
+  /** What a partly judged run judged and what it did not, in the engine's
+   *  words (`--json` carries the same object). */
+  judgement_scope?: JudgementScope
   /** Every term the page can explain, in the engine's words. */
   glossary?: GlossaryRow[]
+}
+
+/** The key parts with no usable model, and the nets whose checks they could
+ *  change (those were not judged). */
+export interface JudgementScope {
+  open_parts: string[]
+  /** Named nets on the board; each has a wiring/value claim and an electrical claim. */
+  nets: number
+  /** Nets whose wiring/value checks were not judged. */
+  wiring_dependent: string[]
+  /** Nets whose electrical checks (levels, ratings, rails) were not judged. */
+  electrical_dependent: string[]
 }
 
 export interface WebSupply {

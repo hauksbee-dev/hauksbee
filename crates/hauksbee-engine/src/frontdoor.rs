@@ -673,6 +673,12 @@ pub struct WebReport {
     /// same flag `run --check --json` prints. Absent otherwise.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub partly_judged: bool,
+    /// What a PARTLY JUDGED run judged and what it did not (the open parts and
+    /// the nets whose checks they could change): the same object `run --check
+    /// --json` prints, so the browser names the judged scope beside the
+    /// verdict. Absent when every key part is modelled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judgement_scope: Option<crate::scope::JudgementScope>,
     /// The `--check` machine document for the static board, which the verdict
     /// is derived from. Firmware co-sim faults are folded into a copy of it
     /// when the verdict is derived, never into this one.
@@ -725,6 +731,7 @@ impl WebReport {
         self.headline = verdict_headline(&verdict, &self.headline, self.serious);
         self.verdict = verdict.verdict.to_string();
         self.partly_judged = verdict.partial;
+        self.judgement_scope.clone_from(&machine.judgement_scope);
         self.verdict_reason = verdict.reason;
         // Routing is the only blocking problem: the headline frames the state and
         // the strip says what ran, so the reason names the blocker once, briefly.
