@@ -84,7 +84,9 @@ matches = [
   "^Looks healthy: no copper spacing \\(drc\\) problems found\\.$",
   "^Looks healthy: no connectivity problems found\\.$",
   "^Looks healthy: no signal-integrity problems found\\.$",
-  "^VERDICT: clean: 0 serious, 0 worth a look$",
+  # Its copper was judged against default spacing rules (no .kicad_pro beside
+  # it), so the pass is conditional and says how to lift the condition.
+  "^VERDICT: clean, conditionally: 0 serious, 0 worth a look; copper spacing was judged against a DEFAULT [0-9.]+ mm clearance, not your rules; .* to remove this assumption\\.$",
 ]
 not_matches = [
   "INCONCLUSIVE",

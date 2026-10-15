@@ -256,7 +256,6 @@ fn gather_ci_artifact_findings(
         });
     }
     crate::reports::ci_artifacts::set_current_findings(findings.clone());
-    crate::reports::ci_artifacts::set_current_findings(findings.clone());
     Ok(findings)
 }
 
@@ -342,7 +341,9 @@ pub fn prepare_run_inputs(
         path: cfg.board.display().to_string(),
         kind: "board".to_string(),
         format: input_kind_name(input_kind).to_string(),
-        sha256: None,
+        // The same digest the evidence inventory records for these bytes, so
+        // the two provenance blocks describe the file identically.
+        sha256: (!raw.is_empty()).then(|| crate::run_manifest::hex_digest(&raw)),
         contributed: vec![format!(
             "{} components and {} nets",
             board.components.len(),

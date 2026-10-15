@@ -266,7 +266,7 @@ fn assemble_evidence_and_ci_artifacts(
         board_evidence.fault_finding_maps(&mut run_findings[..fault_findings.len()], &budget)?,
     );
     if let Some(summary) = &observations.cosim {
-        cosim_maps.push(board_evidence.simulation_map(
+        cosim_maps.extend(board_evidence.simulation_map_if_mapped(
             format!(
                 "Firmware behaviour for {} executed on {}",
                 summary.mcu_ref, summary.requested_part

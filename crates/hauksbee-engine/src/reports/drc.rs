@@ -91,8 +91,14 @@ pub(crate) fn emit_with_schematic_quiet(
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
                 .with_inputs(input.inputs)
                 .with_evidence(&evidence);
+            jr.findings = Some(drc_findings(&structured, Some(&provenance)));
             jr.drc = Some(structured.clone());
             jr.clearance_rule_source = Some(provenance.clone());
+            // A copper-only verdict over default rules is a conditional pass,
+            // and says which checks it covers.
+            jr.verdict_conditions
+                .extend(default_rules_condition(&structured, &provenance));
+            jr.push_coverage_note(crate::scope::single_check_note("DRC"));
             if provenance.source == crate::result::ClearanceRuleSource::Defaulted {
                 jr.push_coverage_note(provenance.cli_notice());
             }
@@ -139,6 +145,8 @@ pub(crate) fn emit_with_schematic_quiet(
         print!("{summary}");
     }
     if !matches!(mode, OutputMode::Json) {
+        // The same scope the JSON document states: copper only, not the board.
+        println!("\n{}", crate::scope::single_check_note("DRC"));
         print!(
             "{}",
             super::render_evidence_appendix(&evidence, quiet, verbose)
@@ -162,9 +170,10 @@ pub(crate) fn emit_with_schematic_quiet(
     // Copper is model-free: only an undermined DRC coverage claim (the input
     // could not honestly be inspected) or an undermined shorts map exits 3;
     // the bind state never poisons the copper surface.
-    if strict
-        && (coverage_undermined || crate::result::run_level_undermined(evidence.maps(), |_| false))
-    {
+    let unvouched =
+        coverage_undermined || crate::result::run_level_undermined(evidence.maps(), |_| false);
+    super::note_unvouched_exit(strict, unvouched);
+    if strict && unvouched {
         let refusal = crate::result::Refusal::new(
             "a trustworthy copper-spacing result",
             "DRC input coverage or run-level evidence is undermined",
@@ -177,6 +186,87 @@ pub(crate) fn emit_with_schematic_quiet(
         );
     }
     Ok(())
+}
+
+/// Every DRC result as machine findings, in report order: each short, then
+/// each below-rule clearance group, with its location, layer, nets and the
+/// parts whose pads it touches. The `findings[]` array, the CI artifacts and
+/// the `--strict` gate read this one list, so they cannot disagree.
+///
+/// A short keeps its structured severity: `serious` gates; `note` (an
+/// unvalidated-format claim or a board-authorized tie) does not. A clearance
+/// group is a `warning` and never gates on its own; one measured only against
+/// a default rule without crossing its floor is not actionable.
+pub(crate) fn drc_findings(
+    drc: &DrcStructured,
+    provenance: Option<&crate::result::ClearanceRuleProvenance>,
+) -> Vec<crate::result::JsonFinding> {
+    let phantom = drc.version_warning.is_some();
+    let shorts = drc.shorts.iter().map(|s| crate::result::JsonFinding {
+        check: "drc".into(),
+        kind: "short".into(),
+        severity: s.severity.clone(),
+        nets: vec![s.net_a.clone(), s.net_b.clone()],
+        location_mm: Some(s.loc_mm),
+        layer: Some(s.layer.clone()),
+        refs: s.refs.clone(),
+        // A tool-only claim still needs a look; an authorized tie does not.
+        actionable: s.severity == "serious" || phantom,
+        message: format!(
+            "copper short: {} touches {} on {}",
+            s.net_a, s.net_b, s.layer
+        ),
+        plain: s.plain.clone(),
+        fix: Some(s.fix.clone()),
+    });
+    let groups = drc.violations.iter().map(|g| crate::result::JsonFinding {
+        check: "drc".into(),
+        kind: "clearance".into(),
+        severity: "warning".into(),
+        nets: vec![g.net_a.clone(), g.net_b.clone()],
+        location_mm: Some(g.min_gap_loc_mm),
+        layer: Some(g.layer.clone()),
+        refs: g.refs.clone(),
+        actionable: !provenance.is_some_and(|p| p.is_advisory(g)),
+        message: format!(
+            "clearance: {} to {} on {}, {} below the {:.3} mm rule (tightest {:.3} mm)",
+            g.net_a, g.net_b, g.layer, g.below_count, g.rule_mm, g.min_gap_mm
+        ),
+        plain: provenance.map_or_else(|| g.plain.clone(), |p| g.label_with_rule_provenance(p)),
+        fix: Some(g.fix.clone()),
+    });
+    shorts.chain(groups).collect()
+}
+
+/// The condition a pass rests on when copper spacing was judged against a
+/// default clearance rather than the board's own rules, with how to lift it.
+/// `None` for the board's own rules, or when there was no copper to space (a
+/// netlist): a pass on them is unconditional.
+pub(crate) fn default_rules_condition(
+    drc: &DrcStructured,
+    provenance: &crate::result::ClearanceRuleProvenance,
+) -> Option<String> {
+    use crate::result::ClearanceRuleSource;
+    if drc.primitive_count == 0 {
+        return None;
+    }
+    let lift = match provenance.source {
+        ClearanceRuleSource::Defaulted if provenance.project_file_found => {
+            "repair the board's .kicad_pro so its netclass rules can be read, then rerun"
+        }
+        ClearanceRuleSource::Defaulted => {
+            "put the board's .kicad_pro beside it (or upload it with the board) and rerun"
+        }
+        ClearanceRuleSource::ToolDefault => {
+            "this format carries no design rules Hauksbee reads, so confirm spacing with your CAD tool's own DRC"
+        }
+        _ => return None,
+    };
+    Some(format!(
+        "copper spacing was judged against a DEFAULT {:.3} mm clearance, not your rules; \
+         {lift} to remove this assumption.",
+        provenance.value_mm
+    ))
 }
 
 /// Parse a version string like "10.0.3" (or "`KiCad` 9.0.3") into a comparable
