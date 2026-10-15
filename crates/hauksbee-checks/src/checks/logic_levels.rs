@@ -198,11 +198,11 @@ fn part_flags(
 
 fn flags(
     board: &ExtractedBoard,
-    lib: &ModelLibrary,
+    st: &super::BoardStatics<'_>,
     span: &dyn Fn(&str) -> Option<RailRange>,
 ) -> Vec<Flag> {
-    let each = super::resolved_components(board, lib);
-    each.flat_map(|(c, m)| part_flags(board, c, &m, span))
+    let each = st.parts(board);
+    each.flat_map(|(c, m)| part_flags(board, c, m, span))
         .collect()
 }
 
@@ -213,7 +213,8 @@ pub fn logic_level_lint(
     lib: &ModelLibrary,
     span: &dyn Fn(&str) -> Option<RailRange>,
 ) -> NetLintReport {
-    let findings = flags(board, lib, span).into_iter().map(|(f, _)| f);
+    let st = super::BoardStatics::of(board, lib);
+    let findings = flags(board, &st, span).into_iter().map(|(f, _)| f);
     NetLintReport {
         findings: findings.collect(),
     }
@@ -223,16 +224,17 @@ pub fn logic_level_lint(
 /// operating-limit violation.
 pub fn run_assumptions(
     board: &ExtractedBoard,
-    lib: &ModelLibrary,
+    st: &super::BoardStatics<'_>,
     span: &dyn Fn(&str) -> Option<RailRange>,
 ) -> Vec<Assumption> {
     let fix = "drive the input to a valid level for the part's supply, then re-run";
-    super::analog_inputs::as_evidence(flags(board, lib, span), "logic-level", fix)
+    super::analog_inputs::as_evidence(flags(board, st, span), "logic-level", fix)
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::test_support::{board, part};
+    use super::super::BoardStatics;
     use super::*;
     use hauksbee_ir::evidence::AssumptionKind;
     use std::collections::HashMap;
@@ -249,7 +251,7 @@ mod tests {
         let lib = ModelLibrary::builtin();
         (
             logic_level_lint(&b, &lib, &span),
-            run_assumptions(&b, &lib, &span),
+            run_assumptions(&b, &BoardStatics::of(&b, &lib), &span),
         )
     }
 

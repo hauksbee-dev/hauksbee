@@ -146,15 +146,15 @@ fn adc_flags(cx: &Ctx, c: &Component, m: &ModelEntry) -> Vec<Flag> {
 /// ceiling, plus ADC pins fed from too high a source impedance.
 fn flags(
     board: &ExtractedBoard,
-    lib: &ModelLibrary,
+    st: &super::BoardStatics<'_>,
     v: &dyn Fn(&str) -> Option<f64>,
     ambient_c: Option<f64>,
 ) -> Vec<Flag> {
     let (cx, mut out) = (Ctx { board, v }, Vec::new());
-    for (c, m) in super::resolved_components(board, lib) {
-        let channel = |e| channel_flag(&cx, c, &m, e);
+    for (c, m) in st.parts(board) {
+        let channel = |e| channel_flag(&cx, c, m, e);
         out.extend(super::envelope::binding(&m.envelope, ambient_c).filter_map(channel));
-        out.extend(adc_flags(&cx, c, &m));
+        out.extend(adc_flags(&cx, c, m));
     }
     out
 }
@@ -165,7 +165,8 @@ pub fn analog_input_lint(
     lib: &ModelLibrary,
     volts: &dyn Fn(&str) -> Option<f64>,
 ) -> NetLintReport {
-    let findings = flags(board, lib, volts, None).into_iter().map(|(f, _)| f);
+    let st = super::BoardStatics::of(board, lib);
+    let findings = flags(board, &st, volts, None).into_iter().map(|(f, _)| f);
     NetLintReport {
         findings: findings.collect(),
     }
@@ -181,12 +182,12 @@ pub fn analog_input_lint(
 /// `ambient` is the run's ambient (°C) and whether the scenario stated it.
 pub fn run_assumptions(
     board: &ExtractedBoard,
-    lib: &ModelLibrary,
+    st: &super::BoardStatics<'_>,
     volts: &dyn Fn(&str) -> Option<f64>,
     ambient: (f64, bool),
 ) -> Vec<Assumption> {
     let fix = "bring the input inside the range the card quotes, then re-run";
-    let judge = |at| flags(board, lib, volts, at);
+    let judge = |at| flags(board, st, volts, at);
     at_ambient(ambient, judge, "analog-input-range", fix)
 }
 
@@ -240,6 +241,7 @@ pub(super) fn as_evidence(mut found: Vec<Flag>, limit: &str, fix: &str) -> Vec<A
 #[cfg(test)]
 mod tests {
     use super::super::test_support::{board, part};
+    use super::super::BoardStatics;
     use super::*;
     use hauksbee_ir::evidence::AssumptionKind as Kind;
     use hauksbee_ir::evidence::AssumptionKind::{OperatingLimitViolated, ReducedFidelity};
@@ -275,7 +277,7 @@ mod tests {
         let lib = ModelLibrary::builtin();
         let report = analog_input_lint(b, &lib, v);
         assert_eq!(report.findings.len(), n, "{label}: {report:?}");
-        let assumptions = run_assumptions(b, &lib, v, (25.0, true));
+        let assumptions = run_assumptions(b, &BoardStatics::of(b, &lib), v, (25.0, true));
         let kinds: Vec<_> = assumptions
             .iter()
             .map(hauksbee_ir::evidence::Assumption::kind)

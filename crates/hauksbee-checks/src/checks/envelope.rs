@@ -27,6 +27,7 @@ use hauksbee_models::{
     ComponentKind, EnvelopeSeverity, ModelEntry, ModelLibrary, OperatingEnvelope,
 };
 
+use super::BoardStatics;
 use hauksbee_bind::binder::{is_ground, power_rail_voltage, resolve};
 
 /// The complete DC interval a net can present during normal operation.
@@ -144,14 +145,13 @@ fn parallel(ohms: impl Iterator<Item = f64>) -> Option<f64> {
 /// which case the card's own set point stands.
 fn feedback_output_range(
     board: &ExtractedBoard,
-    comp: &Component,
-    model: &ModelEntry,
+    tied: &BTreeMap<i64, BTreeSet<i64>>,
+    (comp, model): (&Component, &ModelEntry),
     uncertainty: &[ModelUncertainty],
     out_net: i64,
 ) -> Option<RailRange> {
     let feedback = model.behavioral.converter.as_ref()?.feedback.as_ref()?;
     let fb_net = role_net_id(comp, model, &feedback.pin)?;
-    let tied = tied_nets(board);
     let on_output = |n: i64| n == out_net || tied.get(&out_net).is_some_and(|set| set.contains(&n));
     let grounded = |n: i64| board.net(n).is_some_and(|net| is_ground(&net.name));
     let top = parallel(
@@ -224,10 +224,28 @@ fn tied_nets(board: &ExtractedBoard) -> BTreeMap<i64, BTreeSet<i64>> {
     map
 }
 
-fn regulator_ranges(board: &ExtractedBoard, lib: &ModelLibrary) -> BTreeMap<i64, RailRange> {
+/// What the board's parts alone say each net's level is: the regulator and
+/// battery rails. It reads no run level, so every ensemble member on this board
+/// shares one (see [`BoardStatics`]).
+pub(crate) struct Rails {
+    regulators: BTreeMap<i64, RailRange>,
+    batteries: BTreeMap<i64, Option<RailRange>>,
+}
+
+impl Rails {
+    pub(crate) fn of(board: &ExtractedBoard, st: &BoardStatics<'_>) -> Self {
+        Self {
+            regulators: regulator_ranges(board, st),
+            batteries: battery_ranges(board, st),
+        }
+    }
+}
+
+fn regulator_ranges(board: &ExtractedBoard, st: &BoardStatics<'_>) -> BTreeMap<i64, RailRange> {
     let mut ranges = BTreeMap::new();
-    for (comp, model) in super::resolved_components(board, lib) {
-        let Some(range) = model_output_range(&model) else {
+    let tied = tied_nets(board);
+    for (comp, model) in st.parts(board) {
+        let Some(range) = model_output_range(model) else {
             continue;
         };
         let output_role = model
@@ -241,23 +259,21 @@ fn regulator_ranges(board: &ExtractedBoard, lib: &ModelLibrary) -> BTreeMap<i64,
                     .find(|role| model.pins.values().any(|known| known == role))
             });
         let Some(role) = output_role else { continue };
-        if let Some(net_id) = role_net_id(comp, &model, role) {
+        if let Some(net_id) = role_net_id(comp, model, role) {
             // The library keeps a card's declared uncertainty on the
             // resolution's provenance, not on the compiled entry.
             let uncertainty = AssemblyState::of(comp)
                 .fitted()
-                .and_then(|part| resolve(lib, part).provenance)
+                .and_then(|part| resolve(st.lib, part).provenance)
                 .map(|source| source.uncertainty().to_vec())
                 .unwrap_or_default();
-            let range =
-                feedback_output_range(board, comp, &model, &uncertainty, net_id).unwrap_or(range);
-            ranges.insert(net_id, range);
+            let feedback = feedback_output_range(board, &tied, (comp, model), &uncertainty, net_id);
+            ranges.insert(net_id, feedback.unwrap_or(range));
         }
     }
     // A regulated net reaches the loads through net ties and zero-ohm links
     // as the same rail: the level is the regulator's, not one the far net's
     // name suggests.
-    let tied = tied_nets(board);
     let spread: Vec<(i64, RailRange)> = ranges
         .iter()
         .flat_map(|(&net, &range)| {
@@ -272,9 +288,9 @@ fn regulator_ranges(board: &ExtractedBoard, lib: &ModelLibrary) -> BTreeMap<i64,
     }
     // A fitted module's own supply pins (a dev board's 5V/3V3 header), unless
     // a regulator on the board already defines the net.
-    for (comp, model) in super::resolved_components(board, lib) {
+    for (comp, model) in st.parts(board) {
         for out in &model.supply_outputs {
-            if let Some(net_id) = role_net_id(comp, &model, &out.role) {
+            if let Some(net_id) = role_net_id(comp, model, &out.role) {
                 let range = RailRange {
                     min_v: out.min,
                     max_v: out.max,
@@ -304,7 +320,10 @@ fn battery_floor(chemistry: &str) -> Option<f64> {
 
 /// Battery-class nets and the range their chemistry witness authorizes.
 /// `None` means the topology establishes a battery but no chemistry card does.
-fn battery_ranges(board: &ExtractedBoard, lib: &ModelLibrary) -> BTreeMap<i64, Option<RailRange>> {
+fn battery_ranges(
+    board: &ExtractedBoard,
+    st: &BoardStatics<'_>,
+) -> BTreeMap<i64, Option<RailRange>> {
     let mut ranges = BTreeMap::new();
 
     for comp in &board.components {
@@ -318,13 +337,9 @@ fn battery_ranges(board: &ExtractedBoard, lib: &ModelLibrary) -> BTreeMap<i64, O
                 }
             }
         }
+    }
 
-        let Some(part) = AssemblyState::of(comp).fitted() else {
-            continue;
-        };
-        let Some(model) = resolve(lib, part).model else {
-            continue;
-        };
+    for (comp, model) in st.parts(board) {
         // Only a part that manages a cell (a charger or power-path card, or
         // any card that states the chemistry) makes its battery pin a battery
         // net. A chip that merely CONSUMES backup power on a VBAT pin (an
@@ -342,7 +357,7 @@ fn battery_ranges(board: &ExtractedBoard, lib: &ModelLibrary) -> BTreeMap<i64, O
         }) else {
             continue;
         };
-        let Some(net_id) = role_net_id(comp, &model, battery_role) else {
+        let Some(net_id) = role_net_id(comp, model, battery_role) else {
             continue;
         };
         let range = model
@@ -350,7 +365,7 @@ fn battery_ranges(board: &ExtractedBoard, lib: &ModelLibrary) -> BTreeMap<i64, O
             .get_str("battery_chemistry")
             .and_then(battery_floor)
             .and_then(|min_v| {
-                model_output_range(&model).map(|setpoint| RailRange {
+                model_output_range(model).map(|setpoint| RailRange {
                     min_v,
                     max_v: setpoint.max_v,
                 })
@@ -368,22 +383,19 @@ pub(crate) struct RailResolver<'a> {
     board: &'a ExtractedBoard,
     /// Levels a run solved (or a spec forced), each the span the net covered.
     solved: &'a BTreeMap<String, RailRange>,
-    regulators: BTreeMap<i64, RailRange>,
-    batteries: BTreeMap<i64, Option<RailRange>>,
+    rails: &'a Rails,
 }
 
 impl<'a> RailResolver<'a> {
     pub(crate) fn new(
         board: &'a ExtractedBoard,
-        lib: &ModelLibrary,
+        st: &'a BoardStatics<'_>,
         solved: &'a BTreeMap<String, RailRange>,
     ) -> Self {
-        let (regulators, batteries) = (regulator_ranges(board, lib), battery_ranges(board, lib));
         Self {
             board,
             solved,
-            regulators,
-            batteries,
+            rails: st.rails(board),
         }
     }
 
@@ -413,8 +425,8 @@ impl<'a> RailResolver<'a> {
     /// run solved it, and no regulator, battery or ground identity defines it.
     fn assumed_from_name(&self, net_id: i64) -> bool {
         self.solved(net_id).is_none()
-            && !self.regulators.contains_key(&net_id)
-            && !self.batteries.contains_key(&net_id)
+            && !self.rails.regulators.contains_key(&net_id)
+            && !self.rails.batteries.contains_key(&net_id)
             && self
                 .board
                 .net(net_id)
@@ -425,10 +437,10 @@ impl<'a> RailResolver<'a> {
         let Some(net) = self.board.net(net_id) else {
             return RailKnowledge::Unknown;
         };
-        if let Some(range) = self.regulators.get(&net_id).copied() {
+        if let Some(range) = self.rails.regulators.get(&net_id).copied() {
             return RailKnowledge::Known(range);
         }
-        if let Some(range) = self.batteries.get(&net_id) {
+        if let Some(range) = self.rails.batteries.get(&net_id) {
             return range
                 .map(RailKnowledge::Known)
                 .unwrap_or(RailKnowledge::BatteryWithoutChemistry);
@@ -540,12 +552,12 @@ pub(crate) fn binding(
 /// that qualifies the answer.
 pub(crate) fn temperature_caveats(
     board: &ExtractedBoard,
-    lib: &ModelLibrary,
+    st: &BoardStatics<'_>,
     ambient_c: f64,
 ) -> Vec<Assumption> {
     let fix = "run the part inside the temperature range the card's rows are printed for, or add the row for this temperature";
     let mut out = Vec::new();
-    for (comp, model) in super::resolved_components(board, lib) {
+    for (comp, model) in st.parts(board) {
         let (r, envelope) = (comp.reference.as_str(), &model.envelope);
         for e in envelope {
             let first = rows_of(envelope, e).next() == Some(e);
@@ -582,26 +594,27 @@ pub fn envelope_lint_with_drives(
     let points = drives
         .iter()
         .map(|(net, v)| (net.clone(), RailRange::point(*v)));
-    envelope_lint_with_tolerance(board, lib, &points.collect(), (0.0, 0.0), None)
+    let st = BoardStatics::of(board, lib);
+    envelope_lint_with_tolerance(board, &st, &points.collect(), (0.0, 0.0), None)
 }
 
 // One match over envelope kinds sharing the resolver and per-net abstention bookkeeping.
 #[allow(clippy::too_many_lines)]
 fn envelope_lint_with_tolerance(
     board: &ExtractedBoard,
-    lib: &ModelLibrary,
+    st: &BoardStatics<'_>,
     solved: &BTreeMap<String, RailRange>,
     (reltol, vntol): (f64, f64),
     ambient_c: Option<f64>,
 ) -> NetLintReport {
-    let resolver = RailResolver::new(board, lib, solved);
+    let resolver = RailResolver::new(board, st, solved);
     let mut report = NetLintReport::default();
     let mut abstained_nets = BTreeSet::new();
     let mut starved: BTreeMap<i64, Vec<Starved>> = BTreeMap::new();
     let mut unleveled: BTreeMap<i64, Vec<Starved>> = BTreeMap::new();
 
-    for (comp, model) in super::resolved_components(board, lib) {
-        let net_of = |role| role_net_id(comp, &model, role).and_then(|id| board.net(id));
+    for (comp, model) in st.parts(board) {
+        let net_of = |role| role_net_id(comp, model, role).and_then(|id| board.net(id));
         for envelope in binding(&model.envelope, ambient_c) {
             match envelope {
                 OperatingEnvelope::SupplyRange {
@@ -629,7 +642,7 @@ fn envelope_lint_with_tolerance(
                                     finding: usize::MAX,
                                     reference: comp.reference.clone(),
                                     min_v: *min_v,
-                                    draw_a: static_draw_a(&model),
+                                    draw_a: static_draw_a(model),
                                 });
                             }
                             continue;
@@ -698,7 +711,7 @@ fn envelope_lint_with_tolerance(
                             finding: report.findings.len(),
                             reference: comp.reference.clone(),
                             min_v: *min_v,
-                            draw_a: static_draw_a(&model),
+                            draw_a: static_draw_a(model),
                         });
                     }
                     report.findings.push(LintFinding {
@@ -767,7 +780,7 @@ fn envelope_lint_with_tolerance(
         }
     }
     fold_starved_rails(&resolver, starved, &mut report);
-    estimate_starved_rails(&resolver, lib, &unleveled, &mut report);
+    estimate_starved_rails(&resolver, st, &unleveled, &mut report);
     report
 }
 
@@ -853,7 +866,7 @@ fn fold_starved_rails(
         let Some(rail) = resolver.solved(net_id) else {
             continue;
         };
-        if resolver.regulators.contains_key(&net_id) {
+        if resolver.rails.regulators.contains_key(&net_id) {
             continue;
         }
         let Some(finding) = explain_starved(resolver, net_id, &parts, Some(rail)) else {
@@ -881,11 +894,12 @@ fn fold_starved_rails(
 /// the rail (a regulator, a battery) already gives the rail a declared level.
 fn estimate_starved_rails(
     resolver: &RailResolver<'_>,
-    lib: &ModelLibrary,
+    st: &BoardStatics<'_>,
     unleveled: &BTreeMap<i64, Vec<Starved>>,
     report: &mut NetLintReport,
 ) {
-    let modelled: BTreeSet<&str> = super::resolved_components(resolver.board, lib)
+    let modelled: BTreeSet<&str> = st
+        .parts(resolver.board)
         .map(|(comp, _)| comp.reference.as_str())
         .collect();
     for (&net_id, parts) in unleveled {
@@ -1006,21 +1020,21 @@ fn explain_starved(
 #[must_use]
 pub fn run_assumptions(
     board: &ExtractedBoard,
-    lib: &ModelLibrary,
+    st: &BoardStatics<'_>,
     solved: &BTreeMap<String, RailRange>,
     tolerance: (f64, f64),
     ambient: (f64, bool),
 ) -> Vec<Assumption> {
     let solved_only = |f: &LintFinding| f.nets.iter().all(|n| solved.contains_key(n));
     let judge = |at| {
-        let found = envelope_lint_with_tolerance(board, lib, solved, tolerance, at).findings;
+        let found = envelope_lint_with_tolerance(board, st, solved, tolerance, at).findings;
         let serious = |f: LintFinding| (f.severity == Severity::High, f);
         let found = found.into_iter().filter(&solved_only).map(serious);
         found.map(|(bad, f)| (f, bad)).collect()
     };
     let fix = "bring the rail inside the envelope the card quotes, then re-run";
     let mut out = super::analog_inputs::at_ambient(ambient, judge, "supply-envelope", fix);
-    out.extend(temperature_caveats(board, lib, ambient.0));
+    out.extend(temperature_caveats(board, st, ambient.0));
     out
 }
 
@@ -1089,7 +1103,13 @@ basis = "Recommended Operating Conditions, Table 1, VDD row"
         };
         let lib = ModelLibrary::builtin();
         let solved = BTreeMap::new();
-        let known = |b: &ExtractedBoard, id| match RailResolver::new(b, &lib, &solved).range(id) {
+        let known = |b: &ExtractedBoard, id| match RailResolver::new(
+            b,
+            &BoardStatics::of(b, &lib),
+            &solved,
+        )
+        .range(id)
+        {
             RailKnowledge::Known(r) => Some((r.min_v, r.max_v)),
             _ => None,
         };
@@ -1308,6 +1328,78 @@ basis = "Recommended Operating Conditions, V+ row"
         assert_eq!(found[0].severity, Severity::Low, "{msg}");
     }
 
+    /// Ensemble members on one board share its statics, yet each is judged at
+    /// its own solved level, whatever order they are asked in.
+    #[test]
+    fn shared_statics_judge_each_members_own_supply() {
+        let b = board(
+            &[(1, "GND"), (2, "UNNAMED_SUPPLY")],
+            vec![part("U1", "RANGE_PART", vec![pin("1", 2), pin("2", 1)])],
+        );
+        let lib = library("shared", SUPPLY_CARD);
+        let shared = BoardStatics::of(&b, &lib);
+        let fires = |st: &BoardStatics<'_>, v: f64| {
+            let level = RailRange { min_v: v, max_v: v };
+            let solved = BTreeMap::from([("UNNAMED_SUPPLY".to_string(), level)]);
+            let found = run_assumptions(&b, st, &solved, (1.0e-3, 1.0e-6), (25.0, true));
+            !found.is_empty()
+        };
+        let volts = [3.3, 3.8, 3.3, 2.8, 3.4];
+        let members: Vec<_> = volts.iter().map(|&v| fires(&shared, v)).collect();
+        assert_eq!(members, [false, true, false, true, false]);
+        for (v, got) in volts.iter().zip(members) {
+            assert_eq!(fires(&BoardStatics::of(&b, &lib), *v), got, "{v} V");
+        }
+    }
+
+    /// The statics belong to their exact board: a feedback resistor changed
+    /// by a sampled member sets a different rail, so that member must not be
+    /// handed the statics taken from the nominal board.
+    #[test]
+    fn statics_follow_the_boards_feedback_divider() {
+        let lib = library("fbstatics", BOOST_AND_LOAD);
+        let with_top = |top: &str| {
+            let mut r1 = part("R1", top, vec![pin("1", 3), pin("2", 4)]);
+            r1.lib_id = "Device:R".into();
+            let mut r2 = part("R2", "50k", vec![pin("1", 3), pin("2", 1)]);
+            r2.lib_id = "Device:R".into();
+            board(
+                &[(1, "GND"), (2, "VIN"), (3, "FB"), (4, "OUT")],
+                vec![
+                    part(
+                        "U1",
+                        "FB_BOOST",
+                        vec![pin("1", 2), pin("2", 1), pin("3", 3), pin("4", 4)],
+                    ),
+                    r1,
+                    r2,
+                    part("U2", "LOAD_PART", vec![pin("1", 4), pin("2", 1)]),
+                ],
+            )
+        };
+        let (nominal, sampled) = (with_top("450k"), with_top("250k"));
+        let (st_nominal, st_sampled) = (
+            BoardStatics::of(&nominal, &lib),
+            BoardStatics::of(&sampled, &lib),
+        );
+        assert!(st_nominal.describes(&nominal) && st_sampled.describes(&sampled));
+        assert!(
+            !st_nominal.describes(&sampled),
+            "a changed value is a new board"
+        );
+        let out = |st: &BoardStatics<'_>, b: &ExtractedBoard| st.rails(b).regulators[&4];
+        let (hi, lo) = (out(&st_nominal, &nominal), out(&st_sampled, &sampled));
+        assert!((hi.max_v - 5.0).abs() < 1e-9, "{hi:?}");
+        assert!((lo.max_v - 3.0).abs() < 1e-9, "{lo:?}");
+        let judged = |b: &ExtractedBoard| {
+            let found = envelope_lint(b, &lib);
+            let mut found = found.of_check(LintCheck::OperatingEnvelope);
+            found.any(|f| f.refs.contains(&"U2".to_string()))
+        };
+        assert!(judged(&nominal), "5.0 V is over the load's 4.5 V maximum");
+        assert!(!judged(&sampled), "3.0 V is inside the load's range");
+    }
+
     #[test]
     fn solved_level_uses_solver_voltage_tolerance_at_envelope_edge() {
         let b = board(
@@ -1333,7 +1425,13 @@ basis = "Recommended Operating Conditions, V+ row"
         ] {
             let solved =
                 BTreeMap::from([("UNNAMED_SUPPLY".to_string(), RailRange { min_v, max_v })]);
-            let findings = run_assumptions(&b, &lib, &solved, (1.0e-3, 1.0e-6), (25.0, true));
+            let findings = run_assumptions(
+                &b,
+                &BoardStatics::of(&b, &lib),
+                &solved,
+                (1.0e-3, 1.0e-6),
+                (25.0, true),
+            );
             assert_eq!(
                 !findings.is_empty(),
                 fires,
@@ -1469,8 +1567,19 @@ envelope = [
             (125.0, true, [1, 1, 2, 0]),
             (25.0, false, [1, 0, 0, 1]),
         ] {
-            let mut ids = run_assumptions(&b, &lib, &solved, (0.0, 0.0), (ta, given));
-            ids.extend(analog_inputs::run_assumptions(&b, &lib, &v, (ta, given)));
+            let mut ids = run_assumptions(
+                &b,
+                &BoardStatics::of(&b, &lib),
+                &solved,
+                (0.0, 0.0),
+                (ta, given),
+            );
+            ids.extend(analog_inputs::run_assumptions(
+                &b,
+                &BoardStatics::of(&b, &lib),
+                &v,
+                (ta, given),
+            ));
             let ids: Vec<String> = ids.iter().map(|a| a.id().to_string()).collect();
             let count = |s: &str| ids.iter().filter(|id| id.contains(s)).count();
             let got = ["supply-env", "analog-input", "temperature", "ambient"].map(count);
@@ -1700,7 +1809,13 @@ unlocked_by = "validated behavior"
         // Legal: a 10 ohm feed drops 33 mV; a direct feed drops nothing.
         for feed in [Some("10"), None] {
             let (b, solved) = comparator_rail(feed);
-            let report = envelope_lint_with_tolerance(&b, &lib, &solved, tol, Some(25.0));
+            let report = envelope_lint_with_tolerance(
+                &b,
+                &BoardStatics::of(&b, &lib),
+                &solved,
+                tol,
+                Some(25.0),
+            );
             let starved = |f: &&LintFinding| f.message.contains("is starved");
             assert_eq!(
                 report.findings.iter().filter(starved).count(),
@@ -1711,7 +1826,8 @@ unlocked_by = "validated behavior"
                 .get(if feed.is_some() { "VA" } else { "+5V" })
                 .unwrap();
             assert!(rail.min_v > 4.9, "{feed:?}: the rail is up, got {rail:?}");
-            let evidence = run_assumptions(&b, &lib, &solved, tol, (25.0, true));
+            let evidence =
+                run_assumptions(&b, &BoardStatics::of(&b, &lib), &solved, tol, (25.0, true));
             assert!(evidence.is_empty(), "{feed:?}: {evidence:?}");
         }
 
@@ -1720,7 +1836,8 @@ unlocked_by = "validated behavior"
         let (b, solved) = comparator_rail(Some("1k"));
         let va = solved["VA"].max_v;
         assert!(va < 2.7, "VA must solve below the parts' minimum, got {va}");
-        let report = envelope_lint_with_tolerance(&b, &lib, &solved, tol, Some(25.0));
+        let report =
+            envelope_lint_with_tolerance(&b, &BoardStatics::of(&b, &lib), &solved, tol, Some(25.0));
         assert_eq!(
             report.findings.len(),
             1,
@@ -1741,7 +1858,7 @@ unlocked_by = "validated behavior"
             assert!(f.message.contains(says), "{says:?} in {}", f.message);
         }
         // As run evidence it is one measured violation, keyed on the feed.
-        let evidence = run_assumptions(&b, &lib, &solved, tol, (25.0, true));
+        let evidence = run_assumptions(&b, &BoardStatics::of(&b, &lib), &solved, tol, (25.0, true));
         let kinds: Vec<_> = evidence.iter().map(Assumption::kind).collect();
         assert_eq!(
             kinds,

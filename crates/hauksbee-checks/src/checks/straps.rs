@@ -64,7 +64,8 @@ pub fn strap_lint_with_drives(
     lib: &ModelLibrary,
     solved: &BTreeMap<String, RailRange>,
 ) -> NetLintReport {
-    let rails = RailResolver::new(board, lib, solved);
+    let statics = super::BoardStatics::of(board, lib);
+    let rails = RailResolver::new(board, &statics, solved);
     let mut report = NetLintReport::default();
     for comp in &board.components {
         // The three-state contract: only a present part's strap table runs.

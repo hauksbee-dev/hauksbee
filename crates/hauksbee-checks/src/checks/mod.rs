@@ -125,10 +125,102 @@ pub(crate) fn resolved_components<'a>(
     board: &'a ExtractedBoard,
     lib: &'a ModelLibrary,
 ) -> impl Iterator<Item = (&'a hauksbee_extract::Component, hauksbee_models::ModelEntry)> + 'a {
-    board.components.iter().filter_map(move |comp| {
-        let part = hauksbee_extract::assembly::AssemblyState::of(comp).fitted()?;
-        Some((comp, hauksbee_bind::binder::resolve(lib, part).model?))
-    })
+    BoardStatics::resolve_all(board, lib).map(|(_, comp, model)| (comp, model))
+}
+
+/// What a board and the model library alone decide, asked of them once.
+///
+/// A run-evidence pass asks the same questions of the same board many times (a
+/// model per part, the regulator and battery rails), and an ensemble asks them
+/// again for every member. None of them reads a member's supply values, enables
+/// or seed: those arrive separately, as the `solved` levels each pass takes. So
+/// the answers are kept here and shared by every member that runs on this exact
+/// board. A member whose board differs (a toleranced value, a pinned variant)
+/// must build its own; [`Self::describes`] says whether a board is the one these
+/// were taken from.
+pub struct BoardStatics<'l> {
+    lib: &'l ModelLibrary,
+    fingerprint: u64,
+    /// `(index into the board's components, its model)` for each fitted part.
+    models: Vec<(usize, hauksbee_models::ModelEntry)>,
+    rails: std::sync::OnceLock<envelope::Rails>,
+}
+
+impl<'l> BoardStatics<'l> {
+    /// The statics of `board` against `lib`.
+    #[must_use]
+    pub fn of(board: &ExtractedBoard, lib: &'l ModelLibrary) -> Self {
+        let models = Self::resolve_all(board, lib)
+            .map(|(i, _, model)| (i, model))
+            .collect();
+        Self {
+            lib,
+            fingerprint: fingerprint(board),
+            models,
+            rails: std::sync::OnceLock::new(),
+        }
+    }
+
+    fn resolve_all<'a>(
+        board: &'a ExtractedBoard,
+        lib: &'a ModelLibrary,
+    ) -> impl Iterator<
+        Item = (
+            usize,
+            &'a hauksbee_extract::Component,
+            hauksbee_models::ModelEntry,
+        ),
+    > + 'a {
+        let each = board.components.iter().enumerate();
+        each.filter_map(move |(i, comp)| {
+            let part = hauksbee_extract::assembly::AssemblyState::of(comp).fitted()?;
+            Some((i, comp, hauksbee_bind::binder::resolve(lib, part).model?))
+        })
+    }
+
+    /// The board's regulator and battery rails, found on first ask.
+    pub(crate) fn rails(&self, board: &ExtractedBoard) -> &envelope::Rails {
+        self.rails.get_or_init(|| envelope::Rails::of(board, self))
+    }
+
+    /// Whether `board` is the board these statics were taken from.
+    #[must_use]
+    pub fn describes(&self, board: &ExtractedBoard) -> bool {
+        fingerprint(board) == self.fingerprint
+    }
+
+    /// [`resolved_components`] of the board these statics describe.
+    pub(crate) fn parts<'a>(
+        &'a self,
+        board: &'a ExtractedBoard,
+    ) -> impl Iterator<
+        Item = (
+            &'a hauksbee_extract::Component,
+            &'a hauksbee_models::ModelEntry,
+        ),
+    > + 'a {
+        let at = |(i, model): &'a (usize, _)| (&board.components[*i], model);
+        self.models.iter().map(at)
+    }
+}
+
+/// A hash of everything about `board`'s parts that a resolution reads.
+fn fingerprint(board: &ExtractedBoard) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for c in &board.components {
+        (
+            &c.reference,
+            &c.value,
+            &c.lib_id,
+            &c.footprint,
+            &c.properties,
+            c.dnp,
+        )
+            .hash(&mut h);
+        c.pins.iter().for_each(|p| (&p.number, p.net).hash(&mut h));
+    }
+    h.finish()
 }
 
 /// The full engine-level lint.

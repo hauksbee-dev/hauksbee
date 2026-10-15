@@ -8,7 +8,9 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
+use hauksbee_engine::checks::BoardStatics;
 use hauksbee_engine::power_supply::{PowerSupply, SupplyLeg};
 use hauksbee_engine::rail_owner::{Feed, RailDomains};
 pub use hauksbee_engine::unpowered_supply_nets;
@@ -65,6 +67,58 @@ struct RunInputEvidence<'a> {
     /// The spec's firmware, resolved and format-checked once before the board
     /// was read.
     firmware: Option<&'a Path>,
+}
+
+/// What `apply_plan` writes onto the board: the sampled values and pinned
+/// variants. Two plans with the same key run on the same board.
+type BoardKey = (Vec<(String, u64)>, Vec<(String, String)>);
+
+/// The most boards [`BoardCache`] keeps before it starts over, so a tolerance
+/// ensemble (every member its own board) cannot hold them all at once.
+const BOARD_CACHE_CAP: usize = 64;
+
+/// The static answers ([`BoardStatics`]) for each distinct board an ensemble
+/// runs, each worked out once and shared by every member on that board.
+///
+/// A member's board is the base board plus its plan's sampled values and
+/// pinned variants, so the key is exactly those. Supply values, enables, the
+/// seed and a search condition are not in it because they never touch the
+/// board: they reach the checks as the levels a member solved, per member.
+struct BoardCache<'l> {
+    lib: &'l ModelLibrary,
+    /// One slot per board: the map lock is held only to find the slot, so
+    /// members on other boards work out theirs at the same time.
+    slots: Mutex<HashMap<BoardKey, Arc<OnceLock<Arc<BoardStatics<'l>>>>>>,
+}
+
+impl<'l> BoardCache<'l> {
+    fn new(lib: &'l ModelLibrary) -> Self {
+        Self {
+            lib,
+            slots: Mutex::default(),
+        }
+    }
+
+    /// The statics of `board`, which must be the board `plan` produces.
+    fn statics(&self, plan: &SeedPlan, board: &ExtractedBoard) -> Arc<BoardStatics<'l>> {
+        let values = plan
+            .values
+            .iter()
+            .map(|v| (v.reference.clone(), v.si.to_bits()));
+        let key = (values.collect(), plan.variants.clone());
+        let mut slots = self.slots.lock().unwrap_or_else(PoisonError::into_inner);
+        if slots.len() >= BOARD_CACHE_CAP && !slots.contains_key(&key) {
+            slots.clear();
+        }
+        let slot = Arc::clone(slots.entry(key).or_default());
+        drop(slots);
+        let statics = slot.get_or_init(|| Arc::new(BoardStatics::of(board, self.lib)));
+        debug_assert!(
+            statics.describes(board),
+            "statics taken from a different board"
+        );
+        Arc::clone(statics)
+    }
 }
 
 /// The evidence-spine record for one assembly input (BOM or placement): the
@@ -892,6 +946,7 @@ pub fn run_spec_with_lib(
     // paces itself against the wall clock and a loaded machine would skew it.
     let members_are_independent =
         spec.search.is_some() || (firmware.is_none() && spec.firmware.is_none());
+    let boards = BoardCache::new(lib);
     let run_plans = |batch: &[SeedPlan]| {
         let one = |plan: &SeedPlan| {
             run_one(
@@ -899,7 +954,7 @@ pub fn run_spec_with_lib(
                 &base,
                 &thresholds,
                 plan,
-                lib,
+                &boards,
                 member_count,
                 &run_inputs,
             )
@@ -1544,7 +1599,7 @@ fn production_assumptions(
     spec: &Spec,
     board: &ExtractedBoard,
     engine: &HauksbeeEngine,
-    lib: &ModelLibrary,
+    statics: &BoardStatics<'_>,
     seed: u32,
     hollow_assumptions: Vec<Assumption>,
 ) -> Result<Vec<Assumption>, SpecError> {
@@ -1645,7 +1700,7 @@ fn production_assumptions(
     let stress = &engine.scheduler().stress;
     let ambient = (stress.ambient_c, stress.ambient_given);
     let analog =
-        hauksbee_engine::checks::analog_inputs::run_assumptions(board, lib, &solved, ambient);
+        hauksbee_engine::checks::analog_inputs::run_assumptions(board, statics, &solved, ambient);
     production_assumptions.extend(analog);
     // Supply and rail-order envelopes, on the span each net covered in the run
     // (a sag that recovers is still a violation), or its final level.
@@ -1661,12 +1716,12 @@ fn production_assumptions(
     // A logic input whose span sat, or peaked, between its VCC-scaled VIL and
     // VIH: the datasheet guarantees no state there (MEASURED, so it undermines).
     let span = |net: &str| levels.get(net).copied();
-    let undefined = hauksbee_engine::checks::logic_levels::run_assumptions(board, lib, &span);
+    let undefined = hauksbee_engine::checks::logic_levels::run_assumptions(board, statics, &span);
     production_assumptions.extend(undefined);
     let opts = engine.scheduler().opts;
     let supply = hauksbee_engine::checks::envelope::run_assumptions(
         board,
-        lib,
+        statics,
         &levels,
         (opts.reltol, opts.vntol),
         ambient,
@@ -1900,11 +1955,11 @@ fn run_one(
     base: &ExtractedBoard,
     thresholds: &[f64],
     plan: &crate::tolerance::SeedPlan,
-    lib: &ModelLibrary,
+    boards: &BoardCache<'_>,
     member_count: usize,
     run_inputs: &RunInputEvidence<'_>,
 ) -> Result<RunOutcome, SpecError> {
-    let seed = plan.seed;
+    let (seed, lib) = (plan.seed, boards.lib);
     let mut board = apply_overrides(spec, base);
     apply_plan(&mut board, plan);
     // A search condition that forces a net is one more drive; parts bind
@@ -2391,8 +2446,9 @@ fn run_one(
             .error_budget()
             .map_err(SpecError::invalid("building run error budget"))?,
     );
+    let statics = boards.statics(plan, &board);
     let production_assumptions =
-        production_assumptions(spec, &board, &engine, lib, seed, hollow_assumptions)?;
+        production_assumptions(spec, &board, &engine, &statics, seed, hollow_assumptions)?;
     let evidence = build_evidence(
         &board,
         &engine,
@@ -3046,8 +3102,6 @@ fn attach_peripherals(
     // per-seed so N runs do not overwrite one fixed file. `None` for a single run.
     vcd_seed: Option<u32>,
 ) -> Result<Vec<(String, std::path::PathBuf)>, SpecError> {
-    use std::sync::{Arc, Mutex};
-
     use hauksbee_engine::peripherals::controls::{pwl as pwl_source, StimulusKind};
     use hauksbee_engine::{Eeprom24c, I2cBus, Lm75, Mcp3008, Spi25Eeprom, SpiBus};
     use hauksbee_engine::{Encoder, Potentiometer, Pushbutton, Stimulus, ToggleSwitch, VcdSink};
@@ -3260,8 +3314,6 @@ fn attach_sensors(
     spec: &Spec,
     sched: &mut hauksbee_engine::scheduler::Scheduler,
 ) -> Result<Vec<Assumption>, SpecError> {
-    use std::sync::{Arc, Mutex};
-
     use hauksbee_engine::{I2cBus, RegisterMapSensor, SpiBus};
     use hauksbee_models::sensor_spec::{Bus, SensorSpec};
 
@@ -4335,6 +4387,35 @@ mod spi_cs_source_tests {
     /// A CS-wired 25xx EEPROM (pad 1 = `cs` in the model DB).
     fn board() -> ExtractedBoard {
         board_with("25LC256-I/SN", "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "1")
+    }
+
+    /// Members that differ only in seed, supplies or enables run on one board
+    /// and share its statics; a member with another sampled value or pinned
+    /// variant is another board and gets its own.
+    #[test]
+    fn members_share_statics_only_when_they_share_a_board() {
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let cache = BoardCache::new(&lib);
+        let plan = |seed: u32, si: f64, variant: &str| SeedPlan {
+            seed,
+            values: vec![crate::tolerance::SampledValue {
+                reference: "U5".into(),
+                si,
+                nominal_si: 10.0e3,
+                corner: None,
+            }],
+            variants: vec![("U5".into(), variant.into())],
+            ..Default::default()
+        };
+        let statics = |p: &SeedPlan| {
+            let mut b = board();
+            apply_plan(&mut b, p);
+            cache.statics(p, &b)
+        };
+        let base = statics(&plan(0, 10.0e3, "a"));
+        assert!(Arc::ptr_eq(&base, &statics(&plan(7, 10.0e3, "a"))));
+        assert!(!Arc::ptr_eq(&base, &statics(&plan(0, 11.0e3, "a"))));
+        assert!(!Arc::ptr_eq(&base, &statics(&plan(0, 10.0e3, "b"))));
     }
 
     #[test]
