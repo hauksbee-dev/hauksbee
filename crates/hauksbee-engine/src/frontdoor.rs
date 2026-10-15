@@ -1595,11 +1595,17 @@ fn analyze_normalized_with_context(
         &board.name,
         &bind_summary,
         &drc_structured,
+        clearance_rule_source.as_ref(),
         &actual_findings,
         crate::reports::check::check_gate_fails(&drc_structured, &lint, &si, usbc.as_ref()),
     )
     .with_evidence(&evidence)
     .with_condition(crate::checks::indicators::intent_condition(&indicators))
+    .with_condition(
+        clearance_rule_source
+            .as_ref()
+            .and_then(|p| crate::reports::drc::default_rules_condition(&drc_structured, p)),
+    )
     .with_judgement_scope(crate::scope::JudgementScope::of(
         board,
         bound,
@@ -2054,11 +2060,20 @@ fn analyze_with_firmware_context(
     (report, coverage)
 }
 
+/// A refusal says what this run could not judge; it is never a board fault.
+/// It takes the headline only when nothing else decides the verdict: a serious
+/// finding keeps its own headline, and an unrouted board keeps its pre-layout
+/// frame. Overwriting that frame used to make the verdict sentence fall back
+/// to "a finding fails the check gate", so attaching firmware that the quick
+/// report cannot run read as a new board fault.
 fn apply_refusal_headline(report: &mut WebReport) {
-    if report.refusal.is_some() && report.serious == 0 {
+    if report.refusal.is_some() && report.serious == 0 && report.fix_first.notice.is_none() {
         report.headline = REFUSAL_HEADLINE.to_string();
     }
 }
+
+/// The co-sim note for a run with no valid numerical qualification.
+const UNQUALIFIED_COSIM: &str = "Co-sim result has no valid numerical qualification.";
 
 /// Translate a co-sim validity failure into the shared C5.3 refusal contract.
 /// A firmware run that merely carries a substitute/exercise caveat is not an
@@ -2111,6 +2126,18 @@ fn refusal_for_cosim(cosim: &WebCosimSection, coverage: &WebCosimCoverage) -> Op
                 "Firmware loading and reported digital observations outside failed analog windows remain available.",
             ],
             next,
+        ));
+    }
+
+    if let Some(finding) = cosim.findings.iter().find(|f| f.what == UNQUALIFIED_COSIM) {
+        return Some(Refusal::new(
+            "numerically qualified firmware co-simulation conclusions",
+            finding.why.clone(),
+            vec![
+                "Static board analysis and its reported findings remain valid.",
+                "Firmware loading and reported digital observations remain available.",
+            ],
+            finding.fix.clone(),
         ));
     }
 
@@ -2857,11 +2884,14 @@ fn run_web_cosim_with_bound(
     let error_budget = match sched.error_budget() {
         Ok(budget) => Some(budget),
         Err(error) => {
+            // Note-level, then a refusal (see `refusal_for_cosim`): a run the
+            // tool cannot qualify numerically is not judged. Marking it
+            // serious failed a board over the solver's own settings.
             findings.insert(
                 0,
                 WebFinding::unplaced(
-                    "serious",
-                    "Co-sim result has no valid numerical qualification.",
+                    "note",
+                    UNQUALIFIED_COSIM,
                     error.to_string(),
                     "Use finite, positive solver tolerances and run the co-simulation again.",
                 ),
@@ -3762,7 +3792,7 @@ fn main {
             findings.iter().filter(|f| f.severity == "serious").count(),
         );
         let mut machine =
-            crate::reports::check::machine_report("board", &bind, &drc, findings, gate);
+            crate::reports::check::machine_report("board", &bind, &drc, None, findings, gate);
         machine.verdict_conditions = conditions.iter().map(ToString::to_string).collect();
         let mut report = WebReport {
             ok: true,
@@ -3853,6 +3883,74 @@ fn main {
         // A failing run states no conditions: the reason says what to do.
         let failing = web(vec![finding("warning")], true, &[condition], None);
         assert!(failing.verdict_conditions.is_empty() && !failing.headline.contains(condition));
+    }
+
+    /// A co-sim that could not run, or ran without a numerical qualification,
+    /// is not judged (`invalid`, with the refusal naming why and what next);
+    /// a fault the co-sim did observe still fails the board.
+    #[test]
+    fn an_unrun_cosim_is_not_judged_but_an_observed_fault_fails() {
+        let with_cosim = |cosim: WebCosimSection| {
+            let mut report = verdict_web(&[], false, &[], None);
+            report.refusal = refusal_for_cosim(&cosim, &WebCosimCoverage::default());
+            apply_refusal_headline(&mut report);
+            report.cosim = Some(cosim);
+            report.explain_verdict();
+            report
+        };
+
+        let not_run = with_cosim(cosim_unavailable("the emulator is not installed"));
+        assert_eq!(not_run.verdict, "invalid");
+        assert_eq!(not_run.headline, REFUSAL_HEADLINE);
+        let refusal = not_run.refusal.as_ref().expect("named reason");
+        assert_eq!(
+            refusal.missing_prerequisite,
+            "the emulator is not installed"
+        );
+        assert!(!refusal.next_action.is_empty());
+
+        let mut unqualified = clean_ran_section();
+        unqualified.findings.push(WebFinding::unplaced(
+            "note",
+            UNQUALIFIED_COSIM,
+            "relative tolerance must be finite and positive",
+            "Use finite, positive solver tolerances and run the co-simulation again.",
+        ));
+        let unqualified = with_cosim(unqualified);
+        assert_eq!(unqualified.verdict, "invalid");
+        assert!(unqualified
+            .refusal
+            .as_ref()
+            .is_some_and(|r| r.missing_prerequisite.contains("tolerance")));
+
+        for level in ["serious", "warning"] {
+            let mut observed = clean_ran_section();
+            observed
+                .findings
+                .push(finding(level, "Q1 destroyed by over-current."));
+            let observed = with_cosim(observed);
+            assert!(observed.refusal.is_none());
+            assert_eq!(observed.verdict, "fail", "{level}");
+            assert!(observed
+                .verdict_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("Q1")));
+        }
+    }
+
+    /// The pre-layout frame decides an unrouted board's headline; a co-sim
+    /// refusal beside it must not replace it with a generic failure sentence.
+    #[test]
+    fn a_cosim_refusal_keeps_the_pre_layout_headline() {
+        let mut report = verdict_web(&[], false, &[], None);
+        report.fix_first.notice = Some("Route the board");
+        report.headline =
+            format!("{PRE_LAYOUT_HEADLINE_LEAD} the circuit checks found no problems.");
+        let before = report.headline.clone();
+        let cosim = cosim_unavailable("the emulator is not installed");
+        report.refusal = refusal_for_cosim(&cosim, &WebCosimCoverage::default());
+        apply_refusal_headline(&mut report);
+        assert_eq!(report.headline, before);
     }
 
     #[test]

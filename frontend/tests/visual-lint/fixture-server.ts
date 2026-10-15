@@ -103,6 +103,8 @@ async function api(req: Request, url: URL): Promise<Response | null> {
   if (p === '/api/sim' && method === 'POST') return fixture('sim-ac.json')
   if (p === '/api/check' && method === 'POST') return fixture('check-run.json')
   if (p === '/api/deps' && method === 'GET') return fixture('deps.json')
+  // The assertion catalogue (`hauksbee-ci`'s v2 answer, as the server sends it): the Add a check menu and the check-this dock read it.
+  if (p === '/api/ci/catalog' && method === 'GET') return fixture('ci-catalog.json')
   if (p === '/api/sensor-specs' && method === 'GET') {
     // One representative production catalog entry, with canonical behavior bytes.
     return json({

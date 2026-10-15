@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { OpenSelectionsBanner } from '../src/components/SelectionCard'
-import { buildToml, tomlToBuilder, upsertOverride } from '../src/lib/check-spec'
+import { buildToml, upsertOverride } from '../src/lib/check-spec'
+import { tomlToBuilder } from '../src/lib/spec-model'
 import type { WebOpenSelection } from '../src/types/report'
 
 describe('variant selection overrides', () => {

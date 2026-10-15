@@ -1447,6 +1447,8 @@ fn check_trackable_assert_refs(spec: &Spec, bound: &BoundBoard) -> Result<(), Sp
                 let has_real_tj = bound.device_meta.iter().any(|m| {
                     key_belongs_to_ref(reference, &m.reference)
                         && m.ratings.max_junction_temp_c.is_some()
+                        && (m.ratings.basis)
+                            .judges(hauksbee_models::rating_basis::Limit::JunctionTemp)
                 });
                 if !has_real_tj {
                     return Err(SpecError::Invalid(format!(

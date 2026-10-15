@@ -256,7 +256,6 @@ fn gather_ci_artifact_findings(
         });
     }
     crate::reports::ci_artifacts::set_current_findings(findings.clone());
-    crate::reports::ci_artifacts::set_current_findings(findings.clone());
     Ok(findings)
 }
 
@@ -342,7 +341,9 @@ pub fn prepare_run_inputs(
         path: cfg.board.display().to_string(),
         kind: "board".to_string(),
         format: input_kind_name(input_kind).to_string(),
-        sha256: None,
+        // The same digest the evidence inventory records for these bytes, so
+        // the two provenance blocks describe the file identically.
+        sha256: (!raw.is_empty()).then(|| crate::run_manifest::hex_digest(&raw)),
         contributed: vec![format!(
             "{} components and {} nets",
             board.components.len(),
@@ -567,8 +568,12 @@ pub fn prepare_run_inputs(
     // --junit/--sarif: evaluate the selected surface with the same waiver and
     // gate policy that surface renders. Findings remain in the transaction
     // until the final outcome commits them; co-sim appends its dynamic findings.
-    let ci_findings = if cfg.junit.is_some() || cfg.sarif.is_some() {
-        Some(gather_ci_artifact_findings(
+    // A run that records its outcome (--emit-manifest, or a `reproduce` replay)
+    // needs the same gating findings to name what failed; a failure to gather
+    // them there leaves the outcome without finding ids rather than failing the run.
+    let wants_artifacts = cfg.junit.is_some() || cfg.sarif.is_some();
+    let ci_findings = if wants_artifacts || crate::run_manifest::tracking_outcome() {
+        let gathered = gather_ci_artifact_findings(
             cfg,
             surface,
             &board,
@@ -579,7 +584,12 @@ pub fn prepare_run_inputs(
             &lib,
             &reader_notes,
             schematic_ties.as_ref(),
-        )?)
+        );
+        if wants_artifacts {
+            Some(gathered?)
+        } else {
+            gathered.ok()
+        }
     } else {
         None
     };

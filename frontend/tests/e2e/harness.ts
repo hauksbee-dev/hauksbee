@@ -236,10 +236,12 @@ export async function composeChecks(page: Page, settleMs?: number) {
   const empty = page.locator('[data-testid="checks-empty-add"]')
   if (await empty.count() > 0) await empty.click()
   await page.click('[data-testid="add-check"]')
-  await page.locator('button', { hasText: 'A net must sit at a voltage' }).first().click()
-  await page.locator('input[list="net-options"]').last().fill('GND')
-  await page.locator('label', { hasText: 'min V' }).locator('input').last().fill('-0.1')
-  await page.locator('label', { hasText: 'max V' }).locator('input').last().fill('0.1')
+  await page.click('[data-testid="kind-voltage"]')
+  const editor = page.locator('[data-testid="check-editor"]')
+  await editor.locator('[data-testid="field-net"]').fill('GND')
+  await editor.locator('[data-testid="field-min"]').fill('-0.1')
+  await editor.locator('[data-testid="field-max"]').fill('0.1')
+  await editor.locator('[data-testid="editor-add"]').click()
   await settle(page, settleMs)
 }
 

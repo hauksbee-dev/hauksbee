@@ -15,7 +15,9 @@ export function InteractionBuilder({ peripherals, validation, onAdd, onUpdate, o
     <BuilderSection
       testId="interaction-builder"
       title="Interactions & stimuli"
-      caption="Real 50 Ω stimulus and contact models attached to board nets; not forced post-solve values."
+      caption={peripherals.length === 0
+        ? 'Click a trace on the board, or add one here.'
+        : 'Real 50 Ω stimulus and contact models attached to board nets; not forced post-solve values.'}
       actions={(['stimulus', 'pushbutton', 'toggle'] as const).map(kind => (
         <button
           key={kind}
@@ -27,13 +29,6 @@ export function InteractionBuilder({ peripherals, validation, onAdd, onUpdate, o
         </button>
       ))}
     >
-      {peripherals.length === 0 && (
-        <div className="text-[12px] py-2" style={{ color: 'var(--silk-dim)' }}>
-          Click a trace on the board, then add a waveform, button or switch here. Register-map
-          bus devices have their own source-bound section below.
-        </div>
-      )}
-
       {peripherals.map(peripheral => {
         const issues = validation.get(peripheral.rowId) ?? []
         const set = (patch: Partial<PeripheralRow>) => onUpdate(peripheral.rowId, patch)

@@ -1,34 +1,57 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { downloadText } from '../../lib/report-export'
-import { tomlToBuilder } from '../../lib/check-spec'
-import type { BuilderState } from '../../lib/check-spec'
 import { RunResults } from './RunResults'
+import { RunStrip, type RunStatus } from './RunStrip'
 import type { RunResponse } from '../../types/report'
 import type { RemedyActions } from './Remedies'
+import type { GutterResult } from '../editor/TomlEditor'
 
-// The right-hand column: the spec TOML as it currently stands, the run/download
-// actions, the run's verdict, and the GitHub CI setup. What this pane shows IS
-// the file the Download button writes, byte for byte, including the `board` and
-// `firmware` path lines.
+// The editor loads on first use, never in the app's first paint.
+const TomlEditor = lazy(() => import('../editor/TomlEditor'))
+
+// The Checks page frame: ONE toolbar (mode, Run, Download, CI), one run-summary
+// strip, and ONE working surface, the builder or the spec TOML, chosen by the
+// mode switch. Both edit the same text. A run's issues are read inside the
+// active surface (gutter marks and lint squiggles in the TOML, a tag on each
+// builder row); the strip only counts them and jumps. The details drawer is the
+// single slot for the run's full account (remedies, evidence).
+// The Download button writes the path lines shown above the editor followed by
+// the editor's text, byte for byte.
+
+export type SpecMode = 'builder' | 'toml'
 
 export function SpecPane({
-  specText, specStem, specFileName, builtToml, rawMode, rawText, rawSelect, setRawText,
-  onLeaveRawMode, onEnterRawMode, stale, running, canRun, preparing, pulseRun, remedyActions, remedyEditor, onRun,
+  mode, onModeChange, builder, firmwareChoice,
+  specText, specStem, specFileName, bodyText, onBodyChange, pathLines, select, nets, refs, gutter, onGutterClick,
+  showAllResults, stale, running, canRun, preparing, pulseRun, remedyActions, remedyEditor, onRun, onJump,
   validationCount, result, runKey, workflowYml, workflowPinned, reportSerious,
 }: {
+  mode: SpecMode
+  onModeChange: (mode: SpecMode) => void
+  /** The builder surface, shown in builder mode. */
+  builder: React.ReactNode
+  /** The firmware include choice, above the surface in either mode. */
+  firmwareChoice?: React.ReactNode
+  /** Jump to the first check with this status, inline in the active surface. */
+  onJump: (status: RunStatus) => void
+  /** The portable file: `pathLines` then the body. */
   specText: string
   specStem: string
   specFileName: string
-  builtToml: string
-  rawMode: boolean
-  rawText: string
-  /** A range to select in the raw text (a catalogue example's first value to fill). */
-  rawSelect?: { start: number; end: number; seq: number } | null
-  setRawText: (text: string) => void
-  /** The parsed builder state when the raw TOML fits the builder's vocabulary,
-   *  or null when going back would discard it. */
-  onLeaveRawMode: (parsed: BuilderState | null) => void
-  onEnterRawMode: () => void
+  /** The spec body: the one source of truth the builder and the editor share. */
+  bodyText: string
+  onBodyChange: (text: string) => void
+  /** The `board = ...` lines the download adds for the checked-in copy. */
+  pathLines: string
+  /** A range to select in the editor (a catalogue example's first value to fill). */
+  select?: { start: number; end: number; seq: number } | null
+  nets: readonly string[]
+  refs: readonly string[]
+  /** The last run's verdict per [[assert]], for the editor's gutter. */
+  gutter: readonly (GutterResult | null)[]
+  onGutterClick: (assertIndex: number) => void
+  /** List every result under the verdict (some assertions have no builder row). */
+  showAllResults: boolean
   stale: boolean
   running: boolean
   canRun: boolean
@@ -52,149 +75,95 @@ export function SpecPane({
   reportSerious: number
 }) {
   const [ciOpen, setCiOpen] = useState(false)
-  const rawRef = useRef<HTMLTextAreaElement>(null)
-  // Land the cursor on the value to fill in: select it and scroll its line into view.
-  useEffect(() => {
-    const box = rawRef.current
-    if (!rawSelect || !box) return
-    box.focus({ preventScroll: true })
-    box.setSelectionRange(rawSelect.start, rawSelect.end)
-    const line = box.value.slice(0, rawSelect.start).split('\n').length - 1
-    box.scrollTop = Math.max(0, line * 18 - box.clientHeight / 2)
-  }, [rawSelect?.seq]) // eslint-disable-line react-hooks/exhaustive-deps
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const download = (name: string, contents: string) =>
     downloadText(name, contents, 'text/plain;charset=utf-8')
 
-  // Pinned beside the builder in two columns; below the stacking width it sits
-  // after the builder and scrolls with it (`.checks-spec`).
+  const modeButton = (value: SpecMode, label: string) => (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={mode === value}
+      data-testid={`mode-${value}`}
+      onClick={() => onModeChange(value)}
+      className="hb-press px-3 py-1 text-[12px] cursor-pointer rounded-md"
+      style={{
+        border: 'none',
+        background: mode === value ? 'var(--copper-tint-strong)' : 'transparent',
+        color: mode === value ? 'var(--silk)' : 'var(--silk-dim)',
+        fontWeight: mode === value ? 600 : 400,
+      }}
+    >
+      {label}
+    </button>
+  )
+
   return (
-    <div className="min-w-0">
-    <div className="sticky top-0 checks-spec">
-      <div className="hb-card overflow-hidden">
-        <div className="flex items-center justify-between px-3 py-2" style={{ borderBottom: '1px solid var(--hairline)' }}>
-          <div className="text-[11px] font-bold tracking-widest uppercase inline-flex items-center gap-2" style={{ color: 'var(--silk-faint)' }}>
-            <span
-              style={{
-                width: 7, height: 7, borderRadius: 4, display: 'inline-block',
-                background: stale ? 'var(--warn)' : 'var(--ok)',
-              }}
-              title={stale
-                ? 'The spec changed since the last run'
-                : 'These are the assertions that run, and this is the file the download writes'}
-            />
-            spec.toml
-          </div>
+    <div className="min-w-0" data-testid="spec-pane" data-mode={mode}>
+      {/* The one toolbar: mode, then the actions. */}
+      <div className="pb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div role="tablist" aria-label="How to edit the checks" className="inline-flex items-center gap-0.5 p-0.5 rounded-lg" style={{ border: '1px solid var(--hairline)', background: 'var(--surface-2)' }}>
+          {modeButton('builder', 'Builder')}
+          {modeButton('toml', 'TOML')}
+        </div>
+        <span
+          className="text-[11px] inline-flex items-center gap-1.5 min-w-0"
+          style={{ color: 'var(--silk-faint)' }}
+          title={stale
+            ? 'The spec changed since the last run'
+            : 'The assertions that run, and the file the download writes'}
+        >
+          <span style={{ width: 7, height: 7, borderRadius: 4, display: 'inline-block', flexShrink: 0, background: stale ? 'var(--warn)' : 'var(--ok)' }} />
+          <span className="truncate">{specFileName}</span>
+        </span>
+        <div className="sm:ml-auto flex flex-wrap items-center gap-2 min-w-0 max-w-full">
           <button
             type="button"
-            data-testid="raw-toggle"
-            className="hb-press text-[11px] cursor-pointer"
-            style={{ color: 'var(--copper)', background: 'none', border: 'none' }}
-            onClick={() => {
-              if (!rawMode) {
-                setRawText(builtToml)
-                onEnterRawMode()
-                return
-              }
-              // Raw is the source of truth on a successful parse: an
-              // intentionally emptied list clears the builder rows too. When it
-              // does not parse, going back DISCARDS it, so ask first.
-              const parsed = tomlToBuilder(rawText)
-              if (parsed) onLeaveRawMode(parsed)
-              else if (window.confirm(
-                'This TOML uses features the visual builder does not cover '
-                + '(tolerances, scenarios, overrides...). Going back to the '
-                + 'builder will DISCARD the raw text. Continue?')) {
-                onLeaveRawMode(null)
-              }
-            }}
+            data-testid="run-checks"
+            disabled={!canRun || running || preparing}
+            onClick={onRun}
+            className={`hb-btn-primary hb-press px-4 py-1.5 text-[13px] inline-flex items-center gap-2${pulseRun && !running ? ' run-nudge' : ''}`}
           >
-            {rawMode ? '← back to the builder' : 'edit raw →'}
+            {running && <span className="slot-spin" style={{ borderTopColor: 'var(--on-copper)' }} />}
+            {running ? 'Running…' : preparing ? 'Preparing…' : pulseRun ? 'Run the checks again' : 'Run these checks now'}
+          </button>
+          <button
+            type="button"
+            className="hb-btn hb-press px-3 py-1.5 text-[13px] max-w-full"
+            style={{ whiteSpace: 'normal', overflowWrap: 'anywhere', textAlign: 'left' }}
+            onClick={() => download(specFileName, specText)}
+          >
+            Download {specStem}.toml
+          </button>
+          <button
+            type="button"
+            className="hb-btn hb-press px-3 py-1.5 text-[13px]"
+            aria-expanded={ciOpen}
+            onClick={() => setCiOpen(open => !open)}
+          >
+            {ciOpen ? 'Hide GitHub CI setup' : 'Set up GitHub CI'}
           </button>
         </div>
-        {rawMode ? (
-          <textarea
-            data-testid="raw-toml"
-            ref={rawRef}
-            value={rawText}
-            onChange={e => setRawText(e.target.value)}
-            spellCheck={false}
-            className="w-full block p-3"
-            style={{
-              background: 'var(--code-bg)', border: 'none', outline: 'none', resize: 'vertical',
-              color: 'var(--silk)', minHeight: 260, maxHeight: '46vh',
-              fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.5,
-            }}
+      </div>
+
+      <RunStrip
+        result={result} stale={stale} running={running} canRun={canRun}
+        validationCount={validationCount} reportSerious={reportSerious}
+        detailsOpen={detailsOpen} onToggleDetails={() => setDetailsOpen(open => !open)} onJump={onJump}
+      />
+
+      {/* The run's full account behind one click: the single slot for the
+          remedies and the evidence. */}
+      {result && detailsOpen && (
+        <div data-testid="run-details" className="hb-card view-enter mt-2 px-3 pb-3">
+          <RunResults
+            result={result} runKey={runKey} stale={stale} rawMode={showAllResults} reportSerious={reportSerious}
+            remedyActions={remedyActions} remedyEditor={remedyEditor}
           />
-        ) : (
-          // What this pane shows IS the file the Download button
-          // writes, byte for byte, including the `board` (and
-          // `firmware`) path lines.
-          <pre
-            data-testid="spec-preview"
-            className="p-3 m-0 overflow-auto text-[12px] leading-relaxed"
-            style={{
-              background: 'var(--code-bg)', color: 'var(--silk-dim)',
-              fontFamily: 'var(--font-mono)', maxHeight: '46vh',
-            }}
-          >
-            {specText}
-          </pre>
-        )}
-      </div>
-      {!rawMode && (
-        <div className="mt-1.5 text-[12px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
-          This is the file the Download button writes. Running from here uses the
-          design inputs already uploaded in this session, so the path lines are for
-          the checked-in copy.
         </div>
       )}
-
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          data-testid="run-checks"
-          disabled={!canRun || running || preparing}
-          onClick={onRun}
-          className={`hb-btn-primary hb-press px-4 py-2 text-[13px] inline-flex items-center gap-2${pulseRun && !running ? ' run-nudge' : ''}`}
-        >
-          {running && <span className="slot-spin" style={{ borderTopColor: 'var(--on-copper)' }} />}
-          {running ? 'Running…' : preparing ? 'Preparing…' : pulseRun ? 'Run the checks again' : 'Run these checks now'}
-        </button>
-        <button
-          type="button"
-          className="hb-btn hb-press px-3 py-2 text-[13px]"
-          onClick={() => download(specFileName, specText)}
-        >
-          Download {specStem}.toml
-        </button>
-        <button
-          type="button"
-          className="hb-btn hb-press px-3 py-2 text-[13px]"
-          onClick={() => setCiOpen(open => !open)}
-        >
-          {ciOpen ? 'Hide GitHub CI setup' : 'Set up GitHub CI'}
-        </button>
-      </div>
-      {!canRun && (
-        <div className="mt-1.5 text-[12px]" style={{ color: 'var(--silk-faint)' }}>
-          (running from here needs the board uploaded in this session)
-        </div>
-      )}
-      {!rawMode && validationCount > 0 && (
-        <div
-          data-testid="builder-validation"
-          className="mt-3 rounded-lg px-3 py-2.5 text-[13px]"
-          style={{ background: 'var(--err-bg)', border: '1px solid var(--err-border)', color: 'var(--err-strong)' }}
-        >
-          Nothing was run: {validationCount === 1 ? 'a check is' : `${validationCount} checks are`} missing
-          values. The highlighted fields above say which.
-        </div>
-      )}
-
-      {result && <RunResults
-        result={result} runKey={runKey} stale={stale} rawMode={rawMode} reportSerious={reportSerious}
-        remedyActions={remedyActions} remedyEditor={remedyEditor}
-      />}
+      {/* A model editor a remedy opened must be reachable even when the drawer is shut. */}
+      {result && !detailsOpen && remedyEditor}
 
       {/* GitHub CI setup: the two files and where they go. */}
       {ciOpen && (
@@ -245,7 +214,61 @@ export function SpecPane({
           </div>
         </div>
       )}
+
+      {firmwareChoice && <div className="mt-3">{firmwareChoice}</div>}
+
+      <div className="mt-3">
+        {mode === 'builder' ? builder : (
+          <div className="hb-card overflow-hidden">
+            {pathLines && (
+              <pre
+                data-testid="spec-paths"
+                title="Added by the Download button for the checked-in copy. A run here uses this session's uploads."
+                className="m-0 px-3 pt-2 pb-1.5 text-[11px] leading-relaxed overflow-x-auto"
+                style={{ background: 'var(--code-bg)', color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)', borderBottom: '1px dashed var(--hairline)' }}
+              >
+                {pathLines.replace(/\n$/, '')}
+              </pre>
+            )}
+            <Suspense fallback={
+              <pre
+                data-testid="toml-editor-loading"
+                className="p-3 m-0 overflow-auto text-[12px] leading-relaxed"
+                style={{ background: 'var(--code-bg)', color: 'var(--silk-dim)', fontFamily: 'var(--font-mono)', maxHeight: '60vh' }}
+              >
+                {bodyText}
+              </pre>
+            }>
+              <TomlEditor
+                value={bodyText}
+                onChange={onBodyChange}
+                nets={nets}
+                refs={refs}
+                results={gutter}
+                onResultClick={onGutterClick}
+                select={select}
+                testId="toml-editor"
+                ariaLabel={`${specFileName}, the checks spec`}
+              />
+            </Suspense>
+          </div>
+        )}
+      </div>
+
+      {/* The exact bytes the Download button writes, whole. */}
+      <details className="mt-2 text-[12px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
+        <summary className="cursor-pointer">
+          The file as downloaded. Running from here uses the design inputs already uploaded
+          in this session, so the path lines are for the checked-in copy.
+        </summary>
+        <pre
+          data-testid="spec-preview"
+          className="hb-code mt-1.5 p-3 overflow-auto text-[11px] leading-relaxed"
+          style={{ maxHeight: '30vh' }}
+        >
+          {specText}
+        </pre>
+      </details>
     </div>
-  </div>
-    )
-  }
+  )
+}

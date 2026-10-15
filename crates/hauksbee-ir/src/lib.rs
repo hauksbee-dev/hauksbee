@@ -23,6 +23,7 @@ mod models;
 pub mod run_record;
 mod source;
 mod spice;
+pub mod units;
 pub mod vocabulary;
 
 pub use bexpr::CompiledExpr;

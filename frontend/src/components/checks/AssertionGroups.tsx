@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import type { ArtifactProvenance, CheckResult, EvidenceAssumption } from '../../types/report'
-import { CHECK_KINDS, GROUP_ORDER, checkKind } from '../../lib/check-spec'
+import { checkKind } from '../../lib/check-spec'
+import { groupOf, KIND_GROUPS, useCatalog } from '../../lib/check-catalog'
 import { repeatedAssumptions } from '../../lib/report-view'
 import type { CheckRow, RowIssue } from '../../lib/check-spec'
 import { ARRIVE, LEAVE, StaggerItem, ValueSettle } from '../../motion'
@@ -25,11 +27,22 @@ export function AssertionGroups({
   onRemove: (id: number) => void
 }) {
   const reduced = useReducedMotion()
-  const grouped = GROUP_ORDER
-    .map(group => ({
+  // A row's evidence is a wall of text; it opens on request, never by default.
+  const [evidenceOpen, setEvidenceOpen] = useState<ReadonlySet<number>>(new Set())
+  const toggleEvidence = (id: number) => setEvidenceOpen(prev => {
+    const next = new Set(prev)
+    if (!next.delete(id)) next.add(id)
+    return next
+  })
+  // The groups, the order and the plain-language titles are the served
+  // catalogue's (lib/check-catalog); the builder only says which kinds it has a row for.
+  const catalog = useCatalog()
+  const titleOf = (kind: string) => catalog?.find(k => k.kind === kind)?.title ?? kind
+  const grouped = KIND_GROUPS
+    .map(([group, members]) => ({
       group,
-      kinds: CHECK_KINDS.filter(k => k.group === group),
-      rows: checks.filter(c => checkKind(c.kind)?.group === group),
+      kinds: members.filter(kind => checkKind(kind)),
+      rows: checks.filter(c => groupOf(checkKind(c.kind)?.kind ?? c.kind) === group),
     }))
     .filter(g => g.rows.length > 0)
   const displayRows = grouped.flatMap(group => group.rows)
@@ -57,7 +70,7 @@ export function AssertionGroups({
                   global menu below covers everything. */}
               <button
                 type="button"
-                onClick={() => onAdd(kinds[0].kind)}
+                onClick={() => onAdd(kinds[0])}
                 className="hb-press text-[11px] cursor-pointer inline-flex items-center gap-1"
                 style={{ color: 'var(--copper)', background: 'none', border: 'none' }}
               >
@@ -73,7 +86,6 @@ export function AssertionGroups({
                 its slot open while the reader waits to see the result. */}
             <AnimatePresence initial={false}>
               {rows.map(c => {
-                const meta = checkKind(c.kind)
                 const rowResult = resultForRow(c.id)
                 const issues = validation.get(c.id) ?? []
                 return (
@@ -84,6 +96,7 @@ export function AssertionGroups({
                     animate={{ opacity: 1, y: 0 }}
                     exit={reduced ? { opacity: 0 } : { opacity: 0, height: 0, transition: LEAVE }}
                     transition={reduced ? { duration: 0 } : ARRIVE}
+                    data-row-id={c.id}
                     className="check-row py-2.5"
                     style={{
                       overflow: 'hidden',
@@ -99,20 +112,34 @@ export function AssertionGroups({
                         {/* The plain-language label is what the row IS, so it
                             wraps rather than truncating: on a phone column the
                             kind chip and the verdict leave it about 24px. */}
-                        <span>{meta?.label ?? c.kind}</span>
+                        <span>{titleOf(checkKind(c.kind)?.kind ?? c.kind)}</span>
                         <code className="text-[10px] shrink-0" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
                           {c.kind}
                         </code>
                         {rowResult && <ResultChip result={rowResult} stale={stale} />}
                       </div>
-                      <button
-                        type="button"
-                        className="hb-press text-[12px] cursor-pointer shrink-0"
-                        style={{ color: 'var(--silk-faint)', background: 'none', border: 'none' }}
-                        onClick={() => onRemove(c.id)}
-                      >
-                        remove
-                      </button>
+                      <div className="flex items-center gap-3 shrink-0">
+                        {rowResult && (
+                          <button
+                            type="button"
+                            data-testid="row-evidence-toggle"
+                            aria-expanded={evidenceOpen.has(c.id)}
+                            className="hb-press text-[12px] cursor-pointer underline"
+                            style={{ color: 'var(--silk-dim)', background: 'none', border: 'none' }}
+                            onClick={() => toggleEvidence(c.id)}
+                          >
+                            {evidenceOpen.has(c.id) ? 'Hide evidence' : rowResult.passed && !rowResult.invalid ? 'Evidence' : 'Why'}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="hb-press text-[12px] cursor-pointer"
+                          style={{ color: 'var(--silk-faint)', background: 'none', border: 'none' }}
+                          onClick={() => onRemove(c.id)}
+                        >
+                          remove
+                        </button>
+                      </div>
                     </div>
                     <div className="mt-2">
                       <ConstraintEditor
@@ -143,7 +170,7 @@ export function AssertionGroups({
                         {stale ? ' (from the last run; the spec has changed since)' : ''}
                       </div>
                     )}
-                    {rowResult && (
+                    {rowResult && evidenceOpen.has(c.id) && (
                       <AssertionEvidence
                         result={rowResult}
                         assumptions={assumptions}

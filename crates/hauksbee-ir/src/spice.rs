@@ -370,11 +370,13 @@ fn number_end(t: &str) -> usize {
     (1..=t.len()).rev().find(parses).unwrap_or(0)
 }
 
-/// Parse a SPICE number with an optional engineering suffix.
+/// Parse a SPICE number with an optional engineering suffix, in SPICE grammar.
 ///
 /// Accepts `1k`, `2.2u`, `1meg`, `4.7nF`, `5A`. A stray tail (`1kk`, `1x`) is
-/// `None`, not silently truncated. Public because the CLI accepts the same
-/// vocabulary.
+/// `None`, not silently truncated. SPICE is case-insensitive, so `1M` is
+/// 1e-3 (milli) and mega is `1MEG`. This is for netlists and `.model` cards
+/// only: CLI flags, specs and BOM values use [`crate::units::parse_quantity`],
+/// where `1M` is mega.
 #[must_use]
 pub fn parse_spice_number(tok: &str) -> Option<f64> {
     const SCALES: [&str; 10] = ["meg", "mil", "t", "g", "k", "m", "u", "n", "p", "f"];

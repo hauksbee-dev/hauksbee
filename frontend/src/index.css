@@ -360,24 +360,6 @@ code.hb-inline {
   border-color: var(--copper-deep);
 }
 
-/* The builder and the spec.toml pane sit side by side only while both can have
-   their real width. The pane will not go below 300px without becoming unreadable,
-   and the builder's rows (a net picker plus three numeric fields) need about 500,
-   so below 1024 the two columns become one: builder first, spec pane after it,
-   in reading order. The pane also stops being sticky there. A sticky pane in a
-   single column is not chrome beside the work, it is chrome ON it: it painted
-   over the very rows it describes, and the remove buttons underneath took the
-   click. */
-.checks-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 400px);
-}
-
-@media (max-width: 1023px) {
-  .checks-grid { grid-template-columns: minmax(0, 1fr); }
-  .checks-grid .checks-spec { position: static; }
-}
-
 /* Builder inputs are sized for the value they hold (a net name is wider than a
    voltage), never for the column. Below their natural width they shrink with it
    rather than pushing the row's last control out of the card, which is where the

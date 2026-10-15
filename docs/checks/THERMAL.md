@@ -66,6 +66,7 @@ Chip resistors and capacitors use a **size-derived** theta_JA, because a hot
 ~80 C/W. These bracket the chip-resistor power deratings the stress monitor
 already encodes (a 0402 at 1/16 W reaching its rated rise is the same physics):
 
+<!-- BEGIN GENERATED: chip-sizes (source: crates/hauksbee-models/tests/suite/docs_generated.rs) -->
 | Chip size | theta_JA (C/W) |
 |-----------|----------------|
 | 01005     | 1200           |
@@ -78,6 +79,9 @@ already encodes (a 0402 at 1/16 W reaching its rated rise is the same physics):
 | 2010      | 120            |
 | 2512      | 80             |
 
+Resistor rating by size: 01005 (metric 0402) 1/32 W, 0201 (metric 0603) 1/20 W, 0402 (metric 1005) 1/16 W, 0603 (metric 1608) 1/10 W, 0805 (metric 2012) 1/8 W, 1206 (metric 3216) 1/4 W, 1210 (metric 3225) 1/2 W, 2010 (metric 5025) 3/4 W, 1812 (metric 4532) 1 W, 2512 (metric 6332) 1 W, 2220 (metric 5750) 1 W. A size with no theta_JA row has no derived figure.
+<!-- END GENERATED: chip-sizes -->
+
 The size token is matched smallest-body-first, and 01005 has to be tested before
 0402: KiCad names a chip footprint with the imperial code beside its metric twin,
 and 01005's metric code *is* 0402 (`R_01005_0402Metric`), so a plain substring
@@ -88,8 +92,7 @@ under-estimate its temperature.
 
 An explicit `ratings.max_power_w` always wins. Otherwise the rating comes from
 the same imperial size token, smallest-body-first for the same metric-collision
-reason: 01005 1/32 W, 0201 1/20 W, 0402 1/16 W, 0603 1/10 W, 0805 1/8 W,
-1206 1/4 W, 1210 1/2 W, 2010 3/4 W, 2512 1 W.
+reason. The rating of each size is in the generated block above.
 
 The unrecognised case is split three ways, because a single fallback cannot be
 conservative for both surface-mount and through-hole parts:

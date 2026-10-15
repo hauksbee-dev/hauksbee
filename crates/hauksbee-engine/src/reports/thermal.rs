@@ -74,8 +74,11 @@ pub(crate) fn emit_quiet(
     guessed.extend(engine.scheduler().stress.rating_disclosures());
     let evidence = evidence.clone().with_assumptions(guessed)?;
     let mut maps = Vec::new();
+    // A dissipating device the board connects to no net keeps its row; it
+    // just has no board location to back a map, as on the co-sim surface.
+    let mut unmapped = Vec::new();
     for (reference, tj_c, over_limit) in &rows {
-        maps.push(evidence.check_simulation_map(
+        let map = evidence.check_simulation_map_if_mapped(
             format!(
                 "{reference} peak junction temperature is {tj_c:.3} C ({})",
                 if *over_limit {
@@ -88,8 +91,18 @@ pub(crate) fn emit_quiet(
             std::slice::from_ref(reference),
             Some(budget.clone()),
             Some(("thermal", reference)),
-        )?);
+        )?;
+        match map {
+            Some(map) => maps.push(map),
+            None => unmapped.push(reference.as_str()),
+        }
     }
+    let unmapped_note = (!unmapped.is_empty()).then(|| {
+        format!(
+            "Not mapped to the board: {} connect(s) to no board net, so those thermal rows have no board location.",
+            unmapped.join(", ")
+        )
+    });
     let report_evidence = evidence.with_maps(maps);
     if json {
         let mut jr = JsonReport::new(&board_name, summary)
@@ -105,6 +118,10 @@ pub(crate) fn emit_quiet(
                 thermal_coverage_caveat(&coverage)
             ));
         }
+        if let Some(note) = &unmapped_note {
+            jr.push_coverage_note(note.clone());
+        }
+        jr.push_coverage_note(crate::scope::single_check_note("thermal"));
         jr.thermal = Some(ThermalJson {
             validity: strict_partial_refusal
                 .clone()
@@ -137,6 +154,9 @@ pub(crate) fn emit_quiet(
         // being a silent false-comfort pass.
         if coverage.partial {
             emit_thermal_coverage_caveat(&coverage, &coverage_refs);
+        }
+        if let Some(note) = &unmapped_note {
+            println!("{note}");
         }
         print!(
             "{}",

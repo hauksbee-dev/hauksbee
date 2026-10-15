@@ -163,6 +163,15 @@ pub fn begin_run(
 /// Replace the selected run's current finding set. Nothing is committed to the
 /// requested paths until the one terminal finalizer below runs.
 pub fn set_current_findings(findings: Vec<JsonFinding>) {
+    if crate::run_manifest::tracking_outcome() {
+        crate::run_manifest::note_gating_findings(
+            "",
+            findings
+                .iter()
+                .filter(|finding| finding.gates())
+                .map(JsonFinding::group_key),
+        );
+    }
     CURRENT_RUN.with(|slot| {
         if let Some(state) = slot.borrow_mut().as_mut() {
             state.findings = findings;
@@ -254,6 +263,7 @@ pub fn exit_with_refusal(code: i32, refusal: &Refusal) -> ! {
         }
     }
     github_refusal_annotation(refusal);
+    crate::run_manifest::finish_outcome("hauksbee", code);
     std::process::exit(code)
 }
 
@@ -270,6 +280,7 @@ pub fn exit_with_findings(code: i32, annotation_items: &[String]) -> ! {
         github_refusal_annotation(refusal);
     }
     github_annotations(annotation_items);
+    crate::run_manifest::finish_outcome("hauksbee", code);
     std::process::exit(code)
 }
 

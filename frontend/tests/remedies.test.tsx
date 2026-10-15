@@ -7,7 +7,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { blockingRemedies } from '../src/components/checks/Remedies'
 import type { RemedyActions } from '../src/components/checks/Remedies'
 import { RunResults } from '../src/components/checks/RunResults'
-import { buildToml, scaffoldRows, supplyToml, tomlToBuilder } from '../src/lib/check-spec'
+import { buildToml, scaffoldRows, supplyToml } from '../src/lib/check-spec'
+import { tomlToBuilder } from '../src/lib/spec-model'
 import type { EvidenceAssumption, Remedy, RunResponse } from '../src/types/report'
 
 const assumption = (id: string, remedy: Remedy | undefined, replacement = 'do the thing'): EvidenceAssumption => ({
