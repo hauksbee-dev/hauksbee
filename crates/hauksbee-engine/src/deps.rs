@@ -336,6 +336,17 @@ fn with_signin(mut row: DepStatus) -> DepStatus {
     row
 }
 
+/// Whether extractor `id` is installed and its own status command says it is
+/// signed in. A CLI with no status command (agy) is not claimed to be.
+pub(crate) fn extractor_signed_in(id: &str) -> bool {
+    let row = match id {
+        "claude-code" => probe_claude_code(),
+        "agy" => probe_agy(),
+        _ => return false,
+    };
+    with_signin(row).sign_in == Some("signed_in")
+}
+
 /// Probe only the two extractors for `/api/models/extract/ready`.
 ///
 /// Readiness must fail closed: before offering consent it checks, fresh, that

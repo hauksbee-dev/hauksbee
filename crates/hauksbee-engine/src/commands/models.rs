@@ -1881,7 +1881,7 @@ fn scaffold_template(
     // parses, but the shared linter refuses it until the author decides.
     let kind = kind_override.unwrap_or("choose_kind");
     let kind_note = if kind_override.is_some() {
-        "# Selected explicitly with --kind; still verify it against the part documentation."
+        "# Kind chosen by you; still verify it against the part documentation."
     } else {
         "# TODO: choose the device kind from the part documentation.\n\
          # `choose_kind` is an unresolved placeholder; `models lint` must refuse\n\
@@ -2192,6 +2192,10 @@ pub struct CoverageComponent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refused: Option<String>,
     pub actionable_behavior_gap: bool,
+    /// Set when the part is open because another part shares its designator:
+    /// renaming one fixes it and a model cannot, so no authoring is offered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rename_fix: Option<String>,
     pub model_id: Option<String>,
     pub model_kind: Option<String>,
     pub layer: String,
@@ -2343,6 +2347,17 @@ fn coverage_refusal(
         .map(|why| format!("package mismatch: {why}"))
 }
 
+/// The rename that closes a part whose designator two different parts share.
+fn rename_fix(comp: &hauksbee_extract::Component) -> Option<String> {
+    use hauksbee_extract::assembly::AssemblyState;
+    match AssemblyState::of(comp) {
+        AssemblyState::IdentityUnknown(refusal) => {
+            hauksbee_ir::evidence::Assumption::duplicate_fix(&comp.reference, &refusal.reason())
+        }
+        _ => None,
+    }
+}
+
 fn coverage_component(
     comp: &hauksbee_extract::Component,
     net_names: &std::collections::HashMap<i64, String>,
@@ -2354,9 +2369,7 @@ fn coverage_component(
         .clone()
         .unwrap_or_else(|| open_source(&comp.reference));
     let model = resolution.model.as_ref();
-    let identity_only = model
-        .and_then(|entry| entry.params.get_bool("identity_only"))
-        .unwrap_or(false);
+    let identity_only = model.is_some_and(|e| e.params.get_bool("identity_only").unwrap_or(false));
     let refused = model.and_then(|entry| coverage_refusal(comp, entry, net_names));
     let stage = match model {
         None => CoverageStage::Unresolved,
@@ -2416,6 +2429,7 @@ fn coverage_component(
         stage,
         refused,
         actionable_behavior_gap,
+        rename_fix: rename_fix(comp),
         model_id: model.map(|entry| entry.id.clone()),
         model_kind: model.map(|entry| model_kind_name(entry.kind)),
         layer: resolution.layer.map_or_else(
@@ -3125,6 +3139,7 @@ pub fn draft_model(
     footprint: &str,
     properties: &[(String, String)],
     expected_model_id: &str,
+    kind: &str,
 ) -> anyhow::Result<String> {
     let component = hauksbee_extract::Component {
         reference: reference.to_string(),
@@ -3138,7 +3153,7 @@ pub fn draft_model(
         pins: Vec::new(),
     };
     if expected_model_id.trim().is_empty() {
-        return scaffold_template(Path::new(board_label), &component, None);
+        return scaffold_template(Path::new(board_label), &component, Some(kind));
     }
     let lib = ModelLibrary::builtin_with_user_dirs(&[]);
     let resolution = crate::binder::library_resolution(&lib, &component);
@@ -3354,6 +3369,7 @@ mod tests {
             "Package_LGA:LGA-12_2x2mm_P0.5mm",
             &[],
             "bma423",
+            "",
         )
         .unwrap();
         let parsed: hauksbee_models::schema::DbFile = toml::from_str(&draft).unwrap();

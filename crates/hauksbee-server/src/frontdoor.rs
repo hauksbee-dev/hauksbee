@@ -543,6 +543,7 @@ async fn datasheet_extract_handler(
         part,
         kind: parts.kind.unwrap_or_default(),
         model: parts.model.unwrap_or_default(),
+        backend: parts.backend.unwrap_or_default(),
     };
     let extract = hooks.extract.clone();
     stream_job("card", move |sink| (extract)(job, sink))
@@ -807,6 +808,7 @@ struct UploadedParts {
     kind: Option<String>,
     reference: Option<String>,
     model: Option<String>,
+    backend: Option<String>,
 }
 
 impl UploadedParts {
@@ -909,12 +911,13 @@ async fn parse_upload(multipart: &mut Multipart) -> Result<UploadedParts, String
                 parts.spec = Some(String::from_utf8_lossy(&data).into_owned());
                 continue;
             }
-            "part" | "kind" | "model" | "reference" => {
+            "part" | "kind" | "model" | "reference" | "backend" => {
                 let text = Some(String::from_utf8_lossy(&data).trim().to_string());
                 match name.as_str() {
                     "part" => parts.part = text,
                     "kind" => parts.kind = text,
                     "model" => parts.model = text,
+                    "backend" => parts.backend = text,
                     _ => parts.reference = text,
                 }
                 continue;

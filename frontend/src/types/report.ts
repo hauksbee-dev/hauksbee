@@ -76,6 +76,9 @@ export interface WebOpenPart {
   consequence: string
   active_ic: boolean
   bound: boolean
+  /** Set when the part is open because two parts share its designator: the fix
+   *  is to rename one, so no model drafting is offered. */
+  rename_fix?: string
 }
 
 export interface WebGpioNet {
@@ -308,6 +311,8 @@ export interface ModelCoverageComponent {
   footprint: string
   stage: ModelCoverageStage
   actionable_behavior_gap: boolean
+  /** Duplicate designator: the sentence that fixes it; a model cannot. */
+  rename_fix?: string
   model_id?: string | null
   model_kind?: string | null
   layer: string
@@ -443,7 +448,13 @@ export interface LiveLaunchResponse {
  *  can run on this machine, and everything the consent step must say. The notice
  *  and the kind list come from the engine so the browser cannot drift from what
  *  `hauksbee models extract` shows and accepts. */
+/** Another installed, signed-in backend that could run this extraction. */
+export type ExtractAlternative = Pick<ExtractReady,
+  'backend' | 'backend_label' | 'sends_data_to' | 'cost' | 'default_model' | 'default_effort'> & { id: string }
+
 export interface ExtractReady {
+  /** Other backends that could run it right now (only when blocked). */
+  alternatives?: ExtractAlternative[]
   ready: boolean
   /** "codex" | "claude-code" | "agy" | "api" | "mock" */
   backend: string

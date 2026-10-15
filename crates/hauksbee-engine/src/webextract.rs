@@ -132,6 +132,9 @@ struct UpgradeDraftRequest {
     properties: Vec<(String, String)>,
     #[serde(default)]
     model_id: String,
+    /// The kind the author picked; empty keeps the unresolved placeholder.
+    #[serde(default)]
+    kind: String,
 }
 
 fn draft_upgrade(body: &str) -> Result<String, String> {
@@ -148,6 +151,7 @@ fn draft_upgrade(body: &str) -> Result<String, String> {
         &request.footprint,
         &request.properties,
         &request.model_id,
+        &request.kind,
     )
     .map_err(|error| error.to_string())
 }
@@ -189,6 +193,13 @@ const OR_CHOOSE_ANOTHER: &str =
 /// rather than silently falling back to defaults: running an extraction on
 /// settings the user did not choose would be worse than refusing.
 fn backend() -> Backend {
+    backend_for(None)
+}
+
+/// [`backend`] for one extraction that picks its own backend (the page's "Use
+/// Claude Code instead"); it wins over the config exactly as `--backend` does
+/// and changes nothing that is saved.
+fn backend_for(flag: Option<datasheet::Backend>) -> Backend {
     if std::env::var_os("HAUKSBEE_EXTRACT_MOCK_REPLY").is_some() {
         return Backend::Mock;
     }
@@ -203,7 +214,7 @@ fn backend() -> Backend {
             )
         }
     };
-    let resolved = config.resolve(&ProcessHost, None);
+    let resolved = config.resolve(&ProcessHost, flag);
     if let Some(reason) = load_error {
         return Backend::Blocked {
             resolved,
@@ -237,7 +248,8 @@ fn backend() -> Backend {
                         "the {} backend is not usable: {detail}",
                         resolved.backend.label()
                     ),
-                    fix: format!("{}{OR_CHOOSE_ANOTHER}", d.manual),
+                    // The bare command: the page offers a copy button for it, so it must be pasteable.
+                    fix: d.manual.clone(),
                     resolved,
                 }
             }
@@ -292,6 +304,39 @@ fn cost_line(resolved: &Resolved) -> String {
     }
 }
 
+/// What the page names before asking for consent: the backend, what it sends
+/// where, what it costs and which model reads the datasheet.
+fn backend_facts(resolved: &Resolved) -> serde_json::Value {
+    serde_json::json!({
+        "id": resolved.backend.name(),
+        "backend": resolved.backend.name(),
+        "backend_label": resolved.backend.label(),
+        "backend_source": resolved.backend_source.describe(),
+        // Name the actual model and routing before asking for consent.
+        "default_model": resolved.model(),
+        "default_effort": resolved.effort().unwrap_or(""),
+        "sends_data_to": resolved.sends_data_to(resolved.backend),
+        "cost": cost_line(resolved),
+    })
+}
+
+/// The other backends that could run this extraction right now: installed and
+/// signed in, so "Use Claude Code instead" never offers a second dead end.
+fn alternatives(blocked: datasheet::Backend) -> Vec<serde_json::Value> {
+    datasheet::Backend::ALL
+        .into_iter()
+        .filter(|b| *b != blocked && *b != datasheet::Backend::Api)
+        .filter_map(|b| match backend_for(Some(b)) {
+            Backend::Ready(r)
+                if b == datasheet::Backend::Codex || crate::deps::extractor_signed_in(b.name()) =>
+            {
+                Some(backend_facts(&r))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// `GET /api/models/extract/ready`: everything the browser needs to decide
 /// whether to offer extraction, and what to say while asking.
 ///
@@ -313,16 +358,7 @@ pub fn ready_json() -> String {
             "sends_data_to": "nowhere (mock reply hook)",
             "cost": "Mock reply hook set; nothing is sent.",
         }),
-        Backend::Ready(resolved) | Backend::Blocked { resolved, .. } => serde_json::json!({
-            "backend": resolved.backend.name(),
-            "backend_label": resolved.backend.label(),
-            "backend_source": resolved.backend_source.describe(),
-            // Name the actual model and routing before asking for consent.
-            "default_model": resolved.model(),
-            "default_effort": resolved.effort().unwrap_or(""),
-            "sends_data_to": resolved.sends_data_to(resolved.backend),
-            "cost": cost_line(resolved),
-        }),
+        Backend::Ready(resolved) | Backend::Blocked { resolved, .. } => backend_facts(resolved),
     };
     let (reason, fix) = match &picked {
         Backend::Blocked { reason, fix, .. } => (Some(reason), Some(fix)),
@@ -332,6 +368,9 @@ pub fn ready_json() -> String {
         .iter()
         .map(|(id, label)| serde_json::json!({ "id": id, "label": label }))
         .collect();
+    if let Backend::Blocked { resolved, .. } = &picked {
+        reply["alternatives"] = serde_json::json!(alternatives(resolved.backend));
+    }
     reply["ready"] = serde_json::json!(reason.is_none());
     reply["reason"] = serde_json::json!(reason);
     reply["fix"] = serde_json::json!(fix);
@@ -364,7 +403,16 @@ pub fn extract(job: &DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Str
     // Refuse before sending, not after. The browser already asked
     // `/api/models/extract/ready`, but that answer is a moment old and the
     // route is reachable without it.
-    let picked = backend();
+    let flag = match job.backend.trim() {
+        "" => None,
+        name => Some(
+            datasheet::Backend::ALL
+                .into_iter()
+                .find(|b| b.name() == name)
+                .ok_or_else(|| format!("'{name}' is not an extraction backend"))?,
+        ),
+    };
+    let picked = backend_for(flag);
     let engine_backend = match &picked {
         Backend::Mock => None,
         Backend::Ready(resolved) => Some(resolved.backend),
@@ -1074,6 +1122,7 @@ mod tests {
             kind: "vreg".to_string(),
             // Empty is what the form posts when the user does not pick one.
             model: String::new(),
+            backend: String::new(),
         }
     }
 
@@ -1280,6 +1329,21 @@ max_current_a = 0.5 # Source: absolute maximum ratings
         assert_eq!(row["source"]["validation"].as_str(), Some("unvalidated"));
         assert!(draft.contains("Copied from winning model 'w25q128jv_soic8'"));
         assert!(draft.contains("busy_timing"));
+    }
+
+    #[test]
+    fn browser_draft_takes_the_kind_the_author_picked_and_refuses_an_unknown_one() {
+        let request = |kind: &str| {
+            serde_json::json!({
+                "board_label": "b.kicad_pcb", "reference": "Q1", "value": "BS250",
+                "lib_id": "", "footprint": "", "model_id": "", "kind": kind
+            })
+            .to_string()
+        };
+        let draft = draft_upgrade(&request("pmos")).expect("a known kind scaffolds");
+        let parsed: toml::Value = toml::from_str(&draft).expect("valid TOML");
+        assert_eq!(parsed["models"][0]["kind"].as_str(), Some("pmos"));
+        assert!(draft_upgrade(&request("choose_kind")).is_err());
     }
 
     #[test]

@@ -523,12 +523,7 @@ impl OpenPartCause {
         match self {
             Self::DuplicateDesignator => Remedy::RenameDuplicate {
                 reference: duplicate_name(reference).to_string(),
-                conflict: fragment(
-                    reason
-                        .split_once("kept distinct:")
-                        .map_or(reason, |(_, how)| how)
-                        .trim_end_matches("; left open"),
-                ),
+                conflict: duplicate_conflict(reason),
             },
             Self::NoModel if !subject.is_empty() && says_not_fitted(value) => Remedy::MarkDnp {
                 reference: reference.to_string(),
@@ -539,6 +534,35 @@ impl OpenPartCause {
             _ => Remedy::Other,
         }
     }
+}
+
+/// How the two records sharing a designator differ, from the refusal's reason.
+fn duplicate_conflict(reason: &str) -> String {
+    fragment(
+        reason
+            .split_once("kept distinct:")
+            .map_or(reason, |(_, how)| how)
+            .trim_end_matches("; left open"),
+    )
+}
+
+/// The sentence that closes a duplicate designator: renaming, never a model.
+/// A conflict like `footprints differ ('lib:CP_Elec' versus 'lib:C_0805')` is
+/// named by the two things that differ; any other shape is quoted whole.
+fn rename_sentence(reference: &str, conflict: &str) -> String {
+    let short = |s: &str| s.rsplit(':').next().unwrap_or(s).to_string();
+    let pair = conflict
+        .split_once("' versus '")
+        .and_then(|(left, right)| Some((left.rsplit_once('\'')?.1, right.split_once('\'')?.0)));
+    let how = match (pair, conflict.is_empty()) {
+        (Some((a, b)), _) => format!(" (a {} and a {})", short(a), short(b)),
+        (None, false) => format!(": {conflict}"),
+        (None, true) => String::new(),
+    };
+    format!(
+        "Two different parts are both called {}{how}. Rename one in your design and re-export.",
+        duplicate_name(reference)
+    )
 }
 
 /// Does a part value read as "this position is not populated"?
@@ -1150,6 +1174,16 @@ impl Assumption {
     /// model.
     pub const DUPLICATE_DESIGNATOR_REASON: &'static str = "ambiguous duplicate designator";
 
+    /// The fix for an open part whose `reason` is the duplicate-designator
+    /// refusal (rename one, no model helps), or `None` for any other reason.
+    /// Surfaces that list parts outside the evidence rows ask this, so they
+    /// word the fix exactly as the rows do.
+    #[must_use]
+    pub fn duplicate_fix(reference: &str, reason: &str) -> Option<String> {
+        (OpenPartCause::of(reason) == OpenPartCause::DuplicateDesignator)
+            .then(|| rename_sentence(reference, &duplicate_conflict(reason)))
+    }
+
     /// Marks a bind warning as a PARTIAL-MODEL disclosure, so it becomes evidence
     /// rather than only a line on the bind report.
     ///
@@ -1459,11 +1493,9 @@ impl Assumption {
             // sentence above just explained is not yet possible.
             match (unlocked_by, plural) {
                 (Some(unlock), _) => unlock.to_string(),
-                (None, _) if cause == OpenPartCause::DuplicateDesignator => format!(
-                    "Two different parts are both called {}; rename one in your design and \
-                     re-export.",
-                    duplicate_name(&reference)
-                ),
+                (None, _) if cause == OpenPartCause::DuplicateDesignator => {
+                    rename_sentence(&reference, &duplicate_conflict(reason))
+                }
                 (None, true) => format!(
                     "Add models for those {count} parts to your models directory, or mark them \
                      DNP if the board does not fit them."

@@ -452,7 +452,7 @@ export function SelectionCard({
         </button>
       )}
 
-      {component && modelCoverage?.actionable_behavior_gap && onAuthorModel && (
+      {component && modelCoverage?.actionable_behavior_gap && !modelCoverage.rename_fix && onAuthorModel && (
         <button
           type="button"
           data-testid="selection-author-model"

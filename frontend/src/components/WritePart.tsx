@@ -54,34 +54,33 @@ interface ModelAuthoringSuggestion {
   properties?: Array<{ name: string; value: string }>
 }
 
-function starterFor(part?: ModelAuthoringSuggestion): string {
-  if (!part) return STARTER
-  const value = part.value.trim()
-  const id = `${part.reference}_${value || 'part'}`
-    .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
-  const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const description = JSON.stringify(`${value || part.reference}: describe what this part does`)
-  const valueRe = JSON.stringify(`^${escaped}$`)
-  const passive = /^[RCL]\d+$/i.test(part.reference)
-  const kind = part.model_kind || (passive ? 'passive' : 'choose_kind')
-  const choice = part.model_kind
-    ? `# Extending ${part.model_id ?? 'the resolved model'} (${part.stage?.replaceAll('_', ' ') ?? 'known scope'}).\n# Preserve its behavior and close only source-supported gaps: ${(part.missing ?? []).join(', ') || 'scope not yet declared'}.`
-    : passive
-    ? '# Passive reference prefix inferred; verify it against the datasheet.'
-    : '# A reference like U3 does not identify behavior. Replace choose_kind.'
-  const libMatch = part.lib_id?.trim()
-    ? `\nlib_id = ${JSON.stringify(part.lib_id.trim())}`
-    : ''
-  return `[[models]]
-id = "${id || 'my_part'}"
-kind = "${kind}"
-${choice}
-description = ${description}
-
-[models.match]
-value_re = ${valueRe}${libMatch}
-`
+function draftRequest(suggested: WebOpenPart | ModelAuthoringSuggestion, boardLabel?: string, kind = '') {
+  return {
+    board_label: boardLabel ?? 'uploaded board',
+    reference: suggested.reference,
+    value: suggested.value,
+    lib_id: 'lib_id' in suggested ? suggested.lib_id ?? '' : '',
+    footprint: 'footprint' in suggested ? suggested.footprint ?? '' : '',
+    properties: 'properties' in suggested
+      ? (suggested.properties ?? []).map(property => [property.name, property.value])
+      : [],
+    model_id: 'model_id' in suggested ? suggested.model_id ?? '' : '',
+    kind,
+  }
 }
+
+/** The kinds a hand-written model can be, in the words someone with a datasheet
+ *  in hand would use. A reference letter does not say (`Q` is a BJT or a MOSFET),
+ *  so the author chooses before any TOML appears. */
+const KIND_CHOICES: [id: string, what: string][] = [
+  ['passive', 'resistor, capacitor, inductor'], ['diode', 'diode, Schottky, Zener, LED'],
+  ['bjt_npn', 'NPN transistor'], ['bjt_pnp', 'PNP transistor'],
+  ['nmos', 'N-channel MOSFET'], ['pmos', 'P-channel MOSFET'],
+  ['vreg', 'regulator, LDO, charger'], ['opamp', 'op-amp'], ['comparator', 'comparator'],
+  ['timer', '555-class timer'], ['analog_switch', 'analogue or load switch'],
+  ['digital', 'logic gate or digital part'], ['dac', 'DAC'], ['adc', 'ADC'],
+  ['shift_register', 'shift register'], ['mcu', 'microcontroller'], ['connector', 'connector'],
+]
 
 type CheckState =
   | { phase: 'idle' }
@@ -103,12 +102,17 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
 }) {
   const [open, setOpen] = useState(false)
   const [format, setFormat] = useState<Format>('toml')
-  const [toml, setToml] = useState(() => starterFor(suggested))
+  const [toml, setToml] = useState(STARTER)
   const [spice, setSpice] = useState(SPICE_STARTER)
   const body = format === 'toml' ? toml : spice
   const setBody = format === 'toml' ? setToml : setSpice
   const [part, setPart] = useState(() => suggested?.value.trim() ?? '')
   const [check, setCheck] = useState<CheckState>({ phase: 'idle' })
+  // The kind chosen on the picker (null: still choosing), and whether the author
+  // has touched the text. Until they have, a gap in the scaffold is a to-do the
+  // page already told them about, not an error.
+  const [kind, setKind] = useState<string | null>(null)
+  const [edited, setEdited] = useState(false)
   const [saveMsg, setSaveMsg] = useState<string | null>(null)
   const [drafting, setDrafting] = useState(false)
   const timer = useRef<number | null>(null)
@@ -118,30 +122,22 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
     if (!openSignal || !suggested) return
     setFormat('toml')
     setPart(suggested.value.trim() || suggested.reference)
-    setToml(starterFor(suggested))
+    setToml(STARTER)
     setCheck({ phase: 'idle' })
     setSaveMsg(null)
     setOpen(true)
-    setDrafting(true)
-    let cancelled = false
+    setEdited(false)
     const upgradesExisting = 'model_id' in suggested && !!suggested.model_id &&
       !!suggested.model_kind && suggested.stage?.startsWith('executable_')
-    setSaveMsg(upgradesExisting
-      ? 'Copying the exact resolved behavior into a local extension …'
-      : 'Preparing the conservative evidence-first scaffold …')
+    // A new model starts on the kind picker; only extending an existing one has a kind already.
+    setKind(upgradesExisting ? suggested.model_kind ?? null : null)
+    if (!upgradesExisting) return
+    setDrafting(true)
+    let cancelled = false
+    setSaveMsg('Copying the exact resolved behavior into a local extension …')
     void (async () => {
       try {
-        const result = await api.modelsDraft({
-          board_label: boardLabel ?? 'uploaded board',
-          reference: suggested.reference,
-          value: suggested.value,
-          lib_id: 'lib_id' in suggested ? suggested.lib_id ?? '' : '',
-          footprint: 'footprint' in suggested ? suggested.footprint ?? '' : '',
-          properties: 'properties' in suggested
-            ? (suggested.properties ?? []).map(property => [property.name, property.value])
-            : [],
-          model_id: 'model_id' in suggested ? suggested.model_id ?? '' : '',
-        })
+        const result = await api.modelsDraft(draftRequest(suggested, boardLabel))
         if (cancelled) return
         if (!result.ok || !result.toml) {
           setSaveMsg(result.error ?? 'the server could not prepare the resolved model')
@@ -151,9 +147,7 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
         setToml(result.toml)
         setCheck({ phase: 'idle' })
         setDrafting(false)
-        setSaveMsg(upgradesExisting
-          ? 'Copied the existing executable model. Review the declared gaps, edit, validate, then choose Save.'
-          : 'Prepared the same unresolved scaffold as models prepare. Choose a source-backed kind and behavior, validate, then choose Save.')
+        setSaveMsg('Copied the existing executable model. Review the declared gaps, edit, validate, then choose Save.')
       } catch (error) {
         if (!cancelled) {
           setSaveMsg(errorText(error))
@@ -163,6 +157,28 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
     })()
     return () => { cancelled = true }
   }, [openSignal, suggested, boardLabel])
+
+  // The author chose a kind: the scaffold for it replaces the placeholder. For a part on
+  // the board the server draws it from the board's own identity; otherwise it is the starter.
+  const pick = useCallback(async (chosen: string) => {
+    setKind(chosen)
+    setEdited(false)
+    setCheck({ phase: 'idle' })
+    if (!suggested) {
+      setToml(STARTER.replace('kind = "passive"', `kind = "${chosen}"`))
+      return
+    }
+    setDrafting(true)
+    setSaveMsg(null)
+    try {
+      const result = await api.modelsDraft(draftRequest(suggested, boardLabel, chosen))
+      if (result.ok && result.toml) setToml(result.toml)
+      else setSaveMsg(result.error ?? 'the server could not prepare a scaffold')
+    } catch (error) {
+      setSaveMsg(errorText(error))
+    }
+    setDrafting(false)
+  }, [suggested, boardLabel])
 
   // Debounced, because this runs the real validator on the server and a request
   // per keystroke would queue behind itself while someone types a paragraph.
@@ -200,6 +216,10 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
   const visibleCheck: CheckState = isModelCheckCurrent(check, body, format)
     ? check
     : { phase: 'checking', body, format }
+
+  // A fresh scaffold's gaps are to-dos the page has already announced, so they stay amber and
+  // quiet; the validator's word counts as an error only once the author has edited.
+  const todo = !edited && visibleCheck.phase === 'bad' && format === 'toml'
 
   // Escape closes the editor, the same key that dismisses every other in-page
   // surface in this app (the layers panel, the fullscreen map, the add menu).
@@ -352,10 +372,37 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
         </label>
       )}
 
+      {format === 'toml' && kind === null && (
+        <div data-testid="kind-picker">
+          <div className="text-[12px] mb-1.5" style={{ color: 'var(--silk)' }}>
+            What kind of part {suggested ? `is ${suggested.reference}${suggested.value ? ` (${suggested.value})` : ''}` : 'is it'}?
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {KIND_CHOICES.map(([id, what]) => (
+              <button
+                key={id}
+                type="button"
+                data-testid={`kind-${id}`}
+                onClick={() => void pick(id)}
+                className="hb-btn hb-press px-2.5 py-1 text-[11px] text-left"
+                title={id}
+              >
+                {what}
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] mt-2" style={{ color: 'var(--silk-faint)' }}>
+            A reference letter does not say what a part does, so you choose. You get a scaffold that
+            is valid apart from the values only the datasheet can give.
+          </p>
+        </div>
+      )}
+
+      {(format === 'spice' || kind !== null) && (<>
       <textarea
         data-testid="write-part-toml"
         value={body}
-        onChange={e => setBody(e.target.value)}
+        onChange={e => { setEdited(true); setBody(e.target.value) }}
         disabled={format === 'toml' && drafting}
         aria-busy={format === 'toml' && drafting}
         spellCheck={false}
@@ -365,6 +412,7 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
 
       <div
         data-testid="write-part-status"
+        data-quiet={todo || undefined}
         className="text-[11px] mt-2 rounded-lg px-2.5 py-2 leading-relaxed"
         style={{
           background: visibleCheck.phase === 'bad' ? 'var(--warn-bg)' : 'var(--code-bg)',
@@ -375,7 +423,7 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
       >
         {visibleCheck.phase === 'checking' && 'checking ...'}
         {visibleCheck.phase === 'ok' && visibleCheck.summary}
-        {visibleCheck.phase === 'bad' && visibleCheck.error}
+        {visibleCheck.phase === 'bad' && (todo ? `Fill these in from the datasheet, then it will save: ${visibleCheck.error}` : visibleCheck.error)}
         {visibleCheck.phase === 'idle' && 'start typing to check it'}
       </div>
 
@@ -407,6 +455,8 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
           </span>
         )}
       </div>
+
+      </>)}
 
       {saveMsg && (
         <div className="text-[11px] mt-2" style={{ color: 'var(--silk-dim)' }}>

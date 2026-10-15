@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { ExtractReady, ModelCard, ModelSaveResult, WebOpenPart } from '../types/report'
+import type { ExtractAlternative, ExtractReady, ModelCard, ModelSaveResult, WebOpenPart } from '../types/report'
 import { CheckIcon, WarningIcon } from './Icons'
 import { api, errorText } from '../lib/api'
 import { tildeHome } from '../lib/display-path'
@@ -60,6 +60,8 @@ export function DatasheetExtract({
   const draftable = openParts.filter(p => !p.bound)
 
   const [ready, setReady] = useState<Ready>({ phase: 'loading' })
+  // Another backend picked for this extraction only; nothing saved changes.
+  const [via, setVia] = useState<ExtractAlternative | null>(null)
   const [active, setActive] = useState<WebOpenPart | null>(null)
   const [flow, setFlow] = useState<Flow>({ step: 'consent' })
   const [part, setPart] = useState('')
@@ -88,6 +90,7 @@ export function DatasheetExtract({
     // exactly what the extraction needs, but it is also where "TBD" and "DNP"
     // live, so it is a prefill and not an answer.
     setPart(p.value.trim())
+    setVia(null)
     setKind('')
     setFile(null)
     setSaveError(null)
@@ -95,6 +98,7 @@ export function DatasheetExtract({
 
   const close = useCallback(() => {
     setActive(null)
+    setVia(null)
     setFlow({ step: 'consent' })
     setFile(null)
     setSaveError(null)
@@ -126,6 +130,7 @@ export function DatasheetExtract({
     form.append('part', part)
     form.append('kind', kind)
     form.append('model', model)
+    if (via) form.append('backend', via.id)
     form.append('reference', active.reference)
     try {
       let settled = false
@@ -154,7 +159,7 @@ export function DatasheetExtract({
     } catch (e) {
       setFlow({ step: 'failed', message: `the extraction request failed: ${errorText(e)}`, log: live.log, activity: live.activity })
     }
-  }, [active, file, part, kind, model])
+  }, [active, file, part, kind, model, via])
 
   const accept = useCallback(async (toml: string, saveAs: string) => {
     if (flow.step !== 'review') return
@@ -175,7 +180,8 @@ export function DatasheetExtract({
 
   if (draftable.length === 0) return null
 
-  const info = ready.phase === 'ready' ? ready.info : null
+  const base = ready.phase === 'ready' ? ready.info : null
+  const info = base && via ? { ...base, ...via, ready: true, reason: null, fix: null } : base
   const blocked = info !== null && !info.ready
 
   return (
@@ -214,6 +220,11 @@ export function DatasheetExtract({
                   {p.reason}
                 </div>
               </div>
+              {p.rename_fix ? (
+                <div data-testid={`extract-rename-${p.reference}`} className="text-[12px] leading-relaxed w-full" style={{ color: 'var(--silk)' }}>
+                  {p.rename_fix}
+                </div>
+              ) : (
               <button
                 type="button"
                 data-testid={`extract-start-${p.reference}`}
@@ -236,6 +247,7 @@ export function DatasheetExtract({
                 <span className="hidden min-[400px]:inline">Draft a model from a datasheet</span>
                 <span className="min-[400px]:hidden">Draft from a datasheet</span>
               </button>
+              )}
             </div>
           ))}
         </div>
@@ -299,6 +311,30 @@ export function DatasheetExtract({
                       </div>
                     )}
                     <div className="mt-1.5" style={{ color: 'var(--silk-faint)' }}>{info.cost}</div>
+                    {/* Another backend that is installed and signed in: one click, this extraction
+                        only, and the consent step still follows. */}
+                    {info.alternatives?.map(alt => (
+                      <button
+                        key={alt.id}
+                        type="button"
+                        data-testid={`extract-use-${alt.id}`}
+                        onClick={() => setVia(alt)}
+                        className="hb-btn hb-press mt-2 mr-2 px-3 text-[12px]"
+                        style={{ height: 28 }}
+                      >
+                        Use {alt.backend_label ?? alt.id} instead
+                      </button>
+                    ))}
+                    {onOpenSettings && (
+                      <button
+                        type="button"
+                        onClick={onOpenSettings}
+                        className="hb-press mt-2 block cursor-pointer text-[11px] font-semibold"
+                        style={{ background: 'none', border: 'none', padding: 0, color: 'var(--copper-hi)' }}
+                      >
+                        or choose another backend in Settings
+                      </button>
+                    )}
                   </Callout>
                 )}
                 {info && info.ready && (

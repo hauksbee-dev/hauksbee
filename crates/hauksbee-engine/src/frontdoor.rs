@@ -186,6 +186,10 @@ pub struct WebOpenPart {
     /// parts need wiring or pin attention, not a model, so no extraction is
     /// offered for them.
     pub bound: bool,
+    /// Set when the part is open because two parts share its designator: the
+    /// fix is to rename one, so the page offers no model drafting for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rename_fix: Option<String>,
 }
 
 impl BindSummaryWeb {
@@ -219,6 +223,10 @@ impl BindSummaryWeb {
                 consequence: u.consequence.clone(),
                 active_ic: u.active_ic,
                 bound,
+                rename_fix: hauksbee_ir::evidence::Assumption::duplicate_fix(
+                    &u.reference,
+                    &u.reason,
+                ),
             })
             .collect();
         // Sorted, not report order: every surface that prints this list (the

@@ -1633,13 +1633,41 @@ fn every_open_part_cause_maps_to_a_remedy() {
         assert_eq!(a.remedy(), &expected, "{cause:?}");
         if cause == OpenPartCause::DuplicateDesignator {
             assert!(
-                a.replacement().contains("rename one"),
+                a.replacement().contains("Rename one"),
                 "{}",
                 a.replacement()
             );
             assert!(!a.replacement().contains("Add a model"));
         }
     }
+}
+
+#[test]
+fn duplicate_designator_fix_is_the_same_rename_sentence_everywhere() {
+    let reason = format!(
+        "{}: records named 'Q7' were kept distinct: values differ ('lib:BC847' versus 'BS250'); \
+         library ids differ ('a:X' versus 'a:Y'); left open",
+        Assumption::DUPLICATE_DESIGNATOR_REASON
+    );
+    let want = "Two different parts are both called Q7 (a BC847 and a BS250). \
+                Rename one in your design and re-export.";
+    assert_eq!(
+        Assumption::duplicate_fix("Q7@conflict-2", &reason).as_deref(),
+        Some(want)
+    );
+    assert_eq!(
+        Assumption::open_part("Q7", "BC847", &reason).replacement(),
+        want
+    );
+    // A conflict that is not a pair is quoted whole, and any other reason is no duplicate.
+    let odd = format!(
+        "{}: records named 'Q7' were kept distinct: pins differ; left open",
+        Assumption::DUPLICATE_DESIGNATOR_REASON
+    );
+    assert!(Assumption::duplicate_fix("Q7", &odd)
+        .unwrap()
+        .contains("Q7: pins differ."));
+    assert_eq!(Assumption::duplicate_fix("Q7", "no model matched"), None);
 }
 
 #[test]

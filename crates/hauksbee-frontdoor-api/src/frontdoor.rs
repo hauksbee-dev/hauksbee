@@ -97,6 +97,8 @@ pub struct DatasheetJob {
     pub kind: String,
     /// Empty selects the embedding application's default model.
     pub model: String,
+    /// The backend for this extraction only; empty keeps the configured one.
+    pub backend: String,
 }
 
 /// Whether datasheet extraction is ready, encoded as JSON.

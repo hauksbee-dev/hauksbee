@@ -237,7 +237,7 @@ export function ModelCoveragePanel({ coverage, onSelect, onAuthor }: {
                 {cell(component, '', { color: 'inherit' }, undefined,
                   component.missing?.length ? `· ${plural(component.missing.length, 'gap')}` : ' ')}
               </span>
-              {component.actionable_behavior_gap && (
+              {component.actionable_behavior_gap && !component.rename_fix && (
                 <button
                   type="button"
                   data-testid={`model-author-${component.reference}`}
