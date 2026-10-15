@@ -367,8 +367,9 @@ fn strip_package_suffix(value: &str) -> Option<&str> {
         .map(|m| m.as_str())
 }
 
-/// The one key normaliser for property names and table headers: lowercase,
-/// every run of non-alphanumerics folded to one `_`, trimmed. `"Mid X"`,
+/// The one key normaliser for property names and table headers.
+///
+/// Lowercase, every run of non-alphanumerics folded to one `_`, trimmed. `"Mid X"`,
 /// `"mid-x"` and `"MID_X"` are all `mid_x`; `"Reference(s)"` is `reference_s`.
 #[must_use]
 pub fn normalise_key(s: &str) -> String {
@@ -493,7 +494,7 @@ mod tests {
     fn value_commas_follow_the_value_parser() {
         let value_re = |re: &str, value: &str| {
             let compiled = entry(
-                ComponentKind::Capacitor,
+                ComponentKind::Passive,
                 MatchRules {
                     value_re: Some(re.to_string()),
                     ..Default::default()

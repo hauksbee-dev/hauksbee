@@ -177,8 +177,9 @@ fn unit_matches(tail: &str, unit: &str) -> bool {
     !unit.is_empty() && tail.eq_ignore_ascii_case(unit)
 }
 
-/// Format `v` (base SI units) in engineering notation: three significant
-/// digits, trailing zeros trimmed, ASCII `u` for micro. With a `unit` the
+/// Format `v` (base SI units) in engineering notation.
+///
+/// Three significant digits, trailing zeros trimmed, ASCII `u` for micro. With a `unit` the
 /// result is SI-typeset with a space (`4.7 uF`, `1 MHz`); with `""` it is the
 /// bare, re-parseable form (`10.9k`, `18.2n`, `-1M`). Zero and non-finite
 /// values print as Rust's plain `{v}`.
