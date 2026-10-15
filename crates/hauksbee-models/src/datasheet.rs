@@ -3153,6 +3153,13 @@ struct Prompts {
     staged: String,
 }
 
+impl Prompts {
+    fn for_harness(&self, staged: bool) -> String {
+        let prompt = if staged { &self.staged } else { &self.single };
+        prompt.clone()
+    }
+}
+
 /// One model's attempt at the extraction in the shared sandbox: the staged
 /// harness when `budget` is set (locate, then draft and fix, each a fresh agent
 /// bounded to `budget` tokens of context), else one agent with the full prompt.
@@ -3202,12 +3209,7 @@ fn run_tier(
             Reply::Word => {}
         }
     }
-    let mut prompt = if staged {
-        &prompts.staged
-    } else {
-        &prompts.single
-    }
-    .clone();
+    let mut prompt = prompts.for_harness(staged);
     if !reply.table().is_empty() {
         prompt += &harness::handoff(ws.path(), staged, escalated_because.map(String::as_str));
     }
