@@ -115,9 +115,9 @@ fn channel_flag(cx: &Ctx, c: &Component, m: &ModelEntry, e: &OperatingEnvelope) 
         "{r} has every input of one channel above V('{rail}') - {headroom_v:.3} V = {limit:.3} V"
     );
     let rating = format!("{headroom_v:.3} V common-mode headroom");
-    let f = finding(c, severity, nets, message);
-    let f = super::envelope::stated_if_stand_in(f, m, Limit::Envelope, &seen, &rating);
-    Some((f, true))
+    let flag = finding(c, severity, nets, message);
+    let flag = super::envelope::stated_if_stand_in(flag, m, Limit::Envelope, &seen, &rating);
+    Some((flag, true))
 }
 
 /// The ADC pin's flag, where the parallel resistance of the resistors feeding
@@ -139,9 +139,9 @@ fn adc_flag(cx: &Ctx, c: &Component, m: &ModelEntry, role: &str, limit: f64) -> 
     let nets = vec![net.name.clone()];
     let seen = format!("{r} pin role {role} is fed from {:.1} kOhm", 1e-3 / inv_r);
     let rating = format!("{:.1} kOhm ADC source-impedance", limit / 1e3);
-    let f = finding(c, Severity::Medium, nets, message);
-    let f = super::envelope::stated_if_stand_in(f, m, Limit::Envelope, &seen, &rating);
-    Some((f, false))
+    let flag = finding(c, Severity::Medium, nets, message);
+    let flag = super::envelope::stated_if_stand_in(flag, m, Limit::Envelope, &seen, &rating);
+    Some((flag, false))
 }
 
 /// Every ADC pin role the card names, judged against its impedance ceiling.

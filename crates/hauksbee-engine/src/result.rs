@@ -2061,10 +2061,24 @@ impl JsonFinding {
     }
 }
 
-/// A stand-in rating's condition (see [`hauksbee_models::rating_basis`]) as the
-/// verdict reason states it.
-fn stated_reason(condition: &str) -> String {
-    format!("a part's limit was judged against a stand-in card's rating, not its own: {condition}.")
+/// Why a verdict with no cause is partly judged, if it is: the judgement
+/// scope's sentence and the first stated stand-in-rating condition (see
+/// [`hauksbee_models::rating_basis`]), when there is one.
+fn partly_judged_reason(
+    scope: Option<&crate::scope::JudgementScope>,
+    stated: Option<&str>,
+) -> Option<String> {
+    let stated = stated.map(|c| {
+        format!("a part's limit was judged against a stand-in card's rating, not its own: {c}.")
+    });
+    match (scope, stated) {
+        (Some(s), Some(c)) => Some(format!("{} {c}", s.partly_judged_reason())),
+        (Some(s), None) => Some(s.partly_judged_reason()),
+        (None, Some(c)) => Some(format!(
+            "PARTLY JUDGED (not a pass): nothing found blocks ordering, but {c}"
+        )),
+        (None, None) => None,
+    }
 }
 
 /// The sentence a finding carries when its subject resolves to no board net.
@@ -2686,6 +2700,15 @@ impl JsonReport {
         self
     }
 
+    /// The first stated condition a finding carries: a part held past a
+    /// placeholder or guessed card's limit, not its own
+    /// ([`hauksbee_models::rating_basis`]), which is never a fail.
+    fn stated_condition(&self) -> Option<&str> {
+        (self.findings.iter().flatten())
+            .find(|f| hauksbee_models::rating_basis::is_condition(&f.message))
+            .map(|f| f.message.as_str())
+    }
+
     /// The scope, when it lets the verdict judge around exactly `blockers`.
     fn active_scope(&self, blockers: &[String]) -> Option<&crate::scope::JudgementScope> {
         self.judgement_scope.as_ref().filter(|s| s.scopes(blockers))
@@ -2890,9 +2913,7 @@ impl JsonReport {
         let cause = VerdictCause::pick(failing, refused, unjudged, evidence_undermined);
         // A limit passed that was a placeholder or guessed card's, not the
         // part's own, is a stated condition: never a fail, never a pass either.
-        let stated = (self.findings.iter().flatten())
-            .find(|f| hauksbee_models::rating_basis::is_condition(&f.message))
-            .map(|f| f.message.as_str());
+        let stated = self.stated_condition();
         let partial = cause.is_none() && (scope.is_some() || stated.is_some());
         let verdict = match cause {
             None if partial => "invalid",
@@ -2910,16 +2931,7 @@ impl JsonReport {
                 Some(note.map_or_else(|| c.reason(), |n| format!("{} {n}", c.reason())))
             }
             (Some(c), _) => Some(c.reason_scoped(&blockers, scope)),
-            (None, Some(s)) => Some(match stated {
-                Some(c) => format!("{} {}", s.partly_judged_reason(), stated_reason(c)),
-                None => s.partly_judged_reason(),
-            }),
-            (None, None) => stated.map(|c| {
-                format!(
-                    "PARTLY JUDGED (not a pass): nothing found blocks ordering, but {}",
-                    stated_reason(c)
-                )
-            }),
+            (None, s) => partly_judged_reason(s, stated),
         };
         (
             (verdict == "pass", verdict, serious, actionable),
@@ -3657,7 +3669,7 @@ mod tests {
             "{why}"
         );
         // The part's own rating passed still fails, condition or not.
-        let mut own = report.clone();
+        let mut own = report;
         own.findings
             .as_mut()
             .unwrap()
