@@ -1765,7 +1765,7 @@ fn prompt_for_agent_backend(prompt: &str) -> String {
     format!(
         "{before}{DATASHEET_TEXT_BEGIN}\n\
          [Not embedded for this local agent backend. Read the attached page images first. \
-         If a needed fact is absent, open datasheet.txt or datasheet.pdf in the sandbox.]\n\
+         If a needed fact is absent, find its page in page-index.md and read that page.]\n\
          {DATASHEET_TEXT_END}{after}"
     )
 }
@@ -1827,7 +1827,7 @@ is a WRONG ANSWER.
 
 {example_cards}
 
-{datasheet_text}
+{library_patterns}{datasheet_text}
 
 Produce a TOML model entry that exactly conforms to the hauksbee-models schema.
 The entry must use [[models]] array syntax and include:
@@ -1922,6 +1922,11 @@ OUTPUT (TOML only, starting with [[models]]):
             |base| format!(
                 "{base} (the {kind} family, written as a {base} entry; see its notes below)"
             )
+        ),
+        library_patterns = crate::extract_examples::prompt_section(
+            part,
+            behavioral_family_base_kind(kind).unwrap_or(kind),
+            pdf_text,
         ),
         datasheet_text = datasheet_text_block(pdf_text),
         required_params = required_params_for_kind(kind),
@@ -2159,7 +2164,11 @@ fn behavioral_family_base_kind(kind: &str) -> Option<&'static str> {
 /// sense pins; a PMIC's internal pin pulls; a balancer's leak law).
 fn behavioral_hint_for_kind(kind: &str) -> String {
     let Some(base) = behavioral_family_base_kind(kind) else {
-        return String::new();
+        return match kind {
+            "vreg" => SWITCHER_HINT.to_string(),
+            "digital" => SUPPLY_DRAW_HINT.to_string(),
+            _ => String::new(),
+        };
     };
     let common = format!(
         r#"
@@ -2237,6 +2246,60 @@ Only include the blocks the datasheet supports, each number cited (rule 1).
     format!("{common}{specific}\n")
 }
 
+/// How a switching regulator is written. Measured: told only the simple
+/// regulator's `in, out, gnd`, a buck draft mapped PH as `sw`, had no pad left
+/// for `out`, and failed all three attempts on the missing output pin.
+const SWITCHER_HINT: &str = r#"
+SWITCHING REGULATOR (buck, boost, buck-boost; a part with an SW/PH/LX switch
+node and an inductor): its regulated rail is past the inductor, on no pad of the
+IC, so it has NO 'out' pin and no vout/vref/dropout_v params. Map the switch
+node 'sw' (BOOT 'boot', VSENSE/FB 'fb', COMP 'comp', SS 'ss', EN 'en') and add:
+
+  [models.behavioral.converter]
+  topology = "buck"            # or "boost" / "buck_boost"
+  out_pin = "sw"
+  in_pin = "in"
+  vout_setpoint = <V>          # the fixed output, or for an adjustable part a
+                               # seed used only when the board has no divider
+  iout_limit_a = <A>           # rated output current (optional)
+  max_duty = <0..1>            # maximum duty cycle row (optional)
+  switching_hz = <Hz>          # switching frequency row (optional)
+  [models.behavioral.converter.feedback]   # adjustable parts
+  pin = "fb"
+  vref_v = <V>                 # feedback reference, typ; its min/max as an
+                               # interval record for `feedback_reference`
+
+`iq_a` (operating quiescent current) may stay in [models.params]; a `warning`
+param names what is not modelled (ripple, loop stability, soft-start, light-load
+modes, protection). A linear regulator or reference ignores this block.
+"#;
+
+/// How a driver or power IC with no logic outputs is written. Measured: told
+/// only "logic, else identity-only", a pack FET driver came back identity-only
+/// although its supply current and range were printed.
+const SUPPLY_DRAW_HINT: &str = r#"
+SUPPLY-DRAW FORM (a driver or power IC whose outputs are not logic levels: a
+motor H-bridge, gate driver, LED driver or battery-pack FET driver): when the
+function table cannot honestly be [models.logic], do not stop at identity-only
+if the datasheet prints the operating supply current. Omit [models.logic] and
+write the supply draw, citing the rows:
+
+  [models.params]
+  supply_current_a = <A>     # operating-mode supply current, typ
+  supply_on_v = <V>          # minimum recommended supply voltage
+  warning = "source-bound supply-draw model: <what is executable>; <what is not>"
+
+  [[models.behavioral.laws]]
+  name = "supply_draw"
+  kind = "current"
+  a = "<supply role>"        # e.g. vm, vcc, bat
+  b = "gnd"
+  expr = "supply_current_a * min(1.0, max(0.0, v_<supply role> / supply_on_v))"
+
+with the [[models.envelope]] supply_range for that supply pin and every pad in
+[models.pins]. Identity-only is for a part whose supply current is not printed.
+"#;
+
 /// The pin role names the BINDER accepts for a kind, verbatim.
 ///
 /// The binder looks these up by exact string (`roles.get("out")`), so a model
@@ -2249,7 +2312,7 @@ fn pin_roles_for_kind(kind: &str) -> &'static str {
         "diode" => "anode, cathode; a multi-diode package numbers each diode's own electrode (anode1, cathode2), an unnumbered one is shared (common cathode: anode1, anode2, cathode), and a series pair's shared pad is common",
         "bjt_npn" | "bjt_pnp" => "collector, base, emitter; a dual: collector_q1, base_q1, ..._q2",
         "nmos" | "pmos" => "drain, gate, source",
-        "vreg" | "charger" | "pmic" => "in, out, gnd  (and en / adj / fb when the part has them; a fixed-output part's ADJ/GND pin is gnd)",
+        "vreg" | "charger" | "pmic" => "in, out, gnd  (and en / adj / fb when the part has them; a fixed-output part's ADJ/GND pin is gnd; a switching regulator's switch node is sw and it has no out pin: see SWITCHING REGULATOR below)",
         "opamp" | "comparator" => {
             "in_plus, in_minus, out, vcc, vee; a dual or quad suffixes each unit's signal roles \
              _a to _d (out_a, in_minus_a, in_plus_a, out_b, in_minus_b, ...), supplies unsuffixed"
@@ -2271,8 +2334,8 @@ fn digital_hint_for_kind(kind: &str) -> &'static str {
         return "";
     }
     r#"
-DIGITAL BEHAVIOR (required unless this must be an explicit identity-only
-abstention): add `[models.logic]`. Its `inputs` and `outputs` arrays contain pin
+DIGITAL BEHAVIOR (required unless the part takes the SUPPLY-DRAW FORM below or
+must be an explicit identity-only abstention): add `[models.logic]`. Its `inputs` and `outputs` arrays contain pin
 ROLE names from `[models.pins]`, not pad numbers. Every functional input and
 output must be listed; inputs, outputs, and registers share one UNIQUE namespace.
 Do not list a bidirectional signal in both arrays: that fails validation. This
@@ -2370,7 +2433,9 @@ fn required_params_for_kind(kind: &str) -> &'static str {
              selectable outputs is never vout. iq_a: the no-load ground (or supply) current; \
              max_current_a (a [models.ratings] key, never a param): the rated output current, \
              never the absolute-maximum IOUT; dropout_v: the row for this part's own \
-             output-voltage option, at the rated output current when several loads are printed"
+             output-voltage option, at the rated output current when several loads are printed. \
+             A SWITCHING regulator takes none of these: its behaviour is the converter block \
+             described below"
         }
         "opamp" => {
             "gain, and swing_lo/swing_hi (output headroom from each supply pin, max column) or \
@@ -2800,7 +2865,7 @@ impl Reply<'_> {
             Reply::Model { part, kind } => parse_and_validate_reply(raw, part, kind).map(drop),
             Reply::Sensor { part, kind } => validate_sensor_reply(raw, part, kind).map(drop),
             Reply::Word if raw.trim().is_empty() => bail!("the backend returned nothing"),
-            Reply::Word => Ok(()),
+            Reply::Word => check_kind_reply(raw),
         }
     }
 }
@@ -2875,7 +2940,16 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
         ws.pages.len()
     );
     let agent_prompt = prompt_for_agent_backend(prompt);
-    let clause = verification_clause(&ws, reply.table());
+    // Naming the kind is one word read off the front page, whose text is in
+    // the prompt. Measured: given the drafting clause and page images, the
+    // agent read the whole datasheet to answer it (430k to 790k input tokens,
+    // over half of a part's total, and two idle kills).
+    let clause = if reply.table().is_empty() {
+        ws.pages.clear();
+        IDENTIFY_CLAUSE.to_string()
+    } else {
+        verification_clause(&ws, reply.table())
+    };
     let agy_note = if chosen == Backend::Agy {
         agy_tool_note(&ws)
     } else {
@@ -3063,53 +3137,76 @@ fn run_tier(
         prompt += harness::CONFIDENCE_CLAUSE;
     }
     let mut timed_out = None;
-    let raw = validated_attempts(resolved.retries, &prompt, reply, (tool, staged), |p| {
-        if let Some(draft) = merged_draft.take() {
-            return Ok(draft);
-        }
-        let answer = ws.answer_path();
-        // A staged fix agent finds the failed draft where it will edit it, and
-        // `previous.toml` as a copy; an unstaged retry starts clean.
-        if staged && answer.is_file() {
-            let _ = std::fs::copy(&answer, ws.path().join(harness::PREVIOUS));
-        } else {
-            let _ = std::fs::remove_file(&answer);
-        }
-        let ran = run(p);
-        let stdout = match ran {
-            // A killed run keeps its draft only if it passes the finished-answer check.
-            Err(e) if e.is::<TimedOut>() && !reply.table().is_empty() => {
-                let draft = std::fs::read_to_string(ws.answer_path()).unwrap_or_default();
-                let draft = extract_toml_block(&draft, reply.table());
-                let t = e.downcast::<TimedOut>()?;
-                let checked = reply.check(&reply.complete(draft.clone()));
-                checked.map_err(|_| t.clone())?;
-                timed_out = Some(t);
+    // The last card-shaped draft, so a retry edits it instead of a fresh agent
+    // re-reading the datasheet from page one: measured, an unstaged retry cost
+    // as many tokens as the first draft (555k) to fix one missing pin.
+    let mut last_draft = None::<String>;
+    let table = reply.table();
+    let edit_in_place = !table.is_empty();
+    let raw = validated_attempts(
+        resolved.retries,
+        &prompt,
+        reply,
+        (tool, edit_in_place),
+        |p| {
+            if let Some(draft) = merged_draft.take() {
+                last_draft = Some(draft.clone());
                 return Ok(draft);
             }
-            // A staged agent stopped at its budget after writing model.toml has
-            // that draft checked like any other: a failure goes to a fix agent
-            // that edits it, instead of a fresh agent redoing the reading.
-            Err(e) if staged && e.is::<harness::Stopped>() => {
-                let draft = std::fs::read_to_string(ws.answer_path()).unwrap_or_default();
-                if reply.table().is_empty() || draft.trim().is_empty() {
-                    return Err(e);
+            let answer = ws.answer_path();
+            // A fix agent finds the failed draft where it will edit it, and
+            // `previous.toml` as a copy; a first attempt starts clean.
+            let previous = last_draft
+                .take()
+                .filter(|d| !table.is_empty() && d.contains(table));
+            if let Some(draft) = &previous {
+                if !answer.is_file() {
+                    let _ = std::fs::write(&answer, draft);
                 }
-                say!("[model-extract] {e}; checking the draft it wrote");
-                return Ok(extract_toml_block(&draft, reply.table()));
+                let _ = std::fs::copy(&answer, ws.path().join(harness::PREVIOUS));
+            } else if staged && answer.is_file() {
+                let _ = std::fs::copy(&answer, ws.path().join(harness::PREVIOUS));
+            } else {
+                let _ = std::fs::remove_file(&answer);
             }
-            outcome => outcome?,
-        };
-        // Prefer the file we asked for. Falling back to stdout keeps a model
-        // that answered in prose from failing outright, but the file is the
-        // reliable path: stdout also carries the agent's narration, and one
-        // that says "here is the TOML" twice yields two candidates.
-        let text = std::fs::read_to_string(ws.answer_path())
-            .ok()
-            .filter(|t| !t.trim().is_empty())
-            .unwrap_or(stdout);
-        Ok(extract_toml_block(&text, reply.table()))
-    });
+            let ran = run(p);
+            let stdout = match ran {
+                // A killed run keeps its draft only if it passes the finished-answer check.
+                Err(e) if e.is::<TimedOut>() && !reply.table().is_empty() => {
+                    let draft = std::fs::read_to_string(ws.answer_path()).unwrap_or_default();
+                    let draft = extract_toml_block(&draft, reply.table());
+                    let t = e.downcast::<TimedOut>()?;
+                    let checked = reply.check(&reply.complete(draft.clone()));
+                    checked.map_err(|_| t.clone())?;
+                    timed_out = Some(t);
+                    return Ok(draft);
+                }
+                // A staged agent stopped at its budget after writing model.toml has
+                // that draft checked like any other: a failure goes to a fix agent
+                // that edits it, instead of a fresh agent redoing the reading.
+                Err(e) if staged && e.is::<harness::Stopped>() => {
+                    let draft = std::fs::read_to_string(ws.answer_path()).unwrap_or_default();
+                    if reply.table().is_empty() || draft.trim().is_empty() {
+                        return Err(e);
+                    }
+                    say!("[model-extract] {e}; checking the draft it wrote");
+                    return Ok(extract_toml_block(&draft, reply.table()));
+                }
+                outcome => outcome?,
+            };
+            // Prefer the file we asked for. Falling back to stdout keeps a model
+            // that answered in prose from failing outright, but the file is the
+            // reliable path: stdout also carries the agent's narration, and one
+            // that says "here is the TOML" twice yields two candidates.
+            let text = std::fs::read_to_string(ws.answer_path())
+                .ok()
+                .filter(|t| !t.trim().is_empty())
+                .unwrap_or(stdout);
+            let draft = extract_toml_block(&text, table);
+            last_draft = Some(draft.clone());
+            Ok(draft)
+        },
+    );
     raw.map(|raw| (raw, timed_out))
 }
 
@@ -3306,7 +3403,12 @@ fn retry_feedback(raw: &str, validation_error: &str, table: &str, edit_in_place:
     let missing_param = validation_error.contains("missing required param");
     let honest_exits = (table == "[[models]]" && missing_param).then_some(HONEST_EXITS);
     let honest_exits = honest_exits.unwrap_or_default();
-    let fix = if edit_in_place {
+    let fix = if table.is_empty() {
+        format!(
+            "YOUR PREVIOUS REPLY WAS: {}\nWrite only the one kind identifier to model.toml.",
+            truncate_to_chars(raw.trim(), 300)
+        )
+    } else if edit_in_place {
         format!("Fix exactly those issues. {}", harness::EDIT_IN_PLACE)
     } else {
         format!(
@@ -3357,17 +3459,45 @@ fn identify_prompt(part: &str, pdf_text: &str) -> String {
     )
 }
 
-fn kind_from_reply(part: &str, reply: &str) -> Result<String> {
-    // The model may answer with surrounding prose despite the instruction, so
-    // look for a supported kind rather than trusting the whole reply.
-    let found: Vec<&str> = supported_kinds()
+/// The supported kinds a reply names as whole words. The model may answer with
+/// surrounding prose despite the instruction, so a kind is looked for rather
+/// than the whole reply trusted.
+fn kinds_named(reply: &str) -> Vec<&'static str> {
+    let reply = reply.to_ascii_lowercase();
+    supported_kinds()
         .into_iter()
         .filter(|k| {
             reply
                 .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
                 .any(|w| w == *k)
         })
-        .collect();
+        .collect()
+}
+
+/// Whether an identification reply is usable: exactly one kind, or the
+/// explicit `unsupported`. Anything else (prose, a refusal that claims the
+/// sandbox is unreadable, two kinds) is retried with the reason quoted back.
+fn check_kind_reply(raw: &str) -> Result<()> {
+    let found = kinds_named(raw);
+    let unsupported = raw.to_ascii_lowercase().contains("unsupported");
+    match found.as_slice() {
+        [_] => Ok(()),
+        [] if unsupported => Ok(()),
+        [] => bail!(
+            "the reply named no kind from the list. Your working directory and every file in it \
+             are readable; if the text in the prompt is not enough, open page-index.md or \
+             pages/page-001.txt. Answer with exactly one kind identifier"
+        ),
+        many => bail!(
+            "the reply named several kinds ({}); answer with the ONE closest to the part's \
+             primary pins and supply",
+            many.join(", ")
+        ),
+    }
+}
+
+fn kind_from_reply(part: &str, reply: &str) -> Result<String> {
+    let found = kinds_named(reply);
     let kinds = supported_kinds().join(", ");
     match found.as_slice() {
         [one] => Ok((*one).to_string()),
@@ -3396,11 +3526,18 @@ fn kind_definition(kind: &str) -> &'static str {
         "diode" => "rectifier, Schottky, Zener, TVS or LED",
         "bjt_npn" | "bjt_pnp" => "discrete bipolar transistor of that polarity",
         "nmos" | "pmos" => "discrete MOSFET of that channel type",
-        "vreg" => "linear or switching regulator, reference, or other part whose job is a rail",
+        "vreg" => {
+            "linear regulator, switching regulator or DC-DC converter (buck, boost), reference, \
+             or other part whose job is a rail"
+        }
         "opamp" => "amplifier with an analog output (op-amp, instrumentation, audio)",
         "comparator" => "comparator or supervisor with a two-level output",
         "analog_switch" => "analog switch, multiplexer or load switch",
-        "digital" => "logic, buffer, level shifter or driver whose outputs follow logic inputs",
+        "digital" => {
+            "logic, buffer, level shifter, or a driver IC steered by logic inputs (motor, gate, \
+             LED or battery-pack FET driver, H-bridge): a driver whose outputs are not logic \
+             becomes a supply-draw card"
+        }
         "shift_register" => "shift or storage register (serial/parallel in or out)",
         "dac" | "adc" => "digital-to-analog (dac) or analog-to-digital (adc) converter",
         "mcu" => "programmable microcontroller",
@@ -3474,15 +3611,20 @@ fn verification_clause(ws: &Workspace, table: &str) -> String {
             .collect::<Vec<_>>()
             .join("\n");
         let category_coverage = ws.category_disclosures.join("\n");
+        // Measured: an unbounded agent printed the whole dump, and every later
+        // turn re-sent it (500k+ input tokens per draft); the hand-writer read
+        // the few pages it needed by number.
         let text_dump = if ws.has_text_dump {
-            "The complete text dump is `datasheet.txt`."
+            "`page-index.md` lists every page's topics and `pages/page-NNN.txt` holds each \
+             page's text: find the page there and read only it. Never print `datasheet.txt` or \
+             the PDF whole; everything you read is re-sent on every later turn."
         } else {
             "No separate text dump was available."
         };
         format!(
             "{} relevance-selected page image(s) are attached:\n{}\n\nPer-category coverage:\n{}\n\nThis is not \
              the whole datasheet. The complete PDF is `datasheet.pdf`. {} If a needed \
-             fact is on an omitted page, open the PDF or text dump before answering. \
+             fact is on an omitted page, read that page before answering. \
              Read values off the IMAGES for anything that lives in a table or pinout: \
              text extraction loses which column a number belonged to.",
             ws.pages.len(),
@@ -3519,6 +3661,13 @@ fn verification_clause(ws: &Workspace, table: &str) -> String {
          TOML document and nothing else."
     )
 }
+
+/// The identification call's instruction in place of the drafting one.
+const IDENTIFY_CLAUSE: &str = "## How to answer\n\nThe datasheet's front-page text is in this \
+    prompt and is normally enough. Only if it does not say what the part is, read \
+    `page-index.md` and then one or two `pages/page-NNN.txt` files; do not read `datasheet.txt` \
+    or `datasheet.pdf` whole and do not run any checker. Write the one kind identifier to \
+    `model.toml` in your working directory and nothing else.";
 
 /// The defaults live in [`crate::extract_config`]; re-exported so callers
 /// that only want to name them need not know where they are kept.
@@ -4006,6 +4155,9 @@ fn run_cli_agent(
 const AGENT_POINTER: &[u8] = b"Read prompt.md in your working directory and follow it exactly. \
     The supplied files and output location are in that working directory; read nothing outside \
     it, use the file tools available to you, and report any denied required read or write instead of claiming success. \
+    The working directory sits inside the system temporary folder, which the sandbox policy \
+    denies in general but grants for this directory: open its files rather than concluding \
+    from the policy text that you cannot, and report a denial only after a read has failed. \
     Read values off the rendered page images (page-*.png) for anything that lives in a table \
     or pinout, with datasheet.pdf available in the same directory. Write your answer to the file prompt.md names \
     (model.toml unless it names another).";
@@ -4673,6 +4825,50 @@ mod tests {
         );
         assert!(build_prompt("nPM1300", "pmic", "x").contains("pull_to"));
         assert!(build_prompt("LTC6803", "balancer", "x").contains("[[models.behavioral.laws]]"));
+    }
+
+    #[test]
+    fn identification_retries_prose_and_refusals() {
+        for good in ["vreg", "digital\n", "unsupported"] {
+            assert!(check_kind_reply(good).is_ok(), "{good}");
+        }
+        let refusal = "I can't complete the task because the workspace is under \
+                       `/private/var/folders/x/T`, which the active filesystem policy denies";
+        let err = format!("{:#}", check_kind_reply(refusal).unwrap_err());
+        assert!(err.contains("readable"), "{err}");
+        assert!(check_kind_reply("either vreg or digital").is_err());
+        let fix = retry_feedback(refusal, &err, "", false);
+        assert!(fix.contains("YOUR PREVIOUS REPLY WAS: I can't") && fix.contains("one kind"));
+        assert!(IDENTIFY_CLAUSE.contains("page-index.md"));
+        // The refusal is retried with its reason, not taken as the answer.
+        let mut prompts = Vec::new();
+        let word = validated_attempts(1, "p", Reply::Word, ("codex", false), |p| {
+            prompts.push(p.to_string());
+            Ok(if prompts.len() == 1 { refusal } else { "vreg" }.into())
+        })
+        .unwrap();
+        assert_eq!(word, "vreg");
+        assert!(prompts[1].contains("readable"), "{}", prompts[1]);
+    }
+
+    #[test]
+    fn prompt_shows_switcher_and_driver_shapes() {
+        let vreg = build_prompt("REG_FIXTURE", "vreg", "x");
+        assert!(vreg.contains(SWITCHER_HINT) && !vreg.contains("LIBRARY PATTERNS"));
+        let digital = build_prompt("LOGIC_FIXTURE", "digital", "x");
+        assert!(digital.contains(SUPPLY_DRAW_HINT));
+        assert!(!build_prompt("BC847", "bjt_npn", "x").contains(SUPPLY_DRAW_HINT));
+        // A front page naming a buck brings the library's converter cards,
+        // ahead of the datasheet text.
+        let buck = build_prompt("REG_FIXTURE", "vreg", "2-A step-down buck converter");
+        let (patterns, text) = (
+            buck.find("LIBRARY PATTERNS"),
+            buck.find(DATASHEET_TEXT_BEGIN),
+        );
+        assert!(
+            patterns.zip(text).is_some_and(|(p, t)| p < t),
+            "{patterns:?} {text:?}"
+        );
     }
 
     #[test]
@@ -6130,11 +6326,11 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             if prompts.len() == 1 {
                 Err(harness::Stopped("over budget".into()).into())
             } else {
-                Ok("resistor".into())
+                Ok("vreg".into())
             }
         })
         .unwrap();
-        assert_eq!(word, "resistor");
+        assert_eq!(word, "vreg");
         assert!(
             prompts[1].ends_with(harness::CONTINUE_AFTER_STOP),
             "{}",
@@ -6181,13 +6377,13 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let local = prompt_for_agent_backend(&model_prompt);
         assert!(!local.contains(noise));
         assert!(local.contains("Read the attached page images first"));
-        assert!(local.contains("datasheet.txt or datasheet.pdf"));
+        assert!(local.contains("find its page in page-index.md"));
         assert!(local.len() < model_prompt.len());
 
         let sensor_prompt = build_sensor_prompt("TMP117", "i2c_sensor", &marker);
         let local_sensor = prompt_for_agent_backend(&sensor_prompt);
         assert!(!local_sensor.contains(noise));
-        assert!(local_sensor.contains("datasheet.txt or datasheet.pdf"));
+        assert!(local_sensor.contains("find its page in page-index.md"));
 
         // Kind identification is a separate small call made before the
         // workspace exists, so prompts without the bounded source markers are
