@@ -706,7 +706,7 @@
       "type": "object"
     },
     "EvidenceGrade": {
-      "description": "How much a conclusion's evidence can be trusted: the record's spelling of\n[`EvidenceStatus`]. `full` replaces that type's `clean`, which collided\nwith the verdict word \"clean\"; `clean` stays the wire word in `run --json`\nv3 and `hauksbee-ci --json` v2 until those documents become the record.",
+      "description": "How much a conclusion's evidence can be trusted.\n\nThe record's spelling of [`EvidenceStatus`]: `full` replaces that type's `clean`, which collided\nwith the verdict word \"clean\"; `clean` stays the wire word in `run --json`\nv3 and `hauksbee-ci --json` v2 until those documents become the record.",
       "oneOf": [
         {
           "const": "full",
@@ -1876,7 +1876,7 @@
       ]
     },
     "Severity": {
-      "description": "How much a finding matters, on one ordered scale (`info` lowest,\n`serious` highest). Whether it fails the run is a separate flag,\n[`BLOCKING`]: the gate decides that per check (a lint warning can block, a\nDRC warning does not), and every renderer leads with it (\"2 blocking,\n0 serious, 2 worth a look\") so the headline and the verdict agree.",
+      "description": "How much a finding matters, on one ordered scale (`info` lowest,\n`serious` highest).\n\nWhether it fails the run is a separate flag,\n[`BLOCKING`]: the gate decides that per check (a lint warning can block, a\nDRC warning does not), and every renderer leads with it (\"2 blocking,\n0 serious, 2 worth a look\") so the headline and the verdict agree.",
       "oneOf": [
         {
           "const": "info",
