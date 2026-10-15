@@ -347,13 +347,16 @@ export function reportView(r: WebReport): ReportView {
   const sections = (r.sections ?? []).map(sectionView)
   const notice = r.fix_first?.notice
   const copper = (notice && sections.find(s => s.title.startsWith('Copper spacing'))) || null
+  // An unrouted board's headline already says so and its fix-first item says
+  // what to do, so the routing-only reason would be a third telling.
+  const reason = notice && r.verdict_reason?.startsWith('the board must be routed') ? null : (r.verdict_reason ?? null)
   return {
     tone: reportVerdictTone(r),
     palette: reportVerdictPalette(r),
     headline: headlineWithoutConditions(reportVerdictHeadline(r), conditions),
     conditions,
-    reason: r.verdict_reason ?? null,
-    reasonBrief: r.verdict_reason ? briefReason(r.verdict_reason) : null,
+    reason,
+    reasonBrief: reason ? briefReason(reason) : null,
     title: r.board_name || r.file_name,
     sizeLine: `${plural(r.num_components, 'part')}, ${plural(r.num_nets, 'net')}`,
     unresolved,

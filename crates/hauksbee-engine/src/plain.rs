@@ -405,7 +405,7 @@ fn write_heads_up(out: &mut String, notes: &[HeadsUp]) {
 }
 
 /// The notice a pre-layout board carries in place of its copper findings.
-pub const PRE_LAYOUT_NOTICE: &str = "This board isn't routed yet. Circuit, model and firmware checks ran on its netlist; copper checks (shorts, spacing) wait until it's routed.";
+pub const PRE_LAYOUT_NOTICE: &str = "Circuit, model and firmware checks ran on the netlist; copper checks (shorts, spacing) wait until the board is routed.";
 
 /// The "Fix these first" item for the not-routed state: what to do, since the
 /// notice and the headline already say what the state is.
@@ -2435,7 +2435,7 @@ mod tests {
         let whats: Vec<_> = first.items.iter().map(|i| i.what.as_str()).collect();
         assert_eq!(whats, ["floating pin", ROUTE_THE_BOARD]);
         assert_eq!(first.notice, Some(PRE_LAYOUT_NOTICE));
-        assert!(first.render().contains("isn't routed yet"));
+        assert!(first.render().contains("wait until the board is routed"));
         // The state is said once (the notice); the item only says what to do.
         assert!(!first.render().contains("pad groups"));
         // The state is not a defect and the copper waits: neither is counted.

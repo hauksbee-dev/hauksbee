@@ -47,7 +47,7 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 }, timeout: 9
     const item = await page.locator('[data-testid="fix-first-item"]').first().innerText()
     ok('fix-first says what to do, in board-level words', item.startsWith('Route the board') && item.includes('Route all the nets') && !item.includes('netlist'), item)
     ok('the pad-group detail is said at most once on the page', (await page.locator('body').innerText()).split('pad group').length <= 2)
-    ok("says the board isn't routed yet", (await page.locator('body').innerText()).includes("isn't routed yet"))
+    ok('says the board is not routed yet', (await page.locator('body').innerText()).includes('Not routed yet'))
     const banner = Number(await page.locator('[data-testid="open-parts-banner"]').getAttribute('data-open-count'))
     const cards = await page.locator('[data-testid^="open-part-"]').count()
     ok('banner count equals the open-part cards', banner === cards && cards > 0, `${banner} vs ${cards}`)
