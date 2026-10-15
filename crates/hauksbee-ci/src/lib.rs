@@ -36,6 +36,7 @@ pub mod integrate;
 pub mod lint;
 pub mod measure;
 pub mod progress;
+pub(crate) mod rail_feed;
 pub mod report;
 pub mod runner;
 pub mod scenarios;

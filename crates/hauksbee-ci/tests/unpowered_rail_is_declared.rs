@@ -260,6 +260,76 @@ fn the_scaffolds_questions_cover_every_rail_the_first_run_warns_about() {
 
 
 
+/// `two_rail_board` plus a resistor `RFEED` from `powered` (pin 1) to
+/// `fed` (pin 2): the board itself feeds `fed` from a powered rail.
+fn board_with_a_resistor_fed_rail(dir: &Path, powered: &str, fed: &str) -> PathBuf {
+    let path = two_rail_board(dir.join("resistor_fed.net"), powered, fed);
+    let net = std::fs::read_to_string(&path).expect("read board");
+    let net = net
+        .replace(
+            "  )\n  (nets\n",
+            "    (comp (ref \"RFEED\") (value \"4.7k\") \
+             (footprint \"Resistor_SMD:R_0603_1608Metric\") \
+             (libsource (lib \"Device\") (part \"R\")))\n  )\n  (nets\n",
+        )
+        .replace(
+            "      (node (ref \"R9\") (pin \"1\")))",
+            "      (node (ref \"R9\") (pin \"1\"))\n      (node (ref \"RFEED\") (pin \"1\")))",
+        )
+        .replace(
+            &format!("(name \"{fed}\")\n"),
+            &format!("(name \"{fed}\")\n      (node (ref \"RFEED\") (pin \"2\"))\n"),
+        );
+    std::fs::write(&path, net).expect("write board");
+    path
+}
+
+#[test]
+fn a_rail_the_board_feeds_through_a_resistor_gets_no_supply_and_a_reason() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = board_with_a_resistor_fed_rail(dir.path(), "VCC", "VDD_A");
+    let toml = hauksbee_ci::init::render_spec(&board).expect("scaffold");
+    assert!(
+        !toml.contains("net = \"VDD_A\""),
+        "no [[supply]] question for a resistor-fed rail:\n{toml}"
+    );
+    assert!(
+        toml.contains(
+            "VDD_A is fed from VCC through RFEED (4.7k); not proposing a [[supply]] for it"
+        ),
+        "the scaffold names the feed it saw:\n{toml}"
+    );
+}
+
+#[test]
+fn a_rail_with_no_feed_at_all_is_still_proposed() {
+    // The control for the resistor-fed rule: nothing ties VDD_A to a powered
+    // rail, so the scaffold still asks and gives no "fed from" reason.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = board_with_a_nameless_rail(dir.path());
+    let toml = hauksbee_ci::init::render_spec(&board).expect("scaffold");
+    assert!(
+        toml.contains("# net = \"VDD_A\""),
+        "an unfed rail is still proposed:\n{toml}"
+    );
+    assert!(
+        !toml.contains("VDD_A is fed from"),
+        "and no feed is claimed for it:\n{toml}"
+    );
+}
+
+#[test]
+fn the_run_and_the_scaffold_agree_on_a_resistor_fed_rail() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = board_with_a_resistor_fed_rail(dir.path(), "VCC", "VDD_A");
+    let result = run(&spec_for(dir.path(), &board, ""));
+    assert!(
+        result.dead_rails.is_empty(),
+        "the run does not call a resistor-fed rail dead: {:?}",
+        result.dead_rails
+    );
+}
+
 #[test]
 fn a_rail_a_regulator_drives_is_not_called_dead_or_offered_a_supply() {
     // VDD_A names no voltage, but an AMS1117-3.3 makes it from VCC. It is
