@@ -217,8 +217,8 @@ fn gather_ci_artifact_findings(
         blockers
     };
     // The `--check` verdict judges around open parts it can scope (see
-    // `crate::scope`), so its CI artifact carries the scope as a qualified,
-    // non-gating badge instead of a red INVALID test, matching the verdict.
+    // `crate::scope`). Partly judged is never a pass, so its CI artifact is a
+    // red PARTLY JUDGED test naming what was not judged, not a green one.
     let scope = (surface == SelectedSurface::Check)
         .then(|| crate::scope::JudgementScope::of(board, &bound, &blockers))
         .flatten()
@@ -235,9 +235,9 @@ fn gather_ci_artifact_findings(
             },
             |s| {
                 (
-                    "qualified",
-                    "warning",
-                    format!("QUALIFIED evidence: {}", s.condition()),
+                    "partly_judged",
+                    "serious",
+                    format!("PARTLY JUDGED (not a pass): {}", s.condition()),
                 )
             },
         );

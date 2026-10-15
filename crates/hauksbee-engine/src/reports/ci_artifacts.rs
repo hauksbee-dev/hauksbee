@@ -338,6 +338,22 @@ pub fn github_blocker_annotation(blockers: &[String]) {
     );
 }
 
+/// GitHub error annotation for a PARTLY JUDGED run under `--strict`, which
+/// exits 3 like a blocker refusal but says what WAS judged. No-op outside
+/// GitHub Actions.
+pub fn github_partly_judged_annotation(reason: &str) {
+    if std::env::var_os("GITHUB_ACTIONS").is_none() {
+        return;
+    }
+    eprintln!(
+        "::error title=hauksbee PARTLY JUDGED::{}",
+        reason
+            .replace('%', "%25")
+            .replace('\r', "%0D")
+            .replace('\n', "%0A")
+    );
+}
+
 /// GitHub error annotation for a whole-run refusal.
 ///
 /// The refusal is the exit-3 document the `JUnit` `<error>` and the SARIF

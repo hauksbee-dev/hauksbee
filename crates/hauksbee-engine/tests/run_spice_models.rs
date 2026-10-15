@@ -25,27 +25,20 @@ fn report(out: &Output) -> serde_json::Value {
 
 /// The board's Q1 carries `2SD1664R`, a real part the built-in library does
 /// not cover: nothing in the tree claims it and the vendor's card is the only
-/// model there is. Without it the run judges only what Q1 cannot change and
-/// says so; with it the same board is judged whole.
+/// model there is. Without it the run declines to vouch for itself; with it
+/// the same board is judgeable.
 #[test]
-fn a_vendor_model_card_turns_a_partly_judged_run_into_a_full_pass() {
+fn a_vendor_model_card_turns_an_unjudgeable_run_into_a_pass() {
     let b = fixture("spice_card_bjt.kicad_sch");
     let without = run(&["run", &b, "--check", "--strict", "--json"]);
     let doc = report(&without);
-    assert_eq!(doc["verdict"], "pass", "{doc}");
-    assert_eq!(doc["judgement_scope"]["open_parts"][0], "Q1", "{doc}");
-    assert!(
-        doc["verdict_conditions"][0]
-            .as_str()
-            .is_some_and(|c| c.starts_with("Partly judged: Q1 has no usable model")),
-        "{doc}"
-    );
+    assert_eq!(doc["verdict"], "invalid", "{doc}");
     assert_eq!(doc["bind"]["unresolved"], 1);
     assert_eq!(doc["bind"]["active_path_unresolved"][0]["reference"], "Q1");
     assert_eq!(
         without.status.code(),
-        Some(0),
-        "a partly judged pass exits 0"
+        Some(3),
+        "invalid for analysis is exit 3"
     );
 
     let lib = fixture("vendor_bjt.lib");
@@ -60,7 +53,6 @@ fn a_vendor_model_card_turns_a_partly_judged_run_into_a_full_pass() {
     ]);
     let doc = report(&with);
     assert_eq!(doc["verdict"], "pass", "{doc}");
-    assert!(doc.get("judgement_scope").is_none(), "{doc}");
     assert_eq!(doc["bind"]["unresolved"], 0);
     assert_eq!(
         doc["bind"]["active_path_unresolved"]

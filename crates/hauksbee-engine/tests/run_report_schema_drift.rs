@@ -58,6 +58,10 @@ fn generated_schema() -> String {
         json!({ "type": "string", "description": "Present when verdict is not pass: the main reason and the next action, in one plain sentence." }),
     );
     props.insert(
+        "partly_judged".into(),
+        json!({ "type": "boolean", "description": "Present (true) when nothing was found among the checks this run could judge around unmodelled key parts (see judgement_scope): verdict is then invalid and ok false, never a pass." }),
+    );
+    props.insert(
         "serious_count".into(),
         json!({ "type": "integer", "minimum": 0 }),
     );

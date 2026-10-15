@@ -3201,7 +3201,7 @@
           "type": "null"
         }
       ],
-      "description": "Which net checks the run judged when key parts have no usable model:\nthe open parts, and the nets whose wiring/value or electrical checks\nthey could change (not judged). With some claim judged, the verdict\njudges the rest instead of refusing the whole board, and the first\nverdict condition (or the failing reason) names what was not judged.\nAdditive; omitted when every key part is modelled."
+      "description": "Which net checks the run judged when key parts have no usable model:\nthe open parts, and the nets whose wiring/value or electrical checks\nthey could change (not judged). With some electrical check judged, a\nfinding on the rest fails the board, and nothing found is PARTLY\nJUDGED (`partly_judged: true`, verdict `invalid`, `ok` false); the\nreason names what was not judged. Additive; omitted when every key\npart is modelled."
     },
     "notes": {
       "description": "Info-level notes (bind roles, co-sim substitution, coverage caveats, SI\ninfo) that must never be silently absent but never gate a CI pipeline.\nAdditive + `skip_serializing_if` so the schema stays backward-compatible.",
@@ -3211,6 +3211,10 @@
       "type": "array"
     },
     "ok": {
+      "type": "boolean"
+    },
+    "partly_judged": {
+      "description": "Present (true) when nothing was found among the checks this run could judge around unmodelled key parts (see judgement_scope): verdict is then invalid and ok false, never a pass.",
       "type": "boolean"
     },
     "refusal": {

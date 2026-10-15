@@ -719,15 +719,12 @@ impl OrderTriage {
     fn empty_headline(verdict: &crate::result::RunVerdict) -> String {
         let reason = verdict.reason.as_deref().unwrap_or_default();
         match verdict.verdict {
+            // The reason starts "PARTLY JUDGED (not a pass)".
+            _ if verdict.partial => reason.to_string(),
             "pass" if verdict.conditions.is_empty() => {
                 "OK TO ORDER: nothing found that blocks ordering or needs inspecting first."
                     .to_string()
             }
-            "pass" if verdict.partial => format!(
-                "PARTLY JUDGED: nothing found that blocks ordering among the checks this run \
-                 could judge. {}",
-                verdict.conditions.join(" ")
-            ),
             "pass" => format!(
                 "OK TO ORDER, conditionally: nothing found that blocks ordering or needs \
                  inspecting first; this rests on: {}",
@@ -747,7 +744,7 @@ impl OrderTriage {
         // Three empty lists read as a missing answer, so a clean triage says
         // so in one line and the empty buckets are left out. A failed run says
         // so in the same place even when the buckets below do not name its cause.
-        if self.do_not_order.is_empty() && self.inspect.is_empty() {
+        if (self.do_not_order.is_empty() && self.inspect.is_empty()) || verdict.partial {
             let _ = writeln!(out, "{}", Self::empty_headline(verdict));
         } else if verdict.verdict == "fail" && self.do_not_order.is_empty() {
             let _ = writeln!(

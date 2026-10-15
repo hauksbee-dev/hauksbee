@@ -61,10 +61,10 @@ fn unbound() -> PathBuf {
     fixture("verdict_fet_unbound.kicad_pcb")
 }
 
-/// [`unbound`] with a pin of Q1 on every net, so even `--check`, which judges
-/// around an open part, has nothing left to judge and refuses the board.
-fn unbound_everywhere() -> PathBuf {
-    fixture("verdict_fet_everywhere.kicad_pcb")
+/// [`unbound`] plus a rail (VB) that meets Q1's side only at ground, so
+/// `--check` can judge VB's checks around the open Q1: PARTLY JUDGED.
+fn partly_judged() -> PathBuf {
+    fixture("verdict_fet_partial.kicad_pcb")
 }
 
 /// [`unbound`]'s twin with Q1 bound, so the normal verdicts return.
@@ -570,23 +570,27 @@ fn web_front_door_refuses_a_clean_bill_over_an_unbound_fet() {
 }
 
 #[test]
-fn check_closing_verdict_is_scoped_not_clean() {
+fn check_closing_verdict_is_inconclusive_not_clean() {
     let b = unbound();
     let out = run_board(&b, &["--check"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let text = stdout(&out);
-    // Q1 reaches every net electrically, so only the wiring of the one net it
-    // has no pin on (+5V) is judged, and the closing line says exactly that.
     assert!(
-        text.contains("VERDICT: clean where judged")
-            && text.contains("Partly judged: Q1 has no usable model")
-            && text.contains("NO electrical check was judged")
-            && text.contains("The other 1 of 8 net checks were judged"),
-        "the closing line scopes the claim and names the part:\n{text}"
+        text.contains("VERDICT: inconclusive") && text.contains("Q1"),
+        "the closing line refuses the clean claim and names the part:\n{text}"
     );
     assert!(
-        !text.contains("VERDICT: clean:"),
-        "no plain clean bill over an unmodelled current-carrying part:\n{text}"
+        !text.contains("VERDICT: clean"),
+        "no clean bill over an unmodelled current-carrying part:\n{text}"
+    );
+    // Q1 reaches every net through the circuit, so no electrical check is
+    // judged; the one clean wiring check is information, not a pass.
+    assert!(
+        text.contains(
+            "For information only, not a pass: the wiring and value checks on the 1 of 4 \
+             net(s) Q1 does not connect to found nothing that fails"
+        ),
+        "the clean wiring check is reported as information:\n{text}"
     );
     // Bound side: the clean verdict returns.
     let out = run_board(&bound(), &["--check"]);
@@ -641,7 +645,7 @@ fn junit_agrees_with_the_json_verdict_about_bind_blockers() {
     // Scenario 08's inverse: an invalid JSON verdict must show red in the
     // JUnit file too, not a green test-report tab beside a red dashboard.
     let art = Artifacts::new("out");
-    let out = run_board(&unbound(), &art.with_junit(&["--lint"]));
+    let out = run_board(&unbound(), &art.with_junit(&["--check"]));
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let xml = art.xml();
     assert!(
@@ -652,16 +656,6 @@ fn junit_agrees_with_the_json_verdict_about_bind_blockers() {
         !junit_all_green(&xml),
         "the JUnit root must not read all-green beside an invalid JSON verdict: {}",
         junit_root(&xml)
-    );
-    // `--check` scopes the same blocker into a partly judged pass, so its
-    // JUnit carries the scope as a qualified, non-failing entry instead.
-    let art = Artifacts::new("check");
-    let out = run_board(&unbound(), &art.with_junit(&["--check"]));
-    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
-    let xml = art.xml();
-    assert!(
-        xml.contains("QUALIFIED evidence: Partly judged: Q1") && junit_all_green(&xml),
-        "the scoped blocker reads as a qualified entry beside a pass:\n{xml}"
     );
 }
 
@@ -765,11 +759,58 @@ fn si_strict_exit_agrees_with_the_si_verdict_on_both_sides_of_the_bind_gate() {
 
 #[test]
 fn check_strict_exit_agrees_with_the_check_verdict_on_both_sides_of_the_bind_gate() {
-    // The unbound FET leaves one net check judged: a partly judged pass, exit 0.
-    assert_gate_matches_verdict(&["--check"], &unbound(), "pass");
+    assert_gate_matches_verdict(&["--check"], &unbound(), "invalid");
     assert_gate_matches_verdict(&["--check"], &bound(), "pass");
-    // With a pin on every net it leaves nothing to judge: invalid, exit 3.
-    assert_gate_matches_verdict(&["--check"], &unbound_everywhere(), "invalid");
+}
+
+/// A partly judged board is never a pass: not in the JSON (`ok` false, verdict
+/// `invalid`, `partly_judged` true), not in the `--strict` exit (3), not in the
+/// closing line, the `JUnit` file or the GitHub annotation, which all say
+/// PARTLY JUDGED.
+#[test]
+fn a_partly_judged_board_is_never_a_pass_on_any_surface() {
+    let board = partly_judged();
+    assert_gate_matches_verdict(&["--check"], &board, "invalid");
+    assert_bare_json_gate_matches_verdict(&board, "invalid");
+    let v = json_doc(&run_board(&board, &["--check", "--json"]));
+    assert_eq!(v["partly_judged"], true, "{v}");
+    assert_eq!(v["judgement_scope"]["open_parts"][0], "Q1", "{v}");
+    assert_eq!(
+        v["judgement_scope"]["electrical_dependent"]
+            .as_array()
+            .map(Vec::len),
+        Some(4),
+        "{v}"
+    );
+    let reason = v["verdict_reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.starts_with("PARTLY JUDGED (not a pass): ")
+            && reason.contains("Partly judged: Q1 has no usable model")
+            && reason.contains("The other 3 of 10 net checks were judged"),
+        "{reason}"
+    );
+
+    let text = stdout(&run_board(&board, &["--check"]));
+    assert!(
+        text.contains("VERDICT: PARTLY JUDGED: 0 serious") && !text.contains("VERDICT: clean"),
+        "{text}"
+    );
+
+    let art = Artifacts::new("out");
+    let out = run_board_in_actions(&board, &art.with_junit(&["--check", "--json", "--strict"]));
+    assert_eq!(out.status.code(), Some(3), "stderr: {}", stderr(&out));
+    let xml = art.xml();
+    assert!(
+        xml.contains("PARTLY JUDGED (not a pass): Partly judged: Q1") && !junit_all_green(&xml),
+        "the JUnit file shows PARTLY JUDGED red, never a pass:\n{xml}"
+    );
+    let err = stderr(&out);
+    assert!(
+        err.lines()
+            .any(|l| l
+                .starts_with("::error title=hauksbee PARTLY JUDGED::PARTLY JUDGED (not a pass): ")),
+        "the annotation names the partly judged answer:\n{err}"
+    );
 }
 
 #[test]
@@ -910,9 +951,7 @@ fn the_resources_subset_and_the_bare_machine_report_gate_like_their_verdicts() {
     // bare `--json` produces.
     assert_gate_matches_verdict(&["--resources"], &unbound(), "invalid");
     assert_gate_matches_verdict(&["--resources"], &bound(), "pass");
-    // The bare report is the `--check` document, so it scopes like `--check`.
-    assert_bare_json_gate_matches_verdict(&unbound(), "pass");
-    assert_bare_json_gate_matches_verdict(&unbound_everywhere(), "invalid");
+    assert_bare_json_gate_matches_verdict(&unbound(), "invalid");
     assert_bare_json_gate_matches_verdict(&bound(), "pass");
 }
 
@@ -1000,14 +1039,7 @@ fn github_annotations_agree_with_a_specialist_surfaces_verdict() {
     // pipeline that gates on the exit code alone would still get a silent
     // checks tab.
     for surface in ["--lint", "--si", "--check", "--resources"] {
-        // `--check` judges around a part it can scope, so it refuses only
-        // when the open part reaches every net check.
-        let board = if surface == "--check" {
-            unbound_everywhere()
-        } else {
-            unbound()
-        };
-        let out = run_board_in_actions(&board, &[surface, "--json", "--strict"]);
+        let out = run_board_in_actions(&unbound(), &[surface, "--json", "--strict"]);
         assert_eq!(
             out.status.code(),
             Some(3),
@@ -1036,7 +1068,7 @@ fn github_annotations_agree_with_a_specialist_surfaces_verdict() {
     // on a line the reader has already seen.
     let art = Artifacts::new("out");
     let out = run_board_in_actions(
-        &unbound_everywhere(),
+        &unbound(),
         &art.with_junit(&["--check", "--json", "--strict"]),
     );
     let err = stderr(&out);
@@ -1313,10 +1345,7 @@ fn an_invalid_verdict_keeps_the_invalid_shape_in_the_artifact() {
     // parts, so the artifact carries the INVALID evidence blocker as its only
     // gate-grade entry and the document still reads `invalid`, not `fail`.
     let art = Artifacts::new("out");
-    let out = run_board(
-        &unbound_everywhere(),
-        &art.with_both(&["--check", "--json"]),
-    );
+    let out = run_board(&unbound(), &art.with_both(&["--check", "--json"]));
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     assert_eq!(json_verdict(&out).0, "invalid");
 

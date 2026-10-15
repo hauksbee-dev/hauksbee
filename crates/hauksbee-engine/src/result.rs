@@ -261,8 +261,9 @@ pub struct RunVerdict {
     pub reason: Option<String>,
     /// The assumptions a pass rests on (empty unless the verdict is a pass).
     pub conditions: Vec<String>,
-    /// A pass judged only the checks unmodelled key parts cannot change
-    /// ([`crate::scope::JudgementScope`]); its first condition says which were not.
+    /// PARTLY JUDGED: nothing was found among the checks unmodelled key parts
+    /// cannot change ([`crate::scope::JudgementScope`]). Never a pass: the
+    /// verdict is `invalid` and the reason starts `PARTLY JUDGED`.
     pub partial: bool,
 }
 
@@ -296,11 +297,13 @@ impl<'a> From<&'a Refusal> for VerdictCause<'a> {
 }
 
 /// [`JsonReport::verdict_with_waivers`]: `(ok, verdict, serious, actionable)`,
-/// the findings a waiver covered, and the reason sentence when not a pass.
+/// the findings a waiver covered, the reason sentence when not a pass, and
+/// whether the run is PARTLY JUDGED ([`RunVerdict::partial`]).
 type VerdictParts = (
     (bool, &'static str, usize, usize),
     Vec<crate::waiver::WaivedFinding>,
     Option<String>,
+    bool,
 );
 
 /// The first few references, then a count of the rest.
@@ -2468,10 +2471,11 @@ pub struct JsonReport {
     pub verdict_conditions: Vec<String>,
     /// Which net checks the run judged when key parts have no usable model:
     /// the open parts, and the nets whose wiring/value or electrical checks
-    /// they could change (not judged). With some claim judged, the verdict
-    /// judges the rest instead of refusing the whole board, and the first
-    /// verdict condition (or the failing reason) names what was not judged.
-    /// Additive; omitted when every key part is modelled.
+    /// they could change (not judged). With some electrical check judged, a
+    /// finding on the rest fails the board, and nothing found is PARTLY
+    /// JUDGED (`partly_judged: true`, verdict `invalid`, `ok` false); the
+    /// reason names what was not judged. Additive; omitted when every key
+    /// part is modelled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judgement_scope: Option<crate::scope::JudgementScope>,
 }
@@ -2668,13 +2672,10 @@ impl JsonReport {
         self
     }
 
-    /// Scope the verdict around unmodelled key parts (nothing for `None`):
-    /// when the scope judged anything, its condition leads the conditions.
+    /// Scope the verdict around unmodelled key parts (nothing for `None`).
+    /// The verdict reason names what the scope did not judge.
     #[must_use]
     pub fn with_judgement_scope(mut self, scope: Option<crate::scope::JudgementScope>) -> Self {
-        if let Some(s) = scope.as_ref().filter(|s| s.judged() > 0) {
-            self.verdict_conditions.insert(0, s.condition());
-        }
         self.judgement_scope = scope;
         self
     }
@@ -2870,19 +2871,37 @@ impl JsonReport {
             VerdictCause::Failing { count, first }
         });
         // Scoped judgement: blockers whose dependent checks the scope set aside
-        // no longer refuse the rest; its sentence says what was not judged.
+        // no longer refuse the rest; its sentence says what was not judged. A
+        // finding still fails the board, and nothing found is PARTLY JUDGED,
+        // which is `invalid`, never a pass.
         let scope = self.active_scope(&blockers);
         let unjudged: &[String] = if scope.is_some() { &[] } else { &blockers };
         let cause = VerdictCause::pick(failing, refused, unjudged, evidence_undermined);
+        let partial = cause.is_none() && scope.is_some();
         let verdict = match cause {
+            None if partial => "invalid",
             None => "pass",
             Some(c) if c.is_invalid() => "invalid",
             Some(_) => "fail",
         };
+        let reason = match (cause, scope) {
+            (Some(c @ VerdictCause::Unmodelled(_)), None) => {
+                // Too narrow a scope to judge an electrical check: the refusal
+                // stands, with the clean wiring/value checks as information.
+                let note = (self.judgement_scope.as_ref())
+                    .filter(|s| s.open_parts == blockers)
+                    .and_then(crate::scope::JudgementScope::wiring_note);
+                Some(note.map_or_else(|| c.reason(), |n| format!("{} {n}", c.reason())))
+            }
+            (Some(c), _) => Some(c.reason_scoped(&blockers, scope)),
+            (None, Some(s)) => Some(s.partly_judged_reason()),
+            (None, None) => None,
+        };
         (
             (verdict == "pass", verdict, serious, actionable),
             waived,
-            cause.map(|c| c.reason_scoped(&blockers, scope)),
+            reason,
+            partial,
         )
     }
 
@@ -2891,7 +2910,7 @@ impl JsonReport {
     /// line built from this can never disagree with the `verdict` field.
     #[must_use]
     pub fn run_verdict(&self) -> RunVerdict {
-        let ((_, verdict, _, _), _, reason) =
+        let ((_, verdict, _, _), _, reason, partial) =
             self.verdict_with_waivers(&mut crate::waiver::WaiverSet::default());
         RunVerdict {
             verdict,
@@ -2902,11 +2921,7 @@ impl JsonReport {
             } else {
                 Vec::new()
             },
-            partial: verdict == "pass"
-                && self.bind_gates_verdict
-                && self
-                    .active_scope(&unmodelled_critical_refs(&self.bind))
-                    .is_some(),
+            partial,
         }
     }
 
@@ -2917,7 +2932,7 @@ impl JsonReport {
     /// envelope and a CI consumer never has to re-derive pass/fail.
     #[must_use]
     pub fn to_json(&self) -> String {
-        let ((ok, verdict, serious, actionable), _, reason) =
+        let ((ok, verdict, serious, actionable), _, reason, partial) =
             self.verdict_with_waivers(&mut crate::waiver::WaiverSet::default());
         let Ok(serde_json::Value::Object(mut value)) = serde_json::to_value(self) else {
             return serde_json::to_string_pretty(self)
@@ -2929,6 +2944,10 @@ impl JsonReport {
         let mut out = serde_json::Map::new();
         out.insert("ok".into(), serde_json::json!(ok));
         out.insert("verdict".into(), serde_json::json!(verdict));
+        // For consumers that want the partly judged answer: `ok` stays false.
+        if partial {
+            out.insert("partly_judged".into(), serde_json::json!(true));
+        }
         if let Some(reason) = reason {
             out.insert("verdict_reason".into(), serde_json::json!(reason));
         }

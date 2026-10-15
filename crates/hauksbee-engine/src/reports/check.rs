@@ -390,6 +390,13 @@ impl CheckReport<'_> {
         // evidence or unbound verdict-critical parts), not on any undermined map:
         // a finding-backed badge must not exit 3 under --strict while the verdict
         // field says pass.
+        // A partly judged run is not a pass either: exit 3, annotated as such.
+        if strict && run_verdict.partial {
+            super::ci_artifacts::github_partly_judged_annotation(
+                run_verdict.reason.as_deref().unwrap_or_default(),
+            );
+            super::ci_artifacts::exit_with_findings(crate::result::EXIT_INVALID_FOR_ANALYSIS, &[]);
+        }
         if strict && run_verdict.verdict == "invalid" {
             super::exit_invalid_for_analysis(&blockers);
         }
@@ -516,17 +523,15 @@ fn verdict_line(
         // A pass that rests on an assumption says so on the line itself.
         return if conditions.is_empty() {
             format!("VERDICT: clean: 0 serious, {worth_a_look} worth a look")
-        } else if verdict.partial {
-            format!(
-                "VERDICT: clean where judged: 0 serious, {worth_a_look} worth a look; {conditions}"
-            )
         } else {
             format!(
                 "VERDICT: clean, conditionally: 0 serious, {worth_a_look} worth a look; {conditions}"
             )
         };
     };
-    let tag = if verdict.verdict == "invalid" {
+    let tag = if verdict.partial {
+        "PARTLY JUDGED"
+    } else if verdict.verdict == "invalid" {
         "inconclusive"
     } else {
         "failing"
@@ -1205,9 +1210,9 @@ mod tests {
                 scope_nets: Some(10),
                 ..row(
                     "unmodelled key part, rest of the board judged",
-                    "pass",
-                    "PARTLY JUDGED: ",
-                    "VERDICT: clean where judged: ",
+                    "invalid",
+                    "PARTLY JUDGED (not a pass): ",
+                    "VERDICT: PARTLY JUDGED: ",
                 )
             },
             Row {
@@ -1280,16 +1285,16 @@ mod tests {
             );
             if row.verdict == "pass" {
                 assert!(got.json_reason.is_none(), "{name}");
-                // A scoped pass names the open part and what was not judged.
-                if row.scope_nets.is_some() {
-                    for text in [&got.triage, &got.line] {
-                        assert!(
-                            text.contains("Partly judged: U1 has no usable model"),
-                            "{text}"
-                        );
-                    }
-                }
                 continue;
+            }
+            // A partly judged run names the open part and what was not judged.
+            if row.headline.starts_with("PARTLY JUDGED") {
+                for text in [&got.triage, &got.line] {
+                    assert!(
+                        text.contains("Partly judged: U1 has no usable model"),
+                        "{text}"
+                    );
+                }
             }
             // Whatever the wording, a run that is not a pass never reads as one.
             assert!(

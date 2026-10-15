@@ -95,6 +95,7 @@ and failure parse the same way:
 |---|---|---|
 | `ok` | bool | `true` iff `verdict == "pass"` |
 | `verdict` | string | `"pass"` \| `"fail"` \| `"invalid"` (see below) |
+| `partly_judged` | bool | present (`true`) only on a PARTLY JUDGED run: `verdict` `invalid`, see `judgement_scope` below |
 | `serious_count` | int | number of `serious` findings (DRC shorts, a destroyed part in co-sim, high-severity lint/SI). A co-sim fault that did not destroy the part grades `warning` and is counted by its surface's gate instead, see `verdict` below |
 | `actionable_count` | int | findings a user can act on (serious + warnings + clearance groups) |
 
@@ -137,12 +138,16 @@ judging it (`docs/ci/CI.md` states that boundary).
 whole board. `judgement_scope` names the open parts, the named-net count, the
 nets they have a pin on (`wiring_dependent`: wiring/value checks not judged)
 and every net they reach through any part's pins, stopping only at the analysis
-ground (`electrical_dependent`: levels, ratings and rails not judged). When any
-net check is left over, `verdict` judges those: `pass` with the scope's
-"Partly judged: ..." sentence as the first `verdict_conditions` entry (the
-closing line reads `VERDICT: clean where judged`), or `fail` with the same
-sentence after "Also:" in `verdict_reason`. Only when the open parts reach every
-net check does the verdict stay `invalid`.
+ground (`electrical_dependent`: levels, ratings and rails not judged). A
+finding on any judged check is `fail`, with the scope's "Partly judged: ..."
+sentence after "Also:" in `verdict_reason`. With nothing found and at least one
+electrical check judged, the run is PARTLY JUDGED, which is never a pass:
+`verdict` is `invalid`, `ok` is `false`, `partly_judged` is `true`,
+`verdict_reason` starts `PARTLY JUDGED (not a pass):`, and a `--strict` run
+exits 3 (the closing line reads `VERDICT: PARTLY JUDGED`). When the open parts
+reach every net electrically, the verdict is the plain `invalid` above, and
+`verdict_reason` adds, as information only, how many wiring/value checks on
+the nets they do not touch found nothing.
 
 Read `verdict` together with `notes` and the `bind` fields, never on its own:
 `thermal.valid: true` under `--thermal --no-strict-thermal` means the table is

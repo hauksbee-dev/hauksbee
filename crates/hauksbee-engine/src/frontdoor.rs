@@ -669,6 +669,10 @@ pub struct WebReport {
     /// read the board.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub verdict: String,
+    /// True when the verdict is PARTLY JUDGED (`invalid`, never a pass): the
+    /// same flag `run --check --json` prints. Absent otherwise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub partly_judged: bool,
     /// The `--check` machine document for the static board, which the verdict
     /// is derived from. Firmware co-sim faults are folded into a copy of it
     /// when the verdict is derived, never into this one.
@@ -720,6 +724,7 @@ impl WebReport {
         self.pre_verdict_headline.clone_from(&self.headline);
         self.headline = verdict_headline(&verdict, &self.headline, self.serious);
         self.verdict = verdict.verdict.to_string();
+        self.partly_judged = verdict.partial;
         self.verdict_reason = verdict.reason;
         // Routing is the only blocking problem: the headline frames the state and
         // the strip says what ran, so the reason names the blocker once, briefly.
@@ -766,14 +771,13 @@ fn verdict_headline(verdict: &crate::result::RunVerdict, current: &str, serious:
         // A serious finding's headline already says to fix it before ordering.
         "fail" if serious > 0 || current.starts_with(PRE_LAYOUT_HEADLINE_LEAD) => current.to_string(),
         "fail" => "Not OK to order: a finding fails the check gate; see the reason below.".to_string(),
+        _ if verdict.partial => "Partly judged, not a pass: nothing found blocks ordering among \
+             the checks this run could judge, but parts with no usable model leave the rest \
+             unjudged; see the reason below."
+            .to_string(),
         "invalid" if inconclusive.contains(&current) => current.to_string(),
         "invalid" => "Not conclusive: nothing found blocks ordering, but this run cannot vouch for the board; see the reason below.".to_string(),
         _ if verdict.conditions.is_empty() => current.to_string(),
-        _ if verdict.partial => format!(
-            "Partly judged: nothing found blocks ordering among the checks this run could \
-             judge. {}",
-            verdict.conditions.join(" ")
-        ),
         _ => {
             let conditions = verdict.conditions.join(" ");
             if current == overall_headline(0, 0, false, false) {

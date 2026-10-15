@@ -6,7 +6,11 @@
 //! splits each named net's two claims (its wiring/value checks and its
 //! electrical checks: levels, ratings, rails) into those an open part can
 //! change and those it provably cannot, and the verdict judges only the second
-//! kind.
+//! kind. A finding on a judged check still fails the board. With nothing
+//! found, the answer is PARTLY JUDGED: never a pass (`ok` false, `--strict`
+//! exit 3), and only when at least one electrical check was judged; wiring and
+//! value checks alone leave the verdict `invalid`, with a line saying how many
+//! of them came out clean.
 //!
 //! The rule is deliberately coarse, so it can only over-refuse, never
 //! over-judge:
@@ -95,12 +99,66 @@ impl JudgementScope {
             .saturating_sub(self.wiring_dependent.len() + self.electrical_dependent.len())
     }
 
+    /// Nets whose wiring/value checks were judged.
+    #[must_use]
+    pub const fn wiring_judged(&self) -> usize {
+        self.nets.saturating_sub(self.wiring_dependent.len())
+    }
+
+    /// Nets whose electrical checks (levels, ratings, rails) were judged.
+    #[must_use]
+    pub const fn electrical_judged(&self) -> usize {
+        self.nets.saturating_sub(self.electrical_dependent.len())
+    }
+
     /// Whether this scope lets the verdict judge the rest of the board for
-    /// exactly these blockers: some claim was judged, and it was cut around
-    /// every blocker the verdict would otherwise refuse over.
+    /// exactly these blockers: at least one electrical check was judged (the
+    /// wiring/value checks alone never make a partly judged answer), and the
+    /// scope was cut around every blocker the verdict would otherwise refuse
+    /// over.
     #[must_use]
     pub fn scopes(&self, blockers: &[String]) -> bool {
-        self.judged() > 0 && self.open_parts == blockers
+        self.electrical_judged() > 0 && self.open_parts == blockers
+    }
+
+    /// The verdict reason of a run this scope judged with nothing found: it
+    /// is not a pass, so it says so first.
+    #[must_use]
+    pub fn partly_judged_reason(&self) -> String {
+        format!(
+            "PARTLY JUDGED (not a pass): nothing found blocks ordering among the checks this \
+             run could judge. {}",
+            self.condition()
+        )
+    }
+
+    /// For a scope too narrow to judge any electrical check: one line, as
+    /// information only, saying how many wiring/value checks came out clean.
+    /// `None` when none did.
+    #[must_use]
+    pub fn wiring_note(&self) -> Option<String> {
+        let judged = self.wiring_judged();
+        (judged > 0 && self.electrical_judged() == 0).then(|| {
+            let (parts, does) = match self.open_parts.as_slice() {
+                [one] => (one.clone(), "does"),
+                many => (crate::result::refs_summary(many), "do"),
+            };
+            format!(
+                "For information only, not a pass: the wiring and value checks on the {judged} \
+                 of {} net(s) {parts} {does} not connect to found nothing that fails, but {} can \
+                 reach every net through the circuit, so no electrical check could be judged.",
+                self.nets,
+                self.pronoun(),
+            )
+        })
+    }
+
+    const fn pronoun(&self) -> &'static str {
+        if self.open_parts.len() == 1 {
+            "it"
+        } else {
+            "they"
+        }
     }
 
     /// One sentence naming the open parts, what was not judged, what was, and
@@ -118,29 +176,23 @@ impl JudgementScope {
             format!("{}{more}", shown.join(", "))
         };
         let parts = crate::result::refs_summary(&self.open_parts);
-        let (has, it) = if self.open_parts.len() == 1 {
-            ("has", "it")
+        let it = self.pronoun();
+        let has = if self.open_parts.len() == 1 {
+            "has"
         } else {
-            ("have", "they")
-        };
-        let reach = self.electrical_dependent.len();
-        let electrical = if reach == self.nets {
-            format!("on all {reach} nets, since {it} can reach every one through the circuit, so NO electrical check was judged")
-        } else {
-            format!(
-                "on the {reach} of {} net(s) {it} can reach through the circuit ({})",
-                self.nets,
-                sample(&self.electrical_dependent)
-            )
+            "have"
         };
         format!(
             "Partly judged: {parts} {has} no usable model, so the checks {it} could change are \
              not judged: wiring and value checks on the {} net(s) {it} connects to ({}), and \
-             electrical checks (levels, ratings, rails) {electrical}. The other {} of {} net \
-             checks were judged. Draft the model(s) with `hauksbee models extract --unmodelled \
-             <board>` to judge the rest.",
+             electrical checks (levels, ratings, rails) on the {} of {} net(s) {it} can reach \
+             through the circuit ({}). The other {} of {} net checks were judged. Draft the \
+             model(s) with `hauksbee models extract --unmodelled <board>` to judge the rest.",
             self.wiring_dependent.len(),
             sample(&self.wiring_dependent),
+            self.electrical_dependent.len(),
+            self.nets,
+            sample(&self.electrical_dependent),
             self.judged(),
             2 * self.nets,
         )
@@ -208,6 +260,7 @@ mod tests {
         assert_eq!(s.electrical_dependent, ["GND", "SDA", "VIN", "VOUT"]);
         assert_eq!(s.judged(), 12 - 2 - 4);
         assert!(s.scopes(&["U3".into()]));
+        assert!(s.wiring_note().is_none());
         let c = s.condition();
         assert!(
             c.contains("U3 has no usable model") && c.contains("6 of 12"),
@@ -242,5 +295,23 @@ mod tests {
         let s = scope(("U3", &NETS));
         assert_eq!(s.judged(), 0);
         assert!(!s.scopes(&["U3".into()]));
+        assert!(s.wiring_note().is_none());
+    }
+
+    #[test]
+    fn wiring_checks_alone_never_make_a_partly_judged_answer() {
+        // U3 bridges both halves of the board, so it reaches every net
+        // electrically while touching only two: the untouched nets' wiring
+        // checks are counted as information, never as a scope.
+        let s = scope(("U3", &["VOUT", "VB"]));
+        assert_eq!(s.electrical_judged(), 0);
+        assert_eq!(s.wiring_judged(), 4);
+        assert!(!s.scopes(&["U3".into()]));
+        let note = s.wiring_note().expect("four wiring checks came out clean");
+        assert!(
+            note.starts_with("For information only, not a pass")
+                && note.contains("4 of 6 net(s) U3 does not connect to"),
+            "{note}"
+        );
     }
 }
