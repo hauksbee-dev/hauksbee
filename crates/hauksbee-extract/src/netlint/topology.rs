@@ -46,6 +46,36 @@ fn ground_named(name: &str) -> bool {
     })
 }
 
+/// A ground-family word with an optional single-letter domain prefix and
+/// number: `GND`, `AGND`, `GNDA`, `GND2`, `VSS`, `VSSA`, `GNDPWR`.
+fn ground_word(word: &str) -> bool {
+    let w = word.trim_end_matches(|c: char| c.is_ascii_digit());
+    ["GND", "VSS"].iter().any(|g| {
+        let rest = w
+            .strip_prefix(g)
+            .or_else(|| w.strip_suffix(g))
+            .unwrap_or("x");
+        rest.is_empty() || matches!(rest, "A" | "D" | "P" | "S" | "IO" | "PWR" | "DIG" | "ANA")
+    })
+}
+
+/// Evidence that a net is a ground beyond a substring of its name: the whole
+/// name is a ground word (optionally with one short qualifier token), or a pin
+/// on it is named as a ground pin by its part. A signal pair whose name merely
+/// contains `GND` (`SNS_GND+`, `ISENSE_GNDSENSE`) has neither.
+fn ground_evidence(board: &ExtractedBoard, net: &crate::Net) -> bool {
+    let words: Vec<String> = tokens(&net.name).collect();
+    let by_name = match words.as_slice() {
+        [w] => ground_word(w) || w == "GROUND",
+        [a, b] => (ground_word(a) && b.len() <= 2) || (ground_word(b) && a.len() <= 2),
+        _ => false,
+    };
+    by_name
+        || members(board, net.id).into_iter().any(|(c, p)| {
+            !is_test_point_or_hole(c) && ground_word(&p.function.trim().to_ascii_uppercase())
+        })
+}
+
 /// A name that declares a deliberately separate return domain, or a signal that
 /// merely mentions ground (a kelvin sense or detect line).
 fn separate_domain(name: &str) -> bool {
@@ -174,19 +204,44 @@ pub(super) fn check_ground_islands(board: &ExtractedBoard, report: &mut NetLintR
     let main_name = &board.nets[main].name;
     for (nets, refs) in islands.into_values() {
         let refs: Vec<String> = refs.into_iter().collect();
+        let listed = nets
+            .iter()
+            .map(|n| format!("'{n}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        // A name alone proves nothing: a signal pair named for its return
+        // (`SNS_GND+`) is no ground. Only a ground word as the whole name or a
+        // ground-named pin makes this a fault; otherwise it is a question.
+        let proven = nets.iter().any(|n| {
+            board
+                .nets
+                .iter()
+                .any(|b| b.name == *n && ground_evidence(board, b))
+        });
+        let (severity, message) = if proven {
+            (
+                Severity::High,
+                format!(
+                    "ground net {listed} ({}) is never joined to the board ground '{main_name}': no copper, \
+                     resistor, ferrite, net tie or part ties them, so its return current has no path \
+                     on the board",
+                    refs.join(", "),
+                ),
+            )
+        } else {
+            (
+                Severity::Low,
+                format!(
+                    "{listed} ({}) has ground in its name but no ground pin, and nothing joins it to '{main_name}'. \
+                     If it is a ground, join it; if it is a signal or sense pair, ignore this.",
+                    refs.join(", "),
+                ),
+            )
+        };
         report.findings.push(LintFinding {
             check: LintCheck::GroundIsland,
-            severity: Severity::High,
-            message: format!(
-                "ground net {} ({}) is never joined to the board ground '{main_name}': no copper, \
-                 resistor, ferrite, net tie or part ties them, so its return current has no path \
-                 on the board",
-                nets.iter()
-                    .map(|n| format!("'{n}'"))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                refs.join(", "),
-            ),
+            severity,
+            message,
             refs,
             nets,
         });
