@@ -571,7 +571,7 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
           style={{ color: visibleCheck.phase === 'ok' ? 'var(--ok)' : 'var(--silk-faint)' }}
         >
           {visibleCheck.phase === 'checking' && 'Checking …'}
-          {visibleCheck.phase === 'ok' && `Valid: ${visibleCheck.summary}`}
+          {visibleCheck.phase === 'ok' && `Valid: ${visibleCheck.summary.replace(/^valid:\s*/i, '')}`}
           {visibleCheck.phase === 'bad' && bodyFormat === 'spice' && <span style={{ color: 'var(--err)' }}>{visibleCheck.error}</span>}
           {visibleCheck.phase === 'bad' && bodyFormat === 'toml' && (quiet ? 'Fill in the marked lines from the datasheet, then it will save.' : 'Fix the marked lines to save.')}
         </div>
