@@ -554,7 +554,43 @@ pub fn run_web_check_design(
         }
         return reading;
     }
-    run_ci_json(&["run".as_ref(), spec_path.as_os_str(), "--json".as_ref()])
+    run_with_exports(dir, &spec_path)
+}
+
+/// The run, with the CLI also writing its `JUnit` and reproduction manifest; the
+/// answer carries their bytes (and the JSON line itself) under `exports`, which
+/// the server keeps for the export route. A run whose manifest cannot be
+/// captured is run again without the extra files rather than lost.
+fn run_with_exports(dir: &std::path::Path, spec_path: &std::path::Path) -> String {
+    let junit = dir.join("results.xml");
+    let manifest = dir.join("manifest.json");
+    let line = run_ci_json(&[
+        "run".as_ref(),
+        spec_path.as_os_str(),
+        "--json".as_ref(),
+        "--junit".as_ref(),
+        junit.as_os_str(),
+        "--emit-manifest".as_ref(),
+        manifest.as_os_str(),
+    ]);
+    let Ok(serde_json::Value::Object(mut answer)) = serde_json::from_str(&line) else {
+        return line;
+    };
+    let Ok(junit_xml) = std::fs::read_to_string(&junit) else {
+        if line.contains("run manifest") {
+            return run_ci_json(&["run".as_ref(), spec_path.as_os_str(), "--json".as_ref()]);
+        }
+        return line;
+    };
+    answer.insert(
+        "exports".into(),
+        serde_json::json!({
+            "json": line,
+            "junit": junit_xml,
+            "manifest": std::fs::read_to_string(&manifest).ok(),
+        }),
+    );
+    serde_json::Value::Object(answer).to_string()
 }
 
 /// How long a measurement may run before it is stopped: it is one nominal run, so a
