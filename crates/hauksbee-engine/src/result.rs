@@ -230,6 +230,20 @@ impl<'a> VerdictCause<'a> {
             refs_summary(unmodelled)
         )
     }
+
+    /// [`Self::reason_alongside`], with the judgement scope's sentence in
+    /// place of the blanket caveat when the verdict was scoped around them.
+    #[must_use]
+    pub fn reason_scoped(
+        self,
+        unmodelled: &[String],
+        scope: Option<&crate::scope::JudgementScope>,
+    ) -> String {
+        scope.map_or_else(
+            || self.reason_alongside(unmodelled),
+            |s| format!("{} Also: {}", self.reason(), s.condition()),
+        )
+    }
 }
 
 /// The one machine verdict every human surface of a run must agree with.
@@ -247,6 +261,10 @@ pub struct RunVerdict {
     pub reason: Option<String>,
     /// The assumptions a pass rests on (empty unless the verdict is a pass).
     pub conditions: Vec<String>,
+    /// PARTLY JUDGED: nothing was found among the checks unmodelled key parts
+    /// cannot change ([`crate::scope::JudgementScope`]). Never a pass: the
+    /// verdict is `invalid` and the reason starts `PARTLY JUDGED`.
+    pub partial: bool,
 }
 
 impl Default for RunVerdict {
@@ -255,6 +273,7 @@ impl Default for RunVerdict {
             verdict: "pass",
             reason: None,
             conditions: Vec::new(),
+            partial: false,
         }
     }
 }
@@ -278,15 +297,17 @@ impl<'a> From<&'a Refusal> for VerdictCause<'a> {
 }
 
 /// [`JsonReport::verdict_with_waivers`]: `(ok, verdict, serious, actionable)`,
-/// the findings a waiver covered, and the reason sentence when not a pass.
+/// the findings a waiver covered, the reason sentence when not a pass, and
+/// whether the run is PARTLY JUDGED ([`RunVerdict::partial`]).
 type VerdictParts = (
     (bool, &'static str, usize, usize),
     Vec<crate::waiver::WaivedFinding>,
     Option<String>,
+    bool,
 );
 
 /// The first few references, then a count of the rest.
-fn refs_summary(refs: &[String]) -> String {
+pub(crate) fn refs_summary(refs: &[String]) -> String {
     const SHOWN: usize = 6;
     match refs.split_at_checked(SHOWN) {
         Some((head, rest)) if !rest.is_empty() => {
@@ -2448,6 +2469,15 @@ pub struct JsonReport {
     /// a pass (`verdict_reason` then says why).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verdict_conditions: Vec<String>,
+    /// Which net checks the run judged when key parts have no usable model:
+    /// the open parts, and the nets whose wiring/value or electrical checks
+    /// they could change (not judged). With some electrical check judged, a
+    /// finding on the rest fails the board, and nothing found is PARTLY
+    /// JUDGED (`partly_judged: true`, verdict `invalid`, `ok` false); the
+    /// reason names what was not judged. Additive; omitted when every key
+    /// part is modelled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judgement_scope: Option<crate::scope::JudgementScope>,
 }
 
 /// Machine-readable input inventory for BOM/placement-aware runs.
@@ -2575,6 +2605,7 @@ impl JsonReport {
             cosim: None,
             waived: Vec::new(),
             verdict_conditions: Vec::new(),
+            judgement_scope: None,
         }
     }
 
@@ -2639,6 +2670,45 @@ impl JsonReport {
     pub fn with_condition(mut self, condition: Option<String>) -> Self {
         self.verdict_conditions.extend(condition);
         self
+    }
+
+    /// Scope the verdict around unmodelled key parts (nothing for `None`).
+    /// The verdict reason names what the scope did not judge.
+    #[must_use]
+    pub fn with_judgement_scope(mut self, scope: Option<crate::scope::JudgementScope>) -> Self {
+        self.judgement_scope = scope;
+        self
+    }
+
+    /// The scope, when it lets the verdict judge around exactly `blockers`.
+    fn active_scope(&self, blockers: &[String]) -> Option<&crate::scope::JudgementScope> {
+        self.judgement_scope.as_ref().filter(|s| s.scopes(blockers))
+    }
+
+    /// Why the run refused a verdict, if it did: the run-level refusal first,
+    /// then an AC or thermal result that could not be judged (with its own
+    /// refusal when it carries one).
+    fn refused_cause(&self) -> Option<VerdictCause<'_>> {
+        self.refusal.as_ref().map(VerdictCause::from).or_else(|| {
+            let validities = [
+                self.ac.as_ref().map(|a| &a.validity),
+                self.thermal.as_ref().map(|t| &t.validity),
+            ];
+            let invalid = validities.into_iter().flatten().find(|v| !v.valid)?;
+            Some(invalid.refusal.as_ref().map_or_else(
+                || {
+                    VerdictCause::Refused {
+                        claim: "a trustworthy analysis result",
+                        missing: invalid
+                            .reason
+                            .as_deref()
+                            .unwrap_or("its inputs were not valid"),
+                        next: "read the reason in that analysis section",
+                    }
+                },
+                VerdictCause::from,
+            ))
+        })
     }
 
     /// Replace the board-wide binding maps with maps for the actual findings
@@ -2786,28 +2856,7 @@ impl JsonReport {
         } else {
             Vec::new()
         };
-        // The run-level refusal comes first, then an AC or thermal result that
-        // could not be judged (with its own refusal when it carries one).
-        let refused = self.refusal.as_ref().map(VerdictCause::from).or_else(|| {
-            let validities = [
-                self.ac.as_ref().map(|a| &a.validity),
-                self.thermal.as_ref().map(|t| &t.validity),
-            ];
-            let invalid = validities.into_iter().flatten().find(|v| !v.valid)?;
-            Some(invalid.refusal.as_ref().map_or_else(
-                || {
-                    VerdictCause::Refused {
-                        claim: "a trustworthy analysis result",
-                        missing: invalid
-                            .reason
-                            .as_deref()
-                            .unwrap_or("its inputs were not valid"),
-                        next: "read the reason in that analysis section",
-                    }
-                },
-                VerdictCause::from,
-            ))
-        });
+        let refused = self.refused_cause();
         // `fail` covers both routes to a failing gate: a serious finding, and a
         // finding this surface's own (wider) strict gate fails on. The second
         // route is what keeps the verdict field from reading `pass` in the very
@@ -2826,16 +2875,38 @@ impl JsonReport {
             });
             VerdictCause::Failing { count, first }
         });
-        let cause = VerdictCause::pick(failing, refused, &blockers, evidence_undermined);
+        // Scoped judgement: blockers whose dependent checks the scope set aside
+        // no longer refuse the rest; its sentence says what was not judged. A
+        // finding still fails the board, and nothing found is PARTLY JUDGED,
+        // which is `invalid`, never a pass.
+        let scope = self.active_scope(&blockers);
+        let unjudged: &[String] = if scope.is_some() { &[] } else { &blockers };
+        let cause = VerdictCause::pick(failing, refused, unjudged, evidence_undermined);
+        let partial = cause.is_none() && scope.is_some();
         let verdict = match cause {
+            None if partial => "invalid",
             None => "pass",
             Some(c) if c.is_invalid() => "invalid",
             Some(_) => "fail",
         };
+        let reason = match (cause, scope) {
+            (Some(c @ VerdictCause::Unmodelled(_)), None) => {
+                // Too narrow a scope to judge an electrical check: the refusal
+                // stands, with the clean wiring/value checks as information.
+                let note = (self.judgement_scope.as_ref())
+                    .filter(|s| s.open_parts == blockers)
+                    .and_then(crate::scope::JudgementScope::wiring_note);
+                Some(note.map_or_else(|| c.reason(), |n| format!("{} {n}", c.reason())))
+            }
+            (Some(c), _) => Some(c.reason_scoped(&blockers, scope)),
+            (None, Some(s)) => Some(s.partly_judged_reason()),
+            (None, None) => None,
+        };
         (
             (verdict == "pass", verdict, serious, actionable),
             waived,
-            cause.map(|c| c.reason_alongside(&blockers)),
+            reason,
+            partial,
         )
     }
 
@@ -2844,7 +2915,7 @@ impl JsonReport {
     /// line built from this can never disagree with the `verdict` field.
     #[must_use]
     pub fn run_verdict(&self) -> RunVerdict {
-        let ((_, verdict, _, _), _, reason) =
+        let ((_, verdict, _, _), _, reason, partial) =
             self.verdict_with_waivers(&mut crate::waiver::WaiverSet::default());
         RunVerdict {
             verdict,
@@ -2855,6 +2926,7 @@ impl JsonReport {
             } else {
                 Vec::new()
             },
+            partial,
         }
     }
 
@@ -2865,7 +2937,7 @@ impl JsonReport {
     /// envelope and a CI consumer never has to re-derive pass/fail.
     #[must_use]
     pub fn to_json(&self) -> String {
-        let ((ok, verdict, serious, actionable), _, reason) =
+        let ((ok, verdict, serious, actionable), _, reason, partial) =
             self.verdict_with_waivers(&mut crate::waiver::WaiverSet::default());
         let Ok(serde_json::Value::Object(mut value)) = serde_json::to_value(self) else {
             return serde_json::to_string_pretty(self)
@@ -2877,6 +2949,10 @@ impl JsonReport {
         let mut out = serde_json::Map::new();
         out.insert("ok".into(), serde_json::json!(ok));
         out.insert("verdict".into(), serde_json::json!(verdict));
+        // For consumers that want the partly judged answer: `ok` stays false.
+        if partial {
+            out.insert("partly_judged".into(), serde_json::json!(true));
+        }
         if let Some(reason) = reason {
             out.insert("verdict_reason".into(), serde_json::json!(reason));
         }

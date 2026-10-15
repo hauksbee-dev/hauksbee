@@ -44,6 +44,10 @@ matches = [
   # verdict even though Watchy can no longer exercise the clean wording.
   "^INCONCLUSIVE: .* Plus 3 things worth a look \\(see below\\)\\.$",
   "^VERDICT: inconclusive: 0 serious, 3 worth a look; 1 key part has no usable model \\(U1\\), so the checks cannot vouch for this board; next: ",
+  # U1 reaches every net through the circuit, so no electrical check is judged
+  # and nothing reads as partly judged; the clean wiring checks are a line of
+  # information on the same verdict, never a pass.
+  "^VERDICT: inconclusive: .* For information only, not a pass: the wiring and value checks on the [0-9]+ of [0-9]+ net\\(s\\) U1 does not connect to found nothing that fails",
   "run --report for the (bind table|[0-9]+-part bind table)",
 ]
 not_matches = [

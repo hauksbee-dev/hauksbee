@@ -33,7 +33,10 @@ sentence:
   real, and the INCONCLUSIVE line must retain its "Plus 3 things worth a look"
   pointer rather than burying them.
 - The closing verdict line says "inconclusive", not "clean", for the same
-  reason.
+  reason. U1 can reach every net through the circuit, so no electrical check
+  is judged around it and the answer is not even partly judged; the line adds,
+  as information only and explicitly not a pass, how many wiring and value
+  checks on the nets U1 does not touch found nothing.
 
 Each finding underneath is three parts: what it is, why it matters, what to do.
 He never has to ask "so is that bad?".

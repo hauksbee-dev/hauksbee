@@ -61,6 +61,12 @@ fn unbound() -> PathBuf {
     fixture("verdict_fet_unbound.kicad_pcb")
 }
 
+/// [`unbound`] plus a rail (VB) that meets Q1's side only at ground, so
+/// `--check` can judge VB's checks around the open Q1: PARTLY JUDGED.
+fn partly_judged() -> PathBuf {
+    fixture("verdict_fet_partial.kicad_pcb")
+}
+
 /// [`unbound`]'s twin with Q1 bound, so the normal verdicts return.
 fn bound() -> PathBuf {
     fixture("verdict_fet_bound.kicad_pcb")
@@ -577,6 +583,15 @@ fn check_closing_verdict_is_inconclusive_not_clean() {
         !text.contains("VERDICT: clean"),
         "no clean bill over an unmodelled current-carrying part:\n{text}"
     );
+    // Q1 reaches every net through the circuit, so no electrical check is
+    // judged; the one clean wiring check is information, not a pass.
+    assert!(
+        text.contains(
+            "For information only, not a pass: the wiring and value checks on the 1 of 4 \
+             net(s) Q1 does not connect to found nothing that fails"
+        ),
+        "the clean wiring check is reported as information:\n{text}"
+    );
     // Bound side: the clean verdict returns.
     let out = run_board(&bound(), &["--check"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
@@ -746,6 +761,56 @@ fn si_strict_exit_agrees_with_the_si_verdict_on_both_sides_of_the_bind_gate() {
 fn check_strict_exit_agrees_with_the_check_verdict_on_both_sides_of_the_bind_gate() {
     assert_gate_matches_verdict(&["--check"], &unbound(), "invalid");
     assert_gate_matches_verdict(&["--check"], &bound(), "pass");
+}
+
+/// A partly judged board is never a pass: not in the JSON (`ok` false, verdict
+/// `invalid`, `partly_judged` true), not in the `--strict` exit (3), not in the
+/// closing line, the `JUnit` file or the GitHub annotation, which all say
+/// PARTLY JUDGED.
+#[test]
+fn a_partly_judged_board_is_never_a_pass_on_any_surface() {
+    let board = partly_judged();
+    assert_gate_matches_verdict(&["--check"], &board, "invalid");
+    assert_bare_json_gate_matches_verdict(&board, "invalid");
+    let v = json_doc(&run_board(&board, &["--check", "--json"]));
+    assert_eq!(v["partly_judged"], true, "{v}");
+    assert_eq!(v["judgement_scope"]["open_parts"][0], "Q1", "{v}");
+    assert_eq!(
+        v["judgement_scope"]["electrical_dependent"]
+            .as_array()
+            .map(Vec::len),
+        Some(4),
+        "{v}"
+    );
+    let reason = v["verdict_reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.starts_with("PARTLY JUDGED (not a pass): ")
+            && reason.contains("Partly judged: Q1 has no usable model")
+            && reason.contains("The other 3 of 10 net checks were judged"),
+        "{reason}"
+    );
+
+    let text = stdout(&run_board(&board, &["--check"]));
+    assert!(
+        text.contains("VERDICT: PARTLY JUDGED: 0 serious") && !text.contains("VERDICT: clean"),
+        "{text}"
+    );
+
+    let art = Artifacts::new("out");
+    let out = run_board_in_actions(&board, &art.with_junit(&["--check", "--json", "--strict"]));
+    assert_eq!(out.status.code(), Some(3), "stderr: {}", stderr(&out));
+    let xml = art.xml();
+    assert!(
+        xml.contains("PARTLY JUDGED (not a pass): Partly judged: Q1") && !junit_all_green(&xml),
+        "the JUnit file shows PARTLY JUDGED red, never a pass:\n{xml}"
+    );
+    let err = stderr(&out);
+    assert!(
+        err.lines()
+            .any(|l| l
+                .starts_with("::error title=hauksbee PARTLY JUDGED::PARTLY JUDGED (not a pass): ")),
+        "the annotation names the partly judged answer:\n{err}"
+    );
 }
 
 #[test]

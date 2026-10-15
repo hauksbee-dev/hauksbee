@@ -213,7 +213,8 @@ impl CheckReport<'_> {
         .with_inputs(input.inputs)
         .with_evidence(&evidence)
         // A pass over hardware-fixed indicator meaning nobody stated rests on it.
-        .with_condition(crate::checks::indicators::intent_condition(&indicators));
+        .with_condition(crate::checks::indicators::intent_condition(&indicators))
+        .with_judgement_scope(crate::scope::JudgementScope::of(board, &bound, &blockers));
         let run_verdict = jr.run_verdict();
         match mode {
             OutputMode::Json => {
@@ -389,6 +390,13 @@ impl CheckReport<'_> {
         // evidence or unbound verdict-critical parts), not on any undermined map:
         // a finding-backed badge must not exit 3 under --strict while the verdict
         // field says pass.
+        // A partly judged run is not a pass either: exit 3, annotated as such.
+        if strict && run_verdict.partial {
+            super::ci_artifacts::github_partly_judged_annotation(
+                run_verdict.reason.as_deref().unwrap_or_default(),
+            );
+            super::ci_artifacts::exit_with_findings(crate::result::EXIT_INVALID_FOR_ANALYSIS, &[]);
+        }
         if strict && run_verdict.verdict == "invalid" {
             super::exit_invalid_for_analysis(&blockers);
         }
@@ -521,7 +529,9 @@ fn verdict_line(
             )
         };
     };
-    let tag = if verdict.verdict == "invalid" {
+    let tag = if verdict.partial {
+        "PARTLY JUDGED"
+    } else if verdict.verdict == "invalid" {
         "inconclusive"
     } else {
         "failing"
@@ -1054,6 +1064,7 @@ mod tests {
         unmodelled_parts: &[&str],
         conditions: &[&str],
         copper_unvalidated: Option<&str>,
+        scope_nets: Option<usize>,
     ) -> Surfaces {
         let drc = DrcStructured::from_report(&DrcReport {
             clearance_mm: 0.2,
@@ -1070,6 +1081,13 @@ mod tests {
         let would_gate = super::super::lint_fails(lint) || super::super::si_fails(si);
         let mut jr = super::machine_report("synthetic", &summary, &drc, &findings, would_gate);
         jr.verdict_conditions = conditions.iter().map(ToString::to_string).collect();
+        // A scope over `nets` named nets, one of which ("VB") the open parts touch.
+        let jr = jr.with_judgement_scope(scope_nets.map(|nets| crate::scope::JudgementScope {
+            open_parts: unmodelled_parts.iter().map(ToString::to_string).collect(),
+            nets,
+            wiring_dependent: vec!["VB".into()],
+            electrical_dependent: vec!["VB".into()],
+        }));
         let run_verdict = jr.run_verdict();
         let triage = crate::plain::order_triage_with_rule_source(
             &drc,
@@ -1099,6 +1117,7 @@ mod tests {
         unmodelled: &'static [&'static str],
         conditions: &'static [&'static str],
         copper_unvalidated: Option<&'static str>,
+        scope_nets: Option<usize>,
         verdict: &'static str,
         headline: &'static str,
         line: &'static str,
@@ -1123,6 +1142,7 @@ mod tests {
             unmodelled: &[],
             conditions: &[],
             copper_unvalidated: None,
+            scope_nets: None,
             verdict,
             headline,
             line,
@@ -1186,6 +1206,37 @@ mod tests {
                 )
             },
             Row {
+                unmodelled: &["U1"],
+                scope_nets: Some(10),
+                ..row(
+                    "unmodelled key part, rest of the board judged",
+                    "invalid",
+                    "PARTLY JUDGED (not a pass): ",
+                    "VERDICT: PARTLY JUDGED: ",
+                )
+            },
+            Row {
+                lint: vec![serious()],
+                unmodelled: &["U1"],
+                scope_nets: Some(10),
+                ..row(
+                    "serious plus a scoped unmodelled key part",
+                    "fail",
+                    "DO NOT ORDER:",
+                    "VERDICT: failing: ",
+                )
+            },
+            Row {
+                unmodelled: &["U1"],
+                scope_nets: Some(1),
+                ..row(
+                    "unmodelled key part on every net",
+                    "invalid",
+                    "NOT CONCLUSIVE: ",
+                    "VERDICT: inconclusive: ",
+                )
+            },
+            Row {
                 lint: vec![warning()],
                 copper_unvalidated: COPPER,
                 ..row(
@@ -1216,6 +1267,7 @@ mod tests {
                 row.unmodelled,
                 row.conditions,
                 row.copper_unvalidated,
+                row.scope_nets,
             );
             let name = row.name;
             assert_eq!(got.json_verdict, row.verdict, "{name}: JSON verdict");
@@ -1235,6 +1287,15 @@ mod tests {
                 assert!(got.json_reason.is_none(), "{name}");
                 continue;
             }
+            // A partly judged run names the open part and what was not judged.
+            if row.headline.starts_with("PARTLY JUDGED") {
+                for text in [&got.triage, &got.line] {
+                    assert!(
+                        text.contains("Partly judged: U1 has no usable model"),
+                        "{text}"
+                    );
+                }
+            }
             // Whatever the wording, a run that is not a pass never reads as one.
             assert!(
                 !got.triage.contains("\nOK TO ORDER") && !got.line.contains("VERDICT: clean"),
@@ -1250,11 +1311,16 @@ mod tests {
             // rest of the board is not vouched for, in JSON and in the line.
             if row.verdict == "fail" && !row.unmodelled.is_empty() {
                 let list = row.unmodelled.join(", ");
+                let caveat = if row.scope_nets.is_some() {
+                    "are not judged"
+                } else {
+                    "the rest of the board is not vouched for"
+                };
                 for text in [reason, got.line.as_str()] {
                     assert!(
                         text.contains("no usable model")
                             && text.contains(&list)
-                            && text.contains("the rest of the board is not vouched for"),
+                            && text.contains(caveat),
                         "{name}: unmodelled parts hidden in:\n{text}"
                     );
                 }

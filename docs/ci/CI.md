@@ -1522,7 +1522,7 @@ the CLI says so on stderr.
 | 0 | clean, or a report-only run without `--strict` |
 | 1 | the run never happened: the board could not be read (unrecognized format, a Git LFS pointer, a missing file, an ASCII-Protel `.PcbDoc`) or the analysis could not be set up |
 | 2 | gate-grade findings, under `--strict` (or `--strict-boot` for the boot-safety advisory; co-sim stress faults also gate under `--strict`, and they outrank a zero-activity refusal: a run that saw faults was analysable). Also a usage error, such as two report flags at once |
-| 3 | invalid for analysis (aborted analog solve, zero-activity co-sim under `--strict` that raised no faults, thermal table with no usable coverage, a PARTIAL-coverage `--thermal` result, undermined run-level evidence under `--strict`, or unbound verdict-critical parts on a model-dependent surface under `--strict`, see below) |
+| 3 | invalid for analysis (aborted analog solve, zero-activity co-sim under `--strict` that raised no faults, thermal table with no usable coverage, a PARTIAL-coverage `--thermal` result, undermined run-level evidence under `--strict`, or unbound verdict-critical parts on a model-dependent surface under `--strict`, including a PARTLY JUDGED `--check`, see below) |
 
 `--thermal` gates on coverage **by default**: a partial-coverage table (real
 rows while an active power IC on the live circuit is open or unresolved) exits
@@ -1544,6 +1544,13 @@ model-dependent surfaces exit 3, because their machine `verdict` field reads
 `invalid` for the unbound part and an exit code that disagreed with the document
 beside it would give a pipeline two answers. If the run ALSO gates on a
 finding, `fail` outranks the unbound part on both: verdict `fail`, exit 2.
+`--check` scopes the refusal: it judges the net checks the unbound parts
+cannot change, so a finding there still fails (exit 2). With nothing found and
+at least one electrical check judged, the run is PARTLY JUDGED, never a pass:
+verdict `invalid` with `partly_judged: true`, exit 3 under `--strict`, a
+`partly_judged` failing testcase in the JUnit file ("PARTLY JUDGED (not a
+pass): ..."), and a `hauksbee PARTLY JUDGED` error annotation in GitHub
+Actions (`docs/analysis/JSON_OUTPUT.md`).
 
 The copper (`--drc`) and descriptive (`--report`) surfaces are exempt on both:
 copper reads the layout and owes nothing to device models, and `--report`
