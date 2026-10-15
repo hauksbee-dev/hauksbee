@@ -35,6 +35,8 @@ use hauksbee_extract::{
 use hauksbee_models::refdes::RefClass;
 use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
 
+use super::floating_inputs::control_lint_covers;
+
 fn unconnected_placeholder(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.starts_with("unconnected-(") || lower.starts_with("unconnected_")
@@ -126,7 +128,8 @@ pub fn model_control_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLint
                     continue;
                 };
                 let name = &net.name;
-                if unconnected_placeholder(name) {
+                // A named control pin alone on its net is the extract lint's.
+                if unconnected_placeholder(name) || control_lint_covers(board, comp, pin) {
                     continue;
                 }
                 // Every other fitted pad on the net, by what it does to the level.
@@ -386,6 +389,21 @@ mod tests {
             ],
         );
         assert!(esp32s3_enable(vec![pnp]).is_empty());
+    }
+
+    #[test]
+    fn a_named_enable_alone_on_its_net_is_reported_once() {
+        let u1 = fitted(
+            "U1",
+            "ESP32-S3-WROOM-1",
+            "RF_Module:ESP32-S3-WROOM-1",
+            vec![pin("1", GND), pin("2", V3), pin_fn("3", EN, "EN")],
+        );
+        let b = board("t", &[(GND, "GND"), (V3, "+3V3"), (EN, "/EN")], vec![u1]);
+        let here = model_control_lint(&b, &ModelLibrary::builtin());
+        assert_eq!(here.of_check(LintCheck::FloatingControlPin).count(), 0);
+        let extract = b.net_lint();
+        assert_eq!(extract.of_check(LintCheck::FloatingControlPin).count(), 1);
     }
 
     #[test]
