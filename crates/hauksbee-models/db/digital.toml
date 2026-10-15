@@ -10309,3 +10309,1238 @@ pins = { "1" = "I/O1", "2" = "GND", "3" = "I/O2", "4" = "I/O3", "5" = "I/O4" }
 [models.coverage]
 implements = ["esd_clamp", "negative_clamp", "positive_breakdown"]
 missing = ["channel_capacitance", "subthreshold_leakage", "snapback_window", "iec_pulse_waveform", "temperature_dependence"]
+
+# ── ST ESDCAN01-2BLY automotive dual-line bidirectional TVS (SOT23-3L) ────────
+# Source: ST ESDCAN01-2BLY DocID026507 Rev 1 (June 2014), sha256
+# 12e23fd157ab2017fa27828e0170c20e608505ac9d3adca07fae5c17781a2d75. Drafted by
+# `hauksbee models extract` (gpt-6-luna) as an identity-only diode card, then
+# rewritten by hand into the executable clamp form used by the other TVS cards
+# and reviewed against the PDF. Figure 1 (functional diagram) numbers the two
+# protected lines 1 and 2 and the shared terminal 3; Table 2 prints VRM 24 V max,
+# VBR 25 V min / 30 V max at IR = 1 mA, VCL 40 V max at IPP = 5 A (8/20 us),
+# IRM 100 nA max at 24 V, C 30 pF max at 0 V. No typical breakdown or dynamic
+# resistance is printed, so the clamp is fitted to the printed rows: it
+# conducts from the VBR midpoint (25 V + 30 V) / 2 = 27.5 V and
+# rdyn_ohms = (40 V - 27.5 V) / 5 A = 2.5 Ohm lands on the printed 40 V maximum
+# clamp at 5 A. The real breakdown lies anywhere in 25 V to 30 V (recorded as an
+# interval below), so this is a nominal fit, not a guarantee.
+[[models]]
+id = "esdcan01_2bly_tvs"
+kind = "digital"
+description = "ESDCAN01-2BLY automotive dual-line bidirectional TVS for CAN, 24 V stand-off, SOT23-3L"
+
+[models.match]
+value_re = "(?i)^ESDCAN01[-_ ]?2BLY[A-Z0-9_-]*$"
+
+[models.params]
+vbreak_v = 27.5
+rdyn_ohms = 2.5
+warning = "source-bound symmetric piecewise-linear clamp from each line to the common terminal: conduction in both polarities above the 27.5 V nominal breakdown (VBR midpoint), 2.5 Ohm slope fitted to the 40 V maximum clamp at 5 A; the 30 pF capacitance, 100 nA leakage, the 24 V to 30 V knee, ISO 7637-3 pulse waveforms, temperature coefficient and package parasitics are not represented"
+
+[models.pins]
+# Figure 1 functional diagram: lines 1 and 2, shared terminal 3.
+"1" = "line1"
+"2" = "line2"
+"3" = "common"
+
+[[models.source.pinout]]
+package = "SOT23-3L"
+pins = { "1" = "line 1", "2" = "line 2", "3" = "common" }
+
+[[models.behavioral.laws]]
+name = "line1_clamp"
+kind = "current"
+a = "line1"
+b = "common"
+expr = "max(0.0, (v_line1 - v_common) - vbreak_v) / rdyn_ohms + min(0.0, (v_line1 - v_common) + vbreak_v) / rdyn_ohms"
+
+[[models.behavioral.laws]]
+name = "line2_clamp"
+kind = "current"
+a = "line2"
+b = "common"
+expr = "max(0.0, (v_line2 - v_common) - vbreak_v) / rdyn_ohms + min(0.0, (v_line2 - v_common) + vbreak_v) / rdyn_ohms"
+
+[models.ratings]
+max_voltage_v = 24.0           # VRM stand-off voltage max, Table 2, Tamb = 25 C, either polarity
+max_junction_temp_c = 150.0    # Top operating junction temperature, Table 1
+max_surge_current_a = 5.5      # IPP peak pulse current, Table 1, 8/20 us, Tj initial = 25 C
+
+[models.coverage]
+implements = ["esd_clamp", "bidirectional_positive_and_negative_breakdown", "absolute_ratings"]
+missing = ["line_capacitance", "subthreshold_leakage", "iso7637_pulse_waveform", "package_parasitics", "temperature_dependence"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.st.com/resource/en/datasheet/esdcan01-2bly.pdf"
+title = "STMicroelectronics ESDCAN01-2BLY automotive dual-line Transil TVS for CAN bus, DocID026507 Rev 1 (June 2014)"
+locator = "Figure 1 functional diagram; Table 1 absolute maximum ratings; Table 2 electrical characteristics"
+sha256 = "12e23fd157ab2017fa27828e0170c20e608505ac9d3adca07fae5c17781a2d75"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the clamp is fitted to the VBR midpoint and the VCL maximum"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vbreak_v"
+low = 25.0
+high = 30.0
+unit = "V"
+kind = "specification-limits"
+basis = "ST ESDCAN01-2BLY DocID026507 Rev 1, Table 2, VBR min/max at IR = 1 mA"
+[[models.source.characteristic]]
+parameter = "VBR breakdown voltage"
+min = 25.0
+max = 30.0
+unit = "V"
+conditions = "IR = 1 mA, Tamb = 25 C"
+basis = "ST ESDCAN01-2BLY DocID026507 Rev 1, Table 2, VBR min/max"
+[[models.source.characteristic]]
+parameter = "VRM stand-off voltage"
+max = 24.0
+unit = "V"
+conditions = "Tamb = 25 C"
+basis = "ST ESDCAN01-2BLY DocID026507 Rev 1, Table 2, VRM max"
+[[models.source.characteristic]]
+parameter = "VCL clamping voltage"
+max = 40.0
+unit = "V"
+conditions = "IPP = 5 A, 8/20 us, Tamb = 25 C"
+basis = "ST ESDCAN01-2BLY DocID026507 Rev 1, Table 2, VCL max"
+[[models.source.characteristic]]
+parameter = "IPP peak pulse current"
+max = 5.5
+unit = "A"
+conditions = "8/20 us, Tj initial = Tamb = 25 C"
+basis = "ST ESDCAN01-2BLY DocID026507 Rev 1, Table 1, IPP"
+
+# ── ISO1541D (TI isolated I2C, 8-pin SOIC; identity-only) ─────────────────────
+# Source: TI ISO1540/ISO1541 datasheet (see the sha256 reference below). Drafted by
+# `hauksbee models extract` (gpt-6-luna) and reviewed against the PDF: the pin map
+# (1 VCC1, 2 SDA1, 3 SCL1, 4 GND1, 5 GND2, 6 SCL2, 7 SDA2, 8 VCC2) matches
+# Table 5-2 and the SOIC top view. Identity-only because the digital schema cannot
+# express a bidirectional open-drain SDA with side-specific, supply-relative
+# thresholds without inventing logic, so the part stays UNRESOLVED by design.
+[[models]]
+id = "iso1541d"
+kind = "digital"
+description = "ISO1541D 8-pin SOIC isolated I2C interface; identity-only because its bidirectional open-drain SDA behavior, unidirectional SCL channel, and unequal side thresholds cannot be represented by this digital logic contract; propagation delay, timing races, analog isolation behavior, and thermal shutdown are not modeled. ABSTAIN: no single set of digital thresholds and output equations captures the two sides."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "digital_behavior"
+reason = "ABSTAIN: the digital schema does not represent bidirectional isolated SDA behavior with side-specific thresholds and unidirectional SCL1-to-SCL2 behavior."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "VIH1"
+reason = "Table 6.3 gives only supply-relative limits: min 0.7 × VCC1 and max VCC1; no standalone voltage is stated."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "VIH2"
+reason = "Table 6.3 gives only supply-relative limits: min 0.7 × VCC2 and max VCC2; no standalone voltage is stated."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "VILT2"
+reason = "Table 6.9 gives only supply-relative limits: min 0.3 × VCC2 and max 0.4 × VCC2; no standalone voltage is stated."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "VIHT2"
+reason = "Table 6.9 gives only supply-relative limits: min 0.4 × VCC2 and max 0.5 × VCC2; no standalone voltage is stated."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "VHYST2"
+reason = "Table 6.9 gives only a supply-relative minimum: 0.05 × VCC2; no standalone voltage is stated."
+
+[[models.source.pinout]]
+package = "SOIC (8)"
+pins = { "1" = "VCC1", "2" = "SDA1", "3" = "SCL1", "4" = "GND1", "5" = "GND2", "6" = "SCL2", "7" = "SDA2", "8" = "VCC2" }
+
+[[models.source.characteristic]]
+parameter = "IO output current, SDA1 and SCL1"
+min = 0
+max = 20
+unit = "mA"
+conditions = "Absolute maximum rating; pins SDA1, SCL1"
+basis = "Table 6.1, Output current, min/max"
+
+[[models.source.characteristic]]
+parameter = "IO output current, SDA2 and SCL2"
+min = 0
+max = 100
+unit = "mA"
+conditions = "Absolute maximum rating; pins SDA2, SCL2"
+basis = "Table 6.1, Output current, min/max"
+
+[[models.source.characteristic]]
+parameter = "VCC1, VCC2 absolute voltage"
+min = -0.5
+max = 6
+unit = "V"
+conditions = "With respect to local ground; peak voltage"
+basis = "Table 6.1, Voltage VCC1/VCC2, min/max"
+
+[[models.source.characteristic]]
+parameter = "SDA1, SCL1 absolute voltage"
+min = -0.5
+unit = "V"
+conditions = "Maximum is VCC1 + 0.5 V, subject to 6 V maximum; with respect to local ground; peak voltage"
+basis = "Table 6.1, Voltage SDA1/SCL1, min and relational maximum"
+
+[[models.source.characteristic]]
+parameter = "SDA2, SCL2 absolute voltage"
+min = -0.5
+unit = "V"
+conditions = "Maximum is VCC2 + 0.5 V, subject to 6 V maximum; with respect to local ground; peak voltage"
+basis = "Table 6.1, Voltage SDA2/SCL2, min and relational maximum"
+
+[[models.source.characteristic]]
+parameter = "Tstg storage temperature"
+min = -65
+max = 150
+unit = "°C"
+conditions = "Storage"
+basis = "Table 6.1, Tstg, min/max"
+
+[[models.source.characteristic]]
+parameter = "HBM ESD, bus pins"
+min = -8000
+max = 8000
+unit = "V"
+conditions = "Human body model, ANSI/ESDA/JEDEC JS-001"
+basis = "Table 6.2, V(ESD) bus pins, value ±8000"
+
+[[models.source.characteristic]]
+parameter = "HBM ESD, all pins"
+min = -4000
+max = 4000
+unit = "V"
+conditions = "Human body model, ANSI/ESDA/JEDEC JS-001"
+basis = "Table 6.2, V(ESD) all pins, value ±4000"
+
+[[models.source.characteristic]]
+parameter = "CDM ESD"
+min = -1500
+max = 1500
+unit = "V"
+conditions = "Charged-device model, JEDEC JESD22-C101"
+basis = "Table 6.2, V(ESD), value ±1500"
+
+[[models.source.characteristic]]
+parameter = "Recommended signal voltage, side 1"
+min = 0
+unit = "V"
+conditions = "Maximum VCC1"
+basis = "Table 6.3, VSDA1/VSCL1, min and relational maximum"
+
+[[models.source.characteristic]]
+parameter = "Recommended signal voltage, side 2"
+min = 0
+unit = "V"
+conditions = "Maximum VCC2"
+basis = "Table 6.3, VSDA2/VSCL2, min and relational maximum"
+
+[[models.source.characteristic]]
+parameter = "VIL1 low-level input voltage"
+min = 0
+max = 0.5
+unit = "V"
+conditions = "Side 1"
+basis = "Table 6.3, VIL1, min/max"
+
+[[models.source.characteristic]]
+parameter = "VIL2 low-level input voltage"
+min = 0
+unit = "V"
+conditions = "Side 2; maximum is 0.3 × VCC2"
+basis = "Table 6.3, VIL2, min and relational maximum"
+
+[[models.source.characteristic]]
+parameter = "IOL1 output current"
+min = 0.5
+max = 3.5
+unit = "mA"
+conditions = "Side 1"
+basis = "Table 6.3, IOL1, min/max"
+
+[[models.source.characteristic]]
+parameter = "IOL2 output current"
+min = 0.5
+max = 35
+unit = "mA"
+conditions = "Side 2"
+basis = "Table 6.3, IOL2, min/max"
+
+[[models.source.characteristic]]
+parameter = "C1 capacitive load"
+max = 40
+unit = "pF"
+conditions = "Side 1"
+basis = "Table 6.3, C1, max"
+
+[[models.source.characteristic]]
+parameter = "C2 capacitive load"
+max = 400
+unit = "pF"
+conditions = "Side 2"
+basis = "Table 6.3, C2, max"
+
+[[models.source.characteristic]]
+parameter = "fMAX operating frequency"
+max = 1
+unit = "MHz"
+conditions = "Maximum bus load and maximum current sink"
+basis = "Table 6.3, fMAX, max"
+
+[[models.source.characteristic]]
+parameter = "TJ junction temperature operating range"
+min = -40
+max = 136
+unit = "°C"
+conditions = "Recommended operating conditions"
+basis = "Table 6.3, TJ, min/max"
+
+[[models.source.characteristic]]
+parameter = "TA ambient temperature operating range"
+min = -40
+max = 125
+unit = "°C"
+conditions = "Recommended operating conditions"
+basis = "Table 6.3, TA, min/max"
+
+[[models.source.characteristic]]
+parameter = "TSD thermal shutdown"
+min = 139
+max = 197
+unit = "°C"
+conditions = "Thermal shutdown temperature"
+basis = "Table 6.3, TSD, min/max"
+
+[[models.source.characteristic]]
+parameter = "VILT1 input threshold low"
+min = 480
+typ = 550
+max = 660
+unit = "mV"
+conditions = "SDA1 and SCL1; over recommended operating conditions"
+basis = "Table 6.9, VILT1, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "VIHT1 input threshold high"
+min = 520
+typ = 610
+max = 700
+unit = "mV"
+conditions = "SDA1 and SCL1; over recommended operating conditions"
+basis = "Table 6.9, VIHT1, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "VHYST1 voltage input hysteresis"
+min = 40
+typ = 60
+unit = "mV"
+conditions = "VIHT1 − VILT1"
+basis = "Table 6.9, VHYST1, min/typ"
+
+[[models.source.characteristic]]
+parameter = "VOL1 low-level output voltage"
+min = 570
+max = 800
+unit = "mV"
+conditions = "SDA1 and SCL1; 0.5 mA ≤ each ISDA1 and ISCL1 ≤ 3.5 mA; not applicable to ISO1541 SCL1"
+basis = "Table 6.9, VOL1, min/max"
+
+[[models.source.characteristic]]
+parameter = "Delta VOIT1 low-level output to high-level input threshold difference"
+min = 50
+unit = "mV"
+conditions = "SDA1 and SCL1; 0.5 mA ≤ each ISDA1 and ISCL1 ≤ 3.5 mA; not applicable to ISO1541 SCL1"
+basis = "Table 6.9, ΔVOIT1, min"
+
+[[models.source.characteristic]]
+parameter = "VOL2 low-level output voltage"
+max = 0.4
+unit = "V"
+conditions = "SDA2 and SCL2; 0.5 mA ≤ each ISDA2 and ISCL2 ≤ 35 mA"
+basis = "Table 6.9, VOL2, max"
+
+[[models.source.characteristic]]
+parameter = "II input leakage current"
+typ = 0.01
+max = 10
+unit = "µA"
+conditions = "VSDA1 = VSCL1 = VCC1; VSDA2 = VSCL2 = VCC2"
+basis = "Table 6.9, |II|, typ/max"
+
+[[models.source.characteristic]]
+parameter = "CI input capacitance to local ground"
+typ = 7
+unit = "pF"
+conditions = "VI = 0.4 × sin(2E6πt) + 2.5 V; SDA1, SCL1, SDA2, SCL2"
+basis = "Table 6.9, CI, typ"
+
+[[models.source.characteristic]]
+parameter = "CMTI common-mode transient immunity"
+min = 25
+typ = 50
+unit = "kV/µs"
+conditions = "See Figure 7-3"
+basis = "Table 6.9, CMTI, min/typ"
+
+[[models.source.characteristic]]
+parameter = "VCCUV VCC undervoltage lockout threshold"
+min = 1.7
+typ = 2.5
+max = 2.9
+unit = "V"
+conditions = "Any VCC below min ensures lockout; both VCC voltages above max prevent lockout"
+basis = "Table 6.9, VCCUV, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "tf1 output signal fall time, low supply"
+min = 8
+typ = 17
+max = 29
+unit = "ns"
+conditions = "3 V ≤ VCC1,VCC2 ≤ 3.6 V; SDA1/SCL1; R1=953 Ω, C1=40 pF; 0.7×VCC1 to 0.3×VCC1"
+basis = "Table 6.12, tf1 first condition, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "tf1 output signal fall time, low supply alternate measurement"
+min = 16
+typ = 29
+max = 48
+unit = "ns"
+conditions = "3 V ≤ VCC1,VCC2 ≤ 3.6 V; SDA1/SCL1; R1=953 Ω, C1=40 pF; 0.9×VCC1 to 900 mV"
+basis = "Table 6.12, tf1 second condition, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "tf2 output signal fall time, low supply"
+min = 14
+typ = 23
+max = 47
+unit = "ns"
+conditions = "3 V ≤ VCC1,VCC2 ≤ 3.6 V; SDA2/SCL2; R2=95.3 Ω, C2=400 pF; 0.7×VCC2 to 0.3×VCC2"
+basis = "Table 6.12, tf2 first condition, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "tf2 output signal fall time, low supply alternate measurement"
+min = 35
+typ = 50
+max = 100
+unit = "ns"
+conditions = "3 V ≤ VCC1,VCC2 ≤ 3.6 V; SDA2/SCL2; R2=95.3 Ω, C2=400 pF; 0.9×VCC2 to 400 mV"
+basis = "Table 6.12, tf2 second condition, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "tpLH1-2 low-to-high propagation delay"
+typ = 33
+max = 65
+unit = "ns"
+conditions = "3 V ≤ VCC1,VCC2 ≤ 3.6 V; side 1 to side 2; 0.55 V to 0.7×VCC2"
+basis = "Table 6.12, tpLH1-2, typ/max"
+
+[[models.source.characteristic]]
+parameter = "tpHL1-2 high-to-low propagation delay"
+typ = 90
+max = 181
+unit = "ns"
+conditions = "3 V ≤ VCC1,VCC2 ≤ 3.6 V; side 1 to side 2; 0.7 V to 0.4 V"
+basis = "Table 6.12, tpHL1-2, typ/max"
+
+[[models.source.characteristic]]
+parameter = "PWD1-2 pulse width distortion"
+typ = 55
+max = 123
+unit = "ns"
+conditions = "3 V ≤ VCC1,VCC2 ≤ 3.6 V; |tpHL1-2 − tpLH1-2|; R1=953 Ω, R2=95.3 Ω, C1=C2=10 pF"
+basis = "Table 6.12, PWD1-2, typ/max"
+
+[[models.source.characteristic]]
+parameter = "tpLH2-1 low-to-high propagation delay"
+typ = 47
+max = 68
+unit = "ns"
+conditions = "3 V ≤ VCC1,VCC2 ≤ 3.6 V; side 2 to side 1; 0.4×VCC2 to 0.7×VCC1; not applicable to ISO1541 SCL1"
+basis = "Table 6.12, tpLH2-1, typ/max"
+
+[[models.source.characteristic]]
+parameter = "tpHL2-1 high-to-low propagation delay"
+typ = 67
+max = 109
+unit = "ns"
+conditions = "3 V ≤ VCC1,VCC2 ≤ 3.6 V; side 2 to side 1; 0.4×VCC2 to 0.9 V; not applicable to ISO1541 SCL1"
+basis = "Table 6.12, tpHL2-1, typ/max"
+
+[[models.source.characteristic]]
+parameter = "PWD2-1 pulse width distortion"
+typ = 20
+max = 49
+unit = "ns"
+conditions = "3 V ≤ VCC1,VCC2 ≤ 3.6 V; |tpHL2-1 − tpLH2-1|; not applicable to ISO1541 SCL1"
+basis = "Table 6.12, PWD2-1, typ/max"
+
+[[models.source.characteristic]]
+parameter = "tLOOP1 round-trip propagation delay"
+typ = 100
+max = 165
+unit = "ns"
+conditions = "3 V ≤ VCC1,VCC2 ≤ 3.6 V; side 1; R1=953 Ω, C1=40 pF, R2=95.3 Ω, C2=400 pF; 0.4 V to 0.3×VCC1; not applicable to ISO1541 SCL1"
+basis = "Table 6.12, tLOOP1, typ/max"
+
+[[models.source.characteristic]]
+parameter = "tf1 output signal fall time, high supply"
+min = 6
+typ = 11
+max = 22
+unit = "ns"
+conditions = "4.5 V ≤ VCC1,VCC2 ≤ 5.5 V; SDA1/SCL1; R1=1430 Ω, C1=40 pF; 0.7×VCC1 to 0.3×VCC1"
+basis = "Table 6.12, tf1 first condition high supply, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "tf1 output signal fall time, high supply alternate measurement"
+min = 13
+typ = 21
+max = 48
+unit = "ns"
+conditions = "4.5 V ≤ VCC1,VCC2 ≤ 5.5 V; SDA1/SCL1; R1=1430 Ω, C1=40 pF; 0.9×VCC1 to 900 mV"
+basis = "Table 6.12, tf1 second condition high supply, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "tf2 output signal fall time, high supply"
+min = 10
+typ = 18
+max = 35
+unit = "ns"
+conditions = "4.5 V ≤ VCC1,VCC2 ≤ 5.5 V; SDA2/SCL2; R2=143 Ω, C2=400 pF; 0.7×VCC2 to 0.3×VCC2"
+basis = "Table 6.12, tf2 first condition high supply, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "tf2 output signal fall time, high supply alternate measurement"
+min = 28
+typ = 41
+max = 76
+unit = "ns"
+conditions = "4.5 V ≤ VCC1,VCC2 ≤ 5.5 V; SDA2/SCL2; R2=143 Ω, C2=400 pF; 0.9×VCC2 to 400 mV"
+basis = "Table 6.12, tf2 second condition high supply, min/typ/max"
+
+[[models.source.characteristic]]
+parameter = "tpLH1-2 low-to-high propagation delay"
+typ = 31
+max = 62
+unit = "ns"
+conditions = "4.5 V ≤ VCC1,VCC2 ≤ 5.5 V; side 1 to side 2; 0.55 V to 0.7×VCC2"
+basis = "Table 6.12, tpLH1-2 high supply, typ/max"
+
+[[models.source.characteristic]]
+parameter = "tpHL1-2 high-to-low propagation delay"
+typ = 70
+max = 139
+unit = "ns"
+conditions = "4.5 V ≤ VCC1,VCC2 ≤ 5.5 V; side 1 to side 2; 0.7 V to 0.4 V"
+basis = "Table 6.12, tpHL1-2 high supply, typ/max"
+
+[[models.source.characteristic]]
+parameter = "PWD1-2 pulse width distortion"
+typ = 38
+max = 80
+unit = "ns"
+conditions = "4.5 V ≤ VCC1,VCC2 ≤ 5.5 V; |tpHL1-2 − tpLH1-2|; R1=1430 Ω, R2=143 Ω, C1=C2=10 pF"
+basis = "Table 6.12, PWD1-2 high supply, typ/max"
+
+[[models.source.characteristic]]
+parameter = "tpLH2-1 low-to-high propagation delay"
+typ = 55
+max = 80
+unit = "ns"
+conditions = "4.5 V ≤ VCC1,VCC2 ≤ 5.5 V; side 2 to side 1; 0.4×VCC2 to 0.7×VCC1; not applicable to ISO1541 SCL1"
+basis = "Table 6.12, tpLH2-1 high supply, typ/max"
+
+[[models.source.characteristic]]
+parameter = "tpHL2-1 high-to-low propagation delay"
+typ = 47
+max = 85
+unit = "ns"
+conditions = "4.5 V ≤ VCC1,VCC2 ≤ 5.5 V; side 2 to side 1; 0.4×VCC2 to 0.9 V; not applicable to ISO1541 SCL1"
+basis = "Table 6.12, tpHL2-1 high supply, typ/max"
+
+[[models.source.characteristic]]
+parameter = "PWD2-1 pulse width distortion"
+typ = 8
+max = 34
+unit = "ns"
+conditions = "4.5 V ≤ VCC1,VCC2 ≤ 5.5 V; |tpHL2-1 − tpLH2-1|; not applicable to ISO1541 SCL1"
+basis = "Table 6.12, PWD2-1 high supply, typ/max"
+
+[[models.source.characteristic]]
+parameter = "tLOOP1 round-trip propagation delay"
+typ = 110
+max = 180
+unit = "ns"
+conditions = "4.5 V ≤ VCC1,VCC2 ≤ 5.5 V; side 1; R1=1430 Ω, C1=40 pF, R2=143 Ω, C2=400 pF; 0.4 V to 0.3×VCC1; not applicable to ISO1541 SCL1"
+basis = "Table 6.12, tLOOP1 high supply, typ/max"
+
+[[models.source.references]]
+title = "ISO1541.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "a073ca9bd456eda119708ed14e1458c286ca65f332bfa8e451b922b9732fed0c"
+
+[models.match]
+value_re = "(?i)^(?:ISO1541D)$"
+
+[models.params]
+identity_only = true
+warning = "ABSTAIN: the digital schema cannot represent the ISO1541's bidirectional SDA isolation and distinct side-specific behavior without inventing logic."
+unlocked_by = "A digital schema for isolated bidirectional open-drain channels with side-specific thresholds and output behavior."
+supply_pin = "1" # Source: Table 5-2, VCC1 pin number
+gnd_pin = "4" # Source: Table 5-2, GND1 pin number
+tpd_s = 3.3e-8  # derived: tpd_s = propagation delay, the slower edge at the largest printed overdrive: 'tpLH1-2 low-to-high propagation delay' typ 33 ns (3 V ≤ VCC1,VCC2 ≤ 3.6 V; side 1 to side 2; 0.55 V to 0.7×VCC2)
+
+[models.ratings]
+max_voltage_v = 6.0 # Source: Table 6.1, VCC1/VCC2 absolute maximum
+max_junction_temp_c = 150.0 # Source: Table 6.1, TJ(MAX)
+
+[models.pins]
+# Cross-checked Table 5-2 against the D-package top view in Figure 5-2 and Figure 8-4.
+"1" = "vcc" # VCC1, side 1; Table 5-2 and Figure 5-2, SOIC top view
+"2" = "sda1" # SDA1, serial data input/output, side 1; Table 5-2
+"3" = "scl1" # SCL1, serial clock input, side 1; Table 5-2
+"4" = "gnd" # GND1, ground, side 1; Table 5-2
+"5" = "gnd2" # GND2, ground, side 2; Table 5-2
+"6" = "scl2" # SCL2, serial clock output, side 2; Table 5-2
+"7" = "sda2" # SDA2, serial data input/output, side 2; Table 5-2
+"8" = "vcc2" # VCC2, side 2; Table 5-2
+
+# NO supply_range ENVELOPES, ON PURPOSE (VCC1 and VCC2 are 3.0 to 5.5 V, abs max
+# 6 V, Table 6.3): an envelope on an unresolved rail only adds an "operating
+# envelope abstained" note, which on the c64 saver's fixed revision would break
+# the defect-regression fixture's empty-findings claim until the MCP1703 feeding
+# VDD2 is modelled. Re-add them then, with that fixture's expectation.
+
+[models.coverage]
+implements = ["isolated_i2c_identity", "dual_supply_isolation"]
+missing = ["bidirectional_open_drain_logic", "side_specific_thresholds", "scl_propagation", "propagation_delay", "timing_races", "common_mode_transient_behavior", "thermal_shutdown"]
+
+# ── DRV2603RUNT (TI haptic driver, 10-pin WQFN; identity-only) ────────────────
+# Source: TI DRV2603 datasheet (sha256 6976bc4f5b9ed36a429743e402b473e1adb8ae98245e23d3becfbe8790afcf8c).
+# Drafted by `hauksbee models extract` (gpt-6-luna) and reviewed against the PDF:
+# the pin map (1 EN, 2 PWM, 3 LRA/ERM, 4 NC, 5/8/10 GND, 6 OUT-, 7 VDD, 9 OUT+)
+# matches the Pin Functions table and top view. The draft's supply_static_ua entry
+# was labelled in mA under a uA name; it is rewritten as 1.7e3 uA. Identity-only: the digital schema
+# cannot express a PWM differential haptic output, so the part stays UNRESOLVED.
+[[models]]
+id = "drv2603runt"
+kind = "digital"
+description = "DRV2603RUNT RUN 10-pin WQFN identity-only card; documents pinout and electrical data but does not model PWM-controlled differential haptic drive, LRA resonance tracking, ERM/LRA mode behavior, braking, or thermal shutdown. ABSTAIN: the digital logic schema cannot represent the analog actuator driver behavior."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "digital_behavior"
+reason = "ABSTAIN: DRV2603 is a PWM-controlled differential haptic power driver; the digital logic schema cannot represent actuator drive, resonance tracking, braking, or its analog output behavior."
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "voh_vol_tpd_s"
+reason = "ABSTAIN: the datasheet specifies differential haptic power output rather than digital logic output levels or logic propagation delay."
+
+[[models.source.pinout]]
+package = "RUN (WQFN), 10 pins"
+pins = { "1" = "EN", "2" = "PWM", "3" = "LRA/ERM", "4" = "NC", "5" = "GND", "6" = "OUT−", "7" = "VDD", "8" = "GND", "9" = "OUT+", "10" = "GND" }
+
+[[models.source.characteristic]]
+parameter = "VDD, supply voltage"
+min = -0.3
+max = 6
+unit = "V"
+conditions = ""
+basis = "Table 6.1 Absolute Maximum Ratings, MIN/MAX"
+
+[[models.source.characteristic]]
+parameter = "VI, input voltage (EN, PWM, LRA/ERM)"
+min = -0.3
+unit = "V"
+conditions = "Maximum is VDD + 0.3 V"
+basis = "Table 6.1 Absolute Maximum Ratings, MIN"
+
+[[models.source.characteristic]]
+parameter = "TA, operating free-air temperature range"
+min = -40
+max = 85
+unit = "°C"
+conditions = "Over operating free-air temperature range"
+basis = "Table 6.1 Absolute Maximum Ratings, MIN/MAX"
+
+[[models.source.characteristic]]
+parameter = "TJ, operating junction temperature range"
+min = -40
+max = 150
+unit = "°C"
+conditions = ""
+basis = "Table 6.1 Absolute Maximum Ratings, MIN/MAX"
+
+[[models.source.characteristic]]
+parameter = "Tstg, storage temperature range"
+min = -65
+max = 150
+unit = "°C"
+conditions = ""
+basis = "Table 6.1 Absolute Maximum Ratings, MIN/MAX"
+
+[[models.source.characteristic]]
+parameter = "V(ESD), electrostatic discharge, human body model (HBM)"
+min = -2000
+max = 2000
+unit = "V"
+conditions = "Per ANSI/ESDA/JEDEC JS-001"
+basis = "Table 6.2 ESD Ratings, VALUE (±2000)"
+
+[[models.source.characteristic]]
+parameter = "V(ESD), electrostatic discharge, charged-device model (CDM)"
+min = -500
+max = 500
+unit = "V"
+conditions = "Per JEDEC specification JESD22-C101"
+basis = "Table 6.2 ESD Ratings, VALUE (±500)"
+
+[[models.source.characteristic]]
+parameter = "fPWM, PWM input frequency"
+min = 10
+max = 250
+unit = "kHz"
+conditions = ""
+basis = "Table 6.3 Recommended Operating Conditions, MIN/MAX"
+
+[[models.source.characteristic]]
+parameter = "RL, load impedance"
+min = 8
+unit = "Ω"
+conditions = "VDD = 5.2 V"
+basis = "Table 6.3 Recommended Operating Conditions, MIN"
+
+[[models.source.characteristic]]
+parameter = "F0, supported LRA frequency"
+min = 140
+max = 220
+unit = "Hz"
+conditions = "Auto resonance tracking range for LRA"
+basis = "Table 6.3 Recommended Operating Conditions, MIN/MAX"
+
+[[models.source.characteristic]]
+parameter = "VIL, digital input low voltage"
+max = 0.6
+unit = "V"
+conditions = "EN, PWM, LRA/ERM"
+basis = "Table 6.3 Recommended Operating Conditions, MAX"
+
+[[models.source.characteristic]]
+parameter = "VIH, digital input high voltage"
+min = 1.2
+unit = "V"
+conditions = "EN, PWM, LRA/ERM"
+basis = "Table 6.3 Recommended Operating Conditions, MIN"
+
+[[models.source.characteristic]]
+parameter = "TA, operating free-air temperature range"
+min = -40
+max = 85
+unit = "°C"
+conditions = ""
+basis = "Table 6.3 Recommended Operating Conditions, MIN/MAX"
+
+[[models.source.characteristic]]
+parameter = "RθJA, junction-to-ambient thermal resistance"
+typ = 153.7
+unit = "°C/W"
+conditions = "DRV2603 RUN (WQFN), 10 pins"
+basis = "Table 6.4 Thermal Information, TYP"
+rating = "theta_ja_c_per_w"
+
+[[models.source.characteristic]]
+parameter = "RθJC(top), junction-to-case (top) thermal resistance"
+typ = 86
+unit = "°C/W"
+conditions = "DRV2603 RUN (WQFN), 10 pins"
+basis = "Table 6.4 Thermal Information, TYP"
+
+[[models.source.characteristic]]
+parameter = "RθJB, junction-to-board thermal resistance"
+typ = 70.4
+unit = "°C/W"
+conditions = "DRV2603 RUN (WQFN), 10 pins"
+basis = "Table 6.4 Thermal Information, TYP"
+
+[[models.source.characteristic]]
+parameter = "ψJT, junction-to-top characterization parameter"
+typ = 1.3
+unit = "°C/W"
+conditions = "DRV2603 RUN (WQFN), 10 pins"
+basis = "Table 6.4 Thermal Information, TYP"
+
+[[models.source.characteristic]]
+parameter = "ψJB, junction-to-board characterization parameter"
+typ = 70.4
+unit = "°C/W"
+conditions = "DRV2603 RUN (WQFN), 10 pins"
+basis = "Table 6.4 Thermal Information, TYP"
+
+[[models.source.characteristic]]
+parameter = "|IIL|, digital input low current"
+max = 1
+unit = "µA"
+conditions = "EN, PWM, LRA/ERM; VDD = 5.0 V, VIN = 0 V; TA = 25°C, VDD = 3.6 V unless otherwise noted"
+basis = "Table 6.5 Electrical Characteristics, MAX"
+
+[[models.source.characteristic]]
+parameter = "|IIH|, digital input high current (EN)"
+max = 6
+unit = "µA"
+conditions = "EN; VDD = 5.0 V, VIN = VDD; TA = 25°C, VDD = 3.6 V unless otherwise noted"
+basis = "Table 6.5 Electrical Characteristics, MAX"
+
+[[models.source.characteristic]]
+parameter = "|IIH|, digital input high current (PWM, LRA/ERM)"
+max = 3
+unit = "µA"
+conditions = "PWM, LRA/ERM; VDD = 5.0 V, VIN = VDD; TA = 25°C, VDD = 3.6 V unless otherwise noted"
+basis = "Table 6.5 Electrical Characteristics, MAX"
+
+[[models.source.characteristic]]
+parameter = "ISD, shut down current"
+typ = 0.3
+max = 3
+unit = "µA"
+conditions = "VEN = 0 V; TA = 25°C, VDD = 3.6 V unless otherwise noted"
+basis = "Table 6.5 Electrical Characteristics, TYP/MAX"
+
+[[models.source.characteristic]]
+parameter = "IDDQ, quiescent current"
+typ = 1.7
+max = 2.5
+unit = "mA"
+conditions = "VEN = VDD, ERM Mode, 50% duty cycle input, no load; TA = 25°C, VDD = 3.6 V unless otherwise noted"
+basis = "Table 6.5 Electrical Characteristics, TYP/MAX"
+
+[[models.source.characteristic]]
+parameter = "ROUT, output impedance in shutdown"
+typ = 15
+unit = "kΩ"
+conditions = "OUT+ to GND, OUT− to GND; TA = 25°C, VDD = 3.6 V unless otherwise noted"
+basis = "Table 6.5 Electrical Characteristics, TYP"
+
+[[models.source.characteristic]]
+parameter = "tSU, start-up time"
+typ = 1.3
+unit = "ms"
+conditions = "Time from EN high to output signal; TA = 25°C, VDD = 3.6 V unless otherwise noted"
+basis = "Table 6.5 Electrical Characteristics, TYP"
+
+[[models.source.characteristic]]
+parameter = "fSW, PWM output frequency"
+min = 19.5
+typ = 20.3
+max = 21.5
+unit = "kHz"
+conditions = "TA = 25°C, VDD = 3.6 V unless otherwise noted"
+basis = "Table 6.5 Electrical Characteristics, MIN/TYP/MAX"
+
+[[models.source.characteristic]]
+parameter = "IBAT,AVG, average battery current during operation"
+typ = 55
+unit = "mA"
+conditions = "Duty cycle = 100%, LRA Mode, load = 25 Ω LRA; TA = 25°C, VDD = 3.6 V unless otherwise noted"
+basis = "Table 6.5 Electrical Characteristics, TYP"
+
+[[models.source.characteristic]]
+parameter = "IBAT,AVG, average battery current during operation"
+typ = 59
+unit = "mA"
+conditions = "Duty cycle = 80%, ERM Mode, RL = 17 Ω, 2 V rated ERM; TA = 25°C, VDD = 3.6 V unless otherwise noted"
+basis = "Table 6.5 Electrical Characteristics, TYP"
+
+[[models.source.characteristic]]
+parameter = "RDS-HS, drain-to-source resistance, high-side"
+typ = 1.05
+unit = "Ω"
+conditions = "TA = 25°C, VDD = 3.6 V unless otherwise noted"
+basis = "Table 6.5 Electrical Characteristics, TYP"
+
+[[models.source.characteristic]]
+parameter = "RDS-LS, drain-to-source resistance, low-side"
+typ = 0.85
+unit = "Ω"
+conditions = "TA = 25°C, VDD = 3.6 V unless otherwise noted"
+basis = "Table 6.5 Electrical Characteristics, TYP"
+
+[[models.source.characteristic]]
+parameter = "VOUT, differential output voltage"
+typ = 2.2
+unit = "VRMS"
+conditions = "Duty cycle = 100%, LRA Mode, load = 25 Ω LRA; TA = 25°C, VDD = 3.6 V unless otherwise noted"
+basis = "Table 6.5 Electrical Characteristics, TYP"
+
+[[models.source.characteristic]]
+parameter = "VOUT, differential output voltage"
+typ = 3.3
+unit = "V"
+conditions = "Duty cycle = 100%, ERM Mode, RL = 20 Ω ERM; TA = 25°C, VDD = 3.6 V unless otherwise noted"
+basis = "Table 6.5 Electrical Characteristics, TYP"
+
+[[models.source.characteristic]]
+parameter = "Thermal threshold"
+typ = 145
+unit = "°C"
+conditions = "TA = 25°C, VDD = 3.6 V unless otherwise noted"
+basis = "Table 6.5 Electrical Characteristics, TYP"
+
+[[models.source.characteristic]]
+parameter = "Thermal hysteresis"
+typ = 18
+unit = "°C"
+conditions = "TA = 25°C, VDD = 3.6 V unless otherwise noted"
+basis = "Table 6.5 Electrical Characteristics, TYP"
+
+[[models.source.references]]
+title = "DRV2603.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "6976bc4f5b9ed36a429743e402b473e1adb8ae98245e23d3becfbe8790afcf8c"
+
+[models.match]
+value_re = "(?i)^(?:DRV2603RUNT)$"
+
+[models.params]
+identity_only = true
+warning = "Identity only: the digital kind cannot express the device's differential haptic power output and actuator-control behavior."
+unlocked_by = "A model kind and schema that represent PWM-controlled differential actuator drive and resonance/braking behavior."
+supply_static_ua = 1.7e3 # IDDQ typ 1.7 mA (VEN = VDD, ERM mode, 50% duty PWM, no load, TA = 25 C, VDD = 3.6 V)
+supply_pin = "7" # Source: Pin Functions table, VDD pin number
+gnd_pin = "5" # Source: Pin Functions table, GND pins 5, 8, 10
+vih = { min = 1.2, unit = "V", conditions = "EN, PWM, LRA/ERM", basis = "Table 6.3 Recommended Operating Conditions, MIN" } # Source: Table 6.3 Recommended Operating Conditions
+vil = { max = 0.6, unit = "V", conditions = "EN, PWM, LRA/ERM", basis = "Table 6.3 Recommended Operating Conditions, MAX" } # Source: Table 6.3 Recommended Operating Conditions
+
+[models.ratings]
+max_voltage_v = 6.0 # Source: Table 6.1 Absolute Maximum Ratings, supply voltage VDD MAX
+max_junction_temp_c = 150.0 # Source: Table 6.1 Absolute Maximum Ratings, operating junction temperature TJ MAX
+theta_ja_c_per_w = 153.7 # Source: Table 6.4 Thermal Information, RUN (WQFN), 10 pins, RθJA TYP
+
+[models.pins]
+"1" = "en" # EN, device enable; Pin Functions table and top-view pinout.
+"2" = "pwm" # PWM, input signal; Pin Functions table and top-view pinout.
+"3" = "lra_erm" # LRA/ERM, mode selection (ERM = low, LRA = high); Pin Functions table and top-view pinout.
+"4" = "nc" # NC, no connection; Pin Functions table and top-view pinout.
+"5" = "gnd" # GND, supply ground; Pin Functions table and top-view pinout.
+"6" = "out_minus" # OUT−, negative haptic driver differential output; Pin Functions table and top-view pinout.
+"7" = "vdd" # VDD, supply input; Pin Functions table and top-view pinout.
+"8" = "gnd" # GND, supply ground; Pin Functions table and top-view pinout.
+"9" = "out_plus" # OUT+, positive haptic driver differential output; Pin Functions table and top-view pinout.
+"10" = "gnd" # GND, supply ground; Pin Functions table and top-view pinout.
+
+[models.coverage]
+implements = ["pinout", "datasheet_electrical_characteristics"]
+missing = ["pwm_controlled_haptic_drive", "differential_actuator_output", "lra_resonance_tracking", "erm_lra_mode_behavior", "automatic_braking", "thermal_shutdown", "digital_logic_timing"]
+# ─────────────────────────────────────────────────────────────────────────────
+# INA219: Texas Instruments zero-drift current/power monitor, I2C, 8-pin SOIC (D).
+#
+# Source: TI "INA219 Zero-Drift, Bidirectional Current/Power Monitor With I2C
+#   Interface", SBOS448G, August 2008, revised December 2015 (sha256 below).
+#   Section 6 Pin Configuration and Functions (D package, 8-pin SOIC top view),
+#   Section 7.1 Absolute Maximum Ratings, Section 7.5 Electrical Characteristics,
+#   Table 1 Address Pins and Slave Addresses, Table 2 Summary of Register Set,
+#   Section 8.6.2.1 Configuration Register (reset 399Fh), Package Option Addendum.
+#
+# THE SOIC MAP, NOT THE SOT-23 ONE. The same sheet prints two pad maps: DCN
+# (SOT-23) is 1 IN+, 2 IN-, 3 GND, 4 VS, 5 SCL, 6 SDA, 7 A0, 8 A1; D (SOIC) is
+# 1 A1, 2 A0, 3 SDA, 4 SCL, 5 VS, 6 GND, 7 IN-, 8 IN+. The Luna draft
+# (gpt-6-luna) used the SOT-23 map and no strap table for a SOIC board, so it was
+# rejected and this card is hand-written; the match is the SOIC (D) orderable
+# names only (INA219AID/AIDR/BID/BIDR, and the KiCad-style "INA219xIDR-SOIC"),
+# so a DCN part cannot bind to this map.
+#
+# THE SHUNT IS EXTERNAL. IN+ and IN- only sense across a board resistor. Their
+# common-mode limit is 26 V (Section 7.1), above the 6 V supply/SDA ceiling the
+# `digital` max_voltage_v carries, which is not watched per pin.
+#
+# LOGIC LEVELS ARE EVALUATED AT VS = 3.3 V (the sheet's own nominal in Section
+# 7.3). VIH is 0.7 x VS min and VIL is 0.3 x VS max (Section 7.5), supply-relative,
+# and the schema has one number per field, so on a 5 V board both are low by 1.5x.
+# VOL is absolute: 0.4 V max at 3 mA (SDA open drain, no VOH).
+#
+# ADDRESS: Table 1, the 16 combinations of A1/A0 on GND, VS, SDA or SCL (0x40 to
+# 0x4F). Only the power-on reset value of the Configuration register (399Fh, sent
+# MSB first, Section 8.5.5.2) is carried; the measurement registers are not.
+[[models]]
+id = "ina219_soic"
+kind = "digital"
+description = "TI INA219 current/power monitor, 8-pin SOIC (strapped I2C address, Configuration reset read, pad map, logic levels and supply draw)"
+
+[models.match]
+value_re = "(?i)^INA219[AB]?x?ID(R)?(-SOIC)?$"
+
+[models.params]
+# Section 7.5 Electrical Characteristics, evaluated at VS = 3.3 V.
+vol   = 0.4      # logic 0 output level max, ISINK = 3 mA, SDA
+vih   = 2.31     # 0.7 x VS min at VS = 3.3 V
+vil   = 0.99     # 0.3 x VS max at VS = 3.3 V
+supply_static_ua = 700.0   # quiescent current typ (1 mA max); power-down 6 uA typ
+supply_pin = "5"           # VS
+gnd_pin    = "6"           # GND
+warning = "logic thresholds are evaluated at VS = 3.3 V (0.7 x VS / 0.3 x VS); on another supply rail they scale"
+
+[models.pins]
+# Section 6, D (SOIC) column of the Pin Functions table and the D top view.
+"1" = "a1"      # address pin: GND, VS, SDA or SCL (Table 1)
+"2" = "a0"      # address pin: GND, VS, SDA or SCL (Table 1)
+"3" = "sda"     # serial data, open-drain I/O
+"4" = "scl"     # serial clock input
+"5" = "vdd"     # VS, power supply, 3 to 5.5 V
+"6" = "gnd"
+"7" = "in_n"    # IN-, load side of the external shunt
+"8" = "in_p"    # IN+, supply side of the external shunt
+
+[models.ratings]
+# Section 7.1: VS 6 V; SDA GND - 0.3 to 6 V. See the note above on IN+/IN-.
+max_voltage_v = 6.0
+
+# NO supply_range ENVELOPE, ON PURPOSE. The sheet gives VS 3 to 5.5 V (Section
+# 7.5), but an envelope on an unresolved rail only adds an "operating envelope
+# abstained" note; on the c64 saver's fixed revision that note would break the
+# defect-regression fixture's empty-findings claim until the MCP1703 feeding the
+# rail is modelled. Add `[[models.envelope]] kind = "supply_range" pin = "vdd"
+# min_v = 3.0 max_v = 5.5` then, and update that fixture's expectation with it.
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "INA219 Configuration reset subset"
+bus = "i2c"
+i2c_address = 0x40
+
+# Section 6, D (SOIC); the same pad map as [models.pins].
+[sensor.pins]
+1 = "a1"
+2 = "a0"
+3 = "sda"
+4 = "scl"
+5 = "vdd"
+6 = "gnd"
+7 = "in_n"
+8 = "in_p"
+
+# Table 1 Address Pins and Slave Addresses, rows in printed order.
+[[sensor.address_select]]
+address = 0x40
+straps = { a1 = "low", a0 = "low" }
+[[sensor.address_select]]
+address = 0x41
+straps = { a1 = "low", a0 = "high" }
+[[sensor.address_select]]
+address = 0x42
+straps = { a1 = "low", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x43
+straps = { a1 = "low", a0 = "scl" }
+[[sensor.address_select]]
+address = 0x44
+straps = { a1 = "high", a0 = "low" }
+[[sensor.address_select]]
+address = 0x45
+straps = { a1 = "high", a0 = "high" }
+[[sensor.address_select]]
+address = 0x46
+straps = { a1 = "high", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x47
+straps = { a1 = "high", a0 = "scl" }
+[[sensor.address_select]]
+address = 0x48
+straps = { a1 = "sda", a0 = "low" }
+[[sensor.address_select]]
+address = 0x49
+straps = { a1 = "sda", a0 = "high" }
+[[sensor.address_select]]
+address = 0x4A
+straps = { a1 = "sda", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x4B
+straps = { a1 = "sda", a0 = "scl" }
+[[sensor.address_select]]
+address = 0x4C
+straps = { a1 = "scl", a0 = "low" }
+[[sensor.address_select]]
+address = 0x4D
+straps = { a1 = "scl", a0 = "high" }
+[[sensor.address_select]]
+address = 0x4E
+straps = { a1 = "scl", a0 = "sda" }
+[[sensor.address_select]]
+address = 0x4F
+straps = { a1 = "scl", a0 = "scl" }
+
+# Table 2: Configuration register 00h power-on reset 399Fh, sent MSB first.
+[[sensor.register]]
+addr = 0x00
+const = [0x39, 0x9F]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 2.0    # Section 7.5, power-on reset threshold typ
+idle_a = 0.0007               # Section 7.5, quiescent current typ
+read_a = 0.0007
+write_a = 0.0007
+low_power_a = 0.000006        # Section 7.5, quiescent current, power-down mode typ
+
+[models.coverage]
+implements = ["pin_roles", "logic_levels", "active_supply_current", "absolute_ratings", "i2c_address_strap", "four_level_address_pins", "register_map_subset", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["supply_range_envelope", "shunt_and_bus_measurement","calibration_register", "power_current_registers", "conversion_ready_alert", "smbus_timeout", "sense_pin_ratings"]
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/ina219.pdf"
+title = "Texas Instruments INA219 Zero-Drift, Bidirectional Current/Power Monitor With I2C Interface, SBOS448G, August 2008, revised December 2015"
+locator = "Section 6 Pin Configuration and Functions (D package); Section 7.1; Section 7.5; Table 1 Address Pins and Slave Addresses; Table 2 Summary of Register Set"
+sha256 = "58004eda854d07478e6fc6f4398c114f60a3bcf18d4877471c7c1a306d1fa1cb"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+# ── ATA6561-GAQW-N high-speed CAN transceiver (SOIC8) ─────────────────────────
+# Source: Microchip ATA6560/1 datasheet DS20005991A (2018), sha256
+# c4039dda3b2a9a829f59bb004b994c5950f3cbde4c37406e6e4fa6a49361a026.
+# Table 1-2 pin function table (ATA6561 SOIC8: 1 TXD, 2 GND, 3 VCC, 4 RXD, 5 VIO,
+# 6 CANL, 7 CANH, 8 STBY); the Product Identification section lists ATA6561-GAQW-N
+# as the 8-lead SOIC, tape and reel, non-AEC variant. Absolute Maximum Ratings:
+# CANH/CANL -27 to +42 V, every other pin -0.3 to +5.5 V. Electrical
+# Characteristics: VCC 4.5 to 5.5 V, VIO 2.8 to 5.5 V, IVCC recessive Normal mode
+# 2 to 5 mA, dominant 50 mA typ (20 to 70), Standby 12 uA max, IIO recessive 80 uA
+# typ, RXD output IOH -1 to -8 mA at VIO - 0.4 V.
+# The Luna draft (gpt-6-luna, identity-only) was reviewed against the PDF: the pin
+# map and the supply/VIO/abs-max rows were right, but it carried no executable
+# behaviour, so this card follows sit1050t_can_transceiver: bus-idle (recessive)
+# supply draw and an RXD that reads high. The 3.5 mA draw is the midpoint of the
+# Normal-mode recessive 2 to 5 mA row (the sheet prints no typ); Standby (12 uA) and
+# Silent (2.5 mA typ) modes are not modelled, so the draw is the Normal-mode figure.
+[[models]]
+id = "ata6561_gaqw_n_can_transceiver"
+kind = "digital"
+description = "ATA6561-GAQW-N CAN transceiver, SOIC8, bus idle (recessive): supply draw and RXD high"
+
+[models.match]
+value_re = "(?i)^ATA6561[-_ ]?GAQW([-_ ]?N)?$"
+
+[models.params]
+supply_current_a = 0.0035
+supply_on_v = 4.5
+vio_current_a = 0.00008
+vio_on_v = 2.8
+warning = "source-bound bus-idle, Normal-mode model: the recessive VCC supply current (2 to 5 mA, midpoint used), the 80 uA VIO current, the 4.5-5.5 V / 2.8-5.5 V supply limits and an RXD that reads high are executable; dominant transmission (50 mA typ), CANH/CANL bus levels, Standby and Silent modes, wake-up, undervoltage detection and the TXD dominant time-out are not modelled"
+
+[models.pins]
+"1" = "txd"
+"2" = "gnd"
+"3" = "vcc"
+"4" = "rxd"
+"5" = "vio"
+"6" = "canl"
+"7" = "canh"
+"8" = "stby"
+
+[models.ratings]
+max_voltage_v = 5.5   # Absolute Maximum Ratings, DC voltage on all other pins (not CANH/CANL, which tolerate -27 to +42 V)
+max_junction_temp_c = 150.0   # Absolute Maximum Ratings, virtual junction temperature
+theta_ja_c_per_w = 145.0      # Thermal Resistance Virtual Junction to Ambient, SOIC8
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 4.5
+max_v = 5.5
+abs_max_v = 5.5
+basis = "ATA6560/1 DS20005991A, Electrical Characteristics VVCC 4.5 V to 5.5 V; Absolute Maximum Ratings, DC voltage on all other pins -0.3 V to +5.5 V"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vio"
+min_v = 2.8
+max_v = 5.5
+abs_max_v = 5.5
+basis = "ATA6560/1 DS20005991A, Electrical Characteristics VVIO 2.8 V to 5.5 V (ATA6561 only); Absolute Maximum Ratings, DC voltage on all other pins -0.3 V to +5.5 V"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vcc"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vcc / supply_on_v))"
+
+[[models.behavioral.laws]]
+name = "vio_draw"
+kind = "current"
+a = "vio"
+b = "gnd"
+expr = "vio_current_a * min(1.0, max(0.0, v_vio / vio_on_v))"
+
+[[models.behavioral.laws]]
+name = "rxd_recessive_high"
+kind = "voltage"
+a = "rxd"
+b = "gnd"
+expr = "max(0.0, v_vio - 0.4)"
+r_ohms = 400.0
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/ATA6560-ATA6561-High-Speed-CAN-Transceiver-DS20005991A.pdf"
+title = "Microchip ATA6560/1 High-Speed CAN Transceiver with Standby Mode, DS20005991A (2018)"
+locator = "Table 1-2 Pin Function Table; Product Identification System; Absolute Maximum Ratings; ATA6560/1 Electrical Characteristics (Supply, Pin VCC; Pin VIO; CAN Receive Data Output, Pin RXD)"
+sha256 = "c4039dda3b2a9a829f59bb004b994c5950f3cbde4c37406e6e4fa6a49361a026"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "supply_current_a"
+low = 0.002
+high = 0.005
+unit = "A"
+kind = "specification-limits"
+basis = "ATA6560/1 DS20005991A, Electrical Characteristics, supply current in Normal mode, recessive, VTXD = VVIO, 2 mA min to 5 mA max"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the RXD level law is a conservative 0.4 V / 1 mA output-resistance fit to the IOH row and only the Normal-mode bus-idle state is modelled"
+[[models.source.pinout]]
+package = "SOIC8"
+pins = { "1" = "TXD", "2" = "GND", "3" = "VCC", "4" = "RXD", "5" = "VIO", "6" = "CANL", "7" = "CANH", "8" = "STBY" }
+
+[models.coverage]
+implements = ["supply_current", "vio_supply_current", "supply_range", "recessive_rxd_output"]
+missing = ["dominant_transmit", "bus_levels", "standby_mode", "silent_mode", "wake_up", "txd_dominant_timeout", "undervoltage_detection", "timing"]

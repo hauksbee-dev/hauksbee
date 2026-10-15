@@ -3136,3 +3136,312 @@ max = 75.0
 unit = "°C/W"
 conditions = "Note 1: case reference is the solder mounting surface of the drain pins"
 basis = "onsemi FDN360P/D Rev. 8 (January 2023), Thermal Characteristics, RθJC (Note 1)"
+
+# ── DMN6075S (Diodes 60 V N-channel MOSFET, SOT23) ── Diodes DS37023 Rev. 7-2 (Sept 2025), sha256 3ca54b9c...d39d473. Drafted by `hauksbee models extract` (gpt-6-luna); reviewed against the PDF: ratings, VGS(th), RDS(on) rows and the SOT23 top-view drawing (G lower-left, S lower-right, D top) checked; pin NUMBERS are the JEDEC standard, not printed on the sheet. vto was a min/max dict, now the 2.0 V midpoint scalar (house style). kp/rd/rs are the draft's fit to the two typ RDS(on) rows (69 mOhm at 10 V, 75 mOhm at 4.5 V), which reproduces both.
+[[models]]
+id = "dmn6075s"
+kind = "nmos"
+description = "DMN6075S SOT23 N-channel enhancement MOSFET; models the level-1 channel from the threshold and RDS(on) rows, but does not model body-diode conduction, temperature-dependent behavior, switching transients, or self-heating."
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+
+[[models.source.pinout]]
+package = "SOT23"
+pins = { "1" = "G", "2" = "S", "3" = "D" }
+standard = "JEDEC TO-236 top view: 1 lower-left, 2 lower-right, 3 top"
+
+[[models.source.characteristic]]
+parameter = "VDSS Drain-Source Voltage"
+max = 60.0
+unit = "V"
+conditions = "TA = +25°C"
+basis = "Maximum Ratings, Drain-Source Voltage row, Value column"
+
+[[models.source.characteristic]]
+parameter = "VGSS Gate-Source Voltage"
+min = -20.0
+max = 20.0
+unit = "V"
+conditions = "Absolute maximum rating, TA = +25°C"
+basis = "Maximum Ratings, Gate-Source Voltage row, ±20"
+
+[[models.source.characteristic]]
+parameter = "ID Continuous Drain Current, Note 5"
+rating = "max_current_a"
+max = 2.0
+unit = "A"
+conditions = "VGS = 10 V, steady state, TA = +25°C; FR-4, 2 oz copper, minimum recommended pad layout"
+basis = "Maximum Ratings, Continuous Drain Current (Note 5) row, TA = +25°C"
+
+[[models.source.characteristic]]
+parameter = "ID Continuous Drain Current, Note 5"
+rating = "max_current_a"
+max = 1.5
+unit = "A"
+conditions = "VGS = 10 V, steady state, TA = +70°C; FR-4, 2 oz copper, minimum recommended pad layout"
+basis = "Maximum Ratings, Continuous Drain Current (Note 5) row, TA = +70°C"
+
+[[models.source.characteristic]]
+parameter = "ID Continuous Drain Current, Note 6"
+rating = "max_current_a"
+max = 2.5
+unit = "A"
+conditions = "VGS = 10 V, steady state, TA = +25°C; FR-4, 2 oz copper, thermal vias to bottom layer 1-inch square copper plate"
+basis = "Maximum Ratings, Continuous Drain Current (Note 6) row, TA = +25°C"
+
+[[models.source.characteristic]]
+parameter = "ID Continuous Drain Current, Note 6"
+rating = "max_current_a"
+max = 2.0
+unit = "A"
+conditions = "VGS = 10 V, steady state, TA = +70°C; FR-4, 2 oz copper, thermal vias to bottom layer 1-inch square copper plate"
+basis = "Maximum Ratings, Continuous Drain Current (Note 6) row, TA = +70°C"
+
+[[models.source.characteristic]]
+parameter = "IS Maximum Body Diode Forward Current, Note 5"
+max = 2.0
+unit = "A"
+conditions = "TA = +25°C; FR-4, 2 oz copper, minimum recommended pad layout"
+basis = "Maximum Ratings, Maximum Body Diode Forward Current (Note 5) row, max column"
+
+[[models.source.characteristic]]
+parameter = "IDM Pulsed Drain Current"
+max = 12.0
+unit = "A"
+conditions = "10 µs pulse, duty cycle = 1%, TA = +25°C"
+basis = "Maximum Ratings, Pulsed Drain Current row, max column"
+
+[[models.source.characteristic]]
+parameter = "PD Total Power Dissipation, Note 5"
+rating = "max_power_w"
+max = 0.8
+unit = "W"
+conditions = "TA = +25°C; FR-4, 2 oz copper, minimum recommended pad layout"
+basis = "Thermal Characteristics, Total Power Dissipation (Note 5) row, TA = +25°C"
+
+[[models.source.characteristic]]
+parameter = "PD Total Power Dissipation, Note 5"
+rating = "max_power_w"
+max = 0.5
+unit = "W"
+conditions = "TA = +70°C; FR-4, 2 oz copper, minimum recommended pad layout"
+basis = "Thermal Characteristics, Total Power Dissipation (Note 5) row, TA = +70°C"
+
+[[models.source.characteristic]]
+parameter = "RθJA Thermal Resistance, Junction to Ambient, Note 5"
+rating = "theta_ja_c_per_w"
+max = 157.0
+unit = "°C/W"
+conditions = "steady state; FR-4, 2 oz copper, minimum recommended pad layout"
+basis = "Thermal Characteristics, Thermal Resistance Junction to Ambient (Note 5) row"
+
+[[models.source.characteristic]]
+parameter = "PD Total Power Dissipation, Note 6"
+rating = "max_power_w"
+max = 1.15
+unit = "W"
+conditions = "TA = +25°C; FR-4, 2 oz copper, thermal vias to bottom layer 1-inch square copper plate"
+basis = "Thermal Characteristics, Total Power Dissipation (Note 6) row, TA = +25°C"
+
+[[models.source.characteristic]]
+parameter = "PD Total Power Dissipation, Note 6"
+rating = "max_power_w"
+max = 0.7
+unit = "W"
+conditions = "TA = +70°C; FR-4, 2 oz copper, thermal vias to bottom layer 1-inch square copper plate"
+basis = "Thermal Characteristics, Total Power Dissipation (Note 6) row, TA = +70°C"
+
+[[models.source.characteristic]]
+parameter = "RθJA Thermal Resistance, Junction to Ambient, Note 6"
+rating = "theta_ja_c_per_w"
+max = 110.0
+unit = "°C/W"
+conditions = "steady state; FR-4, 2 oz copper, thermal vias to bottom layer 1-inch square copper plate"
+basis = "Thermal Characteristics, Thermal Resistance Junction to Ambient (Note 6) row"
+
+[[models.source.characteristic]]
+parameter = "TJ, TSTG Operating and Storage Temperature Range"
+min = -55.0
+max = 150.0
+unit = "°C"
+conditions = "operating and storage"
+basis = "Thermal Characteristics, Operating and Storage Temperature Range row"
+
+[[models.source.characteristic]]
+parameter = "BVDSS Drain-Source Breakdown Voltage"
+min = 60.0
+unit = "V"
+conditions = "VGS = 0 V, ID = 250 µA, TA = +25°C"
+basis = "Electrical Characteristics, OFF Characteristics, BVDSS row, min column"
+
+[[models.source.characteristic]]
+parameter = "IDSS Zero Gate Voltage Drain Current"
+max = 1.0
+unit = "µA"
+conditions = "TJ = +25°C, VDS = 60 V, VGS = 0 V"
+basis = "Electrical Characteristics, OFF Characteristics, IDSS row, max column"
+
+[[models.source.characteristic]]
+parameter = "IGSS Gate-Source Leakage"
+min = -100.0
+max = 100.0
+unit = "nA"
+conditions = "VGS = ±16 V, VDS = 0 V, TA = +25°C"
+basis = "Electrical Characteristics, OFF Characteristics, IGSS row, ±100 max column"
+
+[[models.source.characteristic]]
+parameter = "VGS(TH) Gate Threshold Voltage"
+min = 1.3
+max = 2.7
+unit = "V"
+conditions = "VDS = VGS, ID = 250 µA, TA = +25°C"
+basis = "Electrical Characteristics, ON Characteristics, Gate Threshold Voltage row, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "RDS(ON) Static Drain-Source On-Resistance"
+typ = 69.0
+max = 85.0
+unit = "mΩ"
+conditions = "VGS = 10 V, ID = 3.2 A, TA = +25°C"
+basis = "Electrical Characteristics, ON Characteristics, Static Drain-Source On-Resistance row, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "RDS(ON) Static Drain-Source On-Resistance"
+typ = 75.0
+max = 120.0
+unit = "mΩ"
+conditions = "VGS = 4.5 V, ID = 2.8 A, TA = +25°C"
+basis = "Electrical Characteristics, ON Characteristics, Static Drain-Source On-Resistance row, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "VSD Diode Forward Voltage"
+max = 1.2
+unit = "V"
+conditions = "VGS = 0 V, IS = 2.5 A, TA = +25°C"
+basis = "Electrical Characteristics, ON Characteristics, Diode Forward Voltage row, max column"
+
+[[models.source.characteristic]]
+parameter = "Ciss Input Capacitance"
+typ = 606.0
+unit = "pF"
+conditions = "VDS = 20 V, VGS = 0 V, f = 1.0 MHz"
+basis = "Electrical Characteristics, Dynamic Characteristics, Input Capacitance row, typ column"
+
+[[models.source.characteristic]]
+parameter = "Coss Output Capacitance"
+typ = 32.6
+unit = "pF"
+conditions = "VDS = 20 V, VGS = 0 V, f = 1.0 MHz"
+basis = "Electrical Characteristics, Dynamic Characteristics, Output Capacitance row, typ column"
+
+[[models.source.characteristic]]
+parameter = "Crss Reverse Transfer Capacitance"
+typ = 24.6
+unit = "pF"
+conditions = "VDS = 20 V, VGS = 0 V, f = 1.0 MHz"
+basis = "Electrical Characteristics, Dynamic Characteristics, Reverse Transfer Capacitance row, typ column"
+
+[[models.source.characteristic]]
+parameter = "Rg Gate Resistance"
+typ = 1.5
+unit = "Ω"
+conditions = "VDS = 0 V, VGS = 0 V, f = 1 MHz"
+basis = "Electrical Characteristics, Dynamic Characteristics, Gate Resistance row, typ column"
+
+[[models.source.characteristic]]
+parameter = "Qg Total Gate Charge, VGS = 10 V"
+typ = 12.3
+unit = "nC"
+conditions = "VDS = 30 V, ID = 3 A"
+basis = "Electrical Characteristics, Dynamic Characteristics, Total Gate Charge row (VGS = 10 V), typ column"
+
+[[models.source.characteristic]]
+parameter = "Qg Total Gate Charge, VGS = 4.5 V"
+typ = 5.6
+unit = "nC"
+conditions = "VDS = 30 V, ID = 3 A"
+basis = "Electrical Characteristics, Dynamic Characteristics, Total Gate Charge row (VGS = 4.5 V), typ column"
+
+[[models.source.characteristic]]
+parameter = "Qgs Gate-Source Charge"
+typ = 1.7
+unit = "nC"
+conditions = "VDS = 30 V, ID = 3 A"
+basis = "Electrical Characteristics, Dynamic Characteristics, Gate-Source Charge row, typ column"
+
+[[models.source.characteristic]]
+parameter = "Qgd Gate-Drain Charge"
+typ = 1.9
+unit = "nC"
+conditions = "VDS = 30 V, ID = 3 A"
+basis = "Electrical Characteristics, Dynamic Characteristics, Gate-Drain Charge row, typ column"
+
+[[models.source.characteristic]]
+parameter = "tD(ON) Turn-On Delay Time"
+typ = 3.5
+unit = "ns"
+conditions = "VGS = 10 V, VDS = 30 V, Rg = 20 Ω, RL = 50 Ω"
+basis = "Electrical Characteristics, Dynamic Characteristics, Turn-On Delay Time row, typ column"
+
+[[models.source.characteristic]]
+parameter = "tR Turn-On Rise Time"
+typ = 4.1
+unit = "ns"
+conditions = "VGS = 10 V, VDS = 30 V, Rg = 20 Ω, RL = 50 Ω"
+basis = "Electrical Characteristics, Dynamic Characteristics, Turn-On Rise Time row, typ column"
+
+[[models.source.characteristic]]
+parameter = "tD(OFF) Turn-Off Delay Time"
+typ = 35.0
+unit = "ns"
+conditions = "VGS = 10 V, VDS = 30 V, Rg = 20 Ω, RL = 50 Ω"
+basis = "Electrical Characteristics, Dynamic Characteristics, Turn-Off Delay Time row, typ column"
+
+[[models.source.characteristic]]
+parameter = "tF Turn-Off Fall Time"
+typ = 11.0
+unit = "ns"
+conditions = "VGS = 10 V, VDS = 30 V, Rg = 20 Ω, RL = 50 Ω"
+basis = "Electrical Characteristics, Dynamic Characteristics, Turn-Off Fall Time row, typ column"
+
+[[models.source.references]]
+title = "DMN6075S.pdf"
+locator = "the whole PDF, as extracted"
+sha256 = "3ca54b9ce05adcdf89c22be66808095c1777c2735330227bec4395e57d39d473"
+
+[models.match]
+value_re = "(?i)^(?:DMN6075S)$"
+
+[models.params]
+vto = 2.0  # VGS(th) midpoint of the 1.3-2.7 V band at VDS = VGS, ID = 250 uA; a part anywhere in the band is not exactly this card
+kp = 45.8333333333 # derived from RDS(on) rows at VGS=10 V, ID=3.2 A, and VGS=4.5 V, ID=2.8 A, typ column
+rd = 0.0331363636364 # derived from RDS(on) rows at VGS=10 V, ID=3.2 A, typ column; split series-resistance residue evenly
+rs = 0.0331363636364 # derived from RDS(on) rows at VGS=10 V, ID=3.2 A, typ column; split series-resistance residue evenly
+cgs = 5.814e-10  # derived: cgs = Ciss - Crss, 'Ciss Input Capacitance' typ 606 pF (VDS = 20 V, VGS = 0 V, f = 1.0 MHz); 'Crss Reverse Transfer Capacitance' typ 24.6 pF (VDS = 20 V, VGS = 0 V, f = 1.0 MHz)
+cgd = 2.46e-11  # derived: cgd = Crss at its printed bias, 'Crss Reverse Transfer Capacitance' typ 24.6 pF (VDS = 20 V, VGS = 0 V, f = 1.0 MHz)
+
+[models.ratings]
+max_voltage_v = 60.0 # Source: Maximum Ratings, Drain-Source Voltage row
+max_current_a = 2.0 # Source: Maximum Ratings, Continuous Drain Current (Note 5), VGS=10 V, TA=+25°C
+max_surge_current_a = 12.0 # Source: Maximum Ratings, Pulsed Drain Current, 10 µs pulse, duty cycle 1%
+max_power_w = 0.8 # Source: Thermal Characteristics, Total Power Dissipation (Note 5), TA=+25°C
+max_junction_temp_c = 150.0 # Source: Thermal Characteristics, Operating and Storage Temperature Range, TJ max
+theta_ja_c_per_w = 157.0 # Source: Thermal Characteristics, Thermal Resistance Junction to Ambient (Note 5), steady state
+rds_on_vgs = 4.5 # Source: Electrical Characteristics, RDS(ON) row, lowest specified VGS
+vgs_th_max = 2.7 # Source: Electrical Characteristics, Gate Threshold Voltage row, max column
+
+[models.pins]
+"1" = "gate" # SOT23 top view; cross-checked against package top view and pin-configuration drawing; TO-236 pin 1 is lower-left
+"2" = "source" # SOT23 top view; cross-checked against package top view and pin-configuration drawing; TO-236 pin 2 is lower-right
+"3" = "drain" # SOT23 top view; cross-checked against package top view and pin-configuration drawing; TO-236 pin 3 is top
+
+[models.coverage]
+implements = ["nmos_channel"]
+missing = ["body_diode", "temperature_dependent_behavior", "switching_transients", "self_heating"]

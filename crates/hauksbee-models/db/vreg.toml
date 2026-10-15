@@ -1968,6 +1968,125 @@ max_voltage_v = 6.5          # Absolute Maximum Ratings, VIN
 max_junction_temp_c = 150.0  # Absolute Maximum Ratings, TJ
 theta_ja_c_per_w = 250.0     # Absolute Maximum Ratings, θJA SOT-23-3 (SOT-23 is 180; the worse is kept)
 
+# ── AP2127N-1.8 / AP2127N-2.8 (the same sheet's other fixed SOT-23 versions) ──
+# Source: Diodes AP2127 DS36478 Rev. 7-2, December 2017 (same file as above, same
+# sha256). Ordering Information lists AP2127N-1.8TRG1 and AP2127N-2.8TRG1; the pin
+# map is the SOT-23 / SOT-23-3 column (1 GND, 2 VOUT, 3 VIN). The two cards differ
+# from -3.3 only in VOUT and in the dropout row: the sheet prints 600 typ / 700 max
+# mV at 300 mA for VOUT = 1.8 V (tested at VIN = 2.5 V) and 170 / 300 mV for the
+# 2.5 V to 4.2 V versions, which is the row the 2.8 V part sits in. The 2.8 V draft
+# was extracted with `hauksbee models extract` (gpt-6-luna) and reviewed against
+# the PDF; the 1.8 V draft failed lint three times and was derived from it by hand.
+[[models]]
+id = "ap2127n_2v8"
+kind = "vreg"
+description = "Diodes AP2127N-2.8 300mA LDO, 2.8V fixed, SOT-23 (no enable)"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/AP2127.pdf"
+title = "Diodes Incorporated AP2127 300mA high-speed, extremely low noise LDO regulator, DS36478 Rev. 7-2, December 2017"
+locator = "Pin Descriptions p.2 (SOT-23 / SOT-23-3 column); Absolute Maximum Ratings p.4; Recommended Operating Conditions p.4; Electrical Characteristics p.5 (VOUT, IOUT(MAX), VDROP rows); Ordering Information"
+sha256 = "d48c96ac985d348a379084ad921f699b8ec6f298c3d72fddc0ecae6bbe328993"
+
+[[models.source.pinout]]
+package = "SOT-23 / SOT-23-3"
+pins = { "1" = "GND", "2" = "VOUT", "3" = "VIN" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+
+[models.match]
+value_re = "(?i)^AP2127N3?-2[._]8(TRG1|G1|TR)?$"
+
+[models.params]
+vout       = 2.8      # Ordering Information, fixed 2.8 V; Electrical Characteristics +-2% (98% to 102% of VOUT)
+dropout_v  = 0.3      # VDROP max @ IOUT = 300 mA, VOUT = 2.5 V to 4.2 V row (170 mV typ)
+cout_min_f = 1.0e-6   # Electrical Characteristics header, COUT = 1 uF
+iq_a       = 60.0e-6  # IQ typ (90 uA max), VIN = VOUT + 1 V, IOUT = 0
+
+[models.pins]
+# Pin Descriptions, SOT-23 / SOT-23-3 column.
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 0.3          # IOUT(MAX) min, Electrical Characteristics
+max_voltage_v = 6.5          # Absolute Maximum Ratings, VIN
+max_junction_temp_c = 150.0  # Absolute Maximum Ratings, TJ
+theta_ja_c_per_w = 250.0     # Absolute Maximum Ratings, θJA SOT-23-3 (SOT-23 is 180; the worse is kept)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 2.5
+max_v = 6.0
+abs_max_v = 6.5
+basis = "AP2127 DS36478 Rev. 7-2, Recommended Operating Conditions, VIN 2.5 V to 6 V; Absolute Maximum Ratings, VIN 6.5 V"
+
+[models.coverage]
+implements = ["fixed_output_regulation", "dropout", "absolute_ratings"]
+missing = ["line_load_regulation", "ripple_rejection", "output_noise", "current_limit", "thermal_shutdown"]
+
+[[models]]
+id = "ap2127n_1v8"
+kind = "vreg"
+description = "Diodes AP2127N-1.8 300mA LDO, 1.8V fixed, SOT-23 (no enable)"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/AP2127.pdf"
+title = "Diodes Incorporated AP2127 300mA high-speed, extremely low noise CMOS LDO regulator, DS36478 Rev. 7-2, December 2017"
+locator = "Pin Descriptions p.2 (SOT-23 / SOT-23-3 column); Absolute Maximum Ratings p.4; Recommended Operating Conditions p.4; Electrical Characteristics p.5 (VOUT, IOUT(MAX), VDROP rows); Ordering Information"
+sha256 = "d48c96ac985d348a379084ad921f699b8ec6f298c3d72fddc0ecae6bbe328993"
+
+[[models.source.pinout]]
+package = "SOT-23 / SOT-23-3"
+pins = { "1" = "GND", "2" = "VOUT", "3" = "VIN" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+
+[models.match]
+value_re = "(?i)^AP2127N3?-1[._]8(TRG1|G1|TR)?$"
+
+[models.params]
+vout       = 1.8      # Ordering Information, fixed 1.8 V; Electrical Characteristics +-2% (98% to 102% of VOUT)
+dropout_v  = 0.7      # VDROP max @ IOUT = 300 mA, VOUT = 1.8 V row (600 mV typ); the row is tested at VIN = 2.5 V
+cout_min_f = 1.0e-6   # Electrical Characteristics header, COUT = 1 uF
+iq_a       = 60.0e-6  # IQ typ (90 uA max), VIN = VOUT + 1 V, IOUT = 0
+
+[models.pins]
+# Pin Descriptions, SOT-23 / SOT-23-3 column.
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 0.3          # IOUT(MAX) min, Electrical Characteristics
+max_voltage_v = 6.5          # Absolute Maximum Ratings, VIN
+max_junction_temp_c = 150.0  # Absolute Maximum Ratings, TJ
+theta_ja_c_per_w = 250.0     # Absolute Maximum Ratings, θJA SOT-23-3 (SOT-23 is 180; the worse is kept)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 2.5
+max_v = 6.0
+abs_max_v = 6.5
+basis = "AP2127 DS36478 Rev. 7-2, Recommended Operating Conditions, VIN 2.5 V to 6 V; Absolute Maximum Ratings, VIN 6.5 V"
+
+[models.coverage]
+implements = ["fixed_output_regulation", "dropout", "absolute_ratings"]
+missing = ["line_load_regulation", "ripple_rejection", "output_noise", "current_limit", "thermal_shutdown"]
+
 # ── AP1117-33 / AP1117E33G-13 (Diodes 1 A LDO, fixed 3.3 V) ────────────────
 # Source: Diodes AP1117/AP1117I DS31009 Rev. 24-3, March 2015 (marked "not
 # recommended for new design"). Ordering Information: AP1117 [I] E 33 [G|L]
@@ -3631,6 +3750,97 @@ high_threshold_v = 1.25
 [models.coverage]
 implements = ["averaged_buck_dc", "board_feedback_divider", "enable_gating", "output_current_ceiling", "reflected_input_power"]
 missing = ["switching_ripple", "compensation_stability", "soft_start", "pfm_ldo_modes", "cycle_by_cycle_peak_limit", "ovp", "uvlo_hysteresis", "thermal_shutdown", "temperature_curves"]
+
+# ── AP64060WU-7 (Diodes 600 mA, 40 V, 2 MHz synchronous buck, TSOT26) ─────────
+# Source: Diodes AP64060/AP64062 DS44123 Rev. 4-2 (May 2025), sha256
+# ec6a354db94ea4f6f822fe0952907197b258791a93480e58b0a89eebb95599f1. The Luna draft
+# (gpt-6-luna) failed lint three times because a buck has an SW pin, not an
+# OUT pin, so this card is written by hand from the draft's data and the PDF,
+# following ap64501sp_13. Review notes: pin map checked against Pin Assignments
+# and Pin Descriptions (1 BST, 2 GND, 3 FB, 4 EN, 5 VIN, 6 SW). The 0.8 V figure
+# is the FEEDBACK REFERENCE (VFB 784/800/816 mV), not the output: the converter
+# setpoint is a placeholder that the binder replaces from the board's own FB
+# divider. EN is a precision 1.21 V typ rising / 1.10 V typ falling threshold
+# (VEN_H 1.21 typ, 1.25 max). Efficiency 0.85 is an assumption (the sheet
+# gives only curves); out_r_ohms is the 600 mOhm high-side RDS(ON) typ.
+[[models]]
+id = "ap64060wu_7"
+kind = "vreg"
+description = "Diodes AP64060WU-7 600mA 40V 2MHz synchronous buck (averaged feedback model)"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/AP64060_AP64062.pdf"
+title = "Diodes Incorporated AP64060/AP64062 4.5V to 40V input, 600mA synchronous buck converter, DS44123 Rev. 4-2, May 2025"
+locator = "Pin Descriptions p.3; Absolute Maximum Ratings and Recommended Operating Conditions p.4; Electrical Characteristics p.5 (VFB, VEN_H, VEN_L, IQ, fSW rows)"
+sha256 = "ec6a354db94ea4f6f822fe0952907197b258791a93480e58b0a89eebb95599f1"
+[[models.source.pinout]]
+package = "TSOT26"
+pins = { "1" = "BST", "2" = "GND", "3" = "FB", "4" = "EN", "5" = "VIN", "6" = "SW" }
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "feedback_reference"
+low = 0.784
+high = 0.816
+unit = "V"
+kind = "specification-limits"
+basis = "AP64060 DS44123 Rev. 4-2, Electrical Characteristics VFB row, CCM, TJ -40 C to +125 C"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+
+[models.match]
+value_re = "(?i)^AP64060WU[-_ ]?7$"
+
+[models.params]
+warning = "source-bound averaged DC model: board feedback and EN are executable; switching ripple, loop stability, soft-start, PFM mode and protection transients are not modeled"
+
+[models.pins]
+"1" = "bst"
+"2" = "gnd"
+"3" = "fb"
+"4" = "en"
+"5" = "in"
+"6" = "sw"
+
+[models.ratings]
+max_current_a = 0.6    # Features, 600 mA continuous output current
+max_voltage_v = 42.0   # Absolute Maximum Ratings, VIN -0.3 to +42.0 V DC
+max_junction_temp_c = 170.0
+theta_ja_c_per_w = 89.0  # Package Thermal Information, JEDEC 4-layer board
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 4.5
+max_v = 40.0
+abs_max_v = 42.0
+basis = "AP64060 DS44123 Rev. 4-2, Recommended Operating Conditions VIN 4.5 V to 40 V; Absolute Maximum Ratings VIN -0.3 V to +42.0 V (DC)"
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+vout_setpoint = 5.0
+iout_limit_a = 0.6
+efficiency = 0.85
+out_r_ohms = 0.6
+switching_hz = 2.0e6   # Electrical Characteristics, fSW AP64060 typ 2 MHz
+
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 0.800   # VFB typ (784 to 816 mV); a feedback reference, never the output voltage
+
+[models.behavioral.converter.enable]
+pin = "en"
+high_threshold_v = 1.25   # VEN_H max 1.25 V (typ 1.21 V)
+
+[models.coverage]
+implements = ["averaged_buck_dc", "board_feedback_divider", "enable_gating", "output_current_ceiling", "reflected_input_power"]
+missing = ["switching_ripple", "compensation_stability", "soft_start", "pfm_mode", "cycle_by_cycle_peak_limit", "ovp", "uvlo_hysteresis", "thermal_shutdown", "temperature_curves"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LM317: the three-terminal ADJUSTABLE regulator. It has no ground pin and no
@@ -7771,3 +7981,100 @@ url = "https://www.diodes.com/assets/Datasheets/AP2114.pdf"
 title = "BCD Semiconductor / Diodes AP2114 1A low noise CMOS LDO regulator with enable, data sheet Rev. 2.2, January 2013"
 locator = "Figure 2 Pin Configuration p.2 (HA); Pin Descriptions p.3; Ordering Information p.4-5; Absolute Maximum Ratings and Recommended Operating Conditions p.7; AP2114-3.3 Electrical Characteristics p.12"
 sha256 = "d20cd46c5f472fe220f3e1ffb82b2679bc37e3dd145891bfdedf0acb78089d51"
+
+# ── ZMR330FTA (Diodes 50 mA fixed 3.3 V regulator, SOT23) ─────────────────────
+# Source: Diodes ZMR Series DS32195 Rev. 11-2 (March 2013), sha256
+# 41667d862f23cd0017454cab59e3cf0500a32158771f839d22d31cafa02efbde. Drafted by
+# `hauksbee models extract` (gpt-6-luna) as identity-only and reviewed against the
+# PDF. Review findings: the pin map was right (SOT23 suffix F: 1 GND, 2 OUT, 3 IN);
+# the draft took iq_a from the delta-IS row (2 uA), which is a CHANGE in supply
+# current, not the quiescent current: IS is 120 uA typ / 170 uA max (TJ -55 to
+# +125 C), so 120 uA is used. The sheet prints no dropout voltage, only "Input
+# Voltage Required to Maintain Regulation" 4.74 V typ (IO = 10 mA, header) and a
+# 4.8 V minimum recommended VIN; dropout is therefore taken as 4.8 - 3.3 = 1.5 V,
+# the largest the recommended range allows at that load, not a datasheet row.
+[[models]]
+id = "zmr330_sot23"
+kind = "vreg"
+description = "Diodes ZMR330 50mA fixed 3.3V regulator, SOT23 (no enable)"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.diodes.com/assets/Datasheets/ZMRSERIES.pdf"
+title = "Diodes Incorporated ZMR Series fixed 2.5, 3.3 and 5 volt miniature voltage regulators, DS32195 Rev. 11-2, March 2013"
+locator = "Pin Assignments p.1 (SOT23, suffix F); Absolute Maximum Ratings p.2; Recommended Operating Conditions p.2; Electrical Characteristics ZMR330 p.3"
+sha256 = "41667d862f23cd0017454cab59e3cf0500a32158771f839d22d31cafa02efbde"
+[[models.source.pinout]]
+package = "SOT23"
+pins = { "1" = "GND", "2" = "OUT", "3" = "IN" }
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.217
+high = 3.383
+unit = "V"
+kind = "specification-limits"
+basis = "ZMR Series DS32195 Rev. 11-2, Electrical Characteristics ZMR330, VO 3.217 / 3.3 / 3.383 V at TA = 25 C, IO = 0 to 50 mA, VIN = 7 V (10 mA header)"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "dropout_v"
+reason = "the sheet prints no dropout voltage; the value is derived from the 4.8 V recommended minimum input and the 3.3 V output"
+[[models.source.characteristic]]
+parameter = "VO Output Voltage"
+min = 3.217
+typ = 3.3
+max = 3.383
+unit = "V"
+conditions = "TA = 25 C, IO = 0 to 50 mA, VIN = 7 V"
+basis = "ZMR Series DS32195 Rev. 11-2, Electrical Characteristics ZMR330, VO row"
+[[models.source.characteristic]]
+parameter = "IS Supply Current"
+typ = 120.0
+max = 170.0
+unit = "uA"
+conditions = "TJ = -55 C to +125 C, IO = 10 mA, VIN = 7 V"
+basis = "ZMR Series DS32195 Rev. 11-2, Electrical Characteristics ZMR330, IS row"
+[[models.source.characteristic]]
+parameter = "VIN required to maintain regulation"
+typ = 4.74
+unit = "V"
+conditions = "TA = 25 C, IO = 10 mA"
+basis = "ZMR Series DS32195 Rev. 11-2, Electrical Characteristics ZMR330, VIN row"
+
+[models.match]
+value_re = "(?i)^ZMR330(FTA|F-7)?$"
+
+[models.params]
+vout       = 3.3      # Electrical Characteristics ZMR330, VO typ at TA = 25 C (3.217 to 3.383 V)
+dropout_v  = 1.5      # derived: recommended VIN min 4.8 V minus 3.3 V (see above); 4.74 V typ regulation input is 1.44 V above VO
+iq_a       = 120.0e-6 # IS typ (170 uA max), IO = 10 mA
+
+[models.pins]
+# Pin Assignments, SOT23 package suffix F, top view.
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_voltage_v = 24.0         # Absolute Maximum Ratings, ZMR330 input voltage
+max_current_a = 0.05         # Features, output current up to 50 mA (Absolute Maximum Ratings IO 100 mA)
+max_power_w = 0.5            # Absolute Maximum Ratings, SOT23 power dissipation at TAMB = 25 C on 15x15x0.6 mm ceramic, derated linearly to zero at 125 C
+max_junction_temp_c = 125.0  # Absolute Maximum Ratings, maximum junction temperature
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 4.8
+max_v = 24.0
+abs_max_v = 24.0
+basis = "ZMR Series DS32195 Rev. 11-2, Recommended Operating Conditions, ZMR330 input voltage 4.8 V to 24 V; Absolute Maximum Ratings 24 V"
+
+[models.coverage]
+implements = ["fixed_output_regulation", "supply_current", "absolute_ratings"]
+missing = ["dropout_characteristic", "line_load_regulation", "ripple_rejection", "output_noise", "current_limit", "thermal_shutdown"]
