@@ -2555,6 +2555,28 @@ fn unnumbered_rows_to_unknowns(source: &mut toml_edit::Table) -> bool {
     true
 }
 
+/// A voltage row names `pins` but no `rating`: only a current row tagged with
+/// one bounds a path, so the checker rejects the names. They go; whether any did.
+fn drop_pins_from_voltage_rows(source: &mut toml_edit::Table) -> bool {
+    use toml_edit::Item;
+    let rows = source
+        .get_mut("characteristic")
+        .and_then(Item::as_array_of_tables_mut);
+    let volts = |r: &toml_edit::Table| {
+        let unit = r.get("unit").and_then(Item::as_str);
+        matches!(unit, Some("V" | "mV")) && !r.contains_key("rating") && r.contains_key("pins")
+    };
+    let mut dropped = false;
+    for row in rows
+        .into_iter()
+        .flat_map(|rows| rows.iter_mut())
+        .filter(|r| volts(r))
+    {
+        dropped |= row.remove("pins").is_some();
+    }
+    dropped
+}
+
 /// A param written as a printed row its name cannot read (a nominal printing
 /// only a max, a unit it does not convert) moves to a characteristic record of
 /// the same name, as the checker prescribes. Whether it moved any of `keys`.
@@ -2639,6 +2661,13 @@ impl Reply<'_> {
                         repaired = true;
                     }
                 }
+            }
+            if source
+                .as_table_mut()
+                .is_some_and(drop_pins_from_voltage_rows)
+            {
+                say!("[model-extract] voltage rows naming pins without a rating: pins dropped");
+                repaired = true;
             }
             if source
                 .as_table_mut()
@@ -5870,6 +5899,20 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let done = reply.complete(card);
         assert!(reply.check(&done).is_ok(), "{done}");
         assert!(done.contains("status = \"unknown\"") && done.contains("min = 0.7 VCC"));
+    }
+
+    /// A voltage row naming pins but no rating loses the pins; a current row keeps them.
+    #[test]
+    fn a_voltage_row_naming_pins_without_a_rating_drops_them() {
+        let mut doc: toml_edit::DocumentMut = "[[characteristic]]\nunit = \"V\"\npins = [\"a\"]\n\
+            [[characteristic]]\nunit = \"uA\"\npins = [\"a\"]\n"
+            .parse()
+            .unwrap();
+        assert!(drop_pins_from_voltage_rows(doc.as_table_mut()));
+        let rows = doc["characteristic"].as_array_of_tables().unwrap();
+        assert!(!rows.get(0).unwrap().contains_key("pins"));
+        assert!(rows.get(1).unwrap().contains_key("pins"));
+        assert!(!drop_pins_from_voltage_rows(doc.as_table_mut()));
     }
 
     /// A nominal param whose row prints only a max cannot be read: its row moves
