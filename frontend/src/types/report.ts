@@ -349,6 +349,8 @@ export interface FixFirst {
   items: Array<WebFinding & { similar: number }>
   /** Serious causes beyond the ones listed. */
   more: number
+  /** On a pre-layout board, how many copper findings were held back. */
+  copper_held?: number
 }
 
 export interface WebReport {

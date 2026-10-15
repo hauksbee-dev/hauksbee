@@ -710,11 +710,17 @@ impl WebReport {
         self.headline = verdict_headline(&verdict, &self.headline, self.serious);
         self.verdict = verdict.verdict.to_string();
         self.verdict_reason = verdict.reason;
-        // Routing is the only listed cause: the headline frames the state and the
-        // strip says what ran, so the reason names the blocker once, briefly.
+        // Routing is the only blocking problem: the headline frames the state and
+        // the strip says what ran, so the reason names the blocker once, briefly.
+        let only_unrouted = format!(
+            "1 blocking problem(s), first: {}",
+            hauksbee_extract::NOT_ROUTED_MESSAGE_PREFIX
+        );
         if self.verdict == "fail"
-            && self.fix_first.notice.is_some()
-            && self.fix_first.items.len() == 1
+            && self
+                .verdict_reason
+                .as_ref()
+                .is_some_and(|reason| reason.starts_with(&only_unrouted))
         {
             self.verdict_reason = Some(crate::plain::PRE_LAYOUT_REASON.to_string());
         }
@@ -1459,7 +1465,7 @@ fn analyze_normalized_with_context(
     // told by the bind banner and the evidence, not by a different headline.
     let pre_layout = fix_first.notice.is_some();
     if pre_layout {
-        headline = crate::plain::pre_layout_headline(total, serious);
+        headline = crate::plain::pre_layout_headline(total, serious, fix_first.copper_held);
     }
     // Same run-level split as the JSON verdict: a finding-backed undermined
     // map is a badge on that finding, not run invalidity, so the headline only
@@ -1915,7 +1921,7 @@ fn analyze_with_firmware_context(
             .is_some_and(|b| !b.active_path_unresolved.is_empty());
         if gained_serious || !(evidence_invalid || report.run_level_undermined || bind_invalid) {
             report.headline = if report.fix_first.notice.is_some() {
-                crate::plain::pre_layout_headline(total, serious)
+                crate::plain::pre_layout_headline(total, serious, report.fix_first.copper_held)
             } else {
                 headline
             };
@@ -3770,10 +3776,48 @@ fn main {
         assert!(!h.to_lowercase().contains("looks healthy"), "{h}");
     }
 
+    /// `SHORTED` with one track on it: no longer an unrouted layout, so its
+    /// copper findings count instead of being held back.
+    fn shorted_and_routed() -> Vec<u8> {
+        let text = String::from_utf8(SHORTED.to_vec()).unwrap();
+        let track = "  (segment (start 50 50) (end 51 50) (width 0.25) (layer F.Cu) (net 1))\n)";
+        text.trim_end()
+            .strip_suffix(')')
+            .map(|head| format!("{head}{track}\n").into_bytes())
+            .unwrap()
+    }
+
+    #[test]
+    fn an_unrouted_shorted_board_holds_its_copper_findings_back_and_says_so() {
+        let r = analyze("boot_gate.kicad_pcb", SHORTED);
+        assert!(r.fix_first.notice.is_some());
+        assert_eq!(r.fix_first.copper_held, 2, "the two copper shorts");
+        assert_eq!(
+            r.serious, 0,
+            "neither the shorts nor the unrouted state count"
+        );
+        assert!(r.headline.starts_with("Not routed yet: "), "{}", r.headline);
+        assert!(
+            r.headline.contains("2 copper finding(s) are held back"),
+            "{}",
+            r.headline
+        );
+        // They are held back, not dropped: the copper section still lists them.
+        assert_eq!(drc_section(&r).findings.len(), 2);
+        assert!(
+            r.verdict == "fail",
+            "an unrouted board never reads as ready"
+        );
+    }
+
     #[test]
     fn analyze_shorted_board_reports_serious_with_positions_and_valid_json() {
-        let r = analyze("boot_gate.kicad_pcb", SHORTED);
+        let r = analyze("boot_gate.kicad_pcb", &shorted_and_routed());
         assert!(r.ok, "extraction should succeed: {:?}", r.error);
+        assert!(
+            r.fix_first.notice.is_none(),
+            "a routed board has no pre-layout state"
+        );
         assert!(r.serious > 0, "boot_gate has copper shorts");
         assert!(r.headline.to_lowercase().contains("serious"));
         assert!(drc_section(&r)
@@ -3916,6 +3960,11 @@ fn main {
             "evidence",
             "fix_first",
             "glossary",
+            // A pre-layout board frames its headline and leaves the copper
+            // findings and the not-routed state out of the counts.
+            "headline",
+            "serious",
+            "total",
             "inventory",
             "import_diagnostics",
             "import_failure",
@@ -3928,7 +3977,10 @@ fn main {
         ] {
             object.remove(key);
         }
-        let golden_value: serde_json::Value = serde_json::from_str(golden).unwrap();
+        let mut golden_value: serde_json::Value = serde_json::from_str(golden).unwrap();
+        for key in ["headline", "serious", "total"] {
+            golden_value.as_object_mut().unwrap().remove(key);
+        }
         let golden_drc = golden_value["sections"]
             .as_array()
             .unwrap()

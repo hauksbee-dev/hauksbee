@@ -423,14 +423,21 @@ pub const PRE_LAYOUT_REASON: &str = "the board must be routed before it can be o
 /// it is not counted; `total` / `serious` are the circuit findings only (see
 /// [`without_pre_layout`]).
 #[must_use]
-pub fn pre_layout_headline(total: usize, serious: usize) -> String {
+pub fn pre_layout_headline(total: usize, serious: usize, copper_held: usize) -> String {
     let lead = "Not routed yet:";
     let issues = if total == 1 { "issue" } else { "issues" };
-    match (total, serious) {
+    let mut headline = match (total, serious) {
         (0, _) => format!("{lead} the circuit checks found no problems."),
         (_, 0) => format!("{lead} circuit checks found {total} {issues}, none serious."),
         _ => format!("{lead} circuit checks found {total} {issues} ({serious} serious)."),
+    };
+    if copper_held > 0 {
+        let _ = write!(
+            headline,
+            " {copper_held} copper finding(s) are held back until it is routed."
+        );
     }
+    headline
 }
 
 /// The report's `(total, serious)` without what a pre-layout board holds back:
@@ -487,6 +494,15 @@ pub struct FixFirst {
     pub items: Vec<FixFirstItem>,
     /// Serious causes beyond the ones listed.
     pub more: usize,
+    /// On a pre-layout board, how many copper findings were held back.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub copper_held: usize,
+}
+
+// serde's `skip_serializing_if` hands the field by reference, so the signature is fixed.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 impl FixFirst {
@@ -556,6 +572,7 @@ pub fn fix_first(
     let is_unrouted = is_unrouted_state;
     let pre_layout = wiring.findings.iter().any(is_unrouted);
     let usbc = usbc.and_then(usbc_finding);
+    let all_copper = copper.findings.len();
     let copper = if pre_layout {
         &[][..]
     } else {
@@ -600,6 +617,7 @@ pub fn fix_first(
             })
             .collect(),
         more,
+        copper_held: if pre_layout { all_copper } else { 0 },
     }
 }
 
@@ -2428,16 +2446,16 @@ mod tests {
     #[test]
     fn a_pre_layout_headline_frames_the_state_and_counts_only_circuit_issues() {
         assert_eq!(
-            pre_layout_headline(0, 0),
+            pre_layout_headline(0, 0, 0),
             "Not routed yet: the circuit checks found no problems."
         );
         assert_eq!(
-            pre_layout_headline(10, 0),
+            pre_layout_headline(10, 0, 0),
             "Not routed yet: circuit checks found 10 issues, none serious."
         );
         assert_eq!(
-            pre_layout_headline(1, 1),
-            "Not routed yet: circuit checks found 1 issue (1 serious)."
+            pre_layout_headline(1, 1, 2),
+            "Not routed yet: circuit checks found 1 issue (1 serious). 2 copper finding(s) are held back until it is routed."
         );
     }
 
