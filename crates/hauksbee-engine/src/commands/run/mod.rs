@@ -346,6 +346,14 @@ pub fn error_exit_code(error: &anyhow::Error) -> i32 {
     if let Some(error) = error.downcast_ref::<crate::binder::IdentityRefusal>() {
         return error.exit_code();
     }
+    // A missing emulator means nothing ran, so nothing was judged: the same
+    // inconclusive exit `hauksbee-ci` gives it, never the failure code.
+    if error
+        .downcast_ref::<hauksbee_mcu::BackendNotInstalled>()
+        .is_some()
+    {
+        return crate::result::EXIT_INVALID_FOR_ANALYSIS;
+    }
     1
 }
 
@@ -741,6 +749,21 @@ mod terminal_refusal_tests {
         assert!(rendered.contains("GPIO4"), "{rendered}");
         assert!(rendered.contains("GPIO5"), "{rendered}");
         assert!(rendered.contains("timing evidence"), "{rendered}");
+    }
+
+    /// A co-sim whose emulator is not installed ran nothing: it exits with the
+    /// inconclusive code, as `hauksbee-ci` does, never as a failure.
+    #[test]
+    fn a_missing_emulator_exits_inconclusive() {
+        let missing = anyhow::Error::new(hauksbee_mcu::BackendNotInstalled(
+            "Espressif QEMU is not installed: run `hauksbee install esp-qemu`".into(),
+        ))
+        .context("building the co-sim engine");
+        assert_eq!(
+            super::error_exit_code(&missing),
+            crate::result::EXIT_INVALID_FOR_ANALYSIS
+        );
+        assert_eq!(super::error_exit_code(&anyhow::anyhow!("bad flag")), 1);
     }
 }
 
