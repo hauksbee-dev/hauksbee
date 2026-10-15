@@ -290,6 +290,72 @@ fn union_across(
         .collect()
 }
 
+/// The `why:` for an assertion that FAILED on a board that runs parts outside
+/// their datasheet limits, or `None` when the failure is not entitled to stand.
+///
+/// A datasheet limit the run MEASURED as violated undermines a PASS: the card
+/// guarantees nothing there, so a green number is not evidence. It does not
+/// undermine a FAIL the same way. The outcome was asked of the board, and a
+/// board that leaves a part outside its card (a rail starved through its feed
+/// resistor, a comparator input above its common-mode range, a logic input
+/// parked between VIL and VIH) has not delivered it whatever the part would
+/// have done there: the violation is the board fault, and refusing with "not
+/// a failure of your board" hides it. So a failure stands as a failure when
+/// measured violations are the ONLY thing undermining it; any other
+/// undermining gap (an open part, a substitute model, firmware that never ran)
+/// still makes it INVALID, as does a run with a rail nothing powered (the
+/// caller's guard), where the violations are artifacts of the spec.
+///
+/// A supply-envelope violation leads the sentence: a rail outside what its
+/// parts need is upstream of every input-range and logic-level violation that
+/// rail causes, so it is the one to fix first.
+fn board_limit_failure(
+    result: &assertions::AssertResult,
+    map: &EvidenceMap,
+    all: &[Assumption],
+    today: hauksbee_ir::evidence::RunDate,
+) -> Option<String> {
+    use hauksbee_ir::evidence::{AssumptionKind, EvidenceStatus};
+    if result.passed || result.invalid || result.measured {
+        return None;
+    }
+    let on_path = map
+        .assumptions()
+        .iter()
+        .filter_map(|id| all.iter().find(|a| a.id() == id));
+    let (violated, rest): (Vec<&Assumption>, Vec<&Assumption>) =
+        on_path.partition(|a| matches!(a.kind(), AssumptionKind::OperatingLimitViolated));
+    let rest: Vec<Assumption> = rest.into_iter().cloned().collect();
+    if EvidenceMap::derive_status(&rest, today) == EvidenceStatus::Undermined {
+        return None;
+    }
+    let root = violated
+        .iter()
+        .find(|a| a.id().as_str().contains(BOARD_LIMIT_ROOT))
+        .or_else(|| violated.first())?;
+    let others = violated.len() - 1;
+    let more = if others == 0 {
+        String::new()
+    } else {
+        format!(
+            " ({others} more violated limit(s) on this outcome's path are listed under evidence.)"
+        )
+    };
+    // Worded as a finding on the outcome's path, not as THE cause: the
+    // measured shortfall (when there is one) leads the line, and a limit
+    // broken elsewhere on the path may or may not be what produced it.
+    Some(format!(
+        "this outcome does not hold as designed; its path also runs a part outside its \
+         datasheet limit. {} {}{more}",
+        root.statement(),
+        root.because(),
+    ))
+}
+
+/// The limit tag the supply-envelope run check gives its violations: a rail
+/// outside its parts' supply range, the root of the violations it causes.
+const BOARD_LIMIT_ROOT: &str = "-supply-envelope-";
+
 /// Load the spec, run the co-sim across its seeds, and evaluate its assertions.
 ///
 /// # Errors
@@ -688,6 +754,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         }
     }
     evidence = evidence.with_maps(maps);
+    let any_dead_rail = outcomes.iter().any(|o| !o.dead_rails.is_empty());
     for result in &mut results {
         if floating_reds.contains(&result.label) {
             // A floating-net RED already carries its own diagnosis; the
@@ -699,6 +766,17 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
             .maps()
             .iter()
             .find(|map| map.assertion() == result.label);
+        if let Some(cause) = map
+            .filter(|map| map.is_undermined() && !any_dead_rail)
+            .and_then(|map| board_limit_failure(result, map, evidence.assumptions(), today))
+        {
+            // The measured shortfall stays first; the broken limit follows.
+            result.why = Some(match result.why.take() {
+                Some(measured) => format!("{measured}; {cause}"),
+                None => cause,
+            });
+            continue;
+        }
         if let Some(map) = map.filter(|map| map.is_undermined()) {
             result.invalid = true;
             result.waived = None;
