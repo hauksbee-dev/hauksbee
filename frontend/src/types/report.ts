@@ -391,6 +391,9 @@ export interface WebReport {
   component_kinds?: Record<string, string>
   /** Component-scoped assertion kinds the bound circuit can evaluate. */
   component_assertions?: Record<string, string[]>
+  /** Ratings the bound models state, by reference; a key is absent when no
+   *  model states it. Never a datasheet citation: the page is not recorded. */
+  component_ratings?: Record<string, ComponentRatings>
   /** Binder-detected supplies (rail net → nominal volts) for the checks
    *  builder's prefill. */
   supplies?: WebSupply[]
@@ -716,6 +719,16 @@ export interface CheckConstraints {
   settle_within_ms?: string
 }
 
+/** The limits a part's bound model states (amps, watts, volts). */
+export interface ComponentRatings {
+  max_current_a?: number
+  max_pin_current_a?: number
+  max_power_w?: number
+  max_voltage_v?: number
+  vih?: number
+  vil?: number
+}
+
 /** What a board surface (a net or component click on the report map or the
  *  live sim) asks the checks builder for. Each stays typed rather than
  *  collapsing into "a row": a stimulus or a supply changes the experiment,
@@ -731,6 +744,8 @@ export type BoardRequest =
   | { type: 'supply'; net: string; volts?: number }
   /** Settle an open variant selection with `[[override]] select`. */
   | { type: 'select'; ref: string; select: string }
+  /** One exact `[[assert]]` table from the in-place editor, queued as written. */
+  | { type: 'assert'; kind: string; toml: string }
 
 /** A request in the queue; `seq` orders and de-duplicates consumption across
  *  remounts. */

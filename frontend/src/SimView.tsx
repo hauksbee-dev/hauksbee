@@ -4,8 +4,6 @@ import { useSimSession } from './hooks/useSimSession'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './components/BoardViewer'
 import { TransportBar } from './components/TransportBar'
 import { SelectionCard } from './components/SelectionCard'
-import { QueuedConstraintModal } from './components/ConstraintModal'
-import type { ConstraintDraft } from './components/ConstraintEditor'
 import { NetPanel } from './components/NetPanel'
 import { SerialConsole } from './components/SerialConsole'
 import { SolverControlsPanel } from './components/SolverControlsPanel'
@@ -96,7 +94,6 @@ export default function SimView({
   const cards = useRailCards()
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
   const [selectedFp, setSelectedFp] = useState<FootprintInfo | null>(null)
-  const [constraintDraft, setConstraintDraft] = useState<(Partial<ConstraintDraft> & Pick<ConstraintDraft, 'kind'>) | null>(null)
   // A 316 px instrument rail consumes the entire work surface on a phone.
   // Start it collapsed there so Drive it live still lands on the board; the
   // labelled 18 px toggle keeps every instrument one tap away.
@@ -119,11 +116,9 @@ export default function SimView({
   // exploration and deterministic replay never drift into two experiments.
   // The server refuses any unsupported/unknown net.
   const queueAndApply = useCallback((request: BoardRequest) => {
-    // A check is never appended straight from a click: the card only knows the
-    // kind and the net, so the exact assertion is edited in place first.
-    if (request.type === 'check') {
-      setConstraintDraft(request)
-    } else if (request.type === 'peripheral') {
+    // A check is made in place in the card (the exact assertion, edited there),
+    // so what arrives here is already complete: it is queued as written.
+    if (request.type === 'peripheral') {
       if (!request.net) return
       liveInteractionSeq.current += 1
       const stem = request.net.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 28) || 'NET'
@@ -259,6 +254,26 @@ export default function SimView({
   // empty cards of a dead session as though they described a real board.
   const sessionLost = everHadSession && !connected
 
+  const card = (
+    <SelectionCard
+      net={selectedFp ? null : selectedNet}
+      docked={!boardFullscreen}
+      // What the net actually is, not just a number: driven, moving,
+      // or unobservable on this backend (see lib/net-state.ts).
+      reading={selectedNet && !selectedFp ? readNet(frame, selectedNet, netEnvelopes) : undefined}
+      component={selectedFp}
+      boundKind={selectedFp ? boardInfo?.component_kinds?.[selectedFp.ref] ?? null : null}
+      assertionCapabilities={selectedFp ? componentAssertions?.[selectedFp.ref] ?? [] : []}
+      modelCoverage={coverageFor(modelCoverage, selectedFp?.ref)}
+      netModels={selectedFp ? [] : modelsOnNet(modelCoverage, selectedNet)}
+      onQueue={onQueue && queueAndApply}
+      peripheralMode="live-and-scenario"
+      onAddProbe={addProbe}
+      onClose={() => { setSelectedFp(null); setSelectedNet(null) }}
+      onPickNet={net => { setSelectedFp(null); setSelectedNet(net) }}
+    />
+  )
+
   return (
     <div className="flex flex-col h-full overflow-hidden" style={{ background: 'var(--canvas)' }}>
       <TransportBar
@@ -290,9 +305,12 @@ export default function SimView({
       {shorts && <ShortsBanner shorts={shorts} />}
 
       <div className="flex flex-1 overflow-hidden">
+        {/* The canvas and its selection dock: the dock is a right rail from 1100 px,
+            a sheet under the canvas below that, and never over the board. */}
+        <div className="flex flex-1 min-w-0 min-h-0 flex-col min-[1100px]:flex-row overflow-hidden">
         {/* Board canvas (dominant center) */}
         <div
-          className="flex-1 relative min-w-0 overflow-hidden"
+          className="flex-1 relative min-w-0 min-h-0 overflow-hidden"
           style={boardFullscreen
             ? { position: 'fixed', inset: 0, zIndex: 60, background: 'var(--instrument)' }
             : undefined}
@@ -315,33 +333,11 @@ export default function SimView({
             />
           )}
 
-          {/* Floating selection card: same language as the report map. */}
-          {(selectedFp || selectedNet) && (
+          {/* Full-screen board: no room for a dock, so the card floats. */}
+          {boardFullscreen && (selectedFp || selectedNet) && (
             <div className="absolute left-3 z-10 flex items-end pointer-events-none" style={{ top: TOOLBAR_CLEARANCE, bottom: 36 }}>
-              <div className="pointer-events-auto" style={{ maxHeight: '100%', display: 'flex' }}>
-                <SelectionCard
-                  net={selectedFp ? null : selectedNet}
-                  // What the net actually is, not just a number: driven, moving,
-                  // or unobservable on this backend (see lib/net-state.ts).
-                  reading={selectedNet && !selectedFp ? readNet(frame, selectedNet, netEnvelopes) : undefined}
-                  component={selectedFp}
-                  boundKind={selectedFp ? boardInfo?.component_kinds?.[selectedFp.ref] ?? null : null}
-                  assertionCapabilities={selectedFp ? componentAssertions?.[selectedFp.ref] ?? [] : []}
-                  modelCoverage={coverageFor(modelCoverage, selectedFp?.ref)}
-                  netModels={selectedFp ? [] : modelsOnNet(modelCoverage, selectedNet)}
-                  onQueue={onQueue && queueAndApply}
-                  peripheralMode="live-and-scenario"
-                  onAddProbe={addProbe}
-                  onClose={() => { setSelectedFp(null); setSelectedNet(null) }}
-                  onPickNet={net => { setSelectedFp(null); setSelectedNet(net) }}
-                />
-              </div>
+              <div className="pointer-events-auto" style={{ maxHeight: '100%', display: 'flex' }}>{card}</div>
             </div>
-          )}
-
-          {constraintDraft && onQueue && (
-            <QueuedConstraintModal initial={constraintDraft} onQueue={onQueue}
-              onClose={() => setConstraintDraft(null)} onOpenChecks={onOpenChecks} />
           )}
 
           {/* Board overlay hints. While an input has focus the keyboard
@@ -362,6 +358,17 @@ export default function SimView({
               ? 'shortcuts paused, click away from the input to use Space / N'
               : 'Space=play/pause · N=step · scroll=zoom · drag=pan · hover=probe'}
           </div>
+        </div>
+
+        {!boardFullscreen && (selectedFp || selectedNet) && (
+          <div
+            data-testid="selection-dock"
+            className="shrink-0 overflow-y-auto p-2 max-h-[45%] min-[1100px]:max-h-none min-[1100px]:w-[340px] border-t min-[1100px]:border-t-0 min-[1100px]:border-l"
+            style={{ borderColor: 'var(--hairline)', background: 'var(--canvas)' }}
+          >
+            {card}
+          </div>
+        )}
         </div>
 
         <button
@@ -458,7 +465,7 @@ export default function SimView({
               <NetPanel
                 frame={frame}
                 selectedNet={selectedNet}
-                onSelectNet={setSelectedNet}
+                onSelectNet={net => { setSelectedNet(net); if (net) setSelectedFp(null) }}
                 envelopes={netEnvelopes}
                 envelopeSource={netEnvelopeSource}
               />
