@@ -4511,10 +4511,34 @@ fn parse_and_validate_reply(raw: &str, part: &str, kind_str: &str) -> Result<Mod
             .map_err(|e| anyhow::anyhow!("[[models]] entry '{}': {e:#}", entry.id))?;
     }
     let all: Vec<ModelEntry> = std::iter::once(first.clone()).chain(entries).collect();
+    if !names_part(&all, part) {
+        bail!(
+            "no [models.match] value_re or mpn_re matches '{part}', the name this card was \
+             requested for, so a board naming the part that way would never bind it. Widen the \
+             pattern to accept '{part}' as well as the ordering codes it already accepts"
+        );
+    }
     if let Some(problem) = crate::variants::lint(&all).into_iter().next() {
         bail!("variant set in the reply for {part}: {problem}");
     }
     Ok(first)
+}
+
+/// Whether some entry's `value_re` or `mpn_re` accepts `part` itself (an
+/// entry with neither names it by other means). Measured: a draft matched
+/// only the tape-and-reel code `<part>R`, so the requested name never bound.
+fn names_part(entries: &[ModelEntry], part: &str) -> bool {
+    let part = part.trim();
+    part.is_empty()
+        || entries.iter().any(|e| {
+            let rules = &e.r#match;
+            let patterns = [rules.value_re.as_deref(), rules.mpn_re.as_deref()];
+            let mut patterns = patterns.into_iter().flatten().peekable();
+            patterns.peek().is_none()
+                || patterns.any(|p| {
+                    regex::Regex::new(&format!("(?i){p}")).is_ok_and(|re| re.is_match(part))
+                })
+        })
 }
 
 fn check_reply_entry(entry: &ModelEntry, part: &str, kind_str: &str) -> Result<()> {
@@ -4849,6 +4873,23 @@ mod tests {
         .unwrap();
         assert_eq!(word, "vreg");
         assert!(prompts[1].contains("readable"), "{}", prompts[1]);
+    }
+
+    #[test]
+    fn a_card_must_match_the_name_it_was_requested_for() {
+        let card = |value_re: Option<&str>| {
+            let mut e = ModelEntry::default();
+            e.r#match.value_re = value_re.map(str::to_string);
+            e
+        };
+        let reel_only = card(Some("^DRV1234DDAR$"));
+        assert!(!names_part(std::slice::from_ref(&reel_only), "DRV1234DDA"));
+        assert!(names_part(
+            &[reel_only, card(Some("^drv1234dda(r)?$"))],
+            "DRV1234DDA"
+        ));
+        assert!(names_part(&[card(None)], "DRV1234DDA"));
+        assert!(names_part(&[card(Some("^X$"))], ""));
     }
 
     #[test]
