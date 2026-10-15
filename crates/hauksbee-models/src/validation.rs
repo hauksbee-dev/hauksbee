@@ -3185,12 +3185,12 @@ pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
         // Its DFN-4 column numbers the pads differently, so the card is held to
         // its SOT-23-5 footprints (PACKAGE_SPLIT_RULE) before it stands.
         assert!(draft_pin_map_problems(&card(&[]))[0].contains(PACKAGE_SPLIT_RULE));
-        let held = card(&[("[source]", "[match]\nfootprint_re = \"(?i)SOT-?23\"\n[source]")]);
-        assert!(draft_pin_map_problems(&held).is_empty());
+        let gate = ("[source]", "[match]\nfootprint_re = \"(?i)SOT-?23\"\n[source]");
+        assert!(draft_pin_map_problems(&card(&[gate])).is_empty());
         let no_column = LDO_FIXTURE[..LDO_FIXTURE.find("[[source.pinout]]").unwrap()].replace("SOT-23-5 package", "");
         let no_column: ModelEntry = toml::from_str(&no_column).unwrap();
         assert!(draft_pin_map_problems(&no_column)[0].contains("records no [[models.source.pinout]] column"));
-        let unread = card(&[(sot_pins, &sot_pins.replace("\"EN\"", "\"unknown_pad_3\"").replace("\"NC\"", "\"unknown_pad_4\""))]);
+        let unread = card(&[gate, (sot_pins, &sot_pins.replace("\"EN\"", "\"unknown_pad_3\"").replace("\"NC\"", "\"unknown_pad_4\""))]);
         assert!(draft_pin_map_problems(&unread)[0].contains("records pads 3, 4 as unknown_pad_"));
         // Many unknown pads: advisory, naming why it matters.
         let vague = card(&[("\"3\" = \"en\"", "\"3\" = \"unknown_pad_3\""), ("\"4\" = \"nc\"", "\"4\" = \"unknown_pad_4\"")]);

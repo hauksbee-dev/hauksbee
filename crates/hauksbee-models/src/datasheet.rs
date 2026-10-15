@@ -6231,7 +6231,9 @@ uncertainty = [
         assert!(parse_and_validate_reply(&bad_bf, "BCM847BS", "bjt_npn").is_err());
         // Every entry is checked, not just the first; a row param is checked too.
         let second = |bf: &str| {
-            let b = good.replace("\"bcm847bs\"", "\"bcm847bs_b\"");
+            let b = good
+                .replace("\"bcm847bs\"", "\"bcm847bs_b\"")
+                .replace("(?i)BCM847BS", "(?i)BCM847BS-Q");
             format!("{good}{}", b.replace("bf  = 150.0", bf))
         };
         let row = "bf = { min = 100, typ = 150, max = 460, unit = \"\", conditions = \"c\", basis = \"b\" }";
