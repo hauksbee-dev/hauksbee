@@ -42,32 +42,46 @@ fn overstress(rail: &str, ohms: &str) -> Vec<LintFinding> {
     lint.of_check(LintCheck::DcOverstress).cloned().collect()
 }
 
-/// 5 V through 10 ohm: about 60 mA even at the 3.5 V blue corner, over the
-/// 25 mA rating at both corners, so the finding is unconditional.
-#[test]
-fn an_led_overdriven_at_every_corner_is_a_plain_finding() {
-    let found = overstress("+5V", "10");
+/// The stated condition on D1: its 25 mA is the ASSUMED generic card's, not
+/// the fitted LED's, so passing it is never a failing finding.
+fn stated_on_d1(found: &[LintFinding]) -> &LintFinding {
     let f = found
         .iter()
         .find(|f| f.refs == ["D1"])
         .unwrap_or_else(|| panic!("the LED is overdriven: {found:#?}"));
-    assert_eq!(f.severity, Severity::High, "{}", f.message);
-    assert!(!f.message.contains("CONDITIONAL"), "{}", f.message);
+    assert_eq!(f.severity, Severity::Low, "{}", f.message);
+    assert!(
+        hauksbee_models::rating_basis::is_condition(&f.message)
+            && f.message.contains("judged against a generic")
+            && f.message.contains("give D1 its own model"),
+        "{}",
+        f.message
+    );
+    f
+}
+
+/// 5 V through 10 ohm: about 60 mA even at the 3.5 V blue corner, over the
+/// generic card's ASSUMED 25 mA at both corners. That rating is no datasheet's,
+/// so it is a stated condition, never a failing finding.
+#[test]
+fn an_led_overdriven_at_every_corner_is_a_stated_condition() {
+    let found = overstress("+5V", "10");
+    stated_on_d1(&found);
+    assert!(
+        found.iter().all(|f| f.severity == Severity::Low),
+        "{found:#?}"
+    );
 }
 
 /// 3.3 V through 33 ohm: about 35 mA into a 1.9 V red die, nothing into a
-/// 3.5 V blue one. Which it is depends on the fitted colour, which the board
-/// does not say: a conditional finding naming the low-Vf corner.
+/// 3.5 V blue one. Only the low-Vf corner passes its ASSUMED rating, and the
+/// condition names that corner's card.
 #[test]
-fn an_led_overdriven_only_at_the_low_vf_corner_is_conditional() {
+fn an_led_overdriven_only_at_the_low_vf_corner_states_that_corner() {
     let found = overstress("+3V3", "33");
-    let f = found
-        .iter()
-        .find(|f| f.refs == ["D1"])
-        .unwrap_or_else(|| panic!("the red corner is overdriven: {found:#?}"));
-    assert_eq!(f.severity, Severity::Medium, "{}", f.message);
+    let f = stated_on_d1(&found);
     assert!(
-        f.message.contains("CONDITIONAL") && f.message.contains("led_generic_corner_low_vf"),
+        f.message.contains("led_generic_corner_low_vf"),
         "{}",
         f.message
     );
