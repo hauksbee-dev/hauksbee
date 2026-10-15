@@ -1110,9 +1110,9 @@ mod tests {
         const COPPER: Option<&str> = Some("board newer than the validated KiCad format");
         let warning = || {
             lint(
-                LintCheck::PcbSchematicMismatch,
+                LintCheck::OutputContention,
                 Severity::Medium,
-                "U4 has value 100n in the schematic but 10n on the PCB",
+                "U4 and U5 both drive the net",
             )
         };
         let serious = || lint(LintCheck::OutputContention, Severity::High, "two drivers");

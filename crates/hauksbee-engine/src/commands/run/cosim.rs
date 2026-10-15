@@ -253,7 +253,7 @@ fn assemble_evidence_and_ci_artifacts(
     // the Undermined assumption beneath it makes the verdict invalid and
     // `--strict` exit 3 through the existing gates, with no new gate code.
     for taint in engine.scheduler().regulation_taint() {
-        cosim_maps.push(board_evidence.simulation_map(
+        cosim_maps.extend(board_evidence.simulation_map_if_mapped(
             taint.reason.clone(),
             &taint.nets,
             &taint.refs,
@@ -276,7 +276,9 @@ fn assemble_evidence_and_ci_artifacts(
             Some(budget.clone()),
         )?);
         for activity in &summary.activity_summary {
-            cosim_maps.push(board_evidence.simulation_map(
+            // A net the board's evidence does not hold (blank, merged) has no
+            // causal path to map: its activity stays in the summary only.
+            cosim_maps.extend(board_evidence.simulation_map_if_mapped(
                 format!(
                     "{} toggled {} times between {:.6} V and {:.6} V",
                     activity.net, activity.toggles, activity.v_min, activity.v_max

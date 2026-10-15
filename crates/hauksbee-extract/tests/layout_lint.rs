@@ -1,7 +1,7 @@
 //! Layout wiring checks on hand-authored boards: each fault next to its legal
 //! twin, so a check that stops firing (or fires on the legal form) fails here.
 
-use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, Severity};
+use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, Severity, CHECK_BEFORE_ORDERING};
 
 fn board(items: &str) -> String {
     format!(
@@ -297,7 +297,11 @@ fn with_ic(u1_value: &str) -> String {
 fn a_part_whose_value_differs_between_the_files_is_one_warning() {
     let found = parity(&with_ic("TPS62130"), &with_ic("TPS62160"));
     assert_eq!(found.len(), 1, "{found:?}");
-    assert_eq!(found[0].severity, Severity::Medium);
+    // The layout's part is what gets built and what was simulated: a
+    // non-gating item to confirm before ordering, never a failing warning.
+    assert_eq!(found[0].severity, Severity::Low);
+    assert!(found[0].message.starts_with(CHECK_BEFORE_ORDERING));
+    assert!(found[0].message.contains("part that gets built"));
     assert_eq!(found[0].refs, vec!["U1".to_string()]);
     let m = &found[0].message;
     assert!(m.contains("'TPS62160' in the schematic"), "{m}");
@@ -338,8 +342,11 @@ fn outcome(found: &[LintFinding]) -> Outcome {
     assert!(found.len() <= 1, "{found:?}");
     match found.first().map(|f| f.severity) {
         None => Outcome::Nothing,
+        Some(Severity::Low) if found[0].message.starts_with(CHECK_BEFORE_ORDERING) => {
+            Outcome::Warning
+        }
         Some(Severity::Low) => Outcome::Note,
-        Some(Severity::Medium) => Outcome::Warning,
+        Some(Severity::Medium) => panic!("a part identity mismatch must not gate: {found:?}"),
         Some(Severity::High) => panic!("a part identity mismatch must not be high: {found:?}"),
     }
 }
@@ -407,7 +414,7 @@ fn value_pairs_are_judged_by_electrical_meaning() {
             assert_eq!(
                 f.message.contains("analysed the PCB's"),
                 expected == Warning,
-                "only a gating warning says the verdict used the PCB's part: {}",
+                "only a check-before-ordering item says the verdict used the PCB's part: {}",
                 f.message
             );
         }

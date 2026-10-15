@@ -890,11 +890,13 @@ impl NetlistBuilder {
             .find_value("dnp")
             .is_some_and(|v| v.eq_ignore_ascii_case("yes") || v == "true");
 
-        if sym
-            .find_value("in_bom")
-            .is_some_and(|v| v.eq_ignore_ascii_case("no"))
-        {
-            properties.push((crate::dnp::EXCLUDED_FROM_BOM_KEY.to_string(), String::new()));
+        for (flag, key) in [
+            ("in_bom", crate::dnp::EXCLUDED_FROM_BOM_KEY),
+            ("on_board", crate::dnp::EXCLUDED_FROM_BOARD_KEY),
+        ] {
+            if (sym.find_value(flag)).is_some_and(|v| v.eq_ignore_ascii_case("no")) {
+                properties.push((key.to_string(), String::new()));
+            }
         }
         self.components.push(Component {
             reference,

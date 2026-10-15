@@ -152,7 +152,7 @@ Every key the loader accepts, in one place. Unknown keys are rejected.
 | `asbuilt`       | path     | none          | `.asbuilt.toml` overlay: the physical rework delta (cut traces, jumpers, lifted pins, fitted values) applied to the bound board before every run. See [the as-built overlay](#the-as-built-overlay-asbuilt). |
 | `fit`           | [string] | `[]`          | DNP part references to simulate as fitted regardless of `dnp`. Unknown references are loud errors. See [DNP.md](../ingest/DNP.md). |
 | `no_fit`        | [string] | `[]`          | DNP part references to leave open regardless of `dnp`. See [DNP.md](../ingest/DNP.md). |
-| `dnp`           | string   | `"fit-except-links"` | Policy for DNP parts neither list names: `fit-except-links`, `fit-all`, or `honour`. See [DNP.md](../ingest/DNP.md). |
+| `dnp`           | string   | `"honour"` | Policy for DNP parts neither list names: `honour` (leave them out), `fit-except-links`, or `fit-all`. See [DNP.md](../ingest/DNP.md). |
 | `suppress_rail` | [string] | `[]`          | Nets whose auto-rail is removed (fed only through the board). |
 | `[[supply]]`    | blocks   | none          | Power-supply legs (ideal / bench / wall / usb / battery). See [below](#power-supplies-supply). |
 | `[[net_drive]]` | blocks   | none          | Nets forced to a fixed voltage for the whole run. See [below](#net-drives-net_drive). |

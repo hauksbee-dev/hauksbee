@@ -70,6 +70,12 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
                     properties.push((k, v));
                 }
             }
+            if comp.find_all("property").any(|p| {
+                p.find_value("name")
+                    .is_some_and(|n| n.eq_ignore_ascii_case("exclude_from_bom"))
+            }) {
+                properties.push((crate::dnp::EXCLUDED_FROM_BOM_KEY.to_string(), String::new()));
+            }
             components.push(Component {
                 reference: comp.find_value("ref").unwrap_or_default(),
                 value: comp.find_value("value").unwrap_or_default(),

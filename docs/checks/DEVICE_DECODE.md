@@ -61,10 +61,9 @@ missing.
 It is **DNP-aware**, but through the shared DNP policy rather than a rule of its
 own: `resistor_ohms` skips any component still carrying the Do-Not-Populate flag
 when the check runs. What that means on a given run depends on the policy, and the
-default is `FitExceptLinks` (`crates/hauksbee-extract/src/dnp.rs`), which clears
-the flag on every DNP part that is not a near-zero-ohm link *before* the checks see
-the board. So by default a DNP divider resistor **is** counted, and
-`--honour-dnp` is what leaves it out. The walkthrough below shows this difference
+default is `Honour` (`crates/hauksbee-extract/src/dnp.rs`), which leaves every DNP
+part out *before* the checks see the board. So by default a DNP divider resistor
+is **not** counted, and `--fit-dnp` is what brings it back. The walkthrough below shows this difference
 on a board file.
 
 ## CYPD3177 decoder
@@ -146,17 +145,17 @@ ISNK current-sense straps, which this check does not read.
 So what the run reports depends entirely on the DNP policy, and both answers are
 correct answers to different questions.
 
-**Default policy: the check fires.** hauksbee assumes an unpopulated footprint
-gets stuffed eventually, so R12 and R9 come back and the faulty static divider is
+**`--fit-dnp`: the check fires.** Assume the unpopulated footprints get stuffed
+eventually, so R12 and R9 come back and the faulty static divider is
 the one that gets decoded:
 
 ```
-$ hauksbee run USB-C_PD_Trigger.kicad_pcb --lint
-do-not-populate: DNP parts are simulated as fitted (they are usually placed eventually), except near-zero-ohm links, which stay open because fitting one merges the nets it bridges
-  fitted:    R19 (10k), DNP, fitted by default
-  fitted:    R12 (10k), DNP, fitted by default
-  fitted:    R16 (5k1), DNP, fitted by default
-  fitted:    R9 (5k1), DNP, fitted by default
+$ hauksbee run USB-C_PD_Trigger.kicad_pcb --lint --fit-dnp
+do-not-populate: this run fits DNP parts, except near-zero-ohm links, which stay open because fitting one merges the nets it bridges
+  fitted:    R19 (10k), DNP, fitted by this run's policy
+  fitted:    R12 (10k), DNP, fitted by this run's policy
+  fitted:    R16 (5k1), DNP, fitted by this run's policy
+  fitted:    R9 (5k1), DNP, fitted by this run's policy
 net-lint: 2 finding(s)
   [medium] device_decode - U1 VBUS_MAX selector on net 'VBUS_max' decodes (Table 2) to {5V [SW1.1 (GND) -> 0 mV], 9V [SW1.2 (R13) -> 499 mV], 12V [SW1.3 (R14) -> 908 mV], 12V [SW1.4 (R15) -> 1315 mV], 19V [SW1.5 (open) -> 2185 mV], 19V [SW1.NC -> 2185 mV]}, but cannot reach {15V, 20V}: the divider's permanent pull-down plus switched-parallel legs cannot reproduce the datasheet's per-detent codes, so the top setting(s) are unreachable
   [high] device_decode - U1 VBUS_MIN net 'Net-(U1-VBUS_MIN)' decodes (Table 2) to 19V (2185 mV), GREATER than 4 of the VBUS_MAX selector's reachable detents (top band 19V): per EZ-PD BCR datasheet Note 1 (VBUS_MIN > VBUS_MAX), VBUS_MAX is used as both minimum and maximum, so the hard-wired VBUS_MIN silently overrides and defeats those selector positions
@@ -164,13 +163,13 @@ note: gate-grade finding(s) above, but this is a report command so the exit code
 ```
 
 Those are the same two findings, with the same detent voltages, that the unit
-tests derive by hand. The board-file run reproduces them under the default policy.
+tests derive by hand. The board-file run reproduces them under `--fit-dnp`.
 
-**`--honour-dnp`: the check goes quiet.** Build only what the fab would build and
+**Default (`--honour-dnp`): the check goes quiet.** Build only what the fab would build and
 the divider the finding rests on is not there:
 
 ```
-$ hauksbee run USB-C_PD_Trigger.kicad_pcb --lint --honour-dnp
+$ hauksbee run USB-C_PD_Trigger.kicad_pcb --lint
 do-not-populate: DNP parts are left out of the simulation, matching the board file
   left open: R19 (10k), DNP, left open
   left open: R12 (10k), DNP, left open
@@ -188,10 +187,10 @@ net-lint: no findings.
 
 The split is deliberate. DNP carries two opposite meanings in practice, "not on
 this assembly BOM but it will be there" and "this link is deliberately open", and
-hauksbee cannot tell which one a given footprint means. Defaulting to fitted
-surfaces the latent fault, which is the useful answer for a board still in design:
-stuff R12 and R9 and the selector really is mis-coded. `--honour-dnp` answers the
-assembly-BOM question. Neither is a false positive, because
+hauksbee cannot tell which one a given footprint means. It follows the source: what
+the designer marked not built is not built, so the findings are about the board as
+assembled, not about a board nobody ordered. `--fit-dnp` answers the "what if they
+are stuffed" question: stuff R12 and R9 and the selector really is mis-coded. Neither is a false positive, because
 every run prints the policy line and the per-part fitted/left-open decision above
 the findings, so which board was analysed is never in doubt. `--fit R12` /
 `--no-fit R12` override a single part by name.

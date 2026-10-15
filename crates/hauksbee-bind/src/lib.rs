@@ -67,5 +67,5 @@ pub use boardcode::{
 };
 pub use power_supply::{BatteryProtection, Chemistry, PowerSupply, SupplyLeg, UsbSpec};
 pub use shorts::{AppliedShort, BRIDGE_OHMS};
-pub use stress::{FaultEvent, FaultKind, StressMonitor};
+pub use stress::{is_implausible, FaultEvent, FaultKind, StressMonitor};
 pub use thermal::{junction_temp_c, theta_ja_from_footprint, DEFAULT_AMBIENT_C, DEFAULT_THETA_JA};

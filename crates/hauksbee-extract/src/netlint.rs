@@ -53,6 +53,13 @@ pub const ZONES_NOT_FILLED_PREFIX: &str = "zones not filled";
 /// it is emitted as a separate finding.
 pub const INFORMATIONAL_MARKER: &str = " (informational)";
 
+/// Opens a part-identity finding that names a different value or part number.
+///
+/// Nothing else differs for the reference. It is a non-gating item
+/// to look at before ordering: the run used the layout's part, the one that
+/// gets built. Footprint or pin-map differences never carry it.
+pub const CHECK_BEFORE_ORDERING: &str = "Check before ordering: ";
+
 impl LintFinding {
     /// Whether this finding asks the reader to do something: not an abstention
     /// and not a low-severity informational evidence note.
@@ -1281,7 +1288,7 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                 message: format!(
                     "I2C {role} net '{}' relies on {dnp_ref} for its pull-up, but {dnp_ref} \
                      is marked {DNP_PULLUP_MESSAGE_MARKER}: as assembled, the line floats \
-                     (simulation fits DNP parts by default, so other results may look fine)",
+                     (this run fits DNP parts, so other results may look fine)",
                     net.name
                 ),
                 refs: present_refs(&mem),
@@ -1819,7 +1826,7 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                 message: format!(
                     "SD card {role} net '{}' relies on {dnp_ref} for its pull-up, but \
                      {dnp_ref} is marked {DNP_PULLUP_MESSAGE_MARKER}: as assembled, the \
-                     line floats (simulation fits DNP parts by default, so other results \
+                     line floats (this run fits DNP parts, so other results \
                      may look fine)",
                     net.name
                 ),
@@ -2666,7 +2673,7 @@ mod sd_pullup_tests {
 
     /// A DNP pull-up must not silently clear the finding, on EITHER dnp
     /// policy. Under `--honour-dnp` the part is absent and the plain Medium
-    /// finding fires; under the default fit-except-links policy the part is
+    /// finding fires; under the fit-except-links policy the part is
     /// simulation-fitted, and the check must say the assembled board still
     /// floats instead of going green (the policy marks such parts with
     /// `DNP_FITTED_KEY` exactly so presence-class lints can tell).

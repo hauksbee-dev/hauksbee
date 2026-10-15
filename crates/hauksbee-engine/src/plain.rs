@@ -19,7 +19,7 @@ use serde::Serialize;
 
 use hauksbee_extract::{
     DrcReport, LintCheck, NetLintReport, Severity, SiCheck, SiFinding, SiReport, SiSeverity,
-    DNP_PULLUP_MESSAGE_MARKER, SPI_PULLUP_MESSAGE_MARKER,
+    CHECK_BEFORE_ORDERING, DNP_PULLUP_MESSAGE_MARKER, SPI_PULLUP_MESSAGE_MARKER,
 };
 
 use crate::stress::{FaultEvent, FaultKind};
@@ -866,7 +866,10 @@ pub(crate) fn order_triage_with_rule_source(
         );
         if finding.level == PlainLevel::Serious || (decoded && raw.severity != Severity::Low) {
             triage.do_not_order.push(entry);
-        } else if raw.check == LintCheck::UncheckedMcu || json.gates() {
+        } else if raw.check == LintCheck::UncheckedMcu
+            || json.gates()
+            || raw.message.starts_with(CHECK_BEFORE_ORDERING)
+        {
             triage.inspect.push(entry);
         }
     }
@@ -1378,7 +1381,7 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
             {
                 (
                     f.message.clone(),
-                    "The design contains the pull-up, but the part is marked do-not-populate, so the boards that come back from assembly do not have it fitted. Simulation fits DNP parts by default (they are usually placed eventually), which is why other results can look healthy while the real line floats.".to_string(),
+                    "The design contains the pull-up, but the part is marked do-not-populate, so the boards that come back from assembly do not have it fitted. This run fits DNP parts, which is why other results can look healthy while the real line floats.".to_string(),
                     "Either fit the resistor in this build (remove the DNP mark, or name it as fitted), or, if leaving it off is deliberate, document what else defines the line's level.".to_string(),
                 )
             }
@@ -1440,12 +1443,12 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "The pads are on the right net, but no track, via or copper pour actually reaches them. A board made from these files would leave the connection open: the ratsnest line the layout editor shows here was never routed.".to_string(),
                 "Route the missing connection (or extend the pour to it), refill the zones, and run the layout editor's DRC until it reports no unconnected items.".to_string(),
             ),
-            // Medium is the part-identity comparison: the wiring agrees but a
-            // reference names a different part in each file.
-            LintCheck::PcbSchematicMismatch if f.severity == Severity::Medium => (
+            // Below High is the part-identity comparison: the wiring agrees but a
+            // reference names a different value or part in each file. Not gating.
+            LintCheck::PcbSchematicMismatch if f.severity != Severity::High => (
                 f.message.clone(),
-                "The schematic and the layout disagree about which part this reference is. Only one of them can be what gets bought and fitted, and the check results describe the layout's part.".to_string(),
-                "Decide which part is right, make the schematic and layout agree (KiCad: Tools > Update PCB from Schematic), and re-check.".to_string(),
+                "The schematic and the layout disagree about which part this reference is. The layout's part is the one that gets built, and the check results describe it, so this is a thing to confirm rather than a fault.".to_string(),
+                "Confirm which part is intended; if the schematic's is right, update the PCB from it (KiCad: Tools > Update PCB from Schematic) and re-check.".to_string(),
             ),
             LintCheck::PcbSchematicMismatch => (
                 f.message.clone(),
@@ -2361,6 +2364,60 @@ mod tests {
             clean.contains("\nOK TO ORDER: ") && !clean.contains(":\n"),
             "{clean}"
         );
+    }
+
+    /// A schematic/PCB value mismatch is a non-gating "check before ordering"
+    /// item naming both values; a moved pin (High) still gates. Both carry the
+    /// same check, so the severity alone must decide.
+    #[test]
+    fn a_value_mismatch_is_listed_to_check_but_does_not_gate() {
+        let finding = |severity, message: &str| LintFinding {
+            check: LintCheck::PcbSchematicMismatch,
+            severity,
+            message: message.to_string(),
+            refs: vec!["C4".into()],
+            nets: Vec::new(),
+        };
+        let value = format!(
+            "{CHECK_BEFORE_ORDERING}C4 has value '100n' in the schematic but '10n' on the PCB."
+        );
+        let lint = NetLintReport {
+            findings: vec![finding(Severity::Low, &value)],
+        };
+        let json = crate::result::lint_findings_json(&lint);
+        assert!(!json[0].gates(), "a value mismatch must not gate");
+        let drc = crate::result::DrcStructured {
+            clearance_rule_mm: 0.2,
+            primitive_count: 0,
+            shorts: Vec::new(),
+            violations: Vec::new(),
+            at_limit: Vec::new(),
+            version_warning: None,
+            suppression_note: None,
+        };
+        let provenance = crate::result::ClearanceRuleProvenance::defaulted(0.2, false);
+        let triage = |lint: &NetLintReport| {
+            order_triage_with_rule_source(
+                &drc,
+                &provenance,
+                lint,
+                &SiReport::default(),
+                None,
+                true,
+                0,
+                true,
+            )
+        };
+        let t = triage(&lint);
+        assert!(t.do_not_order.is_empty(), "{t:#?}");
+        assert_eq!(t.inspect.len(), 1, "{t:#?}");
+        assert!(t.inspect[0].statement.contains("100n") && t.inspect[0].statement.contains("10n"));
+        // Control: a pin wired differently on the PCB still gates.
+        let moved = NetLintReport {
+            findings: vec![finding(Severity::High, "R1.2 is connected differently")],
+        };
+        assert!(crate::result::lint_findings_json(&moved)[0].gates());
+        assert_eq!(triage(&moved).do_not_order.len(), 1);
     }
 
     fn found(level: PlainLevel, what: &str, fix: &str) -> PlainFinding {

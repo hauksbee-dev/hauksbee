@@ -1556,7 +1556,7 @@ impl BoardEvidence {
     ///
     /// Returns an error if the traversal, map or artifact list fails
     /// validation.
-    fn simulation_map_if_mapped(
+    pub(crate) fn simulation_map_if_mapped(
         &self,
         assertion: impl Into<String>,
         nets: &[String],
@@ -1621,7 +1621,16 @@ impl BoardEvidence {
         budget: Option<ErrorBudget>,
         check_scope: Option<(&str, &str)>,
     ) -> Result<EvidenceMap, EvidenceError> {
-        let scoped_nets = self.nets_for_subjects(nets, references);
+        // A simulation names nets by what its solver interned, which can be a
+        // name the incidence never held (a blank or merged net, a node the
+        // binder made). Such a net has no causal record to traverse, so it
+        // is left out of the scope rather than failing the run; a subject
+        // with nothing left is the unmapped case below.
+        let known: Vec<String> = (nets.iter())
+            .filter(|net| self.refs_by_net.contains_key(*net))
+            .cloned()
+            .collect();
+        let scoped_nets = self.nets_for_subjects(&known, references);
         if scoped_nets.is_empty() {
             return Err(EvidenceError::Empty {
                 field: "simulation_map.nets",
@@ -3454,6 +3463,31 @@ mod tests {
             .unwrap();
         assert_eq!(ci.status(), EvidenceStatus::Undermined);
         assert_eq!(ci.assumptions(), simulation.assumptions());
+    }
+
+    /// A simulation can name a net the incidence never held (a blank or merged
+    /// name the binder still interned). That net has no causal record: it is
+    /// left out of the scope, and a subject with nothing else is unmapped, never
+    /// an internal error. The control, a net the board holds, still maps.
+    #[test]
+    fn a_net_with_no_incidence_record_is_skipped_not_an_error() {
+        let board = board(
+            "no-incidence",
+            &[(1, "MCU_SUPPLY"), (2, "")],
+            vec![component("U1", "STM32F411", 1)],
+        );
+        let evidence = evidence(&board, &report(vec![]));
+        let held = ["MCU_SUPPLY".to_string()];
+        let lost = [String::new()];
+        assert!(evidence.simulation_map("held", &held, &[], None).is_ok());
+        let mixed = [held[0].clone(), lost[0].clone()];
+        assert!(evidence.simulation_map("mixed", &mixed, &[], None).is_ok());
+        assert!(matches!(
+            evidence.simulation_map("lost", &lost, &[], None),
+            Err(EvidenceError::Empty { .. })
+        ));
+        let unmapped = evidence.simulation_map_if_mapped("lost", &lost, &[], None);
+        assert!(matches!(unmapped, Ok(None)), "{unmapped:?}");
     }
 
     /// Ids are cited in acknowledgment files and diffed across runs: the same

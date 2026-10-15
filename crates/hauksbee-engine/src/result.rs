@@ -3003,8 +3003,8 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::UnroutedPad => {
             "Route the unconnected pads to their net (or refill the zones) until KiCad DRC reports no unconnected items."
         }
-        // Medium is a part-identity disagreement, not moved wiring.
-        LintCheck::PcbSchematicMismatch if severity == Severity::Medium => "Decide which part is right and make the schematic and layout agree, then re-check.",
+        // Below High is a part-identity disagreement, not moved wiring.
+        LintCheck::PcbSchematicMismatch if severity != Severity::High => "Confirm which part is intended and, if the schematic's is right, update the PCB from it, then re-check.",
         LintCheck::PcbSchematicMismatch => {
             "Update the PCB from the schematic, re-route the changed pins, and re-check."
         }

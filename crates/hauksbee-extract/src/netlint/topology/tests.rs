@@ -41,7 +41,14 @@ fn island_board(extra: Vec<Component>) -> ExtractedBoard {
         two("C1", "100n", "Device:C", 4, 1),
         two("C2", "100n", "Device:C", 3, 2),
         header("J1", &[3, 2]),
-        header("J2", &[2]),
+        // The connector names its pin as a ground: that is the evidence.
+        part(
+            "J2",
+            "Conn",
+            "Connector:Conn",
+            "PinHeader_1x02",
+            vec![named("1", 2, "GND")],
+        ),
     ];
     parts.extend(extra);
     board(
@@ -67,6 +74,32 @@ fn a_ground_net_never_joined_to_ground_is_serious() {
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].severity, Severity::High);
     assert_eq!(found[0].nets, ["/SENSOR_GND"]);
+}
+
+/// Faulty/legal pair: a signal pair whose names merely contain a ground token
+/// (no ground pin, no ground-word name) is at most a low question; a net that
+/// is a ground by pin evidence stays serious even with an odd name.
+#[test]
+fn a_name_containing_gnd_alone_is_not_a_serious_island() {
+    let mut b = island_board(vec![]);
+    b.nets[1].name = "/ISENSE_GNDSENSE+".into();
+    for c in &mut b.components {
+        for p in &mut c.pins {
+            p.function.clear();
+        }
+    }
+    let report = b.net_lint();
+    let found: Vec<_> = report.of_check(LintCheck::GroundIsland).collect();
+    assert!(
+        found.iter().all(|f| f.severity == Severity::Low),
+        "{found:?}"
+    );
+    let mut named_pin = island_board(vec![]);
+    named_pin.nets[1].name = "/ISENSE_GNDSENSE+".into();
+    let report = named_pin.net_lint();
+    let found: Vec<_> = report.of_check(LintCheck::GroundIsland).collect();
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].severity, Severity::High);
 }
 
 #[test]

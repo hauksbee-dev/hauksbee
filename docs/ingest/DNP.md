@@ -17,11 +17,25 @@ difficulty:
 
 ## What hauksbee does by default
 
-Most DNP footprints get placed eventually, so **hauksbee simulates DNP parts
-as fitted**, with one exception: **near-zero-ohm links stay open**, because
-fitting one changes the board's topology instead of adding a component to it.
+**hauksbee leaves every part the source says is not built out of the circuit
+and the checks.** That is a part marked DNP (KiCad 7/8/9 `dnp`, Eagle
+`populate="no"`, a netlist `dnp` property), a part excluded from the BOM or the
+board (`exclude_from_bom`, `exclude_from_board`, `on_board no`) that has
+connections, and a part whose value field says so (`DNP`, `DNF`, `NC`, `do not
+populate`, `not fitted`, in any case, as a whole word). A second regulator
+marked DNP no longer fights the fitted one for the rail, and a DNP load no
+longer appears as an overstressed part. A BOM-excluded part with no connection
+(a fiducial, a mounting hole) is inert and is not reported.
 
-A part counts as a link when it has two or fewer pins and any of:
+If you do want a DNP part simulated, say so:
+
+- `--fit R7` (or `fit` in a spec) fits one named part.
+- `--fit-dnp` fits every DNP part except near-zero-ohm links (a 0R bridge,
+  a ferrite, a net tie, a jumper), which stay open because fitting one merges
+  the nets it bridges.
+- `--fit-all-dnp` fits every DNP part, links included.
+
+The link rule used by `--fit-dnp`: a part with two or fewer pins and any of:
 
 - a resistance of 0.5 Ω or less (`0`, `0R`, `0R0`, `R000`, `0.1`)
 - a ferrite bead: value starting `FB`, or `ferrite` anywhere in the value **or**
@@ -29,22 +43,15 @@ A part counts as a link when it has two or fewer pins and any of:
 - a bridging **value**: `JUMPER`, `SOLDER_BRIDGE`, `SOLDERBRIDGE`, `NET_TIE` or
   `NETTIE`, case-insensitively
 
-Note the asymmetry in that last rule, because it bites. The bridging test reads
-the component's *value* only. Ferrite is the one kind matched against the
-footprint as well. So a genuine net tie whose footprint is
-`NetTie:NetTie-2_SMD_Pad0.5mm` but whose value is blank, or `0R`-less, or some
-house string like `TIE`, is **not** recognised as a link by that rule, and gets
-fitted. If the value happens to be `0R` the resistance rule catches it anyway;
-otherwise name it in `--no-fit` (or `no_fit` in a spec) to keep it open.
+The bridging test reads the component's *value* only; ferrite is the one kind
+matched against the footprint as well.
 
 Every run prints its decision, so the choice is never silent:
 
 ```
-do-not-populate: DNP parts are simulated as fitted (they are usually placed
-eventually), except near-zero-ohm links, which stay open because fitting one
-merges the nets it bridges
-  fitted:    A101 (Arduino_Nano_v3.x), DNP, fitted by default
-  left open: R7 (0R), DNP link (near 0 ohm), left open: fitting it merges nets
+do-not-populate: DNP parts are left out of the simulation, matching the board file
+  left open: A101 (Arduino_Nano_v3.x), DNP, left open
+  left open: R7 (0R), DNP, left open
 ```
 
 A board with no DNP parts prints nothing about DNP.
@@ -54,14 +61,15 @@ A board with no DNP parts prints nothing about DNP.
 Per part, on the command line:
 
 ```bash
-hauksbee run board.kicad_pcb --fit R7          # fit this one, even though it is a link
-hauksbee run board.kicad_pcb --no-fit A101     # leave this one open
+hauksbee run board.kicad_pcb --fit A101        # fit this one although it is DNP
+hauksbee run board.kicad_pcb --no-fit R7       # leave this one open regardless
 ```
 
 Whole-board policy:
 
 ```bash
-hauksbee run board.kicad_pcb --honour-dnp      # leave every DNP part out, as a fab house builds it
+hauksbee run board.kicad_pcb --honour-dnp      # leave every DNP part out (the default)
+hauksbee run board.kicad_pcb --fit-dnp         # fit every DNP part except near-zero-ohm links
 hauksbee run board.kicad_pcb --fit-all-dnp     # fit every DNP part, links included
 ```
 
@@ -73,7 +81,7 @@ CLI:
 board = "hardware/board.kicad_pcb"
 firmware = "firmware/build/app.elf"
 
-dnp = "fit-except-links"   # or "fit-all", or "honour"; this is the default
+dnp = "honour"   # the default; or "fit-except-links", or "fit-all"
 fit = ["R7"]               # fit these regardless of the policy
 no_fit = ["A101"]          # leave these open regardless of layout DNP state
 
