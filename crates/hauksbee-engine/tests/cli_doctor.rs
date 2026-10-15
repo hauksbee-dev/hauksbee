@@ -16,7 +16,16 @@
 use crate::support::run;
 
 /// Every backend the doctor is expected to report, exactly once.
-const KNOWN_BACKENDS: &[&str] = &["avr", "qemu-xtensa", "qemu-riscv32", "renode", "extract"];
+const KNOWN_BACKENDS: &[&str] = &[
+    "avr",
+    "qemu-xtensa",
+    "qemu-riscv32",
+    "renode",
+    "ngspice",
+    "kicad-cli",
+    "freerouting",
+    "extract",
+];
 
 /// Statuses the machine-readable table may carry (single lowercase tokens).
 /// `warn` is a backend that is installed but cannot be used yet (an extractor
@@ -121,5 +130,30 @@ fn doctor_backends_json_is_well_formed() {
             status == "ok" || status == "builtin",
             "available must track status; backend: {b}"
         );
+    }
+}
+
+#[test]
+fn doctor_json_names_the_tool_and_each_backends_version() {
+    let out = run(&["doctor", "--json"]);
+    assert!(out.status.success(), "doctor --json exits 0");
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("--json stdout is valid JSON");
+    assert_eq!(v["tool"]["name"], "hauksbee");
+    assert_eq!(v["tool"]["version"], env!("CARGO_PKG_VERSION"));
+    for b in v["backends"].as_array().expect("`backends` is an array") {
+        let version = b
+            .get("version")
+            .unwrap_or_else(|| panic!("no version key: {b}"));
+        assert!(
+            version.is_null() || version.as_str().is_some_and(|s| !s.is_empty()),
+            "version is a non-empty string or null: {b}"
+        );
+        if b["status"] == "absent" || b["status"] == "disabled" {
+            assert!(
+                version.is_null(),
+                "an unavailable backend has no version: {b}"
+            );
+        }
     }
 }
