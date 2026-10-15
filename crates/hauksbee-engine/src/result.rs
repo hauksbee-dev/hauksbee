@@ -2685,6 +2685,32 @@ impl JsonReport {
         self.judgement_scope.as_ref().filter(|s| s.scopes(blockers))
     }
 
+    /// Why the run refused a verdict, if it did: the run-level refusal first,
+    /// then an AC or thermal result that could not be judged (with its own
+    /// refusal when it carries one).
+    fn refused_cause(&self) -> Option<VerdictCause<'_>> {
+        self.refusal.as_ref().map(VerdictCause::from).or_else(|| {
+            let validities = [
+                self.ac.as_ref().map(|a| &a.validity),
+                self.thermal.as_ref().map(|t| &t.validity),
+            ];
+            let invalid = validities.into_iter().flatten().find(|v| !v.valid)?;
+            Some(invalid.refusal.as_ref().map_or_else(
+                || {
+                    VerdictCause::Refused {
+                        claim: "a trustworthy analysis result",
+                        missing: invalid
+                            .reason
+                            .as_deref()
+                            .unwrap_or("its inputs were not valid"),
+                        next: "read the reason in that analysis section",
+                    }
+                },
+                VerdictCause::from,
+            ))
+        })
+    }
+
     /// Replace the board-wide binding maps with maps for the actual findings
     /// already attached to this report, KEEPING the run-level maps in
     /// `run_level` (input coverage and its kin). The replacement must not
@@ -2830,28 +2856,7 @@ impl JsonReport {
         } else {
             Vec::new()
         };
-        // The run-level refusal comes first, then an AC or thermal result that
-        // could not be judged (with its own refusal when it carries one).
-        let refused = self.refusal.as_ref().map(VerdictCause::from).or_else(|| {
-            let validities = [
-                self.ac.as_ref().map(|a| &a.validity),
-                self.thermal.as_ref().map(|t| &t.validity),
-            ];
-            let invalid = validities.into_iter().flatten().find(|v| !v.valid)?;
-            Some(invalid.refusal.as_ref().map_or_else(
-                || {
-                    VerdictCause::Refused {
-                        claim: "a trustworthy analysis result",
-                        missing: invalid
-                            .reason
-                            .as_deref()
-                            .unwrap_or("its inputs were not valid"),
-                        next: "read the reason in that analysis section",
-                    }
-                },
-                VerdictCause::from,
-            ))
-        });
+        let refused = self.refused_cause();
         // `fail` covers both routes to a failing gate: a serious finding, and a
         // finding this surface's own (wider) strict gate fails on. The second
         // route is what keeps the verdict field from reading `pass` in the very
