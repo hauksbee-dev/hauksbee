@@ -860,10 +860,11 @@ full pin map for both channels.
 | bq76952      | digital | VPACK 85 V abs max  | TI SLUSDX9C Rev C 2021. Minimal-resolve: internal AFE, protection FET control, coulomb counter, and I2C register map are NOT modeled. Resolves the part so supply-voltage and Tj checking work. |
 | LM5107       | digital | VDD 15 V abs max    | TI SNVSA29B Rev B 2015. Minimal-resolve: half-bridge level-shift and dead-time logic not modeled. |
 | LM5109       | digital | VDD 15 V abs max    | TI SNVSA31C Rev C 2017. Matches LM5109BMA (mppt-1210 U1) and all LM5109 variants. Minimal-resolve: same as LM5107 but LIN is active-low. |
-| INA180       | opamp   | VS 26 V abs max     | TI SBOS774D Rev D 2019. Gain by suffix (A1=20, A2=50, A3=100, A4=200 V/V). |
-| INA181       | opamp   | VS 26 V abs max     | TI SBOS744C Rev C 2019. Same gain variants, SOT-23-5 pinout. |
-| INA186       | opamp   | VS 26 V abs max     | TI SBOS791A Rev A 2020. Bidirectional current-sense. |
-| INA2181      | opamp   | VS 26 V abs max     | TI SBOS831A Rev A 2021. DUAL (two INA181 channels in MSOP-10). |
+| INA180       | opamp   | VS 6 V abs max; IN+/IN- 26 V | TI SBOS741H (Jul 2022), SOT-23-5 (DBV) only. Two pinouts chosen by the order code's first letter (INA180A* pinout A, INA180B* pinout B, Table 6-1); a bare `INA180` binds no card because it names neither. Inputs rated -0.2 to 26 V (7.3), 26 V abs max (7.1). Gain 100 V/V representative. |
+| INA181       | opamp   | VS 6 V abs max; IN+/IN- 26 V | TI SBOS793H (Nov 2023). SOT-23-6 (DBV) and SC70-6 (DCK) have different pin maps (Table 5-1); there is no 5-pin package. The order code (`...IDBVR`/`...IDCKR`) or the footprint picks the map; a bare value with no footprint binds no card. Inputs rated -0.2 to 26 V (6.3), 26 V abs max (6.1). |
+| INA185       | opamp   | VS 6 V abs max; IN+/IN- 26 V | TI SBOS378A (Nov 2023). SOT-563 (DRL) and SC70-6 (DCK), same selection rule as INA181 (Table 4-1). Inputs rated -0.2 to 26 V (5.3), 26 V abs max (5.1). |
+| INA186       | opamp   | VS 6 V abs max; IN+/IN- 42 V | TI SBOS318B (Jul 2021). Bidirectional current-sense. SC70-6 (DCK, gain by A1-A5 suffix) and SOT-23-8 (DDF, adds ENABLE) have different pin maps (Table 5-1); the DSBGA (YFD) has no card. Inputs rated GND - 0.2 to 40 V (6.3), 42 V abs max (6.1). |
+| INA2181      | opamp   | VS 6 V abs max; IN+/IN- 26 V | TI SBOS793H (Nov 2023). DUAL (two INA181 channels) in VSSOP-10 (DGS) / WSON-10 (DSQ), Table 5-2. Inputs as the INA181. |
 
 The bq76952, LM5107, and LM5109 entries are explicitly minimal-resolve: they
 give the part an id, kind, and ratings so it stops binding open, but

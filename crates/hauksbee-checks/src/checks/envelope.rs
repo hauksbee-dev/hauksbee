@@ -1354,8 +1354,8 @@ basis = "Recommended Operating Conditions, V+ row"
             ("NE555", "8", 17.0, Medium),
             ("ATmega1284P", "5", 5.8, Medium),
             ("LM5109", "3", 16.0, Medium),
-            ("INA181A3", "5", 5.8, Medium),
-            ("INA181A3", "5", 7.0, High),
+            ("INA181A3IDBVR", "6", 5.8, Medium),
+            ("INA181A3IDBVR", "6", 7.0, High),
             ("FSUSB42", "1", 5.0, Medium),
         ] {
             let b = board(&[(2, "VIN")], vec![part("U1", value, vec![pin(vin, 2)])]);

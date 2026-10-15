@@ -27,6 +27,7 @@ mod diode_1n4148_packages;
 mod exact_override_tiebreak;
 mod external_five_coverage;
 mod extract_model_choice;
+mod ina18x_pinouts;
 mod layer_docs;
 mod ldo_logic_cards;
 mod mito_open_part_noise;

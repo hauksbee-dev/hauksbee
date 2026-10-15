@@ -34,7 +34,7 @@ type Row = (
 /// inside the bound its datasheet figure (in the row comment) implies.
 #[test]
 fn specific_parts_resolve_with_their_kind_and_datasheet_ratings() {
-    let rows: [Row; 8] = [
+    let rows: [Row; 9] = [
         // 100 V, 100 A
         (
             &["IPA045N10N3G"],
@@ -88,10 +88,20 @@ fn specific_parts_resolve_with_their_kind_and_datasheet_ratings() {
             None,
             None,
         ),
-        // VS abs max 6 V (26 V is the IN+/IN- common-mode row), SBOS793H 6.1
+        // VS abs max 6 V (26 V is the IN+/IN- common-mode row), SBOS793H 6.1.
+        // The map depends on the package, so the order code must name it (a
+        // bare INA181 is told apart by footprint, see ina18x_pinouts.rs).
         (
-            &["INA181", "INA181A1", "INA181A3", "INA181A4IDBVR"],
-            "ina181",
+            &["INA181A1IDBVR", "INA181A3IDBVR", "INA181A4IDBVR"],
+            "ina181_dbv",
+            Opamp,
+            Some(|v| (5.5..=6.5).contains(&v)),
+            None,
+            None,
+        ),
+        (
+            &["INA181A1IDCKR", "INA181A4IDCKT"],
+            "ina181_dck",
             Opamp,
             Some(|v| (5.5..=6.5).contains(&v)),
             None,

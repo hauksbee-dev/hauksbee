@@ -48,18 +48,28 @@ fn one_n4004_rating_is_400v_not_the_family_50v() {
 
 #[test]
 fn ina186_gain_suffix_beats_the_broad_family_entry() {
-    // `ina186_dck_a1` (^INA186A1[A-Z0-9-]*$, gain 25) ties the broad `ina186`
-    // ((?i)^INA186, gain 100) on field specificity; the exact-literal prefix
-    // must win the tie on regex constrainedness, not on file position.
+    // `ina186_dck_a1` (gain 25) and the bare-value `ina186_dck_a1_family` both
+    // describe the SC70-6 pinout; the order code with its gain suffix must win
+    // over the bare value on an SC70 footprint, whatever the file order.
     let lib = ModelLibrary::builtin();
-    let m = resolve(&lib, "INA186A1IDCKR")
-        .model
-        .expect("INA186A1 resolves");
+    let q = |value: &str, footprint: &str| {
+        lib.resolve(&ComponentQuery {
+            value: Some(value.into()),
+            footprint: Some(footprint.into()),
+            ..Default::default()
+        })
+    };
+    let sc70 = "Package_TO_SOT_SMD:SOT-363_SC-70-6";
+    let m = q("INA186A1IDCKR", sc70).model.expect("INA186A1 resolves");
     assert_eq!(m.id, "ina186_dck_a1");
     assert_eq!(m.params.get_f64("gain"), Some(25.0));
-    // The bare value with no gain suffix still binds the broad entry.
-    let m = resolve(&lib, "INA186").model.expect("INA186 resolves");
-    assert_eq!(m.id, "ina186");
+    // The bare value with no gain suffix binds the fallback for the footprint's package.
+    let m = q("INA186", sc70).model.expect("INA186 resolves");
+    assert_eq!(m.id, "ina186_dck_a1_family");
+    let m = q("INA186", "Package_TO_SOT_SMD:SOT-23-8")
+        .model
+        .expect("INA186 DDF resolves");
+    assert_eq!(m.id, "ina186_ddf_by_footprint");
 }
 
 #[test]
