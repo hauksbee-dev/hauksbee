@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useContext } from 'react'
 import type { SimFrame, BoardInfoMsg, StatusMsg, ProbeDataMsg, BacklogMsg, ClientMessage, ActionResultMsg } from '../types/protocol'
 import { SimSourceContext } from '../demo/simSource'
 import { openLiveSocket } from '../lib/api'
+import { coalesceFrames } from '../lib/frame-coalesce'
 import type { LiveSocket } from '../lib/api'
 
 export interface SimulationState {
@@ -63,7 +64,9 @@ function useLiveSimulation(): SimulationState {
   // Coalesce high-rate messages to one React commit per animation frame. At
   // play speed the server emits SimFrame + Status 30x/s; pushing each into
   // state re-rendered the whole app twice per server tick, and when the tab
-  // fell behind the queue only grew. Latest-wins per rAF is the honest rate.
+  // fell behind the queue only grew. Latest-wins per rAF is the honest rate
+  // for the snapshot; a superseded frame's faults and UART bytes are carried
+  // forward (coalesceFrames), because the server sends each only once.
   const pendingFrame = useRef<SimFrame | null>(null)
   const pendingStatus = useRef<StatusMsg | null>(null)
   const flushScheduled = useRef(false)
@@ -103,7 +106,7 @@ function useLiveSimulation(): SimulationState {
             setServerError(msg.fatal ?? null)
             break
           case 'SimFrame':
-            pendingFrame.current = msg
+            pendingFrame.current = coalesceFrames(pendingFrame.current, msg)
             scheduleFlush()
             // A frame means the session is stepping again: any earlier stop
             // reason no longer describes the present. (A dead solve emits its
