@@ -3325,11 +3325,19 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::GateUnderdrive => {
             "Put the transistor's part number on it so its real threshold is checked, or drive the gate past the class's maximum threshold (a level shifter or a logic-level part)."
         }
-        LintCheck::RegulatorHeldOff => {
-            "Pull the regulator's enable pin to its input through 10k-100k, or tie it to the input; keep that pull even when a GPIO switches the rail."
-        }
         LintCheck::SupplyGroundSwapped | LintCheck::DiodeReversed | LintCheck::PolarisedCapReversed => {
             polarity_fix_hint(check)
+        }
+        LintCheck::RegulatorHeldOff | LintCheck::RailUnpowered | LintCheck::ControlHeldOff | LintCheck::I2cBusLoading => supply_fix_hint(check),
+    })
+}
+
+/// Fix hints for the supply-side checks: a held-off regulator, an unpowered rail,
+/// a reset or enable held off by its pull and an overloaded I2C pull-up.
+const fn supply_fix_hint(check: LintCheck) -> &'static str {
+    match check {
+        LintCheck::RegulatorHeldOff => {
+            "Pull the regulator's enable pin to its input through 10k-100k, or tie it to the input; keep that pull even when a GPIO switches the rail."
         }
         LintCheck::RailUnpowered => {
             "Fit the rail's regulator or link, or bring the rail in on a connector or test point; name each supply net with its voltage so the rail is judged."
@@ -3337,10 +3345,10 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::ControlHeldOff => {
             "Return the pull resistor to the part's supply rail instead of ground, or drive the pin from a GPIO or a supervisor."
         }
-        LintCheck::I2cBusLoading => {
+        _ => {
             "Re-pick the pull-ups so the sink current stays under 3 mA (R > (Vrail - 0.4 V) / 3 mA) and the rise time fits the bus speed; 2.2k-4.7k suits most 3.3 V buses."
         }
-    })
+    }
 }
 
 /// A copper finding between two track items on `F.Cu`, shared by the engine's

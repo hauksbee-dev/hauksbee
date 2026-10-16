@@ -137,10 +137,14 @@ fn collect_absolute_strings(value: &serde_json::Value, out: &mut Vec<String>) {
             }
         }
         serde_json::Value::Array(items) => {
-            items.iter().for_each(|v| collect_absolute_strings(v, out));
+            for v in items {
+                collect_absolute_strings(v, out);
+            }
         }
         serde_json::Value::Object(map) => {
-            map.values().for_each(|v| collect_absolute_strings(v, out));
+            for v in map.values() {
+                collect_absolute_strings(v, out);
+            }
         }
         _ => {}
     }
