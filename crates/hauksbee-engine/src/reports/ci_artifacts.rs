@@ -926,7 +926,7 @@ mod tests {
         }
     }
 
-    /// The invariant: JUnit and SARIF are never green beside a verdict that is
+    /// The invariant: `JUnit` and SARIF are never green beside a verdict that is
     /// not a pass, whatever findings they were handed. Faulty case: a partly
     /// judged and an invalid verdict over warnings only. Controls: a pass stays
     /// green, and a verdict already red through a failing finding or a refusal
