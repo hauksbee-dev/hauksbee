@@ -430,4 +430,59 @@ mod tests {
         let report = model_control_lint(&b, &lib);
         assert_eq!(report.of_check(LintCheck::FloatingControlPin).count(), 0);
     }
+
+    /// ADS122C04 RESET has no internal pull (TI SBAS751B sec 9.1.3: "Tie the
+    /// RESET pin to DVDD if the RESET pin is not used"). A breakout that brings
+    /// it to a header with no pull-up floats it whenever nothing is plugged in;
+    /// with its pull-up fitted it is held high.
+    #[test]
+    fn a_reset_without_an_internal_pull_floats_without_its_pull_up() {
+        const VCC: i64 = 3;
+        let run = |with_pull: bool| {
+            let mut parts = vec![
+                fitted(
+                    "IC1",
+                    "ADC_ADS122C04RTE",
+                    "WQFN16",
+                    vec![pin("1", EN), pin("2", GND), pin("11", VCC)],
+                ),
+                fitted(
+                    "JP2",
+                    "",
+                    "1X06_ROUND_70",
+                    vec![pin("6", EN), pin("1", GND)],
+                ),
+            ];
+            if with_pull {
+                parts.push(fitted(
+                    "R4",
+                    "10K",
+                    "0603",
+                    vec![pin("1", VCC), pin("2", EN)],
+                ));
+            }
+            let nets = [(GND, "GND"), (VCC, "VCC"), (EN, "!RESET")];
+            model_control_lint(&board("t", &nets, parts), &ModelLibrary::builtin())
+                .of_check(LintCheck::FloatingControlPin)
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let found = run(false);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, Severity::High);
+        for needle in [
+            "IC1 pad 1",
+            "reset_n",
+            "ads122c04_rte",
+            "!RESET",
+            "JP2 pin 6",
+        ] {
+            assert!(
+                found[0].message.contains(needle),
+                "{needle}: {}",
+                found[0].message
+            );
+        }
+        assert!(run(true).is_empty(), "the fitted pull-up holds RESET high");
+    }
 }

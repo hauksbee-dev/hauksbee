@@ -2766,6 +2766,11 @@ internal_clock = "internal ring oscillator (ROSC)"
 role = "qspi_ss"
 level = "high"
 boot_select = true   # held low at reset selects the USB bootloader (BOOTSEL)
+# RP2040 Datasheet build 3184e62-clean (2025-02-20) Table 348 p.304: PADS_QSPI
+# GPIO_QSPI_SS resets with PUE = 1 (pull-up enabled), PDE = 0; sec 5.5 p.615
+# RPU 50-80 kOhm. So an undriven QSPI_SS boots from flash, and only a pull-down
+# strong enough to beat 50-80 kOhm (the BOOTSEL button's 1k) selects USB boot.
+internal_pull = "pull_up"
 note = "QSPI_SS (flash CS) high = boot from flash (normal); held low = USB BOOTSEL"
 
 [models.coverage]
@@ -2858,6 +2863,7 @@ internal_clock = "internal ring oscillator (ROSC)"
 role = "qspi_ss"
 level = "high"
 boot_select = true
+internal_pull = "pull_up"   # Table 348 p.304 PUE reset 1; see the identity entry
 note = "QSPI_SS (flash CS) high = boot from flash (normal); held low = USB BOOTSEL"
 
 # The on-chip core regulator's output, wired off-chip to DVDD. It comes up at
