@@ -3,6 +3,7 @@
 //! overlays, resolves companion schematics, emits manifests, and prepares the
 //! static evidence findings shared by later report and simulation paths.
 
+use hauksbee_ir::{eprintln, println};
 use std::path::Path;
 
 use hauksbee_extract::ExtractedBoard;

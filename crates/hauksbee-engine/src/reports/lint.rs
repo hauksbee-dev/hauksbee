@@ -11,6 +11,7 @@ use crate::binder::bind_board;
 use crate::result::{
     lint_findings_json, BindSummary, JsonInputEvidence, JsonNote, JsonNoteKind, JsonReport,
 };
+use hauksbee_ir::{eprintln, print, println};
 
 use super::{lint_fails, OutputMode, StaticInputs};
 

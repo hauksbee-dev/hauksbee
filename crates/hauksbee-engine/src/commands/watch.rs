@@ -27,6 +27,7 @@
 //! wrapping script sees the most recent verdict. `--once` runs a single check and
 //! exits directly with that run's code.
 
+use hauksbee_ir::{eprintln, println};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;

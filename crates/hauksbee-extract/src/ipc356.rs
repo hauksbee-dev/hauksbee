@@ -9,6 +9,7 @@
 //! parameter says so).
 
 use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
+use hauksbee_ir::eprintln;
 use std::collections::HashMap;
 
 #[allow(clippy::too_many_lines, reason = "single-pass record parser")]

@@ -10,6 +10,7 @@ use super::{
 };
 use crate::result::{BindSummary, BootGateJson, JsonNote, JsonNoteKind, JsonReport, Refusal};
 use hauksbee_cosim::scheduler::{AdcDrop, DriverContention, ShortPulse, UnexercisedBus};
+use hauksbee_ir::{eprintln, print, println};
 
 pub(super) struct AnalogStatus {
     pub(super) valid: bool,

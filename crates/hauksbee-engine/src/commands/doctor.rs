@@ -8,6 +8,7 @@
 //! run manifest records the same discovery ([`resolved_backends`]), so a
 //! reproduced run can say which backend versions changed.
 
+use hauksbee_ir::{eprintln, print, println};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;

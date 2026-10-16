@@ -23,6 +23,8 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use hauksbee_ir::{eprint, eprintln, println};
+
 fn main() {
     if let Err(e) = run() {
         eprintln!("error: {e}");
@@ -376,6 +378,7 @@ fn diff_tables(hand: &BTreeMap<String, String>, machine: &BTreeMap<String, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hauksbee_ir::{eprintln, println};
 
     #[test]
     fn pwm_validation() {

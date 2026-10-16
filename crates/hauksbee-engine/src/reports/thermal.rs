@@ -16,6 +16,7 @@ use crate::result::{
     EXIT_INVALID_FOR_ANALYSIS,
 };
 use hauksbee_ir::evidence::Scope;
+use hauksbee_ir::{eprintln, print, println};
 
 /// Run the thermal estimate and print it (`json` selects JSON over the text
 /// table). Exits with the invalid-for-analysis code when the table is invalid,

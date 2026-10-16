@@ -48,7 +48,7 @@ fn set_heartbeat(sink: Option<Sink>, every: Duration) {
 
 fn print_line(line: &str) {
     let mut err = std::io::stderr();
-    let _ = writeln!(err, "{line}");
+    let _ = writeln!(err, "{}", hauksbee_ir::terminal_safe::terminal_safe(line));
     let _ = err.flush();
 }
 

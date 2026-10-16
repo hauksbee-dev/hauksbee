@@ -8,6 +8,7 @@ use super::{
     simulation::SimulationContext,
     RunConfig,
 };
+use hauksbee_ir::eprintln;
 
 use crate::commands::run::preloaded_board_file;
 use hauksbee_extract::ExtractedBoard;

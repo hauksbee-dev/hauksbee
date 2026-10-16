@@ -2,6 +2,7 @@
 //! in ONE report, plus the bare-`--json` combined report (bind + DRC + lint + SI
 //! + USB-C) that a `run <board> --json` with no specific selector emits.
 
+use hauksbee_ir::{eprintln, print, println};
 use std::path::Path;
 
 use hauksbee_extract::ExtractedBoard;
@@ -218,6 +219,8 @@ impl CheckReport<'_> {
             &drc_structured,
             &provenance,
         ))
+        // And one on spacing nobody measured, from an input with no copper geometry.
+        .with_condition(super::drc::unmeasured_spacing_condition(input.input_kind))
         // And on every rail held at its named voltage with nothing on the
         // board modelled to source it: from a connector, or from nothing seen.
         .with_condition(rails_entered)

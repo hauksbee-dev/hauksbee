@@ -6,6 +6,7 @@
 //! serious finding exits non-zero. CLI glue over the engine's `usb_c_report`.
 
 use hauksbee_extract::ExtractedBoard;
+use hauksbee_ir::{print, println};
 
 use crate::result::JsonInputEvidence;
 

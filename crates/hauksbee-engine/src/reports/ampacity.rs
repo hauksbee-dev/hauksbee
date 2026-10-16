@@ -5,6 +5,7 @@
 //! pass/fail. JSON remains unsupported; plain mode keeps the same auditable rows
 //! under a short prose explanation.
 
+use hauksbee_ir::{print, println};
 /// Print the trace-capacity report and return. `altium_present` boards carry no
 /// routed-copper geometry through this path yet, so they report an empty table.
 #[allow(clippy::fn_params_excessive_bools, reason = "independent CLI switches")]

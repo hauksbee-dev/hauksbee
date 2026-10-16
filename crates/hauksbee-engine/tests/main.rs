@@ -69,6 +69,8 @@ mod cli_round3_fixes;
 mod cli_sim_help_honesty;
 #[path = "cli_strict_plain.rs"]
 mod cli_strict_plain;
+#[path = "cli_terminal_safe.rs"]
+mod cli_terminal_safe;
 #[path = "cli_watch.rs"]
 mod cli_watch;
 mod common;

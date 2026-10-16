@@ -23,6 +23,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+use hauksbee_ir::eprintln;
 use hauksbee_ir::evidence::{Assumption, EvidenceMap, MatchConfidence, ModelLayer, ModelOnPath};
 
 pub mod assertions;

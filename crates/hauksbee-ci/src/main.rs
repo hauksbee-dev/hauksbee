@@ -20,6 +20,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use hauksbee_ci::{run, RunConfig};
+use hauksbee_ir::{eprint, eprintln, print, println};
 
 /// CI for hardware: run a board+firmware spec headless and assert on the result.
 ///

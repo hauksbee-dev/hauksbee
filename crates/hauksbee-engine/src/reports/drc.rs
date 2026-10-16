@@ -5,6 +5,7 @@
 //! exits non-zero on a true short. Pure CLI glue over the extractor's DRC and
 //! the binder.
 
+use hauksbee_ir::{print, println};
 use std::path::Path;
 
 use crate::binder::bind_board;
@@ -98,6 +99,8 @@ pub(crate) fn emit_with_schematic_quiet(
             // and says which checks it covers.
             jr.verdict_conditions
                 .extend(default_rules_condition(&structured, &provenance));
+            jr.verdict_conditions
+                .extend(unmeasured_spacing_condition(input.input_kind));
             jr.push_coverage_note(crate::scope::single_check_note("DRC"));
             if provenance.source == crate::result::ClearanceRuleSource::Defaulted {
                 jr.push_coverage_note(provenance.cli_notice());
@@ -267,6 +270,32 @@ pub(crate) fn default_rules_condition(
          {lift} to remove this assumption.",
         provenance.value_mm
     ))
+}
+
+/// The condition a pass rests on when the input carried connectivity but no
+/// copper geometry the DRC measures (a gerber, IPC-D-356, ODB++ or IPC-2581
+/// input), so copper spacing was never examined at all.
+///
+/// Distinct from [`default_rules_condition`], which is about a rule that WAS
+/// applied but is not the board's own. Here no rule could be applied: an empty
+/// sweep finds nothing whatever the gaps are, and a headline of "OK TO ORDER"
+/// over it would vouch for spacing nobody measured. `None` for every input whose
+/// copper the DRC does read.
+pub(crate) fn unmeasured_spacing_condition(kind: crate::board_input::InputKind) -> Option<String> {
+    use crate::board_input::InputKind;
+    matches!(
+        kind,
+        InputKind::Gerber | InputKind::Ipc356Archive | InputKind::Odb | InputKind::Ipc2581
+    )
+    .then(|| {
+        format!(
+            "copper spacing was not checked: {} gives Hauksbee connectivity but no copper \
+             geometry to measure gaps on, so a gap below your fab's minimum would not be \
+             flagged; run your CAD tool's design-rule check on the layout to remove this \
+             assumption.",
+            crate::board_input::input_kind_phrase(kind)
+        )
+    })
 }
 
 /// Parse a version string like "10.0.3" (or "`KiCad` 9.0.3") into a comparable
@@ -598,6 +627,28 @@ fn oracle_cross_check(board: &Path, report: &hauksbee_extract::DrcReport) -> Ora
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fab_inputs_with_no_copper_geometry_pass_only_conditionally() {
+        use crate::board_input::InputKind;
+        for kind in [
+            InputKind::Gerber,
+            InputKind::Ipc356Archive,
+            InputKind::Odb,
+            InputKind::Ipc2581,
+        ] {
+            let condition = unmeasured_spacing_condition(kind)
+                .unwrap_or_else(|| panic!("{kind:?} must state that spacing was not measured"));
+            assert!(
+                condition.starts_with("copper spacing was not checked"),
+                "{condition}"
+            );
+        }
+        // The controls: inputs whose copper the DRC reads carry no such condition.
+        for kind in [InputKind::Text, InputKind::Altium, InputKind::BoardCode] {
+            assert!(unmeasured_spacing_condition(kind).is_none(), "{kind:?}");
+        }
+    }
 
     #[test]
     fn oracle_confirmed_unvalidated_short_is_promoted_but_tool_only_short_is_not() {

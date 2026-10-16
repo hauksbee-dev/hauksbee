@@ -213,9 +213,9 @@ pub fn load_code(path: &Path) -> anyhow::Result<String> {
         }
         let f =
             found.ok_or_else(|| anyhow::anyhow!("no .board file found in {}", path.display()))?;
-        Ok(std::fs::read_to_string(f)?)
+        Ok(hauksbee_extract::read_regular_string(&f)?)
     } else {
-        std::fs::read_to_string(path).map_err(|e| {
+        hauksbee_extract::read_regular_string(path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 // Suggestion adapts to what is actually runnable: the bundled
                 // example only exists inside a source checkout; a bare binary

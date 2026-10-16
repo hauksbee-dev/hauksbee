@@ -21,6 +21,7 @@
 //! the reproduction identity, and the outcome only gives `reproduce` something
 //! to compare with.
 
+use hauksbee_ir::eprintln;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs;

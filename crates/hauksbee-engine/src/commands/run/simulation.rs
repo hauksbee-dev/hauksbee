@@ -4,6 +4,7 @@
 //! emulator installation, and applies requested copper-short bridges.
 
 use hauksbee_extract::ExtractedBoard;
+use hauksbee_ir::{eprintln, println};
 
 use crate::binder::{bind_board, BoundBoard};
 use crate::engine::HauksbeeEngine;

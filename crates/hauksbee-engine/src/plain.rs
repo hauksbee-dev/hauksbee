@@ -1050,14 +1050,17 @@ pub fn plain_drc_structured_with_rule_source(
         && st.at_limit.is_empty()
     {
         out.push_note(HeadsUp::glossed(
-            "No copper was checked: this input carries connectivity but no traces or pours."
+            "No copper was checked: copper spacing was not measured on these inputs, which \
+             gave Hauksbee connectivity but no copper geometry it measures gaps on."
                 .to_string(),
             "Clearance DRC compares copper shapes against each other. A netlist has no \
-             copper at all, and a layout file can simply not be routed yet. Everything \
-             else in this report still applies.",
-            "If this was a layout file (.kicad_pcb, .brd, .PcbDoc), it has no routed \
-             copper yet: route it, or point hauksbee at the fab gerbers. If it was a \
-             netlist, run hauksbee against the layout file or a gerber archive instead.",
+             copper at all, a layout file can simply not be routed yet, and fabrication \
+             files (gerbers, ODB++) are read for connectivity, not measured for gaps. \
+             Everything else in this report still applies.",
+            "If this was a layout file (.kicad_pcb, .brd, .PcbDoc), it may have no routed \
+             copper yet: route it. If it was a netlist or fabrication files (which do \
+             carry copper, but not in a form this check measures), run hauksbee against \
+             the layout file, or run your CAD tool's design-rule check to confirm spacing.",
         ));
         return out;
     }

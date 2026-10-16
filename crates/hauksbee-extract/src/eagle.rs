@@ -6,6 +6,7 @@
 //! `<elements>`, pad offsets from `<packages>`.
 
 use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
+use hauksbee_ir::eprintln;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::HashMap;

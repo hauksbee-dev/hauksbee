@@ -36,6 +36,9 @@
 //! had before the split, so `hauksbee_engine::binder::bind_board` and friends
 //! are unchanged for downstream crates.
 
+// Printing: every file that prints imports `print!`/`println!`/`eprint!`/`eprintln!`
+// from `hauksbee_ir` (defined once in `hauksbee_ir::terminal_safe`), so board-file
+// text cannot reach a terminal raw.
 pub mod boardcode;
 pub mod commands;
 pub mod deps;

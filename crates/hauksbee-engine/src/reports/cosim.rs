@@ -5,6 +5,7 @@
 //! net-name validation helpers. `cmd_run` orchestrates these; the boot advisory
 //! it layers on top lives in `crate::checks::boot`.
 
+use hauksbee_ir::{eprintln, println};
 use std::{fmt::Write as _, path::Path};
 
 use hauksbee_ir::levenshtein;

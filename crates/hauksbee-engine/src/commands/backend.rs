@@ -9,6 +9,7 @@
 //! `read_line`, the same style as the consent prompt in
 //! [`crate::commands::models::extract`].
 
+use hauksbee_ir::{print, println};
 use std::io::Write;
 
 use anyhow::Context;

@@ -4,6 +4,7 @@
 //! precedence while sharing normalized inputs and resolved schematic context.
 
 use crate::binder::bind_board;
+use hauksbee_ir::{eprintln, print, println};
 
 use super::{
     list_nets_json,

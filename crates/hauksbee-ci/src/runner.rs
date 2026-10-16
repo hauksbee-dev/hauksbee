@@ -20,6 +20,7 @@ use hauksbee_engine::{
 };
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_frontdoor_api::engine::Engine;
+use hauksbee_ir::eprintln;
 use hauksbee_ir::evidence::{
     ArtifactKind, ArtifactProvenance, ArtifactRole, Assumption, AssumptionSource, Contribution,
     ErrorBudget, IgnoredInput, NetScope, RunDate, Scope, Subject, TimeWindow,
@@ -3958,6 +3959,7 @@ fn hash2(seed: u64, s: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hauksbee_ir::eprintln;
 
     fn spec(src: &str) -> Spec {
         toml::from_str(src).expect("spec shape")
