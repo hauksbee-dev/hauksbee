@@ -632,6 +632,20 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         // own open-part assumption undermine the map, so an INVALID verdict
         // stops reading as qualified.
         let mut subject_refs = result.subject_refs.clone();
+        // A board-wide stress check that found faults is about the parts it
+        // found them on: its causal path is theirs (their nets and the supply
+        // chain behind them), so an open part elsewhere on the board cannot
+        // turn a found overstress into "not judged". With no fault found it
+        // keeps no subject and the whole board stays its path: a clean result
+        // over open parts is never a pass. Waivers still match the spec's own
+        // subject (`result.subject_refs`), never the faulting parts.
+        if result.kind == "no_faults" && subject_refs.is_empty() && !result.passed {
+            for fault in outcomes.iter().flat_map(|outcome| &outcome.faults) {
+                if !subject_refs.contains(&fault.component) {
+                    subject_refs.push(fault.component.clone());
+                }
+            }
+        }
         if result.invalid {
             subject_refs.extend(
                 outcomes

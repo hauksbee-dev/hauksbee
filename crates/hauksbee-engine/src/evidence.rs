@@ -33,8 +33,8 @@ use hauksbee_ir::evidence::{
     AssumptionSource, CausalPathIndex, Contribution, CrossCheck, EntityKind, EntityRef,
     ErrorBudget, EvidenceError, EvidenceMap, EvidenceRegistry, EvidenceStatus, IgnoredInput,
     IntegrationTolerance, MatchConfidence, ModelLayer, ModelOnPath, ModelSource, ModelSourceTier,
-    ModelUncertainty, ModelValidation, NetScope, ParameterProvenance, RunDate, Scope, Subject,
-    SubjectSet, ValueOrigin,
+    ModelUncertainty, ModelValidation, NetScope, ParameterProvenance, Remedy, RunDate, Scope,
+    Subject, SubjectSet, ValueOrigin,
 };
 use hauksbee_models::variants::{Selection, Via};
 use hauksbee_models::Confidence;
@@ -474,18 +474,25 @@ impl BoardEvidence {
                 .map_or_else(|| row.reference.trim(), String::as_str);
             let key = format!("model/{component_subject}");
             let subject_text = format!("{} ({})", row.reference, row.value);
-            assumptions.push(Assumption::reduced_fidelity(
-                AssumptionSource::Binder,
-                Subject::new(&key, &subject_text),
-                Scope::Board,
-                &format!(
-                    "the generic fallback model '{}', whose ratings and device parameters are \
+            assumptions.push(
+                Assumption::reduced_fidelity(
+                    AssumptionSource::Binder,
+                    Subject::new(&key, &subject_text),
+                    Scope::Board,
+                    &format!(
+                        "the generic fallback model '{}', whose ratings and device parameters are \
                      estimates for the package class rather than values from any datasheet",
-                    row.model_id.as_deref().unwrap_or("(unnamed)"),
-                ),
-                "add a model entry matching the part (value_re or mpn_re), or put the \
+                        row.model_id.as_deref().unwrap_or("(unnamed)"),
+                    ),
+                    "add a model entry matching the part (value_re or mpn_re), or put the \
                  manufacturer part number on the component",
-            ));
+                )
+                // The part, as a typed target: the id's `model/` namespace is not
+                // a part name.
+                .with_remedy(Remedy::AddModel {
+                    reference: row.reference.trim().to_string(),
+                }),
+            );
         }
         // A PARTIAL-MODEL warning becomes evidence. These rows bound, so they are
         // counted as resolved and no `open_part` assumption exists for them, and one

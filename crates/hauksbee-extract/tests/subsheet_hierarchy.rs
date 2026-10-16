@@ -113,6 +113,44 @@ fn an_orphan_sub_sheet_is_refused_with_a_message_naming_what_it_needs() {
     );
 }
 
+/// A sub-sheet left beside a project whose root never uses it (no sheet in
+/// the root's hierarchy names it): the refusal says it is not part of the
+/// design and names the project's root schematic as the file to check, not a
+/// generic "find the root". Without the project file the refusal stays the
+/// general one (control).
+#[test]
+fn an_unused_sheet_beside_a_project_names_the_projects_root() {
+    let dir = std::env::temp_dir().join(format!("hb_unused_sheet_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    let orphan = std::fs::read_to_string(fixture("subsheet_orphan.kicad_sch")).expect("fixture");
+    std::fs::write(dir.join("leftover.kicad_sch"), orphan).expect("write sheet");
+    std::fs::write(
+        dir.join("proj.kicad_sch"),
+        "(kicad_sch (version 20250114) (generator \"test\") \
+         (uuid \"00000000-0000-0000-0000-000000000051\") (paper \"A4\") (lib_symbols) \
+         (sheet_instances (path \"/\" (page \"1\"))))\n",
+    )
+    .expect("write root");
+    let refusal = || {
+        ExtractedBoard::from_kicad_schematic_path(&dir.join("leftover.kicad_sch"))
+            .expect_err("a sheet no root uses cannot be extracted honestly")
+            .to_string()
+    };
+    let general = refusal();
+    assert!(general.contains("No .kicad_sch in"), "{general}");
+
+    std::fs::write(dir.join("proj.kicad_pro"), "{}\n").expect("write project");
+    let named = refusal();
+    assert!(
+        named.contains("proj.kicad_sch does not use it")
+            && named.contains("not part of the design")
+            && named.contains("Point hauksbee at"),
+        "{named}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ---------------------------------------------------------------------------
 // The corpus case this was found on. Corpus-gated; a scan of zero fails.
 // ---------------------------------------------------------------------------

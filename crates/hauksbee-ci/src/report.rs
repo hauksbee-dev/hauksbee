@@ -463,19 +463,53 @@ impl CiResult {
         let evidence = count(&open_part);
         let timing = count(&|r| r.detail.starts_with("INVALID: timing coverage refusal:"));
         let paced = count(&|r| r.detail.contains("INVALID: host-paced clock:"));
-        // The first open part behind it, when the run carries one (`open-part:C2`).
-        let first_open = self
-            .assumptions
-            .iter()
-            .find(|a| a.kind() == hauksbee_ir::evidence::AssumptionKind::OpenPart)
-            .map(|a| a.id().to_string())
-            .and_then(|id| {
-                let part = id.split_once(':')?.1;
-                Some(part.split('~').next().unwrap_or(part).to_string())
-            })
-            .map_or_else(String::new, |part| {
-                format!("; the first open part is {part}")
-            });
+        // The open parts behind it: those on an INVALID assertion's own path
+        // (`open-part:C2` ids on its map), never an unrelated one the run also
+        // carries. Only a run whose invalid assertions carry no map at all
+        // falls back to the first open part it has.
+        let part_of = |a: &hauksbee_ir::evidence::Assumption| {
+            let id = a.id().to_string();
+            let part = id.split_once(':')?.1;
+            Some(part.split('~').next().unwrap_or(part).to_string())
+        };
+        let is_open = |a: &&hauksbee_ir::evidence::Assumption| {
+            a.kind() == hauksbee_ir::evidence::AssumptionKind::OpenPart
+        };
+        let invalid_maps: Vec<&hauksbee_ir::evidence::EvidenceMap> = (self.results.iter())
+            .filter(|r| r.invalid)
+            .filter_map(|r| self.evidence.iter().find(|m| m.assertion() == r.label))
+            .collect();
+        let first_open = if invalid_maps.is_empty() {
+            (self.assumptions.iter().find(is_open))
+                .and_then(part_of)
+                .map_or_else(String::new, |part| {
+                    format!("; the first open part is {part}")
+                })
+        } else {
+            let mut on_path: Vec<String> = Vec::new();
+            for id in invalid_maps.iter().flat_map(|m| m.assumptions()) {
+                let found = self.assumptions.iter().find(|a| a.id() == id);
+                if let Some(part) = found.filter(is_open).and_then(part_of) {
+                    if !on_path.contains(&part) {
+                        on_path.push(part);
+                    }
+                }
+            }
+            match on_path.as_slice() {
+                [] => String::new(),
+                [one] => format!("; the open part on their path is {one}"),
+                many => {
+                    let shown = many.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+                    let more = many.len().saturating_sub(3);
+                    let more = if more > 0 {
+                        format!(" and {more} more")
+                    } else {
+                        String::new()
+                    };
+                    format!("; the open parts on their paths are {shown}{more}")
+                }
+            }
+        };
         let missing = if self.analog_abort {
             format!(
                 "the analog solve stopped converging and the consecutive-failure abort tripped, so {invalid} assertion(s) were marked INVALID"
