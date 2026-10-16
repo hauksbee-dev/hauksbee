@@ -44,25 +44,34 @@ pub fn electrical_terminal_nets(component: &Component) -> Option<(i64, i64)> {
     (first != second).then_some((first, second))
 }
 
-/// How many distinct pads of `component` are connected to a net. A part with
-/// at most one (a test point, a single-pad marker, a stub resistor with one
-/// dangling leg) carries no DC current between nets, so no programming network
-/// reads through it and it is not a part the network could mis-read.
+/// Whether `component` is an inert marker on a programming net.
+///
+/// A test point, a single-pad part or any other non-resistor with at most one
+/// pad on a net joins the net to nothing, so no programming network reads
+/// through it. A resistor-like part with at most one connected pad (a dangling
+/// leg, whether or not its second pad is listed) is NOT such a marker: the
+/// programming resistor was drawn but not connected, and the walk must say so
+/// rather than read the pin as floating.
 #[must_use]
-pub fn connected_pad_count(component: &Component) -> usize {
+pub fn is_inert_marker(component: &Component) -> bool {
     let connected = component.pins.iter().filter(|pin| pin.net.is_some());
-    if component
+    let connected_pads = if component
         .pins
         .iter()
         .any(|pin| pin.number.trim().is_empty())
     {
         // Unnumbered pads cannot be told apart from one pad on two layers.
-        return connected.count();
+        connected.count()
+    } else {
+        connected
+            .map(|pin| pin.number.trim())
+            .collect::<BTreeSet<_>>()
+            .len()
+    };
+    if connected_pads > 1 {
+        return false;
     }
-    connected
-        .map(|pin| pin.number.trim())
-        .collect::<BTreeSet<_>>()
-        .len()
+    hauksbee_extract::is_test_point_or_hole(component) || !is_resistor_component(component)
 }
 
 /// A two-terminal part's terminal nets; `None` marks an unconnected terminal.
@@ -358,9 +367,10 @@ fn program_network_edges(
             {
                 continue;
             }
-            if connected_pad_count(component) <= 1 {
-                // A test point, single-pad marker or dangling stub on the net
-                // joins it to nothing, so it cannot change the equivalent.
+            if is_inert_marker(component) {
+                // A test point or single-pad marker on the net joins it to
+                // nothing, so it cannot change the equivalent. A resistor with
+                // a dangling leg is not one: it falls through to the abstention.
                 continue;
             }
             let Ok(Some(terminals)) = electrical_terminal_net_options(component) else {
@@ -370,7 +380,11 @@ fn program_network_edges(
                 if component.pins.iter().any(|pin| pin.net == Some(net_id)) {
                     return Err(unread_part(
                         component,
-                        "is not a two-terminal part (or its pads disagree on their nets)",
+                        if is_resistor_component(component) && component.pins.len() <= 1 {
+                            "has an unconnected second terminal"
+                        } else {
+                            "is not a two-terminal part (or its pads disagree on their nets)"
+                        },
                     ));
                 }
                 continue;
@@ -378,6 +392,9 @@ fn program_network_edges(
             let far = match terminals {
                 (Some(first), Some(second)) if first == net_id && second != net_id => second,
                 (Some(first), Some(second)) if second == net_id && first != net_id => first,
+                (Some(first), None) | (None, Some(first)) if first == net_id => {
+                    return Err(unread_part(component, "has an unconnected second terminal"));
+                }
                 _ => continue,
             };
 

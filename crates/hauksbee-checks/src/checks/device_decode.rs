@@ -713,13 +713,13 @@ fn shorted_program_finding(
 }
 
 /// Whether any fitted component other than `ic` is joined to `net` by more
-/// than one pad: a resistor, a capacitor, an open link, anything a reader could
+/// than one pad, or a resistor with a dangling leg: anything a reader could
 /// have to read. A DNP part, a test point or another single-pad marker is not.
 fn has_fitted_member_besides(board: &ExtractedBoard, net: i64, ic: &Component) -> bool {
     board.net_members(net).into_iter().any(|(member, _)| {
         !std::ptr::eq(member, ic)
             && !matches!(AssemblyState::of(member), AssemblyState::DnpAbsent(_))
-            && hauksbee_bind::program_resistor::connected_pad_count(member) > 1
+            && !hauksbee_bind::program_resistor::is_inert_marker(member)
     })
 }
 
@@ -2013,6 +2013,49 @@ mod program_domain_tests {
                 0,
                 "{:?}",
                 report.findings
+            );
+        }
+    }
+
+    /// A PROG resistor with one dangling leg (its second pad on no net, or on
+    /// KiCad's `unconnected-(..)` placeholder net) is a programming resistor
+    /// drawn but not connected: the pin is not floating by design, so the check
+    /// abstains by name and the verdict is never a pass. A test point beside it
+    /// changes nothing.
+    #[test]
+    fn a_prog_resistor_with_one_dangling_leg_abstains_by_name() {
+        let ground_pad = r#"(pad 2 smd rect (at 2 0) (net 1 "GND"))"#;
+        let netless = charger_board("MCP73831T-2ACI/OT", "2k")
+            .replace(ground_pad, "(pad 2 smd rect (at 2 0))");
+        let placeholder = charger_board("MCP73831T-2ACI/OT", "2k")
+            .replacen(
+                "(net 0 \"\")",
+                "(net 0 \"\")\n  (net 6 \"unconnected-(R8-Pad2)\")",
+                1,
+            )
+            .replace(
+                ground_pad,
+                r#"(pad 2 smd rect (at 2 0) (net 6 "unconnected-(R8-Pad2)"))"#,
+            );
+        for board in [
+            netless.clone(),
+            placeholder.clone(),
+            with_test_point(&netless),
+            with_test_point(&placeholder),
+        ] {
+            let report = lint(&board);
+            let f: Vec<_> = report.of_check(LintCheck::DeviceDecode).collect();
+            assert_eq!(f.len(), 1, "one abstention, not silence: {f:?}");
+            assert!(f[0].is_abstention(), "{}", f[0].message);
+            assert!(
+                hauksbee_models::rating_basis::is_not_judged(&f[0].message),
+                "{}",
+                f[0].message
+            );
+            assert!(
+                f[0].message.contains("R8") && f[0].message.contains("PROG pin"),
+                "{}",
+                f[0].message
             );
         }
     }
