@@ -1427,9 +1427,9 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 format!("Tie \"{net}\" to a defined level: a pull-up resistor to power (to hold it high/enabled) or a pull-down to ground (to hold it low), per the chip's datasheet, or drive it from a known output."),
             ),
             LintCheck::LedCurrentSanity => (
-                format!("The LED + resistor on {parts} looks mis-sized: its current is outside the sensible range for an indicator."),
-                "Too much current and the LED runs hot and ages fast (or pulls more than the driving pin should source); too little and it is too dim to see. The series resistor sets this current.".to_string(),
-                "Re-pick the series resistor for roughly 1 to 20 mA: resistor = (supply voltage minus LED forward voltage) / target current. Check the LED's datasheet for its forward voltage and max current.".to_string(),
+                format!("The LED string {parts} carries more current than a part in it is rated for."),
+                "The series resistor sets an LED's current. Too small a resistor and the LED, the resistor or the pin driving them carries more than its rating, so it runs hot and fails early.".to_string(),
+                "Raise the series resistor (the finding names the smallest value that keeps every rating): resistor = (supply voltage minus LED forward voltage) / target current, for roughly 1 to 20 mA. Put the LED's part number on it so its own datasheet ratings are judged.".to_string(),
             ),
             LintCheck::OutputContention => (
                 format!("Two chip outputs ({parts}) are wired directly together on \"{net}\"."),
@@ -1568,6 +1568,11 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
             // The abstention is the pass saying a rating was never really
             // tested, so it must not read as the overstress the arm below
             // describes.
+            LintCheck::DcOverstress if hauksbee_models::rating_basis::is_not_judged(&f.message) => (
+                "The datasheet-ratings check did not run to a result, so the parts it names were not judged: unverified, not known to be met, and the verdict is not a pass.".to_string(),
+                format!("The ratings are judged at the board's solved resting state. Here the solve failed, or a named rail sat far below its level in it (nothing on the board powers its input, or a supply's model could not start), so every rating on it was held at a dead circuit and proves nothing. Detail: {}", f.message),
+                "Declare the level of each input the board takes power from (a net_drive for the connector's rail), or give the part the note blames a working model, then re-check.".to_string(),
+            ),
             LintCheck::DcOverstress if f.is_abstention() => (
                 format!("A datasheet rating on {parts} could not be checked, so it is unverified, not known to be met."),
                 format!("The board's resting state was solved and every rated part held to its ratings there, but this part's current runs into a part with no working model: one the design files give no usable value or model for, left open, or a trimmer whose setting they do not give. The simulation carried no current (or a guessed one) through it, so a clean reading here proves nothing. Detail: {}", f.message),

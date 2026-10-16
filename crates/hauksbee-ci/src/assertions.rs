@@ -753,7 +753,9 @@ pub(crate) fn analog_eval_window(a: &Assertion, out: &RunOutcome) -> Option<(f64
         "voltage" | "pulse_width" | "logic_level" | "fires" | "increases" | "decreases" => {
             Some((a.after_ms.unwrap_or(0.0) / 1000.0, end))
         }
-        "toggle" | "max_current" | "max_temp" | "rail_window" => Some((0.0, end)),
+        // `no_faults` reads the stress monitor, which only sees converged
+        // chunks: a fault inside a failed window is unseen, not absent.
+        "toggle" | "max_current" | "max_temp" | "rail_window" | "no_faults" => Some((0.0, end)),
         "boot_coverage" | "boot-coverage" => Some((0.0, a.deadline_ms.map_or(end, |d| d / 1000.0))),
         // A vcd_sink's `transitions` field counts analog per-frame threshold
         // crossings (exactly like `toggle`), so a chunk the solver failed on
@@ -2999,6 +3001,21 @@ mod tests {
             "{}",
             res.detail
         );
+    }
+
+    // The stress monitor only sees converged chunks, so a run whose solve
+    // failed over a window has not shown that nothing was over-stressed: the
+    // result is INVALID, never a pass. The same run with every chunk
+    // converged passes.
+    #[test]
+    fn no_faults_over_a_failed_solve_window_is_invalid_not_a_pass() {
+        let a = assertion("kind = \"no_faults\"\n");
+        let mut diverged = vout_member(0, 3.3, false);
+        diverged.failed_windows = vec![(0.0, 0.010)];
+        let res = evaluate_one(&a, &[diverged], Some(Mode::Corners), 1.0);
+        assert!(res.invalid && !res.passed, "{}", res.detail);
+        let res = evaluate_one(&a, &[vout_member(0, 3.3, false)], Some(Mode::Corners), 1.0);
+        assert!(res.passed && !res.invalid, "{}", res.detail);
     }
 
     // A package ref owns itself and its `_q<N>` / `_s<N>` / `_e<N>` unit keys,

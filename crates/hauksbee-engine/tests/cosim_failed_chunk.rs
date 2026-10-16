@@ -14,7 +14,8 @@
 use crate::support::{impossible_board, resistor, vsource};
 
 use hauksbee_engine::result::{
-    strict_analog_exit_code, CosimFailedWindow, CosimJson, EXIT_INVALID_FOR_ANALYSIS,
+    strict_analog_exit_code, BindSummary, CosimFailedWindow, CosimJson, JsonReport,
+    EXIT_INVALID_FOR_ANALYSIS,
 };
 use hauksbee_engine::scheduler::{Scheduler, STRICT_CONSECUTIVE_FAILED_ABORT};
 use hauksbee_ir::{Circuit, NodeId, SourceKind};
@@ -213,6 +214,26 @@ fn cosim_failed_chunk_marks_analog_invalid() {
         json.contains("\"failed_windows\""),
         "co-sim JSON lists the failed windows, got {json}"
     );
+
+    // The run verdict over that co-sim is partly judged, never a pass: the
+    // stress monitor saw nothing over the failed window, which is not the
+    // same as nothing being over-stressed there.
+    let mut report = clean_report();
+    assert_eq!(report.run_verdict().verdict, "pass", "the control passes");
+    report.cosim = Some(cosim_json_from(&sched));
+    let run = report.run_verdict();
+    assert_eq!(run.verdict, "invalid", "a failed solve is never a pass");
+    assert!(run.partial);
+    let why = run.reason.expect("a partly judged verdict says why");
+    assert!(why.contains("did not converge"), "{why}");
+}
+
+/// A report with nothing on it, which passes.
+fn clean_report() -> JsonReport {
+    JsonReport::new(
+        "b",
+        BindSummary::from_report(&hauksbee_engine::BindReport::default()),
+    )
 }
 
 #[test]
@@ -245,5 +266,12 @@ fn cosim_valid_run_reports_analog_valid_true() {
     assert!(
         !json.contains("failed_windows"),
         "failed_windows omitted when empty: {json}"
+    );
+    let mut report = clean_report();
+    report.cosim = Some(cosim_json_from(&sched));
+    assert_eq!(
+        report.run_verdict().verdict,
+        "pass",
+        "a converged co-sim passes"
     );
 }

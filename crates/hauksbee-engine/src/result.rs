@@ -2086,16 +2086,18 @@ impl JsonFinding {
     }
 }
 
+/// The fix for an analysis that did not run to a result.
+const NOT_JUDGED_FIX: &str = "Declare the level of each input the board takes power from (a \
+     net_drive for the connector's rail), or give the part the note blames a working model, so \
+     the operating point solves with its rails up; then re-check.";
+
 /// Why a verdict with no cause is partly judged, if it is: the judgement
-/// scope's sentence and the first stated stand-in-rating condition (see
-/// [`hauksbee_models::rating_basis`]), when there is one.
+/// scope's sentence and the clause [`JsonReport::stated_condition`] gives,
+/// when there is one.
 fn partly_judged_reason(
     scope: Option<&crate::scope::JudgementScope>,
-    stated: Option<&str>,
+    stated: Option<String>,
 ) -> Option<String> {
-    let stated = stated.map(|c| {
-        format!("a part's limit was judged against a stand-in card's rating, not its own: {c}.")
-    });
     match (scope, stated) {
         (Some(s), Some(c)) => Some(format!("{} {c}", s.partly_judged_reason())),
         (Some(s), None) => Some(s.partly_judged_reason()),
@@ -2345,7 +2347,9 @@ pub fn lint_findings_json(report: &NetLintReport) -> Vec<JsonFinding> {
             actionable: f.is_actionable(),
             message: f.message.clone(),
             plain: f.message.clone(),
-            fix: if f.is_abstention() {
+            fix: if hauksbee_models::rating_basis::is_not_judged(&f.message) {
+                Some(NOT_JUDGED_FIX.to_string())
+            } else if f.is_abstention() {
                 lint_abstention_hint(f.check).map(str::to_string)
             } else if f
                 .message
@@ -2728,13 +2732,41 @@ impl JsonReport {
         self
     }
 
-    /// The first stated condition a finding carries: a part held past a
-    /// placeholder or guessed card's limit, not its own
-    /// ([`hauksbee_models::rating_basis`]), which is never a fail.
-    fn stated_condition(&self) -> Option<&str> {
-        (self.findings.iter().flatten())
-            .find(|f| hauksbee_models::rating_basis::is_condition(&f.message))
-            .map(|f| f.message.as_str())
+    /// What keeps a clean run from passing, as a clause: an analysis that did
+    /// not run to a result (it judged nothing), else the first stated
+    /// condition (a part held past a placeholder or guessed card's limit, not
+    /// its own); see [`hauksbee_models::rating_basis`]. Neither is a fail.
+    fn stated_condition(&self) -> Option<String> {
+        use hauksbee_models::rating_basis::{is_condition, is_not_judged, not_judged};
+        let first = |pick: fn(&str) -> bool| {
+            (self.findings.iter().flatten())
+                .find(|f| pick(&f.message))
+                .map(|f| f.message.as_str())
+        };
+        // A co-sim whose analog solve failed held stale voltages over those
+        // windows: no fault seen there is no fault absent.
+        let unsolved = (self.cosim.as_ref()).filter(|c| !c.analog_valid).map(|c| {
+            let what = format!(
+                "the co-sim's analog solve did not converge over {} window(s) and held stale \
+                 voltages there",
+                c.failed_windows.len().max(1)
+            );
+            format!(
+                "an analysis did not run to a result: {}.",
+                not_judged(&what)
+            )
+        });
+        (unsolved.or_else(|| {
+            first(is_not_judged).map(|m| format!("an analysis did not run to a result: {m}."))
+        }))
+        .or_else(|| {
+            first(is_condition).map(|c| {
+                format!(
+                    "a part's limit was judged against a stand-in card's rating, not its \
+                         own: {c}."
+                )
+            })
+        })
     }
 
     /// The scope, when it lets the verdict judge around exactly `blockers`.
@@ -2944,7 +2976,8 @@ impl JsonReport {
         let unjudged: &[String] = if scope.is_some() { &[] } else { &blockers };
         let cause = VerdictCause::pick(failing, refused, unjudged, evidence_undermined);
         // A limit passed that was a placeholder or guessed card's, not the
-        // part's own, is a stated condition: never a fail, never a pass either.
+        // part's own, is a stated condition, and an analysis that did not run
+        // to a result judged nothing: never a fail, never a pass either.
         let stated = self.stated_condition();
         let partial = cause.is_none() && (scope.is_some() || stated.is_some());
         let verdict = match cause {
@@ -3702,6 +3735,56 @@ mod tests {
             "{why}"
         );
         // The part's own rating passed still fails, condition or not.
+        let mut own = report;
+        own.findings
+            .as_mut()
+            .unwrap()
+            .extend(fault_findings_json(&[fault(
+                "Q2",
+                crate::stress::FaultKind::Overcurrent,
+                true,
+            )]));
+        assert_eq!(own.run_verdict().verdict, "fail");
+    }
+
+    /// An analysis that did not run to a result (a DC solve that failed, a
+    /// rail that never came up in it) judged nothing: the clean run is partly
+    /// judged, names what was not judged, and is never a pass. A real fault
+    /// found elsewhere still fails the board.
+    #[test]
+    fn an_analysis_that_did_not_run_is_partly_judged_never_a_pass() {
+        use hauksbee_models::rating_basis::not_judged;
+        let unsolved = not_judged(
+            "the DC ratings check abstained at power-up (registers cleared): the board's DC \
+             operating point did not solve, so no part was checked against its ratings there",
+        );
+        let mut report = JsonReport::new("b", summary_with(Vec::new(), Vec::new()));
+        report.findings = Some(lint_findings_json(&NetLintReport {
+            findings: vec![hauksbee_extract::LintFinding {
+                check: hauksbee_extract::LintCheck::DcOverstress,
+                severity: hauksbee_extract::Severity::Low,
+                message: unsolved.clone(),
+                refs: Vec::new(),
+                nets: Vec::new(),
+            }],
+        }));
+        let run = report.run_verdict();
+        assert_eq!(run.verdict, "invalid", "a failed solve is never a pass");
+        assert!(run.partial);
+        let why = run.reason.expect("a partly judged verdict says why");
+        assert!(
+            why.starts_with("PARTLY JUDGED") && why.contains(&unsolved),
+            "{why}"
+        );
+        let finding = &report.findings.as_ref().unwrap()[0];
+        assert!(
+            !finding.actionable,
+            "the note is coverage, not a fix to make"
+        );
+        assert!(finding
+            .fix
+            .as_deref()
+            .is_some_and(|f| f.contains("net_drive")));
         let mut own = report;
         own.findings
             .as_mut()

@@ -427,8 +427,12 @@ fn emit_report(
     let run_evidence = &evidence.run_evidence;
     let run_findings = &evidence.run_findings;
     let faults_gate = evidence.faults_gate;
+    let machine;
 
-    if cfg.json {
+    // The machine report is built on every surface: its verdict is the one
+    // the manifest records and the plain closing line states, so no surface
+    // can read pass over a run the JSON calls partly judged.
+    {
         // The co-sim machine report is a model-dependent-claim surface
         // like the static one: an unbound verdict-critical part gates its
         // verdict too, or a firmware run could read pass where the static
@@ -528,7 +532,12 @@ fn emit_report(
         }
         jr.cosim.clone_from(cosim);
         jr.refusal.clone_from(strict_refusal);
-        println!("{}", jr.to_json());
+        machine = jr;
+    }
+    let verdict = machine.run_verdict();
+    crate::run_manifest::note_run_verdict(verdict.verdict);
+    if cfg.json {
+        println!("{}", machine.to_json());
     } else if cfg.plain {
         // A co-sim with no stress faults is NOT plainly "healthy" if it ran on
         // a substitute chip or never exercised the firmware. Surface those as
@@ -622,6 +631,9 @@ fn emit_report(
         if !gate_rows.is_empty() {
             print!("{}", crate::checks::boot::render_boot_gate_panel(gate_rows));
         }
+        if let Some(line) = closing_verdict_line(&verdict, &report) {
+            println!("{line}");
+        }
     } else {
         // Default text headless mode: the co-sim activity table is printed
         // elsewhere, but the boot power-up hazard and the gate panel must
@@ -641,6 +653,9 @@ fn emit_report(
         if !gate_rows.is_empty() {
             print!("{}", crate::checks::boot::render_boot_gate_panel(gate_rows));
         }
+        if let Some(line) = closing_verdict_line(&verdict, &crate::plain_faults(faults)) {
+            println!("{line}");
+        }
         let open = crate::result::coverage_open_active_refs(summary);
         if !open.is_empty() {
             println!(
@@ -657,11 +672,59 @@ fn emit_report(
     }
 }
 
+/// The closing `VERDICT:` line a text surface prints when the run is not a
+/// pass: the machine verdict's tag and reason (the line `--check` prints), so
+/// a failed solve with no fault reads PARTLY JUDGED, never healthy. A pass
+/// prints none: the surface's own summary already says it.
+fn closing_verdict_line(
+    verdict: &crate::result::RunVerdict,
+    report: &crate::plain::PlainReport,
+) -> Option<String> {
+    (verdict.verdict != "pass").then(|| {
+        let serious = report.serious_count();
+        let worth = (report.findings.len() - serious) + report.heads_up.len();
+        crate::reports::check::verdict_line(verdict, (serious, worth), None)
+    })
+}
+
 fn emit_evidence(cfg: &RunConfig, quiet: bool, evidence: &EvidenceArtifacts) {
     if !cfg.json {
         print!(
             "{}",
             crate::reports::render_evidence_appendix(&evidence.run_evidence, quiet, false)
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::closing_verdict_line;
+    use crate::plain::PlainReport;
+    use crate::result::RunVerdict;
+
+    /// A run whose solve failed with no fault closes on the machine
+    /// verdict's PARTLY JUDGED line and its reason; a converged pass prints
+    /// no closing line, its summary already says it.
+    #[test]
+    fn a_failed_solve_closes_partly_judged_and_a_pass_prints_no_verdict_line() {
+        let partial = RunVerdict {
+            verdict: "invalid",
+            reason: Some(
+                "PARTLY JUDGED: an analysis did not run to a result: the co-sim's analog \
+                 solve did not converge over 1 window(s)"
+                    .into(),
+            ),
+            conditions: Vec::new(),
+            partial: true,
+        };
+        let line = closing_verdict_line(&partial, &PlainReport::default()).unwrap();
+        assert!(
+            line.starts_with("VERDICT: PARTLY JUDGED: ") && line.contains("did not converge"),
+            "{line}"
+        );
+        assert_eq!(
+            closing_verdict_line(&RunVerdict::default(), &PlainReport::default()),
+            None
         );
     }
 }

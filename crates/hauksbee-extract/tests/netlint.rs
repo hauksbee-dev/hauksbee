@@ -406,50 +406,8 @@ lint_tests! {
       (node (ref U6) (pin 11) (pinfunction "EN") (pintype "input+no_connect")))"#;
 }
 
-// ---------------------------------------------------------------------------
-// LED current sanity check.
-// ---------------------------------------------------------------------------
-
-lint_tests! {
-    /// An LED from a 5 V rail through a 100 ohm series resistor to ground draws
-    /// ~30 mA, above the indicator band: fires.
-    led_overcurrent_fires: LedCurrentSanity == 1;
-    // 5 V rail, 68 ohm series, Vf 2 V -> ~44 mA, clearly over the 30 mA band.
-    r"
-    (comp (ref D1) (value LED) (footprint LED_SMD:LED_0603))
-    (comp (ref R1) (value 68) (footprint Resistor_SMD:R_0402))",
-    r#"
-    (net (code 1) (name "+5V") (node (ref R1) (pin 1)))
-    (net (code 2) (name "LEDA") (node (ref R1) (pin 2)) (node (ref D1) (pin 1)))
-    (net (code 3) (name "GND") (node (ref D1) (pin 2)))"#;
-
-    /// R15: the LED-current check must not abandon its rail search on the first
-    /// co-located R-ref part whose value does not parse. Here a DNP option resistor
-    /// (R0, value "DNP") sits on the anode net BEFORE the real 68 ohm series
-    /// resistor; the old `?` on `parse_ohms` returned None for the whole search, so
-    /// the over-current LED was silently passed. The genuine series resistor must
-    /// still be found and the finding must fire.
-    led_current_search_skips_unparseable_resistor_and_still_fires: LedCurrentSanity == 1,
-        "the DNP resistor must not abort the search before the real 68 ohm series R";
-    r"
-    (comp (ref D1) (value LED) (footprint LED_SMD:LED_0603))
-    (comp (ref R0) (value DNP) (footprint Resistor_SMD:R_0402))
-    (comp (ref R1) (value 68) (footprint Resistor_SMD:R_0402))",
-    r#"
-    (net (code 1) (name "+5V") (node (ref R1) (pin 1)))
-    (net (code 2) (name "LEDA") (node (ref R0) (pin 1)) (node (ref R1) (pin 2)) (node (ref D1) (pin 1)))
-    (net (code 3) (name "GND") (node (ref R0) (pin 2)) (node (ref D1) (pin 2)))"#;
-
-    /// A sane 1 kohm series resistor from 3.3 V (~1.3 mA) does not fire.
-    led_sane_current_is_clean: LedCurrentSanity == 0;
-    r"
-    (comp (ref D1) (value LED) (footprint LED_SMD:LED_0603))
-    (comp (ref R1) (value 1k) (footprint Resistor_SMD:R_0402))",
-    r#"
-    (net (code 1) (name "+3V3") (node (ref R1) (pin 1)))
-    (net (code 2) (name "LEDA") (node (ref R1) (pin 2)) (node (ref D1) (pin 1)))
-    (net (code 3) (name "GND") (node (ref D1) (pin 2)))"#;
-}
+// LED current: judged by hauksbee-checks' `led_current` rule (its unit tests
+// hold the faulty and legal-control cases this file used to).
 
 // ---------------------------------------------------------------------------
 // Output-vs-output contention check (schematic ERC).

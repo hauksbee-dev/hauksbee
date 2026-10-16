@@ -543,7 +543,7 @@ fn verdict_counts(
 /// not be judged. Either way the line ends on the shared
 /// [`crate::result::VerdictCause::reason`] sentence, the same one `--json`, the CI renderers and
 /// the web report carry, including its note that key parts were not modelled.
-fn verdict_line(
+pub(crate) fn verdict_line(
     verdict: &RunVerdict,
     (serious, worth_a_look): (usize, usize),
     copper_unvalidated: Option<&str>,

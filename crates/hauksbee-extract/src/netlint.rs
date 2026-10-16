@@ -407,7 +407,6 @@ impl ExtractedBoard {
         check_i2c_pullups(self, &mut report);
         check_sd_pullups(self, &mut report);
         check_floating_control_pins(self, &mut report);
-        check_led_current(self, &mut report);
         check_output_contention(self, &mut report);
         check_pin_functions(self, &mut report);
         check_design_file_qc(self, &mut report);
@@ -423,9 +422,7 @@ impl ExtractedBoard {
 // every board check (`hauksbee_models::netclass`).
 // ---------------------------------------------------------------------------
 
-pub use hauksbee_models::netclass::{
-    is_ground, is_positive_supply, is_supply, leaf as norm, rail_voltage,
-};
+pub use hauksbee_models::netclass::{is_ground, is_positive_supply, is_supply, leaf as norm};
 
 /// Is this component a plain two-terminal resistor (the kind that can be a
 /// pull-up)?
@@ -2060,7 +2057,9 @@ fn check_floating_control_pins(board: &ExtractedBoard, report: &mut NetLintRepor
 }
 
 // ---------------------------------------------------------------------------
-// Check 3: LED series-resistor current sanity.
+// Check 3 (retired): LED current. The one LED-current rule is
+// `hauksbee_checks::checks::led_current`, which reads the LED's own card and
+// the rails' resolved levels; the fixed-Vf estimate that lived here is gone.
 // ---------------------------------------------------------------------------
 
 /// Parse a resistor value string ("330", "1k", "4k7", "1.2K", "0R") to ohms via
@@ -2076,106 +2075,6 @@ pub fn parse_ohms(v: &str) -> Option<f64> {
     hauksbee_models::value::parse_value(v)
         .filter(|p| matches!(p.unit.as_deref(), None | Some("Ω")))
         .map(|p| p.si)
-}
-
-/// Typical LED forward voltage; we use a conservative single value since colour
-/// is rarely encoded. 2.0 V splits red (1.8) and green/blue (2.8..3.2); the
-/// check bands are wide enough that the exact Vf does not produce false fires.
-const LED_VF: f64 = 2.0;
-/// Indicator LED current sanity band (A). Below: too dim to matter (not a
-/// finding). Above HIGH: stressing the LED / wasting power.
-const LED_I_MAX_OK: f64 = 0.030; // 30 mA: typical indicator absolute-ish ceiling
-
-fn check_led_current(board: &ExtractedBoard, report: &mut NetLintReport) {
-    for led in &board.components {
-        // An unpopulated indicator draws nothing; do not model it.
-        if !AssemblyState::of(led).is_present() || !is_led(led) || led.pins.len() != 2 {
-            continue;
-        }
-        // Find the two nets of the LED.
-        let mut led_nets = [None, None];
-        for (i, p) in led.pins.iter().enumerate().take(2) {
-            led_nets[i] = p.net;
-        }
-        let [Some(na), Some(nb)] = led_nets else {
-            continue;
-        };
-
-        // One side should ultimately reach a rail through a series resistor and
-        // the other side a return (ground or a driven low). We look for a
-        // resistor sharing one of the LED's nets whose far pad is a rail, and
-        // require the LED's other net to be ground (the classic always-on /
-        // indicator topology). GPIO-driven LEDs (far side an MCU pin) are not
-        // flagged: the firmware sets the level and the resistor still bounds the
-        // current, so the static current is the worst case either way - but to
-        // stay conservative we only fire when one terminal is a hard rail and
-        // the other a hard ground.
-        for (anode_net, cathode_net) in [(na, nb), (nb, na)] {
-            // series resistor on the anode side reaching a rail
-            let rail_v = resistor_to_rail(board, anode_net, led.reference.as_str());
-            let cathode_is_gnd = board.net(cathode_net).is_some_and(|n| is_ground(&n.name));
-            if let Some((rref, ohms, vrail)) = rail_v {
-                if cathode_is_gnd && ohms > 0.0 {
-                    let i = (vrail - LED_VF) / ohms;
-                    if i > LED_I_MAX_OK {
-                        report.findings.push(LintFinding {
-                            check: LintCheck::LedCurrentSanity,
-                            severity: Severity::Low,
-                            message: format!(
-                                "{} via {} ({:.0}Ω) from {:.1}V rail draws ~{:.1} mA (>{:.0} mA)",
-                                led.reference,
-                                rref,
-                                ohms,
-                                vrail,
-                                i * 1e3,
-                                LED_I_MAX_OK * 1e3
-                            ),
-                            refs: vec![led.reference.clone(), rref],
-                            nets: vec![],
-                        });
-                    }
-                    break;
-                }
-            }
-        }
-    }
-}
-
-/// If a resistor has one pad on `net` and the other on a power rail, return
-/// (resistor ref, ohms, rail voltage).
-fn resistor_to_rail(
-    board: &ExtractedBoard,
-    net: i64,
-    _exclude: &str,
-) -> Option<(String, f64, f64)> {
-    for (c, _p) in members(board, net) {
-        // An absent or identity-refused resistor bounds no current.
-        if !AssemblyState::of(c).is_present() || !is_resistor(c) {
-            continue;
-        }
-        // Skip an R-ref part whose value does not parse (a DNP/NC option
-        // resistor, a bare MPN) and keep scanning; the genuine series resistor
-        // to the rail may be a LATER member. Using `?` here abandoned the whole
-        // search on the first unparseable co-located resistor, silently voiding
-        // the LED-current sanity check (the same abort-via-`?` the sub-ohm "R47"
-        // fix already guarded against).
-        let Some(ohms) = parse_ohms(&c.value) else {
-            continue;
-        };
-        for op in &c.pins {
-            if op.net == Some(net) {
-                continue;
-            }
-            if let Some(oid) = op.net {
-                if let Some(on) = board.net(oid) {
-                    if let Some(v) = rail_voltage(&on.name) {
-                        return Some((c.reference.clone(), ohms, v));
-                    }
-                }
-            }
-        }
-    }
-    None
 }
 
 // ---------------------------------------------------------------------------

@@ -18,7 +18,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
-    is_resistor, Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
+    is_plain_inductor, is_resistor, Component, ExtractedBoard, LintCheck, LintFinding,
+    NetLintReport, Severity,
 };
 use hauksbee_ir::evidence::{Assumption, ModelUncertainty};
 use hauksbee_models::derating::{temp_span, TempRef};
@@ -139,9 +140,10 @@ fn model_output_range(model: &ModelEntry) -> Option<RailRange> {
         .or_else(|| model.params.get_f64("vout").map(RailRange::point))
 }
 
-/// Ohms of a fitted two-terminal resistor between nets `a` and `b` (either
-/// way round), or `None` when the part is not one.
-fn resistor_between(c: &Component, a: i64, b: impl Fn(i64) -> bool) -> Option<f64> {
+/// A fitted two-terminal resistor between nets `a` and `b` (either way
+/// round): its ohms and the fractional tolerance it states, `0` when it states
+/// none. `None` when the part is not one.
+fn resistor_between(c: &Component, a: i64, b: impl Fn(i64) -> bool) -> Option<(f64, f64)> {
     if !AssemblyState::of(c).is_present() || !is_resistor(c) {
         return None;
     }
@@ -151,31 +153,131 @@ fn resistor_between(c: &Component, a: i64, b: impl Fn(i64) -> bool) -> Option<f6
     };
     let joins = (first == a && b(second)) || (second == a && b(first));
     let ohms = parse_value(&c.value).map(|value| value.si)?;
-    (joins && ohms.is_finite() && ohms > 0.0).then_some(ohms)
+    (joins && ohms.is_finite() && ohms > 0.0)
+        .then(|| (ohms, super::stated_tolerance(c).unwrap_or(0.0)))
 }
 
-/// Parallel combination of `ohms`, `None` when empty.
-fn parallel(ohms: impl Iterator<Item = f64>) -> Option<f64> {
-    let g: f64 = ohms.map(f64::recip).sum();
-    (g > 0.0).then(|| g.recip())
+/// The parallel combination of resistors given as (ohms, tolerance): the
+/// lowest and highest it can read with each resistor at its stated tolerance
+/// (both its nominal when none states one). `None` when empty.
+fn parallel(parts: impl Iterator<Item = (f64, f64)>) -> Option<Spread> {
+    let (mut least_g, mut most_g) = (0.0_f64, 0.0_f64);
+    for (ohms, tol) in parts {
+        // A resistor at +tol ohms conducts least; at -tol, most.
+        least_g += (ohms * (1.0 + tol)).recip();
+        most_g += (ohms * (1.0 - tol).max(f64::EPSILON)).recip();
+    }
+    (least_g > 0.0).then(|| Spread {
+        low: most_g.recip(),
+        high: least_g.recip(),
+    })
 }
 
-/// The output a feedback-regulated converter sets with the board's own
-/// divider: `Vref * (1 + Rtop / Rbottom)`, Rtop from the feedback pin to the
-/// output (or a net tied to it) and Rbottom from the feedback pin to ground,
-/// across the card's stated reference interval when it gives one. `None`
-/// when the card has no feedback pin or the divider is not on the board, in
-/// which case the card's own set point stands.
+/// An ohmic value and the range its stated tolerances allow.
+#[derive(Debug, Clone, Copy)]
+struct Spread {
+    low: f64,
+    high: f64,
+}
+
+/// How a board divider sets an adjustable part's output from its reference.
+#[derive(Debug, Clone, Copy)]
+enum DividerLaw {
+    /// The error amplifier holds FB at `Vref` above ground: `Vref * (1 +
+    /// Rtop / Rbottom)`, Rtop from FB to the output.
+    Grounded,
+    /// The LM317 class (no ground pin): `Vref` sits between OUT and ADJ, and
+    /// the ADJ pin's own current flows on through Rbottom: `Vref * (1 +
+    /// Rbottom / Rtop) + Iadj * Rbottom`.
+    OutReferenced { iadj_a: f64 },
+}
+
+/// The two nets of a two-terminal part, when it is one.
+fn ends(c: &Component) -> Option<(i64, i64)> {
+    let nets: Vec<i64> = c.pins.iter().filter_map(|pin| pin.net).collect();
+    let [a, b] = nets[..] else { return None };
+    Some((a, b))
+}
+
+/// The net a divider from `fb_net` senses: `out_net` itself (or a net tied to
+/// it) when a feedback resistor lands there, else the one non-ground net the
+/// feedback resistors reach that a fitted inductor joins to `out_net` (a
+/// buck's card names its switch node as the output; the rail is past the
+/// inductor). `None` when neither is on the board.
+fn sensed_net(
+    board: &ExtractedBoard,
+    tied: &BTreeMap<i64, BTreeSet<i64>>,
+    fb_net: i64,
+    out_net: i64,
+) -> Option<i64> {
+    let on_output = |n: i64| n == out_net || tied.get(&out_net).is_some_and(|set| set.contains(&n));
+    let grounded = |n: i64| board.net(n).is_some_and(|net| is_ground(&net.name));
+    let fitted = |c: &&Component| AssemblyState::of(c).is_present();
+    let reached: BTreeSet<i64> = (board.components.iter().filter(fitted))
+        .filter(|c| is_resistor(c))
+        .filter_map(|c| match ends(c)? {
+            (a, b) if a == fb_net => Some(b),
+            (a, b) if b == fb_net => Some(a),
+            _ => None,
+        })
+        .filter(|&n| n != fb_net && !grounded(n))
+        .collect();
+    if reached.iter().any(|&n| on_output(n)) {
+        return Some(out_net);
+    }
+    let past_inductor = |n: i64| {
+        (board.components.iter().filter(fitted))
+            .filter(|c| is_plain_inductor(c))
+            .any(|c| ends(c).is_some_and(|e| e == (out_net, n) || e == (n, out_net)))
+    };
+    let mut sensed = reached.into_iter().filter(|&n| past_inductor(n));
+    let first = sensed.next()?;
+    sensed.next().is_none().then_some(first)
+}
+
+/// The feedback pin, reference and law of an adjustable part: a converter
+/// with a feedback pin, or a regulator card with a `vref` and an `fb`/`adj`
+/// pin (a ground pin on the card makes it grounded, see [`DividerLaw`]).
+fn adjustable(model: &ModelEntry) -> Option<(&str, f64, DividerLaw)> {
+    let converter = model.behavioral.converter.as_ref();
+    if let Some(feedback) = converter.and_then(|c| c.feedback.as_ref()) {
+        return Some((feedback.pin.as_str(), feedback.vref_v, DividerLaw::Grounded));
+    }
+    let regulator = model.kind == ComponentKind::Vreg
+        && converter.is_none()
+        && !model.params.get_bool("shunt").unwrap_or(false);
+    let vref = (model.params.get_f64("vref")).filter(|v| regulator && v.is_finite() && *v > 0.0)?;
+    let pin = ["fb", "adj"]
+        .into_iter()
+        .find(|role| model.pins.values().any(|known| known == role))?;
+    let law = if model.pins.values().any(|known| known == "gnd") {
+        DividerLaw::Grounded
+    } else {
+        let iadj_a = model.params.get_f64("iadj_a").filter(|a| a.is_finite());
+        DividerLaw::OutReferenced {
+            iadj_a: iadj_a.unwrap_or(0.0),
+        }
+    };
+    Some((pin, vref, law))
+}
+
+/// The rail an adjustable part ([`adjustable`]) sets with the board's own
+/// divider, and the net it is on: Rtop from the feedback pin to the sensed
+/// output ([`sensed_net`]) and Rbottom from the feedback pin to ground, by the
+/// card's law, across the card's stated reference interval when it gives one.
+/// `None` when the card is not adjustable or the divider is not on the board,
+/// in which case the card's own set point stands.
 fn feedback_output_range(
     board: &ExtractedBoard,
     tied: &BTreeMap<i64, BTreeSet<i64>>,
     (comp, model): (&Component, &ModelEntry),
     uncertainty: &[ModelUncertainty],
     out_net: i64,
-) -> Option<RailRange> {
-    let feedback = model.behavioral.converter.as_ref()?.feedback.as_ref()?;
-    let fb_net = role_net_id(comp, model, &feedback.pin)?;
-    let on_output = |n: i64| n == out_net || tied.get(&out_net).is_some_and(|set| set.contains(&n));
+) -> Option<(i64, RailRange)> {
+    let (pin, vref, law) = adjustable(model)?;
+    let fb_net = role_net_id(comp, model, pin)?;
+    let sensed = sensed_net(board, tied, fb_net, out_net)?;
+    let on_output = |n: i64| n == sensed || tied.get(&sensed).is_some_and(|set| set.contains(&n));
     let grounded = |n: i64| board.net(n).is_some_and(|net| is_ground(&net.name));
     let top = parallel(
         board
@@ -197,15 +299,29 @@ fn feedback_output_range(
                 low,
                 high,
                 ..
-            } if parameter == "feedback_reference" && low <= high => Some((*low, *high)),
+            } if (parameter == "feedback_reference" || parameter == "vref") && low <= high => {
+                Some((*low, *high))
+            }
             _ => None,
         })
-        .unwrap_or((feedback.vref_v, feedback.vref_v));
-    let gain = 1.0 + top / bottom;
-    Some(RailRange {
-        min_v: lo * gain,
-        max_v: hi * gain,
-    })
+        .unwrap_or((vref, vref));
+    // The lowest and highest gain and offset the stated resistor tolerances
+    // allow; with none stated they collapse to the nominal divider.
+    let ((gain_lo, offset_lo), (gain_hi, offset_hi)) = match law {
+        DividerLaw::Grounded => (
+            (1.0 + top.low / bottom.high, 0.0),
+            (1.0 + top.high / bottom.low, 0.0),
+        ),
+        DividerLaw::OutReferenced { iadj_a } => (
+            (1.0 + bottom.low / top.high, iadj_a * bottom.low),
+            (1.0 + bottom.high / top.low, iadj_a * bottom.high),
+        ),
+    };
+    let range = RailRange {
+        min_v: lo.mul_add(gain_lo, offset_lo),
+        max_v: hi.mul_add(gain_hi, offset_hi),
+    };
+    Some((sensed, range))
 }
 
 /// Nets joined by a fitted net tie or near-zero-ohm link, each net mapped to
@@ -361,9 +477,7 @@ fn regulator_ranges(board: &ExtractedBoard, st: &BoardStatics<'_>) -> BTreeMap<i
     let mut ranges = BTreeMap::new();
     let tied = tied_nets(board);
     for (comp, model) in st.parts(board) {
-        let Some(range) = model_output_range(model) else {
-            continue;
-        };
+        let range = model_output_range(model);
         let output_role = model
             .behavioral
             .converter
@@ -383,8 +497,15 @@ fn regulator_ranges(board: &ExtractedBoard, st: &BoardStatics<'_>) -> BTreeMap<i
                 .and_then(|part| resolve(st.lib, part).provenance)
                 .map(|source| source.uncertainty().to_vec())
                 .unwrap_or_default();
+            // The divider's rail lands on the net it senses; a card's own set
+            // point stays on its output pin's net (a buck's switch node).
             let feedback = feedback_output_range(board, &tied, (comp, model), &uncertainty, net_id);
-            ranges.insert(net_id, feedback.unwrap_or(range));
+            if let Some((sensed, set)) = feedback {
+                ranges.insert(sensed, set);
+            }
+            if let Some(range) = range.filter(|_| feedback.is_none_or(|(n, _)| n != net_id)) {
+                ranges.insert(net_id, range);
+            }
         }
     }
     // A regulated net reaches the loads through net ties and zero-ohm links
@@ -1767,6 +1888,157 @@ basis = "Recommended Operating Conditions, V+ row"
         assert!(msg.contains("4.365..4.635"), "{msg}");
         assert!(!msg.contains("Tie "), "a margin is not a rewire: {msg}");
         assert_eq!(found[0].severity, Severity::Low, "{msg}");
+    }
+
+    /// The divider's own resistor tolerances widen the set point: 400k/50k
+    /// sets exactly the load's 4.5 V maximum, so 1 % parts reach 4.58 V
+    /// (a margin note, under abs max) where the same values with no stated
+    /// tolerance are judged at nominal and say nothing.
+    #[test]
+    fn divider_set_point_carries_the_resistor_tolerances() {
+        let lib = library("fbrtol", BOOST_AND_LOAD);
+        let load_report = |top: &str, bottom: &str| {
+            let b = board(
+                &[(1, "GND"), (2, "VIN"), (3, "FB"), (4, "OUT")],
+                vec![
+                    part(
+                        "U1",
+                        "FB_BOOST",
+                        vec![pin("1", 2), pin("2", 1), pin("3", 3), pin("4", 4)],
+                    ),
+                    resistor("R1", top, 3, 4),
+                    resistor("R2", bottom, 3, 1),
+                    part("U2", "LOAD_PART", vec![pin("1", 4), pin("2", 1)]),
+                ],
+            );
+            envelope_lint(&b, &lib)
+                .of_check(LintCheck::OperatingEnvelope)
+                .filter(|f| f.refs.contains(&"U2".to_string()))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let found = load_report("400k 1%", "50k 1%");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("4.421..4.581"), "{:?}", found[0]);
+        assert!(
+            load_report("400k", "50k").is_empty(),
+            "no stated tolerance is judged at the nominal divider"
+        );
+        assert!(
+            load_report("390k 1%", "50k 1%").is_empty(),
+            "a divider whose tolerance corner stays inside the window says nothing"
+        );
+    }
+
+    /// A buck whose card names its switch node as the output, an LDO set by
+    /// the LM317 law, and the load from [`BOOST_AND_LOAD`].
+    const BUCK_AND_ADJ: &str = r#"
+[[models]]
+id = "fb_buck"
+kind = "vreg"
+description = "feedback-set buck fixture whose output pin is the switch node"
+[models.match]
+value_re = "^FB_BUCK$"
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "fb"
+"4" = "sw"
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "sw"
+in_pin = "in"
+vout_setpoint = 9.0
+[models.behavioral.converter.feedback]
+pin = "fb"
+vref_v = 0.5
+
+[[models]]
+id = "adj_ldo"
+kind = "vreg"
+description = "ADJ-referenced (no ground pin) adjustable LDO fixture"
+[models.match]
+value_re = "^ADJ_LDO$"
+[models.params]
+vref = 1.25
+iadj_a = 50.0e-6
+dropout_v = 3.0
+[models.pins]
+"1" = "fb"
+"2" = "out"
+"3" = "in"
+"#;
+
+    /// The load U2's findings on `parts` (with the load on net 5).
+    fn load_findings(parts: Vec<Component>, nets: &[(i64, &str)]) -> Vec<LintFinding> {
+        let card = format!("{BOOST_AND_LOAD}\n{BUCK_AND_ADJ}");
+        let lib = library("adjrails", &card);
+        let mut parts = parts;
+        parts.push(part("U2", "LOAD_PART", vec![pin("1", 5), pin("2", 1)]));
+        let report = envelope_lint(&board(nets, parts), &lib);
+        (report.of_check(LintCheck::OperatingEnvelope))
+            .filter(|f| f.refs.contains(&"U2".to_string()))
+            .cloned()
+            .collect()
+    }
+
+    fn resistor(reference: &str, value: &str, net_a: i64, net_b: i64) -> Component {
+        let mut built = part(reference, value, vec![pin("1", net_a), pin("2", net_b)]);
+        built.lib_id = "Device:R".into();
+        built
+    }
+
+    /// The buck's divider senses the rail past the inductor, not the switch
+    /// node its card names: the load is judged at Vref * (1 + Rtop/Rbot).
+    /// Faulty: 450k/50k sets 5.0 V, past the load's 4.5 V. Legal control:
+    /// 270k/50k sets 3.2 V, inside it, so nothing is said.
+    #[test]
+    fn a_bucks_divider_sets_the_rail_past_its_inductor() {
+        let buck = |top: &str| {
+            let mut l1 = part("L1", "10uH", vec![pin("1", 4), pin("2", 5)]);
+            l1.lib_id = "Device:L".into();
+            let parts = vec![
+                part(
+                    "U1",
+                    "FB_BUCK",
+                    vec![pin("1", 2), pin("2", 1), pin("3", 3), pin("4", 4)],
+                ),
+                l1,
+                resistor("R1", top, 3, 5),
+                resistor("R2", "50k", 3, 1),
+            ];
+            let nets = [(1, "GND"), (2, "VIN"), (3, "FB"), (4, "SW"), (5, "VOUT")];
+            load_findings(parts, &nets)
+        };
+        let high = buck("450k");
+        assert_eq!(high.len(), 1, "{high:#?}");
+        assert!(
+            high[0].message.contains("5.000..5.000"),
+            "{}",
+            high[0].message
+        );
+        assert_ne!(high[0].severity, Severity::Low, "{}", high[0].message);
+        assert!(buck("270k").is_empty(), "{:#?}", buck("270k"));
+    }
+
+    /// An adjustable LDO with no ground pin holds Vref between OUT and ADJ
+    /// (the LM317 law): 240R OUT-ADJ over 390R ADJ-GND is 3.30 V, inside the
+    /// load's window (the grounded law would read 2.02 V and fire). Faulty:
+    /// 715R ADJ-GND sets 5.01 V, past it.
+    #[test]
+    fn an_adj_referenced_ldo_sets_its_rail_by_the_lm317_law() {
+        let ldo = |bottom: &str| {
+            let parts = vec![
+                part("U1", "ADJ_LDO", vec![pin("1", 3), pin("2", 5), pin("3", 2)]),
+                resistor("R1", "240", 5, 3),
+                resistor("R2", bottom, 3, 1),
+            ];
+            load_findings(parts, &[(1, "GND"), (2, "VIN"), (3, "ADJ"), (5, "VOUT")])
+        };
+        assert!(ldo("390").is_empty(), "{:#?}", ldo("390"));
+        let high = ldo("715");
+        assert_eq!(high.len(), 1, "{high:#?}");
+        assert!(high[0].message.contains("5.01"), "{}", high[0].message);
     }
 
     /// Ensemble members on one board share its statics, yet each is judged at
