@@ -373,7 +373,7 @@ fn an_unbounded_assertion_reports_a_number_and_judges_nothing() {
     let pu = support::row(&r, "pu");
     assert!(pu.measured && pu.passed && !pu.invalid, "{pu:?}");
     assert!(
-        pu.detail.contains("measured") && pu.detail.contains("3.300"),
+        pu.detail.contains("measured") && pu.detail.contains("3.3 V"),
         "{}",
         pu.detail
     );

@@ -42,6 +42,7 @@ use hauksbee_extract::{
 use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
 
 use super::floating_inputs::is_cmos_logic_value;
+use hauksbee_ir::units::format_volts;
 
 /// Forward drive (V) across a base-emitter junction that counts as conducting:
 /// one junction drop plus margin.
@@ -367,13 +368,10 @@ fn base_group_finding(hits: &[BaseHit]) -> LintFinding {
     LintFinding {
         check: LintCheck::UnlimitedBaseDrive,
         severity: Severity::High,
-        message: format!(
-            "{subject}, holding it at {:.1} V with nothing in series, and the emitter is tied to '{}': \
-             the base-emitter junction is forward-biased by about {:.1} V and conducts whatever the \
+        message: format!( "{subject}, holding it at {} with nothing in series, and the emitter is tied to '{}': \
+             the base-emitter junction is forward-biased by about {} and conducts whatever the \
              driver can supply, far past the transistor's rating. Put a series base resistor (a few \
-             kilohms for a small-signal transistor) between the driver and the base.",
-            first.driver.level, first.emitter, first.drive
-        ),
+             kilohms for a small-signal transistor) between the driver and the base.", format_volts(first.driver.level), first.emitter, format_volts(first.drive)),
         refs: hits
             .iter()
             .map(|h| h.part.clone())

@@ -68,7 +68,7 @@ fn an_led_straight_off_a_logic_output_overstresses_both_at_the_strong_corner() {
         assert!(f.message.contains("strong-drive corner"), "{}", f.message);
     }
     let pin = found.iter().find(|f| f.refs == ["U1"]).unwrap();
-    assert!(pin.message.contains("35.0 mA"), "{}", pin.message);
+    assert!(pin.message.contains("35 mA"), "{}", pin.message);
 }
 
 /// Control: through 1k the output delivers a few mA at either corner.

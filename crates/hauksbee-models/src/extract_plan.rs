@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::extract_usage::Billing;
+use hauksbee_ir::units::format_percent;
 
 /// A plan's usage, in percent of each limit window (`None`: not reported).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -272,8 +273,14 @@ pub fn report(tool: &str, before: Option<Reading>, after: Option<Reading>) -> St
         return format!("plan usage: usage unavailable (could not read the {plan})");
     };
     let window = |name: &str, b: Option<f64>, a: Option<f64>| {
-        b.zip(a)
-            .map(|(b, a)| format!("{name} {b:.0}% -> {a:.0}% ({:+.0} points)", a - b))
+        b.zip(a).map(|(b, a)| {
+            format!(
+                "{name} {} -> {} ({:+.0} points)",
+                format_percent(b, 0),
+                format_percent(a, 0),
+                a - b
+            )
+        })
     };
     let parts: Vec<String> = [
         window("week", b.week, a.week),

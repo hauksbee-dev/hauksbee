@@ -81,11 +81,7 @@ fn a_logic_output_into_a_base_through_47_ohm_is_overstressed() {
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(|| panic!("message names the current: {}", f.message));
     assert!((30.0..60.0).contains(&ma), "{ma} mA: {}", f.message);
-    assert!(
-        f.message.contains("over its 25.0 mA rating"),
-        "{}",
-        f.message
-    );
+    assert!(f.message.contains("over its 25 mA rating"), "{}", f.message);
 }
 
 #[test]

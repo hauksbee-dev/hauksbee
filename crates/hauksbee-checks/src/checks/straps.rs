@@ -768,11 +768,11 @@ fn judge_divider(
         [false, true, false] => ("an undefined level (between VIL and VIH)", Severity::High),
         _ => ("an undefined, corner-dependent level", Severity::High),
     };
-    let span = |(a, b): (f64, f64)| {
-        if (b - a).abs() < 5e-3 {
-            format!("{a:.2} V")
+    let span = |pair: (f64, f64)| {
+        if (pair.1 - pair.0).abs() < 5e-3 {
+            format_volts(pair.0)
         } else {
-            format!("{a:.2}-{b:.2} V")
+            format_series(&<[f64; 2]>::from(pair), "-", "V")
         }
     };
     Ok(Some((severity, format!(
@@ -787,6 +787,7 @@ fn judge_divider(
 // boot check (`netclass::may_be_supply`): an exact-voltage table misses VBAT,
 // VSYS and VMOT, which lets the clock-reach hop wander onto a rail and hides a
 // genuine wrong-direction pull.
+use hauksbee_ir::units::{format_series, format_volts};
 use hauksbee_models::netclass::may_be_supply as is_rail_name;
 
 /// True when the only thing on `net_id` is `mcu` itself, no resistor, no other
@@ -1099,7 +1100,7 @@ vih = [0.0, 2.0]
                 ),
                 &[(
                     High,
-                    &["1.57-1.73 V", "VIL <= 0.90 V", "VIH >= 2.00 V", "undefined"],
+                    &["1.567-1.732 V", "VIL <= 900 mV", "VIH >= 2 V", "undefined"],
                 )],
             ),
             // 27k/10k crosses VIL inside the +3V3 envelope: 0.85 V at 3.135 V but
@@ -1154,7 +1155,7 @@ vih = [0.0, 2.0]
             "solved rail",
             &faulty,
             &solved,
-            &[(Medium, &["2.36-3.15 V", "4 rail corner(s)"])],
+            &[(Medium, &["2.364-3.15 V", "4 rail corner(s)"])],
         );
     }
 

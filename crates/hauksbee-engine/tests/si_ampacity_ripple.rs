@@ -187,7 +187,7 @@ fn si_surfaces_ampacity_on_undersized_routed_rail() {
     let f = &amp[0];
     assert!(f.nets.contains(&"VBAT".to_string()), "fires on VBAT");
     assert!(
-        f.message.contains("TP4054") || f.message.contains("0.40 A"),
+        f.message.contains("TP4054") || f.message.contains("400.9 mA"),
         "cites the regulated charge current: {}",
         f.message
     );
@@ -221,7 +221,7 @@ fn an_assumed_copper_weight_reports_but_does_not_convict() {
     assert!(
         note.message.contains("NOT a verdict")
             && note.message.contains("declares no stackup")
-            && note.message.contains("0.40 A"),
+            && note.message.contains("400.9 mA"),
         "the note must state the shortfall, the assumption and the unlock: {}",
         note.message
     );
@@ -438,7 +438,7 @@ fn si_ripple_uses_programmed_load_but_not_capability_or_invented_rating() {
         .find(|f| f.check == SiCheck::InputCapRipple && f.severity == SiSeverity::Info)
         .expect("the resolved buck must leave an input-cap ripple info note");
     assert!(
-        info.message.contains("I_out 0.40 A")
+        info.message.contains("I_out 400.9 mA")
             && info.message.to_ascii_lowercase().contains("tp4054")
             && info
                 .message
@@ -467,7 +467,7 @@ fn si_ripple_fires_from_shipped_exact_cap_rating_and_named_nominal_duty() {
     );
     let finding = findings[0];
     assert!(finding.message.contains("C1"));
-    assert!(finding.message.contains("3.00 A_rms"));
+    assert!(finding.message.contains("3 A_rms"));
     assert!(finding.message.contains("D=0.500"));
     assert!(finding.message.contains("VIN_5V") && finding.message.contains("VOUT_2V5"));
     assert!(finding.message.contains("~1.67x"));
@@ -488,7 +488,7 @@ fn si_ripple_does_not_assume_half_duty_when_rail_voltages_are_unknown() {
         .find(|finding| finding.check == SiCheck::InputCapRipple)
         .expect("the evidence-complete stage records why it abstained");
     assert!(note.message.contains("duty") && note.message.contains("unknown"));
-    assert!(note.message.contains("10.00 A") && note.message.contains("3.00 A_rms"));
+    assert!(note.message.contains("10 A") && note.message.contains("3 A_rms"));
 }
 
 /// Parallel input capacitors divide ripple according to their frequency-

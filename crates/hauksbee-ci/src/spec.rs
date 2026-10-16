@@ -43,6 +43,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::error::{near_matches, SpecError};
+use hauksbee_ir::units::format_celsius_to;
 
 // ── Declarative sensor ────────────────────────────────────────────────────────
 
@@ -191,20 +192,6 @@ fn need(ok: bool, msg: String) -> Result<(), SpecError> {
     } else {
         Err(SpecError::Invalid(msg))
     }
-}
-
-/// A temperature as the reports print it: `91.7 C`, a space before the unit and
-/// never `-0`. The one spelling for every temperature a verdict states.
-#[must_use]
-pub(crate) fn fmt_c(celsius: f64) -> String {
-    // `+ 0.0` turns IEEE negative zero into zero (it leaves every other value).
-    format!("{} C", celsius + 0.0)
-}
-
-/// A measured temperature to one decimal, in the same spelling as [`fmt_c`].
-#[must_use]
-pub(crate) fn fmt_c1(celsius: f64) -> String {
-    format!("{:.1} C", celsius + 0.0)
 }
 
 /// Absolute zero (C). No temperature field of a spec may sit at or below it.
@@ -2897,7 +2884,7 @@ impl Assertion {
             ),
             "max_temp" => self.celsius.map_or_else(
                 || format!("Tj({reference}) <= device max"),
-                |c| format!("Tj({reference}) <= {}", fmt_c(c)),
+                |c| format!("Tj({reference}) <= {}", format_celsius_to(c, 3)),
             ),
             "peripheral" => {
                 let id = self.id.as_deref().unwrap_or_default();

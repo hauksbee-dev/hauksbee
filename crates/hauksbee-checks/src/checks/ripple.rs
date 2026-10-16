@@ -41,6 +41,12 @@ use hauksbee_models::ModelLibrary;
 use super::converter::{detect_converters_with_abstentions, BulkCap, ConverterStage, Topology};
 use hauksbee_bind::binder::resolve;
 use hauksbee_extract::assembly::AssemblyState;
+use hauksbee_ir::units::{format_amps, format_engineering};
+
+/// A ripple current in the unit the datasheet rates it in (RMS amps).
+fn rms(a: f64) -> String {
+    format_engineering(a, "A_rms")
+}
 
 /// Worst-case input-cap RMS ripple current of a buck (A): `I_out*sqrt(D - D^2)`.
 /// `d` is the duty cycle `Vout/Vin` in (0,1). Clamps `d` to the open interval so
@@ -290,11 +296,10 @@ fn stage_ripple_finding(
         (rating, i_out) => {
             let why = match (rating, i_out.as_ref()) {
                 (None, None) => "it has no part-specific datasheet ripple rating and the output current is not attributable".to_string(),
-                (None, Some((i_out_a, citation))) => format!(
-                    "it has no part-specific datasheet ripple rating; attributable I_out {i_out_a:.2} A from: {citation}"
-                ),
+                (None, Some((i_out_a, citation))) => format!( "it has no part-specific datasheet ripple rating; attributable I_out {} from: {citation}", format_amps(i_out_a)),
                 (Some(rating_a), None) => format!(
-                    "it has a {rating_a:.2} A_rms part-specific datasheet rating but the output current is not attributable"
+                    "it has a {} part-specific datasheet rating but the output current is not attributable",
+                    rms(rating_a)
                 ),
                 (Some(_), Some(_)) => unreachable!("complete evidence handled above"),
             };
@@ -317,8 +322,11 @@ fn stage_ripple_finding(
     if !(rating_a > 0.0) {
         return Some(input_cap_note(format!(
             "input-cap ripple: buck stage on '{}' has input bulk cap {} ({}) whose \
-             ripple rating is {:.2} A_rms, not a usable positive value - not flagged.",
-            stage.input_rail.1, cap.reference, cap.value, rating_a,
+             ripple rating is {}, not a usable positive value - not flagged.",
+            stage.input_rail.1,
+            cap.reference,
+            cap.value,
+            rms(rating_a),
         )));
     }
 
@@ -326,16 +334,13 @@ fn stage_ripple_finding(
         return Some(SiFinding {
             check: SiCheck::InputCapRipple,
             severity: SiSeverity::Info,
-            message: format!(
-                "input-cap ripple: buck stage '{} -> {}' has attributable I_out {:.2} A and {} ({}) has a {:.2} A_rms part-specific datasheet rating, but the rail names do not provide one unambiguous nominal voltage each; duty D=Vout/Vin is unknown - not flagged. I_out from: {}",
+            message: format!( "input-cap ripple: buck stage '{} -> {}' has attributable I_out {} and {} ({}) has a {} part-specific datasheet rating, but the rail names do not provide one unambiguous nominal voltage each; duty D=Vout/Vin is unknown - not flagged. I_out from: {}",
                 stage.input_rail.1,
-                stage.output_rail.1,
-                i_out_a,
+                stage.output_rail.1, format_amps(i_out_a),
                 cap.reference,
                 cap.value,
-                rating_a,
-                i_cite,
-            ),
+                rms(rating_a),
+                i_cite),
             refs: vec![cap.reference.clone()],
             nets: vec![stage.input_rail.1.clone(), stage.output_rail.1.clone()],
         });
@@ -366,20 +371,20 @@ fn ripple_verdict(
         (
             SiSeverity::Medium,
             format!(
-                "input bulk cap {} ({}) on buck '{} -> {}' carries ~{:.2} A_rms ripple \
-                 (I_out {:.1} A, D={:.3} from named nominal rail voltages) but is rated {:.2} A_rms{}: ~{:.2}x \
+                "input bulk cap {} ({}) on buck '{} -> {}' carries ~{} ripple \
+                 (I_out {}, D={:.3} from named nominal rail voltages) but is rated {}{}: ~{:.2}x \
                  overstress, which shortens cap life (I^2*ESR self-heating). I_out from: {}",
                 cap.reference,
                 cap.value,
                 stage.input_rail.1,
                 stage.output_rail.1,
-                i_rms,
-                i_out_a,
+                rms(i_rms),
+                format_amps(i_out_a),
                 duty,
-                rating_a,
+                rms(rating_a),
                 " [datasheet]",
                 ratio,
-                i_cite,
+                i_cite
             ),
             vec![stage.input_rail.1.clone()],
         )
@@ -387,13 +392,13 @@ fn ripple_verdict(
         (
             SiSeverity::Info,
             format!(
-                "input bulk cap {} on '{} -> {}': ~{:.2} A_rms ripple at D={:.3} from named nominal rail voltages vs {:.2} A_rms rating ({:.2}x) - ok.",
+                "input bulk cap {} on '{} -> {}': ~{} ripple at D={:.3} from named nominal rail voltages vs {} rating ({:.2}x) - ok.",
                 cap.reference,
                 stage.input_rail.1,
                 stage.output_rail.1,
-                i_rms,
+                rms(i_rms),
                 duty,
-                rating_a,
+                rms(rating_a),
                 ratio
             ),
             vec![stage.input_rail.1.clone(), stage.output_rail.1.clone()],

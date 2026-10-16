@@ -29,6 +29,7 @@ use hauksbee_extract::{
     ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity, INFORMATIONAL_MARKER,
     REMEDY_MARKER,
 };
+use hauksbee_ir::units::format_volts;
 use hauksbee_models::ModelLibrary;
 
 /// How many parts a message lists before it counts the rest.
@@ -64,7 +65,12 @@ fn unfitted_clause(unfitted: &[Unfitted]) -> String {
 fn volts_clause(rail: &RailBasis) -> String {
     rail.volts.map_or_else(
         || "The analysis leaves it unpowered".to_string(),
-        |v| format!("The analysis held it at {v:.2} V by its name alone"),
+        |v| {
+            format!(
+                "The analysis held it at {} by its name alone",
+                format_volts(v)
+            )
+        },
     )
 }
 
@@ -123,7 +129,7 @@ fn unfitted_note(rail: &RailBasis) -> LintFinding {
         )
     };
     let held = rail.volts.map_or_else(String::new, |v| {
-        format!(", and the run assumes it is held at {v:.2} V")
+        format!(", and the run assumes it is held at {}", format_volts(v))
     });
     let message = format!(
         "'{net}' has no fitted source of its own: {}. {how}{held}{INFORMATIONAL_MARKER}.",
@@ -220,11 +226,12 @@ pub fn rail_conditions(
             } else {
                 format!(" (possible source: {})", listed(&rail.feeds))
             };
-            held.push(format!("'{}' at {v:.2} V{may}{own}", rail.net()));
+            held.push(format!("'{}' at {}{may}{own}", rail.net(), format_volts(v)));
         } else {
             entered.push(format!(
-                "'{}' at {v:.2} V through {}{own}",
+                "'{}' at {} through {}{own}",
                 rail.net(),
+                format_volts(v),
                 listed(&rail.entries)
             ));
         }
@@ -351,7 +358,7 @@ mod tests {
         );
         let [entered, held] = conditions(parts);
         let entered = entered.expect("the connector rail is a condition");
-        assert!(entered.contains("'+5V' at 5.00 V through J1"), "{entered}");
+        assert!(entered.contains("'+5V' at 5 V through J1"), "{entered}");
         assert!(!entered.contains("+3V3"), "{entered}");
         assert!(held.is_none(), "{held:?}");
     }
@@ -382,7 +389,7 @@ mod tests {
         let [entered, _] = conditions(parts);
         let entered = entered.expect("condition");
         assert!(
-            entered.contains("'+3V3' at 3.30 V through J2, its own source U1 not fitted"),
+            entered.contains("'+3V3' at 3.3 V through J2, its own source U1 not fitted"),
             "{entered}"
         );
     }
@@ -552,7 +559,7 @@ mod tests {
         assert!(entered.is_none(), "{entered:?}");
         let held = held.expect("held condition");
         assert!(
-            held.contains("'+3V3' at 3.30 V (possible source: U4)"),
+            held.contains("'+3V3' at 3.3 V (possible source: U4)"),
             "{held}"
         );
     }

@@ -17,6 +17,7 @@ use crate::schema::{
 };
 use crate::sensor_spec::{Bus, SensorSpec};
 use hauksbee_ir::evidence::ModelUncertainty;
+use hauksbee_ir::units::format_amps;
 use thiserror::Error;
 
 /// A validation error.
@@ -1368,7 +1369,7 @@ fn check_program_scale(
         } => (volts / bias < MIN_PROGRAM_OHMS)
             .then(|| format!("program_full_scale_v / program_bias_a = {} Ω", volts / bias)),
         _ => full.zip(program.equation_current_a(MIN_PROGRAM_OHMS)).and_then(|(full, i)| {
-            (i < full).then(|| format!("the law gives {i:.4} A at {MIN_PROGRAM_OHMS} Ω, short of the {full} A full scale"))
+            (i < full).then(|| format!( "the law gives {} at {MIN_PROGRAM_OHMS} Ω, short of the {full} A full scale", format_amps(i)))
         }),
     };
     if let Some(short) = short.filter(|_| valid) {
@@ -1396,7 +1397,7 @@ fn check_program_scale(
         });
         p.require((lo / 1.25..=hi * 1.25).contains(&law), || {
             let (what, at) = (&row.parameter, &row.conditions);
-            format!("current_program: the law gives {law:.4} A at {ohms} Ω, but characteristic '{what}' prints {lo}..{hi} A there ({at}); {K_SI}")
+            format!( "current_program: the law gives {} at {ohms} Ω, but characteristic '{what}' prints {lo}..{hi} A there ({at}); {K_SI}", format_amps(law))
         });
     }
 }

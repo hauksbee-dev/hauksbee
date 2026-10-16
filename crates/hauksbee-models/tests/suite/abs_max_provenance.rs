@@ -45,7 +45,7 @@ fn the_citation_carries_both_bases_or_says_it_has_one() {
     // Neither: the figure is not presented as read from the window's table.
     let none = abs_max_citation(roc, "", 4.6);
     assert!(
-        none.contains("records no source for its 4.60 V absolute maximum"),
+        none.contains("records no source for its 4.6 V absolute maximum"),
         "{none}"
     );
 }

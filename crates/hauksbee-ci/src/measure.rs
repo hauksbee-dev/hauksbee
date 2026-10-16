@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use crate::assertions::{edge_rate, evaluate, peak_for_ref};
 use crate::runner::{run_spec, RunOutcome};
 use crate::spec::Spec;
+use hauksbee_ir::units::format_series;
 
 /// Kinds that reduce a run to one number.
 const MEASURABLE: &[&str] = &[
@@ -49,9 +50,10 @@ fn read(spec: &Spec, a: &crate::spec::Assertion, out: &RunOutcome) -> Reading {
                         Some(w.max_v),
                         Some("V"),
                         Some(format!(
-                            "the value is where the net settled; it ranged {:.3} to {:.3} V \
+                            "the value is where the net settled; it ranged {} \
                              over {} samples",
-                            w.min_v, w.max_v, w.samples
+                            format_series(&[w.min_v, w.max_v], " to ", "V"),
+                            w.samples
                         )),
                     )
                 },

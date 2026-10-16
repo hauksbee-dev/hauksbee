@@ -41,6 +41,7 @@
 //! same high-side switch ([`RailDomains::join_pass_fets`]).
 
 use crate::behavioral::BehavioralDevice;
+use hauksbee_ir::units::format_volts;
 use hauksbee_ir::{BOutput, Circuit, Device, DeviceId, NodeId, SourceKind};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -288,7 +289,7 @@ impl RailDomains {
                 });
                 let need = feed
                     .min_v
-                    .map_or_else(String::new, |v| format!(", at least {v:.2} V"));
+                    .map_or_else(String::new, |v| format!( ", at least {}", format_volts(v)));
                 format!(
                     " Declare the supply on {top}'s input instead{feeds}: net = \"{}\"{by_pin}{need}.",
                     circuit.node_name(feed.input),
@@ -516,11 +517,14 @@ pub fn mark_unfitted_alternates(
             _ => continue,
         };
         conflict.message = format!(
-            "{alternate} ({alternate_v:.2} V) and {keep} ({keep_v:.2} V) take the same input \
-             and drive '{}', which is named for {v_rail:.2} V: {alternate} reads as an \
+            "{alternate} ({}) and {keep} ({}) take the same input \
+             and drive '{}', which is named for {}: {alternate} reads as an \
              alternate footprint that is not fitted. If both are fitted they fight; name \
              the part that is not fitted (--no-fit) to confirm",
-            conflict.nets[0]
+            format_volts(alternate_v),
+            format_volts(keep_v),
+            conflict.nets[0],
+            format_volts(v_rail)
         );
         conflict.unfitted_alternate = Some(alternate.clone());
     }
@@ -624,7 +628,7 @@ mod tests {
             .unwrap();
         assert!(note.contains("'SW'"), "{note}");
         let fix = "Declare the supply on U1's input instead: net = \"+12V\" \
-                   (or ref = \"U1\", pin = \"4\"), at least 5.60 V.";
+                   (or ref = \"U1\", pin = \"4\"), at least 5.6 V.";
         assert!(note.contains(fix), "{note}");
         assert!(d
             .owned_note(&c, "+5V_A", ana, |_| None)
@@ -661,7 +665,7 @@ mod tests {
         };
         let note = d.owned_note(&c, "+3V3", out, feeds).unwrap();
         assert!(
-            note.contains("on U1's input instead (U1 feeds U2): net = \"VBAT\", at least 5.30 V."),
+            note.contains("on U1's input instead (U1 feeds U2): net = \"VBAT\", at least 5.3 V."),
             "{note}"
         );
         // A loop, or a top part with no known input, never names a driven net.

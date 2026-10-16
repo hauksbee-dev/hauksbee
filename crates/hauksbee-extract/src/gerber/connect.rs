@@ -39,6 +39,7 @@ use crate::{Component, ExtractedBoard, Net, Pin};
 use super::geo::{shape_gap_within, BoundsLeaf, Shape};
 use super::placement::Placement;
 use super::rs274x::{CopperPrim, PrimKind, X2Attrs};
+use hauksbee_ir::units::format_percent;
 
 /// Copper that touches within this gap (mm) is treated as one conductor. Small
 /// positive value absorbs export rounding and the convex-hull over-approx of
@@ -1056,7 +1057,7 @@ impl ReconStats {
                 0.0
             };
             out.push(format!(
-                "gerber reconstruction: {} of {} aperture flashes ({:.0}%) were matched to a \
+                "gerber reconstruction: {} of {} aperture flashes ({}) were matched to a \
                  placed component; {} were not. Not every flash is a component pad (via lands, \
                  fiducials and test points are flashed too), so the unmatched count is an \
                  upper bound on missing pads rather than a list of them. An unmatched flash \
@@ -1065,7 +1066,10 @@ impl ReconStats {
                  closed-loop percentage) scores only the matched ones. Where the missing \
                  flashes ARE component pads, a pick-and-place file (.csv / .pos, or an Allegro \
                  smt_loc.txt) covering those parts will place them.",
-                self.assigned_flashes, self.total_flashes, pct, self.unassigned_flashes,
+                self.assigned_flashes,
+                self.total_flashes,
+                format_percent(pct, 0),
+                self.unassigned_flashes
             ));
         }
         out

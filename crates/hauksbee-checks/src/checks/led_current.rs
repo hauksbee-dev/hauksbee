@@ -49,6 +49,7 @@ use hauksbee_extract::{
     is_led, is_plain_resistor, Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport,
     Severity,
 };
+use hauksbee_ir::units::{format_amps, format_number, format_percent, format_volts, format_watts};
 use hauksbee_models::rating_basis::{Limit, StandIn};
 use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary, Resolution};
 
@@ -493,36 +494,6 @@ fn ohms(value: &str) -> Option<f64> {
         .filter(|r| r.is_finite() && *r >= 0.0)
 }
 
-fn amps(amps: f64) -> String {
-    if amps >= 1.0 {
-        format!("{amps:.2} A")
-    } else {
-        format!("{:.1} mA", amps * 1e3)
-    }
-}
-
-fn watts(watts: f64) -> String {
-    if watts >= 1.0 {
-        format!("{watts:.2} W")
-    } else {
-        format!("{:.0} mW", watts * 1e3)
-    }
-}
-
-/// `v` with no trailing zeros.
-fn trim(v: f64) -> String {
-    let s = if v >= 100.0 {
-        format!("{v:.0}")
-    } else {
-        format!("{v:.2}")
-    };
-    if s.contains('.') {
-        s.trim_end_matches('0').trim_end_matches('.').to_string()
-    } else {
-        s
-    }
-}
-
 impl LedString<'_> {
     const fn ends(&self) -> [&End; 2] {
         [&self.anode, &self.cathode]
@@ -558,9 +529,9 @@ impl LedString<'_> {
                          size of {from} is rated for (assumed from its size: the board does not \
                          state the part's own rating), past any chip resistor that size",
                         s.reference,
-                        watts(dissipated),
+                        format_watts(dissipated),
                         dissipated / rating,
-                        watts(*rating),
+                        format_watts(*rating),
                     ),
                     stand_in: None,
                 });
@@ -569,8 +540,8 @@ impl LedString<'_> {
                     clause: format!(
                         "{} dissipates {}, over its {} rating (from {from})",
                         s.reference,
-                        watts(dissipated),
-                        watts(*rating)
+                        format_watts(dissipated),
+                        format_watts(*rating)
                     ),
                     stand_in: stand_in.clone(),
                 });
@@ -583,8 +554,8 @@ impl LedString<'_> {
                     "{reference} carries {} steadily, over even the {} pulsed peak (duty 1/10) \
                      of an indicator LED, past the continuous rating of any LED in its {package} \
                      package (the generic limit; card '{}' gives no part's own rating)",
-                    amps(current),
-                    amps(*ceiling),
+                    format_amps(current),
+                    format_amps(*ceiling),
                     led.card,
                 ),
                 stand_in: None,
@@ -594,8 +565,8 @@ impl LedString<'_> {
             out.push(Exceeded {
                 clause: format!(
                     "{reference} carries {}, over its {} current rating",
-                    amps(current),
-                    amps(*rating)
+                    format_amps(current),
+                    format_amps(*rating)
                 ),
                 stand_in: stand_in.clone(),
             });
@@ -606,8 +577,8 @@ impl LedString<'_> {
                     clause: format!(
                         "{}'s pin passes {}, over its {} pin rating",
                         d.reference,
-                        amps(current),
-                        amps(*rating)
+                        format_amps(current),
+                        format_amps(*rating)
                     ),
                     stand_in: stand_in.clone(),
                 });
@@ -693,21 +664,30 @@ impl LedString<'_> {
     fn held(end: &End, sources: bool) -> String {
         let Some(d) = &end.driver else {
             return if (end.max_v - end.min_v).abs() < 1e-9 {
-                format!("'{}' at {:.2} V", end.net, end.max_v)
+                format!("'{}' at {}", end.net, format_volts(end.max_v))
             } else {
-                format!("'{}' at {:.2} V to {:.2} V", end.net, end.min_v, end.max_v)
+                format!(
+                    "'{}' at {} to {}",
+                    end.net,
+                    format_volts(end.min_v),
+                    format_volts(end.max_v)
+                )
             };
         };
         let ro = if d.ro_stated {
-            format!("its card's {} Ω output resistance", trim(d.ro))
+            format!("its card's {} Ω output resistance", format_number(d.ro, 2))
         } else {
             format!(
                 "an assumed {} Ω output resistance (its card states none)",
-                trim(d.ro)
+                format_number(d.ro, 2)
             )
         };
         let level = if sources {
-            format!("high ({:.2} V to {:.2} V)", end.min_v, end.max_v)
+            format!(
+                "high ({} to {})",
+                format_volts(end.min_v),
+                format_volts(end.max_v)
+            )
         } else {
             "low".to_string()
         };
@@ -723,9 +703,13 @@ impl LedString<'_> {
             .map(|s| {
                 let tolerance = s.tolerance.map_or_else(
                     || "no tolerance stated".to_string(),
-                    |t| format!("±{:.0} %", t * 100.0),
+                    |t| format!("±{}", format_percent(t * 100.0, 0)),
                 );
-                format!("{} ({} Ω, {tolerance})", s.reference, trim(s.ohms))
+                format!(
+                    "{} ({} Ω, {tolerance})",
+                    s.reference,
+                    format_number(s.ohms, 2)
+                )
             })
             .collect();
         let corner = if worst.corner.is_empty() {
@@ -735,14 +719,14 @@ impl LedString<'_> {
         };
         format!(
             "{} lit from {} through {} to {} carries up to {}{corner}, its forward drop \
-             {:.2} V there (card '{}')",
+             {} there (card '{}')",
             self.led.reference,
             Self::held(&self.anode, true),
             resistors.join(" and "),
             Self::held(&self.cathode, false),
-            amps(worst.amps),
-            worst.drop,
-            worst.card,
+            format_amps(worst.amps),
+            format_volts(worst.drop),
+            worst.card
         )
     }
 
@@ -780,7 +764,7 @@ impl LedString<'_> {
         let remedy = self.safe_ohms(cards).map_or_else(String::new, |r| {
             format!(
                 "; a series resistance of at least {} Ω keeps every rating",
-                trim(r)
+                format_number(r, 2)
             )
         });
         // Only a judged limit is a finding here: a stand-in card's limit
@@ -857,7 +841,7 @@ mod tests {
         assert!(f.nets.contains(&"+3V3".to_string()), "{:?}", f.nets);
         for words in [
             "pulsed peak",
-            "100.0 mA",
+            "100 mA",
             "'led_red'",
             "forward drop",
             "at least",

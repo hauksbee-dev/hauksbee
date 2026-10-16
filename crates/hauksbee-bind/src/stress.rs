@@ -52,6 +52,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use hauksbee_ir::evidence::{Assumption, AssumptionSource, Scope, Subject};
+use hauksbee_ir::units::{format_amps, format_celsius, format_volts, format_watts};
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
 use hauksbee_models::chip_size;
 use hauksbee_models::derating::{Carrier, Curve, Derating, TempRef};
@@ -298,24 +299,14 @@ pub fn far_past_reason(kind: FaultKind, value: f64) -> String {
 pub fn stress_quantity(kind: FaultKind, v: f64) -> String {
     match kind {
         FaultKind::Overcurrent | FaultKind::SurgeCurrent | FaultKind::PinOvercurrent => {
-            if v.abs() >= 1.0 {
-                format!("{v:.2} A")
-            } else {
-                format!("{:.1} mA", v * 1e3)
-            }
+            format_amps(v)
         }
-        FaultKind::Overpower => {
-            if v.abs() >= 1.0 {
-                format!("{v:.2} W")
-            } else {
-                format!("{:.0} mW", v * 1e3)
-            }
-        }
+        FaultKind::Overpower => format_watts(v),
         FaultKind::Overvoltage
         | FaultKind::ReverseBias
         | FaultKind::GateOvervoltage
-        | FaultKind::Short => format!("{v:.2} V"),
-        FaultKind::Overtemperature => format!("{v:.0} C"),
+        | FaultKind::Short => format_volts(v),
+        FaultKind::Overtemperature => format_celsius(v),
     }
 }
 
@@ -1056,7 +1047,6 @@ impl StandInExceedance {
     #[must_use]
     pub fn condition(&self) -> String {
         let f = &self.fault;
-        let unit = f.kind.unit();
         let (seen, what) = match f.kind {
             FaultKind::Overcurrent => ("carries", "current"),
             FaultKind::SurgeCurrent => ("carries", "surge current"),
@@ -1067,7 +1057,7 @@ impl StandInExceedance {
             FaultKind::Overvoltage | FaultKind::Short => ("sees", "voltage"),
             FaultKind::GateOvervoltage => ("sees", "gate-source voltage"),
         };
-        let rating = format!("{} {unit} {what}", fmt_rating(f.limit));
+        let rating = format!("{} {what}", stress_quantity(f.kind, f.limit));
         // Far past it (a temperature the guessed theta-JA puts past twice its
         // limit, say) the figure is no result: the one stress wording says so.
         let subject = if is_far_past_rating(f.kind, f.value, f.limit) {
@@ -1081,19 +1071,13 @@ impl StandInExceedance {
             )
         } else {
             format!(
-                "{} {seen} {} {unit}, past its {rating} limit",
+                "{} {seen} {}, past its {rating} limit",
                 f.component,
-                fmt_rating(f.value),
+                stress_quantity(f.kind, f.value),
             )
         };
         rating_basis::condition(&f.component, &self.stand_in, &subject, &rating)
     }
-}
-
-/// A rating as a card prints it: no trailing zeros.
-fn fmt_rating(v: f64) -> String {
-    let s = format!("{v:.3}");
-    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 /// The card limit a `kind` fault on `meta` is held to, or `None` when no card
@@ -1389,13 +1373,14 @@ impl StressMonitor {
         for (m, s) in self.metas.iter().zip(&self.run) {
             let (r, rt) = (&m.reference, &m.ratings);
             if let Some(floor) = rt.min_current_a.filter(|f| s.peak_a < *f) {
-                let (ma, floor_ma) = (s.peak_a * 1e3, floor * 1e3);
                 out.push(Assumption::operating_limit_violated(
                     &format!("{r}-min-current"),
                     r,
                     &format!(
-                        "{r} carries {ma:.2} mA, below the {floor_ma:.2} mA its datasheet card \
-                         requires for regulation, so the voltage it holds here is not guaranteed"
+                        "{r} carries {}, below the {} its datasheet card \
+                         requires for regulation, so the voltage it holds here is not guaranteed",
+                        format_amps(s.peak_a),
+                        format_amps(floor)
                     ),
                     // Neutral about WHICH network feeds it: a shunt reference is fed
                     // by its series resistor, a series regulator by its load and its
@@ -1407,9 +1392,9 @@ impl StressMonitor {
             if let Some(GateDrive { vgs, spec, th, .. }) = gate_drive(m, s) {
                 let th = th.unwrap_or(f64::NEG_INFINITY);
                 let (id, fix) = (format!("{r}-gate-drive"), "drive the gate to at least the VGS the card specifies RDS(on) at (a gate driver or a level shifter), or fit a logic-level part, then re-run");
-                let gap = format!("{r} conducts at VGS = {vgs:.2} V, below the {spec:.2} V its datasheet specifies RDS(on) at, so its on-resistance at this drive is not guaranteed by the datasheet");
+                let gap = format!( "{r} conducts at VGS = {}, below the {} its datasheet specifies RDS(on) at, so its on-resistance at this drive is not guaranteed by the datasheet", format_volts(vgs), format_volts(spec));
                 out.push(if vgs < th {
-                    Assumption::operating_limit_violated(&id, r, &format!("{gap}; {vgs:.2} V is also below its {th:.2} V maximum VGS(th), so the datasheet does not guarantee it is on at all"), fix)
+                    Assumption::operating_limit_violated(&id, r, &format!( "{gap}; {} is also below its {} maximum VGS(th), so the datasheet does not guarantee it is on at all", format_volts(vgs), format_volts(th)), fix)
                 } else {
                     Assumption::partial_model_for_component(&id, r, "", &gap, fix)
                 });
@@ -1423,7 +1408,7 @@ impl StressMonitor {
                 .filter(|(pk, c)| !s.lag_over_limit && rt.max_surge_current_a.is_none() && pk > c)
             {
                 out.push(Assumption::partial_model_for_component(&format!("{r}-peak-current"), r, "",
-                    &format!("{r} peaks at {pk:.3} A, above the {cont:.3} A its card rates CONTINUOUSLY, and the card carries no pulsed (IDM) rating for the peak to be judged against"),
+                    &format!( "{r} peaks at {}, above the {} its card rates CONTINUOUSLY, and the card carries no pulsed (IDM) rating for the peak to be judged against", format_amps(pk), format_amps(cont)),
                     "add the datasheet's pulsed drain/forward current to the card, then re-run"));
             }
         }
@@ -1519,7 +1504,7 @@ impl StressMonitor {
             let (r, theta, limit) = (&m.reference, m.theta_ja_c_per_w(), m.tj_max_c());
             let decisive = s.theta_flip || 2.0f64.mul_add(peak, -self.ambient_c) >= limit;
             let key = format!("{r}-theta-ja");
-            let text = format!("{r}'s junction temperature (peak {peak:.1} C)");
+            let text = format!("{r}'s junction temperature (peak {})", format_celsius(peak));
             let how = format!(
                 "a theta_JA of {theta:.0} C/W inferred from its package ('{}'), because its card \
                  carries no theta_ja_c_per_w",
@@ -3652,8 +3637,8 @@ mod monitor_temp_tests {
         assert_eq!((faults.len(), stand_in.len()), (1, 0), "{faults:?}");
         let said = faults[0].statement();
         assert!(
-            said.contains("U1 sees far more than its 6.00 V voltage rating")
-                && said.contains("past 10000.00 V")
+            said.contains("U1 sees far more than its 6 V voltage rating")
+                && said.contains("past 10 kV")
                 && !said.contains("20000"),
             "{said}"
         );
@@ -3667,7 +3652,7 @@ mod monitor_temp_tests {
         let (faults, _) = watched(None, 100.0);
         assert_eq!(
             faults[0].statement(),
-            "U1 sees 100.00 V, over its 6.00 V voltage rating"
+            "U1 sees 100 V, over its 6 V voltage rating"
         );
     }
 
@@ -3687,8 +3672,7 @@ mod monitor_temp_tests {
         };
         let absurd = event(24_950.0, 0.25).statement();
         assert!(
-            absurd
-                .starts_with("R1 dissipates far more than its 250 mW power rating (past 500.00 W")
+            absurd.starts_with("R1 dissipates far more than its 250 mW power rating (past 500 W")
                 && !absurd.contains("24950")
                 && !absurd.contains("100x"),
             "{absurd}"
@@ -3700,7 +3684,7 @@ mod monitor_temp_tests {
         );
         assert_eq!(
             event(2.5, 0.25).statement(),
-            "R1 dissipates 2.50 W, over its 250 mW power rating"
+            "R1 dissipates 2.5 W, over its 250 mW power rating"
         );
     }
 

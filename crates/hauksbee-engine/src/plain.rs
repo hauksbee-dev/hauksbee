@@ -22,6 +22,7 @@ use hauksbee_extract::{
     CHECK_BEFORE_ORDERING, DNP_PULLUP_MESSAGE_MARKER, SPI_PULLUP_MESSAGE_MARKER,
 };
 
+use hauksbee_ir::units::{format_amps, format_celsius, format_volts, format_watts};
 use hauksbee_ir::vocabulary::INSPECT_BEFORE_ORDERING;
 
 use crate::stress::{FaultEvent, FaultKind};
@@ -1931,8 +1932,8 @@ pub fn plain_faults(faults: &[FaultEvent]) -> PlainReport {
             FaultKind::Overcurrent => (
                 format!(
                     "{c} is carrying about {} of continuous current, past its {} limit.",
-                    amps(f.value),
-                    amps(f.limit),
+                    format_amps(f.value.abs()),
+                    format_amps(f.limit.abs()),
                 ),
                 "Sustained current above a part's rating heats it up. The part runs hot, drifts out of spec, ages fast, and eventually fails (a resistor can char, a trace can burn open).".to_string(),
                 "Lower the current (raise the relevant resistance, split the load, add parts in parallel) or use a part rated for this current. If a resistor, also pick a higher-wattage package.".to_string(),
@@ -1940,8 +1941,8 @@ pub fn plain_faults(faults: &[FaultEvent]) -> PlainReport {
             FaultKind::SurgeCurrent => (
                 format!(
                     "{c} sees a brief current spike of about {}, past its {} surge limit.",
-                    amps(f.value),
-                    amps(f.limit),
+                    format_amps(f.value.abs()),
+                    format_amps(f.limit.abs()),
                 ),
                 "Even short spikes (at power-on, or when charging a big capacitor) can exceed what a part survives. Repeated surges weaken or pop the part even if the average current looks fine.".to_string(),
                 "Add inrush limiting: a series resistor / NTC, a soft-start, or a part rated for the surge. Reducing the capacitance being charged through it also helps.".to_string(),
@@ -1949,8 +1950,8 @@ pub fn plain_faults(faults: &[FaultEvent]) -> PlainReport {
             FaultKind::Overpower => (
                 format!(
                     "{c} is dissipating about {}, past its {} power rating.",
-                    watts(f.value),
-                    watts(f.limit),
+                    format_watts(f.value.abs()),
+                    format_watts(f.limit.abs()),
                 ),
                 "Power turns into heat. Over its rating the part overheats: a resistor scorches, a regulator shuts down or fails, and nearby parts get cooked too.".to_string(),
                 "Reduce the power (less current or less voltage across it), spread it over more parts, or move to a larger / higher-wattage package with better heat handling.".to_string(),
@@ -1958,8 +1959,8 @@ pub fn plain_faults(faults: &[FaultEvent]) -> PlainReport {
             FaultKind::Overvoltage => (
                 format!(
                     "{c} has about {} across it, past its {} voltage rating.",
-                    volts(f.value),
-                    volts(f.limit),
+                    format_volts(f.value.abs()),
+                    format_volts(f.limit.abs()),
                 ),
                 "Every part has a maximum safe voltage. Above it the insulation/junction can break down (a capacitor can short or vent, a semiconductor can be punched through), often instantly and permanently.".to_string(),
                 "Use a part rated for at least this voltage (with margin), or lower the voltage it sees (clamp, divider, or correct the supply/rail it is on).".to_string(),
@@ -1967,22 +1968,22 @@ pub fn plain_faults(faults: &[FaultEvent]) -> PlainReport {
             FaultKind::GateOvervoltage => (
                 format!(
                     "{c} has about {} between its gate and source, past its {} gate-source rating.",
-                    volts(f.value),
-                    volts(f.limit),
+                    format_volts(f.value.abs()),
+                    format_volts(f.limit.abs()),
                 ),
                 "A MOSFET's gate is a thin insulating oxide. Past its gate-source absolute maximum the oxide can rupture, leaving the gate leaky or shorted to the channel, often permanently.".to_string(),
                 "Clamp the gate below the rating (a lower-voltage Zener from gate to source, or a divider on the gate drive), or use a part rated for this gate voltage.".to_string(),
             ),
             FaultKind::ReverseBias => (
-                format!("{c} (a polarised part) is being driven backwards (reverse voltage of about {}).", volts(f.value)),
+                format!("{c} (a polarised part) is being driven backwards (reverse voltage of about {}).", format_volts(f.value.abs())),
                 "Polarised parts like electrolytic and tantalum capacitors only tolerate voltage one way round. Reverse voltage damages them, and a tantalum can fail short and catch fire.".to_string(),
                 "Check the part's orientation/footprint against the schematic and flip it if it is backwards, or move it to a net where its polarity is correct. If the net genuinely swings both ways, use a non-polarised part.".to_string(),
             ),
             FaultKind::PinOvercurrent => (
                 format!(
                     "A single pin of {c} is sourcing/sinking about {}, past its {} per-pin limit.",
-                    amps(f.value),
-                    amps(f.limit),
+                    format_amps(f.value.abs()),
+                    format_amps(f.limit.abs()),
                 ),
                 "Each chip pin can only drive so much current. Pushing more overheats that pin's internal driver, droops its output voltage, and can permanently damage the pin or the chip.".to_string(),
                 "Drive less current per pin: add a series resistor, use a transistor/driver to handle the load instead of the pin directly, or spread the load across multiple pins.".to_string(),
@@ -1993,10 +1994,7 @@ pub fn plain_faults(faults: &[FaultEvent]) -> PlainReport {
                 "Find and remove the bridge (see the copper-spacing / DRC report for the exact spot), or, if the connection is intended, make them one named net deliberately.".to_string(),
             ),
             FaultKind::Overtemperature => (
-                format!(
-                    "{c} reaches about {:.0} C, past its {:.0} C junction-temperature limit.",
-                    f.value, f.limit,
-                ),
+                format!( "{c} reaches about {}, past its {} junction-temperature limit.", format_celsius(f.value), format_celsius(f.limit)),
                 "The power this part dissipates raises its internal (junction) temperature above ambient. Past its rated junction temperature it degrades fast, drifts out of spec, and eventually fails; a hot part also heats its neighbours.".to_string(),
                 "Reduce the power it dissipates, move to a package with lower thermal resistance, add copper pour / a heatsink to carry heat away, or improve airflow / lower the ambient. The estimate assumes still air, so real cooling helps.".to_string(),
             ),
@@ -2019,28 +2017,6 @@ pub fn plain_faults(faults: &[FaultEvent]) -> PlainReport {
 }
 
 // ── Unit formatting (engineer-friendly but readable) ──────────────────────────
-
-fn amps(a: f64) -> String {
-    let a = a.abs();
-    if a < 1.0 {
-        format!("{:.0} mA", a * 1000.0)
-    } else {
-        format!("{a:.2} A")
-    }
-}
-
-fn watts(w: f64) -> String {
-    let w = w.abs();
-    if w < 1.0 {
-        format!("{:.0} mW", w * 1000.0)
-    } else {
-        format!("{w:.2} W")
-    }
-}
-
-fn volts(v: f64) -> String {
-    format!("{:.2} V", v.abs())
-}
 
 #[cfg(test)]
 mod tests {
@@ -2467,7 +2443,7 @@ mod tests {
             "{absurd}"
         );
         let real = &plain_faults(&[fault(2.5)]).findings[0].what;
-        assert!(real.contains("2.50 W") && !real.contains("far"), "{real}");
+        assert!(real.contains("2.5 W") && !real.contains("far"), "{real}");
     }
 
     #[test]

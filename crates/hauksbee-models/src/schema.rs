@@ -20,6 +20,7 @@ use hauksbee_ir::evidence::{
 };
 
 use crate::check::positive_finite;
+use hauksbee_ir::units::format_volts;
 
 // ── Top-level file container ──────────────────────────────────────────────────
 
@@ -1398,7 +1399,8 @@ pub fn abs_max_citation(basis: &str, abs_max_basis: &str, limit: f64) -> String 
         format!("basis: \"{basis}\"")
     } else {
         format!(
-            "basis: \"{basis}\"; the card records no source for its {limit:.2} V absolute maximum"
+            "basis: \"{basis}\"; the card records no source for its {} absolute maximum",
+            format_volts(limit)
         )
     }
 }

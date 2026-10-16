@@ -49,7 +49,7 @@ use crate::error::SpecError;
 use crate::runner::RunOutcome;
 use crate::spec::{Assertion, Spec};
 use crate::tolerance::{SampledValue, SeedPlan};
-use hauksbee_ir::units::format_engineering;
+use hauksbee_ir::units::{format_engineering, format_volts};
 
 /// The most members a search grid may expand to (before tolerance crossing).
 pub const MAX_GRID: usize = 256;
@@ -568,7 +568,8 @@ fn logic_level(a: &Assertion, out: &RunOutcome) -> Measure {
         (Some(v), _) => (v, "the spec's level".to_string(), None),
         (None, Some(l)) => {
             let v = if high { l.vih } else { l.vil };
-            let at = format!("{} {} {edge} at VCC {:.2} V", l.reference, l.role, l.vcc);
+            let vcc = format_volts(l.vcc);
+            let at = format!("{} {} {edge} at VCC {vcc}", l.reference, l.role);
             (v, at, Some(l.reference.as_str()))
         }
         (None, None) => {
@@ -597,18 +598,20 @@ fn logic_level(a: &Assertion, out: &RunOutcome) -> Measure {
         ("low", "bottoms at")
     };
     let leaf = leaf(net);
+    let (reached_s, need_s) = (format_volts(reached), format_volts(need));
     let detail = if a.min_width_ms.is_none() && a.min_toggles.is_none() {
         format!(
-            "{leaf} {verb} {reached:.3} V; a valid logic {word} at every input it drives needs \
-             {need:.3} V ({whose})"
+            "{leaf} {verb} {reached_s}; a valid logic {word} at every input it drives \
+             needs {need_s} ({whose})"
         )
     } else {
         let peak = sign * sustained(&x, 0.0, f64::INFINITY).0;
         let longest = longest_past(&x, sign * need) * 1e3;
+        let peak_s = format_volts(peak);
         format!(
-            "{leaf} {verb} {peak:.3} V and holds {reached:.3} V for {ms} ms; past {need:.3} V \
+            "{leaf} {verb} {peak_s} and holds {reached_s} for {ms} ms; past {need_s} \
              for at most {longest:.4} ms, in {count} pulse(s) {ms} ms long; a valid logic {word} \
-             needs {need:.3} V held {ms} ms in {pulses} pulse(s) ({whose})",
+             needs {need_s} held {ms} ms in {pulses} pulse(s) ({whose})",
             ms = a.min_width_ms.unwrap_or(0.0)
         )
     };
@@ -618,15 +621,15 @@ fn logic_level(a: &Assertion, out: &RunOutcome) -> Measure {
             format!("only {count} of the {pulses} pulse(s) {who} needs hold {edge}")
         } else if a.min_width_ms.is_some() {
             format!(
-                "{} V short of {edge} over the {} ms {who} needs: no pulse is {word} enough \
+                "{} short of {edge} over the {} ms {who} needs: no pulse is {word} enough \
                  for long enough",
-                fmt3(-margin),
+                format_volts(-margin),
                 a.min_width_ms.unwrap_or(0.0)
             )
         } else {
             format!(
-                "{} V short of {edge}: {who} cannot read it as {word}",
-                fmt3(-margin)
+                "{} short of {edge}: {who} cannot read it as {word}",
+                format_volts(-margin)
             )
         };
         let near = |(_, vt): &&(String, f64)| (reached - vt).abs() <= 0.1 * vt.abs().max(1.0);
@@ -634,8 +637,9 @@ fn logic_level(a: &Assertion, out: &RunOutcome) -> Measure {
         if let Some((sw, vt)) = switches.iter().find(near) {
             let _ = write!(
                 w,
-                "; it stops at {sw}'s {vt:.2} V switching threshold, and {sw} is driven by \
-                 this net"
+                "; it stops at {sw}'s {} switching threshold, and {sw} is driven by \
+                 this net",
+                format_volts(vt)
             );
         }
         w
@@ -727,13 +731,6 @@ fn longest_past(s: &[(f64, f64)], need: f64) -> f64 {
     best.max(tail)
 }
 
-/// `v` to three decimals, never "-0.000": a value that rounds to zero prints
-/// as zero, whichever side of it the solve landed.
-fn fmt3(v: f64) -> String {
-    let v = if v.abs() < 0.0005 { 0.0 } else { v };
-    format!("{v:.3}")
-}
-
 /// The trip level of a comparator's first decision: where +IN first crossed
 /// -IN, both inputs read at the interpolated crossing (-IN's opening level if
 /// they never cross).
@@ -773,24 +770,25 @@ fn fires(a: &Assertion, out: &RunOutcome) -> Measure {
     if edges < need {
         let margin = peak.min(-1e-6);
         let detail = format!(
-            "{reference} fires {edges} time(s) (needs {need}): +IN peaks at {:.3} V against \
-             -IN {:.3} V",
-            plus[peak_at].1, minus[peak_at].1
+            "{reference} fires {edges} time(s) (needs {need}): +IN peaks at {} against \
+             -IN {}",
+            format_volts(plus[peak_at].1),
+            format_volts(minus[peak_at].1)
         );
         let short = -peak.min(0.0);
         // A shortfall below the printed resolution is no shortfall: +IN only
         // reaches -IN (both inputs sit together, as on a dead rail).
         let why = if short < 0.0005 {
             format!(
-                "{reference}'s +IN only reaches -IN ({} V against {} V), with no overdrive to \
+                "{reference}'s +IN only reaches -IN ({} against {}), with no overdrive to \
                  trip it, so it never fires",
-                fmt3(plus[peak_at].1),
-                fmt3(minus[peak_at].1)
+                format_volts(plus[peak_at].1),
+                format_volts(minus[peak_at].1)
             )
         } else {
             format!(
-                "{reference}'s +IN never rises above -IN: it stops {} V short of the trip point",
-                fmt3(short)
+                "{reference}'s +IN never rises above -IN: it stops {} short of the trip point",
+                format_volts(short)
             )
         };
         return Measure {
@@ -847,15 +845,17 @@ fn resets(reference: &str, inp: &str, below: f64, rises: &[usize], plus: &[(f64,
         .fold(f64::NEG_INFINITY, f64::max);
     let margin = below - worst;
     let detail = format!(
-        "{} resets only to {worst:.3} V between firings; a full reset needs below {below:.3} V",
-        leaf(inp)
+        "{} resets only to {} between firings; a full reset needs below {}",
+        leaf(inp),
+        format_volts(worst),
+        format_volts(below)
     );
     let why = (margin < 0.0).then(|| {
         format!(
-            "{reference}'s reset is partial: +IN ({}) stays {} V above the reset level, so \
+            "{reference}'s reset is partial: +IN ({}) stays {} above the reset level, so \
              each spike starts from a charged input and the firing count overstates the drive",
             leaf(inp),
-            fmt3(-margin)
+            format_volts(-margin)
         )
     });
     Measure {
@@ -883,13 +883,16 @@ fn trips_at(
     let tol = a.tolerance.unwrap_or(0.05) * target.abs();
     let margin = tol - (trip - target).abs();
     let detail = format!(
-        "{reference} fires {edges} time(s), first tripping at {trip:.3} V; intended {target:.3} V \
-         +/- {tol:.3} V"
+        "{reference} fires {edges} time(s), first tripping at {}; intended {} \
+         +/- {}",
+        format_volts(trip),
+        format_volts(target),
+        format_volts(tol)
     );
     let why = (margin < 0.0).then(|| {
         format!(
-            "{reference} trips {} V {} the intended level ({:.2}x)",
-            fmt3((trip - target).abs()),
+            "{reference} trips {} {} the intended level ({:.2}x)",
+            format_volts((trip - target).abs()),
             if trip > target { "above" } else { "below" },
             trip / target
         )
@@ -1086,7 +1089,7 @@ fn explain(
                 let vt = probe.switches.values().flatten().find(|(s, _)| s == r);
                 vt.map_or_else(
                     || "threshold".to_string(),
-                    |(_, v)| format!("threshold {v:.2} V"),
+                    |(_, v)| format!("threshold {}", format_volts(v)),
                 )
             },
             |v| format_engineering(*v, ""),
@@ -1097,10 +1100,11 @@ fn explain(
             if follows >= FOLLOWS {
                 let _ = write!(
                     line,
-                    "; the level follows {r}'s switching threshold ({follows:.2} V per V): \
+                    "; the level follows {r}'s switching threshold ({} per V): \
                      the pulse ends once the switch it drives turns on, so it is \
                      self-limiting and set by that threshold, not by its driver. Drive \
-                     {r} from a latched, full-swing signal (Schmitt buffer, one-shot)"
+                     {r} from a latched, full-swing signal (Schmitt buffer, one-shot)",
+                    format_volts(follows)
                 );
                 limiting.get_or_insert(r.as_str());
             }
@@ -1201,7 +1205,7 @@ mod tests {
         let partial = resets("U1", "/a/INTEG", 0.1, &[1, 4], &plus);
         assert!(!partial.passed);
         assert!((partial.measured - 0.5).abs() < 1e-12);
-        assert!(partial.detail.contains("INTEG resets only to 0.500 V"));
+        assert!(partial.detail.contains("INTEG resets only to 500 mV"));
         assert!(partial.why.unwrap().contains("reset is partial"));
         let full = resets("U1", "/a/INTEG", 0.1, &[1], &plus[..3]);
         assert!(full.passed && full.why.is_none(), "{}", full.detail);
@@ -1282,14 +1286,14 @@ mod tests {
         assert!(big.problems().iter().any(|p| p.contains("cap 256")));
     }
 
-    /// A value that rounds to zero prints as zero, never "-0.000" (a dead
+    /// A value that rounds to zero prints as zero, never "-0.000 V" (a dead
     /// rail's comparator read "stops -0.000 V short"); real values keep sign.
     #[test]
-    fn fmt3_never_prints_negative_zero() {
-        assert_eq!(super::fmt3(-0.0), "0.000");
-        assert_eq!(super::fmt3(-0.0004), "0.000");
-        assert_eq!(super::fmt3(0.0004), "0.000");
-        assert_eq!(super::fmt3(-0.267), "-0.267");
-        assert_eq!(super::fmt3(0.4191), "0.419");
+    fn volts_never_print_negative_zero() {
+        assert_eq!(super::format_volts(-0.0), "0 V");
+        assert_eq!(super::format_volts(-1e-15), "0 V");
+        assert_eq!(super::format_volts(0.0004), "400 uV");
+        assert_eq!(super::format_volts(-0.267), "-267 mV");
+        assert_eq!(super::format_volts(0.4191), "419.1 mV");
     }
 }

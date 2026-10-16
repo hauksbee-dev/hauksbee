@@ -52,6 +52,7 @@
 //! Rationale: `docs/how-and-why/hauksbee-models/schema.md`.
 
 use crate::schema::{Characteristic, ComponentKind, ModelEntry};
+use hauksbee_ir::units::{format_percent, format_volts};
 
 /// Names any kind may carry: resolve-report annotations, the explicit
 /// identity-without-behavior state, and the free-text `warning` the binder
@@ -615,7 +616,7 @@ fn law_warning(entry: &ModelEntry, rows: &[Characteristic]) -> Option<String> {
     let max_only = !vf.is_empty() && !hedged && vf.iter().all(|r| r.typ.is_none());
     let max_only = max_only.then(|| "diode is/n/rs are fitted to max VF rows alone: say so in their basis (law fitted to guaranteed maxima, a conservative stand-in for typical)".into());
     let at = diode_vf(law, i);
-    (miss > 0.1).then(|| format!("diode is/n/rs give VF = {at:.3} V at IF = {i} A where a VF row on the card prints {v} V, over 10% off")).or(max_only)
+    (miss > 0.1).then(|| format!( "diode is/n/rs give VF = {} at IF = {i} A where a VF row on the card prints {v} V, over 10% off", format_volts(at))).or(max_only)
 }
 
 /// A `gain` 10 dB (3.16×) or more off every printed column of every cited
@@ -959,7 +960,10 @@ pub(crate) fn diode_refit_params(entry: &ModelEntry) -> Vec<Derived> {
         return Vec::new();
     };
     let miss = diode_law(entry).map(|law| worst_miss(law, &points).0);
-    let off = miss.map_or_else(|| "absent".into(), |m| format!("{:.0}% off", 100.0 * m));
+    let off = miss.map_or_else(
+        || "absent".into(),
+        |m| format!("{} off", format_percent(100.0 * m, 0)),
+    );
     let count = points.len();
     let how =
         format!("fitted: is/n/rs to the cited VF rows ({count} points), the card's law was {off}");

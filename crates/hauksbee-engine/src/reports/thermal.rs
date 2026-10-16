@@ -16,6 +16,7 @@ use crate::result::{
     EXIT_INVALID_FOR_ANALYSIS,
 };
 use hauksbee_ir::evidence::Scope;
+use hauksbee_ir::units::format_celsius;
 use hauksbee_ir::{eprintln, print, println};
 
 /// Run the thermal estimate and print it (`json` selects JSON over the text
@@ -86,7 +87,8 @@ pub(crate) fn emit_quiet(
         let claim = far_past(reference, *tj_c, *over_limit).map_or_else(
             || {
                 format!(
-                    "{reference} peak junction temperature is {tj_c:.3} C ({})",
+                    "{reference} peak junction temperature is {} ({})",
+                    format_celsius(tj_c),
                     if over_limit.is_some() {
                         "over limit"
                     } else {
@@ -354,7 +356,8 @@ fn render_thermal_text(
     }
     let _ = writeln!(
         out,
-        "\nsteady-state junction temperature (Tj = {ambient_c:.0} C + P * theta_JA):"
+        "\nsteady-state junction temperature (Tj = {} + P * theta_JA):",
+        format_celsius(ambient_c)
     );
     if rows.is_empty() {
         let _ = writeln!(

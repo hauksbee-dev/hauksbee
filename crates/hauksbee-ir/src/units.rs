@@ -29,6 +29,11 @@
 //!
 //! [`format_engineering`] is the one formatter: three significant digits,
 //! trailing zeros trimmed, carry at a decade edge (`999.9k` prints `1M`).
+//! Every figure a message states goes through this family
+//! ([`format_volts`], [`format_amps`], [`format_watts`], [`format_celsius`],
+//! [`format_percent`]): negative zero prints as `0`, a value that rounds to
+//! nothing never keeps its sign, NaN and infinity are never printed as
+//! numbers ([`NotFinite`], rendered as words), and the unit is always there.
 //! CLI and CI text use ASCII `u` for micro so every printed value can be
 //! pasted straight back into a flag or spec; the web is served
 //! [`WEB_MICRO_SIGN`] (`µ`, U+00B5) and nothing else.
@@ -177,61 +182,339 @@ fn unit_matches(tail: &str, unit: &str) -> bool {
     !unit.is_empty() && tail.eq_ignore_ascii_case(unit)
 }
 
-/// Format `v` (base SI units) in engineering notation.
+/// A number that cannot be stated as a quantity: it is not finite.
 ///
-/// Three significant digits, trailing zeros trimmed, ASCII `u` for micro. With a `unit` the
-/// result is SI-typeset with a space (`4.7 uF`, `1 MHz`); with `""` it is the
-/// bare, re-parseable form (`10.9k`, `18.2n`, `-1M`). Zero and non-finite
-/// values print as Rust's plain `{v}`.
-#[must_use]
-pub fn format_engineering(v: f64, unit: &str) -> String {
-    const SUFFIX: &[(f64, &str)] = &[
+/// The formatters below refuse to print NaN or infinity as if it were a
+/// reading. [`try_format_engineering`] and [`try_format_fixed`] hand the
+/// caller this typed outcome so the message can say what happened in words
+/// ("did not solve"); the infallible formatters render [`NotFinite::words`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotFinite {
+    /// NaN: an undefined result.
+    NotANumber,
+    /// Positive or negative infinity: an unbounded result.
+    Unbounded,
+}
+
+impl NotFinite {
+    /// Why `v` has no figure, or `None` when it is finite.
+    #[must_use]
+    pub const fn of(v: f64) -> Option<Self> {
+        if v.is_nan() {
+            Some(Self::NotANumber)
+        } else if v.is_infinite() {
+            Some(Self::Unbounded)
+        } else {
+            None
+        }
+    }
+
+    /// The reader-facing words for the missing figure.
+    #[must_use]
+    pub const fn words(self) -> &'static str {
+        match self {
+            Self::NotANumber => "not a number",
+            Self::Unbounded => "unbounded",
+        }
+    }
+}
+
+impl fmt::Display for NotFinite {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.words())
+    }
+}
+
+impl std::error::Error for NotFinite {}
+
+/// Significant digits of [`format_engineering`] (bare, re-parseable values).
+const ENGINEERING_SIG: usize = 3;
+/// Significant digits of the measured-quantity formatters
+/// ([`format_volts`], [`format_amps`], [`format_watts`]): one more than the
+/// bare form, so a figure just past its limit does not print as the limit
+/// itself (`1.004 A` against `1 A`).
+const QUANTITY_SIG: usize = 4;
+
+/// `s` with trailing fractional zeros trimmed (`"4.70"` -> `"4.7"`, `"390"` stays).
+fn trim_fraction(s: &str) -> &str {
+    if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        s
+    }
+}
+
+/// Whether a rendered magnitude is nothing but zeros (`"0"`, `"0.00"`).
+fn is_zero_text(s: &str) -> bool {
+    s.chars().all(|c| c == '0' || c == '.')
+}
+
+/// The shared engineering renderer: `micro` is the micro prefix to print.
+fn render_engineering(v: f64, unit: &str, sig: usize, micro: &str) -> Result<String, NotFinite> {
+    if let Some(why) = NotFinite::of(v) {
+        return Err(why);
+    }
+    let prefixes: [(f64, &str); 8] = [
         (1e9, "G"),
         (1e6, "M"),
         (1e3, "k"),
         (1.0, ""),
         (1e-3, "m"),
-        (1e-6, "u"),
+        (1e-6, micro),
         (1e-9, "n"),
         (1e-12, "p"),
     ];
     let sep = if unit.is_empty() { "" } else { " " };
-    if v == 0.0 || !v.is_finite() {
-        return format!("{v}{sep}{unit}");
-    }
-    // Three significant digits on the scaled mantissa (which lives in [1, 1000)).
-    let sig_digits = |m: f64| usize::from(m < 100.0) + usize::from(m < 10.0);
-    let round_to = |m: f64, digits: usize| {
-        let factor = [1.0, 10.0, 100.0][digits];
+    // `sig` significant digits on a mantissa that lives in [1, 1000).
+    let decimals =
+        |m: f64| sig.saturating_sub(1 + usize::from(m >= 10.0) + usize::from(m >= 100.0));
+    let round_to = |m: f64, d: usize| {
+        let factor = 10f64.powi(i32::try_from(d).unwrap_or(0));
         (m * factor).round() / factor
     };
     let mag = v.abs();
-    let mut idx = SUFFIX
+    // Below half the smallest prefix (a picounit) nothing is left to print: a
+    // figure that small is zero, whichever sign it came with.
+    if mag < prefixes[prefixes.len() - 1].0 / 2.0 {
+        return Ok(format!("0{sep}{unit}"));
+    }
+    // Past the largest prefix (1000 G) a figure is absurd for any quantity a
+    // board has; scientific notation keeps it readable instead of a wall of digits.
+    if mag >= 1e12 {
+        let s = format!("{mag:.*e}", sig - 1);
+        let (mantissa, exp) = s.split_once('e').unwrap_or((&s, "0"));
+        let sign = if v < 0.0 { "-" } else { "" };
+        return Ok(format!(
+            "{sign}{}e{exp}{sep}{unit}",
+            trim_fraction(mantissa)
+        ));
+    }
+    let mut idx = prefixes
         .iter()
         .position(|(s, _)| mag >= *s)
-        .unwrap_or(SUFFIX.len() - 1);
-    let mut mantissa = mag / SUFFIX[idx].0;
-    let mut digits = sig_digits(mantissa);
+        .unwrap_or(prefixes.len() - 1);
+    let mut mantissa = mag / prefixes[idx].0;
+    let mut digits = decimals(mantissa);
     // Rounding can carry the mantissa to 1000 (999999 -> "1000k"): promote to
-    // the next-larger suffix so it stays in [1, 1000). G has nothing above it.
+    // the next-larger prefix so it stays in [1, 1000). G has nothing above it.
     if round_to(mantissa, digits) >= 1000.0 && idx > 0 {
         idx -= 1;
-        mantissa = mag / SUFFIX[idx].0;
-        digits = sig_digits(mantissa);
+        mantissa = mag / prefixes[idx].0;
+        digits = decimals(mantissa);
     }
     let s = format!("{mantissa:.digits$}");
-    let s = if s.contains('.') {
-        s.trim_end_matches('0').trim_end_matches('.')
-    } else {
-        &s
-    };
+    let s = trim_fraction(&s);
+    // A value that rounds to nothing is zero, whatever sign it came with:
+    // never "-0 A".
+    if is_zero_text(s) {
+        return Ok(format!("0{sep}{unit}"));
+    }
     let sign = if v < 0.0 { "-" } else { "" };
-    format!("{sign}{s}{sep}{}{unit}", SUFFIX[idx].1)
+    Ok(format!("{sign}{s}{sep}{}{unit}", prefixes[idx].1))
+}
+
+/// Format `v` (base SI units) in engineering notation, or say why it has no
+/// figure.
+///
+/// Three significant digits, trailing zeros trimmed, ASCII `u` for micro. With a `unit` the
+/// result is SI-typeset with a space (`4.7 uF`, `1 MHz`); with `""` it is the
+/// bare, re-parseable form (`10.9k`, `18.2n`, `-1M`). Negative zero and any
+/// value that rounds to nothing print as `0`; NaN and infinity are a typed
+/// [`NotFinite`], never a printed number.
+///
+/// # Errors
+///
+/// [`NotFinite`] when `v` is NaN or infinite.
+pub fn try_format_engineering(v: f64, unit: &str) -> Result<String, NotFinite> {
+    render_engineering(v, unit, ENGINEERING_SIG, "u")
+}
+
+/// [`try_format_engineering`] for a message that has no other way to say it:
+/// a non-finite `v` reads as words ([`NotFinite::words`]), never as a number.
+#[must_use]
+pub fn format_engineering(v: f64, unit: &str) -> String {
+    try_format_engineering(v, unit).unwrap_or_else(|why| why.words().to_string())
+}
+
+/// [`format_engineering`] with the micro sign the web UI renders
+/// ([`WEB_MICRO_SIGN`]) instead of ASCII `u`.
+#[must_use]
+pub fn format_engineering_web(v: f64, unit: &str) -> String {
+    render_engineering(v, unit, ENGINEERING_SIG, &WEB_MICRO_SIGN.to_string())
+        .unwrap_or_else(|why| why.words().to_string())
+}
+
+/// A measured quantity with its unit, or `missing` when it has no figure.
+///
+/// Engineering prefix chosen by magnitude (`mA` reads as `mA`, never `0.00 A`),
+/// four significant digits, the unit always present, `0` for negative zero.
+/// `missing` is the caller's words for "no figure here" (`"did not solve"`).
+#[must_use]
+pub fn format_quantity_or(v: f64, unit: &str, missing: &str) -> String {
+    render_engineering(v, unit, QUANTITY_SIG, "u").unwrap_or_else(|_| missing.to_string())
+}
+
+/// Several quantities of one unit joined by `sep`.
+///
+/// The unit is stated once when every one prints with the same prefix
+/// (`1.7..3.6 V`, `1.2/1.5/1.8 A`), and on each one otherwise (`0 V..50 mV`).
+/// A value with no figure reads as words.
+#[must_use]
+pub fn format_series(values: &[f64], sep: &str, unit: &str) -> String {
+    let parts: Vec<String> = values
+        .iter()
+        .map(|v| format_quantity_or(*v, unit, NotFinite::NotANumber.words()))
+        .collect();
+    let suffixes: Vec<Option<&str>> = parts
+        .iter()
+        .map(|p| p.rsplit_once(' ').map(|(_, u)| u))
+        .collect();
+    let shared =
+        suffixes.first().copied().flatten().is_some() && suffixes.iter().all(|u| *u == suffixes[0]);
+    let last = parts.len().saturating_sub(1);
+    parts
+        .iter()
+        .enumerate()
+        .map(|(i, p)| match p.rsplit_once(' ') {
+            Some((figure, _)) if shared && i < last => figure,
+            _ => p.as_str(),
+        })
+        .collect::<Vec<_>>()
+        .join(sep)
+}
+
+/// A number a message can state: an `f64`, or a reference to one, so a
+/// formatter takes whatever a caller has in hand (`*v`, `v`, `&v`).
+pub trait Figure: Copy {
+    /// The value.
+    fn figure(self) -> f64;
+}
+
+impl Figure for f64 {
+    fn figure(self) -> f64 {
+        self
+    }
+}
+
+impl Figure for &f64 {
+    fn figure(self) -> f64 {
+        *self
+    }
+}
+
+impl Figure for &&f64 {
+    fn figure(self) -> f64 {
+        **self
+    }
+}
+
+/// Volts for a message: `3.3 V`, `50 mV`, `0 V`; see [`format_quantity_or`].
+#[must_use]
+pub fn format_volts(v: impl Figure) -> String {
+    format_quantity_or(v.figure(), "V", NotFinite::NotANumber.words())
+}
+
+/// Amps for a message: `1.5 A`, `12.5 mA`, `4.995 kA`; see [`format_quantity_or`].
+#[must_use]
+pub fn format_amps(a: impl Figure) -> String {
+    format_quantity_or(a.figure(), "A", NotFinite::NotANumber.words())
+}
+
+/// Watts for a message: `1.5 W`, `250 mW`; see [`format_quantity_or`].
+#[must_use]
+pub fn format_watts(w: impl Figure) -> String {
+    format_quantity_or(w.figure(), "W", NotFinite::NotANumber.words())
+}
+
+/// `v` to `decimals` decimals with `unit` (a space before it, none before
+/// `%`), or why it has no figure.
+///
+/// For quantities with no engineering prefix (degrees Celsius, percent). A
+/// value that rounds to zero at this precision prints as `0` with no sign
+/// (never `-0%`); `signed` writes an explicit `+` on positive values. With
+/// `trim`, trailing fractional zeros go (`125 C`, `91.7 C`).
+///
+/// # Errors
+///
+/// [`NotFinite`] when `v` is NaN or infinite.
+pub fn try_format_fixed(
+    v: f64,
+    decimals: usize,
+    unit: &str,
+    signed: bool,
+    trim: bool,
+) -> Result<String, NotFinite> {
+    if let Some(why) = NotFinite::of(v) {
+        return Err(why);
+    }
+    let body = format!("{:.decimals$}", v.abs());
+    let body = if trim { trim_fraction(&body) } else { &body };
+    let sign = if is_zero_text(body) {
+        ""
+    } else if v < 0.0 {
+        "-"
+    } else if signed {
+        "+"
+    } else {
+        ""
+    };
+    let sep = if unit.is_empty() || unit == "%" {
+        ""
+    } else {
+        " "
+    };
+    Ok(format!("{sign}{body}{sep}{unit}"))
+}
+
+/// A bare number to at most `decimals` decimals, trailing zeros trimmed.
+///
+/// `3.3`, `125`, never `-0`; a non-finite value reads as words. For the figure
+/// in a range or a list whose unit is stated once (`1.7-3.6 V`).
+#[must_use]
+pub fn format_number(v: impl Figure, decimals: usize) -> String {
+    try_format_fixed(v.figure(), decimals, "", false, true)
+        .unwrap_or_else(|why| why.words().to_string())
+}
+
+/// A temperature as every report prints it: `91.7 C`, one decimal at most,
+/// a space before the unit, never `-0 C`; a non-finite value reads as words.
+#[must_use]
+pub fn format_celsius(celsius: impl Figure) -> String {
+    format_celsius_to(celsius, 1)
+}
+
+/// [`format_celsius`] to at most `decimals` decimals (trailing zeros trimmed):
+/// a ceiling the user typed (`125.25 C`) keeps the figures they gave.
+#[must_use]
+pub fn format_celsius_to(celsius: impl Figure, decimals: usize) -> String {
+    try_format_fixed(celsius.figure(), decimals, "C", false, true)
+        .unwrap_or_else(|why| why.words().to_string())
+}
+
+/// A percentage to `decimals` decimals (`12.5%`), never `-0%`; a non-finite
+/// value reads as words.
+#[must_use]
+pub fn format_percent(pct: impl Figure, decimals: usize) -> String {
+    try_format_fixed(pct.figure(), decimals, "%", false, false)
+        .unwrap_or_else(|why| why.words().to_string())
+}
+
+/// [`format_percent`] with an explicit `+` on positive deviations (`+3%`,
+/// `-12%`); a deviation that rounds to zero is `0%`, not `-0%`.
+#[must_use]
+pub fn format_percent_signed(pct: impl Figure, decimals: usize) -> String {
+    try_format_fixed(pct.figure(), decimals, "%", true, false)
+        .unwrap_or_else(|why| why.words().to_string())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{format_engineering, parse_quantity, split_prefix};
+    use super::{
+        format_amps, format_celsius, format_engineering, format_engineering_web, format_number,
+        format_percent, format_percent_signed, format_quantity_or, format_series, format_volts,
+        format_watts, parse_quantity, split_prefix, try_format_engineering, try_format_fixed,
+        NotFinite,
+    };
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() <= 1e-12 * b.abs().max(1e-30)
@@ -350,6 +633,103 @@ mod tests {
         for v in [1.0, 4.7e-6, 2.2e3, 1e6, 3.3e-12, 47.0, 1.5e9] {
             let back = parse_quantity(&format_engineering(v, ""), "").unwrap();
             assert!(close(back, v), "{v}");
+        }
+    }
+
+    /// Negative zero and values that round to nothing print as a plain `0`.
+    #[test]
+    fn negative_zero_and_tiny_negatives_print_as_zero() {
+        assert_eq!(format_engineering(-0.0, "V"), "0 V");
+        assert_eq!(format_engineering(-0.0, ""), "0");
+        assert_eq!(format_volts(-0.0), "0 V");
+        assert_eq!(format_amps(-0.0), "0 A");
+        // Below the smallest prefix it rounds away, sign and all.
+        assert_eq!(format_amps(-1e-15), "0 A");
+        assert_eq!(format_engineering(-1e-15, "A"), "0 A");
+        assert_eq!(format_percent(-0.0, 0), "0%");
+        assert_eq!(format_percent_signed(-0.4, 0), "0%");
+        assert_eq!(format_percent_signed(-0.004, 1), "0.0%");
+        assert_eq!(format_celsius(-0.0), "0 C");
+        assert_eq!(format_celsius(-0.04), "0 C");
+        // A real negative keeps its sign.
+        assert_eq!(format_engineering(-1.5e-3, "A"), "-1.5 mA");
+        assert_eq!(format_percent_signed(-12.4, 0), "-12%");
+        assert_eq!(format_celsius(-5.0), "-5 C");
+    }
+
+    /// NaN and infinity are a typed outcome, never a printed number.
+    #[test]
+    fn non_finite_values_are_words_never_numbers() {
+        for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(try_format_engineering(v, "A").is_err(), "{v}");
+            assert!(try_format_fixed(v, 1, "C", false, true).is_err(), "{v}");
+            for text in [
+                format_engineering(v, "A"),
+                format_engineering(v, ""),
+                format_engineering_web(v, "F"),
+                format_volts(v),
+                format_amps(v),
+                format_watts(v),
+                format_celsius(v),
+                format_percent(v, 1),
+                format_percent_signed(v, 1),
+            ] {
+                let lower = text.to_ascii_lowercase();
+                assert!(
+                    !lower.contains("nan") && !lower.contains("inf"),
+                    "{v} printed as {text:?}"
+                );
+            }
+        }
+        assert_eq!(NotFinite::of(f64::NAN), Some(NotFinite::NotANumber));
+        assert_eq!(NotFinite::of(f64::NEG_INFINITY), Some(NotFinite::Unbounded));
+        assert_eq!(NotFinite::of(1.0), None);
+        assert_eq!(
+            format_quantity_or(f64::NAN, "V", "did not solve"),
+            "did not solve"
+        );
+        assert_eq!(
+            format_quantity_or(f64::INFINITY, "A", "did not solve"),
+            "did not solve"
+        );
+        assert_eq!(format_quantity_or(3.3, "V", "did not solve"), "3.3 V");
+    }
+
+    /// The prefix follows the magnitude and the unit is always carried.
+    #[test]
+    fn quantities_pick_a_prefix_and_carry_the_unit() {
+        let table: &[(&dyn Fn() -> String, &str)] = &[
+            (&|| format_amps(1e-3), "1 mA"),
+            (&|| format_amps(0.0125), "12.5 mA"),
+            (&|| format_amps(1.5), "1.5 A"),
+            (&|| format_amps(4995.0), "4.995 kA"),
+            (&|| format_amps(2.5e-6), "2.5 uA"),
+            (&|| format_amps(-3e20), "-3e20 A"),
+            (&|| format_amps(1.5e12), "1.5e12 A"),
+            (&|| format_amps(1.004), "1.004 A"),
+            (&|| format_volts(3.3), "3.3 V"),
+            (&|| format_volts(0.05), "50 mV"),
+            (&|| format_volts(12.0), "12 V"),
+            (&|| format_volts(-5.0), "-5 V"),
+            (&|| format_watts(0.25), "250 mW"),
+            (&|| format_watts(24_950.0), "24.95 kW"),
+            (&|| format_celsius(91.74), "91.7 C"),
+            (&|| format_celsius(125.0), "125 C"),
+            (&|| format_series(&[1.7, 3.6], "..", "V"), "1.7..3.6 V"),
+            (&|| format_series(&[-0.0, 0.05], "..", "V"), "0 V..50 mV"),
+            (
+                &|| format_series(&[1.2, 1.5, 1.8], "/", "A"),
+                "1.2/1.5/1.8 A",
+            ),
+            (&|| format_number(-0.0, 2), "0"),
+            (&|| format_number(3.30, 2), "3.3"),
+            (&|| format_percent(12.5, 1), "12.5%"),
+            (&|| format_percent(50.0, 0), "50%"),
+            (&|| format_percent_signed(3.4, 0), "+3%"),
+            (&|| format_engineering_web(4.7e-6, "F"), "4.7 \u{b5}F"),
+        ];
+        for (f, want) in table {
+            assert_eq!(&f(), want);
         }
     }
 }

@@ -81,7 +81,7 @@ fn max_temp_on_multi_unit_package_passes_on_the_hottest_unit_measurement() {
     let r = &results[0];
     assert_row_green(r, "60C peak is within 85C");
     assert!(
-        r.detail.contains("60.0") && !r.detail.contains("no dissipation"),
+        r.detail.contains("60 C") && !r.detail.contains("no dissipation"),
         "the pass must be measured against the hottest unit, not skipped: {}",
         r.detail
     );
