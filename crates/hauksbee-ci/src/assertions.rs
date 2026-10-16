@@ -2638,6 +2638,41 @@ pub(crate) fn key_belongs_to_ref(reference: &str, key: &str) -> bool {
         })
 }
 
+/// The `max_temp` result for an overtemperature fault `f` past the device's
+/// own junction limit. Far past it the figure is no result: the engine's one
+/// stress wording states it without the number.
+fn over_device_max(f: &crate::runner::RunFault) -> (bool, String, Option<String>) {
+    let kind = FaultKind::Overtemperature;
+    if is_far_past_rating(kind, f.value, f.limit) {
+        let said = stress_clause(&f.component, kind, f.value, f.limit, rating_noun(kind), "");
+        return (
+            false,
+            format!(
+                "Tj({}) exceeded device max at {:.1}ms: {said}",
+                f.component, f.t_ms
+            ),
+            Some(said),
+        );
+    }
+    (
+        false,
+        format!(
+            "Tj({}) exceeded device max: {} > {} at {:.1}ms",
+            f.component,
+            fmt_c1(f.value),
+            fmt_c1(f.limit),
+            f.t_ms
+        ),
+        Some(format!(
+            "{} ran {} past its own {} max junction temperature at {:.1} ms",
+            f.component,
+            fmt_c1(f.value - f.limit),
+            fmt_c1(f.limit),
+            f.t_ms
+        )),
+    )
+}
+
 /// `max_temp`: the steady-state junction temperature of `ref` must stay at or
 /// below `celsius` (if given) or below the device's own max junction temp (if
 /// not, in which case we lean on whether an overtemperature fault fired).
@@ -2715,64 +2750,28 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Stri
         .faults
         .iter()
         .find(|f| key_belongs_to_ref(&reference, &f.component) && f.kind == "overtemperature");
-    if let Some(f) =
-        over.filter(|f| is_far_past_rating(FaultKind::Overtemperature, f.value, f.limit))
-    {
-        let said = stress_clause(
-            &f.component,
-            FaultKind::Overtemperature,
-            f.value,
-            f.limit,
-            rating_noun(FaultKind::Overtemperature),
-            "",
-        );
-        (
-            false,
-            format!(
-                "Tj({}) exceeded device max at {:.1}ms: {said}",
-                f.component, f.t_ms
-            ),
-            Some(said),
-        )
-    } else if let Some(f) = over {
-        (
-            false,
-            format!(
-                "Tj({}) exceeded device max: {} > {} at {:.1}ms",
-                f.component,
-                fmt_c1(f.value),
-                fmt_c1(f.limit),
-                f.t_ms
-            ),
-            Some(format!(
-                "{} ran {} past its own {} max junction temperature at {:.1} ms",
-                f.component,
-                fmt_c1(f.value - f.limit),
-                fmt_c1(f.limit),
-                f.t_ms
-            )),
-        )
-    } else {
-        // No sample at all: the junction was never estimated, so this
-        // guard was never evaluated. Reporting it green would be the
-        // same vacuous pass the load-time untracked-ref refusal exists to
-        // prevent; fail with the reason instead (max_current's no-data
-        // branch is the same discipline).
-        let Some((_, tj)) = peak else {
-            return (
-                false,
-                format!(
-                    "Tj({reference}): no dissipation was ever measured, so its junction \
-                     temperature was never estimated; the guard was never evaluated and \
-                     cannot be reported green (give the assert an explicit `celsius`, \
-                     or point it at a part this run actually stresses)"
-                ),
-                None,
-            );
-        };
-        let detail = format!("Tj({reference}) peak {}, within device max", fmt_c1(tj));
-        (true, detail, None)
+    if let Some(f) = over {
+        return over_device_max(f);
     }
+    // No sample at all: the junction was never estimated, so this
+    // guard was never evaluated. Reporting it green would be the
+    // same vacuous pass the load-time untracked-ref refusal exists to
+    // prevent; fail with the reason instead (max_current's no-data
+    // branch is the same discipline).
+    let Some((_, tj)) = peak else {
+        return (
+            false,
+            format!(
+                "Tj({reference}): no dissipation was ever measured, so its junction \
+                 temperature was never estimated; the guard was never evaluated and \
+                 cannot be reported green (give the assert an explicit `celsius`, \
+                 or point it at a part this run actually stresses)"
+            ),
+            None,
+        );
+    };
+    let detail = format!("Tj({reference}) peak {}, within device max", fmt_c1(tj));
+    (true, detail, None)
 }
 
 #[cfg(test)]
@@ -4150,13 +4149,23 @@ mod tests {
             ("reverse_bias", "V"),
             ("gate_overvoltage", "V"),
         ] {
-            let (ok, detail) = check_no_faults(&fault(kind, 120.48, 1.0));
+            let (ok, detail) = check_no_faults(&fault(kind, 1.48, 1.0));
             assert!(!ok);
             assert!(
-                detail.contains(&format!("{kind} 120.480 {unit} > 1.000 {unit} at 0.4ms")),
+                detail.contains(&format!("{kind} 1.480 {unit} > 1.000 {unit} at 0.4ms")),
                 "{detail}"
             );
         }
+        // Over 100x its rating the figure is no result: the fault is stated
+        // far past it, in the engine's one wording, with no number.
+        let (ok, detail) = check_no_faults(&fault("overpower", 120.48, 1.0));
+        assert!(!ok);
+        assert!(
+            detail.contains("first: R1 dissipates far more than its 1.00 W power rating")
+                && !detail.contains("120.48")
+                && detail.ends_with("at 0.4ms"),
+            "{detail}"
+        );
         assert!(check_no_faults(&RunOutcome::default()).0);
     }
 
