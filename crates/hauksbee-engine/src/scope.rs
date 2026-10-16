@@ -22,13 +22,13 @@
 //!   stop that reach, each marked dependent itself:
 //!   - the analysis ground: the solver's fixed reference node on every
 //!     board, so an open part's return current cannot move it;
-//!   - a held rail ([`held_rails`]): a rail a modelled source holds (a supply
+//!   - a held rail (`held_rails`): a rail a modelled source holds (a supply
 //!     the analysis applies, or a modelled regulator fed from a held rail)
 //!     and on which no open part has a pin that could drive it. An open load
 //!     there is named, not followed, and the verdict states the condition
 //!     that it draws within what the source gives;
 //!   - a signal pin of a part whose pins the analysis treats as separate
-//!     ports ([`NO_TRANSFER`]: a processor, an ADC, a connector); a rail
+//!     ports (`NO_TRANSFER`: a processor, an ADC, a connector); a rail
 //!     pin of such a part still carries.
 //!
 //! Without the second and third cuts every open part reached every net on
@@ -143,7 +143,7 @@ pub struct JudgementScope {
     /// analysis ground): their electrical checks are not judged.
     pub electrical_dependent: Vec<String>,
     /// Rails an open part loads that a modelled source holds (see
-    /// [`held_rails`]): the rail itself is in `electrical_dependent`, but the
+    /// `held_rails`): the rail itself is in `electrical_dependent`, but the
     /// reach stopped there, so the rest of what the rail feeds is judged on
     /// the condition the verdict states. Named in [`Self::condition`]; not a
     /// separate report field.
