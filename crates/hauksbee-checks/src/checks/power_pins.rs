@@ -586,8 +586,8 @@ impl Part<'_> {
         }
     }
 
-    /// "The board's symbol calls pad 4 V_CC; the datasheet puts VCC on pad 6."
-    /// for each flagged pad the board's symbol names as something else, or
+    /// One sentence such as `The board's symbol calls pad 4 V_CC; the datasheet
+    /// puts VCC on pad 6.` for each flagged pad the board's symbol names as something else, or
     /// whose power role the symbol puts on a pad the card does not.
     fn symbol_note(&self, flagged: &[&Pad]) -> String {
         let mut sentences: Vec<String> = Vec::new();
@@ -1061,7 +1061,7 @@ mod tests {
             ("1", SIG),
         ];
         let u = part("U1", "PWRTEST", &pads);
-        let bd = board(&NETS, vec![u.clone(), decap("C1", LONE), load()]);
+        let bd = board(&NETS, vec![u, decap("C1", LONE), load()]);
         assert!(power_pin_lint(&bd, &bridge).findings.is_empty());
         // The same tie with no law declaring 3V3OUT an output: open.
         let found = power_pin_lint(&bd, &card_lib(&pins, "")).findings;
