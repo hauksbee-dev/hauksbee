@@ -2021,7 +2021,8 @@ mod program_domain_tests {
     /// A PROG resistor with one dangling leg (its second pad on no net, or on
     /// KiCad's `unconnected-(..)` placeholder net) is a programming resistor
     /// drawn but not connected: the pin is not floating by design, so the check
-    /// abstains by name and the verdict is never a pass. A test point beside it
+    /// abstains (naming the part and pin, and saying no resistor path to ground
+    /// is fitted) and the verdict is never a pass. A test point beside it
     /// changes nothing.
     #[test]
     fn a_prog_resistor_with_one_dangling_leg_abstains_by_name() {
@@ -2054,7 +2055,7 @@ mod program_domain_tests {
                 f[0].message
             );
             assert!(
-                f[0].message.contains("R8") && f[0].message.contains("prog pin"),
+                f[0].message.contains("U3") && f[0].message.contains("prog pin"),
                 "{}",
                 f[0].message
             );
