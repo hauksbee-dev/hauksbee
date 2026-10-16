@@ -460,9 +460,14 @@ impl CheckReport<'_> {
         // reason, so the GitHub surface is red wherever JUnit, SARIF and the
         // exit code are, blockers or not.
         if strict && run_verdict.verdict == "invalid" {
-            super::ci_artifacts::github_verdict_annotation(
-                run_verdict.reason.as_deref().unwrap_or_default(),
-            );
+            // Blockers are named in the shared INCONCLUSIVE sentence by the exit
+            // below; a partly judged run, or one with no blocker to name, says
+            // the verdict's own reason instead.
+            if run_verdict.partial || blockers.is_empty() {
+                super::ci_artifacts::github_verdict_annotation(
+                    run_verdict.reason.as_deref().unwrap_or_default(),
+                );
+            }
             super::exit_invalid_for_analysis(&blockers);
         }
         Ok(())
