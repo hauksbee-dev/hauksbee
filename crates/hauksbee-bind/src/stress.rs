@@ -360,13 +360,14 @@ const fn far_past_verb(kind: FaultKind) -> &'static str {
     }
 }
 
-/// How every report states one stress: the clause "`component` dissipates
-/// 2.50 W`detail`, over its 250 mW `rated`", or, when the figure is no
-/// result ([`is_far_past_rating`]), "`component` dissipates far more than its
-/// 250 mW `rated` (why no figure is printed)". The single formatter for a
-/// stress figure, so no surface prints an idealised model's absurd number
-/// as fact. `detail` (the nets or currents behind a figure) is dropped with
-/// the figure.
+/// How every report states one stress, the single formatter for a figure.
+///
+/// The clause is "`component` dissipates 2.50 W`detail`, over its 250 mW
+/// `rated`", or, when the figure is no result ([`is_far_past_rating`]),
+/// "`component` dissipates far more than its 250 mW `rated` (why no figure is
+/// printed)", so no surface prints an idealised model's absurd number as
+/// fact. `detail` (the nets or currents behind a figure) is dropped with the
+/// figure.
 #[must_use]
 pub fn stress_clause(
     component: &str,
@@ -3503,9 +3504,9 @@ mod monitor_temp_tests {
     }
 
     /// Legal control: a junction estimate 2.2x a stand-in card's limit (25 C
-    /// + 1.95 W * 100 C/W = 220 C against 100 C) rests on a guessed theta-JA
-    /// as well as a guessed limit, so it stays a stated condition, worded
-    /// without its figure. Faulty: past the 1500 C no package survives
+    /// plus 1.95 W at 100 C/W, 220 C against 100 C) rests on a guessed
+    /// theta-JA as well as a guessed limit, so it stays a stated condition,
+    /// worded without its figure. Faulty: past the 1500 C no package survives
     /// (16 W, 1625 C) no guess excuses it, and it is a fault.
     #[test]
     fn a_stand_in_temperature_is_a_condition_until_no_package_survives_it() {
