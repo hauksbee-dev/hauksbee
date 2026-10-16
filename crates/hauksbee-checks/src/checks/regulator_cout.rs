@@ -155,23 +155,19 @@ fn unvalued_note(
     (model_id, need, what): (&str, f64, &str),
     (out_name, unvalued): (&str, &[&str]),
 ) -> LintFinding {
-    let one = unvalued.len() == 1;
+    let caps = unvalued.join(", ");
+    let has = if unvalued.len() == 1 { "has" } else { "have" };
     LintFinding {
         check: LintCheck::OperatingEnvelope,
         severity: Severity::Low,
         message: format!(
-            "{} ({}) output '{}': the output-capacitance check{ABSTENTION_MARKER} against the \
-             {} {what} card '{}' states for loop stability, because {} across the output {} \
-             no readable capacitance value. {REMEDY_MARKER}Give {} a capacitance value (\"4u7\", \
-             \"100n\", \"0.1uF\") so the requirement can be checked.",
+            "{} ({}) output '{out_name}': the output-capacitance check{ABSTENTION_MARKER} against \
+             the {} {what} card '{model_id}' states for loop stability, because {caps} across \
+             the output {has} no readable capacitance value. {REMEDY_MARKER}Give {caps} a \
+             capacitance value (\"4u7\", \"100n\", \"0.1uF\") so the requirement can be checked.",
             comp.reference,
             comp.value.trim(),
-            out_name,
             farads(need),
-            model_id,
-            unvalued.join(", "),
-            if one { "has" } else { "have" },
-            if one { "it" } else { "them" },
         ),
         refs: std::iter::once(comp.reference.clone())
             .chain(unvalued.iter().map(|r| (*r).to_string()))
