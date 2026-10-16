@@ -216,7 +216,9 @@ fn modelling_condition(assumptions: &[Assumption]) -> Option<String> {
     // which names the part as assumed and says how to lift it (bind its part
     // number). The class models behind those corners (a stand-in, a fallback,
     // one modelled only in part) are that same assumption, so the part is not
-    // named again under any label.
+    // named again under a model-fidelity label. Its other assumptions (a pin
+    // role inferred from the package, a default value) are not what the
+    // corners sweep, so they stay named.
     let swept: BTreeSet<String> = assumptions
         .iter()
         .filter(|a| a.term() == Term::AssumedCorner)
@@ -229,7 +231,11 @@ fn modelling_condition(assumptions: &[Assumption]) -> Option<String> {
             continue;
         }
         let part = assumption_part(a);
-        if part.as_ref().is_some_and(|p| swept.contains(p)) {
+        let model_fidelity = matches!(
+            term,
+            Term::ReducedFidelity | Term::ExecutablePartial | Term::SubstituteModel
+        );
+        if model_fidelity && part.as_ref().is_some_and(|p| swept.contains(p)) {
             continue;
         }
         let entry = by_term.entry(term).or_default();
@@ -443,12 +449,17 @@ mod tests {
             "Simulated at assumed corners, not any datasheet.",
             "",
         );
-        let said = derived(&[], &[swept, partial, unswept], true);
+        let said = derived(&[], &[swept.clone(), partial.clone(), unswept], true);
         assert_eq!(said.len(), 1, "{said:?}");
         assert!(
             said[0].contains("(D5)") && !said[0].contains("D4"),
             "{said:?}"
         );
+        // The corners sweep the part's parameters, not its pinout: a pin role
+        // inferred from the package on the swept part is still named.
+        let pin = Assumption::inferred_pin_role_for_component("D4", "D4", "1", "anode");
+        let said = derived(&[], &[swept, partial, pin], true);
+        assert!(said[0].contains("Inferred pin role (D4)"), "{said:?}");
     }
 
     #[test]
