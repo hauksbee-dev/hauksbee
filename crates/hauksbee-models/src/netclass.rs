@@ -28,7 +28,19 @@ pub fn leaf(name: &str) -> String {
 }
 
 /// A ground-family net: the reference every other voltage is measured from,
-/// or a named split of it (AGND, DGND, PGND, GNDA, ISOGND, a numbered GND2).
+/// or a named split of it (AGND, DGND, PGND, GNDA, ISOGND, a numbered GND2,
+/// the `0V` of a bench-style schematic).
+///
+/// This is the one definition every consumer reads: the binder's reference
+/// node, the crystal, decoupling and back-power checks, the USB-C Rd walk and
+/// the wording. A board whose ground is spelled `GND1`, `GROUND`, `GNDREF`,
+/// `AGND` or `0V` is the same circuit as one spelled `GND`, so none of them
+/// may change a verdict. How a ground-family net becomes the solver's 0 V node
+/// is [`is_canonical_ground`] plus the binder's per-circuit reference rule.
+///
+/// Not recognised by name alone: `COM` and `COMMON`. They are the ground on
+/// some instrument schematics and a signal on others (a relay pole, a
+/// transceiver's common-mode output pin), so a name cannot decide them.
 ///
 /// Not ground:
 /// - a sense, LED-return, feedback or switched net named after ground
@@ -40,7 +52,9 @@ pub fn leaf(name: &str) -> String {
 #[must_use]
 pub fn is_ground(name: &str) -> bool {
     let n = leaf(name);
-    if n == "0" {
+    // SPICE node 0, and the `0V` / `0V0` (KiCad digit-V-digit) a bench-style
+    // schematic calls its reference: a rail of zero volts is the reference.
+    if matches!(n.as_str(), "0" | "0V" | "0V0") {
         return true;
     }
     // Numbering does not change what a net is: GND1, AGND_2, GND-3.
@@ -66,7 +80,13 @@ const NOT_THE_PLANE: [&str; 11] = [
     "SENSE", "SENS", "SNS", "KELVIN", "LED", "LEDS", "FB", "MON", "MEAS", "DET", "SW",
 ];
 
-/// The net the binder fuses onto node 0: `GND`, `VSS` or `0` exactly.
+/// The net the binder fuses onto node 0 by name alone: `GND`, `VSS`, `0V` or
+/// `0` exactly.
+///
+/// Any other ground-family net (`GND1`, `GROUND`, `GNDREF`, `AGND`) is the
+/// reference of its own circuit when no part joins it to a canonical ground,
+/// and stays a distinct node when one does; see the binder's
+/// `island_reference_grounds`.
 ///
 /// Deliberately narrower than [`is_ground`]: AGND, DGND, PGND, ISOGND and
 /// `CHASSIS_GND` are distinct nets until something (a ferrite bead, a 0 ohm
@@ -75,7 +95,7 @@ const NOT_THE_PLANE: [&str; 11] = [
 /// so a board whose only ground is `VSS` still has a reference node.
 #[must_use]
 pub fn is_canonical_ground(name: &str) -> bool {
-    matches!(leaf(name).as_str(), "0" | "GND" | "VSS")
+    matches!(leaf(name).as_str(), "0" | "0V" | "GND" | "VSS")
 }
 
 /// The nominal voltage a supply net's name states, or `None` when the name
@@ -374,6 +394,14 @@ mod tests {
         ("/Power/GND", Ground, "only the leaf decides"),
         ("0", Ground, "SPICE node 0"),
         ("VSS", Ground, "the IC-pin spelling of ground"),
+        ("0V", Ground, "a rail of zero volts is the reference"),
+        ("0V0", Ground, "KiCad digit-V-digit spelling of 0V"),
+        ("/Power/0V", Ground, "only the leaf decides"),
+        (
+            "COM",
+            Signal,
+            "a relay pole or a common-mode output as often as a ground: a name cannot decide",
+        ),
         ("VSSA", Ground, "analog VSS"),
         ("AGND", Ground, "a named split, still ground"),
         ("DGND", Ground, "a named split, still ground"),
@@ -586,11 +614,35 @@ mod tests {
 
     #[test]
     fn canonical_ground_is_only_gnd_vss_and_node_zero() {
-        for name in ["GND", "/sheet/GND", "gnd", "VSS", "0"] {
+        for name in ["GND", "/sheet/GND", "gnd", "VSS", "0", "0V", "/Power/0v"] {
             assert!(is_canonical_ground(name), "{name}");
         }
-        for name in ["AGND", "DGND", "PGND", "CHASSIS_GND", "VEE", "GND_SENSE"] {
+        for name in [
+            "AGND",
+            "DGND",
+            "PGND",
+            "CHASSIS_GND",
+            "VEE",
+            "GND_SENSE",
+            "GND1",
+            "GROUND",
+            "GNDREF",
+        ] {
             assert!(!is_canonical_ground(name), "{name}");
+        }
+    }
+
+    /// Every spelling a board uses for its one ground is ground-family, so no
+    /// consumer of the one table sees a spelling as a signal; and a zero-volt
+    /// rail name is no supply.
+    #[test]
+    fn every_ground_spelling_is_ground_and_none_is_a_supply() {
+        for name in [
+            "GND", "0V", "0V0", "GND1", "GROUND", "GNDREF", "AGND", "DGND", "VSS", "/sub/0V",
+        ] {
+            assert!(is_ground(name), "{name}");
+            assert!(!is_supply(name), "{name} is not a supply");
+            assert_eq!(rail_voltage(name), None, "{name} states no rail voltage");
         }
     }
 }
