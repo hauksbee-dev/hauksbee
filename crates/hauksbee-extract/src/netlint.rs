@@ -285,6 +285,14 @@ pub enum LintCheck {
     /// reverse-biased whenever the board is powered. Produced by
     /// `polarity.rs`.
     PolarisedCapReversed,
+    /// A rail the analysis would otherwise power by its name alone whose only
+    /// source is a part the board does not fit (its regulator, or the ferrite
+    /// or 0 ohm link to a powered rail), with no connector, test point or
+    /// battery to bring it in: it never comes up. Also the non-gating notes on
+    /// a rail whose own source is unfitted but may come in from off the board,
+    /// and on a run that powered no rail at all. Produced by the engine-layer
+    /// `rail_basis` check.
+    RailUnpowered,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -309,7 +317,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 35] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -344,6 +352,7 @@ impl LintCheck {
         Self::SupplyGroundSwapped,
         Self::DiodeReversed,
         Self::PolarisedCapReversed,
+        Self::RailUnpowered,
     ];
 
     #[must_use]
@@ -383,6 +392,7 @@ impl LintCheck {
             Self::SupplyGroundSwapped => "supply_ground_swapped",
             Self::DiodeReversed => "diode_reversed",
             Self::PolarisedCapReversed => "polarised_cap_reversed",
+            Self::RailUnpowered => "rail_unpowered",
         }
     }
 }

@@ -164,12 +164,15 @@ fn a_hardware_fixed_indicator_makes_the_pass_conditional_on_every_surface() {
         .iter()
         .filter_map(serde_json::Value::as_str)
         .collect();
-    assert_eq!(
-        conditions.len(),
-        1,
+    // One condition for the area; the only other is that the fixture's
+    // connector-fed rail is assumed supplied from off the board.
+    assert!(conditions[0].starts_with(CONDITION), "{conditions:?}");
+    assert!(
+        conditions[1..]
+            .iter()
+            .all(|c| c.starts_with("Rails assumed supplied from off the board")),
         "one condition for the area: {conditions:?}"
     );
-    assert!(conditions[0].starts_with(CONDITION), "{conditions:?}");
 
     let text = stdout(&run_board(&path, &["--check", "--plain"]));
     let headline = text.lines().nth(1).unwrap_or_default();
@@ -198,7 +201,7 @@ fn a_hardware_fixed_indicator_makes_the_pass_conditional_on_every_surface() {
             && !web.headline.contains('`')
             && web
                 .headline
-                .ends_with(&format!("this rests on: {}", conditions[0])),
+                .contains(&format!("this rests on: {}", conditions[0])),
         "{}",
         web.headline
     );
@@ -232,8 +235,9 @@ fn a_gating_warning_fails_the_web_headline_as_it_fails_the_json() {
 
 /// An LED a microcontroller pin drives directly is lit by whatever level the
 /// firmware writes, so ordering the board does not fix its meaning: it stays
-/// NOT COVERED but adds no condition (blinky's only condition is that its
-/// copper was spaced against default rules, having no project file beside it).
+/// NOT COVERED but adds no condition (blinky's only conditions are that its
+/// copper was spaced against default rules, having no project file beside it,
+/// and how its rails are taken to be supplied).
 #[test]
 fn a_firmware_driven_indicator_adds_no_condition() {
     let path = crate::support::board("../hauksbee-ci/examples/boards/blinky.kicad_pcb");
@@ -244,9 +248,9 @@ fn a_firmware_driven_indicator_adds_no_condition() {
     assert_eq!(v["verdict"], "pass", "{v:#}");
     let conditions = v["verdict_conditions"].as_array().expect("conditions");
     assert!(
-        conditions.iter().all(|c| c
-            .as_str()
-            .is_some_and(|c| c.starts_with("copper spacing was judged against a DEFAULT"))),
+        conditions.iter().all(|c| c.as_str().is_some_and(|c| c
+            .starts_with("copper spacing was judged against a DEFAULT")
+            || c.starts_with("Rails "))),
         "{v:#}"
     );
 }
