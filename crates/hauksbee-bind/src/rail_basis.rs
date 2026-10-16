@@ -171,7 +171,7 @@ fn is_entry(c: &Component, kinds: &HashMap<String, String>) -> bool {
     // A capacitor, resistor, inductor or semiconductor is never an entry,
     // whatever its footprint geometry reads as (a resistor or capacitor
     // array, a solder-jumper footprint).
-    let part = is_capacitor(c)
+    let passive_or_semi = is_capacitor(c)
         || is_plain_resistor(c)
         || is_plain_inductor(c)
         || is_led(c)
@@ -179,7 +179,7 @@ fn is_entry(c: &Component, kinds: &HashMap<String, String>) -> bool {
             r.strip_prefix(p)
                 .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
         });
-    if part && !port {
+    if passive_or_semi && !port {
         return false;
     }
     kinds.get(&c.reference).is_some_and(|k| k == "connector")
