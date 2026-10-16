@@ -226,6 +226,9 @@ impl CheckReport<'_> {
         .with_condition(rails_entered)
         .with_condition(rails_held)
         .with_judgement_scope(crate::scope::JudgementScope::of(board, &bound, &blockers));
+        // The verdict carries the triage's inspect count, so the closing
+        // line's tag and the web headline read the same number.
+        jr.inspect_items = triage.inspect.len();
         // The board's real clearance-rule provenance, the one the sections and
         // `--json` read, attached before anything counts against it.
         jr.clearance_rule_source = Some(provenance.clone());
@@ -561,12 +564,16 @@ pub(crate) fn verdict_line(
                  copper findings remain tool-only and none counted as serious. Reason: {copper}{on}"
             );
         }
+        // A pass with items the triage lists to inspect is not clean: the tag
+        // says what the triage bucket says (the verdict carries its count, as
+        // the web headline reads it), so the two never disagree.
+        let tag = verdict.inspect_tag().unwrap_or_else(|| "clean".to_string());
         // A pass that rests on an assumption says so on the line itself.
         return if conditions.is_empty() {
-            format!("VERDICT: clean: 0 serious, {worth_a_look} worth a look")
+            format!("VERDICT: {tag}: 0 serious, {worth_a_look} worth a look")
         } else {
             format!(
-                "VERDICT: clean, conditionally: 0 serious, {worth_a_look} worth a look; {conditions}"
+                "VERDICT: {tag}, conditionally: 0 serious, {worth_a_look} worth a look; {conditions}"
             )
         };
     };
@@ -1061,14 +1068,13 @@ mod tests {
         jr.clearance_rule_source = Some(provenance.clone());
         jr.verdict_conditions = conditions.iter().map(ToString::to_string).collect();
         // A scope over `nets` named nets, one of which ("VB") the open parts touch.
-        let jr = jr.with_judgement_scope(scope_nets.map(|nets| crate::scope::JudgementScope {
+        let mut jr = jr.with_judgement_scope(scope_nets.map(|nets| crate::scope::JudgementScope {
             open_parts: unmodelled_parts.iter().map(ToString::to_string).collect(),
             nets,
             wiring_dependent: vec!["VB".into()],
             electrical_dependent: vec!["VB".into()],
             held_rails: Vec::new(),
         }));
-        let run_verdict = jr.run_verdict();
         let triage = crate::plain::order_triage_with_rule_source(
             &drc,
             &provenance,
@@ -1079,6 +1085,8 @@ mod tests {
             summary.unresolved,
             true,
         );
+        jr.inspect_items = triage.inspect.len();
+        let run_verdict = jr.run_verdict();
         let (_, _, json_serious, json_actionable) = jr.verdict();
         let (serious, worth) = (json_serious, json_actionable.saturating_sub(json_serious));
         let json: serde_json::Value = serde_json::from_str(&jr.to_json()).unwrap();
@@ -1137,6 +1145,37 @@ mod tests {
                     "pass",
                     "OK TO ORDER, conditionally: ",
                     "VERDICT: clean, conditionally: ",
+                )
+            },
+            Row {
+                // A rating no check could judge: the rest was judged, so a
+                // pass, but one that names the unchecked rating.
+                lint: vec![lint(
+                    LintCheck::DcOverstress,
+                    Severity::Low,
+                    "U4's current and power ratings check abstained: its path runs into J1 \
+                     (no model, left open), so the rating is unverified, not met",
+                )],
+                ..row(
+                    "abstained rating",
+                    "pass",
+                    "OK TO ORDER, conditionally: ",
+                    "VERDICT: clean, conditionally: ",
+                )
+            },
+            Row {
+                // Strap pins nobody checked are an item to inspect: never "clean".
+                lint: vec![lint(
+                    LintCheck::UncheckedMcu,
+                    Severity::Low,
+                    "U4 (STM32F405) looks like a strap-bearing MCU but has no boot-strap table, \
+                     so its boot strap-pins were NOT checked",
+                )],
+                ..row(
+                    "unchecked MCU straps",
+                    "pass",
+                    "INSPECT BEFORE ORDERING:\n  - U4 (STM32F405)",
+                    "VERDICT: inspect before ordering (1 item), conditionally: ",
                 )
             },
             Row {
@@ -1237,6 +1276,86 @@ mod tests {
                 )
             },
         ]
+    }
+
+    #[test]
+    fn a_pass_with_items_to_inspect_is_never_called_clean() {
+        let pass = crate::result::RunVerdict {
+            inspect: 17,
+            ..crate::result::RunVerdict::default()
+        };
+        let line = super::verdict_line(&pass, (0, 17), None);
+        assert!(
+            line.starts_with("VERDICT: inspect before ordering (17 items): 0 serious"),
+            "{line}"
+        );
+        // Control: nothing to inspect is clean.
+        let pass = crate::result::RunVerdict::default();
+        let line = super::verdict_line(&pass, (0, 0), None);
+        assert!(line.starts_with("VERDICT: clean: 0 serious"), "{line}");
+    }
+
+    #[test]
+    fn an_abstention_listed_to_inspect_is_said_once_in_the_triage() {
+        let mcu = lint(
+            LintCheck::UncheckedMcu,
+            Severity::Low,
+            "U4 (STM32F405) looks like a strap-bearing MCU but has no boot-strap table, so its \
+             boot strap-pins were NOT checked",
+        );
+        let got = surfaces(
+            &NetLintReport {
+                findings: vec![mcu],
+            },
+            &SiReport {
+                findings: Vec::new(),
+            },
+            &[],
+            &[],
+            None,
+            None,
+        );
+        assert_eq!(got.json_verdict, "pass");
+        // The inspect item states it; a CONDITIONALLY line would repeat it.
+        assert_eq!(
+            got.triage.matches("NOT checked").count(),
+            1,
+            "{}",
+            got.triage
+        );
+        assert!(!got.triage.contains("CONDITIONALLY"), "{}", got.triage);
+        // The closing line, which has no item list, names it as its condition.
+        assert!(got.line.contains("NOT checked"), "{}", got.line);
+        // Control: a condition that is not an item still opens the triage.
+        let got = surfaces(
+            &NetLintReport {
+                findings: vec![lint(
+                    LintCheck::UncheckedMcu,
+                    Severity::Low,
+                    "U4 (STM32F405) looks like a strap-bearing MCU but has no boot-strap \
+                     table, so its boot strap-pins were NOT checked",
+                )],
+            },
+            &SiReport {
+                findings: Vec::new(),
+            },
+            &[],
+            &["Q1 is judged at its assumed corners."],
+            None,
+            None,
+        );
+        assert!(
+            got.triage
+                .contains("CONDITIONALLY: whatever the items below decide, this rests on: Q1"),
+            "{}",
+            got.triage
+        );
+        assert_eq!(
+            got.triage.matches("NOT checked").count(),
+            1,
+            "{}",
+            got.triage
+        );
     }
 
     #[test]

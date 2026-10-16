@@ -72,6 +72,25 @@ pub fn ci_result(
 ///
 /// `CiResult::passed()` is only the numeric judgement. It stays true when an
 /// assertion's evidence is undermined (INVALID, exit 3), so a test claiming
+/// Whether `condition` is one the engine derives from the assumptions an
+/// assertion's evidence cites (`verdict_conditions::assumption_conditions`):
+/// parts with no model, modelling assumptions, checks not run, reader gaps,
+/// parts assumed fitted. Not a sweep, clock or time-bound condition.
+pub fn is_evidence_condition(condition: &str) -> bool {
+    use hauksbee_ir::vocabulary::{
+        MODELLING_ASSUMPTIONS_LEAD, NOT_JUDGED_BY_RUN_LEAD, READER_LIMITATION_LEAD,
+    };
+    [
+        MODELLING_ASSUMPTIONS_LEAD,
+        NOT_JUDGED_BY_RUN_LEAD,
+        READER_LIMITATION_LEAD,
+    ]
+    .iter()
+    .any(|lead| condition.starts_with(lead))
+        || condition.contains(" no model and w")
+        || condition.starts_with("Every placed part was judged as fitted")
+}
+
 /// "green" must check `exit_code()`. On failure this prints the verdict, every
 /// INVALID row's reason and the full human report.
 pub fn assert_green(result: &hauksbee_ci::CiResult, what: &str) {

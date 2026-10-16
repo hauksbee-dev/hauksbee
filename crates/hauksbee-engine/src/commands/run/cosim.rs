@@ -718,6 +718,7 @@ mod tests {
             conditions: Vec::new(),
             partial: true,
             not_judged: None,
+            inspect: 0,
         };
         let line = closing_verdict_line(&partial, &PlainReport::default()).unwrap();
         assert!(

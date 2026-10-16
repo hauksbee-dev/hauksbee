@@ -47,6 +47,65 @@ pub const DRAFT_MODELS_NEXT_STEP: &str =
 /// can split them where the engine joined them.
 pub const NOT_JUDGED_JOINER: &str = " Also: ";
 
+/// The order-triage bucket for findings a person must look at before ordering.
+///
+/// A run whose only items are in this bucket is a pass (nothing blocks), but
+/// it is not clean: the closing `VERDICT:` line carries the same words, in
+/// lower case, instead of "clean", so the two never disagree.
+pub const INSPECT_BEFORE_ORDERING: &str = "INSPECT BEFORE ORDERING";
+
+/// How the pass condition naming the modelling assumptions opens.
+///
+/// It lists the model-fidelity assumptions the checks were judged on (partly
+/// modelled parts, stand-in and reduced-fidelity models, inferred pin roles,
+/// default values), grouped by their glossary label. Checks that did not run,
+/// parts with no model and reader gaps are not modelling assumptions and have
+/// their own conditions.
+pub const MODELLING_ASSUMPTIONS_LEAD: &str =
+    "Judged on modelling assumptions, each listed in the evidence with how to lift it";
+
+/// The pass condition that counts the abstentions a run does not name one by
+/// one; `{n}` is how many and `{subjects}` the parts or nets they cover. Each
+/// one stays among the findings with what it needs.
+pub const MORE_ABSTENTIONS: &str =
+    "{n} more checks could not judge the part or net they cover ({subjects}); each is listed \
+     among the findings with what it needs.";
+
+/// How the pass condition naming checks this run did not judge opens.
+///
+/// A check that could not run on these inputs, or a part of the board the
+/// run never exercised, grouped by glossary label ("Not checked (drc)").
+pub const NOT_JUDGED_BY_RUN_LEAD: &str =
+    "Not judged by this run, so finding nothing there is no evidence that nothing is wrong";
+
+/// How the pass condition naming inputs read past a known reader gap opens.
+pub const READER_LIMITATION_LEAD: &str =
+    "Could not be read with confidence, so findings there may be missing or wrong";
+
+/// The pass condition for a run that treated every placed part as fitted;
+/// `{subjects}` names the input that carries no BOM or populate flag.
+pub const FITTED_BY_DEFAULT_CONDITION: &str =
+    "Every placed part was judged as fitted, because {subjects} carries no BOM or populate flag: \
+     a part the board leaves unfitted (DNP) was judged as present.";
+
+/// The pass condition for parts with no model on a pass (a verdict-critical
+/// one makes the run PARTLY JUDGED instead): `{n}` is how many and
+/// `{subjects}` names them, a few by name and the rest counted.
+#[must_use]
+pub fn open_parts_condition(n: usize, subjects: &str) -> String {
+    if n == 1 {
+        format!(
+            "1 part has no model and was not judged ({subjects}); it is listed in the evidence \
+             with how to model it."
+        )
+    } else {
+        format!(
+            "{n} parts have no model and were not judged ({subjects}); each is listed in the \
+             evidence with how to model it."
+        )
+    }
+}
+
 /// What a run concluded. Ordered from best to worst for the reader: a pass,
 /// a pass with named conditions, a fail, and the two outcomes that vouch for
 /// nothing (partly judged, invalid run).
@@ -119,7 +178,9 @@ impl VerdictState {
             Self::Pass => "Every check in scope ran on trustworthy evidence and nothing blocks.",
             Self::PassConditional => {
                 "Nothing blocks, but the pass rests on named conditions (default rules, \
-                 guessed or fallback models); each condition says how to lift it."
+                 guessed or fallback models, partly modelled parts, inferred pin roles, parts \
+                 with no model, checks that could not judge a part or did not run); each \
+                 condition says how to lift it."
             }
             Self::Fail => "At least one blocking finding or failed assertion.",
             Self::PartlyJudged => {

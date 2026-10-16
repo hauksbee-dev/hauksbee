@@ -406,10 +406,12 @@ fn an_unbounded_assertion_reports_a_number_and_judges_nothing() {
             "{probe}[[assert]]\nkind = \"voltage\"\nname = \"rail\"\nnet = \"V33\"\nmin = 3.0\n"
         ),
     );
+    // GREEN, conditionally: the asserted net is held by the spec's own ideal
+    // source, which the pass states as a reduced-fidelity condition.
     assert!(
         mixed
             .render_human()
-            .contains("GREEN - 2/2 assertions passed"),
+            .contains("GREEN, conditionally - 2/2 assertions passed"),
         "{}",
         mixed.render_human()
     );

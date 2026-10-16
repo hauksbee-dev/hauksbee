@@ -113,13 +113,24 @@ fn boot_state_fuzz(
         result.seeds, expected,
         "{case}: must hold across every boot seed ({seeds}) at each open-set member"
     );
+    // The sweep's own conditions first, exactly; after them only what the
+    // assertions' evidence rests on (parts with no model, modelling
+    // assumptions), never another sweep claim.
+    let stated = &result.verdict_conditions;
     assert_eq!(
-        result.verdict_conditions, conditions,
+        stated[..conditions.len().min(stated.len())],
+        conditions[..],
         "{case}: a pass over a partly swept open set must say so"
+    );
+    assert!(
+        stated[conditions.len()..]
+            .iter()
+            .all(|c| support::is_evidence_condition(c)),
+        "{case}: {stated:?}"
     );
     assert_eq!(
         result.render_json().contains("\"verdict_conditions\""),
-        !conditions.is_empty(),
+        !stated.is_empty(),
         "{case}: the JSON document carries the conditions exactly when there are some"
     );
     result
@@ -255,9 +266,16 @@ fn mnt_reform_supervisor_boot_states_raise_no_fault() {
         24 * 14,
         "24 seeds x the 14-member linear cover"
     );
-    let [condition] = result.verdict_conditions.as_slice() else {
-        panic!("one condition: {:?}", result.verdict_conditions);
+    // One sweep condition; the rest say what the assertions' evidence rests
+    // on (the parts with no model, the modelling assumptions).
+    let [condition, evidence @ ..] = result.verdict_conditions.as_slice() else {
+        panic!("a sweep condition: {:?}", result.verdict_conditions);
     };
+    assert!(
+        evidence.iter().all(|c| support::is_evidence_condition(c)),
+        "one sweep condition: {:?}",
+        result.verdict_conditions
+    );
     for needle in [
         "6 parts the board names only by class",
         "all weak, all strong, and each alone against the rest",

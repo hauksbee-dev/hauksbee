@@ -311,6 +311,11 @@ pub struct RunVerdict {
     /// that lists the failures itself states this once, on its own line,
     /// beside them.
     pub not_judged: Option<String>,
+    /// How many items the order triage lists to inspect before ordering, on a
+    /// pass (0 otherwise). A pass with any is not "clean" and not plainly "OK
+    /// to order": every surface tags it [`Self::inspect_tag`] from this one
+    /// count, so the closing `VERDICT:` line and the web headline agree.
+    pub inspect: usize,
 }
 
 impl Default for RunVerdict {
@@ -321,6 +326,7 @@ impl Default for RunVerdict {
             conditions: Vec::new(),
             partial: false,
             not_judged: None,
+            inspect: 0,
         }
     }
 }
@@ -330,6 +336,21 @@ impl RunVerdict {
     #[must_use]
     pub fn is_pass(&self) -> bool {
         self.verdict == "pass"
+    }
+
+    /// "inspect before ordering (N items)" for a pass with items the triage
+    /// lists to inspect, in the triage bucket's own words; `None` when there
+    /// are none (or the run did not pass).
+    #[must_use]
+    pub fn inspect_tag(&self) -> Option<String> {
+        (self.is_pass() && self.inspect > 0).then(|| {
+            format!(
+                "{} ({} item{})",
+                hauksbee_ir::vocabulary::INSPECT_BEFORE_ORDERING.to_lowercase(),
+                self.inspect,
+                if self.inspect == 1 { "" } else { "s" }
+            )
+        })
     }
 
     /// The line a failing run prints once, after its failures: the lead, what
@@ -2640,9 +2661,12 @@ pub struct JsonReport {
     /// swept ("Q1 passes across assumed corners (...); put the MPN on Q1 to
     /// remove this assumption."), and, once per area, intent the tool cannot
     /// know but the hardware fixes (which level lights an indicator, when no
-    /// stated outcome says). A pass with any is conditional on them, never
-    /// unconditional. Additive; omitted when empty or when the verdict is not
-    /// a pass (`verdict_reason` then says why).
+    /// stated outcome says). The serialized list also names each check that
+    /// abstained on a part or net, and the modelling assumptions a
+    /// model-dependent surface judged on (`JsonReport::pass_conditions`). A pass
+    /// with any is conditional on them, never unconditional. Additive; omitted
+    /// when empty or when the verdict is not a pass (`verdict_reason` then says
+    /// why).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verdict_conditions: Vec<String>,
     /// Which net checks the run judged when key parts have no usable model:
@@ -2654,6 +2678,12 @@ pub struct JsonReport {
     /// part is modelled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judgement_scope: Option<crate::scope::JudgementScope>,
+    /// How many items the surface's order triage lists to inspect, set before
+    /// the verdict is derived ([`RunVerdict::inspect`]). Not serialized: the
+    /// triage itself is the machine record of them.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub inspect_items: usize,
 }
 
 /// Machine-readable input inventory for BOM/placement-aware runs.
@@ -2782,6 +2812,7 @@ impl JsonReport {
             waived: Vec::new(),
             verdict_conditions: Vec::new(),
             judgement_scope: None,
+            inspect_items: 0,
         }
     }
 
@@ -3142,6 +3173,34 @@ impl JsonReport {
         )
     }
 
+    /// Everything a pass rests on: the conditions the surface stated, then the
+    /// ones its findings and assumptions imply (a check that abstained on a
+    /// part, the modelling assumptions a model-dependent surface judged on; see
+    /// [`crate::verdict_conditions`]), each once. Every surface reads this one
+    /// list, so `--json`, `--plain`, the closing `VERDICT:` line and the web
+    /// headline name the same conditions.
+    #[must_use]
+    pub fn pass_conditions(&self) -> Vec<String> {
+        // A waived finding is listed with its waiver's reason and date, never
+        // as something the pass rests on.
+        let findings: Vec<JsonFinding> = (self.findings.iter().flatten())
+            .filter(|f| {
+                !self
+                    .waived
+                    .iter()
+                    .any(|w| [&w.check, &w.kind, &w.subject] == [&f.check, &f.kind, &f.message])
+            })
+            .cloned()
+            .collect();
+        let model_dependent = self.bind_gates_verdict && !self.descriptive_only;
+        let derived =
+            crate::verdict_conditions::derived(&findings, &self.assumptions, model_dependent);
+        let mut seen = std::collections::HashSet::new();
+        (self.verdict_conditions.iter().cloned().chain(derived))
+            .filter(|c| seen.insert(c.clone()))
+            .collect()
+    }
+
     /// The machine verdict as the human surfaces carry it: the SAME derivation
     /// [`Self::to_json`] prints, so a triage headline or a closing `VERDICT:`
     /// line built from this can never disagree with the `verdict` field.
@@ -3159,12 +3218,17 @@ impl JsonReport {
             reason,
             // A condition qualifies a pass; a verdict that is not one says why instead.
             conditions: if verdict == "pass" {
-                self.verdict_conditions.clone()
+                self.pass_conditions()
             } else {
                 Vec::new()
             },
             partial,
             not_judged,
+            inspect: if verdict == "pass" {
+                self.inspect_items
+            } else {
+                0
+            },
         }
     }
 
@@ -3200,8 +3264,15 @@ impl JsonReport {
         out.insert("serious_count".into(), serde_json::json!(serious));
         out.insert("actionable_count".into(), serde_json::json!(actionable));
         // A condition qualifies a pass; a verdict that is not one says why instead.
-        if verdict != "pass" {
+        let conditions = if verdict == "pass" {
+            self.pass_conditions()
+        } else {
+            Vec::new()
+        };
+        if conditions.is_empty() {
             value.remove("verdict_conditions");
+        } else {
+            value.insert("verdict_conditions".into(), serde_json::json!(conditions));
         }
         out.append(&mut value);
         serde_json::to_string_pretty(&serde_json::Value::Object(out))
@@ -3290,6 +3361,16 @@ fn severity_specific_fix_hint(check: LintCheck, severity: Severity) -> Option<&'
     )
 }
 
+/// The suggested fix of a schematic/PCB disagreement: below High it is a
+/// part-identity disagreement, not moved wiring.
+fn pcb_schematic_fix_hint(severity: Severity) -> &'static str {
+    if severity == Severity::High {
+        "Update the PCB from the schematic, re-route the changed pins, and re-check."
+    } else {
+        "Confirm which part is intended and, if the schematic's is right, update the PCB from it, then re-check."
+    }
+}
+
 /// The suggested fix of a polarity finding (a swapped supply and ground pin, a diode or a
 /// polarised capacitor fitted backwards).
 const fn polarity_fix_hint(check: LintCheck) -> &'static str {
@@ -3336,11 +3417,7 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::UnroutedPad => {
             "Route the unconnected pads to their net (or refill the zones) until KiCad DRC reports no unconnected items."
         }
-        // Below High is a part-identity disagreement, not moved wiring.
-        LintCheck::PcbSchematicMismatch if severity != Severity::High => "Confirm which part is intended and, if the schematic's is right, update the PCB from it, then re-check.",
-        LintCheck::PcbSchematicMismatch => {
-            "Update the PCB from the schematic, re-route the changed pins, and re-check."
-        }
+        LintCheck::PcbSchematicMismatch => pcb_schematic_fix_hint(severity),
         LintCheck::StrapPin => {
             "Hold the strap net at the datasheet's required reset level with a pull resistor; keep active signals off it until after boot."
         }

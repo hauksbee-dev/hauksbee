@@ -702,6 +702,12 @@ pub struct WebReport {
     /// read the board.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub verdict: String,
+    /// On a pass with items the order triage lists to inspect, the verdict's
+    /// tag for it ("inspect before ordering (3 items)",
+    /// `RunVerdict::inspect_tag`): the words the CLI's closing `VERDICT:` line
+    /// uses, so the browser never calls that pass clean. Absent otherwise.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub verdict_inspect: String,
     /// True when the verdict is PARTLY JUDGED (`invalid`, never a pass): the
     /// same flag `run --check --json` prints. Absent otherwise.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -740,6 +746,8 @@ impl WebReport {
             return;
         };
         machine.refusal.clone_from(&self.refusal);
+        // The verdict carries the triage's inspect count, as `--check` does.
+        machine.inspect_items = self.triage.as_ref().map_or(0, |t| t.inspect.len());
         // A co-sim fault gates like the CLI's co-sim surface: a destroyed part
         // is serious, and any raised over-stress fails the gate.
         let faults: Vec<crate::result::JsonFinding> = self
@@ -770,6 +778,7 @@ impl WebReport {
         self.pre_verdict_headline.clone_from(&self.headline);
         self.headline = verdict_headline(&verdict, &self.headline, self.serious);
         self.verdict = verdict.verdict.to_string();
+        self.verdict_inspect = verdict.inspect_tag().unwrap_or_default();
         self.partly_judged = verdict.partial;
         self.judgement_scope.clone_from(&machine.judgement_scope);
         self.verdict_reason = verdict.reason;
@@ -824,21 +833,44 @@ fn verdict_headline(verdict: &crate::result::RunVerdict, current: &str, serious:
             .to_string(),
         "invalid" if inconclusive.contains(&current) => current.to_string(),
         "invalid" => "Not conclusive: nothing found blocks ordering, but this run cannot vouch for the board; see the reason below.".to_string(),
-        _ if verdict.conditions.is_empty() => current.to_string(),
         _ => {
+            // A pass with items the triage lists to inspect is not plainly OK
+            // to order: it takes the tag the closing `VERDICT:` line prints.
+            let ok = verdict.inspect_tag().map_or_else(
+                || "OK to order".to_string(),
+                |tag| {
+                    let mut chars = tag.chars();
+                    chars.next().map_or_else(String::new, |first| {
+                        first.to_uppercase().chain(chars).collect()
+                    })
+                },
+            );
+            let healthy = current == overall_headline(0, 0, false, false);
+            let heads_up = current == overall_headline(0, 0, true, false);
+            if verdict.conditions.is_empty() {
+                return match verdict.inspect_tag() {
+                    // A headline that calls the board healthy would contradict
+                    // the items to inspect; any other already says to look.
+                    Some(_) if healthy || heads_up => format!(
+                        "{ok}: nothing found blocks ordering, but the items listed to \
+                         inspect need checking by hand first."
+                    ),
+                    _ => current.to_string(),
+                };
+            }
             let conditions = verdict.conditions.join(" ");
-            if current == overall_headline(0, 0, false, false) {
+            if healthy {
                 format!(
-                    "OK to order, conditionally: the static checks found nothing that blocks \
+                    "{ok}, conditionally: the static checks found nothing that blocks \
                      ordering; this rests on: {conditions}"
                 )
-            } else if current == overall_headline(0, 0, true, false) {
+            } else if heads_up {
                 format!(
-                    "OK to order, conditionally: nothing found blocks ordering (see the \
+                    "{ok}, conditionally: nothing found blocks ordering (see the \
                      heads-up note below); this rests on: {conditions}"
                 )
             } else {
-                format!("{current} OK to order, conditionally; this rests on: {conditions}")
+                format!("{current} {ok}, conditionally; this rests on: {conditions}")
             }
         }
     }
@@ -3899,6 +3931,35 @@ fn main {
         // A failing run states no conditions: the reason says what to do.
         let failing = web(vec![finding("warning")], true, &[condition], None);
         assert!(failing.verdict_conditions.is_empty() && !failing.headline.contains(condition));
+
+        // A pass with items the triage lists to inspect takes the tag the
+        // closing VERDICT line prints, never "OK to order".
+        let entry = |statement: &str| crate::plain::TriageEntry {
+            id: "lint".into(),
+            kind: "unchecked_mcu".into(),
+            statement: statement.to_string(),
+            location_mm: None,
+        };
+        let mut inspect = web(Vec::new(), false, &[condition], None);
+        inspect.triage = Some(crate::plain::OrderTriage {
+            inspect: vec![entry("Check C4 by hand."), entry("Check C5 by hand.")],
+            ..crate::plain::OrderTriage::default()
+        });
+        // Derived afresh from the run's own headline, as the firmware pass does.
+        inspect.headline = std::mem::take(&mut inspect.pre_verdict_headline);
+        inspect.explain_verdict();
+        assert_eq!(inspect.verdict, "pass");
+        assert_eq!(inspect.verdict_inspect, "inspect before ordering (2 items)");
+        assert!(
+            inspect
+                .headline
+                .starts_with("Inspect before ordering (2 items), conditionally: ")
+                && !inspect.headline.contains("OK to order"),
+            "{}",
+            inspect.headline
+        );
+        // Control: an empty inspect list keeps the plain conditional pass.
+        assert!(conditional.verdict_inspect.is_empty());
     }
 
     /// A co-sim that could not run, or ran without a numerical qualification,
