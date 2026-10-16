@@ -264,10 +264,9 @@ pub fn note_verdict(verdict: &str, partial: bool, reason: Option<&str>) {
         partial,
         reason: reason.map(str::to_string),
     };
-    let keep = |current: &Option<NotedVerdict>| {
-        current
-            .as_ref()
-            .is_some_and(|c| c.verdict != "pass" && noted.verdict == "pass")
+    let is_pass = noted.verdict == "pass";
+    let keep = move |current: &Option<NotedVerdict>| {
+        is_pass && current.as_ref().is_some_and(|c| c.verdict != "pass")
     };
     CURRENT_RUN.with(|slot| {
         if let Some(state) = slot.borrow_mut().as_mut() {
