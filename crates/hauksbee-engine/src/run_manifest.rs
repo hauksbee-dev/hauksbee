@@ -1190,13 +1190,10 @@ fn relative_to_root(text: &str, root: &Path) -> String {
     // name or another letter case, `..`, a symlinked ancestor) must still come
     // out project-relative, or a replay elsewhere would chase the capturing
     // directory.
-    match canonical_for_root(path)
+    canonical_for_root(path)
         .as_deref()
         .and_then(|resolved| resolved.strip_prefix(root).ok())
-    {
-        Some(relative) => slash_path(relative),
-        None => text.to_string(),
-    }
+        .map_or_else(|| text.to_string(), slash_path)
 }
 
 /// An argv token with an absolute path under `root` made root-relative, also

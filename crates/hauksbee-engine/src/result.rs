@@ -3250,6 +3250,8 @@ const fn polarity_fix_hint(check: LintCheck) -> &'static str {
 /// check, whose low-severity form (a single function committed to a pin-locked
 /// group) has a different honest remedy than the serious two-function contention.
 #[must_use]
+// One flat table of check -> remedy: splitting it would only scatter the table.
+#[allow(clippy::too_many_lines)]
 pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static str> {
     if let Some(hint) = severity_specific_fix_hint(check, severity) {
         return Some(hint);

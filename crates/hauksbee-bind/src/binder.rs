@@ -2842,9 +2842,11 @@ pub const UNKNOWN_DIODE_VRRM_FLOOR_V: f64 = 20.0;
 /// keeps the knee sharp enough that the clamp sits at the stated voltage.
 const ZENER_FALLBACK_KNEE_A: f64 = 0.005;
 
-/// The forward current an unrecognised diode is held to: the lowest average
-/// forward current small rectifiers and Schottkys are sold with (BAT54-class
-/// parts are 0.2 A). A stand-in, so passing it is a stated condition.
+/// The forward current an unrecognised diode is held to.
+///
+/// It is the lowest average forward current small rectifiers and Schottkys
+/// are sold with (BAT54-class parts are 0.2 A). A stand-in, so passing it is a
+/// stated condition.
 pub const UNKNOWN_DIODE_IF_FLOOR_A: f64 = 0.2;
 
 /// The fallback for a TVS whose part number names its family and voltage
