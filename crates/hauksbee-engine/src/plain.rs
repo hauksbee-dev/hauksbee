@@ -1664,6 +1664,11 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "This regulator's datasheet says its enable pin turns the part off when nothing drives it. On this board nothing can raise that pin: it is unconnected, or only touches parts that cannot pull it up (a capacitor, a pull-down, a part that is not fitted). The output rail stays at 0 V and every part it powers is dead.".to_string(),
                 "Pull the enable pin up to the regulator's input through a 10k to 100k resistor, or tie it straight to the input. If a microcontroller pin is meant to switch the rail, keep the resistor so the rail has a defined state before firmware runs.".to_string(),
             ),
+            LintCheck::RailUnpowered => (
+                format!("A supply rail's source is missing or only assumed. {}", f.message),
+                "A rail nothing on the board drives is held at the voltage its name states so the parts on it can be checked. That is right when the rail comes in on a connector or test point. When its only source is a part marked do-not-fit (its regulator, or the ferrite or 0 ohm link from another rail), the real rail stays at 0 V and every part on it is unpowered, so no result for those parts stands.".to_string(),
+                "Fit the part that sources the rail, or bring the rail in on a connector or test point. If the board is powered from outside, check that supply on its own.".to_string(),
+            ),
             LintCheck::I2cBusLoading => (
                 format!("The I2C line \"{net}\" has pull-ups, but they are mis-sized for the bus. {}", f.message),
                 "I2C devices can only pull the line LOW; the resistor pulls it back HIGH. Too strong a pull-up and a device cannot sink enough current to make a valid low (the spec guarantees only 3 mA), so reads fail intermittently. Too weak and the line rises too slowly for the clock rate, corrupting edges as more devices load the bus.".to_string(),

@@ -269,6 +269,14 @@ pub enum LintCheck {
     /// the rail never comes on. Produced by the engine-layer
     /// `regulator_enable` check.
     RegulatorHeldOff,
+    /// A rail the analysis would otherwise power by its name alone whose only
+    /// source is a part the board does not fit (its regulator, or the ferrite
+    /// or 0 ohm link to a powered rail), with no connector, test point or
+    /// battery to bring it in: it never comes up. Also the non-gating notes on
+    /// a rail whose own source is unfitted but may come in from off the board,
+    /// and on a run that powered no rail at all. Produced by the engine-layer
+    /// `rail_basis` check.
+    RailUnpowered,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -293,7 +301,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 32] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -325,6 +333,7 @@ impl LintCheck {
         Self::FloatingGate,
         Self::GateUnderdrive,
         Self::RegulatorHeldOff,
+        Self::RailUnpowered,
     ];
 
     #[must_use]
@@ -361,6 +370,7 @@ impl LintCheck {
             Self::FloatingGate => "floating_gate",
             Self::GateUnderdrive => "gate_underdrive",
             Self::RegulatorHeldOff => "regulator_held_off",
+            Self::RailUnpowered => "rail_unpowered",
         }
     }
 }

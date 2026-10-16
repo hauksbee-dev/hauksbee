@@ -1591,6 +1591,7 @@ fn analyze_normalized_with_context(
     }
     // The `--check` machine document for this board: the web verdict is ITS
     // verdict, so the browser and `run --check --json` cannot disagree.
+    let [rails_entered, rails_held] = crate::checks::rail_basis::rail_conditions(board, lib, bound);
     let mut machine = crate::reports::check::machine_report(
         &board.name,
         &bind_summary,
@@ -1606,6 +1607,8 @@ fn analyze_normalized_with_context(
             .as_ref()
             .and_then(|p| crate::reports::drc::default_rules_condition(&drc_structured, p)),
     )
+    .with_condition(rails_entered)
+    .with_condition(rails_held)
     .with_judgement_scope(crate::scope::JudgementScope::of(
         board,
         bound,
