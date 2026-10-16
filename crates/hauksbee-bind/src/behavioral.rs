@@ -39,6 +39,7 @@
 //! The FSM advances once per chunk: its guards are `evalexpr` booleans over the
 //! same context. Per-state pin overrides retune the open-drain / drive legs.
 
+use hauksbee_ir::eprintln;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 

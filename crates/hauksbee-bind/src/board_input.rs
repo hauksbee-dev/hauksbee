@@ -50,6 +50,7 @@
 // Test code below is exempt: an unwrap in a test is an assertion.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
+use hauksbee_ir::eprintln;
 use std::borrow::Cow;
 use std::path::Path;
 
@@ -841,6 +842,10 @@ fn board_files_in(dir: &Path) -> Vec<std::path::PathBuf> {
 /// head, so scanning a directory of large XML never reads them whole.
 fn ipc2581_head(path: &Path) -> bool {
     use std::io::Read;
+    // Opening a FIFO with no writer blocks forever; only a regular file is a board.
+    if !std::fs::metadata(path).is_ok_and(|m| m.is_file()) {
+        return false;
+    }
     let Ok(mut f) = std::fs::File::open(path) else {
         return false;
     };
@@ -973,7 +978,6 @@ fn with_name_fallback(mut norm: NormalizedBoard, path: &Path) -> NormalizedBoard
 /// skipped), `Ok(None)` when it holds none (a gerber fab archive never
 /// carries one), an error when it holds several or cannot be read.
 fn zip_board_code(file_name: &str, contents: &[u8]) -> Result<Option<String>, BoardInputError> {
-    use std::io::Read;
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(contents)).map_err(|e| {
         BoardInputError::Zip(format!(
             "could not open '{file_name}' as a zip archive: {e}"
@@ -1006,12 +1010,16 @@ fn zip_board_code(file_name: &str, contents: &[u8]) -> Result<Option<String>, Bo
             "could not read the .board inside '{file_name}': {e}"
         ))
     })?;
-    let mut src = String::new();
-    entry.read_to_string(&mut src).map_err(|e| {
-        BoardInputError::Zip(format!(
-            "could not read the .board inside '{file_name}': {e}"
-        ))
-    })?;
+    let src = hauksbee_extract::read_member_capped(&mut entry)
+        .and_then(|bytes| {
+            String::from_utf8(bytes)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        })
+        .map_err(|e| {
+            BoardInputError::Zip(format!(
+                "could not read the .board inside '{file_name}': {e}"
+            ))
+        })?;
     Ok(Some(src))
 }
 
@@ -1026,8 +1034,6 @@ fn ipc356_from_fab_zip(
     file_name: &str,
     contents: &[u8],
 ) -> Result<Option<NormalizedBoard>, BoardInputError> {
-    use std::io::Read;
-
     let reader = std::io::Cursor::new(contents);
     let mut archive = zip::ZipArchive::new(reader).map_err(|e| {
         BoardInputError::Zip(format!(
@@ -1074,8 +1080,7 @@ fn ipc356_from_fab_zip(
             "could not read IPC-D-356 member '{member_name}' from '{file_name}': {e}"
         ))
     })?;
-    let mut member = Vec::new();
-    entry.read_to_end(&mut member).map_err(|e| {
+    let member = hauksbee_extract::read_member_capped(&mut entry).map_err(|e| {
         BoardInputError::Zip(format!(
             "could not read IPC-D-356 member '{member_name}' from '{file_name}': {e}"
         ))

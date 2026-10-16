@@ -9,6 +9,7 @@ use super::{
     timing_refusal, RunConfig,
 };
 use crate::result::{strict_analog_exit_code, EXIT_INVALID_FOR_ANALYSIS};
+use hauksbee_ir::eprintln;
 
 pub(super) fn enforce_gates(
     cfg: &RunConfig,

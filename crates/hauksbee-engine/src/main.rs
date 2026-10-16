@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 // The binary prints through the same terminal-safe boundary as the library.
-use hauksbee_engine::{eprintln, println};
+use hauksbee_ir::{eprintln, println};
 
 /// Execute the system your design files already contain.
 ///

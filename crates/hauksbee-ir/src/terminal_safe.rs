@@ -7,9 +7,15 @@
 //! override reorders what is printed so a line reads differently from what it
 //! says. `--json` escapes control characters already; the human surfaces did
 //! not, so they pass through [`terminal_safe`] on the way out.
+//!
+//! The same module owns the print macros every crate that echoes board text
+//! uses (`print!`, `println!`, `eprint!`, `eprintln!`, defined once here). A
+//! crate opts in with `use hauksbee_ir::{eprintln, println};` in each file that
+//! prints, which shadows the std macro of the same name for that file; the macro
+//! formats its arguments and passes the result through [`terminal_safe`].
 
 use std::borrow::Cow;
-use std::fmt::Write as _;
+use std::fmt::{Arguments, Write as _};
 
 /// Whether `c` is active in a terminal or reorders the text around it.
 ///
@@ -36,15 +42,19 @@ pub const fn is_terminal_active(c: char) -> bool {
 /// `text` with every terminal-active character replaced by its visible `\uXXXX`
 /// escape (also the JSON escape, so a JSON document passed through here stays
 /// valid and decodes to the same string). Borrows when there is nothing to
-/// replace, which is nearly always.
+/// replace, which is nearly always. A carriage return directly before a line
+/// feed is a Windows line ending, not an overwrite, so it is left alone.
 #[must_use]
 pub fn terminal_safe(text: &str) -> Cow<'_, str> {
-    if !text.chars().any(is_terminal_active) {
+    let active = |i: usize, c: char| {
+        is_terminal_active(c) && !(c == '\r' && text.as_bytes().get(i + 1) == Some(&b'\n'))
+    };
+    if !text.char_indices().any(|(i, c)| active(i, c)) {
         return Cow::Borrowed(text);
     }
     let mut out = String::with_capacity(text.len() + 16);
-    for c in text.chars() {
-        if is_terminal_active(c) {
+    for (i, c) in text.char_indices() {
+        if active(i, c) {
             let _ = write!(out, "\\u{:04x}", u32::from(c));
         } else {
             out.push(c);
@@ -53,9 +63,73 @@ pub fn terminal_safe(text: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
+/// `print!` with the text made terminal-safe. Use through the macro.
+#[doc(hidden)]
+pub fn print(args: Arguments<'_>) {
+    let text = std::fmt::format(args);
+    ::std::print!("{}", terminal_safe(&text));
+}
+
+/// `println!` with the text made terminal-safe; one trailing carriage return
+/// (a CRLF line ending carried in from a file) is dropped, not shown as an escape.
+#[doc(hidden)]
+pub fn println(args: Arguments<'_>) {
+    let text = std::fmt::format(args);
+    let text = text.strip_suffix('\r').unwrap_or(&text);
+    ::std::println!("{}", terminal_safe(text));
+}
+
+/// `eprint!` with the text made terminal-safe. Use through the macro.
+#[doc(hidden)]
+pub fn eprint(args: Arguments<'_>) {
+    let text = std::fmt::format(args);
+    ::std::eprint!("{}", terminal_safe(&text));
+}
+
+/// `eprintln!` with the text made terminal-safe; see [`println`] for the CR rule.
+#[doc(hidden)]
+pub fn eprintln(args: Arguments<'_>) {
+    let text = std::fmt::format(args);
+    let text = text.strip_suffix('\r').unwrap_or(&text);
+    ::std::eprintln!("{}", terminal_safe(text));
+}
+
+/// Terminal-safe `print!`.
+#[macro_export]
+macro_rules! print {
+    ($($arg:tt)*) => { $crate::terminal_safe::print(::std::format_args!($($arg)*)) };
+}
+
+/// Terminal-safe `println!`.
+#[macro_export]
+macro_rules! println {
+    () => { $crate::terminal_safe::println(::std::format_args!("")) };
+    ($($arg:tt)*) => { $crate::terminal_safe::println(::std::format_args!($($arg)*)) };
+}
+
+/// Terminal-safe `eprint!`.
+#[macro_export]
+macro_rules! eprint {
+    ($($arg:tt)*) => { $crate::terminal_safe::eprint(::std::format_args!($($arg)*)) };
+}
+
+/// Terminal-safe `eprintln!`.
+#[macro_export]
+macro_rules! eprintln {
+    () => { $crate::terminal_safe::eprintln(::std::format_args!("")) };
+    ($($arg:tt)*) => { $crate::terminal_safe::eprintln(::std::format_args!($($arg)*)) };
+}
+
 #[cfg(test)]
 mod tests {
     use super::{is_terminal_active, terminal_safe};
+
+    #[test]
+    fn a_crlf_line_ending_is_layout_but_a_bare_carriage_return_is_not() {
+        assert_eq!(terminal_safe("one\r\ntwo\r\n"), "one\r\ntwo\r\n");
+        assert_eq!(terminal_safe("over\rwrite"), "over\\u000dwrite");
+        assert_eq!(terminal_safe("end\r"), "end\\u000d");
+    }
 
     #[test]
     fn escape_sequences_are_shown_not_obeyed() {

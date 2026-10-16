@@ -2,6 +2,7 @@
 //! in ONE report, plus the bare-`--json` combined report (bind + DRC + lint + SI
 //! + USB-C) that a `run <board> --json` with no specific selector emits.
 
+use hauksbee_ir::{eprintln, print, println};
 use std::path::Path;
 
 use hauksbee_extract::ExtractedBoard;

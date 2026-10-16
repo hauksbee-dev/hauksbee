@@ -22,6 +22,7 @@
 //! Chunking is fixed and the solver is seeded deterministically, so a run is
 //! reproducible given the same firmware and board.
 
+use hauksbee_ir::eprintln;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};

@@ -42,6 +42,7 @@ mod eagle;
 /// works from destroys the header, and one of those readers will then claim the
 /// file and report invented parts from it.
 pub use eagle::{eagle_binary_message, looks_like_eagle_binary};
+pub use odbpp::tree::MAX_INFLATED_BYTES;
 /// Declared net ties from a companion Eagle `.sch`.
 ///
 /// Not a schematic extractor: the `.brd` already carries the netlist, and this answers only whether the
@@ -1059,6 +1060,34 @@ pub fn read_regular_file(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
     std::fs::read(path)
 }
 
+/// Read one archive member whole, refusing one that inflates past
+/// [`MAX_INFLATED_BYTES`].
+///
+/// A zip member's declared size is the archive's own claim and a bomb lies
+/// about it, so the read is bounded by the ceiling (`take(cap + 1)` so a member
+/// that exactly fills it succeeds and a bigger one is detected rather than
+/// truncated). The error carries the shared expansion-limit wording used by the
+/// gerber and ODB++ readers, so the same hostile upload gets the same answer
+/// from every door. Callers that open a single member out of a user's zip
+/// (a netlist, a `.board` file) use this instead of `read_to_end`.
+///
+/// # Errors
+///
+/// [`std::io::ErrorKind::InvalidData`] with the expansion-limit message when the
+/// member is too large, otherwise whatever reading the member raises.
+pub fn read_member_capped(member: impl std::io::Read) -> std::io::Result<Vec<u8>> {
+    use std::io::Read as _;
+    let mut buf = Vec::new();
+    member.take(MAX_INFLATED_BYTES + 1).read_to_end(&mut buf)?;
+    if buf.len() as u64 > MAX_INFLATED_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            odbpp::tree::expansion_limit_message("archive member"),
+        ));
+    }
+    Ok(buf)
+}
+
 /// Builders for the hand-made boards the unit tests use.
 #[cfg(test)]
 pub(crate) mod testutil {
@@ -1465,7 +1494,13 @@ mod schematic_pin_name_tests {
 
 #[cfg(test)]
 mod read_regular_file_tests {
-    use super::read_regular_file;
+    use super::{read_member_capped, read_regular_file};
+
+    #[test]
+    fn an_archive_member_under_the_ceiling_reads_whole() {
+        let bytes = read_member_capped(std::io::Cursor::new(b"P1 N1 U1 *".to_vec())).unwrap();
+        assert_eq!(bytes, b"P1 N1 U1 *");
+    }
 
     #[test]
     fn a_regular_file_reads_whole() {

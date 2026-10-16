@@ -15,6 +15,7 @@
 //! error exactly as before. The prompt lives at the CLI layer on purpose: the
 //! engine library and server must never block on stdin.
 
+use hauksbee_ir::{eprintln, println};
 /// Run the `install esp-qemu` subcommand. `yes` skips the confirmation
 /// prompt (CI); without it, a non-interactive stdin refuses rather than
 /// downloading on a guess.

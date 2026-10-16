@@ -17,6 +17,7 @@
 //! Unresolved analog parts sitting on connected nets raise a loud warning and
 //! default to an open circuit.
 
+use hauksbee_ir::eprintln;
 use std::collections::HashMap;
 use std::sync::Arc;
 

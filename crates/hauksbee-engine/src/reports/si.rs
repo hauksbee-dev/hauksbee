@@ -8,6 +8,7 @@
 
 use crate::binder::bind_board;
 use crate::result::{si_findings_json, BindSummary, JsonReport};
+use hauksbee_ir::{eprintln, print, println};
 
 use super::{si_fails, OutputMode, StaticInputs};
 

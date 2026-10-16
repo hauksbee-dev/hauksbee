@@ -4,6 +4,7 @@
 //! with `--ac-loop`, gain crossover and phase margin. Refuses (exit 3) to
 //! present a meaningless all-sentinel or no-signal-path sweep as valid data.
 
+use hauksbee_ir::{eprintln, print, println};
 use std::{fmt::Write as _, path::Path};
 
 use crate::result::{

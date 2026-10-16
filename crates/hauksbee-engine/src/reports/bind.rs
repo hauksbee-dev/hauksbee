@@ -8,6 +8,7 @@
 //! apply; `--plain` adds a one-line bottom verdict.
 
 use hauksbee_extract::{ExtractedBoard, LintCheck, NetLintReport};
+use hauksbee_ir::{print, println};
 use hauksbee_models::ModelLibrary;
 
 use crate::binder::bind_board;

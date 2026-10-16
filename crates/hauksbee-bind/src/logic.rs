@@ -70,6 +70,7 @@
 //! modeling artifact rather than silicon behaviour, so a board that wants it
 //! must tie `PL_n` low in copper as the real part requires.
 
+use hauksbee_ir::eprintln;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};

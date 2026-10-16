@@ -33,6 +33,7 @@
 //!     74HC595-supplied address bits, captures writes, and answers a
 //!     bidirectional data bus inside the firmware instruction stream.
 
+use hauksbee_ir::eprintln;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 

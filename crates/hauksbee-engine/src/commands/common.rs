@@ -4,6 +4,7 @@
 //! and the websocket server launcher (`hauksbee serve` and `run --serve` both reach
 //! it).
 
+use hauksbee_ir::{eprintln, println};
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "serve")]

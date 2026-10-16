@@ -27,6 +27,7 @@
 //! part declaring a `ser` input and a `qh_serial`/`qh` output participates),
 //! so the contract is data-visible role names, not a Rust enum.
 
+use hauksbee_ir::eprintln;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 

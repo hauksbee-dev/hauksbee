@@ -5,6 +5,7 @@
 //! in the binary; this takes a plain [`RunConfig`].
 
 use crate::result::Refusal;
+use hauksbee_ir::eprintln;
 
 mod cosim;
 mod cosim_gates;

@@ -7,6 +7,7 @@
 //! GitHub annotations for gate-grade findings ride the `--strict` gate
 //! (see [`super::strict_gate_exit`]'s caller in `reports::mod`).
 
+use hauksbee_ir::eprintln;
 use std::path::Path;
 
 use crate::result::{JsonFinding, Refusal};

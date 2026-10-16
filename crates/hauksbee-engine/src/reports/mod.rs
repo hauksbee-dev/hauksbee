@@ -26,6 +26,7 @@ pub mod si;
 pub mod thermal;
 pub mod usb_c;
 
+use hauksbee_ir::{eprintln, println};
 use std::path::Path;
 
 use anyhow::Context;

@@ -12,6 +12,7 @@
 
 use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
 use forge_sexpr::{Document, List};
+use hauksbee_ir::eprintln;
 
 pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     crate::reject_merge_conflict(text)?;

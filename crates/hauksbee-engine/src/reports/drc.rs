@@ -5,6 +5,7 @@
 //! exits non-zero on a true short. Pure CLI glue over the extractor's DRC and
 //! the binder.
 
+use hauksbee_ir::{print, println};
 use std::path::Path;
 
 use crate::binder::bind_board;

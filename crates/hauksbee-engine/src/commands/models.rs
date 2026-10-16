@@ -6,6 +6,7 @@
 //! which-entry-won-from-which-layer report, the pack author's debugging
 //! surface).
 
+use hauksbee_ir::{eprintln, print, println};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 

@@ -38,6 +38,7 @@ pub mod macros;
 pub mod placement;
 pub mod rs274x;
 
+use hauksbee_ir::eprintln;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 

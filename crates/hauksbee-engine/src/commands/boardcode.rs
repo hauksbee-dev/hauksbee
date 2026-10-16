@@ -6,6 +6,7 @@
 //! the stress co-sim. This is the CLI glue over the `boardcode` module; the
 //! round-trip logic itself lives there.
 
+use hauksbee_ir::{eprintln, print, println};
 use std::path::{Path, PathBuf};
 
 use crate::boardcode::{

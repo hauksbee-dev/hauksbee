@@ -5,6 +5,7 @@
 //! a well-formed deck the solver cannot honestly answer exits 3.
 
 use crate::result::{Refusal, EXIT_INVALID_FOR_ANALYSIS};
+use hauksbee_ir::{eprintln, print};
 use hauksbee_ir::{AcDirective, AcSweep, Circuit, DcSweep, Directives, SpiceLoader};
 use hauksbee_solve::{
     default_probes, run_ac, run_dc, run_op, run_tran, write_ascii_rawfile, DcInit, Integration,

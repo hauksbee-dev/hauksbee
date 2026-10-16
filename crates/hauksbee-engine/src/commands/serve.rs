@@ -5,6 +5,7 @@
 //! drop-zone: drop a board (and optionally firmware) to get the plain-language
 //! report from the analysis API, then press "run it" to bring a board to life.
 
+use hauksbee_ir::println;
 /// Open the system browser at `url`, detached, best-effort.
 ///
 /// Used for `--open` and for the no-TTY launch path (double-click / launchd /
