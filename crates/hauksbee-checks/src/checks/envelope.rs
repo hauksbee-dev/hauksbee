@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
     is_capacitor, is_plain_inductor, is_resistor, Component, ExtractedBoard, LintCheck,
-    LintFinding, NetLintReport, Severity,
+    LintFinding, NetLintReport, Severity, REMEDY_MARKER,
 };
 use hauksbee_ir::evidence::{Assumption, ModelUncertainty};
 use hauksbee_models::derating::{temp_span, TempRef};
@@ -1060,7 +1060,7 @@ fn divider_name_findings(
             },
         );
         let message = format!(
-            "{} ({}) sets rail '{net}' to {set:.2} V, {pct:.0} % {side} the {want_v:.2} V its name states: its feedback divider ({} from the output to the feedback pin, {} from it to ground) holds the pin at the {vref:.3} V reference, so Vout = {law} = {set:.2} V, and every part on '{net}' is supplied {set:.2} V instead of {want_v:.2} V. {fix}; if {set:.2} V is what the board needs, rename the net to say so.",
+            "{} ({}) sets rail '{net}' to {set:.2} V, {pct:.0} % {side} the {want_v:.2} V its name states: its feedback divider ({} from the output to the feedback pin, {} from it to ground) holds the pin at the {vref:.3} V reference, so Vout = {law} = {set:.2} V, and every part on '{net}' is supplied {set:.2} V instead of {want_v:.2} V. {REMEDY_MARKER}{fix}, or, if {set:.2} V is what the board needs, rename the net to say so.",
             divider.regulator,
             divider.value,
             leg(&divider.top),
@@ -2422,7 +2422,9 @@ dropout_v = 3.0
         ] {
             assert!(msg.contains(part), "{part}: {msg}");
         }
-        assert!(msg.contains("Make R1 about 280k"), "{msg}");
+        // The remedy is the finding's own fix, not the check kind's generic advice.
+        let (_, fix) = msg.rsplit_once(REMEDY_MARKER).expect("a remedy");
+        assert!(fix.starts_with("Make R1 about 280k"), "{fix}");
         let low = boost("200k", "+3V3");
         assert_eq!(low.len(), 1, "{low:#?}");
         assert!(low[0].message.contains("below"), "{}", low[0].message);
