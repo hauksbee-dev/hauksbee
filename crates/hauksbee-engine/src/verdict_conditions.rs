@@ -100,6 +100,8 @@ fn sentence(text: &str) -> String {
 /// abstention that makes the run PARTLY JUDGED (an analysis that judged
 /// nothing, a stand-in's limit) is not a condition: it keeps the run from
 /// passing at all.
+// False positive: "{subjects}" is the vocabulary template's placeholder, filled by replace.
+#[allow(clippy::literal_string_with_formatting_args)]
 fn abstention_conditions(findings: &[JsonFinding]) -> Vec<String> {
     use hauksbee_models::rating_basis::{is_condition, is_not_judged};
     let abstained: Vec<LintFinding> = findings
