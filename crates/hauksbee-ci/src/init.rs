@@ -301,7 +301,6 @@ fn scaffold_supplies(
         // first stage (12 V into a 5 V regulator feeding a 3.3 V one) is the
         // highest, and powering it powers the stages behind it, which must not
         // also get a source of their own on the regulator's output.
-        let volts = |hint: Option<f64>| hint.map_or(9.0, f64::ceil);
         let Some(found) = unsupported_regulator_inputs(board, &supplies) else {
             // The run refused the draft, so it is never handed to the user:
             // the last regulator input added goes (the rails passed the same
@@ -317,15 +316,24 @@ fn scaffold_supplies(
         let Some((net, hint)) = found
             .into_iter()
             .filter_map(|(net, hint)| placement(extracted, bound, &supplies, net, hint))
-            .max_by(|a, b| volts(a.1).total_cmp(&volts(b.1)))
+            .max_by(|a, b| seeded_input_volts(a.1).total_cmp(&seeded_input_volts(b.1)))
         else {
             break;
         };
-        // The least the regulators need, rounded up to a whole volt; with no
-        // figure, a 9 V adapter is the usual guess.
-        supplies.push(ScaffoldSupply::regulator_input(net, volts(hint)));
+        supplies.push(ScaffoldSupply::regulator_input(
+            net,
+            seeded_input_volts(hint),
+        ));
     }
     supplies
+}
+
+/// The voltage seeded on a regulator input whose regulators need at least
+/// `min_v`: the next whole volt strictly above it, so a draft never sits on
+/// the boundary where the run reports the regulator's input as too low to
+/// judge. With no figure, a 9 V adapter is the usual guess.
+fn seeded_input_volts(min_v: Option<f64>) -> f64 {
+    min_v.map_or(9.0, |v| v.floor() + 1.0)
 }
 
 /// Where the run accepts a supply proposed on `net` after the draft
@@ -956,6 +964,22 @@ fn fmt1(v: f64) -> String {
 /// Format a voltage bound with two decimals ("4.75", "5.25").
 fn fmt2(v: f64) -> String {
     format!("{v:.2}")
+}
+
+#[cfg(test)]
+mod seeded_volts_tests {
+    use super::seeded_input_volts;
+
+    #[test]
+    fn a_whole_volt_minimum_is_seeded_above_it_not_on_it() {
+        // Faulty case: a 7 V minimum seeded at exactly 7 V leaves the run
+        // unable to judge the regulator, so the draft gets 8 V.
+        assert!((seeded_input_volts(Some(7.0)) - 8.0).abs() < f64::EPSILON);
+        // Legal controls: a fractional minimum rounds up to the next volt,
+        // and no figure falls back to a 9 V adapter.
+        assert!((seeded_input_volts(Some(6.3)) - 7.0).abs() < f64::EPSILON);
+        assert!((seeded_input_volts(None) - 9.0).abs() < f64::EPSILON);
+    }
 }
 
 #[cfg(test)]
