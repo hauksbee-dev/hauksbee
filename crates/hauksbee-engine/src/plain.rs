@@ -2136,7 +2136,7 @@ mod tests {
         let modelled = crate::result::RunVerdict {
             reason: Some("1 blocking problem(s), first: two drivers; next: remove one.".into()),
             not_judged: None,
-            ..failing.clone()
+            ..failing
         };
         assert!(!triage.render(&modelled).contains("NOT JUDGED"));
         assert!(!triage

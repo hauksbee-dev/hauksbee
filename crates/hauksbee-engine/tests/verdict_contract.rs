@@ -485,7 +485,7 @@ fn check_plain_sections_read_inconclusive_but_drc_stays_exempt() {
 }
 
 /// The twin of the `verdict_fet_<kind>` board with a ground track laid across
-/// its LOAD_DRAIN track: a copper short, so the board FAILS whatever else it
+/// its `LOAD_DRAIN` track: a copper short, so the board FAILS whatever else it
 /// is missing.
 fn shorted(kind: &str) -> PathBuf {
     fixture(&format!("verdict_fet_{kind}_shorted.kicad_pcb"))

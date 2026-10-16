@@ -235,10 +235,10 @@ impl<'a> VerdictCause<'a> {
         unmodelled: &[String],
         scope: Option<&crate::scope::JudgementScope>,
     ) -> String {
-        match self.not_judged(unmodelled, scope) {
-            Some(clause) => format!("{}{NOT_JUDGED_JOINER}{clause}", self.reason()),
-            None => self.reason(),
-        }
+        self.not_judged(unmodelled, scope).map_or_else(
+            || self.reason(),
+            |clause| format!("{}{NOT_JUDGED_JOINER}{clause}", self.reason()),
+        )
     }
 
     /// The one sentence naming what a failing or refused run did not judge,
