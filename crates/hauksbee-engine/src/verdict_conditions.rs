@@ -167,8 +167,11 @@ fn assumption_part(a: &Assumption) -> Option<String> {
 /// One condition naming every modelling assumption the checks were judged on,
 /// grouped by glossary label, or `None` when the models carry none.
 fn modelling_condition(assumptions: &[Assumption]) -> Option<String> {
-    // A part swept across its assumed corners is stated by its own condition;
-    // the single stand-in model behind each corner is the same assumption.
+    // A part swept across its assumed corners is stated by its own condition,
+    // which names the part as assumed and says how to lift it (bind its part
+    // number). The class models behind those corners (a stand-in, a fallback,
+    // one modelled only in part) are that same assumption, so the part is not
+    // named again under any label.
     let swept: BTreeSet<String> = assumptions
         .iter()
         .filter(|a| a.term() == Term::AssumedCorner)
@@ -181,7 +184,7 @@ fn modelling_condition(assumptions: &[Assumption]) -> Option<String> {
             continue;
         }
         let part = assumption_part(a);
-        if term == Term::ReducedFidelity && part.as_ref().is_some_and(|p| swept.contains(p)) {
+        if part.as_ref().is_some_and(|p| swept.contains(p)) {
             continue;
         }
         let entry = by_term.entry(term).or_default();
@@ -343,7 +346,7 @@ mod tests {
     #[test]
     fn modelling_assumptions_are_named_by_label_on_model_dependent_surfaces() {
         let assumptions = vec![
-            Assumption::partial_model_for_component("U1", "U1", "BQ76200", "the charge pump", ""),
+            Assumption::partial_model("U1", "U1", "BQ76200", "the charge pump", ""),
             Assumption::inferred_pin_role_for_component("Q5", "Q5", "1", "gate"),
             Assumption::inferred_pin_role_for_component("Q5", "Q5", "2", "source"),
             Assumption::open_part("J1", "CONN_01X02", "no model"),
@@ -370,8 +373,31 @@ mod tests {
     #[test]
     fn a_swept_part_is_not_named_again_for_its_stand_in_model() {
         let swept = Assumption::swept_corner("corners/D4", "D4", "led_hi, led_lo", false);
-        let said = derived(&[], &[swept], true);
+        // The class models behind the corners: one a fallback, one modelled
+        // only in part. Both are the swept assumption the corner condition
+        // already states.
+        let partial = Assumption::partial_model(
+            "D4",
+            "LED_GENERIC",
+            "Simulated at assumed corners, not any datasheet.",
+            "",
+        );
+        let said = derived(&[], &[swept.clone(), partial.clone()], true);
         assert!(said.is_empty(), "{said:?}");
+        // Faulty control: the same partial model on a part that was NOT swept
+        // is a condition the pass rests on.
+        let unswept = Assumption::partial_model(
+            "D5",
+            "LED_GENERIC",
+            "Simulated at assumed corners, not any datasheet.",
+            "",
+        );
+        let said = derived(&[], &[swept, partial, unswept], true);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(
+            said[0].contains("(D5)") && !said[0].contains("D4"),
+            "{said:?}"
+        );
     }
 
     #[test]
