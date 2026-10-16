@@ -602,7 +602,7 @@ mod tests {
         assert!(
             lint(vec![
                 ic("CHIP_PU", RST),
-                pull_down("R1", "100k"),
+                pull_down("R1", "1k"),
                 jumper.clone()
             ])
             .is_empty(),

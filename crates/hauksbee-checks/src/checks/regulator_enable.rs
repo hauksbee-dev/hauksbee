@@ -200,18 +200,22 @@ fn role_is_port(role: &str) -> bool {
         || (b.len() >= 3 && b[0] == b'p' && b[1].is_ascii_lowercase() && b[2].is_ascii_digit())
 }
 
-/// A push button or tactile switch, by its reference class or by the
-/// symbol, footprint or value naming one (`SW_Push`, `EVQ-P7`, `TACTILE`,
-/// `PUSHBUTTON`, `BTN`): boards label a reset button with refs like `RESET`
-/// that read as a resistor by prefix alone.
+/// A push button or tactile switch, by its reference class or by a word of
+/// the symbol, footprint or value naming one (`SW_Push`, `EVQ-P7`,
+/// `TACTILE`, `PUSHBUTTON`, `BTN`): boards label a reset button with refs
+/// like `RESET` that read as a resistor by prefix alone. Whole words only, so
+/// a battery `Contact` is not a tactile switch.
 fn is_switch(o: &Component) -> bool {
     if RefClass::of(&o.reference) == RefClass::Switch {
         return true;
     }
     let blob = format!("{} {} {}", o.lib_id, o.footprint, o.value).to_ascii_uppercase();
-    ["SW_", "EVQ", "TACT", "PUSH", "BTN", "BUTTON"]
-        .iter()
-        .any(|t| blob.contains(t))
+    blob.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| {
+        matches!(w, "SW" | "BTN")
+            || ["TACT", "EVQ", "PUSH", "BUTTON"]
+                .iter()
+                .any(|p| w.starts_with(p))
+    })
 }
 
 pub(super) fn classify(
