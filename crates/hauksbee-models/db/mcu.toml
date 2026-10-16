@@ -1927,6 +1927,12 @@ role = "gpio15"
 level = "high"
 note = "MTDO/GPIO15 high (normal) silences boot log on U0TXD; low enables it"
 
+[models.ratings]
+# ESP32 Series Datasheet v5.3, Table 5-1 "Absolute Maximum Ratings" (p. 51):
+# VDDA, VDD3P3, VDD3P3_RTC, VDD3P3_CPU, VDD_SDIO allowed input voltage -0.3 to
+# 3.6 V. Table 5-2 recommends up to the same 3.6 V.
+max_voltage_v = 3.6
+
 [models.coverage]
 implements = ["xtensa_lx6_firmware_execution", "boot_to_application", "gpio_output_register_or_mailbox_observation", "uart_tx", "wall_bounded_virtual_time", "gpio_input_mailbox_contract", "adc_input_mailbox_contract", "i2c_spi_mailbox_contract", "tmp105_temperature_injection"]
 missing = ["instruction_counted_timing", "unmodified_firmware_gpio_input", "native_adc_peripheral", "unmodified_firmware_i2c_spi_observation", "watchdog_behavior", "silicon_power_current_profile", "silicon_timing_and_errata"]
@@ -2079,6 +2085,12 @@ role = "gpio45"
 level = "defined"
 note = "GPIO45 selects VDD_SPI flash voltage (low = 3.3 V default); must be defined"
 
+[models.ratings]
+# ESP32-S3-WROOM-1/-1U Datasheet v1.8, Table 6-1 "Absolute Maximum Ratings"
+# (p. 27): VDD33 power supply voltage -0.3 to 3.6 V (pin 2 "3V3", Table 3-1).
+# Table 6-2 recommends 3.0 to 3.6 V.
+max_voltage_v = 3.6
+
 [models.coverage]
 implements = ["xtensa_lx7_machine_boot", "gpio_output_register_or_mailbox_observation_0_to_31", "uart_transport", "wall_bounded_virtual_time", "gpio_input_mailbox_contract_0_to_31", "adc_input_mailbox_contract", "i2c_spi_mailbox_contract"]
 missing = ["application_firmware_end_to_end_proof", "gpio_32_to_48_observation", "instruction_counted_timing", "unmodified_firmware_gpio_input", "native_adc_peripheral", "unmodified_firmware_i2c_spi_observation", "watchdog_behavior", "silicon_power_current_profile", "silicon_timing_and_errata"]
@@ -2125,6 +2137,12 @@ note = "GPIO46 must be low or floating at reset (joins GPIO0 to pick boot mode)"
 role = "gpio45"
 level = "defined"
 note = "GPIO45 selects VDD_SPI flash voltage (low = 3.3 V default); must be defined"
+
+[models.ratings]
+# ESP32-S3 Series Datasheet v2.2, Table 5-1 "Absolute Maximum Ratings" (p. 64):
+# input power pins (VDDA, VDD3P3, VDD3P3_RTC, VDD3P3_CPU) -0.3 to 3.6 V.
+# Table 5-2 recommends 3.0 to 3.6 V.
+max_voltage_v = 3.6
 
 [models.coverage]
 implements = ["xtensa_lx7_machine_boot", "gpio_output_register_or_mailbox_observation_0_to_31", "uart_transport", "wall_bounded_virtual_time", "gpio_input_mailbox_contract_0_to_31", "adc_input_mailbox_contract", "i2c_spi_mailbox_contract"]

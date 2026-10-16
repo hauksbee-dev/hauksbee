@@ -739,8 +739,17 @@ fn envelope_lint_with_tolerance(
                             draw_a: static_draw_a(model),
                         });
                     }
+                    let over_abs = abs_max_v
+                        .filter(|_| above_abs_max)
+                        .map(|limit| {
+                            format!(
+                                ", {:.2} V above its {limit:.2} V absolute maximum",
+                                range.max_v - limit
+                            )
+                        })
+                        .unwrap_or_default();
                     let seen = format!(
-                        "{} role {pin} on '{}' presents {:.3}..{:.3} V, outside the {:.3}..{:.3} V operating envelope",
+                        "{} role {pin} on '{}' presents {:.3}..{:.3} V, outside the {:.3}..{:.3} V operating envelope{over_abs}",
                         comp.reference, net.name, range.min_v, range.max_v, min_v, max_v
                     );
                     let finding = LintFinding {
@@ -819,10 +828,112 @@ fn envelope_lint_with_tolerance(
                 OperatingEnvelope::InputCommonMode { .. } => {}
             }
         }
+        report
+            .findings
+            .extend(supply_abs_max_findings(comp, model, &resolver));
     }
     fold_starved_rails(&resolver, starved, &mut report);
     estimate_starved_rails(&resolver, st, &unleveled, &mut report);
     report
+}
+
+/// Card pin-map roles that feed an IC's own supply domain: the pins its
+/// `ratings.max_voltage_v` (the schema's "IC supply abs max") rates. Regulator
+/// and charger inputs (`vin`, `vbus`, `vbat`) are rated by their own rows.
+const IC_SUPPLY_ROLES: [&str; 15] = [
+    "vcc", "vdd", "vddio", "iovdd", "vio", "vccio", "vcca", "vccb", "dvdd", "avdd", "vdda",
+    "avcc", "dvcc", "3v3", "v+",
+];
+
+/// Kinds whose `ratings.max_voltage_v` is the supply's absolute maximum
+/// (for a regulator it is VIN, for discretes a blocking voltage).
+const fn rates_supply(kind: ComponentKind) -> bool {
+    matches!(
+        kind,
+        ComponentKind::Mcu
+            | ComponentKind::Digital
+            | ComponentKind::ShiftRegister
+            | ComponentKind::Adc
+            | ComponentKind::Dac
+            | ComponentKind::AnalogSwitch
+            | ComponentKind::Opamp
+            | ComponentKind::Comparator
+            | ComponentKind::Timer
+    )
+}
+
+/// A supply pin on a rail that can exceed the IC card's absolute-maximum
+/// supply (`ratings.max_voltage_v`), for every supply role no `supply_range`
+/// row already judges. Exceeding abs max is damage, not a margin: serious,
+/// or a warning when the rail's level is only the band its name implies.
+fn supply_abs_max_findings(
+    comp: &Component,
+    model: &ModelEntry,
+    resolver: &RailResolver<'_>,
+) -> Vec<LintFinding> {
+    let Some(abs_max) = model.ratings.max_voltage_v.filter(|v| *v > 0.0) else {
+        return Vec::new();
+    };
+    if !rates_supply(model.kind) {
+        return Vec::new();
+    }
+    let judged: BTreeSet<String> = model
+        .envelope
+        .iter()
+        .filter_map(|e| match e {
+            OperatingEnvelope::SupplyRange { pin, .. } => Some(pin.to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect();
+    let roles: BTreeSet<String> = model
+        .pins
+        .values()
+        .map(|r| r.to_ascii_lowercase())
+        .filter(|r| IC_SUPPLY_ROLES.contains(&r.as_str()) && !judged.contains(r))
+        .collect();
+    let mut out = Vec::new();
+    let mut seen_nets = BTreeSet::new();
+    for role in roles {
+        let Some(net_id) = role_net_id(comp, model, &role) else {
+            continue;
+        };
+        let Some(net) = resolver.board.net(net_id) else {
+            continue;
+        };
+        let RailKnowledge::Known(range) = resolver.range(net_id) else {
+            continue;
+        };
+        if range.max_v <= abs_max || !seen_nets.insert(net_id) {
+            continue;
+        }
+        let assumed = resolver.assumed_from_name(net_id);
+        let (severity, level) = if assumed {
+            (
+                Severity::Medium,
+                " (the ±5 % band its name implies; no regulator or run states it)",
+            )
+        } else {
+            (Severity::High, "")
+        };
+        let over = range.max_v - abs_max;
+        let seen = format!(
+            "{} supply pin {role} on '{}' reaches {:.2} V{level}, {over:.2} V above the {abs_max:.2} V absolute-maximum supply on card '{}'",
+            comp.reference, net.name, range.max_v, model.id
+        );
+        let fix = format!(
+            " Feed {role} from a rail that stays at or below {abs_max:.2} V (inside the card's recommended supply), or fit a part rated for this rail."
+        );
+        let finding = LintFinding {
+            check: LintCheck::OperatingEnvelope,
+            severity,
+            message: format!("{seen}: the part can be damaged.{fix}"),
+            refs: vec![comp.reference.clone()],
+            nets: vec![net.name.clone()],
+        };
+        let rating = format!("{abs_max:.2} V absolute-maximum supply");
+        out.push(stated_if_stand_in(finding, model, Limit::Voltage, &seen, &rating));
+    }
+    out
 }
 
 /// How many of a starved rail's parts its finding names before "and N more".
@@ -1212,6 +1323,36 @@ basis = "Recommended Operating Conditions, Table 1, VDD row"
         assert!(findings[0].message.contains("3.135"));
         assert!(findings[0].message.contains("3.465"));
         assert!(findings[0].message.contains("Table 1"));
+    }
+
+    /// An IC card with only `ratings.max_voltage_v` (the supply's absolute
+    /// maximum, no `supply_range` row) is still judged: an ESP32-S3 module
+    /// (3.6 V, datasheet Table 6-1) on a 5 V rail warns with the excess and
+    /// the limit; on 3.3 V it is clean.
+    #[test]
+    fn an_ic_on_a_rail_above_its_card_abs_max_supply_is_flagged() {
+        let lint = |rail: &str| {
+            let module = Component {
+                footprint: "RF_Module:ESP32-S3-WROOM-1".into(),
+                ..part("U1", "ESP32-S3-WROOM-1", vec![pin("2", 2), pin("1", 1)])
+            };
+            let report = envelope_lint(
+                &board(&[(1, "GND"), (2, rail)], vec![module]),
+                &ModelLibrary::builtin(),
+            );
+            report
+                .of_check(LintCheck::OperatingEnvelope)
+                .filter(|f| f.message.contains("absolute-maximum"))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let hot = lint("+5V");
+        assert_eq!(hot.len(), 1, "{hot:?}");
+        assert_eq!(hot[0].severity, Severity::Medium, "name-assumed level warns");
+        assert!(hot[0].message.contains("5.25 V"), "{}", hot[0].message);
+        assert!(hot[0].message.contains("1.65 V above the 3.60 V"), "{}", hot[0].message);
+        assert!(hot[0].message.contains("esp32s3_wroom"), "{}", hot[0].message);
+        assert!(lint("+3V3").is_empty(), "3.465 V is under 3.6 V");
     }
 
     const MARGIN_CARD: &str = r#"

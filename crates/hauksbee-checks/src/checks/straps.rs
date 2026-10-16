@@ -263,21 +263,33 @@ fn examine_strap(
             ),
         };
     }
-    // One-sided: a wrong pull only counts when it is *strong* against the
-    // part's internal pull (~45 kOhm on ESP32); <= 20 kOhm is a real pull.
-    if let Some(p) = pulls
-        .iter()
-        .find(|p| p.up != want_high && p.ohms.is_some_and(|r| r <= 20_000.0))
-    {
+    // One-sided: against an internal pull (~45 kOhm on ESP32) a wrong pull
+    // only counts when it is *strong*; <= 20 kOhm is a real pull. A pin with
+    // no internal pull (STM32 BOOT0) has nothing to fight, so any wrong-way
+    // resistor, of any or unreadable value, alone sets the boot level.
+    let no_internal = strap.internal_pull == StrapInternalPull::None;
+    let strong = |p: &Pull| no_internal || p.ohms.is_some_and(|r| r <= 20_000.0);
+    if let Some(p) = pulls.iter().find(|p| p.up != want_high && strong(p)) {
         let dir = if p.up {
             "pull-up to a rail"
         } else {
             "pull-down to ground"
         };
+        let far = board.net(p.far).map_or("?", |n| n.name.as_str());
+        let to = if want_high { "the I/O supply" } else { "ground" };
+        let against = if no_internal {
+            "the pin has no internal pull, so this resistor alone sets the level".to_string()
+        } else {
+            format!(
+                "at {} it overrides the pin's internal pull",
+                p.value.trim()
+            )
+        };
         let what = format!(
-            "has a {dir} ({}) but normal boot needs {}: the strap is biased to the wrong level",
+            "has a {dir} ({} to '{far}') but normal boot needs {}: the strap is biased to the wrong level ({against}). Move {} to {to}, or replace it with a pull to {to}",
             p.reference,
-            strap.level.as_str()
+            strap.level.as_str(),
+            p.reference
         );
         push(Severity::Medium, what, vec![p.reference.clone()]);
     }
@@ -726,6 +738,26 @@ vih = [0.0, 2.0]
             (
                 "BOOT0 pulled down",
                 strap_board("+3V3", "/BOOT0", vec![stm32(), pull("R1", "10k", 1)]),
+                &[],
+            ),
+            // No internal pull to fight: a weak wrong-way pull alone sets BOOT0.
+            (
+                "BOOT0 weakly pulled up",
+                strap_board("+3V3", "/BOOT0", vec![stm32(), pull("R1", "100k", 2)]),
+                &[(
+                    Medium,
+                    &["boot0", "wrong level", "no internal pull", "Move R1 to ground"],
+                )],
+            ),
+            (
+                "BOOT0 weakly pulled down",
+                strap_board("+3V3", "/BOOT0", vec![stm32(), pull("R1", "100k", 1)]),
+                &[],
+            ),
+            // GPIO0's internal pull-up beats a weak pull-down: not judged wrong.
+            (
+                "weak pull-down on GPIO0",
+                strap_board("+3V3", "/GPIO0", vec![esp32("25"), pull("R36", "100k", 1)]),
                 &[],
             ),
             // STM32 BOOT0 has no internal pull: floating is undefined at reset,
