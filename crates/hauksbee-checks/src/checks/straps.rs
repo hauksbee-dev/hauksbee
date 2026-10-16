@@ -1166,7 +1166,7 @@ vih = [0.0, 2.0]
         );
     }
 
-    /// The RP2040 BOOTSEL strap (QSPI_SS, needs high; RP2040 datasheet
+    /// The RP2040 BOOTSEL strap (`QSPI_SS`, needs high; RP2040 datasheet
     /// 3184e62-clean sec 2.8.1.2 p.130 "Check if SPI CS pin is tied low ...
     /// skip flash boot") shares its net with the flash's chip-select input and a
     /// BOOTSEL button that pulls it to ground through 1k. Neither can hold the
