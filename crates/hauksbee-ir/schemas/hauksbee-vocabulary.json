@@ -19,7 +19,7 @@
     {
       "id": "pass_conditional",
       "label": "pass, conditionally",
-      "meaning": "Nothing blocks, but the pass rests on named conditions (default rules, guessed or fallback models); each condition says how to lift it.",
+      "meaning": "Nothing blocks, but the pass rests on named conditions (default rules, guessed or fallback models, partly modelled parts, inferred pin roles, checks that could not judge a part); each condition says how to lift it.",
       "aliases": [
         "clean, conditionally",
         "GREEN, conditionally",

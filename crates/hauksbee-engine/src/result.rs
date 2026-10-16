@@ -2579,9 +2579,12 @@ pub struct JsonReport {
     /// swept ("Q1 passes across assumed corners (...); put the MPN on Q1 to
     /// remove this assumption."), and, once per area, intent the tool cannot
     /// know but the hardware fixes (which level lights an indicator, when no
-    /// stated outcome says). A pass with any is conditional on them, never
-    /// unconditional. Additive; omitted when empty or when the verdict is not
-    /// a pass (`verdict_reason` then says why).
+    /// stated outcome says). The serialized list also names each check that
+    /// abstained on a part or net, and the modelling assumptions a
+    /// model-dependent surface judged on (`JsonReport::pass_conditions`). A pass
+    /// with any is conditional on them, never unconditional. Additive; omitted
+    /// when empty or when the verdict is not a pass (`verdict_reason` then says
+    /// why).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verdict_conditions: Vec<String>,
     /// Which net checks the run judged when key parts have no usable model:
@@ -3071,6 +3074,24 @@ impl JsonReport {
         )
     }
 
+    /// Everything a pass rests on: the conditions the surface stated, then the
+    /// ones its findings and assumptions imply (a check that abstained on a
+    /// part, the modelling assumptions a model-dependent surface judged on; see
+    /// [`crate::verdict_conditions`]), each once. Every surface reads this one
+    /// list, so `--json`, `--plain`, the closing `VERDICT:` line and the web
+    /// headline name the same conditions.
+    #[must_use]
+    pub fn pass_conditions(&self) -> Vec<String> {
+        let findings = self.findings.as_deref().unwrap_or_default();
+        let model_dependent = self.bind_gates_verdict && !self.descriptive_only;
+        let derived =
+            crate::verdict_conditions::derived(findings, &self.assumptions, model_dependent);
+        let mut seen = std::collections::HashSet::new();
+        (self.verdict_conditions.iter().cloned().chain(derived))
+            .filter(|c| seen.insert(c.clone()))
+            .collect()
+    }
+
     /// The machine verdict as the human surfaces carry it: the SAME derivation
     /// [`Self::to_json`] prints, so a triage headline or a closing `VERDICT:`
     /// line built from this can never disagree with the `verdict` field.
@@ -3083,7 +3104,7 @@ impl JsonReport {
             reason,
             // A condition qualifies a pass; a verdict that is not one says why instead.
             conditions: if verdict == "pass" {
-                self.verdict_conditions.clone()
+                self.pass_conditions()
             } else {
                 Vec::new()
             },
@@ -3121,8 +3142,15 @@ impl JsonReport {
         out.insert("serious_count".into(), serde_json::json!(serious));
         out.insert("actionable_count".into(), serde_json::json!(actionable));
         // A condition qualifies a pass; a verdict that is not one says why instead.
-        if verdict != "pass" {
+        let conditions = if verdict == "pass" {
+            self.pass_conditions()
+        } else {
+            Vec::new()
+        };
+        if conditions.is_empty() {
             value.remove("verdict_conditions");
+        } else {
+            value.insert("verdict_conditions".into(), serde_json::json!(conditions));
         }
         out.append(&mut value);
         serde_json::to_string_pretty(&serde_json::Value::Object(out))

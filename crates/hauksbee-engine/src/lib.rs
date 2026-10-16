@@ -46,6 +46,7 @@ pub mod reports;
 pub mod result;
 pub mod run_manifest;
 pub mod scope;
+pub mod verdict_conditions;
 pub mod web_design;
 pub mod web_dist;
 pub mod webcheck;

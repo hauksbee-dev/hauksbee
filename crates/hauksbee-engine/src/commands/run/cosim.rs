@@ -683,7 +683,7 @@ fn closing_verdict_line(
     (verdict.verdict != "pass").then(|| {
         let serious = report.serious_count();
         let worth = (report.findings.len() - serious) + report.heads_up.len();
-        crate::reports::check::verdict_line(verdict, (serious, worth), None)
+        crate::reports::check::verdict_line(verdict, (serious, worth), 0, None)
     })
 }
 

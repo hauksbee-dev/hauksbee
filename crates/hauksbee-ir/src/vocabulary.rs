@@ -47,6 +47,25 @@ pub const DRAFT_MODELS_NEXT_STEP: &str =
 /// can split them where the engine joined them.
 pub const NOT_JUDGED_JOINER: &str = " Also: ";
 
+/// The order-triage bucket for findings a person must look at before ordering.
+///
+/// A run whose only items are in this bucket is a pass (nothing blocks), but
+/// it is not clean: the closing `VERDICT:` line carries the same words, in
+/// lower case, instead of "clean", so the two never disagree.
+pub const INSPECT_BEFORE_ORDERING: &str = "INSPECT BEFORE ORDERING";
+
+/// How a pass condition opens that names the modelling assumptions the checks
+/// were judged on (partly modelled parts, inferred pin roles, reduced-fidelity
+/// models, default values), grouped by their glossary label.
+pub const MODELLING_ASSUMPTIONS_LEAD: &str =
+    "Judged on modelling assumptions, each listed in the evidence with how to lift it";
+
+/// The pass condition that counts the abstentions a run does not name one by
+/// one; `{n}` is how many. Each one stays among the findings with what it needs.
+pub const MORE_ABSTENTIONS: &str =
+    "{n} more checks could not judge the part or net they cover; each is listed among the \
+     findings with what it needs.";
+
 /// What a run concluded. Ordered from best to worst for the reader: a pass,
 /// a pass with named conditions, a fail, and the two outcomes that vouch for
 /// nothing (partly judged, invalid run).
@@ -119,7 +138,8 @@ impl VerdictState {
             Self::Pass => "Every check in scope ran on trustworthy evidence and nothing blocks.",
             Self::PassConditional => {
                 "Nothing blocks, but the pass rests on named conditions (default rules, \
-                 guessed or fallback models); each condition says how to lift it."
+                 guessed or fallback models, partly modelled parts, inferred pin roles, checks \
+                 that could not judge a part); each condition says how to lift it."
             }
             Self::Fail => "At least one blocking finding or failed assertion.",
             Self::PartlyJudged => {

@@ -22,6 +22,8 @@ use hauksbee_extract::{
     CHECK_BEFORE_ORDERING, DNP_PULLUP_MESSAGE_MARKER, SPI_PULLUP_MESSAGE_MARKER,
 };
 
+use hauksbee_ir::vocabulary::INSPECT_BEFORE_ORDERING;
+
 use crate::stress::{FaultEvent, FaultKind};
 
 /// How serious a finding is, in plain terms. Ordered worst-first so a simple
@@ -712,10 +714,10 @@ impl OrderTriage {
                 .count();
             let class = match (heading, entry.id.as_str(), entry.kind.as_str()) {
                 ("DO NOT ORDER", "drc", "short") => Some("oracle-confirmed copper shorts"),
-                ("INSPECT BEFORE ORDERING", "drc", "short") => {
+                (INSPECT_BEFORE_ORDERING, "drc", "short") => {
                     Some("tool-only potential copper shorts with coordinates")
                 }
-                ("INSPECT BEFORE ORDERING", "drc", "clearance") => {
+                (INSPECT_BEFORE_ORDERING, "drc", "clearance") => {
                     Some("below-rule clearance groups with coordinates")
                 }
                 _ => None,
@@ -762,6 +764,27 @@ impl OrderTriage {
         }
     }
 
+    /// The pass conditions this triage does not already list as an item: an
+    /// abstention the inspect bucket names is stated there, in the same words,
+    /// so the block says it once.
+    fn unlisted_conditions<'a>(&self, verdict: &'a crate::result::RunVerdict) -> Vec<&'a str> {
+        let norm = |s: &str| {
+            s.split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim_end_matches('.')
+                .to_string()
+        };
+        let listed: std::collections::HashSet<String> = (self.do_not_order.iter())
+            .chain(&self.inspect)
+            .map(|e| norm(&e.statement))
+            .collect();
+        (verdict.conditions.iter())
+            .filter(|c| !listed.contains(&norm(c)))
+            .map(String::as_str)
+            .collect()
+    }
+
     pub(crate) fn render(&self, verdict: &crate::result::RunVerdict) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "== ORDER / DON'T-ORDER TRIAGE ==");
@@ -776,17 +799,18 @@ impl OrderTriage {
                 "NOT OK TO ORDER YET: this run failed. {}",
                 verdict.reason_without_not_judged().unwrap_or_default()
             );
-        } else if verdict.is_pass() && !verdict.conditions.is_empty() {
+        } else if verdict.is_pass() && !self.unlisted_conditions(verdict).is_empty() {
             // A pass with items to inspect still rests on its conditions; say
-            // so here, not only on the closing line.
+            // so here, not only on the closing line. A condition that IS one of
+            // the items below (an abstention to check by hand) is said there.
             let _ = writeln!(
                 out,
                 "CONDITIONALLY: whatever the items below decide, this rests on: {}",
-                verdict.conditions.join(" ")
+                self.unlisted_conditions(verdict).join(" ")
             );
         }
         Self::write_bucket(&mut out, "DO NOT ORDER", &self.do_not_order);
-        Self::write_bucket(&mut out, "INSPECT BEFORE ORDERING", &self.inspect);
+        Self::write_bucket(&mut out, INSPECT_BEFORE_ORDERING, &self.inspect);
         Self::write_bucket(&mut out, "CHECKED AND OK", &self.checked_ok);
         // What a failing run did not judge, said once, on one line after its
         // failures: the verdict, then the failures, then this.
