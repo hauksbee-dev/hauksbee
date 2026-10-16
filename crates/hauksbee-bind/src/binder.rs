@@ -3908,6 +3908,30 @@ fn role_node_map_guessed(
     }
 }
 
+/// Each role of `model` on `comp` and the board net id its pad sits on, read
+/// exactly as the binder reads them (pin-functions, the card's pads, then the
+/// pin-rule table). Empty when a rule contradicts a pad the board names, where
+/// the binder leaves the part open.
+#[must_use]
+pub fn role_nets(
+    comp: &Component,
+    model: &ModelEntry,
+    pin_rules: &hauksbee_models::PinRuleTable,
+) -> HashMap<String, i64> {
+    let node_of = |net: Option<i64>| {
+        net.filter(|&id| id > 0)
+            .and_then(|id| u32::try_from(id).ok())
+            .map(NodeId)
+    };
+    let (roles, _, clash) = role_node_map_guessed(comp, model, &node_of, pin_rules);
+    if clash.is_some() {
+        return HashMap::new();
+    }
+    (roles.into_iter())
+        .map(|(role, node)| (role, i64::from(node.0)))
+        .collect()
+}
+
 /// Two pads of one signal role on two nets: the role map keeps one, floating a
 /// unit. (One pad on two nets is a board contradiction, refused elsewhere.)
 /// Only multi-unit kinds: elsewhere a repeated role is one internal node (an
