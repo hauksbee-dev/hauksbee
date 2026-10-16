@@ -61,7 +61,21 @@ pub const INFORMATIONAL_MARKER: &str = " (informational)";
 /// gets built. Footprint or pin-map differences never carry it.
 pub const CHECK_BEFORE_ORDERING: &str = "Check before ordering: ";
 
+/// Opens the closing sentence of a finding that computed its own remedy (a
+/// resistance bound, a feed to use): everything after it is that remedy, and
+/// every surface's "what to do" and the verdict's next step use it in place of
+/// the check kind's generic advice ([`LintFinding::own_remedy`]).
+pub const REMEDY_MARKER: &str = "Remedy: ";
+
 impl LintFinding {
+    /// The remedy this finding worked out for itself, when its message closes
+    /// with one ([`REMEDY_MARKER`]); `None` leaves the check kind's advice.
+    #[must_use]
+    pub fn own_remedy(&self) -> Option<&str> {
+        let (_, remedy) = self.message.rsplit_once(REMEDY_MARKER)?;
+        Some(remedy.trim()).filter(|r| !r.is_empty())
+    }
+
     /// Whether this finding asks the reader to do something: not an abstention
     /// and not a low-severity informational evidence note.
     #[must_use]

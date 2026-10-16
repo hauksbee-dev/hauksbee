@@ -65,6 +65,9 @@
 //!   solved DC operating point by the co-simulation's own stress monitor.
 //! - [`open_paths`]: the rating claims that pass would read as met whose
 //!   current path runs into a part with no working model, as abstentions.
+//! - [`rest_supply`]: whether the resting draw [`dc_stress`] judges is one the
+//!   rails' supplies can give; parts over a rating only at an impossible draw
+//!   are one finding about the supply or the model, not overstress findings.
 
 pub mod ampacity;
 pub mod analog_inputs;
@@ -85,6 +88,7 @@ pub mod node_drive;
 pub mod open_paths;
 pub mod rail_conflicts;
 pub mod rail_decoupling;
+pub mod rest_supply;
 pub mod ripple;
 pub mod siblings;
 pub mod straps;

@@ -32,6 +32,8 @@ use hauksbee_ir::{DeviceId, NodeId};
 use hauksbee_models::ModelLibrary;
 use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
 
+use super::rest_supply;
+
 /// Bind `board`, solve its DC operating point, and report every part held
 /// past a rating there, at every assumed corner ([`dc_stress_at_corners`]).
 #[must_use]
@@ -197,6 +199,11 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
     // part -> the stated condition for its first limit passed that was a
     // placeholder or guessed card's, not its own: never a failing finding.
     let mut stated: BTreeMap<String, String> = BTreeMap::new();
+    // Rails drawn past what their supply gives, and the parts over a rating
+    // only at that draw (part -> first clause): one finding, not overstresses.
+    let mut overloaded: Vec<rest_supply::Overload> = Vec::new();
+    let mut only_ideal: BTreeMap<String, String> = BTreeMap::new();
+    let mut held_unsolved = false;
     for ((label, registers_high), strong_label) in STATES.into_iter().zip(STRONG_STATES) {
         // The states run in order on the one bound board: the second starts
         // from the first's settled circuit and re-settles after its change.
@@ -209,6 +216,7 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
             continue;
         };
         let (overstressed, under_driven, absurd, stand_in) = judge(state, &x);
+        let over = rest_supply::overloads(state, &x.0, &x.1);
         note_absurd(&mut impossible, absurd);
         note_stand_in(&mut stated, stand_in);
         for (drive, nets) in under_driven {
@@ -219,44 +227,68 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
                 worst.0 = drive;
             }
         }
-        let weak: Vec<String> = (overstressed.into_iter())
-            .map(|(part, clauses, nets)| {
-                let entry = by_part.entry(part.clone()).or_default();
-                entry.0.push(label);
-                if entry.1.is_empty() {
-                    entry.1 = clauses;
-                }
-                entry.2.extend(nets);
-                part
-            })
-            .collect();
+        let mut weak: Vec<String> = Vec::new();
+        let mut found = overstressed;
         // The same state at the strong-drive corner, then back to the weak
         // one so the next state starts where it always did. A part already
         // over a rating at the weak corner is not news at the strong one, and
         // a gate under-driven at the weak corner is judged there alone.
-        if !set_drive(state, true) {
-            continue;
-        }
-        if let Some(x) = settle(state) {
-            let (strong_over, _, absurd, stand_in) = judge(state, &x);
-            note_absurd(&mut impossible, absurd);
-            note_stand_in(&mut stated, stand_in);
-            for (part, clauses, nets) in strong_over {
-                if weak.contains(&part) {
-                    continue;
-                }
-                let entry = by_part.entry(part).or_default();
-                entry.0.push(strong_label);
-                if entry.1.is_empty() {
-                    entry.1 = clauses;
-                }
-                entry.2.extend(nets);
+        let mut strong_found = Vec::new();
+        if set_drive(state, true) {
+            if let Some(x) = settle(state) {
+                let (strong_over, _, absurd, stand_in) = judge(state, &x);
+                note_absurd(&mut impossible, absurd);
+                note_stand_in(&mut stated, stand_in);
+                strong_found = strong_over;
             }
+            set_drive(state, false);
         }
-        set_drive(state, false);
+        // A draw no supply gives: keep only the parts still over a rating
+        // with the rails held to what their supplies can give.
+        if !over.is_empty() {
+            let real = held_to_capability(state, &over);
+            held_unsolved |= real.is_none();
+            let keep = |part: &str| real.as_ref().is_some_and(|r| r.iter().any(|p| p == part));
+            for (part, clauses, _) in found.iter().chain(&strong_found) {
+                if !keep(part.as_str()) {
+                    only_ideal
+                        .entry(part.clone())
+                        .or_insert_with(|| clauses.first().cloned().unwrap_or_default());
+                }
+            }
+            found.retain(|(part, ..)| keep(part.as_str()));
+            strong_found.retain(|(part, ..)| keep(part.as_str()));
+            rest_supply::note_overloads(&mut overloaded, over);
+        }
+        for (part, clauses, nets) in found {
+            let entry = by_part.entry(part.clone()).or_default();
+            entry.0.push(label);
+            if entry.1.is_empty() {
+                entry.1 = clauses;
+            }
+            entry.2.extend(nets);
+            weak.push(part);
+        }
+        for (part, clauses, nets) in strong_found {
+            if weak.contains(&part) {
+                continue;
+            }
+            let entry = by_part.entry(part).or_default();
+            entry.0.push(strong_label);
+            if entry.1.is_empty() {
+                entry.1 = clauses;
+            }
+            entry.2.extend(nets);
+        }
     }
-    let conditional = unknown_state_faults(&mut bound, &by_part);
-    let reported: Vec<&String> = by_part.keys().chain(conditional.keys()).collect();
+    // A part over a rating at a plausible draw in any state is reported there.
+    only_ideal.retain(|part, _| !by_part.contains_key(part));
+    let mut conditional = unknown_state_faults(&mut bound, &by_part);
+    conditional.retain(|part, _| !only_ideal.contains_key(part));
+    let reported: Vec<&String> = (by_part.keys())
+        .chain(conditional.keys())
+        .chain(only_ideal.keys())
+        .collect();
     let stated: Vec<LintFinding> = (stated.into_iter())
         .filter(|(part, _)| !reported.contains(&part))
         .map(|(part, condition)| stand_in_condition(part, condition))
@@ -273,6 +305,11 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
             .map(|(part, clause)| model_error(part, &clause)),
     );
     findings.extend(stated);
+    findings.extend(rest_supply::implausible_rest_finding(
+        &overloaded,
+        &only_ideal,
+        held_unsolved,
+    ));
     if !unsolved.is_empty() {
         findings.push(LintFinding {
             check: LintCheck::DcOverstress,
@@ -435,6 +472,22 @@ fn unknown_state_faults(
         set_unknown_state_loads(bound, false);
     }
     conditional
+}
+
+/// The parts over a rating in `bound`'s current state with each rail of
+/// `over` held to what its supply can give ([`rest_supply`]), the rails then
+/// put back. `None` when the held board does not solve.
+fn held_to_capability(
+    bound: &mut BoundBoard,
+    over: &[rest_supply::Overload],
+) -> Option<Vec<String>> {
+    let saved = rest_supply::hold_to_capability(bound, over);
+    let real = settle(bound).map(|x| {
+        let (still, ..) = judge(bound, &x);
+        still.into_iter().map(|(part, ..)| part).collect()
+    });
+    rest_supply::release(bound, saved);
+    real
 }
 
 /// Load every clocked register of every logic part with ones and drive the
@@ -814,6 +867,84 @@ mod tests {
     fn diode_at(value: &str, ohms: &str) -> NetLintReport {
         let r = part("R1", ohms, &[("1", 2), ("2", 3)]);
         series_path(r, part("D1", value, &[("A", 3), ("K", 1)]))
+    }
+
+    /// `cells` copies of a 1N4148WT (125 mA) fed from +5V through `ohms`
+    /// each, all on the one rail the board powers by name.
+    fn diode_cells(cells: i64, ohms: &str) -> NetLintReport {
+        let mut nets = vec![(1, "GND".to_string()), (2, "+5V".into())];
+        let mut parts = Vec::new();
+        for k in 0..cells {
+            let mid = 10 + k;
+            nets.push((mid, format!("/C{k}")));
+            parts.push(part(&format!("R{k}"), ohms, &[("1", 2), ("2", mid)]));
+            parts.push(part(&format!("D{k}"), "1N4148WT", &[("A", mid), ("K", 1)]));
+        }
+        let nets: Vec<(i64, &str)> = nets.iter().map(|(i, n)| (*i, n.as_str())).collect();
+        dc_stress_lint(&board(&nets, parts), &ModelLibrary::builtin())
+    }
+
+    /// Faulty model, not faulty parts: forty cells at about 400 mA each pull
+    /// some 16 A from +5V, which no supply the board names gives. Held to
+    /// the 3 A assumed for it, each carries about 75 mA, inside its 125 mA:
+    /// no part is reported overstressed, and one finding names the rail, the
+    /// draw and the limit.
+    #[test]
+    fn a_rest_draw_no_supply_gives_is_one_supply_finding_not_forty_overstresses() {
+        let report = diode_cells(40, "10R");
+        let high: Vec<&LintFinding> = (report.findings.iter())
+            .filter(|f| f.severity == Severity::High)
+            .collect();
+        assert!(high.is_empty(), "{high:#?}");
+        let supply: Vec<&LintFinding> = (report.findings.iter())
+            .filter(|f| f.message.starts_with(rest_supply::OPENING))
+            .collect();
+        assert_eq!(supply.len(), 1, "{:#?}", report.findings);
+        let f = supply[0];
+        assert_eq!(f.severity, Severity::Medium);
+        assert!(f.message.contains("from +5V"), "{}", f.message);
+        assert!(f.message.contains("3.00 A assumed"), "{}", f.message);
+        assert!(f.refs.iter().any(|r| r == "D0"), "{:?}", f.refs);
+        assert!(f.refs.iter().any(|r| r == "D39"), "{:?}", f.refs);
+    }
+
+    /// Legal control: the same cells at about 400 mA, but only five of them
+    /// (some 2 A, a draw a supply gives). Each diode is a real overstress.
+    #[test]
+    fn a_plausible_rest_draw_keeps_each_overstress() {
+        let report = diode_cells(5, "10R");
+        for k in 0..5 {
+            let on = findings_on(&report, &format!("D{k}"));
+            assert!(
+                on.iter().any(|f| f.severity == Severity::High),
+                "D{k}: {:#?}",
+                report.findings
+            );
+        }
+        assert!(
+            !(report.findings.iter()).any(|f| f.message.starts_with(rest_supply::OPENING)),
+            "{:#?}",
+            report.findings
+        );
+    }
+
+    /// Faulty: one diode on a near-short (0.5 ohm) pulls more than the 3 A
+    /// limit, and still carries 3 A, far past 125 mA, with the rail held
+    /// there: a real overstress at any supply stays one.
+    #[test]
+    fn a_part_over_its_rating_even_at_the_supply_limit_stays_an_overstress() {
+        let report = diode_cells(1, "0.5R");
+        let on = findings_on(&report, "D0");
+        assert!(
+            on.iter().any(|f| f.severity == Severity::High),
+            "{:#?}",
+            report.findings
+        );
+        assert!(
+            !(report.findings.iter()).any(|f| f.message.starts_with(rest_supply::OPENING)),
+            "{:#?}",
+            report.findings
+        );
     }
 
     /// Legal control: about 100 mA is inside the SOD-523 part's 125 mA.

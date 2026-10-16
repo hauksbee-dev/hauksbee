@@ -1029,13 +1029,13 @@ fn explain_starved(
     let message = reached.map_or_else(
         || {
             format!(
-                "'{}' is likely starved (estimate from the cards' stated supply current; no operating point was solved): the {count} part(s) it powers ({listed}) need at least {need_v:.3} V, but their {milliamps:.1} mA static supply draw alone through {fed_by} from '{feed_name}' ({feed_v:.3} V) would drop {drop_v:.1} V, more than the {headroom_v:.3} V of headroom, so the rail cannot come up and those parts would not run. Feed the rail through no more than {max_ohms} ohm in total, or directly from '{feed_name}'.",
+                "'{}' is likely starved (estimate from the cards' stated supply current; no operating point was solved): the {count} part(s) it powers ({listed}) need at least {need_v:.3} V, but their {milliamps:.1} mA static supply draw alone through {fed_by} from '{feed_name}' ({feed_v:.3} V) would drop {drop_v:.1} V, more than the {headroom_v:.3} V of headroom, so the rail cannot come up and those parts would not run. Remedy: Feed the rail through no more than {max_ohms} ohm in total, or directly from '{feed_name}'.",
                 net.name,
             )
         },
         |rail| {
             format!(
-                "'{}' is starved: it reaches only {:.3} V, below the {need_v:.3} V minimum supply of the {count} part(s) it powers ({listed}). Their {milliamps:.1} mA static supply draw through {fed_by} from '{feed_name}' ({feed_v:.3} V) drops {drop_v:.1} V, more than the {headroom_v:.3} V of headroom, so the rail cannot come up and those parts do not run. Feed the rail through no more than {max_ohms} ohm in total, or directly from '{feed_name}'.",
+                "'{}' is starved: it reaches only {:.3} V, below the {need_v:.3} V minimum supply of the {count} part(s) it powers ({listed}). Their {milliamps:.1} mA static supply draw through {fed_by} from '{feed_name}' ({feed_v:.3} V) drops {drop_v:.1} V, more than the {headroom_v:.3} V of headroom, so the rail cannot come up and those parts do not run. Remedy: Feed the rail through no more than {max_ohms} ohm in total, or directly from '{feed_name}'.",
                 net.name, rail.max_v,
             )
         },

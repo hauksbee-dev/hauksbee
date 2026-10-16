@@ -1573,6 +1573,16 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 format!("The board's resting state was solved and every rated part held to its ratings there, but this part's current runs into a part with no working model: one the design files give no usable value or model for, left open, or a trimmer whose setting they do not give. The simulation carried no current (or a guessed one) through it, so a clean reading here proves nothing. Detail: {}", f.message),
                 "Give the part the detail names a model or a usable value (a card, a numeric resistance, the trimmer's setting), then re-check.".to_string(),
             ),
+            // The resting draw is past what the rail's supply can give, so
+            // the ideal rail's overstress figures are the solve's, not the
+            // board's: a supply or model question, never a part overstress.
+            LintCheck::DcOverstress
+                if f.message.starts_with(crate::checks::rest_supply::OPENING) =>
+            (
+                format!("The board's resting draw is more than its supply can give, so the overstress computed on {} part(s) is not what the board sees. {}", f.refs.len(), f.message),
+                "Every rail is solved as an ideal source unless a supply is declared, so it holds its level whatever the board pulls. Here the resting state pulls more current than a bench supply, USB port or module pin gives: the real rail sags first, and each part carries only its share. Held to what the supply can give, the parts named are within their ratings, so they are not reported as overstressed. A draw this large usually means a model or binding is wrong (a switch's resting state, a pin map, a part that is not fitted); if the real board does pull it, the board crowbars its rail.".to_string(),
+                "Declare the real supply with its current limit, then trace the path into the first part named against its datasheet.".to_string(),
+            ),
             LintCheck::DcOverstress => (
                 format!("A part is pushed past its datasheet rating as soon as the board powers up. {}", f.message),
                 "This is the board's resting state, solved from the design: every part with a datasheet rating was held to it there. A part over its current, power or temperature rating in that state is overstressed the whole time the board is on; a transistor base or diode driven from a supply or logic output through too little resistance is the usual cause.".to_string(),
@@ -1629,6 +1639,9 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "Size the pull-up between the two limits: above (rail voltage - 0.4 V) / 3 mA (so lows work), and low enough that the rise time fits the bus speed at the real bus capacitance. 2.2k to 4.7k suits most 3.3 V buses.".to_string(),
             ),
         };
+        // A finding that worked out its own remedy is acted on by that, not by
+        // the check kind's generic advice.
+        let fix = f.own_remedy().map_or(fix, str::to_string);
         out.push_for_part(
             level,
             what,

@@ -727,7 +727,10 @@ fn longest_past(s: &[(f64, f64)], need: f64) -> f64 {
     best.max(tail)
 }
 
+/// `v` to three decimals, never "-0.000": a value that rounds to zero prints
+/// as zero, whichever side of it the solve landed.
 fn fmt3(v: f64) -> String {
+    let v = if v.abs() < 0.0005 { 0.0 } else { v };
     format!("{v:.3}")
 }
 
@@ -774,10 +777,22 @@ fn fires(a: &Assertion, out: &RunOutcome) -> Measure {
              -IN {:.3} V",
             plus[peak_at].1, minus[peak_at].1
         );
-        let why = format!(
-            "{reference}'s +IN never rises above -IN: it stops {} V short of the trip point",
-            fmt3(-peak.min(0.0))
-        );
+        let short = -peak.min(0.0);
+        // A shortfall below the printed resolution is no shortfall: +IN only
+        // reaches -IN (both inputs sit together, as on a dead rail).
+        let why = if short < 0.0005 {
+            format!(
+                "{reference}'s +IN only reaches -IN ({} V against {} V), with no overdrive to \
+                 trip it, so it never fires",
+                fmt3(plus[peak_at].1),
+                fmt3(minus[peak_at].1)
+            )
+        } else {
+            format!(
+                "{reference}'s +IN never rises above -IN: it stops {} V short of the trip point",
+                fmt3(short)
+            )
+        };
         return Measure {
             passed: false,
             margin,
@@ -1265,5 +1280,16 @@ mod tests {
             culprits: None,
         };
         assert!(big.problems().iter().any(|p| p.contains("cap 256")));
+    }
+
+    /// A value that rounds to zero prints as zero, never "-0.000" (a dead
+    /// rail's comparator read "stops -0.000 V short"); real values keep sign.
+    #[test]
+    fn fmt3_never_prints_negative_zero() {
+        assert_eq!(super::fmt3(-0.0), "0.000");
+        assert_eq!(super::fmt3(-0.0004), "0.000");
+        assert_eq!(super::fmt3(0.0004), "0.000");
+        assert_eq!(super::fmt3(-0.267), "-0.267");
+        assert_eq!(super::fmt3(0.4191), "0.419");
     }
 }
