@@ -267,8 +267,7 @@ fn open_part_bound(board: &ExtractedBoard, reference: &str) -> Option<String> {
     };
     let first = part.pins.first()?;
     let net = first.net?;
-    let ground =
-        |n: &hauksbee_extract::Net| n.id == net && crate::binder::is_canonical_ground(&n.name);
+    let ground = |n: &hauksbee_extract::Net| n.id == net && crate::binder::is_ground(&n.name);
     let single = board.nets.iter().any(ground)
         && part
             .pins

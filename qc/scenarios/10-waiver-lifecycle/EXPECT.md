@@ -22,7 +22,7 @@ the reason, and the expiry date. A board carrying two overruled findings must
 not look identical to a clean one, or the waiver file becomes invisible
 infrastructure that nobody reads and nobody removes.
 
-**The measurement survives.** `Tj(R1) peak 156.7C > ceiling 125C` stays on
+**The measurement survives.** `Tj(R1) peak 156.7 C > ceiling 125 C` stays on
 screen next to `[WAIVED]`. A waiver overrules a finding; it does not delete the
 number that produced it.
 

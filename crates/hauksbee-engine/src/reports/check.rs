@@ -199,6 +199,8 @@ impl CheckReport<'_> {
         // VERDICT line read, so no human surface can say something the `--json`
         // `verdict` field does not. Everything the verdict reads is attached
         // here, before it is computed.
+        let [rails_entered, rails_held] =
+            crate::checks::rail_basis::rail_conditions(board, lib, &bound);
         let mut jr = machine_report(
             &bound.name,
             &summary,
@@ -216,6 +218,10 @@ impl CheckReport<'_> {
             &drc_structured,
             &provenance,
         ))
+        // And on every rail held at its named voltage with nothing on the
+        // board modelled to source it: from a connector, or from nothing seen.
+        .with_condition(rails_entered)
+        .with_condition(rails_held)
         .with_judgement_scope(crate::scope::JudgementScope::of(board, &bound, &blockers));
         let run_verdict = jr.run_verdict();
         // The closing line's tag reads the triage's inspect bucket, which the
