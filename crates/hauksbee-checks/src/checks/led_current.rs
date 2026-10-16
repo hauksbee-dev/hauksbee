@@ -271,21 +271,29 @@ impl Ctx<'_> {
         (Some(series), far)
     }
 
-    /// A resistor's wattage: its card's, else its footprint package's.
+    /// A resistor's wattage: its own card's, else the one its footprint
+    /// package states (which the board states, so it is judged), else a
+    /// stand-in card's.
     fn resistor_power(&self, resistor: &Component) -> Option<(Rated, String)> {
         let model = AssemblyState::of(resistor)
             .fitted()
             .and_then(|part| resolve(self.lib, part).model);
-        if let Some(model) = model {
-            if let Some(watts) = model.ratings.max_power_w {
-                let stand_in = model.ratings.basis.stand_in_for(Limit::Power).cloned();
-                return Some(((watts, stand_in), format!("card '{}'", model.id)));
-            }
+        let card = model.and_then(|model| {
+            let watts = model.ratings.max_power_w?;
+            let stand_in = model.ratings.basis.stand_in_for(Limit::Power).cloned();
+            Some(((watts, stand_in), format!("card '{}'", model.id)))
+        });
+        if let Some(own) = card
+            .as_ref()
+            .filter(|((_, stand_in), _)| stand_in.is_none())
+        {
+            return Some(own.clone());
         }
-        let watts = resistor_power_from_footprint(&resistor.footprint).watts?;
         let footprint = &resistor.footprint;
         let package = footprint.rsplit(':').next().unwrap_or(footprint);
-        Some(((watts, None), format!("its {package} footprint")))
+        (resistor_power_from_footprint(footprint).watts)
+            .map(|watts| ((watts, None), format!("its {package} footprint")))
+            .or(card)
     }
 
     /// The level `net` is held at while the LED is lit: a rail's span, or a
@@ -871,10 +879,12 @@ mod tests {
             part("R1", "68", &[("1", 4), ("2", 3)]),
             "Resistor_SMD:R_0402_1005Metric",
         );
-        let option = with_footprint(
+        let mut option = with_footprint(
             part("R0", "DNP", &[("1", 3), ("2", 1)]),
             "Resistor_SMD:R_0402_1005Metric",
         );
+        // What the DNP policy records for a "DNP" value in the real pipeline.
+        option.dnp = true;
         let found = lint(vec![series, option, led("LED", 3, 1)]);
         assert_eq!(found.len(), 1, "{found:#?}");
         assert!(

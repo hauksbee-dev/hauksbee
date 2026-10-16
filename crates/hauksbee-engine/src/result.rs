@@ -2730,21 +2730,36 @@ impl JsonReport {
     /// condition (a part held past a placeholder or guessed card's limit, not
     /// its own); see [`hauksbee_models::rating_basis`]. Neither is a fail.
     fn stated_condition(&self) -> Option<String> {
-        use hauksbee_models::rating_basis::{is_condition, is_not_judged};
+        use hauksbee_models::rating_basis::{is_condition, is_not_judged, not_judged};
         let first = |pick: fn(&str) -> bool| {
             (self.findings.iter().flatten())
                 .find(|f| pick(&f.message))
                 .map(|f| f.message.as_str())
         };
-        (first(is_not_judged).map(|m| format!("an analysis did not run to a result: {m}.")))
-            .or_else(|| {
-                first(is_condition).map(|c| {
-                    format!(
-                        "a part's limit was judged against a stand-in card's rating, not its \
+        // A co-sim whose analog solve failed held stale voltages over those
+        // windows: no fault seen there is no fault absent.
+        let unsolved = (self.cosim.as_ref()).filter(|c| !c.analog_valid).map(|c| {
+            let what = format!(
+                "the co-sim's analog solve did not converge over {} window(s) and held stale \
+                 voltages there",
+                c.failed_windows.len().max(1)
+            );
+            format!(
+                "an analysis did not run to a result: {}.",
+                not_judged(&what)
+            )
+        });
+        (unsolved.or_else(|| {
+            first(is_not_judged).map(|m| format!("an analysis did not run to a result: {m}."))
+        }))
+        .or_else(|| {
+            first(is_condition).map(|c| {
+                format!(
+                    "a part's limit was judged against a stand-in card's rating, not its \
                          own: {c}."
-                    )
-                })
+                )
             })
+        })
     }
 
     /// The scope, when it lets the verdict judge around exactly `blockers`.
