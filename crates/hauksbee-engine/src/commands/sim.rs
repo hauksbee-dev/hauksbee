@@ -396,15 +396,75 @@ pub fn simulate_deck_within(
     })
 }
 
+/// Most points `hauksbee sim` will solve for one `.dc` or `.ac` sweep. A sweep
+/// point is a full solve, so a million of them is minutes; a step of 1e-9 on a
+/// 0-1 V sweep asks for a billion and would run until killed.
+const MAX_SWEEP_POINTS: f64 = 1_000_000.0;
+
+/// Most output rows `hauksbee sim` will produce for one `.tran` (stop time over
+/// step). Larger asks exhaust memory long before they finish.
+const MAX_TRAN_POINTS: f64 = 20_000_000.0;
+
+/// The analysis a deck runs when none is forced: its own card, `.tran` first.
+fn deck_analysis(d: &Directives) -> Analysis {
+    if d.tran.is_some() {
+        Analysis::Tran
+    } else if d.dc.is_some() {
+        Analysis::Dc
+    } else if d.ac.is_some() {
+        Analysis::Ac
+    } else {
+        Analysis::Op
+    }
+}
+
+/// Points the card for `analysis` asks for; none for `.op`.
+fn requested_points(d: &Directives, analysis: Analysis) -> f64 {
+    let sweep_points = |s: &DcSweep| ((s.stop - s.start) / s.step).abs() + 1.0;
+    match analysis {
+        Analysis::Tran => d.tran.map_or(0.0, |t| (t.tstop - t.tstart) / t.tstep),
+        Analysis::Ac => d.ac.as_ref().map_or(0.0, ac_points),
+        Analysis::Dc => d.dc.as_ref().map_or(0.0, |c| {
+            sweep_points(&c.inner) * c.outer.as_ref().map_or(1.0, sweep_points)
+        }),
+        Analysis::Op => 0.0,
+    }
+}
+
+/// Refuse, before solving, a sweep or transient that asks for more points than
+/// `hauksbee sim` will run, saying which card and what to change.
+fn within_sweep_cap(d: &Directives, analysis: Analysis) -> Result<(), SimError> {
+    let points = requested_points(d, analysis);
+    let (card, cap, fix) = match analysis {
+        Analysis::Tran => (
+            ".tran",
+            MAX_TRAN_POINTS,
+            "Widen the step or shorten the stop time",
+        ),
+        Analysis::Ac => (
+            ".ac",
+            MAX_SWEEP_POINTS,
+            "Use fewer points or a narrower range",
+        ),
+        Analysis::Dc => (
+            ".dc",
+            MAX_SWEEP_POINTS,
+            "Widen the step or narrow the range",
+        ),
+        Analysis::Op => return Ok(()),
+    };
+    if points.is_nan() || points > cap {
+        return Err(SimError::malformed(format!(
+            "the `{card}` card asks for about {points:.0} points; `hauksbee sim` runs at most \
+             {cap:.0} for one {card}. {fix}."
+        )));
+    }
+    Ok(())
+}
+
 /// Refuse, before solving, a deck whose cards imply more than [`MAX_DECK_POINTS`].
 fn within_point_budget(d: &Directives) -> Result<(), String> {
-    let sweep_points = |s: &DcSweep| ((s.stop - s.start) / s.step).abs() + 1.0;
-    let points = match (&d.tran, &d.ac, &d.dc) {
-        (Some(t), ..) if t.tstep > 0.0 => (t.tstop - t.tstart) / t.tstep,
-        (_, Some(a), _) => ac_points(a),
-        (_, _, Some(c)) => sweep_points(&c.inner) * c.outer.as_ref().map_or(1.0, sweep_points),
-        _ => 0.0,
-    };
+    let points = requested_points(d, deck_analysis(d));
     if points.is_nan() || points > MAX_DECK_POINTS {
         return Err(format!(
             "this deck asks for about {points:.0} solved points; a deck run in the browser is \
@@ -460,17 +520,9 @@ fn simulate(
                 .into(),
         );
     }
-    let analysis = forced.unwrap_or_else(|| {
-        if directives.tran.is_some() {
-            Analysis::Tran
-        } else if directives.dc.is_some() {
-            Analysis::Dc
-        } else if directives.ac.is_some() {
-            Analysis::Ac
-        } else {
-            Analysis::Op
-        }
-    });
+    let analysis = forced.unwrap_or_else(|| deck_analysis(directives));
+    // Before any solve, so an absurd sweep is refused in microseconds and says why.
+    within_sweep_cap(directives, analysis)?;
     let tag = match analysis {
         Analysis::Op => "op",
         Analysis::Tran => "tran",
@@ -671,8 +723,12 @@ fn solver_opts_from_deck(circuit: &hauksbee_ir::Circuit, directives: &Directives
 
 #[cfg(test)]
 mod tests {
-    use super::{csv_escape, decode_deck_text, sim_output_to_csv, solver_opts_from_deck};
+    use super::{
+        csv_escape, decode_deck_text, sim_output_to_csv, simulate, simulate_deck,
+        solver_opts_from_deck, Analysis, SimError,
+    };
     use hauksbee_ir::SpiceLoader;
+    use hauksbee_solve::SimOutput;
 
     #[test]
     fn binary_deck_bytes_are_refused_with_a_reason() {
@@ -728,5 +784,69 @@ mod tests {
         let (c0, d0) =
             SpiceLoader::load_with_directives("t\nV1 in 0 1\nR1 in 0 1k\n.op\n.end\n").unwrap();
         assert!((solver_opts_from_deck(&c0, &d0).temperature_c - 27.0).abs() < 1e-9);
+    }
+
+    fn run_deck(card: &str, analysis: Analysis) -> Result<(&'static str, SimOutput), SimError> {
+        let text = format!("t\nV1 in 0 DC 0\nR1 in out 1k\nR2 out 0 3k\n{card}\n.end\n");
+        let (c, d) = SpiceLoader::load_with_directives(&text).unwrap_or_else(|e| panic!("{e}"));
+        simulate(
+            &c,
+            &d,
+            &["V(out)".to_string()],
+            Some(analysis),
+            &mut Vec::new(),
+        )
+    }
+
+    #[test]
+    fn a_sweep_asking_for_a_billion_points_is_refused_up_front() {
+        // `.dc V1 0 1 1e-9` used to run until killed; it is refused before any solve and the
+        // message names the card, the count and the cap.
+        let Err(SimError::Malformed(msg)) = run_deck(".dc V1 0 1 1e-9", Analysis::Dc) else {
+            panic!("a billion-point .dc must be refused");
+        };
+        assert!(msg.contains("`.dc`") && msg.contains("1000000"), "{msg}");
+        let Err(SimError::Malformed(msg)) = run_deck(".ac lin 100000000 1 1k", Analysis::Ac) else {
+            panic!("a 1e8-point .ac must be refused");
+        };
+        assert!(msg.contains("`.ac`"), "{msg}");
+        let Err(SimError::Malformed(msg)) = run_deck(".tran 1p 1", Analysis::Tran) else {
+            panic!("a 1e12-point .tran must be refused");
+        };
+        assert!(msg.contains("`.tran`"), "{msg}");
+        // Controls: ordinary sweeps run.
+        assert!(run_deck(".dc V1 0 1 0.25", Analysis::Dc).is_ok());
+        // (This deck has no AC stimulus, so the AC analysis may refuse it, but never the cap.)
+        assert!(!matches!(
+            run_deck(".ac dec 10 1 1meg", Analysis::Ac),
+            Err(SimError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn a_negative_resistor_deck_never_reaches_the_solver() {
+        let text = "t\nV1 in 0 DC 5\nR1 in out -1k\nR2 out 0 3k\n.op\n.end\n";
+        let err = simulate_deck(text, &["V(out)".to_string()]).expect_err("must be refused");
+        assert!(err.contains("negative resistance"), "{err}");
+    }
+
+    #[test]
+    fn a_resistance_floor_substitution_reaches_the_run_notes() {
+        let text = "t\nV1 in 0 DC 5\nR1 in out 1e-9\nR2 out 0 3k\n.op\n.end\n";
+        let run = simulate_deck(text, &["V(out)".to_string()]).expect("solves");
+        assert!(
+            run.notes
+                .iter()
+                .any(|n| n.contains("R1 = 1e-9") && n.contains("simulated as 1 uohm")),
+            "{:?}",
+            run.notes
+        );
+        let clean = "t\nV1 in 0 DC 5\nR1 in out 1k\nR2 out 0 3k\n.op\n.end\n";
+        let run = simulate_deck(clean, &["V(out)".to_string()]).expect("solves");
+        assert!(
+            !run.notes.iter().any(|n| n.contains("floor")),
+            "{:?}",
+            run.notes
+        );
     }
 }
