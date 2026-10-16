@@ -184,9 +184,9 @@ fn xtal_board(xtal_val: &str, c1: &str, c2: &str) -> ExtractedBoard {
 
 #[test]
 fn crystal_known_cl_within_tolerance_is_info_not_finding() {
-    // ABM8-272 specs 18 pF; two 33 pF caps -> 16.5 + 4 = 20.5 pF, deviation 2.5
-    // pF < 8 pF tolerance: ok, info only.
-    let b = xtal_board("ABM8-272-T3", "33p", "33p");
+    // ABM8-272 specs 10 pF (RP2040 datasheet Table 257); the Pico's two 15 pF
+    // caps -> 7.5 + 4 = 11.5 pF, deviation 1.5 pF < 8 pF tolerance: info only.
+    let b = xtal_board("ABM8-272-T3", "15p", "15p");
     let r = run_board(&b, check_crystal_load_cap);
     assert_eq!(r.finding_count(), 0, "within tolerance must not fire");
     assert!(r
@@ -196,15 +196,78 @@ fn crystal_known_cl_within_tolerance_is_info_not_finding() {
 
 #[test]
 fn crystal_known_cl_far_off_fires() {
-    // ABM8-272 specs 18 pF; two 4.7 pF caps -> 2.35 + 4 = 6.35 pF, deviation
-    // 11.65 pF > 8 pF: fires (under-capacitanced -> runs fast / may not start).
-    let b = xtal_board("ABM8-272-T3", "4p7", "4p7");
+    // ABM8-272 specs 10 pF; two 34 pF caps -> 17 + 4 = 21 pF, deviation 11 pF
+    // > 8 pF: fires (over-loaded -> runs slow, less gain margin). The 18 pF the
+    // table used to claim would have passed this pair.
+    let b = xtal_board("ABM8-272-T3", "34p", "34p");
     let r = run_board(&b, check_crystal_load_cap);
     assert_eq!(r.finding_count(), 1, "far-off CL must fire");
-    assert_eq!(
-        r.of_check(SiCheck::CrystalLoadCap).next().unwrap().check,
-        SiCheck::CrystalLoadCap
+    let f = r.of_check(SiCheck::CrystalLoadCap).next().unwrap();
+    assert!(f.message.contains("CL = 10 pF"), "{}", f.message);
+    assert!(f.message.contains("Table 257"), "{}", f.message);
+}
+
+/// A 32.768 kHz crystal whose value states no CL is judged against the class's
+/// 12.5 pF standard CL with the usual 8 pF tolerance: 48 pF caps (CL ~28 pF)
+/// fire Medium with the gain-margin reason; the common 22 pF pair (~15 pF) and
+/// the 33 pF edge (20.5 pF, not over) are silent notes.
+#[test]
+fn watch_crystal_far_above_its_class_cl_fires() {
+    let faulty = run_board(
+        &xtal_board("32.768kHz", "48p", "48p"),
+        check_crystal_load_cap,
     );
+    assert_eq!(faulty.finding_count(), 1, "{:?}", faulty.findings);
+    let f = faulty.findings_only().next().unwrap();
+    assert_eq!(f.severity, SiSeverity::Medium);
+    for says in [
+        "CL ~ 28.0 pF",
+        "12.5 pF standard CL",
+        "ABS07",
+        "gain margin",
+        "motional",
+    ] {
+        assert!(f.message.contains(says), "{says:?} in {}", f.message);
+    }
+    for (value, cap) in [("32.768kHz", "22p"), ("32768", "33p"), ("32K", "12p")] {
+        let legal = run_board(&xtal_board(value, cap, cap), check_crystal_load_cap);
+        assert_eq!(
+            legal.finding_count(),
+            0,
+            "{value} {cap}: {:?}",
+            legal.findings
+        );
+    }
+    // A MHz crystal with no stated CL keeps the no-judgement note.
+    let mhz = run_board(&xtal_board("16MHz", "48p", "48p"), check_crystal_load_cap);
+    assert_eq!(mhz.finding_count(), 0, "{:?}", mhz.findings);
+}
+
+/// An HC-49 can is a crystal outline whatever the reference prefix: `Q1` with
+/// footprint `HC49UP` is the crystal on an emonTx-style board.
+#[test]
+fn an_hc49_footprint_marks_a_crystal() {
+    let comp = |reference: &str, footprint: &str| Component {
+        reference: reference.into(),
+        value: "16Mhz".into(),
+        footprint: footprint.into(),
+        pins: vec![
+            crate::Pin {
+                number: "1".into(),
+                net: Some(1),
+                ..Default::default()
+            },
+            crate::Pin {
+                number: "2".into(),
+                net: Some(2),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    assert!(is_crystal(&comp("Q1", "HC49UP")));
+    assert!(is_crystal(&comp("X2", "Crystal:Crystal_HC49-U_Vertical")));
+    assert!(!is_crystal(&comp("Q1", "Package_TO_SOT_SMD:SOT-23")));
 }
 
 #[test]

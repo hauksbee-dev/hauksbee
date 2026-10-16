@@ -135,7 +135,7 @@ fn si_checks_are_silent_on_the_entire_known_good_corpus() {
 }
 
 /// The RP2040 minimal reference board carries Y1 = ABM8-272-T3 (the one corpus
-/// crystal whose datasheet CL = 18 pF is derivable from the value), driven with
+/// crystal whose CL is derivable from the value: RP2040 datasheet Table 257 gives 10 pF), driven with
 /// 15 pF caps -> board CL ~ 11.5 pF, inside the 8 pF tolerance: an INFO, never a
 /// fire. Pins both the known-CL lookup and the series-resistor cap trace.
 #[test]
@@ -159,9 +159,9 @@ fn rp2040_abm8_272_load_is_info_within_tolerance() {
         SiSeverity::Info,
         "ABM8-272 at 15pF caps is within tolerance"
     );
-    // The board CL ~ 11.5 pF and the 18 pF spec must both be in the note.
+    // The board CL ~ 11.5 pF and the 10 pF spec must both be in the note.
     assert!(
-        y1.message.contains("18 pF"),
+        y1.message.contains("spec 10 pF"),
         "the ABM8-272 CL spec must be cited: {}",
         y1.message
     );

@@ -317,15 +317,32 @@ const CL_TOLERANCE_PF: f64 = 8.0;
 ///
 /// `(value-substring, CL_pF, citation)`.
 const KNOWN_CRYSTAL_CL: &[(&str, f64, &str)] = &[
-    // Abracon ABM8-272 series: the "-272" code is the 18 pF CL option on the
-    // ABM8 3.2x2.5 mm SMD crystal (Abracon ABM8 datasheet, CL ordering code
-    // table). The RP2040 minimal reference design (Y1 = ABM8-272-T3) uses it
-    // with 15 pF caps -> board CL ~ 7.5 + stray, the documented RP2040 hint.
-    ("ABM8-272", 18.0, "Abracon ABM8 datasheet, -272 = 18 pF CL"),
+    // Abracon ABM8-272-T3, the 12 MHz crystal the RP2040 datasheet recommends:
+    // its Table 257 (Key Crystal Specifications, section 2.16.1.1, p.216)
+    // gives CL 10 pF min/typ/max, C0 3.0 pF max, ESR 50 ohm max, +-30 ppm.
+    (
+        "ABM8-272",
+        10.0,
+        "RP2040 datasheet Table 257: ABM8-272-T3 CL = 10 pF",
+    ),
     // Abracon ABM8G frequency-stamped parts (used on MNT Reform) are sold in
     // multiple CL options; without the full ordering code the CL is NOT known,
     // so ABM8G alone is deliberately absent here (info, not a guess).
 ];
+
+/// The standard load capacitance (pF) of a 32.768 kHz tuning-fork crystal and
+/// the largest listed option: Abracon ABS07 lists CL 4, 6, 7, 9 and 12.5 pF
+/// (default 12.5) and ABS25 gives 12.5 pF as standard. A watch crystal whose
+/// value states no CL is judged against it with `CL_TOLERANCE_PF`.
+const WATCH_CRYSTAL_CL_PF: f64 = 12.5;
+const WATCH_CRYSTAL_CL_CITE: &str =
+    "Abracon ABS07 and ABS25 datasheets: CL options 4 to 12.5 pF, standard 12.5 pF";
+
+/// A 32.768 kHz watch crystal by its value ("32.768kHz", "32768", "32K").
+fn is_watch_crystal(value: &str) -> bool {
+    let v = value.to_ascii_uppercase().replace(' ', "");
+    v.contains("32.768") || v.contains("32768") || v.starts_with("32K") || v.contains("32KHZ")
+}
 
 /// A ceramic resonator (Murata `CSTxE` / CERALOCK, ZTT, 3-terminal) integrates its
 /// own load caps (the centre pin is the common cap node to ground). It needs no
@@ -470,7 +487,12 @@ fn is_crystal(c: &Component) -> bool {
     let r = part_class::ref_designator(&c.reference);
     let lib = c.lib_id.to_ascii_lowercase();
     let fp = c.footprint.to_ascii_lowercase();
-    let crystal_fp = lib.contains("crystal") || fp.contains("crystal") || fp.contains("xtal");
+    // HC-49 (HC49U, HC49UP, HC-49/US) is a crystal-only can outline.
+    let crystal_fp = lib.contains("crystal")
+        || fp.contains("crystal")
+        || fp.contains("xtal")
+        || fp.contains("hc49")
+        || fp.contains("hc-49");
     // Y is the unambiguous crystal designator. X is overloaded (connectors), so
     // an X-ref only counts as a crystal with a crystal footprint.
     if r.starts_with('Y') && r.chars().nth(1).is_some_and(|c| c.is_ascii_digit()) {
@@ -612,6 +634,21 @@ fn check_crystal_load_cap(board: &ExtractedBoard, report: &mut SiReport) {
                         format!("board CL ~ {cl:.1} pF vs spec {spec:.0} pF (within {CL_TOLERANCE_PF:.0} pF) - ok"),
                     );
                 }
+            } else if is_watch_crystal(&xtal.value) && cl > WATCH_CRYSTAL_CL_PF + CL_TOLERANCE_PF {
+                // A 32.768 kHz tuning fork with no stated CL: judge it against
+                // the class's standard CL with the tolerance a stated CL gets.
+                push(
+                    SiSeverity::Medium,
+                    format!(
+                        "board presents CL ~ {cl:.1} pF (C1={c1:.0}p, C2={c2:.0}p, +{CSTRAY_PF:.0}p stray) on a \
+                         32.768 kHz crystal whose value states no CL, more than {CL_TOLERANCE_PF:.0} pF above \
+                         the {WATCH_CRYSTAL_CL_PF} pF standard CL of the class [{WATCH_CRYSTAL_CL_CITE}]. \
+                         A heavier load cuts the oscillator's gain margin (the critical gm grows with \
+                         (C0+CL)^2) and pulls the frequency low; the ppm error needs the crystal's motional \
+                         C1, which its datasheet rarely gives. Size the caps to the crystal's CL \
+                         (C = 2 x (CL - stray)), or state a higher CL in the value if the part has one."
+                    ),
+                );
             } else {
                 // CL spec unknown: report the computed load as info only.
                 push(

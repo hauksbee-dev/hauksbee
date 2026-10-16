@@ -213,7 +213,11 @@ fn feedback_output_range(
 fn tied_nets(board: &ExtractedBoard) -> BTreeMap<i64, BTreeSet<i64>> {
     let is_tie = |c: &Component| {
         let text = format!("{} {}", c.lib_id, c.footprint).to_ascii_lowercase();
-        let named_tie = text.contains("nettie") || text.contains("net_tie");
+        let named_tie = text.contains("nettie")
+            || text.contains("net_tie")
+            || c.reference
+                .strip_prefix("NT")
+                .is_some_and(|rest| rest.starts_with(|ch: char| ch.is_ascii_digit()));
         let zero_ohm = is_resistor(c)
             && parse_value(&c.value).is_some_and(|v| v.si.is_finite() && v.si <= 0.1);
         AssemblyState::of(c).is_present() && (named_tie || zero_ohm)
@@ -253,15 +257,104 @@ fn tied_nets(board: &ExtractedBoard) -> BTreeMap<i64, BTreeSet<i64>> {
 pub(crate) struct Rails {
     regulators: BTreeMap<i64, RailRange>,
     batteries: BTreeMap<i64, Option<RailRange>>,
+    /// Nets a converter-shaped part drives whose output level no card states
+    /// (an unmodelled buck, or a regulator card with no output range), each
+    /// with the part, `"U21 (TPS62410)"`.
+    unknown_drivers: BTreeMap<i64, String>,
 }
 
 impl Rails {
     pub(crate) fn of(board: &ExtractedBoard, st: &BoardStatics<'_>) -> Self {
+        let regulators = regulator_ranges(board, st);
+        let unknown_drivers = converter_driven_nets(board)
+            .into_iter()
+            .filter(|(net, _)| !regulators.contains_key(net))
+            .collect();
         Self {
-            regulators: regulator_ranges(board, st),
+            regulators,
             batteries: battery_ranges(board, st),
+            unknown_drivers,
         }
     }
+}
+
+/// A pin name with `KiCad`'s `_<pad>` suffix and any channel digits removed,
+/// upper-cased: `SW1` and `FB_3` read as `SW` and `FB`.
+fn pin_base(function: &str) -> String {
+    let f = function.trim().to_ascii_uppercase();
+    let f = match f.rsplit_once('_') {
+        Some((head, tail)) if !head.is_empty() && tail.chars().all(|c| c.is_ascii_digit()) => {
+            head.to_string()
+        }
+        _ => f,
+    };
+    f.trim_end_matches(|c: char| c.is_ascii_digit()).to_string()
+}
+
+/// Nets a converter-shaped part drives, judged from pin names alone so it
+/// holds whether or not the part bound a card: a part with an input pin
+/// (`VIN`, `IN`, `PVIN`) drives the nets of its output and feedback pins
+/// (`VOUT`, `OUT`, `FB`), and through an inductor the far net of its switch
+/// pin (`SW`, `LX`). Spread across net ties, as the regulated rails are.
+fn converter_driven_nets(board: &ExtractedBoard) -> BTreeMap<i64, String> {
+    const INPUTS: [&str; 7] = ["IN", "VIN", "VI", "INPUT", "PVIN", "AVIN", "VINA"];
+    const OUTPUTS: [&str; 7] = ["OUT", "VOUT", "VO", "OUTPUT", "FB", "VFB", "VOS"];
+    const SWITCHES: [&str; 3] = ["SW", "LX", "PH"];
+    let has =
+        |p: &hauksbee_extract::Pin, names: &[&str]| names.contains(&pin_base(&p.function).as_str());
+    let inductor_far = |net: i64| {
+        board
+            .net_members(net)
+            .into_iter()
+            .filter_map(move |(c, _)| {
+                let is_l = c
+                    .reference
+                    .strip_prefix('L')
+                    .is_some_and(|rest| rest.starts_with(|ch: char| ch.is_ascii_digit()));
+                let nets: BTreeSet<i64> = c.pins.iter().filter_map(|p| p.net).collect();
+                (is_l && AssemblyState::of(c).is_present() && nets.len() == 2)
+                    .then(|| nets.into_iter().find(|&n| n != net))
+                    .flatten()
+            })
+    };
+    let mut out = BTreeMap::new();
+    for comp in &board.components {
+        if !AssemblyState::of(comp).is_present() || !comp.pins.iter().any(|p| has(p, &INPUTS)) {
+            continue;
+        }
+        let who = format!("{} ({})", comp.reference, comp.value.trim());
+        for pin in &comp.pins {
+            let Some(net) = pin.net.filter(|n| *n != 0) else {
+                continue;
+            };
+            let driven: Vec<i64> = if has(pin, &OUTPUTS) {
+                vec![net]
+            } else if has(pin, &SWITCHES) {
+                inductor_far(net).collect()
+            } else {
+                Vec::new()
+            };
+            for n in driven {
+                if board.net(n).is_some_and(|x| !is_ground(&x.name)) {
+                    out.entry(n).or_insert_with(|| who.clone());
+                }
+            }
+        }
+    }
+    let tied = tied_nets(board);
+    let spread: Vec<(i64, String)> = out
+        .iter()
+        .flat_map(|(net, who)| {
+            tied.get(net)
+                .into_iter()
+                .flatten()
+                .map(move |&other| (other, who.clone()))
+        })
+        .collect();
+    for (net, who) in spread {
+        out.entry(net).or_insert(who);
+    }
+    out
 }
 
 fn regulator_ranges(board: &ExtractedBoard, st: &BoardStatics<'_>) -> BTreeMap<i64, RailRange> {
@@ -454,6 +547,22 @@ impl<'a> RailResolver<'a> {
                 .board
                 .net(net_id)
                 .is_some_and(|n| !is_ground(&n.name) && power_rail_voltage(&n.name).is_some())
+    }
+
+    /// The part that drives a net whose level is only its name's band, where
+    /// that part is a converter with no stated output: the name is then
+    /// contradicted by nothing yet confirmed by nothing either, since the
+    /// converter sets the real level (a `VCC` buck output is often 3.3 V).
+    /// Only a magnitude-free name (`VCC`, `VDD`) qualifies: a converter output
+    /// named `+5V` states its level in the name.
+    fn unknown_driver(&self, net_id: i64) -> Option<&str> {
+        let magnitude_free = self.board.net(net_id).is_some_and(|n| {
+            let leaf = n.name.rsplit('/').next().unwrap_or(&n.name);
+            !leaf.chars().any(|c| c.is_ascii_digit())
+        });
+        (magnitude_free && self.assumed_from_name(net_id))
+            .then(|| self.rails.unknown_drivers.get(&net_id).map(String::as_str))
+            .flatten()
     }
 
     fn declared(&self, net_id: i64) -> RailKnowledge {
@@ -700,7 +809,10 @@ fn envelope_lint_with_tolerance(
                     // to check, not a fault, and it gives no basis for
                     // rewiring the part to another rail.
                     let assumed = resolver.assumed_from_name(net_id);
-                    let fix = if assumed {
+                    let fix = if let Some(driver) = resolver.unknown_driver(net_id) {
+                        severity = at_most(severity, Severity::Low);
+                        unknown_driver_note(&net.name, nominal, driver)
+                    } else if assumed {
                         let cap = if nominal_inside && !above_abs_max {
                             Severity::Low
                         } else {
@@ -907,7 +1019,10 @@ fn supply_abs_max_findings(
             continue;
         }
         let assumed = resolver.assumed_from_name(net_id);
-        let (severity, level) = if assumed {
+        let driver = resolver.unknown_driver(net_id);
+        let (severity, level) = if driver.is_some() {
+            (Severity::Low, " (the ±5 % band its name implies)")
+        } else if assumed {
             (
                 Severity::Medium,
                 " (the ±5 % band its name implies; no regulator or run states it)",
@@ -920,13 +1035,21 @@ fn supply_abs_max_findings(
             "{} supply pin {role} on '{}' reaches {:.2} V{level}, {over:.2} V above the {abs_max:.2} V absolute-maximum supply on card '{}'",
             comp.reference, net.name, range.max_v, model.id
         );
-        let fix = format!(
-            " Feed {role} from a rail that stays at or below {abs_max:.2} V (inside the card's recommended supply), or fit a part rated for this rail."
+        let message = driver.map_or_else(
+            || {
+                format!(
+                    "{seen}: the part can be damaged. Feed {role} from a rail that stays at or below {abs_max:.2} V (inside the card's recommended supply), or fit a part rated for this rail."
+                )
+            },
+            |driver| {
+                let nominal = f64::midpoint(range.min_v, range.max_v);
+                format!("{seen}, if the name's level holds.{}", unknown_driver_note(&net.name, nominal, driver))
+            },
         );
         let finding = LintFinding {
             check: LintCheck::OperatingEnvelope,
             severity,
-            message: format!("{seen}: the part can be damaged.{fix}"),
+            message,
             refs: vec![comp.reference.clone()],
             nets: vec![net.name.clone()],
         };
@@ -940,6 +1063,17 @@ fn supply_abs_max_findings(
         ));
     }
     out
+}
+
+/// The note for a rail whose only level is its name's band while a converter
+/// with no stated output drives it: the converter, not the name, sets the
+/// level, so the comparison is a question to answer, never a fault.
+fn unknown_driver_note(net: &str, nominal: f64, driver: &str) -> String {
+    format!(
+        " The level is not known: only the net name suggests {nominal:.2} V, and '{net}' is driven by \
+         {driver}, a converter whose output no model states. Declare the rail's level with a \
+         net_drive (or give {driver} a card with its output), then re-check."
+    )
 }
 
 /// How many of a starved rail's parts its finding names before "and N more".
@@ -1371,6 +1505,79 @@ basis = "Recommended Operating Conditions, Table 1, VDD row"
             hot[0].message
         );
         assert!(lint("+3V3").is_empty(), "3.465 V is under 3.6 V");
+    }
+
+    /// A rail whose only level is its name's band (bare `VCC` reads 5 V) but
+    /// which an unmodelled converter drives, here through its switch-node
+    /// inductor and a net tie, is a note asking for the level: the converter
+    /// sets it (a `VCC` buck output is often 3.3 V). The same name with
+    /// nothing driving it keeps the gating warning (faulty and control).
+    #[test]
+    fn a_name_only_rail_an_unmodelled_converter_drives_is_a_note() {
+        let w25q = |net| part("U20", "W25Q128JVSIQ", vec![pin("8", net), pin("4", 1)]);
+        let named = |p: Pin, name: &str| Pin {
+            function: name.into(),
+            ..p
+        };
+        let buck = part(
+            "U21",
+            "TPS62410",
+            vec![
+                named(pin("3", 4), "VIN"),
+                named(pin("6", 5), "SW1"),
+                named(pin("4", 3), "FB1"),
+                named(pin("8", 1), "GND"),
+            ],
+        );
+        let inductor = part("L11", "4u7", vec![pin("1", 3), pin("2", 5)]);
+        let tie = Component {
+            lib_id: "Device:NetTie_2".into(),
+            ..part("NT2", "VCC", vec![pin("1", 2), pin("2", 3)])
+        };
+        let nets = &[
+            (1, "GND"),
+            (2, "VCC"),
+            (3, "REG_OUT1"),
+            (4, "VIN"),
+            (5, "SW_NODE"),
+        ];
+        let abs_max = |b: &ExtractedBoard| -> Vec<LintFinding> {
+            envelope_lint(b, &ModelLibrary::builtin())
+                .of_check(LintCheck::OperatingEnvelope)
+                .filter(|f| f.message.contains("absolute-maximum"))
+                .cloned()
+                .collect()
+        };
+        let parts = vec![w25q(2), buck, inductor, tie];
+        let driven = abs_max(&board(nets, parts.clone()));
+        assert_eq!(driven.len(), 1, "{driven:?}");
+        assert_eq!(driven[0].severity, Severity::Low, "{}", driven[0].message);
+        for says in [
+            "U21 (TPS62410)",
+            "net_drive",
+            "only the net name suggests 5.00 V",
+        ] {
+            assert!(
+                driven[0].message.contains(says),
+                "{says:?} in {}",
+                driven[0].message
+            );
+        }
+        let alone = abs_max(&board(nets, vec![w25q(2)]));
+        assert_eq!(alone.len(), 1, "{alone:?}");
+        assert_eq!(alone[0].severity, Severity::Medium, "{}", alone[0].message);
+        // A converter output whose name states its level ("+5V") keeps the
+        // warning: the name is a magnitude, not a convention.
+        let mut stated = nets.to_vec();
+        stated[1] = (2, "+5V");
+        let named_5v = abs_max(&board(&stated, parts));
+        assert_eq!(named_5v.len(), 1, "{named_5v:?}");
+        assert_eq!(
+            named_5v[0].severity,
+            Severity::Medium,
+            "{}",
+            named_5v[0].message
+        );
     }
 
     const MARGIN_CARD: &str = r#"
