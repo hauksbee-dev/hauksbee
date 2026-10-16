@@ -1596,6 +1596,7 @@ value_re = "^ADJ_LDO$"
 [models.params]
 vref = 1.25
 iadj_a = 50.0e-6
+dropout_v = 3.0
 [models.pins]
 "1" = "fb"
 "2" = "out"
