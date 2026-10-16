@@ -10509,7 +10509,8 @@ style = "i2c_pointer"
     fn simple_vreg_stamps_exact_voltage_between_output_and_return() {
         let lib = ModelLibrary::builtin();
         for case in [
-            "card | AMS1117-3.3 | 3.3 | OUT 0 | 1.3 | 4.699 | 15 | at least 22 µF output capacitance",
+            // AMS1117's 22 µF is a datasheet recommendation (p.4), not a minimum.
+            "card | AMS1117-3.3 | 3.3 | OUT 0 | 1.3 | 4.699 | 15 | recommends 22 µF output capacitance",
             "offset | LM7905 | -5 | OUT RET | 1.1 | 6.1 | 25 | does not state the output-capacitor",
             "abs max | MIC5205-3.3 | 3.3 | OUT 0 | 0.35 | 3.65 | 20 | does not state the output-capacitor",
             "bare | - | 5 | 0 RET | - | 5 | inf | -",
