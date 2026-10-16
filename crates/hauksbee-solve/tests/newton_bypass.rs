@@ -297,8 +297,8 @@ fn stiff_fixture_bypass_preserves_pulse_train() {
     );
 }
 
-/// Gate (c): the plan's named high-Z stress fixture, a weakly-driven
-/// sense net in the W1 §2.4 dead-integrator shape. A fixed source behind a
+/// Gate (c): the high-Z stress fixture, a weakly-driven sense net in a
+/// dead-integrator shape. A fixed source behind a
 /// large series resistance charges an integrator cap THROUGH A DIODE; the
 /// integrator's only other connection is a 1 GΩ leak, so near the comparator
 /// threshold every accepted step moves the node by far less than bypasstol,

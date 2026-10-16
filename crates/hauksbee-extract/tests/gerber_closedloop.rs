@@ -363,8 +363,8 @@ fn shipped_boards_survive_gerbers() {
     if kicad_cli().is_none() {
         // A gate that silently does not run is worse than no gate: it reads as
         // evidence. HAUKSBEE_REQUIRE_KICAD=1 makes a missing kicad-cli a hard
-        // failure, and scripts/make-public.sh sets it, so the release gate
-        // exercises the claim even though a per-PR runner does not.
+        // failure, and the release gate sets it, so that gate exercises the
+        // claim even though a per-PR runner does not.
         assert!(
             std::env::var_os("HAUKSBEE_REQUIRE_KICAD").is_none(),
             "HAUKSBEE_REQUIRE_KICAD is set but kicad-cli was not found. Gerber \

@@ -14,7 +14,7 @@ optional `haiku-single` and Codex `luna-ladder`.
 **Luna baseline.** Every Claude tier is compared with `luna` on the parts both ran,
 with denominators (`8/12 vs 9/12`). No cached or replayed Luna results exist for these
 12 public parts, so `luna` is a real codex run (on a ChatGPT plan, its weekly share is
-shown); the held-out sets are not used here. A tier below Luna on pin-map exact count
+shown). A tier below Luna on pin-map exact count
 or validator passes is never recommended as the default. The lowest tier is judged
 too: `haiku-harnessed` alone at or above Luna may be offered alone; below it, only as
 `haiku-sonnet`; if that is below Luna too, the report says to drop `claude-code-haiku`
