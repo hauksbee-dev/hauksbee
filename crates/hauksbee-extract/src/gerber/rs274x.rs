@@ -221,20 +221,70 @@ fn skippable_statement(line: &str) -> bool {
         return true;
     }
     if let Some(body) = line.strip_prefix('%') {
-        return [
-            "TF", "TA", "TO", "TD", "AM", "LN", "IN", "IP", "OF", "SF", "AS", "MI", "IO", "IR",
-        ]
-        .iter()
-        .any(|p| body.starts_with(p));
+        return ["TF", "TA", "TO", "TD", "AM", "LN", "IN"]
+            .iter()
+            .any(|p| body.starts_with(p))
+            || identity_image_parameter(body);
     }
     // Deprecated words matched by prefix: they are followed by other words on the
-    // same line (`G71D02*`, `G54D10*`) or a bare terminator (`G90*`).
+    // same line (`G71D02*`, `G54D10*`) or a bare terminator (`G90*`). `G91`
+    // (incremental coordinates) is not among them: skipping it would read every
+    // later coordinate as absolute and misplace the copper.
     line.starts_with("G04")
         || [
-            "G54", "G55", "G70", "G71", "G74", "G75", "G90", "G91", "M00", "M01",
+            "G54", "G55", "G70", "G71", "G74", "G75", "G90", "M00", "M01",
         ]
         .iter()
         .any(|p| line.starts_with(p))
+}
+
+/// A deprecated image parameter (`%IP`, `%MI`, `%IR`, `%OF`, `%IO`, `%SF`, `%AS`)
+/// that leaves the image as drawn: positive polarity, no mirror, no rotation, zero
+/// offset, unit scale, A to X and B to Y. Any other value transforms the whole
+/// layer, which this reader does not apply, so skipping it would misplace the copper.
+fn identity_image_parameter(body: &str) -> bool {
+    let body: String = body
+        .chars()
+        .filter(|c| !matches!(c, '*' | '%') && !c.is_whitespace())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    // The A and B values of a parameter, each defaulting to `default` when absent;
+    // `None` when a value is not a number.
+    let axes = |rest: &str, default: f64| -> Option<(f64, f64)> {
+        let (a, b) = match (rest.find('A'), rest.find('B')) {
+            (Some(i), Some(j)) if i < j => (&rest[i + 1..j], &rest[j + 1..]),
+            (Some(i), None) => (&rest[i + 1..], ""),
+            (None, Some(j)) => ("", &rest[j + 1..]),
+            (None, None) if rest.is_empty() => ("", ""),
+            _ => return None,
+        };
+        let value = |v: &str| {
+            if v.is_empty() {
+                Some(default)
+            } else {
+                v.parse::<f64>().ok()
+            }
+        };
+        Some((value(a)?, value(b)?))
+    };
+    if let Some(rest) = body.strip_prefix("IP") {
+        return rest == "POS";
+    }
+    if let Some(rest) = body.strip_prefix("IR") {
+        return rest
+            .parse::<f64>()
+            .is_ok_and(|deg| deg.abs() < f64::EPSILON);
+    }
+    if let Some(rest) = body.strip_prefix("AS") {
+        return rest == "AXBY";
+    }
+    if let Some(rest) = body.strip_prefix("SF") {
+        return axes(rest, 1.0) == Some((1.0, 1.0));
+    }
+    ["MI", "OF", "IO"].iter().any(|p| {
+        body.strip_prefix(p)
+            .is_some_and(|rest| axes(rest, 0.0) == Some((0.0, 0.0)))
+    })
 }
 
 /// Largest coordinate or aperture size (in the file's own units) that any real
@@ -369,6 +419,53 @@ fn note_unreadable_statements(doc: &gerber_parser::GerberDoc, faults: &mut Vec<S
             "never states its units (%MOMM or %MOIN), so the scale of every coordinate is unknown"
                 .to_string(),
         );
+    }
+    // The deprecated image parameters and incremental coordinates move every
+    // coordinate of the layer, and this plotter applies none of them: a layer that
+    // sets one to anything but its default would be read misplaced, so refuse it.
+    if doc.format_specification.as_ref().is_some_and(|fs| {
+        matches!(
+            fs.coordinate_mode,
+            gerber_types::CoordinateMode::Incremental
+        )
+    }) {
+        faults.push(
+            "states incremental coordinates (%FS...I...), which this reader does not apply, so every position would be misplaced"
+                .to_string(),
+        );
+    }
+    if let Some(what) = doc.commands().iter().find_map(|c| match c {
+        Command::ExtendedCode(ExtendedCode::ImagePolarity(
+            gerber_types::ImagePolarity::Negative,
+        )) => Some("negative image polarity (%IPNEG)"),
+        Command::ExtendedCode(ExtendedCode::MirrorImage(m))
+            if !matches!(m, gerber_types::ImageMirroring::None) =>
+        {
+            Some("a mirrored image (%MI)")
+        }
+        Command::ExtendedCode(ExtendedCode::RotateImage(r))
+            if !matches!(r, gerber_types::ImageRotation::None) =>
+        {
+            Some("a rotated image (%IR)")
+        }
+        Command::ExtendedCode(ExtendedCode::OffsetImage(o))
+            if o.a.abs() > f64::EPSILON || o.b.abs() > f64::EPSILON =>
+        {
+            Some("an image offset (%OF)")
+        }
+        Command::ExtendedCode(ExtendedCode::ScaleImage(sf))
+            if (sf.a - 1.0).abs() > f64::EPSILON || (sf.b - 1.0).abs() > f64::EPSILON =>
+        {
+            Some("a scaled image (%SF)")
+        }
+        Command::ExtendedCode(ExtendedCode::AxisSelect(gerber_types::AxisSelect::AYBX)) => {
+            Some("swapped axes (%ASAYBX)")
+        }
+        _ => None,
+    }) {
+        faults.push(format!(
+            "sets {what}, a whole-layer transform this reader does not apply, so the copper would be read misplaced"
+        ));
     }
     // An `%AM` the parser could not read is dropped from the command list, and a
     // flash of an aperture built on it would be drawn as the fallback disc: the
@@ -4467,7 +4564,22 @@ M02*
     #[test]
     fn deprecated_words_with_trailing_words_and_lone_terminators_do_not_refuse_a_film() {
         for extra in [
-            "G71D02*", "G70*", "G90*", "G91*", "G55*", "G54D10*", "*", "%", "G71*",
+            "G71D02*",
+            "G70*",
+            "G90*",
+            "G55*",
+            "G54D10*",
+            "*",
+            "%",
+            "G71*",
+            "%IPPOS*%",
+            "%MIA0B0*%",
+            "%IR0*%",
+            "%OFA0B0*%",
+            "%SFA1B1*%",
+            "%ASAXBY*%",
+            "%SFA1.0B1.0*%",
+            "%OFA0.000B0.000*%",
         ] {
             let g = LEGAL_COPPER.replace("%LPD*%", &format!("%LPD*%\n{extra}"));
             assert!(
@@ -4493,7 +4605,6 @@ M02*
         for line in [
             "G71D02*",
             "G90*",
-            "G91*",
             "G55*",
             "*",
             "%",
@@ -4504,6 +4615,66 @@ M02*
         }
         for line in ["X1Y1D09*", "Q7*", "G02X1Y1*"] {
             assert!(!skippable_statement(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_copper_layer_with_a_whole_layer_transform_is_refused() {
+        for param in [
+            "%IPNEG*%",
+            "%MIA1B0*%",
+            "%IR90*%",
+            "%OFA0.5B0*%",
+            "%SFA2B1*%",
+            "%ASAYBX*%",
+        ] {
+            let g = LEGAL_COPPER.replace("%LPD*%", &format!("{param}\n%LPD*%"));
+            let err = parse_copper_layer(&g).expect_err(param);
+            assert!(err.contains("misplaced"), "{param}: {err}");
+        }
+        for param in [
+            "%IPPOS*%",
+            "%MIA0B0*%",
+            "%IR0*%",
+            "%OFA0B0*%",
+            "%SFA1B1*%",
+            "%ASAXBY*%",
+        ] {
+            let g = LEGAL_COPPER.replace("%LPD*%", &format!("{param}\n%LPD*%"));
+            assert!(
+                parse_copper_layer(&g).is_ok(),
+                "{param}: {:?}",
+                parse_copper_layer(&g)
+            );
+        }
+    }
+
+    #[test]
+    fn image_transforms_and_incremental_mode_are_never_skipped() {
+        // Each changes where every later coordinate lands; skipping it would
+        // misplace the copper silently.
+        for line in [
+            "G91*",
+            "%IPNEG*%",
+            "%MIA1B0*%",
+            "%IR90*%",
+            "%OFA0.5B0*%",
+            "%IOA0B2*%",
+            "%SFA2B1*%",
+            "%ASAYBX*%",
+            "%SFAxB1*%",
+        ] {
+            assert!(!skippable_statement(line), "{line}");
+        }
+        for line in [
+            "%IPPOS*%",
+            "%MIA0B0*%",
+            "%IR0*%",
+            "%OFA0B0*%",
+            "%SFA1B1*%",
+            "%ASAXBY*%",
+        ] {
+            assert!(skippable_statement(line), "{line}");
         }
     }
 
