@@ -1676,7 +1676,7 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
             ),
             LintCheck::PolarisedCapReversed => (
                 format!("A polarised capacitor on {parts} is fitted backwards. {}", f.message),
-                "An electrolytic or tantalum capacitor is only rated for its + terminal at the higher voltage. Reversed it conducts a large leakage current, heats, and can fail short-circuit or vent, taking the rail down with it.".to_string(),
+                "A solid tantalum capacitor tolerates only a small reverse voltage (about a tenth of its rating at room temperature) and an aluminium electrolytic none at all. Wrong polarity short-circuits or damages the part, and an electrolytic can open its pressure vent, which can take the rail down with it.".to_string(),
                 "Turn the capacitor round so its + terminal is on the more positive net, in the schematic symbol and on the footprint.".to_string(),
             ),
             LintCheck::I2cBusLoading => (

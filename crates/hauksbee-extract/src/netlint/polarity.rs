@@ -84,7 +84,7 @@ fn level_of(name: &str) -> Level {
 /// against a rail, or a positive rail against a negative one. Two rails of the
 /// same sign are never ordered (`+5V` against `+3V3` is a name, not a measured
 /// potential, and a diode or capacitor between them is legal either way round).
-fn order(a: Level, b: Level) -> Option<Ordering> {
+const fn order(a: Level, b: Level) -> Option<Ordering> {
     use Level::{Ground, Negative, Positive};
     match (a, b) {
         (Ground, Positive(_)) | (Negative(_), Ground | Positive(_)) => Some(Ordering::Less),
@@ -94,7 +94,7 @@ fn order(a: Level, b: Level) -> Option<Ordering> {
 }
 
 /// The stated voltage of a level, ground being 0 V.
-fn volts(l: Level) -> Option<f64> {
+const fn volts(l: Level) -> Option<f64> {
     match l {
         Level::Ground => Some(0.0),
         Level::Positive(v) | Level::Negative(v) => v,
@@ -437,6 +437,9 @@ fn is_plain_diode(c: &Component) -> bool {
 /// Whether the part may conduct both ways: a bidirectional TVS (`SMBJ6.0CA`,
 /// `P6KE15C`, "bidir" in its name).
 fn maybe_bidirectional(c: &Component) -> bool {
+    const TVS_FAMILIES: [&str; 11] = [
+        "SMAJ", "SMBJ", "SMCJ", "SMDJ", "SM8S", "P4KE", "P6KE", "1.5KE", "P6SMB", "SMF", "TPSMB",
+    ];
     let text = format!("{} {} {}", c.value, c.lib_id, c.footprint).to_ascii_uppercase();
     if ["BIDIR", "BI-DIR", "BI_DIR", "BIPOLAR"]
         .iter()
@@ -456,9 +459,6 @@ fn maybe_bidirectional(c: &Component) -> bool {
             .and_then(|head| head.chars().last())
             .is_some_and(|ch| ch.is_ascii_digit())
     };
-    const TVS_FAMILIES: [&str; 11] = [
-        "SMAJ", "SMBJ", "SMCJ", "SMDJ", "SM8S", "P4KE", "P6KE", "1.5KE", "P6SMB", "SMF", "TPSMB",
-    ];
     digit_before("CA") || (digit_before("C") && TVS_FAMILIES.iter().any(|f| token.starts_with(f)))
 }
 
@@ -576,9 +576,10 @@ fn reversed_capacitor_finding(
         message: format!(
             "{} ({}) is polarised and fitted backwards: its + terminal is on '{plus}' and its - \
              terminal on '{minus}', the more positive net{across}, so it is reverse-biased whenever \
-             the board is powered. A polarised (electrolytic or tantalum) capacitor is rated for its \
-             + terminal at the higher potential; reversed it leaks heavily, heats, and can fail short \
-             or vent. Remedy: turn {} round so its + terminal is on '{minus}' and its - terminal on \
+             the board is powered. A polarised capacitor takes only a small reverse voltage (a \
+             solid tantalum about 10 % of its rating at 25 \u{b0}C, an aluminium electrolytic none): \
+             wrong polarity short-circuits or damages it, and an electrolytic can open its pressure \
+             vent. Remedy: turn {} round so its + terminal is on '{minus}' and its - terminal on \
              '{plus}'",
             c.reference,
             c.value.trim(),
