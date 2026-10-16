@@ -710,7 +710,7 @@ mod tests {
         let partial = RunVerdict {
             verdict: "invalid",
             reason: Some(
-                "PARTLY JUDGED: an analysis did not run to a result: the co-sim's analog \
+                "PARTLY JUDGED (not a pass): an analysis did not run to a result: the co-sim's analog \
                  solve did not converge over 1 window(s)"
                     .into(),
             ),
@@ -720,7 +720,10 @@ mod tests {
         };
         let line = closing_verdict_line(&partial, &PlainReport::default()).unwrap();
         assert!(
-            line.starts_with("VERDICT: PARTLY JUDGED: ") && line.contains("did not converge"),
+            line.starts_with(
+                "VERDICT: PARTLY JUDGED (not a pass): 0 serious, 0 worth a look; an analysis"
+            ) && line.contains("did not converge")
+                && !line.contains("PARTLY JUDGED: "),
             "{line}"
         );
         assert_eq!(
