@@ -1586,10 +1586,13 @@ basis = "Recommended Operating Conditions, Table 1, VDD row"
         assert!(findings[0].message.contains("Table 1"));
     }
 
-    /// An IC card with only `ratings.max_voltage_v` (the supply's absolute
-    /// maximum, no `supply_range` row) is still judged: an ESP32-S3 module
-    /// (3.6 V, datasheet Table 6-1) on a 5 V rail warns with the excess and
-    /// the limit; on 3.3 V it is clean.
+    /// An ESP32-S3 module (3.6 V absolute maximum, datasheet Table 6-1) on a
+    /// 5 V rail warns with the excess and the limit; on 3.3 V it is clean. The
+    /// card states a `supply_range` row with `abs_max_v` on its one supply pin,
+    /// so that row judges the pin once: the ratings-only path
+    /// (`supply_abs_max_findings`, covered with the W25Q card below) skips a
+    /// role a `supply_range` row already judges and must not add a second
+    /// finding for the same pin.
     #[test]
     fn an_ic_on_a_rail_above_its_card_abs_max_supply_is_flagged() {
         let lint = |rail: &str| {
@@ -1603,28 +1606,28 @@ basis = "Recommended Operating Conditions, Table 1, VDD row"
             );
             report
                 .of_check(LintCheck::OperatingEnvelope)
-                .filter(|f| f.message.contains("absolute-maximum"))
                 .cloned()
                 .collect::<Vec<_>>()
         };
         let hot = lint("+5V");
-        assert_eq!(hot.len(), 1, "{hot:?}");
+        assert_eq!(hot.len(), 1, "one finding for the one pin: {hot:?}");
         assert_eq!(
             hot[0].severity,
             Severity::Medium,
             "name-assumed level warns"
         );
-        assert!(hot[0].message.contains("5.25 V"), "{}", hot[0].message);
-        assert!(
-            hot[0].message.contains("1.65 V above the 3.60 V"),
-            "{}",
-            hot[0].message
-        );
-        assert!(
-            hot[0].message.contains("esp32s3_wroom"),
-            "{}",
-            hot[0].message
-        );
+        for says in [
+            "U1 role vdd on '+5V'",
+            "4.750..5.250 V",
+            "1.65 V above its 3.60 V absolute maximum",
+            "Table 6-1",
+        ] {
+            assert!(
+                hot[0].message.contains(says),
+                "{says:?} in {}",
+                hot[0].message
+            );
+        }
         assert!(lint("+3V3").is_empty(), "3.465 V is under 3.6 V");
     }
 
