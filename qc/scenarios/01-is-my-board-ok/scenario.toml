@@ -38,7 +38,7 @@ matches = [
   # The triage block states the missing model once: U1 is named, what it
   # changes is counted, and the next step is given. No separate banner or
   # heads-up repeats it.
-  "^PARTLY JUDGED \\(not a pass\\): nothing found blocks ordering among the checks this run could judge\\. U1 has no usable model, so the checks it could change are not judged: wiring and value checks on the [0-9]+ net\\(s\\) it connects to",
+  "^PARTLY JUDGED \\(not a pass\\): nothing found blocks ordering among the checks this run could judge\\. U1 has no usable model, so the checks it could change are not judged: wiring, value and electrical checks \\(levels, ratings, rails\\) on the 6 net\\(s\\) it connects to \\(\\+3V3, BTN2, BTN3, EN and 2 more\\); nothing further is reached through the circuit\\. The other 156 of 168 net checks were judged\\.",
   # The distinct fact: parts without a simulation model, with the pointer to
   # the table that lists them.
   "^NOT COVERED: [0-9]+ parts lack an executable simulation model;.*run --report for the (bind table|[0-9]+-part bind table)",

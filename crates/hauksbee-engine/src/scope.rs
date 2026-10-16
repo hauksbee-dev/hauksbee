@@ -396,17 +396,32 @@ impl JudgementScope {
                 sample(&self.held_rails),
             )
         };
+        // The reach is never smaller than the nets the part touches. When it
+        // stops there (a held rail and signal pins cut it at once), one list
+        // says it, instead of the same nets named twice.
+        let what = if self.electrical_dependent.len() == self.wiring_dependent.len() {
+            format!(
+                "wiring, value and electrical checks (levels, ratings, rails) on the {} net(s) \
+                 {it} connects to ({}); nothing further is reached through the circuit",
+                self.wiring_dependent.len(),
+                sample(&self.wiring_dependent),
+            )
+        } else {
+            format!(
+                "wiring and value checks on the {} net(s) {it} connects to ({}), and \
+                 electrical checks (levels, ratings, rails) on the {} of {} net(s) {it} can \
+                 reach through the circuit ({})",
+                self.wiring_dependent.len(),
+                sample(&self.wiring_dependent),
+                self.electrical_dependent.len(),
+                self.nets,
+                sample(&self.electrical_dependent),
+            )
+        };
         format!(
-            "{parts} {has} no usable model, so the checks {it} could change are \
-             not judged: wiring and value checks on the {} net(s) {it} connects to ({}), and \
-             electrical checks (levels, ratings, rails) on the {} of {} net(s) {it} can reach \
-             through the circuit ({}). The other {} of {} net checks were judged.{held} Draft \
-             the model(s) with `hauksbee models extract --unmodelled <board>` to judge the rest.",
-            self.wiring_dependent.len(),
-            sample(&self.wiring_dependent),
-            self.electrical_dependent.len(),
-            self.nets,
-            sample(&self.electrical_dependent),
+            "{parts} {has} no usable model, so the checks {it} could change are not judged: \
+             {what}. The other {} of {} net checks were judged.{held} Draft the model(s) with \
+             `hauksbee models extract --unmodelled <board>` to judge the rest.",
             self.judged(),
             2 * self.nets,
         )
@@ -621,7 +636,15 @@ mod tests {
         let s = behind_diode("VB", "VIN");
         assert_eq!(s.electrical_dependent, ["GND", "VOUT"]);
         assert_eq!(s.held_rails, ["VOUT"]);
-        assert!(s.condition().contains("source of VOUT can supply"));
+        let c = s.condition();
+        assert!(c.contains("source of VOUT can supply"), "{c}");
+        // The reach is exactly the nets U3 touches: one list, not two.
+        assert!(
+            c.contains("wiring, value and electrical checks")
+                && c.contains("nothing further is reached")
+                && !c.contains("can reach through the circuit"),
+            "{c}"
+        );
     }
 
     #[test]
