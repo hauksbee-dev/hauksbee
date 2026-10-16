@@ -4163,6 +4163,16 @@ voh = [[3.0, 2.3], [3.6, 2.9]]
 "29" = "gnd2"
 "EP" = "gnd3"
 
+
+# VDD (pad 6) is the internal regulator's 3.3 V OUTPUT whenever VREGIN is fed
+# (Figures 2.1 and 2.2: "3.3 V (out)" with bypass capacitors only), so a board
+# that leaves it on a capacitor-only net is wired as the datasheet draws it.
+# It is an input only when the regulator is bypassed (Figure 2.3), and VREGIN,
+# the other supply pad, is still held to being wired.
+[[models.optional_supplies]]
+role = "vdd"
+basis = "Silicon Labs CP2102N Rev. 1.5, 2.1 Typical Connection Diagrams, Figure 2.1 (bus-powered) and Figure 2.2 (self-powered): VDD is '3.3 V (out)' of the internal regulator with 4.7 uF and 0.1 uF bypass capacitors only; Figure 2.3 ties it to the external supply when the regulator is not used"
+
 [models.ratings]
 # Table 3.10. VDD's 4.2 V is the tightest supply limit; per-pin limits are in
 # the envelopes below.
