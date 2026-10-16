@@ -484,6 +484,96 @@ fn check_plain_sections_read_inconclusive_but_drc_stays_exempt() {
     );
 }
 
+/// The twin of the `verdict_fet_<kind>` board with a ground track laid across
+/// its LOAD_DRAIN track: a copper short, so the board FAILS whatever else it
+/// is missing.
+fn shorted(kind: &str) -> PathBuf {
+    fixture(&format!("verdict_fet_{kind}_shorted.kicad_pcb"))
+}
+
+/// The lines of `text` that state the missing model, apart from the closing
+/// `VERDICT:` line (which carries the verdict's whole reason, as `--json` does).
+fn model_gap_lines(text: &str) -> Vec<&str> {
+    text.lines()
+        .filter(|l| !l.starts_with("VERDICT:") && l.contains("no usable model"))
+        .collect()
+}
+
+#[test]
+fn a_failing_plain_check_says_what_it_did_not_judge_once() {
+    for (name, board, scoped) in [
+        ("unscoped", shorted("unbound"), false),
+        ("scoped", shorted("partial"), true),
+    ] {
+        let out = run_board(&board, &["--check", "--plain"]);
+        assert_eq!(out.status.code(), Some(0), "{name}: {}", stderr(&out));
+        let text = stdout(&out);
+        assert!(
+            text.contains("VERDICT: failing"),
+            "{name}: the short fails the board:\n{text}"
+        );
+        // The verdict, then the failures, then one line naming what was not
+        // judged: no INCONCLUSIVE banner and no open-IC heads-up restate it.
+        let triage = text.split("== Copper spacing").next().unwrap_or_default();
+        let said: Vec<&str> = triage
+            .lines()
+            .filter(|l| l.starts_with("NOT JUDGED: "))
+            .collect();
+        assert_eq!(said.len(), 1, "{name}: one NOT JUDGED line:\n{text}");
+        assert!(said[0].contains("Q1 has no usable model") || said[0].contains("(Q1)"));
+        assert!(
+            said[0].contains(if scoped {
+                "are not judged"
+            } else {
+                "the rest of the board is not vouched for"
+            }),
+            "{name}: {}",
+            said[0]
+        );
+        assert!(
+            triage.find("DO NOT ORDER:") < triage.find("NOT JUDGED:"),
+            "{name}: failures first, then what was not judged:\n{triage}"
+        );
+        assert_eq!(model_gap_lines(&text), said, "{name}: said once:\n{text}");
+        assert!(
+            !text.contains("INCONCLUSIVE:") && !text.contains("are unresolved/open"),
+            "{name}: no banner or heads-up repeats it:\n{text}"
+        );
+    }
+    // Control: with Q1 modelled the same short still fails, and nothing was
+    // left unjudged, so no such line appears.
+    let text = stdout(&run_board(&shorted("bound"), &["--check", "--plain"]));
+    assert!(text.contains("VERDICT: failing"), "{text}");
+    assert!(
+        !text.contains("NOT JUDGED") && !text.contains("INCONCLUSIVE"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_failing_text_check_says_what_it_did_not_judge_once() {
+    let out = run_board(&shorted("unbound"), &["--check"]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("VERDICT: failing"), "{text}");
+    assert_eq!(
+        text.lines()
+            .filter(|l| l.starts_with("NOT JUDGED: "))
+            .count(),
+        1,
+        "one line names the unjudged part:\n{text}"
+    );
+    assert_eq!(
+        model_gap_lines(&text).len(),
+        1,
+        "the model gap is stated once outside the closing line:\n{text}"
+    );
+    assert!(
+        !text.contains("INCONCLUSIVE:"),
+        "no second sentence:\n{text}"
+    );
+}
+
 #[test]
 fn thermal_json_note_leads_with_the_shared_inconclusive_tag() {
     let b = thermal_partial();

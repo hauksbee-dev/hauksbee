@@ -348,7 +348,13 @@ impl PlainReport {
         // With real findings, the verdict line counts them (not a clean bill),
         // but the coverage hole must still be said out loud: fixing the listed
         // findings would otherwise flip the verdict straight to a vacuous pass.
-        if !self.findings.is_empty() && !self.unmodelled_critical.is_empty() {
+        // When the report already said it once above every section, the
+        // pointer back to it is only for a section with nothing else to show
+        // (its verdict line would otherwise read as a clean bill).
+        if !self.findings.is_empty()
+            && !self.unmodelled_critical.is_empty()
+            && !self.inconclusive_said_above
+        {
             let _ = writeln!(s, "{}", self.inconclusive());
         }
         if !self.findings.is_empty() {
@@ -733,7 +739,9 @@ impl OrderTriage {
     /// so an empty triage can never say OK TO ORDER over a failed or
     /// inconclusive run.
     fn empty_headline(verdict: &crate::result::RunVerdict) -> String {
-        let reason = verdict.reason.as_deref().unwrap_or_default();
+        // A failing run's not-judged sentence is its own line, below the
+        // failures (see `render`), so the headline does not carry it too.
+        let reason = verdict.reason_without_not_judged().unwrap_or_default();
         match verdict.verdict {
             // The reason starts "PARTLY JUDGED (not a pass)".
             _ if verdict.partial => reason.to_string(),
@@ -766,7 +774,7 @@ impl OrderTriage {
             let _ = writeln!(
                 out,
                 "NOT OK TO ORDER YET: this run failed. {}",
-                verdict.reason.as_deref().unwrap_or_default()
+                verdict.reason_without_not_judged().unwrap_or_default()
             );
         } else if verdict.is_pass() && !verdict.conditions.is_empty() {
             // A pass with items to inspect still rests on its conditions; say
@@ -780,6 +788,19 @@ impl OrderTriage {
         Self::write_bucket(&mut out, "DO NOT ORDER", &self.do_not_order);
         Self::write_bucket(&mut out, "INSPECT BEFORE ORDERING", &self.inspect);
         Self::write_bucket(&mut out, "CHECKED AND OK", &self.checked_ok);
+        // What a failing run did not judge, said once, on one line after its
+        // failures: the verdict, then the failures, then this.
+        if let Some(not_judged) = verdict
+            .not_judged
+            .as_deref()
+            .filter(|_| verdict.verdict == "fail")
+        {
+            let _ = writeln!(
+                out,
+                "{}: {not_judged}",
+                hauksbee_ir::vocabulary::NOT_JUDGED_LEAD
+            );
+        }
         if !self.not_covered.is_empty() {
             let _ = writeln!(out, "NOT COVERED: {}", self.not_covered);
         }
@@ -2046,6 +2067,82 @@ mod tests {
         let rendered = r.render();
         assert!(rendered.contains("1 issue found"), "{rendered}");
         assert!(rendered.contains("INCONCLUSIVE"), "{rendered}");
+    }
+
+    /// Once the report has said above every section which parts were not
+    /// judged, a section that lists findings does not point back at it again;
+    /// a section with nothing to show still does, so it never reads as clean.
+    #[test]
+    fn a_section_with_findings_does_not_repeat_what_the_top_said() {
+        let mut r = PlainReport::new("connectivity");
+        r.unmodelled_critical = vec!["Q1".to_string()];
+        r.inconclusive_said_above = true;
+        let empty = r.render();
+        assert!(empty.contains(INCONCLUSIVE_SEE_TOP), "{empty}");
+        r.push(PlainLevel::Warning, "w".into(), "why".into(), "fix".into());
+        let listed = r.render();
+        assert!(listed.contains("1 issue found"), "{listed}");
+        assert!(!listed.contains(INCONCLUSIVE_SEE_TOP), "{listed}");
+        // Said nowhere above: the section keeps the full sentence beside its findings.
+        r.inconclusive_said_above = false;
+        assert!(r.render().contains("INCONCLUSIVE"), "{}", r.render());
+    }
+
+    /// A failing run lists its failures, then names what it did not judge on
+    /// one line of its own; the failure sentence does not carry it too. A
+    /// passing or merely inconclusive run has no such line.
+    #[test]
+    fn a_failing_triage_names_what_was_not_judged_once_after_its_failures() {
+        let triage = OrderTriage {
+            do_not_order: vec![TriageEntry::new(
+                "lint",
+                "rail_conflict",
+                "two drivers",
+                None,
+            )],
+            ..OrderTriage::default()
+        };
+        let said =
+            "1 key part has no usable model (Q1), so the rest of the board is not vouched for.";
+        let failing = crate::result::RunVerdict {
+            verdict: "fail",
+            reason: Some(format!(
+                "1 blocking problem(s), first: two drivers; next: remove one.{} {said}",
+                hauksbee_ir::vocabulary::NOT_JUDGED_JOINER.trim_end()
+            )),
+            conditions: Vec::new(),
+            partial: false,
+            not_judged: Some(said.to_string()),
+        };
+        let out = triage.render(&failing);
+        assert_eq!(out.matches(said).count(), 1, "{out}");
+        assert!(
+            out.contains(&format!("NOT JUDGED: {said}")),
+            "the line is labelled: {out}"
+        );
+        assert!(
+            out.find("DO NOT ORDER:") < out.find("NOT JUDGED:"),
+            "failures first, then what was not judged: {out}"
+        );
+        // With nothing listed, the headline carries the failure and not the
+        // not-judged sentence, which keeps its own line.
+        let headline = OrderTriage::default().render(&failing);
+        assert!(
+            headline.contains("NOT OK TO ORDER: this run failed. 1 blocking problem(s)"),
+            "{headline}"
+        );
+        assert_eq!(headline.matches(said).count(), 1, "{headline}");
+        assert!(!headline.contains("Also:"), "{headline}");
+        // Controls: a run that is not failing, or fails with every part modelled.
+        let modelled = crate::result::RunVerdict {
+            reason: Some("1 blocking problem(s), first: two drivers; next: remove one.".into()),
+            not_judged: None,
+            ..failing.clone()
+        };
+        assert!(!triage.render(&modelled).contains("NOT JUDGED"));
+        assert!(!triage
+            .render(&crate::result::RunVerdict::default())
+            .contains("NOT JUDGED"));
     }
 
     #[test]

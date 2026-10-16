@@ -68,6 +68,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use hauksbee_extract::{DrcReport, ViolationKind};
+use hauksbee_ir::vocabulary::NOT_JUDGED_JOINER;
 
 // The role-aware bind summary lives with the bind report in hauksbee-bind;
 // it stays reachable here so `hauksbee_engine::result::BindSummary` and the
@@ -223,16 +224,7 @@ impl<'a> VerdictCause<'a> {
     /// unmodelled cause already says this on its own, so it is left unchanged.
     #[must_use]
     pub fn reason_alongside(self, unmodelled: &[String]) -> String {
-        let reason = self.reason();
-        if unmodelled.is_empty() || matches!(self, Self::Unmodelled(_)) {
-            return reason;
-        }
-        format!(
-            "{reason} Also: {} key {} no usable model ({}), so the rest of the board is not vouched for.",
-            unmodelled.len(),
-            if unmodelled.len() == 1 { "part has" } else { "parts have" },
-            refs_summary(unmodelled)
-        )
+        self.reason_scoped(unmodelled, None)
     }
 
     /// [`Self::reason_alongside`], with the judgement scope's sentence in
@@ -243,10 +235,39 @@ impl<'a> VerdictCause<'a> {
         unmodelled: &[String],
         scope: Option<&crate::scope::JudgementScope>,
     ) -> String {
-        scope.map_or_else(
-            || self.reason_alongside(unmodelled),
-            |s| format!("{} Also: {}", self.reason(), s.condition()),
-        )
+        match self.not_judged(unmodelled, scope) {
+            Some(clause) => format!("{}{NOT_JUDGED_JOINER}{clause}", self.reason()),
+            None => self.reason(),
+        }
+    }
+
+    /// The one sentence naming what a failing or refused run did not judge,
+    /// which [`Self::reason_scoped`] appends after the joiner: the scope's
+    /// sentence when the verdict was scoped around the open parts, else the
+    /// blanket caveat. `None` when every key part has a model, and for the
+    /// unmodelled cause, which already says it.
+    #[must_use]
+    pub fn not_judged(
+        self,
+        unmodelled: &[String],
+        scope: Option<&crate::scope::JudgementScope>,
+    ) -> Option<String> {
+        if let Some(scope) = scope {
+            return Some(scope.condition());
+        }
+        if unmodelled.is_empty() || matches!(self, Self::Unmodelled(_)) {
+            return None;
+        }
+        Some(format!(
+            "{} key {} no usable model ({}), so the rest of the board is not vouched for.",
+            unmodelled.len(),
+            if unmodelled.len() == 1 {
+                "part has"
+            } else {
+                "parts have"
+            },
+            refs_summary(unmodelled)
+        ))
     }
 }
 
@@ -269,6 +290,11 @@ pub struct RunVerdict {
     /// cannot change ([`crate::scope::JudgementScope`]). Never a pass: the
     /// verdict is `invalid` and the reason starts `PARTLY JUDGED`.
     pub partial: bool,
+    /// What a failing (or refused) run did not judge, when key parts have no
+    /// usable model: the sentence `reason` ends with, after its own. A surface
+    /// that lists the failures itself states this once, on its own line,
+    /// beside them.
+    pub not_judged: Option<String>,
 }
 
 impl Default for RunVerdict {
@@ -278,6 +304,7 @@ impl Default for RunVerdict {
             reason: None,
             conditions: Vec::new(),
             partial: false,
+            not_judged: None,
         }
     }
 }
@@ -287,6 +314,18 @@ impl RunVerdict {
     #[must_use]
     pub fn is_pass(&self) -> bool {
         self.verdict == "pass"
+    }
+
+    /// [`Self::reason`] without the sentence naming what was not judged, for a
+    /// surface that states that sentence on its own line ([`Self::not_judged`]).
+    #[must_use]
+    pub fn reason_without_not_judged(&self) -> Option<&str> {
+        let reason = self.reason.as_deref()?;
+        let Some(said) = self.not_judged.as_deref() else {
+            return Some(reason);
+        };
+        let tail = format!("{NOT_JUDGED_JOINER}{said}");
+        Some(reason.strip_suffix(tail.as_str()).unwrap_or(reason))
     }
 }
 
@@ -301,13 +340,16 @@ impl<'a> From<&'a Refusal> for VerdictCause<'a> {
 }
 
 /// [`JsonReport::verdict_with_waivers`]: `(ok, verdict, serious, actionable)`,
-/// the findings a waiver covered, the reason sentence when not a pass, and
-/// whether the run is PARTLY JUDGED ([`RunVerdict::partial`]).
+/// the findings a waiver covered, the reason sentence when not a pass,
+/// whether the run is PARTLY JUDGED ([`RunVerdict::partial`]) and, for a
+/// failing run, the sentence naming what it did not judge
+/// ([`RunVerdict::not_judged`]).
 type VerdictParts = (
     (bool, &'static str, usize, usize),
     Vec<crate::waiver::WaivedFinding>,
     Option<String>,
     bool,
+    Option<String>,
 );
 
 /// The first few references, then a count of the rest.
@@ -2990,6 +3032,7 @@ impl JsonReport {
             Some(c) if c.is_invalid() => "invalid",
             Some(_) => "fail",
         };
+        let not_judged = cause.and_then(|c| c.not_judged(&blockers, scope));
         let reason = match (cause, scope) {
             (Some(c @ VerdictCause::Unmodelled(_)), None) => {
                 // Too narrow a scope to judge an electrical check: the refusal
@@ -3007,6 +3050,7 @@ impl JsonReport {
             waived,
             reason,
             partial,
+            not_judged,
         )
     }
 
@@ -3015,7 +3059,7 @@ impl JsonReport {
     /// line built from this can never disagree with the `verdict` field.
     #[must_use]
     pub fn run_verdict(&self) -> RunVerdict {
-        let ((_, verdict, _, _), _, reason, partial) =
+        let ((_, verdict, _, _), _, reason, partial, not_judged) =
             self.verdict_with_waivers(&mut crate::waiver::WaiverSet::default());
         RunVerdict {
             verdict,
@@ -3027,6 +3071,7 @@ impl JsonReport {
                 Vec::new()
             },
             partial,
+            not_judged,
         }
     }
 
@@ -3037,7 +3082,7 @@ impl JsonReport {
     /// envelope and a CI consumer never has to re-derive pass/fail.
     #[must_use]
     pub fn to_json(&self) -> String {
-        let ((ok, verdict, serious, actionable), _, reason, partial) =
+        let ((ok, verdict, serious, actionable), _, reason, partial, _) =
             self.verdict_with_waivers(&mut crate::waiver::WaiverSet::default());
         let Ok(serde_json::Value::Object(mut value)) = serde_json::to_value(self) else {
             return serde_json::to_string_pretty(self)
