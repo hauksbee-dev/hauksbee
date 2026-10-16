@@ -3247,6 +3247,9 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::GateUnderdrive => {
             "Put the transistor's part number on it so its real threshold is checked, or drive the gate past the class's maximum threshold (a level shifter or a logic-level part)."
         }
+        LintCheck::RegulatorHeldOff => {
+            "Pull the regulator's enable pin to its input through 10k-100k, or tie it to the input; keep that pull even when a GPIO switches the rail."
+        }
         LintCheck::I2cBusLoading => {
             "Re-pick the pull-ups so the sink current stays under 3 mA (R > (Vrail - 0.4 V) / 3 mA) and the rise time fits the bus speed; 2.2k-4.7k suits most 3.3 V buses."
         }

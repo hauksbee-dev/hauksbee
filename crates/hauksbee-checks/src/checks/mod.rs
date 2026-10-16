@@ -42,6 +42,9 @@
 //!   the estimated bus capacitance to meet the rise-time budget.
 //! - [`regulator_cout`]: a linear regulator whose output carries less
 //!   capacitance than its card's stability minimum (`cout_min_f`).
+//! - [`regulator_enable`]: a linear regulator whose card says an open enable
+//!   pin is off (`en_open = "off"`, or an internal pull toward off) with that
+//!   pin left with nothing that can raise it: its rail never comes on.
 //! - [`crystal_caps`]: crystal load capacitors far outside the C1/C2 range the
 //!   driving IC's card states (`xtal_cap_min_f`/`xtal_cap_max_f`), for a
 //!   crystal whose value states no CL.
@@ -100,6 +103,7 @@ pub mod open_paths;
 pub mod rail_conflicts;
 pub mod rail_decoupling;
 pub mod regulator_cout;
+pub mod regulator_enable;
 pub mod rest_supply;
 pub mod ripple;
 pub mod siblings;
@@ -368,6 +372,17 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     report
         .findings
         .extend(regulator_cout::regulator_cout_lint(board, lib).findings);
+    // A regulator held off by its open enable pin is one finding: the
+    // extract layer's generic floating-control note on the same pin and net
+    // says less (no rail, no datasheet state) and gives way to it.
+    let held_off = regulator_enable::regulator_enable_lint(board, lib).findings;
+    report.findings.retain(|f| {
+        f.check != LintCheck::FloatingControlPin
+            || !held_off
+                .iter()
+                .any(|h| h.refs == f.refs && f.nets.iter().all(|n| h.nets.contains(n)))
+    });
+    report.findings.extend(held_off);
     // One binding serves both checks that need the bound board: the rail
     // conflicts read its report, the DC stress pass then consumes it. Binding
     // a large board is not cheap, so it is done once here, not once per check.

@@ -206,7 +206,10 @@ fn validate_vreg_enable_params(entry: &ModelEntry, p: &mut Problems) {
     let params = &entry.params;
     // Named in the errors: a fixer told only "en_*" searched for that prefix,
     // missed `i_shdn_a`, and re-ran the checker three times.
-    let stated = stated_params(entry, KEYS.iter().chain(&["i_shdn_a", "en_open"]));
+    let stated = stated_params(
+        entry,
+        KEYS.iter().chain(&["i_shdn_a", "en_open", "en_open_basis"]),
+    );
     if entry.kind != ComponentKind::Vreg || stated.is_empty() {
         return;
     }
@@ -289,6 +292,21 @@ fn validate_vreg_enable_params(entry: &ModelEntry, p: &mut Problems) {
                 )
             });
         }
+    }
+    // The quote of the open-pin state backs a stated state: `en_open` or an
+    // internal pull, never nothing.
+    if params.0.contains_key("en_open_basis") {
+        p.require(
+            params
+                .get_str("en_open_basis")
+                .is_some_and(|q| !q.trim().is_empty()),
+            || "param 'en_open_basis' must be the datasheet's words, a non-empty string".into(),
+        );
+        p.require(params.0.contains_key("en_open") || pulls == 1, || {
+            "param 'en_open_basis' quotes the open-pin state, so the card needs 'en_open' \
+                 or an internal pull ('en_pull_*') for it to back"
+                .into()
+        });
     }
     for key in &KEYS[3..] {
         if params.0.contains_key(*key) {
@@ -2465,6 +2483,31 @@ mod tests {
         rejects(
             &open("shdn", &[("en_pull_down_a", 1e-6)], Some("low"), "off"),
             "contradicts the card's internal pull-down",
+        );
+        // The datasheet's words for the open state back a stated state.
+        let quoted = |mut e: ModelEntry, quote: &str| {
+            e.params.set_str("en_open_basis", quote);
+            e
+        };
+        accepts(&quoted(
+            open("en", &[], None, "off"),
+            "p.3: logic low or open = shutdown",
+        ));
+        accepts(&quoted(
+            en("en", &[("en_pull_down_ohms", 3e6)], None),
+            "p.4: RPD 3 MOhm",
+        ));
+        rejects(
+            &quoted(en("en", &[], None), "p.3: open = off"),
+            "needs 'en_open'",
+        );
+        rejects(
+            &quoted(open("en", &[], None, "off"), "  "),
+            "non-empty string",
+        );
+        rejects(
+            &quoted(open("nc", &[], None, "off"), "p.3"),
+            "'en' or 'shdn' role",
         );
     }
 

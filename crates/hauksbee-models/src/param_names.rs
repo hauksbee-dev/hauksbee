@@ -221,6 +221,9 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             // The state the datasheet states for an open pin when it prints no
             // pull value (`"off"` or `"on"`).
             "en_open",
+            // The datasheet's own words (with page) for that open-pin state,
+            // quoted by the board check that finds the pin left open.
+            "en_open_basis",
             // The supply current from IN while the enable holds the part off
             // (the datasheet's I_SHDN); the card's `iq_a` is the on-state figure.
             "i_shdn_a",
@@ -314,6 +317,7 @@ const GLOSSARY: &str = "is A saturation current (a fitted law constant, not a le
     vol V output low level; ro ohm output resistance; \
     en_on_level - the enable-pin level (high or low) that turns a regulator on; \
     en_open - the state (off or on) the datasheet states for an open enable pin; \
+    en_open_basis - the datasheet's words and page for the open enable pin's state; \
     cout_recommended_type - the output-capacitor type a recommended value names (\"solid tantalum\")";
 
 fn glossary() -> impl Iterator<Item = [&'static str; 3]> {
