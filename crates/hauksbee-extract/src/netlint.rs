@@ -189,8 +189,9 @@ pub enum LintCheck {
     I2cBusLoading,
     /// A schematic-ERC fault read from pin names and pin electrical types where
     /// both are specific: two UART transmit pins driving one net (TX wired to
-    /// TX), a `power_in` pin left unconnected, or an LED hung from an
-    /// open-drain status output to ground (it lights when the flag is idle).
+    /// TX), a `power_in` pin left unconnected, or (a non-gating note) an LED
+    /// hung from an open-drain fault flag to ground (it lights when the flag is
+    /// idle).
     /// Pins whose role is unknown (passive, generic GPIO) never fire. The
     /// message names the pins, why it matters, and the likely fix.
     PinFunction,
@@ -2251,8 +2252,9 @@ fn is_bus_transceiver(c: &Component) -> bool {
 
 /// An active-low fault flag (`FLT`, `~{FAULT}`, `nFLT`) that is not typed as
 /// a push-pull output. Such a pin only sinks, and it sinks on the fault, so an
-/// LED from it to ground is dark on the fault. A power-good flag is excluded:
-/// an LED fed by its pull-up lights on "good", which is the intended reading.
+/// LED from it to ground is dark on the fault (a note: a design choice, see
+/// [`check_pin_functions`]). A power-good flag is excluded: an LED fed by its
+/// pull-up lights on "good", which is the intended reading.
 fn is_fault_flag(p: &Pin) -> bool {
     !matches!(
         p.kind.to_ascii_lowercase().as_str(),
@@ -2318,10 +2320,16 @@ fn check_pin_functions(board: &ExtractedBoard, report: &mut NetLintReport) {
         let flag = members(board, anode)
             .into_iter()
             .find(|(c, p)| c.reference != led.reference && fitted(c) && is_fault_flag(p));
+        // A note, never a gate: the LED runs on the flag's pull-up current and
+        // is off whenever the pin sinks, so nothing is overstressed, and "lit
+        // while all is well" is the same reading a power-good lamp gives on
+        // purpose. What it can harm is the idle level a logic input on the
+        // line sees, which depends on the pull-up and the reader's threshold:
+        // the level checks judge that where the parts are modelled.
         if let (true, Some((c, p))) = (returns, flag) {
             let net = board.net(anode).map(|n| n.name.clone()).unwrap_or_default();
-            push(Severity::Medium, format!(
-                "{} has its anode on {}.{} ({}), an active-low open-drain fault output, and its cathode returns to ground: the pin sinks on a fault, so the LED is lit while all is well and goes dark on the fault, and it clamps the line seen by anything else on '{net}'; move the LED between a supply rail and the pin (cathode to the pin)",
+            push(Severity::Low, format!(
+                "{} has its anode on {}.{} ({}), an active-low open-drain fault flag, and its cathode returns to ground: it runs on the flag's pull-up current, so it is lit while there is no fault and dark on a fault, and nothing is overstressed. If it is meant to show the fault, move it between a supply rail and the pin (cathode to the pin). As wired it also holds the idle level of '{net}' near its forward voltage plus its resistor's drop, below the pull-up rail: check that any logic input reading this line still sees a valid high",
                 led.reference, c.reference, p.number, p.function), vec![led.reference.clone(), c.reference.clone()], vec![net]);
         }
     }

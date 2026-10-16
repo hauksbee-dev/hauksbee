@@ -656,3 +656,81 @@ fn pin_function_rules_fire_on_faults_and_stay_silent_on_legal_twins() {
         assert_eq!(count(&lint(comps, &nets), check), want, "{name}");
     }
 }
+
+/// An LED from an open-drain fault flag to ground is a design choice, not a
+/// fault: it runs on the pull-up's current (the flag only ever sinks that, so
+/// nothing is overstressed) and reads "lit = no fault", as a power-good lamp
+/// does on purpose. It stays a note that names the line's idle level as the
+/// thing to check, and never gates; the legal twin (cathode on the flag, anode
+/// fed from a rail) says nothing.
+#[test]
+fn an_led_from_a_fault_flag_to_ground_is_a_note_not_a_gate() {
+    let comps = "(comp (ref U1) (value A) (footprint P:QFN)) (comp (ref U2) (value MCU) (footprint P:QFN)) \
+                 (comp (ref D1) (value LED) (footprint LED_SMD:LED_0603)) (comp (ref R1) (value 1k5) (footprint R_SMD:R_0603)) \
+                 (comp (ref R2) (value 10k) (footprint R_SMD:R_0603))";
+    let node = |r: &str, p: &str, f: &str, t: &str| {
+        format!(r#"(node (ref {r}) (pin {p}) (pinfunction "{f}") (pintype "{t}"))"#)
+    };
+    // The flag also reaches an MCU input through a series resistor, as a
+    // fault line read by firmware often does.
+    let nets = |flag_side: &str, other_side: &str, other_net: &str| {
+        format!(
+            "(net (code 1) (name \"FLT\") {} {flag_side} {})\n(net (code 2) (name \"MID\") {other_side} {})\n(net (code 3) (name \"{other_net}\") {})\n(net (code 4) (name \"SIG\") {} {})\n",
+            node("U1", "2", "FLT", "open_collector"),
+            node("R2", "2", "~", "passive"),
+            node("R1", "2", "~", "passive"),
+            node("R1", "1", "~", "passive"),
+            node("R2", "1", "~", "passive"),
+            node("U2", "65", "PC8", "bidirectional"),
+        )
+    };
+    let anode_on_flag = nets(
+        &node("D1", "2", "A", "passive"),
+        &node("D1", "1", "K", "passive"),
+        "GND",
+    );
+    let r = lint(comps, &anode_on_flag);
+    let found: Vec<_> = r
+        .findings
+        .iter()
+        .filter(|f| f.check == LintCheck::PinFunction)
+        .collect();
+    assert_eq!(found.len(), 1, "the LED on the flag is still named: {r:?}");
+    let f = found[0];
+    assert_eq!(
+        f.severity,
+        Severity::Low,
+        "a design choice must not gate: {}",
+        f.message
+    );
+    for want in [
+        "D1",
+        "U1.2",
+        "lit while there is no fault",
+        "nothing is overstressed",
+        "valid high",
+    ] {
+        assert!(
+            f.message.contains(want),
+            "message names '{want}': {}",
+            f.message
+        );
+    }
+    assert!(
+        !f.message.contains("clamps"),
+        "no unquantified claim that the line is clamped: {}",
+        f.message
+    );
+    assert!(f.is_actionable() && !f.is_abstention());
+
+    // Legal twin: anode from the rail, cathode on the flag (lights on the fault).
+    let cathode_on_flag = nets(
+        &node("D1", "1", "K", "passive"),
+        &node("D1", "2", "A", "passive"),
+        "+3V3",
+    );
+    assert_eq!(
+        count(&lint(comps, &cathode_on_flag), LintCheck::PinFunction),
+        0
+    );
+}
