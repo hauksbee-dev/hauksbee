@@ -108,7 +108,7 @@ mod tests {
     use super::super::test_support::{board, part};
     use super::*;
 
-    /// An ATmega328P (DIP-28: XTAL1 pad 9, XTAL2 pad 10) on a 16 MHz crystal
+    /// An `ATmega328P` (DIP-28: XTAL1 pad 9, XTAL2 pad 10) on a 16 MHz crystal
     /// with `cap` on each terminal to ground.
     fn avr_xtal(crystal: &str, cap: &str) -> ExtractedBoard {
         let mut y1 = part("Y1", crystal, &[("1", 1), ("2", 2)]);
@@ -130,7 +130,7 @@ mod tests {
         r.findings
     }
 
-    /// Four times the Uno's 22 pF (88 pF each) is four times the ATmega328P
+    /// Four times the Uno's 22 pF (88 pF each) is four times the `ATmega328P`
     /// datasheet's 22 pF maximum: one Medium finding naming the caps, the range,
     /// the card, the MCU and the board's CL.
     #[test]

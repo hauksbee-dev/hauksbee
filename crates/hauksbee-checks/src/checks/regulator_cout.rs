@@ -38,6 +38,63 @@ fn farads(f: f64) -> String {
     }
 }
 
+/// The fitted capacitors from the regulator output `out` to its return (its
+/// ground pin's net, or any ground-named net when it has none), each once.
+fn caps_across_output(board: &ExtractedBoard, out: i64, gnd: Option<i64>) -> Vec<&Component> {
+    let is_return = |id: i64| {
+        gnd.map_or_else(
+            || board.net(id).is_some_and(|n| is_ground(&n.name)),
+            |g| g == id,
+        )
+    };
+    let mut across: Vec<&Component> = Vec::new();
+    for (c, _) in board.net_members(out) {
+        let nets: Vec<i64> = c.pins.iter().filter_map(|p| p.net).collect();
+        let spans = nets.len() == 2
+            && nets.contains(&out)
+            && nets.iter().any(|n| *n != out && is_return(*n));
+        if spans
+            && AssemblyState::of(c).is_present()
+            && is_capacitor(c)
+            && !across.iter().any(|seen| seen.reference == c.reference)
+        {
+            across.push(c);
+        }
+    }
+    across
+}
+
+/// The note for capacitors that are across the output but have no readable
+/// value, so the card's minimum cannot be judged.
+fn unvalued_note(
+    comp: &Component,
+    (model_id, need): (&str, f64),
+    (out_name, unvalued): (&str, &[&str]),
+) -> LintFinding {
+    LintFinding {
+        check: LintCheck::OperatingEnvelope,
+        severity: Severity::Low,
+        message: format!(
+            "{} ({}) output '{}': the {} minimum output capacitance card '{}' states \
+             for loop stability is not judged, because {} across the output {} no \
+             readable value. Give {} a capacitance value so the requirement can be \
+             checked.",
+            comp.reference,
+            comp.value.trim(),
+            out_name,
+            farads(need),
+            model_id,
+            unvalued.join(", "),
+            if unvalued.len() == 1 { "has" } else { "have" },
+            if unvalued.len() == 1 { "it" } else { "them" },
+        ),
+        refs: std::iter::once(comp.reference.clone())
+            .chain(unvalued.iter().map(|r| (*r).to_string()))
+            .collect(),
+        nets: vec![out_name.to_string()],
+    }
+}
+
 /// One finding per fitted regulator whose card states `cout_min_f` and whose
 /// output carries less than that from output to ground.
 #[must_use]
@@ -68,26 +125,7 @@ pub fn regulator_cout_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLin
             continue;
         }
         let gnd = role_net_id(comp, &model, "gnd");
-        let is_return = |id: i64| {
-            gnd.map_or_else(
-                || board.net(id).is_some_and(|n| is_ground(&n.name)),
-                |g| g == id,
-            )
-        };
-        let mut across: Vec<&Component> = Vec::new();
-        for (c, _) in board.net_members(out) {
-            let nets: Vec<i64> = c.pins.iter().filter_map(|p| p.net).collect();
-            let spans = nets.len() == 2
-                && nets.contains(&out)
-                && nets.iter().any(|n| *n != out && is_return(*n));
-            if spans
-                && AssemblyState::of(c).is_present()
-                && is_capacitor(c)
-                && !across.iter().any(|seen| seen.reference == c.reference)
-            {
-                across.push(c);
-            }
-        }
+        let across = caps_across_output(board, out, gnd);
         let value = |c: &Component| {
             parse_value(c.value.trim())
                 .map(|v| v.si)
@@ -116,28 +154,11 @@ pub fn regulator_cout_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLin
         if !unvalued.is_empty() {
             // Capacitors are there but their size is not: the minimum cannot be
             // judged, so it is a note naming them, never a missing-capacitor fail.
-            report.findings.push(LintFinding {
-                check: LintCheck::OperatingEnvelope,
-                severity: Severity::Low,
-                message: format!(
-                    "{} ({}) output '{}': the {} minimum output capacitance card '{}' states \
-                     for loop stability is not judged, because {} across the output {} no \
-                     readable value. Give {} a capacitance value so the requirement can be \
-                     checked.",
-                    comp.reference,
-                    comp.value.trim(),
-                    out_net.name,
-                    farads(need),
-                    model.id,
-                    unvalued.join(", "),
-                    if unvalued.len() == 1 { "has" } else { "have" },
-                    if unvalued.len() == 1 { "it" } else { "them" },
-                ),
-                refs: std::iter::once(comp.reference.clone())
-                    .chain(unvalued.iter().map(|r| (*r).to_string()))
-                    .collect(),
-                nets: vec![out_net.name.clone()],
-            });
+            report.findings.push(unvalued_note(
+                comp,
+                (&model.id, need),
+                (&out_net.name, &unvalued),
+            ));
             continue;
         }
         let (severity, what) = if caps.is_empty() {
@@ -182,7 +203,7 @@ mod tests {
     use super::super::test_support::{board, part};
     use super::*;
 
-    /// An AMS1117-3.3 (SOT-223: 1 GND, 2 OUT, 3 IN; card cout_min_f 22 uF,
+    /// An AMS1117-3.3 (SOT-223: 1 GND, 2 OUT, 3 IN; card `cout_min_f` 22 uF,
     /// datasheet Applications Hints) from +5V to +3V3 with `caps` across its
     /// output.
     fn ldo(caps: &[&str]) -> ExtractedBoard {

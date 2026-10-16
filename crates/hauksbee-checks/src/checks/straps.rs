@@ -42,6 +42,7 @@ use hauksbee_extract::{
 };
 use std::collections::BTreeMap;
 
+use hauksbee_models::refdes::{designator, RefClass};
 use hauksbee_models::value::parse_value;
 use hauksbee_models::{ModelEntry, ModelLibrary, StrapInternalPull, StrapLevel, StrapPin};
 
@@ -269,6 +270,14 @@ fn examine_strap(
     // resistor, of any or unreadable value, alone sets the boot level.
     let no_internal = strap.internal_pull == StrapInternalPull::None;
     let strong = |p: &Pull| no_internal || p.ohms.is_some_and(|r| r <= 20_000.0);
+    // A fitted switch, transistor or IC on the net (directly or behind one series
+    // resistor) can pull the strap to the other level on the board itself: the
+    // wrong-way resistor is then the idle bias of a designed boot circuit (a
+    // bootloader button or a gated pull-down), not the only thing setting the
+    // level. Which level wins at reset is dynamic, so the static lint abstains.
+    if level_switched_on_board(board, net_id, mcu) {
+        return;
+    }
     if let Some(p) = pulls.iter().find(|p| p.up != want_high && strong(p)) {
         let dir = if p.up {
             "pull-up to a rail"
@@ -294,6 +303,38 @@ fn examine_strap(
         );
         push(Severity::Medium, what, vec![p.reference.clone()]);
     }
+}
+
+/// Is a fitted part that can switch the strap net's level on the board itself
+/// (a transistor, a push-button or switch, or another IC, never the strap's own
+/// MCU) on the net directly or behind one series resistor? A pull resistor to a
+/// rail or ground is a bias, not a hop. A header or test point does not count:
+/// what an off-board plug drives is not a design on this board.
+fn level_switched_on_board(board: &ExtractedBoard, net_id: i64, mcu: &Component) -> bool {
+    let switches = |c: &Component| {
+        c.reference != mcu.reference
+            && AssemblyState::of(c).is_present()
+            && (matches!(
+                RefClass::of(&c.reference),
+                RefClass::Transistor | RefClass::ActiveIc
+            ) || designator(&c.reference).starts_with("SW"))
+    };
+    let on_net = |id: i64| board.net_members(id).into_iter().any(|(c, _)| switches(c));
+    if on_net(net_id) {
+        return true;
+    }
+    board
+        .net_members(net_id)
+        .into_iter()
+        .filter(|(c, _)| is_assembled_resistor(c))
+        .flat_map(|(c, _)| c.pins.iter().filter_map(|p| p.net))
+        .filter(|id| *id != net_id)
+        .filter(|id| {
+            board
+                .net(*id)
+                .is_some_and(|n| !is_ground_name(&n.name) && !is_rail_name(&n.name))
+        })
+        .any(on_net)
 }
 
 /// A plain two-terminal resistor on the shared part-class ladder
@@ -754,6 +795,39 @@ vih = [0.0, 2.0]
                         "Move R1 to ground",
                     ],
                 )],
+            ),
+            // A bootloader-button circuit: the 1M pull-up is the idle bias and a
+            // transistor behind a series resistor pulls BOOT0 low for normal boot.
+            (
+                "BOOT0 pull-up with an on-board pull-down switch",
+                strap_board(
+                    "+3V3",
+                    "/BOOT0",
+                    vec![
+                        stm32(),
+                        pull("R35", "1M", 2),
+                        part("R38", "2.2k", &[("1", 3), ("2", 4)]),
+                        part("Q8", "BSS138", &[("1", 6), ("2", 4), ("3", 1)]),
+                    ],
+                ),
+                &[],
+            ),
+            (
+                "BOOT0 pull-up with the switch not fitted",
+                strap_board(
+                    "+3V3",
+                    "/BOOT0",
+                    vec![
+                        stm32(),
+                        pull("R35", "1M", 2),
+                        part("R38", "2.2k", &[("1", 3), ("2", 4)]),
+                        Component {
+                            dnp: true,
+                            ..part("Q8", "BSS138", &[("1", 6), ("2", 4), ("3", 1)])
+                        },
+                    ],
+                ),
+                &[(Medium, &["boot0", "wrong level", "R35"])],
             ),
             (
                 "BOOT0 weakly pulled down",
