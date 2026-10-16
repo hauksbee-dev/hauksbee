@@ -1343,7 +1343,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             Path("README.md"),
             Path("docs/START_HERE.md"),
             Path("crates/hauksbee-mcp/README.md"),
-            Path("frontend/src/demo/DemoApp.tsx"),
+            Path("frontend/vite.config.ts"),
         ):
             text = (ROOT / relative).read_text()
             with self.subTest(path=relative):

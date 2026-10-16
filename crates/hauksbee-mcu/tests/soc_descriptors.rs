@@ -564,8 +564,7 @@ fn resolve_validates_the_spec_backend_token() {
     ));
 }
 
-/// The fail-loud contract on the override dirs (the fresh-context critic's
-/// decisive probe): an INVALID override descriptor for a part about to be
+/// The fail-loud contract on the override dirs: an INVALID override descriptor for a part about to be
 /// used, including a BUILTIN part name, fails the resolution with the file
 /// path and the named inner error. It is never silently skipped in favour of
 /// the embedded builtin. And a VALID override for a builtin name WINS over

@@ -10327,8 +10327,8 @@ implements = ["pin_roles", "supply_ranges", "io_logic_levels", "absolute_ratings
 missing = ["mcu_core", "firmware", "usb_engine", "gpif_fifos", "i2c_boot", "crystal_oscillator", "port_drive"]
 
 # ══ Olimex ESP32-EVB REV-L peripherals ════════════════════════════════════════
-# Datasheets were fetched into target/launch/olimex-datasheets/ (sha256 recorded
-# in each card). Each card models only what the datasheet states as a number: the
+# Each card cites its datasheet by title, URL and sha256 in its source record.
+# Each card models only what the datasheet states as a number: the
 # supply draw, the supply-limit envelope, and, where the part is a switch or a
 # threshold device, that behaviour. Everything else is listed under `missing`.
 #
