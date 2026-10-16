@@ -284,6 +284,10 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             // capacitor (C1, C2), read by the crystal load-cap check.
             "xtal_cap_min_f",
             "xtal_cap_max_f",
+            // The datasheet's minimum resistance of the reset input's
+            // permanent internal pull-up, read by the held-off check to
+            // judge an external pull-down against it.
+            "reset_pull_up_ohms",
         ],
         ComponentKind::Connector | ComponentKind::Ignore => &[],
     }

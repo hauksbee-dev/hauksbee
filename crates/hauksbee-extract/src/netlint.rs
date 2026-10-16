@@ -269,6 +269,11 @@ pub enum LintCheck {
     /// the rail never comes on. Produced by the engine-layer
     /// `regulator_enable` check.
     RegulatorHeldOff,
+    /// An active-high enable or active-low reset input of any other part
+    /// that the board pulls to its off level with nothing on the net able to
+    /// release it: the part is never enabled, or is held in reset for good.
+    /// Produced by the engine-layer `control_held_off` check.
+    ControlHeldOff,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -293,7 +298,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 32] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -325,6 +330,7 @@ impl LintCheck {
         Self::FloatingGate,
         Self::GateUnderdrive,
         Self::RegulatorHeldOff,
+        Self::ControlHeldOff,
     ];
 
     #[must_use]
@@ -361,6 +367,7 @@ impl LintCheck {
             Self::FloatingGate => "floating_gate",
             Self::GateUnderdrive => "gate_underdrive",
             Self::RegulatorHeldOff => "regulator_held_off",
+            Self::ControlHeldOff => "control_held_off",
         }
     }
 }
