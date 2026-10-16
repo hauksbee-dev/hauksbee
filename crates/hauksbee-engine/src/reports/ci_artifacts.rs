@@ -487,8 +487,9 @@ fn announce_verdict_once(title: &str, text: &str) {
     );
 }
 
-/// GitHub error annotation for unbound verdict-critical parts, so the
-/// annotation surface agrees with the gate-grade JUnit/SARIF entry the same
+/// GitHub error annotation for unbound verdict-critical parts.
+///
+/// The annotation surface agrees with the gate-grade JUnit/SARIF entry the same
 /// blockers produce. No-op outside GitHub Actions, and for no blockers (see
 /// [`github_verdict_annotation`] for a verdict that has none to name).
 ///
@@ -503,9 +504,10 @@ pub fn github_blocker_annotation(blockers: &[String]) {
     );
 }
 
-/// GitHub error annotation for a strict run whose verdict is not a pass and
-/// that no gate-grade finding explains: partly judged, or invalid with no
-/// blocker list (an undermined run-level evidence map). `reason` is the run
+/// GitHub error annotation for a strict run whose verdict is not a pass.
+///
+/// For a verdict no gate-grade finding explains: partly judged, or invalid with
+/// no blocker list (an undermined run-level evidence map). `reason` is the run
 /// verdict's own sentence, the one `--json` carries as `verdict_reason`. No-op
 /// outside GitHub Actions; at most once per process.
 pub fn github_verdict_annotation(reason: &str) {
