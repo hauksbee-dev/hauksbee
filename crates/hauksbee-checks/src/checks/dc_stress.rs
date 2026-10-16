@@ -608,8 +608,16 @@ fn set_registers_high(bound: &mut BoundBoard) -> bool {
     any
 }
 
-/// Solve DC, let the logic parts react to it, and repeat until no driven
-/// output moves. Returns the solution vector of the last solve.
+/// An arming change below this (the converter's limit source, in its own
+/// units) counts as settled, as in the co-sim's own converter settle.
+const ARMING_SETTLED: f64 = 1e-6;
+
+/// Solve DC, let the logic parts and the behavioural converters react to it,
+/// and repeat until no driven output moves and no converter's arming does.
+/// A converter is stamped disarmed and only an update arms it (enable high,
+/// feedback sensed), so without this every rail a buck or boost makes stays
+/// at 0 V here and nothing it powers is judged. Returns the solution vector
+/// of the last solve.
 fn settle(bound: &mut BoundBoard) -> Option<(Workspace, Vec<f64>)> {
     let drive_state = |b: &BoundBoard| -> Vec<(bool, u64)> {
         (b.digital.iter())
@@ -639,12 +647,18 @@ fn settle(bound: &mut BoundBoard) -> Option<(Workspace, Vec<f64>)> {
                 .unwrap_or(0.0)
         };
         let BoundBoard {
-            circuit, digital, ..
+            circuit,
+            digital,
+            behavioral,
+            ..
         } = &mut *bound;
         for d in digital.iter_mut() {
             d.tick(circuit, &node_v);
         }
-        if drive_state(bound) == before {
+        let arming = (behavioral.iter_mut())
+            .map(|d| d.update_converter(circuit, &node_v))
+            .fold(0.0, f64::max);
+        if drive_state(bound) == before && arming < ARMING_SETTLED {
             return Some((ws, x));
         }
     }
@@ -1363,5 +1377,55 @@ mod tests {
             "{:#?}",
             live.findings
         );
+    }
+
+    /// An LM2596-5.0 buck (averaged converter card, ON/OFF grounded = on)
+    /// from +12V making '+5V' through its inductor, loaded by a 1N4148
+    /// (DO-35) through `ohms`.
+    fn buck_into_diode(ohms: &str) -> NetLintReport {
+        let nets = [
+            (1, "GND"),
+            (2, "+12V"),
+            (3, "/SW"),
+            (4, "+5V"),
+            (5, "/LOAD"),
+        ];
+        let parts = vec![
+            part(
+                "U1",
+                "LM2596S-5.0",
+                &[("1", 2), ("2", 3), ("3", 1), ("4", 4), ("5", 1)],
+            ),
+            part("L1", "33uH", &[("1", 3), ("2", 4)]),
+            part("C1", "220uF", &[("1", 4), ("2", 1)]),
+            part("R1", ohms, &[("1", 4), ("2", 5)]),
+            part("D1", "1N4148", &[("A", 5), ("K", 1)]),
+        ];
+        dc_stress_lint(&board(&nets, parts), &ModelLibrary::builtin())
+    }
+
+    /// A behavioural converter is stamped disarmed; the DC ratings solve must
+    /// arm it as the co-sim does, or every rail it makes sits at 0 V and
+    /// nothing behind it is judged. Faulty: about 180 mA through the DO-35
+    /// 1N4148 on the buck's '+5V' is over its rating and fires. Legal control:
+    /// about 100 mA is inside it and nothing is said. Neither leaves '+5V'
+    /// not judged.
+    #[test]
+    fn a_rail_a_buck_makes_is_judged_both_ways() {
+        use hauksbee_models::rating_basis::is_not_judged;
+        for (ohms, faults) in [("22R", 1), ("43R", 0)] {
+            let report = buck_into_diode(ohms);
+            assert!(
+                !report.findings.iter().any(|f| is_not_judged(&f.message)),
+                "{ohms}: {:#?}",
+                report.findings
+            );
+            assert_eq!(
+                findings_on(&report, "D1").len(),
+                faults,
+                "{ohms}: {:#?}",
+                report.findings
+            );
+        }
     }
 }
