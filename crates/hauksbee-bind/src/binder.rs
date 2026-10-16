@@ -4430,7 +4430,8 @@ fn logical_passive_pins(comp: &Component) -> Result<Vec<LogicalPassivePin>, Stri
     Ok(pins)
 }
 
-/// Resistance a literal 0 Ω resistor is bound at.
+/// Resistance a literal 0 Ω resistor is bound at, and the conditioning floor
+/// below which any resistor is raised to it (see `passive_device`).
 ///
 /// A `0` in a resistor's value field is a JUMPER: a zero-ohm link placed to
 /// route a trace, strap an option, or leave a cut point. It is not a
@@ -4473,25 +4474,57 @@ fn passive_device(
         (Device::capacitor(name, a, b, p.si), None)
     } else if letter == Some('L') || unit.eq_ignore_ascii_case("H") {
         (Device::inductor(name, a, b, rkm_henries(p)), None)
-    } else if p.si <= 0.0 {
-        // A literal 0 (or negative) resistance is a fitted jumper link, not a
+    } else if p.si <= 0.0 || p.si.is_nan() {
+        // A literal 0 resistance is a fitted jumper link, not a
         // mathematical short. Binding it at the raw 1e-6 floor leaves ten
         // near-short conductances that wreck the analog solve's conditioning
         // (anyshake/explorer). Bind it at the same milliohm the supply legs use
         // for "electrically negligible but solver-safe", and SAY SO: the value
         // on the board is then not the value in the matrix, and a silent
         // substitution is exactly the class of thing this project refuses.
+        // A negative (or unreadable) value is no resistance at all; it is bound
+        // the same way so the board still solves, but the note says the value is
+        // wrong rather than calling it a jumper.
+        let note = if p.si < 0.0 || p.si.is_nan() {
+            format!(
+                "{name}: value '{}' is not a resistance (negative or unreadable), bound as a {:.0} mohm link so the solve stays finite; correct the value",
+                comp.value,
+                ZERO_OHM_JUMPER_OHMS * 1e3,
+            )
+        } else {
+            format!(
+                "{name}: value '{}' is a 0 ohm jumper, bound as a {:.0} mohm link so the solve stays finite (an infinite conductance would poison the matrix)",
+                comp.value,
+                ZERO_OHM_JUMPER_OHMS * 1e3,
+            )
+        };
+        (
+            Device::resistor(name, a, b, ZERO_OHM_JUMPER_OHMS),
+            Some(note),
+        )
+    } else if p.si < ZERO_OHM_JUMPER_OHMS {
+        // A positive but sub-milliohm value (a 15 µΩ shunt, a 1e-9 typo) stamps
+        // 1e4..1e9 S into the matrix. Past ~1e4 S the elimination loses the
+        // gmin-sized pivots of the diode-off nodes around it (the cancellation
+        // error is eps times the largest conductance, so 2e4 S already costs
+        // 2e-12 S, more than gmin), the LU reports a singular pivot and the
+        // whole board's DC operating point fails to solve while a literal 0
+        // (bound at a milliohm above) solves. Bind it at the same milliohm
+        // and say so, as for the 0 ohm link: the drop across it is the current
+        // times a milliohm, far below the rails a board is judged against.
         let note = format!(
-            "{name}: value '{}' is a 0 ohm jumper, bound as a {:.0} mohm link so the solve stays finite (an infinite conductance would poison the matrix)",
+            "{name}: value '{}' ({}) is below the {} conditioning floor, bound as a {} link so the solve stays finite (a stiffer conductance would lose the matrix's small pivots)",
             comp.value,
-            ZERO_OHM_JUMPER_OHMS * 1e3,
+            fmt_eng(p.si, "ohm"),
+            fmt_eng(ZERO_OHM_JUMPER_OHMS, "ohm"),
+            fmt_eng(ZERO_OHM_JUMPER_OHMS, "ohm"),
         );
         (
             Device::resistor(name, a, b, ZERO_OHM_JUMPER_OHMS),
             Some(note),
         )
     } else {
-        (Device::resistor(name, a, b, p.si.max(1e-6)), None)
+        (Device::resistor(name, a, b, p.si), None)
     }
 }
 

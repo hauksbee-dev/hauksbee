@@ -456,10 +456,10 @@ impl LinearIsland {
                 // Same fused form as `stamp::resistor_value`, so both paths agree bit-for-bit.
                 let r = tc1.map_or(*ohms, |tc| *ohms * tc.mul_add(temp_c - 27.0, 1.0));
                 // Non-positive resistance = SHORT (matching the interpreted
-                // stamp): clamp to the shared 1e-6 Ω floor and stamp a stiff
-                // conductance rather than skipping, which would silently turn
-                // a 0-Ω jumper into an open on this fast path only.
-                let g = 1.0 / r.max(1e-6);
+                // stamp): clamp to the shared `MIN_RESISTANCE_OHMS` floor and
+                // stamp a stiff conductance rather than skipping, which would
+                // silently turn a 0-Ω jumper into an open on this fast path only.
+                let g = 1.0 / r.max(hauksbee_ir::MIN_RESISTANCE_OHMS);
                 match (slot(*a), slot(*b)) {
                     (Slot::Free(fa), Slot::Free(fb)) => {
                         m[mi(fa, fa)] += g;
