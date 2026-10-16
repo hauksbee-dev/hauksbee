@@ -1292,8 +1292,15 @@ pub enum OperatingEnvelope {
         abs_max_v: Option<f64>,
         #[serde(default)]
         severity: EnvelopeSeverity,
+        /// The Recommended Operating Conditions row `min_v..max_v` is read from.
         #[serde(default)]
         basis: String,
+        /// The Absolute Maximum Ratings row `abs_max_v` is read from. It is a
+        /// different table from `basis`, so a finding that quotes the
+        /// absolute-maximum figure quotes this too; empty when `basis` already
+        /// names that table (see [`basis_names_abs_max`]).
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        abs_max_basis: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         note: String,
         /// The printed row's temperature (`TA = 25 °C`, `TA = −40 °C to 85 °C`);
@@ -1329,6 +1336,54 @@ pub enum OperatingEnvelope {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         conditions: String,
     },
+}
+
+/// Whether a supply row's `basis` already names a second source for its
+/// `abs_max_v`.
+///
+/// That is the wording the vendors print for the absolute-maximum table
+/// ("Absolute Maximum Ratings", "Limiting Values", ST's "Voltage
+/// characteristics", "Maximum Ratings"), or a `;`-separated second citation that
+/// carries a table or section number ("..., 5.3 VCCA 1.2 V to 3.6 V; 5.1 VCCA
+/// -0.5 V to 4.6 V"). A basis that cites only the recommended-operating-conditions
+/// row does not.
+#[must_use]
+pub fn basis_names_abs_max(basis: &str) -> bool {
+    let lower = basis
+        .to_ascii_lowercase()
+        .replace(['-', '_'], " ")
+        .replace('.', "");
+    let worded = [
+        "absolute max",
+        "abs max",
+        "limiting values",
+        "maximum rating",
+        "voltage characteristics",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase));
+    worded
+        || basis
+            .rsplit_once(';')
+            .is_some_and(|(_, second)| second.chars().any(|c| c.is_ascii_digit()))
+}
+
+/// The source clause a finding quotes when it states the `limit` V absolute
+/// maximum beside the recommended window.
+///
+/// It carries both rows' bases, since they are different tables of the sheet. A row that records no absolute-maximum source
+/// says so, so the figure is never presented as read from the window's table.
+#[must_use]
+pub fn abs_max_citation(basis: &str, abs_max_basis: &str, limit: f64) -> String {
+    if !abs_max_basis.trim().is_empty() {
+        format!("basis: \"{basis}\"; absolute maximum basis: \"{abs_max_basis}\"")
+    } else if basis_names_abs_max(basis) {
+        format!("basis: \"{basis}\"")
+    } else {
+        format!(
+            "basis: \"{basis}\"; the card records no source for its {limit:.2} V absolute maximum"
+        )
+    }
 }
 
 impl OperatingEnvelope {

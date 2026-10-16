@@ -9,6 +9,7 @@
 //! Adding a test file: drop it in `tests/suite/` and add a `mod` line here. A
 //! file that is not listed does not run, so the list is the source of truth.
 
+mod abs_max_provenance;
 mod agent_cli_invocation;
 mod analog_active_resolve;
 mod api_backend;
@@ -32,6 +33,7 @@ mod extract_model_choice;
 mod ina18x_pinouts;
 mod layer_docs;
 mod ldo_logic_cards;
+mod lm1117_cards;
 mod mito_open_part_noise;
 mod module_carrier_resolve;
 mod negative_rail_validation;
@@ -47,6 +49,7 @@ mod power_ic_resolve;
 mod quad_opamp_pinout;
 mod schottky_1n58xx;
 mod spi_cs_pin_roles;
+mod stm32f0_nrst;
 mod user_dir_layering;
 mod vreg_78xx_resolve;
 mod vreg_79xx_negative;

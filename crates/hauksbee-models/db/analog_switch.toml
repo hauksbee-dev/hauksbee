@@ -1315,6 +1315,7 @@ min_v = 3.0
 max_v = 4.3
 abs_max_v = 5.5
 basis = "Recommended Operating Conditions, VCC Supply Voltage row"
+abs_max_basis = "onsemi/Fairchild FSUSB30 Rev. 1.1.8 p.3, Absolute Maximum Ratings, VCC Supply Voltage -0.5 V to +5.5 V"
 [models.coverage]
 implements = ["dpdt_channel_selection", "on_resistance", "off_state_leakage", "control_threshold"]
 missing = ["output_enable_disconnect", "power_off_protection", "switching_timing", "signal_bandwidth", "crosstalk", "signal_capacitance", "voltage_dependent_switch_behavior"]
@@ -1427,6 +1428,7 @@ min_v = 3.0
 max_v = 4.3
 abs_max_v = 5.5
 basis = "Recommended Operating Conditions, VCC Supply Voltage row"
+abs_max_basis = "onsemi/Fairchild FSUSB30 Rev. 1.1.8 p.3, Absolute Maximum Ratings, VCC Supply Voltage -0.5 V to +5.5 V"
 [models.coverage]
 implements = ["dpdt_channel_selection", "on_resistance", "off_state_leakage", "control_threshold"]
 missing = ["output_enable_disconnect", "power_off_protection", "switching_timing", "signal_bandwidth", "crosstalk", "signal_capacitance", "voltage_dependent_switch_behavior"]
@@ -1539,6 +1541,7 @@ min_v = 3.0
 max_v = 4.3
 abs_max_v = 5.5
 basis = "Recommended Operating Conditions, VCC Supply Voltage row"
+abs_max_basis = "onsemi/Fairchild FSUSB30 Rev. 1.1.8 p.3, Absolute Maximum Ratings, VCC Supply Voltage -0.5 V to +5.5 V"
 [models.coverage]
 implements = ["dpdt_channel_selection", "on_resistance", "off_state_leakage", "control_threshold"]
 missing = ["output_enable_disconnect", "power_off_protection", "switching_timing", "signal_bandwidth", "crosstalk", "signal_capacitance", "voltage_dependent_switch_behavior"]

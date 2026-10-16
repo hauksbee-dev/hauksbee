@@ -26,7 +26,7 @@ use hauksbee_models::derating::{temp_span, TempRef};
 use hauksbee_models::rating_basis::{self, Limit};
 use hauksbee_models::value::parse_value;
 use hauksbee_models::{
-    ComponentKind, EnvelopeSeverity, ModelEntry, ModelLibrary, OperatingEnvelope,
+    abs_max_citation, ComponentKind, EnvelopeSeverity, ModelEntry, ModelLibrary, OperatingEnvelope,
 };
 
 use super::BoardStatics;
@@ -878,6 +878,7 @@ fn envelope_lint_with_tolerance(
                     max_v,
                     abs_max_v,
                     basis,
+                    abs_max_basis,
                     ..
                 } => {
                     let Some(net) = net_of(pin) else { continue };
@@ -985,10 +986,16 @@ fn envelope_lint_with_tolerance(
                         "{} role {pin} on '{}' presents {:.3}..{:.3} V, outside the {:.3}..{:.3} V operating envelope{over_abs}",
                         comp.reference, net.name, range.min_v, range.max_v, min_v, max_v
                     );
+                    // The window and the absolute maximum come from different
+                    // tables: a finding that states the latter cites both.
+                    let citation = abs_max_v.filter(|_| above_abs_max).map_or_else(
+                        || format!("basis: \"{basis}\""),
+                        |limit| abs_max_citation(basis, abs_max_basis, limit),
+                    );
                     let finding = LintFinding {
                         check: LintCheck::OperatingEnvelope,
                         severity,
-                        message: format!("{seen}; basis: \"{basis}\".{fix}"),
+                        message: format!("{seen}; {citation}.{fix}"),
                         refs: vec![comp.reference.clone()],
                         nets: vec![net.name.clone()],
                     };
@@ -1757,6 +1764,93 @@ basis = "Recommended Operating Conditions, VDD row"
         let over = one("+5V");
         assert_eq!(over.severity, Severity::Medium, "{}", over.message);
         assert!(!over.message.contains("Tie "), "{}", over.message);
+    }
+
+    /// The window and the absolute maximum are different tables of the sheet. A
+    /// finding that states "N V above its X V absolute maximum" cites both
+    /// bases, says when the card records only one, and states a plain
+    /// out-of-window finding (under abs max) with the window's basis alone.
+    #[test]
+    fn an_absolute_maximum_finding_cites_both_tables() {
+        let amr = "Absolute Maximum Ratings, VDD supply voltage -0.5 V to 4.0 V";
+        let cards = [
+            // Window-only basis, no abs-max source recorded (the faulty shape).
+            ("only_roc", String::new()),
+            // The abs-max table recorded beside the window's.
+            ("both", format!("abs_max_basis = \"{amr}\"\n")),
+            // The window basis already names the second table.
+            (
+                "named",
+                "basis = \"Recommended Operating Conditions, VDD row; Section 5.1 VDD 4 V\"\n"
+                    .to_string(),
+            ),
+        ];
+        let mut text = String::new();
+        for (id, extra) in &cards {
+            let card = MARGIN_CARD
+                .replace("margin_part", id)
+                .replace("^MARGIN_PART$", &format!("^{}$", id.to_ascii_uppercase()))
+                .replace(
+                    "severity = \"serious\"\n",
+                    &format!("severity = \"serious\"\n{extra}"),
+                );
+            // A repeated `basis` key would not parse: `named` replaces it.
+            let card = if id == &"named" {
+                card.replace(
+                    "basis = \"Recommended Operating Conditions, VDD row\"\n",
+                    "",
+                )
+            } else {
+                card
+            };
+            text.push_str(&card);
+        }
+        let lib = library("abscite", &text);
+        let message = |value: &str, rail: &str| {
+            let b = board(
+                &[(1, "GND"), (2, rail)],
+                vec![part("U1", value, vec![pin("1", 2), pin("2", 1)])],
+            );
+            let report = envelope_lint(&b, &lib);
+            let found: Vec<_> = report
+                .of_check(LintCheck::OperatingEnvelope)
+                .cloned()
+                .collect();
+            assert_eq!(found.len(), 1, "{value} {rail}: {found:?}");
+            found[0].message.clone()
+        };
+        // +5V reads 4.75..5.25 V: past the 4.0 V absolute maximum.
+        let only_roc = message("ONLY_ROC", "+5V");
+        assert!(
+            only_roc.contains("above its 4.00 V absolute maximum"),
+            "{only_roc}"
+        );
+        assert!(
+            only_roc.contains("records no source for its 4.00 V absolute maximum"),
+            "{only_roc}"
+        );
+        let both = message("BOTH", "+5V");
+        assert!(
+            both.contains("basis: \"Recommended Operating Conditions, VDD row\""),
+            "{both}"
+        );
+        assert!(
+            both.contains(&format!("absolute maximum basis: \"{amr}\"")),
+            "{both}"
+        );
+        let named = message("NAMED", "+5V");
+        assert!(named.contains("Section 5.1 VDD 4 V"), "{named}");
+        assert!(!named.contains("records no source"), "{named}");
+        // Control: +3V3 reads 3.135..3.465 V, outside the 3.0..3.4 V window but
+        // under the absolute maximum, so no abs-max sentence and no second basis.
+        for value in ["ONLY_ROC", "BOTH"] {
+            let near = message(value, "+3V3");
+            assert!(!near.contains("absolute maximum"), "{near}");
+            assert!(
+                near.contains("basis: \"Recommended Operating Conditions, VDD row\""),
+                "{near}"
+            );
+        }
     }
 
     const BOOST_AND_LOAD: &str = r#"

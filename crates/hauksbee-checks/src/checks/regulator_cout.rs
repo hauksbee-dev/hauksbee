@@ -497,12 +497,49 @@ mod tests {
     /// names are the wrong pads.
     #[test]
     fn a_card_that_does_not_fit_the_footprint_is_not_judged() {
-        // TLV75533P card (DBV: 1 IN, 2 GND, 3 EN, 4 NC, 5 OUT) on a 6-pad DRV
-        // layout whose pad 2 (NC on DRV) sits on the output and whose pad 3
-        // and exposed pad are ground.
+        // TLV75533P DBV order code (DBV: 1 IN, 2 GND, 3 EN, 4 NC, 5 OUT) on a
+        // 6-pad DRV layout whose pad 2 (NC on DRV) sits on the output and whose
+        // pad 3 and exposed pad are ground.
+        let b = tlv_wson_board("TLV75533PDBVR", "470n");
+        assert!(regulator_cout_lint(&b, &ModelLibrary::builtin())
+            .findings
+            .is_empty());
+    }
+
+    /// The same WSON-6 layout with a DRV order code binds the DRV card (TLV755P
+    /// SBVS320D Table 4-1: OUT 1, NC 2, GND 3, EN 4, NC 5, IN 6), so the
+    /// regulator is judged on its own pads: 1 µF is the stated minimum (p.4).
+    #[test]
+    fn a_drv_order_code_is_judged_with_the_drv_pin_map() {
+        let short = regulator_cout_lint(
+            &tlv_wson_board("TLV75533PDRVR", "470n"),
+            &ModelLibrary::builtin(),
+        )
+        .findings;
+        assert_eq!(short.len(), 1, "{short:?}");
+        assert_eq!(short[0].severity, Severity::Medium);
+        says(
+            &short[0],
+            &[
+                "has 470 nF",
+                "below the 1 µF minimum",
+                "card 'tlv75533p_drv'",
+            ],
+        );
+        let fine = regulator_cout_lint(
+            &tlv_wson_board("TLV75533PDRVR", "4u7"),
+            &ModelLibrary::builtin(),
+        )
+        .findings;
+        assert!(fine.is_empty(), "{fine:?}");
+    }
+
+    /// A 6-pad WSON layout: pads 1 and 2 on the 3V3 net, 3 and the exposed pad
+    /// 7 on ground, 4 to 6 on 5 V, with one output capacitor of `cap`.
+    fn tlv_wson_board(value: &str, cap: &str) -> ExtractedBoard {
         let mut u = part(
             "U1",
-            "TLV75533PDRVR",
+            value,
             &[
                 ("1", 2),
                 ("2", 2),
@@ -515,12 +552,39 @@ mod tests {
         );
         u.footprint = "Package_SON:WSON-6-1EP_2x2mm_P0.65mm_EP1x1.6mm".into();
         u.position = Some((0.0, 0.0, 0.0));
-        let b = board(
+        board(
             &[(1, "+5V"), (2, "+3V3"), (3, "GND")],
-            vec![u, part("C1", "4u7", &[("1", 2), ("2", 3)])],
+            vec![u, part("C1", cap, &[("1", 2), ("2", 3)])],
+        )
+    }
+
+    /// TI LM1117 (SNOS412Q p.1): "A minimum of 10-µF tantalum capacitor is
+    /// required at the output to improve the transient response and
+    /// stability." A minimum, so a shortfall gates; AMS1117's 22 µF is only a
+    /// recommendation, so the same 4.7 µF there is a note, not a fault.
+    #[test]
+    fn the_lm1117_ten_microfarad_minimum_gates() {
+        let short = lint_on("LM1117-3.3", &["4u7"]);
+        assert_eq!(short.len(), 1, "{short:?}");
+        assert_eq!(short[0].severity, Severity::Medium);
+        says(
+            &short[0],
+            &[
+                "has 4.7 µF",
+                "below the 10 µF minimum",
+                "card 'lm1117_3v3'",
+                "Add at least 5.3 µF",
+            ],
         );
-        assert!(regulator_cout_lint(&b, &ModelLibrary::builtin())
-            .findings
-            .is_empty());
+        // Legal controls: the minimum met exactly, and more than it.
+        assert!(lint_on("LM1117-3.3", &["10u"]).is_empty());
+        assert!(lint_on("LM1117MPX-3.3_NOPB", &["22u"]).is_empty());
+        let none = lint_on("LM1117-5.0", &[]);
+        assert_eq!(none.len(), 1);
+        assert_eq!(none[0].severity, Severity::High);
+        // The AMS1117 with the same 4.7 µF is a note under its recommendation.
+        let ams = lint_on("AMS1117-3.3", &["4u7"]);
+        assert_eq!(ams.len(), 1, "{ams:?}");
+        assert_eq!(ams[0].severity, Severity::Low);
     }
 }
