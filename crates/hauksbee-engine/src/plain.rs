@@ -1664,6 +1664,26 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "This regulator's datasheet says its enable pin turns the part off when nothing drives it. On this board nothing can raise that pin: it is unconnected, or only touches parts that cannot pull it up (a capacitor, a pull-down, a part that is not fitted). The output rail stays at 0 V and every part it powers is dead.".to_string(),
                 "Pull the enable pin up to the regulator's input through a 10k to 100k resistor, or tie it straight to the input. If a microcontroller pin is meant to switch the rail, keep the resistor so the rail has a defined state before firmware runs.".to_string(),
             ),
+            LintCheck::SupplyGroundSwapped => (
+                format!("A connector pin on {parts} is wired to the wrong kind of net. {}", f.message),
+                "The connector's own pin names say which pin is the supply and which is ground, but the board wires a supply pin to ground or a ground pin to a supply rail. Whatever is plugged in here is shorted or fed backwards, and the board never receives the supply it expects.".to_string(),
+                "Swap the nets of the supply and ground pins so each reaches the rail its name says, in the schematic and on the layout.".to_string(),
+            ),
+            LintCheck::DiodeReversed => (
+                format!("A diode on {parts} is fitted backwards across a rail. {}", f.message),
+                "A TVS, Zener or clamp diode across a supply rail is meant to block until the voltage passes its breakdown value. With the anode on the rail and the cathode on ground it is forward-biased instead, so it conducts as soon as the rail is powered and holds the rail at about one diode drop.".to_string(),
+                "Turn the diode round so its cathode is on the more positive net and its anode on the more negative one, in the schematic symbol and on the footprint.".to_string(),
+            ),
+            LintCheck::PolarisedCapReversed => (
+                format!("A polarised capacitor on {parts} is fitted backwards. {}", f.message),
+                "A solid tantalum capacitor tolerates only a small reverse voltage (about a tenth of its rating at room temperature) and an aluminium electrolytic none at all. Wrong polarity short-circuits or damages the part, and an electrolytic can open its pressure vent, which can take the rail down with it.".to_string(),
+                "Turn the capacitor round so its + terminal is on the more positive net, in the schematic symbol and on the footprint.".to_string(),
+            ),
+            LintCheck::RailUnpowered => (
+                format!("A supply rail's source is missing or only assumed. {}", f.message),
+                "A rail nothing on the board drives is held at the voltage its name states so the parts on it can be checked. That is right when the rail comes in on a connector or test point. When its only source is a part marked do-not-fit (its regulator, or the ferrite or 0 ohm link from another rail), the real rail stays at 0 V and every part on it is unpowered, so no result for those parts stands.".to_string(),
+                "Fit the part that sources the rail, or bring the rail in on a connector or test point. If the board is powered from outside, check that supply on its own.".to_string(),
+            ),
             LintCheck::ControlHeldOff => (
                 format!("The enable or reset pin of {parts} is held in its off state. {}", f.message),
                 "This pin has a resistor to ground, and nothing else on its net can raise it: no pull-up, no GPIO or supervisor output, no switch to a supply. An enable that stays low never turns the part on, and a reset that stays low holds the part in reset so it never runs. The usual cause is a pull-up whose far end was wired to ground, or a pull-up that is not fitted.".to_string(),

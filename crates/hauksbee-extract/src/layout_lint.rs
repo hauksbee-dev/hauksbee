@@ -453,6 +453,28 @@ struct Primary {
     rest: String,
 }
 
+/// `token` (a bare number ending at byte `end` of `s`) joined to the word after
+/// it, when that word is a unit or SI-prefixed unit: the parse of the pair and
+/// the text after it. `None` when the next word is a number or a rating word.
+fn unit_in_next_word<'a>(
+    s: &'a str,
+    token: &str,
+    end: usize,
+) -> Option<(hauksbee_models::value::ParsedValue, &'a str)> {
+    let after = s[end..].trim_start();
+    let word_end = after
+        .find(|c: char| c.is_whitespace() || c == '/')
+        .unwrap_or(after.len());
+    let word = after[..word_end].trim_end_matches(',');
+    // A unit word starts with a letter or Ω/µ; "25V" and "1%" are ratings.
+    if !word.chars().next().is_some_and(char::is_alphabetic) || is_spec_token(word) {
+        return None;
+    }
+    let joined = hauksbee_models::value::parse_value(&format!("{token}{word}"))?;
+    let consumed = s.len() - after.len() + word_end;
+    Some((joined, &s[consumed..]))
+}
+
 fn primary(s: &str) -> Option<Primary> {
     let s = s.trim();
     // The first token ends at a space or a `/`: "100uF 50V", "100uF/50V".
@@ -461,6 +483,12 @@ fn primary(s: &str) -> Option<Primary> {
         .unwrap_or(s.len());
     let token = s[..end].trim_end_matches(',');
     let (parsed, rest) = match hauksbee_models::value::parse_value(token) {
+        // "220 pF", "1.78 kΩ", "100 nF": the unit stands in the next word. A
+        // bare number followed by a word that makes it a quantity is one
+        // quantity, read whole, so the SI prefix is not lost to a space.
+        Some(p) if p.unit.is_none() => {
+            unit_in_next_word(s, token, end).unwrap_or_else(|| (p, &s[end..]))
+        }
         Some(p) => (p, &s[end..]),
         // A multi-token string the parser reads whole ("4,7 k") keeps no rest.
         None => (hauksbee_models::value::parse_value(s)?, ""),

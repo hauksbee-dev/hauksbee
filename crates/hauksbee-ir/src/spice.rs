@@ -192,12 +192,14 @@ fn load_deck(text: &str, dir: &Path) -> Result<(Circuit, Directives), SpiceError
         fixups: Vec::new(),
         seen: HashMap::new(),
         used_models: HashSet::new(),
+        notes: Vec::new(),
     };
     for line in &deck.elems {
         b.element(line, &top, &mut Vec::new())?;
     }
     b.resolve_fixups()?;
     let used_models = std::mem::take(&mut b.used_models);
+    let build_notes = std::mem::take(&mut b.notes);
     let mut circuit = b.circuit;
     if let Some(line) = &deck.dc {
         d.dc = Some(parse_dc(line, &circuit)?);
@@ -205,6 +207,7 @@ fn load_deck(text: &str, dir: &Path) -> Result<(Circuit, Directives), SpiceError
     circuit.initial_conditions = ic_values(&deck.ic, &circuit, &top.env)?;
     circuit.nodesets = ic_values(&deck.nodeset, &circuit, &top.env)?;
     d.notes = unmodelled_notes(&deck, &used_models);
+    d.notes.extend(build_notes);
     if !circuit.initial_conditions.is_empty() && !d.use_initial_conditions {
         bail!(deck.ic[0], "`.ic` requires `uic` on the `.tran` card (hauksbee seeds the power-on start; it does not pin nodes during a DC solve)");
     }
@@ -384,6 +387,11 @@ pub fn parse_spice_number(tok: &str) -> Option<f64> {
     let t = tok.trim();
     let end = number_end(t);
     let value: f64 = t[..end].parse().ok().filter(|_| end > 0)?;
+    // `1e999` parses to infinity: not a number a circuit can hold, so it is as
+    // malformed as `inf` and `nan` (which `number_end` already refuses).
+    if !value.is_finite() {
+        return None;
+    }
     let suffix = t[end..].to_ascii_lowercase();
     let scale = SCALES.iter().position(|p| suffix.starts_with(p));
     let mult = scale.map_or(1.0, |i| {
@@ -395,6 +403,7 @@ pub fn parse_spice_number(tok: &str) -> Option<f64> {
         "" | "a" | "v" | "f" | "h" | "s" | "hz" | "ohm" | "ohms"
     )
     .then_some(value * mult)
+    .filter(|v| v.is_finite())
 }
 
 /// Iterative Levenshtein edit distance; shared by did-you-mean hints elsewhere.
@@ -885,6 +894,8 @@ struct Build<'a> {
     seen: HashMap<String, usize>,
     /// Lowercased `.model` names an element actually instantiated.
     used_models: HashSet<String>,
+    /// One caveat per value the loader changed (a resistance raised to the floor).
+    notes: Vec<String>,
 }
 
 /// Check a card has at least `n` tokens, naming the expected fields.
@@ -986,15 +997,44 @@ impl<'a> Build<'a> {
                 let keys: &[&str] = if kind == 'R' { &["tc", "tc1"] } else { &["ic"] };
                 let kv = options(line, &toks[4..], env, keys)?;
                 let ic = kv.get("ic").copied();
+                if !v.is_finite() {
+                    bail!(line, "`{}` is not a finite value", toks[3]);
+                }
                 match kind {
-                    // R=0 is a jumper, never an open.
-                    'R' => Device::Resistor {
-                        name,
-                        a,
-                        b,
-                        ohms: v.max(1e-6),
-                        tc1: kv.get("tc1").or_else(|| kv.get("tc")).copied(),
-                    },
+                    'R' => {
+                        // ngspice simulates a negative resistance as negative;
+                        // the solver's partitioning and stiff-link handling
+                        // assume a passive resistor, so a negative one is
+                        // refused rather than clamped to a short (which gave
+                        // 4.99999 V for a divider whose true output is 7.5 V).
+                        if v < 0.0 {
+                            bail!(
+                                line,
+                                "{name}: negative resistance {} is not simulated (ngspice accepts \
+                                 it, hauksbee does not); model a negative-resistance element with \
+                                 a controlled source (G or E card) instead",
+                                crate::units::format_engineering(v, "ohm")
+                            );
+                        }
+                        // R=0 is a jumper, never an open; a resistance below the
+                        // solver floor is stamped AT the floor, and the run says so.
+                        if v < crate::MIN_RESISTANCE_OHMS {
+                            let floor =
+                                crate::units::format_engineering(crate::MIN_RESISTANCE_OHMS, "ohm");
+                            self.notes.push(format!(
+                                "note: {name} = {} is below the solver's {floor} resistance floor \
+                                 and is simulated as {floor}.",
+                                toks[3],
+                            ));
+                        }
+                        Device::Resistor {
+                            name,
+                            a,
+                            b,
+                            ohms: v.max(crate::MIN_RESISTANCE_OHMS),
+                            tc1: kv.get("tc1").or_else(|| kv.get("tc")).copied(),
+                        }
+                    }
                     'C' => Device::Capacitor {
                         name,
                         a,
@@ -1611,6 +1651,24 @@ fn parse_tran(
     if nums.len() < 2 {
         bail!(line, "`.tran` needs at least tstep and tstop");
     }
+    // A step that is zero or negative never advances time: refuse it here,
+    // not after a 30 s grind into the step budget.
+    if nums[0] <= 0.0 {
+        bail!(
+            line,
+            "`.tran` step must be positive (got {}): a zero or negative step never advances time",
+            nums[0]
+        );
+    }
+    if nums[1] <= 0.0 {
+        bail!(line, "`.tran` stop time must be positive (got {})", nums[1]);
+    }
+    if nums.get(2).is_some_and(|t| *t < 0.0 || *t >= nums[1]) {
+        bail!(line, "`.tran` start time must satisfy 0 <= tstart < tstop");
+    }
+    if nums.get(3).is_some_and(|t| *t <= 0.0) {
+        bail!(line, "`.tran` maximum step (tmax) must be positive");
+    }
     Ok(TranDirective {
         tstep: nums[0],
         tstop: nums[1],
@@ -2187,5 +2245,74 @@ mod tests {
         assert!(err("t\n.four 1k v(out)\n").contains("unsupported directive `.four`"));
         assert!(err("t\n.control\nrun\n.endc\n").contains("unrecognized directive `.control`"));
         assert!(err("t\n.ends\n").contains("without a matching"));
+    }
+
+    fn notes(net: &str) -> Vec<String> {
+        SpiceLoader::load_with_directives(net)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .1
+            .notes
+    }
+
+    #[test]
+    fn negative_resistance_is_refused_not_clamped() {
+        // ngspice simulates -1k as -1k (the divider below sits at 7.5 V); clamping it to a
+        // short answered 4.99999 V. A positive control with the same shape loads.
+        let e = err("t\nV1 in 0 5\nR1 in out -1k\nR2 out 0 3k\n.end\n");
+        assert!(e.contains("negative resistance"), "{e}");
+        assert!(e.contains("R1"), "{e}");
+        let ok = load("t\nV1 in 0 5\nR1 in out 1k\nR2 out 0 3k\n.end\n");
+        assert!(matches!(dev(&ok, "R1"), Device::Resistor { ohms, .. } if close(*ohms, 1e3)));
+        // A parameter that evaluates negative is the same mistake.
+        let e = err("t\n.param r=-5\nV1 in 0 5\nR1 in 0 {r}\n.end\n");
+        assert!(e.contains("negative resistance"), "{e}");
+    }
+
+    #[test]
+    fn a_resistance_floor_substitution_is_announced() {
+        // 0 and 1e-9 are stamped at the floor, and the notes say which element and which value.
+        let n = notes("t\nV1 a 0 1\nR1 a b 1e-9\nR2 b 0 0\n.end\n");
+        assert!(
+            n.iter()
+                .any(|s| s.contains("R1 = 1e-9") && s.contains("1 uohm")),
+            "{n:?}"
+        );
+        assert!(n.iter().any(|s| s.contains("R2 = 0")), "{n:?}");
+        // Control: a resistance at or above the floor is stamped as written, silently.
+        assert!(notes("t\nV1 a 0 1\nR1 a b 1u\nR2 b 0 1k\n.end\n").is_empty());
+    }
+
+    #[test]
+    fn an_overflowing_number_is_malformed_like_inf() {
+        assert!(err("t\nV1 a 0 DC 1e999\nR1 a 0 1k\n.end\n").contains("malformed number"));
+        assert!(err("t\nV1 a 0 1\nR1 a 0 1e999\n.end\n").contains("malformed number"));
+        assert_eq!(parse_spice_number("1e999"), None);
+        assert_eq!(parse_spice_number("1e308meg"), None);
+        assert_eq!(parse_spice_number("1e300"), Some(1e300));
+    }
+
+    #[test]
+    fn a_tran_step_that_cannot_advance_time_is_refused() {
+        let deck = |card: &str| format!("t\nV1 a 0 1\nR1 a 0 1k\n{card}\n.end\n");
+        for card in [
+            ".tran 0 100u",
+            ".tran -1u 100u",
+            ".tran 1u 0",
+            ".tran 1u -5",
+        ] {
+            assert!(
+                err(&deck(card)).contains("`.tran`"),
+                "{card} must be refused"
+            );
+        }
+        assert!(err(&deck(".tran 1u 100u 200u")).contains("tstart"));
+        assert!(err(&deck(".tran 1u 100u 0 0")).contains("tmax"));
+        // Controls: a positive step, a start before the stop, a positive tmax.
+        for card in [".tran 1u 100u", ".tran 1u 100u 10u", ".tran 1u 100u 0 0.5u"] {
+            assert!(
+                SpiceLoader::load_with_directives(&deck(card)).is_ok(),
+                "{card} must load"
+            );
+        }
     }
 }

@@ -166,9 +166,14 @@ impl RailWindow {
     }
 
     pub fn observe(&mut self, t_s: f64, v: f64) {
-        self.min_v = self.min_v.min(v);
-        self.max_v = self.max_v.max(v);
+        self.fold(v);
         self.samples.push((t_s, v));
+    }
+
+    /// Whether a non-finite sample reached this window (see [`Self::fold`]).
+    #[must_use]
+    pub const fn is_poisoned(&self) -> bool {
+        self.min_v.is_nan() || self.max_v.is_nan()
     }
 
     /// Widen the window's min/max envelope with an intra-frame extreme WITHOUT
@@ -182,8 +187,16 @@ impl RailWindow {
     /// `dip_duration/recovery` and `spike_duration/settling` still reflect settled
     /// per-frame values.)
     pub const fn fold(&mut self, v: f64) {
-        self.min_v = self.min_v.min(v);
-        self.max_v = self.max_v.max(v);
+        // `f64::min`/`max` drop a NaN, so a non-finite sample would leave the
+        // bounds looking untouched; poison both (sticky) so it reads as "no
+        // measurement" and the assertions refuse to judge it.
+        if v.is_finite() && !self.is_poisoned() {
+            self.min_v = self.min_v.min(v);
+            self.max_v = self.max_v.max(v);
+        } else {
+            self.min_v = f64::NAN;
+            self.max_v = f64::NAN;
+        }
     }
 
     /// Total time (s) the rail spent strictly past `threshold` on the `below`

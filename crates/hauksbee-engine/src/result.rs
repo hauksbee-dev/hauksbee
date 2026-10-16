@@ -3211,6 +3211,22 @@ fn severity_specific_fix_hint(check: LintCheck, severity: Severity) -> Option<&'
     )
 }
 
+/// The suggested fix of a polarity finding (a swapped supply and ground pin, a diode or a
+/// polarised capacitor fitted backwards).
+const fn polarity_fix_hint(check: LintCheck) -> &'static str {
+    match check {
+        LintCheck::SupplyGroundSwapped => {
+            "Swap the nets of the connector's supply and ground pins so each pin reaches the rail its name says."
+        }
+        LintCheck::DiodeReversed => {
+            "Turn the diode round so its cathode is on the more positive net and its anode on the more negative one."
+        }
+        _ => {
+            "Turn the capacitor round so its + terminal is on the more positive net and its - terminal on the more negative one."
+        }
+    }
+}
+
 /// A concise suggested fix for a lint finding kind, for the machine-readable `fix` field.
 ///
 /// `None` when no template applies. Severity disambiguates the resource-conflict
@@ -3311,6 +3327,12 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         }
         LintCheck::RegulatorHeldOff => {
             "Pull the regulator's enable pin to its input through 10k-100k, or tie it to the input; keep that pull even when a GPIO switches the rail."
+        }
+        LintCheck::SupplyGroundSwapped | LintCheck::DiodeReversed | LintCheck::PolarisedCapReversed => {
+            polarity_fix_hint(check)
+        }
+        LintCheck::RailUnpowered => {
+            "Fit the rail's regulator or link, or bring the rail in on a connector or test point; name each supply net with its voltage so the rail is judged."
         }
         LintCheck::ControlHeldOff => {
             "Return the pull resistor to the part's supply rail instead of ground, or drive the pin from a GPIO or a supervisor."
