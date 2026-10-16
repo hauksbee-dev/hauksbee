@@ -8,7 +8,7 @@
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_ir::{print, println};
 
-use crate::result::JsonInputEvidence;
+use crate::result::{BindSummary, JsonInputEvidence, JsonReport, Refusal};
 
 use super::OutputMode;
 
@@ -41,6 +41,7 @@ pub(crate) fn emit_quiet(
     strict: bool,
     quiet: bool,
     inputs: &[JsonInputEvidence],
+    bind: &BindSummary,
     blockers: &[String],
 ) -> anyhow::Result<()> {
     let report = crate::usb_c_report(board);
@@ -67,6 +68,33 @@ pub(crate) fn emit_quiet(
         .unwrap_or_default();
     let human_maps = evidence.maps_for_surface_nets("USB-C CC input coverage", &cc_nets)?;
     let human_evidence = evidence.clone().with_maps(human_maps);
+    // The machine verdict, from the same `JsonReport` derivation every other
+    // surface uses (and which tells the CI artifacts the verdict, in every
+    // output mode). The bind gate is not used: it would read ALL unbound
+    // critical parts, and this surface is scoped to the CC nets, so the scoped
+    // blockers ride a refusal instead. Failure still beats inconclusiveness
+    // (`VerdictCause::pick`), exactly as the printed INCONCLUSIVE sentence
+    // sits beside a serious fault.
+    let mut machine = JsonReport::new(&board.name, bind.clone())
+        .with_surface_gate(serious)
+        .with_inputs(inputs);
+    machine.findings = Some(
+        report
+            .as_ref()
+            .and_then(crate::result::usbc_finding_json)
+            .into_iter()
+            .collect(),
+    );
+    if let Some(note) = &inconclusive {
+        machine.refusal = Some(Refusal::new(
+            "a USB-C CC compliance verdict",
+            note.clone(),
+            Vec::<String>::new(),
+            "give the parts on the receptacle's CC nets a model, then rerun",
+        ));
+    }
+    let run_verdict = machine.run_verdict();
+    let machine_ok = run_verdict.verdict == "pass";
     match &report {
         None => {
             match mode {
@@ -80,11 +108,9 @@ pub(crate) fn emit_quiet(
                     value["inputs"] = serde_json::to_value(inputs)?;
                     // No receptacle: nothing to fail, and the CC blockers are
                     // scoped to audited nets, so none exist here either.
-                    value["verdict"] = serde_json::Value::from("pass");
-                    value["ok"] = serde_json::Value::from(true);
+                    value["verdict"] = serde_json::Value::from(run_verdict.verdict);
+                    value["ok"] = serde_json::Value::from(machine_ok);
                     if let Some(note) = &inconclusive {
-                        value["verdict"] = serde_json::Value::from("invalid");
-                        value["ok"] = serde_json::Value::from(false);
                         value["coverage_note"] = serde_json::Value::from(note.clone());
                     }
                     println!("{}", serde_json::to_string(&value)?);
@@ -105,14 +131,8 @@ pub(crate) fn emit_quiet(
                 // The machine contract, unconditionally: fail beats invalid
                 // beats pass, and a consumer can always gate on these fields
                 // instead of re-deriving severity from the level.
-                value["verdict"] = serde_json::Value::from(if serious {
-                    "fail"
-                } else if inconclusive.is_some() {
-                    "invalid"
-                } else {
-                    "pass"
-                });
-                value["ok"] = serde_json::Value::from(!serious && inconclusive.is_none());
+                value["verdict"] = serde_json::Value::from(run_verdict.verdict);
+                value["ok"] = serde_json::Value::from(machine_ok);
                 if let Some(note) = &inconclusive {
                     value["coverage_note"] = serde_json::Value::from(note.clone());
                 }

@@ -58,27 +58,32 @@ pub(crate) fn emit_quiet(
     // code is unchanged; under it these blockers exit 3, matching the verdict.
     let blockers =
         crate::result::unmodelled_critical_refs(&BindSummary::from_report(&bound.report));
+    // The machine document is built in EVERY output mode: building it is what
+    // tells the CI artifacts the run's verdict (see `JsonReport::to_json`), so a
+    // `--junit`/`--sarif` beside a text report cannot be green over a verdict
+    // that is not a pass. Only `--json` prints it.
+    let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
+        .with_bind_verdict_gate()
+        // `si_fails` is this surface's exit gate and it counts every
+        // real finding, including the low ones that serialize as
+        // `note` (its informational computed-value notes are excluded),
+        // so the verdict has to know or the document reads `pass`
+        // beside exit 2.
+        .with_surface_gate(si_fails(&report))
+        .with_inputs(input.inputs)
+        .with_evidence(&evidence);
+    jr.findings = Some(si_findings_json(&report));
+    jr.attach_finding_evidence(&evidence, run_level)?;
+    if !blockers.is_empty() {
+        jr.push_coverage_note(crate::result::inconclusive_verdict(&blockers));
+    }
+    // A green verdict that quietly dropped findings would be worse than
+    // no waivers at all, so the machine surface carries them too.
+    jr.waived = waived.iter().cloned().map(Into::into).collect();
+    let document = jr.to_json();
     match mode {
         OutputMode::Json => {
-            let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
-                .with_bind_verdict_gate()
-                // `si_fails` is this surface's exit gate and it counts every
-                // real finding, including the low ones that serialize as
-                // `note` (its informational computed-value notes are excluded),
-                // so the verdict has to know or the document reads `pass`
-                // beside exit 2.
-                .with_surface_gate(si_fails(&report))
-                .with_inputs(input.inputs)
-                .with_evidence(&evidence);
-            jr.findings = Some(si_findings_json(&report));
-            jr.attach_finding_evidence(&evidence, run_level)?;
-            if !blockers.is_empty() {
-                jr.push_coverage_note(crate::result::inconclusive_verdict(&blockers));
-            }
-            // A green verdict that quietly dropped findings would be worse than
-            // no waivers at all, so the machine surface carries them too.
-            jr.waived = waived.iter().cloned().map(Into::into).collect();
-            println!("{}", jr.to_json());
+            println!("{document}");
         }
         OutputMode::Plain => {
             let mut plain = crate::plain_si(&report);

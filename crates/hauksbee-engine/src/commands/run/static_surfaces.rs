@@ -160,11 +160,10 @@ pub fn emit_selected(
     if surface == SelectedSurface::UsbC {
         let bound = bind_board(board, lib);
         let evidence = report_inputs.evidence(&bound.report)?;
-        let blockers = crate::result::unmodelled_critical_refs(
-            &crate::result::BindSummary::from_report(&bound.report),
-        );
+        let bind = crate::result::BindSummary::from_report(&bound.report);
+        let blockers = crate::result::unmodelled_critical_refs(&bind);
         return crate::reports::usb_c::emit_quiet(
-            board, &evidence, mode, cfg.strict, quiet, inputs, &blockers,
+            board, &evidence, mode, cfg.strict, quiet, inputs, &bind, &blockers,
         )
         .map(|()| true);
     }

@@ -85,33 +85,39 @@ pub(crate) fn emit_with_schematic_quiet(
         maps.push(coverage);
     }
     let evidence = evidence.with_maps(maps);
+    // The machine document is built in EVERY output mode: building it is what
+    // tells the CI artifacts the run's verdict (see `JsonReport::to_json`), so a
+    // `--junit`/`--sarif` beside a text report cannot be green over a verdict
+    // that is not a pass. Only `--json` prints it.
+    //
+    // Grouped DRC: shorts kept verbatim, clearance findings
+    // grouped by (net_a, net_b, layer), at-limit separated from below-rule.
+    let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
+        .with_inputs(input.inputs)
+        .with_evidence(&evidence);
+    jr.findings = Some(drc_findings(&structured, Some(&provenance)));
+    jr.drc = Some(structured.clone());
+    jr.clearance_rule_source = Some(provenance.clone());
+    // A copper-only verdict over default rules is a conditional pass,
+    // and says which checks it covers.
+    jr.verdict_conditions
+        .extend(default_rules_condition(&structured, &provenance));
+    jr.verdict_conditions
+        .extend(unmeasured_spacing_condition(input.input_kind));
+    jr.push_coverage_note(crate::scope::single_check_note("DRC"));
+    if provenance.source == crate::result::ClearanceRuleSource::Defaulted {
+        jr.push_coverage_note(provenance.cli_notice());
+    }
+    if unrouted {
+        jr.push_coverage_note(super::UNROUTED_COPPER_NOTE.to_string());
+    }
+    // A green verdict that quietly dropped findings would be worse than
+    // no waivers at all, so the machine surface carries them too.
+    jr.waived = waived.iter().cloned().map(Into::into).collect();
+    let document = jr.to_json();
     match mode {
         OutputMode::Json => {
-            // Grouped DRC: shorts kept verbatim, clearance findings
-            // grouped by (net_a, net_b, layer), at-limit separated from below-rule.
-            let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
-                .with_inputs(input.inputs)
-                .with_evidence(&evidence);
-            jr.findings = Some(drc_findings(&structured, Some(&provenance)));
-            jr.drc = Some(structured.clone());
-            jr.clearance_rule_source = Some(provenance.clone());
-            // A copper-only verdict over default rules is a conditional pass,
-            // and says which checks it covers.
-            jr.verdict_conditions
-                .extend(default_rules_condition(&structured, &provenance));
-            jr.verdict_conditions
-                .extend(unmeasured_spacing_condition(input.input_kind));
-            jr.push_coverage_note(crate::scope::single_check_note("DRC"));
-            if provenance.source == crate::result::ClearanceRuleSource::Defaulted {
-                jr.push_coverage_note(provenance.cli_notice());
-            }
-            if unrouted {
-                jr.push_coverage_note(super::UNROUTED_COPPER_NOTE.to_string());
-            }
-            // A green verdict that quietly dropped findings would be worse than
-            // no waivers at all, so the machine surface carries them too.
-            jr.waived = waived.iter().cloned().map(Into::into).collect();
-            println!("{}", jr.to_json());
+            println!("{document}");
         }
         OutputMode::Plain => {
             if unrouted {

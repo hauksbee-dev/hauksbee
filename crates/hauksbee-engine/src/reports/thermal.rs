@@ -46,7 +46,7 @@ pub(crate) fn emit_quiet(
     // most dangerous outcome); `--no-strict-thermal` opts out of the exit-code
     // escalation while keeping the INCONCLUSIVE caveat. validity is unchanged.
     let coverage = thermal_coverage(rows.len(), &summary);
-    let strict_partial_refusal = (coverage.partial && strict).then(|| {
+    let partial_refusal = coverage.partial.then(|| {
         Refusal::new(
             "a complete thermal-safety conclusion for every active power IC",
             format!(
@@ -60,6 +60,10 @@ pub(crate) fn emit_quiet(
             "bind the named open active ICs with --models-dir, then rerun the same --thermal command",
         )
     });
+    // Under `--no-strict-thermal` the exit code stays 0, but the machine verdict
+    // still refuses the complete-coverage claim (below), so the JSON can never
+    // read `pass` beside the INCONCLUSIVE caveat the text surface prints.
+    let strict_partial_refusal = partial_refusal.clone().filter(|_| strict);
     // The open active ICs to NAME in the caveat, computed before `summary` is
     // moved into the JSON report.
     let coverage_refs = coverage_open_active_refs(&summary);
@@ -111,10 +115,17 @@ pub(crate) fn emit_quiet(
         )
     });
     let report_evidence = evidence.with_maps(maps);
-    if json {
+    // The machine document is built in EVERY output mode: building it is what
+    // tells the CI artifacts the run's verdict (see `JsonReport::to_json`). Only
+    // `--json` prints it.
+    let document = {
         let mut jr = JsonReport::new(&board_name, summary)
             .with_inputs(inputs)
             .with_evidence(&report_evidence);
+        if !strict {
+            // Opted out of the exit-code escalation only; the claim stays refused.
+            jr.refusal.clone_from(&partial_refusal);
+        }
         // Surface the partial-coverage caveat as an info note too, so a JSON
         // consumer that ignores `coverage` still sees the honesty annotation.
         // Same INCONCLUSIVE lead as the text caveat: one vocabulary, no
@@ -144,7 +155,10 @@ pub(crate) fn emit_quiet(
                 .collect(),
             coverage: Some(coverage.clone()),
         });
-        println!("{}", jr.to_json());
+        jr.to_json()
+    };
+    if json {
+        println!("{document}");
     } else {
         if plain {
             println!(

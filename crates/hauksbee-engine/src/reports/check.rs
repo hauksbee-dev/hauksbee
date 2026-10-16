@@ -226,11 +226,24 @@ impl CheckReport<'_> {
         .with_condition(rails_entered)
         .with_condition(rails_held)
         .with_judgement_scope(crate::scope::JudgementScope::of(board, &bound, &blockers));
+        // The board's real clearance-rule provenance, the one the sections and
+        // `--json` read, attached before anything counts against it.
+        jr.clearance_rule_source = Some(provenance.clone());
+        // `run_verdict` also tells the CI artifacts the verdict (see
+        // `JsonReport::run_verdict`), so JUnit and SARIF can never be green
+        // beside a verdict that is not a pass.
         let run_verdict = jr.run_verdict();
+        // The headline counts are the machine document's own: `--json`'s
+        // `serious_count` and `actionable_count`, not a second derivation. A
+        // heads-up counts exactly when `--json` carries it as an actionable
+        // finding (the SI impedance advisories do); the copper heads-ups
+        // (suppressed class, unvalidated format, no copper) are notes the JSON
+        // does not count, so the headline does not either.
+        let (_, _, json_serious, json_actionable) = jr.verdict();
+        let headline_counts = (json_serious, json_actionable.saturating_sub(json_serious));
         match mode {
             OutputMode::Json => {
                 jr.triage = Some(triage);
-                jr.clearance_rule_source = Some(provenance);
                 if unrouted {
                     jr.push_coverage_note(super::UNROUTED_COPPER_NOTE.to_string());
                 }
@@ -405,8 +418,7 @@ impl CheckReport<'_> {
             }
         }
         if !matches!(mode, OutputMode::Json) {
-            let (serious, worth_a_look) =
-                verdict_counts(&drc_structured, &lint, &si, usbc.as_ref());
+            let (serious, worth_a_look) = headline_counts;
             print!(
                 "{}",
                 super::render_evidence_appendix(&evidence, quiet, verbose)
@@ -453,13 +465,18 @@ impl CheckReport<'_> {
         // a finding-backed badge must not exit 3 under --strict while the verdict
         // field says pass.
         // A partly judged run is not a pass either: exit 3, annotated as such.
-        if strict && run_verdict.partial {
-            super::ci_artifacts::github_partly_judged_annotation(
-                run_verdict.reason.as_deref().unwrap_or_default(),
-            );
-            super::ci_artifacts::exit_with_findings(crate::result::EXIT_INVALID_FOR_ANALYSIS, &[]);
-        }
+        // Every strict non-pass verdict is annotated with the verdict's own
+        // reason, so the GitHub surface is red wherever JUnit, SARIF and the
+        // exit code are, blockers or not.
         if strict && run_verdict.verdict == "invalid" {
+            // Blockers are named in the shared INCONCLUSIVE sentence by the exit
+            // below; a partly judged run, or one with no blocker to name, says
+            // the verdict's own reason instead.
+            if run_verdict.partial || blockers.is_empty() {
+                super::ci_artifacts::github_verdict_annotation(
+                    run_verdict.reason.as_deref().unwrap_or_default(),
+                );
+            }
             super::exit_invalid_for_analysis(&blockers);
         }
         Ok(())
@@ -515,51 +532,6 @@ pub(crate) fn machine_report(
     all.extend_from_slice(findings);
     jr.findings = Some(all);
     jr
-}
-
-/// Serious / worth-a-look counts across the whole `--check` suite, classified
-/// with the SAME plain-language templates the web and `--plain` surfaces use,
-/// so the counts on the closing line match the section renderings. They are
-/// counts only: whether the run passed is decided by the shared machine verdict.
-fn verdict_counts(
-    drc_structured: &DrcStructured,
-    lint: &hauksbee_extract::NetLintReport,
-    si: &hauksbee_extract::SiReport,
-    usbc: Option<&crate::checks::usb_c::UsbcReport>,
-) -> (usize, usize) {
-    use crate::plain::PlainLevel;
-    let drc_plain = crate::plain::plain_drc_structured(drc_structured);
-    let lint_plain = crate::plain_netlint(lint);
-    let si_plain = crate::plain_si(si);
-    let mut serious = 0usize;
-    let mut worth_a_look = 0usize;
-    for f in drc_plain
-        .findings
-        .iter()
-        .chain(&lint_plain.findings)
-        .chain(&si_plain.findings)
-    {
-        match f.level {
-            PlainLevel::Serious => serious += 1,
-            _ => worth_a_look += 1,
-        }
-    }
-    // Heads-up notes are actionable observations: they count as worth a look,
-    // exactly as the web headline refuses "Looks healthy" over one.
-    worth_a_look += drc_plain.heads_up.len() + lint_plain.heads_up.len() + si_plain.heads_up.len();
-    // An abstention names what was not judged. It stays in the report, but it is
-    // not a flaw to look at, and the coverage caveat carries the missing
-    // judgement (the same split `--json` makes with its `actionable` flag).
-    worth_a_look = worth_a_look.saturating_sub(
-        lint.findings
-            .iter()
-            .filter(|f| !f.is_actionable() && f.severity != hauksbee_extract::Severity::High)
-            .count(),
-    );
-    if usbc.is_some_and(crate::checks::usb_c::UsbcReport::is_serious) {
-        serious += 1;
-    }
-    (serious, worth_a_look)
 }
 
 /// The single closing verdict line for `--check` (U4).
@@ -1078,8 +1050,15 @@ mod tests {
         let mut findings = lint_findings_json(lint);
         findings.extend(si_findings_json(si));
         let would_gate = super::super::lint_fails(lint) || super::super::si_fails(si);
-        let mut jr =
-            super::machine_report("synthetic", &summary, &drc, None, &findings, would_gate);
+        let mut jr = super::machine_report(
+            "synthetic",
+            &summary,
+            &drc,
+            Some(&provenance),
+            &findings,
+            would_gate,
+        );
+        jr.clearance_rule_source = Some(provenance.clone());
         jr.verdict_conditions = conditions.iter().map(ToString::to_string).collect();
         // A scope over `nets` named nets, one of which ("VB") the open parts touch.
         let jr = jr.with_judgement_scope(scope_nets.map(|nets| crate::scope::JudgementScope {
@@ -1100,7 +1079,8 @@ mod tests {
             summary.unresolved,
             true,
         );
-        let (serious, worth) = super::verdict_counts(&drc, lint, si, None);
+        let (_, _, json_serious, json_actionable) = jr.verdict();
+        let (serious, worth) = (json_serious, json_actionable.saturating_sub(json_serious));
         let json: serde_json::Value = serde_json::from_str(&jr.to_json()).unwrap();
         Surfaces {
             json_verdict: json["verdict"].as_str().unwrap().to_string(),

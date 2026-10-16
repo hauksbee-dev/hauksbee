@@ -253,13 +253,16 @@ pub(crate) fn emit_quiet(
     }
     let report_evidence = evidence.clone().with_maps(ac_maps);
 
-    if json {
-        // Valid sweep: emit the structured bode per net. Skip empty/not-found
+    // The machine document is built in EVERY output mode: building it is what
+    // tells the CI artifacts the run's verdict (see `JsonReport::to_json`). Only
+    // `--json` prints it.
+    let document = {
+        // Valid sweep: the structured bode per net. Skip empty/not-found
         // nets AND any individual net that is all-sentinel (no path to THIS net),
         // so a JSON consumer never sees -6000 dB rows presented as real data
         // alongside valid:true. The skipped nets are listed so the omission is
         // explicit, never silent.
-        let mut jr = JsonReport::new(&bound.name, summary)
+        let mut jr = JsonReport::new(&bound.name, summary.clone())
             .with_inputs(inputs)
             .with_evidence(&report_evidence);
         let nets: Vec<AcNetJson> = per_net
@@ -312,7 +315,10 @@ pub(crate) fn emit_quiet(
             coverage,
         });
         jr.push_coverage_note(crate::scope::single_check_note("AC"));
-        println!("{}", jr.to_json());
+        jr.to_json()
+    };
+    if json {
+        println!("{document}");
         return Ok(());
     }
 
