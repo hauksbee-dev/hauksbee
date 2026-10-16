@@ -447,8 +447,9 @@ pub fn program_resistance_to_ground(
     }
 }
 
-/// [`program_resistance_to_ground`], keeping the reason it has no resistance:
-/// a pin shorted to ground reads as zero ohms ([`ProgramReading::Shorted`]),
+/// [`program_resistance_to_ground`], keeping the reason it has no resistance.
+///
+/// A pin shorted to ground reads as zero ohms ([`ProgramReading::Shorted`]),
 /// the extreme of a too-small programming resistor, and anything the walk
 /// could not read says which part or limit stopped it, so a check that rests
 /// on the resistance can abstain by name instead of going silent.
@@ -472,6 +473,15 @@ pub fn program_network_reading(
             Err(unread) => return ProgramReading::Unread(unread),
         };
     solve_program_network(&edges, is_ground, start)
+}
+
+fn closed_link_references(edges: &[ResistanceEdge]) -> Vec<String> {
+    let links: BTreeSet<String> = edges
+        .iter()
+        .filter(|edge| edge.closed)
+        .map(|edge| edge.reference.clone())
+        .collect();
+    links.into_iter().collect()
 }
 
 fn solve_program_network(
@@ -514,12 +524,7 @@ fn solve_program_network(
         .collect();
     if ground_roots.contains(&start_root) {
         // Only closed links join the pin to ground: zero ohms.
-        let links: BTreeSet<String> = edges
-            .iter()
-            .filter(|edge| edge.closed)
-            .map(|edge| edge.reference.clone())
-            .collect();
-        return ProgramReading::Shorted(links.into_iter().collect());
+        return ProgramReading::Shorted(closed_link_references(edges));
     }
 
     let variable_roots: BTreeSet<usize> = (0..node_ids.len())

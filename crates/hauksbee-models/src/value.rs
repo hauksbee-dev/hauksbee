@@ -715,9 +715,9 @@ mod tests {
         assert_eq!(normalise_comma_decimal("1,5,20"), "1,5,20");
     }
 
-    /// A digit group after a space is not an annotation: "1 000" must never
+    /// A digit group after a space is not an annotation: `1 000` must never
     /// read as 1 ohm (a 1000x error on a programming resistor). It abstains,
-    /// like "1_000"; spaced units, tolerances and chip-size codes still parse.
+    /// like `1_000`; spaced units, tolerances and chip-size codes still parse.
     #[test]
     fn a_space_grouped_number_is_not_read_as_its_first_group() {
         for s in ["1 000", "10 000", "4 700", "1 000 000", "2 2"] {
