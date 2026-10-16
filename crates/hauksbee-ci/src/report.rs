@@ -605,6 +605,7 @@ impl CiResult {
         let failing = first.map(|_| VerdictCause::Failing {
             count: self.gating_failures().count(),
             first: Some((&what, &fix)),
+            same_on: "",
         });
         let refused = refusal.as_ref().map(VerdictCause::from);
         refused.or(failing).map(VerdictCause::reason)
