@@ -103,10 +103,12 @@ impl<'a> Wiring<'a> {
         }
     }
 
-    /// The state and net name of pad `number` of `comp`.
-    fn pad(&self, comp: &Component, number: &str) -> (PadState, String, String) {
+    /// The state and net name of pad `number` of `comp`. `renamed` is set when
+    /// the board's part has pads the card does not number (an `EPAD` where the
+    /// card says `57`): the numbering differs, so an absent pad proves nothing.
+    fn pad(&self, comp: &Component, number: &str, renamed: bool) -> (PadState, String, String) {
         let Some(pin) = comp.pins.iter().find(|p| p.number == number) else {
-            let absent = if self.lists_unconnected {
+            let absent = if self.lists_unconnected || renamed {
                 PadState::Unknown
             } else {
                 PadState::Open
@@ -205,6 +207,10 @@ fn judge(wiring: &Wiring<'_>, comp: &Component, model: &ModelEntry) -> Vec<LintF
         .iter()
         .map(|o| o.role.to_ascii_lowercase())
         .collect();
+    let renamed = comp
+        .pins
+        .iter()
+        .any(|p| !model.pins.contains_key(&p.number));
     let mut pads: Vec<Pad> = model
         .pins
         .iter()
@@ -213,7 +219,7 @@ fn judge(wiring: &Wiring<'_>, comp: &Component, model: &ModelEntry) -> Vec<LintF
             if outputs.contains(&role.to_ascii_lowercase()) {
                 return None;
             }
-            let (state, net, function) = wiring.pad(comp, number);
+            let (state, net, function) = wiring.pad(comp, number, renamed);
             let label = if function.is_empty() {
                 role.to_ascii_uppercase()
             } else {
@@ -659,6 +665,14 @@ mod tests {
         // Each alone on its own net is still two open supply inputs.
         let open = run(&lib, &[("2", GND), ("3", SIG)]);
         assert_eq!(open.len(), 2, "{open:#?}");
+    }
+
+    /// An Eagle package names its exposed pad `EPAD` where the card says `2`:
+    /// the numbering differs, so the card's ground pad is not proven open.
+    #[test]
+    fn a_pad_the_board_names_differently_from_the_card_is_not_judged() {
+        let found = run(&simple(), &[("1", V33), ("EPAD", GND), ("3", SIG)]);
+        assert!(found.is_empty(), "{found:#?}");
     }
 
     #[test]

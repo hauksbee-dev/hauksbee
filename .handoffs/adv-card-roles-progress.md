@@ -1,0 +1,5 @@
+card-roles progress (branch adv-card-roles, worktree agent-af12747947575c25a)
+VERIFIED (Modal) at a839d2d2: lint OK, test 4135 pass, qcdef rcs all 0 (target/launch/correctness-20261016/card-roles/qcdef-a839d2d2), boards n1/n2/nctl + census runs in same dir.
+UNVERIFIED later commits: 33f1cb3a (tied-pads-not-open, uvcc not required) and the commit after it (pad-renamed-not-judged, EPAD). Modal spend limit hit 15:00 so lint/test never ran on them (lint-33f1cb3a.out shows LINT_NO_RESULT).
+NEXT when Modal is back, at the final sha: lint-commit.sh <sha>, test-commit.sh <sha>, qcdef stage, rerun census (census_app.py, boards model-coverage-20261015/boards.json) + nctl/n1/n2 boards_app jobs-*.json, then sweep run_sweep.sh with --classes ic_supply_pads_open,ic_return_pads_open,ic_supply_ground_swapped,ic_power_optional_open; diff census with scratchpad cdiff.py (b4cbdfbd vs new).
+EVIDENCE: detection numbers + census false-alarm explanation are in the final report; scripts: scratchpad analyze.py, cdiff.py.
