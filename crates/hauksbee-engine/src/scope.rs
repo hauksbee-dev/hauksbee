@@ -532,10 +532,9 @@ mod tests {
     /// An MCU-like part U1 on SDA and LED_K (two signal pins) and VOUT (its
     /// rail, a supply group), bound as `kind`, with an open part U3 on `u3_net`.
     fn through_part(kind: &str, u3_net: &'static str) -> JudgementScope {
-        let parts: Vec<(&str, &[&str])> = vec![
-            ("U1", &["SDA", "LED_K", "VOUT", "GND"]),
-            ("U3", &[u3_net, "GND"]),
-        ];
+        let u1_nets: [&str; 4] = ["SDA", "LED_K", "VOUT", "GND"];
+        let u3_nets: [&str; 2] = [u3_net, "GND"];
+        let parts: Vec<(&str, &[&str])> = vec![("U1", &u1_nets[..]), ("U3", &u3_nets[..])];
         let mut b = board(&parts);
         b.components[0].pins[2].function = "VDD".into();
         let mut bound = BoundBoard::default();
