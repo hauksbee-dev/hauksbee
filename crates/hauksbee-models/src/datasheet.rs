@@ -1739,7 +1739,8 @@ supply_range or input_common_mode per printed temperature row, each with its
 (min/max) cell, never typ (typ alone: omit the entry). Pins, supplies and inputs
 are roles from [models.pins], never pad numbers. Every `basis` names the exact
 table and row; add `abs_max_v` only when the absolute-maximum table publishes
-it. No table row to cite, no envelope: omit this section then, and never infer
+it, and then also `abs_max_basis` naming that table and row (a different table
+from `basis`, so a finding that states the figure cites both). No table row to cite, no envelope: omit this section then, and never infer
 a bound from a typical value, application schematic, or family convention.";
 
 const PIN_NUMBERING: &str = r#"PIN NUMBERING, read this before you fill in [models.pins]:

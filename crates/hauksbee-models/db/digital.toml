@@ -111,6 +111,7 @@ min_v = 1.2
 max_v = 3.6
 abs_max_v = 4.6
 basis = "TI TXB0101 SCES639F, Section 5.3 Recommended Operating Conditions, VCCA supply-voltage row"
+abs_max_basis = "TI TXB0101 SCES639F, Section 5.1 Absolute Maximum Ratings p.5, VCCA supply voltage -0.5 V to 4.6 V"
 
 [[models.envelope]]
 kind = "supply_range"
@@ -119,6 +120,7 @@ min_v = 1.65
 max_v = 5.5
 abs_max_v = 6.5
 basis = "TI TXB0101 SCES639F, Section 5.3 Recommended Operating Conditions, VCCB supply-voltage row"
+abs_max_basis = "TI TXB0101 SCES639F, Section 5.1 Absolute Maximum Ratings p.5, VCCB supply voltage -0.5 V to 6.5 V"
 
 [[models.envelope]]
 kind = "rail_order"
@@ -10321,6 +10323,7 @@ min_v = 3.0
 max_v = 3.6
 abs_max_v = 4.0
 basis = "Cypress 38-08032 Rev. AD Table 11 AVCC: connect to the 3.3 V power source; same limits as VCC"
+abs_max_basis = "Cypress 38-08032 Rev. AD p.41, Absolute Maximum Ratings, supply voltage to ground potential -0.5 V to +4.0 V (the sheet prints one supply limit; AVCC is tied to the same 3.3 V source as VCC)"
 
 [models.coverage]
 implements = ["pin_roles", "supply_ranges", "io_logic_levels", "absolute_ratings"]
@@ -13643,6 +13646,7 @@ max_v = 5.5
 conditions = "Interface inactive; fSCL = 0 Hz; Tamb = 25 °C"
 abs_max_v = 6.5
 basis = "Table 29, Supply voltage; Table 28, Supply voltage"
+abs_max_basis = "Table 28, Limiting values, VDD supply voltage -0.5 V to +6.5 V (Absolute Maximum Rating System, IEC 60134)"
 [[models.envelope]]
 kind = "supply_range"
 pin = "vdd"
@@ -13651,6 +13655,7 @@ max_v = 5.5
 conditions = "Interface active; fSCL = 400 kHz; TA = -40 °C to +85 °C"
 abs_max_v = 6.5
 basis = "Table 29, Supply voltage; Table 28, Supply voltage"
+abs_max_basis = "Table 28, Limiting values, VDD supply voltage -0.5 V to +6.5 V (Absolute Maximum Rating System, IEC 60134)"
 
 [[models]]
 id = "pcf8563_so8"
@@ -13763,6 +13768,7 @@ max_v = 5.5
 conditions = "Interface inactive; fSCL = 0 Hz; Tamb = 25 °C"
 abs_max_v = 6.5
 basis = "Table 29, Supply voltage; Table 28, Supply voltage"
+abs_max_basis = "Table 28, Limiting values, VDD supply voltage -0.5 V to +6.5 V (Absolute Maximum Rating System, IEC 60134)"
 [[models.envelope]]
 kind = "supply_range"
 pin = "vdd"
@@ -13771,6 +13777,7 @@ max_v = 5.5
 conditions = "Interface active; fSCL = 400 kHz; TA = -40 °C to +85 °C"
 abs_max_v = 6.5
 basis = "Table 29, Supply voltage; Table 28, Supply voltage"
+abs_max_basis = "Table 28, Limiting values, VDD supply voltage -0.5 V to +6.5 V (Absolute Maximum Rating System, IEC 60134)"
 
 [[models]]
 id = "pcf8563_tssop8"
@@ -13877,6 +13884,7 @@ max_v = 5.5
 conditions = "Interface inactive; fSCL = 0 Hz; Tamb = 25 °C"
 abs_max_v = 6.5
 basis = "Table 29, Supply voltage; Table 28, Supply voltage"
+abs_max_basis = "Table 28, Limiting values, VDD supply voltage -0.5 V to +6.5 V (Absolute Maximum Rating System, IEC 60134)"
 [[models.envelope]]
 kind = "supply_range"
 pin = "vdd"
@@ -13885,6 +13893,7 @@ max_v = 5.5
 conditions = "Interface active; fSCL = 400 kHz; TA = -40 °C to +85 °C"
 abs_max_v = 6.5
 basis = "Table 29, Supply voltage; Table 28, Supply voltage"
+abs_max_basis = "Table 28, Limiting values, VDD supply voltage -0.5 V to +6.5 V (Absolute Maximum Rating System, IEC 60134)"
 
 # ── PCA9635: NXP 16-channel Fm+ I2C LED driver, TSSOP28 ──
 # NXP PCA9635 Rev. 7.1 (27 July 2021), sha256 15110f5e5ce3e955a589bec76c9b1fa1f4c54c8c7525c0994861a5c99b6e5696. Drafted by the extraction pipeline
@@ -15357,6 +15366,7 @@ min_v = 2.5
 max_v = 4.5
 abs_max_v = 6.0
 basis = "Electrical Characteristics, Supply Voltage row (VDD = 2.5V to 4.5V)"
+abs_max_basis = "Absolute Maximum Ratings, All Other Pins to GND -0.3 V to +6 V (VDD has no separate row)"
 
 [[models]]
 id = "max17048_wlp"
@@ -15428,6 +15438,7 @@ min_v = 2.5
 max_v = 4.5
 abs_max_v = 6.0
 basis = "Electrical Characteristics, Supply Voltage row (VDD = 2.5V to 4.5V)"
+abs_max_basis = "Absolute Maximum Ratings, All Other Pins to GND -0.3 V to +6 V (VDD has no separate row)"
 
 # CAT24M01 1-Mbit I2C EEPROM (onsemi datasheet): extraction pipeline with --kind digital after the auto sensor kind gave a bare spec; accepted as drafted (pin map identical for SOIC, TSSOP and UDFN).
 [[models]]
@@ -15479,6 +15490,7 @@ min_v = 1.8
 max_v = 5.5
 abs_max_v = 6.5
 basis = "Table 3, D.C. Operating Characteristics, VCC range"
+abs_max_basis = "Table 1, Absolute Maximum Ratings, Voltage on any Pin with Respect to Ground -0.5 V to +6.5 V"
 
 [models.coverage]
 implements = ["identity", "pin_assignment", "supply_range", "absolute_maximum_voltage", "maximum_junction_temperature"]

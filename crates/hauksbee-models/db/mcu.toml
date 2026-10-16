@@ -1289,6 +1289,20 @@ internal_clock = "internal HSI RC oscillator"
 "4"  = "pc15_osc32_out"
 "5"  = "pf0_osc_in"
 "6"  = "pf1_osc_out"
+# NRST has a PERMANENT on-die pull-up, so a floating NRST is not undefined and
+# this card does not list `reset` in `must_not_float_roles` (a removed external
+# pull-up is not judged a fault). STM32F072x8/xB datasheet DocID025004 Rev 5
+# (the DS9826 line), 6.3.15 NRST pin characteristics, p.83: "The NRST pin input
+# driver uses the CMOS technology. It is connected to a permanent pull-up
+# resistor, RPU."; Table 56 (continued, p.84): RPU "Weak pull-up equivalent
+# resistor", VIN = VSS, 25 kOhm min / 40 kOhm typ / 55 kOhm max, footnote 2:
+# "The pull-up is designed with a true resistance in series with a switchable
+# PMOS. This PMOS contribution to the series resistance is minimal (~10% order)."
+# Same figures in STM32F030x4/6/8/C DocID024849 Rev 2 Table 49 (p.71). Also
+# Table 56: VIL(NRST) max 0.3 VDD + 0.07 V, VIH(NRST) min 0.445 VDD + 0.398 V,
+# Vhys 200 mV typ, filtered pulse 100 ns max, unfiltered pulse 300 ns (2.7 V
+# < VDD < 3.6 V) or 500 ns (2.0 V < VDD < 3.6 V) min. The datasheet revision
+# above is the one read for this check; the card's other rows cite DS9826 Rev 6.
 "7"  = "reset"
 "8"  = "vssa"
 "9"  = "vdda"

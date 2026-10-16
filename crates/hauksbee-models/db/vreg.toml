@@ -161,7 +161,7 @@ basis = "TI TLV1117 SLVS561O, 5.3 Recommended Operating Conditions, VIN 3.2 V to
 [[models]]
 id = "ams1117_3v3"
 kind = "vreg"
-description = "AMS1117-3.3 / LM1117-3.3 LDO, 1A, 3.3V fixed, SOT-223"
+description = "AMS1117-3.3 LDO, 1A, 3.3V fixed, SOT-223 (the TI LM1117-3.3 has its own card: it states a 10 uF output-capacitor minimum)"
 
 [models.source]
 tier = "curated-library"
@@ -201,7 +201,7 @@ package = "SOIC-8"
 basis = "Advanced Monolithic Systems AMS1117 datasheet (ds1117.pdf, no revision or date printed), Absolute Maximum Ratings, Thermal Resistance, SO-8 package ϕJA = 160 °C/W"
 
 [models.match]
-value_re = "(?i)^(AMS|LM)1117.?3[._]?3"
+value_re = "(?i)^AMS1117.?3[._]?3"
 
 [models.params]
 # Source: Advanced Monolithic Systems AMS1117 datasheet (see above).
@@ -238,10 +238,10 @@ theta_jc_c_per_w = 15.0      # all packages, max
 [[models]]
 id = "ams1117_5v"
 kind = "vreg"
-description = "AMS1117-5.0 / LM1117-5.0 LDO, 1A, 5V fixed"
+description = "AMS1117-5.0 LDO, 1A, 5V fixed (the TI LM1117-5.0 has its own card)"
 
 [models.match]
-value_re = "(?i)^(AMS|LM)1117.?5[._]?0?"
+value_re = "(?i)^AMS1117.?5[._]?0?"
 
 [models.params]
 vout      = 5.0
@@ -2609,8 +2609,13 @@ description = "TLV75533P LDO, 500mA, 3.3V fixed, SOT-23-5 (TI DBV)"
 
 [models.match]
 # The 33 in the part number is the voltage code; the family spans 0.6 V to
-# 5.0 V on the same pinout, so it is required.
-value_re = "(?i)^TLV755?33P?[A-Z]{0,4}[0-9]?R?$"
+# 5.0 V on the same pinout, so it is required. This card's pin map is the DBV
+# (SOT-23-5) column, so only a bare part number (the DBV is the package a bare
+# TLV75533P is sold in on the ZSWatch boards) or a DBV order code (PDBVR,
+# PDBVT) binds it. The DQN (X2SON), DYD (SOT-23-5 with thermal pad) and DRV
+# (WSON-6) codes have their own cards below: reading a DRV part with this
+# map would put IN on pin 1, where the DRV has OUT.
+value_re = "(?i)^TLV755?33P?(?:DBV(?:R|T)?(?:G4)?)?(?:\\.A)?$"
 
 [models.params]
 vout      = 3.3      # +-1% max accuracy, -40 to +85 C, DBV package
@@ -2669,6 +2674,167 @@ unit = "°C/W"
 conditions = "DBV (SOT-23-5), LP087A EVM with an exposed pad SOT-23-5 (DYD) layout"
 mounting = "LP087A EVM"
 basis = "TI TLV755P SBVS320D (September 2024), 5.4 Thermal Information, DBV (SOT-23-5), EVM RθJA"
+
+[[models]]
+id = "tlv75533p_drv"
+kind = "vreg"
+description = "TLV75533P LDO, 500mA, 3.3V fixed, WSON-6 (TI DRV, thermal pad internally GND)"
+
+[models.match]
+value_re = "(?i)^TLV75533PDRV(?:R|T)?(?:G4)?(?:\\.A)?$"
+
+[models.params]
+vout      = 3.3      # +-1% max accuracy, -40 to +85 C (DBV and DRV package); TI TLV755P SBVS320D (September 2024) 5.5
+dropout_v = 0.238    # VDO max @ 500 mA, -40..125 C, 3.3 V <= VOUT < 5.0 V row (DRV is not DYD), 5.5
+# MINIMUM. TI TLV755P SBVS320D Table 4-1 (p.3), OUT: "A capacitor with a value
+# of 1µF or larger is required"; Recommended Operating Conditions (p.4) COUT
+# 1 µF min, 200 µF max.
+cout_min_f = 1.0e-6
+iq_a      = 25.0e-6  # IGND typ @ IOUT = 0, TJ = 25 C (33 uA max over -40 to +85 C)
+# EN pin (active high). TI TLV755P SBVS320D 5.5 Electrical Characteristics (p.6): VHI 1 V
+# min, VLO 0.3 V max; RPULLDOWN 120 Ohm typ output discharge when disabled (6.3.2, p.12).
+en_on_v           = 1.0
+en_off_v          = 0.3
+en_discharge_ohms = 120.0
+i_shdn_a  = 1.0e-7  # ISHDN typ (1 uA max), VEN <= 0.4 V, 5.5 Electrical Characteristics
+
+[models.pins]
+# DRV (WSON-6) package. TI TLV755P SBVS320D Table 4-1 Pin Functions (p.3), DRV column: OUT 1, NC 2, GND 3, EN 4, NC 5, IN 6; the
+# thermal pad is internally connected to GND. (The DBV card's map puts IN on pin 1.)
+"1" = "out"
+"2" = "nc"
+"3" = "gnd"
+"4" = "en"
+"5" = "nc"
+"6" = "in"
+
+[models.ratings]
+max_current_a = 0.5
+max_voltage_v = 6.0          # VIN abs max (1.45 to 5.5 V operating), 5.1
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 100.2     # DRV (WSON-6), JEDEC standard board, 5.4
+theta_jc_c_per_w = 108.5     # RthJC(top), DRV (WSON-6), 5.4
+# NOT MODELLED: ICL 720 mA typ current limit and the 355 mA typ short-circuit current.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 100.2
+unit = "°C/W"
+conditions = "DRV (WSON-6), JEDEC standard PCB (2s2p, no vias to internal plane and bottom layer)"
+mounting = "JEDEC 2s2p board"
+basis = "TI TLV755P SBVS320D (September 2024), 5.4 Thermal Information, DRV (WSON-6), JEDEC RθJA"
+
+[[models]]
+id = "tlv75533p_dqn"
+kind = "vreg"
+description = "TLV75533P LDO, 500mA, 3.3V fixed, X2SON-4 (TI DQN, thermal pad internally GND)"
+
+[models.match]
+value_re = "(?i)^TLV75533PDQN(?:R|T)?(?:G4|M3)?(?:\\.A)?$"
+
+[models.params]
+vout      = 3.3      # +-1% max accuracy, -40 to +85 C (DQN package ±1.2%); TI TLV755P SBVS320D (September 2024) 5.5
+dropout_v = 0.238    # VDO max @ 500 mA, -40..125 C, 3.3 V <= VOUT < 5.0 V row (DQN is not DYD), 5.5
+# MINIMUM. TI TLV755P SBVS320D Table 4-1 (p.3), OUT: "A capacitor with a value
+# of 1µF or larger is required"; Recommended Operating Conditions (p.4) COUT
+# 1 µF min, 200 µF max.
+cout_min_f = 1.0e-6
+iq_a      = 25.0e-6  # IGND typ @ IOUT = 0, TJ = 25 C (33 uA max over -40 to +85 C)
+# EN pin (active high). TI TLV755P SBVS320D 5.5 Electrical Characteristics (p.6): VHI 1 V
+# min, VLO 0.3 V max; RPULLDOWN 120 Ohm typ output discharge when disabled (6.3.2, p.12).
+en_on_v           = 1.0
+en_off_v          = 0.3
+en_discharge_ohms = 120.0
+i_shdn_a  = 1.0e-7  # ISHDN typ (1 uA max), VEN <= 0.4 V, 5.5 Electrical Characteristics
+
+[models.pins]
+# DQN (X2SON-4) package. TI TLV755P SBVS320D Table 4-1 Pin Functions (p.3), DQN column: OUT 1, GND 2, EN 3, IN 4; the thermal
+# pad is internally connected to GND.
+"1" = "out"
+"2" = "gnd"
+"3" = "en"
+"4" = "in"
+
+[models.ratings]
+max_current_a = 0.5
+max_voltage_v = 6.0          # VIN abs max (1.45 to 5.5 V operating), 5.1
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 168.4     # DQN (X2SON-4), JEDEC standard board, 5.4
+theta_jc_c_per_w = 139.1     # RthJC(top), DQN (X2SON-4), 5.4
+# NOT MODELLED: ICL 720 mA typ current limit and the 355 mA typ short-circuit current.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 168.4
+unit = "°C/W"
+conditions = "DQN (X2SON-4), JEDEC standard PCB (2s2p, no vias to internal plane and bottom layer)"
+mounting = "JEDEC 2s2p board"
+basis = "TI TLV755P SBVS320D (September 2024), 5.4 Thermal Information, DQN (X2SON-4), JEDEC RθJA"
+
+[[models]]
+id = "tlv75533p_dyd"
+kind = "vreg"
+description = "TLV75533P LDO, 500mA, 3.3V fixed, SOT-23-5 with exposed thermal pad (TI DYD)"
+
+[models.match]
+value_re = "(?i)^TLV75533PDYD(?:R|T)?(?:\\.A)?$"
+
+[models.params]
+vout      = 3.3      # +-1% max accuracy, -40 to +85 C (DYD package); TI TLV755P SBVS320D (September 2024) 5.5
+dropout_v = 0.258    # VDO max @ 500 mA, -40..125 C, 3.3 V <= VOUT < 5.0 V row (the DYD package's own 258 mV, p.6), 5.5
+# MINIMUM. TI TLV755P SBVS320D Table 4-1 (p.3), OUT: "A capacitor with a value
+# of 1µF or larger is required"; Recommended Operating Conditions (p.4) COUT
+# 1 µF min, 200 µF max.
+cout_min_f = 1.0e-6
+iq_a      = 25.0e-6  # IGND typ @ IOUT = 0, TJ = 25 C (33 uA max over -40 to +85 C)
+# EN pin (active high). TI TLV755P SBVS320D 5.5 Electrical Characteristics (p.6): VHI 1 V
+# min, VLO 0.3 V max; RPULLDOWN 120 Ohm typ output discharge when disabled (6.3.2, p.12).
+en_on_v           = 1.0
+en_off_v          = 0.3
+en_discharge_ohms = 120.0
+i_shdn_a  = 1.0e-7  # ISHDN typ (1 uA max), VEN <= 0.4 V, 5.5 Electrical Characteristics
+
+[models.pins]
+# DYD (SOT-23-5 with thermal pad) package. TI TLV755P SBVS320D Table 4-1 Pin Functions (p.3), DYD column: EN 3, GND 2, IN 1, NC 4,
+# OUT 5, the same numbering as DBV; the thermal pad is internally connected to GND.
+"1" = "in"
+"2" = "gnd"
+"3" = "en"
+"4" = "nc"
+"5" = "out"
+
+[models.ratings]
+max_current_a = 0.5
+max_voltage_v = 6.0          # VIN abs max (1.45 to 5.5 V operating), 5.1
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 92.5     # DYD (SOT-23-5 with thermal pad), JEDEC standard board, 5.4
+theta_jc_c_per_w = 119.8     # RthJC(top), DYD (SOT-23-5 with thermal pad), 5.4
+# NOT MODELLED: ICL 720 mA typ current limit and the 355 mA typ short-circuit current.
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 92.5
+unit = "°C/W"
+conditions = "DYD (SOT-23-5 with thermal pad), JEDEC standard PCB (2s2p, no vias to internal plane and bottom layer)"
+mounting = "JEDEC 2s2p board"
+basis = "TI TLV755P SBVS320D (September 2024), 5.4 Thermal Information, DYD (SOT-23-5 with thermal pad), JEDEC RθJA"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 60.3
+unit = "°C/W"
+conditions = "DYD (SOT-23-5 with exposed thermal pad), LP087A EVM"
+mounting = "LP087A EVM"
+basis = "TI TLV755P SBVS320D (September 2024), 5.4 Thermal Information, DYD (SOT-23-5), EVM RθJA"
 
 # ═════════════════════════════════════════════════════════════════════════════
 # SMALL BUCK CONVERTERS: averaged board-feedback models.
@@ -8470,23 +8636,28 @@ max_v = 16.0
 abs_max_v = 20.0
 basis = "Microchip MIC5205 DS20005785A, Operating Ratings, input voltage VIN +2.5 V to +16 V; Absolute Maximum Ratings, VIN -20 V to +20 V"
 
-# ── LM1117 (bare part number or -ADJ = ADJUSTABLE) ───────────────────────────
-# TI 800 mA LDO. The fixed versions carry their voltage in the part number
-# (LM1117-3.3, LM1117-5.0, ...); a bare "LM1117" or "LM1117-ADJ" is the adjustable
-# version whose ADJ pin (pin 1) is referenced to the OUTPUT: VREF = 1.25 V sits between OUT and
-# ADJ, so the board's own R1/R2 divider and the ADJ-pin current set the rail
-# (VOUT = VREF x (1 + R2/R1) + IADJ x R2). Like the LM317 card this maps no gnd pin.
-# 1.25 V is a reference, never an output voltage.
+# ── LM1117 (TI 800 mA LDO: fixed 1.8 / 2.5 / 3.3 / 5.0 V and ADJUSTABLE) ─────
 # Source: TI LM1117 SNOS412Q (February 2000, revised January 2023), sha256
 # c117f5dd97fd15e62c0dee3adbf1af60480a128a10a0f9a9c28aafb8220ec3aa (byte-identical to the
 # ti.com lm1117.pdf symlink). Table 6-1 Pin Functions p.3 (ADJ/GND 1, VOUT 2 and tab, VIN 3 on
-# TO-252, SOT-223, TO-263 and TO-220), 7.1 p.4 (VIN 20 V abs max), 7.3 p.4 (VIN 15 V),
-# 7.4 p.4 thermal, 7.5 Electrical Characteristics p.5 (VREF 1.238/1.25/1.262 V, dropout 1.2 V
-# typ and 1.3 V max at 800 mA, minimum load 1.7 mA typ and 5 mA max, adjust pin current 60 uA
-# typ and 120 uA max). The WSON package numbers the pins differently and is not matched by pin.
-# CAVEAT: a bare "LM1117" on a board is read as the adjustable part. If the board really
-# uses a fixed-voltage LM1117 whose value string omits the voltage, put the full part number
-# (LM1117-3.3) in the value; with pin 1 grounded this card would read the rail as 1.25 V.
+# TO-252, TO-263 and TO-220; SOT-223 VOUT 2 and 4, the tab), 7.1 p.4 (VIN 20 V abs max),
+# 7.3 p.4 (VIN 15 V), 7.4 p.4 thermal, 7.5 Electrical Characteristics pp.5-6, p.1 and 9.2.2.1.3
+# p.15 (output capacitor).
+#
+# These are NOT the AMS1117 cards: the AMS sheet recommends 22 uF tantalum (a recommendation),
+# while TI's LM1117 sheet states a 10 uF tantalum MINIMUM at the output, which gates.
+# The value rules take only the packages whose pad numbering Table 6-1 gives as ADJ/GND 1,
+# VOUT 2, VIN 3: SOT-223 (DCY), TO-252 (NDP), TO-263 (KTT), TO-220 (NDE), that is order codes
+# LM1117, LM1117I with an MP/MPX, DT/DTX, S/SX or T suffix or none. The WSON order codes (LD)
+# number their pins differently (ADJ/GND 1, VIN 2-4, VOUT 5-7) and match no card here, so a
+# WSON part is reported as unmodelled instead of being read with the wrong pin map.
+# A bare "LM1117" (or -ADJ) is the adjustable part: its ADJ pin (pin 1) is referenced to the
+# OUTPUT, VREF = 1.25 V sits between OUT and ADJ, so the board's own R1/R2 divider and the
+# ADJ-pin current set the rail (VOUT = VREF x (1 + R2/R1) + IADJ x R2). Like the LM317 card
+# it maps no gnd pin. 1.25 V is a reference, never an output voltage.
+# CAVEAT: if a board really uses a fixed-voltage LM1117 whose value string omits the voltage,
+# put the full part number (LM1117-3.3) in the value; with pin 1 grounded the adjustable card
+# would read the rail as 1.25 V.
 [[models]]
 id = "lm1117_adj"
 kind = "vreg"
@@ -8498,7 +8669,7 @@ validation = "physical-bounds-only"
 [[models.source.references]]
 url = "https://www.ti.com/lit/ds/symlink/lm1117.pdf"
 title = "TI LM1117 800-mA, Low-Dropout Linear Regulator, SNOS412Q, February 2000, revised January 2023"
-locator = "Table 6-1 Pin Functions p.3; 7.1 Absolute Maximum Ratings, 7.3 Recommended Operating Conditions and 7.4 Thermal Information p.4; 7.5 Electrical Characteristics p.5; 8 Detailed Description p.13"
+locator = "p.1 Description; Table 6-1 Pin Functions p.3; 7.1 Absolute Maximum Ratings, 7.3 Recommended Operating Conditions and 7.4 Thermal Information p.4; 7.5 Electrical Characteristics pp.5-6; 9.2.2.1.3 Output Capacitor p.15"
 sha256 = "c117f5dd97fd15e62c0dee3adbf1af60480a128a10a0f9a9c28aafb8220ec3aa"
 [[models.source.uncertainty]]
 status = "interval"
@@ -8512,29 +8683,74 @@ basis = "LM1117-ADJ SNOS412Q 7.5, VREF 1.238 V min / 1.25 V typ / 1.262 V max (I
 status = "unknown"
 parameter = "model"
 reason = "datasheet publishes no validated model error interval; the divider-set DC rail, the ADJ-pin current, the dropout and the ratings are modelled"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 61.6
+unit = "°C/W"
+conditions = "SOT-223 package (DCY), 7.4 Thermal Information"
+package = "SOT-223"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA DCY (SOT-223) = 61.6 °C/W"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 45.1
+unit = "°C/W"
+conditions = "TO-252 package (NDP), 7.4 Thermal Information"
+package = "TO-252"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA NDP (TO-252) = 45.1 °C/W"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 41.3
+unit = "°C/W"
+conditions = "TO-263 package (KTT), 7.4 Thermal Information"
+package = "TO-263"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA KTT (TO-263) = 41.3 °C/W"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 23.8
+unit = "°C/W"
+conditions = "TO-220 package (NDE), 7.4 Thermal Information"
+package = "TO-220"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA NDE (TO-220) = 23.8 °C/W"
 
 [models.match]
-value_re = "(?i)^LM1117(?:[A-Z]{1,3})?(?:[- ]?ADJ)?(?:/NOPB)?$"
+value_re = "(?i)^LM1117I?(?:MPX?|DTX?|SX?|T)?(?:[- ]?ADJ)?(?:[/_]NOPB)?$"
 
 [models.params]
 warning = "the bare LM1117 part number is read as the ADJUSTABLE version: the rail is the board's own divider against a 1.25 V reference; if this board's part is a fixed-voltage LM1117 with its voltage omitted from the value, put the full part number (for example LM1117-3.3) in the value so the right card is used"
 vref      = 1.25     # VREF typ, 7.5 (1.238 min / 1.262 max at 25 C): a feedback reference, never an output voltage
 iadj_a    = 60.0e-6  # adjust pin current typ (120 uA max), 7.5
 dropout_v = 1.3      # VIN - VOUT max @ IOUT = 800 mA over temperature (1.2 V typ)
+# MINIMUM. TI LM1117 SNOS412Q p.1 Description: "A minimum of 10-µF tantalum capacitor is
+# required at the output to improve the transient response and stability." and 9.2.2.1.3
+# Output Capacitor (p.15): "The minimum output capacitance required by the LM1117 is 10 µF,
+# if a tantalum capacitor is used. ... The ESR of the output capacitor should range between
+# 0.3 Ω to 22 Ω." The ESR window is a type condition the board does not record, so the
+# regulator_cout check states it and does not judge it.
+cout_min_f = 10.0e-6
+cout_esr_min_ohm = 0.3
+cout_esr_max_ohm = 22.0
+# 9.2.2.1.3: "when the CADJ is used, a larger output capacitance (22-µF tantalum) is required".
 
 [models.pins]
 # Table 6-1: pin 1 ADJ/GND (ADJ on this card), 2 VOUT, 3 VIN; the SOT-223 tab is pin 4 on a
-# 4-pin footprint and is the output, left unmapped here like the LM317 card.
+# 4-pin footprint and is the output too (VOUT 2, 4).
 "1" = "fb"
 "2" = "out"
 "3" = "in"
+"4" = "out"
 
 [models.ratings]
-max_current_a = 0.8          # rated output, 7.5 dropout/current-limit rows (800 mA)
-min_current_a = 0.005        # minimum load current, ADJ version: 1.7 mA typ, 5 mA max over temperature (VIN = 15 V)
+max_current_a = 0.8          # rated output, 7.5 dropout row (800 mA) and Features "Output current: 800 mA"
 max_voltage_v = 20.0         # 7.1 maximum input voltage, VIN to GND (15 V operating, 7.3)
-max_junction_temp_c = 125.0  # 7.3 TJ range 0 to 125 C
-theta_ja_c_per_w = 61.6      # 7.4 RθJA, DCY (SOT-223); 23.8 TO-220, 45.1 TO-252, 39.3 WSON, 41.3 TO-263
+max_junction_temp_c = 125.0  # 7.3 TJ range 0 to 125 C (LM1117I: -40 to 125 C)
+theta_ja_c_per_w = 61.6      # 7.4 RθJA, DCY (SOT-223), the least favourable matched package; the
+                             # package rows above judge a TO-252 (45.1), TO-263 (41.3) or TO-220 (23.8)
+                             # footprint on its own figure
+min_current_a = 0.005        # minimum load current, ADJ version: 1.7 mA typ, 5 mA max over temperature (VIN = 15 V)
 
 [[models.envelope]]
 kind = "supply_range"
@@ -8542,7 +8758,404 @@ pin = "in"
 min_v = 0.0
 max_v = 15.0
 abs_max_v = 20.0
-basis = "TI LM1117 SNOS412Q, 7.3 Recommended Operating Conditions VIN (to GND) 15 V maximum, no minimum printed; 7.1 Absolute Maximum Ratings VIN 20 V"
+basis = "TI LM1117 SNOS412Q, 7.3 Recommended Operating Conditions p.4, input voltage (VIN to GND) 15 V maximum, no minimum printed"
+abs_max_basis = "TI LM1117 SNOS412Q, 7.1 Absolute Maximum Ratings p.4, maximum input voltage (VIN to GND) 20 V"
+
+# LM1117-1.8: VOUT 1.782 / 1.8 / 1.818 V (IOUT = 10 mA, TJ = 25 C), 1.746 to 1.854 V over line, load
+# and temperature (0 <= IOUT <= 800 mA, 3.2 V <= VIN <= 10 V), 7.5 p.5. Dropout 1.2 V typ, 1.3 V max at 800 mA, IQ 5 mA typ
+# and 10 mA max (VIN <= 15 V), 7.5 p.6. Pin 1 is GND on a fixed part.
+[[models]]
+id = "lm1117_1v8"
+kind = "vreg"
+description = "TI LM1117-1.8 800mA fixed 1.8V LDO, SOT-223 / TO-252 / TO-263 / TO-220"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lm1117.pdf"
+title = "TI LM1117 800-mA, Low-Dropout Linear Regulator, SNOS412Q, February 2000, revised January 2023"
+locator = "p.1 Description; Table 6-1 Pin Functions p.3; 7.1, 7.3 and 7.4 p.4; 7.5 Electrical Characteristics pp.5-6; 9.2.2.1.3 Output Capacitor p.15"
+sha256 = "c117f5dd97fd15e62c0dee3adbf1af60480a128a10a0f9a9c28aafb8220ec3aa"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 1.746
+high = 1.854
+unit = "V"
+kind = "specification-limits"
+basis = "LM1117-1.8 SNOS412Q 7.5 p.5, VOUT over the junction temperature range 0 to 125 C (0 <= IOUT <= 800 mA, 3.2 V <= VIN <= 10 V): 1.746 V min / 1.854 V max; 1.782 / 1.8 / 1.818 V at TJ = 25 C, IOUT = 10 mA"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 61.6
+unit = "°C/W"
+conditions = "SOT-223 package (DCY), 7.4 Thermal Information"
+package = "SOT-223"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA DCY (SOT-223) = 61.6 °C/W"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 45.1
+unit = "°C/W"
+conditions = "TO-252 package (NDP), 7.4 Thermal Information"
+package = "TO-252"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA NDP (TO-252) = 45.1 °C/W"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 41.3
+unit = "°C/W"
+conditions = "TO-263 package (KTT), 7.4 Thermal Information"
+package = "TO-263"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA KTT (TO-263) = 41.3 °C/W"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 23.8
+unit = "°C/W"
+conditions = "TO-220 package (NDE), 7.4 Thermal Information"
+package = "TO-220"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA NDE (TO-220) = 23.8 °C/W"
+
+[models.match]
+value_re = "(?i)^LM1117I?(?:MPX?|DTX?|SX?|T)?[- _]?1[._V]8V?(?:[/_]NOPB)?$"
+
+[models.params]
+vout      = 1.8     # typ; 1.782 to 1.818 V at 25 C, 1.746 to 1.854 V over line, load and temperature (7.5)
+dropout_v = 1.3      # VIN - VOUT max @ IOUT = 800 mA over temperature (1.2 V typ), 7.5
+iq_a      = 5.0e-3   # quiescent current typ, VIN <= 15 V (10 mA max), 7.5
+# MINIMUM. TI LM1117 SNOS412Q p.1 Description: "A minimum of 10-µF tantalum capacitor is
+# required at the output to improve the transient response and stability." and 9.2.2.1.3
+# Output Capacitor (p.15): "The minimum output capacitance required by the LM1117 is 10 µF,
+# if a tantalum capacitor is used. ... The ESR of the output capacitor should range between
+# 0.3 Ω to 22 Ω." The ESR window is a type condition the board does not record, so the
+# regulator_cout check states it and does not judge it.
+cout_min_f = 10.0e-6
+cout_esr_min_ohm = 0.3
+cout_esr_max_ohm = 22.0
+
+[models.pins]
+# Table 6-1: pin 1 GND on a fixed part, 2 VOUT, 3 VIN; the SOT-223 tab is pin 4 on a 4-pin
+# footprint and is the output too (VOUT 2, 4).
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+"4" = "out"
+
+[models.ratings]
+max_current_a = 0.8          # rated output, 7.5 dropout row (800 mA) and Features "Output current: 800 mA"
+max_voltage_v = 20.0         # 7.1 maximum input voltage, VIN to GND (15 V operating, 7.3)
+max_junction_temp_c = 125.0  # 7.3 TJ range 0 to 125 C (LM1117I: -40 to 125 C)
+theta_ja_c_per_w = 61.6      # 7.4 RθJA, DCY (SOT-223), the least favourable matched package; the
+                             # package rows above judge a TO-252 (45.1), TO-263 (41.3) or TO-220 (23.8)
+                             # footprint on its own figure
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.0
+max_v = 15.0
+abs_max_v = 20.0
+basis = "TI LM1117 SNOS412Q, 7.3 Recommended Operating Conditions p.4, input voltage (VIN to GND) 15 V maximum, no minimum printed"
+abs_max_basis = "TI LM1117 SNOS412Q, 7.1 Absolute Maximum Ratings p.4, maximum input voltage (VIN to GND) 20 V"
+
+# LM1117-2.5: VOUT 2.475 / 2.5 / 2.525 V (IOUT = 10 mA, TJ = 25 C), 2.45 to 2.55 V over line, load
+# and temperature (0 <= IOUT <= 800 mA, 3.9 V <= VIN <= 10 V), 7.5 p.5. Dropout 1.2 V typ, 1.3 V max at 800 mA, IQ 5 mA typ
+# and 10 mA max (VIN <= 15 V), 7.5 p.6. Pin 1 is GND on a fixed part.
+[[models]]
+id = "lm1117_2v5"
+kind = "vreg"
+description = "TI LM1117-2.5 800mA fixed 2.5V LDO, SOT-223 / TO-252 / TO-263 / TO-220"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lm1117.pdf"
+title = "TI LM1117 800-mA, Low-Dropout Linear Regulator, SNOS412Q, February 2000, revised January 2023"
+locator = "p.1 Description; Table 6-1 Pin Functions p.3; 7.1, 7.3 and 7.4 p.4; 7.5 Electrical Characteristics pp.5-6; 9.2.2.1.3 Output Capacitor p.15"
+sha256 = "c117f5dd97fd15e62c0dee3adbf1af60480a128a10a0f9a9c28aafb8220ec3aa"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 2.45
+high = 2.55
+unit = "V"
+kind = "specification-limits"
+basis = "LM1117-2.5 SNOS412Q 7.5 p.5, VOUT over the junction temperature range 0 to 125 C (0 <= IOUT <= 800 mA, 3.9 V <= VIN <= 10 V): 2.45 V min / 2.55 V max; 2.475 / 2.5 / 2.525 V at TJ = 25 C, IOUT = 10 mA"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 61.6
+unit = "°C/W"
+conditions = "SOT-223 package (DCY), 7.4 Thermal Information"
+package = "SOT-223"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA DCY (SOT-223) = 61.6 °C/W"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 45.1
+unit = "°C/W"
+conditions = "TO-252 package (NDP), 7.4 Thermal Information"
+package = "TO-252"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA NDP (TO-252) = 45.1 °C/W"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 41.3
+unit = "°C/W"
+conditions = "TO-263 package (KTT), 7.4 Thermal Information"
+package = "TO-263"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA KTT (TO-263) = 41.3 °C/W"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 23.8
+unit = "°C/W"
+conditions = "TO-220 package (NDE), 7.4 Thermal Information"
+package = "TO-220"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA NDE (TO-220) = 23.8 °C/W"
+
+[models.match]
+value_re = "(?i)^LM1117I?(?:MPX?|DTX?|SX?|T)?[- _]?2[._V]5V?(?:[/_]NOPB)?$"
+
+[models.params]
+vout      = 2.5     # typ; 2.475 to 2.525 V at 25 C, 2.45 to 2.55 V over line, load and temperature (7.5)
+dropout_v = 1.3      # VIN - VOUT max @ IOUT = 800 mA over temperature (1.2 V typ), 7.5
+iq_a      = 5.0e-3   # quiescent current typ, VIN <= 15 V (10 mA max), 7.5
+# MINIMUM. TI LM1117 SNOS412Q p.1 Description: "A minimum of 10-µF tantalum capacitor is
+# required at the output to improve the transient response and stability." and 9.2.2.1.3
+# Output Capacitor (p.15): "The minimum output capacitance required by the LM1117 is 10 µF,
+# if a tantalum capacitor is used. ... The ESR of the output capacitor should range between
+# 0.3 Ω to 22 Ω." The ESR window is a type condition the board does not record, so the
+# regulator_cout check states it and does not judge it.
+cout_min_f = 10.0e-6
+cout_esr_min_ohm = 0.3
+cout_esr_max_ohm = 22.0
+
+[models.pins]
+# Table 6-1: pin 1 GND on a fixed part, 2 VOUT, 3 VIN; the SOT-223 tab is pin 4 on a 4-pin
+# footprint and is the output too (VOUT 2, 4).
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+"4" = "out"
+
+[models.ratings]
+max_current_a = 0.8          # rated output, 7.5 dropout row (800 mA) and Features "Output current: 800 mA"
+max_voltage_v = 20.0         # 7.1 maximum input voltage, VIN to GND (15 V operating, 7.3)
+max_junction_temp_c = 125.0  # 7.3 TJ range 0 to 125 C (LM1117I: -40 to 125 C)
+theta_ja_c_per_w = 61.6      # 7.4 RθJA, DCY (SOT-223), the least favourable matched package; the
+                             # package rows above judge a TO-252 (45.1), TO-263 (41.3) or TO-220 (23.8)
+                             # footprint on its own figure
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.0
+max_v = 15.0
+abs_max_v = 20.0
+basis = "TI LM1117 SNOS412Q, 7.3 Recommended Operating Conditions p.4, input voltage (VIN to GND) 15 V maximum, no minimum printed"
+abs_max_basis = "TI LM1117 SNOS412Q, 7.1 Absolute Maximum Ratings p.4, maximum input voltage (VIN to GND) 20 V"
+
+# LM1117-3.3: VOUT 3.267 / 3.3 / 3.333 V (IOUT = 10 mA, TJ = 25 C), 3.235 to 3.365 V over line, load
+# and temperature (0 <= IOUT <= 800 mA, 4.75 V <= VIN <= 10 V), 7.5 p.5. Dropout 1.2 V typ, 1.3 V max at 800 mA, IQ 5 mA typ
+# and 10 mA max (VIN <= 15 V), 7.5 p.6. Pin 1 is GND on a fixed part.
+[[models]]
+id = "lm1117_3v3"
+kind = "vreg"
+description = "TI LM1117-3.3 800mA fixed 3.3V LDO, SOT-223 / TO-252 / TO-263 / TO-220"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lm1117.pdf"
+title = "TI LM1117 800-mA, Low-Dropout Linear Regulator, SNOS412Q, February 2000, revised January 2023"
+locator = "p.1 Description; Table 6-1 Pin Functions p.3; 7.1, 7.3 and 7.4 p.4; 7.5 Electrical Characteristics pp.5-6; 9.2.2.1.3 Output Capacitor p.15"
+sha256 = "c117f5dd97fd15e62c0dee3adbf1af60480a128a10a0f9a9c28aafb8220ec3aa"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.235
+high = 3.365
+unit = "V"
+kind = "specification-limits"
+basis = "LM1117-3.3 SNOS412Q 7.5 p.5, VOUT over the junction temperature range 0 to 125 C (0 <= IOUT <= 800 mA, 4.75 V <= VIN <= 10 V): 3.235 V min / 3.365 V max; 3.267 / 3.3 / 3.333 V at TJ = 25 C, IOUT = 10 mA"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 61.6
+unit = "°C/W"
+conditions = "SOT-223 package (DCY), 7.4 Thermal Information"
+package = "SOT-223"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA DCY (SOT-223) = 61.6 °C/W"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 45.1
+unit = "°C/W"
+conditions = "TO-252 package (NDP), 7.4 Thermal Information"
+package = "TO-252"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA NDP (TO-252) = 45.1 °C/W"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 41.3
+unit = "°C/W"
+conditions = "TO-263 package (KTT), 7.4 Thermal Information"
+package = "TO-263"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA KTT (TO-263) = 41.3 °C/W"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 23.8
+unit = "°C/W"
+conditions = "TO-220 package (NDE), 7.4 Thermal Information"
+package = "TO-220"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA NDE (TO-220) = 23.8 °C/W"
+
+[models.match]
+value_re = "(?i)^LM1117I?(?:MPX?|DTX?|SX?|T)?[- _]?3[._V]?3V?(?:[/_]NOPB)?$"
+
+[models.params]
+vout      = 3.3     # typ; 3.267 to 3.333 V at 25 C, 3.235 to 3.365 V over line, load and temperature (7.5)
+dropout_v = 1.3      # VIN - VOUT max @ IOUT = 800 mA over temperature (1.2 V typ), 7.5
+iq_a      = 5.0e-3   # quiescent current typ, VIN <= 15 V (10 mA max), 7.5
+# MINIMUM. TI LM1117 SNOS412Q p.1 Description: "A minimum of 10-µF tantalum capacitor is
+# required at the output to improve the transient response and stability." and 9.2.2.1.3
+# Output Capacitor (p.15): "The minimum output capacitance required by the LM1117 is 10 µF,
+# if a tantalum capacitor is used. ... The ESR of the output capacitor should range between
+# 0.3 Ω to 22 Ω." The ESR window is a type condition the board does not record, so the
+# regulator_cout check states it and does not judge it.
+cout_min_f = 10.0e-6
+cout_esr_min_ohm = 0.3
+cout_esr_max_ohm = 22.0
+
+[models.pins]
+# Table 6-1: pin 1 GND on a fixed part, 2 VOUT, 3 VIN; the SOT-223 tab is pin 4 on a 4-pin
+# footprint and is the output too (VOUT 2, 4).
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+"4" = "out"
+
+[models.ratings]
+max_current_a = 0.8          # rated output, 7.5 dropout row (800 mA) and Features "Output current: 800 mA"
+max_voltage_v = 20.0         # 7.1 maximum input voltage, VIN to GND (15 V operating, 7.3)
+max_junction_temp_c = 125.0  # 7.3 TJ range 0 to 125 C (LM1117I: -40 to 125 C)
+theta_ja_c_per_w = 61.6      # 7.4 RθJA, DCY (SOT-223), the least favourable matched package; the
+                             # package rows above judge a TO-252 (45.1), TO-263 (41.3) or TO-220 (23.8)
+                             # footprint on its own figure
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.0
+max_v = 15.0
+abs_max_v = 20.0
+basis = "TI LM1117 SNOS412Q, 7.3 Recommended Operating Conditions p.4, input voltage (VIN to GND) 15 V maximum, no minimum printed"
+abs_max_basis = "TI LM1117 SNOS412Q, 7.1 Absolute Maximum Ratings p.4, maximum input voltage (VIN to GND) 20 V"
+
+# LM1117-5.0: VOUT 4.95 / 5.0 / 5.05 V (IOUT = 10 mA, TJ = 25 C), 4.9 to 5.1 V over line, load
+# and temperature (0 <= IOUT <= 800 mA, 6.5 V <= VIN <= 12 V), 7.5 p.5. Dropout 1.2 V typ, 1.3 V max at 800 mA, IQ 5 mA typ
+# and 10 mA max (VIN <= 15 V), 7.5 p.6. Pin 1 is GND on a fixed part.
+[[models]]
+id = "lm1117_5v"
+kind = "vreg"
+description = "TI LM1117-5.0 800mA fixed 5.0V LDO, SOT-223 / TO-252 / TO-263 / TO-220"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/lm1117.pdf"
+title = "TI LM1117 800-mA, Low-Dropout Linear Regulator, SNOS412Q, February 2000, revised January 2023"
+locator = "p.1 Description; Table 6-1 Pin Functions p.3; 7.1, 7.3 and 7.4 p.4; 7.5 Electrical Characteristics pp.5-6; 9.2.2.1.3 Output Capacitor p.15"
+sha256 = "c117f5dd97fd15e62c0dee3adbf1af60480a128a10a0f9a9c28aafb8220ec3aa"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 4.9
+high = 5.1
+unit = "V"
+kind = "specification-limits"
+basis = "LM1117-5.0 SNOS412Q 7.5 p.5, VOUT over the junction temperature range 0 to 125 C (0 <= IOUT <= 800 mA, 6.5 V <= VIN <= 12 V): 4.9 V min / 5.1 V max; 4.95 / 5.0 / 5.05 V at TJ = 25 C, IOUT = 10 mA"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 61.6
+unit = "°C/W"
+conditions = "SOT-223 package (DCY), 7.4 Thermal Information"
+package = "SOT-223"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA DCY (SOT-223) = 61.6 °C/W"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 45.1
+unit = "°C/W"
+conditions = "TO-252 package (NDP), 7.4 Thermal Information"
+package = "TO-252"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA NDP (TO-252) = 45.1 °C/W"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 41.3
+unit = "°C/W"
+conditions = "TO-263 package (KTT), 7.4 Thermal Information"
+package = "TO-263"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA KTT (TO-263) = 41.3 °C/W"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 23.8
+unit = "°C/W"
+conditions = "TO-220 package (NDE), 7.4 Thermal Information"
+package = "TO-220"
+basis = "TI LM1117 SNOS412Q 7.4 Thermal Information p.4, RθJA NDE (TO-220) = 23.8 °C/W"
+
+[models.match]
+value_re = "(?i)^LM1117I?(?:MPX?|DTX?|SX?|T)?[- _]?5(?:[._V]0)?V?(?:[/_]NOPB)?$"
+
+[models.params]
+vout      = 5.0     # typ; 4.95 to 5.05 V at 25 C, 4.9 to 5.1 V over line, load and temperature (7.5)
+dropout_v = 1.3      # VIN - VOUT max @ IOUT = 800 mA over temperature (1.2 V typ), 7.5
+iq_a      = 5.0e-3   # quiescent current typ, VIN <= 15 V (10 mA max), 7.5
+# MINIMUM. TI LM1117 SNOS412Q p.1 Description: "A minimum of 10-µF tantalum capacitor is
+# required at the output to improve the transient response and stability." and 9.2.2.1.3
+# Output Capacitor (p.15): "The minimum output capacitance required by the LM1117 is 10 µF,
+# if a tantalum capacitor is used. ... The ESR of the output capacitor should range between
+# 0.3 Ω to 22 Ω." The ESR window is a type condition the board does not record, so the
+# regulator_cout check states it and does not judge it.
+cout_min_f = 10.0e-6
+cout_esr_min_ohm = 0.3
+cout_esr_max_ohm = 22.0
+
+[models.pins]
+# Table 6-1: pin 1 GND on a fixed part, 2 VOUT, 3 VIN; the SOT-223 tab is pin 4 on a 4-pin
+# footprint and is the output too (VOUT 2, 4).
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+"4" = "out"
+
+[models.ratings]
+max_current_a = 0.8          # rated output, 7.5 dropout row (800 mA) and Features "Output current: 800 mA"
+max_voltage_v = 20.0         # 7.1 maximum input voltage, VIN to GND (15 V operating, 7.3)
+max_junction_temp_c = 125.0  # 7.3 TJ range 0 to 125 C (LM1117I: -40 to 125 C)
+theta_ja_c_per_w = 61.6      # 7.4 RθJA, DCY (SOT-223), the least favourable matched package; the
+                             # package rows above judge a TO-252 (45.1), TO-263 (41.3) or TO-220 (23.8)
+                             # footprint on its own figure
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.0
+max_v = 15.0
+abs_max_v = 20.0
+basis = "TI LM1117 SNOS412Q, 7.3 Recommended Operating Conditions p.4, input voltage (VIN to GND) 15 V maximum, no minimum printed"
+abs_max_basis = "TI LM1117 SNOS412Q, 7.1 Absolute Maximum Ratings p.4, maximum input voltage (VIN to GND) 20 V"
 
 # ── max17760: Analog Devices MAX17760 76 V / 300 mA synchronous buck ──
 # MAX17760 datasheet (12 TDFN-EP). Drafted by the extraction pipeline (codex gpt-6-luna) and reviewed against the PDF:

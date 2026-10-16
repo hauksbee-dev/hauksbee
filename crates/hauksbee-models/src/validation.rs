@@ -534,8 +534,13 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 min_v,
                 max_v,
                 abs_max_v,
+                abs_max_basis,
                 ..
             } => {
+                p.require(
+                    abs_max_basis.trim().is_empty() || abs_max_v.is_some(),
+                    || "operating envelope abs_max_basis needs the abs_max_v it cites".into(),
+                );
                 supplies.extend([*min_v, *max_v, abs_max_v.unwrap_or(0.0)]);
                 p.require(has_role_ci(entry, pin), || {
                     not_a_role("operating envelope pin", pin)
