@@ -140,9 +140,10 @@ fn model_output_range(model: &ModelEntry) -> Option<RailRange> {
         .or_else(|| model.params.get_f64("vout").map(RailRange::point))
 }
 
-/// Ohms of a fitted two-terminal resistor between nets `a` and `b` (either
-/// way round), or `None` when the part is not one.
-fn resistor_between(c: &Component, a: i64, b: impl Fn(i64) -> bool) -> Option<f64> {
+/// A fitted two-terminal resistor between nets `a` and `b` (either way
+/// round): its ohms and the fractional tolerance it states, `0` when it states
+/// none. `None` when the part is not one.
+fn resistor_between(c: &Component, a: i64, b: impl Fn(i64) -> bool) -> Option<(f64, f64)> {
     if !AssemblyState::of(c).is_present() || !is_resistor(c) {
         return None;
     }
@@ -152,13 +153,31 @@ fn resistor_between(c: &Component, a: i64, b: impl Fn(i64) -> bool) -> Option<f6
     };
     let joins = (first == a && b(second)) || (second == a && b(first));
     let ohms = parse_value(&c.value).map(|value| value.si)?;
-    (joins && ohms.is_finite() && ohms > 0.0).then_some(ohms)
+    (joins && ohms.is_finite() && ohms > 0.0)
+        .then(|| (ohms, super::stated_tolerance(c).unwrap_or(0.0)))
 }
 
-/// Parallel combination of `ohms`, `None` when empty.
-fn parallel(ohms: impl Iterator<Item = f64>) -> Option<f64> {
-    let g: f64 = ohms.map(f64::recip).sum();
-    (g > 0.0).then(|| g.recip())
+/// The parallel combination of resistors given as (ohms, tolerance): the
+/// lowest and highest it can read with each resistor at its stated tolerance
+/// (both its nominal when none states one). `None` when empty.
+fn parallel(parts: impl Iterator<Item = (f64, f64)>) -> Option<Spread> {
+    let (mut least_g, mut most_g) = (0.0_f64, 0.0_f64);
+    for (ohms, tol) in parts {
+        // A resistor at +tol ohms conducts least; at -tol, most.
+        least_g += (ohms * (1.0 + tol)).recip();
+        most_g += (ohms * (1.0 - tol).max(f64::EPSILON)).recip();
+    }
+    (least_g > 0.0).then(|| Spread {
+        low: most_g.recip(),
+        high: least_g.recip(),
+    })
+}
+
+/// An ohmic value and the range its stated tolerances allow.
+#[derive(Debug, Clone, Copy)]
+struct Spread {
+    low: f64,
+    high: f64,
 }
 
 /// How a board divider sets an adjustable part's output from its reference.
@@ -286,13 +305,21 @@ fn feedback_output_range(
             _ => None,
         })
         .unwrap_or((vref, vref));
-    let (gain, offset) = match law {
-        DividerLaw::Grounded => (1.0 + top / bottom, 0.0),
-        DividerLaw::OutReferenced { iadj_a } => (1.0 + bottom / top, iadj_a * bottom),
+    // The lowest and highest gain and offset the stated resistor tolerances
+    // allow; with none stated they collapse to the nominal divider.
+    let ((gain_lo, offset_lo), (gain_hi, offset_hi)) = match law {
+        DividerLaw::Grounded => (
+            (1.0 + top.low / bottom.high, 0.0),
+            (1.0 + top.high / bottom.low, 0.0),
+        ),
+        DividerLaw::OutReferenced { iadj_a } => (
+            (1.0 + bottom.low / top.high, iadj_a * bottom.low),
+            (1.0 + bottom.high / top.low, iadj_a * bottom.high),
+        ),
     };
     let range = RailRange {
-        min_v: lo.mul_add(gain, offset),
-        max_v: hi.mul_add(gain, offset),
+        min_v: lo.mul_add(gain_lo, offset_lo),
+        max_v: hi.mul_add(gain_hi, offset_hi),
     };
     Some((sensed, range))
 }
@@ -1495,6 +1522,46 @@ basis = "Recommended Operating Conditions, V+ row"
         assert!(msg.contains("4.365..4.635"), "{msg}");
         assert!(!msg.contains("Tie "), "a margin is not a rewire: {msg}");
         assert_eq!(found[0].severity, Severity::Low, "{msg}");
+    }
+
+    /// The divider's own resistor tolerances widen the set point: 400k/50k
+    /// sets exactly the load's 4.5 V maximum, so 1 % parts reach 4.58 V
+    /// (a margin note, under abs max) where the same values with no stated
+    /// tolerance are judged at nominal and say nothing.
+    #[test]
+    fn divider_set_point_carries_the_resistor_tolerances() {
+        let lib = library("fbrtol", BOOST_AND_LOAD);
+        let load_report = |top: &str, bottom: &str| {
+            let b = board(
+                &[(1, "GND"), (2, "VIN"), (3, "FB"), (4, "OUT")],
+                vec![
+                    part(
+                        "U1",
+                        "FB_BOOST",
+                        vec![pin("1", 2), pin("2", 1), pin("3", 3), pin("4", 4)],
+                    ),
+                    resistor("R1", top, 3, 4),
+                    resistor("R2", bottom, 3, 1),
+                    part("U2", "LOAD_PART", vec![pin("1", 4), pin("2", 1)]),
+                ],
+            );
+            envelope_lint(&b, &lib)
+                .of_check(LintCheck::OperatingEnvelope)
+                .filter(|f| f.refs.contains(&"U2".to_string()))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let found = load_report("400k 1%", "50k 1%");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("4.421..4.581"), "{:?}", found[0]);
+        assert!(
+            load_report("400k", "50k").is_empty(),
+            "no stated tolerance is judged at the nominal divider"
+        );
+        assert!(
+            load_report("390k 1%", "50k 1%").is_empty(),
+            "a divider whose tolerance corner stays inside the window says nothing"
+        );
     }
 
     /// A buck whose card names its switch node as the output, an LDO set by

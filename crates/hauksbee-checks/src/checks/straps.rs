@@ -428,14 +428,6 @@ fn pulls_on(board: &ExtractedBoard, net_id: i64) -> Vec<Pull> {
             }
             let ohms =
                 parse_value(&c.value).filter(|v| matches!(v.unit.as_deref(), None | Some("Ω")));
-            let tol = c
-                .properties
-                .iter()
-                .filter(|(k, _)| k.eq_ignore_ascii_case("tolerance"))
-                .map(|(_, v)| v.as_str());
-            let tol = tol
-                .chain(c.value.split_whitespace())
-                .find_map(|t| t.trim().strip_suffix('%')?.parse::<f64>().ok());
             let (reference, value, up) =
                 (c.reference.clone(), c.value.clone(), !is_ground_name(name));
             pulls.push(Pull {
@@ -444,7 +436,7 @@ fn pulls_on(board: &ExtractedBoard, net_id: i64) -> Vec<Pull> {
                 far,
                 up,
                 ohms: ohms.map(|v| v.si),
-                tol: tol.unwrap_or(0.0) / 100.0,
+                tol: super::stated_tolerance(c).unwrap_or(0.0),
             });
         }
     }

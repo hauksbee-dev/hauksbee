@@ -100,6 +100,26 @@ use hauksbee_models::ModelLibrary;
 /// Net-name classification: the one table (`hauksbee_models::netclass`).
 pub(crate) use hauksbee_models::netclass::{is_ground as is_ground_name, leaf as norm};
 
+/// The fractional tolerance a part states ("10k 1%", "±5%", or a `Tolerance`
+/// property), or `None` when it states none: an unstated tolerance is never
+/// invented, so a corner judged on it says it was judged at nominal values.
+pub(crate) fn stated_tolerance(c: &hauksbee_extract::Component) -> Option<f64> {
+    let property = (c.properties.iter())
+        .filter(|(k, _)| k.eq_ignore_ascii_case("tolerance"))
+        .map(|(_, v)| v.as_str());
+    property
+        .chain(c.value.split_whitespace())
+        .find_map(|t| {
+            let pct = t
+                .trim()
+                .trim_start_matches(['±', '+', '-'])
+                .strip_suffix('%')?;
+            pct.parse::<f64>().ok()
+        })
+        .filter(|pct| pct.is_finite() && *pct >= 0.0)
+        .map(|pct| pct / 100.0)
+}
+
 /// `KiCad`'s placeholder net for a pin that is on no net at all.
 pub(crate) fn is_unconnected_net(name: &str) -> bool {
     name.trim_start_matches('/').starts_with("unconnected-")
