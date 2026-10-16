@@ -154,7 +154,7 @@ pub struct PlainReport {
 /// What a model-dependent section says when the INCONCLUSIVE banner naming the
 /// unmodelled parts was already printed once, above every section.
 pub const INCONCLUSIVE_SEE_TOP: &str =
-    "Not a clean bill: key parts have no model (see INCONCLUSIVE at the top).";
+    "Not a clean bill: key parts have no model (see the verdict at the top).";
 
 /// De-escape `KiCad`'s label escapes so a plain sentence names the net the way
 /// the schematic does. `KiCad` writes a literal `/` inside a label as `{slash}`
@@ -815,7 +815,7 @@ pub(crate) fn order_triage_with_rule_source(
     // Nothing to say about models when every part has one.
     let models = match unmodelled_parts {
         0 => String::new(),
-        n => format!("{n} {} an executable simulation model; model-dependent firmware/analog/AC/thermal claims involving those parts are not covered. Copper geometry and datasheet decode rules do not require a simulation model.", if n == 1 { "part lacks" } else { "parts lack" }),
+        n => format!("{n} {} an executable simulation model; model-dependent firmware/analog/AC/thermal claims involving those parts are not covered (run --report for the bind table). Copper geometry and datasheet decode rules do not require a simulation model.", if n == 1 { "part lacks" } else { "parts lack" }),
     };
     let clearance = match clearance_rule_source.source {
         crate::result::ClearanceRuleSource::Defaulted

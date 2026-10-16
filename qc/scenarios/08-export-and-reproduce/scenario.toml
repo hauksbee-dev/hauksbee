@@ -81,8 +81,8 @@ xml_root_attrs = { failures = "1" }
 file_matches = { "watchy.xml" = [
   "^<\\?xml version=\"1\\.0\" encoding=\"UTF-8\"\\?>",
   "<testsuites name=\"hauksbee watchy\\.kicad_pcb\" tests=\"[0-9]+\" failures=\"1\" errors=\"0\">",
-  "<testcase name=\"undermined U1\" classname=\"evidence\">",
-  "<failure message=\"INVALID evidence: INCONCLUSIVE: 1 current-carrying / active part\\(s\\) have no model \\(U1\\)",
+  "<testcase name=\"partly_judged U1\" classname=\"evidence\">",
+  "<failure message=\"PARTLY JUDGED \\(not a pass\\): U1 has no usable model, so the checks it could change are not judged",
 ] }
 
 [[step]]

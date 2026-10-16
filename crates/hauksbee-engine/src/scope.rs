@@ -23,10 +23,11 @@
 //!   - the analysis ground: the solver's fixed reference node on every
 //!     board, so an open part's return current cannot move it;
 //!   - a held rail (`held_rails`): a rail a modelled source holds (a supply
-//!     the analysis applies, or a modelled regulator fed from a held rail)
-//!     and on which no open part has a pin that could drive it. An open load
-//!     there is named, not followed, and the verdict states the condition
-//!     that it draws within what the source gives;
+//!     the analysis applies, or a modelled regulator fed from a held rail,
+//!     including one fed through a diode from a held rail: a reverse-protection
+//!     or power-OR diode) and on which no open part has a pin that could drive
+//!     it. An open load there is named, not followed, and the verdict states
+//!     the condition that it draws within what the source gives;
 //!   - a signal pin of a part whose pins the analysis treats as separate
 //!     ports (`NO_TRANSFER`: a processor, an ADC, a connector); a rail
 //!     pin of such a part still carries.
@@ -38,6 +39,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use hauksbee_extract::ExtractedBoard;
+use hauksbee_ir::Device;
 use serde::Serialize;
 
 use crate::binder::{is_canonical_ground, BoundBoard};
@@ -76,11 +78,19 @@ fn supply_input(function: &str) -> bool {
 /// drive it (it may be that rail's source). An open part's load on a held
 /// rail is named, not followed: the rail's other loads stay judged, on the
 /// stated condition that the open part draws within what the source gives.
+///
+/// A regulator's input net is held too when a modelled diode carries it from a
+/// held rail (`diodes` are `(anode, cathode)` net names): a reverse-protection
+/// or power-OR diode makes the input follow the held rail, so a regulator
+/// behind it holds its own output. The diode is followed only into a net a
+/// regulator takes its power from; a diode into a signal net (an LED, a
+/// clamp) holds nothing.
 fn held_rails<'a>(
     bound: &'a BoundBoard,
     sourced: &BTreeSet<&'a str>,
     is_open: &dyn Fn(&str) -> bool,
     open_drives: &BTreeSet<&str>,
+    diodes: &[(&'a str, &'a str)],
 ) -> BTreeSet<&'a str> {
     type Group<'g> = (BTreeSet<&'g str>, Vec<(&'g str, &'g str)>);
     let mut groups: Vec<Group<'a>> = (bound.report.supply_groups.iter())
@@ -103,8 +113,38 @@ fn held_rails<'a>(
         }
     }
     let mut held = vec![false; groups.len()];
+    let regulator_inputs: BTreeSet<&str> = (groups.iter())
+        .flat_map(|(_, feeds)| feeds.iter().map(|(_, input)| *input))
+        .collect();
     loop {
         let mut changed = false;
+        for &(anode, cathode) in diodes {
+            let is_held = |net: &str, groups: &[Group<'a>], held: &[bool]| {
+                groups
+                    .iter()
+                    .zip(held)
+                    .any(|((ns, _), &h)| h && ns.contains(net))
+            };
+            if !regulator_inputs.contains(cathode)
+                || open_drives.contains(cathode)
+                || !is_held(anode, &groups, &held)
+                || is_held(cathode, &groups, &held)
+            {
+                continue;
+            }
+            match groups.iter().position(|(ns, _)| ns.contains(cathode)) {
+                Some(i) if groups[i].0.iter().any(|n| open_drives.contains(n)) => {}
+                Some(i) => {
+                    held[i] = true;
+                    changed = true;
+                }
+                None => {
+                    groups.push((BTreeSet::from([cathode]), Vec::new()));
+                    held.push(true);
+                    changed = true;
+                }
+            }
+        }
         for (i, (nets, feeds)) in groups.iter().enumerate() {
             if held[i] || nets.iter().any(|n| open_drives.contains(n)) {
                 continue;
@@ -198,7 +238,16 @@ impl JudgementScope {
             .filter(|p| crate::bind_report::pin_can_drive(&p.kind) && !supply_input(&p.function))
             .filter_map(|p| names.get(&p.net?).copied())
             .collect();
-        let held = held_rails(bound, sourced, &is_open, &open_drives);
+        // The diodes the analysis stamps, as (anode, cathode) net names.
+        let diodes: Vec<(&str, &str)> = (bound.circuit.iter())
+            .filter_map(|(_, d)| match d {
+                Device::Diode { name, a, k, .. } if !is_open(name) => {
+                    Some((bound.circuit.node_name(*a), bound.circuit.node_name(*k)))
+                }
+                _ => None,
+            })
+            .collect();
+        let held = held_rails(bound, sourced, &is_open, &open_drives, &diodes);
         let rails: BTreeSet<&str> = (bound.report.supply_groups.iter())
             .flat_map(|g| g.nets.iter().map(String::as_str))
             .chain(sourced.iter().copied())
@@ -277,8 +326,8 @@ impl JudgementScope {
     #[must_use]
     pub fn partly_judged_reason(&self) -> String {
         format!(
-            "PARTLY JUDGED (not a pass): nothing found blocks ordering among the checks this \
-             run could judge. {}",
+            "{}: nothing found blocks ordering among the checks this run could judge. {}",
+            hauksbee_ir::vocabulary::PARTLY_JUDGED_LEAD,
             self.condition()
         )
     }
@@ -347,17 +396,32 @@ impl JudgementScope {
                 sample(&self.held_rails),
             )
         };
+        // The reach is never smaller than the nets the part touches. When it
+        // stops there (a held rail and signal pins cut it at once), one list
+        // says it, instead of the same nets named twice.
+        let what = if self.electrical_dependent.len() == self.wiring_dependent.len() {
+            format!(
+                "wiring, value and electrical checks (levels, ratings, rails) on the {} net(s) \
+                 {it} connects to ({}); nothing further is reached through the circuit",
+                self.wiring_dependent.len(),
+                sample(&self.wiring_dependent),
+            )
+        } else {
+            format!(
+                "wiring and value checks on the {} net(s) {it} connects to ({}), and \
+                 electrical checks (levels, ratings, rails) on the {} of {} net(s) {it} can \
+                 reach through the circuit ({})",
+                self.wiring_dependent.len(),
+                sample(&self.wiring_dependent),
+                self.electrical_dependent.len(),
+                self.nets,
+                sample(&self.electrical_dependent),
+            )
+        };
         format!(
-            "Partly judged: {parts} {has} no usable model, so the checks {it} could change are \
-             not judged: wiring and value checks on the {} net(s) {it} connects to ({}), and \
-             electrical checks (levels, ratings, rails) on the {} of {} net(s) {it} can reach \
-             through the circuit ({}). The other {} of {} net checks were judged.{held} Draft \
-             the model(s) with `hauksbee models extract --unmodelled <board>` to judge the rest.",
-            self.wiring_dependent.len(),
-            sample(&self.wiring_dependent),
-            self.electrical_dependent.len(),
-            self.nets,
-            sample(&self.electrical_dependent),
+            "{parts} {has} no usable model, so the checks {it} could change are not judged: \
+             {what}. The other {} of {} net checks were judged.{held} Draft the model(s) with \
+             `hauksbee models extract --unmodelled <board>` to judge the rest.",
             self.judged(),
             2 * self.nets,
         )
@@ -527,6 +591,80 @@ mod tests {
         let s = held("power_in", true);
         assert!(s.held_rails.is_empty());
         assert!(s.electrical_dependent.contains(&"SDA".to_string()));
+    }
+
+    /// [`BASE`] with the supply on VB and a stamped diode `(anode, cathode)`
+    /// between two nets; U2 is a modelled regulator feeding VOUT from VIN, and
+    /// the open part U3 sits on VOUT as a pure load (a `power_in` pin).
+    fn behind_diode(anode: &str, cathode: &str) -> JudgementScope {
+        let mut b = board(&{
+            let mut parts = BASE.to_vec();
+            parts.push(("U3", &["VOUT", "GND"]));
+            parts
+        });
+        b.components
+            .iter_mut()
+            .find(|c| c.reference == "U3")
+            .unwrap()
+            .pins[0]
+            .kind = "power_in".into();
+        let mut bound = BoundBoard::default();
+        bound
+            .report
+            .supply_groups
+            .push(hauksbee_bind::rail_owner::SupplyGroup {
+                nets: ["VOUT".to_string()].into(),
+                passes: std::collections::BTreeSet::new(),
+                feeds: [("U2".to_string(), "VIN".to_string())].into(),
+            });
+        let (a, k) = (bound.circuit.node(anode), bound.circuit.node(cathode));
+        bound.circuit.add(hauksbee_ir::Device::Diode {
+            name: "D9".into(),
+            a,
+            k,
+            model: hauksbee_ir::DiodeModel::default(),
+        });
+        let sourced = ["VB"].into();
+        JudgementScope::of_sourced(&b, &bound, &["U3".to_string()], &sourced).unwrap()
+    }
+
+    #[test]
+    fn a_regulator_behind_a_diode_from_a_held_rail_holds_its_output() {
+        // Legal: VB is a supply the analysis applies, a diode carries it to the
+        // regulator's input VIN, so the regulator holds VOUT and U3's load on it
+        // is named, not followed: VIN, SDA and the VB rail stay judged.
+        let s = behind_diode("VB", "VIN");
+        assert_eq!(s.electrical_dependent, ["GND", "VOUT"]);
+        assert_eq!(s.held_rails, ["VOUT"]);
+        let c = s.condition();
+        assert!(c.contains("source of VOUT can supply"), "{c}");
+        // The reach is exactly the nets U3 touches: one list, not two.
+        assert!(
+            c.contains("wiring, value and electrical checks")
+                && c.contains("nothing further is reached")
+                && !c.contains("can reach through the circuit"),
+            "{c}"
+        );
+    }
+
+    #[test]
+    fn a_diode_pointing_the_other_way_holds_nothing() {
+        // Faulty: the diode carries VIN toward VB, not VB toward VIN, so
+        // nothing modelled holds the regulator's input and U3's reach goes
+        // back through the regulator to VIN and on to the pull-up on SDA.
+        let s = behind_diode("VIN", "VB");
+        assert!(s.held_rails.is_empty(), "{:?}", s.held_rails);
+        for net in ["SDA", "VOUT", "VIN"] {
+            assert!(s.electrical_dependent.contains(&net.to_string()), "{net}");
+        }
+    }
+
+    #[test]
+    fn a_diode_into_a_signal_net_holds_nothing() {
+        // Control: LED_K is no regulator's input, so a diode from the held VB
+        // rail into it does not make it a held rail.
+        let s = behind_diode("VB", "LED_K");
+        assert!(s.held_rails.is_empty(), "{:?}", s.held_rails);
     }
 
     /// An MCU-like part U1 on `SDA` and `LED_K` (two signal pins) and `VOUT` (its

@@ -24,6 +24,12 @@ use crate::glossary::TermEntry;
 /// states it next to its exit code so a consumer can tell which table applies.
 pub const EXIT_CONTRACT: &str = "hauksbee/1";
 
+/// How every human surface opens a partly judged verdict.
+///
+/// The reason sentence, the triage headline, the CI finding and the closing
+/// `VERDICT:` line all start from it, so the words are spelled once.
+pub const PARTLY_JUDGED_LEAD: &str = "PARTLY JUDGED (not a pass)";
+
 /// What a run concluded. Ordered from best to worst for the reader: a pass,
 /// a pass with named conditions, a fail, and the two outcomes that vouch for
 /// nothing (partly judged, invalid run).

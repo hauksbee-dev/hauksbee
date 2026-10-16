@@ -28,8 +28,6 @@ contains = [
   "== Connectivity / lint (incl. MCU resource conflicts, boot strap pins) ==",
   "== Signal integrity ==",
   "== What this pass did not check ==",
-  "active IC(s) are unresolved/open",
-  "INCOMPLETE",
   "Why it matters:",
   "What to do:",
   "Heads up (worth knowing, not a failure):",
@@ -37,19 +35,23 @@ contains = [
 ]
 matches = [
   "^Looks healthy: no copper spacing \\(drc\\) problems found\\.$",
-  # The scope banner says INCONCLUSIVE and names U1 once, above the sections,
-  # rather than turning an identity-only SR2 card into a behavioural clean bill.
-  "^INCONCLUSIVE: 1 current-carrying / active part\\(s\\) have no model \\(U1\\)",
-  # Each model-dependent section points back at it. Informational SI
-  # observations must remain visible under the inconclusive verdict even
-  # though Watchy can no longer exercise the clean wording.
-  "^Not a clean bill: key parts have no model \\(see INCONCLUSIVE at the top\\)\\. Plus 3 things worth a look \\(see below\\)\\.$",
-  "^VERDICT: inconclusive: 0 serious, 3 worth a look; 1 key part has no usable model \\(U1\\), so the checks cannot vouch for this board; next: ",
-  # U1 reaches every net through the circuit, so no electrical check is judged
-  # and nothing reads as partly judged; the clean wiring checks are a line of
-  # information on the same verdict, never a pass.
-  "^VERDICT: inconclusive: .* For information only, not a pass: the wiring and value checks on the [0-9]+ of [0-9]+ net\\(s\\) U1 does not connect to found nothing that fails",
-  "run --report for the (bind table|[0-9]+-part bind table)",
+  # The triage block states the missing model once: U1 is named, what it
+  # changes is counted, and the next step is given. No separate banner or
+  # heads-up repeats it.
+  "^PARTLY JUDGED \\(not a pass\\): nothing found blocks ordering among the checks this run could judge\\. U1 has no usable model, so the checks it could change are not judged: wiring, value and electrical checks \\(levels, ratings, rails\\) on the 6 net\\(s\\) it connects to \\(\\+3V3, BTN2, BTN3, EN and 2 more\\); nothing further is reached through the circuit\\. The other 156 of 168 net checks were judged\\.",
+  # The distinct fact: parts without a simulation model, with the pointer to
+  # the table that lists them.
+  "^NOT COVERED: [0-9]+ parts lack an executable simulation model;.*run --report for the (bind table|[0-9]+-part bind table)",
+  # Each model-dependent section points back at the verdict. Informational SI
+  # observations must remain visible under the partly judged verdict.
+  "^Not a clean bill: key parts have no model \\(see the verdict at the top\\)\\.$",
+  "^Not a clean bill: key parts have no model \\(see the verdict at the top\\)\\. Plus 3 things worth a look \\(see below\\)\\.$",
+  # The closing line carries the lead once. U1 sits on a regulated rail, so the
+  # reach stops there: the rest of the board is judged, on the stated condition
+  # that U1 draws no more than that rail's source can supply (+3V3, the rail U1
+  # takes its power from, not the upstream VBUS).
+  "^VERDICT: PARTLY JUDGED \\(not a pass\\): 0 serious, 3 worth a look; nothing found blocks ordering among the checks this run could judge\\. U1 has no usable model, so the checks it could change are not judged: .*That assumes it draws no more than the source of \\+3V3 can supply",
+  "^VERDICT: PARTLY JUDGED .* Draft the model\\(s\\) with `hauksbee models extract --unmodelled <board>` to judge the rest\\.$",
 ]
 not_matches = [
   "critical_parts_bound",
@@ -66,6 +68,11 @@ not_matches = [
   "RUST_BACKTRACE",
   "\\ba a\\b",
   "\\bthe the\\b",
+  # Said once: no second statement of the same missing-model fact.
+  "^INCONCLUSIVE",
+  "unresolved/open",
+  "PARTLY JUDGED[^\\n]*PARTLY JUDGED",
+  "Partly judged:",
 ]
 
 [[step]]

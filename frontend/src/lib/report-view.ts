@@ -367,7 +367,7 @@ export const openPartRef = (a: EvidenceAssumption): string | null =>
   a.kind === 'open_part' ? assumptionPart(a) ?? null : null
 
 /** The judged scope of a PARTLY JUDGED run: the same numbers the engine's
- *  "Partly judged: ..." sentence states (`2 * nets` claims, less the dependent ones). */
+ *  "... has no usable model, so the checks it could change are not judged" sentence states (`2 * nets` claims, less the dependent ones). */
 function partlyJudgedView(r: WebReport): PartlyJudgedView | null {
   if (!r.partly_judged) return null
   const scope = r.judgement_scope
