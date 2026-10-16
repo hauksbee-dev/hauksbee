@@ -14,6 +14,37 @@ fn exact_ucc_ekyb_bulk_cap_resolves_its_datasheet_ripple_rating() {
 }
 
 #[test]
+fn littelfuse_1812l075_33_binds_by_its_ordering_code_only() {
+    // Faulty case: a series PTC carrying only a rating string must not be left
+    // open when its MPN property names the exact part, so the rails behind it
+    // come up and get judged.
+    for mpn in ["1812L075/33DR", "1812L075-33DR", "1812L075/33"] {
+        let model = super::expect_query(
+            Some("PTC 750mA / 33V"),
+            Some(mpn),
+            Some("oas:Fuse_1812L_4532Metric"),
+        );
+        assert_eq!(model.id, "littelfuse_1812l075_33", "{mpn}");
+        assert_eq!(model.params.get_f64("ohms"), Some(0.110));
+        assert_eq!(model.ratings.max_current_a, Some(0.75));
+        assert_eq!(model.ratings.max_voltage_v, Some(33.0));
+    }
+    // Legal controls: a sibling row of the same family (different hold or
+    // voltage) and the bare rating string do not borrow this card's figures.
+    for (value, mpn) in [
+        ("PTC 750mA / 24V", Some("1812L075/24DR")),
+        ("PTC 1.1A / 33V", Some("1812L110/33DR")),
+        ("PTC 750mA / 33V", None),
+    ] {
+        assert_ne!(
+            super::query_id(Some(value), mpn, Some("oas:Fuse_1812L_4532Metric")).as_deref(),
+            Some("littelfuse_1812l075_33"),
+            "{value} / {mpn:?}"
+        );
+    }
+}
+
+#[test]
 fn exact_littelfuse_order_code_unlocks_the_executable_trip_envelope() {
     let lib = ModelLibrary::builtin_shared();
     let board_query = ComponentQuery {
