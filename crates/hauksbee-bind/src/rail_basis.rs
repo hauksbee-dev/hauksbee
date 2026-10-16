@@ -207,8 +207,14 @@ fn is_series_link(lib: &ModelLibrary, c: &Component) -> bool {
     let ohms = hauksbee_models::value::parse_value(&c.value)
         .filter(|p| matches!(p.unit.as_deref(), None | Some("Ω")))
         .map(|p| p.si);
+    // An L designator is an inductor even when its value names no part (an
+    // unfitted link whose value reads "DNP" or "NA").
+    let inductor_designator = r
+        .strip_prefix('L')
+        .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
     ferrite
         || is_plain_inductor(c)
+        || inductor_designator
         || (is_plain_resistor(c) && ohms.is_some_and(|o| o <= SERIES_OHMS))
 }
 

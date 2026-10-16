@@ -422,6 +422,24 @@ mod tests {
         assert!(m.contains("U3"), "{m}");
     }
 
+    /// Faulty: an unfitted inductor link whose value names no part ("DNP",
+    /// as many boards mark it) still cuts the island off.
+    #[test]
+    fn unfitted_inductor_valued_dnp_cuts_a_rail_island() {
+        let found = run(vec![
+            usb(),
+            ldo(),
+            sensor("U2", V3),
+            dnp(part("L5", "DNP", &[("1", V3), ("2", AV)])),
+            sensor("U3", AV),
+        ]);
+        let g = gating(&found);
+        assert_eq!(g.len(), 1, "{found:#?}");
+        let m = &g[0].message;
+        assert!(m.contains("'+3V3A' never comes up"), "{m}");
+        assert!(m.contains("L5"), "{m}");
+    }
+
     /// Faulty: the ferrite from a connector's supply pin (a net whose name
     /// states no voltage) to +3V3A is not fitted: the island never comes up
     /// although the connector side is unpowered in the analysis too.
