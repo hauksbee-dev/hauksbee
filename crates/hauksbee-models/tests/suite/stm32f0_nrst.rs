@@ -1,5 +1,5 @@
 //! The STM32F0 NRST pin has a permanent on-die pull-up (STM32F072x8/xB
-//! DocID025004 Rev 5, 6.3.15 p.83: "It is connected to a permanent pull-up
+//! `DocID025004` Rev 5, 6.3.15 p.83: "It is connected to a permanent pull-up
 //! resistor, RPU."; Table 56 p.84: RPU 25 / 40 / 55 kOhm, VIN = VSS), so the
 //! card names the pin `reset` and leaves it out of `must_not_float_roles`: a
 //! removed external pull-up is not a fault on this part, while a reset pin with

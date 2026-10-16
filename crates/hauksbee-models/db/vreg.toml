@@ -7229,7 +7229,9 @@ missing = ["pass_through", "pfm_mode", "switching_ripple", "soft_start", "valley
 #        at 25 V (not modelled: the stamp has no current limit)
 #   Table 1 p.7: VI 30 V abs max; IO and PD internally limited; TJ -40..150 C.
 #   Table 2 p.7: D²PAK RthJA 62.5 C/W, RthJC 3 C/W.
-#   Features p.1: operating -40..125 C; 10 uF minimum output capacitor.
+#   Features p.1: operating -40..125 C. Description p.1 (not the Features list):
+#   "Only a 10 µF (minimum) capacitor is needed for stability". Checked against
+#   DocID6739 Rev 35 (November 2015), pp.1, 6, 7, 11; the figures above are the same there.
 #
 # THE PAD NUMBERS ARE ASSUMED. Figure 2 (p.6) draws the D²PAK top view with its
 # leads labelled INPUT / OUTPUT / ADJ/GND and no lead numbers, and notes that

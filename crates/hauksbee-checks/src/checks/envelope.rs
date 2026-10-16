@@ -988,10 +988,10 @@ fn envelope_lint_with_tolerance(
                     );
                     // The window and the absolute maximum come from different
                     // tables: a finding that states the latter cites both.
-                    let citation = match abs_max_v.filter(|_| above_abs_max) {
-                        Some(limit) => abs_max_citation(basis, abs_max_basis, limit),
-                        None => format!("basis: \"{basis}\""),
-                    };
+                    let citation = abs_max_v.filter(|_| above_abs_max).map_or_else(
+                        || format!("basis: \"{basis}\""),
+                        |limit| abs_max_citation(basis, abs_max_basis, limit),
+                    );
                     let finding = LintFinding {
                         check: LintCheck::OperatingEnvelope,
                         severity,

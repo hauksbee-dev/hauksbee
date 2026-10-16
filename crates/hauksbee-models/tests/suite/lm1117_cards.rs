@@ -62,11 +62,10 @@ fn ams1117_values_keep_their_own_cards() {
         let m = expect_model(value);
         assert_eq!(m.id, id, "{value}");
         assert!(m.params.get_f64("cout_min_f").is_none(), "{value}");
-        assert!(
-            (param(&m, "cout_recommended_f") - 22.0e-6).abs() < 1e-12 || id == "ams1117_5v",
-            "{value}"
-        );
     }
+    // The 3.3 V card records the sheet's 22 µF tantalum recommendation (p.4).
+    let m = expect_model("AMS1117-3.3");
+    assert!((param(&m, "cout_recommended_f") - 22.0e-6).abs() < 1e-12);
     for value in ["LM1117-3.3", "LM1117-5.0", "LM1117MPX-3.3_NOPB"] {
         let m = expect_model(value);
         assert!(
@@ -94,7 +93,7 @@ fn the_wson_order_codes_are_not_read_with_the_three_lead_map() {
 }
 
 /// The ratings are the TI figures: 20 V absolute maximum, 15 V operating, and
-/// a per-package RθJA so a TO-252 footprint is not judged on the SOT-223 figure.
+/// a per-package `RθJA` so a TO-252 footprint is not judged on the SOT-223 figure.
 #[test]
 fn lm1117_ratings_and_packages_are_the_ti_figures() {
     let m = expect_model("LM1117-3.3");
