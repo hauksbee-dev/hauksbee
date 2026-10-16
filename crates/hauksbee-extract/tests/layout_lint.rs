@@ -101,6 +101,57 @@ fn a_filled_zone_connects_and_an_unfilled_one_is_unknown_not_open() {
     }
 }
 
+/// A KiCad 10 board (nets named on each item, no net table) whose two A pads
+/// meet a same-net pour only through thermal-relief spokes: the fill is cut
+/// back from each pad by the thermal gap, so neither pad centre lies inside
+/// the filled polygon and only a spoke touches the pad's edge. KiCad counts
+/// such a pad as connected, and so must this. The fault twin drops R2's spoke
+/// (a pad isolated inside its clearance, an unconnected item to KiCad); R2.1
+/// is then an island. A zone outline with no saved fill proves nothing either
+/// way (`a_filled_zone_connects_and_an_unfilled_one_is_unknown_not_open`).
+#[test]
+fn a_pad_reached_only_by_thermal_spokes_of_a_fill_is_connected() {
+    let board10 = |fill_pts: &str| {
+        format!(
+            r#"(kicad_pcb (version 20260206) (generator "pcbnew") (generator_version "10.0")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+  (footprint "lib:R" (layer "F.Cu") (at 0 0)
+    (property "Reference" "R1")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "A"))
+    (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net "GND")))
+  (footprint "lib:R" (layer "F.Cu") (at 10 0)
+    (property "Reference" "R2")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "A"))
+    (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net "GND")))
+  (segment (start 2 0) (end 12 0) (width 0.25) (layer "F.Cu") (net "GND"))
+  (zone (net "A") (layer "F.Cu") (connect_pads (clearance 0.5)) (min_thickness 0.25)
+    (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))
+    (polygon (pts (xy -1 -1) (xy 11 -1) (xy 11 3) (xy -1 3)))
+    (filled_polygon (layer "F.Cu") (pts {fill_pts})))
+)
+"#
+        )
+    };
+    // A strip 0.5 mm above the pads, with a 0.5 mm spoke down onto each A pad.
+    let both =
+        "(xy -1 3) (xy 11 3) (xy 11 1) (xy 10.25 1) (xy 10.25 0.4) (xy 9.75 0.4) (xy 9.75 1) \
+                (xy 0.25 1) (xy 0.25 0.4) (xy -0.25 0.4) (xy -0.25 1) (xy -1 1)";
+    let spoked = lint(&board10(both));
+    assert!(high(&spoked).is_empty(), "{spoked:?}");
+    assert!(
+        spoked.iter().all(|f| f.check != LintCheck::UnroutedPad),
+        "a saved fill is read, not reported as unfilled: {spoked:?}"
+    );
+
+    let r1_only = "(xy -1 3) (xy 11 3) (xy 11 1) (xy 0.25 1) (xy 0.25 0.4) (xy -0.25 0.4) (xy -0.25 1) (xy -1 1)";
+    let starved = lint(&board10(r1_only));
+    let open = high(&starved);
+    assert_eq!(open.len(), 1, "{starved:?}");
+    assert_eq!(open[0].check, LintCheck::UnroutedPad);
+    assert_eq!(open[0].nets, ["A"]);
+    assert!(open[0].message.contains("R2.1"), "{}", open[0].message);
+}
+
 #[test]
 fn npth_no_connect_and_netless_pads_are_never_islands() {
     let odd = r#"  (footprint "lib:odd" (layer "F.Cu") (at 30 0)
