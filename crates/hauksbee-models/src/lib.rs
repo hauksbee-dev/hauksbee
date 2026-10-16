@@ -69,6 +69,7 @@ pub mod pack;
 pub mod package;
 pub mod param_names;
 pub mod pin_rules;
+mod plausibility;
 pub mod profile;
 pub mod rating_basis;
 pub mod refdes;

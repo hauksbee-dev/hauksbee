@@ -18,9 +18,9 @@ use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, TableLike, Value};
 use super::{
     behavioral_family_base_kind, behavioral_hint_for_kind, conventions_for_kind,
     digital_hint_for_kind, extract_toml_block, format_examples_for_kind, optional_params_for_kind,
-    param_bounds_for_kind, pin_roles_for_kind, rating_key_guide, required_params_for_kind,
-    run_and_record, Workspace, ENVELOPE_RULES, EXTRACTION_RULES, PIN_NUMBERING, PIN_ROLE_GUIDANCE,
-    RATINGS_RULES, SOURCE_QUANTITY_GUIDANCE,
+    param_bounds_for_kind, pin_numbering, pin_roles_for_kind, rating_key_guide,
+    required_params_for_kind, run_and_record, Workspace, ENVELOPE_RULES, EXTRACTION_RULES,
+    PIN_ROLE_GUIDANCE, RATINGS_RULES, SOURCE_QUANTITY_GUIDANCE,
 };
 use crate::extract_config::Resolved;
 use crate::extract_harness as harness;
@@ -367,11 +367,11 @@ fn prompt(part: &str, kind: &str, section: &str, known: &str) -> String {
             "pin functions or package pinout, ordering or package information",
             "",
             format!(
-                "{roles}\n\n{PIN_ROLE_GUIDANCE}\n\n{PIN_NUMBERING}\n\nMap the package the \
-                 orderable part number names. If it names none and the datasheet has several, \
-                 take the one whose pad map the most packages share, else the first listed. Name \
-                 each `package` with its pin count as printed (`SOT-23-6 (DBV)`: a bare `SOT-23` \
+                "{roles}\n\n{PIN_ROLE_GUIDANCE}\n\n{}\n\nMap the package the \
+                 orderable part number names, else split by numbering (P4 SPLIT). Name each \
+                 `package` with its pin count as printed (`SOT-23-6 (DBV)`: a bare `SOT-23` \
                  reads as 3 pins).{}",
+                pin_numbering(),
                 harness::CONFIDENCE_CLAUSE
             ),
         ),

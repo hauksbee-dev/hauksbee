@@ -56,7 +56,13 @@ pub fn conventions(entry: &ModelEntry) -> Vec<Derived> {
             out.extend(delay(entry).into_iter().chain(supply_current(entry)));
             out.extend(logic_levels(entry));
         }
-        Vreg if entry.params.get_bool("shunt") != Some(true) => out.extend(regulator(entry)),
+        // A switching converter's dropout or supply row is an internal bias
+        // regulator's (the `converter_dropout` plausibility rule).
+        Vreg if entry.params.get_bool("shunt") != Some(true)
+            && entry.behavioral.converter.is_none() =>
+        {
+            out.extend(regulator(entry));
+        }
         AnalogSwitch => out.extend(switch(entry)),
         _ => {}
     }
@@ -202,34 +208,38 @@ fn delay(entry: &ModelEntry) -> Option<Derived> {
     ))
 }
 
-/// `supply_static_ua`: the supply-current row (ICC, IDD, IQ) of the operating
-/// mode, never a shutdown, standby or sleep row.
+/// `supply_static_ua`: the quiescent supply-current row (ICC, IDD, IQ): an
+/// operating row, else a standby one; never a shutdown or sleep row, nor one
+/// measured reading, writing or at a running clock (the `static_supply`
+/// plausibility rule holds a drafted value to the same).
 fn supply_current(entry: &ModelEntry) -> Option<Derived> {
-    let syms = "ICC IDD IQ ICCQ IDDQ ISUPPLY ~supply_current ~quiescent_current";
-    let row = named(entry, syms)
-        .filter(|r| !idle(r))
-        .find_map(|r| cell("supply_static_ua", r))?;
+    use crate::plausibility::{dynamic, shutdown, standby};
+    let syms = "ICC* IDD* IQ ISUPPLY ISB ~supply_current ~quiescent_current ~standby_current";
+    let quiet: Vec<_> = named(entry, syms)
+        .filter(|r| !dynamic(r) && !shutdown(r))
+        .collect();
+    let operating = quiet.iter().filter(|r| !standby(r));
+    let ranked = operating.chain(quiet.iter().filter(|r| standby(r)));
+    let row = ranked.copied().find_map(|r| cell("supply_static_ua", r))?;
     Some((
         "supply_static_ua",
         row.0,
-        format!("operating-mode supply current, {}", row.1),
+        format!("quiescent supply current, {}", row.1),
     ))
 }
 
 /// A logic level printed as a fraction of, or an offset from, a supply
 /// (`0.7 × VDDIO`, `70 % VDD`, `VDD − 0.4 V`): that fraction or offset applied
-/// to the supply's value its text prints (`VDDIO = 1.8 V`), else to a cited
-/// row for that supply (typ, else the min/max midpoint).
+/// to the supply's value its text prints (`VDDIO = 1.8 V`), else, for the main
+/// supply, the one the card's stated levels are read at (the `one_corner`
+/// plausibility rule), else a cited row for that supply (typ, else the
+/// min/max midpoint).
 fn relative_level(
     entry: &ModelEntry,
     text: &str,
     percent_of: Option<f64>,
 ) -> Option<(f64, String)> {
-    const RAIL: &str = r"(V(?:DD|CC|IO|S|L|REF|BAT)[A-Z0-9_]*)";
-    static FRACTION: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(&format!(r"(\d*\.?\d+)\s*(%)?\s*(?:[×x*·]|of)?\s*{RAIL}\b"))
-            .expect("a valid pattern")
-    });
+    use crate::plausibility::{FRACTION, RAIL};
     static OFFSET: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(&format!(r"\b{RAIL}\s*([-+−])\s*(\d*\.?\d+)\s*(m?V)?")).expect("a valid pattern")
     });
@@ -237,12 +247,17 @@ fn relative_level(
         LazyLock::new(|| Regex::new(&format!(r"\b{RAIL}\b")).expect("a valid pattern"));
     let value = |rail: &str| {
         let printed = quantity(text, rail, "V");
+        let main = matches!(rail, "VDD" | "VCC" | "VS");
+        let corner = || {
+            main.then(|| crate::plausibility::levels_corner(entry))
+                .flatten()
+        };
         let row = || {
             named(entry, rail)
                 .find_map(|r| read(r, "typ", "V"))
                 .map(|c| c.0)
         };
-        printed.or_else(row).filter(|v| *v > 0.0)
+        printed.or_else(corner).or_else(row).filter(|v| *v > 0.0)
     };
     if let Some(pct) = percent_of {
         let rail = NAME.captures(text)?[1].to_string();
@@ -316,9 +331,10 @@ fn logic_levels(entry: &ModelEntry) -> Vec<Derived> {
                     .map(|(v, how)| (v, format!("unknown record '{p}', {how}")))
             });
         let level = named(entry, sym).find_map(row_level).or(quoted);
+        // A row recording its own "0.7 VDD" coefficient as volts is no level.
         let absolute = || {
             named(entry, sym)
-                .filter(|_| bare)
+                .filter(|r| bare && crate::plausibility::fraction_as_volts(r).is_none())
                 .find_map(|r| cell(name, r))
         };
         out.extend(
@@ -638,6 +654,15 @@ mod tests {
             "comparator |  | tPLH ; typ = 40 ; ns ; 20 mV overdrive + tPHL ; typ = 55 ; ns ; 20 mV overdrive | tpd_s = 5.5000e-8",
             "comparator | open_collector = true | VOL ; max = 0.4 ; V ; - + ICC ; typ = 0.8, max = 1.5 ; mA ; - | supply_static_ua = 8.0000e2",
             "digital |  | ICC shutdown ; max = 1 ; uA ; - + ICC ; max = 20 ; uA ; VCC = 5.5 V | supply_static_ua = 2.0000e1",
+            // Round-3 drafts: the static draw is never a bus-active or write row (PCF8563, 24AA025UID).
+            "digital |  | IDD supply current ; max = 200 ; uA ; Interface active; fSCL = 100 kHz + IDD supply current ; typ = 250, max = 500 ; nA ; Interface inactive (fSCL = 0 Hz); VDD = 3.0 V | supply_static_ua = 2.5000e-1",
+            "digital |  | ICC write, operating current ; typ = 0.1, max = 3 ; mA ; VCC = 5.5 V, SCL = 400 kHz + ICC read, operating current ; max = 1 ; mA ; VCC = 5.5 V + ICCS, standby current ; typ = 0.01, max = 1 ; uA ; VCC = 5.5 V | supply_static_ua = 1.0000e-2",
+            // A ratiometric level scales by the supply the card's own levels are read at (CY8CMBR3108).
+            "digital | voh = 2.4 | VOH, output voltage HIGH level ; min = 2.4 ; V ; IOH = −4 mA at 3 V VDD + VDD, chip supply voltage ; min = 1.71, typ = 1.8, max = 1.89 ; V ; VCC shorted to VDD | vih = 2.1000e0 | [[models.source.uncertainty]]\nstatus = \"unknown\"\nparameter = \"vih_xres\"\nreason = \"Table 15 gives VIH_XRES as 0.7 × VDD\"",
+            // A row recording its own 0.7 VDD coefficient as volts is no level (PCF8563).
+            "digital |  | VIH high-level input voltage ; min = 0.7, max = 5.5 ; V ; Lower limit 0.7 VDD | ",
+            // A buck's dropout row is its internal VCC LDO's (MAX17760).
+            "vreg |  | VCC dropout voltage ; max = 0.27 ; V ; VIN = 4.5V, IVCC = 5mA |  | [models.behavioral.converter]\ntopology = \"buck\"\nout_pin = \"sw\"\nin_pin = \"in\"\nvout_setpoint = 5.0",
             // Regulator: no-load iq, charging iq, dropout at the highest load of its own option.
             "vreg | vout = 3.3 | IQ ; typ = 300 ; uA ; IOUT = 100 mA + IQ ; typ = 50 ; uA ; IOUT = 0 mA + IQ shutdown ; max = 1 ; uA ; - | iq_a = 5.0000e-5",
             "vreg |  | ICC standby ; typ = 50 ; uA ; - + ICC charge mode ; typ = 500 ; uA ; charging | iq_a = 5.0000e-4",

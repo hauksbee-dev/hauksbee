@@ -218,6 +218,10 @@ fn probe_library(cards: &[Card], tag: &str) -> ModelLibrary {
     let mut doc = toml::Table::new();
     let probes = cards.iter().enumerate().map(|(i, c)| {
         let mut t = c.table.clone();
+        // A variant member's probe is a card of its own: its family's shared
+        // match is replaced, so it is no longer one of a set.
+        t.remove("variant_of");
+        t.remove("variant");
         let mut m = toml::Table::new();
         m.insert("value_re".into(), format!("^PROBE{i}$").into());
         t.insert("match".into(), m.into());
