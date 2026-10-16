@@ -1975,7 +1975,10 @@ pub fn control_role(function: &str) -> Option<&'static str> {
     // trailing-'N' strip would maim the no-N control names (EN -> E, SHDN -> SHD),
     // so the doc comment's "RESETN" promise is kept with dedicated arms instead.
     match c {
-        "EN" | "ENABLE" | "CE" | "CEN" | "SHDN" | "SHUTDOWN" | "NSHDN" => Some("enable"),
+        // CHIP_PU / CHIP_EN: Espressif's name for the chip enable.
+        "EN" | "ENABLE" | "CE" | "CEN" | "SHDN" | "SHUTDOWN" | "NSHDN" | "CHIP_PU" | "CHIP_EN" => {
+            Some("enable")
+        }
         "RST" | "RESET" | "RSTN" | "RESETN" | "MR" | "RESE" => Some("reset"), // RESE = RESET after _N strip
         "CS" | "SS" | "NCS" | "NSS" | "CSB" | "CSN" | "SSN" => Some("chip-select"),
         "OE" | "NOE" => Some("output-enable"),

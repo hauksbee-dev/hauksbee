@@ -3,11 +3,19 @@
 //! PCB layouts often retain pad numbers and nets but not schematic pin names,
 //! so the extraction-only floating-control check cannot know that pad 7 is a
 //! HOLD input. A source-bound model may opt individual roles into
-//! `params.must_not_float_roles`. This check then supplies only the missing
-//! semantic map; the board still supplies the topology. It fires solely on the
-//! same high-confidence signature as the extraction check: a named net whose
-//! only member is that control pad. It does not guess bias polarity, firmware
-//! mode, or behavior for models that did not opt in.
+//! `params.must_not_float_roles`: the datasheet gives the pin no internal pull
+//! and says it must be driven or tied (an ESP32 chip enable, a flash HOLD). A
+//! part whose datasheet gives the pin an internal pull (an AVR, STM32, SAM or
+//! RP2040 reset) does not opt in, and its pin is not judged here. This check
+//! supplies only the missing semantic map; the board still supplies the
+//! topology. It fires when nothing on the net sets the pin's level: the net
+//! holds only that pad, or only parts that cannot hold a level on their own: a
+//! capacitor (the C of a reset RC), a button or switch, a connector or test
+//! pad (nothing while unplugged), an NPN collector or N-channel drain (it only
+//! pulls low, and only when on), or another part's enable or reset input. Any
+//! other part on the net (a resistor, a driver, a pin no rule knows) may set
+//! the level, and the pin is not reported. It does not guess bias polarity,
+//! firmware mode, or behavior for models that did not opt in.
 //!
 //! A card lists in `params.float_tolerated_roles` a control input its
 //! datasheet ignores at the part's default configuration (a flash write
@@ -17,18 +25,77 @@
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 
-use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};
-use hauksbee_models::ModelLibrary;
+use std::collections::HashMap;
+
+use hauksbee_extract::assembly::AssemblyState;
+use hauksbee_extract::{
+    control_role, is_capacitor, is_connector_like, is_test_point_or_hole, Component,
+    ExtractedBoard, LintCheck, LintFinding, NetLintReport, Pin, Severity,
+};
+use hauksbee_models::refdes::RefClass;
+use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
+
+use super::floating_inputs::control_lint_covers;
 
 fn unconnected_placeholder(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.starts_with("unconnected-(") || lower.starts_with("unconnected_")
 }
 
-/// Find model-declared control pads that sit alone on a named net.
+/// How a pad that cannot hold a net's level on its own reads in a finding, or
+/// `None` for a pad that may set the level (a resistor, a driver, a pin no rule
+/// knows).
+fn holds_no_level(c: &Component, p: &Pin, models: &HashMap<&str, &ModelEntry>) -> Option<String> {
+    let class = RefClass::of(&c.reference);
+    if is_capacitor(c) {
+        return Some(c.reference.clone());
+    }
+    if class == RefClass::Switch || is_connector_like(c) {
+        return Some(format!("{} pin {}", c.reference, p.number));
+    }
+    if class == RefClass::Transistor {
+        // Only an NPN collector or N-channel drain: it pulls low while on and
+        // lets go while off. A PNP or P-channel one may hold the net high.
+        let model = models.get(c.reference.as_str());
+        let sinks = model.map_or_else(
+            || {
+                let text = format!("{} {}", c.value, c.lib_id).to_ascii_uppercase();
+                ["NPN", "NMOS", "N-CH", "NFET"]
+                    .iter()
+                    .any(|k| text.contains(k))
+            },
+            |m| matches!(m.kind, ComponentKind::BjtNpn | ComponentKind::Nmos),
+        );
+        // The card's role for the pad (by number, then by pin name), else the
+        // symbol's pin name: `collector`, `drain_q2`, `C`, `D`.
+        let role = model
+            .and_then(|m| {
+                m.pins
+                    .get(&p.number)
+                    .or_else(|| m.pins.get(p.function.trim()))
+            })
+            .map_or_else(|| p.function.trim(), String::as_str)
+            .to_ascii_lowercase();
+        return match role.split('_').next().unwrap_or_default() {
+            "c" | "collector" if sinks => Some(format!("{}'s collector", c.reference)),
+            "d" | "drain" if sinks => Some(format!("{}'s drain", c.reference)),
+            _ => None,
+        };
+    }
+    let input = p.kind.trim().eq_ignore_ascii_case("input");
+    (input && matches!(control_role(&p.function), Some("enable" | "reset")))
+        .then(|| format!("{} pin {} ({})", c.reference, p.number, p.function.trim()))
+}
+
+/// Find model-declared control pads on a net nothing holds at a level.
 pub fn model_control_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
-    for (comp, model) in super::resolved_components(board, lib) {
+    let resolved: Vec<_> = super::resolved_components(board, lib).collect();
+    let models: HashMap<&str, &ModelEntry> = resolved
+        .iter()
+        .map(|(c, m)| (c.reference.as_str(), m))
+        .collect();
+    for (comp, model) in &resolved {
         let roles = |key| {
             model
                 .params
@@ -60,7 +127,25 @@ pub fn model_control_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLint
                 let Some(net) = board.net(net_id) else {
                     continue;
                 };
-                if unconnected_placeholder(&net.name) || board.net_members(net_id).len() != 1 {
+                let name = &net.name;
+                // A named control pin alone on its net is the extract lint's.
+                if unconnected_placeholder(name) || control_lint_covers(board, comp, pin) {
+                    continue;
+                }
+                // Every other fitted pad on the net, by what it does to the level.
+                let mut held_by = Vec::new();
+                let mut defined = false;
+                for (o, q) in board.net_members(net_id) {
+                    let this = std::ptr::eq(o, *comp) && std::ptr::eq(q, pin);
+                    if this || !AssemblyState::of(o).is_present() || is_test_point_or_hole(o) {
+                        continue;
+                    }
+                    match holds_no_level(o, q, &models) {
+                        Some(label) => held_by.push(label),
+                        None => defined = true,
+                    }
+                }
+                if defined {
                     continue;
                 }
                 let (severity, consequence) = if must {
@@ -78,15 +163,23 @@ pub fn model_control_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLint
                         format!("harmless as shipped ({basis}), but tie it to its inactive rail so it cannot pick up noise or act if the configuration changes"),
                     )
                 };
+                let topology = if held_by.is_empty() {
+                    "the net touches only this pad".to_string()
+                } else {
+                    format!(
+                        "the net holds only {}, and none of them sets a level while no button is pressed and nothing is plugged in",
+                        held_by.join(", ")
+                    )
+                };
                 report.findings.push(LintFinding {
                     check: LintCheck::FloatingControlPin,
                     severity,
                     message: format!(
-                        "{} pad {} ({role}, from model '{}') is a control input on floating net '{}': the net touches only this pad; {consequence}",
-                        comp.reference, pin.number, model.id, net.name
+                        "{} pad {} ({role}, from model '{}') is a control input on floating net '{name}': {topology}; {consequence}",
+                        comp.reference, pin.number, model.id
                     ),
                     refs: vec![comp.reference.clone()],
-                    nets: vec![net.name.clone()],
+                    nets: vec![name.clone()],
                 });
             }
         }
@@ -168,6 +261,173 @@ mod tests {
         let mut board = flash_board(false);
         board.components[0].value = "UNKNOWN_FLASH".into();
         let report = model_control_lint(&board, &ModelLibrary::builtin());
+        assert_eq!(report.of_check(LintCheck::FloatingControlPin).count(), 0);
+    }
+
+    use crate::test_support::{board, pin, pin_fn};
+
+    const GND: i64 = 1;
+    const V3: i64 = 2;
+    const EN: i64 = 10;
+
+    fn fitted(reference: &str, value: &str, lib_id: &str, pins: Vec<Pin>) -> Component {
+        Component {
+            reference: reference.into(),
+            value: value.into(),
+            lib_id: lib_id.into(),
+            footprint: lib_id.into(),
+            layer: "F.Cu".into(),
+            pins,
+            ..Default::default()
+        }
+    }
+
+    /// The usual ESP32-S3 auto-reset corner without its pull-up: the module's
+    /// EN (pad 3) with the RC's capacitor, a reset button, the USB-serial
+    /// bridge's NPN, a header pin, a test pad, a do-not-populate 10k and a
+    /// second board's `CHIP_PU` input.
+    fn esp32s3_enable(extra: Vec<Component>) -> Vec<LintFinding> {
+        let mut input = pin_fn("3", EN, "CHIP_PU");
+        input.kind = "input".into();
+        let mut dnp_pull = fitted("R1", "10k", "Device:R", vec![pin("1", V3), pin("2", EN)]);
+        dnp_pull.dnp = true;
+        let mut parts = vec![
+            fitted(
+                "U1",
+                "ESP32-S3-WROOM-1",
+                "RF_Module:ESP32-S3-WROOM-1",
+                vec![pin("1", GND), pin("2", V3), pin_fn("3", EN, "EN")],
+            ),
+            fitted("C4", "1u", "Device:C", vec![pin("1", EN), pin("2", GND)]),
+            fitted(
+                "SW1",
+                "SW_Push",
+                "Switch:SW_Push",
+                vec![pin("1", GND), pin("2", EN)],
+            ),
+            fitted(
+                "Q1",
+                "Q_NPN_BCE",
+                "Device:Q_NPN_BCE",
+                vec![
+                    pin_fn("1", 20, "B"),
+                    pin_fn("2", EN, "C"),
+                    pin_fn("3", 21, "E"),
+                ],
+            ),
+            fitted(
+                "J1",
+                "Conn_01x04",
+                "Connector:Conn_01x04",
+                vec![pin("2", EN)],
+            ),
+            fitted(
+                "TP1",
+                "TestPoint",
+                "Connector:TestPoint",
+                vec![pin("1", EN)],
+            ),
+            dnp_pull,
+            fitted(
+                "U2",
+                "ESP32-S3-DevKitC",
+                "Espressif:ESP32-S3-DevKitC",
+                vec![input],
+            ),
+        ];
+        parts.extend(extra);
+        let nets = [
+            (GND, "GND"),
+            (V3, "+3V3"),
+            (EN, "/EN"),
+            (20, "/DTR"),
+            (21, "/RTS"),
+        ];
+        model_control_lint(&board("t", &nets, parts), &ModelLibrary::builtin())
+            .of_check(LintCheck::FloatingControlPin)
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn an_enable_held_only_by_parts_that_set_no_level_floats() {
+        let found = esp32s3_enable(vec![]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        let f = &found[0];
+        assert_eq!(f.severity, Severity::High);
+        assert_eq!(f.refs, ["U1"]);
+        for named in [
+            "C4",
+            "SW1 pin 2",
+            "Q1's collector",
+            "J1 pin 2",
+            "U2 pin 3 (CHIP_PU)",
+        ] {
+            assert!(f.message.contains(named), "{named}: {}", f.message);
+        }
+        // A test pad and an unfitted resistor are not on the assembled net.
+        assert!(
+            !f.message.contains("TP1") && !f.message.contains("R1"),
+            "{}",
+            f.message
+        );
+    }
+
+    #[test]
+    fn a_fitted_pull_or_a_high_side_transistor_sets_the_enable() {
+        let pull = fitted("R2", "10k", "Device:R", vec![pin("1", V3), pin("2", EN)]);
+        assert!(esp32s3_enable(vec![pull]).is_empty());
+        // A PNP collector may hold the net high; that is a driver, not a float.
+        let pnp = fitted(
+            "Q2",
+            "Q_PNP_BCE",
+            "Device:Q_PNP_BCE",
+            vec![
+                pin_fn("1", 22, "B"),
+                pin_fn("2", EN, "C"),
+                pin_fn("3", V3, "E"),
+            ],
+        );
+        assert!(esp32s3_enable(vec![pnp]).is_empty());
+    }
+
+    #[test]
+    fn a_named_enable_alone_on_its_net_is_reported_once() {
+        let u1 = fitted(
+            "U1",
+            "ESP32-S3-WROOM-1",
+            "RF_Module:ESP32-S3-WROOM-1",
+            vec![pin("1", GND), pin("2", V3), pin_fn("3", EN, "EN")],
+        );
+        let b = board("t", &[(GND, "GND"), (V3, "+3V3"), (EN, "/EN")], vec![u1]);
+        let here = model_control_lint(&b, &ModelLibrary::builtin());
+        assert_eq!(here.of_check(LintCheck::FloatingControlPin).count(), 0);
+        let extract = b.net_lint();
+        assert_eq!(extract.of_check(LintCheck::FloatingControlPin).count(), 1);
+    }
+
+    #[test]
+    fn a_reset_with_an_internal_pull_is_not_judged() {
+        // RP2040 RUN (pad 26) has an on-die pull-up (datasheet Table 619), so
+        // its card does not opt RUN in: a button and a cap alone are fine.
+        let mut pins: Vec<Pin> = (1..=57).map(|n| pin(&n.to_string(), 30 + n)).collect();
+        pins[25] = pin_fn("26", EN, "RUN");
+        let parts = vec![
+            fitted("U1", "RP2040", "QFN-56-1EP_7x7mm_P0.4mm_EP3.2x3.2mm", pins),
+            fitted("C1", "100n", "Device:C", vec![pin("1", EN), pin("2", GND)]),
+            fitted(
+                "SW1",
+                "SW_Push",
+                "Switch:SW_Push",
+                vec![pin("1", GND), pin("2", EN)],
+            ),
+        ];
+        let b = board("t", &[(GND, "GND"), (EN, "/RUN")], parts);
+        let lib = ModelLibrary::builtin();
+        let rp2040 =
+            crate::checks::resolved_components(&b, &lib).find(|(c, _)| c.reference == "U1");
+        assert!(rp2040.is_some_and(|(_, m)| m.pins.get("26").is_some_and(|r| r == "run")));
+        let report = model_control_lint(&b, &lib);
         assert_eq!(report.of_check(LintCheck::FloatingControlPin).count(), 0);
     }
 }

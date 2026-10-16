@@ -32,6 +32,8 @@ pub enum RefClass {
     Transistor,
     /// `U`, `IC`, `MCU`.
     ActiveIc,
+    /// `SW`, `S`, `BTN`: a switch or push button.
+    Switch,
     /// Anything else, including a CAD tool's `U$12` placeholder.
     Other,
 }
@@ -64,6 +66,7 @@ impl RefClass {
             match prefix(&d).as_str() {
                 "D" => Self::Diode,
                 "Q" => Self::Transistor,
+                "SW" | "S" | "BTN" => Self::Switch,
                 // Eagle's `U$12` placeholder is a hole, fiducial or logo.
                 "U" | "IC" | "MCU" if !is_tool_generated_ref(reference) => Self::ActiveIc,
                 _ => Self::Other,
@@ -134,7 +137,7 @@ pub fn is_tool_generated_ref(reference: &str) -> bool {
 mod tests {
     use super::RefClass::{
         self, ActiveIc, Capacitor, Diode, FerriteBead, Inductor, Led, Other, Resistor,
-        ResistorArray, Thermistor, Transistor, Varistor,
+        ResistorArray, Switch, Thermistor, Transistor, Varistor,
     };
 
     #[test]
@@ -170,6 +173,10 @@ mod tests {
             ("MCU1", ActiveIc, "IC"),
             ("U$12", Other, "Eagle's placeholder for an unnamed element"),
             ("J1", Other, "connector"),
+            ("SW1", Switch, "switch or push button"),
+            ("S2", Switch, "switch (IEEE 315 S)"),
+            ("BTN1", Switch, "push button"),
+            ("SPK1", Other, "speaker, not a switch"),
             (
                 "USB1",
                 Other,
