@@ -1060,6 +1060,39 @@ pub fn read_regular_file(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
     std::fs::read(path)
 }
 
+/// [`read_regular_file`] decoded as UTF-8, with the same error `read_to_string`
+/// gives for text that is not.
+///
+/// # Errors
+///
+/// As [`read_regular_file`], plus [`std::io::ErrorKind::InvalidData`] for bytes
+/// that are not UTF-8.
+pub fn read_regular_string(path: &std::path::Path) -> std::io::Result<String> {
+    String::from_utf8(read_regular_file(path)?).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "stream did not contain valid UTF-8",
+        )
+    })
+}
+
+/// [`read_regular_file`] decoded as UTF-8 with invalid bytes replaced.
+///
+/// For fab and CAM text, where a Latin-1 degree sign or micro sign in a comment
+/// is common and says nothing about the geometry: refusing the whole job over it
+/// would be a false refusal, and dropping the file would lose a layer.
+///
+/// # Errors
+///
+/// As [`read_regular_file`].
+pub fn read_regular_text_lossy(path: &std::path::Path) -> std::io::Result<String> {
+    let bytes = read_regular_file(path)?;
+    Ok(match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+    })
+}
+
 /// Read one archive member whole, refusing one that inflates past
 /// [`MAX_INFLATED_BYTES`].
 ///

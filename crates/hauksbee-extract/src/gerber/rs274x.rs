@@ -215,7 +215,11 @@ pub fn parse_copper_layer(text: &str) -> Result<Vec<CopperPrim>, String> {
 /// the parser rejected (an unknown word, a malformed aperture or coordinate, an
 /// operation before the format is declared) is geometry this reader dropped.
 fn skippable_statement(line: &str) -> bool {
-    let line = line.trim();
+    let line = line.trim().trim_start_matches('\u{feff}');
+    // A line of nothing but terminators (`*`, `%`) carries no statement.
+    if line.chars().all(|c| matches!(c, '*' | '%' | ' ' | '\t')) {
+        return true;
+    }
     if let Some(body) = line.strip_prefix('%') {
         return [
             "TF", "TA", "TO", "TD", "AM", "LN", "IN", "IP", "OF", "SF", "AS", "MI", "IO", "IR",
@@ -223,19 +227,64 @@ fn skippable_statement(line: &str) -> bool {
         .iter()
         .any(|p| body.starts_with(p));
     }
-    let code = line.trim_end_matches('*');
+    // Deprecated words matched by prefix: they are followed by other words on the
+    // same line (`G71D02*`, `G54D10*`) or a bare terminator (`G90*`).
     line.starts_with("G04")
-        || matches!(
-            code,
-            "G54" | "G55" | "G70" | "G71" | "G74" | "G75" | "G90" | "G91" | "M00" | "M01"
-        )
+        || [
+            "G54", "G55", "G70", "G71", "G74", "G75", "G90", "G91", "M00", "M01",
+        ]
+        .iter()
+        .any(|p| line.starts_with(p))
 }
 
 /// Largest coordinate or aperture size (in the file's own units) that any real
 /// board reaches: 100 metres in millimetres, far past a 10-metre panel.
 const MAX_SANE_EXTENT: f64 = 100_000.0;
 
+/// The 1-based number of the first line carrying a coordinate with more digits
+/// than any gerber number format allows (at most 6 integer and 6 decimal places).
+/// The parser multiplies such a number by a power of ten while it is still an
+/// integer, so a hostile one would overflow there instead of being refused.
+fn overlong_coordinate_line(text: &str) -> Option<usize> {
+    const MAX_DIGITS: usize = 12;
+    for (n, line) in text.lines().enumerate() {
+        let line = line.trim().trim_start_matches('\u{feff}');
+        if line.starts_with('%') || line.starts_with("G04") {
+            continue;
+        }
+        let bytes = line.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if matches!(bytes[i], b'X' | b'Y' | b'I' | b'J') {
+                let mut j = i + 1;
+                if matches!(bytes.get(j), Some(b'-' | b'+')) {
+                    j += 1;
+                }
+                let start = j;
+                while j < bytes.len() && bytes[j].is_ascii_digit() {
+                    j += 1;
+                }
+                if line[start..j].trim_start_matches('0').len() > MAX_DIGITS {
+                    return Some(n + 1);
+                }
+                i = j.max(i + 1);
+            } else {
+                i += 1;
+            }
+        }
+    }
+    None
+}
+
 fn parse_layer_checked(text: &str) -> (Vec<CopperPrim>, Vec<String>) {
+    if let Some(line_no) = overlong_coordinate_line(text) {
+        return (
+            Vec::new(),
+            vec![format!(
+                "has a coordinate on line {line_no} far outside any real board (more than 12 digits)"
+            )],
+        );
+    }
     let normalized = normalize_rs274x(text);
     // `parse` returns the partially-built document even on a hard error (the
     // error and the doc-so-far are paired). Per-command parse errors are kept
@@ -320,6 +369,33 @@ fn note_unreadable_statements(doc: &gerber_parser::GerberDoc, faults: &mut Vec<S
             "never states its units (%MOMM or %MOIN), so the scale of every coordinate is unknown"
                 .to_string(),
         );
+    }
+    // An `%AM` the parser could not read is dropped from the command list, and a
+    // flash of an aperture built on it would be drawn as the fallback disc: the
+    // pad would be there, at the wrong size and shape. Refuse instead.
+    let defined_macros: std::collections::HashSet<&str> = doc
+        .commands
+        .iter()
+        .filter_map(|c| match c {
+            Ok(Command::ExtendedCode(ExtendedCode::ApertureMacro(m))) => Some(m.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    let mut undefined_macros: Vec<(i32, &str)> = doc
+        .apertures
+        .iter()
+        .filter_map(|(code, aperture)| match aperture {
+            Aperture::Macro(name, _) if !defined_macros.contains(name.as_str()) => {
+                Some((*code, name.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
+    undefined_macros.sort_unstable();
+    if let Some((code, name)) = undefined_macros.first() {
+        faults.push(format!(
+            "defines aperture D{code} with the aperture macro `{name}`, which the file never defines or which could not be read, so its pads would be drawn at the wrong size and shape"
+        ));
     }
     for (code, aperture) in &doc.apertures {
         let sizes: Vec<f64> = match aperture {
@@ -1529,6 +1605,8 @@ fn already_void(
 /// gerbers are unaffected (their `%...%` blocks are already single-statement
 /// and their FS already carries the zero char).
 fn normalize_rs274x(text: &str) -> String {
+    // A UTF-8 byte-order mark (Windows editors) is not part of the first statement.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut out = String::with_capacity(text.len());
     for line in text.lines() {
         let trimmed = line.trim();
@@ -4387,6 +4465,60 @@ M02*
     }
 
     #[test]
+    fn deprecated_words_with_trailing_words_and_lone_terminators_do_not_refuse_a_film() {
+        for extra in ["G71D02*", "G70*", "G90*", "G91*", "G55*", "G54D10*", "*", "%", "G71*"] {
+            let g = LEGAL_COPPER.replace("%LPD*%", &format!("%LPD*%\n{extra}"));
+            assert!(
+                parse_copper_layer(&g).is_ok(),
+                "{extra}: {:?}",
+                parse_copper_layer(&g)
+            );
+        }
+    }
+
+    #[test]
+    fn a_leading_byte_order_mark_does_not_hide_the_first_statement() {
+        let g = format!("\u{{feff}}{LEGAL_COPPER}");
+        assert!(
+            parse_copper_layer(&g).is_ok(),
+            "{:?}",
+            parse_copper_layer(&g)
+        );
+    }
+
+    #[test]
+    fn skippable_statement_matches_deprecated_words_by_prefix() {
+        for line in ["G71D02*", "G90*", "G91*", "G55*", "*", "%", "\u{feff}G70*", "G04 note*"] {
+            assert!(skippable_statement(line), "{line}");
+        }
+        for line in ["X1Y1D09*", "Q7*", "G02X1Y1*"] {
+            assert!(!skippable_statement(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_flashed_aperture_macro_that_cannot_be_read_refuses_the_film() {
+        // The well-formed macro is the control: it reads and flashes fine.
+        let good = "\
+%FSLAX46Y46*%
+%MOMM*%
+%AMBOX*21,1,2,2,0,0,0*%
+%ADD10BOX*%
+D10*
+X0Y0D03*
+M02*
+";
+        assert!(parse_copper_layer(good).is_ok(), "{:?}", parse_copper_layer(good));
+        // Same film, the macro body is garbage and the aperture is defined from it.
+        let bad = good.replace("21,1,2,2,0,0,0", "1,1,0.5");
+        let why = copper_fault(&bad);
+        assert!(why.contains("BOX") && why.contains("D10"), "{why}");
+        // A macro never defined at all is refused the same way.
+        let missing = good.replace("%AMBOX*21,1,2,2,0,0,0*%\n", "");
+        assert!(copper_fault(&missing).contains("BOX"));
+    }
+
+    #[test]
     fn trailing_bytes_after_m02_are_outside_the_file() {
         let g = format!("{LEGAL_COPPER}\x1a\n");
         assert!(parse_copper_layer(&g).is_ok());
@@ -4456,8 +4588,17 @@ M02*
                 "aperture size {size} must be refused"
             );
         }
+        // Refused either by the digit-count guard or by the parser's own
+        // number-format check; both name the coordinate as unusable.
         let far = LEGAL_COPPER.replace("X11000000", "X99999999999999999");
-        assert!(copper_fault(&far).contains("outside any real board"));
+        let why = copper_fault(&far);
+        assert!(
+            why.contains("outside any real board") || why.contains("not valid RS-274X"),
+            "{why}"
+        );
+        // Under a coarse format the same number would overflow inside the parser.
+        let coarse = far.replace("FSLAX46Y46", "FSLAX43Y43");
+        assert!(parse_copper_layer(&coarse).is_err());
     }
 
     #[test]

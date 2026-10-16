@@ -84,7 +84,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
 /// question about it. If no parent can be found, it refuses rather than return a
 /// netlist that will be read as fact ([`ExtractError::OrphanSubSheet`]).
 pub fn extract_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
-    let text = std::fs::read_to_string(path)
+    let text = crate::read_regular_string(path)
         .map_err(|e| ExtractError::Xml(format!("read {}: {e}", path.display())))?;
     crate::reject_merge_conflict(&text)?;
     let doc = forge_sexpr::parse(&text)?;
@@ -134,7 +134,7 @@ fn orphan_sheet_needs(dir: &Path) -> String {
 
 /// [`extract_from_path`] with the sub-sheet question already settled.
 fn extract_root_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
-    let text = std::fs::read_to_string(path)
+    let text = crate::read_regular_string(path)
         .map_err(|e| ExtractError::Xml(format!("read {}: {e}", path.display())))?;
     let doc = forge_sexpr::parse(&text)?;
     let base = path.parent().map(Path::to_path_buf);
@@ -175,7 +175,7 @@ fn bus_alias_defs(root: &List) -> Vec<(String, Vec<String>)> {
 /// unreadable project file defines none: older projects keep their aliases in
 /// the sheet files, which `add_sheet_doc` reads.
 fn project_bus_aliases(pro: &Path) -> HashMap<String, Vec<String>> {
-    let Ok(text) = std::fs::read_to_string(pro) else {
+    let Ok(text) = crate::read_regular_string(pro) else {
         return HashMap::new();
     };
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
@@ -236,7 +236,7 @@ fn find_hierarchy_root(sheet: &Path) -> Option<PathBuf> {
         if cand == *sheet {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&cand) else {
+        let Ok(text) = crate::read_regular_string(&cand) else {
             continue;
         };
         let Ok(doc) = forge_sexpr::parse(&text) else {
@@ -265,7 +265,7 @@ fn project_root(dir: &Path) -> Option<PathBuf> {
     projects.sort();
     projects.into_iter().find_map(|pro| {
         let sch = pro.with_extension("kicad_sch");
-        let text = std::fs::read_to_string(&sch).ok()?;
+        let text = crate::read_regular_string(&sch).ok()?;
         let doc = forge_sexpr::parse(&text).ok()?;
         is_root_sheet(&doc).then_some(sch)
     })
@@ -287,7 +287,7 @@ fn hierarchy_reaches(root: &Path, target: &Path) -> bool {
         if canon == *target {
             return true;
         }
-        let Ok(text) = std::fs::read_to_string(&p) else {
+        let Ok(text) = crate::read_regular_string(&p) else {
             continue;
         };
         let Ok(doc) = forge_sexpr::parse(&text) else {
@@ -1177,7 +1177,7 @@ impl NetlistBuilder {
         if let Some(doc) = self.parsed_sheets.get(key) {
             return Some(Rc::clone(doc));
         }
-        let text = std::fs::read_to_string(path).ok()?;
+        let text = crate::read_regular_string(path).ok()?;
         forge_sexpr::parse(&text).ok().map(Rc::new)
     }
 

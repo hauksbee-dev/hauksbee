@@ -1328,6 +1328,12 @@ pub struct ClearanceRuleProvenance {
     /// Parsed custom-rule coverage, including scopes Hauksbee did not evaluate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_rules: Option<CustomRulesCoverage>,
+    /// The input is a board-file source for which no design rule was read at all
+    /// (the clearance sweep never ran), as opposed to a rule that was read and
+    /// happens to be small. Not part of the report document: it only picks the
+    /// wording of [`Self::source_notice`].
+    #[serde(skip)]
+    pub no_rule_read: bool,
 }
 
 impl Default for ClearanceRuleProvenance {
@@ -1345,6 +1351,7 @@ impl ClearanceRuleProvenance {
             project_file_found: true,
             overridden_project_value_mm: None,
             custom_rules: None,
+            no_rule_read: false,
         }
     }
 
@@ -1356,6 +1363,7 @@ impl ClearanceRuleProvenance {
             project_file_found,
             overridden_project_value_mm: None,
             custom_rules: None,
+            no_rule_read: false,
         }
     }
 
@@ -1367,6 +1375,7 @@ impl ClearanceRuleProvenance {
             project_file_found: false,
             overridden_project_value_mm: None,
             custom_rules: None,
+            no_rule_read: false,
         }
     }
 
@@ -1378,6 +1387,7 @@ impl ClearanceRuleProvenance {
             project_file_found: false,
             overridden_project_value_mm: None,
             custom_rules: None,
+            no_rule_read: false,
         }
     }
 
@@ -1393,7 +1403,17 @@ impl ClearanceRuleProvenance {
             project_file_found: overridden_project_value_mm.is_some(),
             overridden_project_value_mm,
             custom_rules: Some(coverage),
+            no_rule_read: false,
         }
+    }
+
+    /// Mark that no design rule was read from this input (see
+    /// [`Self::no_rule_read`]). An explicit rule of any size, zero included,
+    /// stays the board's own rule.
+    #[must_use]
+    pub const fn with_no_rule_read(mut self) -> Self {
+        self.no_rule_read = true;
+        self
     }
 
     #[must_use]
@@ -1466,9 +1486,10 @@ impl ClearanceRuleProvenance {
                 "CLEARANCE RULE SOURCE: TOOL DEFAULT {:.3} mm; this importer did not read design rules, so these are default rules, not your rules.",
                 self.value_mm
             ),
-            // A zero report-wide value is no rule at all: nothing could be flagged
-            // against it, so it must not read as a rule the board file carries.
-            ClearanceRuleSource::BoardFile if self.value_mm <= 0.0 => "CLEARANCE RULE SOURCE: none; this input carries no clearance rule Hauksbee reads, so no copper spacing was measured.".to_string(),
+            // No rule was read at all (the sweep never ran): nothing could be
+            // flagged, so it must not read as a rule the board file carries. An
+            // explicit rule, even a zero one, keeps the board-file wording below.
+            ClearanceRuleSource::BoardFile if self.no_rule_read => "CLEARANCE RULE SOURCE: none; this input carries no clearance rule Hauksbee reads, so no copper spacing was measured.".to_string(),
             ClearanceRuleSource::BoardFile => format!(
                 "CLEARANCE RULE SOURCE: clearance carried by the board file (report-wide value {:.3} mm).",
                 self.value_mm
@@ -3355,6 +3376,26 @@ pub(crate) fn test_finding(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_board_file_rule_source_says_none_only_when_no_rule_was_read() {
+        // An explicit rule of zero is still the board's own rule.
+        let explicit = ClearanceRuleProvenance::board_file(0.0);
+        assert!(explicit
+            .source_notice()
+            .contains("clearance carried by the board file"));
+        let unread = ClearanceRuleProvenance::board_file(0.0).with_no_rule_read();
+        let notice = unread.source_notice();
+        assert!(
+            notice.contains("none") && notice.contains("no copper spacing was measured"),
+            "{notice}"
+        );
+        // The marker is not part of the report document.
+        assert_eq!(
+            serde_json::to_value(&explicit).unwrap(),
+            serde_json::to_value(&unread).unwrap()
+        );
+    }
     use crate::reports::bind::{BindOutcome, BindReport, BindRow};
     use hauksbee_extract::DrcFinding;
     use hauksbee_ir::evidence::Assumption;

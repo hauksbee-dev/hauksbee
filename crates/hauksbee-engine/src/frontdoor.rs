@@ -1343,9 +1343,14 @@ fn analyze_normalized_with_context(
             drc.clearance_mm,
         ))
     } else if text_view.is_some_and(|text| !text.contains("(kicad_pcb")) {
-        Some(crate::result::ClearanceRuleProvenance::board_file(
-            drc.clearance_mm,
-        ))
+        let provenance = crate::result::ClearanceRuleProvenance::board_file(drc.clearance_mm);
+        // A sweep that never ran (an empty default report) read no rule at all;
+        // a rule that was read keeps its own wording even when it is small.
+        Some(if drc.primitive_count == 0 && drc.clearance_mm <= 0.0 {
+            provenance.with_no_rule_read()
+        } else {
+            provenance
+        })
     } else {
         Some(crate::result::ClearanceRuleProvenance::defaulted(
             drc.clearance_mm,

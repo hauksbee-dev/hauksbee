@@ -95,7 +95,7 @@ pub fn resolve(
                 board_path.display()
             );
         }
-        let raw = std::fs::read(path)
+        let raw = hauksbee_extract::read_regular_file(path)
             .map_err(|e| anyhow::anyhow!("--schematic {}: {e}", path.display()))?;
         let text = String::from_utf8_lossy(&raw);
         if hauksbee_extract::looks_like_eagle_binary(&raw) {
@@ -129,7 +129,7 @@ pub fn resolve(
     // Eagle names the pair `<project>.brd` / `<project>.sch`, so the extension
     // swap is the whole convention.
     let sibling = board_path.with_extension("sch");
-    let Ok(raw) = std::fs::read(&sibling) else {
+    let Ok(raw) = hauksbee_extract::read_regular_file(&sibling) else {
         return Ok(None);
     };
     let text = String::from_utf8_lossy(&raw);

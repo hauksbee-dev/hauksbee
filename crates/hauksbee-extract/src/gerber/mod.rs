@@ -74,7 +74,7 @@ fn ext_is(path: &Path, ext: &str) -> bool {
 }
 
 fn read_text(path: &Path, what: &str) -> Result<String, ExtractError> {
-    std::fs::read_to_string(path)
+    crate::read_regular_text_lossy(path)
         .map_err(|e| ExtractError::Xml(format!("{what} {}: {e}", film(path))))
 }
 
@@ -192,6 +192,10 @@ fn drill_is_gerber_format(head: &str, ext: Option<&str>) -> bool {
 /// its file; a binary member yields something no rule matches.
 fn read_head(path: &Path) -> String {
     use std::io::Read;
+    // Opening a FIFO with no writer blocks forever; only a regular file has a head.
+    if !std::fs::metadata(path).is_ok_and(|m| m.is_file()) {
+        return String::new();
+    }
     let Ok(file) = std::fs::File::open(path) else {
         return String::new();
     };
@@ -405,17 +409,17 @@ impl PackageMetadata {
         for p in files {
             let name = film(p);
             if name.eq_ignore_ascii_case("layer_map.txt") || ext_is(p, "map") {
-                if let Ok(text) = std::fs::read_to_string(p) {
+                if let Ok(text) = crate::read_regular_text_lossy(p) {
                     meta.mapping.extend(layers::parse_mapping(&text));
                 }
             } else if ext_is(p, "gbrjob") {
-                if let Ok(text) = std::fs::read_to_string(p) {
+                if let Ok(text) = crate::read_regular_text_lossy(p) {
                     meta.gbrjob.extend(layers::parse_gbrjob(&text));
                 }
             } else if ext_is(p, "ldp") {
                 // Conflicting declarations refuse: picking one would fabricate
                 // or erase a barrel connection.
-                let Ok(text) = std::fs::read_to_string(p) else {
+                let Ok(text) = crate::read_regular_text_lossy(p) else {
                     notes.push(format!(
                         "{name} could not be read, so its drill-layer metadata was not used."
                     ));
@@ -445,7 +449,7 @@ impl PackageMetadata {
                     }
                 }
             } else if ext_is(p, "extrep") {
-                let Ok(text) = std::fs::read_to_string(p) else {
+                let Ok(text) = crate::read_regular_text_lossy(p) else {
                     notes.push(format!(
                         "{name} could not be read, so its extension-role metadata was not used."
                     ));
@@ -689,7 +693,7 @@ fn read_placements(
 ) {
     let mut placements = Vec::new();
     let mut bom = HashMap::new();
-    for text in csvs.iter().filter_map(|c| std::fs::read_to_string(c).ok()) {
+    for text in csvs.iter().filter_map(|c| crate::read_regular_text_lossy(c).ok()) {
         let pnp = placement::parse_pnp(&text);
         if pnp.is_empty() {
             bom.extend(placement::parse_bom(&text));
@@ -700,7 +704,7 @@ fn read_placements(
     if placements.is_empty() {
         placements = loc_files
             .iter()
-            .filter_map(|l| std::fs::read_to_string(l).ok())
+            .filter_map(|l| crate::read_regular_text_lossy(l).ok())
             .map(|text| placement::parse_allegro_loc(&text))
             .find(|pnp| !pnp.is_empty())
             .unwrap_or_default();
@@ -1588,7 +1592,7 @@ fn names_a_partial_span(fname: &str) -> bool {
 fn read_outline(outlines: &[PathBuf]) -> Vec<geo::Shape> {
     let mut out = Vec::new();
     for p in outlines {
-        let Ok(text) = std::fs::read_to_string(p) else {
+        let Ok(text) = crate::read_regular_text_lossy(p) else {
             continue;
         };
         if let Ok(prims) = rs274x::parse_layer(&text) {
@@ -2240,5 +2244,25 @@ mod unzip_cap_tests {
         let zip = zip_of(&[("a.gbr", vec![7u8; 1 << 20])]);
         assert!(unzip_with_budget(&zip, 1 << 20).is_ok());
         assert!(unzip_with_budget(&zip, (1 << 20) - 1).is_err());
+    }
+}
+
+#[cfg(test)]
+mod lossy_text_tests {
+    use super::read_text;
+
+    #[test]
+    fn a_latin1_byte_in_a_comment_does_not_refuse_the_film() {
+        let dir = std::env::temp_dir().join(format!("hauksbee_latin1_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("top.gtl");
+        let mut bytes = b"G04 90".to_vec();
+        bytes.push(0xB0); // Latin-1 degree sign, not valid UTF-8 on its own
+        bytes.extend_from_slice(b" turn*\n%FSLAX46Y46*%\n%MOMM*%\n%ADD10C,0.6*%\nD10*\nX0Y0D03*\nM02*\n");
+        std::fs::write(&path, &bytes).unwrap();
+        let text = read_text(&path, "read").expect("a Latin-1 comment is not a refusal");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(text.contains("%FSLAX46Y46*%"), "{text}");
+        assert!(super::rs274x::parse_copper_layer(&text).is_ok());
     }
 }

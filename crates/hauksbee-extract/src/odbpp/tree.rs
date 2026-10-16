@@ -182,7 +182,7 @@ impl OdbTree {
             // Read failures (a permission-denied or vanished file) are skipped
             // rather than fatal: the missing member then shows up as the
             // specific "no eda/data" style refusal, which names what is absent.
-            if let Ok(bytes) = std::fs::read(&path) {
+            if let Ok(bytes) = crate::read_regular_file(&path) {
                 tree.insert(rel, bytes)?;
             }
         }

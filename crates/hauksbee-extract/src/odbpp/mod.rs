@@ -262,7 +262,7 @@ pub fn from_odbpp(path: &Path) -> Result<OdbExtraction, ExtractError> {
     if path.is_dir() {
         return extract_tree(&OdbTree::from_dir(path)?);
     }
-    let bytes = std::fs::read(path)
+    let bytes = crate::read_regular_file(path)
         .map_err(|e| ExtractError::Odb(format!("read {}: {e}", path.display())))?;
     from_odbpp_archive(&bytes)
 }
