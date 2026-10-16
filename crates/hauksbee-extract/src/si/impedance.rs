@@ -426,7 +426,7 @@ fn classified_pairs(board: &ExtractedBoard) -> Vec<(i64, i64, Option<ImpedanceCl
 
 /// The standard a differential pair belongs to, from what the board says about
 /// it, or `None` when it says nothing: a `_DP`/`_DN` suffix is a USB data pair,
-/// a DisplayPort lane and a vendor's private link alike, and a 90 ohm USB target
+/// a `DisplayPort` lane and a vendor's private link alike, and a 90 ohm USB target
 /// printed against an `eDP` lane (100 ohm) reads as a fault that is not there.
 ///
 /// In order: a display token in either net's name (`EDP`, `DISPLAYPORT`,
