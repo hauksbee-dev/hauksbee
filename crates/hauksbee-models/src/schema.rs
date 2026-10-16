@@ -1339,7 +1339,9 @@ pub enum OperatingEnvelope {
 }
 
 /// Whether a supply row's `basis` already names a second source for its
-/// `abs_max_v`: the wording the vendors print for the absolute-maximum table
+/// `abs_max_v`.
+///
+/// That is the wording the vendors print for the absolute-maximum table
 /// ("Absolute Maximum Ratings", "Limiting Values", ST's "Voltage
 /// characteristics", "Maximum Ratings"), or a `;`-separated second citation that
 /// carries a table or section number ("..., 5.3 VCCA 1.2 V to 3.6 V; 5.1 VCCA
@@ -1367,8 +1369,9 @@ pub fn basis_names_abs_max(basis: &str) -> bool {
 }
 
 /// The source clause a finding quotes when it states the `limit` V absolute
-/// maximum beside the recommended window: both rows' bases, since they are
-/// different tables of the sheet. A row that records no absolute-maximum source
+/// maximum beside the recommended window.
+///
+/// It carries both rows' bases, since they are different tables of the sheet. A row that records no absolute-maximum source
 /// says so, so the figure is never presented as read from the window's table.
 #[must_use]
 pub fn abs_max_citation(basis: &str, abs_max_basis: &str, limit: f64) -> String {
