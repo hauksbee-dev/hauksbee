@@ -58,7 +58,9 @@ fn hostile_net_names_are_shown_not_obeyed() {
 
 #[test]
 fn ordinary_names_pass_through_unchanged() {
-    let text = output_for("VBUS_5V", &["--check", "--plain"]);
+    // `--list-nets` prints every net name; a healthy `--check` report does not
+    // name a net at all, so it cannot show a name passing through.
+    let text = output_for("VBUS_5V", &["--list-nets"]);
     assert!(text.contains("VBUS_5V"), "{text}");
     assert!(!text.contains("\\u00"), "{text}");
 }
