@@ -44,7 +44,10 @@ use std::collections::BTreeMap;
 
 use hauksbee_models::refdes::{designator, RefClass};
 use hauksbee_models::value::parse_value;
-use hauksbee_models::{ModelEntry, ModelLibrary, StrapInternalPull, StrapLevel, StrapPin};
+use hauksbee_models::{
+    ComponentKind, ModelEntry, ModelLibrary, PeripheralSpec, StrapInternalPull, StrapLevel,
+    StrapPin,
+};
 
 use super::envelope::{role_net_id, RailRange, RailResolver};
 use hauksbee_bind::binder::resolve;
@@ -140,7 +143,15 @@ pub fn strap_lint_with_drives(
                 }
                 continue;
             }
-            examine_strap(board, &rails, (comp, model), strap, net_id, &mut report);
+            examine_strap(
+                board,
+                lib,
+                &rails,
+                (comp, model),
+                strap,
+                net_id,
+                &mut report,
+            );
         }
     }
     report
@@ -267,6 +278,7 @@ pub fn strap_coverage(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<String>
 /// required level at reset.
 fn examine_strap(
     board: &ExtractedBoard,
+    lib: &ModelLibrary,
     rails: &RailResolver<'_>,
     (mcu, model): (&Component, &ModelEntry),
     strap: &StrapPin,
@@ -348,7 +360,7 @@ fn examine_strap(
     // wrong-way resistor is then the idle bias of a designed boot circuit (a
     // bootloader button or a gated pull-down), not the only thing setting the
     // level. Which level wins at reset is dynamic, so the static lint abstains.
-    if level_switched_on_board(board, net_id, mcu) {
+    if level_switched_on_board(board, lib, net_id, mcu, want_high) {
         return;
     }
     if let Some(p) = pulls.iter().find(|p| p.up != want_high && strong(p)) {
@@ -378,21 +390,63 @@ fn examine_strap(
     }
 }
 
-/// Is a fitted part that can switch the strap net's level on the board itself
-/// (a transistor, a push-button or switch, or another IC, never the strap's own
-/// MCU) on the net directly or behind one series resistor? A pull resistor to a
-/// rail or ground is a bias, not a hop. A header or test point does not count:
-/// what an off-board plug drives is not a design on this board.
-fn level_switched_on_board(board: &ExtractedBoard, net_id: i64, mcu: &Component) -> bool {
-    let switches = |c: &Component| {
-        c.reference != mcu.reference
-            && AssemblyState::of(c).is_present()
-            && (matches!(
-                RefClass::of(&c.reference),
-                RefClass::Transistor | RefClass::ActiveIc
-            ) || designator(&c.reference).starts_with("SW"))
+/// Is a fitted part that can move the strap net to its *normal* boot level on
+/// the board itself on the net directly or behind one series resistor? Then a
+/// wrong-way resistor is the idle bias of a designed boot circuit, not the only
+/// thing setting the level. A pull resistor to a rail or ground is a bias, not
+/// a hop. A header or test point does not count: what an off-board plug drives
+/// is not a design on this board. The strap's own MCU never counts.
+///
+/// Only a part that can actually drive the net counts:
+/// - a transistor (it may switch the strap either way, e.g. an NMOS pulling
+///   BOOT0 low for normal boot against a 1M idle pull-up);
+/// - a switch with a terminal off the wrong-level supply. A BOOTSEL button
+///   whose far side is ground when normal boot needs high only pushes the
+///   strap further the wrong way, so it never excuses a wrong-way pull;
+/// - an IC whose pin on the net is not input-only. A peripheral's chip-select
+///   input (the QSPI flash `/CS` sharing an RP2040's `QSPI_SS`) cannot set a
+///   level at all.
+fn level_switched_on_board(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    net_id: i64,
+    mcu: &Component,
+    want_high: bool,
+) -> bool {
+    let wrong_supply = |id: i64| {
+        board.net(id).is_some_and(|n| {
+            if want_high {
+                is_ground_name(&n.name)
+            } else {
+                is_rail_name(&n.name)
+            }
+        })
     };
-    let on_net = |id: i64| board.net_members(id).into_iter().any(|(c, _)| switches(c));
+    let drives = |c: &Component, at: i64| {
+        if c.reference == mcu.reference || !AssemblyState::of(c).is_present() {
+            return false;
+        }
+        match RefClass::of(&c.reference) {
+            RefClass::Transistor => true,
+            RefClass::ActiveIc => c
+                .pins
+                .iter()
+                .filter(|p| p.net == Some(at))
+                .any(|p| !input_only_pin(lib, c, p)),
+            class if class == RefClass::Switch || designator(&c.reference).starts_with("SW") => c
+                .pins
+                .iter()
+                .filter_map(|p| p.net)
+                .any(|id| id != at && !wrong_supply(id)),
+            _ => false,
+        }
+    };
+    let on_net = |id: i64| {
+        board
+            .net_members(id)
+            .into_iter()
+            .any(|(c, _)| drives(c, id))
+    };
     if on_net(net_id) {
         return true;
     }
@@ -408,6 +462,58 @@ fn level_switched_on_board(board: &ExtractedBoard, net_id: i64, mcu: &Component)
                 .is_some_and(|n| !is_ground_name(&n.name) && !is_rail_name(&n.name))
         })
         .any(on_net)
+}
+
+/// Whether an IC pin can only sense its net, never drive it: the schematic
+/// types it `input`; its bound card names it a logic input or a peripheral's
+/// chip-select role; or, on a part no MCU card binds, its pin name is a
+/// chip-select (`/CS`, `~{CS}`, `!CS!`, `CS#`, `SSEL`, `nCE`), which on a SPI
+/// peripheral is an input by definition. Anything else may drive.
+fn input_only_pin(lib: &ModelLibrary, c: &Component, p: &hauksbee_extract::Pin) -> bool {
+    if p.kind.trim().eq_ignore_ascii_case("input") {
+        return true;
+    }
+    let model = AssemblyState::of(c)
+        .fitted()
+        .and_then(|part| resolve(lib, part).model);
+    if let Some(m) = &model {
+        if let Some(role) = m.pins.get(&p.number) {
+            let cs = match &m.peripheral {
+                Some(
+                    PeripheralSpec::SpiNorFlash { cs_role, .. }
+                    | PeripheralSpec::RegisterMap { cs_role, .. },
+                ) => Some(cs_role.as_str()),
+                _ => None,
+            };
+            if cs.is_some_and(|cs| cs.eq_ignore_ascii_case(role))
+                || m.logic.inputs.iter().any(|i| i.eq_ignore_ascii_case(role))
+            {
+                return true;
+            }
+        }
+        if m.kind == ComponentKind::Mcu {
+            return false; // a controller's chip-select pin is an output
+        }
+    }
+    is_chip_select_name(&p.function)
+}
+
+/// A dedicated chip-select pin name, active-low decoration stripped.
+fn is_chip_select_name(function: &str) -> bool {
+    let core: String = function
+        .trim()
+        .to_ascii_uppercase()
+        .chars()
+        .filter(|ch| !matches!(ch, '~' | '{' | '}' | '!' | '/' | '#' | ' '))
+        .collect();
+    let core = core
+        .strip_suffix("_N")
+        .or_else(|| core.strip_suffix("_B"))
+        .unwrap_or(&core);
+    matches!(
+        core,
+        "CS" | "CSN" | "NCS" | "CSB" | "SS" | "SSN" | "SSEL" | "CE" | "NCE"
+    )
 }
 
 /// A plain two-terminal resistor on the shared part-class ladder
@@ -1050,6 +1156,65 @@ vih = [0.0, 2.0]
             &solved,
             &[(Medium, &["2.36-3.15 V", "4 rail corner(s)"])],
         );
+    }
+
+    /// The RP2040 BOOTSEL strap (`QSPI_SS`, needs high; RP2040 datasheet
+    /// 3184e62-clean sec 2.8.1.2 p.130 "Check if SPI CS pin is tied low ...
+    /// skip flash boot") shares its net with the flash's chip-select input and a
+    /// BOOTSEL button that pulls it to ground through 1k. Neither can hold the
+    /// strap high, so a pull-down there still fires; a pull-up stays silent; a
+    /// part that can drive the net still makes the lint abstain.
+    #[test]
+    fn qspi_ss_wrong_way_pull_is_not_excused_by_flash_cs_or_bootsel_button() {
+        // Nets: 1 GND, 2 +3V3, 3 QSPI_SS, 4 the button side of the series 1k.
+        let run = |pull_to: i64, flash: Component, extra: Vec<Component>| {
+            let mut parts = vec![
+                part("U3", "RP2040", &[("56", 3)]),
+                flash,
+                pull("R2", "10k", pull_to),
+                part("R1", "1k", &[("1", 3), ("2", 4)]),
+                part("SW1", "BOOTSEL", &[("1", 4), ("2", 4), ("3", 1), ("4", 1)]),
+            ];
+            parts.extend(extra);
+            let b = board(
+                &[(1, "GND"), (2, "+3V3"), (3, "/QSPI_SS"), (4, "/USB_BOOT")],
+                parts,
+            );
+            strap_lint(&b, &library())
+                .of_check(LintCheck::StrapPin)
+                .map(|f| (f.severity, f.message.clone()))
+                .collect::<Vec<_>>()
+        };
+        // A carded flash: its pad 1 is the card's SPI NOR `cs` role.
+        let carded = || part("U2", "W25Q128JVSIQ", &[("1", 3), ("4", 1), ("8", 2)]);
+        // An uncarded flash whose schematic names the pin SSEL (no pin type).
+        let named = || {
+            let mut u = part("U1", "8MB QSPI", &[("1", 3), ("4", 1), ("8", 2)]);
+            u.pins[0].function = "SSEL".into();
+            u
+        };
+        for (what, flash) in [("carded", carded()), ("named", named())] {
+            let got = run(1, flash, vec![]);
+            assert_eq!(got.len(), 1, "{what}: {got:#?}");
+            assert_eq!(got[0].0, Medium, "{what}");
+            for needle in ["qspi_ss", "R2", "needs high", "wrong level"] {
+                assert!(
+                    got[0].1.contains(needle),
+                    "{what}: '{needle}' in {}",
+                    got[0].1
+                );
+            }
+        }
+        // Legal control: the 10k pull-up holds QSPI_SS high for flash boot.
+        assert!(run(2, carded(), vec![]).is_empty());
+        assert!(run(2, named(), vec![]).is_empty());
+        // A part that can drive the net (an IC pin of unknown direction, here an
+        // inverter output) may hold the strap high itself: abstain.
+        let driver = part("U5", "74HC04", &[("2", 3), ("7", 1), ("14", 2)]);
+        assert!(run(1, carded(), vec![driver]).is_empty());
+        // A button to the rail can lift the strap to its normal level: abstain.
+        let lift = part("SW2", "B3U-1000P", &[("1", 3), ("2", 2)]);
+        assert!(run(1, carded(), vec![lift]).is_empty());
     }
 
     /// A clean strap check says what it examined, and a strap it could not
