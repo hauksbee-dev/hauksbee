@@ -121,6 +121,19 @@ impl FaultKind {
         }
     }
 
+    /// The unit the fault's `value` and limit are in: amps, volts, watts or
+    /// degrees C. The one table every report that prints a fault figure reads,
+    /// so a bare number never reaches a user without its unit.
+    #[must_use]
+    pub const fn unit(self) -> &'static str {
+        match self {
+            Self::Overcurrent | Self::SurgeCurrent | Self::PinOvercurrent => "A",
+            Self::Overpower => "W",
+            Self::Overvoltage | Self::ReverseBias | Self::Short | Self::GateOvervoltage => "V",
+            Self::Overtemperature => "C",
+        }
+    }
+
     /// Inverse of [`Self::as_str`]; unknown strings map to `Overcurrent`.
     // Infallible (unknown maps to Overcurrent), so FromStr and its Err type do not fit.
     #[allow(clippy::should_implement_trait)]
@@ -811,15 +824,16 @@ impl StandInExceedance {
     #[must_use]
     pub fn condition(&self) -> String {
         let f = &self.fault;
-        let (unit, seen, what) = match f.kind {
-            FaultKind::Overcurrent => ("A", "carries", "current"),
-            FaultKind::SurgeCurrent => ("A", "carries", "surge current"),
-            FaultKind::PinOvercurrent => ("A", "passes", "pin current"),
-            FaultKind::Overpower => ("W", "dissipates", "power"),
-            FaultKind::Overtemperature => ("C", "reaches", "junction temperature"),
-            FaultKind::ReverseBias => ("V", "sees", "reverse bias"),
-            FaultKind::Overvoltage | FaultKind::Short => ("V", "sees", "voltage"),
-            FaultKind::GateOvervoltage => ("V", "sees", "gate-source voltage"),
+        let unit = f.kind.unit();
+        let (seen, what) = match f.kind {
+            FaultKind::Overcurrent => ("carries", "current"),
+            FaultKind::SurgeCurrent => ("carries", "surge current"),
+            FaultKind::PinOvercurrent => ("passes", "pin current"),
+            FaultKind::Overpower => ("dissipates", "power"),
+            FaultKind::Overtemperature => ("reaches", "junction temperature"),
+            FaultKind::ReverseBias => ("sees", "reverse bias"),
+            FaultKind::Overvoltage | FaultKind::Short => ("sees", "voltage"),
+            FaultKind::GateOvervoltage => ("sees", "gate-source voltage"),
         };
         let rating = format!("{} {unit} {what}", fmt_rating(f.limit));
         let subject = format!(

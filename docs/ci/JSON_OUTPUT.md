@@ -154,7 +154,7 @@ A green run, trimmed to the interesting keys:
  "coverage":null,"substitutions":[],"coverage_warnings":[],"dead_rails":[],
  "waiver_notes":[],
  "results":[{"label":"Tj(R1) <= 125 C","kind":"max_temp","passed":true,
-   "invalid":false,"detail":"Tj(R1) peak 91.7C (<= 125C)","failing_seed":null,
+   "invalid":false,"detail":"Tj(R1) peak 91.7 C (<= 125 C)","failing_seed":null,
    "failing_seeds":[],"seeds_total":1}]}
 ```
 
@@ -163,7 +163,7 @@ A red run adds `why` and a `failing_seed`:
 ```json
 {"passed":false,"assertions_passed":false,"run_valid":true,"exit_code":1,
  "results":[{"label":"Tj(R1) <= 125 C","kind":"max_temp","passed":false,
-   "invalid":false,"detail":"Tj(R1) peak 156.7C > ceiling 125C <- FAILED HERE",
+   "invalid":false,"detail":"Tj(R1) peak 156.7 C > ceiling 125 C <- FAILED HERE",
    "failing_seed":0,"failing_seeds":[0],"seeds_total":1,
    "why":"R1 ran 31.7 C hotter than your 125 C ceiling (peak 156.7 C)"}]}
 ```
@@ -174,7 +174,7 @@ the run is green, and the waiver reason travels with it.
 ```json
 {"passed":true,"assertions_passed":true,"run_valid":true,"exit_code":0,
  "results":[{"label":"Tj(R1) <= 125 C","kind":"max_temp","passed":false,
-   "invalid":false,"detail":"Tj(R1) peak 156.7C > ceiling 125C <- FAILED HERE",
+   "invalid":false,"detail":"Tj(R1) peak 156.7 C > ceiling 125 C <- FAILED HERE",
    "failing_seed":0,"failing_seeds":[0],"seeds_total":1,
    "why":"R1 ran 31.7 C hotter than your 125 C ceiling (peak 156.7 C)",
    "waived":"bench-verified at 40 C ambient; the thermal model has no airflow term (until 2027-12-31)"}]}

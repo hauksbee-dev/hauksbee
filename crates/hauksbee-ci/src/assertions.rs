@@ -4,8 +4,9 @@
 //! fuzzing meaningful: the rail must come up across all random power-up states).
 
 use crate::runner::RunOutcome;
-use crate::spec::{Assertion, Spec};
+use crate::spec::{fmt_c, fmt_c1, Assertion, Spec};
 use hauksbee_engine::scheduler::PeripheralPad;
+use hauksbee_engine::stress::FaultKind;
 use hauksbee_ir::truncate_ellipsis;
 use std::fmt::Write as _;
 
@@ -415,22 +416,69 @@ fn regulation_reason<'a>(a: &Assertion, out: &'a RunOutcome) -> Option<&'a str> 
 }
 
 /// Silicon's melting point (C): no junction estimate above it is physical.
-const TJ_IMPOSSIBLE_C: f64 = 1414.0;
+pub(crate) const TJ_IMPOSSIBLE_C: f64 = 1414.0;
+
+/// The lead of every INVALID reason that refuses a figure which is not a
+/// physical result (a junction past the melting point, a measurement that is
+/// not a finite number). The report's refusal footer counts rows by it, so the
+/// footer names this cause and not a solver failure.
+pub(crate) const UNPHYSICAL_FIGURE: &str = "unphysical figure:";
+
+/// Does any entry of a per-device map that belongs to `reference` hold a
+/// non-finite value (the runner records a NaN or infinite sample as NaN)?
+fn nonfinite_for_ref(map: &std::collections::HashMap<String, f64>, reference: &str) -> bool {
+    map.iter()
+        .any(|(k, v)| key_belongs_to_ref(reference, k) && !v.is_finite())
+}
+
+/// Why a measurement this assertion reads is not a number at all, if so: the
+/// run recorded a NaN or infinite sample for it. `f64::max`/`min` drop a NaN,
+/// so such a sample used to vanish into the running extreme and leave a peak of
+/// `-inf` or `0 A` that PASSED its limit; it now refuses, with the part or net.
+fn nonfinite_measurement_reason(a: &Assertion, out: &RunOutcome) -> Option<String> {
+    let reference = a.reference.as_deref().unwrap_or_default();
+    let (what, subject) = match a.kind.as_str() {
+        "max_temp" if nonfinite_for_ref(&out.peak_temp_c, reference) => {
+            ("junction estimate", reference.to_string())
+        }
+        "max_current" if nonfinite_for_ref(&out.peak_current, reference) => {
+            ("peak current", reference.to_string())
+        }
+        _ => {
+            let nets = [a.net.as_ref(), a.supply_net.as_ref()];
+            let net = nets.into_iter().flatten().find(|n| {
+                out.windows
+                    .iter()
+                    .any(|((w, _), win)| &w == n && win.is_poisoned())
+                    || out
+                        .rail_windows
+                        .iter()
+                        .any(|((_, w), win)| &w == n && win.is_poisoned())
+            })?;
+            ("voltage", net.clone())
+        }
+    };
+    Some(format!(
+        "{UNPHYSICAL_FIGURE} the {what} for {subject} is not a finite number (NaN or infinite),          so there is nothing to compare with your limit. A non-finite input is the usual cause:          check `ambient_c`, the supply voltages and the part values for a nan, inf or absurd figure."
+    ))
+}
 
 /// Why this member cannot be judged AT ALL, if it cannot: its evaluation window
-/// overlapped a chunk the solver failed on, so the samples are held-stale; or an
-/// unsupported regulator's setpoint reaches what it judges. Worded once, here.
+/// overlapped a chunk the solver failed on, so the samples are held-stale; a figure
+/// it rests on is not physical; or an unsupported regulator's setpoint reaches
+/// what it judges. Worded once, here.
 fn member_invalid_reason(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> Option<String> {
     if let Some(((ws, we), (fs, fe))) = stale_overlap(a, out) {
         return Some(format!(
-            "the analog solve failed within this assertion's window ({:.2}-{:.2} ms \
-             overlaps its {:.2}-{:.2} ms evaluation span); those voltages are \
-             held-stale, so the result cannot be trusted.",
+            "the analog solve failed within this assertion's window ({:.2}-{:.2} ms              overlaps its {:.2}-{:.2} ms evaluation span); those voltages are              held-stale, so the result cannot be trusted.",
             fs * 1e3,
             fe * 1e3,
             ws * 1e3,
             we * 1e3,
         ));
+    }
+    if let Some(reason) = nonfinite_measurement_reason(a, out) {
+        return Some(reason);
     }
     // A junction estimate past silicon's melting point is no state a part can
     // occupy, so the power behind it is not physical: it decides nothing.
@@ -444,9 +492,9 @@ fn member_invalid_reason(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> Opti
     };
     if let Some((key, tj)) = tj.filter(|(_, tj)| melted("overtemperature", *tj)) {
         return Some(format!(
-            "the junction estimate for {key} reached {tj:.0} C, past silicon's \
-             {TJ_IMPOSSIBLE_C:.0} C melting point; no part holds that temperature, so the \
-             power behind it is not a physical result."
+            "{UNPHYSICAL_FIGURE} the junction estimate for {key} reached {}, past silicon's              {} melting point; no part holds that temperature, so the power behind it is              not a physical result. Check that part's value, its supply voltage and `ambient_c`.",
+            fmt_c(tj.round()),
+            fmt_c(TJ_IMPOSSIBLE_C),
         ));
     }
     // Content the firmware had not produced by the end of a host-paced run is not
@@ -2477,10 +2525,13 @@ fn check_no_faults(out: &RunOutcome) -> (bool, String) {
         (true, "no stress faults".into())
     } else {
         let f = &out.faults[0];
+        // Value and limit are in the fault kind's unit (W, C, A or V); a bare
+        // "120.480 > 1.000" says neither what was measured nor in what.
+        let unit = FaultKind::from_str(&f.kind).unit();
         (
             false,
             format!(
-                "{} fault(s); first: {} {} {:.3} > {:.3} at {:.1}ms",
+                "{} fault(s); first: {} {} {:.3} {unit} > {:.3} {unit} at {:.1}ms",
                 out.faults.len(),
                 f.component,
                 f.kind,
@@ -2594,64 +2645,58 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Stri
 
     // Explicit ceiling: compare the peak junction temperature against it.
     if let Some(limit) = a.celsius {
-        return match peak {
-            Some((key, tj)) => {
-                let ok = tj <= limit + 1e-6;
-                let unit = unit_note("hottest unit", &key, &reference);
-                if ok {
-                    (
-                        true,
-                        format!("Tj({reference}) peak {tj:.1}C{unit} (<= {limit}C)"),
-                        None,
-                    )
-                } else {
-                    (
-                        false,
-                        format!(
-                            "Tj({reference}) peak {tj:.1}C > ceiling {limit}C <- FAILED HERE{unit}"
-                        ),
-                        Some(format!(
-                            "{reference} ran {:.1} C hotter than your {limit} C ceiling \
-                             (peak {tj:.1} C{unit})",
-                            tj - limit
-                        )),
-                    )
-                }
+        return if let Some((key, tj)) = peak {
+            let ok = tj <= limit + 1e-6;
+            let unit = unit_note("hottest unit", &key, &reference);
+            let (tj_s, limit_s) = (fmt_c1(tj), fmt_c(limit));
+            if ok {
+                (
+                    true,
+                    format!("Tj({reference}) peak {tj_s}{unit} (<= {limit_s})"),
+                    None,
+                )
+            } else {
+                (
+                    false,
+                    format!("Tj({reference}) peak {tj_s} > ceiling {limit_s} <- FAILED HERE{unit}"),
+                    Some(format!(
+                        "{reference} ran {} hotter than your {limit_s} ceiling \
+                             (peak {tj_s}{unit})",
+                        fmt_c1(tj - limit)
+                    )),
+                )
             }
-            None => {
-                // No thermal data. The runner rejects a max_temp on a component
-                // with no thermal model at bind time (`check_trackable_assert_refs`),
-                // so here the part IS stress-monitored and simply never dissipated
-                // measurably: its junction sat at AMBIENT. That is only a pass if
-                // ambient itself is within the ceiling, in a hot-ambient spec a
-                // ceiling below ambient is violated by the idle part sitting at
-                // ambient, not silently skipped.
-                if out.ambient_c <= limit + 1e-6 {
-                    (
-                        true,
-                        format!(
-                            "Tj({reference}): no dissipation measured (idle at ambient \
-                             {:.1}C <= {limit}C); skipped",
-                            out.ambient_c
-                        ),
-                        None,
-                    )
-                } else {
-                    (
-                        false,
-                        format!(
-                            "Tj({reference}): idle at ambient {:.1}C exceeds ceiling {limit}C \
-                             (no dissipation, but ambient alone is over-limit)",
-                            out.ambient_c
-                        ),
-                        Some(format!(
-                            "{reference} sat idle at the {:.1} C ambient, {:.1} C over your \
-                             {limit} C ceiling; the ceiling is below the spec's ambient_c",
-                            out.ambient_c,
-                            out.ambient_c - limit
-                        )),
-                    )
-                }
+        } else {
+            // No thermal data. The runner rejects a max_temp on a component
+            // with no thermal model at bind time (`check_trackable_assert_refs`),
+            // so here the part IS stress-monitored and simply never dissipated
+            // measurably: its junction sat at AMBIENT. That is only a pass if
+            // ambient itself is within the ceiling, in a hot-ambient spec a
+            // ceiling below ambient is violated by the idle part sitting at
+            // ambient, not silently skipped.
+            let (ambient_s, limit_s) = (fmt_c1(out.ambient_c), fmt_c(limit));
+            if out.ambient_c <= limit + 1e-6 {
+                (
+                    true,
+                    format!(
+                        "Tj({reference}): no dissipation measured (idle at ambient \
+                             {ambient_s} <= {limit_s}); skipped"
+                    ),
+                    None,
+                )
+            } else {
+                (
+                    false,
+                    format!(
+                        "Tj({reference}): idle at ambient {ambient_s} exceeds ceiling \
+                             {limit_s} (no dissipation, but ambient alone is over-limit)"
+                    ),
+                    Some(format!(
+                        "{reference} sat idle at the {ambient_s} ambient, {} over your \
+                             {limit_s} ceiling; the ceiling is below the spec's ambient_c",
+                        fmt_c1(out.ambient_c - limit)
+                    )),
+                )
             }
         };
     }
@@ -2667,14 +2712,17 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Stri
         (
             false,
             format!(
-                "Tj({}) exceeded device max: {:.1}C > {:.1}C at {:.1}ms",
-                f.component, f.value, f.limit, f.t_ms
+                "Tj({}) exceeded device max: {} > {} at {:.1}ms",
+                f.component,
+                fmt_c1(f.value),
+                fmt_c1(f.limit),
+                f.t_ms
             ),
             Some(format!(
-                "{} ran {:.1} C past its own {:.1} C max junction temperature at {:.1} ms",
+                "{} ran {} past its own {} max junction temperature at {:.1} ms",
                 f.component,
-                f.value - f.limit,
-                f.limit,
+                fmt_c1(f.value - f.limit),
+                fmt_c1(f.limit),
                 f.t_ms
             )),
         )
@@ -2696,7 +2744,7 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Stri
                 None,
             );
         };
-        let detail = format!("Tj({reference}) peak {tj:.1}C, within device max");
+        let detail = format!("Tj({reference}) peak {}, within device max", fmt_c1(tj));
         (true, detail, None)
     }
 }
@@ -3979,6 +4027,131 @@ mod tests {
         );
         out.peak_temp_c.insert("Q1".to_string(), 240.0);
         assert!(member_invalid_reason(&a, &out, 1.0).is_none());
+    }
+
+    /// One member, judged the way `evaluate` judges it.
+    fn judge(a: &Assertion, out: RunOutcome) -> AssertResult {
+        let out = RunOutcome {
+            analog_valid: true,
+            ambient_c: 25.0,
+            sim_ms: 100.0,
+            ..out
+        };
+        evaluate_one(a, &[out], None, 1.0)
+    }
+
+    /// A NaN measurement is no number: it must refuse (INVALID, with the cause
+    /// named), never fold into a running extreme and pass. The finite controls
+    /// are judged normally, with `91.7 C` spacing.
+    #[test]
+    fn a_non_finite_measurement_is_invalid_with_its_cause_and_a_finite_one_is_judged() {
+        let temp = assertion("kind = \"max_temp\"\nref = \"R1\"\ncelsius = 125.0\n");
+        let amps = assertion("kind = \"max_current\"\nref = \"R1\"\namps = 1.0\n");
+        for (a, is_temp) in [(&temp, true), (&amps, false)] {
+            let mut out = RunOutcome::default();
+            // The runner records any non-finite sample as NaN (`fold_peak`).
+            let map = if is_temp {
+                &mut out.peak_temp_c
+            } else {
+                &mut out.peak_current
+            };
+            map.insert("R1".to_string(), f64::NAN);
+            let r = judge(a, out);
+            assert!(r.invalid && !r.passed, "{}", r.detail);
+            assert!(
+                r.detail.contains(UNPHYSICAL_FIGURE)
+                    && r.detail.contains("R1")
+                    && r.detail.contains("not a finite number"),
+                "{}",
+                r.detail
+            );
+            assert!(!r.detail.contains("converge"), "{}", r.detail);
+        }
+        let mut ok = RunOutcome::default();
+        ok.peak_temp_c.insert("R1".to_string(), 91.7);
+        ok.peak_current.insert("R1".to_string(), 0.2);
+        let (t, i) = (judge(&temp, ok.clone()), judge(&amps, ok));
+        assert!(t.passed && !t.invalid, "{}", t.detail);
+        assert_eq!(t.detail, "Tj(R1) peak 91.7 C (<= 125 C)");
+        assert!(i.passed && !i.invalid, "{}", i.detail);
+    }
+
+    /// A window that saw a non-finite voltage holds no measurement: the bound
+    /// check refuses instead of reading an untouched window as a pass.
+    #[test]
+    fn a_poisoned_voltage_window_is_invalid_and_a_clean_one_is_judged() {
+        let a = assertion("kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.0\nmax = 3.6\n");
+        let with = |min_v: f64, max_v: f64| {
+            let mut out = RunOutcome::default();
+            out.windows.insert(
+                ("VOUT".to_string(), 0.0f64.to_bits()),
+                NetWindow {
+                    min_v,
+                    max_v,
+                    last_v: min_v,
+                    samples: 10,
+                },
+            );
+            judge(&a, out)
+        };
+        let bad = with(f64::NAN, f64::NAN);
+        assert!(bad.invalid && !bad.passed, "{}", bad.detail);
+        assert!(bad.detail.contains(UNPHYSICAL_FIGURE) && bad.detail.contains("VOUT"));
+        let good = with(3.3, 3.3);
+        assert!(good.passed && !good.invalid, "{}", good.detail);
+    }
+
+    /// The fault line carries the unit of each figure (W, C, A or V).
+    #[test]
+    fn a_stress_fault_detail_states_units() {
+        let fault = |kind: &str, value: f64, limit: f64| RunOutcome {
+            faults: vec![crate::runner::RunFault {
+                component: "R1".into(),
+                kind: kind.into(),
+                value,
+                limit,
+                t_ms: 0.4,
+            }],
+            ..Default::default()
+        };
+        for (kind, unit) in [
+            ("overpower", "W"),
+            ("overtemperature", "C"),
+            ("overcurrent", "A"),
+            ("surge_current", "A"),
+            ("pin_overcurrent", "A"),
+            ("overvoltage", "V"),
+            ("reverse_bias", "V"),
+            ("gate_overvoltage", "V"),
+        ] {
+            let (ok, detail) = check_no_faults(&fault(kind, 120.48, 1.0));
+            assert!(!ok);
+            assert!(
+                detail.contains(&format!("{kind} 120.480 {unit} > 1.000 {unit} at 0.4ms")),
+                "{detail}"
+            );
+        }
+        assert!(check_no_faults(&RunOutcome::default()).0);
+    }
+
+    /// Temperatures read `91.7 C` everywhere, never `91.7C`, and never `-0`.
+    #[test]
+    fn temperatures_use_one_spelling() {
+        let a = assertion("kind = \"max_temp\"\nref = \"R1\"\ncelsius = -0.0\n");
+        assert_eq!(a.label(), "Tj(R1) <= 0 C");
+        let mut hot = RunOutcome::default();
+        hot.peak_temp_c.insert("R1".to_string(), 156.7);
+        let ceiling = assertion("kind = \"max_temp\"\nref = \"R1\"\ncelsius = 125.0\n");
+        let r = judge(&ceiling, hot);
+        assert!(!r.passed && !r.invalid);
+        assert_eq!(
+            r.detail,
+            "Tj(R1) peak 156.7 C > ceiling 125 C <- FAILED HERE"
+        );
+        assert_eq!(
+            r.why.as_deref(),
+            Some("R1 ran 31.7 C hotter than your 125 C ceiling (peak 156.7 C)")
+        );
     }
 
     #[test]
