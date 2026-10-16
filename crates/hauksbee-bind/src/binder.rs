@@ -1433,9 +1433,10 @@ impl PartFacts {
     }
 }
 
-/// The lowest rated voltage (V) capacitors are commonly sold with (6.3 V
-/// MLCC, electrolytic and tantalum classes). What a capacitor whose value and
-/// fields state no voltage is held to: an assumed floor, not a rating.
+/// The assumed rated voltage (V) of a capacitor whose record states none.
+///
+/// The lowest voltage capacitors are commonly sold with (6.3 V MLCC,
+/// electrolytic and tantalum classes): a floor, not a rating.
 pub const UNRATED_CAPACITOR_VOLTAGE_FLOOR_V: f64 = 6.3;
 
 /// The rated voltage a capacitor's own record states: its value ("10uF/16V",
@@ -2789,9 +2790,10 @@ fn diode_1n4148_params() -> hauksbee_models::Params {
     p
 }
 
-/// The blocking voltage (V) an unrecognised diode is held to: the lowest VRRM
-/// the common rectifier and Schottky families are sold with (SS12, 1N5820,
-/// MBR0520L, SB120 are all 20 V). A stand-in limit, never a rating: the real
+/// The blocking voltage (V) an unrecognised diode is held to.
+///
+/// The lowest VRRM the common rectifier and Schottky families are sold with
+/// (SS12, 1N5820, MBR0520L, SB120 are all 20 V). A stand-in limit, never a rating: the real
 /// part may block far more, so passing it proves nothing and exceeding it is a
 /// condition to resolve by naming the part, not a fault.
 pub const UNKNOWN_DIODE_VRRM_FLOOR_V: f64 = 20.0;
