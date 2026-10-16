@@ -137,6 +137,10 @@ pub enum VerdictCause<'a> {
     Failing {
         count: usize,
         first: Option<(&'a str, &'a str)>,
+        /// The other parts that same finding is raised on (a mirrored half, a
+        /// repeated cell), so the count's other problems are not left unnamed;
+        /// empty when it is on no other part.
+        same_on: &'a str,
     },
     /// A claim the run declined to make, the prerequisite it lacks, and the action.
     Refused {
@@ -177,13 +181,25 @@ impl<'a> VerdictCause<'a> {
     #[must_use]
     pub fn reason(self) -> String {
         let (why, next) = match self {
-            Self::Failing { count, first } => (
+            Self::Failing {
+                count,
+                first,
+                same_on,
+            } => (
                 format!(
                     "{count} blocking problem(s){}",
                     // A finding's own remedy is the next step: not said twice.
                     first.map_or_else(String::new, |(what, _)| {
                         let said = what.rsplit_once(hauksbee_extract::REMEDY_MARKER);
-                        format!(", first: {}", said.map_or(what, |(w, _)| w.trim_end()))
+                        let same = if same_on.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" (the same on {same_on})")
+                        };
+                        format!(
+                            ", first: {}{same}",
+                            said.map_or(what, |(w, _)| w.trim_end())
+                        )
                     })
                 ),
                 first
@@ -368,6 +384,27 @@ type VerdictParts = (
     bool,
     Option<String>,
 );
+
+/// The parts, other than the first's own, that the finding named by `first`
+/// (its plain words) is repeated on: those gating findings sharing its group
+/// key. Empty when `first` is none, matches no finding, or is on one part.
+fn first_siblings<'a>(
+    first: Option<(&str, &str)>,
+    gating: impl Iterator<Item = &'a JsonFinding> + Clone,
+) -> String {
+    let Some((plain, _)) = first else {
+        return String::new();
+    };
+    let Some(lead) = gating.clone().find(|f| f.plain == plain) else {
+        return String::new();
+    };
+    let key = lead.group_key();
+    let others: Vec<String> = gating
+        .filter(|f| !std::ptr::eq(*f, lead) && f.group_key() == key)
+        .flat_map(|f| f.refs.iter().cloned())
+        .collect();
+    refs_summary(&others)
+}
 
 /// The first few references, then a count of the rest.
 pub(crate) fn refs_summary(refs: &[String]) -> String {
@@ -3018,18 +3055,24 @@ impl JsonReport {
         // route is what keeps the verdict field from reading `pass` in the very
         // document a `--strict` exit 2 was printed beside.
         let gating = || self.findings.iter().flatten().filter(|f| f.gates());
+        let first = first.or_else(|| {
+            gating()
+                .next()
+                .map(|f| (f.plain.as_str(), f.fix.as_deref().unwrap_or_default()))
+        });
+        // The other parts the first finding is repeated on.
+        let same_on = first_siblings(first, gating());
         let failing = (serious > 0 || self.surface_gate_fails).then(|| {
             let count = if serious > 0 {
                 serious
             } else {
                 gating().count().max(1)
             };
-            let first = first.or_else(|| {
-                gating()
-                    .next()
-                    .map(|f| (f.plain.as_str(), f.fix.as_deref().unwrap_or_default()))
-            });
-            VerdictCause::Failing { count, first }
+            VerdictCause::Failing {
+                count,
+                first,
+                same_on: &same_on,
+            }
         });
         // Scoped judgement: blockers whose dependent checks the scope set aside
         // no longer refuse the rest; its sentence says what was not judged. A
@@ -4218,6 +4261,7 @@ mod tests {
         let reason = VerdictCause::Failing {
             count: 1,
             first: Some((json[0].plain.as_str(), fix)),
+            same_on: "",
         }
         .reason();
         assert_eq!(
@@ -4229,6 +4273,39 @@ mod tests {
             reason.contains("first: 'ANALOG_VDD' is starved"),
             "{reason}"
         );
+    }
+
+    /// Faulty: two mirrored parts (D1 and its right-hand copy rD1) fail alike.
+    /// The verdict says "2 blocking problem(s)", so its first-finding clause
+    /// names the other part it is repeated on instead of leaving it unnamed.
+    /// Legal control: a finding on one part names no other.
+    #[test]
+    fn the_verdict_names_the_other_parts_its_first_finding_is_repeated_on() {
+        let on = |part: &str| hauksbee_extract::LintFinding {
+            check: LintCheck::DcOverstress,
+            severity: Severity::High,
+            message: format!("{part} carries 851.0 mA, over its 125.0 mA rating"),
+            refs: vec![part.to_string()],
+            nets: Vec::new(),
+        };
+        let json = lint_findings_json(&hauksbee_extract::NetLintReport {
+            findings: vec![on("D1"), on("rD1"), on("D7")],
+        });
+        let gating = || json.iter().filter(|f| f.gates());
+        let lead = Some((json[0].plain.as_str(), ""));
+        assert_eq!(first_siblings(lead, gating()), "rD1, D7");
+        let alone = lint_findings_json(&hauksbee_extract::NetLintReport {
+            findings: vec![on("D1")],
+        });
+        let lead = Some((alone[0].plain.as_str(), ""));
+        assert_eq!(first_siblings(lead, alone.iter().filter(|f| f.gates())), "");
+        let reason = VerdictCause::Failing {
+            count: 2,
+            first: Some((json[0].plain.as_str(), "")),
+            same_on: "rD1",
+        }
+        .reason();
+        assert!(reason.contains("(the same on rD1)"), "{reason}");
     }
 
     /// Legal control: a finding with no remedy of its own keeps the check
