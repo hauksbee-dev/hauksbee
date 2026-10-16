@@ -451,13 +451,24 @@ fn check_plain_sections_read_inconclusive_but_drc_stays_exempt() {
     let out = run_board(&unbound(), &["--check", "--plain"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let text = stdout(&out);
-    // The sentence is said once, above every section, and both model-dependent
-    // sections point back at it rather than repeating it.
+    // The missing model is said once, in the triage block above every section
+    // (named, with the next step); no separate banner or open-IC heads-up
+    // repeats it, and both model-dependent sections point back at the verdict.
+    let triage = text.split("== Copper spacing").next().unwrap_or_default();
+    assert!(
+        triage.contains("1 key part has no usable model (Q1)")
+            && triage.contains("hauksbee models extract --unmodelled <board>"),
+        "the triage block names the part and the next step:\n{text}"
+    );
     assert_eq!(
         text.matches("INCONCLUSIVE: 1 current-carrying / active part(s) have no model (Q1)")
             .count(),
-        1,
-        "the scope banner is printed once:\n{text}"
+        0,
+        "no standalone banner repeats the triage:\n{text}"
+    );
+    assert!(
+        !text.contains("are unresolved/open"),
+        "no heads-up repeats the part:\n{text}"
     );
     assert_eq!(
         text.matches(hauksbee_engine::plain::INCONCLUSIVE_SEE_TOP)
