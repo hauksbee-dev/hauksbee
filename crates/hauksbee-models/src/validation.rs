@@ -747,6 +747,15 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             format!("[[models.supply_outputs]] '{r}' needs a basis citing its source path")
         });
     }
+    for opt in &entry.optional_supplies {
+        let r = &opt.role;
+        p.require(entry.pins.values().any(|v| v == r), || {
+            format!("[[models.optional_supplies]] role '{r}' is not a role in [models.pins]")
+        });
+        p.require(!opt.basis.trim().is_empty(), || {
+            format!("[[models.optional_supplies]] '{r}' needs a basis citing the datasheet")
+        });
+    }
     for (rail, roles) in &entry.level_rails {
         let unmapped = std::iter::once(rail)
             .chain(roles)

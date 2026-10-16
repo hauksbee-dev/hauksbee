@@ -3,8 +3,8 @@
 //! A card names each pad's role as a free string, and the power pads are the
 //! ones every board check eventually needs to find: which pads feed the part,
 //! which return its current. This is the one table that says it. A role is a
-//! *primary supply* (`vcc`, `vdd`, `avdd`, `vddio`, `iovdd`, `vcca`, ...) or a
-//! *return* (`gnd`, `agnd`, `pgnd`, `vss`, `avss`, ...), or neither.
+//! *primary supply* (`vcc`, `vdd`, `avdd`, `vddio`, `iovdd`, `vcca`, `uvcc`...)
+//! or a *return* (`gnd`, `agnd`, `pgnd`, `vss`, `avss`, ...), or neither.
 //!
 //! What counts is deliberately narrow, because a check that reads it must
 //! never call a legal board wrong:
@@ -13,24 +13,31 @@
 //!   pad is as often an output as an input.
 //! * A regulated internal rail (`vddcore`, `vddcp`, `vregvdd`, `vcap`), a
 //!   switched or external-option supply (`extvcc`, `vbat`, `vbus`, `vin`,
-//!   `vm`), the input of an internal regulator the part can bypass (`uvcc`,
-//!   the USB pad regulator of an AVR: its `UVREGE` bit disables the regulator
-//!   when the output pin is powered directly) and an exposed or sense return
-//!   (`gnd_ep`, `sensgnd`) are not primary: a part is not wrong for leaving
-//!   them to a capacitor or open.
+//!   `vm`) and an exposed or sense return (`gnd_ep`, `sensgnd`) are not
+//!   primary: a part is not wrong for leaving them to a capacitor or open.
+//! * `vs` is a supply only on an amplifier or comparator card (the op-amp
+//!   pinout's single supply pin). On a gate driver `VS` is the high-side
+//!   switch node, so it is read by part kind, never by name alone.
 //! * A numbered role (`vdd2`, `vddio3`) is one more pad of the family its
 //!   digit-free name makes; a family is a supply the part needs only when the
 //!   card also names its base pad (`vdd`, or `vdd1`). A card that lists only
 //!   `vddio2` describes a second supply some packages leave unused, and says
 //!   nothing a check may hold the board to.
 //!
-//! The cards carry no per-pin "optional" flag, so this vocabulary is the whole
-//! of what "required" means for the power-pin checks; widening it is a card
-//! decision, made here once.
+//! A supply the datasheet lets the board leave open (an AVR's `UVCC` when its
+//! USB pad regulator is bypassed) is a card decision, not a vocabulary one: the
+//! card lists it under `[[models.optional_supplies]]` with the figure or table
+//! that says so ([`crate::ModelEntry::optional_supplies`]).
+//!
+//! `pin_roles_cases.tsv` beside this file is the shared table of cases this
+//! vocabulary and the fault-injection harness's independent statement of it
+//! (`qc/fault_injection/catalogue.py`) must both reproduce.
 
 use std::sync::OnceLock;
 
 use regex::Regex;
+
+use crate::ComponentKind;
 
 /// Whether a power pad feeds the part or returns its current.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,7 +68,7 @@ fn supply_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"^(?P<fam>(?:a|d|io|usb_|t|cp)?(?:vcc|vdd)(?:a|b|d|io|ana|q)?)(?P<num>\d*)[a-d]?(?:_[a-d])?$",
+            r"^(?P<fam>(?:a|d|io|usb_|t|cp|u)?(?:vcc|vdd)(?:a|b|d|io|ana|q)?)(?P<num>\d*)[a-d]?(?:_[a-d])?$",
         )
         .expect("supply role regex")
     })
@@ -74,10 +81,11 @@ fn return_re() -> &'static Regex {
     })
 }
 
-/// `role` read as a power pad, or `None` for any other role (and for the
-/// internal rails, options and bare voltage names the module doc leaves out).
+/// `role` of a `kind` card read as a power pad, or `None` for any other role
+/// (and for the internal rails, options and bare voltage names the module doc
+/// leaves out).
 #[must_use]
-pub fn power_pin(role: &str) -> Option<PowerPin> {
+pub fn power_pin(role: &str, kind: ComponentKind) -> Option<PowerPin> {
     let r = role.trim().to_ascii_lowercase();
     if let Some(c) = supply_re().captures(&r) {
         let num = &c["num"];
@@ -88,7 +96,8 @@ pub fn power_pin(role: &str) -> Option<PowerPin> {
             ground: false,
         });
     }
-    if matches!(r.as_str(), "vio" | "v+" | "vs") {
+    let amplifier = matches!(kind, ComponentKind::Opamp | ComponentKind::Comparator);
+    if matches!(r.as_str(), "vio" | "v+") || (r == "vs" && amplifier) {
         return Some(PowerPin {
             kind: PowerKind::Supply,
             family: r,
@@ -110,7 +119,7 @@ mod tests {
     use super::*;
 
     fn supply(role: &str) -> Option<(String, bool)> {
-        power_pin(role)
+        power_pin(role, ComponentKind::Digital)
             .filter(|p| p.kind == PowerKind::Supply)
             .map(|p| (p.family, p.base))
     }
@@ -133,11 +142,11 @@ mod tests {
             ("avdd", "avdd", true),
             ("dvdd2", "dvdd", false),
             ("usb_vdd", "usb_vdd", true),
+            ("uvcc", "uvcc", true),
             ("tvdd", "tvdd", true),
             ("cpvdd", "cpvdd", true),
             ("vio", "vio", true),
             ("v+", "v+", true),
-            ("vs", "vs", true),
         ] {
             assert_eq!(supply(role), Some((family.to_string(), base)), "{role}");
         }
@@ -147,10 +156,26 @@ mod tests {
     fn internal_rails_options_and_bare_voltages_are_not_primary() {
         for role in [
             "3v3", "5v", "3v3a", "adc_avdd", "vddcore", "vddcp", "vddcr", "vregvdd", "extvcc",
-            "vbat", "vbus", "vin", "vm", "uvcc", "vref", "vcap1", "v3", "gnd_ep", "avss_ep",
-            "sensgnd", "gnd_aux", "vregvss", "in_plus", "out", "en",
+            "vbat", "vbus", "vin", "vm", "vref", "vcap1", "v3", "gnd_ep", "avss_ep", "sensgnd",
+            "gnd_aux", "vregvss", "in_plus", "out", "en",
         ] {
-            assert_eq!(power_pin(role), None, "{role}");
+            assert_eq!(power_pin(role, ComponentKind::Digital), None, "{role}");
+        }
+    }
+
+    /// `VS` is an op-amp's supply and a gate driver's switch node.
+    #[test]
+    fn vs_is_a_supply_only_on_an_amplifier_or_comparator() {
+        for kind in [ComponentKind::Opamp, ComponentKind::Comparator] {
+            let p = power_pin("vs", kind).expect("an amplifier's VS is its supply");
+            assert_eq!((p.kind, p.family.as_str()), (PowerKind::Supply, "vs"));
+        }
+        for kind in [
+            ComponentKind::Vreg,
+            ComponentKind::Digital,
+            ComponentKind::Mcu,
+        ] {
+            assert_eq!(power_pin("vs", kind), None, "{kind:?}");
         }
     }
 
@@ -170,10 +195,85 @@ mod tests {
             ("avss", false),
             ("vssa", false),
         ] {
-            let p = power_pin(role).unwrap_or_else(|| panic!("{role} is a return"));
+            let p = power_pin(role, ComponentKind::Digital)
+                .unwrap_or_else(|| panic!("{role} is a return"));
             assert_eq!(p.kind, PowerKind::Return, "{role}");
             assert_eq!(p.family, "gnd", "{role}");
             assert_eq!(p.ground, ground, "{role}");
+        }
+    }
+
+    /// One row of `pin_roles_cases.tsv`: `role`, the card kind it is read on
+    /// (`*` for any), and what it reads as.
+    fn cases() -> Vec<(String, String, String)> {
+        include_str!("pin_roles_cases.tsv")
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+            .map(|l| {
+                let cols: Vec<&str> = l.split('\t').collect();
+                assert_eq!(cols.len(), 3, "pin_roles_cases.tsv row {l:?}");
+                (
+                    cols[0].to_string(),
+                    cols[1].to_string(),
+                    cols[2].to_string(),
+                )
+            })
+            .collect()
+    }
+
+    fn kind_of(name: &str) -> ComponentKind {
+        ComponentKind::ALL
+            .into_iter()
+            .find(|k| {
+                serde_json::to_value(k)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    == Some(name.to_string())
+            })
+            .unwrap_or_else(|| panic!("pin_roles_cases.tsv: no kind {name:?}"))
+    }
+
+    fn reads(role: &str, kind: ComponentKind) -> String {
+        match power_pin(role, kind) {
+            None => "none".to_string(),
+            Some(p) if p.kind == PowerKind::Supply => {
+                format!("supply {} {}", p.family, u8::from(p.base))
+            }
+            Some(p) => format!("return {}", u8::from(p.ground)),
+        }
+    }
+
+    /// The shared table the Python harness also reproduces
+    /// (`qc/tests/test_fault_injection.py`): every row reads as stated here,
+    /// and every role a built-in card names is either a row or reads as no
+    /// power pad, so a new card role or a regex edit on one side alone fails.
+    #[test]
+    fn the_shared_case_table_is_this_vocabulary() {
+        let table = cases();
+        for (role, kind, want) in &table {
+            let kinds: Vec<ComponentKind> = if kind == "*" {
+                ComponentKind::ALL.to_vec()
+            } else {
+                vec![kind_of(kind)]
+            };
+            for k in kinds {
+                assert_eq!(&reads(role, k), want, "{role} on {k:?}");
+            }
+        }
+        let lib = crate::ModelLibrary::builtin();
+        for entry in lib.entries.iter().map(|le| &le.compiled.entry) {
+            for role in entry.pins.values() {
+                let r = role.trim().to_ascii_lowercase();
+                let listed = table
+                    .iter()
+                    .any(|(t, k, _)| *t == r && (k == "*" || kind_of(k) == entry.kind));
+                assert!(
+                    listed || reads(&r, entry.kind) == "none",
+                    "card {} role {r:?} reads as {} but is not in pin_roles_cases.tsv",
+                    entry.id,
+                    reads(&r, entry.kind)
+                );
+            }
         }
     }
 }

@@ -96,6 +96,13 @@ pub struct ModelEntry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supply_outputs: Vec<SupplyOutput>,
 
+    /// `[[models.optional_supplies]]`: supply-role pins the datasheet lets a
+    /// board leave unconnected (an AVR's `UVCC` when the USB pad regulator is
+    /// bypassed and `UCAP` fed directly). The power-pin check does not hold
+    /// the board to them; each names the figure or table that says so.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional_supplies: Vec<OptionalSupply>,
+
     /// Pin-scoped recommended operating conditions and rail relationships.
     /// Every entry carries its own source basis so a static finding can quote
     /// the exact table row that authorizes the constraint.
@@ -209,6 +216,16 @@ pub struct SupplyOutput {
     /// The highest, V.
     pub max: f64,
     /// Where the range comes from: the source path(s) and the datasheet rows.
+    pub basis: String,
+}
+
+/// A supply pin a board may leave open (see [`ModelEntry::optional_supplies`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OptionalSupply {
+    /// The `[models.pins]` role of the pin.
+    pub role: String,
+    /// The datasheet figure, table or sentence that lets it be left open.
     pub basis: String,
 }
 

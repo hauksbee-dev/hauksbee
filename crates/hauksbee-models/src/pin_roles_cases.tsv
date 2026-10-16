@@ -1,0 +1,121 @@
+# Shared cases of the card power-pin vocabulary: role<TAB>card kind (* for any)<TAB>what it reads as.
+# Read by crates/hauksbee-models/src/pin_roles.rs (power_pin) and qc/tests/test_fault_injection.py
+# (catalogue._power_role); both must reproduce every row, and a built-in card role not listed here must read
+# as none on both sides. `supply <family> <base pad 0/1>`, `return <true ground 0/1>`, or `none`.
+3v3	*	none
+3v3a	*	none
+5v	*	none
+adc_avdd	*	none
+agnd	*	return 1
+agnd2	*	return 1
+avcc	*	supply avcc 1
+avcc2	*	supply avcc 0
+avdd	*	supply avdd 1
+avss	*	return 0
+avss_ep	*	none
+cpgnd	*	return 1
+cpvdd	*	supply cpvdd 1
+dgnd	*	return 1
+dgnd2	*	return 1
+dvdd	*	supply dvdd 1
+dvdd2	*	supply dvdd 0
+dvdd3	*	supply dvdd 0
+en	*	none
+extvcc	*	none
+gnd	*	return 1
+gnd10	*	return 1
+gnd11	*	return 1
+gnd12	*	return 1
+gnd13	*	return 1
+gnd14	*	return 1
+gnd15	*	return 1
+gnd16	*	return 1
+gnd17	*	return 1
+gnd18	*	return 1
+gnd19	*	return 1
+gnd2	*	return 1
+gnd20	*	return 1
+gnd21	*	return 1
+gnd22	*	return 1
+gnd3	*	return 1
+gnd4	*	return 1
+gnd5	*	return 1
+gnd6	*	return 1
+gnd7	*	return 1
+gnd8	*	return 1
+gnd9	*	return 1
+gnd_a	*	return 1
+gnd_aux	*	none
+gnd_ep	*	none
+gndio	*	return 1
+in_plus	*	none
+iovdd	*	supply iovdd 1
+iovdd2	*	supply iovdd 0
+iovdd3	*	supply iovdd 0
+iovdd4	*	supply iovdd 0
+iovdd5	*	supply iovdd 0
+iovdd6	*	supply iovdd 0
+out	*	none
+pgnd	*	return 1
+pgnd2	*	return 1
+pgnd3	*	return 1
+sensgnd	*	none
+tvdd	*	supply tvdd 1
+ucap	*	none
+ugnd	*	return 1
+usb_vdd	*	supply usb_vdd 1
+uvcc	*	supply uvcc 1
+v+	*	supply v+ 1
+v3	*	none
+v3v3out	*	none
+vbat	*	none
+vbus	*	none
+vcap1	*	none
+vcc	*	supply vcc 1
+vcc2	*	supply vcc 0
+vcc3	*	supply vcc 0
+vcc4	*	supply vcc 0
+vcc5	*	supply vcc 0
+vcc6	*	supply vcc 0
+vcca	*	supply vcca 1
+vccb	*	supply vccb 1
+vccio	*	supply vccio 1
+vdd	*	supply vdd 1
+vdd1a	*	supply vdd 1
+vdd2	*	supply vdd 0
+vdd2a	*	supply vdd 0
+vdd3	*	supply vdd 0
+vdd33_a	*	supply vdd 0
+vdd33_b	*	supply vdd 0
+vdd4	*	supply vdd 0
+vdd5	*	supply vdd 0
+vdda	*	supply vdda 1
+vdda33_a	*	supply vdda 0
+vdda33_b	*	supply vdda 0
+vdda33_c	*	supply vdda 0
+vdda33_d	*	supply vdda 0
+vddana	*	supply vddana 1
+vddcore	*	none
+vddcp	*	none
+vddcr	*	none
+vddio	*	supply vddio 1
+vddio2	*	supply vddio 0
+vin	*	none
+vio	*	supply vio 1
+vm	*	none
+vref	*	none
+vreg_vout	*	none
+vregvdd	*	none
+vregvss	*	none
+vs	analog_switch	none
+vs	comparator	supply vs 1
+vs	digital	none
+vs	mcu	none
+vs	opamp	supply vs 1
+vs	vreg	none
+vss	*	return 0
+vss2	*	return 0
+vss3	*	return 0
+vss4	*	return 0
+vss5	*	return 0
+vssa	*	return 0
