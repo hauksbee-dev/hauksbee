@@ -253,6 +253,29 @@ fn hold_overloaded_rails(
     real.is_none()
 }
 
+/// The parts over a rating in the current state at the strong-drive corner,
+/// noting what the judge there found impossible or past a stand-in limit, then
+/// back to the weak corner. Empty when the board has no drive to set or the
+/// corner does not solve.
+fn strong_corner_faults(
+    state: &mut BoundBoard,
+    impossible: &mut BTreeMap<String, String>,
+    stated: &mut BTreeMap<String, String>,
+    unstated: &mut BTreeMap<String, (f64, f64)>,
+) -> Vec<PartFault> {
+    let mut strong_found = Vec::new();
+    if set_drive(state, true) {
+        if let Some(x) = settle(state) {
+            let (strong_over, _, absurd, stand_in) = judge(state, &x);
+            note_absurd(impossible, absurd);
+            note_stand_in(stated, unstated, stand_in);
+            strong_found = strong_over;
+        }
+        set_drive(state, false);
+    }
+    strong_found
+}
+
 /// [`dc_stress_lint`] over an already bound board.
 #[must_use]
 pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
@@ -307,16 +330,8 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
         // one so the next state starts where it always did. A part already
         // over a rating at the weak corner is not news at the strong one, and
         // a gate under-driven at the weak corner is judged there alone.
-        let mut strong_found = Vec::new();
-        if set_drive(state, true) {
-            if let Some(x) = settle(state) {
-                let (strong_over, _, absurd, stand_in) = judge(state, &x);
-                note_absurd(&mut impossible, absurd);
-                note_stand_in(&mut stated, &mut unstated, stand_in);
-                strong_found = strong_over;
-            }
-            set_drive(state, false);
-        }
+        let mut strong_found =
+            strong_corner_faults(state, &mut impossible, &mut stated, &mut unstated);
         // A draw no supply gives: keep only the parts still over a rating
         // with the rails held to what their supplies can give.
         if !over.is_empty() {
