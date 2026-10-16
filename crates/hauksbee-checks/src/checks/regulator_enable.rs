@@ -16,9 +16,21 @@
 //! non-ground net, a GPIO or logic output, a switch or connector that can
 //! reach a rail, a transistor that can pull high, or any part no rule here
 //! knows. A pin tied straight to the off rail (EN to GND) is a deliberate
-//! choice and is left to the bind report. A card that states no open-pin
-//! state, or states the pin is on when open (`en_open = "on"`, an internal
-//! pull toward on), is not judged: an unknown is never read as off.
+//! choice and is left to the bind report. A connector pad on the net is an
+//! off-board source that may drive the pin, so a net whose only way to the on
+//! level is a connector is a non-gating note, not a High finding, and only
+//! when the board itself pulls the pin to the off level (with no pull at all
+//! the pin is simply an external enable input): a default-off enable brought
+//! out to a header is a common deliberate design. A jumper or header of at
+//! most three pads with another pad on a live net (a solder jumper from EN to
+//! VIN) may close onto that net, so it may set the level. A part referenced
+//! like a resistor whose value is not a resistance (a reset button `RESET`),
+//! a switch named by its symbol or footprint, and any other card-less part
+//! whose other pads reach only the off rail cannot raise the pin. A card
+//! that states no open-pin state, or states the pin is on when open
+//! (`en_open = "on"`, an internal pull toward on), is not judged here: an
+//! unknown is never read as off. A pull-down that holds such a pin off is
+//! `control_held_off`'s, which judges the divider against the internal pull.
 
 use std::collections::HashMap;
 
@@ -99,7 +111,16 @@ impl OffWhenOpen {
     }
 }
 
-fn ohms(v: f64) -> String {
+/// A resistor's value in ohms, or `None` when its value text does not read as
+/// a resistance.
+pub(super) fn resistor_ohms(c: &Component) -> Option<f64> {
+    hauksbee_models::value::parse_value(&c.value)
+        .filter(|p| matches!(p.unit.as_deref(), None | Some("Ω")))
+        .map(|p| p.si)
+        .filter(|v| v.is_finite() && *v >= 0.0)
+}
+
+pub(super) fn ohms(v: f64) -> String {
     let (scaled, unit) = if v >= 1e6 {
         (v / 1e6, "MΩ")
     } else if v >= 1e3 {
@@ -111,22 +132,32 @@ fn ohms(v: f64) -> String {
     format!("{} {unit}", s.trim_end_matches('0').trim_end_matches('.'))
 }
 
-/// What one other pad on the enable net does to its level.
-enum Member {
+/// What one other pad on a control net does to its level.
+pub(super) enum Member {
     /// It may take the pin to its on level (a pull to a rail, a driver, a
     /// part no rule knows): the board is not judged.
     MaySet,
     /// It cannot, and reads this way in the finding.
     Cannot(String),
+    /// A resistor (or a wire-like ferrite or inductor) from the net to the
+    /// off rail: it cannot raise the pin and it actively holds it off. `ohms`
+    /// is its resistance, `None` when the value does not read as one.
+    OffPull { label: String, ohms: Option<f64> },
+    /// A connector pad: whatever is plugged in may drive the net, but nothing
+    /// on this board does.
+    External(String),
 }
 
-/// The regulator under judgement, as the classifier needs it.
-struct Reg<'a> {
-    comp: &'a Component,
-    /// Whether the output is on with the pin HIGH.
-    on_high: bool,
-    input: i64,
-    gnd: Option<i64>,
+/// The control pin under judgement, as the classifier needs it. For a
+/// regulator the off rail is its GND (on-high pin) or its input (on-low pin);
+/// for any other part's active-high enable or active-low reset it is ground.
+pub(super) struct Reg<'a> {
+    pub(super) comp: &'a Component,
+    /// Whether the pin is on at its HIGH level.
+    pub(super) on_high: bool,
+    /// The net the off level sits on when the pin is on-low.
+    pub(super) input: i64,
+    pub(super) gnd: Option<i64>,
 }
 
 impl Reg<'_> {
@@ -144,17 +175,70 @@ impl Reg<'_> {
     }
 }
 
-fn classify(
+/// Whether a schematic pin's electrical type says the pin drives its net: an
+/// output, a tri-state pin, or an open-collector / open-drain / open-emitter
+/// pin (`KiCad` `output`, `tri_state`, `open_collector`, `open_emitter`;
+/// Eagle `out`, `oc`, `hiz`). A reset or enable of that type is an output
+/// (a supervisor's or a bridge's reset line), never an input to judge.
+pub(super) fn pin_drives(q: &Pin) -> bool {
+    let k = q.kind.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+    k.contains("output")
+        || k.contains("open_collector")
+        || k.contains("open_drain")
+        || k.contains("open_emitter")
+        || k.contains("tri_state")
+        || k.contains("tristate")
+        || matches!(k.as_str(), "out" | "oc" | "hiz")
+}
+
+/// Whether a card role names a port or general-purpose I/O pad (`gpio4`,
+/// `io12`, `pa3`, `pc6_reset`): firmware may drive it.
+fn role_is_port(role: &str) -> bool {
+    let b = role.as_bytes();
+    role.starts_with("gpio")
+        || (role.starts_with("io") && b.get(2).is_some_and(u8::is_ascii_digit))
+        || (b.len() >= 3 && b[0] == b'p' && b[1].is_ascii_lowercase() && b[2].is_ascii_digit())
+}
+
+/// A push button or tactile switch, by its reference class or by a word of
+/// the symbol, footprint or value naming one (`SW_Push`, `EVQ-P7`,
+/// `TACTILE`, `PUSHBUTTON`, `BTN`): boards label a reset button with refs
+/// like `RESET` that read as a resistor by prefix alone. Whole words only, so
+/// a battery `Contact` is not a tactile switch.
+fn is_switch(o: &Component) -> bool {
+    if RefClass::of(&o.reference) == RefClass::Switch {
+        return true;
+    }
+    let blob = format!("{} {} {}", o.lib_id, o.footprint, o.value).to_ascii_uppercase();
+    blob.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| {
+        matches!(w, "SW" | "BTN")
+            || ["TACT", "EVQ", "PUSH", "BUTTON"]
+                .iter()
+                .any(|p| w.starts_with(p))
+    })
+}
+
+pub(super) fn classify(
     board: &ExtractedBoard,
     reg: &Reg<'_>,
     (o, q): (&Component, &Pin),
     (en, models): (i64, &HashMap<&str, ModelEntry>),
 ) -> Member {
     let model = models.get(o.reference.as_str());
+    let role = model
+        .and_then(|m| m.pins.get(&q.number))
+        .map(|r| r.to_ascii_lowercase());
     if std::ptr::eq(o, reg.comp) {
-        // The regulator's own other pads: its input is a tie to VIN (handled
-        // before here); its output or bypass pad holds no level of its own
-        // while the part is off.
+        // The part's own other pads: a GPIO or output of its own may drive
+        // the net. A regulator's input is a tie to VIN (handled before
+        // here); its output or bypass pad holds no level of its own while
+        // the part is off.
+        if pin_drives(q)
+            || q.kind.trim().eq_ignore_ascii_case("bidirectional")
+            || role.as_deref().is_some_and(role_is_port)
+        {
+            return Member::MaySet;
+        }
         return Member::Cannot(format!("{}'s own pad {}", o.reference, q.number));
     }
     if is_capacitor(o) {
@@ -166,28 +250,39 @@ fn classify(
         .filter(|p| p.net != Some(en))
         .map(|p| p.net.filter(|id| *id != 0))
         .collect();
+    let only_off = far
+        .iter()
+        .all(|n| n.is_none() || reg.is_off_rail(board, *n));
     let class = RefClass::of(&o.reference);
-    let series = matches!(
-        class,
-        RefClass::Resistor | RefClass::FerriteBead | RefClass::Inductor
-    );
+    // A part whose reference reads as a resistor but whose value is not a
+    // resistance (a reset button referenced `RESET`) is not priced as one.
+    let series = match class {
+        RefClass::Resistor => resistor_ohms(o).is_some(),
+        RefClass::FerriteBead | RefClass::Inductor => true,
+        _ => false,
+    };
     if series && o.pins.len() == 2 {
         return match far.first().copied().flatten() {
             None => Member::Cannot(format!("{} (its other end is on no net)", o.reference)),
             Some(id) if reg.is_off_rail(board, Some(id)) => {
                 let to = board.net(id).map_or("ground", |n| n.name.as_str());
-                Member::Cannot(format!("{} to '{to}'", o.reference))
+                let ohms = match class {
+                    RefClass::Resistor => resistor_ohms(o),
+                    // A ferrite bead or inductor is a wire at DC.
+                    _ => Some(0.0),
+                };
+                Member::OffPull {
+                    label: format!("{} to '{to}'", o.reference),
+                    ohms,
+                }
             }
             Some(_) => Member::MaySet,
         };
     }
-    if class == RefClass::Switch {
+    if is_switch(o) {
         // A switch that only ever closes onto the off rail cannot turn the
         // part on; one that can reach anything else may be the power switch.
-        return if far
-            .iter()
-            .all(|n| n.is_none() || reg.is_off_rail(board, *n))
-        {
+        return if only_off {
             Member::Cannot(format!(
                 "{} (it switches only to the off level)",
                 o.reference
@@ -197,8 +292,14 @@ fn classify(
         };
     }
     if is_connector_like(o) {
-        // An off-board signal may drive it: an external enable, not a fault.
-        return Member::MaySet;
+        // A jumper or small header with another pad on a live net (a solder
+        // jumper from EN to VIN, a 3-pin selector) closes onto that net when
+        // fitted: it may set the level on the board itself.
+        if o.pins.len() <= 3 && !only_off {
+            return Member::MaySet;
+        }
+        // An off-board signal may drive it: an external enable or reset.
+        return Member::External(format!("{} pin {}", o.reference, q.number));
     }
     if class == RefClass::Transistor {
         return match low_side_sink(o, q, model) {
@@ -206,10 +307,21 @@ fn classify(
             _ => Member::MaySet,
         };
     }
+    // A part with no card role on this pad and no IC body whose other pads
+    // reach only the off rail (a diode or TVS to ground, a button whose value
+    // is not a resistance) can only take the pin to its off level.
+    if class != RefClass::ActiveIc
+        && role.is_none()
+        && o.pins.len() >= 2
+        && only_off
+        && far.iter().any(Option::is_some)
+    {
+        return Member::Cannot(format!(
+            "{} (its other pads reach only the off level)",
+            o.reference
+        ));
+    }
     // Another part's own enable or shutdown input sets nothing.
-    let role = model
-        .and_then(|m| m.pins.get(&q.number))
-        .map(|r| r.to_ascii_lowercase());
     let input = q.kind.trim().eq_ignore_ascii_case("input");
     if matches!(role.as_deref(), Some("en" | "shdn"))
         || (input && matches!(control_role(&q.function), Some("enable" | "reset")))
@@ -219,7 +331,140 @@ fn classify(
             o.reference, q.number
         ));
     }
+    // Another part's reset input, whatever alternate function the symbol
+    // names it with (`PC6(/RESET)`), takes a level and sets none.
+    if names_reset_input(q) {
+        return Member::Cannot(format!("{} pin {} (a reset input)", o.reference, q.number));
+    }
     Member::MaySet
+}
+
+/// Whether a pad is a micro's reset input: named for the reset after its port
+/// name (`PC6(/RESET)`, `PA0/NRST`), where the symbol shares the pad with the
+/// pin's port function, and not an output. A bare `RESET` of unstated type
+/// may be a supervisor's output and is left to the caller.
+fn names_reset_input(q: &Pin) -> bool {
+    if pin_drives(q) {
+        return false;
+    }
+    let name = q.function.trim().to_ascii_uppercase();
+    let is_reset = |t: &str| t.contains("RESET") || matches!(t, "RST" | "NRST" | "MCLR");
+    let mut tokens = name
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty());
+    let first_is_reset = tokens.next().is_some_and(is_reset);
+    !first_is_reset && tokens.any(is_reset)
+}
+
+/// What every other pad on a control net does to the pin's level.
+#[derive(Default)]
+pub(super) struct Survey {
+    /// Pads that cannot raise the pin, as the finding reads them.
+    pub(super) held: Vec<String>,
+    /// The resistance of each resistor (or wire-like part) holding the pin
+    /// at its off level; `None` for a value that does not read as one.
+    pub(super) pulls: Vec<Option<f64>>,
+    /// Connector pads: an off-board source may drive the net.
+    pub(super) external: Vec<String>,
+    /// Parts on the net that are not fitted.
+    pub(super) unfitted: Vec<String>,
+}
+
+/// Classify every other fitted pad on net `en`. `None` when anything on it may
+/// raise the pin to its on level, or when a record on it is refused: nothing
+/// about an unknown is evidence of a fault.
+pub(super) fn survey_net(
+    board: &ExtractedBoard,
+    reg: &Reg<'_>,
+    (comp, pad): (&Component, &str),
+    (en, models): (i64, &HashMap<&str, ModelEntry>),
+) -> Option<Survey> {
+    let mut out = Survey::default();
+    for (o, q) in board.net_members(en) {
+        if std::ptr::eq(o, comp) && q.number == pad {
+            continue;
+        }
+        match AssemblyState::of(o) {
+            AssemblyState::DnpAbsent(_) => {
+                out.unfitted.push(o.reference.clone());
+                continue;
+            }
+            // Nothing about a refused record is evidence either way.
+            AssemblyState::IdentityUnknown(_) => return None,
+            AssemblyState::Present(_) => {}
+        }
+        if is_test_point_or_hole(o) {
+            continue;
+        }
+        match classify(board, reg, (o, q), (en, models)) {
+            Member::MaySet => return None,
+            Member::Cannot(how) => out.held.push(how),
+            Member::OffPull { label, ohms } => {
+                out.held.push(label);
+                out.pulls.push(ohms);
+            }
+            Member::External(label) => out.external.push(label),
+        }
+    }
+    Some(out)
+}
+
+/// A fitted part's card, when it resolves by more than a guess.
+fn confident_model(lib: &ModelLibrary, comp: &Component) -> Option<ModelEntry> {
+    let part = AssemblyState::of(comp).fitted()?;
+    let res = resolve(lib, part);
+    if matches!(res.confidence, Confidence::Guessed | Confidence::Unresolved) {
+        return None;
+    }
+    res.model
+}
+
+/// A simple linear regulator whose card fits the footprint: this check's
+/// subject.
+fn is_simple_regulator(board: &ExtractedBoard, comp: &Component, model: &ModelEntry) -> bool {
+    model.kind == ComponentKind::Vreg
+        && model.behavioral.converter.is_none()
+        && super::card_fits(board, comp, model)
+}
+
+/// The card's enable pad: its role (`en`, else `shdn`), pad number and
+/// whether the pin is on at its high level.
+fn enable_pad(model: &ModelEntry) -> Option<(&'static str, String, bool)> {
+    let (role, pad) = ["en", "shdn"].into_iter().find_map(|role| {
+        model
+            .pins
+            .iter()
+            .find(|(_, r)| r.eq_ignore_ascii_case(role))
+            .map(|(pad, _)| (role, pad.clone()))
+    })?;
+    let on_high = model.params.get_str("en_on_level") != Some("low");
+    Some((role, pad, on_high))
+}
+
+/// The enable pad this check judges on `comp`, when it judges one: a fitted
+/// simple linear regulator whose card says an open enable is off, with the
+/// pad, its input and its output on the board. `control_held_off` leaves
+/// exactly that pad to this check and judges every other regulator enable
+/// (a card silent on the open state, or one pulled on inside the part), so a
+/// pull-down nothing releases is never missed by both and never reported by
+/// both.
+pub(super) fn judged_enable_pad(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    comp: &Component,
+) -> Option<String> {
+    let model = confident_model(lib, comp)?;
+    if !is_simple_regulator(board, comp, &model) {
+        return None;
+    }
+    let (_, pad, on_high) = enable_pad(&model)?;
+    OffWhenOpen::of(&model, on_high)?;
+    if !comp.pins.iter().any(|p| p.number == pad) {
+        return None;
+    }
+    board.net(role_net_id(comp, &model, "in")?)?;
+    board.net(role_net_id(comp, &model, "out")?)?;
+    Some(pad)
 }
 
 /// One gating finding per fitted linear regulator whose card says an open
@@ -231,18 +476,10 @@ pub fn regulator_enable_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetL
     let mut models: HashMap<&str, ModelEntry> = HashMap::new();
     let mut regulators = Vec::new();
     for comp in &board.components {
-        let Some(part) = AssemblyState::of(comp).fitted() else {
+        let Some(model) = confident_model(lib, comp) else {
             continue;
         };
-        let res = resolve(lib, part);
-        if matches!(res.confidence, Confidence::Guessed | Confidence::Unresolved) {
-            continue;
-        }
-        let Some(model) = res.model else { continue };
-        if model.kind == ComponentKind::Vreg
-            && model.behavioral.converter.is_none()
-            && super::card_fits(board, comp, &model)
-        {
+        if is_simple_regulator(board, comp, &model) {
             regulators.push((comp, model.clone()));
         }
         models.insert(comp.reference.as_str(), model);
@@ -268,20 +505,28 @@ fn remedy(label: &str, on_high: bool, in_name: &str) -> String {
     )
 }
 
+pub(super) fn decapitalise(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map_or_else(String::new, |f| f.to_lowercase().chain(c).collect())
+}
+
+/// " (R1 on the net is not fitted)", or nothing when every part is fitted.
+pub(super) fn unfitted_note(unfitted: &[String]) -> String {
+    match unfitted {
+        [] => String::new(),
+        [one] => format!(" ({one} on the net is not fitted)"),
+        many => format!(" ({} on the net are not fitted)", many.join(", ")),
+    }
+}
+
 fn judge(
     board: &ExtractedBoard,
     comp: &Component,
     model: &ModelEntry,
     models: &HashMap<&str, ModelEntry>,
 ) -> Option<LintFinding> {
-    let (role, pad) = ["en", "shdn"].into_iter().find_map(|role| {
-        model
-            .pins
-            .iter()
-            .find(|(_, r)| r.eq_ignore_ascii_case(role))
-            .map(|(pad, _)| (role, pad.clone()))
-    })?;
-    let on_high = model.params.get_str("en_on_level") != Some("low");
+    let (role, pad, on_high) = enable_pad(model)?;
     let off = OffWhenOpen::of(model, on_high)?;
     let pin = comp.pins.iter().find(|p| p.number == pad)?;
     // Without the rail and its input on the board the finding could not
@@ -302,35 +547,28 @@ fn judge(
         pin.function.trim().to_string()
     };
     let net = pin.net.filter(|id| *id != 0);
-    let mut held = Vec::new();
-    let mut unfitted = Vec::new();
-    if let Some(en) = net {
-        // Tied to the input (on for an on-high pin) or to its off rail (a
-        // deliberate choice the bind report already names): not judged.
-        if en == input || reg.is_off_rail(board, Some(en)) {
-            return None;
+    let survey = match net {
+        Some(en) => {
+            // Tied to the input (on for an on-high pin) or to its off rail (a
+            // deliberate choice the bind report already names): not judged.
+            if en == input || reg.is_off_rail(board, Some(en)) {
+                return None;
+            }
+            survey_net(board, &reg, (comp, &pin.number), (en, models))?
         }
-        for (o, q) in board.net_members(en) {
-            if std::ptr::eq(o, comp) && q.number == pin.number {
-                continue;
-            }
-            match AssemblyState::of(o) {
-                AssemblyState::DnpAbsent(_) => {
-                    unfitted.push(o.reference.clone());
-                    continue;
-                }
-                // Nothing about a refused record is evidence either way.
-                AssemblyState::IdentityUnknown(_) => return None,
-                AssemblyState::Present(_) => {}
-            }
-            if is_test_point_or_hole(o) {
-                continue;
-            }
-            match classify(board, &reg, (o, q), (en, models)) {
-                Member::MaySet => return None,
-                Member::Cannot(how) => held.push(how),
-            }
-        }
+        None => Survey::default(),
+    };
+    let Survey {
+        held,
+        pulls,
+        external,
+        unfitted,
+    } = survey;
+    // A connector on the net is an off-board source that may drive the pin:
+    // with nothing on the board pulling it off the pin is an external enable
+    // input, and the board is not judged.
+    if !external.is_empty() && pulls.is_empty() {
+        return None;
     }
     let net_name = net.and_then(|id| board.net(id)).map(|n| n.name.clone());
     let topology = match (&net_name, held.is_empty()) {
@@ -341,30 +579,51 @@ fn judge(
             held.join(", ")
         ),
     };
-    let unfitted = match unfitted.as_slice() {
-        [] => String::new(),
-        [one] => format!(" ({one} on the net is not fitted)"),
-        many => format!(" ({} on the net are not fitted)", many.join(", ")),
-    };
+    let unfitted = unfitted_note(&unfitted);
     let vout = model
         .params
         .get_f64("vout")
         .map_or_else(String::new, |v| format!(" ({v:.2} V)"));
     let fix = remedy(&label, on_high, &in_name);
-    let message = format!(
-        "{} ({}) {label} pad {} {topology}{unfitted}: {}, so the regulator stays off and its \
-         output '{out_name}'{vout} never comes on; everything powered from '{out_name}' is \
-         unpowered. {REMEDY_MARKER}{fix}",
-        comp.reference,
-        comp.value.trim(),
-        pin.number,
-        off.sentence(&model.id, &label),
-    );
+    let (severity, message) = if external.is_empty() {
+        (
+            Severity::High,
+            format!(
+                "{} ({}) {label} pad {} {topology}{unfitted}: {}, so the regulator stays off and its \
+                 output '{out_name}'{vout} never comes on; everything powered from '{out_name}' is \
+                 unpowered. {REMEDY_MARKER}{fix}",
+                comp.reference,
+                comp.value.trim(),
+                pin.number,
+                off.sentence(&model.id, &label),
+            ),
+        )
+    } else {
+        // A default-off enable brought out to a connector with a local
+        // pull-down is a common, deliberate design (the host or module
+        // switches the rail): the board alone cannot tell it from a fault,
+        // so it is a non-gating note naming the connector.
+        (
+            Severity::Low,
+            format!(
+                "{} ({}) {label} pad {} {topology}{unfitted}; the only thing on it that can raise \
+                 it is {}, an off-board source, so unless that source always drives the pin the \
+                 board holds the regulator off and its output '{out_name}'{vout} never comes on. \
+                 {REMEDY_MARKER}If an external enable is meant to switch this rail, confirm it \
+                 drives the pin whenever the rail is needed; otherwise {}",
+                comp.reference,
+                comp.value.trim(),
+                pin.number,
+                external.join(", "),
+                decapitalise(&fix),
+            ),
+        )
+    };
     let mut nets: Vec<String> = net_name.into_iter().collect();
     nets.push(out_name);
     Some(LintFinding {
         check: LintCheck::RegulatorHeldOff,
-        severity: Severity::High,
+        severity,
         message,
         refs: vec![comp.reference.clone()],
         nets,
@@ -500,6 +759,14 @@ mod tests {
             mic5205(MIC, Some(EN), vec![switch]).is_empty(),
             "power switch"
         );
+        // "Default off, fit the jumper to enable": a 2-pad jumper from EN to
+        // VIN beside a 100k pull-down closes onto the input when fitted.
+        let jumper = part("JP1", "SolderJumper_2_Open", &[("1", EN), ("2", VIN)]);
+        let pull = part("R2", "100k", &[("1", EN), ("2", GND)]);
+        assert!(
+            mic5205(MIC, Some(EN), vec![jumper, pull]).is_empty(),
+            "jumper to VIN"
+        );
         assert!(
             mic5205(MIC, Some(GND), vec![]).is_empty(),
             "tied off on purpose"
@@ -518,6 +785,36 @@ mod tests {
         let found = mic5205(MIC, Some(EN), vec![q]);
         assert_eq!(found.len(), 1, "{found:#?}");
         says(&found[0], &["Q1's collector"]);
+    }
+
+    /// A pull-down to the off level with a header as the only thing that can
+    /// raise the pin is a non-gating note naming the header (a default-off
+    /// enable brought out to a header is a common deliberate design, so it is
+    /// not the High "nothing can raise it"). The same header with no
+    /// pull-down is an external enable input, silent (the legal control
+    /// above).
+    #[test]
+    fn a_pull_down_and_a_header_is_a_note_that_names_the_header() {
+        let pull = part("R1", "100k", &[("1", EN), ("2", GND)]);
+        let header = part("JP3", "Conn_01x02", &[("1", EN), ("2", GND)]);
+        let found = mic5205(MIC, Some(EN), vec![pull, header]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        let f = &found[0];
+        assert_eq!(f.severity, Severity::Low);
+        says(
+            f,
+            &[
+                "which holds only R1 to 'GND'",
+                "the only thing on it that can raise it is JP3 pin 1, an off-board source",
+                "output '+3V3' (3.30 V) never comes on",
+            ],
+        );
+        assert!(f.own_remedy().is_some(), "{}", f.message);
+        // A ferrite bead or inductor to ground is a 0 ohm pull-down too.
+        let bead = part("FB1", "BLM18", &[("1", EN), ("2", GND)]);
+        let found = mic5205(MIC, Some(EN), vec![bead]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, Severity::High);
     }
 
     /// A card that does not say what an open pin does is never read as off,

@@ -1679,6 +1679,11 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "A rail nothing on the board drives is held at the voltage its name states so the parts on it can be checked. That is right when the rail comes in on a connector or test point. When its only source is a part marked do-not-fit (its regulator, or the ferrite or 0 ohm link from another rail), the real rail stays at 0 V and every part on it is unpowered, so no result for those parts stands.".to_string(),
                 "Fit the part that sources the rail, or bring the rail in on a connector or test point. If the board is powered from outside, check that supply on its own.".to_string(),
             ),
+            LintCheck::ControlHeldOff => (
+                format!("The enable or reset pin of {parts} is held in its off state. {}", f.message),
+                "This pin has a resistor to ground, and nothing else on its net can raise it: no pull-up, no GPIO or supervisor output, no switch to a supply. An enable that stays low never turns the part on, and a reset that stays low holds the part in reset so it never runs. The usual cause is a pull-up whose far end was wired to ground, or a pull-up that is not fitted.".to_string(),
+                "Connect the pull resistor to the part's supply rail instead of ground, or drive the pin from a GPIO or a supervisor.".to_string(),
+            ),
             LintCheck::I2cBusLoading => (
                 format!("The I2C line \"{net}\" has pull-ups, but they are mis-sized for the bus. {}", f.message),
                 "I2C devices can only pull the line LOW; the resistor pulls it back HIGH. Too strong a pull-up and a device cannot sink enough current to make a valid low (the spec guarantees only 3 mA), so reads fail intermittently. Too weak and the line rises too slowly for the clock rate, corrupting edges as more devices load the bus.".to_string(),

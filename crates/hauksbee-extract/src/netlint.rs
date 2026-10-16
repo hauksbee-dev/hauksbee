@@ -293,6 +293,11 @@ pub enum LintCheck {
     /// and on a run that powered no rail at all. Produced by the engine-layer
     /// `rail_basis` check.
     RailUnpowered,
+    /// An active-high enable or active-low reset input of any other part
+    /// that the board pulls to its off level with nothing on the net able to
+    /// release it: the part is never enabled, or is held in reset for good.
+    /// Produced by the engine-layer `control_held_off` check.
+    ControlHeldOff,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -317,7 +322,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 36] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -353,6 +358,7 @@ impl LintCheck {
         Self::DiodeReversed,
         Self::PolarisedCapReversed,
         Self::RailUnpowered,
+        Self::ControlHeldOff,
     ];
 
     #[must_use]
@@ -393,6 +399,7 @@ impl LintCheck {
             Self::DiodeReversed => "diode_reversed",
             Self::PolarisedCapReversed => "polarised_cap_reversed",
             Self::RailUnpowered => "rail_unpowered",
+            Self::ControlHeldOff => "control_held_off",
         }
     }
 }

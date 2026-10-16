@@ -36,6 +36,10 @@ default_clock_hz = 8000000
 # WITHOUT this key is not checked at all, which is the honest state for every
 # other MCU here until its own datasheet figure is quoted.
 max_adc_source_impedance_ohms = 10000.0
+# Microchip megaAVR DS40002061B (ATmega48A/PA/88A/PA/168A/PA/328/P), Table 30-1 "Common
+# DC characteristics" (Continued): RRST "Reset Pull-up Resistor", 30 kOhm min, 60 kOhm max.
+# The minimum, for the held-off check's divider against an external pull-down.
+reset_pull_up_ohms = 30000.0
 
 [models.pins]
 # DIP-28 pin map (KiCad Device:ATmega328P-P symbol). The 32-pad TQFP/QFN/MLF
@@ -126,6 +130,10 @@ backend = "simavr:atmega328p"
 internal_clock = "internal 8 MHz RC oscillator"
 default_clock_hz = 8000000
 max_adc_source_impedance_ohms = 10000.0
+# Microchip megaAVR DS40002061B (ATmega48A/PA/88A/PA/168A/PA/328/P), Table 30-1 "Common
+# DC characteristics" (Continued): RRST "Reset Pull-up Resistor", 30 kOhm min, 60 kOhm max.
+# The minimum, for the held-off check's divider against an external pull-down.
+reset_pull_up_ohms = 30000.0
 
 [models.pins]
 "1"  = "pd3_int1_oc2b"
@@ -211,6 +219,10 @@ backend = "simavr:atmega328p"
 internal_clock = "internal 8 MHz RC oscillator"
 default_clock_hz = 8000000
 max_adc_source_impedance_ohms = 10000.0
+# Microchip megaAVR DS40002061B (ATmega48A/PA/88A/PA/168A/PA/328/P), Table 30-1 "Common
+# DC characteristics" (Continued): RRST "Reset Pull-up Resistor", 30 kOhm min, 60 kOhm max.
+# The minimum, for the held-off check's divider against an external pull-down.
+reset_pull_up_ohms = 30000.0
 
 [models.pins]
 "1"  = "pd3_int1_oc2b"
@@ -1277,6 +1289,9 @@ mpn_re   = "(?i)^STM32F072C(8|B)(T[67]|U[67])?"
 [models.params]
 backend = "renode:stm32f072"
 internal_clock = "internal HSI RC oscillator"
+# NRST's permanent pull-up RPU, 25 kOhm min / 40 typ / 55 max (DocID025004 Rev 5 Table 56,
+# p.84, VIN = VSS): the minimum, for the held-off check's divider against an external pull-down.
+reset_pull_up_ohms = 25000.0
 
 [models.pins]
 # STMicroelectronics DS9826 Rev 6, Table 14, LQFP48/UFQFPN48 column. The

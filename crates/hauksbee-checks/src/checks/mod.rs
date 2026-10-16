@@ -45,6 +45,9 @@
 //! - [`regulator_enable`]: a linear regulator whose card says an open enable
 //!   pin is off (`en_open = "off"`, or an internal pull toward off) with that
 //!   pin left with nothing that can raise it: its rail never comes on.
+//! - [`control_held_off`]: an active-high enable or active-low reset the board
+//!   pulls to its off level with nothing that can release it: the part is never
+//!   enabled, or is held in reset and never runs.
 //! - [`crystal_caps`]: crystal load capacitors far outside the C1/C2 range the
 //!   driving IC's card states (`xtal_cap_min_f`/`xtal_cap_max_f`), for a
 //!   crystal whose value states no CL.
@@ -91,6 +94,7 @@ pub mod back_power;
 pub mod boot;
 pub mod bus_loading;
 pub mod contention;
+pub mod control_held_off;
 pub mod converter;
 pub mod crystal_caps;
 pub mod dc_stress;
@@ -387,7 +391,21 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
                 .iter()
                 .any(|h| h.refs == f.refs && f.nets.iter().all(|n| h.nets.contains(n)))
     });
+    // The same fault on any other part's enable or reset input: a pull to the
+    // off level that nothing on the net can release. The two checks split a
+    // regulator's enable pad between them; a part and net one has reported is
+    // never reported again by the other.
+    let control: Vec<_> = control_held_off::control_held_off_lint(board, lib)
+        .findings
+        .into_iter()
+        .filter(|c| {
+            !held_off
+                .iter()
+                .any(|h| h.refs == c.refs && c.nets.iter().all(|n| h.nets.contains(n)))
+        })
+        .collect();
     report.findings.extend(held_off);
+    report.findings.extend(control);
     // One binding serves both checks that need the bound board: the rail
     // conflicts read its report, the DC stress pass then consumes it. Binding
     // a large board is not cheap, so it is done once here, not once per check.

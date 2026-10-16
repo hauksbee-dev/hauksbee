@@ -3399,12 +3399,12 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::SupplyGroundSwapped | LintCheck::DiodeReversed | LintCheck::PolarisedCapReversed => {
             polarity_fix_hint(check)
         }
-        LintCheck::RegulatorHeldOff | LintCheck::RailUnpowered | LintCheck::I2cBusLoading => supply_fix_hint(check),
+        LintCheck::RegulatorHeldOff | LintCheck::RailUnpowered | LintCheck::ControlHeldOff | LintCheck::I2cBusLoading => supply_fix_hint(check),
     })
 }
 
-/// Fix hints for the supply-side checks: a held-off regulator, an unpowered rail
-/// and an overloaded I2C pull-up.
+/// Fix hints for the supply-side checks: a held-off regulator, an unpowered rail,
+/// a reset or enable held off by its pull and an overloaded I2C pull-up.
 const fn supply_fix_hint(check: LintCheck) -> &'static str {
     match check {
         LintCheck::RegulatorHeldOff => {
@@ -3412,6 +3412,9 @@ const fn supply_fix_hint(check: LintCheck) -> &'static str {
         }
         LintCheck::RailUnpowered => {
             "Fit the rail's regulator or link, or bring the rail in on a connector or test point; name each supply net with its voltage so the rail is judged."
+        }
+        LintCheck::ControlHeldOff => {
+            "Return the pull resistor to the part's supply rail instead of ground, or drive the pin from a GPIO or a supervisor."
         }
         _ => {
             "Re-pick the pull-ups so the sink current stays under 3 mA (R > (Vrail - 0.4 V) / 3 mA) and the rise time fits the bus speed; 2.2k-4.7k suits most 3.3 V buses."
