@@ -193,6 +193,50 @@ fn need(ok: bool, msg: String) -> Result<(), SpecError> {
     }
 }
 
+/// A temperature as the reports print it: `91.7 C`, a space before the unit and
+/// never `-0`. The one spelling for every temperature a verdict states.
+#[must_use]
+pub(crate) fn fmt_c(celsius: f64) -> String {
+    // `+ 0.0` turns IEEE negative zero into zero (it leaves every other value).
+    format!("{} C", celsius + 0.0)
+}
+
+/// A measured temperature to one decimal, in the same spelling as [`fmt_c`].
+#[must_use]
+pub(crate) fn fmt_c1(celsius: f64) -> String {
+    format!("{:.1} C", celsius + 0.0)
+}
+
+/// Absolute zero (C). No temperature field of a spec may sit at or below it.
+pub const ABSOLUTE_ZERO_C: f64 = -273.15;
+
+/// The hottest ambient (C) a spec may state. No electronic part sits in air
+/// above this (the hottest real cases are a few hundred degrees), so a larger
+/// figure is a unit slip or a typo, and the junction numbers built on it would
+/// be past silicon's melting point anyway.
+pub const MAX_AMBIENT_C: f64 = 500.0;
+
+/// The longest board time (ms) one run may simulate: ten minutes. The
+/// co-simulation spends real time on every simulated millisecond, so a larger
+/// figure does not finish in any useful time, and `1e15` ran until killed.
+pub const MAX_DURATION_MS: f64 = 600_000.0;
+
+/// The most co-sim frames one run may take (`duration_ms / frame_ms`).
+pub const MAX_FRAMES: f64 = 1_000_000.0;
+
+/// Why `value` is not a usable temperature in `field`, or `None` when it is a
+/// finite temperature above absolute zero and at most `ceiling_c`. The one
+/// place every temperature a spec states is checked, so `nan`, `inf`, `-0` and
+/// sub-absolute-zero figures are refused with the same words.
+fn temperature_problem(field: &str, value: f64, ceiling_c: f64, what: &str) -> Option<String> {
+    (!(value.is_finite() && value > ABSOLUTE_ZERO_C && value <= ceiling_c)).then(|| {
+        format!(
+            "{field} must be a finite temperature above absolute zero ({ABSOLUTE_ZERO_C} C) and \
+             at most {ceiling_c} C ({what}), got {value}"
+        )
+    })
+}
+
 fn validate_fit_lists(fit: &[String], no_fit: &[String], context: &str) -> Result<(), SpecError> {
     need(
         fit.iter().chain(no_fit).all(|r| !r.trim().is_empty()),
@@ -1670,10 +1714,44 @@ impl Spec {
             duration_ok,
             "duration_ms must be a positive, finite number".into(),
         );
+        // A finite duration can still be absurd: the run would take real time
+        // for every simulated millisecond. Refuse it here, with the limit.
         check(
-            self.frame_ms.is_finite() && self.frame_ms > 0.0,
+            !duration_ok || self.duration_ms <= MAX_DURATION_MS,
+            format!(
+                "duration_ms {} is longer than the {MAX_DURATION_MS} ms (ten minutes of board \
+                 time) a run may simulate; shorten it to the window the assertions need",
+                self.duration_ms
+            ),
+        );
+        let frame_ok = self.frame_ms.is_finite() && self.frame_ms > 0.0;
+        check(
+            frame_ok,
             "frame_ms must be a positive, finite number".into(),
         );
+        check(
+            !(duration_ok && frame_ok) || self.duration_ms / self.frame_ms <= MAX_FRAMES,
+            format!(
+                "duration_ms {} at frame_ms {} is {:.3e} co-sim frames, over the {MAX_FRAMES} \
+                 a run may take; raise frame_ms or shorten duration_ms",
+                self.duration_ms,
+                self.frame_ms,
+                self.duration_ms / self.frame_ms
+            ),
+        );
+        // Ambient feeds every junction-temperature figure and temperature-
+        // dependent rating row: a NaN poisons them all, and a value below
+        // absolute zero produces a "peak" colder than physics allows.
+        if let Some(problem) = self.ambient_c.and_then(|t| {
+            temperature_problem(
+                "ambient_c",
+                t,
+                MAX_AMBIENT_C,
+                "no part's surroundings are hotter",
+            )
+        }) {
+            check(false, problem);
+        }
         // Transient scenarios: the schema documents start_ms >= 0, so the
         // runtime validate path must hold the same line (schema-vs-validate
         // parity); a negative or non-finite start would otherwise slide the
@@ -2547,10 +2625,24 @@ impl Assertion {
             )?,
             // `celsius` is optional: absent means "use the device's own max
             // junction temperature".
-            "max_temp" => need(
-                self.reference.is_some(),
-                "max_temp assertion needs a `ref` (the component to check)".into(),
-            )?,
+            "max_temp" => {
+                need(
+                    self.reference.is_some(),
+                    "max_temp assertion needs a `ref` (the component to check)".into(),
+                )?;
+                // When given, `celsius` is a real ceiling: `inf` would pass
+                // everything, `nan` compares false with everything, and one
+                // past silicon's melting point can never be judged.
+                let problem = self.celsius.and_then(|c| {
+                    temperature_problem(
+                        "max_temp `celsius`",
+                        c,
+                        crate::assertions::TJ_IMPOSSIBLE_C,
+                        "past silicon's melting point no junction exists to judge",
+                    )
+                });
+                need(problem.is_none(), problem.unwrap_or_default())?;
+            }
             "peripheral" => {
                 need(
                     self.id.is_some(),
@@ -2803,7 +2895,7 @@ impl Assertion {
             ),
             "max_temp" => self.celsius.map_or_else(
                 || format!("Tj({reference}) <= device max"),
-                |c| format!("Tj({reference}) <= {c} C"),
+                |c| format!("Tj({reference}) <= {}", fmt_c(c)),
             ),
             "peripheral" => {
                 let id = self.id.as_deref().unwrap_or_default();
@@ -3190,6 +3282,68 @@ min = 3.0
             assert_invalid(&base(dur, frame), &[field]);
         }
     }
+    /// Every temperature a spec states is finite, above absolute zero and
+    /// physically bounded; a legal spelling of each is still accepted.
+    #[test]
+    fn temperatures_must_be_finite_and_physical() {
+        let with_ambient = |v: &str| format!("{BASE}ambient_c = {v}\n{VCC}");
+        for bad in ["nan", "inf", "-inf", "-300", "-273.15", "1000", "1e5"] {
+            assert_invalid(&with_ambient(bad), &["ambient_c", "absolute zero"]);
+        }
+        for good in ["25", "-40", "85.5", "-0.0", "500", "-273.0"] {
+            let spec = spec_from(&with_ambient(good));
+            assert!(
+                spec.validate().is_ok(),
+                "ambient_c = {good}: {:?}",
+                spec.validate()
+            );
+        }
+        let ceiling = |v: &str| {
+            format!("{BASE}[[assert]]\nkind = \"max_temp\"\nref = \"R1\"\ncelsius = {v}\n")
+        };
+        for bad in ["nan", "inf", "-inf", "-300", "-273.15", "1e9"] {
+            assert_invalid(&ceiling(bad), &["celsius", "absolute zero"]);
+        }
+        for good in ["125", "0", "-0.0", "-40", "150.5"] {
+            let spec = spec_from(&ceiling(good));
+            assert!(
+                spec.validate().is_ok(),
+                "celsius = {good}: {:?}",
+                spec.validate()
+            );
+        }
+        // One spelling in the label: a space before the unit, and never `-0`.
+        let spec = spec_from(&ceiling("-0.0"));
+        assert_eq!(spec.asserts[0].label(), "Tj(R1) <= 0 C");
+        let spec = spec_from(&ceiling("125"));
+        assert_eq!(spec.asserts[0].label(), "Tj(R1) <= 125 C");
+    }
+
+    /// A finite but absurd run length is refused up front with the limit; the
+    /// longest legal run, and the same duration at a coarser cadence, are not.
+    #[test]
+    fn an_absurd_run_length_is_refused_and_a_long_legal_one_is_not() {
+        let run = |dur: &str, frame: &str| {
+            format!("name = \"t\"\nboard = \"b.kicad_pcb\"\nduration_ms = {dur}\nframe_ms = {frame}\n{VCC}")
+        };
+        for (dur, frame, needle) in [
+            ("1e15", "1", "ten minutes"),
+            ("600001", "1000", "ten minutes"),
+            ("10", "1e-6", "co-sim frames"),
+            ("600000", "0.1", "co-sim frames"),
+        ] {
+            assert_invalid(&run(dur, frame), &[needle]);
+        }
+        for (dur, frame) in [("600000", "1"), ("2000", "0.01"), ("100", "1")] {
+            let spec = spec_from(&run(dur, frame));
+            assert!(
+                spec.validate().is_ok(),
+                "{dur} @ {frame}: {:?}",
+                spec.validate()
+            );
+        }
+    }
+
     #[test]
     fn nan_after_ms_is_rejected_not_panicked() {
         // R33: a NaN made threshold sorting panic instead of returning a

@@ -55,7 +55,7 @@ next action: ...
 ## 3. Classify the failure
 
 - **Real board fault.** A clean or qualified RED whose `detail` names a
-  physical cause, for example `Tj(R1) peak 156.7C > ceiling 125C`, or
+  physical cause, for example `Tj(R1) peak 156.7 C > ceiling 125 C`, or
   `control net 'GATE_CTRL' was never driven to >= 3 V`. Report it with the
   measured value and the `why:` line.
 - **Model gap.** INVALID with `open-part`, or `INCONCLUSIVE:` notes from

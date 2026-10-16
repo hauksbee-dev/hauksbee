@@ -123,7 +123,7 @@ fn a_conflicting_source_on_a_supplied_rail_still_solves() {
     assert_eq!(out.status.code(), Some(3), "{text}\n{}", stderr(&out));
     for want in [
         "outside the 1.800..5.500 V operating envelope",
-        "U1 overvoltage 60.000 > 6.000",
+        "U1 overvoltage 60.000 V > 6.000 V",
     ] {
         assert!(text.contains(want), "missing {want:?}:\n{text}");
     }

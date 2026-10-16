@@ -51,7 +51,7 @@ max_seconds = 30
 contains = [
   "[PASS] Tj(R1) <= 125 C",
   # 5 V across 30 ohm is 0.83 W; in a 2512 at 25 C that lands at 91.7 C.
-  "Tj(R1) peak 91.7C (<= 125C)",
+  "Tj(R1) peak 91.7 C (<= 125 C)",
   "[PASS] no stress faults raised",
   "no stress faults",
   "GREEN",
@@ -98,10 +98,10 @@ contains = [
   "[FAIL] Tj(R1) <= 125 C",
   # 5 V across 10 ohm is 2.5 W: 25 + 2.5*80 = 225 C. Both numbers are only
   # reachable if the override actually reached the circuit.
-  "Tj(R1) peak 225.0C > ceiling 125C",
+  "Tj(R1) peak 225.0 C > ceiling 125 C",
   "why: R1 ran 100.0 C hotter than your 125 C ceiling (peak 225.0 C)",
   "[FAIL] no stress faults raised",
-  "R1 overpower 2.500 > 1.000",
+  "R1 overpower 2.500 W > 1.000 W",
   "RED",
 ]
 not_contains = ["[PASS]", "GREEN"]
@@ -132,7 +132,7 @@ max_seconds = 30
 contains = [
   "[PASS] no stress faults raised",
   # 5 V across 100 ohm is 0.25 W: 25 + 0.25*80 = 45 C.
-  "Tj(R1) peak 45.0C (<= 125C)",
+  "Tj(R1) peak 45.0 C (<= 125 C)",
   "GREEN",
 ]
 not_contains = ["[FAIL]", "RED", "overpower"]
