@@ -550,10 +550,10 @@ pub fn stamp_device<S: StampSink>(ctx: &StampCtx, id: DeviceId, dev: &Device, si
             // A non-positive resistance is a SHORT, not an open: skipping the
             // stamp would leave the nodes coupled only through gmin (an open
             // with a ~1e12 Ω leak), silently breaking a 0-Ω jumper's net.
-            // Clamp to the same 1e-6 Ω floor as the SPICE loader and the
-            // engine's board binder (`bind_passive`) so a stiff conductance
+            // Clamp to the shared `MIN_RESISTANCE_OHMS` floor (the SPICE loader
+            // announces it when it substitutes) so a stiff conductance
             // couples the nodes. Also covers a tc1 derating driving r below 0.
-            let r = resistor_value(*ohms, *tc1, ctx).max(1e-6);
+            let r = resistor_value(*ohms, *tc1, ctx).max(hauksbee_ir::MIN_RESISTANCE_OHMS);
             stamp_cond(sink, ctx.layout, *a, *b, 1.0 / r);
         }
         Device::Capacitor {

@@ -34,13 +34,14 @@ fn a_full_gate_drive_passes_on_the_corner_condition() {
     assert_eq!(doc["verdict"], "pass", "{doc:#}");
     assert_eq!(doc["ok"], true);
     // The corner condition, plus only the default-spacing-rules one (the
-    // fixture has no project file beside it).
+    // fixture has no project file beside it) and the one saying its +5V rail
+    // is held at its named voltage with nothing on the board sourcing it.
     let conditions = doc["verdict_conditions"].as_array().expect("conditions");
     assert_eq!(conditions[0], CONDITION, "{doc:#}");
     assert!(
-        conditions[1..].iter().all(|c| c
-            .as_str()
-            .is_some_and(|c| c.starts_with("copper spacing was judged against a DEFAULT"))),
+        conditions[1..].iter().all(|c| c.as_str().is_some_and(|c| c
+            .starts_with("copper spacing was judged against a DEFAULT")
+            || c.starts_with("Rails held at their named voltage"))),
         "{doc:#}"
     );
     // The swept assumption is qualified; the unswept stand-in one is gone.
