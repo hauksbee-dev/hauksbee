@@ -667,7 +667,7 @@ mod tests {
             f,
             &[
                 "which holds only R1 to 'GND'",
-                "the only thing on it that can raise it is JP3, an off-board source",
+                "the only thing on it that can raise it is JP3 pin 1, an off-board source",
                 "output '+3V3' (3.30 V) never comes on",
             ],
         );
