@@ -112,7 +112,7 @@ fn attribute_i_out(
 /// `VOUT_3V3`. For hierarchical names only the leaf is electrically
 /// descriptive; parent-sheet tokens are ignored. More than one voltage token
 /// in that leaf is ambiguous and is refused.
-fn named_rail_voltage(name: &str) -> Option<f64> {
+pub(crate) fn named_rail_voltage(name: &str) -> Option<f64> {
     fn parse_token(token: &str) -> Option<f64> {
         let parse_positive = |text: &str| {
             let value = text.parse::<f64>().ok()?;

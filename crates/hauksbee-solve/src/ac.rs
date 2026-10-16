@@ -427,11 +427,11 @@ fn stamp_ac(
             a, b, ohms, tc1, ..
         } => {
             // A non-positive resistance is a SHORT, not an open: mirror the
-            // transient stamp's 1e-6 Ω floor (stamp.rs) so a 0-Ω jumper
+            // transient stamp's `MIN_RESISTANCE_OHMS` floor (stamp.rs) so a 0-Ω jumper
             // couples its nodes with a stiff conductance instead of leaving
             // them gmin-isolated. Also covers a tc1 derating driving r
             // below 0. Same tc1 temperature derating as the DC path.
-            let r = resistor_value(*ohms, *tc1, opts).max(1e-6);
+            let r = resistor_value(*ohms, *tc1, opts).max(hauksbee_ir::MIN_RESISTANCE_OHMS);
             sys.stamp_admittance(n(*a), n(*b), Complex64::new(1.0 / r, 0.0));
         }
         Device::Capacitor { a, b, farads, .. } => {

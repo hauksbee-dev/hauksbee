@@ -1853,7 +1853,11 @@ fn main() -> anyhow::Result<()> {
             InstallCommand::Renode { yes } => hauksbee_engine::commands::install::renode(yes),
         },
     };
-    // A run that wrote a manifest records how it ended in that manifest.
+    // A run that wrote a manifest records how it ended in that manifest. The
+    // error text goes only to a `reproduce` replay, so its DIFF can say why.
+    if let Err(e) = &result {
+        hauksbee_engine::run_manifest::note_run_error(format!("{e:#}"));
+    }
     hauksbee_engine::run_manifest::finish_outcome(
         "hauksbee",
         result

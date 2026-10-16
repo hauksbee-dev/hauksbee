@@ -320,6 +320,55 @@ fn crystal_cl_stated_in_its_value_is_judged() {
     assert_eq!(stated_crystal_cl("16 MHz CL=12.5 pF"), Some(12.5));
 }
 
+/// The same crystal and load caps on a board whose ground is called `ground`.
+fn xtal_board_grounded(ground: &str) -> ExtractedBoard {
+    pcb(&format!(
+        r#"(net 1 "XIN") (net 2 "XOUT") (net 3 "{ground}")
+        (footprint "Crystal:Crystal_SMD_3225-4Pin"
+          (at 10 10) (layer "F.Cu")
+          (property "Reference" "Y1") (property "Value" "16MHz")
+          (pad "1" smd rect (at -1 0) (net 1 "XIN"))
+          (pad "2" smd rect (at -1 1) (net 3 "{ground}"))
+          (pad "3" smd rect (at 1 0) (net 2 "XOUT"))
+          (pad "4" smd rect (at 1 1) (net 3 "{ground}")))
+        (footprint "Capacitor_SMD:C_0402"
+          (at 8 10) (layer "F.Cu")
+          (property "Reference" "C1") (property "Value" "22p")
+          (pad "1" smd rect (at 0 0) (net 1 "XIN"))
+          (pad "2" smd rect (at 1 0) (net 3 "{ground}")))
+        (footprint "Capacitor_SMD:C_0402"
+          (at 12 10) (layer "F.Cu")
+          (property "Reference" "C2") (property "Value" "22p")
+          (pad "1" smd rect (at 0 0) (net 2 "XOUT"))
+          (pad "2" smd rect (at 1 0) (net 3 "{ground}")))"#
+    ))
+}
+
+/// A load capacitor to a ground counts as one whatever the ground is called:
+/// renaming the ground changes no circuit. The control keeps the "no load
+/// capacitors" finding, so the check is live on each spelling.
+#[test]
+fn load_caps_to_a_ground_count_whatever_the_ground_is_called() {
+    for ground in [
+        "GND",
+        "0V",
+        "GND1",
+        "GROUND",
+        "GNDREF",
+        "AGND",
+        "VSS",
+        "/sheet/0V",
+    ] {
+        let r = run_board(&xtal_board_grounded(ground), check_crystal_load_cap);
+        assert_eq!(r.finding_count(), 0, "{ground}: C1 and C2 load the crystal");
+        assert!(
+            r.of_check(SiCheck::CrystalLoadCap)
+                .any(|f| f.message.contains("pF")),
+            "{ground}: the load the caps present is stated"
+        );
+    }
+}
+
 #[test]
 fn crystal_missing_both_caps_fires() {
     // A discrete crystal with no load caps at all on either terminal.
@@ -1318,4 +1367,157 @@ fn a_via_antipad_in_the_plane_is_not_a_missing_reference() {
         f.message
     );
     assert_eq!(r.finding_count(), 0, "an anti-pad must never fire");
+}
+
+// ---------------------------------------------------------------------------
+// Which standard a differential pair is: the suffix alone does not say.
+// ---------------------------------------------------------------------------
+
+/// The class [`impedance::pair_class`] gives a pair named `plus` / `minus`,
+/// with `extra` board text (footprints) beside the two nets.
+fn pair_class_of(plus: &str, minus: &str, extra: &str) -> Option<impedance::ImpedanceClass> {
+    let b = pcb(&format!(r#"(net 1 "{plus}") (net 2 "{minus}") {extra}"#));
+    let id = |name: &str| b.nets.iter().find(|n| n.name == name).unwrap().id;
+    impedance::pair_class(&b, id(plus), id(minus))
+}
+
+/// A connector footprint with one pad on each of nets 1 and 2.
+fn connector_on_pair(footprint: &str, value: &str, plus: &str, minus: &str) -> String {
+    format!(
+        r#"(footprint "{footprint}" (at 0 0) (layer "F.Cu")
+             (property "Reference" "J1") (property "Value" "{value}")
+             (pad "1" smd rect (at 0 0) (net 1 "{plus}"))
+             (pad "2" smd rect (at 1 0) (net 2 "{minus}")))"#
+    )
+}
+
+#[test]
+fn a_dp_dn_suffix_names_a_usb_pair_only_with_usb_evidence() {
+    use impedance::ImpedanceClass::{DisplayDiff, EthernetDiff, UsbDiff};
+    // Faulty reads, one per way the suffix used to be taken for USB.
+    assert_eq!(
+        pair_class_of("EDP_TX1_DP", "EDP_TX1_DN", ""),
+        Some(DisplayDiff),
+        "an eDP lane is a 100 ohm display lane"
+    );
+    assert_eq!(
+        pair_class_of("/Display/HDMI_D0_DP", "/Display/HDMI_D0_DN", ""),
+        Some(DisplayDiff)
+    );
+    assert_eq!(
+        pair_class_of("LVDS0_DP", "LVDS0_DN", ""),
+        Some(DisplayDiff),
+        "a lane number after the token still names the standard"
+    );
+    assert_eq!(
+        pair_class_of("MDI0_DP", "MDI0_DN", ""),
+        Some(EthernetDiff),
+        "an Ethernet token outranks the suffix"
+    );
+    assert_eq!(
+        pair_class_of("LPCUD_DP", "LPCUD_DN", ""),
+        None,
+        "a suffix alone names no standard"
+    );
+    // Legal controls: the same suffix with USB evidence stays USB.
+    assert_eq!(pair_class_of("USB_DP", "USB_DM", ""), Some(UsbDiff));
+    assert_eq!(pair_class_of("USB3_3_DP", "USB3_3_DN", ""), Some(UsbDiff));
+    assert_eq!(pair_class_of("/D+", "/D-", ""), Some(UsbDiff), "bare D+/D-");
+    assert_eq!(pair_class_of("DP", "DN", ""), Some(UsbDiff), "bare DP/DN");
+    assert_eq!(
+        pair_class_of("/mcu/usb/power/DP", "/mcu/usb/power/DM", ""),
+        Some(UsbDiff),
+        "the sheet path says USB"
+    );
+    // A USB connector on the nets makes an oddly named pair USB.
+    let jack = connector_on_pair("Connector_USB:USB_C_Receptacle", "USB_C", "PD+", "PD-");
+    assert_eq!(pair_class_of("PD+", "PD-", &jack), Some(UsbDiff));
+    // A non-USB connector on the same names does not.
+    let header = connector_on_pair("Connector_PinHeader:PinHeader_1x02", "Conn", "PD+", "PD-");
+    assert_eq!(pair_class_of("PD+", "PD-", &header), None);
+}
+
+/// A controlled-impedance board routed to Zdiff ~ 108 ohm (W 0.2 mm, gap
+/// 0.2 mm over 0.2 mm FR4): +20% from a 90 ohm USB target, +8% from 100 ohm.
+fn pair_text(plus: &str, minus: &str) -> String {
+    impedance_usb_text(0.2, 0.2, 0.2, 4.3)
+        .replace("USB_DP", plus)
+        .replace("USB_DM", minus)
+}
+
+#[test]
+fn an_edp_lane_is_judged_at_100_ohm_not_90_and_never_called_usb() {
+    let r = run_text(
+        &pair_text("EDP_TX1_DP", "EDP_TX1_DN"),
+        impedance::check_controlled_impedance,
+    );
+    assert_eq!(r.finding_count(), 0, "108 ohm is inside 100 ohm +-15%");
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("a note");
+    assert!(f.message.contains("target 100 ohm"), "{}", f.message);
+    assert!(f.message.contains("ok"), "{}", f.message);
+    assert!(!f.message.contains("USB"), "{}", f.message);
+    // No USB skew claim either.
+    let usb = run_text(&pair_text("EDP_TX1_DP", "EDP_TX1_DN"), check_usb_diff_pair);
+    assert_eq!(usb.of_check(SiCheck::UsbDiffPair).count(), 0);
+}
+
+#[test]
+fn the_same_geometry_on_a_usb_pair_still_fires_against_90_ohm() {
+    let r = run_text(
+        &pair_text("USB_DP", "USB_DM"),
+        impedance::check_controlled_impedance,
+    );
+    assert_eq!(r.finding_count(), 1, "+20% from 90 ohm is out of band");
+    let f = r.of_check(SiCheck::ControlledImpedance).next().unwrap();
+    assert!(f.message.contains("90 ohm"), "{}", f.message);
+}
+
+#[test]
+fn a_pair_of_unidentified_standard_gets_no_target() {
+    let r = run_text(
+        &pair_text("LPCUD_DP", "LPCUD_DN"),
+        impedance::check_controlled_impedance,
+    );
+    assert_eq!(r.finding_count(), 0, "no target, so nothing to miss");
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("a note");
+    assert_eq!(f.severity, SiSeverity::Info);
+    assert!(f.message.contains("unidentified standard"), "{}", f.message);
+    assert!(!f.message.contains("USB differential"), "{}", f.message);
+    assert!(!f.message.contains("target 90"), "{}", f.message);
+}
+
+#[test]
+fn a_pair_of_unidentified_standard_still_names_a_void_under_it() {
+    // The plane void is a fact about the copper, whatever the standard: dropping
+    // the pair's standard must not drop the void it crosses.
+    let void = format!("{} {}", rect_fill(-5.0, 6.0), rect_fill(14.0, 25.0));
+    let text = impedance_usb_over_plane(&void)
+        .replace("USB_DP", "LPCUD_DP")
+        .replace("USB_DM", "LPCUD_DN");
+    let r = run_text(&text, impedance::check_controlled_impedance);
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("a note");
+    assert!(f.message.contains("unidentified standard"), "{}", f.message);
+    assert!(
+        f.message.contains("reference missing under trace")
+            && f.message.contains("~8.00 mm across"),
+        "{}",
+        f.message
+    );
+    assert_eq!(f.severity, SiSeverity::Info, "no standard, no defect claim");
+    // The same copper on a pair that says USB keeps its Medium finding.
+    let usb = run_text(
+        &impedance_usb_over_plane(&void),
+        impedance::check_controlled_impedance,
+    );
+    let u = usb.of_check(SiCheck::ControlledImpedance).next().unwrap();
+    assert_eq!(u.severity, SiSeverity::Medium);
 }

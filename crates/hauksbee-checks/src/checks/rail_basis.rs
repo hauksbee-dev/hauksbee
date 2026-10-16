@@ -1,0 +1,559 @@
+//! Rails the analysis powers on an assumption: the verdict states it, and a
+//! rail only an unfitted part would power is a gating finding.
+//!
+//! With no supply declared, a rail no modelled part drives takes an ideal
+//! source at the voltage its name states, so its loads are judged as if
+//! powered (`hauksbee_bind::rail_basis` says what that rests on). Three
+//! outcomes follow, each generic over boards and parts:
+//! * a rail only do-not-populate parts would power (its sole regulator, or the
+//!   ferrite or 0 Ω link to a powered rail), with no connector, test point or
+//!   battery to bring it in and no other fitted part that may source it, never
+//!   comes up: a High `rail_unpowered` finding naming the unfitted part, the
+//!   rail and the parts left unpowered, with the fix;
+//! * the same rail with an off-board entry, or a fitted part that may source
+//!   it, is a non-gating note naming the unfitted part, and the pass is
+//!   conditional on the entry;
+//! * every other name-powered rail is a verdict condition: assumed supplied
+//!   from off the board through the named connector, or held at its named
+//!   voltage though nothing modelled sources it. Never silent.
+//!
+//! A run that powers no rail at all judged no level, rating or rail check, so
+//! it says so in the not-judged vocabulary and the verdict reads PARTLY
+//! JUDGED, never a bare pass.
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
+
+use hauksbee_bind::binder::BoundBoard;
+use hauksbee_bind::rail_basis::{rail_bases, RailBases, RailBasis, Unfitted};
+use hauksbee_extract::{
+    ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity, INFORMATIONAL_MARKER,
+    REMEDY_MARKER,
+};
+use hauksbee_models::ModelLibrary;
+
+/// How many parts a message lists before it counts the rest.
+const SHOWN: usize = 4;
+
+/// The first few references, then a count of the rest.
+fn listed(refs: &[String]) -> String {
+    match refs.split_at_checked(SHOWN) {
+        Some((head, rest)) if !rest.is_empty() => {
+            format!("{} and {} more", head.join(", "), rest.len())
+        }
+        _ => refs.join(", "),
+    }
+}
+
+/// What is not fitted, one clause per part.
+fn unfitted_clause(unfitted: &[Unfitted]) -> String {
+    let one = |u: &Unfitted| {
+        let value = u.value.trim();
+        let part = if value.is_empty() {
+            u.reference.clone()
+        } else {
+            format!("{} ({value})", u.reference)
+        };
+        u.link_to.as_ref().map_or_else(
+            || format!("{part}, which would source it, is not fitted"),
+            |to| format!("{part}, the link that joins it to '{to}', is not fitted"),
+        )
+    };
+    unfitted.iter().map(one).collect::<Vec<_>>().join("; ")
+}
+
+fn volts_clause(rail: &RailBasis) -> String {
+    rail.volts.map_or_else(
+        || "The analysis leaves it unpowered".to_string(),
+        |v| format!("The analysis held it at {v:.2} V by its name alone"),
+    )
+}
+
+/// The gating finding for a rail that never comes up.
+fn never_up_finding(rail: &RailBasis) -> LintFinding {
+    let net = rail.net();
+    let also = match &rail.nets[1.min(rail.nets.len())..] {
+        [] => String::new(),
+        rest => format!(
+            " (with {})",
+            rest.iter()
+                .map(|n| format!("'{n}'"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    let fit: Vec<&str> = rail.unfitted.iter().map(|u| u.reference.as_str()).collect();
+    let stays = if rail.loads.len() == 1 {
+        "stays"
+    } else {
+        "stay"
+    };
+    let message = format!(
+        "'{net}'{also} never comes up: {}, and nothing else on the board can power it (no fitted \
+         regulator or source, connector, test point or battery on it), so {} {stays} unpowered. \
+         {}, so no result for the parts on it stands. {REMEDY_MARKER}Fit {}, or bring '{net}' in \
+         on a connector or test point.",
+        unfitted_clause(&rail.unfitted),
+        listed(&rail.loads),
+        volts_clause(rail),
+        fit.join(" and "),
+    );
+    let mut refs: Vec<String> = fit.iter().map(|r| (*r).to_string()).collect();
+    refs.extend(rail.loads.iter().take(SHOWN).cloned());
+    LintFinding {
+        check: LintCheck::RailUnpowered,
+        severity: Severity::High,
+        message,
+        refs,
+        nets: rail.nets.clone(),
+    }
+}
+
+/// The note for an unfitted source on a rail that may still be powered.
+fn unfitted_note(rail: &RailBasis) -> LintFinding {
+    let net = rail.net();
+    let how = if rail.entries.is_empty() {
+        format!(
+            "{} may source it, though the analysis models none of them as a source",
+            listed(&rail.feeds)
+        )
+    } else {
+        format!(
+            "It can come in from off the board through {}",
+            listed(&rail.entries)
+        )
+    };
+    let held = rail.volts.map_or_else(String::new, |v| {
+        format!(", and the run assumes it is held at {v:.2} V")
+    });
+    let message = format!(
+        "'{net}' has no fitted source of its own: {}. {how}{held}{INFORMATIONAL_MARKER}.",
+        unfitted_clause(&rail.unfitted),
+    );
+    let mut refs: Vec<String> = rail.unfitted.iter().map(|u| u.reference.clone()).collect();
+    refs.extend(rail.entries.iter().chain(&rail.feeds).take(SHOWN).cloned());
+    LintFinding {
+        check: LintCheck::RailUnpowered,
+        severity: Severity::Low,
+        message,
+        refs,
+        nets: rail.nets.clone(),
+    }
+}
+
+/// The note for a run that powered no rail at all.
+fn no_rail_note(bases: &RailBases) -> LintFinding {
+    let what = format!(
+        "no rail on the board is powered in the analysis (no net's name states its voltage, such \
+         as +3V3 or 5V, and no modelled part sources one), so the levels, ratings and rails of {} \
+         were not checked",
+        listed(&bases.active_parts)
+    );
+    LintFinding {
+        check: LintCheck::RailUnpowered,
+        severity: Severity::Low,
+        message: format!(
+            "{}. {REMEDY_MARKER}Name each supply net with its voltage (+3V3, +5V), or declare it \
+             with a [[supply]], then re-check.",
+            hauksbee_models::rating_basis::not_judged(&what)
+        ),
+        refs: bases.active_parts.iter().take(SHOWN).cloned().collect(),
+        nets: Vec::new(),
+    }
+}
+
+/// The findings for `bases`: a gating finding per rail that never comes up, a
+/// note per rail whose own source is unfitted but may still be powered, and
+/// the not-judged note when no rail is powered at all.
+#[must_use]
+pub fn rail_basis_findings(bases: &RailBases) -> NetLintReport {
+    let mut findings = Vec::new();
+    for rail in &bases.rails {
+        if rail.never_up() {
+            findings.push(never_up_finding(rail));
+        } else if !rail.unfitted.is_empty() && rail.volts.is_some() {
+            findings.push(unfitted_note(rail));
+        }
+    }
+    if !bases.any_powered && !bases.active_parts.is_empty() {
+        findings.push(no_rail_note(bases));
+    }
+    NetLintReport { findings }
+}
+
+/// [`rail_basis_findings`] over `board` bound on its own.
+#[must_use]
+pub fn rail_basis_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
+    let bound = hauksbee_bind::binder::bind_board(board, lib);
+    rail_basis_findings(&rail_bases(board, lib, &bound))
+}
+
+/// The conditions a pass rests on for the rails powered by name alone.
+///
+/// Two sentences: the rails assumed supplied from off the board through a
+/// connector, test point or battery, and those held at their named voltage
+/// though nothing the analysis models sources them. A rail that never comes up is a finding,
+/// not a condition, and a rail no fitted part draws from or may drive states
+/// none.
+#[must_use]
+pub fn rail_conditions(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    bound: &BoundBoard,
+) -> [Option<String>; 2] {
+    let bases = rail_bases(board, lib, bound);
+    let mut entered = Vec::new();
+    let mut held = Vec::new();
+    // A rail nothing fitted draws from or may drive (an unused header pin, a
+    // net with only capacitors) carries no result worth a condition.
+    let matters = |r: &&RailBasis| !(r.never_up() || (r.loads.is_empty() && r.feeds.is_empty()));
+    for rail in bases.rails.iter().filter(matters) {
+        let Some(v) = rail.volts else { continue };
+        let own = if rail.unfitted.is_empty() {
+            String::new()
+        } else {
+            let refs: Vec<&str> = rail.unfitted.iter().map(|u| u.reference.as_str()).collect();
+            format!(", its own source {} not fitted", refs.join(", "))
+        };
+        if rail.entries.is_empty() {
+            let may = if rail.feeds.is_empty() {
+                String::new()
+            } else {
+                format!(" (possible source: {})", listed(&rail.feeds))
+            };
+            held.push(format!("'{}' at {v:.2} V{may}{own}", rail.net()));
+        } else {
+            entered.push(format!(
+                "'{}' at {v:.2} V through {}{own}",
+                rail.net(),
+                listed(&rail.entries)
+            ));
+        }
+    }
+    let sentence = |items: &[String], lead: &str| {
+        (!items.is_empty()).then(|| format!("{lead}: {}.", items.join("; ")))
+    };
+    [
+        sentence(
+            &entered,
+            "Rails assumed supplied from off the board at their named voltage (the off-board \
+             supply itself is not judged)",
+        ),
+        sentence(
+            &held,
+            "Rails held at their named voltage though nothing the analysis models on the board \
+             sources them",
+        ),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::checks::test_support::{board, part};
+    use hauksbee_extract::Component;
+
+    const VBUS: i64 = 1;
+    const V3: i64 = 2;
+    const GND: i64 = 3;
+    const AV: i64 = 4;
+    const SDA: i64 = 5;
+    const EXT: i64 = 6;
+
+    fn nets() -> Vec<(i64, &'static str)> {
+        vec![
+            (VBUS, "+5V"),
+            (V3, "+3V3"),
+            (GND, "GND"),
+            (AV, "+3V3A"),
+            (SDA, "SDA"),
+            (EXT, "VEXT"),
+        ]
+    }
+
+    fn dnp(mut c: Component) -> Component {
+        c.dnp = true;
+        c
+    }
+
+    /// AP2112K-3.3 (SOT25: 1 IN, 2 GND, 3 EN, 4 NC, 5 OUT; Diodes DS39724
+    /// Rev. 2-2 Pin Descriptions p.2) from +5V to +3V3, EN tied to IN.
+    fn ldo() -> Component {
+        part(
+            "U1",
+            "AP2112K-3.3",
+            &[("1", VBUS), ("2", GND), ("3", VBUS), ("5", V3)],
+        )
+    }
+
+    /// A load on +3V3: an unmodelled sensor with a VDD supply pin.
+    fn sensor(reference: &str, rail: i64) -> Component {
+        let mut c = part(reference, "XYZ123", &[("1", rail), ("2", GND), ("3", SDA)]);
+        c.pins[0].function = "VDD".into();
+        c.pins[0].kind = "power_in".into();
+        c.pins[1].function = "GND".into();
+        c.pins[1].kind = "power_in".into();
+        c.pins[2].function = "SDA".into();
+        c.pins[2].kind = "bidirectional".into();
+        c
+    }
+
+    fn usb() -> Component {
+        part("J1", "USB_B_Micro", &[("1", VBUS), ("5", GND)])
+    }
+
+    fn run(parts: Vec<Component>) -> Vec<LintFinding> {
+        let lib = ModelLibrary::builtin();
+        rail_basis_lint(&board(&nets(), parts), &lib).findings
+    }
+
+    fn conditions(parts: Vec<Component>) -> [Option<String>; 2] {
+        let lib = ModelLibrary::builtin();
+        let b = board(&nets(), parts);
+        let bound = hauksbee_bind::binder::bind_board(&b, &lib);
+        rail_conditions(&b, &lib, &bound)
+    }
+
+    fn gating(found: &[LintFinding]) -> Vec<&LintFinding> {
+        found
+            .iter()
+            .filter(|f| f.check == LintCheck::RailUnpowered && f.severity == Severity::High)
+            .collect()
+    }
+
+    /// Faulty: the sole regulator of +3V3 is do-not-populate and nothing else
+    /// brings +3V3 in, so the sensor on it is never powered.
+    #[test]
+    fn sole_regulator_dnp_never_comes_up() {
+        let found = run(vec![
+            usb(),
+            dnp(ldo()),
+            sensor("U2", V3),
+            part("C1", "1u", &[("1", V3), ("2", GND)]),
+        ]);
+        let g = gating(&found);
+        assert_eq!(g.len(), 1, "{found:#?}");
+        let m = &g[0].message;
+        assert!(m.contains("'+3V3'") && m.contains("never comes up"), "{m}");
+        assert!(m.contains("U1 (AP2112K-3.3)") && m.contains("U2"), "{m}");
+        assert!(m.contains(REMEDY_MARKER) && m.contains("Fit U1"), "{m}");
+        assert!(g[0].refs.contains(&"U1".to_string()), "{:?}", g[0].refs);
+    }
+
+    /// Legal control: the regulator fitted. No finding; +5V is a condition
+    /// (from J1), +3V3 is not (the regulator holds it).
+    #[test]
+    fn fitted_regulator_is_silent_and_the_connector_rail_is_a_condition() {
+        let parts = vec![usb(), ldo(), sensor("U2", V3)];
+        let found = run(parts.clone());
+        assert!(
+            found.iter().all(|f| f.check != LintCheck::RailUnpowered),
+            "{found:#?}"
+        );
+        let [entered, held] = conditions(parts);
+        let entered = entered.expect("the connector rail is a condition");
+        assert!(entered.contains("'+5V' at 5.00 V through J1"), "{entered}");
+        assert!(!entered.contains("+3V3"), "{entered}");
+        assert!(held.is_none(), "{held:?}");
+    }
+
+    /// Legal control: the regulator is do-not-populate but +3V3 has a header
+    /// pin, so it may be supplied from off the board: a note and a condition,
+    /// never a gating finding.
+    #[test]
+    fn unfitted_regulator_with_a_header_on_the_rail_is_a_stated_condition() {
+        let parts = vec![
+            usb(),
+            dnp(ldo()),
+            sensor("U2", V3),
+            part("J2", "Conn_01x02", &[("1", V3), ("2", GND)]),
+        ];
+        let found = run(parts.clone());
+        assert!(gating(&found).is_empty(), "{found:#?}");
+        let note = found
+            .iter()
+            .find(|f| f.check == LintCheck::RailUnpowered)
+            .expect("a note names the unfitted source");
+        assert_eq!(note.severity, Severity::Low);
+        assert!(
+            note.message.contains("U1") && note.message.contains("J2"),
+            "{}",
+            note.message
+        );
+        let [entered, _] = conditions(parts);
+        let entered = entered.expect("condition");
+        assert!(
+            entered.contains("'+3V3' at 3.30 V through J2, its own source U1 not fitted"),
+            "{entered}"
+        );
+    }
+
+    /// Legal control: an unfitted alternate regulator beside a fitted one
+    /// (two footprints, one fitted) leaves the rail driven: silent.
+    #[test]
+    fn unfitted_alternate_beside_a_fitted_regulator_is_silent() {
+        let mut alt = ldo();
+        alt.reference = "U9".into();
+        let found = run(vec![usb(), ldo(), dnp(alt), sensor("U2", V3)]);
+        assert!(
+            found.iter().all(|f| f.check != LintCheck::RailUnpowered),
+            "{found:#?}"
+        );
+    }
+
+    /// Faulty: the ferrite joining +3V3A to the regulated +3V3 is not fitted,
+    /// so the analog rail is an island.
+    #[test]
+    fn unfitted_ferrite_cuts_a_rail_island() {
+        let found = run(vec![
+            usb(),
+            ldo(),
+            sensor("U2", V3),
+            dnp(part("FB1", "600R@100MHz", &[("1", V3), ("2", AV)])),
+            sensor("U3", AV),
+        ]);
+        let g = gating(&found);
+        assert_eq!(g.len(), 1, "{found:#?}");
+        let m = &g[0].message;
+        assert!(m.contains("'+3V3A' never comes up"), "{m}");
+        assert!(
+            m.contains("FB1 (600R@100MHz), the link that joins it to '+3V3'"),
+            "{m}"
+        );
+        assert!(m.contains("U3"), "{m}");
+    }
+
+    /// Faulty: an unfitted inductor link whose value names no part ("DNP",
+    /// as many boards mark it) still cuts the island off.
+    #[test]
+    fn unfitted_inductor_valued_dnp_cuts_a_rail_island() {
+        let found = run(vec![
+            usb(),
+            ldo(),
+            sensor("U2", V3),
+            dnp(part("L5", "DNP", &[("1", V3), ("2", AV)])),
+            sensor("U3", AV),
+        ]);
+        let g = gating(&found);
+        assert_eq!(g.len(), 1, "{found:#?}");
+        let m = &g[0].message;
+        assert!(m.contains("'+3V3A' never comes up"), "{m}");
+        assert!(m.contains("L5"), "{m}");
+    }
+
+    /// Faulty: the ferrite from a connector's supply pin (a net whose name
+    /// states no voltage) to +3V3A is not fitted: the island never comes up
+    /// although the connector side is unpowered in the analysis too.
+    #[test]
+    fn unfitted_ferrite_from_a_connector_net_cuts_a_rail_island() {
+        let found = run(vec![
+            part("J3", "Conn_01x02", &[("1", EXT), ("2", GND)]),
+            dnp(part("FB1", "600R@100MHz", &[("1", EXT), ("2", AV)])),
+            sensor("U3", AV),
+        ]);
+        let g = gating(&found);
+        assert_eq!(g.len(), 1, "{found:#?}");
+        assert!(
+            g[0].message.contains("joins it to 'VEXT'"),
+            "{}",
+            g[0].message
+        );
+    }
+
+    /// Legal control: the same ferrite fitted, the island comes in through J3.
+    #[test]
+    fn fitted_ferrite_from_a_connector_net_is_not_gating() {
+        let found = run(vec![
+            part("J3", "Conn_01x02", &[("1", EXT), ("2", GND)]),
+            part("FB1", "600R@100MHz", &[("1", EXT), ("2", AV)]),
+            sensor("U3", AV),
+        ]);
+        assert!(gating(&found).is_empty(), "{found:#?}");
+    }
+
+    /// Legal control: the same ferrite fitted joins the island to +3V3.
+    #[test]
+    fn fitted_ferrite_is_silent() {
+        let found = run(vec![
+            usb(),
+            ldo(),
+            sensor("U2", V3),
+            part("FB1", "600R@100MHz", &[("1", V3), ("2", AV)]),
+            sensor("U3", AV),
+        ]);
+        assert!(
+            found.iter().all(|f| f.check != LintCheck::RailUnpowered),
+            "{found:#?}"
+        );
+    }
+
+    /// Legal control: the island has its own fitted (unmodelled) source, a part
+    /// with an output pin on it: may be powered, so never gating.
+    #[test]
+    fn unfitted_link_beside_an_unmodelled_source_is_not_gating() {
+        let mut src = part("U4", "ZZ9000", &[("1", VBUS), ("2", GND), ("3", AV)]);
+        src.pins[2].function = "OUT".into();
+        let found = run(vec![
+            usb(),
+            ldo(),
+            dnp(part("FB1", "600R@100MHz", &[("1", V3), ("2", AV)])),
+            sensor("U3", AV),
+            src,
+        ]);
+        assert!(gating(&found).is_empty(), "{found:#?}");
+    }
+
+    /// Faulty: every rail of the board is gone (its only supply net shorted
+    /// into GND), so nothing was judged: the not-judged note, never a bare pass.
+    #[test]
+    fn a_board_with_no_powered_rail_is_not_judged() {
+        let found = run(vec![
+            part("J1", "Conn_01x02", &[("1", GND), ("2", GND)]),
+            sensor("U2", GND),
+            sensor("U3", GND),
+        ]);
+        let note = found
+            .iter()
+            .find(|f| f.check == LintCheck::RailUnpowered)
+            .expect("the not-judged note");
+        assert!(
+            hauksbee_models::rating_basis::is_not_judged(&note.message),
+            "{}",
+            note.message
+        );
+        assert!(note.message.contains("U2, U3"), "{}", note.message);
+    }
+
+    /// Legal control: the same parts on a named rail from the connector are
+    /// judged: no not-judged note.
+    #[test]
+    fn a_board_with_a_powered_rail_has_no_not_judged_note() {
+        let found = run(vec![
+            part("J1", "Conn_01x02", &[("1", V3), ("2", GND)]),
+            sensor("U2", V3),
+            sensor("U3", V3),
+        ]);
+        assert!(
+            found.iter().all(|f| f.check != LintCheck::RailUnpowered),
+            "{found:#?}"
+        );
+    }
+
+    /// A rail with no entry and no unfitted source is held by its name: a
+    /// condition naming what may source it, never a finding.
+    #[test]
+    fn a_rail_nothing_modelled_sources_is_a_held_condition() {
+        let mut src = part("U4", "ZZ9000", &[("1", GND), ("2", V3), ("3", SDA)]);
+        src.pins[1].function = "VOUT".into();
+        let parts = vec![src, sensor("U2", V3)];
+        assert!(run(parts.clone())
+            .iter()
+            .all(|f| f.check != LintCheck::RailUnpowered));
+        let [entered, held] = conditions(parts);
+        assert!(entered.is_none(), "{entered:?}");
+        let held = held.expect("held condition");
+        assert!(
+            held.contains("'+3V3' at 3.30 V (possible source: U4)"),
+            "{held}"
+        );
+    }
+}
