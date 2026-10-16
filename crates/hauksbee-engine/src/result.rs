@@ -3117,7 +3117,7 @@ impl JsonReport {
                 !self
                     .waived
                     .iter()
-                    .any(|w| w.check == f.check && w.kind == f.kind && w.subject == f.message)
+                    .any(|w| [&w.check, &w.kind, &w.subject] == [&f.check, &f.kind, &f.message])
             })
             .cloned()
             .collect();
@@ -3282,6 +3282,16 @@ fn severity_specific_fix_hint(check: LintCheck, severity: Severity) -> Option<&'
     )
 }
 
+/// The suggested fix of a schematic/PCB disagreement: below High it is a
+/// part-identity disagreement, not moved wiring.
+fn pcb_schematic_fix_hint(severity: Severity) -> &'static str {
+    if severity == Severity::High {
+        "Update the PCB from the schematic, re-route the changed pins, and re-check."
+    } else {
+        "Confirm which part is intended and, if the schematic's is right, update the PCB from it, then re-check."
+    }
+}
+
 /// The suggested fix of a polarity finding (a swapped supply and ground pin, a diode or a
 /// polarised capacitor fitted backwards).
 const fn polarity_fix_hint(check: LintCheck) -> &'static str {
@@ -3328,11 +3338,7 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::UnroutedPad => {
             "Route the unconnected pads to their net (or refill the zones) until KiCad DRC reports no unconnected items."
         }
-        // Below High is a part-identity disagreement, not moved wiring.
-        LintCheck::PcbSchematicMismatch if severity != Severity::High => "Confirm which part is intended and, if the schematic's is right, update the PCB from it, then re-check.",
-        LintCheck::PcbSchematicMismatch => {
-            "Update the PCB from the schematic, re-route the changed pins, and re-check."
-        }
+        LintCheck::PcbSchematicMismatch => pcb_schematic_fix_hint(severity),
         LintCheck::StrapPin => {
             "Hold the strap net at the datasheet's required reset level with a pull resistor; keep active signals off it until after boot."
         }

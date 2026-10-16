@@ -71,9 +71,10 @@ pub const MORE_ABSTENTIONS: &str =
     "{n} more checks could not judge the part or net they cover ({subjects}); each is listed \
      among the findings with what it needs.";
 
-/// How the pass condition naming checks this run did not judge opens: a
-/// check that could not run on these inputs, or a part of the board the run
-/// never exercised. Grouped by their glossary label ("Not checked (drc)").
+/// How the pass condition naming checks this run did not judge opens.
+///
+/// A check that could not run on these inputs, or a part of the board the
+/// run never exercised, grouped by glossary label ("Not checked (drc)").
 pub const NOT_JUDGED_BY_RUN_LEAD: &str =
     "Not judged by this run, so finding nothing there is no evidence that nothing is wrong";
 

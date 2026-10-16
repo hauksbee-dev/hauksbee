@@ -275,10 +275,12 @@ fn refuse_timing_claims(results: &mut [assertions::AssertResult], refusals: &[St
 }
 
 /// The conditions the assertions' evidence implies, worded as every engine
-/// surface words them: the assumptions some evidence map cites, minus the
-/// member-sweep records built from `stated` (already said, in its own words).
+/// surface words them: the assumptions cited by the evidence map of an
+/// assertion not in `waived`, minus the member-sweep records built from
+/// `stated` (already said, in its own words).
 fn evidence_conditions(
     evidence: &hauksbee_engine::BoardEvidence,
+    waived: &std::collections::BTreeSet<&str>,
     stated: &[String],
 ) -> Vec<String> {
     let norm = |s: &str| s.trim().trim_end_matches('.').to_ascii_lowercase();
@@ -286,6 +288,7 @@ fn evidence_conditions(
     let cited: std::collections::BTreeSet<&hauksbee_ir::evidence::AssumptionId> = evidence
         .maps()
         .iter()
+        .filter(|m| !waived.contains(m.assertion()))
         .flat_map(|m| m.assumptions().iter())
         .collect();
     let on_path: Vec<Assumption> = evidence
@@ -877,9 +880,14 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     // What the assertions' evidence rests on, in the words every engine
     // surface gives it (`verdict_conditions::assumption_conditions`): parts
     // with no model, model-fidelity assumptions, checks not run. Only the
-    // assumptions some assertion's evidence cites, and not the member-sweep
-    // records made above from the conditions already stated.
-    verdict_conditions.extend(evidence_conditions(&evidence, &verdict_conditions));
+    // assumptions the evidence of some unwaived assertion cites (a waived
+    // one is listed with its waiver), and not the member-sweep records made
+    // above from the conditions already stated.
+    let waived: std::collections::BTreeSet<&str> = (results.iter())
+        .filter(|r| r.waived.is_some())
+        .map(|r| r.label.as_str())
+        .collect();
+    verdict_conditions.extend(evidence_conditions(&evidence, &waived, &verdict_conditions));
     verdict_conditions.dedup();
     Ok(CiResult {
         spec_name: spec.name.clone(),

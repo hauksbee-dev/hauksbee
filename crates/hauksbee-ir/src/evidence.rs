@@ -1572,7 +1572,7 @@ impl Assumption {
         }
         built.remedy = cause.remedy(&subject, &reference, &value, reason);
         if !subject.is_empty() {
-            built.subject_name = Some(subject.clone());
+            built.subject_name = Some(subject);
         }
         built.checked()
     }

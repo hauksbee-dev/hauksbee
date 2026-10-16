@@ -299,12 +299,12 @@ fn open_part_count(a: &Assumption) -> usize {
     }
 }
 
-/// The conditions a pass rests on that `assumptions` imply, one per kind of
-/// gap, in a stable order: parts with no model, the modelling assumptions,
-/// what the run did not judge, reader gaps, then parts assumed fitted. Empty
-/// when the assumptions leave nothing unjudged. `hauksbee-ci` reads this for
-/// the assumptions on its assertions' paths, so every surface words them the
-/// same.
+/// The conditions a pass rests on that `assumptions` imply, one per kind of gap.
+///
+/// In a stable order: parts with no model, the modelling assumptions, what
+/// the run did not judge, reader gaps, then parts assumed fitted. Empty when
+/// the assumptions leave nothing unjudged. `hauksbee-ci` reads this for the
+/// assumptions on its assertions' paths, so every surface words them the same.
 #[must_use]
 pub fn assumption_conditions(assumptions: &[Assumption]) -> Vec<String> {
     // A part swept across its assumed corners is stated by its own condition,
