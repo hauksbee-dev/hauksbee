@@ -73,7 +73,7 @@ enum Kind {
 
 impl Kind {
     /// What the part does while the pin is held off.
-    fn consequence(self) -> &'static str {
+    const fn consequence(self) -> &'static str {
         match self {
             Self::Enable => "the part is never enabled and everything it drives stays dead",
             Self::Reset => "the part is held in reset and never runs",
@@ -81,7 +81,7 @@ impl Kind {
     }
 
     /// The level the pin needs to be released.
-    fn on_level(self) -> &'static str {
+    const fn on_level(self) -> &'static str {
         match self {
             Self::Enable => "enable level",
             Self::Reset => "reset-released level",

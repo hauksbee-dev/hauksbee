@@ -392,15 +392,17 @@ fn judge(
         pin.function.trim().to_string()
     };
     let net = pin.net.filter(|id| *id != 0);
-    let mut survey = Survey::default();
-    if let Some(en) = net {
-        // Tied to the input (on for an on-high pin) or to its off rail (a
-        // deliberate choice the bind report already names): not judged.
-        if en == input || reg.is_off_rail(board, Some(en)) {
-            return None;
+    let survey = match net {
+        Some(en) => {
+            // Tied to the input (on for an on-high pin) or to its off rail (a
+            // deliberate choice the bind report already names): not judged.
+            if en == input || reg.is_off_rail(board, Some(en)) {
+                return None;
+            }
+            survey_net(board, &reg, (comp, &pin.number), (en, models))?
         }
-        survey = survey_net(board, &reg, (comp, &pin.number), (en, models))?;
-    }
+        None => Survey::default(),
+    };
     let Survey {
         held,
         pulls,
@@ -620,6 +622,34 @@ mod tests {
         let found = mic5205(MIC, Some(EN), vec![q]);
         assert_eq!(found.len(), 1, "{found:#?}");
         says(&found[0], &["Q1's collector"]);
+    }
+
+    /// A pull-down to the off level with a header as the only thing that can
+    /// raise the pin is a stated note (Medium), not a failing finding: the
+    /// header may carry an enable. The same header with no pull-down is an
+    /// external enable input, silent (the legal control above).
+    #[test]
+    fn a_pull_down_and_a_header_is_a_note_not_a_failure() {
+        let pull = part("R1", "100k", &[("1", EN), ("2", GND)]);
+        let header = part("JP3", "Conn_01x02", &[("1", EN), ("2", GND)]);
+        let found = mic5205(MIC, Some(EN), vec![pull, header]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        let f = &found[0];
+        assert_eq!(f.severity, Severity::Medium);
+        says(
+            f,
+            &[
+                "which holds only R1 to 'GND'",
+                "the only thing on it that can raise it is JP3, an off-board source",
+                "output '+3V3' (3.30 V) never comes on",
+            ],
+        );
+        assert!(f.own_remedy().is_some(), "{}", f.message);
+        // A ferrite bead or inductor to ground is a 0 ohm pull-down too.
+        let bead = part("FB1", "BLM18", &[("1", EN), ("2", GND)]);
+        let found = mic5205(MIC, Some(EN), vec![bead]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, Severity::High);
     }
 
     /// A card that does not say what an open pin does is never read as off,
