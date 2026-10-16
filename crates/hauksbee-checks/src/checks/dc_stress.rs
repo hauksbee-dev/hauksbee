@@ -669,7 +669,11 @@ fn held_to_capability(
     let real = settle(bound).map(|x| {
         let (still, _, _, stand_in) = judge(bound, &x);
         let mut conditions = BTreeMap::new();
-        note_stand_in(&mut conditions, stand_in);
+        // A part past only an assumed floor is no part of `found`, so it has no
+        // held condition to give here; its unstated-rating note is the unheld
+        // judge's (which saw the same part at no less), kept by the caller.
+        let mut unstated = BTreeMap::new();
+        note_stand_in(&mut conditions, &mut unstated, stand_in);
         (
             still.into_iter().map(|(part, ..)| part).collect(),
             conditions,
