@@ -31,6 +31,7 @@ use hauksbee_models::{
 
 use super::BoardStatics;
 use hauksbee_bind::binder::{is_ground, power_rail_voltage, resolve};
+use hauksbee_models::netclass::unreadable_rail_name;
 
 /// The complete DC interval a net can present during normal operation.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -840,6 +841,12 @@ fn unknown_abstention(net_name: &str, knowledge: &RailKnowledge, reference: &str
         format!(
             "operating envelope on net '{net_name}' abstained: the topology identifies a battery net but no charger card declares its chemistry; add battery_chemistry and the sourced charge-voltage range to the charger model"
         )
+    } else if let Some(why) = unreadable_rail_name(net_name) {
+        // The name looks like it states a voltage; say why no level is taken
+        // from it, so a typo'd rail is not mistaken for an unlabelled one.
+        format!(
+            "operating envelope on net '{net_name}' abstained: its name {why}, so no level is assumed from it; declare the level with a net_drive, or bind the regulator that defines this net, or rename the net to a plain form such as +5V or +3V3"
+        )
     } else {
         format!(
             "operating envelope on net '{net_name}' abstained: declare the level with a net_drive, or bind the regulator that defines this net"
@@ -1306,9 +1313,46 @@ fn envelope_lint_with_tolerance(
             .findings
             .extend(supply_abs_max_findings(comp, model, &resolver));
     }
+    report.findings.extend(unreadable_name_abstentions(
+        board,
+        &resolver,
+        &abstained_nets,
+    ));
     fold_starved_rails(&resolver, starved, &mut report);
     estimate_starved_rails(&resolver, st, &unleveled, &mut report);
     report
+}
+
+/// One abstention per supply net whose name seems to state a voltage it does
+/// not state readably (`+1KV`, `+1E3V`, `+5V5V`, `+1V8_3V3`) and whose level
+/// nothing else defines, on every board, whether or not any part on it has an
+/// operating envelope. Without this the same typo is a visible note on a board
+/// with an enveloped part and silent on one without. `already` holds the nets
+/// a part's envelope has abstained on.
+fn unreadable_name_abstentions(
+    board: &ExtractedBoard,
+    resolver: &RailResolver<'_>,
+    already: &BTreeSet<i64>,
+) -> Vec<LintFinding> {
+    board
+        .nets
+        .iter()
+        .filter(|net| !already.contains(&net.id) && unreadable_rail_name(&net.name).is_some())
+        .filter(|net| matches!(resolver.range(net.id), RailKnowledge::Unknown))
+        .filter_map(|net| {
+            let reference = board
+                .components
+                .iter()
+                .filter(|c| c.pins.iter().any(|p| p.net == Some(net.id)))
+                .map(|c| c.reference.as_str())
+                .min()?;
+            Some(unknown_abstention(
+                &net.name,
+                &RailKnowledge::Unknown,
+                reference,
+            ))
+        })
+        .collect()
 }
 
 /// Card pin-map roles that feed an IC's own supply domain: the pins its
@@ -3123,5 +3167,50 @@ unlocked_by = "validated behavior"
         .and_then(|o| o.apply_to_board(&mut b))
         .unwrap();
         assert!(starved(&envelope_lint(&b, &lib)).is_empty());
+    }
+    /// A supply net whose name seems to state a voltage it does not state
+    /// readably is named on every board, whether or not a part on it has an
+    /// operating envelope: the same typo was a visible note beside an
+    /// enveloped part and silent on a board of plain resistors.
+    #[test]
+    fn an_unreadable_rail_name_is_an_abstention_on_a_board_with_no_enveloped_part() {
+        let lint = |rail: &str| {
+            let loads = vec![
+                part("R1", "10k", vec![pin("1", 2), pin("2", 1)]),
+                part("R2", "10k", vec![pin("1", 2), pin("2", 1)]),
+            ];
+            envelope_lint(
+                &board(&[(1, "GND"), (2, rail)], loads),
+                &ModelLibrary::builtin(),
+            )
+            .of_check(LintCheck::OperatingEnvelope)
+            .cloned()
+            .collect::<Vec<_>>()
+        };
+        for (rail, why) in [
+            ("+1KV", "scale prefix"),
+            ("+5mV", "scale prefix"),
+            ("+1e3V", "exponent"),
+            ("VCC_1E3V", "exponent"),
+            ("+5V5V", "second V"),
+            ("+1V8_3V3", "two voltages"),
+        ] {
+            let found = lint(rail);
+            assert_eq!(found.len(), 1, "{rail}: {found:?}");
+            assert_eq!(found[0].severity, Severity::Low);
+            assert!(found[0].is_abstention(), "{rail}: {}", found[0].message);
+            assert!(
+                found[0].message.contains(why),
+                "{rail}: {}",
+                found[0].message
+            );
+            assert_eq!(found[0].nets, vec![rail.to_string()]);
+            assert_eq!(found[0].refs, vec!["R1".to_string()]);
+        }
+        // Legal controls: a readable name, a name that states nothing, and a
+        // tap named after a rail say nothing here.
+        for rail in ["+5V", "+3V3_3V3", "VDD", "+12V_FB", "+1KV_EN"] {
+            assert!(lint(rail).is_empty(), "{rail}: {:?}", lint(rail));
+        }
     }
 }

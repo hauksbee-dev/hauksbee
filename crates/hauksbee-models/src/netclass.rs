@@ -127,6 +127,15 @@ pub fn rail_voltage(name: &str) -> Option<f64> {
             if name_is_rail_monitor_tap(&n) || has_signal_role_token(&n) {
                 return None;
             }
+            // A name that states a voltage in a form this reader cannot take
+            // at face value (`+1KV`, `+1E3V`, `+5V5V`, `+1V8_3V3`) states none:
+            // every one of the fallbacks below would pick a number out of it
+            // (1E3V as 3 V, 5V5V as 5.5 V, 1V8_3V3 as 1.8 V) and judge the
+            // board against a level the name does not give. [`unreadable_rail_name`]
+            // says why, so the abstention is visible.
+            if scan_voltage_tokens(&n).is_err() {
+                return None;
+            }
             // '-'-prefixed rails first: "-5V_ANALOG" must resolve negative.
             let supply_token =
                 n.starts_with('+') || n.contains("VCC") || n.contains("VBUS") || n.contains("VDD");
@@ -149,6 +158,140 @@ pub fn rail_voltage(name: &str) -> Option<f64> {
                 })
         }
     }
+}
+
+/// Why a supply-looking net name that states a voltage cannot be read as one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum NameProblem {
+    /// A scale or unit prefix (`1KV`, `5MV`) or an exponent (`1E3V`): a rail
+    /// name does not carry those, and `5mV` and `5MV` are the same upper-cased
+    /// text a thousand million times apart.
+    Scale,
+    /// A second `V` straight after the voltage token (`5V5V`): read as 5 V then
+    /// `5V`, or as `5V5` (5.5 V) then `V`.
+    DoubledV,
+    /// Two different voltages in one name (`1V8_3V3`, `3V3_5V`).
+    TwoVoltages(f64, f64),
+}
+
+impl NameProblem {
+    fn describe(self) -> String {
+        match self {
+            Self::Scale => "carries a scale prefix or exponent (kV, mV, E3) in front of its V, \
+                 which a rail name does not state unambiguously"
+                .to_string(),
+            Self::DoubledV => {
+                "has a second V straight after its voltage, which reads as either of two levels"
+                    .to_string()
+            }
+            Self::TwoVoltages(a, b) => format!("names two voltages ({a} V and {b} V)"),
+        }
+    }
+}
+
+/// Every voltage token in an upper-cased leaf (`3V3`, `12V`, `3.3V`), or the
+/// reason the name cannot be read as stating one voltage.
+///
+/// A token is a run of digits (optionally dotted) followed by `V` and, for the
+/// digit-V-digit form, the fraction digits. `1E3V` (exponent), `1KV` / `5MV`
+/// (scale prefix), a token followed straight by another `V` (`5V5V`) and two
+/// different tokens in one name are all refused: the readers below would
+/// otherwise each pick a number out of them.
+fn scan_voltage_tokens(n: &str) -> Result<Vec<f64>, NameProblem> {
+    let b = n.as_bytes();
+    let mut values: Vec<f64> = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if !b[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        let mut dotted = false;
+        if i + 1 < b.len() && b[i] == b'.' && b[i + 1].is_ascii_digit() {
+            dotted = true;
+            i += 1;
+            while i < b.len() && b[i].is_ascii_digit() {
+                i += 1;
+            }
+        }
+        let head = &n[start..i];
+        match b.get(i) {
+            Some(b'V') => {
+                i += 1;
+                let frac_start = i;
+                while i < b.len() && b[i].is_ascii_digit() {
+                    i += 1;
+                }
+                let text = if dotted || i == frac_start {
+                    // Digits after a dotted token (`3.3V3`) are a new run.
+                    i = frac_start;
+                    head.to_string()
+                } else {
+                    format!("{head}.{}", &n[frac_start..i])
+                };
+                if b.get(i) == Some(&b'V') {
+                    return Err(NameProblem::DoubledV);
+                }
+                if let Ok(v) = text.parse::<f64>() {
+                    values.push(v);
+                }
+            }
+            Some(b'E') => {
+                let mut j = i + 1;
+                if matches!(b.get(j), Some(b'+' | b'-')) {
+                    j += 1;
+                }
+                let digits = j;
+                while j < b.len() && b[j].is_ascii_digit() {
+                    j += 1;
+                }
+                if j > digits && b.get(j) == Some(&b'V') {
+                    return Err(NameProblem::Scale);
+                }
+            }
+            Some(b'K' | b'M' | b'U' | b'N' | b'G')
+                if b.get(i + 1) == Some(&b'V')
+                    && !b.get(i + 2).is_some_and(u8::is_ascii_alphabetic) =>
+            {
+                return Err(NameProblem::Scale);
+            }
+            _ => {}
+        }
+    }
+    let mut distinct: Vec<f64> = Vec::new();
+    for v in values {
+        if !distinct.iter().any(|d| (d - v).abs() < 1e-9) {
+            distinct.push(v);
+        }
+    }
+    if let [a, b, ..] = distinct[..] {
+        return Err(NameProblem::TwoVoltages(a, b));
+    }
+    Ok(distinct)
+}
+
+/// Why a supply-looking net name that seems to state a voltage cannot be read
+/// as one, or `None` when it reads fine, states none, or is not a supply.
+///
+/// `+1KV`, `+5mV`, `+1E3V`, `VCC_1E3V`, `+5V5V`, `+1V8_3V3`: [`rail_voltage`]
+/// returns `None` for each, so no check may judge a part against a level the
+/// name does not give. The sentence is for the abstention note, which every
+/// board with such a net carries whatever parts hang off it.
+#[must_use]
+pub fn unreadable_rail_name(name: &str) -> Option<String> {
+    let n = leaf(name);
+    if is_ground(name) || name_is_rail_monitor_tap(&n) || has_signal_role_token(&n) {
+        return None;
+    }
+    let problem = scan_voltage_tokens(&n).err()?;
+    let supplyish = n.starts_with(['+', '-'])
+        || n.starts_with(|c: char| c.is_ascii_digit())
+        || SUPPLY_TOKENS.iter().any(|t| n.contains(t));
+    supplyish.then(|| problem.describe())
 }
 
 /// Supply tokens a net name can carry without stating a voltage.
@@ -194,7 +337,12 @@ pub fn names_a_supply_of_unknown_voltage(name: &str) -> bool {
         return false;
     }
     // A leading '+' is `KiCad`'s power-symbol convention (`+BATT`, `+VDC`).
-    n.starts_with('+') || SUPPLY_TOKENS.iter().any(|t| n.contains(t))
+    n.starts_with('+')
+        || SUPPLY_TOKENS.iter().any(|t| n.contains(t))
+        // A name that states a voltage it cannot be read for (`3V3_5V`, `1E3V`)
+        // is still a supply, of unknown voltage. A '-' lead says nothing of the
+        // polarity of an unreadable level, so it claims no positive supply.
+        || (!n.starts_with('-') && unreadable_rail_name(name).is_some())
 }
 
 /// A name that may be a supply: [`is_supply`], or any other `V`-led name
@@ -372,6 +520,7 @@ fn is_rail_monitor_suffix(tail: &str) -> bool {
 mod tests {
     use super::{
         is_canonical_ground, is_ground, is_supply, names_a_supply_of_unknown_voltage, rail_voltage,
+        unreadable_rail_name,
     };
 
     /// What each class means, by name. One row per decision, with its reason.
@@ -513,6 +662,42 @@ mod tests {
         ("VDD_A", Supply, "analog supply, unknown"),
         ("VMOT", Supply, "motor supply, unknown"),
         ("+BATT", Supply, "a '+' power symbol of unknown voltage"),
+        // Names that look like a voltage but do not state one readably: the
+        // supply stays a supply of unknown voltage, never a guessed number.
+        ("+1KV", Supply, "kV or a typo: scale prefixes are not read"),
+        ("+12KV", Supply, "kV or a typo: scale prefixes are not read"),
+        ("+5mV", Supply, "mV and MV upper-case alike: never read"),
+        ("+1e3V", Supply, "an exponent, not the 3 V it ends in"),
+        ("VCC_1E3V", Supply, "an exponent, not the 3 V it ends in"),
+        ("+5V5V", Supply, "5 V twice or 5.5 V then V: ambiguous"),
+        ("+1V8_3V3", Supply, "two voltages: not the first one"),
+        ("3V3_5V", Supply, "two voltages: not the first one"),
+        ("VDD_3V3_1V8", Supply, "two voltages: not the first one"),
+        (
+            "5V5V",
+            Supply,
+            "a digit-led name keeps being a supply, of unknown voltage",
+        ),
+        (
+            "1E3V",
+            Supply,
+            "a digit-led exponent is a supply of unknown voltage",
+        ),
+        (
+            "-1KV",
+            Signal,
+            "no polarity can be read: no positive-supply claim",
+        ),
+        // The same shapes done legally keep reading.
+        ("+3V3_3V3", Rail(3.3), "the same voltage twice states one"),
+        ("+5VSB", Rail(5.0), "standby suffix, one voltage"),
+        ("+5V_USB1", Rail(5.0), "a port number after the voltage"),
+        ("VDD_1V8_PLL", Rail(1.8), "domain suffix, one voltage"),
+        (
+            "+1V8",
+            Rail(1.8),
+            "plain form of the two-voltage fault above",
+        ),
         // Signals named after rails.
         (
             "SDA_3V3",
@@ -609,6 +794,43 @@ mod tests {
                 super::negative_rail_fallback(&format!("-{magnitude}")),
                 None
             );
+        }
+    }
+
+    /// Every unreadable supply name is described, so the abstention note can
+    /// say why; a name that reads fine, states nothing or is not a supply is not.
+    #[test]
+    fn an_unreadable_rail_name_says_why_and_a_legal_one_says_nothing() {
+        for (name, words) in [
+            ("+1KV", "scale prefix"),
+            ("+12KV", "scale prefix"),
+            ("+5mV", "scale prefix"),
+            ("+1e3V", "exponent"),
+            ("VCC_1E3V", "exponent"),
+            ("+5V5V", "second V"),
+            ("+1V8_3V3", "two voltages (1.8 V and 3.3 V)"),
+            ("/power/3V3_5V", "two voltages (3.3 V and 5 V)"),
+        ] {
+            let why = unreadable_rail_name(name).unwrap_or_default();
+            assert!(why.contains(words), "{name}: {why:?}");
+            assert_eq!(rail_voltage(name), None, "{name} must not be guessed");
+        }
+        for name in [
+            "+5V",
+            "+3V3",
+            "+3V3_3V3",
+            "+5VSB",
+            "VDD",
+            "VBAT",
+            "GND",
+            "+12V_FB",
+            "+1KV_EN",
+            "SDA_3V3_5V",
+            "+1V8",
+            "-5V",
+            "VBUS_65V",
+        ] {
+            assert_eq!(unreadable_rail_name(name), None, "{name}");
         }
     }
 
