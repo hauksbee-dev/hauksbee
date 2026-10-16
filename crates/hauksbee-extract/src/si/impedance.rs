@@ -329,6 +329,10 @@ pub enum ImpedanceClass {
     /// Ethernet MDI / other 100 ohm differential pair.
     EthernetDiff,
     /// A `DisplayPort` / `eDP` / HDMI (TMDS) / LVDS lane: 100 ohm differential.
+    ///
+    /// Sources (vendor datasheets): TI SN65DSI86 (SLLSEH2C) section 11.1.2, eDP: "ML*P/N pairs should be routed with
+    /// controlled 100-Ω differential impedance (± 20%)"; TI TMDS181 (HDMI) test-fixture note: "100-Ω differential
+    /// impedance"; TI SN65LVDS93B (LVDS): recommended differential load impedance 90 to 132 ohm, tested at RL = 100 ohm.
     DisplayDiff,
     /// A generic single-ended 50 ohm high-speed line.
     SingleEnded50,

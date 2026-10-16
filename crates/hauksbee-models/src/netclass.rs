@@ -317,7 +317,12 @@ pub fn names_a_supply_of_unknown_voltage(name: &str) -> bool {
         return false;
     }
     // A leading '+' is `KiCad`'s power-symbol convention (`+BATT`, `+VDC`).
-    n.starts_with('+') || SUPPLY_TOKENS.iter().any(|t| n.contains(t))
+    n.starts_with('+')
+        || SUPPLY_TOKENS.iter().any(|t| n.contains(t))
+        // A name that states a voltage it cannot be read for (`3V3_5V`, `1E3V`)
+        // is still a supply, of unknown voltage. A '-' lead says nothing of the
+        // polarity of an unreadable level, so it claims no positive supply.
+        || (!n.starts_with('-') && unreadable_rail_name(name).is_some())
 }
 
 /// A name that may be a supply: [`is_supply`], or any other `V`-led name
@@ -640,6 +645,21 @@ mod tests {
         ("+1V8_3V3", Supply, "two voltages: not the first one"),
         ("3V3_5V", Supply, "two voltages: not the first one"),
         ("VDD_3V3_1V8", Supply, "two voltages: not the first one"),
+        (
+            "5V5V",
+            Supply,
+            "a digit-led name keeps being a supply, of unknown voltage",
+        ),
+        (
+            "1E3V",
+            Supply,
+            "a digit-led exponent is a supply of unknown voltage",
+        ),
+        (
+            "-1KV",
+            Signal,
+            "no polarity can be read: no positive-supply claim",
+        ),
         // The same shapes done legally keep reading.
         ("+3V3_3V3", Rail(3.3), "the same voltage twice states one"),
         ("+5VSB", Rail(5.0), "standby suffix, one voltage"),
