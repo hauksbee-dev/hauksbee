@@ -70,6 +70,9 @@ something that is not there.
 
 A second existing board, Blinky, is the clean control. Its one critical active
 device is executable, so its model-dependent sections may earn a clean verdict.
+That verdict is conditional, and says on what: its copper was judged against
+default spacing rules, and its +5V rail, which nothing on the board sources and
+no connector brings in, was held at its named voltage.
 That control keeps "inconclusive" from becoming a blanket outcome while making
 no claim that Watchy's unsupported supervisor is modelled. The distinct clean
 verdict with informational SI notes is covered by the existing plain-report

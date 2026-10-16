@@ -246,11 +246,16 @@ impl StampPlan {
                     // tc1 resistors depend on options.temperature (not known at
                     // compile time), so they stay interpreted-with-resolved-
                     // slots. A non-positive resistance is a SHORT, clamped to
-                    // the same 1e-6 Ω floor as the interpreted stamp so both
-                    // assemblies agree (skipping it here would turn a 0-Ω
-                    // jumper into an open on the planned path only).
+                    // the same `MIN_RESISTANCE_OHMS` floor as the interpreted
+                    // stamp so both assemblies agree (skipping it here would
+                    // turn a 0-Ω jumper into an open on the planned path only).
                     if tc1.is_none() {
-                        push_pair(&mut cond_ops, *a, *b, 1.0 / ohms.max(1e-6));
+                        push_pair(
+                            &mut cond_ops,
+                            *a,
+                            *b,
+                            1.0 / ohms.max(hauksbee_ir::MIN_RESISTANCE_OHMS),
+                        );
                     } else {
                         restamp.push(Restamp::Slotted {
                             id,

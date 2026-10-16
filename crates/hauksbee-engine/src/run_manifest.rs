@@ -204,6 +204,17 @@ pub struct Outcome {
     pub gating_findings: Vec<String>,
 }
 
+/// What a replayed run hands back to `reproduce` through the outcome file: its
+/// [`Outcome`] plus the error message when it ended in one. The message is for
+/// the person reading the DIFF; it is never written into a manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ReplayOutcome {
+    #[serde(flatten)]
+    outcome: Outcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Invocation {
     pub argv: Vec<String>,
@@ -264,6 +275,7 @@ impl RunManifest {
         }
         let root = fs::canonicalize(root)
             .with_context(|| format!("resolving project root '{}'", root.display()))?;
+        let root = simplify_verbatim(&root);
         request.feature_flags.sort();
         request.feature_flags.dedup();
 
@@ -785,14 +797,20 @@ pub fn reproduce(path: &Path) -> Result<()> {
     };
     // A replay that died before reaching its end-of-run hook left nothing in the
     // file; the exit code alone still compares.
-    let observed = fs::read(outcome_file.path())
+    let ReplayOutcome {
+        outcome: observed,
+        error,
+    } = fs::read(outcome_file.path())
         .ok()
-        .and_then(|bytes| serde_json::from_slice::<Outcome>(&bytes).ok())
-        .unwrap_or_else(|| Outcome {
-            verdict: outcome_verdict(&manifest.tool.name, code, false).to_string(),
-            exit_code: code,
-            record_sha256: None,
-            gating_findings: Vec::new(),
+        .and_then(|bytes| serde_json::from_slice::<ReplayOutcome>(&bytes).ok())
+        .unwrap_or_else(|| ReplayOutcome {
+            outcome: Outcome {
+                verdict: outcome_verdict(&manifest.tool.name, code, false).to_string(),
+                exit_code: code,
+                record_sha256: None,
+                gating_findings: Vec::new(),
+            },
+            error: None,
         });
     let differences = compare_outcomes(recorded, &observed);
     if differences.is_empty() {
@@ -811,6 +829,16 @@ pub fn reproduce(path: &Path) -> Result<()> {
         std::process::exit(0);
     }
     report_diff(&manifest, &differences);
+    if let Some(error) = error {
+        eprintln!("  the replayed run failed with: {error}");
+    } else if observed.verdict == "error" {
+        eprintln!(
+            "  the replayed run exited {code} without recording why; \
+             run `{}` in {} to see its message",
+            manifest.invocation.argv.join(" "),
+            root.display()
+        );
+    }
     std::process::exit(EXIT_REPRODUCE_DIFF);
 }
 
@@ -908,6 +936,7 @@ struct Pending {
     gating: BTreeMap<String, Vec<String>>,
     record_sha256: Option<String>,
     verdict: Option<&'static str>,
+    error: Option<String>,
     finished: bool,
 }
 
@@ -916,6 +945,7 @@ static PENDING: Mutex<Pending> = Mutex::new(Pending {
     gating: BTreeMap::new(),
     record_sha256: None,
     verdict: None,
+    error: None,
     finished: false,
 });
 
@@ -949,6 +979,12 @@ pub fn note_run_verdict(verdict: &'static str) {
     lock_pending().verdict = Some(verdict);
 }
 
+/// Hook for the error that ended the run. `reproduce` shows it beside a DIFF so
+/// an `error` verdict always says why; it is not stored in any manifest.
+pub fn note_run_error(message: impl Into<String>) {
+    lock_pending().error = Some(message.into());
+}
+
 /// Hook for the run record: once a run has written its record, pass the record's
 /// hex SHA-256 here and the manifest's outcome carries it.
 pub fn note_record_sha256(hex: impl Into<String>) {
@@ -960,7 +996,7 @@ pub fn note_record_sha256(hex: impl Into<String>) {
 /// code; it is reported on stderr.
 pub fn finish_outcome(tool: &str, exit_code: i32) {
     let outcome_file = std::env::var_os(OUTCOME_FILE_ENV).map(PathBuf::from);
-    let (manifest, outcome) = {
+    let (manifest, outcome, error) = {
         let mut pending = lock_pending();
         if pending.finished || (pending.manifest.is_none() && outcome_file.is_none()) {
             return;
@@ -988,10 +1024,14 @@ pub fn finish_outcome(tool: &str, exit_code: i32) {
             record_sha256: pending.record_sha256.take(),
             gating_findings: gating,
         };
-        (pending.manifest.take(), outcome)
+        (pending.manifest.take(), outcome, pending.error.take())
     };
     if let Some(file) = outcome_file {
-        if let Err(e) = serde_json::to_vec(&outcome)
+        let replay = ReplayOutcome {
+            outcome: outcome.clone(),
+            error,
+        };
+        if let Err(e) = serde_json::to_vec(&replay)
             .map_err(anyhow::Error::from)
             .and_then(|bytes| fs::write(&file, bytes).map_err(anyhow::Error::from))
         {
@@ -1037,10 +1077,50 @@ fn replace_with_outcome(path: &Path, manifest: &RunManifest) -> Result<()> {
 pub fn project_root() -> PathBuf {
     let cwd = std::env::current_dir()
         .and_then(fs::canonicalize)
-        .unwrap_or_else(|_| PathBuf::from("."));
+        .map_or_else(|_| PathBuf::from("."), |dir| simplify_verbatim(&dir));
     cwd.ancestors()
         .find(|dir| dir.join(".git").exists())
         .map_or_else(|| cwd.clone(), Path::to_path_buf)
+}
+
+/// `text` without a Windows verbatim prefix: `\\?\C:\x` is `C:\x` and
+/// `\\?\UNC\host\share\x` is `\\host\share\x`. Anything else, including verbatim
+/// forms with no ordinary spelling (`\\?\Volume{..}`), is returned unchanged.
+/// Pure text, so it behaves the same on every platform.
+fn strip_verbatim_prefix(text: &str) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return Cow::Owned(format!(r"\\{rest}"));
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if matches!(rest.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic()) => {
+            Cow::Borrowed(rest)
+        }
+        _ => Cow::Borrowed(text),
+    }
+}
+
+/// `path` with `canonicalize`'s Windows `\\?\` spelling replaced by the ordinary
+/// one, so it compares equal to `current_dir()` and to the paths a user types.
+/// A no-op for any path that has no such prefix.
+fn simplify_verbatim(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    match strip_verbatim_prefix(&text) {
+        std::borrow::Cow::Borrowed(stripped) if stripped.len() == text.len() => path.to_path_buf(),
+        stripped => PathBuf::from(stripped.into_owned()),
+    }
+}
+
+/// The canonical, ordinary-spelling form of `path` for comparing it with the
+/// project root: the path itself when it exists, else its parent plus the file
+/// name (an output that is not written yet). `None` when neither resolves.
+fn canonical_for_root(path: &Path) -> Option<PathBuf> {
+    if let Ok(resolved) = fs::canonicalize(path) {
+        return Some(simplify_verbatim(&resolved));
+    }
+    let name = path.file_name()?;
+    let parent = fs::canonicalize(path.parent()?).ok()?;
+    Some(simplify_verbatim(&parent).join(name))
 }
 
 fn root_hint(root: &Path) -> String {
@@ -1075,7 +1155,9 @@ fn portable_path(path: &Path, root: &Path) -> String {
     if let Ok(relative) = path.strip_prefix(root) {
         return slash_path(relative);
     }
-    let home = std::env::var_os("HOME").and_then(|h| fs::canonicalize(h).ok());
+    let home = std::env::var_os("HOME")
+        .and_then(|h| fs::canonicalize(h).ok())
+        .map(|h| simplify_verbatim(&h));
     if let Some(relative) = home.as_deref().and_then(|h| path.strip_prefix(h).ok()) {
         return format!("~/{}", slash_path(relative));
     }
@@ -1099,9 +1181,22 @@ fn resolve_stored_path(stored: &str, root: &Path) -> PathBuf {
 
 fn relative_to_root(text: &str, root: &Path) -> String {
     let path = Path::new(text);
-    match path.strip_prefix(root) {
-        Ok(relative) if path.is_absolute() => slash_path(relative),
-        _ => text.to_string(),
+    if !path.is_absolute() {
+        return text.to_string();
+    }
+    if let Ok(relative) = path.strip_prefix(root) {
+        return slash_path(relative);
+    }
+    // The same place spelled differently (a `\\?\` prefix, a Windows 8.3 short
+    // name or another letter case, `..`, a symlinked ancestor) must still come
+    // out project-relative, or a replay elsewhere would chase the capturing
+    // directory.
+    match canonical_for_root(path)
+        .as_deref()
+        .and_then(|resolved| resolved.strip_prefix(root).ok())
+    {
+        Some(relative) => slash_path(relative),
+        None => text.to_string(),
     }
 }
 
@@ -1206,7 +1301,7 @@ fn hash_input(input: &ManifestInput) -> Result<HashedInput> {
     };
     Ok(HashedInput {
         role: input.role.clone(),
-        path: resolved.display().to_string(),
+        path: simplify_verbatim(&resolved).display().to_string(),
         kind: kind.to_string(),
         digest: Digest {
             algorithm: "sha256".to_string(),
@@ -1318,6 +1413,87 @@ mod tests {
         let changes = manifest.input_changes_at(second.path());
         assert_eq!(changes.len(), 1, "{changes:?}");
         assert!(changes[0].contains("digest mismatch"), "{changes:?}");
+    }
+
+    #[test]
+    fn windows_verbatim_prefixes_are_stripped_and_nothing_else_is() {
+        let strip = |text: &str| strip_verbatim_prefix(text).into_owned();
+        // The faulty spellings `canonicalize` produces on Windows.
+        assert_eq!(strip(r"\\?\C:\Users\me\proj"), r"C:\Users\me\proj");
+        assert_eq!(strip(r"\\?\d:/proj"), "d:/proj");
+        assert_eq!(strip(r"\\?\UNC\host\share\proj"), r"\\host\share\proj");
+        // Controls: ordinary paths and verbatim forms with no plain spelling.
+        assert_eq!(strip(r"C:\Users\me\proj"), r"C:\Users\me\proj");
+        assert_eq!(strip("/home/me/proj"), "/home/me/proj");
+        assert_eq!(strip("board.kicad_pcb"), "board.kicad_pcb");
+        assert_eq!(strip(r"\\?\Volume{1234}\proj"), r"\\?\Volume{1234}\proj");
+        assert_eq!(strip(r"\\?\1:\proj"), r"\\?\1:\proj");
+        assert_eq!(strip(r"\\host\share\proj"), r"\\host\share\proj");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_equivalent_spelling_of_a_path_under_the_root_is_stored_relative() {
+        // The root reached by another spelling, as a Windows 8.3 name, another
+        // letter case or a `\\?\` prefix would reach it: here a symlink alias.
+        let dir = tempfile::tempdir().unwrap();
+        let root = simplify_verbatim(&fs::canonicalize(dir.path()).unwrap());
+        fs::write(root.join("board.kicad_pcb"), "x").unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let alias = elsewhere.path().join("alias");
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        let spelled = alias.join("board.kicad_pcb");
+        assert!(
+            spelled.strip_prefix(&root).is_err(),
+            "plain strip is fooled"
+        );
+        assert_eq!(
+            relative_to_root(&spelled.display().to_string(), &root),
+            "board.kicad_pcb"
+        );
+        // An output that is not written yet resolves through its parent.
+        let pending = alias.join("out.json");
+        assert_eq!(
+            relative_to_root(&pending.display().to_string(), &root),
+            "out.json"
+        );
+        // `--flag=PATH` takes the same route.
+        assert_eq!(
+            portable_argument(&format!("--junit={}", pending.display()), &root),
+            "--junit=out.json"
+        );
+        // Controls: outside the root and relative tokens are left alone.
+        let outside = fs::canonicalize(elsewhere.path())
+            .unwrap()
+            .display()
+            .to_string();
+        assert_eq!(relative_to_root(&outside, &root), outside);
+        assert_eq!(
+            relative_to_root("board.kicad_pcb", &root),
+            "board.kicad_pcb"
+        );
+    }
+
+    #[test]
+    fn a_replayed_runs_error_travels_beside_its_outcome_but_never_into_it() {
+        let outcome = outcome("error", 1, &[]);
+        let sent = serde_json::to_vec(&ReplayOutcome {
+            outcome: outcome.clone(),
+            error: Some("reading 'board.kicad_pcb': not found".into()),
+        })
+        .unwrap();
+        let got: ReplayOutcome = serde_json::from_slice(&sent).unwrap();
+        assert_eq!(got.outcome, outcome);
+        assert_eq!(
+            got.error.as_deref(),
+            Some("reading 'board.kicad_pcb': not found")
+        );
+        // The manifest's own outcome shape carries no error text, and a bare
+        // outcome (an older replay) still reads, with no error.
+        let plain = serde_json::to_string(&outcome).unwrap();
+        assert!(!plain.contains("error\":"), "{plain}");
+        let old: ReplayOutcome = serde_json::from_str(&plain).unwrap();
+        assert_eq!((old.outcome, old.error), (outcome, None));
     }
 
     #[test]

@@ -585,6 +585,17 @@ pub enum Device {
     },
 }
 
+/// Smallest resistance the solver stamps, in ohms.
+///
+/// A resistor at or below this value (a 0 ohm jumper, a 1e-9 ohm typo) is
+/// stamped as exactly this much: its conductance is the largest the matrix is
+/// asked to hold, and a stiffer link would swamp the milli-siemens entries
+/// around it. Every stamping path (interpreted, planned, AC, linear fast path)
+/// and the SPICE loader share this one constant so they cannot disagree; a
+/// front end that substitutes it says so (the SPICE loader adds a note to
+/// [`Directives::notes`]).
+pub const MIN_RESISTANCE_OHMS: f64 = 1e-6;
+
 impl Device {
     /// A linear resistor with no temperature coefficient.
     #[must_use]

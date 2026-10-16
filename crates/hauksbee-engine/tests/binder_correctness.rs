@@ -341,7 +341,19 @@ fn split_grounds_stay_distinct_nodes() {
         "Resistor_SMD:R_0603_1608Metric",
         vec![pin("1", 1, ""), pin("2", 2, "")],
     );
-    let b = board(&[(1, "AGND"), (2, "DGND"), (3, "GND")], vec![bridge]);
+    // A part on GND makes it the board's canonical ground (a net no part
+    // touches is no ground at all, and a board with only split grounds takes
+    // one of them as its reference instead).
+    let decoupling = comp(
+        "C1",
+        "100n",
+        "Capacitor_SMD:C_0603_1608Metric",
+        vec![pin("1", 2, ""), pin("2", 3, "")],
+    );
+    let b = board(
+        &[(1, "AGND"), (2, "DGND"), (3, "GND")],
+        vec![bridge, decoupling],
+    );
     let bound = bind_board(&b, &ModelLibrary::builtin());
 
     let agnd = bound.node("AGND").expect("AGND interned");
