@@ -1209,8 +1209,8 @@ mod tests {
     /// Faulty: the same diode with no series limit on a 5, 12 or 24 V rail is
     /// overstressed on every one; raising the rail only makes it worse, so the
     /// finding must never vanish as the figure passes the plausibility bound.
-    /// A generic LED is the stated condition at each (low severity, which the
-    /// verdict reads as partly judged), never silence.
+    /// A generic LED is a finding at each too: its rating is a stand-in, but
+    /// a stand-in is never 100x wrong, so "far past" is not excused by it.
     #[test]
     fn no_series_limit_stays_a_finding_as_the_rail_rises() {
         for rail in ["+5V", "+12V", "+24V"] {
@@ -1225,7 +1225,8 @@ mod tests {
             let on = findings_on(&led, "D1");
             assert!(
                 on.iter().any(|f| f.severity == Severity::High
-                    || hauksbee_models::rating_basis::is_condition(&f.message)),
+                    && f.message.contains("far more than")
+                    && !hauksbee_models::rating_basis::is_condition(&f.message)),
                 "{rail}: {:#?}",
                 led.findings
             );

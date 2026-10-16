@@ -2956,6 +2956,28 @@ impl JsonReport {
             .0
     }
 
+    /// Whether undermined evidence flips the verdict to `invalid`: the maps
+    /// the RUN-LEVEL claim rests on (input coverage, bind completeness,
+    /// analysis validity), not the maps backing individual findings. A
+    /// finding is an observation the report already surfaces with its own
+    /// qualified/undermined badge; an undermined heads-up note means THAT
+    /// note's magnitude is uncertain, and it stays on the report saying so.
+    /// It does not mean the run could not be judged: "0 serious" rests on
+    /// the coverage maps and the serious-finding set, both of which keep
+    /// their own undermined routes to `invalid`. Without this split, one
+    /// unparseable value field anywhere on the board invalidated the whole
+    /// run through whichever informational note touched its net.
+    fn run_level_evidence_undermined(&self) -> bool {
+        let finding_assertions: std::collections::HashSet<&str> = self
+            .findings
+            .iter()
+            .flatten()
+            .map(|f| f.message.as_str())
+            .collect();
+        !self.descriptive_only
+            && run_level_undermined(&self.evidence, |a| finding_assertions.contains(a))
+    }
+
     /// As [`Self::verdict`], but findings an active waiver covers do not gate.
     ///
     /// Returns the verdict tuple and the waived findings, which the caller
@@ -3018,25 +3040,7 @@ impl JsonReport {
             }
             actionable += drc.actionable_group_count(self.clearance_rule_source.as_ref());
         }
-        // Which undermined evidence flips the verdict to `invalid`: the maps
-        // the RUN-LEVEL claim rests on (input coverage, bind completeness,
-        // analysis validity), not the maps backing individual findings. A
-        // finding is an observation the report already surfaces with its own
-        // qualified/undermined badge; an undermined heads-up note means THAT
-        // note's magnitude is uncertain, and it stays on the report saying so.
-        // It does not mean the run could not be judged: "0 serious" rests on
-        // the coverage maps and the serious-finding set, both of which keep
-        // their own undermined routes to `invalid`. Without this split, one
-        // unparseable value field anywhere on the board invalidated the whole
-        // run through whichever informational note touched its net.
-        let finding_assertions: std::collections::HashSet<&str> = self
-            .findings
-            .iter()
-            .flatten()
-            .map(|f| f.message.as_str())
-            .collect();
-        let evidence_undermined = !self.descriptive_only
-            && run_level_undermined(&self.evidence, |a| finding_assertions.contains(a));
+        let evidence_undermined = self.run_level_evidence_undermined();
         // The INCONCLUSIVE bind contract on the machine surface: a clean
         // result over an unbound verdict-critical part is vacuous, and the
         // model-dependent-claim surfaces' text renderings already refuse the

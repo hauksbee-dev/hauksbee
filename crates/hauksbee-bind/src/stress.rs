@@ -1472,9 +1472,13 @@ impl StressMonitor {
             return false;
         }
         // A stand-in card's limit says nothing about the part: a condition,
-        // noted once per part and kind, never a fault.
+        // noted once per part and kind, never a fault. Except far past it
+        // (`is_far_past_rating`): no stand-in is that wrong, so the part has
+        // nothing limiting its stress and the guess does not excuse it.
         let limit = card_limit(meta, chk.kind);
-        let stand_in = limit.and_then(|l| meta.ratings.basis.stand_in_for(l).map(|s| (l, s)));
+        let stand_in = limit
+            .filter(|_| !is_far_past_rating(chk.kind, chk.value, chk.limit))
+            .and_then(|l| meta.ratings.basis.stand_in_for(l).map(|s| (l, s)));
         if let Some((limit, stand_in)) = stand_in {
             self.stand_in.push(StandInExceedance {
                 fault: FaultEvent {
