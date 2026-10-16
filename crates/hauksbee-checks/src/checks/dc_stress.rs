@@ -344,18 +344,24 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
         &only_ideal,
         held_unsolved,
     ));
-    if !unsolved.is_empty() {
-        findings.push(not_judged_note(
+    findings.extend(abstained_note(&unsolved));
+    findings.extend(dead.filter(|d| !d.is_empty()).map(dead_rail_note));
+    NetLintReport { findings }
+}
+
+/// The note that the check abstained in the `unsolved` states, whose DC
+/// operating point did not solve; none when every state solved.
+fn abstained_note(unsolved: &[&str]) -> Option<LintFinding> {
+    (!unsolved.is_empty()).then(|| {
+        not_judged_note(
             &format!(
                 "the DC ratings check abstained {}: the board's DC operating point did not \
                  solve, so no part was checked against its ratings there",
                 unsolved.join(" or ")
             ),
             Vec::new(),
-        ));
-    }
-    findings.extend(dead.filter(|d| !d.is_empty()).map(dead_rail_note));
-    NetLintReport { findings }
+        )
+    })
 }
 
 /// A rail whose solved level is under this share of the level its name
