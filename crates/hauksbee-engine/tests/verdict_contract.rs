@@ -792,14 +792,16 @@ fn a_partly_judged_board_is_never_a_pass_on_any_surface() {
     let reason = v["verdict_reason"].as_str().unwrap_or_default();
     assert!(
         reason.starts_with("PARTLY JUDGED (not a pass): ")
-            && reason.contains("Partly judged: Q1 has no usable model")
+            && reason.contains("Q1 has no usable model")
             && reason.contains("The other 3 of 10 net checks were judged"),
         "{reason}"
     );
 
     let text = stdout(&run_board(&board, &["--check"]));
     assert!(
-        text.contains("VERDICT: PARTLY JUDGED: 0 serious") && !text.contains("VERDICT: clean"),
+        text.contains("VERDICT: PARTLY JUDGED (not a pass): 0 serious")
+            && !text.contains("PARTLY JUDGED (not a pass): nothing found")
+            && !text.contains("VERDICT: clean"),
         "{text}"
     );
 
@@ -808,7 +810,8 @@ fn a_partly_judged_board_is_never_a_pass_on_any_surface() {
     assert_eq!(out.status.code(), Some(3), "stderr: {}", stderr(&out));
     let xml = art.xml();
     assert!(
-        xml.contains("PARTLY JUDGED (not a pass): Partly judged: Q1") && !junit_all_green(&xml),
+        xml.contains("PARTLY JUDGED (not a pass): Q1 has no usable model")
+            && !junit_all_green(&xml),
         "the JUnit file shows PARTLY JUDGED red, never a pass:\n{xml}"
     );
     let err = stderr(&out);

@@ -534,7 +534,7 @@
    "volts": 5
   }
  ],
- "verdict_reason": "PARTLY JUDGED (not a pass): nothing found blocks ordering among the checks this run could judge. Partly judged: Q1 has no usable model, so the checks it could change are not judged: wiring and value checks on the 3 net(s) it connects to (GATE_CTRL, GND, LOAD_DRAIN), and electrical checks (levels, ratings, rails) on the 4 of 5 net(s) it can reach through the circuit (+5V, GATE_CTRL, GND, LOAD_DRAIN). The other 3 of 10 net checks were judged. Draft the model(s) with `hauksbee models extract --unmodelled <board>` to judge the rest.",
+ "verdict_reason": "PARTLY JUDGED (not a pass): nothing found blocks ordering among the checks this run could judge. Q1 has no usable model, so the checks it could change are not judged: wiring and value checks on the 3 net(s) it connects to (GATE_CTRL, GND, LOAD_DRAIN), and electrical checks (levels, ratings, rails) on the 4 of 5 net(s) it can reach through the circuit (+5V, GATE_CTRL, GND, LOAD_DRAIN). The other 3 of 10 net checks were judged. Draft the model(s) with `hauksbee models extract --unmodelled <board>` to judge the rest.",
  "verdict": "invalid",
  "partly_judged": true,
  "judgement_scope": {

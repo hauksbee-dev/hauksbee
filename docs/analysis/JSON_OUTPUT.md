@@ -137,14 +137,19 @@ judging it (`docs/ci/CI.md` states that boundary).
 `--check` (and the web report) scope that refusal instead of applying it to the
 whole board. `judgement_scope` names the open parts, the named-net count, the
 nets they have a pin on (`wiring_dependent`: wiring/value checks not judged)
-and every net they reach through any part's pins, stopping only at the analysis
-ground (`electrical_dependent`: levels, ratings and rails not judged). A
-finding on any judged check is `fail`, with the scope's "Partly judged: ..."
-sentence after "Also:" in `verdict_reason`. With nothing found and at least one
+and every net they reach through any part's pins, stopping at the analysis
+ground, at a rail a modelled source holds (a supply the analysis applies, or a
+modelled regulator fed from one, including through a reverse-protection or
+power-OR diode; the open load there is named, and the verdict states that it
+draws no more than that rail's source can supply) and at a signal pin of a
+processor, ADC or connector (`electrical_dependent`: levels, ratings and rails
+not judged). A finding on any judged check is `fail`, with the scope's sentence
+("... has no usable model, so the checks it could change are not judged ...")
+after "Also:" in `verdict_reason`. With nothing found and at least one
 electrical check judged, the run is PARTLY JUDGED, which is never a pass:
 `verdict` is `invalid`, `ok` is `false`, `partly_judged` is `true`,
 `verdict_reason` starts `PARTLY JUDGED (not a pass):`, and a `--strict` run
-exits 3 (the closing line reads `VERDICT: PARTLY JUDGED`). When the open parts
+exits 3 (the closing line reads `VERDICT: PARTLY JUDGED (not a pass)`). When the open parts
 reach every net electrically, the verdict is the plain `invalid` above, and
 `verdict_reason` adds, as information only, how many wiring/value checks on
 the nets they do not touch found nothing.

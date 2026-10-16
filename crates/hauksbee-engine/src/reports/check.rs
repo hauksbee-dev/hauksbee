@@ -235,9 +235,19 @@ impl CheckReport<'_> {
             }
             OutputMode::Plain => {
                 print!("{}", triage.render(&run_verdict));
+                // The unmodelled key parts are stated once. The triage headline
+                // already carries them (named, with the next step) when the run is
+                // not a pass and its lists have nothing else to lead with; only
+                // then is the standalone banner and the open-IC heads-up left out.
+                let named_in_triage = run_verdict.verdict == "invalid"
+                    && (run_verdict.partial
+                        || (triage.do_not_order.is_empty() && triage.inspect.is_empty()))
+                    && run_verdict.reason.as_deref().is_some_and(|reason| {
+                        reason.contains(&crate::result::refs_summary(&blockers))
+                    });
                 // The scope banner once, above every section; each model-dependent
-                // section then points back at it instead of repeating it.
-                if !blockers.is_empty() {
+                // section then points back at the verdict instead of repeating it.
+                if !blockers.is_empty() && !named_in_triage {
                     println!("{}\n", crate::result::inconclusive_verdict(&blockers));
                 }
                 let drc_plain = crate::plain::plain_drc_structured_with_rule_source(
@@ -261,8 +271,10 @@ impl CheckReport<'_> {
                 // uncovered. Text/JSON/web all carry this; plain must too. Use the
                 // SAME union the web/json personas do, unresolved active ICs PLUS
                 // resolved-but-open active ICs, so all four personas agree.
-                let open = crate::result::coverage_open_active_refs(&summary).len();
-                if open > 0 {
+                let open_refs = crate::result::coverage_open_active_refs(&summary);
+                let open = open_refs.len();
+                let unsaid = !named_in_triage || open_refs.iter().any(|r| !blockers.contains(r));
+                if open > 0 && unsaid {
                     // No part count in the pointer: `critical_parts_total` counts
                     // critical actives, not bind-table rows, and a wrong count
                     // sends a first-time reader hunting for a table that does not
@@ -558,8 +570,16 @@ fn verdict_line(
             )
         };
     };
+    // A partly judged reason opens with the same lead as the tag, so the line
+    // says it once: the tag carries it and the reason continues from there.
+    let lead = hauksbee_ir::vocabulary::PARTLY_JUDGED_LEAD;
+    let reason = verdict
+        .partial
+        .then(|| reason.strip_prefix(lead).and_then(|r| r.strip_prefix(": ")))
+        .flatten()
+        .unwrap_or(reason);
     let tag = if verdict.partial {
-        "PARTLY JUDGED"
+        lead
     } else if verdict.verdict == "invalid" {
         "inconclusive"
     } else {
@@ -1165,7 +1185,7 @@ mod tests {
                     "unmodelled key part, rest of the board judged",
                     "invalid",
                     "PARTLY JUDGED (not a pass): ",
-                    "VERDICT: PARTLY JUDGED: ",
+                    "VERDICT: PARTLY JUDGED (not a pass): ",
                 )
             },
             Row {
@@ -1243,11 +1263,17 @@ mod tests {
             // A partly judged run names the open part and what was not judged.
             if row.headline.starts_with("PARTLY JUDGED") {
                 for text in [&got.triage, &got.line] {
-                    assert!(
-                        text.contains("Partly judged: U1 has no usable model"),
-                        "{text}"
-                    );
+                    assert!(text.contains(" U1 has no usable model"), "{text}");
                 }
+                // Said once: the closing line's tag carries the lead, and the
+                // reason after it does not open with it again.
+                assert_eq!(got.line.matches("PARTLY JUDGED").count(), 1, "{}", got.line);
+                assert_eq!(
+                    got.triage.matches("PARTLY JUDGED").count(),
+                    1,
+                    "{}",
+                    got.triage
+                );
             }
             // Whatever the wording, a run that is not a pass never reads as one.
             assert!(
@@ -1259,7 +1285,9 @@ mod tests {
             );
             // The reason JSON gives is the reason the closing line gives.
             let reason = got.json_reason.as_deref().expect("a non-pass states why");
-            assert!(got.line.contains(reason), "{name}: {}\n{reason}", got.line);
+            let lead = format!("{}: ", hauksbee_ir::vocabulary::PARTLY_JUDGED_LEAD);
+            let said = reason.strip_prefix(&lead).unwrap_or(reason);
+            assert!(got.line.contains(said), "{name}: {}\n{reason}", got.line);
             // A failure over unmodelled key parts keeps the fail and says the
             // rest of the board is not vouched for, in JSON and in the line.
             if row.verdict == "fail" && !row.unmodelled.is_empty() {

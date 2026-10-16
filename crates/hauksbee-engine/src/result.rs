@@ -2100,7 +2100,8 @@ fn partly_judged_reason(
         (Some(s), Some(c)) => Some(format!("{} {c}", s.partly_judged_reason())),
         (Some(s), None) => Some(s.partly_judged_reason()),
         (None, Some(c)) => Some(format!(
-            "PARTLY JUDGED (not a pass): nothing found blocks ordering, but {c}"
+            "{}: nothing found blocks ordering, but {c}",
+            hauksbee_ir::vocabulary::PARTLY_JUDGED_LEAD
         )),
         (None, None) => None,
     }

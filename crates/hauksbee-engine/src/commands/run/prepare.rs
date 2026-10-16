@@ -237,7 +237,11 @@ fn gather_ci_artifact_findings(
                 (
                     "partly_judged",
                     "serious",
-                    format!("PARTLY JUDGED (not a pass): {}", s.condition()),
+                    format!(
+                        "{}: {}",
+                        hauksbee_ir::vocabulary::PARTLY_JUDGED_LEAD,
+                        s.condition()
+                    ),
                 )
             },
         );
