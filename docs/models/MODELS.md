@@ -646,14 +646,34 @@ The extractor pulls two things from the datasheet:
    the figure cited, and says so in a comment. If the required fact is absent,
    extraction abstains or emits an identity-only draft; it does not invent a
    family value.
-2. **Ratings** into `[models.ratings]`: the prompt offers every `Ratings` key
-   (`Ratings::KEY_GUIDE`), and an unknown key is a parse error. These feed the
+2. **Ratings** into `[models.ratings]`: the prompt offers the `Ratings` keys that
+   apply to the part's kind (the table below, from `Ratings::KEY_GUIDE`), and
+   an unknown key is a parse error. These feed the
    **stress monitor** (`crates/hauksbee-bind/src/stress.rs`): it checks the
    live operating point against them and raises faults when a part runs past
    its limits. An omitted field means "no limit known".
 3. **Published characteristic rows** with no param or rating home, including
    one-sided and typical-only rows, into `[[models.source.characteristic]]`
    (see `SOURCE_LADDER.md`).
+
+<!-- BEGIN GENERATED: rating-keys (source: crates/hauksbee-models/tests/suite/docs_generated.rs) -->
+| Key | Meaning | Kinds it applies to |
+|-----|---------|---------------------|
+| `max_current_a` | continuous rated current (A): diode IF, BJT IC, MOSFET ID, regulator or switch rated IOUT (a features list or operating-conditions row counts); never pulsed or peak, nor an abs-max surge unless it is the only current printed (then say so); for an IC the whole-device or supply/ground current limit, not per-pin | every kind |
+| `max_surge_current_a` | non-repetitive surge / pulsed peak current (A): diode IFSM, BJT ICM, MOSFET IDM | every kind |
+| `max_power_w` | total power dissipation (W): Ptot / PD for the selected package | every kind |
+| `max_voltage_v` | maximum blocking/working voltage (V): diode VRRM, capacitor rated voltage, BJT VCEO, MOSFET VDS, regulator VIN abs max, IC supply abs max | every kind |
+| `polarized` | true for a polarized (electrolytic/tantalum) capacitor, where reverse bias is a fault | passive |
+| `max_pin_current_a` | per-pin source/sink absolute limit (A) for an IC or MCU | vreg, opamp, comparator, timer, analog_switch, digital, dac, adc, shift_register, mcu |
+| `max_ripple_current_a` | capacitor rated RMS ripple current (A) at its stated frequency/temperature | passive |
+| `max_junction_temp_c` | TJ maximum junction temperature (C) | every kind |
+| `theta_ja_c_per_w` | Rth(j-a) junction-to-ambient thermal resistance (C/W = K/W): the row at the standard condition (25 °C, the standard test board), else the least favourable row the part number allows (highest across the packages and board conditions it leaves open) | every kind |
+| `theta_jc_c_per_w` | Rth(j-c) junction-to-case thermal resistance (C/W = K/W), selected package and stated case reference only | every kind |
+| `min_current_a` | FLOOR, not a ceiling (A): least current the datasheet guarantees regulation at (shunt-reference IKmin, LDO minimum load) | vreg |
+| `rds_on_vgs` | MOSFET: lowest \|VGS\| (V) at which the datasheet specifies RDS(on) | nmos, pmos |
+| `vgs_th_max` | MOSFET: MAXIMUM \|VGS(th)\| (V) from Electrical Characteristics | nmos, pmos |
+| `vgs_max` | MOSFET: absolute-maximum gate-source voltage magnitude (V), the VGS / VGSS row (+-12 V gives 12) | nmos, pmos |
+<!-- END GENERATED: rating-keys -->
 
 Every numeric line carries a comment citing where in the datasheet it came
 from, so an extracted model stays auditable.

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "size": "bash ../scripts/check-bundle-size.sh dist",
     "preview": "vite preview",
     "mock-server": "bun run mock-server.ts",
     "visual-lint": "bun run tests/visual-lint/lint.ts",
@@ -14,12 +15,22 @@
     "test:e2e": "bun run tests/e2e/run.ts"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "6.20.3",
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/language": "6.12.4",
+    "@codemirror/legacy-modes": "6.5.4",
+    "@codemirror/lint": "6.9.7",
+    "@codemirror/search": "6.7.2",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.13",
+    "@lezer/highlight": "1.2.5",
     "@tailwindcss/vite": "^4.2.2",
     "motion": "^12.43.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "smol-toml": "^1.7.0",
-    "tailwindcss": "^4.2.2"
+    "tailwindcss": "^4.2.2",
+    "toml-eslint-parser": "1.0.3"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",

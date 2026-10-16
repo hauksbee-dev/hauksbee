@@ -13,16 +13,7 @@ use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::Component;
 use std::collections::{hash_map::Entry, BTreeSet, HashMap, HashSet, VecDeque};
 
-/// True when a net name is ground.
-#[must_use]
-pub fn is_ground_net(name: &str) -> bool {
-    let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
-    let leaf = n.rsplit('/').next().unwrap_or(&n);
-    matches!(
-        leaf,
-        "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "PGND" | "VSS" | "GNDIO" | "0" | "GNDPWR"
-    ) || leaf.starts_with("GND")
-}
+pub use hauksbee_models::netclass::is_ground as is_ground_net;
 
 /// How a two-terminal part on the path from a programming pin to ground behaves.
 pub enum Series {

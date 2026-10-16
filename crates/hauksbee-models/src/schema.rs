@@ -1210,7 +1210,7 @@ pub struct Ratings {
 
     /// Rated RMS ripple current (A) for a capacitor, at its datasheet reference
     /// frequency / temperature. Drives the input-cap ripple-current check
-    /// (`hauksbee_engine::checks::ripple`). Only this part-specific value is
+    /// (`hauksbee_checks::checks::ripple`). Only this part-specific value is
     /// decision-grade; when absent, any capacitance-band estimate is context in
     /// an info note and cannot support pass/fail (e.g. the UCC EKYB 3.0 A at
     /// 100 kHz / 105 C belongs here).
@@ -1226,7 +1226,7 @@ pub struct Ratings {
     /// Junction-to-ambient thermal resistance (C/W), still-air, no heatsink.
     /// Drives the steady-state junction-temperature estimate
     /// `Tj = Tambient + P * theta_JA`. When absent the thermal monitor derives
-    /// a default from the footprint package class (see `hauksbee_engine::thermal`).
+    /// a default from the footprint package class (see `hauksbee_bind::thermal`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theta_ja_c_per_w: Option<f64>,
 
@@ -1261,6 +1261,13 @@ pub struct Ratings {
     /// it feeds collapses, which the DC stress finding says in those words.
     #[serde(skip)]
     pub trips_over_current: bool,
+
+    /// Set by the binder, never by a card: whether these limits are the
+    /// part's own, or a placeholder or guessed card's stand-in, whose
+    /// exceedance is a stated condition and never a failing finding
+    /// ([`crate::rating_basis`]).
+    #[serde(skip)]
+    pub basis: crate::rating_basis::RatingBasis,
 }
 
 /// Severity requested by a sourced operating-envelope entry.
@@ -1368,7 +1375,8 @@ impl OperatingEnvelope {
 impl Ratings {
     /// Every rating key, one `  name  # meaning` line each, offered verbatim by
     /// the extraction prompt; a test pins the names to the struct's serde fields.
-    pub const KEY_GUIDE: &str = "\
+    pub const KEY_GUIDE: &str = concat!(
+        "\
   max_current_a        # continuous rated current (A): diode IF, BJT IC, MOSFET ID, regulator or switch rated IOUT (a features list or operating-conditions row counts); never pulsed or peak, nor an abs-max surge unless it is the only current printed (then say so); for an IC the whole-device or supply/ground current limit, not per-pin
   max_surge_current_a  # non-repetitive surge / pulsed peak current (A): diode IFSM, BJT ICM, MOSFET IDM
   max_power_w          # total power dissipation (W): Ptot / PD for the selected package
@@ -1377,16 +1385,29 @@ impl Ratings {
   max_pin_current_a    # per-pin source/sink absolute limit (A) for an IC or MCU
   max_ripple_current_a # capacitor rated RMS ripple current (A) at its stated frequency/temperature
   max_junction_temp_c  # TJ maximum junction temperature (C)
-  theta_ja_c_per_w     # Rth(j-a) junction-to-ambient thermal resistance (C/W = K/W), the least favourable row the part number allows (highest across packages and board conditions it leaves open)
+  theta_ja_c_per_w     # Rth(j-a) junction-to-ambient thermal resistance (C/W = K/W): ",
+        standard_condition!(),
+        " (highest across the packages and board conditions it leaves open)
   theta_jc_c_per_w     # Rth(j-c) junction-to-case thermal resistance (C/W = K/W), selected package and stated case reference only
   min_current_a        # FLOOR, not a ceiling (A): least current the datasheet guarantees regulation at (shunt-reference IKmin, LDO minimum load)
   rds_on_vgs           # MOSFET: lowest |VGS| (V) at which the datasheet specifies RDS(on)
   vgs_th_max           # MOSFET: MAXIMUM |VGS(th)| (V) from Electrical Characteristics
-  vgs_max              # MOSFET: absolute-maximum gate-source voltage magnitude (V), the VGS / VGSS row (+-12 V gives 12)";
+  vgs_max              # MOSFET: absolute-maximum gate-source voltage magnitude (V), the VGS / VGSS row (+-12 V gives 12)"
+    );
+
+    /// The rating key names, in [`Self::KEY_GUIDE`] order.
+    pub fn keys() -> impl Iterator<Item = &'static str> {
+        Self::KEY_GUIDE
+            .lines()
+            .filter_map(|l| l.split_whitespace().next())
+    }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        *self == Self::default()
+        Self {
+            basis: crate::rating_basis::RatingBasis::default(),
+            ..self.clone()
+        } == Self::default()
     }
 }
 
@@ -1439,6 +1460,31 @@ pub enum ComponentKind {
     /// Mounting hole, logo, test point, fiducial, silently ignored.
     #[default]
     Ignore,
+}
+
+impl ComponentKind {
+    /// Every kind, in declaration order; the `ALL` test fails to compile when a
+    /// variant is added and not listed.
+    pub const ALL: [Self; 18] = [
+        Self::Passive,
+        Self::Diode,
+        Self::BjtNpn,
+        Self::BjtPnp,
+        Self::Nmos,
+        Self::Pmos,
+        Self::Vreg,
+        Self::Opamp,
+        Self::Comparator,
+        Self::Timer,
+        Self::AnalogSwitch,
+        Self::Digital,
+        Self::Dac,
+        Self::Adc,
+        Self::ShiftRegister,
+        Self::Mcu,
+        Self::Connector,
+        Self::Ignore,
+    ];
 }
 
 // ── Passive class ─────────────────────────────────────────────────────────────
@@ -1679,11 +1725,23 @@ mod tests {
         // serde's own "expected one of" list is the struct's field set.
         let listed = err.split("expected one of ").nth(1).unwrap();
         let fields: Vec<&str> = listed.split('`').skip(1).step_by(2).collect();
-        let guide: Vec<&str> = Ratings::KEY_GUIDE
-            .lines()
-            .filter_map(|l| l.split_whitespace().next())
-            .collect();
-        assert_eq!(guide, fields);
+        assert_eq!(Ratings::keys().collect::<Vec<_>>(), fields);
+    }
+
+    #[test]
+    fn component_kind_all_lists_every_variant() {
+        use super::ComponentKind::{
+            Adc, AnalogSwitch, BjtNpn, BjtPnp, Comparator, Connector, Dac, Digital, Diode, Ignore,
+            Mcu, Nmos, Opamp, Passive, Pmos, ShiftRegister, Timer, Vreg,
+        };
+        for k in super::ComponentKind::ALL {
+            // Exhaustive: a new variant fails to compile here until it is in `ALL`.
+            match k {
+                Passive | Diode | BjtNpn | BjtPnp | Nmos | Pmos | Vreg | Opamp | Comparator
+                | Timer | AnalogSwitch | Digital | Dac | Adc | ShiftRegister | Mcu | Connector
+                | Ignore => {}
+            }
+        }
     }
 
     #[test]

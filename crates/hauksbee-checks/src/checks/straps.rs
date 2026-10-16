@@ -36,7 +36,7 @@
 //! clock-driver detection still works - it keys on the *component* (an
 //! oscillator), not a pin electrical type - but the reduced visibility is noted.
 
-use super::{is_ground_name, is_unconnected_net, norm};
+use super::{is_ground_name, is_unconnected_net};
 use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
 };
@@ -145,10 +145,13 @@ pub fn strap_lint_with_drives(
     report
 }
 
-/// Whether the board can drive the boot-select strap `selector` of `comp`: its
-/// net is located and reaches something besides this part (a button, header,
-/// pull or host). An unlocatable selector counts as not drivable, so a card
-/// error never manufactures a finding.
+/// Whether the board can put the boot-select strap `selector` of `comp` into its
+/// alternate mode. Its net must carry something that can move it off the
+/// normal level: a button, header, transistor, another IC, a series path, or a
+/// pull to the opposite level. A pull to the normal level and a capacitor only
+/// hold the normal mode, so a net with nothing else on it is not drivable. An
+/// unlocatable selector counts as not drivable, so a card error never
+/// manufactures a finding.
 fn selector_is_drivable(
     board: &ExtractedBoard,
     comp: &Component,
@@ -161,8 +164,33 @@ fn selector_is_drivable(
     let Ok((_, net_id)) = strap_site(comp, model, strap) else {
         return false;
     };
-    board.net(net_id).is_some_and(|net| {
-        !is_unconnected_net(&net.name) && !net_is_isolated_to(board, net_id, comp)
+    if board
+        .net(net_id)
+        .is_none_or(|net| is_unconnected_net(&net.name))
+    {
+        return false;
+    }
+    // The far side of a resistor that only holds the normal level.
+    let holds_normal = |far: i64| {
+        board.net(far).is_some_and(|n| match strap.level {
+            StrapLevel::High => is_rail_name(&n.name),
+            StrapLevel::Low => is_ground_name(&n.name),
+            StrapLevel::Defined => is_rail_name(&n.name) || is_ground_name(&n.name),
+        })
+    };
+    board.net_members(net_id).into_iter().any(|(c, _)| {
+        if c.reference == comp.reference || !AssemblyState::of(c).is_present() {
+            return false;
+        }
+        if is_assembled_resistor(c) {
+            let mut far = c
+                .pins
+                .iter()
+                .filter_map(|p| p.net)
+                .filter(|id| *id != net_id);
+            return !far.all(holds_normal);
+        }
+        !hauksbee_extract::is_capacitor(c)
     })
 }
 
@@ -328,25 +356,12 @@ fn examine_strap(
     }
 }
 
-/// A two-terminal resistor (ref R*, not RV/RT/RN/RP/RM, two connected pads, not
-/// a ferrite/inductor), and assembled (not DNP). Mirrors the extract lint's
-/// `is_resistor` plus a DNP guard. Shared with the boot check's bias-resistor
-/// predicate, a varistor (RV) or thermistor (RT) to ground sets no DC level
-/// and must never be credited as a bias.
+/// A plain two-terminal resistor on the shared part-class ladder
+/// (`hauksbee_extract::is_plain_resistor`), and assembled (not DNP). Shared with
+/// the boot check's bias-resistor predicate: a varistor or thermistor to ground
+/// sets no DC level and is never credited as a bias.
 pub(crate) fn is_assembled_resistor(c: &Component) -> bool {
-    if !AssemblyState::of(c).is_present() {
-        return false;
-    }
-    let r = c.reference.to_ascii_uppercase();
-    let lib = c.lib_id.to_ascii_lowercase();
-    let is_r_ref = r.starts_with('R')
-        && !r.starts_with("RV")
-        && !r.starts_with("RT")
-        && !r.starts_with("RN")
-        && !r.starts_with("RP")
-        && !r.starts_with("RM");
-    let connected = c.pins.iter().filter(|p| p.net.is_some()).count();
-    is_r_ref && connected == 2 && !lib.contains("ferrite") && !lib.contains("inductor")
+    AssemblyState::of(c).is_present() && hauksbee_extract::is_plain_resistor(c)
 }
 
 /// Is this component a *powered oscillator* (a free-running clock source), as
@@ -380,10 +395,9 @@ fn is_clock_oscillator(c: &Component) -> bool {
         || v.contains("MHZ")
         || v.contains("OSC")
         || v.contains("XO")
-        // Olimex's value string is "Q50MHz/..."; ref CR* / X* / Y* / OSC* are
-        // the usual oscillator designators.
+        // Olimex's value string is "Q50MHz/..." (caught by MHZ above). CR is
+        // the IEEE diode designator, so it is not an oscillator by itself.
         || r.starts_with("OSC")
-        || r.starts_with("CR")
         || (r.starts_with('X') && v.contains("MHZ"))
         || (r.starts_with('Y') && v.contains("MHZ"))
 }
@@ -617,30 +631,11 @@ fn judge_divider(
 
 // ── Small net-name helpers (local copies; the extract versions are private) ──
 
-/// Is this net name a power rail? Every use in this file is boolean ("is the
-/// far side of this pull / this hop a rail"), so this is a predicate, not a
-/// voltage table. Breadth matches boot.rs's `is_power_or_ground_net`, and for
-/// the same calibration reason: an exact-name table (3V3/5V/1V8 plus
-/// VCC/VBUS-gated forms) misses VBAT/VSYS/VMOT/VIN and bare voltages (9V/12V),
-/// so a correct pull-up to "VBAT" reads as a signal net, which both lets the
-/// clock-reach hop wander onto a rail (a spurious HIGH clock finding through an
-/// oscillator's VDD) and hides a genuine wrong-direction pull from `wrong_pull`.
-fn is_rail_name(name: &str) -> bool {
-    let n = norm(name);
-    // Ground is its own family, never a rail.
-    if is_ground_name(name) {
-        return false;
-    }
-    // Explicit '+' rail (e.g. "+3V3", "+5V", "+12V").
-    if n.starts_with('+') {
-        return true;
-    }
-    // V-prefixed rails (VCC/VDD/VBAT/VMOT/VSYS/VIN/VIO/VREF…) and bare voltage
-    // names starting with a digit and carrying a 'V' ("12V", "3V3", "9V").
-    let v_named = n.starts_with('V') && n.len() >= 2;
-    let voltage_named = n.contains('V') && n.chars().next().is_some_and(|c| c.is_ascii_digit());
-    v_named || voltage_named
-}
+// Is the far side of this pull or hop a rail? The broad form shared with the
+// boot check (`netclass::may_be_supply`): an exact-voltage table misses VBAT,
+// VSYS and VMOT, which lets the clock-reach hop wander onto a rail and hides a
+// genuine wrong-direction pull.
+use hauksbee_models::netclass::may_be_supply as is_rail_name;
 
 /// True when the only thing on `net_id` is `mcu` itself, no resistor, no other
 /// component, nothing that could define a level. Such a strap net is floating
@@ -994,5 +989,61 @@ vih = [0.0, 2.0]
             .findings
             .iter()
             .any(|f| f.message.contains("were NOT checked")));
+    }
+
+    /// A mode-qualifying strap (ESP32-C3 GPIO8: any level in SPI boot, high for
+    /// Joint Download Boot, ESP32-C3 Series Datasheet v2.4 Tables 3-1 and 3-3)
+    /// left floating is a fault only when the board can select that mode: a
+    /// BOOT button or a pull-down on GPIO9 can, a bare pull-up and a debounce
+    /// capacitor cannot.
+    #[test]
+    fn mode_qualified_strap_float_needs_a_drivable_selector() {
+        // Nets: 1 GND, 2 +3V3, 3 GPIO8, 5 GPIO9.
+        let chip = || {
+            let mut c = part(
+                "U1",
+                "ESP32-C3FH4",
+                &[("17", 2), ("33", 1), ("14", 3), ("15", 5)],
+            );
+            c.footprint = "Package_DFN_QFN:QFN-32-1EP_5x5mm_P0.5mm_EP3.7x3.7mm".into();
+            c
+        };
+        let on = |reference: &str, value: &str, a: i64, b: i64| {
+            part(reference, value, &[("1", a), ("2", b)])
+        };
+        let run = |gpio8: &str, extra: Vec<Component>| {
+            let mut parts = vec![chip()];
+            parts.extend(extra);
+            let b = board(&[(1, "GND"), (2, "+3V3"), (3, gpio8), (5, "/BOOT")], parts);
+            strap_lint(&b, &library())
+                .of_check(LintCheck::StrapPin)
+                .map(|f| (f.severity, f.message.clone()))
+                .collect::<Vec<_>>()
+        };
+        let float = "unconnected-(U1-GPIO8-Pad14)";
+        let button = || on("SW1", "B3U-1000P", 5, 1);
+        let up9 = || on("R6", "10k", 5, 2);
+        // Faulty: GPIO8 floats and a BOOT button can pull GPIO9 low.
+        let got = run(float, vec![up9(), button()]);
+        assert_eq!(got.len(), 1, "{got:#?}");
+        assert_eq!(got[0].0, Medium);
+        for needle in [
+            "U1 strap pin 14 (gpio8)",
+            "floating",
+            "gpio9",
+            "Joint Download Boot",
+        ] {
+            assert!(got[0].1.contains(needle), "'{needle}' not in {}", got[0].1);
+        }
+        // A pull-down on GPIO9 selects download mode outright: still a fault.
+        assert_eq!(run(float, vec![on("R6", "10k", 5, 1)]).len(), 1);
+        // Fixed: a pull-up holds GPIO8 high.
+        let fixed = run("/GPIO8", vec![up9(), button(), on("R23", "10k", 3, 2)]);
+        assert!(fixed.is_empty(), "{fixed:#?}");
+        // Legal controls: GPIO9 only pulled up (and debounced), or left alone,
+        // so download mode is unreachable and GPIO8's level never matters.
+        let held = run(float, vec![up9(), on("C9", "100n", 5, 1)]);
+        assert!(held.is_empty(), "{held:#?}");
+        assert!(run(float, vec![]).is_empty());
     }
 }

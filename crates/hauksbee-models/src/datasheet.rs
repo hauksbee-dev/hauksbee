@@ -1565,7 +1565,8 @@ datasheet leaves unresolved, or the identity-only abstention for an unresolved p
 abstaining on params never makes a resolved pin table unknown: a pad the pin table names
 keeps its source-named role. Never invent a pin role.";
 
-const RATINGS_RULES: &str = r#"[models.ratings]: these are the ONLY valid keys (any other key fails
+const RATINGS_RULES: &str = concat!(
+    r#"[models.ratings]: these are the ONLY valid keys (any other key fails
 validation). Read them from the Absolute Maximum Ratings / Limiting Values and
 Thermal Characteristics tables, or the table a line names. Include every key the
 datasheet states for the selected package; omit a key it does not state (do NOT
@@ -1580,9 +1581,10 @@ is one characteristic per printed row with `rating = "<key>"`, its temperature i
 `conditions` and any `package` or `mounting` as printed. A current or power limit
 printed per path, channel or output is one row per path, `pins` naming its
 [models.pins] roles (IN1 to OUT: `pins = ["in1"]`), and a printed total a row
-without `pins`. Hauksbee sets each tagged key itself to its row at the standard
-condition (25 °C, the standard test board, else the least favourable), so write
-any tagged row there; it reads the rows at the scenario's temperature:"#;
+without `pins`. Hauksbee sets each tagged key itself to "#,
+    standard_condition!(),
+    ", so write any tagged row there; it reads the rows at the scenario's temperature:"
+);
 
 const ENVELOPE_RULES: &str = r"[[models.envelope]]: read the Recommended Operating Conditions and Absolute
 Maximum Ratings tables. Emit supply_range for every SUPPLY-class pin whose
@@ -1861,7 +1863,8 @@ kind = "{entry_kind}"
 description = "one line"
 
 [models.match]
-value_re = '(?i)^{part_re}$'
+# {match_rule}
+value_re = '(?i)^{part_re}'
 
 [models.params]
 # the required params for this kind, listed below
@@ -1953,6 +1956,38 @@ OUTPUT (TOML only, starting with [[models]]):
         pin_numbering = PIN_NUMBERING,
         extraction_rules = EXTRACTION_RULES,
         source_quantity_guidance = SOURCE_QUANTITY_GUIDANCE,
+        match_rule = crate::validation::MATCH_PATTERN_RULE,
+    )
+}
+
+/// Drop the end anchor ([`crate::validation::MATCH_PATTERN_RULE`]) from each match
+/// pattern of `table`; the `(key, pattern)` pairs rewritten.
+fn unanchor_match(table: &mut toml_edit::Table) -> Vec<(&'static str, String)> {
+    let mut rewritten = Vec::new();
+    let Some(rules) = table
+        .get_mut("match")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    else {
+        return rewritten;
+    };
+    for key in ["value_re", "mpn_re"] {
+        let text = rules.get(key).and_then(toml_edit::Item::as_str);
+        let bare = text.and_then(crate::validation::without_end_anchor);
+        if let Some(bare) = bare.filter(|b| !b.is_empty()).map(str::to_string) {
+            rules.insert(key, toml_edit::value(bare.clone()));
+            rewritten.push((key, bare));
+        }
+    }
+    rewritten
+}
+
+/// The rating key guide every extraction prompt offers: the keys validation
+/// accepts for `kind` ([`crate::validation::rating_guide`]), or all of them for a
+/// kind that is not one of ours (nothing to filter by).
+fn rating_key_guide(kind: &str) -> String {
+    component_kind(kind).map_or_else(
+        || crate::schema::Ratings::KEY_GUIDE.to_string(),
+        crate::validation::rating_guide,
     )
 }
 
@@ -1960,10 +1995,10 @@ OUTPUT (TOML only, starting with [[models]]):
 /// checklist. Measured: two tiers both dropped a printed TJ maximum, and one
 /// put a per-pin limit where the rated output current belonged.
 fn ratings_hint_for_kind(kind: &str) -> String {
+    let guide = rating_key_guide(kind);
     let Some(kind) = component_kind(kind) else {
-        return crate::schema::Ratings::KEY_GUIDE.to_string();
+        return guide;
     };
-    let guide = crate::validation::rating_guide(kind);
     let expected = crate::validation::expected_ratings(kind);
     if expected.is_empty() {
         return guide;
@@ -2815,6 +2850,18 @@ impl Reply<'_> {
         let models = doc.get_mut(path).and_then(Item::as_array_of_tables_mut);
         let tables = models.into_iter().flat_map(ArrayOfTables::iter_mut);
         for (original, table) in db.iter().zip(tables) {
+            // A match pattern anchored at the end binds only the bare name; a variant's
+            // pattern is its own to anchor.
+            if original.variant.is_none() {
+                for (key, bare) in unanchor_match(table) {
+                    say!(
+                        "[model-extract] {}: {key} loses its end anchor ({bare}): {}",
+                        original.id,
+                        crate::validation::MATCH_PATTERN_RULE
+                    );
+                    inserted = true;
+                }
+            }
             let rows = original.params.rows();
             let unread: Vec<&str> = rows
                 .filter(|(k, r)| crate::param_names::row_value(k, r).is_err())
@@ -2906,6 +2953,18 @@ impl Reply<'_> {
             return doc.to_string();
         }
         raw
+    }
+
+    /// The lint warnings a passing reply still draws, the ones `models lint` prints
+    /// for its cited rows ([`crate::param_names::source_warnings`]): a drafter that
+    /// is shown them can fix them, as it is shown a validation error.
+    fn warnings(self, raw: &str) -> Vec<String> {
+        let Reply::Model { part, kind } = self else {
+            return Vec::new();
+        };
+        parse_and_validate_reply(raw, part, kind)
+            .map(|entry| crate::param_names::source_warnings(&entry))
+            .unwrap_or_default()
     }
 
     fn check(self, raw: &str) -> Result<()> {
@@ -3524,6 +3583,25 @@ fn help_mentions(exe: &Path, args: &[&str], flag: &str) -> bool {
     false
 }
 
+/// Tell the progress stream which attempt is starting.
+fn announce_attempt(attempt: usize, attempts: usize, reply: Reply<'_>) {
+    let doing = match (attempt, reply) {
+        (1, Reply::Word) => "identifying the part kind",
+        (1, _) => "drafting the model",
+        _ => "redrafting with the checker's feedback",
+    };
+    progress::phase(format!("{doing} (attempt {attempt} of {attempts})"));
+    let stage = match (attempt, reply) {
+        (_, Reply::Word) => "identify",
+        (1, _) => "draft",
+        _ => "fix",
+    };
+    progress::event(
+        "stage",
+        serde_json::json!({"stage": stage, "attempt": attempt, "attempts": attempts}),
+    );
+}
+
 /// Fetch, validate, and retry with feedback: one loop for every backend.
 ///
 /// Each attempt sends `base_prompt` plus an appendix quoting only the LATEST
@@ -3541,24 +3619,17 @@ fn validated_attempts(
 ) -> Result<String> {
     let mut prompt = base_prompt.to_string();
     let mut idle_retried = false;
+    // A draft that passed the checker but drew lint warnings is redrafted once with
+    // them quoted; if that redraft fails, this one stands.
+    let mut accepted: Option<String> = None;
     for attempt in 1..=retries + 1 {
         let started = Instant::now();
-        let doing = match (attempt, reply) {
-            (1, Reply::Word) => "identifying the part kind",
-            (1, _) => "drafting the model",
-            _ => "redrafting with the checker's feedback",
-        };
-        progress::phase(format!("{doing} (attempt {attempt} of {})", retries + 1));
-        let stage = match (attempt, reply) {
-            (_, Reply::Word) => "identify",
-            (1, _) => "draft",
-            _ => "fix",
-        };
-        progress::event(
-            "stage",
-            serde_json::json!({"stage": stage, "attempt": attempt, "attempts": retries + 1}),
-        );
+        announce_attempt(attempt, retries + 1, reply);
         let fetched = match fetch(&prompt) {
+            Err(e) if accepted.is_some() => {
+                say!("[model-extract] redraft for lint warnings failed ({e:#}); keeping the accepted draft");
+                return Ok(accepted.unwrap_or_default());
+            }
             // One idle kill per extraction call is retried, on the same prompt,
             // spending an attempt like any other retry; a second stall fails.
             Err(e) if e.is::<IdleStalled>() && !idle_retried && attempt <= retries => {
@@ -3597,7 +3668,30 @@ fn validated_attempts(
             serde_json::json!({"ok": error.is_none(), "error": error}),
         );
         match checked {
-            Ok(()) => return Ok(raw),
+            Ok(()) => {
+                let warnings = if accepted.is_none() && attempt <= retries {
+                    reply.warnings(&raw)
+                } else {
+                    Vec::new()
+                };
+                if warnings.is_empty() {
+                    return Ok(raw);
+                }
+                say!(
+                    "[model-extract] attempt {attempt} draws {} lint warning(s); redrafting with them",
+                    warnings.len()
+                );
+                let note = format!(
+                    "the draft passes validation, but the model lint warns about it:\n- {}",
+                    warnings.join("\n- ")
+                );
+                prompt = format!(
+                    "{base_prompt}\n\n{}",
+                    retry_feedback(&raw, &note, reply.table(), edit_in_place)
+                );
+                accepted = Some(raw);
+            }
+            Err(_) if accepted.is_some() => return Ok(accepted.unwrap_or_default()),
             Err(e) if attempt <= retries => {
                 say!("[model-extract] attempt {attempt} failed: {e:#}; retrying with feedback...");
                 prompt = format!(
@@ -5195,7 +5289,7 @@ mod tests {
         assert!(bjt.contains("derives tf, cjc"));
         assert!(bjt.contains("rated IOUT") && bjt.contains("least favourable row the part"));
         assert!(bjt.contains("one characteristic per printed row with `rating = \"<key>\"`"));
-        assert!(bjt.contains("Hauksbee sets each tagged key itself to its row at the standard"));
+        assert!(bjt.contains("Hauksbee sets each tagged key itself to the row at the standard"));
         // Each convention the code applies is named in its kind's prompt, no other's.
         for (kind, rule) in [
             ("diode", "a single VF row"),
@@ -5636,6 +5730,76 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
 
     const MODEL_SOURCE: &str = "[models.source]\ntier = \"datasheet-derived\"\n\
         uncertainty = [{ status = \"unknown\", parameter = \"model\", reason = \"none\" }]\n";
+
+    /// A drafted `value_re` loses its end anchor, whatever the pattern's shape; a
+    /// variant's pattern and an escaped `\$` stay.
+    #[test]
+    fn completion_unanchors_the_end_of_a_match_pattern() {
+        let card = |re: &str, extra: &str| {
+            format!("[[models]]\nid = \"q\"\nkind = \"diode\"\n{extra}[models.match]\nvalue_re = '{re}'\nmpn_re = '^Q1$'\n{MODEL_SOURCE}")
+        };
+        let model = Reply::Model {
+            part: "Q",
+            kind: "diode",
+        };
+        let patterns = |done: &str| {
+            let db: crate::schema::DbFile = toml::from_str(done).expect("completed card parses");
+            let m = db.models[0].r#match.clone();
+            (m.value_re.unwrap_or_default(), m.mpn_re.unwrap_or_default())
+        };
+        let done = model.complete(card("^(?:Q)$", ""));
+        assert_eq!(patterns(&done), ("^(?:Q)".into(), "^Q1".into()));
+        let done = model.complete(card(r"^Q\$", ""));
+        assert_eq!(patterns(&done).0, r"^Q\$");
+        let member = "variant_of = \"q\"\nvariant = { orderable_re = '^QX$', orderable = [\"QX\"], basis = \"p. 2\" }\n";
+        let done = model.complete(card("^Q$", member));
+        assert_eq!(patterns(&done).0, "^Q$");
+        assert_eq!(
+            crate::validation::without_end_anchor("(?i)^PART$"),
+            Some("(?i)^PART")
+        );
+        assert_eq!(crate::validation::without_end_anchor("^PART"), None);
+    }
+
+    /// A draft the checker accepts but the lint warns about is redrafted once with
+    /// the warnings quoted; the redraft's failure leaves the accepted draft standing.
+    #[test]
+    fn lint_warnings_are_fed_back_like_validation_errors() {
+        let card = |tag: &str| {
+            format!("[[models]]\nid = \"q\"\nkind = \"diode\"\ndescription = \"d\"\n[models.params]\nidentity_only = true\nwarning = \"w\"\nunlocked_by = \"u\"\n[models.pins]\n\"1\" = \"anode\"\n\"2\" = \"cathode\"\n{MODEL_SOURCE}[[models.source.characteristic]]\nparameter = \"PD power dissipation\"\nmax = 250.0\nunit = \"mW\"\nconditions = \"TA = 25 °C\"\nbasis = \"b\"\n{tag}")
+        };
+        let (bad, good) = (card(""), card("rating = \"max_power_w\"\n"));
+        let model = Reply::Model {
+            part: "Q",
+            kind: "diode",
+        };
+        let seen = std::cell::RefCell::new(Vec::new());
+        let run = |second: Result<String>| {
+            seen.borrow_mut().clear();
+            validated_attempts(1, "BASE", model, ("t", false), |p| {
+                let mut seen = seen.borrow_mut();
+                seen.push(p.to_string());
+                if seen.len() == 1 {
+                    Ok(bad.clone())
+                } else {
+                    second
+                        .as_ref()
+                        .map(Clone::clone)
+                        .map_err(|e| anyhow::anyhow!("{e}"))
+                }
+            })
+        };
+        let out = run(Ok(good)).unwrap();
+        assert!(out.contains("rating = \"max_power_w\""), "{out}");
+        let prompts = seen.borrow().clone();
+        assert_eq!(prompts.len(), 2);
+        assert!(prompts[1].contains("lint warns") && prompts[1].contains("prints a rating"));
+        let out = run(Err(anyhow::anyhow!("backend down"))).unwrap();
+        assert_eq!(out, model.complete(bad.clone()));
+        assert_eq!(seen.borrow().len(), 2);
+        let out = run(Ok("not a card".into())).unwrap();
+        assert_eq!(out, model.complete(bad.clone()));
+    }
 
     /// Completion writes a tagged rating's scalar from its 25 °C row, whatever
     /// cell the model picked, and leaves a scalar already there as it was.

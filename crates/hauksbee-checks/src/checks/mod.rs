@@ -97,20 +97,8 @@ use hauksbee_bind::variant_sweep::CornerPlan;
 use hauksbee_extract::{ExtractedBoard, NetLintReport, SiReport};
 use hauksbee_models::ModelLibrary;
 
-/// Net-leaf name, upper-cased: strips any sheet path prefix.
-pub(crate) fn norm(name: &str) -> String {
-    let n = name.trim();
-    let leaf = n.rsplit('/').next().unwrap_or(n);
-    leaf.trim().to_ascii_uppercase()
-}
-
-pub(crate) fn is_ground_name(name: &str) -> bool {
-    let n = norm(name);
-    matches!(
-        n.as_str(),
-        "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "PGND" | "VSS" | "GNDIO" | "0"
-    ) || n.starts_with("GND")
-}
+/// Net-name classification: the one table (`hauksbee_models::netclass`).
+pub(crate) use hauksbee_models::netclass::{is_ground as is_ground_name, leaf as norm};
 
 /// `KiCad`'s placeholder net for a pin that is on no net at all.
 pub(crate) fn is_unconnected_net(name: &str) -> bool {

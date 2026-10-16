@@ -30,20 +30,15 @@ export function SensorBuilder({
     <BuilderSection
       testId="sensor-builder"
       title="Register-map devices"
-      caption="I²C/SPI behavior from validated local TOML. The exact bytes are embedded in this scenario."
+      caption={sensors.length === 0
+        ? 'Click a sensor or memory IC on the board, or add one here.'
+        : 'I²C/SPI behavior from validated local TOML. The exact bytes are embedded in this scenario.'}
       actions={
         <button type="button" className="hb-chip hb-press px-2 py-1 text-[11px]" onClick={onAdd}>
           + bus device
         </button>
       }
     >
-      {sensors.length === 0 && (
-        <div className="text-[12px] py-2" style={{ color: 'var(--silk-dim)' }}>
-          Click a sensor or memory IC on the board, or add one here. Choose a checked-in sensor
-          spec; Hauksbee never guesses register behavior from a part number.
-        </div>
-      )}
-
       {sensors.map(sensor => {
         const issues = validation.get(sensor.rowId) ?? []
         const set = (patch: Partial<SensorRow>) => onUpdate(sensor.rowId, patch)

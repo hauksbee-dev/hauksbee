@@ -26,6 +26,7 @@ use hauksbee_ir::{
     BDep, BOutput, BjtModel, Circuit, CompiledExpr, Device, DeviceId, DiodeModel, MosLevel,
     MosfetModel, NodeId, Polarity, Rail, SourceKind,
 };
+use hauksbee_models::rating_basis::Limit;
 use hauksbee_models::schema::{CurrentProgram, CurrentProgramSemantics};
 use hauksbee_models::sensor_spec::StrapTie;
 use hauksbee_models::validation::repeatable_role;
@@ -89,6 +90,9 @@ pub struct McuBinding {
     /// a rail driven past the chip's abs-max Vcc raises an overvoltage fault
     /// instead of nothing.
     pub max_supply_v: Option<f64>,
+    /// The placeholder or guessed card `max_supply_v` came from, when it is
+    /// not the part's own: passing it is a stated condition, not a fault.
+    pub supply_stand_in: Option<hauksbee_models::rating_basis::StandIn>,
     /// Lowest recommended operating supply voltage (V) across the model's
     /// `supply_range` envelope rows, when it carries any. The co-sim's
     /// execution evidence reads a supply below this as "supply not valid", so
@@ -1338,9 +1342,18 @@ fn gather_device_meta(
 /// a caller cannot reach a model without having answered the three-state
 /// assembled-component question. DNP-absent and identity-unknown parts have no
 /// witness and therefore no model.
+///
+/// The model's ratings carry their [basis](hauksbee_models::rating_basis):
+/// whether they are the part's own card's, or a placeholder or guessed card's
+/// stand-in that no check may fail the board on.
 #[must_use]
 pub fn resolve(lib: &ModelLibrary, part: FittedComponent<'_>) -> hauksbee_models::Resolution {
-    library_resolution(lib, part.component())
+    let mut res = library_resolution(lib, part.component());
+    let basis = hauksbee_models::rating_basis::RatingBasis::of(&res);
+    if let Some(m) = res.model.as_mut() {
+        m.ratings.basis = basis;
+    }
+    res
 }
 
 /// What the library alone decides about one fitted part, shared by every board
@@ -1376,20 +1389,29 @@ impl PartFacts {
                 .fitted(&comp.reference, &comp.footprint, mounting);
             // A fuse or polyfuse limits by its hold current: the card's, else the
             // one its value states ("6V 0.5A"), so a load past it is a trip.
+            // A rating the value states is the part's own, so it stands in
+            // place of a stand-in card's and is judged ([`Limit`]).
             let mut ratings = m.ratings.clone();
+            let stand_in = ratings.basis.stand_in.is_some();
             if m.passive_class == Some(hauksbee_models::schema::PassiveClass::Fuse) {
                 ratings.trips_over_current = true;
-                ratings.max_current_a = ratings
-                    .max_current_a
-                    .or_else(|| hauksbee_models::value::parse_current_rating_a(&comp.value));
+                let stated = hauksbee_models::value::parse_current_rating_a(&comp.value);
+                if stated.is_some() && (stand_in || ratings.max_current_a.is_none()) {
+                    ratings.max_current_a = stated;
+                    ratings.basis.stated_on_board(Limit::Current);
+                }
             }
             // A capacitor's value often states its rated voltage ("10uF/16V");
-            // the card's rating, when it has one, wins.
+            // the card's rating, when it has one of its own, wins.
             let capacitor = m.passive_class
                 == Some(hauksbee_models::schema::PassiveClass::Capacitor)
                 || (m.kind == ComponentKind::Passive && passive_letter(comp) == Some('C'));
-            if capacitor && ratings.max_voltage_v.is_none() {
-                ratings.max_voltage_v = hauksbee_models::value::parse_voltage_rating_v(&comp.value);
+            if capacitor && (stand_in || ratings.max_voltage_v.is_none()) {
+                let stated = hauksbee_models::value::parse_voltage_rating_v(&comp.value);
+                if stated.is_some() {
+                    ratings.max_voltage_v = stated;
+                    ratings.basis.stated_on_board(Limit::Voltage);
+                }
             }
             Arc::new(Rated { ratings, derating })
         });
@@ -1958,10 +1980,11 @@ fn supply_groups(
     domains.supply_groups(circuit, board_net, owner, &regulations)
 }
 
-/// The upper-cased alphabetic designator prefix of a reference ("JP3" -> "JP").
+/// The upper-cased alphabetic designator prefix of a reference ("JP3" -> "JP"),
+/// read through the one designator table, so a split keyboard's mirrored `rC6`
+/// is a `C`, not an `RC` resistor.
 fn ref_prefix(reference: &str) -> String {
-    let letters = reference.chars().take_while(char::is_ascii_alphabetic);
-    letters.collect::<String>().to_ascii_uppercase()
+    hauksbee_models::refdes::prefix(&hauksbee_models::refdes::designator(reference))
 }
 
 /// Which passive ('R', 'C' or 'L') a designator's first letter claims, or an
@@ -7483,6 +7506,7 @@ fn bind_mcu(
         adc_pin,
         module,
         max_supply_v: model.ratings.max_voltage_v,
+        supply_stand_in: model.ratings.basis.stand_in_for(Limit::Voltage).cloned(),
         min_supply_v: model
             .envelope
             .iter()
@@ -7906,162 +7930,12 @@ pub fn island_reference_grounds(board: &ExtractedBoard) -> std::collections::Has
     best.into_values().map(|(_, _, id)| id).collect()
 }
 
-/// True only for the canonical ground net itself.
-///
-/// That is `"GND"` or `"0"`, optionally behind a hierarchical sheet path
-/// (`"/Power/GND"`). Matches
-/// [`Circuit::node`]'s own ground rule so pass-1 interning and later
-/// `circuit.node(name)` calls agree on which net is node 0.
-///
-/// Deliberately NARROWER than [`is_ground`]: AGND / DGND / PGND / ISOGND /
-/// `CHASSIS_GND` are real, distinct nets whose whole point is that they are NOT
-/// the same copper as GND until something (a ferrite bead, a 0 Ω link, a star
-/// point) joins them. Folding them all onto node 0 before binding turned every
-/// such bridge into an inert self-loop and erased the board's ground topology,
-/// the split-ground / galvanic-isolation structure this tool exists to check.
-/// Rail-default and rating heuristics keep the broad [`is_ground`]; only the
-/// pass-1 node assignment uses this.
-///
-/// `VSS` IS canonical ground: it is the IC-pin spelling of "the" ground (`KiCad`'s
-/// `power:VSS`), not a split-ground island like the *GND families. A CMOS/logic
-/// board whose sole ground net is labelled `VSS` must still fuse onto node 0, or
-/// the reference node floats and the whole MNA solve is singular / offset. `VEE`
-/// is intentionally NOT included: on bipolar-supply analog boards it is a
-/// negative rail (e.g. -15 V), and pinning that to 0 V would be a hard fault.
-#[must_use]
-pub fn is_canonical_ground(name: &str) -> bool {
-    let n = name.trim();
-    // Hierarchical labels export as "/sheet/GND"; the leaf name decides.
-    let leaf = n.rsplit('/').next().unwrap_or(n).trim();
-    leaf == "0" || leaf.eq_ignore_ascii_case("gnd") || leaf.eq_ignore_ascii_case("vss")
-}
-
-/// True for ground-family net names.
-#[must_use]
-pub fn is_ground(name: &str) -> bool {
-    let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
-    matches!(
-        n.as_str(),
-        "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "VSS" | "0" | "VEE"
-    ) || n.ends_with("GND")
-}
-
-/// If `name` is a recognised supply rail, return its nominal voltage.
-#[must_use]
-pub fn power_rail_voltage(name: &str) -> Option<f64> {
-    let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
-    match n.as_str() {
-        // Bare "VDD" is deliberately NOT here: it names a supply with no
-        // magnitude, and on 3.3 V / 1.8 V boards (STM32/ESP32/nRF52) it is
-        // usually the local 3.3 V core rail, stamping it Ideal at 5 V
-        // overdrives every device on the net. Same discipline as bare "VEE"
-        // below: inventing a voltage would guess; name the net with its
-        // voltage (VDD3V3, VDD_5V) instead. Bare "VCC" stays: it is the
-        // TTL/bipolar convention and conventionally means 5 V.
-        "+5V" | "5V" | "VCC" | "+VCC" | "VBUS" | "+5V0" => Some(5.0),
-        "+3V3" | "3V3" | "+3.3V" | "3.3V" | "VCC3V3" | "VDD3V3" => Some(3.3),
-        "+3V" | "3V" => Some(3.0),
-        "+12V" | "12V" => Some(12.0),
-        "+15V" | "+15.0V" | "15V" => Some(15.0),
-        "+24V" | "+24.0V" | "24V" => Some(24.0),
-        "+1V8" | "1V8" | "1.8V" => Some(1.8),
-        // Negative rails (analog supplies, RS-232 drivers, op-amp VEE feeds).
-        // Without explicit arms these fall through to the substring fallback
-        // below, which requires a leading '+' or a VCC/VBUS token, so "-5V"
-        // returns None, gets no SupplyLeg, and silently floats at 0 V. A
-        // negative rail is NOT ground: it must keep its own node AND get a
-        // supply at the negative voltage. Bare "VEE" is deliberately
-        // unresolved: its magnitude is board-dependent (-5/-12/-15 are all
-        // common), so inventing one would guess; name the net with its
-        // voltage instead.
-        "-5V" | "-5V0" | "-5.0V" => Some(-5.0),
-        "-12V" | "-12.0V" => Some(-12.0),
-        "-15V" | "-15.0V" => Some(-15.0),
-        "-3V3" | "-3.3V" => Some(-3.3),
-        _ => {
-            // A monitor/feedback/sense TAP named after the rail it watches
-            // ("12V_FB", "VCC_5V_MON", "VDD_1V8_MON", "AVCC_2V5_SENSE") is a
-            // divided tap, never a rail node, reject it up front so NO fallback
-            // (numeric, embedded supply-token, or the loose "contains 5V"/"3V3"
-            // substring branch) pins the tap to the full nominal. The per-fallback
-            // gates below are the same discipline; this catches the cases (like the
-            // supply-token substring branch) that would otherwise slip past them.
-            if name_is_rail_monitor_tap(&n) {
-                return None;
-            }
-            // '-'-prefixed rails first: "-5V_ANALOG" must resolve negative and
-            // never fall into the positive "contains 5V" branch through an
-            // incidental VCC/VBUS token elsewhere in the name.
-            let supply_token =
-                n.starts_with('+') || n.contains("VCC") || n.contains("VBUS") || n.contains("VDD");
-            negative_rail_fallback(&n)
-                .or_else(|| positive_rail_fallback(&n))
-                // A supply-token-prefixed rail carries its magnitude in an embedded
-                // voltage token ("VCC_5V", "VDD_3V3", "VDD_1V8", "VCC_15V",
-                // "VBUS_25V"). This precise extraction MUST run before the loose
-                // "contains 5V"/"3V3" substring heuristics below: "VCC_15V" contains
-                // the substring "5V" and "VDD_13V3" contains "3V3", so the substring
-                // branches misread them as 5 V / 3.3 V. embedded_rail_magnitude reads
-                // the whole "15V"/"13V3" digit run and returns 15.0 / 13.3.
-                .or_else(|| embedded_rail_magnitude(&n))
-                // Fallback for voltage-suffixed names embedded_rail_magnitude cannot
-                // parse a numeric token from but that still carry a "5V"/"3V3"
-                // substring next to a supply token (e.g. "VCC_5VOLTS").
-                //
-                // Same gate for the 3.3 V substring fallback: a bare domain-suffixed
-                // SIGNAL net (an open-drain data line "SDA_3V3", a monitor "SENSE_3V3_MON",
-                // an interrupt "IRQ_3.3V") is NOT a rail and must stay unresolved, or
-                // Pass 3 stamps an ideal 3.3 V supply onto it and pins the line high.
-                // Genuine rails still resolve: exact names hit the match arm above,
-                // token-prefixed forms (VDD_3V3) via embedded_rail_magnitude, numeric
-                // forms (+3V3_ANALOG) via positive_rail_fallback.
-                .or_else(|| {
-                    if supply_token && n.contains("5V") {
-                        Some(5.0)
-                    } else if supply_token && (n.contains("3V3") || n.contains("3.3V")) {
-                        Some(3.3)
-                    } else {
-                        None
-                    }
-                })
-        }
-    }
-}
-
-/// True when a net names itself a supply but carries no magnitude anyone can
-/// read off the name, so [`power_rail_voltage`] correctly declines to guess one.
-///
-/// `VDD_A`, bare `VDD`, bare `VEE`, `AVDD`: every one is a supply, and not
-/// one of them says what voltage. Inventing a number would overdrive or
-/// underdrive every part on the net, so the binder leaves them unresolved and
-/// they sit at 0 V. That is the right call and it is invisible, which is the
-/// problem this predicate exists to fix. A caller that finds one of these with
-/// no supply attached knows the board is running with a rail dead, and can say
-/// so instead of reporting whatever the resulting operating point implies as
-/// though it were a finding about the board.
-///
-/// Deliberately name-only and deliberately loose. Callers pair it with a
-/// structural test (how many parts hang off the net) so a three-pin enable
-/// called `VCC_EN` does not read as a dead rail. Ground is excluded: `VSS` and
-/// friends are 0 V because that is what they are.
-#[must_use]
-pub fn names_a_supply_of_unknown_voltage(name: &str) -> bool {
-    const SUPPLY_TOKENS: [&str; 12] = [
-        "VDD", "VCC", "VEE", "VBAT", "VBUS", "VSYS", "VIN", "AVDD", "AVCC", "DVDD", "VREG", "VAUX",
-    ];
-    if is_ground(name) || power_rail_voltage(name).is_some() {
-        return false;
-    }
-    let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
-    // A tap that watches a rail is not the rail, same exclusion power_rail_voltage
-    // makes before any of its fallbacks.
-    if name_is_rail_monitor_tap(&n) {
-        return false;
-    }
-    // The last path segment: a hierarchical sheet name must not decide this.
-    let leaf = n.rsplit('/').next().unwrap_or(&n);
-    SUPPLY_TOKENS.iter().any(|t| leaf.contains(t))
-}
+/// Net-name classification lives in one table, `hauksbee_models::netclass`;
+/// these are its names as the binder has always exported them.
+pub use hauksbee_models::netclass::{
+    is_canonical_ground, is_ground, names_a_supply_of_unknown_voltage,
+    rail_voltage as power_rail_voltage,
+};
 
 /// How many parts must hang off a supply-named net before its silence counts as
 /// a dead rail rather than an oddly-named signal. An enable called `VCC_EN`
@@ -8171,179 +8045,6 @@ pub fn held_off_rails(bound: &BoundBoard) -> Vec<(String, String)> {
             Some((net, because))
         })
         .collect()
-}
-
-/// Extract a rail magnitude from a voltage token embedded MID-name, for
-/// suffixed rails like `VDD_1V8`, `AVCC_2V5`, `VCC_1V2` whose voltage is neither
-/// the canonical 5 V nor 3.3 V and whose name does not START with the digit (so
-/// [`positive_rail_fallback`] skips it). Gated on a supply token so an arbitrary
-/// signal net that merely contains a "1V2"-like substring is not misread as a
-/// rail. Accepts both `KiCad` digit-V-digit ("1V8") and dotted ("1.8V") forms.
-/// Expects `n` already trimmed / uppercased (as in [`power_rail_voltage`]).
-fn embedded_rail_magnitude(n: &str) -> Option<f64> {
-    const SUPPLY_TOKENS: [&str; 11] = [
-        "VDD", "VCC", "VBUS", "VIN", "VSYS", "VBAT", "AVDD", "DVDD", "VOUT", "VREG", "VAUX",
-    ];
-    if !(n.starts_with('+') || SUPPLY_TOKENS.iter().any(|t| n.contains(t))) {
-        return None;
-    }
-    let b = n.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        if !b[i].is_ascii_digit() {
-            i += 1;
-            continue;
-        }
-        let start = i;
-        while i < b.len() && b[i].is_ascii_digit() {
-            i += 1;
-        }
-        // An optional dotted decimal part ("1.8V").
-        if i + 1 < b.len() && b[i] == b'.' && b[i + 1].is_ascii_digit() {
-            i += 1;
-            while i < b.len() && b[i].is_ascii_digit() {
-                i += 1;
-            }
-        }
-        let head = &n[start..i];
-        if i < b.len() && b[i] == b'V' {
-            // KiCad frac form: digits directly after the 'V' ("1V8" → 1.8).
-            let mut j = i + 1;
-            while j < b.len() && b[j].is_ascii_digit() {
-                j += 1;
-            }
-            let frac = &n[i + 1..j];
-            let mag: Option<f64> = if head.contains('.') || frac.is_empty() {
-                head.parse().ok()
-            } else {
-                format!("{head}.{frac}").parse().ok()
-            };
-            if let Some(m) = mag {
-                // No upper clamp: mirror positive_rail_fallback (which resolves
-                // "+65V" -> 65). A <=60 V clamp made embedded_rail_magnitude
-                // return None for a genuine high-voltage rail ("VBUS_65V"), so
-                // control fell through to the loose "contains 5V" substring branch,
-                // which matched the "5V" INSIDE "65V" and silently solved a 65 V
-                // rail at 5 V, masking overvoltage stress. The supply-token + 'V'
-                // gate is specific enough without the range clamp.
-                if m > 0.0 && m.is_finite() {
-                    return Some(m);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// True when the name is a rail MONITOR / FEEDBACK / SENSE tap: a voltage token
-/// ("5V", "1V8", "3V3") immediately followed by a tap suffix ("_MON", "_FB",
-/// "_SENSE", …). Such a net is a divided TAP of the rail (it sits below the rail
-/// voltage), never the rail node itself, so NO rail resolver, numeric, embedded
-/// supply-token, or the loose substring fallback, may pin it to the full nominal
-/// with an ideal supply (that shorts the divider and masks the very under/over-
-/// voltage the tap senses). Checked once, up front, so every fallback is covered.
-fn name_is_rail_monitor_tap(n: &str) -> bool {
-    let b = n.as_bytes();
-    for i in 0..b.len() {
-        if b[i] == b'V' && i > 0 && b[i - 1].is_ascii_digit() {
-            // Skip a KiCad frac digit run after the 'V' ("1V8", "3V3").
-            let mut j = i + 1;
-            while j < b.len() && b[j].is_ascii_digit() {
-                j += 1;
-            }
-            if is_rail_monitor_suffix(&n[j..]) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// "+15V", "+`24V_RAIL`", "+15V0", "+9V", or a bare "15V" -> the positive rail
-/// voltage. The mirror of [`negative_rail_fallback`]: an OPTIONAL leading '+',
-/// then a numeric magnitude in plain ("15V") or `KiCad` digit-V-digit ("5V0",
-/// "3V3") form. A name that does not start with a digit after the optional '+'
-/// (e.g. "`VDD_5V`", "VCC") returns None and is left to the token heuristic.
-/// Expects `n` already trimmed / uppercased (as in [`power_rail_voltage`]).
-fn positive_rail_fallback(n: &str) -> Option<f64> {
-    rail_magnitude(n.strip_prefix('+').unwrap_or(n))
-}
-
-fn rail_magnitude(rest: &str) -> Option<f64> {
-    let int_part: String = rest
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
-    if int_part.is_empty() {
-        return None;
-    }
-    let after = &rest[int_part.len()..];
-    if !after.starts_with('V') {
-        return None;
-    }
-    let frac: String = after[1..]
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect();
-    // A voltage-PREFIXED net whose suffix is a monitor/feedback/sense token
-    // ("12V_FB", "5V_MON", "3V3_SENSE") is a divided TAP of the rail, not the rail
-    // itself: it physically sits below the nominal (near Vref / a divider ratio).
-    // The voltage-SUFFIXED sibling ("SENSE_3V3_MON") is already gated out of the
-    // substring fallback; without this gate the prefix form slipped through here
-    // and Pass 3 pinned the sense node to the full rail with an ideal supply,
-    // shorting the divider and masking the very under/over-voltage it monitors.
-    if is_rail_monitor_suffix(&after[1 + frac.len()..]) {
-        return None;
-    }
-    let magnitude: f64 = if frac.is_empty() {
-        int_part.parse().ok()?
-    } else {
-        format!("{}.{}", int_part.trim_end_matches('.'), frac)
-            .parse()
-            .ok()?
-    };
-    (magnitude > 0.0 && magnitude.is_finite()).then_some(magnitude)
-}
-
-/// True when the text right after a rail's voltage token is a monitor / feedback
-/// / sense SUFFIX, i.e. the net is a divided TAP of the rail (it sits below the
-/// rail voltage, at Vref or a divider fraction), NOT the rail itself. Pinning
-/// such a net to the full nominal with an ideal supply defeats the divider and
-/// masks the under/over-voltage the sense line exists to reveal. Rail-DOMAIN
-/// suffixes (ANALOG, USB, CORE, RAIL, DIG, IO, …) are NOT taps and still resolve.
-/// `tail` is the remainder after the voltage token (e.g. "_FB", "_MON", "_USB").
-fn is_rail_monitor_suffix(tail: &str) -> bool {
-    const RAIL_DOMAIN_EXCEPTIONS: [&str; 2] = ["SENSOR", "FBUS"];
-    const TAP_ROOTS: [&str; 8] = ["FB", "FEEDBACK", "SENS", "MON", "DIV", "TAP", "MEAS", "SNS"];
-    let first: String = tail
-        .trim_start_matches(|c: char| !c.is_ascii_alphanumeric())
-        .chars()
-        .take_while(char::is_ascii_alphanumeric)
-        .collect();
-    // Match on the ROOT, not an exact token: the same intent is spelled in
-    // longer forms, "DIVIDER" (DIV), "SENSED"/"SENSING" (SENSE), "MEASURE"
-    // (MEAS), "MONITORED" (MON), and those must still read as taps, or the net
-    // falls through and is pinned to the full rail (the failure this guard
-    // prevents).
-    //
-    // But prefix matching over-reaches onto rail-DOMAIN words that happen to
-    // share a root's letters: "SENSOR" starts with "SENS" and "FBUS" with "FB",
-    // yet "5V_SENSOR"/"3V3_FBUS" are genuine supply rails, not divided taps,
-    // classifying them as taps drops their SupplyLeg and floats the whole domain
-    // at 0 V. Those specific rail-domain words are excepted before the root test.
-    if RAIL_DOMAIN_EXCEPTIONS.contains(&first.as_str()) {
-        return false;
-    }
-    TAP_ROOTS.iter().any(|r| first.starts_with(r))
-}
-
-/// "-5V", "-`12V_RAIL`", "-5V0", "-`3V3_ANALOG`" -> the negative rail voltage.
-/// The mirror of [`positive_rail_fallback`]: a leading '-', then a numeric
-/// magnitude in plain ("12V") or `KiCad` digit-V-digit ("3V3", "5V0") form.
-/// Expects `n` already trimmed / uppercased (as in [`power_rail_voltage`]).
-fn negative_rail_fallback(n: &str) -> Option<f64> {
-    // Strip exactly one sign; do not accept -+5V by calling the positive wrapper.
-    rail_magnitude(n.strip_prefix('-')?).map(|magnitude| -magnitude)
 }
 
 /// True when a supply net's name carries no magnitude at all (`VCC`, `+VCC`),
@@ -12657,74 +12358,6 @@ style = "i2c_pointer"
             (2_200_000_000.0, "Ω", "2200 MΩ"),
         ] {
             assert_eq!(fmt_eng(value, unit), want);
-        }
-    }
-
-    /// Rail names carry their own magnitude (never a "5V"/"3V3" substring
-    /// guess), supply tokens without a magnitude resolve to nothing, and
-    /// monitor / feedback taps and domain-suffixed signals are not rails.
-    #[test]
-    fn power_rail_voltage_reads_full_magnitudes_and_refuses_taps_and_signals() {
-        for magnitude in ["+5V", "-5V", "NaNV", "infV", "0V", "1..2V", "5V_MON"] {
-            assert_eq!(positive_rail_fallback(&format!("+{magnitude}")), None);
-            assert_eq!(negative_rail_fallback(&format!("-{magnitude}")), None);
-        }
-        for (name, volts) in [
-            ("+15V", 15.0),
-            ("+15V0", 15.0),
-            ("+15V_ANALOG", 15.0),
-            ("+9V", 9.0),
-            ("+5V", 5.0),
-            ("+5V_USB", 5.0),
-            ("VCC_5V", 5.0),
-            ("-15V", -15.0),
-            ("-5V", -5.0),
-            ("-3V3_ANALOG", -3.3),
-            ("VDD_1V8", 1.8),
-            ("AVCC_2V5", 2.5),
-            ("DVDD_0V9", 0.9),
-            ("VDD_1.2V", 1.2),
-            ("VCC_15V", 15.0),
-            ("VDD_13V3", 13.3),
-            ("VDD_3V3", 3.3),
-            ("VCC_3.3V", 3.3),
-            ("VBUS_65V", 65.0),
-            ("VDD_63V3", 63.3),
-            ("+65V", 65.0),
-            ("3V3", 3.3),
-            ("+3V3", 3.3),
-            ("+3V3_DIG", 3.3),
-            ("12V", 12.0),
-            ("5V_SENSOR", 5.0),
-            ("3V3_FBUS", 3.3),
-        ] {
-            assert_eq!(power_rail_voltage(name), Some(volts), "{name}");
-        }
-        for name in [
-            "VDD",
-            "VEE",
-            "SENSE_1V2_MON",
-            "SDA_3V3",
-            "SCL_3V3",
-            "IRQ_3.3V",
-            "SDA_5V",
-            "12V_FB",
-            "3V3_SENSE",
-            "5V_MON",
-            "12V_DIV",
-            "-12V_MON",
-            "VDD_1V8_MON",
-            "VCC_5V_MON",
-            "VOUT_1V0_FB",
-            "12V_DIVIDER",
-            "3V3_SENSED",
-            "5V_SENSING",
-            "12V_MEASURE",
-            "5V_MONITORED",
-            "VDD_1V8_DIVIDER",
-            "-12V_SENSED",
-        ] {
-            assert_eq!(power_rail_voltage(name), None, "{name}");
         }
     }
 

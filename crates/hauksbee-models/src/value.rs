@@ -5,7 +5,9 @@
 //! magnitude and optional unit string.
 //!
 //! The parser is intentionally lenient about case and spacing so it handles
-//! real-world BOM entries.
+//! real-world BOM entries. Its number scanner and SI prefix table are
+//! [`hauksbee_ir::units`]'s (engineering notation: `M` mega, `m` milli), shared
+//! with every CLI flag; this module adds only the BOM-specific layers.
 
 use std::fmt;
 
@@ -78,7 +80,7 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
         .find_map(|(i, _)| {
             let package = v[i + 1..].split('-').next()?;
             let package = package.strip_suffix('T').unwrap_or(package);
-            (i > 0 && FOOTPRINT_SIZE_CODES.contains(&package)).then_some(&v[..i])
+            (i > 0 && crate::chip_size::is_imperial_code(package)).then_some(&v[..i])
         })
         .unwrap_or(v);
     // A JEDEC semiconductor part number ("1N4007", "1N5819", "2N3904", "2N7000")
@@ -246,18 +248,12 @@ fn digit_run(b: &[u8]) -> usize {
 /// EIA imperial chip-size codes that leak into BOM value fields ("0402",
 /// "`0402_47k`"). `"0402".parse::<f64>()` is 402, silently accepting one binds
 /// a 47 kΩ part at 402 Ω.
-const FOOTPRINT_SIZE_CODES: [&str; 9] = [
-    "0201", "0402", "0603", "0805", "1206", "1210", "1812", "2010", "2512",
-];
-
 /// If `s` starts with a chip-size code, return what follows: `Some("")` for a
 /// bare code, `Some(rest)` when a `_`/`-`/space separator follows (the real
 /// value). `None` when the leading digits are NOT a size code ("12065" and
 /// "0402.5" are ordinary numbers).
 fn strip_size_code(s: &str) -> Option<&str> {
-    let rest = FOOTPRINT_SIZE_CODES
-        .iter()
-        .find_map(|code| s.strip_prefix(code))?;
+    let rest = (crate::chip_size::CHIP_SIZES.iter()).find_map(|c| s.strip_prefix(c.imperial))?;
     match rest.chars().next() {
         None => Some(rest),
         Some('_' | '-' | ' ' | '\t') => Some(rest[1..].trim_start()),
@@ -269,7 +265,7 @@ fn strip_size_code(s: &str) -> Option<&str> {
 /// thousands grouping ("10,000" -> "10000", "1,000,000" -> "1000000"). A
 /// 3-digit group after the comma is treated as a thousands separator, a 1-2
 /// digit group as a decimal, so "10,000" is 10000, not 10.0.
-fn normalise_comma_decimal(s: &str) -> String {
+pub(crate) fn normalise_comma_decimal(s: &str) -> String {
     let comma_count = s.bytes().filter(|&b| b == b',').count();
     // Multiple commas are thousands grouping if each is followed by 3 digits.
     if comma_count > 1 && is_thousands_grouped(s) {
@@ -389,31 +385,11 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
             s
         }
     };
-    let bytes = s.as_bytes();
-
-    // --- consume leading digits (and optional leading decimal) ---------------
-    // Allow leading sign
-    let start = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
-    let mut i = start + digit_run(&bytes[start..]);
-    // Optional decimal with digits after
-    if bytes.get(i) == Some(&b'.') {
-        i += 1 + digit_run(&bytes[i + 1..]);
-    }
-    // Optional scientific-notation exponent ("4.7e3", "1e-6"): e/E, optional
-    // sign, one or more digits. Only consumed after a real mantissa (i > start)
-    // and only when digits actually follow the 'e', otherwise a lone 'e' is
-    // left for the tail (no unit token begins with 'E', so it fails loudly
-    // rather than silently eating a bad char). f64::parse handles the exponent.
-    if i > start && matches!(bytes.get(i), Some(b'e' | b'E')) {
-        let exp_digits_start = i + 1 + usize::from(matches!(bytes.get(i + 1), Some(b'+' | b'-')));
-        let exp_digits = digit_run(&bytes[exp_digits_start..]);
-        if exp_digits > 0 {
-            i = exp_digits_start + exp_digits;
-        }
-    }
-    if i == start {
-        // No leading digits, not a numeric value.
-        return None;
+    // Leading mantissa: sign, digits, decimal, and an exponent only when digits
+    // follow the 'e' (a lone 'e' is left for the tail, which then fails loudly).
+    let i = hauksbee_ir::units::mantissa_len(s);
+    if i == 0 {
+        return None; // No leading digits, not a numeric value.
     }
     let before = &s[..i];
     let rest = &s[i..];
@@ -468,18 +444,13 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
 }
 
 /// Parse an SI multiplier suffix. Returns `(multiplier, suffix_char, remainder)`.
+///
+/// The SI table is [`hauksbee_ir::units::split_prefix`] (engineering notation:
+/// `m` milli, `M` and `MEG` mega); this adds only the RKM decimal-point letters
+/// `R`, `H` and `F`, which are BOM conventions, not prefixes.
 fn parse_suffix(s: &str) -> (f64, Option<&str>, &str) {
     if s.is_empty() {
         return (1.0, None, s);
-    }
-    let upper = s.to_uppercase();
-    // MEG must come before M to avoid shadowing
-    if upper.starts_with("MEG") {
-        return (1e6, Some("MEG"), &s[3..]);
-    }
-    // GIG / G
-    if upper.starts_with("GIG") {
-        return (1e9, Some("GIG"), &s[3..]);
     }
     // RKM decimal-point letters for inductance ("4H7" = 4.7 H) and large
     // capacitance ("4F7" = 4.7 F): the same middle-letter-as-decimal-point
@@ -502,24 +473,14 @@ fn parse_suffix(s: &str) -> (f64, Option<&str>, &str) {
         b'F' if f_is_rkm_decimal => return (1.0, Some("F"), &s[1..]),
         _ => {}
     }
-    match s.as_bytes()[0] {
-        // Lowercase 'f' is femto; UPPERCASE 'F' is the Farad UNIT, not a
-        // multiplier. Consuming 'F' as femto turned a bare-Farad value ("1F",
-        // a supercap) into 1e-15 F, off by 10^15. Femto essentially never
-        // appears bare-uppercase in BOMs, so 'F' falls through to parse_tail,
-        // which recognises it as the Farad unit (×1). ("100nF" is unaffected:
-        // the explicit 'n' multiplier is consumed first, then 'F' is the unit.)
-        b'f' => (1e-15, Some("f"), &s[1..]),
-        b'p' | b'P' => (1e-12, Some("p"), &s[1..]),
-        b'n' | b'N' => (1e-9, Some("n"), &s[1..]),
-        b'u' | b'U' => (1e-6, Some("u"), &s[1..]),
-        // 'm' is milli; 'M' alone (not MEG) is also mega in SPICE (we treat M
-        // after digits conservatively: lowercase 'm' = milli, uppercase 'M' = mega).
-        b'm' => (1e-3, Some("m"), &s[1..]),
-        b'M' => (1e6, Some("M"), &s[1..]),
-        b'k' | b'K' => (1e3, Some("k"), &s[1..]),
-        b'g' | b'G' => (1e9, Some("G"), &s[1..]),
-        b't' | b'T' => (1e12, Some("T"), &s[1..]),
+    // Lowercase 'f' is femto; UPPERCASE 'F' is the Farad UNIT (a "1F" supercap),
+    // which split_prefix leaves for parse_tail. Case matters for m/M: 'm' is
+    // milli and 'M' is mega, the engineering reading. (SPICE reads 'M' as milli;
+    // that grammar is hauksbee_ir::parse_spice_number, for decks only.)
+    if let Some((scale, symbol, rest)) = hauksbee_ir::units::split_prefix(s) {
+        return (scale, Some(symbol), rest);
+    }
+    match bytes[0] {
         // 'R' as multiplier means ×1 (e.g. "2R2" = 2.2 Ω)
         b'R' | b'r' => (1.0, Some("R"), &s[1..]),
         _ => (1.0, None, s),

@@ -14914,9 +14914,11 @@ basis = "Table 20, I2C_VHYS_5V5, min"
 
 [[models.source.characteristic]]
 parameter = "TJA, package theta JA"
+rating = "theta_ja_c_per_w"
 typ = 49.6
 unit = "°C/W"
 conditions = "16-pin QFN"
+package = "QFN-16"
 basis = "Table 23, TJA, typ"
 
 [[models.source.characteristic]]

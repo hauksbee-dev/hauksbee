@@ -110,7 +110,7 @@ async function main() {
     await page.getByTestId('run-it').click()
     // Presence of the status bar proves the launch callback has mounted and
     // connected the real SimView. It may legitimately begin paused.
-    await page.getByTestId('sim-run-state').waitFor({ timeout: 60_000 })
+    await page.getByTestId('sim-status-bar').waitFor({ timeout: 60_000 })
     await page.getByTestId('nav-checks').click()
     await page.getByRole('button', { name: '+ bus device' }).click()
     const sensorRow = page.getByTestId('sensor-1')

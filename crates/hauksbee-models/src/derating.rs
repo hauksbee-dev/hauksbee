@@ -100,9 +100,7 @@ pub fn temp_span(conditions: &str) -> Option<(TempRef, f64, f64)> {
 /// Whether `key` names a `[models.ratings]` key.
 #[must_use]
 pub fn is_rating_key(key: &str) -> bool {
-    Ratings::KEY_GUIDE
-        .lines()
-        .any(|l| l.split_whitespace().next() == Some(key))
+    Ratings::keys().any(|k| k == key)
 }
 
 /// A tagged row's magnitude in its key's unit.
@@ -495,7 +493,7 @@ pub fn tag_problems(entry: &ModelEntry) -> Vec<String> {
         let ok = |s: f64| near(s, worst) || standard.is_some_and(|x| near(s, x));
         if !scalar.is_some_and(ok) {
             let want = standard.unwrap_or(worst);
-            out.push(format!("ratings.{key} must be {want}, its tagged row at the standard condition (25 °C, the standard board, else the least favourable): the scalar is the fallback, and Hauksbee reads the tagged rows at the scenario's temperature"));
+            out.push(format!("ratings.{key} must be {want}, {}: the scalar is the fallback, and Hauksbee reads the tagged rows at the scenario's temperature", standard_condition!()));
         }
     }
     out

@@ -25,7 +25,10 @@
 //! a real 4.7k-for-47k typo on a published keyboard), and the TI **TPS25982**
 //! eFuse family's ILIM resistor plus a connected, rated connector witness.
 //! Adding a part means
-//! adding a decoder; this is by design, not a stub.
+//! adding a decoder; this is by design, not a stub. One arm is generic: any
+//! card with a regulated-current programming law (`[models.current_program]`)
+//! is judged on whether its fitted resistor asks for more than the card's
+//! sourced programming ceiling.
 //!
 //! ## Zero-false-positive discipline (binding)
 //!
@@ -83,6 +86,7 @@ use hauksbee_extract::{
     is_plain_resistor as is_source_classified_resistor, Component, ExtractedBoard, LintCheck,
     LintFinding, NetLintReport, Severity, INFORMATIONAL_MARKER,
 };
+use hauksbee_models::rating_basis::Limit;
 use hauksbee_models::value::parse_value;
 use hauksbee_models::{ComponentKind, ModelLibrary};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -384,7 +388,8 @@ fn leg_resistor_to_ground(board: &ExtractedBoard, node: i64) -> Option<(String, 
 #[must_use]
 pub fn device_decode_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
-    for comp in &board.components {
+    for (index, comp) in board.components.iter().enumerate() {
+        check_program_domain(board, index, comp, lib, &mut report);
         if is_cypd3177(comp) {
             check_cypd3177(board, comp, &mut report);
         }
@@ -467,6 +472,138 @@ fn check_program_range(
             .net(net)
             .map(|n| vec![n.name.clone()])
             .unwrap_or_default(),
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Any card with a regulated-current programming law: the fitted resistor must
+// ask for a current inside the card's sourced programming domain.
+//
+// A `[models.current_program]` block with `semantics = "regulated_current"`
+// carries the datasheet's programming equation and `max_operating_current_a`,
+// the highest current the datasheet specifies for programmed operation (the
+// schema requires it for this semantics and forbids inferring it from a device
+// rating). A resistor whose equation current is above that ceiling programs
+// the part outside its specified range: the binder then clamps to the ceiling
+// and reports only a reduced-fidelity assumption, so without this finding a
+// charger PROG resistor a decade too low passes. The read is the same populated
+// resistance-to-ground walk the ampacity attribution and the binder use; an
+// unreadable network, a generic stand-in card, a protection-limit law, or a
+// sense-scaled law (which needs the sense shunt) stays silent.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Margin over a card's programming ceiling before the programmed current is
+/// called out of range. It covers a 5 % resistor and E96 rounding of a
+/// resistor chosen to sit at the ceiling (on a 1000 V / R law, 2.0k asks
+/// exactly 0.50 A and the E96 neighbour 1.91k asks 0.52 A); the E24 step
+/// below, 1.8k at 0.56 A, is past it and is reported.
+const PROGRAM_DOMAIN_GRACE: f64 = 1.10;
+
+/// The smallest resistance whose equation current is at most `ceiling_a`, by
+/// bisection in log space (every supported one-resistor law falls as the
+/// resistance rises). `None` when even a 1 Gohm resistor asks for more.
+fn min_program_ohms(
+    program: &hauksbee_models::schema::CurrentProgram,
+    from_ohms: f64,
+    ceiling_a: f64,
+) -> Option<f64> {
+    let asks = |ohms: f64| program.equation_current_a(ohms).unwrap_or(f64::INFINITY);
+    let (mut lo, mut hi) = (from_ohms.ln(), 1e9_f64.ln());
+    if asks(hi.exp()) > ceiling_a {
+        return None;
+    }
+    for _ in 0..80 {
+        let mid = 0.5 * (lo + hi);
+        if asks(mid.exp()) > ceiling_a {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Some(hi.exp())
+}
+
+fn check_program_domain(
+    board: &ExtractedBoard,
+    index: usize,
+    comp: &Component,
+    lib: &ModelLibrary,
+    report: &mut NetLintReport,
+) {
+    use hauksbee_models::schema::CurrentProgramSemantics;
+    // A programmed part has supply, ground and the programming pin at least;
+    // two-terminal parts never carry a programming law, so skip resolving them.
+    if comp.pins.len() < 3 {
+        return;
+    }
+    let AssemblyState::Present(part) = AssemblyState::of(comp) else {
+        return;
+    };
+    let Some(model) = hauksbee_bind::binder::resolve(lib, part).model else {
+        return;
+    };
+    if model.id.starts_with("generic") {
+        return;
+    }
+    let Some(program) = model
+        .current_program
+        .as_ref()
+        .filter(|p| p.semantics == CurrentProgramSemantics::RegulatedCurrent)
+    else {
+        return;
+    };
+    let Some(ceiling_a) = program
+        .max_operating_current_a
+        .filter(|a| a.is_finite() && *a > 0.0)
+    else {
+        return;
+    };
+    let Ok(net) = hauksbee_bind::component_evidence::role_net(part, &model, &program.pin) else {
+        return;
+    };
+    let Some((ohms, path)) =
+        super::ampacity::program_resistance_to_ground(board, net, 4, Some(index))
+    else {
+        return;
+    };
+    let Some(asked_a) = program.equation_current_a(ohms) else {
+        return;
+    };
+    if asked_a <= ceiling_a * PROGRAM_DOMAIN_GRACE {
+        return;
+    }
+    let net_name = board.net(net).map(|n| n.name.clone()).unwrap_or_default();
+    let fix = min_program_ohms(program, ohms, ceiling_a).map_or_else(
+        || {
+            "fit the resistor the datasheet's programming table gives for the current wanted"
+                .to_string()
+        },
+        |min| {
+            format!(
+                "fit at least {} ohm for the {ceiling_a:.3} A ceiling, or the value the \
+                 datasheet's programming table gives for the current wanted",
+                format_ohms(min)
+            )
+        },
+    );
+    let mut refs = vec![comp.reference.clone()];
+    refs.extend(path.iter().cloned());
+    report.findings.push(LintFinding {
+        check: LintCheck::DeviceDecode,
+        severity: Severity::Medium,
+        message: format!(
+            "{} ({}) is programmed outside its specified range: its {} resistor {} = {} ohm \
+             on net '{net_name}' asks for {asked_a:.3} A by the part's programming equation, \
+             above the {ceiling_a:.3} A the datasheet specifies for programmed operation, so \
+             the part either overheats delivering it or limits at an unspecified point; {fix}",
+            comp.reference,
+            comp.value,
+            program.pin,
+            path.join("+"),
+            format_ohms(ohms),
+        ),
+        refs,
+        nets: vec![net_name],
     });
 }
 
@@ -733,7 +870,9 @@ fn tps25982_rated_connectors(
             };
             if let Some(model) = hauksbee_bind::binder::resolve(lib, part).model {
                 if model.kind == ComponentKind::Connector {
-                    if let Some(rating_a) = model.ratings.max_current_a.filter(|a| *a > 0.0) {
+                    let r = &model.ratings;
+                    let rating = r.basis.judged(Limit::Current, r.max_current_a);
+                    if let Some(rating_a) = rating.filter(|a| *a > 0.0) {
                         witnesses
                             .entry(component.reference.clone())
                             .or_insert_with(|| RatedConnector {
@@ -1532,6 +1671,87 @@ mod tests {
             0,
             "with the permanent pull-down DNP the static divider is uncomputable; the check must stay silent"
         );
+    }
+}
+
+#[cfg(test)]
+mod program_domain_tests {
+    use super::*;
+
+    /// An MCP73831 linear charger (SOT-23-5: 1 STAT, 2 VSS, 3 VBAT, 4 VDD,
+    /// 5 PROG) with `prog` as its PROG resistor to ground. The card's law is
+    /// `I_REG = 1000 V / R_PROG` with a 0.5 A programmed-operation ceiling.
+    fn charger_board(value: &str, prog: &str) -> String {
+        format!(
+            r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "VBUS")
+  (net 3 "VBAT")
+  (net 4 "/charger/PROG")
+  (net 5 "/charger/STAT")
+  (module Package_TO_SOT_SMD:SOT-23-5 (layer F.Cu) (at 100 100)
+    (fp_text reference U3 (at 0 0) (layer F.SilkS))
+    (fp_text value {value} (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 5 "/charger/STAT"))
+    (pad 2 smd rect (at 0 1) (net 1 "GND"))
+    (pad 3 smd rect (at 0 2) (net 3 "VBAT"))
+    (pad 4 smd rect (at 1 0) (net 2 "VBUS"))
+    (pad 5 smd rect (at 1 1) (net 4 "/charger/PROG"))
+  )
+  (module Resistor_SMD:R_0603 (layer F.Cu) (at 110 100)
+    (fp_text reference R8 (at 0 0) (layer F.SilkS))
+    (fp_text value {prog} (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 4 "/charger/PROG"))
+    (pad 2 smd rect (at 2 0) (net 1 "GND"))
+  )
+)
+"#
+        )
+    }
+
+    /// Faulty input: 200 ohm asks 5 A of a part specified to 0.5 A.
+    #[test]
+    fn prog_resistor_a_decade_low_fires_with_the_ceiling_and_the_fix() {
+        let report = lint(&charger_board("MCP73831T-2ACI/OT", "200"));
+        let f: Vec<_> = report.of_check(LintCheck::DeviceDecode).collect();
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].severity, Severity::Medium);
+        assert!(f[0].refs.contains(&"U3".to_string()) && f[0].refs.contains(&"R8".to_string()));
+        assert_eq!(f[0].nets, vec!["/charger/PROG".to_string()]);
+        assert!(
+            f[0].message.contains("5.000 A") && f[0].message.contains("0.500 A"),
+            "{}",
+            f[0].message
+        );
+        assert!(
+            f[0].message.contains("at least 2.0k"),
+            "the remedy names the minimum: {}",
+            f[0].message
+        );
+    }
+
+    /// Legal controls: the datasheet's 2k (exactly the ceiling), the E96 1.91k
+    /// inside the grace, and an ordinary 10k all stay silent; so does an
+    /// unparseable resistor and an unfitted one.
+    #[test]
+    fn in_range_or_unreadable_prog_resistors_stay_silent() {
+        for prog in ["2k", "1.91k", "10k", "RC0603", "DNP"] {
+            let report = lint(&charger_board("MCP73831T-2ACI/OT", prog));
+            assert_eq!(
+                report.of_check(LintCheck::DeviceDecode).count(),
+                0,
+                "PROG = {prog} must stay silent: {:?}",
+                report.findings
+            );
+        }
+    }
+
+    /// A part with no programming law is never judged, whatever sits on pin 5.
+    #[test]
+    fn a_part_without_a_programming_law_stays_silent() {
+        let report = lint(&charger_board("74HC1G04", "200"));
+        assert_eq!(report.of_check(LintCheck::DeviceDecode).count(), 0);
     }
 }
 

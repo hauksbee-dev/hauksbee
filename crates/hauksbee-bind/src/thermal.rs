@@ -54,6 +54,7 @@
 //! A part whose package is unrecognised falls back to a conservative
 //! [`DEFAULT_THETA_JA`].
 
+use hauksbee_models::chip_size;
 use hauksbee_models::package::package_body;
 use hauksbee_models::schema::ComponentKind;
 
@@ -73,28 +74,6 @@ pub const DEFAULT_TJ_MAX_C: f64 = 125.0;
 /// D2PAK, SOT-223, SMA/SMB/SMC), which are typically rated to 150 C.
 pub const POWER_TJ_MAX_C: f64 = 150.0;
 
-/// Size-derived `theta_JA` for a chip resistor / capacitor footprint, by imperial
-/// size token: still-air with minimal copper, bracketing the power deratings the
-/// stress monitor already encodes.
-///
-/// 01005 MUST be tested before 0402: `KiCad` pairs the imperial code with its
-/// metric twin, and 01005's metric code IS 0402 ("`R_01005_0402Metric`"), so a
-/// substring match on "0402" would give the smallest chip the 0402 `theta_JA`
-/// (600), LOWER than 0201's 900, i.e. under-estimating Tj on the worst-cooling
-/// body. Smaller body = hotter, so 01005 sits ABOVE 0201, matching
-/// `resistor_power_from_footprint`'s "match the smallest package first" rule.
-const CHIP_THETA_JA: &[(&str, f64)] = &[
-    ("01005", 1200.0),
-    ("0201", 900.0),
-    ("0402", 600.0),
-    ("0603", 400.0),
-    ("0805", 300.0),
-    ("1206", 220.0),
-    ("1210", 160.0),
-    ("2010", 120.0),
-    ("2512", 80.0),
-];
-
 /// Derive a junction-to-ambient thermal resistance (C/W) from a footprint.
 ///
 /// Read by its package body ([`package_body`], whose table carries each
@@ -104,10 +83,13 @@ const CHIP_THETA_JA: &[(&str, f64)] = &[
 pub fn theta_ja_from_footprint(footprint: &str, kind: ComponentKind) -> f64 {
     let f = footprint.to_ascii_uppercase();
     // Chip passives: size-derived (smaller body = worse cooling).
-    let chip = (CHIP_THETA_JA.iter())
-        .find(|(t, _)| matches!(kind, ComponentKind::Passive) && f.contains(t));
+    // Size-derived (the ladder in `hauksbee_models::chip_size`, smallest body first:
+    // 01005 before its metric twin 0402). A size with no figure falls to the body.
+    let chip =
+        chip_size::find_imperial(|code| matches!(kind, ComponentKind::Passive) && f.contains(code))
+            .and_then(|c| c.theta_ja_c_per_w);
     let body = || package_body(&f).map(|b| b.theta_ja_c_per_w);
-    chip.map(|c| c.1).or_else(body).unwrap_or(DEFAULT_THETA_JA)
+    chip.or_else(body).unwrap_or(DEFAULT_THETA_JA)
 }
 
 /// Default maximum junction temperature (C) for a package class. Power packages

@@ -17,8 +17,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::{
-    is_ground, is_led, is_test_point_or_hole, is_unconnected_net, members, norm, parse_ohms,
-    pin_is_no_connect, rail_voltage, LintCheck, LintFinding, NetLintReport, Severity,
+    is_ground, is_led, is_positive_supply, is_test_point_or_hole, is_unconnected_net, members,
+    norm, parse_ohms, pin_is_no_connect, LintCheck, LintFinding, NetLintReport, Severity,
 };
 use crate::assembly::AssemblyState;
 use crate::dsu::Dsu;
@@ -172,13 +172,15 @@ pub(super) fn check_ground_islands(board: &ExtractedBoard, report: &mut NetLintR
             .map(|(c, _)| c.reference.clone())
             .collect()
     };
-    // The board ground: a conventionally named ground (`GND`, `AGND`, `GND*`)
-    // ahead of any other return-named net, then the most-connected.
+    // The board ground: the net named plain `GND`/`VSS` first, then any other
+    // ground-family net (`AGND`, `SENSOR_GND`), then any other return-named
+    // net, then the most-connected. A busier `SENSOR_GND` is still the island.
     let Some(main) = (0..board.nets.len())
         .filter(|&i| grounds[i])
         .max_by_key(|&i| {
             let net = &board.nets[i];
             (
+                hauksbee_models::netclass::is_canonical_ground(&net.name),
                 is_ground(&net.name),
                 members(board, net.id).len(),
                 std::cmp::Reverse(i),
@@ -416,9 +418,7 @@ fn level_through_resistor(board: &ExtractedBoard, net: i64) -> Option<(bool, Str
         if is_ground(&n.name) {
             Some((false, n.name.clone()))
         } else {
-            rail_voltage(&n.name)
-                .filter(|v| *v > 0.0)
-                .map(|_| (true, n.name.clone()))
+            is_positive_supply(&n.name).then(|| (true, n.name.clone()))
         }
     };
     if let Some(level) = classify(net) {

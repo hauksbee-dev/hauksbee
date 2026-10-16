@@ -504,6 +504,11 @@ pub struct RunOutcome {
     /// ([`crate::tolerance::VariantCoverage::conditions`]). The same sentences on
     /// every member of a run; empty when every combination ran.
     pub verdict_conditions: Vec<String>,
+    /// Each AVR core clock this member's co-sim had to guess (no fuses, no
+    /// crystal frequency; the card's default): the run's timing rests on it, so
+    /// the verdict carries it as a condition
+    /// ([`hauksbee_engine::scheduler::Scheduler::clock_assumptions`]).
+    pub clock_assumptions: Vec<String>,
     /// Full `(t_s, volts)` waveforms for the nets any `hwtrace` assertion
     /// probes, sampled at the frame cadence (held-stale frames excluded, like
     /// every other analog aggregate). Empty when the spec has no hwtrace
@@ -1447,6 +1452,8 @@ fn check_trackable_assert_refs(spec: &Spec, bound: &BoundBoard) -> Result<(), Sp
                 let has_real_tj = bound.device_meta.iter().any(|m| {
                     key_belongs_to_ref(reference, &m.reference)
                         && m.ratings.max_junction_temp_c.is_some()
+                        && (m.ratings.basis)
+                            .judges(hauksbee_models::rating_basis::Limit::JunctionTemp)
                 });
                 if !has_real_tj {
                     return Err(SpecError::Invalid(format!(
@@ -2559,6 +2566,7 @@ fn run_one(
         interior: plan.interior,
         variants: plan.variants.clone(),
         verdict_conditions: Vec::new(),
+        clock_assumptions: engine.scheduler().clock_assumptions().to_vec(),
         net_series,
         substitutions: engine
             .scheduler()

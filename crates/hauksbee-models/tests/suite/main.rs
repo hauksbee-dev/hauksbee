@@ -12,6 +12,7 @@
 mod agent_cli_invocation;
 mod analog_active_resolve;
 mod api_backend;
+mod avr_package_and_clock_cards;
 mod bat54_family;
 mod bjt_regex_polarity;
 mod bridge_dac_mcu_cards;
@@ -24,6 +25,7 @@ mod corpus_gap_cards;
 mod declared_coverage;
 mod digital_pin_maps;
 mod diode_1n4148_packages;
+mod docs_generated;
 mod exact_override_tiebreak;
 mod external_five_coverage;
 mod extract_model_choice;

@@ -451,9 +451,16 @@ fn check_plain_sections_read_inconclusive_but_drc_stays_exempt() {
     let out = run_board(&unbound(), &["--check", "--plain"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let text = stdout(&out);
-    // Both model-dependent sections carry the sentence.
+    // The sentence is said once, above every section, and both model-dependent
+    // sections point back at it rather than repeating it.
     assert_eq!(
         text.matches("INCONCLUSIVE: 1 current-carrying / active part(s) have no model (Q1)")
+            .count(),
+        1,
+        "the scope banner is printed once:\n{text}"
+    );
+    assert_eq!(
+        text.matches(hauksbee_engine::plain::INCONCLUSIVE_SEE_TOP)
             .count(),
         2,
         "the lint AND SI sections both refuse the clean bill:\n{text}"

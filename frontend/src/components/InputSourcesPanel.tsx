@@ -1,5 +1,14 @@
 import { useState, useCallback } from 'react'
 import type { BoardInfoMsg, ClientMessage } from '../types/protocol'
+import { NetPicker } from './ProbeScopePanel'
+
+/** The peripheral kinds a live attach offers, in the words the panel shows. */
+export type AttachKind = 'pushbutton' | 'toggle' | 'stimulus'
+const ATTACH_KINDS: { kind: AttachKind; label: string; hint: string }[] = [
+  { kind: 'pushbutton', label: 'Button', hint: 'a momentary switch to GND, press and hold' },
+  { kind: 'toggle', label: 'Switch', hint: 'a latching switch to GND' },
+  { kind: 'stimulus', label: 'Voltage', hint: 'a driven voltage you set with a slider' },
+]
 
 // Virtual peripherals for the sim rail's "Inputs" card. Scalar inputs are
 // listed only when BoardInfo explicitly exposes a SetInput id/range; a net name
@@ -8,6 +17,9 @@ import type { BoardInfoMsg, ClientMessage } from '../types/protocol'
 interface InputSourcesPanelProps {
   boardInfo: BoardInfoMsg | null
   send: (msg: ClientMessage) => void
+  /** Attach a peripheral on a net (live, and saved into the checks scenario).
+   *  Absent where nothing can be attached (the standalone demo). */
+  onAttach?: (kind: AttachKind, net: string) => void
 }
 
 /** A peripheral that reads as a pushbutton. */
@@ -15,7 +27,7 @@ function isButtonKind(kind: string): boolean {
   return /button|switch|btn/i.test(kind)
 }
 
-export function InputSourcesPanel({ boardInfo, send }: InputSourcesPanelProps) {
+export function InputSourcesPanel({ boardInfo, send, onAttach }: InputSourcesPanelProps) {
   const inputSources = boardInfo?.input_sources ?? []
   const peripherals = boardInfo?.peripherals ?? []
 
@@ -32,17 +44,22 @@ export function InputSourcesPanel({ boardInfo, send }: InputSourcesPanelProps) {
     send({ type: 'SetPeripheral', id, value })
   }, [send])
 
+  const attach = onAttach && <AttachInput nets={boardInfo?.nets ?? []} onAttach={onAttach} />
+
   if (inputSources.length === 0 && peripherals.length === 0) {
     return (
-      <div className="px-3 py-2.5 text-[11px]" style={{ color: 'var(--silk-dim)' }}>
-        No buttons or signals are attached yet. To add one, open Net voltages,
-        pick a net, and attach it from the card that opens.
+      <div className="flex flex-col gap-2 px-3 py-2.5">
+        <div className="text-[11px]" style={{ color: 'var(--silk-dim)' }}>
+          No buttons or signals are attached yet.
+        </div>
+        {attach}
       </div>
     )
   }
 
   return (
     <div className="flex flex-col gap-2 px-3 py-2.5">
+      {attach}
       {/* Attached peripherals: buttons press-and-hold; anything else gets a
           0..1 slider (the server interprets the value per kind). */}
       {peripherals.map(p => {
@@ -105,6 +122,37 @@ export function InputSourcesPanel({ boardInfo, send }: InputSourcesPanelProps) {
           </SliderCard>
         )
       })}
+    </div>
+  )
+}
+
+/** Pick what to attach, then the net: the attach happens on the pick. */
+function AttachInput({ nets, onAttach }: { nets: string[]; onAttach: (kind: AttachKind, net: string) => void }) {
+  const [kind, setKind] = useState<AttachKind>('pushbutton')
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="attach-input">
+      <div className="flex gap-1" role="radiogroup" aria-label="What to attach">
+        {ATTACH_KINDS.map(k => (
+          <button
+            key={k.kind}
+            type="button"
+            role="radio"
+            aria-checked={kind === k.kind}
+            title={k.hint}
+            onClick={() => setKind(k.kind)}
+            className="hb-press text-[10px] px-2 py-0.5 rounded-md cursor-pointer"
+            style={{
+              background: kind === k.kind ? 'var(--copper-tint-strong)' : 'var(--surface-2)',
+              color: kind === k.kind ? 'var(--copper-hi)' : 'var(--silk-faint)',
+              border: `1px solid ${kind === k.kind ? 'var(--copper-deep)' : 'var(--hairline)'}`,
+            }}
+          >
+            {k.label}
+          </button>
+        ))}
+      </div>
+      <NetPicker testId="attach-input-net" label="Attach input" nets={nets} drop="down" align="left"
+        onPick={net => onAttach(kind, net)} />
     </div>
   )
 }

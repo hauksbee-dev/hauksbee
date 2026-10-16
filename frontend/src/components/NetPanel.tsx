@@ -104,6 +104,18 @@ export function NetPanel({
             <div
               key={name}
               onClick={() => onSelectNet(isSelected ? null : name)}
+              role="button"
+              tabIndex={0}
+              aria-pressed={isSelected}
+              data-net={name}
+              onKeyDown={event => {
+                if (event.key !== 'Enter' && event.key !== ' ') return
+                event.preventDefault()
+                onSelectNet(isSelected ? null : name)
+                // The card opens elsewhere on the page: move to its checks so the
+                // next Tab lands on the first offer, not on the next net.
+                if (!isSelected) window.setTimeout(() => document.querySelector<HTMLElement>('[data-testid="check-this"]')?.focus(), 60)
+              }}
               data-testid={moving ? 'net-row-moving' : unmeasured ? 'net-row-unmeasured' : undefined}
               className="flex items-center gap-2 px-3 py-1.5 cursor-pointer"
               style={{

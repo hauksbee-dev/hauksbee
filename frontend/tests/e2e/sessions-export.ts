@@ -95,9 +95,9 @@ await browserFlow(flow, async (page, { base, browser }) => {
 
   await composeChecks(page, 700)
   await page.click('[data-testid="run-checks"]')
-  await page.waitForSelector('[data-testid="check-results"], [data-testid="builder-validation"]', { timeout: 90_000 })
+  await page.waitForSelector('[data-testid="run-details-toggle"], [data-testid="builder-validation"]', { timeout: 90_000 })
   await settle(page, 900)
-  const specText = await page.locator('[data-testid="spec-preview"]').innerText()
+  const specText = (await page.locator('[data-testid="spec-preview"]').textContent()) ?? ''
   ok('the composed spec holds both assertions',
     (specText.match(/\[\[assert\]\]/g) ?? []).length === 2,
     `${(specText.match(/\[\[assert\]\]/g) ?? []).length} asserts`)
@@ -291,7 +291,7 @@ await browserFlow(flow, async (page, { base, browser }) => {
   await page.click('[data-testid="nav-checks"]')
   await page.waitForSelector('[data-testid="checks-panel"]')
   await settle(page, 700)
-  const restoredSpec = await page.locator('[data-testid="spec-preview"]').innerText()
+  const restoredSpec = (await page.locator('[data-testid="spec-preview"]').textContent()) ?? ''
   ok('the composed checks came back with the session',
     (restoredSpec.match(/\[\[assert\]\]/g) ?? []).length === 2,
     `${(restoredSpec.match(/\[\[assert\]\]/g) ?? []).length} asserts`)
@@ -497,6 +497,8 @@ await browserFlow(flow, async (page, { base, browser }) => {
   wire[0]!.send(JSON.stringify({ type: 'Status', running: false, sim_time: 3, options: {
     temperature_c: 25, parasitics: false, junction_caps: false, tolerances: false, integration: 'trap', fixed_dt: 0, granularity: 1 } }))
   await lp.locator('[data-testid="transport-step-back"]').click()
+  // The fault count in the transport row opens the dock's fault table.
+  await lp.locator('[data-testid="sim-fault-count"]').click()
   await lp.locator('[data-testid="fault-row-active"]').click()
   const heldReview = await lp.locator('[data-testid="transport-review"]').innerText()
   const heldFaults = await lp.locator('[data-testid="fault-count-label"]').innerText()

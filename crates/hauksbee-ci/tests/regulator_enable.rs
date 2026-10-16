@@ -481,8 +481,17 @@ fn en_pulled_to_gnd_by_a_resistor_alone_is_held_off() {
 #[cfg(feature = "avr")]
 fn firmware_run(dir: &Path, asserts: &str) -> CiResult {
     let models = models_dir(dir, "SYNTH-LDO-EN", "en", EN_HIGH);
-    let extra: [Part<'_>; 2] = [
+    // The demo firmware is built for 16 MHz, so the board carries the 16 MHz
+    // crystal across XTAL1/XTAL2 (pads 9/10) that states it; without one the
+    // co-sim runs the bare chip at its 8 MHz internal RC and says so.
+    let extra: [Part<'_>; 3] = [
         ("R2", "100k", R0603, &[("1", "D13"), ("2", "GND")]),
+        (
+            "Y1",
+            "16MHz",
+            "Crystal:Crystal_HC49-4H_Vertical",
+            &[("1", "XTAL1"), ("2", "XTAL2")],
+        ),
         (
             "U2",
             "ATmega328P",
@@ -490,6 +499,8 @@ fn firmware_run(dir: &Path, asserts: &str) -> CiResult {
             &[
                 ("7", "+5V"),
                 ("8", "GND"),
+                ("9", "XTAL1"),
+                ("10", "XTAL2"),
                 ("19", "D13"),
                 ("20", "+5V"),
                 ("22", "GND"),

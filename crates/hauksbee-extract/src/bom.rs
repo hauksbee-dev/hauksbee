@@ -1354,8 +1354,8 @@ pub(crate) fn sniff_delimiter(line: &str) -> char {
 
 /// Normalise a header for matching: drop the byte-order mark, the quotes, the
 /// `(optional)` an assembly house's template adds (including the full-width
-/// bracket form JLCPCB's own template uses), then fold everything that is not
-/// alphanumeric into a single underscore.
+/// bracket form JLCPCB's own template uses), then
+/// [`hauksbee_models::matcher::normalise_key`].
 ///
 /// `"Reference(s)"` becomes `reference_s`, `"Mid X"` becomes `mid_x`,
 /// `"JLCPCB Part #（optional）"` becomes `jlcpcb_part`.
@@ -1364,15 +1364,7 @@ pub(crate) fn normalise_header(raw: &str) -> String {
     for token in ["(optional)", "（optional）", "?optional?", "(mpn)"] {
         s = s.replace(token, "");
     }
-    let mut out = String::new();
-    for c in s.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c);
-        } else if !out.ends_with('_') {
-            out.push('_');
-        }
-    }
-    out.trim_matches('_').to_string()
+    hauksbee_models::matcher::normalise_key(&s)
 }
 
 /// Read a text file as a table, finding the header row past any banner and

@@ -172,7 +172,11 @@ hauksbee run <board> --ac <fstart>:<fstop>:<points>[:dec|:oct|:lin] \
 ```
 
 - `--ac 10:1e6:20` sweeps 10 Hz to 1 MHz at 20 points per decade (the default
-  spacing; see the sweep forms below).
+  spacing; see the sweep forms below). Frequencies use engineering notation,
+  not SPICE's: `10:1M:20` is the same sweep (`M` and `MEG` are mega, `m` is
+  milli, and `1mhz` is refused as ambiguous). The parsed sweep is printed back
+  as `AC sweep 10 Hz to 1 MHz, 20 points/decade`. Deck `.ac` cards keep SPICE
+  grammar, where `1M` is 1 mHz.
 - `--ac-node OUT` reports the Bode table for net `OUT` (repeatable, defaults to
   every non-ground net).
 - `--ac-csv sweep.csv` writes `net,freq_hz,mag_db,phase_deg` rows.
