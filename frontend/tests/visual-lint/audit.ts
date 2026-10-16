@@ -337,7 +337,20 @@ export function auditPage(tol: typeof TOLERANCE): Finding[] {
         }
         const range = document.createRange()
         range.selectNodeContents(child)
-        rects.push(...Array.from(range.getClientRects()).filter(r => r.width > 0.5 && r.height > 0.5))
+        let found = Array.from(range.getClientRects()).filter(r => r.width > 0.5 && r.height > 0.5)
+        // A label that ellipsizes inside its own clipping box (a `truncate`
+        // span) is painted only as far as that box: the Range still reports the
+        // whole text run, so clamp it to the box. Rule 3 reports the truncation
+        // as a note; it is not an overflow of the control.
+        if (child instanceof Element) {
+          const cs = style(child)
+          if (cs.textOverflow === 'ellipsis' && clips(cs.overflowX)) {
+            const cb = rect(child)
+            found = found.map(f =>
+              new DOMRect(Math.max(f.left, cb.left), f.top, Math.max(0, Math.min(f.right, cb.right) - Math.max(f.left, cb.left)), f.height))
+          }
+        }
+        rects.push(...found)
         range.detach()
       }
     } catch {
