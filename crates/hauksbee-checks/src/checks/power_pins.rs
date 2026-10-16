@@ -33,9 +33,9 @@ use std::collections::HashMap;
 
 use hauksbee_bind::binder::{is_ground, resolve};
 use hauksbee_extract::assembly::AssemblyState;
-use hauksbee_extract::netlint::is_unconnected_net;
 use hauksbee_extract::{
-    Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity, REMEDY_MARKER,
+    is_unconnected_net, Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
+    REMEDY_MARKER,
 };
 use hauksbee_models::netclass::{is_positive_supply, is_supply, rail_voltage};
 use hauksbee_models::pin_roles::{power_pin, PowerKind, PowerPin};
@@ -432,13 +432,26 @@ impl Part<'_> {
         if grounded.is_empty() && lifted.is_empty() {
             return None;
         }
+        let message = self.exchange_message(&grounded, &lifted, &supplies);
+        let mut nets: Vec<String> = grounded
+            .iter()
+            .chain(lifted.iter())
+            .map(|p| p.net.clone())
+            .collect();
+        nets.sort();
+        nets.dedup();
+        Some(self.finding(message, nets))
+    }
+
+    /// The finding's sentence for a supply on ground, a return on a rail, or both.
+    fn exchange_message(&self, grounded: &[&Pad], lifted: &[&Pad], supplies: &[&Pad]) -> String {
         // A grounded supply alone is a supply on ground; a lifted return alone
         // is a return on a rail; both together are the exchange.
         let g_net = |pads: &[&Pad]| pads.first().map(|p| p.net.clone()).unwrap_or_default();
-        let message = match (grounded.is_empty(), lifted.is_empty()) {
+        match (grounded.is_empty(), lifted.is_empty()) {
             (false, false) => {
-                let rail = g_net(&lifted);
-                let gnd = g_net(&grounded);
+                let rail = g_net(lifted);
+                let gnd = g_net(grounded);
                 format!(
                     "{} has its supply and ground exchanged: {sup} (supply) is on '{gnd}' and \
                      {ret} (ground return) is on '{rail}'. The IC is powered backwards: its \
@@ -446,12 +459,12 @@ impl Part<'_> {
                      which draws heavy current, clamps the rail, and never works. {REMEDY_MARKER}\
                      Swap them: connect {sup} to '{rail}' and {ret} to '{gnd}'.",
                     self.who(),
-                    sup = pads_text(&grounded),
-                    ret = pads_text(&lifted),
+                    sup = pads_text(grounded),
+                    ret = pads_text(lifted),
                 )
             }
             (false, true) => {
-                let window = self.window(&grounded);
+                let window = self.window(grounded);
                 let to = window.map_or_else(
                     || "its supply rail".to_string(),
                     |(lo, hi)| format!("a {}-{} V supply rail", volts(lo), volts(hi)),
@@ -462,13 +475,12 @@ impl Part<'_> {
                      and any pin another supply drives back-feeds it through its protection \
                      diodes. {REMEDY_MARKER}Connect {sup} to {to}.",
                     self.who(),
-                    sup = pads_text(&grounded),
+                    sup = pads_text(grounded),
                     id = self.model.id,
-                    net = g_net(&grounded),
+                    net = g_net(grounded),
                 )
             }
             (true, _) => {
-                let sup: Vec<&Pad> = supplies.clone();
                 format!(
                     "{} has its ground return on a positive rail: {ret} (ground return, card \
                      '{id}') is on '{net}', above the part's supply {sup}, so the IC sees its \
@@ -476,21 +488,13 @@ impl Part<'_> {
                      current, a clamped rail, and the part never works. {REMEDY_MARKER}Connect \
                      {ret} to the ground net and check that the supply pad is on the rail.",
                     self.who(),
-                    ret = pads_text(&lifted),
+                    ret = pads_text(lifted),
                     id = self.model.id,
-                    net = g_net(&lifted),
-                    sup = pads_text(&sup),
+                    net = g_net(lifted),
+                    sup = pads_text(supplies),
                 )
             }
-        };
-        let mut nets: Vec<String> = grounded
-            .iter()
-            .chain(lifted.iter())
-            .map(|p| p.net.clone())
-            .collect();
-        nets.sort();
-        nets.dedup();
-        Some(self.finding(message, nets))
+        }
     }
 }
 
