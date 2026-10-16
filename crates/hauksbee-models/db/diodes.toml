@@ -2987,21 +2987,18 @@ conditions = "TA = 25 C"
 basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, VRRM, SS12 column"
 [[models.source.characteristic]]
 parameter = "IF(AV) average forward rectified current"
-rating = "max_current_a"
 max = 1.0
 unit = "A"
 conditions = "TL per fig. 1"
 basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IF(AV)"
 [[models.source.characteristic]]
 parameter = "IFSM peak forward surge current"
-rating = "max_surge_current_a"
 max = 40.0
 unit = "A"
 conditions = "8.3 ms single half sine-wave superimposed on rated load"
 basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IFSM"
 [[models.source.characteristic]]
 parameter = "TJ operating junction temperature"
-rating = "max_junction_temp_c"
 max = 150.0
 unit = "°C"
 conditions = "-65 to +150"
@@ -3052,21 +3049,18 @@ conditions = "TA = 25 C"
 basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, VRRM, SS13 column"
 [[models.source.characteristic]]
 parameter = "IF(AV) average forward rectified current"
-rating = "max_current_a"
 max = 1.0
 unit = "A"
 conditions = "TL per fig. 1"
 basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IF(AV)"
 [[models.source.characteristic]]
 parameter = "IFSM peak forward surge current"
-rating = "max_surge_current_a"
 max = 40.0
 unit = "A"
 conditions = "8.3 ms single half sine-wave superimposed on rated load"
 basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IFSM"
 [[models.source.characteristic]]
 parameter = "TJ operating junction temperature"
-rating = "max_junction_temp_c"
 max = 150.0
 unit = "°C"
 conditions = "-65 to +150"
@@ -3117,21 +3111,18 @@ conditions = "TA = 25 C"
 basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, VRRM, SS14 column"
 [[models.source.characteristic]]
 parameter = "IF(AV) average forward rectified current"
-rating = "max_current_a"
 max = 1.0
 unit = "A"
 conditions = "TL per fig. 1"
 basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IF(AV)"
 [[models.source.characteristic]]
 parameter = "IFSM peak forward surge current"
-rating = "max_surge_current_a"
 max = 40.0
 unit = "A"
 conditions = "8.3 ms single half sine-wave superimposed on rated load"
 basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IFSM"
 [[models.source.characteristic]]
 parameter = "TJ operating junction temperature"
-rating = "max_junction_temp_c"
 max = 150.0
 unit = "°C"
 conditions = "-65 to +150"
@@ -3182,21 +3173,18 @@ conditions = "TA = 25 C"
 basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, VRRM, SS15 column"
 [[models.source.characteristic]]
 parameter = "IF(AV) average forward rectified current"
-rating = "max_current_a"
 max = 1.0
 unit = "A"
 conditions = "TL per fig. 1"
 basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IF(AV)"
 [[models.source.characteristic]]
 parameter = "IFSM peak forward surge current"
-rating = "max_surge_current_a"
 max = 40.0
 unit = "A"
 conditions = "8.3 ms single half sine-wave superimposed on rated load"
 basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IFSM"
 [[models.source.characteristic]]
 parameter = "TJ operating junction temperature"
-rating = "max_junction_temp_c"
 max = 150.0
 unit = "°C"
 conditions = "-65 to +150"
@@ -3247,21 +3235,18 @@ conditions = "TA = 25 C"
 basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, VRRM, SS16 column"
 [[models.source.characteristic]]
 parameter = "IF(AV) average forward rectified current"
-rating = "max_current_a"
 max = 1.0
 unit = "A"
 conditions = "TL per fig. 1"
 basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IF(AV)"
 [[models.source.characteristic]]
 parameter = "IFSM peak forward surge current"
-rating = "max_surge_current_a"
 max = 40.0
 unit = "A"
 conditions = "8.3 ms single half sine-wave superimposed on rated load"
 basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IFSM"
 [[models.source.characteristic]]
 parameter = "TJ operating junction temperature"
-rating = "max_junction_temp_c"
 max = 150.0
 unit = "°C"
 conditions = "-65 to +150"
@@ -3312,21 +3297,18 @@ conditions = "TA = 25 C"
 basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, VRRM/VRWM/VR, SB120 column"
 [[models.source.characteristic]]
 parameter = "IO average rectified output current"
-rating = "max_current_a"
 max = 1.0
 unit = "A"
 conditions = "9.5 mm from the case, fig. 1"
 basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IO"
 [[models.source.characteristic]]
 parameter = "IFSM non-repetitive peak forward surge current"
-rating = "max_surge_current_a"
 max = 40.0
 unit = "A"
 conditions = "8.3 ms single half sine-wave, JEDEC method"
 basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IFSM"
 [[models.source.characteristic]]
 parameter = "TJ operating temperature range"
-rating = "max_junction_temp_c"
 max = 125.0
 unit = "°C"
 conditions = "SB120-SB140 to +125, SB150-SB160 to +150"
@@ -3377,21 +3359,18 @@ conditions = "TA = 25 C"
 basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, VRRM/VRWM/VR, SB130 column"
 [[models.source.characteristic]]
 parameter = "IO average rectified output current"
-rating = "max_current_a"
 max = 1.0
 unit = "A"
 conditions = "9.5 mm from the case, fig. 1"
 basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IO"
 [[models.source.characteristic]]
 parameter = "IFSM non-repetitive peak forward surge current"
-rating = "max_surge_current_a"
 max = 40.0
 unit = "A"
 conditions = "8.3 ms single half sine-wave, JEDEC method"
 basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IFSM"
 [[models.source.characteristic]]
 parameter = "TJ operating temperature range"
-rating = "max_junction_temp_c"
 max = 125.0
 unit = "°C"
 conditions = "SB120-SB140 to +125, SB150-SB160 to +150"
@@ -3442,21 +3421,18 @@ conditions = "TA = 25 C"
 basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, VRRM/VRWM/VR, SB140 column"
 [[models.source.characteristic]]
 parameter = "IO average rectified output current"
-rating = "max_current_a"
 max = 1.0
 unit = "A"
 conditions = "9.5 mm from the case, fig. 1"
 basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IO"
 [[models.source.characteristic]]
 parameter = "IFSM non-repetitive peak forward surge current"
-rating = "max_surge_current_a"
 max = 40.0
 unit = "A"
 conditions = "8.3 ms single half sine-wave, JEDEC method"
 basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IFSM"
 [[models.source.characteristic]]
 parameter = "TJ operating temperature range"
-rating = "max_junction_temp_c"
 max = 125.0
 unit = "°C"
 conditions = "SB120-SB140 to +125, SB150-SB160 to +150"
@@ -3507,21 +3483,18 @@ conditions = "TA = 25 C"
 basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, VRRM/VRWM/VR, SB150 column"
 [[models.source.characteristic]]
 parameter = "IO average rectified output current"
-rating = "max_current_a"
 max = 1.0
 unit = "A"
 conditions = "9.5 mm from the case, fig. 1"
 basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IO"
 [[models.source.characteristic]]
 parameter = "IFSM non-repetitive peak forward surge current"
-rating = "max_surge_current_a"
 max = 40.0
 unit = "A"
 conditions = "8.3 ms single half sine-wave, JEDEC method"
 basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IFSM"
 [[models.source.characteristic]]
 parameter = "TJ operating temperature range"
-rating = "max_junction_temp_c"
 max = 150.0
 unit = "°C"
 conditions = "SB120-SB140 to +125, SB150-SB160 to +150"
@@ -3572,21 +3545,18 @@ conditions = "TA = 25 C"
 basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, VRRM/VRWM/VR, SB160 column"
 [[models.source.characteristic]]
 parameter = "IO average rectified output current"
-rating = "max_current_a"
 max = 1.0
 unit = "A"
 conditions = "9.5 mm from the case, fig. 1"
 basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IO"
 [[models.source.characteristic]]
 parameter = "IFSM non-repetitive peak forward surge current"
-rating = "max_surge_current_a"
 max = 40.0
 unit = "A"
 conditions = "8.3 ms single half sine-wave, JEDEC method"
 basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IFSM"
 [[models.source.characteristic]]
 parameter = "TJ operating temperature range"
-rating = "max_junction_temp_c"
 max = 150.0
 unit = "°C"
 conditions = "SB120-SB140 to +125, SB150-SB160 to +150"
@@ -3647,14 +3617,12 @@ conditions = "TL = 95 °C, 9.5 mm (0.375 in) lead length"
 basis = "Vishay 1N5820/1N5821/1N5822 doc. 88526 Rev. 05-Apr-2019, Maximum Ratings, IF(AV)"
 [[models.source.characteristic]]
 parameter = "IFSM peak forward surge current"
-rating = "max_surge_current_a"
 max = 80.0
 unit = "A"
 conditions = "8.3 ms single half sine-wave superimposed on rated load"
 basis = "Vishay 1N5820/1N5821/1N5822 doc. 88526 Rev. 05-Apr-2019, Maximum Ratings, IFSM"
 [[models.source.characteristic]]
 parameter = "TJ operating junction and storage temperature range"
-rating = "max_junction_temp_c"
 max = 125.0
 unit = "°C"
 conditions = "-65 to +125"
@@ -3715,14 +3683,12 @@ conditions = "TL = 95 °C, 9.5 mm (0.375 in) lead length"
 basis = "Vishay 1N5820/1N5821/1N5822 doc. 88526 Rev. 05-Apr-2019, Maximum Ratings, IF(AV)"
 [[models.source.characteristic]]
 parameter = "IFSM peak forward surge current"
-rating = "max_surge_current_a"
 max = 80.0
 unit = "A"
 conditions = "8.3 ms single half sine-wave superimposed on rated load"
 basis = "Vishay 1N5820/1N5821/1N5822 doc. 88526 Rev. 05-Apr-2019, Maximum Ratings, IFSM"
 [[models.source.characteristic]]
 parameter = "TJ operating junction and storage temperature range"
-rating = "max_junction_temp_c"
 max = 125.0
 unit = "°C"
 conditions = "-65 to +125"
@@ -3780,7 +3746,6 @@ conditions = "TA = 25 C"
 basis = "semiware MBR0520L-MBR0540L Product Datasheet Rev. A2.0, Maximum Ratings, IO"
 [[models.source.characteristic]]
 parameter = "IFSM peak forward surge current"
-rating = "max_surge_current_a"
 max = 5.5
 unit = "A"
 conditions = "8.3 ms single half sine-wave"
@@ -3794,7 +3759,6 @@ conditions = "TA = 25 C"
 basis = "semiware MBR0520L-MBR0540L Product Datasheet Rev. A2.0, Maximum Ratings, PD 410 mW"
 [[models.source.characteristic]]
 parameter = "TJ operating junction temperature"
-rating = "max_junction_temp_c"
 max = 150.0
 unit = "°C"
 conditions = "-55 to +150"

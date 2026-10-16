@@ -59,7 +59,7 @@ fn cap_board(value: &str, rail: u32, extra: &str) -> String {
     (comp (ref "C1") (value "{value}")
       (footprint "Capacitor_SMD:C_0805_2012Metric")
       (libsource (lib "Device") (part "X")){extra})
-    (comp (ref "R1") (value "10k")
+    (comp (ref "R1") (value "100k")
       (footprint "Resistor_SMD:R_0805_2012Metric")
       (libsource (lib "Device") (part "X"))))
   (nets
@@ -77,6 +77,7 @@ fn cap_board(value: &str, rail: u32, extra: &str) -> String {
 
 struct Probe {
     outcome: String,
+    reason: String,
     findings: Vec<String>,
     conditions: Vec<String>,
 }
@@ -98,6 +99,10 @@ fn check(tag: &str, netlist: &str) -> Probe {
     };
     Probe {
         outcome: doc["verdict"].as_str().unwrap_or_default().to_owned(),
+        reason: doc["verdict_reason"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
         findings: strings("findings", Some("message")),
         conditions: strings("verdict_conditions", None),
     }
@@ -110,8 +115,8 @@ fn names(part: &str, over: &[String]) -> bool {
 impl Probe {
     fn why(&self) -> String {
         format!(
-            "{}: findings {:#?}, conditions {:#?}",
-            self.outcome, self.findings, self.conditions
+            "{} ({}): findings {:#?}, conditions {:#?}",
+            self.outcome, self.reason, self.findings, self.conditions
         )
     }
 }
@@ -122,14 +127,14 @@ fn schottkys_with_cards_fail_above_their_own_vrrm() {
     for (value, rail) in [
         ("SS12", 24),
         ("SS13", 36),
-        ("SS14", 48),
-        ("SS15", 60),
-        ("SS16", 72),
-        ("1N5820", 24),
-        ("1N5821", 36),
-        ("MBR0520", 24),
-        ("MBR0520L", 24),
-        ("SB140", 48),
+        ("SS14", 60),
+        ("SS15", 72),
+        ("SS16", 100),
+        ("1N5820", 36),
+        ("1N5821", 60),
+        ("MBR0520", 25),
+        ("MBR0520L", 36),
+        ("SB140", 60),
     ] {
         let v = check(&format!("{value}_{rail}"), &diode_board(value, rail));
         assert_eq!(v.outcome, "fail", "{value} on {rail} V: {}", v.why());
@@ -155,7 +160,7 @@ fn schottkys_with_cards_pass_below_their_own_vrrm() {
         let v = check(&format!("{value}_{rail}"), &diode_board(value, rail));
         assert_eq!(v.outcome, "pass", "{value} on {rail} V: {}", v.why());
         assert!(
-            !names("D1", &v.conditions),
+            !names("D1", &v.findings),
             "{value} is judged on its own card, not a stand-in: {}",
             v.why()
         );
@@ -164,18 +169,15 @@ fn schottkys_with_cards_pass_below_their_own_vrrm() {
 
 #[test]
 fn an_unrecognised_diode_past_the_class_floor_is_a_condition_not_a_pass() {
-    let v = check("unknown_diode_24", &diode_board("ZQ-9000", 24));
-    assert_ne!(
-        v.outcome,
-        "fail",
-        "a stand-in rating must not fail: {}",
-        v.why()
-    );
+    // The verdict is "partly judged" (invalid): neither a failure of a stand-in
+    // rating nor a pass; a low-severity note names the assumed rating.
+    let v = check("unknown_diode_25", &diode_board("ZQ-9000", 25));
+    assert_eq!(v.outcome, "invalid", "never a pass or a fail: {}", v.why());
     assert!(
-        v.conditions.iter().any(|c| c.contains("D1")
-            && c.contains("not D1's own datasheet")
-            && c.contains("so this is a condition, not a fault")),
-        "the 24 V rail past the assumed 20 V floor is named as a condition: {}",
+        v.findings
+            .iter()
+            .any(|m| m.contains("D1") && m.contains("so this is a condition, not a fault")),
+        "the 25 V rail past the assumed 20 V floor is named as a condition: {}",
         v.why()
     );
 }
@@ -184,18 +186,18 @@ fn an_unrecognised_diode_past_the_class_floor_is_a_condition_not_a_pass() {
 fn an_unrecognised_diode_under_the_class_floor_raises_no_condition() {
     let v = check("unknown_diode_12", &diode_board("ZQ-9000", 12));
     assert_eq!(v.outcome, "pass", "{}", v.why());
-    assert!(!names("D1", &v.conditions), "{}", v.why());
+    assert!(!names("D1", &v.findings), "{}", v.why());
 }
 
 #[test]
 fn a_capacitor_with_no_stated_voltage_is_named_as_unverified_on_a_high_rail() {
     for rail in [12, 24, 48] {
         let v = check(&format!("cap_nov_{rail}"), &cap_board("10uF", rail, ""));
-        assert_ne!(v.outcome, "fail", "{rail} V: {}", v.why());
+        assert_eq!(v.outcome, "invalid", "{rail} V: {}", v.why());
         assert!(
-            v.conditions.iter().any(|c| c.contains("C1")
-                && c.contains("assumed")
-                && c.contains("state C1's rated voltage")),
+            v.findings.iter().any(|m| m.contains("C1")
+                && m.contains("assumed")
+                && m.contains("state C1's rated voltage")),
             "{rail} V: the unstated rating is a named condition: {}",
             v.why()
         );
@@ -206,7 +208,7 @@ fn a_capacitor_with_no_stated_voltage_is_named_as_unverified_on_a_high_rail() {
 fn a_capacitor_with_no_stated_voltage_on_a_low_rail_is_quiet() {
     let v = check("cap_nov_5", &cap_board("10uF", 5, ""));
     assert_eq!(v.outcome, "pass", "{}", v.why());
-    assert!(!names("C1", &v.conditions), "{}", v.why());
+    assert!(!names("C1", &v.findings), "{}", v.why());
 }
 
 #[test]
@@ -227,7 +229,7 @@ fn a_capacitor_that_states_its_voltage_is_judged_against_it() {
             &cap_board(value, rail, ""),
         );
         assert_eq!(v.outcome, "pass", "{value} on {rail} V: {}", v.why());
-        assert!(!names("C1", &v.conditions), "{}", v.why());
+        assert!(!names("C1", &v.findings), "{}", v.why());
     }
 }
 
@@ -238,5 +240,5 @@ fn a_voltage_field_states_the_capacitor_rating() {
     assert_eq!(bad.outcome, "fail", "{}", bad.why());
     let good = check("cap_field_50", &cap_board("10uF", 24, &field("50V")));
     assert_eq!(good.outcome, "pass", "{}", good.why());
-    assert!(!names("C1", &good.conditions), "{}", good.why());
+    assert!(!names("C1", &good.findings), "{}", good.why());
 }
