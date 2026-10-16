@@ -113,9 +113,20 @@ fn boot_state_fuzz(
         result.seeds, expected,
         "{case}: must hold across every boot seed ({seeds}) at each open-set member"
     );
+    // The sweep's own conditions first, exactly; after them only what the
+    // assertions' evidence rests on (parts with no model, modelling
+    // assumptions), never another sweep claim.
+    let stated = &result.verdict_conditions;
     assert_eq!(
-        result.verdict_conditions, conditions,
+        stated[..conditions.len().min(stated.len())],
+        conditions[..],
         "{case}: a pass over a partly swept open set must say so"
+    );
+    assert!(
+        stated[conditions.len()..]
+            .iter()
+            .all(|c| support::is_evidence_condition(c)),
+        "{case}: {stated:?}"
     );
     assert_eq!(
         result.render_json().contains("\"verdict_conditions\""),

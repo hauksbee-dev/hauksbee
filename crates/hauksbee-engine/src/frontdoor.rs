@@ -3932,6 +3932,8 @@ fn main {
             inspect: vec![entry("Check C4 by hand."), entry("Check C5 by hand.")],
             ..crate::plain::OrderTriage::default()
         });
+        // Derived afresh from the run's own headline, as the firmware pass does.
+        inspect.headline = std::mem::take(&mut inspect.pre_verdict_headline);
         inspect.explain_verdict();
         assert_eq!(inspect.verdict, "pass");
         assert_eq!(inspect.verdict_inspect, "inspect before ordering (2 items)");

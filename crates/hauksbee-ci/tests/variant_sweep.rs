@@ -50,13 +50,15 @@ fn an_undetermined_variant_set_is_swept_or_refused_never_guessed() {
         config.models_dir = models.parent().map(Into::into);
         let r = hauksbee_ci::run(&config).expect(case);
         // Two variants x the seeds is far under the run cap: the whole product
-        // ran, so the verdict needs no condition and the JSON carries none.
+        // ran, so no condition is about the sweep. What the evidence rests on
+        // (the regulator card models only part of U3) is still stated.
         assert!(
-            r.verdict_conditions.is_empty(),
+            r.verdict_conditions
+                .iter()
+                .all(|c| support::is_evidence_condition(c)),
             "{case}: {:?}",
             r.verdict_conditions
         );
-        assert!(!r.render_json().contains("verdict_conditions"), "{case}");
         let row = support::row(&r, "vout");
         let got = (row.passed, row.invalid, r.seeds);
         assert_eq!(got, (passed, invalid, seeds), "{case}: {row:?}");

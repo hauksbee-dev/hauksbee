@@ -217,16 +217,14 @@ fn counted_list(names: &[String], unnamed: usize) -> String {
     }
 }
 
-/// The reader-facing name an assumption is about: the name its constructor
-/// recorded (a designator, a check, a net, an input), else the part its
-/// remedy acts on, else its first part subject, else the part a parameter
-/// belongs to. `None` when it names nothing a reader would recognise: a
-/// board-scoped entry's id key is a producer key (`U7-tj-max`,
-/// `reader-note/<digest>`), never printed.
+/// The reader-facing name an assumption is about: the part its remedy acts
+/// on, else its first part subject, else the name its constructor recorded
+/// (a check, a net, an input, the part of a board-scoped entry), else the
+/// part a parameter belongs to. A part is named by its designator alone, so a
+/// part swept at its corners matches its stand-in model's entry. `None` when
+/// it names nothing a reader would recognise: a board-scoped entry's id key
+/// is a producer key (`U7-tj-max`, `reader-note/<digest>`), never printed.
 fn assumption_part(a: &Assumption) -> Option<String> {
-    if let Some(name) = a.subject_name() {
-        return Some(name.to_string());
-    }
     let from_remedy = match a.remedy() {
         Remedy::AddModel { reference }
         | Remedy::SetPartNumber { reference }
@@ -234,15 +232,22 @@ fn assumption_part(a: &Assumption) -> Option<String> {
         | Remedy::RenameDuplicate { reference, .. } => Some(reference.clone()),
         _ => None,
     };
-    from_remedy.or_else(|| match a.scope() {
+    let from_scope = || match a.scope() {
         Scope::Subjects(set) => set
             .as_slice()
             .iter()
             .find(|e| matches!(e.kind(), EntityKind::Part | EntityKind::Pin))
             .map(|e| e.id().split('/').next().unwrap_or_default().to_string()),
+        _ => None,
+    };
+    let from_parameter = || match a.scope() {
         Scope::Parameter(p) => Some(p.subject().id().to_string()),
         _ => None,
-    })
+    };
+    from_remedy
+        .or_else(from_scope)
+        .or_else(|| a.subject_name().map(str::to_string))
+        .or_else(from_parameter)
 }
 
 /// Which condition an assumption's term belongs to, or `None` when it is not
