@@ -660,34 +660,8 @@ fn judge(bound: &mut BoundBoard, solved: &(Workspace, Vec<f64>)) -> Judged {
             let clauses = worst
                 .into_values()
                 .map(|(f, ..)| {
-                    let detail = bjt(f)
-                        .filter(|_| kind_class(f.kind) == 0)
-                        .map(|(id, ic, ib)| {
-                            if let Some(hauksbee_ir::Device::Bjt { b, .. }) =
-                                bound.circuit.devices.get(id.0 as usize)
-                            {
-                                nets.extend(net_of.get(b).map(|n| (*n).to_string()));
-                            }
-                            format!(" (base {}, collector {})", amps(ib), amps(ic))
-                        })
-                        .unwrap_or_else(|| {
-                            if f.kind == FaultKind::GateOvervoltage {
-                                gate_source_nets(bound, &device_of, &net_of, f, &mut nets)
-                            } else {
-                                String::new()
-                            }
-                        });
-                    // A fuse's current rating is its hold current: past it the part
-                    // trips, so say what that does to the rail, not just "over".
-                    let rated = if kind_class(f.kind) == 0 && trips.contains(f.component.as_str()) {
-                        "hold current: the fuse trips and the rail it feeds collapses"
-                    } else if f.kind == FaultKind::GateOvervoltage {
-                        "absolute-maximum VGS rating (the card's vgs_max, from the datasheet's \
-                         Absolute Maximum Ratings): clamp the gate, for example with a lower-voltage \
-                         Zener, or pick a part rated for this drive"
-                    } else {
-                        "rating"
-                    };
+                    let detail = rating_detail(bound, &device_of, &net_of, f, bjt(f), &mut nets);
+                    let rated = rating_phrase(f, trips.contains(f.component.as_str()));
                     format!(
                         "{} {} {}{detail}, over its {} {rated}",
                         f.component,
@@ -701,6 +675,44 @@ fn judge(bound: &mut BoundBoard, solved: &(Workspace, Vec<f64>)) -> Judged {
         })
         .collect();
     (overstressed, under, monitor.implausible, monitor.stand_in)
+}
+
+/// The parenthesised detail after a fault's measured value: a BJT's base and
+/// collector currents for a current fault, the gate and source nets for a
+/// gate-source overvoltage, else nothing. Nets named are added to `nets`.
+fn rating_detail(
+    bound: &BoundBoard,
+    device_of: &HashMap<&str, DeviceId>,
+    net_of: &HashMap<NodeId, &str>,
+    f: &FaultEvent,
+    bjt: Option<(DeviceId, f64, f64)>,
+    nets: &mut Vec<String>,
+) -> String {
+    if let Some((id, ic, ib)) = bjt.filter(|_| kind_class(f.kind) == 0) {
+        if let Some(hauksbee_ir::Device::Bjt { b, .. }) = bound.circuit.devices.get(id.0 as usize) {
+            nets.extend(net_of.get(b).map(|n| (*n).to_string()));
+        }
+        format!(" (base {}, collector {})", amps(ib), amps(ic))
+    } else if f.kind == FaultKind::GateOvervoltage {
+        gate_source_nets(bound, device_of, net_of, f, nets)
+    } else {
+        String::new()
+    }
+}
+
+/// What the fault's limit is called: a fuse's current rating is its hold
+/// current (past it the part trips, so say what that does to the rail), a gate
+/// limit is the absolute-maximum VGS with its remedy, else just "rating".
+fn rating_phrase(f: &FaultEvent, trips: bool) -> &'static str {
+    if kind_class(f.kind) == 0 && trips {
+        "hold current: the fuse trips and the rail it feeds collapses"
+    } else if f.kind == FaultKind::GateOvervoltage {
+        "absolute-maximum VGS rating (the card's vgs_max, from the datasheet's \
+         Absolute Maximum Ratings): clamp the gate, for example with a lower-voltage \
+         Zener, or pick a part rated for this drive"
+    } else {
+        "rating"
+    }
 }
 
 /// The " (gate 'G', source 'S')" detail for a gate-source overvoltage, naming
