@@ -1132,6 +1132,26 @@ fn check_resistor_bins(entry: &ModelEntry, table: &crate::schema::ResistorBins, 
     }
 }
 
+/// The datasheet's allowed programming-resistance bounds must be positive and
+/// ordered, or the out-of-range report would fire on every board or on none.
+fn check_program_ohm_range(program: &crate::schema::CurrentProgram, p: &mut Problems) {
+    for (name, ohms) in [
+        ("min_program_ohms", program.min_program_ohms),
+        ("max_program_ohms", program.max_program_ohms),
+    ] {
+        if let Some(ohms) = ohms {
+            p.positive(format!("current_program.{name}"), ohms);
+        }
+    }
+    if let (Some(min), Some(max)) = (program.min_program_ohms, program.max_program_ohms) {
+        p.require(min < max, || {
+            format!(
+                "current_program.min_program_ohms = {min} is not below max_program_ohms = {max}"
+            )
+        });
+    }
+}
+
 /// Board-programmed current is solver-facing physics just like `params`:
 /// malformed constants silently turn a real rail current into zero/NaN, and
 /// confusing a normal-operating ceiling with a device-level safety threshold
@@ -1173,21 +1193,7 @@ fn check_current_program(
         });
     }
 
-    for (name, ohms) in [
-        ("min_program_ohms", program.min_program_ohms),
-        ("max_program_ohms", program.max_program_ohms),
-    ] {
-        if let Some(ohms) = ohms {
-            p.positive(format!("current_program.{name}"), ohms);
-        }
-    }
-    if let (Some(min), Some(max)) = (program.min_program_ohms, program.max_program_ohms) {
-        p.require(min < max, || {
-            format!(
-                "current_program.min_program_ohms = {min} is not below max_program_ohms = {max}"
-            )
-        });
-    }
+    check_program_ohm_range(program, p);
 
     let limit = program.max_operating_current_a;
     p.require(!regulated || limit.is_some(), || "current_program regulated_current requires max_operating_current_a so an undersized programming resistor cannot imply operation beyond the sourced domain".into());

@@ -819,6 +819,7 @@ impl StandInExceedance {
             FaultKind::Overtemperature => ("C", "reaches", "junction temperature"),
             FaultKind::ReverseBias => ("V", "sees", "reverse bias"),
             FaultKind::Overvoltage | FaultKind::Short => ("V", "sees", "voltage"),
+            FaultKind::GateOvervoltage => ("V", "sees", "gate-source voltage"),
         };
         let rating = format!("{} {unit} {what}", fmt_rating(f.limit));
         let subject = format!(
@@ -846,7 +847,7 @@ fn card_limit(meta: &DeviceMeta, kind: FaultKind) -> Option<Limit> {
         FaultKind::Overpower => {
             (r.max_power_w.is_some() || !meta.derating.power.0.is_empty()).then_some(Limit::Power)
         }
-        FaultKind::Overvoltage => Some(Limit::Voltage),
+        FaultKind::Overvoltage | FaultKind::GateOvervoltage => Some(Limit::Voltage),
         FaultKind::ReverseBias => Some(Limit::Polarity),
         FaultKind::PinOvercurrent => Some(Limit::PinCurrent),
         // An active part's dissipation is its card's model; a passive's is its
