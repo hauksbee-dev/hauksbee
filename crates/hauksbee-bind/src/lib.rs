@@ -69,5 +69,8 @@ pub use boardcode::{
 pub use dnp_rails::{dnp_sourced_rails, DnpSourcedRail, DNP_CAUSE_OPENING};
 pub use power_supply::{BatteryProtection, Chemistry, PowerSupply, SupplyLeg, UsbSpec};
 pub use shorts::{AppliedShort, BRIDGE_OHMS};
-pub use stress::{is_implausible, FaultEvent, FaultKind, StressMonitor};
+pub use stress::{
+    far_past_reason, implausible_bound, is_far_past_rating, is_implausible, FaultEvent, FaultKind,
+    StressMonitor,
+};
 pub use thermal::{junction_temp_c, theta_ja_from_footprint, DEFAULT_AMBIENT_C, DEFAULT_THETA_JA};

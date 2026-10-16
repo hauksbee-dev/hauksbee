@@ -159,12 +159,23 @@ pub struct FaultEvent {
 /// Whether a computed stress value is beyond anything a real part can see.
 ///
 /// A non-finite number, hundreds of watts in one part, a junction hotter than
-/// silicon melts, hundreds of amps or ten kilovolts. Such a number is a modelling or
-/// binding error (a wrong value, a unit slip, a part fitted that was never
-/// built), not a finding about the circuit, so it is never raised as a fault.
+/// silicon melts, hundreds of amps or ten kilovolts. The exact figure is then
+/// not a result, but the fact is: the circuit as drawn gives the part no
+/// limit at all (a diode straight across a rail, a near-zero resistor), which
+/// is a real overstress, so a finite one is raised as a fault like any other
+/// and worded without the number ([`is_far_past_rating`]). Only a non-finite
+/// value is a failed computation, never a finding about the circuit
+/// ([`StressMonitor::implausible`]).
 #[must_use]
 pub fn is_implausible(kind: FaultKind, value: f64) -> bool {
-    let bound = match kind {
+    !value.is_finite() || value.abs() > implausible_bound(kind)
+}
+
+/// The magnitude past which a stress value of `kind` (C, W, A or V) is beyond
+/// anything a real part can see, whatever the part: [`is_implausible`]'s bound.
+#[must_use]
+pub const fn implausible_bound(kind: FaultKind) -> f64 {
+    match kind {
         FaultKind::Overtemperature => 1500.0,
         FaultKind::Overpower
         | FaultKind::Overcurrent
@@ -172,8 +183,64 @@ pub fn is_implausible(kind: FaultKind, value: f64) -> bool {
         | FaultKind::PinOvercurrent => 500.0,
         FaultKind::Overvoltage | FaultKind::ReverseBias | FaultKind::GateOvervoltage => 1e4,
         FaultKind::Short => f64::INFINITY,
-    };
-    !value.is_finite() || value.abs() > bound
+    }
+}
+
+/// Times its own rating a current or power may run before the figure is no result.
+///
+/// The ideal rail and the solver's floors set it, not the part (a supply sags
+/// and a real part fails long before).
+pub const FAR_PAST_RATIO: f64 = 100.0;
+
+/// Times its own junction limit (in C) a temperature may reach before the figure is no result.
+///
+/// The estimate is linear in power and a package has desoldered, charred or
+/// melted well before.
+pub const FAR_PAST_TEMP_RATIO: f64 = 2.0;
+
+/// Whether `value`, held against the part's own `limit`, is so far past it
+/// that only the fact is a result and the exact figure is not.
+///
+/// This is relative to the part: a figure that is a plausible overstress for
+/// one part (851 mA through a diode rated 125 mA) is the same finding stated
+/// without a number once it passes [`FAR_PAST_RATIO`] times a current or power
+/// rating or [`FAR_PAST_TEMP_RATIO`] times a junction limit. It stays a fault:
+/// the part is overstressed, only the magnitude is not trusted.
+#[must_use]
+pub fn is_far_past_rating(kind: FaultKind, value: f64, limit: f64) -> bool {
+    if !value.is_finite() || !limit.is_finite() || limit <= 0.0 {
+        return false;
+    }
+    match kind {
+        FaultKind::Overtemperature => {
+            value > FAR_PAST_TEMP_RATIO * limit || is_implausible(kind, value)
+        }
+        FaultKind::Overpower
+        | FaultKind::Overcurrent
+        | FaultKind::SurgeCurrent
+        | FaultKind::PinOvercurrent => {
+            value.abs() > FAR_PAST_RATIO * limit || is_implausible(kind, value)
+        }
+        FaultKind::Overvoltage
+        | FaultKind::ReverseBias
+        | FaultKind::GateOvervoltage
+        | FaultKind::Short => false,
+    }
+}
+
+/// The parenthesised reason a [`is_far_past_rating`] figure is not printed.
+#[must_use]
+pub fn far_past_reason(kind: FaultKind) -> String {
+    match kind {
+        FaultKind::Overtemperature => format!(
+            "over {FAR_PAST_TEMP_RATIO:.0}x its limit in C; the exact figure is not physical, \
+             the estimate scales with power and the part fails first"
+        ),
+        _ => format!(
+            "over {FAR_PAST_RATIO:.0}x its rating; the exact figure is not physical, the \
+             supply and the solver set it, not the part"
+        ),
+    }
 }
 
 /// Per-device metadata captured at bind time so the monitor can evaluate it.
@@ -784,8 +851,9 @@ pub struct StressMonitor {
     reg_heat: Vec<Option<RegulatorHeat>>,
     /// What the board, not any one part's run, undermines: a rail nothing powered.
     pub board_caveats: Vec<Assumption>,
-    /// Faults whose value is physically impossible ([`is_implausible`]): kept
-    /// apart from the real ones so a caller can report a model error instead.
+    /// Stresses that came out as no finite number: a failed computation, kept
+    /// apart from the real faults so a caller can say the part was not judged.
+    /// A finite value however absurd is a fault ([`is_far_past_rating`]).
     pub implausible: Vec<FaultEvent>,
     /// Limits passed that were a placeholder or guessed card's stand-in, not
     /// the part's own ([`hauksbee_models::rating_basis`]): kept apart from the
@@ -822,11 +890,19 @@ impl StandInExceedance {
             FaultKind::GateOvervoltage => ("V", "sees", "gate-source voltage"),
         };
         let rating = format!("{} {unit} {what}", fmt_rating(f.limit));
-        let subject = format!(
-            "{} {seen} {} {unit}, past its {rating} limit",
-            f.component,
-            fmt_rating(f.value),
-        );
+        let subject = if is_far_past_rating(f.kind, f.value, f.limit) {
+            format!(
+                "{} {seen} far past its {rating} limit ({})",
+                f.component,
+                far_past_reason(f.kind),
+            )
+        } else {
+            format!(
+                "{} {seen} {} {unit}, past its {rating} limit",
+                f.component,
+                fmt_rating(f.value),
+            )
+        };
         rating_basis::condition(&f.component, &self.stand_in, &subject, &rating)
     }
 }
@@ -1375,9 +1451,9 @@ impl StressMonitor {
         circuit: &mut Circuit,
         faults: &mut Vec<FaultEvent>,
     ) -> bool {
-        if is_implausible(chk.kind, chk.value) {
-            // Not a fault: a model error, noted once per part and kind. The
-            // kind stays unraised so a plausible violation later still reports.
+        if !chk.value.is_finite() {
+            // Not a fault: a failed computation, noted once per part and kind.
+            // The kind stays unraised so a finite violation later still reports.
             if !(self.implausible.iter())
                 .any(|e| (e.component.as_str(), e.kind) == (meta.reference.as_str(), chk.kind))
             {
@@ -1809,7 +1885,7 @@ impl StressMonitor {
                     // reports, the circuit is left intact.
                     destroyed: false,
                 };
-                if is_implausible(event.kind, v) {
+                if !v.is_finite() {
                     self.implausible.push(event);
                 } else if let Some(stand_in) = w.stand_in {
                     self.stand_in.push(StandInExceedance {

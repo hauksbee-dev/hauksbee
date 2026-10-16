@@ -4490,10 +4490,26 @@ fn passive_device(
             Device::resistor(name, a, b, ZERO_OHM_JUMPER_OHMS),
             Some(note),
         )
+    } else if p.si < RESISTOR_FLOOR_OHMS {
+        // Below the solver's floor the value on the board is not the value in
+        // the matrix, so say so: every current, power and rail draw computed
+        // through it is the floor's, not the value's.
+        let note = format!(
+            "{name}: value '{}' is below the solver's {:.0} micro-ohm floor, bound at the floor, so currents and powers through it are the floor's, not the value's",
+            comp.value,
+            RESISTOR_FLOOR_OHMS * 1e6,
+        );
+        (
+            Device::resistor(name, a, b, RESISTOR_FLOOR_OHMS),
+            Some(note),
+        )
     } else {
-        (Device::resistor(name, a, b, p.si.max(1e-6)), None)
+        (Device::resistor(name, a, b, p.si), None)
     }
 }
+
+/// The smallest resistance a resistor is bound at, ohms: the solver's floor.
+const RESISTOR_FLOOR_OHMS: f64 = 1e-6;
 
 /// Bind a multi-pad passive array (resistor network / capacitor array) as one
 /// device PER ELEMENT, never as a single 2-terminal element.
