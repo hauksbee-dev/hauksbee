@@ -13,8 +13,9 @@
 //! solved operating point, but a board whose operating point does not solve,
 //! or whose rail solves dead, or whose GPIO sits low at rest, never lights the
 //! LED there. This check needs no solve: it judges the current against the
-//! LED's current rating, the series resistor's wattage (its card's, else its
-//! footprint's) and the driving pin's current rating.
+//! LED's current rating, the series resistor's wattage (its card's; a
+//! footprint's standard wattage is an assumption about the part, judged only
+//! past every chip resistor of the size) and the driving pin's current rating.
 //!
 //! A limit from a stand-in card (an LED guessed from its colour, the generic
 //! LED's assumed corners) is never a failing finding ([`hauksbee_models::rating_basis`]): the DC
@@ -119,8 +120,26 @@ struct Series {
     ohms: f64,
     tolerance: Option<f64>,
     /// Its wattage, and where the rating came from.
-    power: Option<(Rated, String)>,
+    power: Option<Wattage>,
 }
+
+/// A series resistor's wattage.
+struct Wattage {
+    rated: Rated,
+    /// Where the rating came from ("card 'x'", "its R_0603 footprint").
+    from: String,
+    /// Read from the footprint's size alone: the standard rating of a chip
+    /// resistor that size, an assumption about the fitted part.
+    assumed: bool,
+}
+
+/// How far past a footprint's standard wattage a resistor must dissipate
+/// before that assumed rating is judged. The footprint states the size, not
+/// the part: a high-power or anti-surge chip of the same size is rated a few
+/// times higher, so only a dissipation past every chip of the size is a
+/// finding about the board. Below it the DC ratings pass states the
+/// assumption at its solve.
+const FOOTPRINT_MARGIN: f64 = 4.0;
 
 /// A part driving one end of the string.
 struct Driver {
@@ -274,25 +293,30 @@ impl Ctx<'_> {
     /// A resistor's wattage: its own card's, else the one its footprint
     /// package states (which the board states, so it is judged), else a
     /// stand-in card's.
-    fn resistor_power(&self, resistor: &Component) -> Option<(Rated, String)> {
+    fn resistor_power(&self, resistor: &Component) -> Option<Wattage> {
         let model = AssemblyState::of(resistor)
             .fitted()
             .and_then(|part| resolve(self.lib, part).model);
         let card = model.and_then(|model| {
             let watts = model.ratings.max_power_w?;
             let stand_in = model.ratings.basis.stand_in_for(Limit::Power).cloned();
-            Some(((watts, stand_in), format!("card '{}'", model.id)))
+            Some(Wattage {
+                rated: (watts, stand_in),
+                from: format!("card '{}'", model.id),
+                assumed: false,
+            })
         });
-        if let Some(own) = card
-            .as_ref()
-            .filter(|((_, stand_in), _)| stand_in.is_none())
-        {
-            return Some(own.clone());
+        if card.as_ref().is_some_and(|c| c.rated.1.is_none()) {
+            return card;
         }
         let footprint = &resistor.footprint;
         let package = footprint.rsplit(':').next().unwrap_or(footprint);
         (resistor_power_from_footprint(footprint).watts)
-            .map(|watts| ((watts, None), format!("its {package} footprint")))
+            .map(|watts| Wattage {
+                rated: (watts, None),
+                from: format!("its {package} footprint"),
+                assumed: true,
+            })
             .or(card)
     }
 
@@ -518,11 +542,29 @@ impl LedString<'_> {
     fn exceeded(&self, led: &Led, current: f64, ohms: &[f64]) -> Vec<Exceeded> {
         let mut out = Vec::new();
         for (s, r) in self.series.iter().zip(ohms) {
-            let Some(((rating, stand_in), from)) = &s.power else {
+            let Some(Wattage {
+                rated: (rating, stand_in),
+                from,
+                assumed,
+            }) = &s.power
+            else {
                 continue;
             };
             let dissipated = current * current * r;
-            if dissipated > *rating {
+            if *assumed && dissipated > FOOTPRINT_MARGIN * rating {
+                out.push(Exceeded {
+                    clause: format!(
+                        "{} dissipates {}, {:.0} times the {} a standard chip resistor the \
+                         size of {from} is rated for (assumed from its size: the board does not \
+                         state the part's own rating), past any chip resistor that size",
+                        s.reference,
+                        watts(dissipated),
+                        dissipated / rating,
+                        watts(*rating),
+                    ),
+                    stand_in: None,
+                });
+            } else if !*assumed && dissipated > *rating {
                 out.push(Exceeded {
                     clause: format!(
                         "{} dissipates {}, over its {} rating (from {from})",
@@ -771,12 +813,13 @@ mod tests {
     use super::*;
     use crate::checks::test_support::{board, part};
 
-    const NETS: [(i64, &str); 5] = [
+    const NETS: [(i64, &str); 6] = [
         (1, "GND"),
         (2, "+3V3"),
         (3, "/MID"),
         (4, "+5V"),
         (5, "/GPIO"),
+        (6, "+12V"),
     ];
 
     fn with_footprint(mut c: Component, footprint: &str) -> Component {
@@ -871,12 +914,11 @@ mod tests {
     }
 
     /// A DNP option resistor on the anode net is not part of the string: the
-    /// fitted 68 ohm resistor is, and its 0402 wattage is passed at the red
-    /// corner from +5V (the old fixed-Vf rule's R15 case).
+    /// fitted 1 ohm resistor is, and the string it makes is judged.
     #[test]
     fn a_dnp_resistor_beside_the_string_does_not_hide_it() {
         let series = with_footprint(
-            part("R1", "68", &[("1", 4), ("2", 3)]),
+            part("R1", "1", &[("1", 4), ("2", 3)]),
             "Resistor_SMD:R_0402_1005Metric",
         );
         let mut option = with_footprint(
@@ -887,12 +929,40 @@ mod tests {
         option.dnp = true;
         let found = lint(vec![series, option, led("LED", 3, 1)]);
         assert_eq!(found.len(), 1, "{found:#?}");
-        assert!(
-            found[0].message.contains("R1 dissipates"),
-            "{}",
-            found[0].message
-        );
+        assert!(found[0].refs.contains(&"R1".to_string()));
         assert!(!found[0].refs.contains(&"R0".to_string()));
+    }
+
+    /// A footprint states a resistor's size, not its own rating: 68 ohm in
+    /// 0402 from +5V dissipates about 0.17 W, under three times the 1/16 W of
+    /// a standard 0402, which a high-power 0402 may carry. Not a finding.
+    #[test]
+    fn a_footprint_wattage_passed_inside_the_margin_is_not_a_finding() {
+        let series = with_footprint(
+            part("R1", "68", &[("1", 4), ("2", 3)]),
+            "Resistor_SMD:R_0402_1005Metric",
+        );
+        let found = lint(vec![series, led("LED", 3, 1)]);
+        assert!(found.is_empty(), "{found:#?}");
+    }
+
+    /// 200 ohm in 0402 from +12V carries about 50 mA (inside the indicator
+    /// ceiling) and dissipates about 0.5 W, eight times a standard 0402's
+    /// rating: past any chip resistor that size, stated as an assumption.
+    #[test]
+    fn a_resistor_far_past_its_footprint_wattage_is_judged_as_an_assumption() {
+        let series = with_footprint(
+            part("R1", "200", &[("1", 6), ("2", 3)]),
+            "Resistor_SMD:R_0402_1005Metric",
+        );
+        let found = lint(vec![series, led("LED", 3, 1)]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        let message = &found[0].message;
+        assert!(
+            message.contains("R1 dissipates") && message.contains("assumed from its size"),
+            "{message}"
+        );
+        assert!(!message.contains("pulsed peak"), "{message}");
     }
 
     /// An MCU pin lighting the LED through 1 ohm passes the pin's own 40 mA

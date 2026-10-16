@@ -880,11 +880,31 @@ pub fn outcome_verdict(tool: &str, exit_code: i32, has_gating: bool) -> &'static
     }
 }
 
+/// The verdict a finished run records: the run's own machine verdict
+/// (`noted`, what its `--json` prints) when it computed one and exited 0, else
+/// [`outcome_verdict`] from the exit code. A non-strict run exits 0 over a
+/// partly judged result (a failed solve, an unmodelled part), so the exit code
+/// alone would record that as a pass.
+#[must_use]
+pub fn recorded_verdict(
+    tool: &str,
+    exit_code: i32,
+    has_gating: bool,
+    noted: Option<&'static str>,
+) -> &'static str {
+    match noted {
+        Some("pass") | None => outcome_verdict(tool, exit_code, has_gating),
+        Some(verdict) if exit_code == 0 => verdict,
+        Some(_) => outcome_verdict(tool, exit_code, has_gating),
+    }
+}
+
 #[derive(Default)]
 struct Pending {
     manifest: Option<(PathBuf, RunManifest)>,
     gating: BTreeMap<String, Vec<String>>,
     record_sha256: Option<String>,
+    verdict: Option<&'static str>,
     finished: bool,
 }
 
@@ -892,6 +912,7 @@ static PENDING: Mutex<Pending> = Mutex::new(Pending {
     manifest: None,
     gating: BTreeMap::new(),
     record_sha256: None,
+    verdict: None,
     finished: false,
 });
 
@@ -914,6 +935,14 @@ pub fn note_gating_findings(scope: &str, ids: impl IntoIterator<Item = String>) 
     lock_pending()
         .gating
         .insert(scope.to_string(), ids.into_iter().collect());
+}
+
+/// Hook for the run's own machine verdict (`pass`, `fail` or `invalid`, as
+/// its `--json` states it), so the recorded outcome is that verdict rather
+/// than one re-derived from the exit code. Cheap and safe when nothing is
+/// tracked.
+pub fn note_run_verdict(verdict: &'static str) {
+    lock_pending().verdict = Some(verdict);
 }
 
 /// Hook for the run record: once a run has written its record, pass the record's
@@ -949,7 +978,8 @@ pub fn finish_outcome(tool: &str, exit_code: i32) {
         gating.sort();
         gating.dedup();
         let outcome = Outcome {
-            verdict: outcome_verdict(tool, exit_code, !gating.is_empty()).to_string(),
+            verdict: recorded_verdict(tool, exit_code, !gating.is_empty(), pending.verdict)
+                .to_string(),
             exit_code,
             record_sha256: pending.record_sha256.take(),
             gating_findings: gating,
@@ -1388,5 +1418,28 @@ mod tests {
         assert_eq!(outcome_verdict("hauksbee-ci", 1, false), "fail");
         assert_eq!(outcome_verdict("hauksbee-ci", 2, false), "error");
         assert_eq!(outcome_verdict("hauksbee-ci", 3, false), "invalid");
+    }
+
+    /// A non-strict run whose solve failed exits 0 with a partly judged
+    /// (`invalid`) machine verdict: the manifest records that verdict, never
+    /// the pass the exit code alone implies. A converged run that passed
+    /// still records a pass, and a non-zero exit keeps its own word.
+    #[test]
+    fn the_recorded_verdict_is_the_runs_own_never_a_pass_over_a_failed_solve() {
+        assert_eq!(
+            recorded_verdict("hauksbee", 0, false, Some("invalid")),
+            "invalid"
+        );
+        assert_eq!(recorded_verdict("hauksbee", 0, false, Some("pass")), "pass");
+        assert_eq!(recorded_verdict("hauksbee", 0, false, None), "pass");
+        assert_eq!(recorded_verdict("hauksbee", 0, true, Some("pass")), "fail");
+        assert_eq!(
+            recorded_verdict("hauksbee", 3, false, Some("pass")),
+            "invalid"
+        );
+        assert_eq!(
+            recorded_verdict("hauksbee", 2, false, Some("invalid")),
+            "fail"
+        );
     }
 }
