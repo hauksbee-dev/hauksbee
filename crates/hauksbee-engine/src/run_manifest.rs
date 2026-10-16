@@ -880,9 +880,11 @@ pub fn outcome_verdict(tool: &str, exit_code: i32, has_gating: bool) -> &'static
     }
 }
 
-/// The verdict a finished run records: the run's own machine verdict
-/// (`noted`, what its `--json` prints) when it computed one and exited 0, else
-/// [`outcome_verdict`] from the exit code. A non-strict run exits 0 over a
+/// The verdict a finished run records.
+///
+/// It is the run's own machine verdict (`noted`, what its `--json` prints)
+/// when it computed one and exited 0, else [`outcome_verdict`] from the exit
+/// code. A non-strict run exits 0 over a
 /// partly judged result (a failed solve, an unmodelled part), so the exit code
 /// alone would record that as a pass.
 #[must_use]
@@ -937,10 +939,11 @@ pub fn note_gating_findings(scope: &str, ids: impl IntoIterator<Item = String>) 
         .insert(scope.to_string(), ids.into_iter().collect());
 }
 
-/// Hook for the run's own machine verdict (`pass`, `fail` or `invalid`, as
-/// its `--json` states it), so the recorded outcome is that verdict rather
-/// than one re-derived from the exit code. Cheap and safe when nothing is
-/// tracked.
+/// Hook for the run's own machine verdict.
+///
+/// `pass`, `fail` or `invalid`, as its `--json` states it, so the recorded
+/// outcome is that verdict rather than one re-derived from the exit code.
+/// Cheap and safe when nothing is tracked.
 pub fn note_run_verdict(verdict: &'static str) {
     lock_pending().verdict = Some(verdict);
 }

@@ -126,7 +126,7 @@ struct Series {
 /// A series resistor's wattage.
 struct Wattage {
     rated: Rated,
-    /// Where the rating came from ("card 'x'", "its R_0603 footprint").
+    /// Where the rating came from (`card 'x'`, `its R_0603 footprint`).
     from: String,
     /// Read from the footprint's size alone: the standard rating of a chip
     /// resistor that size, an assumption about the fitted part.
