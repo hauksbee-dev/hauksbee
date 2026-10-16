@@ -207,9 +207,15 @@ value_re = "(?i)^(AMS|LM)1117.?3[._]?3"
 # Source: Advanced Monolithic Systems AMS1117 datasheet (see above).
 vout      = 3.3     # 3.251 / 3.300 / 3.349 V @ VIN = 4.8 V, IOUT = 0 mA, TJ = 25 C
 dropout_v = 1.3     # VIN - VOUT max @ IOUT = 0.8 A
-# Source: AMS1117 datasheet, Applications Hints/Stability: COUT >= 22 uF tantalum;
-# no guaranteed ESR interval is tabulated, so ESR bounds remain undeclared.
-cout_min_f = 22.0e-6
+# RECOMMENDATION, not a minimum. AMS1117 datasheet p.4 Stability: "The
+# circuit design used in the AMS1117 series requires the use of an output
+# capacitor as part of the device frequency compensation. The addition of
+# 22µF solid tantalum on the output will ensure stability for all operating
+# conditions." and "Without bypassing the adjustment terminal smaller
+# capacitors can be used with equally good results". No ESR interval is
+# tabulated, so ESR bounds remain undeclared.
+cout_recommended_f = 22.0e-6
+cout_recommended_type = "solid tantalum"
 iq_a      = 5.0e-3  # IQ typ @ (VIN - VOUT) = 1.5 V (11 mA max)
 
 [models.pins]
@@ -1571,8 +1577,11 @@ value_re = "(?i)^AP2112K[- ]?3[._]3([A-Z0-9-]*)?$"
 [models.params]
 vout      = 3.3      # +-1.5% @ VIN=4.3 V, 1 mA <= IOUT <= 30 mA
 dropout_v = 0.4      # VDROP max @ rated 600 mA, AP2112-3.3 Electrical Characteristics
-# Source: Diodes AP2112 DS39724 Rev. 2-2, Typical Application and Note 4: COUT = 1 uF ceramic.
-cout_min_f = 1.0e-6
+# RECOMMENDATION, not a minimum. Diodes AP2112 datasheet p.1 Features: "Stable
+# with 1.0µF Flexible Cap: Ceramic, Tantalum and Aluminum Electrolytic"; p.2
+# Note 4: "It is recommended to use X7R or X5R dielectric capacitor if 1.0µF
+# ceramic capacitor is selected". No minimum is stated.
+cout_recommended_f = 1.0e-6
 iq_a      = 55.0e-6  # IQ typ @ VIN=4.3 V, IOUT=0 (80 uA max; ISTD 0.01 uA typ
                      # in shutdown)
 i_shdn_a  = 1.0e-8   # ISTD "Standby Current" typ (1.0 uA max), VIN = 4.3 V, VEN in OFF mode, DS39724 Rev. 2-2 AP2112-3.3 Electrical Characteristics p.8
@@ -1669,7 +1678,11 @@ footprint_re = "(?i)SOT-?23-?5|SOT-?25|SC-?74A"
 [models.params]
 vout       = 3.3      # AP2112-3.3 Electrical Characteristics, VIN = 4.3 V, 1 mA <= IOUT <= 30 mA
 dropout_v  = 0.4      # VDROP max @ IOUT = 600 mA (250 mV typ; 200 mV max @ 300 mA)
-cout_min_f = 1.0e-6   # Typical Applications Circuit and Note 4: 1.0 uF X7R/X5R ceramic
+# RECOMMENDATION, not a minimum. Diodes AP2112 datasheet p.1 Features: "Stable
+# with 1.0µF Flexible Cap: Ceramic, Tantalum and Aluminum Electrolytic"; p.2
+# Note 4: "It is recommended to use X7R or X5R dielectric capacitor if 1.0µF
+# ceramic capacitor is selected". No minimum is stated.
+cout_recommended_f = 1.0e-6
 iq_a       = 55.0e-6  # IQ typ @ VIN = 4.3 V, IOUT = 0 (80 uA max)
 i_shdn_a   = 1.0e-8   # ISTD "Standby Current" typ (1.0 uA max), VIN = 4.3 V, VEN in OFF mode, DS39724 Rev. 2-2 AP2112-3.3 Electrical Characteristics p.8
 # EN pin (active high; the binder gates the output on it from these fields).
@@ -1725,7 +1738,10 @@ value_re = "(?i)^AP2114H-3[._]3(TRG1|G1|TR)?$"
 [models.params]
 vout       = 3.3      # AP2114-3.3 EC, VIN = 4.3 V, 1 mA <= IOUT <= 30 mA, +-1.5%
 dropout_v  = 0.75     # VDROP max @ IOUT = 1 A (450 mV typ)
-cout_min_f = 4.7e-6   # Features: "Stable with 4.7uF flexible cap"; EC test COUT = 4.7 uF ceramic
+# RECOMMENDATION, not a minimum. Diodes AP2114 datasheet (Rev. 2.2) p.1
+# Features: "Stable with 4.7μF Flexible Cap: Ceramic, Tantalum and Aluminum
+# Electrolytic"; EC test COUT = 4.7 uF. No minimum is stated.
+cout_recommended_f = 4.7e-6
 iq_a       = 65.0e-6  # IQ typ @ VIN = 4.3 V, IOUT = 0 (90 uA max)
 
 [models.pins]
@@ -1762,7 +1778,10 @@ value_re = "(?i)^AP2114M-3[._]3(TRG1|G1|TR)?$"
 [models.params]
 vout       = 3.3      # AP2114-3.3 EC, +-1.5%
 dropout_v  = 0.75     # VDROP max @ IOUT = 1 A (450 mV typ)
-cout_min_f = 4.7e-6   # Features: "Stable with 4.7uF flexible cap"
+# RECOMMENDATION, not a minimum. Diodes AP2114 datasheet (Rev. 2.2) p.1
+# Features: "Stable with 4.7μF Flexible Cap: Ceramic, Tantalum and Aluminum
+# Electrolytic"; EC test COUT = 4.7 uF. No minimum is stated.
+cout_recommended_f = 4.7e-6
 iq_a       = 65.0e-6  # IQ typ @ VIN = 4.3 V, IOUT = 0 (90 uA max)
 i_shdn_a   = 1.0e-8   # ISTD "Standby Current" typ (1.0 uA max), VIN = 4.3 V, VEN in OFF mode, AP2114-3.3 Electrical Characteristics p.12
 # EN pin (active high; the binder gates the output on it from these fields).
@@ -1904,7 +1923,12 @@ value_re = "(?i)^AP2127K-3[._]3(TRG1|G1|TR)?$"
 [models.params]
 vout       = 3.3      # Electrical Characteristics, +-2%, VIN = VOUT + 1 V, 1 mA <= IOUT <= 300 mA
 dropout_v  = 0.3      # VDROP max @ IOUT = 300 mA, VOUT = 2.5-4.2 V row (170 mV typ)
-cout_min_f = 1.0e-6   # Application Information, Output Capacitor: stable with 1 uF or higher X7R/X5R
+# RECOMMENDATION, not a minimum. Diodes AP2127 DS36478 Rev. 7-2 p.12 Output
+# Capacitor: "The output capacitor is required to stabilize ... stable with
+# very small ceramic output capacitor with a low ESR 1µF or higher of X7R or
+# X5R MLCC capacitor, which will be sufficient". A capacitor is required; 1 uF
+# is the stated sufficient value, not a stated floor.
+cout_recommended_f = 1.0e-6
 iq_a       = 60.0e-6  # IQ typ @ VIN = VOUT + 1 V, IOUT = 0 (90 uA max)
 i_shdn_a   = 1.0e-7   # ISTD "Standby Current" typ (1.0 uA max), VSHUTDOWN in off mode, DS36478 Rev. 7-2 Electrical Characteristics p.5
 # Shutdown (enable) pin, active high; the binder gates the output on it from
@@ -1953,7 +1977,12 @@ value_re = "(?i)^AP2127N3?-3[._]3(TRG1|G1|TR)?$"
 [models.params]
 vout       = 3.3      # Electrical Characteristics, +-2%
 dropout_v  = 0.3      # VDROP max @ IOUT = 300 mA (170 mV typ)
-cout_min_f = 1.0e-6   # Application Information, Output Capacitor
+# RECOMMENDATION, not a minimum. Diodes AP2127 DS36478 Rev. 7-2 p.12 Output
+# Capacitor: "The output capacitor is required to stabilize ... stable with
+# very small ceramic output capacitor with a low ESR 1µF or higher of X7R or
+# X5R MLCC capacitor, which will be sufficient". A capacitor is required; 1 uF
+# is the stated sufficient value, not a stated floor.
+cout_recommended_f = 1.0e-6
 iq_a       = 60.0e-6  # IQ typ (90 uA max)
 
 [models.pins]
@@ -2005,7 +2034,12 @@ value_re = "(?i)^AP2127N3?-2[._]8(TRG1|G1|TR)?$"
 [models.params]
 vout       = 2.8      # Ordering Information, fixed 2.8 V; Electrical Characteristics +-2% (98% to 102% of VOUT)
 dropout_v  = 0.3      # VDROP max @ IOUT = 300 mA, VOUT = 2.5 V to 4.2 V row (170 mV typ)
-cout_min_f = 1.0e-6   # Electrical Characteristics header, COUT = 1 uF
+# RECOMMENDATION, not a minimum. Diodes AP2127 DS36478 Rev. 7-2 p.12 Output
+# Capacitor: "The output capacitor is required to stabilize ... stable with
+# very small ceramic output capacitor with a low ESR 1µF or higher of X7R or
+# X5R MLCC capacitor, which will be sufficient". A capacitor is required; 1 uF
+# is the stated sufficient value, not a stated floor.
+cout_recommended_f = 1.0e-6
 iq_a       = 60.0e-6  # IQ typ (90 uA max), VIN = VOUT + 1 V, IOUT = 0
 
 [models.pins]
@@ -2060,7 +2094,12 @@ value_re = "(?i)^AP2127N3?-1[._]8(TRG1|G1|TR)?$"
 [models.params]
 vout       = 1.8      # Ordering Information, fixed 1.8 V; Electrical Characteristics +-2% (98% to 102% of VOUT)
 dropout_v  = 0.7      # VDROP max @ IOUT = 300 mA, VOUT = 1.8 V row (600 mV typ); the row is tested at VIN = 2.5 V
-cout_min_f = 1.0e-6   # Electrical Characteristics header, COUT = 1 uF
+# RECOMMENDATION, not a minimum. Diodes AP2127 DS36478 Rev. 7-2 p.12 Output
+# Capacitor: "The output capacitor is required to stabilize ... stable with
+# very small ceramic output capacitor with a low ESR 1µF or higher of X7R or
+# X5R MLCC capacitor, which will be sufficient". A capacitor is required; 1 uF
+# is the stated sufficient value, not a stated floor.
+cout_recommended_f = 1.0e-6
 iq_a       = 60.0e-6  # IQ typ (90 uA max), VIN = VOUT + 1 V, IOUT = 0
 
 [models.pins]
@@ -2259,7 +2298,12 @@ basis = "TI SBVS186H 6.3 Recommended Operating Conditions, VIN 2.7 V to 30 V; 6.
 [models.params]
 vout       = 1.8      # nomenclature code 18; DC output accuracy +-2 % (VOUT < 3.3 V)
 dropout_v  = 0.9      # DERIVED: VIN(min) 2.7 V - 1.8 V; 6.5 Note 3, VDO undefined below VOUT = 2.8 V
-cout_min_f = 2.2e-6   # Table 5-1, OUT: "2.2-uF or greater ceramic capacitor ... to assure stability"
+# MINIMUM: TI SBVS186H 8.1.1 (p.14) "For output voltages equal or greater
+# than 1.5 V, the minimum effective capacitance for stability is 1.5 µF".
+# RECOMMENDATION: Table 5-1, OUT (p.3) "Connect a small 2.2-µF or greater
+# ceramic capacitor from this pin to ground to assure stability".
+cout_min_f = 1.5e-6
+cout_recommended_f = 2.2e-6
 iq_a       = 1.3e-6   # 6.5 IGND typ, IOUT = 0 mA, VOUT <= 3.3 V (2.05 uA max; shutdown 150 nA typ)
 # EN pin (active high; the binder gates the output on it from these fields).
 # TI SBVS186H, 6.5 Electrical Characteristics (p.5): VEN(HI) "Device enabled"
@@ -2396,7 +2440,8 @@ value_re = "(?i)^MCP1700[T]?[- ]?3302[A-Z0-9/_-]*$"
 [models.params]
 vout      = 3.3      # VR +-0.4% typ at 25 C (+-2.0/3.0% max over temperature)
 dropout_v = 0.35     # max @ rated 250 mA, VR >= 2.5 V, MCP1700 DS20001826F
-# Source: Microchip MCP1700 DS20001826F, Typical Application: COUT = 1 uF ceramic.
+# MINIMUM. Microchip MCP1700 DS20001826F p.13 Output Capacitor: "A minimum output
+# capacitance of 1.0 µF is required for small signal stability".
 cout_min_f = 1.0e-6
 iq_a      = 1.6e-6   # Iq typ @ IL = 0, VIN = VR + 1 V (4 uA max)
 
@@ -2570,7 +2615,9 @@ value_re = "(?i)^TLV755?33P?[A-Z]{0,4}[0-9]?R?$"
 [models.params]
 vout      = 3.3      # +-1% max accuracy, -40 to +85 C, DBV package
 dropout_v = 0.238    # VDO max @ 500 mA, -40..125 C, 3.3 V DBV (non-DYD), §5.5
-# Source: TI TLV755P SBVS320D, Recommended Operating Conditions: effective COUT >= 1 uF.
+# MINIMUM. TI TLV755P SBVS320D Table 4-1 (p.3), OUT: "A capacitor with a value
+# of 1µF or larger is required"; Recommended Operating Conditions (p.4) COUT
+# 1 µF min, 200 µF max.
 cout_min_f = 1.0e-6
 iq_a      = 25.0e-6  # IGND typ @ IOUT = 0, TJ = 25 C (33 uA max over -40 to
                      # +85 C). Shutdown ISHDN is 0.1 uA typ.
@@ -2586,12 +2633,14 @@ en_discharge_ohms = 120.0
 i_shdn_a  = 1.0e-7  # ISHDN "Shutdown current" typ (1 uA max), VEN <= 0.4 V, 1.4 V <= VIN <= 5.5 V, TI TLV755P SBVS320D 5.5 Electrical Characteristics p.5
 
 [models.pins]
-# DBV (SOT-23-5) package.
-"1" = "out"
+# DBV (SOT-23-5) package. TI TLV755P SBVS320D Table 4-1 Pin Functions (p.3),
+# DBV column: EN 3, GND 2, IN 1, NC 4, OUT 5. (The DRV WSON numbers them
+# differently, OUT 1 / IN 6, so this map does not fit a DRV footprint.)
+"1" = "in"
 "2" = "gnd"
 "3" = "en"
 "4" = "nc"
-"5" = "in"
+"5" = "out"
 
 [models.ratings]
 max_current_a = 0.5
@@ -7951,7 +8000,10 @@ value_re = "(?i)^AP2114HA-3[._]3(TRG1|G1|TR)?$"
 [models.params]
 vout       = 3.3      # AP2114-3.3 EC, VIN = 4.3 V, 1 mA <= IOUT <= 30 mA (3.25 to 3.35 V at IOUT(MAX) row)
 dropout_v  = 0.75     # VDROP max @ IOUT = 1 A (450 mV typ)
-cout_min_f = 4.7e-6   # Features: "Stable with 4.7uF flexible cap"; EC test COUT = 4.7 uF ceramic
+# RECOMMENDATION, not a minimum. Diodes AP2114 datasheet (Rev. 2.2) p.1
+# Features: "Stable with 4.7μF Flexible Cap: Ceramic, Tantalum and Aluminum
+# Electrolytic"; EC test COUT = 4.7 uF. No minimum is stated.
+cout_recommended_f = 4.7e-6
 iq_a       = 65.0e-6  # IQ typ @ VIN = 4.3 V, IOUT = 0 (90 uA max)
 
 [models.pins]

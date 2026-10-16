@@ -21,7 +21,7 @@
 //! flag says only that the conversion is unreliable; the net's DC voltage is
 //! still genuinely what the tool reports, so it merely qualifies.
 use hauksbee_extract::{
-    Component, ExtractedBoard, LintCheck, LintFinding, Net, NetLintReport, Severity,
+    Component, ExtractedBoard, LintCheck, LintFinding, Net, NetLintReport, Severity, REMEDY_MARKER,
 };
 use hauksbee_ir::evidence::Assumption;
 use hauksbee_models::rating_basis::Limit;
@@ -135,7 +135,7 @@ fn adc_flag(cx: &Ctx, c: &Component, m: &ModelEntry, role: &str, limit: f64) -> 
         }
     }
     (!abstain && inv_r > 0.0 && 1.0 / inv_r > limit).then_some(())?;
-    let message = format!("{r} pin role {role} (net '{}') is fed from {:.1} kOhm ({}), above the {:.1} kOhm maximum ADC source impedance its card declares, so the sample-and-hold cannot settle and the conversion is unreliable once channels are multiplexed or sampled quickly. Lower the divider, buffer it, or fit a >= {:.0} nF capacitor at the pin. The pin is taken as an ADC input from the card's pin role and the purely resistive net feeding it: the board does not record which pins firmware converts.", net.name, 1e-3 / inv_r, feeders.join(", "), limit / 1e3, ADC_HOLD_CAP_F * 1e9);
+    let message = format!("{r} pin role {role} (net '{}') is fed from {:.1} kOhm ({}), above the {:.1} kOhm maximum ADC source impedance its card declares, so the sample-and-hold cannot settle and the conversion is unreliable once channels are multiplexed or sampled quickly. The pin is taken as an ADC input from the card's pin role and the purely resistive net feeding it: the board does not record which pins firmware converts. {REMEDY_MARKER}Lower the divider, buffer it, or fit a >= {:.0} nF capacitor at the pin.", net.name, 1e-3 / inv_r, feeders.join(", "), limit / 1e3, ADC_HOLD_CAP_F * 1e9);
     let nets = vec![net.name.clone()];
     let seen = format!("{r} pin role {role} is fed from {:.1} kOhm", 1e-3 / inv_r);
     let rating = format!("{:.1} kOhm ADC source-impedance", limit / 1e3);
@@ -347,6 +347,15 @@ mod tests {
             let lint = super::super::engine_lint(&b, &ModelLibrary::builtin());
             let adc = |f: &&LintFinding| f.message.contains("ADC source impedance");
             assert_eq!(lint.findings.iter().filter(adc).count(), *n, "{label}");
+            // The finding names its own fix, not the envelope kind's generic one.
+            for f in lint.findings.iter().filter(adc) {
+                let remedy = f.own_remedy().unwrap_or_default();
+                assert!(
+                    remedy.starts_with("Lower the divider"),
+                    "{label}: {}",
+                    f.message
+                );
+            }
         }
     }
 }

@@ -4970,18 +4970,37 @@ fn vreg_stability_warning(
     components: &[Component],
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
 ) -> Option<String> {
+    // Fitted capacitors spanning output and ground, with their capacitance
+    // when the value reads as one (no unit or farads); `None` is a capacitor
+    // whose size is unknown, which is never counted as 0 F.
     let across_output = |cap: &Component| {
         let pins = logical_passive_pins(cap).ok()?;
         let nodes: Vec<_> = pins.iter().filter_map(|pin| node_of(pin.net)).collect();
         let fitted = AssemblyState::of(cap).is_present() && passive_letter(cap) == Some('C');
         let spans =
             matches!(*nodes.as_slice(), [a, b] if (a, b) == (out, gnd) || (a, b) == (gnd, out));
-        let farads = parse_value(cap.value.trim()).map(|v| v.si)?;
-        (fitted && spans && farads.is_finite() && farads > 0.0).then_some(farads)
+        // Unitless only below 10 mF: a bare "4.7" or "10k" names no known unit.
+        let farads = parse_value(cap.value.trim())
+            .filter(|v| match v.unit.as_deref() {
+                Some(u) => u == "F",
+                None => v.si < 1e-2,
+            })
+            .map(|v| v.si)
+            .filter(|f| f.is_finite() && *f > 0.0);
+        (fitted && spans).then_some(farads)
     };
-    let caps: Vec<_> = components
+    let spanning: Vec<_> = components
         .iter()
         .filter_map(|cap| Some((cap.reference.as_str(), across_output(cap)?)))
+        .collect();
+    let caps: Vec<_> = spanning
+        .iter()
+        .filter_map(|(reference, farads)| Some((*reference, (*farads)?)))
+        .collect();
+    let unvalued: Vec<_> = spanning
+        .iter()
+        .filter(|(_, farads)| farads.is_none())
+        .map(|(reference, _)| *reference)
         .collect();
     let found = caps.iter().map(|(_, farads)| farads).sum::<f64>();
     let refs: Vec<_> = caps.iter().map(|(reference, _)| *reference).collect();
@@ -4991,17 +5010,35 @@ fn vreg_stability_warning(
         refs.join(", ")
     };
     let esr = |name| model.params.get_f64(name);
+    // A part-per-billion slack: "10uF" parses to 10 x 1e-6, one ulp short of
+    // the card's 10e-6, and a capacitor of exactly the stated value meets it.
+    let short = |need: f64| found < need * (1.0 - 1e-9);
+    let recommended = model.params.get_f64("cout_recommended_f");
     let (marker, gap) = match model.params.get_f64("cout_min_f") {
-        None => (
+        None if recommended.is_none() => (
             "",
             "control-loop stability is not simulated and this card does not state the \
-             output-capacitor requirement; add `cout_min_f` and, when required, \
+             output-capacitor requirement; add `cout_min_f` (a stated minimum) or \
+             `cout_recommended_f` (a recommended value) and, when required, \
              `cout_esr_min_ohm` plus `cout_esr_max_ohm` to the card"
                 .to_owned(),
         ),
-        // A part-per-billion slack: "10uF" parses to 10 x 1e-6, one ulp short
-        // of the card's 10e-6, and a capacitor of exactly the minimum meets it.
-        Some(required) if found < required * (1.0 - 1e-9) => (
+        // Capacitors whose size is unknown may make up the shortfall, so the
+        // requirement is stated as not judged rather than violated.
+        Some(required) if short(required) && !unvalued.is_empty() => (
+            "",
+            format!(
+                "{} requires at least {} output capacitance for stability; {} was counted \
+                 directly from output to ground (counted: {counted}), and {} across the output \
+                 {} no readable capacitance value, so the requirement is not judged",
+                comp.reference,
+                fmt_eng(required, "F"),
+                fmt_eng(found, "F"),
+                unvalued.join(", "),
+                if unvalued.len() == 1 { "has" } else { "have" }
+            ),
+        ),
+        Some(required) if short(required) => (
             Assumption::OPERATING_LIMIT_MARKER,
             format!(
                 "{} requires at least {} output capacitance for stability, but {} was found \
@@ -5011,7 +5048,24 @@ fn vreg_stability_warning(
                 fmt_eng(found, "F")
             ),
         ),
-        Some(_) if esr("cout_esr_min_ohm").is_some() => (
+        // A recommended (sufficient, not minimum) value: a shortfall is
+        // disclosed as unconfirmed stability, never as a violated limit.
+        _ if recommended.is_some_and(short) => (
+            "",
+            format!(
+                "the datasheet recommends {} output capacitance for stability (a recommended \
+                 value, not a stated minimum), and {} was found directly from output to ground \
+                 (counted: {counted}{}); stability below the recommendation is not confirmed",
+                fmt_eng(recommended?, "F"),
+                fmt_eng(found, "F"),
+                if unvalued.is_empty() {
+                    String::new()
+                } else {
+                    format!("; no readable value: {}", unvalued.join(", "))
+                }
+            ),
+        ),
+        _ if esr("cout_esr_min_ohm").is_some() => (
             "",
             format!(
                 "control-loop stability requires output-capacitor ESR in {}..{}, but the board \
@@ -5021,7 +5075,7 @@ fn vreg_stability_warning(
                 fmt_eng(esr("cout_esr_max_ohm")?, "Ω")
             ),
         ),
-        Some(_) => return None,
+        _ => return None,
     };
     Some(format!(
         "{}{marker}{} ({}): {gap}",

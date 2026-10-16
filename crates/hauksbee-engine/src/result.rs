@@ -2344,7 +2344,11 @@ pub fn lint_findings_json(report: &NetLintReport) -> Vec<JsonFinding> {
             actionable: f.is_actionable(),
             message: f.message.clone(),
             plain: f.message.clone(),
-            fix: if f.is_abstention() {
+            // The rule that raised a finding states its fix when it can
+            // (`own_remedy`); the check kind's advice is the fallback.
+            fix: if let Some(own) = f.own_remedy().filter(|_| f.is_abstention()) {
+                Some(own.to_string())
+            } else if f.is_abstention() {
                 lint_abstention_hint(f.check).map(str::to_string)
             } else if f
                 .message

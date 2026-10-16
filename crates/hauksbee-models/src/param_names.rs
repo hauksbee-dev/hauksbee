@@ -187,6 +187,8 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             "dropout_v",
             "iq_a",
             "cout_min_f",
+            "cout_recommended_f",
+            "cout_recommended_type",
             "cout_esr_min_ohm",
             "cout_esr_max_ohm",
             "battery_chemistry",
@@ -311,7 +313,8 @@ const GLOSSARY: &str = "is A saturation current (a fitted law constant, not a le
     vih V input high threshold; vil V input low threshold; voh V output high level; \
     vol V output low level; ro ohm output resistance; \
     en_on_level - the enable-pin level (high or low) that turns a regulator on; \
-    en_open - the state (off or on) the datasheet states for an open enable pin";
+    en_open - the state (off or on) the datasheet states for an open enable pin; \
+    cout_recommended_type - the output-capacitor type a recommended value names (\"solid tantalum\")";
 
 fn glossary() -> impl Iterator<Item = [&'static str; 3]> {
     GLOSSARY.split(';').filter_map(|e| {
