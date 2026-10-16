@@ -3536,7 +3536,10 @@ impl EvidenceRegistry {
     /// [`EvidenceError::InvalidAssumption`] for an assumption that fails
     /// [`Assumption::validate`], and [`EvidenceError::DuplicateAssumption`] for
     /// a repeated id.
-    pub fn new(assumptions: Vec<Assumption>) -> Result<Self, EvidenceError> {
+    pub fn new(mut assumptions: Vec<Assumption>) -> Result<Self, EvidenceError> {
+        // Registry order is by id, not by the order the checks happened to
+        // raise the assumptions in, which follows the input file's part order.
+        assumptions.sort_by(|a, b| a.id().cmp(b.id()));
         let mut ids = HashSet::with_capacity(assumptions.len());
         for assumption in &assumptions {
             assumption
@@ -4054,6 +4057,10 @@ impl EvidenceMap {
                 assumptions.push(a.id.clone());
             }
         }
+        // By id, so the order the traversal met the assumptions in (which
+        // follows the order the file listed its parts) never reaches the
+        // report.
+        assumptions.sort();
         Self {
             assertion: assertion.into(),
             artifacts: Vec::new(),
@@ -4319,6 +4326,8 @@ impl EvidenceMap {
                 *assumption = to.id().clone();
             }
         }
+        self.assumptions.sort();
+        self.assumptions.dedup();
         for parameter in &mut self.parameters {
             if let ValueOrigin::Default { assumption } = &mut parameter.origin {
                 if assumption == from.id() {

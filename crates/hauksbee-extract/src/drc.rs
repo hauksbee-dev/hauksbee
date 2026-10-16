@@ -41,6 +41,7 @@
 use std::collections::HashMap;
 
 use forge_sexpr::{Document, List};
+use hauksbee_ir::order::{net_pair_in_order, quantize_mm};
 use rstar::{RTree, AABB};
 
 use crate::gerber::geo::{point_in_polygon, polygon_bounds, shape_gap_at, Capsule, Shape};
@@ -692,6 +693,41 @@ fn common_vertical_via(indices: &[usize], findings: &[DrcFinding]) -> bool {
         rest.iter()
             .all(|index| via_nets(&findings[*index]).contains(&net))
     })
+}
+
+/// The identity of a copper item for ordering: kind, owner, uuid.
+fn item_key(item: &Item) -> (&'static str, &str, &str) {
+    (item.kind.as_str(), &item.owner, &item.uuid)
+}
+
+/// Which of two findings a report keeps when both claim the same cell: the one
+/// that sorts first here. A short beats a clearance violation, a smaller gap
+/// beats a larger one, and the location and items settle a tie, so the choice
+/// is a function of the two findings and never of the order they were met in.
+fn worse(a: &DrcFinding, b: &DrcFinding) -> std::cmp::Ordering {
+    (a.kind == ViolationKind::Clearance)
+        .cmp(&(b.kind == ViolationKind::Clearance))
+        .then_with(|| a.gap_mm.total_cmp(&b.gap_mm))
+        .then_with(|| a.x.total_cmp(&b.x))
+        .then_with(|| a.y.total_cmp(&b.y))
+        .then_with(|| item_key(&a.item_a).cmp(&item_key(&b.item_a)))
+        .then_with(|| item_key(&a.item_b).cmp(&item_key(&b.item_b)))
+}
+
+/// Report order: shorts first, then by net pair (by name) and layer, then the
+/// finding itself ([`worse`]). A total order, so two runs over the same copper
+/// list the same findings in the same order whatever order the file used.
+fn sort_findings(findings: &mut [DrcFinding]) {
+    findings.sort_by(|a, b| {
+        (a.kind == ViolationKind::Clearance)
+            .cmp(&(b.kind == ViolationKind::Clearance))
+            .then_with(|| a.net_a_name.cmp(&b.net_a_name))
+            .then_with(|| a.net_b_name.cmp(&b.net_b_name))
+            .then_with(|| a.net_a.cmp(&b.net_a))
+            .then_with(|| a.net_b.cmp(&b.net_b))
+            .then_with(|| a.layer.cmp(&b.layer))
+            .then_with(|| worse(a, b))
+    });
 }
 
 /// One short / clearance finding between two different nets.
@@ -2649,9 +2685,11 @@ fn sweep_buckets(
 
     // De-dup findings on the same net pair + layer + rounded location, so a
     // pour overlapping a long track does not emit thousands of near-identical
-    // rows.
-    let mut seen: std::collections::HashSet<(i64, i64, String, i64, i64)> =
-        std::collections::HashSet::new();
+    // rows. The cell keeps the WORST finding (see `worse`), not the first one
+    // met: which primitive the sweep reaches first depends on the order the
+    // file listed the copper in, and the report must not.
+    let mut cells: std::collections::HashMap<(i64, i64, String, i64, i64), usize> =
+        std::collections::HashMap::new();
 
     // Zone<->Pad overlaps dropped as antipad carves, counted so the run can
     // disclose that the class was suppressed rather than found clean.
@@ -2659,6 +2697,9 @@ fn sweep_buckets(
 
     // Record one finding, de-duplicating on net pair + layer + ~0.25 mm cell so
     // a pour running alongside a long track does not emit thousands of rows.
+    // The pair is named in canonical direction (by net name, see
+    // `net_pair_in_order`) and every measured length is rounded to a nanometre,
+    // so the same copper reads the same however the file ordered it.
     #[allow(clippy::cast_possible_truncation, reason = "quarter-mm cells fit i64")]
     let mut record = |kind: ViolationKind,
                       pa: i64,
@@ -2670,7 +2711,14 @@ fn sweep_buckets(
                       cy: f64,
                       gap: f64,
                       required_clearance_mm: f64| {
-        let (na, nb) = (pa.min(pb), pa.max(pb));
+        let (cx, cy, gap) = (quantize_mm(cx), quantize_mm(cy), quantize_mm(gap));
+        let (name_a, name_b) = (name_of(pa), name_of(pb));
+        let (na, nb, name_a, name_b, item_a, item_b) =
+            if net_pair_in_order(&name_a, pa, &name_b, pb) {
+                (pa, pb, name_a, name_b, item_a, item_b)
+            } else {
+                (pb, pa, name_b, name_a, item_b, item_a)
+            };
         let key = (
             na,
             nb,
@@ -2678,20 +2726,12 @@ fn sweep_buckets(
             (cx * 4.0).round() as i64,
             (cy * 4.0).round() as i64,
         );
-        if !seen.insert(key) {
-            return;
-        }
-        let (item_a, item_b) = if pa <= pb {
-            (item_a, item_b)
-        } else {
-            (item_b, item_a)
-        };
-        report.findings.push(DrcFinding {
+        let finding = DrcFinding {
             kind,
             net_a: na,
             net_b: nb,
-            net_a_name: name_of(na),
-            net_b_name: name_of(nb),
+            net_a_name: name_a,
+            net_b_name: name_b,
             layer: layer.to_string(),
             x: cx,
             y: cy,
@@ -2699,7 +2739,19 @@ fn sweep_buckets(
             required_clearance_mm,
             item_a,
             item_b,
-        });
+        };
+        match cells.entry(key) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(report.findings.len());
+                report.findings.push(finding);
+            }
+            std::collections::hash_map::Entry::Occupied(slot) => {
+                let kept = &mut report.findings[*slot.get()];
+                if worse(&finding, kept).is_lt() {
+                    *kept = finding;
+                }
+            }
+        }
     };
 
     let empty_zones: Vec<ZonePoly> = Vec::new();
@@ -2737,8 +2789,15 @@ fn sweep_buckets(
                 if no_net.contains(&p.net) || no_net.contains(&q.net) {
                     continue;
                 }
-                let name_p = name_of(p.net);
-                let name_q = name_of(q.net);
+                // The pair in canonical direction, so the measurement below is
+                // a function of the two pieces of copper and not of which one
+                // the file listed first.
+                let (name_p, name_q) = (name_of(p.net), name_of(q.net));
+                let (p, q, name_p, name_q) = if net_pair_in_order(&name_p, p.net, &name_q, q.net) {
+                    (p, q, name_p, name_q)
+                } else {
+                    (q, p, name_q, name_p)
+                };
                 let clearance = rules.effective_clearance(&name_p, &name_q);
                 let (gap, (cx, cy)) = shape_gap_at(&p.shape, &q.shape);
                 if gap >= clearance {
@@ -2843,14 +2902,7 @@ fn sweep_buckets(
         }
     }
 
-    // Stable order: shorts first, then by net pair and layer.
-    report.findings.sort_by(|a, b| {
-        (a.kind == ViolationKind::Clearance)
-            .cmp(&(b.kind == ViolationKind::Clearance))
-            .then(a.net_a.cmp(&b.net_a))
-            .then(a.net_b.cmp(&b.net_b))
-            .then(a.layer.cmp(&b.layer))
-    });
+    sort_findings(&mut report.findings);
     report.zone_pad_overlaps_suppressed = Some(zone_pad_suppressed);
     report
 }
@@ -2927,6 +2979,7 @@ pub mod eagle_drc {
     };
     use crate::eagle::xml_attrs as attrs_of;
     use crate::gerber::geo::poly_poly_closest;
+    use hauksbee_ir::order::{net_pair_in_order, quantize_mm};
     use quick_xml::events::Event;
     use quick_xml::Reader;
     use std::collections::HashMap;
@@ -4121,6 +4174,14 @@ pub mod eagle_drc {
                 {
                     continue;
                 }
+                // The pair in canonical direction (by net name): the contact
+                // point below is measured from `a`, so it must not depend on
+                // which of the two the file listed first.
+                let (a, b) = if net_pair_in_order(&name_of(a.net), a.net, &name_of(b.net), b.net) {
+                    (a, b)
+                } else {
+                    (b, a)
+                };
                 // Overlap means the vertex rings themselves cross or one
                 // contains the other. The rings are deliberately NOT inflated
                 // by the pours' `width` strokes: whether Eagle's boundary
@@ -4164,12 +4225,8 @@ pub mod eagle_drc {
                     ),
                     uuid: String::new(),
                 };
-                let (na, nb) = (a.net.min(b.net), a.net.max(b.net));
-                let (item_a, item_b) = if a.net <= b.net {
-                    (pour_item(a), pour_item(b))
-                } else {
-                    (pour_item(b), pour_item(a))
-                };
+                let (na, nb) = (a.net, b.net);
+                let (item_a, item_b) = (pour_item(a), pour_item(b));
                 report.findings.push(DrcFinding {
                     kind: ViolationKind::Short,
                     net_a: na,
@@ -4177,9 +4234,9 @@ pub mod eagle_drc {
                     net_a_name: name_of(na),
                     net_b_name: name_of(nb),
                     layer: layer_name(a.layer),
-                    x,
-                    y,
-                    gap_mm: gap.min(0.0),
+                    x: quantize_mm(x),
+                    y: quantize_mm(y),
+                    gap_mm: quantize_mm(gap.min(0.0)),
                     required_clearance_mm: rules
                         .effective_clearance(&name_of(a.net), &name_of(b.net)),
                     item_a,
@@ -4187,13 +4244,7 @@ pub mod eagle_drc {
                 });
             }
         }
-        report.findings.sort_by(|a, b| {
-            (a.kind == ViolationKind::Clearance)
-                .cmp(&(b.kind == ViolationKind::Clearance))
-                .then(a.net_a.cmp(&b.net_a))
-                .then(a.net_b.cmp(&b.net_b))
-                .then(a.layer.cmp(&b.layer))
-        });
+        super::sort_findings(&mut report.findings);
         report
     }
 
