@@ -1548,10 +1548,10 @@ iadj_a = 50.0e-6
             .collect()
     }
 
-    fn resistor(r: &str, v: &str, a: i64, b: i64) -> Component {
-        let mut c = part(r, v, vec![pin("1", a), pin("2", b)]);
-        c.lib_id = "Device:R".into();
-        c
+    fn resistor(reference: &str, value: &str, net_a: i64, net_b: i64) -> Component {
+        let mut built = part(reference, value, vec![pin("1", net_a), pin("2", net_b)]);
+        built.lib_id = "Device:R".into();
+        built
     }
 
     /// The buck's divider senses the rail past the inductor, not the switch

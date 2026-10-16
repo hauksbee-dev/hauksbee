@@ -201,9 +201,10 @@ pub fn is_condition(message: &str) -> bool {
     message.contains(CONDITION_MARKER)
 }
 
-/// The words every surface reads an analysis that did not run to a result
-/// by; only [`not_judged`] writes them. A failed or abstaining analysis
-/// judged nothing, so the verdict built over it can never be a pass.
+/// The words every surface reads an analysis that did not run by.
+///
+/// Only [`not_judged`] writes them. A failed or abstaining analysis judged
+/// nothing, so the verdict built over it can never be a pass.
 pub const NOT_JUDGED_MARKER: &str = "not judged, which is not a pass";
 
 /// `what` (the analysis that did not run to a result, and the limits it
