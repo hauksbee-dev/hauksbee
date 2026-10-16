@@ -100,7 +100,7 @@ use std::collections::HashMap;
 
 use super::{
     elem_net_id, is_unconnected_net, local_to_board, net_name_index, norm, routed_length_mm,
-    track_width_range, usb_pairs, SiCheck, SiFinding, SiReport, SiSeverity,
+    track_width_range, usb_pairs, usb_polarity, SiCheck, SiFinding, SiReport, SiSeverity,
 };
 use crate::gerber::geo::{point_in_polygon, seg_seg_dist};
 use crate::ExtractedBoard;
@@ -328,6 +328,12 @@ pub enum ImpedanceClass {
     UsbDiff,
     /// Ethernet MDI / other 100 ohm differential pair.
     EthernetDiff,
+    /// A `DisplayPort` / `eDP` / HDMI (TMDS) / LVDS lane: 100 ohm differential.
+    ///
+    /// Sources (vendor datasheets): TI SN65DSI86 (SLLSEH2C) section 11.1.2, eDP: "ML*P/N pairs should be routed with
+    /// controlled 100-Ω differential impedance (± 20%)"; TI TMDS181 (HDMI) test-fixture note: "100-Ω differential
+    /// impedance"; TI SN65LVDS93B (LVDS): recommended differential load impedance 90 to 132 ohm, tested at RL = 100 ohm.
+    DisplayDiff,
     /// A generic single-ended 50 ohm high-speed line.
     SingleEnded50,
 }
@@ -338,7 +344,7 @@ impl ImpedanceClass {
     pub const fn target_ohm(self) -> f64 {
         match self {
             Self::UsbDiff => 90.0,
-            Self::EthernetDiff => 100.0,
+            Self::EthernetDiff | Self::DisplayDiff => 100.0,
             Self::SingleEnded50 => 50.0,
         }
     }
@@ -347,6 +353,7 @@ impl ImpedanceClass {
         match self {
             Self::UsbDiff => "USB 90 ohm differential",
             Self::EthernetDiff => "Ethernet 100 ohm differential",
+            Self::DisplayDiff => "DisplayPort/HDMI/LVDS 100 ohm differential",
             Self::SingleEnded50 => "50 ohm single-ended",
         }
     }
@@ -360,34 +367,29 @@ impl ImpedanceClass {
         match self {
             Self::UsbDiff => "USB differential",
             Self::EthernetDiff => "Ethernet differential",
+            Self::DisplayDiff => "display differential (DisplayPort/HDMI/LVDS)",
             Self::SingleEnded50 => "single-ended",
         }
     }
 }
 
-/// All controlled-impedance differential pairs on the board with their class:
-/// USB pairs from the shared `usb_pairs` detector (tagged [`ImpedanceClass::UsbDiff`]),
-/// plus Ethernet / generic `_P`/`_N` (`+`/`-`) pairs whose name matches an
-/// Ethernet convention (tagged [`ImpedanceClass::EthernetDiff`]). USB-claimed
-/// nets are not re-emitted. Returns `(plus_id, minus_id, class)`.
-fn classified_pairs(board: &ExtractedBoard) -> Vec<(i64, i64, ImpedanceClass)> {
-    let mut out: Vec<(i64, i64, ImpedanceClass)> = Vec::new();
+/// All differential pairs on the board with the class their evidence names:
+/// pairs from the shared `usb_pairs` detector (a `D+`/`D-`, `DP`/`DN`, `_DP`/`_DN`
+/// suffix pair), each classed by [`pair_class`] (USB, Ethernet, display, or
+/// `None` when nothing says which standard it is), plus Ethernet / generic
+/// `_P`/`_N` (`+`/`-`) pairs whose name matches an Ethernet convention
+/// (tagged [`ImpedanceClass::EthernetDiff`]). Pairs the first pass claimed are
+/// not re-emitted. Returns `(plus_id, minus_id, class)`.
+fn classified_pairs(board: &ExtractedBoard) -> Vec<(i64, i64, Option<ImpedanceClass>)> {
+    let mut out: Vec<(i64, i64, Option<ImpedanceClass>)> = Vec::new();
     let mut claimed: std::collections::HashSet<i64> = std::collections::HashSet::new();
 
-    // USB pairs first (they own their nets).
+    // The `D+`/`DP` suffix pairs first (they own their nets). The suffix alone
+    // does not make a pair USB: eDP lanes are `EDP_TX0_DP`/`EDP_TX0_DN`.
     for (pid, mid, _base) in usb_pairs(board) {
-        // A USB pair whose name is actually Ethernet-flavoured (rare) is judged
-        // as Ethernet; otherwise USB.
-        let pname = board.net(pid).map(|n| n.name.clone()).unwrap_or_default();
-        let mname = board.net(mid).map(|n| n.name.clone()).unwrap_or_default();
-        let class = if is_ethernet_name(&pname) || is_ethernet_name(&mname) {
-            ImpedanceClass::EthernetDiff
-        } else {
-            ImpedanceClass::UsbDiff
-        };
         claimed.insert(pid);
         claimed.insert(mid);
-        out.push((pid, mid, class));
+        out.push((pid, mid, pair_class(board, pid, mid)));
     }
 
     // Ethernet / generic differential pairs by name (P/N, +/-, DP/DN suffix).
@@ -419,11 +421,86 @@ fn classified_pairs(board: &ExtractedBoard) -> Vec<(i64, i64, ImpedanceClass)> {
     for base in keys {
         if let (Some(&pid), Some(&mid)) = (plus.get(base), minus.get(base)) {
             if !claimed.contains(&pid) && !claimed.contains(&mid) {
-                out.push((pid, mid, ImpedanceClass::EthernetDiff));
+                out.push((pid, mid, Some(ImpedanceClass::EthernetDiff)));
             }
         }
     }
     out
+}
+
+/// The standard a differential pair belongs to, from what the board says about
+/// it, or `None` when it says nothing: a `_DP`/`_DN` suffix is a USB data pair,
+/// a `DisplayPort` lane and a vendor's private link alike, and a 90 ohm USB target
+/// printed against an `eDP` lane (100 ohm) reads as a fault that is not there.
+///
+/// In order: a display token in either net's name (`EDP`, `DISPLAYPORT`,
+/// `HDMI`, `TMDS`, `LVDS`) is a display lane; an Ethernet token is Ethernet;
+/// USB evidence is USB (see [`has_usb_evidence`]). Nothing else names a target.
+pub(super) fn pair_class(board: &ExtractedBoard, pid: i64, mid: i64) -> Option<ImpedanceClass> {
+    let names: Vec<String> = [pid, mid]
+        .iter()
+        .filter_map(|id| board.net(*id))
+        .map(|n| n.name.to_ascii_uppercase())
+        .collect();
+    if names.iter().any(|n| is_display_name(n)) {
+        Some(ImpedanceClass::DisplayDiff)
+    } else if names.iter().any(|n| is_ethernet_name(n)) {
+        Some(ImpedanceClass::EthernetDiff)
+    } else if has_usb_evidence(board, pid, mid, &names) {
+        Some(ImpedanceClass::UsbDiff)
+    } else {
+        None
+    }
+}
+
+/// Does a net name (sheet path included) carry a display-link token, whole or
+/// with a lane number (`EDP_TX1_DP`, `/eDP/LANE0_P`, `LVDS0_P`, `HDMI_D2_N`)?
+fn is_display_name(name: &str) -> bool {
+    const DISPLAY: [&str; 5] = ["EDP", "DISPLAYPORT", "HDMI", "TMDS", "LVDS"];
+    name.to_ascii_uppercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|token| {
+            DISPLAY.iter().any(|base| {
+                token
+                    .strip_prefix(base)
+                    .is_some_and(|rest| rest.bytes().all(|b| b.is_ascii_digit()))
+            })
+        })
+}
+
+/// USB evidence for a pair: `USB` in either net name or its sheet path, a bare
+/// `D+`/`D-`/`DP`/`DM` leaf (no stem that could name another link), or a pin of
+/// either net on a part that says it is USB (a `USB` connector or ESD array,
+/// a pin named `USB_DP` or `D+`).
+fn has_usb_evidence(board: &ExtractedBoard, pid: i64, mid: i64, names: &[String]) -> bool {
+    const USB_PIN_FUNCTIONS: [&str; 4] = ["D+", "D-", "DP", "DM"];
+    if names.iter().any(|n| n.contains("USB")) {
+        return true;
+    }
+    let bare = |n: &String| {
+        let leaf = n.rsplit('/').next().unwrap_or(n).trim();
+        usb_polarity(leaf).is_some_and(|(stem, _)| stem.is_empty())
+    };
+    if names.iter().any(bare) {
+        return true;
+    }
+    board.components.iter().any(|c| {
+        let on_pair = || {
+            c.pins
+                .iter()
+                .any(|p| p.net == Some(pid) || p.net == Some(mid))
+        };
+        let part_says_usb = [&c.value, &c.lib_id, &c.footprint]
+            .iter()
+            .any(|t| t.to_ascii_uppercase().contains("USB"));
+        let pin_says_usb = c.pins.iter().any(|p| {
+            (p.net == Some(pid) || p.net == Some(mid)) && {
+                let f = p.function.to_ascii_uppercase();
+                f.contains("USB") || USB_PIN_FUNCTIONS.contains(&f.as_str())
+            }
+        });
+        pin_says_usb || (part_says_usb && on_pair())
+    })
 }
 
 /// Does a net name match an Ethernet-pair convention? `TRD0..3`, `TRX0..3`
@@ -577,10 +654,42 @@ fn check_diff_pairs(board: &ExtractedBoard, root: &List, stackup: &Stackup, repo
         let Some(s) = pair_edge_spacing(root, pid, mid) else {
             // Cannot measure the coupling geometry: report the SE impedance of
             // one leg as info only (no differential judgement without spacing).
-            emit_diff_info_no_spacing(&pname, &mname, w, stackup, class, report);
+            if let Some(class) = class {
+                emit_diff_info_no_spacing(&pname, &mname, w, stackup, class, report);
+            }
             continue;
         };
 
+        let Some(class) = class else {
+            // Nothing on the pair says which standard it is, so there is no
+            // target to hold its impedance to. Say so rather than judge it
+            // against another interface's number. A plane void under the pair
+            // is a fact about the copper, not about the standard, so it is
+            // still named.
+            let void = match reference_plane_under_pair(root, pid, mid) {
+                ReferencePlane::Missing(missing) => {
+                    format!(
+                        "; reference missing under trace - {}, so the return path detours there",
+                        missing.describe_span()
+                    )
+                }
+                _ => String::new(),
+            };
+            report.findings.push(SiFinding {
+                check: SiCheck::ControlledImpedance,
+                severity: SiSeverity::Info,
+                message: format!(
+                    "{pname} / {mname}: differential pair of unidentified standard, no impedance \
+                     target applied (W~{w:.3} mm, S~{s:.3} mm). Nothing on its nets or parts says \
+                     USB, Ethernet or DisplayPort/HDMI/LVDS; name the interface in the net names \
+                     (a USB_, ETH_ or EDP_ prefix) to have it judged{void} [{}]",
+                    stackup.describe()
+                ),
+                refs: vec![],
+                nets: vec![pname.clone(), mname.clone()],
+            });
+            continue;
+        };
         let Some(z0) = microstrip_z0(w, stackup.h_microstrip_mm, stackup.t_cu_mm, stackup.er)
         else {
             continue;

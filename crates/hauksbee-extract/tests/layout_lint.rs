@@ -441,6 +441,23 @@ fn value_pairs_are_judged_by_electrical_meaning() {
         ("C3", "1n 50V C0G", "1n", Nothing),
         ("C4", "10nF", "10n", Nothing),
         ("C5", "0.1uF", "100n", Nothing),
+        // The same quantity spelled with a different SI prefix, or with the
+        // unit in its own word: 0.22 nF is 220 pF, 1000 nF is 1 uF.
+        ("C8", "0.22nF", "220 pF", Nothing),
+        ("C9", "1000nF", "1 uF", Nothing),
+        ("C10", "100 nF", "100000pF", Nothing),
+        ("C11", "10uF 25V", "10 uF", Nothing),
+        ("C12", "100 nF", "0.1uF", Nothing),
+        ("R8", "1780", "1.78 kΩ", Nothing),
+        ("R10", "100000", "100 kΩ", Nothing),
+        ("R11", "100k 1%", "100 kΩ", Nothing),
+        ("R13", "4.7 k", "4k7", Nothing),
+        // And the same spellings of different quantities still gate.
+        ("C13", "0.22nF", "2.2 nF", Warning),
+        ("C14", "1 uF", "1 nF", Warning),
+        ("C15", "100 nF", "100 pF", Warning),
+        ("R14", "1780", "1.8 kΩ", Warning),
+        ("R15", "100000", "10 kΩ", Warning),
         // A different primary quantity gates, in both directions.
         ("R2", "12k", "5k6", Warning),
         ("R3", "5k6", "12k", Warning),

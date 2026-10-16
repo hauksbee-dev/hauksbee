@@ -516,12 +516,13 @@ impl CiResult {
         let evidence = count(&open_part);
         let timing = count(&|r| r.detail.starts_with("INVALID: timing coverage refusal:"));
         let paced = count(&|r| r.detail.contains("INVALID: host-paced clock:"));
+        let unphysical = count(&|r| r.detail.contains(crate::assertions::UNPHYSICAL_FIGURE));
         let first_open = self.open_parts_behind_invalid();
         let missing = if self.analog_abort {
             format!(
                 "the analog solve stopped converging and the consecutive-failure abort tripped, so {invalid} assertion(s) were marked INVALID"
             )
-        } else if no_firmware + evidence + timing + paced == invalid {
+        } else if no_firmware + evidence + timing + paced + unphysical == invalid {
             let mut parts = Vec::new();
             if no_firmware > 0 {
                 parts.push(format!(
@@ -541,6 +542,11 @@ impl CiResult {
             if paced > 0 {
                 parts.push(format!(
                     "the host-paced firmware had not reached the claimed simulated-time window (its clock depends on the host, not on the board), so {paced} assertion(s) were left unjudged"
+                ));
+            }
+            if unphysical > 0 {
+                parts.push(format!(
+                    "{unphysical} assertion(s) rest on a figure that is not physical (a junction estimate past silicon's melting point, or a measurement that is not a finite number), so no pass or fail is given"
                 ));
             }
             parts.join("; ")
@@ -573,6 +579,8 @@ impl CiResult {
                     ("close the assumption named under", " (give an open part a model with hauksbee models new, add a [[supply]] for a battery net, or bring a part inside the card limit it names)")
                 } else if r.detail.contains("INVALID: host-paced clock:") {
                     ("read the host-paced clock note under", "; raise duration_ms or drop the time window it names, or judge it on simavr, Renode or hardware")
+                } else if r.detail.contains(crate::assertions::UNPHYSICAL_FIGURE) {
+                    ("read the unphysical-figure reason under", ": correct the input it names (a part value, a supply voltage or `ambient_c`)")
                 } else if r.detail.starts_with("INVALID: timing coverage refusal:") {
                     ("read the timing refusal under", "; run on a backend that measures it, or drop the timing claim")
                 } else {
@@ -1839,6 +1847,31 @@ mod tests {
             ));
         let named = run.refusal().unwrap().missing_prerequisite;
         assert!(named.ends_with("; the first open part is C2"), "{named}");
+    }
+
+    /// An INVALID row refused for a non-physical figure says so; the footer
+    /// must not blame the analog solve.
+    #[test]
+    fn the_unphysical_figure_refusal_names_its_cause_not_the_solver() {
+        let mut invalid = result(
+            "Tj(R1) <= 125 C",
+            "max_temp",
+            false,
+            &format!(
+                "INVALID: {} the junction estimate for R1 reached 9663 C",
+                crate::assertions::UNPHYSICAL_FIGURE
+            ),
+        );
+        invalid.invalid = true;
+        let refusal = ci_result(vec![invalid]).refusal().unwrap();
+        let missing = refusal.missing_prerequisite;
+        assert!(missing.contains("not physical"), "{missing}");
+        assert!(!missing.contains("converge"), "{missing}");
+        assert!(
+            refusal.next_action.contains("ambient_c"),
+            "{}",
+            refusal.next_action
+        );
     }
 
     /// A red run states the fix and never sends the reader to a docs page.

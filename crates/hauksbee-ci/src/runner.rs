@@ -328,18 +328,34 @@ impl NetWindow {
         }
     }
     const fn observe(&mut self, v: f64) {
-        self.min_v = self.min_v.min(v);
-        self.max_v = self.max_v.max(v);
+        self.widen(v);
         self.last_v = v;
         self.samples += 1;
+    }
+    /// Widen min/max with `v`. `f64::min`/`max` drop a NaN, which would let a
+    /// window that saw only NaN read as an untouched one and pass a bound; a
+    /// non-finite sample therefore poisons both extremes (NaN, and sticky), and
+    /// [`Self::is_poisoned`] tells the assertions the window holds no measurement.
+    const fn widen(&mut self, v: f64) {
+        if v.is_finite() && !self.is_poisoned() {
+            self.min_v = self.min_v.min(v);
+            self.max_v = self.max_v.max(v);
+        } else {
+            self.min_v = f64::NAN;
+            self.max_v = f64::NAN;
+        }
+    }
+    /// Whether a non-finite sample reached this window.
+    #[must_use]
+    pub const fn is_poisoned(&self) -> bool {
+        self.min_v.is_nan() || self.max_v.is_nan()
     }
     /// Widen the min/max window with an intra-frame extreme WITHOUT touching
     /// `last_v`. The settled report value must stay the last-chunk voltage
     /// (`observe`), not the peak excursion, folding the extremes through
     /// `observe` would leave `last_v` reporting the max of the final frame.
     const fn fold(&mut self, v: f64) {
-        self.min_v = self.min_v.min(v);
-        self.max_v = self.max_v.max(v);
+        self.widen(v);
         self.samples += 1;
     }
 }
@@ -2760,7 +2776,13 @@ fn time_in_window(t: f64, start_s: f64, end_s: f64) -> bool {
 /// starts at `floor`.
 fn fold_peak(map: &mut HashMap<String, f64>, key: &str, v: f64, floor: f64) {
     let e = map.entry(key.to_string()).or_insert(floor);
-    if v.is_finite() && v > *e {
+    // A non-finite sample must not vanish into the running maximum (`v > *e` is
+    // false for NaN, which left the floor standing and a part "at -inf" or
+    // "0 A" passing its limit). Record it as NaN, sticky; the assertions read
+    // that as "no measurement" and refuse to judge.
+    if !v.is_finite() || e.is_nan() {
+        *e = f64::NAN;
+    } else if v > *e {
         *e = v;
     }
 }
@@ -4227,6 +4249,49 @@ fn main {
             Some(&true),
             "the re-trip at 0.15 belongs to steady"
         );
+    }
+
+    /// `f64::min`/`max` drop a NaN, so a non-finite sample used to leave a
+    /// window (or a peak) looking untouched, and a bound then PASSED. Now it
+    /// poisons the aggregate, stickily, and finite samples after it do not heal it.
+    #[test]
+    fn a_non_finite_sample_poisons_windows_and_peaks_and_finite_ones_do_not() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut w = NetWindow::empty();
+            w.observe(3.3);
+            assert!(!w.is_poisoned());
+            w.observe(bad);
+            w.observe(3.3);
+            assert!(w.is_poisoned(), "{bad}");
+            let mut f = NetWindow::empty();
+            f.fold(bad);
+            assert!(f.is_poisoned(), "{bad} via fold");
+            let mut rail = crate::scenarios::RailWindow::new();
+            rail.observe(0.0, 3.3);
+            assert!(!rail.is_poisoned());
+            rail.observe(0.001, bad);
+            rail.fold(3.3);
+            assert!(rail.is_poisoned(), "{bad} rail");
+
+            let mut peaks = HashMap::new();
+            fold_peak(&mut peaks, "R1", 0.5, 0.0);
+            fold_peak(&mut peaks, "R1", bad, 0.0);
+            fold_peak(&mut peaks, "R1", 9.0, 0.0);
+            assert!(peaks["R1"].is_nan(), "{bad} peak");
+            let mut cold = HashMap::new();
+            fold_peak(&mut cold, "R1", bad, f64::NEG_INFINITY);
+            assert!(cold["R1"].is_nan(), "{bad} first sample");
+        }
+        // Control: finite samples keep the ordinary running extremes.
+        let mut peaks = HashMap::new();
+        for v in [0.5, 2.0, 1.0] {
+            fold_peak(&mut peaks, "R1", v, 0.0);
+        }
+        assert!((peaks["R1"] - 2.0).abs() < 1e-12);
+        let mut w = NetWindow::empty();
+        w.observe(3.3);
+        w.fold(1.0);
+        assert!(!w.is_poisoned() && (w.min_v, w.max_v) == (1.0, 3.3));
     }
 
     #[test]

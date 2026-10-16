@@ -39,6 +39,7 @@ pub mod occurrence;
 pub mod package_fit;
 pub mod power_supply;
 pub mod program_resistor;
+pub mod rail_basis;
 pub mod rail_owner;
 pub mod schematic_ties;
 pub mod shorts;

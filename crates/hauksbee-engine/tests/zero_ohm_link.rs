@@ -90,49 +90,90 @@ fn zero_ohm_resistor_circuit_solves() {
     );
 }
 
-/// A value below the solver's 1 micro-ohm floor is bound at the floor, and the
-/// bind row says so (the figures through it are the floor's, not the value's).
-/// Legal control: a 1k part and a 1 milli-ohm shunt bind untouched and unwarned.
-#[test]
-fn a_resistor_below_the_solver_floor_binds_at_the_floor_and_says_so() {
-    let board = ExtractedBoard {
-        name: "below_floor_test".to_string(),
+/// +5V -- R5 (`value`) -- MID -- R2 (1k) -- GND: a sense resistor of the given value.
+fn shunt_board(value: &str) -> ExtractedBoard {
+    ExtractedBoard {
+        name: "shunt_test".to_string(),
         nets: vec![
             crate::support::net(1, "+5V".to_string()),
             crate::support::net(2, "MID".to_string()),
             crate::support::net(3, "GND".to_string()),
         ],
         components: vec![
-            comp("R1", "1e-9", vec![pin("1", 1), pin("2", 2)]),
+            comp("R5", value, vec![pin("1", 1), pin("2", 2)]),
             comp("R2", "1k", vec![pin("1", 2), pin("2", 3)]),
-            comp("R3", "0.001", vec![pin("1", 1), pin("2", 3)]),
         ],
-    };
-    let bound = bind_board(&board, &ModelLibrary::builtin());
-    let floor = bound
+    }
+}
+
+fn stamped_ohms(bound: &hauksbee_engine::BoundBoard, refdes: &str) -> f64 {
+    bound
         .circuit
         .devices
         .iter()
         .find_map(|d| match d {
-            Device::Resistor { name, ohms, .. } if name == "R1" => Some(*ohms),
+            Device::Resistor { name, ohms, .. } if name == refdes => Some(*ohms),
             _ => None,
         })
-        .expect("R1 is stamped");
-    assert!(
-        (floor - 1e-6).abs() < 1e-15,
-        "R1 binds at the floor, got {floor}"
-    );
-    let warning = bound
-        .report
-        .row("R1")
-        .and_then(|r| r.warning.as_deref())
-        .expect("the floor stamp is loud");
-    assert!(
-        warning.contains("below the solver's 1 micro-ohm floor") && warning.contains("1e-9"),
-        "{warning}"
-    );
-    for fine in ["R2", "R3"] {
-        let row = bound.report.row(fine).expect("a bind row");
-        assert!(row.warning.is_none(), "{fine}: {:?}", row.warning);
+        .unwrap_or_else(|| panic!("{refdes} is stamped"))
+}
+
+/// A 15 uohm shunt stamped 66 kS and stopped the whole board's DC solve (the LU lost the
+/// gmin-sized pivots around it) while a literal 0 solved. Any sub-milliohm value is bound at the
+/// milliohm conditioning floor and the bind row says so.
+#[test]
+fn a_sub_milliohm_resistor_binds_at_the_conditioning_floor_loudly() {
+    for value in ["15uR", "10u", "1e-9"] {
+        let bound = bind_board(&shunt_board(value), &ModelLibrary::builtin());
+        assert_eq!(
+            stamped_ohms(&bound, "R5").to_bits(),
+            STIFF_R_OHMS.to_bits(),
+            "{value} binds at the conditioning floor"
+        );
+        let warning = bound
+            .report
+            .row("R5")
+            .and_then(|r| r.warning.clone())
+            .unwrap_or_else(|| panic!("{value}: the substitution must be on the bind row"));
+        assert!(
+            warning.contains("R5")
+                && warning.contains("conditioning floor")
+                && warning.contains("1 mohm"),
+            "{value}: {warning}"
+        );
+    }
+}
+
+/// Legal control: a milliohm-or-larger sense resistor is stamped as written and silent.
+#[test]
+fn a_milliohm_or_larger_resistor_is_stamped_as_written_and_silent() {
+    for (value, want) in [("1m", 1e-3), ("5m", 5e-3), ("15mR", 15e-3), ("0.1", 0.1)] {
+        let bound = bind_board(&shunt_board(value), &ModelLibrary::builtin());
+        let got = stamped_ohms(&bound, "R5");
+        assert!((got - want).abs() < 1e-12, "{value}: stamped {got}");
+        assert!(
+            bound.report.row("R5").is_some_and(|r| r.warning.is_none()),
+            "{value}: no warning expected"
+        );
+    }
+}
+
+/// The micro-ohm board solves and sits at the rail, like the milliohm control.
+#[test]
+fn a_micro_ohm_shunt_board_solves_like_the_milliohm_one() {
+    for value in ["15uR", "1e-9", "15mR"] {
+        let bound = bind_board(&shunt_board(value), &ModelLibrary::builtin());
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default())
+            .expect("scheduler builds for the shunt board");
+        for _ in 0..10 {
+            sched.step(1e-4);
+        }
+        assert!(
+            sched.analog_valid(),
+            "{value}: {:?}",
+            sched.failed_windows()
+        );
+        let mid = sched.net_voltage("MID").expect("MID is a live net");
+        assert!((mid - 5.0).abs() < 0.01, "{value}: MID at {mid} V");
     }
 }
