@@ -307,7 +307,7 @@ pub fn looks_like_tar(bytes: &[u8]) -> bool {
 /// once for every archive reader (ODB++ and gerber zips) so the same hostile
 /// upload gets the same answer whichever door it comes through. `what` names the
 /// job kind, e.g. `"gerber job"`.
-pub(crate) fn expansion_limit_message(what: &str) -> String {
+pub fn expansion_limit_message(what: &str) -> String {
     format!(
         "this {what} expands to more than {} MiB, which is past the limit \
          hauksbee will hold in memory for one job. That is far larger than any \

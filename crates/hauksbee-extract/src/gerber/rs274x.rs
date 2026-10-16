@@ -420,6 +420,13 @@ fn note_unreadable_statements(doc: &gerber_parser::GerberDoc, faults: &mut Vec<S
                 .to_string(),
         );
     }
+    note_unapplied_transforms(doc, faults);
+    note_undefined_macros(doc, faults);
+    note_unreal_apertures(doc, faults);
+}
+
+/// Whole-layer image parameters this plotter does not apply.
+fn note_unapplied_transforms(doc: &gerber_parser::GerberDoc, faults: &mut Vec<String>) {
     // The deprecated image parameters and incremental coordinates move every
     // coordinate of the layer, and this plotter applies none of them: a layer that
     // sets one to anything but its default would be read misplaced, so refuse it.
@@ -467,6 +474,10 @@ fn note_unreadable_statements(doc: &gerber_parser::GerberDoc, faults: &mut Vec<S
             "sets {what}, a whole-layer transform this reader does not apply, so the copper would be read misplaced"
         ));
     }
+}
+
+/// Apertures built on an aperture macro the file does not (readably) define.
+fn note_undefined_macros(doc: &gerber_parser::GerberDoc, faults: &mut Vec<String>) {
     // An `%AM` the parser could not read is dropped from the command list, and a
     // flash of an aperture built on it would be drawn as the fallback disc: the
     // pad would be there, at the wrong size and shape. Refuse instead.
@@ -494,6 +505,10 @@ fn note_unreadable_statements(doc: &gerber_parser::GerberDoc, faults: &mut Vec<S
             "defines aperture D{code} with the aperture macro `{name}`, which the file never defines or which could not be read, so its pads would be drawn at the wrong size and shape"
         ));
     }
+}
+
+/// Apertures whose size is not a real length.
+fn note_unreal_apertures(doc: &gerber_parser::GerberDoc, faults: &mut Vec<String>) {
     for (code, aperture) in &doc.apertures {
         let sizes: Vec<f64> = match aperture {
             Aperture::Circle(Circle { diameter, .. })

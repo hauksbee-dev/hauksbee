@@ -39,9 +39,10 @@ pub const fn is_terminal_active(c: char) -> bool {
     )
 }
 
-/// `text` with every terminal-active character replaced by its visible `\uXXXX`
-/// escape (also the JSON escape, so a JSON document passed through here stays
-/// valid and decodes to the same string). Borrows when there is nothing to
+/// `text` with every terminal-active character shown as a `\uXXXX` escape.
+///
+/// The escape is also the JSON one, so a JSON document passed through here stays
+/// valid and decodes to the same string. Borrows when there is nothing to
 /// replace, which is nearly always. A carriage return directly before a line
 /// feed is a Windows line ending, not an overwrite, so it is left alone.
 #[must_use]

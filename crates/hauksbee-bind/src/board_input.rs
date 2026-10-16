@@ -1216,6 +1216,7 @@ fn firmware_zip_message(file_name: &str, marker: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hauksbee_ir::eprintln;
     use std::io::Write;
 
     const KICAD: &[u8] = include_bytes!("../../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");

@@ -6,6 +6,8 @@
 
 use std::io::{BufRead, Write};
 
+use hauksbee_ir::eprintln;
+
 const HELP: &str = concat!(
     "hauksbee-mcp ",
     env!("CARGO_PKG_VERSION"),
