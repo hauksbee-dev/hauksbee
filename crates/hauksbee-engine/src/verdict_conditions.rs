@@ -113,20 +113,63 @@ fn abstention_conditions(findings: &[JsonFinding]) -> Vec<String> {
     let report = NetLintReport {
         findings: abstained,
     };
+    let subjects: Vec<String> = report.findings.iter().map(abstention_subject).collect();
     let mut said = BTreeSet::new();
-    let whats: Vec<String> = crate::plain::plain_netlint(&report)
+    let whats: Vec<(String, String)> = crate::plain::plain_netlint(&report)
         .findings
         .iter()
         .map(|f| sentence(&f.what))
-        .filter(|w| said.insert(w.clone()))
+        .zip(subjects)
+        .filter(|(w, _)| said.insert(w.clone()))
         .collect();
     if whats.len() <= NAMED_ABSTENTIONS + 1 {
-        return whats;
+        return whats.into_iter().map(|(w, _)| w).collect();
     }
     let rest = whats.len() - NAMED_ABSTENTIONS;
-    let mut out: Vec<String> = whats.into_iter().take(NAMED_ABSTENTIONS).collect();
-    out.push(MORE_ABSTENTIONS.replace("{n}", &rest.to_string()));
+    // The counted ones still name what they cover, so the headline says which
+    // parts the pass did not judge even when it does not say why.
+    let mut covered = BTreeSet::new();
+    let counted: Vec<String> = whats[NAMED_ABSTENTIONS..]
+        .iter()
+        .map(|(_, s)| s.clone())
+        .filter(|s| covered.insert(s.clone()))
+        .collect();
+    let mut out: Vec<String> = whats
+        .into_iter()
+        .take(NAMED_ABSTENTIONS)
+        .map(|(w, _)| w)
+        .collect();
+    out.push(
+        MORE_ABSTENTIONS
+            .replace("{n}", &rest.to_string())
+            .replace("{subjects}", &name_list(&counted)),
+    );
     out
+}
+
+/// What an abstention covers: its first part, else its first net.
+fn abstention_subject(f: &LintFinding) -> String {
+    f.refs.first().cloned().unwrap_or_else(|| {
+        f.nets.first().map_or_else(
+            || "a board-level check".to_string(),
+            |n| format!("net \"{n}\""),
+        )
+    })
+}
+
+/// Up to [`NAMED_PER_LABEL`] names joined as prose, the rest counted:
+/// "A, B, C, D and 3 more".
+fn name_list(names: &[String]) -> String {
+    let mut shown: Vec<String> = names.iter().take(NAMED_PER_LABEL).cloned().collect();
+    let more = names.len().saturating_sub(NAMED_PER_LABEL);
+    if more > 0 {
+        shown.push(format!("{more} more"));
+    }
+    match shown.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [init @ .., last] => format!("{} and {last}", init.join(", ")),
+    }
 }
 
 /// The part an assumption is about, when it names one: the part its remedy
@@ -337,6 +380,12 @@ mod tests {
             said[NAMED_ABSTENTIONS].starts_with("3 more checks"),
             "{said:?}"
         );
+        // The counted ones still name the parts they cover; the named ones
+        // are not repeated in the count.
+        assert!(
+            said[NAMED_ABSTENTIONS].contains("(D3, D4 and D5)"),
+            "{said:?}"
+        );
         // Control: three are named one by one (no "1 more" stub).
         let said = derived(&findings[..3], &[], true);
         assert_eq!(said.len(), 3);
@@ -346,7 +395,7 @@ mod tests {
     #[test]
     fn modelling_assumptions_are_named_by_label_on_model_dependent_surfaces() {
         let assumptions = vec![
-            Assumption::partial_model("U1", "U1", "BQ76200", "the charge pump", ""),
+            Assumption::partial_model_for_component("U1", "U1", "BQ76200", "the charge pump", ""),
             Assumption::inferred_pin_role_for_component("Q5", "Q5", "1", "gate"),
             Assumption::inferred_pin_role_for_component("Q5", "Q5", "2", "source"),
             Assumption::open_part("J1", "CONN_01X02", "no model"),

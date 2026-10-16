@@ -63,10 +63,11 @@ pub const MODELLING_ASSUMPTIONS_LEAD: &str =
     "Judged on modelling assumptions, each listed in the evidence with how to lift it";
 
 /// The pass condition that counts the abstentions a run does not name one by
-/// one; `{n}` is how many. Each one stays among the findings with what it needs.
+/// one; `{n}` is how many and `{subjects}` the parts or nets they cover. Each
+/// one stays among the findings with what it needs.
 pub const MORE_ABSTENTIONS: &str =
-    "{n} more checks could not judge the part or net they cover; each is listed among the \
-     findings with what it needs.";
+    "{n} more checks could not judge the part or net they cover ({subjects}); each is listed \
+     among the findings with what it needs.";
 
 /// What a run concluded. Ordered from best to worst for the reader: a pass,
 /// a pass with named conditions, a fail, and the two outcomes that vouch for
