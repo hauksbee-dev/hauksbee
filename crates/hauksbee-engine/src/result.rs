@@ -2347,10 +2347,14 @@ pub fn lint_findings_json(report: &NetLintReport) -> Vec<JsonFinding> {
             actionable: f.is_actionable(),
             message: f.message.clone(),
             plain: f.message.clone(),
+            // The rule that raised a finding states its fix when it can
+            // (`own_remedy`); the check kind's advice is the fallback.
             fix: if hauksbee_models::rating_basis::is_not_judged(&f.message) {
                 Some(NOT_JUDGED_FIX.to_string())
             } else if f.is_abstention() {
-                lint_abstention_hint(f.check).map(str::to_string)
+                f.own_remedy()
+                    .or_else(|| lint_abstention_hint(f.check))
+                    .map(str::to_string)
             } else if f
                 .message
                 .starts_with(hauksbee_extract::NOT_ROUTED_MESSAGE_PREFIX)

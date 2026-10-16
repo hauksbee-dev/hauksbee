@@ -371,14 +371,19 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
     // rejected (returning None => the part read as an OPEN / vanished) even
     // though the middle-letter ("2R2", "4R7") and leading-zero ("0R47") forms
     // already parse. Rewrite the leading-R form to its "0R47" equivalent so it
-    // reuses the already-correct path. Scoped to 'R' (ohms) with an immediately
-    // following digit; the only unambiguous leading-letter marking, so a
-    // unit-prefixed token is never mis-read.
+    // reuses the already-correct path. The same IEC 60062 form marks small
+    // capacitances with the SI letter first: "u1" = 0.1 µF, "n47" = 0.47 nF,
+    // "p5" = 0.5 pF, exactly as "0u1" / "0n47" / "0p5" read. Scoped to R and the
+    // lowercase p/n/u letters with an immediately following digit: those are
+    // unambiguous, while a leading k/M/m would collide with words and labels.
     let rewritten;
     let s = {
         let b = s.as_bytes();
         let k = usize::from(matches!(b.first(), Some(b'+' | b'-')));
-        if k + 1 < b.len() && matches!(b[k], b'R' | b'r') && b[k + 1].is_ascii_digit() {
+        if k + 1 < b.len()
+            && matches!(b[k], b'R' | b'r' | b'p' | b'n' | b'u')
+            && b[k + 1].is_ascii_digit()
+        {
             rewritten = format!("{}0{}", &s[..k], &s[k..]);
             rewritten.as_str()
         } else {
@@ -703,6 +708,26 @@ mod tests {
         assert_eq!(normalise_comma_decimal("1,5,20"), "1,5,20");
     }
 
+    /// Capacitor RKM markings (IEC 60062): the SI letter is the decimal point,
+    /// leading when the value is below one unit.
+    #[test]
+    fn capacitor_rkm_forms() {
+        for (s, si) in [
+            ("4u7", 4.7e-6),
+            ("0u1", 0.1e-6),
+            ("u1", 0.1e-6),
+            ("u22", 0.22e-6),
+            ("µ1", 0.1e-6),
+            ("n47", 0.47e-9),
+            ("2p2", 2.2e-12),
+            ("p5", 0.5e-12),
+            ("u1 X7R", 0.1e-6),
+            ("u1/16V", 0.1e-6),
+        ] {
+            check(s, si);
+        }
+    }
+
     #[test]
     fn units_are_kept_or_dropped_correctly() {
         assert_eq!(unit("4H7").as_deref(), Some("H"));
@@ -727,6 +752,15 @@ mod tests {
             "R_LABEL",
             "4e",
             "330OUTPUT",
+            // a leading letter is a decimal point only before a digit
+            "u",
+            "uF",
+            "n",
+            "pF",
+            "nc",
+            "U1",
+            "N1",
+            "P1",
             // JEDEC diode/transistor part numbers
             "1N4007",
             "1N5819",

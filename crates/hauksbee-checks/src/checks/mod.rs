@@ -141,11 +141,34 @@ pub(crate) fn is_unconnected_net(name: &str) -> bool {
     name.trim_start_matches('/').starts_with("unconnected-")
 }
 
+/// Whether `model`'s pin map fits `comp`'s footprint, judged as the binder
+/// judges it ([`hauksbee_bind::package_fit::misfit`]).
+///
+/// A card the binder refuses for this footprint leaves the part unmodelled in
+/// simulation; a check that read pin roles off the same card would judge a
+/// different circuit (an output pin on the input rail, ground on the output),
+/// so every check takes a card only where this holds.
+pub(crate) fn card_fits(
+    board: &ExtractedBoard,
+    comp: &hauksbee_extract::Component,
+    model: &hauksbee_models::ModelEntry,
+) -> bool {
+    let net = |id: Option<i64>| {
+        let name = &board.net(id?)?.name;
+        Some((
+            hauksbee_models::netclass::is_canonical_ground(name),
+            name.clone(),
+        ))
+    };
+    hauksbee_bind::package_fit::misfit(comp, model, &net).is_none()
+}
+
 /// Every assembled component paired with the model that resolved it.
 ///
 /// The three-state assembly contract, asked once: only a Present record can be
 /// a resolvable part, so DNP and identity-refused records abstain rather than
-/// contribute a model-derived finding.
+/// contribute a model-derived finding. Nor does a card whose pin map does not
+/// fit the footprint ([`card_fits`]).
 pub(crate) fn resolved_components<'a>(
     board: &'a ExtractedBoard,
     lib: &'a ModelLibrary,
@@ -208,7 +231,8 @@ impl<'l> BoardStatics<'l> {
         let each = board.components.iter().enumerate();
         each.filter_map(move |(i, comp)| {
             let part = hauksbee_extract::assembly::AssemblyState::of(comp).fitted()?;
-            Some((i, comp, hauksbee_bind::binder::resolve(lib, part).model?))
+            let model = hauksbee_bind::binder::resolve(lib, part).model?;
+            card_fits(board, comp, &model).then_some((i, comp, model))
         })
     }
 
@@ -236,6 +260,7 @@ impl<'l> BoardStatics<'l> {
         self.facts
             .models()
             .map(|(i, model)| (&board.components[i], model))
+            .filter(|(comp, model)| card_fits(board, comp, model))
     }
 }
 

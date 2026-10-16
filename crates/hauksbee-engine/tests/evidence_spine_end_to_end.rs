@@ -51,12 +51,23 @@ fn output_capacitor_requirements_reach_evidence() {
             "10u",
             Some(("reduced_fidelity", "does not state")),
         ),
+        // AMS1117's 22 µF is a recommendation ("will ensure stability",
+        // datasheet p.4), not a stated minimum: a shortfall is disclosed as
+        // unconfirmed stability, never as a violated limit.
         (
             "AMS1117-3.3",
             "100n",
-            Some(("operating_limit_violated", "C1")),
+            Some(("reduced_fidelity", "not a stated minimum")),
         ),
         ("AMS1117-3.3", "22u", None),
+        // MCP1700's 1 µF is a stated minimum ("A minimum output capacitance
+        // of 1.0 µF is required for small signal stability", DS20001826F p.13).
+        (
+            "MCP1700T-3302E/TT",
+            "100n",
+            Some(("operating_limit_violated", "C1")),
+        ),
+        ("MCP1700T-3302E/TT", "1u", None),
         (
             "NCP1117-3.3_SOT223",
             "10u",

@@ -125,6 +125,37 @@ fn validate_vreg_capacitor_params(entry: &ModelEntry, p: &mut Problems) {
             "param 'cout_min_f' must be a non-negative finite number".into()
         });
     }
+    // A datasheet RECOMMENDATION ("22 µF tantalum will ensure stability") is
+    // a sufficient value, not the stated floor `cout_min_f` records.
+    if params.0.contains_key("cout_recommended_f") {
+        let rec = params
+            .get_f64("cout_recommended_f")
+            .filter(|f| positive_finite(*f));
+        p.require(rec.is_some(), || {
+            "param 'cout_recommended_f' must be a positive finite number".into()
+        });
+        if let (Some(rec), Some(min)) = (rec, params.get_f64("cout_min_f")) {
+            p.require(min <= rec, || {
+                format!(
+                    "param 'cout_min_f' = {min} must be less than or equal to \
+                     'cout_recommended_f' = {rec}"
+                )
+            });
+        }
+    }
+    if params.0.contains_key("cout_recommended_type") {
+        p.require(
+            params.0.contains_key("cout_recommended_f")
+                && params
+                    .get_str("cout_recommended_type")
+                    .is_some_and(|t| !t.trim().is_empty()),
+            || {
+                "param 'cout_recommended_type' must be a non-empty string beside \
+                 'cout_recommended_f'"
+                    .into()
+            },
+        );
+    }
     let esr_keys = ["cout_esr_min_ohm", "cout_esr_max_ohm"];
     for key in esr_keys {
         if params.0.contains_key(key) {
@@ -2619,6 +2650,40 @@ mod tests {
             ),
             "out_lo",
         );
+    }
+
+    /// A recommended output capacitance: positive, never below a stated
+    /// minimum, and a named type only beside it.
+    #[test]
+    fn recommended_output_capacitance() {
+        use ComponentKind::Vreg;
+        let vreg = |extra: &[(&str, f64)]| {
+            let mut p = vec![("vout", 3.3), ("dropout_v", 0.3), ("iq_a", 1e-3)];
+            p.extend_from_slice(extra);
+            entry(Vreg, &p)
+        };
+        for bad in [0.0, -1e-6, f64::NAN] {
+            rejects(&vreg(&[("cout_recommended_f", bad)]), "cout_recommended_f");
+        }
+        accepts(&vreg(&[("cout_recommended_f", 22e-6)]));
+        accepts(&vreg(&[
+            ("cout_min_f", 1.5e-6),
+            ("cout_recommended_f", 2.2e-6),
+        ]));
+        rejects(
+            &vreg(&[("cout_min_f", 4.7e-6), ("cout_recommended_f", 1e-6)]),
+            "less than or equal",
+        );
+        let mut typed = vreg(&[("cout_recommended_f", 22e-6)]);
+        typed
+            .params
+            .set_str("cout_recommended_type", "solid tantalum");
+        accepts(&typed);
+        let mut stray_type = vreg(&[]);
+        stray_type
+            .params
+            .set_str("cout_recommended_type", "solid tantalum");
+        rejects(&stray_type, "beside 'cout_recommended_f'");
     }
 
     #[test]
