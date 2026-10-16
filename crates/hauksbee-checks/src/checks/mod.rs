@@ -391,12 +391,21 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
                 .iter()
                 .any(|h| h.refs == f.refs && f.nets.iter().all(|n| h.nets.contains(n)))
     });
-    report.findings.extend(held_off);
     // The same fault on any other part's enable or reset input: a pull to the
-    // off level that nothing on the net can release.
-    report
+    // off level that nothing on the net can release. The two checks split a
+    // regulator's enable pad between them; a part and net one has reported is
+    // never reported again by the other.
+    let control: Vec<_> = control_held_off::control_held_off_lint(board, lib)
         .findings
-        .extend(control_held_off::control_held_off_lint(board, lib).findings);
+        .into_iter()
+        .filter(|c| {
+            !held_off
+                .iter()
+                .any(|h| h.refs == c.refs && c.nets.iter().all(|n| h.nets.contains(n)))
+        })
+        .collect();
+    report.findings.extend(held_off);
+    report.findings.extend(control);
     // One binding serves both checks that need the bound board: the rail
     // conflicts read its report, the DC stress pass then consumes it. Binding
     // a large board is not cheap, so it is done once here, not once per check.

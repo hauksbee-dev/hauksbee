@@ -16,17 +16,29 @@
 //! classifier is shared with `regulator_enable`). A button to ground, a
 //! capacitor, a low-side transistor and another part's own enable or reset
 //! input cannot. A connector pad is an off-board source that may drive the
-//! pin, so a net whose only way to the on level is a connector is a Medium
-//! note instead of a High fault.
+//! pin, so a net whose only way to the on level is a connector is not a High
+//! fault: on an enable it is a non-gating note (a default-off enable brought
+//! out to a header is a common deliberate design), on a reset a Medium
+//! finding (a debug header's reset line only pulls low). A jumper or header
+//! of at most three pads with another pad on a live net may close onto it and
+//! keeps the board silent.
 //!
-//! Polarity is never guessed. An enable is active-high when its card role is
-//! `en`/`enable` (and the card does not say `en_on_level = "low"`) or its pin
-//! is named like one with no active-low decoration; a `SHDN` pin is not
-//! judged without a card. A reset is active-low when the pin is on an MCU
-//! card's `reset` role (every MCU card's reset role is the active-low reset
-//! input), carries a `_n` card role, or is spelled active-low (`~{RESET}`,
-//! `!RESET`, `RESET#`, `nRST`, `NRST`, `RESET_N`). Anything else, including an
-//! active-low enable or an active-high reset, is not judged.
+//! Polarity and direction are never guessed. An enable is active-high when
+//! its card role is `en`/`enable`/`chip_en`/`chip_pu` (and the card does not
+//! say `en_on_level = "low"`); without a card only Espressif's `CHIP_PU` /
+//! `CHIP_EN` (one sense only) is judged, never a bare `EN`, `CE`, `CEN` or
+//! `ENABLE` (a memory's chip enable is active-low and normally pulled down).
+//! A reset is an active-low input when the pin is on an MCU card's `reset`
+//! role (every MCU card's reset role is the active-low reset input), or on a
+//! `_n` card role that the card shows is an input (listed in
+//! `must_not_float_roles`, a printed `reset_pull_up_ohms`, or a symbol typing
+//! the pin `input`): cards give `rst_n` to open-drain reset outputs as well.
+//! Without a card a reset is judged only when spelled active-low
+//! (`~{RESET}`, `!RESET`, `RESET#`, `nRST`, `NRST`, `RESET_N`). A pin the
+//! symbol types as an output, tri-state or open collector / drain is never
+//! judged. A trailing `_<digits>` pad suffix (`CHIP_PU_3`) is ignored.
+//! Anything else, including an active-low enable or an active-high reset, is
+//! not judged.
 //!
 //! An internal pull-up inside the part can still win against a weak external
 //! pull-down, so the check computes the level: the pin sits at most
@@ -38,7 +50,9 @@
 //! so a part whose datasheet is silent is judged only against a stiff
 //! pull-down.
 //!
-//! Linear regulators with an `en` pin are `regulator_enable`'s; the extract
+//! The enable pad of a linear regulator whose card says an open enable is
+//! off is `regulator_enable`'s; every other regulator enable is judged here,
+//! and the two never report one pad. The extract
 //! layer's generic floating-control note covers a control pin alone on its
 //! net.
 
@@ -55,7 +69,9 @@ use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
 
 use super::envelope::role_net_id;
 use super::indicators::name_suggests_active_low;
-use super::regulator_enable::{decapitalise, ohms, survey_net, unfitted_note, Reg, Survey};
+use super::regulator_enable::{
+    decapitalise, judged_enable_pad, ohms, pin_drives, survey_net, unfitted_note, Reg, Survey,
+};
 
 /// The weakest internal pull-up assumed when a card prints none and does not
 /// say the pin has none.
@@ -121,6 +137,40 @@ fn enable_role(role: &str) -> bool {
     matches!(role, "en" | "enable" | "chip_en" | "chip_pu")
 }
 
+/// A pin function without a trailing `_<digits>` pad suffix (`CHIP_PU_3`,
+/// `~{RESET}_2`): some module symbols number repeated names that way.
+fn without_pad_suffix(function: &str) -> &str {
+    let f = function.trim();
+    match f.rsplit_once('_') {
+        Some((head, tail))
+            if !head.is_empty() && !tail.is_empty() && tail.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            head
+        }
+        _ => f,
+    }
+}
+
+/// Whether the card says a reset-role pad is an input: an MCU's reset role,
+/// a role the datasheet gives no pull and requires driven
+/// (`must_not_float_roles`), or a printed internal pull-up
+/// (`reset_pull_up_ohms`), which only an input has. Cards also give the
+/// `rst_n` role to open-drain reset outputs (a USB bridge's, a timer's, a
+/// supervisor's), so a role alone says nothing about direction.
+fn card_reset_input(model: &ModelEntry, role: &str) -> bool {
+    model.kind == ComponentKind::Mcu
+        || model
+            .params
+            .get_str("must_not_float_roles")
+            .unwrap_or_default()
+            .split(',')
+            .any(|r| r.trim().eq_ignore_ascii_case(role))
+        || model
+            .params
+            .get_f64("reset_pull_up_ohms")
+            .is_some_and(|r| r.is_finite() && r > 0.0)
+}
+
 /// Whether a pin function spells an active-low reset.
 fn reset_spelled_active_low(function: &str) -> bool {
     let f = function.trim();
@@ -138,7 +188,7 @@ fn reset_spelled_active_low(function: &str) -> bool {
 /// active-high enable or an active-low reset.
 fn control_of(pin: &Pin, model: Option<&ModelEntry>) -> Option<Control> {
     let kind_text = pin.kind.trim().to_ascii_lowercase();
-    if kind_text.contains("output") || kind_text.contains("power") {
+    if pin_drives(pin) || kind_text.contains("power") {
         return None;
     }
     let function = pin.function.trim();
@@ -159,7 +209,10 @@ fn control_of(pin: &Pin, model: Option<&ModelEntry>) -> Option<Control> {
                 || r.ends_with("_n")
                 || r.contains("nrst")
                 || reset_spelled_active_low(function);
-            return low.then(|| Control {
+            // Direction from the card; a symbol that types the pin as an
+            // input says so too. Anything else may be a reset output.
+            let input = card_reset_input(model, r) || matches!(kind_text.as_str(), "input" | "in");
+            return (low && input).then(|| Control {
                 kind: Kind::Reset,
                 label: label("RESET"),
                 role: role.clone(),
@@ -178,26 +231,23 @@ fn control_of(pin: &Pin, model: Option<&ModelEntry>) -> Option<Control> {
         // is not evidence of a control.
         return None;
     }
-    let raw = function.to_ascii_uppercase();
-    match control_role(bare(function))? {
-        "reset" => reset_spelled_active_low(function).then(|| Control {
-            kind: Kind::Reset,
-            label: label("RESET"),
+    // No card: a name alone never sets a polarity, except a reset spelled
+    // active-low and Espressif's chip enable, which has only one sense.
+    // `EN`, `CE`, `CEN` and `ENABLE` are not judged without a card: a memory's
+    // chip enable is active-low and is normally held selected by a pull-down.
+    let name = without_pad_suffix(function);
+    if matches!(name.to_ascii_uppercase().as_str(), "CHIP_PU" | "CHIP_EN") {
+        return Some(Control {
+            kind: Kind::Enable,
+            label: label("EN"),
             role: None,
-        }),
-        "enable" => {
-            let active_low = name_suggests_active_low(function)
-                || raw.starts_with('N')
-                || raw.contains("SHDN")
-                || raw.contains("SHUTDOWN");
-            (!active_low).then(|| Control {
-                kind: Kind::Enable,
-                label: label("EN"),
-                role: None,
-            })
-        }
-        _ => None,
+        });
     }
+    (control_role(bare(name)) == Some("reset") && reset_spelled_active_low(name)).then(|| Control {
+        kind: Kind::Reset,
+        label: label("RESET"),
+        role: None,
+    })
 }
 
 fn internal_pull(kind: Kind, role: Option<&str>, model: Option<&ModelEntry>) -> InternalPull {
@@ -225,12 +275,14 @@ fn internal_pull(kind: Kind, role: Option<&str>, model: Option<&ModelEntry>) -> 
     }
 }
 
-/// The parallel resistance of the pulls, `None` when one does not read.
+/// The parallel resistance of the pulls whose values read, `None` when none
+/// does. A pull whose value does not read only lowers the true resistance,
+/// so leaving it out can only under-state the hold: a level judged held
+/// without it is held with it.
 fn parallel(pulls: &[Option<f64>]) -> Option<f64> {
     let mut conductance = 0.0;
-    for p in pulls {
-        let r = (*p)?;
-        if r <= 0.0 {
+    for r in pulls.iter().flatten() {
+        if *r <= 0.0 {
             return Some(0.0);
         }
         conductance += 1.0 / r;
@@ -304,12 +356,17 @@ pub fn control_held_off_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetL
             continue;
         }
         let model = models.get(comp.reference.as_str());
-        // A simple linear regulator's enable is `regulator_enable`'s subject.
-        if model.is_some_and(|m| m.kind == ComponentKind::Vreg && m.behavioral.converter.is_none())
-        {
-            continue;
-        }
+        // The enable pad `regulator_enable` judges (an off-when-open linear
+        // regulator's) is its subject; every other regulator enable, one
+        // whose card is silent on the open state or pulls it on inside the
+        // part, is judged here.
+        let theirs = model
+            .filter(|m| m.kind == ComponentKind::Vreg)
+            .and_then(|_| judged_enable_pad(board, lib, comp));
         for pin in &comp.pins {
+            if theirs.as_deref() == Some(pin.number.as_str()) {
+                continue;
+            }
             if let Some(f) = judge(board, comp, pin, model, &models) {
                 report.findings.push(f);
             }
@@ -384,8 +441,18 @@ fn judge(
             ),
         )
     } else {
+        // A default-off enable brought out to a connector with a local
+        // pull-down is a common deliberate design (the host enables the
+        // part), so it is a non-gating note. A reset pulled into reset with
+        // only a connector to release it gates: a debug or programming
+        // header's reset line only ever pulls low, and a reset is normally
+        // pulled to its released level.
+        let severity = match control.kind {
+            Kind::Enable => Severity::Low,
+            Kind::Reset => Severity::Medium,
+        };
         (
-            Severity::Medium,
+            severity,
             format!(
                 "{subject}; the only thing on it that can take the pin to its {} is {}, an \
                  off-board source: {claim}, so unless that source always releases the pin, {}. \
@@ -466,14 +533,36 @@ mod tests {
         assert!(f.own_remedy().is_some(), "{}", f.message);
     }
 
+    /// Espressif's chip enable has one sense, so it is judged by name; a
+    /// trailing pad suffix (`CHIP_PU_3`, a model-less module symbol) does not
+    /// hide it.
     #[test]
     fn an_active_high_enable_held_low_by_its_only_pull_is_a_finding() {
-        let found = lint(vec![ic("EN", RST), pull_down("R1", "1k")]);
+        let found = lint(vec![ic("CHIP_PU", RST), pull_down("R1", "1k")]);
         assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, Severity::High);
         says(
             &found[0],
-            &["EN pin 1", "the part is never enabled", "enable level"],
+            &["CHIP_PU pin 1", "the part is never enabled", "enable level"],
         );
+        let found = lint(vec![ic("CHIP_PU_3", RST), pull_down("R1", "1k")]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        says(&found[0], &["CHIP_PU_3 pin 1", "the part is never enabled"]);
+    }
+
+    /// Without a card a bare `EN`, `CE`, `CEN` or `ENABLE` has no known
+    /// polarity: a memory's or ADC's chip enable is active-low and a 10k
+    /// pull-down that keeps it selected is normal wiring, not a fault.
+    #[test]
+    fn a_card_less_chip_enable_is_not_judged_by_its_name() {
+        for name in ["CE", "CEN", "EN", "ENABLE", "EN_2"] {
+            for value in ["10k", "1k"] {
+                assert!(
+                    lint(vec![ic(name, RST), pull_down("R1", value)]).is_empty(),
+                    "{name} pulled down by {value}"
+                );
+            }
+        }
     }
 
     /// The legal controls: every way the board can release the pin.
@@ -499,14 +588,53 @@ mod tests {
         );
         let driver = part("U3", "Supervisor", &[("4", RST)]);
         assert!(
-            lint(vec![ic("EN", RST), pull_down("R1", "1k"), driver]).is_empty(),
+            lint(vec![ic("CHIP_PU", RST), pull_down("R1", "1k"), driver]).is_empty(),
             "a supervisor or driver pin on the net"
         );
         let switch = part("SW1", "SPDT", &[("1", V3), ("2", RST), ("3", GND)]);
         assert!(
-            lint(vec![ic("EN", RST), pull_down("R1", "1k"), switch]).is_empty(),
+            lint(vec![ic("CHIP_PU", RST), pull_down("R1", "1k"), switch]).is_empty(),
             "a switch that reaches a rail"
         );
+        // A 2-pad jumper from the pin to the supply closes onto the rail when
+        // fitted ("default off, fit the jumper to enable").
+        let jumper = part("JP1", "SolderJumper_2_Open", &[("1", RST), ("2", V3)]);
+        assert!(
+            lint(vec![
+                ic("CHIP_PU", RST),
+                pull_down("R1", "100k"),
+                jumper.clone()
+            ])
+            .is_empty(),
+            "a jumper to the supply"
+        );
+        assert!(
+            lint(vec![ic("~{RESET}", RST), pull_down("R1", "1k"), jumper]).is_empty(),
+            "a jumper to the supply on a reset"
+        );
+    }
+
+    /// The part's own GPIO or output on the same net may release the pin; a
+    /// pad of its own that drives nothing does not.
+    #[test]
+    fn the_parts_own_output_on_the_net_releases_it() {
+        let own = |kind: &str| {
+            let mut u = ic("~{RESET}", RST);
+            u.pins.push(pin_fn("4", RST, "PA3"));
+            u.pins[3].kind = kind.into();
+            u
+        };
+        assert!(
+            lint(vec![own("output"), pull_down("R1", "1k")]).is_empty(),
+            "its own output"
+        );
+        assert!(
+            lint(vec![own("bidirectional"), pull_down("R1", "1k")]).is_empty(),
+            "its own GPIO"
+        );
+        let found = lint(vec![own("passive"), pull_down("R1", "1k")]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        says(&found[0], &["U1's own pad 4"]);
     }
 
     /// A second footprint of the same micro shares the reset net: its reset
@@ -532,6 +660,44 @@ mod tests {
             lint(vec![ic("~{RESET}", RST), pull_down("R1", "1k"), supervisor]).is_empty(),
             "a bare RESET pin of unstated direction may drive the net"
         );
+    }
+
+    /// A reset button whose reference reads as a resistor (`RESET`) and whose
+    /// value is not a resistance only takes the pin to ground; the real
+    /// pull-down still sets the level. Judged the same with or without a
+    /// switch footprint.
+    #[test]
+    fn a_button_referenced_like_a_resistor_does_not_release_it() {
+        let mcu = || {
+            let mut u = part(
+                "U1",
+                "ATmega328P",
+                &[("1", RST), ("7", V3), ("8", GND), ("20", V3), ("22", GND)],
+            );
+            u.pins[0].kind = "bidirectional".into();
+            u
+        };
+        let button = part("RESET", "RESET", &[("1", RST), ("2", GND)]);
+        let found = lint(vec![mcu(), pull_down("R1", "10k"), button.clone()]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, Severity::High);
+        says(
+            &found[0],
+            &[
+                "R1 to 'GND'",
+                "RESET (its other pads reach only the off level)",
+            ],
+        );
+        let mut tact = button;
+        tact.footprint = "Button_Switch_SMD:SW_SPST_EVQP7".into();
+        let found = lint(vec![mcu(), pull_down("R1", "10k"), tact]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        says(&found[0], &["RESET (it switches only to the off level)"]);
+        // The legal control: the same board with its pull-up returned.
+        let mut up = pull_down("R1", "10k");
+        up.pins[1].net = Some(V3);
+        let button = part("RESET", "RESET", &[("1", RST), ("2", GND)]);
+        assert!(lint(vec![mcu(), up, button]).is_empty());
     }
 
     #[test]
@@ -561,8 +727,11 @@ mod tests {
         assert!(lint(vec![ic("~{RESET}", RST), dnp]).is_empty(), "DNP");
     }
 
-    /// A connector pad may release the pin from outside: a Medium finding, and
-    /// only when the board pulls the pin off.
+    /// A connector pad may release the pin from outside, and only when the
+    /// board pulls the pin off is it reported: a Medium finding on a reset,
+    /// a non-gating note on an enable (a default-off external enable is a
+    /// common design). A wide header stays an off-board source even with a
+    /// supply pin on it.
     #[test]
     fn a_connector_pad_makes_it_a_medium_note_and_only_with_a_pull() {
         let header = part("J1", "Conn_01x02", &[("1", RST), ("2", GND)]);
@@ -574,7 +743,63 @@ mod tests {
         assert_eq!(found.len(), 1, "{found:#?}");
         assert_eq!(found[0].severity, Severity::Medium);
         says(&found[0], &["J1 pin 1", "off-board source"]);
-        assert!(lint(vec![ic("~{RESET}", RST), header]).is_empty());
+        assert!(lint(vec![ic("~{RESET}", RST), header.clone()]).is_empty());
+        let found = lint(vec![ic("CHIP_PU", RST), pull_down("R1", "1k"), header]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, Severity::Low);
+        let wide = part(
+            "J2",
+            "Conn_01x06",
+            &[
+                ("1", V3),
+                ("2", RST),
+                ("3", GPIO),
+                ("4", GND),
+                ("5", GND),
+                ("6", GND),
+            ],
+        );
+        let found = lint(vec![ic("~{RESET}", RST), pull_down("R1", "1k"), wide]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, Severity::Medium);
+        says(&found[0], &["J2 pin 2"]);
+    }
+
+    /// Cards give `rst_n` to open-drain reset outputs too (TPL5010 pad 6,
+    /// "open-drain active-low reset output"): a pull-down on one is not a
+    /// held reset input. Nor is any pin the symbol types as an output.
+    #[test]
+    fn a_reset_output_is_not_a_held_reset_input() {
+        let timer = |kind: &str| {
+            let mut u = part(
+                "U1",
+                "TPL5010DDC",
+                &[
+                    ("1", V3),
+                    ("2", GND),
+                    ("3", GPIO),
+                    ("4", GPIO),
+                    ("5", GPIO),
+                    ("6", RST),
+                ],
+            );
+            u.pins[5].kind = kind.into();
+            u
+        };
+        for kind in ["", "passive", "open_collector", "output"] {
+            assert!(
+                lint(vec![timer(kind), pull_down("R1", "1k")]).is_empty(),
+                "rst_n typed {kind:?}"
+            );
+        }
+        for kind in ["open_collector", "output", "tri_state"] {
+            let mut u = ic("~{RESET}", RST);
+            u.pins[0].kind = kind.into();
+            assert!(
+                lint(vec![u, pull_down("R1", "1k")]).is_empty(),
+                "card-less ~{{RESET}} typed {kind}"
+            );
+        }
     }
 
     /// Polarity is never guessed.
@@ -626,10 +851,95 @@ mod tests {
         says(&found[0], &["no pull of its own", "R1 to 'GND'"]);
     }
 
+    /// A test card for a linear regulator (1 IN, 2 GND, 3 EN, 5 OUT) carrying
+    /// `enable` params, on +5V to +3V3 with EN on `/RST` and `extra` parts.
+    /// Returns (this check's findings, `regulator_enable`'s).
+    fn ldo(tag: &str, enable: &str, extra: Vec<Component>) -> (Vec<LintFinding>, Vec<LintFinding>) {
+        const VIN: i64 = 5;
+        let card = format!(
+            "[[models]]\nid = \"held_off_ldo_{tag}\"\nkind = \"vreg\"\n\
+             description = \"enable fixture\"\n[models.match]\n\
+             value_re = \"^HOLDTEST-{tag}$\"\n[models.params]\nvout = 3.3\n\
+             dropout_v = 0.3\niq_a = 5.0e-5\n{enable}\n[models.pins]\n\
+             \"1\" = \"in\"\n\"2\" = \"gnd\"\n\"3\" = \"en\"\n\"5\" = \"out\"\n"
+        );
+        let dir = std::env::temp_dir().join(format!(
+            "hauksbee_control_held_off_{tag}_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("models.toml"), card).unwrap();
+        let mut lib = ModelLibrary::builtin();
+        let errors = lib.load_user_dir(&dir);
+        assert!(errors.is_empty(), "{tag}: {errors:?}");
+        let reg = part(
+            "U1",
+            &format!("HOLDTEST-{tag}"),
+            &[("1", VIN), ("2", GND), ("3", RST), ("5", V3)],
+        );
+        let mut parts = vec![reg];
+        parts.extend(extra);
+        let nets = [
+            (GND, "GND"),
+            (V3, "+3V3"),
+            (RST, "/LDO_EN"),
+            (GPIO, "/IO"),
+            (VIN, "+5V"),
+        ];
+        let b = board(&nets, parts);
+        let mine = control_held_off_lint(&b, &lib)
+            .of_check(LintCheck::ControlHeldOff)
+            .cloned()
+            .collect();
+        let theirs = crate::checks::regulator_enable::regulator_enable_lint(&b, &lib).findings;
+        (mine, theirs)
+    }
+
+    /// A regulator whose card does not say an open enable is off is not
+    /// `regulator_enable`'s, so a pull-down that holds its enable low is
+    /// judged here: one pulled on inside the part (an internal pull-up a 1k
+    /// pull-down overrides), and one whose card is silent on the open state.
+    /// An off-when-open card's enable is `regulator_enable`'s alone.
+    #[test]
+    fn a_regulator_enable_regulator_enable_does_not_judge_is_judged_here() {
+        let (mine, theirs) = ldo(
+            "PULLUP",
+            "en_pull_up_ohms = 1.0e6",
+            vec![pull_down("R1", "1k")],
+        );
+        assert!(theirs.is_empty(), "{theirs:#?}");
+        assert_eq!(mine.len(), 1, "{mine:#?}");
+        assert_eq!(mine[0].severity, Severity::High);
+        says(
+            &mine[0],
+            &[
+                "U1 (HOLDTEST-PULLUP) EN pin 3",
+                "R1 to 'GND'",
+                "internal pull-up minimum of 1 MΩ",
+            ],
+        );
+        let (mine, theirs) = ldo("SILENT", "", vec![pull_down("R1", "1k")]);
+        assert!(theirs.is_empty(), "{theirs:#?}");
+        assert_eq!(mine.len(), 1, "{mine:#?}");
+        says(&mine[0], &["an assumed internal pull-up floor of 10 kΩ"]);
+        // Legal control: the same regulator pulled up to its input.
+        let mut up = pull_down("R1", "100k");
+        up.pins[1].net = Some(5);
+        let (mine, theirs) = ldo("SILENTUP", "", vec![up]);
+        assert!(
+            mine.is_empty() && theirs.is_empty(),
+            "{mine:#?} {theirs:#?}"
+        );
+        // An off-when-open card: one finding, from regulator_enable.
+        let (mine, theirs) = ldo("OFFOPEN", "en_open = \"off\"", vec![pull_down("R1", "1k")]);
+        assert!(mine.is_empty(), "{mine:#?}");
+        assert_eq!(theirs.len(), 1, "{theirs:#?}");
+    }
+
     #[test]
     fn a_regulator_and_a_rail_are_not_this_checks() {
         // A rail-named net with a bleeder to ground is not a control net.
-        let mut u = ic("EN", V3);
+        let mut u = ic("CHIP_PU", V3);
         u.pins[0].net = Some(V3);
         let bleeder = part("R1", "1k", &[("1", V3), ("2", GND)]);
         assert!(lint(vec![u, bleeder]).is_empty());
