@@ -94,7 +94,31 @@ pub fn strap_lint_with_drives(
             // that is the fault, not a non-event. This is the boot-mode latch the
             // firmware cannot override.
             if is_unconnected_net(&net.name) || net_is_isolated_to(board, net_id, comp) {
-                if strap.internal_pull == StrapInternalPull::None {
+                if let (StrapInternalPull::None, Some(selector)) =
+                    (strap.internal_pull, strap.only_with.as_deref())
+                {
+                    // A mode-qualifying strap: its float matters only when the
+                    // board can select the mode it qualifies.
+                    if selector_is_drivable(board, comp, model, selector) {
+                        report.findings.push(LintFinding {
+                            check: LintCheck::StrapPin,
+                            severity: Severity::Medium,
+                            message: format!(
+                                "{} strap pin {} ({}) is left floating (net '{}' has no pull resistor and \
+                                 the pin has no internal pull), and the board can drive the {} boot \
+                                 strap: the level this pin must hold in that mode is undefined at reset ({})",
+                                comp.reference,
+                                pad_num,
+                                strap.role,
+                                net.name,
+                                selector,
+                                strap.note
+                            ),
+                            refs: vec![comp.reference.clone()],
+                            nets: vec![net.name.clone()],
+                        });
+                    }
+                } else if strap.internal_pull == StrapInternalPull::None {
                     // High (vs the wrong-pull arm's Medium): a wrong static pull at
                     // least boots *deterministically* wrong, so it is caught on the
                     // first power-up at the bench. A float boots correctly often
@@ -120,6 +144,55 @@ pub fn strap_lint_with_drives(
         }
     }
     report
+}
+
+/// Whether the board can put the boot-select strap `selector` of `comp` into its
+/// alternate mode. Its net must carry something that can move it off the
+/// normal level: a button, header, transistor, another IC, a series path, or a
+/// pull to the opposite level. A pull to the normal level and a capacitor only
+/// hold the normal mode, so a net with nothing else on it is not drivable. An
+/// unlocatable selector counts as not drivable, so a card error never
+/// manufactures a finding.
+fn selector_is_drivable(
+    board: &ExtractedBoard,
+    comp: &Component,
+    model: &ModelEntry,
+    selector: &str,
+) -> bool {
+    let Some(strap) = model.straps.iter().find(|s| s.role == selector) else {
+        return false;
+    };
+    let Ok((_, net_id)) = strap_site(comp, model, strap) else {
+        return false;
+    };
+    if board
+        .net(net_id)
+        .is_none_or(|net| is_unconnected_net(&net.name))
+    {
+        return false;
+    }
+    // The far side of a resistor that only holds the normal level.
+    let holds_normal = |far: i64| {
+        board.net(far).is_some_and(|n| match strap.level {
+            StrapLevel::High => is_rail_name(&n.name),
+            StrapLevel::Low => is_ground_name(&n.name),
+            StrapLevel::Defined => is_rail_name(&n.name) || is_ground_name(&n.name),
+        })
+    };
+    board.net_members(net_id).into_iter().any(|(c, _)| {
+        if c.reference == comp.reference || !AssemblyState::of(c).is_present() {
+            return false;
+        }
+        if is_assembled_resistor(c) {
+            let mut far = c
+                .pins
+                .iter()
+                .filter_map(|p| p.net)
+                .filter(|id| *id != net_id);
+            return !far.all(&holds_normal);
+        }
+        !hauksbee_extract::is_capacitor(c)
+    })
 }
 
 /// Map a strap role to the pad that carries it, then to that pad's net, or say
@@ -1028,5 +1101,67 @@ vih = [0.0, 2.0]
             .findings
             .iter()
             .any(|f| f.message.contains("were NOT checked")));
+    }
+
+    /// A mode-qualifying strap (ESP32-C3 GPIO8: any level in SPI boot, high for
+    /// Joint Download Boot, ESP32-C3 Series Datasheet v2.4 Tables 3-1 and 3-3)
+    /// left floating is a fault only when the board can select that mode: a
+    /// BOOT button or a pull-down on GPIO9 can, a bare pull-up and a debounce
+    /// capacitor cannot.
+    #[test]
+    fn mode_qualified_strap_float_needs_a_drivable_selector() {
+        // Nets: 1 GND, 2 +3V3, 3 GPIO8, 5 GPIO9.
+        let chip = || {
+            let mut c = part(
+                "U1",
+                "ESP32-C3FH4",
+                &[("17", 2), ("33", 1), ("14", 3), ("15", 5)],
+            );
+            c.footprint = "Package_DFN_QFN:QFN-32-1EP_5x5mm_P0.5mm_EP3.7x3.7mm".into();
+            c
+        };
+        let on = |reference: &str, value: &str, a: i64, b: i64| {
+            part(reference, value, &[("1", a), ("2", b)])
+        };
+        let run = |gpio8: &str, extra: Vec<Component>| {
+            let mut parts = vec![chip()];
+            parts.extend(extra);
+            let b = board(&[(1, "GND"), (2, "+3V3"), (3, gpio8), (5, "/BOOT")], parts);
+            strap_lint(&b, &library())
+                .of_check(LintCheck::StrapPin)
+                .map(|f| (f.severity, f.message.clone()))
+                .collect::<Vec<_>>()
+        };
+        let float = "unconnected-(U1-GPIO8-Pad14)";
+        let button = || on("SW1", "B3U-1000P", 5, 1);
+        let up9 = || on("R6", "10k", 5, 2);
+        // Faulty: GPIO8 floats and a BOOT button can pull GPIO9 low.
+        let got = run(float, vec![up9(), button()]);
+        assert_eq!(got.len(), 1, "{got:#?}");
+        assert_eq!(got[0].0, Medium);
+        for needle in [
+            "U1 strap pin 14 (gpio8)",
+            "floating",
+            "gpio9",
+            "Joint Download Boot",
+        ] {
+            assert!(got[0].1.contains(needle), "'{needle}' not in {}", got[0].1);
+        }
+        // A pull-down on GPIO9 selects download mode outright: GPIO8's float is
+        // still a fault (beside GPIO9's own wrong-level finding).
+        let down = run(float, vec![on("R6", "10k", 5, 1)]);
+        assert_eq!(
+            down.iter().filter(|(_, m)| m.contains("(gpio8)")).count(),
+            1,
+            "{down:#?}"
+        );
+        // Fixed: a pull-up holds GPIO8 high.
+        let fixed = run("/GPIO8", vec![up9(), button(), on("R23", "10k", 3, 2)]);
+        assert!(fixed.is_empty(), "{fixed:#?}");
+        // Legal controls: GPIO9 only pulled up (and debounced), or left alone,
+        // so download mode is unreachable and GPIO8's level never matters.
+        let held = run(float, vec![up9(), on("C9", "100n", 5, 1)]);
+        assert!(held.is_empty(), "{held:#?}");
+        assert!(run(float, vec![]).is_empty());
     }
 }

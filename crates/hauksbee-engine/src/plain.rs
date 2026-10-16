@@ -1875,6 +1875,15 @@ pub fn plain_faults(faults: &[FaultEvent]) -> PlainReport {
                 "Every part has a maximum safe voltage. Above it the insulation/junction can break down (a capacitor can short or vent, a semiconductor can be punched through), often instantly and permanently.".to_string(),
                 "Use a part rated for at least this voltage (with margin), or lower the voltage it sees (clamp, divider, or correct the supply/rail it is on).".to_string(),
             ),
+            FaultKind::GateOvervoltage => (
+                format!(
+                    "{c} has about {} between its gate and source, past its {} gate-source rating.",
+                    volts(f.value),
+                    volts(f.limit),
+                ),
+                "A MOSFET's gate is a thin insulating oxide. Past its gate-source absolute maximum the oxide can rupture, leaving the gate leaky or shorted to the channel, often permanently.".to_string(),
+                "Clamp the gate below the rating (a lower-voltage Zener from gate to source, or a divider on the gate drive), or use a part rated for this gate voltage.".to_string(),
+            ),
             FaultKind::ReverseBias => (
                 format!("{c} (a polarised part) is being driven backwards (reverse voltage of about {}).", volts(f.value)),
                 "Polarised parts like electrolytic and tantalum capacitors only tolerate voltage one way round. Reverse voltage damages them, and a tantalum can fail short and catch fire.".to_string(),

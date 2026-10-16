@@ -2306,7 +2306,9 @@ kind = "mcu"
 description = "Espressif ESP32-C3 (RISC-V RV32IMC), package not recognised"
 
 [models.match]
-value_re = "(?i)^ESP32[-_ ]?C3([-_ ]?(WROOM|MINI).*)?$"
+# The bare chip also carries its ordering code (ESP32-C3 Series Datasheet v2.4,
+# Table 1-1 Series Comparison: ESP32-C3FN4, -C3FH4, -C3FH4AZ, -C3FH4X, -C3FH8X).
+value_re = "(?i)^ESP32[-_ ]?C3(F[NH][48](AZ|X)?|[-_ ]?(WROOM|MINI).*)?$"
 
 [models.params]
 backend = "qemu:esp32c3"
@@ -2355,11 +2357,12 @@ max_voltage_v = 3.6
 # Ref: ESP32-C3 Technical Reference Manual v1.1, Table 2-8 "Strapping Pins";
 # ESP32-C3 datasheet v1.5 sec 2.4. GPIO9 is the C3's "BOOT" pin (the GPIO0
 # equivalent): high = SPI boot (normal), low = download. GPIO8 must be high at
-# reset. GPIO2 must be high.
+# reset only for Joint Download Boot (GPIO9 low); GPIO2 is recommended high.
 [[models.straps]]
 role = "gpio9"
 level = "high"
 boot_select = true   # the C3 BOOT pin; latches SPI-vs-download boot
+internal_pull = "pull_up"   # Table 3-1: GPIO9 default weak pull-up
 # ESP32-C3 Datasheet v2.4, Table 5-4 "DC Characteristics (3.3 V, 25 °C)": VIL
 # max 0.25 x VDD, VIH min 0.75 x VDD,
 # https://www.espressif.com/sites/default/files/documentation/esp32-c3_datasheet_en.pdf
@@ -2370,7 +2373,13 @@ note = "GPIO9 (BOOT) high = SPI boot (normal); low = download boot"
 [[models.straps]]
 role = "gpio8"
 level = "high"
-note = "GPIO8 must be high at reset (with GPIO9) for normal boot"
+# ESP32-C3 Series Datasheet v2.4 Table 3-1: GPIO8 default "Floating" (no
+# internal pull at reset). Table 3-3: SPI boot takes any GPIO8 level; Joint
+# Download Boot (GPIO9 = 0) needs GPIO8 = 1. So a float matters only when the
+# board can pull GPIO9 low.
+internal_pull = "none"
+only_with = "gpio9"
+note = "ESP32-C3 datasheet Table 3-3: Joint Download Boot (GPIO9 low) needs GPIO8 = 1; SPI boot takes any GPIO8 level; Table 3-1: GPIO8 has no internal pull at reset"
 
 [[models.straps]]
 role = "gpio2"
@@ -2411,6 +2420,7 @@ max_voltage_v = 3.6
 role = "gpio9"
 level = "high"
 boot_select = true
+internal_pull = "pull_up"   # Table 3-1: GPIO9 default weak pull-up
 vil = [0.25, 0.0]
 vih = [0.75, 0.0]
 note = "GPIO9 (BOOT) high = SPI boot (normal); low = download boot"
@@ -2418,7 +2428,13 @@ note = "GPIO9 (BOOT) high = SPI boot (normal); low = download boot"
 [[models.straps]]
 role = "gpio8"
 level = "high"
-note = "GPIO8 must be high at reset (with GPIO9) for normal boot"
+# ESP32-C3 Series Datasheet v2.4 Table 3-1: GPIO8 default "Floating" (no
+# internal pull at reset). Table 3-3: SPI boot takes any GPIO8 level; Joint
+# Download Boot (GPIO9 = 0) needs GPIO8 = 1. So a float matters only when the
+# board can pull GPIO9 low.
+internal_pull = "none"
+only_with = "gpio9"
+note = "ESP32-C3 datasheet Table 3-3: Joint Download Boot (GPIO9 low) needs GPIO8 = 1; SPI boot takes any GPIO8 level; Table 3-1: GPIO8 has no internal pull at reset"
 
 [[models.straps]]
 role = "gpio2"
@@ -2431,8 +2447,12 @@ kind = "mcu"
 description = "Espressif ESP32-C3 bare chip, QFN32 5x5 mm"
 
 [models.match]
-value_re = "(?i)^ESP32[-_ ]?C3([-_ ]?(WROOM|MINI).*)?$"
-footprint_re = '(?i)(^|:)V?QFN[-_]?32([-_]1EP)?[-_]5x5mm[-_]P0\.5mm'
+# Every ordering code shares one QFN32 pad map for the roles below (Figures
+# 2-1 and 2-2 differ only on the unbonded pins 19-24 of -C3FH4X/-C3FH4AZ). The
+# footprint names the 5x5 mm, 0.5 mm-pitch QFN32 in KiCad's spelling or in
+# the EasyEDA/LCSC one ("QFN-32_L5.0-W5.0-P0.50-...").
+value_re = "(?i)^ESP32[-_ ]?C3(F[NH][48](AZ|X)?|[-_ ]?(WROOM|MINI).*)?$"
+footprint_re = '(?i)(^|:)V?QFN[-_]?32(([-_]1EP)?[-_]5x5mm[-_]P0\.5mm|[-_]L5\.0[-_]W5\.0[-_]P0\.50)'
 
 [models.params]
 backend = "qemu:esp32c3"
@@ -2462,6 +2482,7 @@ max_voltage_v = 3.6
 role = "gpio9"
 level = "high"
 boot_select = true
+internal_pull = "pull_up"   # Table 3-1: GPIO9 default weak pull-up
 vil = [0.25, 0.0]
 vih = [0.75, 0.0]
 note = "GPIO9 (BOOT) high = SPI boot (normal); low = download boot"
@@ -2469,7 +2490,13 @@ note = "GPIO9 (BOOT) high = SPI boot (normal); low = download boot"
 [[models.straps]]
 role = "gpio8"
 level = "high"
-note = "GPIO8 must be high at reset (with GPIO9) for normal boot"
+# ESP32-C3 Series Datasheet v2.4 Table 3-1: GPIO8 default "Floating" (no
+# internal pull at reset). Table 3-3: SPI boot takes any GPIO8 level; Joint
+# Download Boot (GPIO9 = 0) needs GPIO8 = 1. So a float matters only when the
+# board can pull GPIO9 low.
+internal_pull = "none"
+only_with = "gpio9"
+note = "ESP32-C3 datasheet Table 3-3: Joint Download Boot (GPIO9 low) needs GPIO8 = 1; SPI boot takes any GPIO8 level; Table 3-1: GPIO8 has no internal pull at reset"
 
 [[models.straps]]
 role = "gpio2"
@@ -2596,6 +2623,7 @@ basis = "ESP32-C6-MINI-1 & MINI-1U Datasheet v1.5, Table 6-2 VDD33 3.0-3.6 V; Ta
 role = "gpio9"
 level = "high"
 boot_select = true   # latches SPI-vs-download boot
+internal_pull = "pull_up"   # Table 4-1: GPIO9 default weak pull-up
 # Table 6-3: VIL max 0.25 x VDD, VIH min 0.75 x VDD.
 vil = [0.25, 0.0]
 vih = [0.75, 0.0]

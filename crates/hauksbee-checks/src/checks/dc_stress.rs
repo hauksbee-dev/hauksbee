@@ -746,24 +746,8 @@ fn judge(bound: &mut BoundBoard, solved: &(Workspace, Vec<f64>)) -> Judged {
             let clauses = worst
                 .into_values()
                 .map(|(f, ..)| {
-                    let detail = bjt(f)
-                        .filter(|_| kind_class(f.kind) == 0)
-                        .map(|(id, ic, ib)| {
-                            if let Some(hauksbee_ir::Device::Bjt { b, .. }) =
-                                bound.circuit.devices.get(id.0 as usize)
-                            {
-                                nets.extend(net_of.get(b).map(|n| (*n).to_string()));
-                            }
-                            format!(" (base {}, collector {})", amps(ib), amps(ic))
-                        })
-                        .unwrap_or_default();
-                    // A fuse's current rating is its hold current: past it the part
-                    // trips, so say what that does to the rail, not just "over".
-                    let rated = if kind_class(f.kind) == 0 && trips.contains(f.component.as_str()) {
-                        "hold current: the fuse trips and the rail it feeds collapses"
-                    } else {
-                        "rating"
-                    };
+                    let detail = rating_detail(bound, &device_of, &net_of, f, bjt(f), &mut nets);
+                    let rated = rating_phrase(f, trips.contains(f.component.as_str()));
                     format!(
                         "{} {} {}{detail}, over its {} {rated}",
                         f.component,
@@ -779,16 +763,81 @@ fn judge(bound: &mut BoundBoard, solved: &(Workspace, Vec<f64>)) -> Judged {
     (overstressed, under, monitor.implausible, monitor.stand_in)
 }
 
+/// The parenthesised detail after a fault's measured value: a BJT's base and
+/// collector currents for a current fault, the gate and source nets for a
+/// gate-source overvoltage, else nothing. Nets named are added to `nets`.
+fn rating_detail(
+    bound: &BoundBoard,
+    device_of: &HashMap<&str, DeviceId>,
+    net_of: &HashMap<NodeId, &str>,
+    f: &FaultEvent,
+    bjt: Option<(DeviceId, f64, f64)>,
+    nets: &mut Vec<String>,
+) -> String {
+    if let Some((id, ic, ib)) = bjt.filter(|_| kind_class(f.kind) == 0) {
+        if let Some(hauksbee_ir::Device::Bjt { b, .. }) = bound.circuit.devices.get(id.0 as usize) {
+            nets.extend(net_of.get(b).map(|n| (*n).to_string()));
+        }
+        format!(" (base {}, collector {})", amps(ib), amps(ic))
+    } else if f.kind == FaultKind::GateOvervoltage {
+        gate_source_nets(bound, device_of, net_of, f, nets)
+    } else {
+        String::new()
+    }
+}
+
+/// What the fault's limit is called: a fuse's current rating is its hold
+/// current (past it the part trips, so say what that does to the rail), a gate
+/// limit is the absolute-maximum VGS with its remedy, else just "rating".
+fn rating_phrase(f: &FaultEvent, trips: bool) -> &'static str {
+    if kind_class(f.kind) == 0 && trips {
+        "hold current: the fuse trips and the rail it feeds collapses"
+    } else if f.kind == FaultKind::GateOvervoltage {
+        "absolute-maximum VGS rating (the card's vgs_max, from the datasheet's \
+         Absolute Maximum Ratings): clamp the gate, for example with a lower-voltage \
+         Zener, or pick a part rated for this drive"
+    } else {
+        "rating"
+    }
+}
+
+/// The " (gate 'G', source 'S')" detail for a gate-source overvoltage, naming
+/// the two nets the voltage was read between and adding them to `nets`.
+fn gate_source_nets(
+    bound: &BoundBoard,
+    device_of: &HashMap<&str, DeviceId>,
+    net_of: &HashMap<NodeId, &str>,
+    f: &FaultEvent,
+    nets: &mut Vec<String>,
+) -> String {
+    let id = device_of.get(f.component.as_str());
+    let Some(hauksbee_ir::Device::Mosfet { g, s, .. }) =
+        id.and_then(|id| bound.circuit.devices.get(id.0 as usize))
+    else {
+        return String::new();
+    };
+    let name = |n: &NodeId| net_of.get(n).copied();
+    match (name(g), name(s)) {
+        (Some(gate), Some(source)) => {
+            nets.extend([gate.to_string(), source.to_string()]);
+            format!(" (gate net '{gate}', source net '{source}')")
+        }
+        _ => String::new(),
+    }
+}
+
 /// The rating a fault is judged against, coarsely: continuous and surge
 /// current are one clause (current first, as the cause), then power,
-/// temperature and voltage.
+/// temperature, voltage and the gate's own rating, which a drain-source
+/// overvoltage on the same part must not hide.
 const fn kind_class(kind: FaultKind) -> u8 {
     match kind {
         FaultKind::Overcurrent | FaultKind::SurgeCurrent | FaultKind::PinOvercurrent => 0,
         FaultKind::Overpower => 1,
         FaultKind::Overtemperature => 2,
         FaultKind::Overvoltage | FaultKind::ReverseBias => 3,
-        FaultKind::Short => 4,
+        FaultKind::GateOvervoltage => 4,
+        FaultKind::Short => 5,
     }
 }
 
@@ -798,6 +847,7 @@ const fn verb(kind: FaultKind) -> &'static str {
         FaultKind::PinOvercurrent => "passes",
         FaultKind::Overpower => "dissipates",
         FaultKind::Overvoltage | FaultKind::ReverseBias => "sees",
+        FaultKind::GateOvervoltage => "sees a gate-source voltage of",
         FaultKind::Overtemperature => "reaches a junction temperature of",
         FaultKind::Short => "is shorted at",
     }
@@ -815,7 +865,10 @@ fn quantity(kind: FaultKind, v: f64) -> String {
     match kind {
         FaultKind::Overcurrent | FaultKind::SurgeCurrent | FaultKind::PinOvercurrent => amps(v),
         FaultKind::Overpower => format!("{:.0} mW", v * 1e3),
-        FaultKind::Overvoltage | FaultKind::ReverseBias | FaultKind::Short => format!("{v:.2} V"),
+        FaultKind::Overvoltage
+        | FaultKind::ReverseBias
+        | FaultKind::GateOvervoltage
+        | FaultKind::Short => format!("{v:.2} V"),
         FaultKind::Overtemperature => format!("{v:.0} C"),
     }
 }

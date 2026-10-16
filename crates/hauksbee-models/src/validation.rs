@@ -548,6 +548,22 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         }
     }
 
+    // A mode-qualifying strap names the boot-select strap whose alternate mode
+    // it qualifies; a dangling or non-selecting reference would silently turn
+    // the float check off.
+    for strap in &entry.straps {
+        if let Some(sel) = strap.only_with.as_deref() {
+            let ok =
+                sel != strap.role && entry.straps.iter().any(|s| s.role == sel && s.boot_select);
+            p.require(ok, || {
+                format!(
+                    "strap '{}' only_with '{sel}' must name another boot_select strap on this card",
+                    strap.role
+                )
+            });
+        }
+    }
+
     // A pin map is a stated fact even on an identity-only card.
     p.0.extend(merged_unit_roles(entry));
     check_pinout(entry, &mut p);
@@ -1116,6 +1132,26 @@ fn check_resistor_bins(entry: &ModelEntry, table: &crate::schema::ResistorBins, 
     }
 }
 
+/// The datasheet's allowed programming-resistance bounds must be positive and
+/// ordered, or the out-of-range report would fire on every board or on none.
+fn check_program_ohm_range(program: &crate::schema::CurrentProgram, p: &mut Problems) {
+    for (name, ohms) in [
+        ("min_program_ohms", program.min_program_ohms),
+        ("max_program_ohms", program.max_program_ohms),
+    ] {
+        if let Some(ohms) = ohms {
+            p.positive(format!("current_program.{name}"), ohms);
+        }
+    }
+    if let (Some(min), Some(max)) = (program.min_program_ohms, program.max_program_ohms) {
+        p.require(min < max, || {
+            format!(
+                "current_program.min_program_ohms = {min} is not below max_program_ohms = {max}"
+            )
+        });
+    }
+}
+
 /// Board-programmed current is solver-facing physics just like `params`:
 /// malformed constants silently turn a real rail current into zero/NaN, and
 /// confusing a normal-operating ceiling with a device-level safety threshold
@@ -1156,6 +1192,8 @@ fn check_current_program(
             format!("current_program role '{input}' appears in both current_in_roles and current_out_roles")
         });
     }
+
+    check_program_ohm_range(program, p);
 
     let limit = program.max_operating_current_a;
     p.require(!regulated || limit.is_some(), || "current_program regulated_current requires max_operating_current_a so an undersized programming resistor cannot imply operation beyond the sourced domain".into());
@@ -1831,7 +1869,7 @@ pub fn rating_applies(kind: ComponentKind, key: &str) -> bool {
     use ComponentKind::{BjtNpn, BjtPnp, Connector, Diode, Nmos, Passive, Pmos, Vreg};
     match key {
         "polarized" | "max_ripple_current_a" => kind == Passive,
-        "rds_on_vgs" | "vgs_th_max" => matches!(kind, Nmos | Pmos),
+        "rds_on_vgs" | "vgs_th_max" | "vgs_max" => matches!(kind, Nmos | Pmos),
         "min_current_a" => kind == Vreg,
         "max_pin_current_a" => !matches!(
             kind,

@@ -21,6 +21,7 @@ const FAULT_UNIT: Record<string, string> = {
   pin_overcurrent: 'A',
   short: 'A',
   overvoltage: 'V',
+  gate_overvoltage: 'V',
   reverse_bias: 'V',
   overpower: 'W',
   overtemperature: '°C',

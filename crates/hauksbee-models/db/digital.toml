@@ -12379,6 +12379,104 @@ pins = { "1" = "GND", "2" = "IN2", "3" = "IN1", "4" = "VREF", "5" = "VM", "6" = 
 implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings"]
 missing = ["h_bridge_drive", "current_regulation", "sleep_mode", "overcurrent_protection", "logic_levels"]
 
+# ── DRV8871: TI 3.6 A brushed-DC motor driver (H-bridge) with internal current sense, 8-pin HSOP PowerPAD (DDA) ──
+# Source: TI SLVSCY9B (August 2015, revised July 2016). Pin Functions p.3 (DDA,
+# top view: 1 GND, 2 IN2, 3 IN1, 4 ILIM, 5 VM, 6 OUT1, 7 PGND, 8 OUT2, thermal pad),
+# 6.1 Absolute Maximum Ratings p.3, 6.3 Recommended Operating Conditions and 6.4
+# Thermal Information p.4, 6.5 Electrical Characteristics p.5, 7.3.3 Current
+# Regulation p.8-9 (Equation 1, ITRIP(A) = VILIM(kV) / RILIM(kOhm), VILIM 59/64/69 kV;
+# "The minimum allowed RILIM is 15 kOhm").
+# VM draw is the operating-mode IVM (3 mA typ, 10 mA max, VM = 12 V); sleep is not
+# modelled. The H-bridge outputs and the current chopping itself are not stamped;
+# the ILIM law is a protection threshold, never attributed as a steady load.
+[[models]]
+id = "drv8871_hsop8"
+kind = "digital"
+description = "TI DRV8871 3.6 A H-bridge motor driver with internal current sense, 8-pin HSOP PowerPAD (DDA): VM supply draw and the ILIM current-regulation law (outputs not modelled)"
+
+[models.match]
+value_re = "(?i)^DRV8871(?:DDA)?[RT]?$"
+
+[models.params]
+supply_current_a = 3e-3
+supply_on_v = 6.5
+warning = "source-bound supply-draw model: the awake VM supply current (3 mA typ, 10 mA max at 12 V), the 6.5 V to 45 V VM range and the ILIM programming law with its 15 kOhm minimum are executable; the H-bridge drive, the current chopping, sleep mode (10 uA), protection and the thermal pad are not modelled"
+
+[models.pins]
+"1" = "gnd"
+"2" = "in2"
+"3" = "in1"
+"4" = "ilim"
+"5" = "vm"
+"6" = "out1"
+"7" = "pgnd"
+"8" = "out2"
+"9" = "gnd_ep"       # thermal pad, connect to board ground
+
+[models.ratings]
+max_voltage_v = 50.0           # 6.1 VM abs max
+max_current_a = 3.5            # 6.1 output current, 100 % duty cycle (3.6 A peak in 6.3)
+max_junction_temp_c = 150.0    # 6.1
+theta_ja_c_per_w = 41.1        # 6.4 RθJA, DDA
+
+# 7.3.3 Equation 1: ITRIP(A) = 64 kV / RILIM(kOhm), i.e. 64000 V / RILIM(ohm)
+# (32 kOhm gives 2 A, the datasheet's own example). A chopping threshold, so
+# protection_limit. "The minimum allowed RILIM is 15 kOhm" (7.3.3); 7.4.2 uses
+# 15 to 18 kOhm when no regulation is wanted. No maximum is printed.
+[models.current_program]
+pin = "ilim"
+semantics = "protection_limit"
+equation = "inverse_resistance"
+k_volts = 64000.0
+min_program_ohms = 15000.0
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vm"
+min_v = 6.5
+max_v = 45.0
+abs_max_v = 50.0
+basis = "TI DRV8871 SLVSCY9B, 6.3 Recommended Operating Conditions VM 6.5 V to 45 V; 6.1 Absolute Maximum Ratings VM 50 V"
+
+[[models.behavioral.laws]]
+name = "supply_draw"
+kind = "current"
+a = "vm"
+b = "gnd"
+expr = "supply_current_a * min(1.0, max(0.0, v_vm / supply_on_v))"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/drv8871.pdf"
+title = "TI DRV8871 3.6-A Brushed DC Motor Driver With Internal Current Sense (PWM Control), SLVSCY9B, August 2015, revised July 2016"
+locator = "Pin Functions p.3; 6.1 Absolute Maximum Ratings p.3; 6.3 Recommended Operating Conditions and 6.4 Thermal Information p.4; 6.5 Electrical Characteristics p.5; 7.3.3 Current Regulation p.8-9"
+sha256 = "09de551aa0c6d090fd14b000634cfd894d782a050eed13110fe2eb10f1b548bf"
+[[models.source.characteristic]]
+parameter = "VILIM constant for calculating current regulation"
+min = 59.0
+typ = 64.0
+max = 69.0
+unit = "kV"
+conditions = "IOUT = 1 A, TA = 25 C"
+basis = "6.5 Electrical Characteristics, CURRENT REGULATION, VILIM"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_current_a"
+reason = "DRV8871 SLVSCY9B 6.5: IVM 3 mA typ / 10 mA max at VM = 12 V awake; IVMSLEEP 10 uA max in sleep; no min is printed"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; only the VM supply draw and the ILIM law are modelled"
+[[models.source.pinout]]
+package = "HSOP-8 PowerPAD (DDA)"
+pins = { "1" = "GND", "2" = "IN2", "3" = "IN1", "4" = "ILIM", "5" = "VM", "6" = "OUT1", "7" = "PGND", "8" = "OUT2", "9" = "PAD" }
+
+[models.coverage]
+implements = ["pin_roles", "supply_current", "supply_range", "absolute_ratings", "current_program"]
+missing = ["h_bridge_drive", "current_chopping", "sleep_mode", "overcurrent_protection", "logic_levels"]
+
 # ── CP2104: Silicon Labs single-chip USB-to-UART bridge with on-chip 3.45 V regulator, QFN-24 ──
 # Source: Silicon Labs CP2104 datasheet Rev. 1.0 (Pololu copy, 22 pages): Table 1
 # Absolute Maximum Ratings and Table 2 Global DC Electrical Characteristics p.5,

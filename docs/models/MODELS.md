@@ -672,6 +672,7 @@ The extractor pulls two things from the datasheet:
 | `min_current_a` | FLOOR, not a ceiling (A): least current the datasheet guarantees regulation at (shunt-reference IKmin, LDO minimum load) | vreg |
 | `rds_on_vgs` | MOSFET: lowest \|VGS\| (V) at which the datasheet specifies RDS(on) | nmos, pmos |
 | `vgs_th_max` | MOSFET: MAXIMUM \|VGS(th)\| (V) from Electrical Characteristics | nmos, pmos |
+| `vgs_max` | MOSFET: absolute-maximum gate-source voltage magnitude (V), the VGS / VGSS row (+-12 V gives 12) | nmos, pmos |
 <!-- END GENERATED: rating-keys -->
 
 Every numeric line carries a comment citing where in the datasheet it came

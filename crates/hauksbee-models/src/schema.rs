@@ -764,6 +764,18 @@ pub struct CurrentProgram {
     #[serde(default, skip_serializing_if = "is_default")]
     pub above_domain: AboveDomainBehavior,
 
+    /// The smallest programming resistance (ohms) the datasheet allows ("the
+    /// minimum allowed RILIM is 15 kOhm"). A board resistor below it is outside
+    /// the part's specified range whatever the equation would return, so the
+    /// device-decode check reports it rather than decoding a setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_program_ohms: Option<f64>,
+
+    /// The largest programming resistance (ohms) the datasheet allows; above
+    /// it is reported the same way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_program_ohms: Option<f64>,
+
     /// Manufacturer programming equation, flattened into the TOML block so a
     /// model reads `equation = "inverse_resistance"` beside its constants.
     #[serde(flatten)]
@@ -949,6 +961,18 @@ pub enum CurrentProgramEquation {
 }
 
 impl CurrentProgram {
+    /// Whether `ohms` lies outside the datasheet's allowed programming range,
+    /// as `(bound, below)`: the violated bound and whether it is the minimum.
+    #[must_use]
+    pub fn out_of_program_range(&self, ohms: f64) -> Option<(f64, bool)> {
+        if let Some(min) = self.min_program_ohms.filter(|min| ohms < *min) {
+            return Some((min, true));
+        }
+        self.max_program_ohms
+            .filter(|max| ohms > *max)
+            .map(|max| (max, false))
+    }
+
     fn apply_operating_domain(&self, equation_current_a: f64) -> Option<f64> {
         match self
             .max_operating_current_a
@@ -1088,6 +1112,14 @@ pub struct StrapPin {
     /// behaviour (never fire on a floating net).
     #[serde(default)]
     pub internal_pull: StrapInternalPull,
+    /// For a strap whose level matters only in the alternate mode another
+    /// strap selects (ESP32-C3 GPIO8: any level in SPI boot, high required for
+    /// Joint Download Boot), the role of that boot-select strap. A floating
+    /// net is then a fault only when the board can drive that strap (its net
+    /// reaches a button, header or other part); otherwise the alternate mode
+    /// is unreachable and the float is harmless.
+    #[serde(default)]
+    pub only_with: Option<String>,
     /// Sourced input thresholds in the datasheet's affine form
     /// `[per_vdd, offset_v]`: VIL max and VIH min are `per_vdd * VDD + offset_v`
     /// on the part's `vdd` pin. Without both, a pull divider is not judged.
@@ -1217,6 +1249,12 @@ pub struct Ratings {
     /// is not guaranteed to be enhanced at all, so conducting there breaks a limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vgs_th_max: Option<f64>,
+
+    /// MOSFET: absolute-maximum gate-source voltage magnitude (V), the
+    /// datasheet's VGS / VGSS row. The gate oxide breaks down past it in either
+    /// direction, so the stress monitor judges |V(gate) - V(source)| against it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vgs_max: Option<f64>,
 
     /// Set by the binder, never by a card: `max_current_a` is a fuse's or
     /// polyfuse's hold current, so a load past it trips the part and the rail
@@ -1353,7 +1391,8 @@ impl Ratings {
   theta_jc_c_per_w     # Rth(j-c) junction-to-case thermal resistance (C/W = K/W), selected package and stated case reference only
   min_current_a        # FLOOR, not a ceiling (A): least current the datasheet guarantees regulation at (shunt-reference IKmin, LDO minimum load)
   rds_on_vgs           # MOSFET: lowest |VGS| (V) at which the datasheet specifies RDS(on)
-  vgs_th_max           # MOSFET: MAXIMUM |VGS(th)| (V) from Electrical Characteristics"
+  vgs_th_max           # MOSFET: MAXIMUM |VGS(th)| (V) from Electrical Characteristics
+  vgs_max              # MOSFET: absolute-maximum gate-source voltage magnitude (V), the VGS / VGSS row (+-12 V gives 12)"
     );
 
     /// The rating key names, in [`Self::KEY_GUIDE`] order.
