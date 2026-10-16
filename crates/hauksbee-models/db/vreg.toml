@@ -2372,6 +2372,7 @@ en_off_v  = 0.18
 # input. Logic-high = enable, logic-low or open = shutdown". The open state is
 # stated, so en_open is set (still no pull value).
 en_open   = "off"
+en_open_basis = "Microchip MIC5205 DS20005785A Table 3-1 Pin Description p.9: \"Logic-high = enable, logic-low or open = shutdown\""
 i_shdn_a  = 1.0e-8 # IGND "Quiescent Current" typ (1 uA max), VEN <= 0.4 V (shutdown), Microchip MIC5205 DS20005785B Electrical Characteristics p.3
 
 [models.pins]
@@ -4652,6 +4653,7 @@ en_off_v=0.25
 # Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
 # state if the SHDN pin is not connected, so the open-pin state is stated (off).
 en_open="off"
+en_open_basis="ADI LT1763 1763fh Pin Functions, SHDN p.13: \"The device will be in the low power shutdown state if the SHDN pin is not connected.\""
 i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="out"
@@ -4694,6 +4696,7 @@ en_off_v=0.25
 # Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
 # state if the SHDN pin is not connected, so the open-pin state is stated (off).
 en_open="off"
+en_open_basis="ADI LT1763 1763fh Pin Functions, SHDN p.13: \"The device will be in the low power shutdown state if the SHDN pin is not connected.\""
 i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="nc"
@@ -4741,6 +4744,7 @@ en_off_v=0.25
 # Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
 # state if the SHDN pin is not connected, so the open-pin state is stated (off).
 en_open="off"
+en_open_basis="ADI LT1763 1763fh Pin Functions, SHDN p.13: \"The device will be in the low power shutdown state if the SHDN pin is not connected.\""
 i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="out"
@@ -4783,6 +4787,7 @@ en_off_v=0.25
 # Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
 # state if the SHDN pin is not connected, so the open-pin state is stated (off).
 en_open="off"
+en_open_basis="ADI LT1763 1763fh Pin Functions, SHDN p.13: \"The device will be in the low power shutdown state if the SHDN pin is not connected.\""
 i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="nc"
@@ -4830,6 +4835,7 @@ en_off_v=0.25
 # Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
 # state if the SHDN pin is not connected, so the open-pin state is stated (off).
 en_open="off"
+en_open_basis="ADI LT1763 1763fh Pin Functions, SHDN p.13: \"The device will be in the low power shutdown state if the SHDN pin is not connected.\""
 i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="out"
@@ -4872,6 +4878,7 @@ en_off_v=0.25
 # Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
 # state if the SHDN pin is not connected, so the open-pin state is stated (off).
 en_open="off"
+en_open_basis="ADI LT1763 1763fh Pin Functions, SHDN p.13: \"The device will be in the low power shutdown state if the SHDN pin is not connected.\""
 i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="nc"
@@ -4919,6 +4926,7 @@ en_off_v=0.25
 # Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
 # state if the SHDN pin is not connected, so the open-pin state is stated (off).
 en_open="off"
+en_open_basis="ADI LT1763 1763fh Pin Functions, SHDN p.13: \"The device will be in the low power shutdown state if the SHDN pin is not connected.\""
 i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="out"
@@ -4961,6 +4969,7 @@ en_off_v=0.25
 # Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
 # state if the SHDN pin is not connected, so the open-pin state is stated (off).
 en_open="off"
+en_open_basis="ADI LT1763 1763fh Pin Functions, SHDN p.13: \"The device will be in the low power shutdown state if the SHDN pin is not connected.\""
 i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="nc"
@@ -5008,6 +5017,7 @@ en_off_v=0.25
 # Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
 # state if the SHDN pin is not connected, so the open-pin state is stated (off).
 en_open="off"
+en_open_basis="ADI LT1763 1763fh Pin Functions, SHDN p.13: \"The device will be in the low power shutdown state if the SHDN pin is not connected.\""
 i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="out"
@@ -5050,6 +5060,7 @@ en_off_v=0.25
 # Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
 # state if the SHDN pin is not connected, so the open-pin state is stated (off).
 en_open="off"
+en_open_basis="ADI LT1763 1763fh Pin Functions, SHDN p.13: \"The device will be in the low power shutdown state if the SHDN pin is not connected.\""
 i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="nc"
@@ -5097,6 +5108,7 @@ en_off_v=0.25
 # Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
 # state if the SHDN pin is not connected, so the open-pin state is stated (off).
 en_open="off"
+en_open_basis="ADI LT1763 1763fh Pin Functions, SHDN p.13: \"The device will be in the low power shutdown state if the SHDN pin is not connected.\""
 i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="out"
@@ -5139,6 +5151,7 @@ en_off_v=0.25
 # Pin Functions, SHDN (Pin 8/Pin 5), p.13: the device is in the low power shutdown
 # state if the SHDN pin is not connected, so the open-pin state is stated (off).
 en_open="off"
+en_open_basis="ADI LT1763 1763fh Pin Functions, SHDN p.13: \"The device will be in the low power shutdown state if the SHDN pin is not connected.\""
 i_shdn_a=1.0e-7  # LT1763 1763fh Electrical Characteristics p.5, "Quiescent Current in Shutdown", VIN = 6 V, VSHDN = 0 V: 0.1 uA typ, 1 uA max
 [models.pins]
 "1"="nc"
@@ -5350,6 +5363,7 @@ en_off_v = 0.4
 # input. Logic high - enable; logic low or open = shutdown". The datasheet states
 # the open-pin state but no pull value, so en_open is set and no pull is.
 en_open = "off"
+en_open_basis = "MaxLinear SPX3819 Rev. 2.0.5 Pin Description p.3: \"Logic high – enable; logic low or open = shutdown\""
 i_shdn_a  = 5.0e-8 # IGND "Quiescent Current" typ 0.05 uA (3 uA max), VENABLE <= 0.4 V, TJ = 25 C, MaxLinear SPX3819 Rev. 2.0.5 Electrical Specifications p.2
 
 [models.pins]
@@ -6585,6 +6599,7 @@ cout_min_f = 1.0e-6    # Output Capacitor: 1.0 uF or greater for stability
 en_on_v    = 2.0       # Enable Input High Voltage, Regulator ON, 2.0 V min; Micrel M9999-072908-A (Jul 2008) Electrical Characteristics, Enable Input, p.3
 en_off_v   = 0.6       # Enable Input Low Voltage, Regulator OFF, 0.6 V max, same table (IEN is leakage/bias; "Logic Low or Open = Shutdown" gives no pull value)
 en_open    = "off"     # Pin Description p.2: "EN ... Enable (Input): Logic Low or Open = Shutdown; Logic High = Enable." (states the open state, no pull value); Micrel M9999-072908-A
+en_open_basis = "Micrel MIC5225 M9999-072908-A Pin Description p.2: \"Enable (Input): Logic Low or Open = Shutdown; Logic High = Enable.\""
 i_shdn_a  = 1.0e-7  # Ground Current in Shutdown typ (5 uA max), VEN < 0.6 V, VIN = 16 V, Micrel MIC5225 M9999-072908-A Electrical Characteristics p.3
 
 [models.pins]
@@ -6641,6 +6656,7 @@ cout_min_f = 1.0e-6
 en_on_v    = 2.0       # Enable Input High Voltage, Regulator ON, 2.0 V min; Micrel M9999-072908-A (Jul 2008) Electrical Characteristics, Enable Input, p.3
 en_off_v   = 0.6       # Enable Input Low Voltage, Regulator OFF, 0.6 V max, same table (IEN is leakage/bias; "Logic Low or Open = Shutdown" gives no pull value)
 en_open    = "off"     # Pin Description p.2: "EN ... Enable (Input): Logic Low or Open = Shutdown; Logic High = Enable." (states the open state, no pull value); Micrel M9999-072908-A
+en_open_basis = "Micrel MIC5225 M9999-072908-A Pin Description p.2: \"Enable (Input): Logic Low or Open = Shutdown; Logic High = Enable.\""
 i_shdn_a  = 1.0e-7  # Ground Current in Shutdown typ (5 uA max), VEN < 0.6 V, VIN = 16 V, Micrel MIC5225 M9999-072908-A Electrical Characteristics p.3
 
 [models.pins]
@@ -8446,6 +8462,7 @@ iq_a      = 80.0e-6  # IGND typ @ IL = 100 uA (125 uA max), Table 1-1
 en_on_v   = 2.0      # VIH regulator enabled, 2.0 V min, Table 1-1
 en_off_v  = 0.18     # VIL regulator shutdown, 0.18 V max over temperature (0.4 V at 25 C)
 en_open   = "off"    # Table 3-1: "logic-low or open = shutdown"
+en_open_basis = "Microchip MIC5205 DS20005785A Table 3-1 Pin Description p.9: \"Logic-high = enable, logic-low or open = shutdown\""
 i_shdn_a  = 1.0e-8   # IGND typ 0.01 uA, VEN <= 0.4 V (shutdown)
 
 [models.pins]

@@ -264,6 +264,11 @@ pub enum LintCheck {
     /// maximum threshold: whether it switches depends on which part is fitted.
     /// Produced by the engine-layer `dc_stress` check.
     GateUnderdrive,
+    /// A linear regulator whose card says an open enable pin is off, with that
+    /// pin left with nothing on the board that can take it to its on level:
+    /// the rail never comes on. Produced by the engine-layer
+    /// `regulator_enable` check.
+    RegulatorHeldOff,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -288,7 +293,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 31] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -319,6 +324,7 @@ impl LintCheck {
         Self::CapNoDcPath,
         Self::FloatingGate,
         Self::GateUnderdrive,
+        Self::RegulatorHeldOff,
     ];
 
     #[must_use]
@@ -354,6 +360,7 @@ impl LintCheck {
             Self::CapNoDcPath => "cap_no_dc_path",
             Self::FloatingGate => "floating_gate",
             Self::GateUnderdrive => "gate_underdrive",
+            Self::RegulatorHeldOff => "regulator_held_off",
         }
     }
 }

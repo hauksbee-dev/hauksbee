@@ -12,7 +12,8 @@ use crate::check::{nonneg_finite, positive_finite, Problems};
 use crate::derating::temp_span;
 use crate::schema::{
     AboveDomainBehavior, Characteristic, ComponentKind, CurrentProgramEquation,
-    CurrentProgramSemantics, ModelEntry, OperatingEnvelope, ParamValue, PeripheralSpec, Pinout,
+    CurrentProgramSemantics, ModelEntry, OperatingEnvelope, ParamValue, Params, PeripheralSpec,
+    Pinout,
 };
 use crate::sensor_spec::{Bus, SensorSpec};
 use hauksbee_ir::evidence::ModelUncertainty;
@@ -206,7 +207,10 @@ fn validate_vreg_enable_params(entry: &ModelEntry, p: &mut Problems) {
     let params = &entry.params;
     // Named in the errors: a fixer told only "en_*" searched for that prefix,
     // missed `i_shdn_a`, and re-ran the checker three times.
-    let stated = stated_params(entry, KEYS.iter().chain(&["i_shdn_a", "en_open"]));
+    let stated = stated_params(
+        entry,
+        KEYS.iter().chain(&["i_shdn_a", "en_open", "en_open_basis"]),
+    );
     if entry.kind != ComponentKind::Vreg || stated.is_empty() {
         return;
     }
@@ -263,6 +267,19 @@ fn validate_vreg_enable_params(entry: &ModelEntry, p: &mut Problems) {
     p.require(pulls <= 1, || {
         "a vreg enable pin has at most one internal pull ('en_pull_*')".into()
     });
+    validate_en_open(params, level, pulls, p);
+    for key in &KEYS[3..] {
+        if params.0.contains_key(*key) {
+            p.require(params.get_f64(key).is_some_and(positive_finite), || {
+                format!("param '{key}' must be a positive finite number")
+            });
+        }
+    }
+}
+
+/// The datasheet's stated open-pin state (`en_open`) and its quote
+/// (`en_open_basis`), checked against the internal pull the card states.
+fn validate_en_open(params: &Params, level: Option<&str>, pulls: usize, p: &mut Problems) {
     // The datasheet's stated open-pin state, for a card that prints no pull
     // value: it may not contradict a pull the card does state (an open pin
     // follows its pull, so a pull toward the off level cannot read as on).
@@ -290,12 +307,20 @@ fn validate_vreg_enable_params(entry: &ModelEntry, p: &mut Problems) {
             });
         }
     }
-    for key in &KEYS[3..] {
-        if params.0.contains_key(*key) {
-            p.require(params.get_f64(key).is_some_and(positive_finite), || {
-                format!("param '{key}' must be a positive finite number")
-            });
-        }
+    // The quote of the open-pin state backs a stated state: `en_open` or an
+    // internal pull, never nothing.
+    if params.0.contains_key("en_open_basis") {
+        p.require(
+            params
+                .get_str("en_open_basis")
+                .is_some_and(|q| !q.trim().is_empty()),
+            || "param 'en_open_basis' must be the datasheet's words, a non-empty string".into(),
+        );
+        p.require(params.0.contains_key("en_open") || pulls == 1, || {
+            "param 'en_open_basis' quotes the open-pin state, so the card needs 'en_open' \
+                 or an internal pull ('en_pull_*') for it to back"
+                .into()
+        });
     }
 }
 
@@ -2371,23 +2396,25 @@ mod tests {
         assert!(!warns_current(&stated));
     }
 
+    /// A simple regulator card whose pad 3 carries `role`, with extra params.
+    fn en(role: &str, params: &[(&str, f64)], level: Option<&str>) -> ModelEntry {
+        let mut p = vec![("vout", 3.3), ("dropout_v", 0.3), ("iq_a", 1e-4)];
+        p.extend_from_slice(params);
+        let mut e = entry(ComponentKind::Vreg, &p);
+        pins(
+            &mut e,
+            &[("1", "in"), ("2", "gnd"), ("3", role), ("5", "out")],
+        );
+        if let Some(level) = level {
+            e.params.set_str("en_on_level", level);
+        }
+        e
+    }
+
     /// The simple regulator's enable fields: paired, ordered for the polarity,
     /// one pull at most, and only on a card that names the pin.
     #[test]
     fn vreg_enable_fields_are_paired_ordered_and_need_the_pin() {
-        let en = |role: &str, params: &[(&str, f64)], level: Option<&str>| {
-            let mut p = vec![("vout", 3.3), ("dropout_v", 0.3), ("iq_a", 1e-4)];
-            p.extend_from_slice(params);
-            let mut e = entry(ComponentKind::Vreg, &p);
-            pins(
-                &mut e,
-                &[("1", "in"), ("2", "gnd"), ("3", role), ("5", "out")],
-            );
-            if let Some(level) = level {
-                e.params.set_str("en_on_level", level);
-            }
-            e
-        };
         let levels = [("en_on_v", 1.5), ("en_off_v", 0.4)];
         accepts(&en("en", &levels, None));
         accepts(&en("en", &levels, Some("high")));
@@ -2434,8 +2461,12 @@ mod tests {
             &en("en", &[("en_discharge_ohms", 0.0)], None),
             "positive finite",
         );
-        // The stated open-pin state: a word, on a card that names the pin, and
-        // never against a pull the card also states.
+    }
+
+    /// The stated open-pin state: a word, on a card that names the pin, and
+    /// never against a pull the card also states; its quote backs a stated state.
+    #[test]
+    fn vreg_enable_open_state_is_a_word_its_pull_allows() {
         let open = |role: &str, params: &[(&str, f64)], level: Option<&str>, state: &str| {
             let mut e = en(role, params, level);
             e.params.set_str("en_open", state);
@@ -2465,6 +2496,31 @@ mod tests {
         rejects(
             &open("shdn", &[("en_pull_down_a", 1e-6)], Some("low"), "off"),
             "contradicts the card's internal pull-down",
+        );
+        // The datasheet's words for the open state back a stated state.
+        let quoted = |mut e: ModelEntry, quote: &str| {
+            e.params.set_str("en_open_basis", quote);
+            e
+        };
+        accepts(&quoted(
+            open("en", &[], None, "off"),
+            "p.3: logic low or open = shutdown",
+        ));
+        accepts(&quoted(
+            en("en", &[("en_pull_down_ohms", 3e6)], None),
+            "p.4: RPD 3 MOhm",
+        ));
+        rejects(
+            &quoted(en("en", &[], None), "p.3: open = off"),
+            "needs 'en_open'",
+        );
+        rejects(
+            &quoted(open("en", &[], None, "off"), "  "),
+            "non-empty string",
+        );
+        rejects(
+            &quoted(open("nc", &[], None, "off"), "p.3"),
+            "'en' or 'shdn' role",
         );
     }
 

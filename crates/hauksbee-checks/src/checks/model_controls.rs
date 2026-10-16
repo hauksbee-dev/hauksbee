@@ -54,37 +54,42 @@ fn holds_no_level(c: &Component, p: &Pin, models: &HashMap<&str, &ModelEntry>) -
         return Some(format!("{} pin {}", c.reference, p.number));
     }
     if class == RefClass::Transistor {
-        // Only an NPN collector or N-channel drain: it pulls low while on and
-        // lets go while off. A PNP or P-channel one may hold the net high.
-        let model = models.get(c.reference.as_str());
-        let sinks = model.map_or_else(
-            || {
-                let text = format!("{} {}", c.value, c.lib_id).to_ascii_uppercase();
-                ["NPN", "NMOS", "N-CH", "NFET"]
-                    .iter()
-                    .any(|k| text.contains(k))
-            },
-            |m| matches!(m.kind, ComponentKind::BjtNpn | ComponentKind::Nmos),
-        );
-        // The card's role for the pad (by number, then by pin name), else the
-        // symbol's pin name: `collector`, `drain_q2`, `C`, `D`.
-        let role = model
-            .and_then(|m| {
-                m.pins
-                    .get(&p.number)
-                    .or_else(|| m.pins.get(p.function.trim()))
-            })
-            .map_or_else(|| p.function.trim(), String::as_str)
-            .to_ascii_lowercase();
-        return match role.split('_').next().unwrap_or_default() {
-            "c" | "collector" if sinks => Some(format!("{}'s collector", c.reference)),
-            "d" | "drain" if sinks => Some(format!("{}'s drain", c.reference)),
-            _ => None,
-        };
+        return low_side_sink(c, p, models.get(c.reference.as_str()).copied());
     }
     let input = p.kind.trim().eq_ignore_ascii_case("input");
     (input && matches!(control_role(&p.function), Some("enable" | "reset")))
         .then(|| format!("{} pin {} ({})", c.reference, p.number, p.function.trim()))
+}
+
+/// How a transistor pad reads when it can only pull its net low (an NPN
+/// collector or N-channel drain: it sinks while on and lets go while off), or
+/// `None` for any other pad, which may hold the net high (a PNP collector, a
+/// P-channel drain, a base or gate).
+pub(super) fn low_side_sink(c: &Component, p: &Pin, model: Option<&ModelEntry>) -> Option<String> {
+    let sinks = model.map_or_else(
+        || {
+            let text = format!("{} {}", c.value, c.lib_id).to_ascii_uppercase();
+            ["NPN", "NMOS", "N-CH", "NFET"]
+                .iter()
+                .any(|k| text.contains(k))
+        },
+        |m| matches!(m.kind, ComponentKind::BjtNpn | ComponentKind::Nmos),
+    );
+    // The card's role for the pad (by number, then by pin name), else the
+    // symbol's pin name: `collector`, `drain_q2`, `C`, `D`.
+    let role = model
+        .and_then(|m| {
+            m.pins
+                .get(&p.number)
+                .or_else(|| m.pins.get(p.function.trim()))
+        })
+        .map_or_else(|| p.function.trim(), String::as_str)
+        .to_ascii_lowercase();
+    match role.split('_').next().unwrap_or_default() {
+        "c" | "collector" if sinks => Some(format!("{}'s collector", c.reference)),
+        "d" | "drain" if sinks => Some(format!("{}'s drain", c.reference)),
+        _ => None,
+    }
 }
 
 /// Find model-declared control pads on a net nothing holds at a level.

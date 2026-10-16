@@ -1646,6 +1646,11 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "The board names this transistor only by its class, with no part number, so its gate threshold is anywhere in the class's range. The gate is driven to a voltage inside that range: a low-threshold part turns on, a high-threshold one may stay off, and the circuit behaves differently depending on which one the assembler fits.".to_string(),
                 "Put the manufacturer part number on the transistor so its real threshold is checked, or drive the gate further (a level shifter or a higher gate supply), or pick a logic-level part rated at this drive.".to_string(),
             ),
+            LintCheck::RegulatorHeldOff => (
+                format!("The regulator {parts} can never turn on. {}", f.message),
+                "This regulator's datasheet says its enable pin turns the part off when nothing drives it. On this board nothing can raise that pin: it is unconnected, or only touches parts that cannot pull it up (a capacitor, a pull-down, a part that is not fitted). The output rail stays at 0 V and every part it powers is dead.".to_string(),
+                "Pull the enable pin up to the regulator's input through a 10k to 100k resistor, or tie it straight to the input. If a microcontroller pin is meant to switch the rail, keep the resistor so the rail has a defined state before firmware runs.".to_string(),
+            ),
             LintCheck::I2cBusLoading => (
                 format!("The I2C line \"{net}\" has pull-ups, but they are mis-sized for the bus. {}", f.message),
                 "I2C devices can only pull the line LOW; the resistor pulls it back HIGH. Too strong a pull-up and a device cannot sink enough current to make a valid low (the spec guarantees only 3 mA), so reads fail intermittently. Too weak and the line rises too slowly for the clock rate, corrupting edges as more devices load the bus.".to_string(),
