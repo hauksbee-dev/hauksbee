@@ -841,8 +841,8 @@ fn envelope_lint_with_tolerance(
 /// `ratings.max_voltage_v` (the schema's "IC supply abs max") rates. Regulator
 /// and charger inputs (`vin`, `vbus`, `vbat`) are rated by their own rows.
 const IC_SUPPLY_ROLES: [&str; 15] = [
-    "vcc", "vdd", "vddio", "iovdd", "vio", "vccio", "vcca", "vccb", "dvdd", "avdd", "vdda",
-    "avcc", "dvcc", "3v3", "v+",
+    "vcc", "vdd", "vddio", "iovdd", "vio", "vccio", "vcca", "vccb", "dvdd", "avdd", "vdda", "avcc",
+    "dvcc", "3v3", "v+",
 ];
 
 /// Kinds whose `ratings.max_voltage_v` is the supply's absolute maximum
@@ -931,7 +931,13 @@ fn supply_abs_max_findings(
             nets: vec![net.name.clone()],
         };
         let rating = format!("{abs_max:.2} V absolute-maximum supply");
-        out.push(stated_if_stand_in(finding, model, Limit::Voltage, &seen, &rating));
+        out.push(stated_if_stand_in(
+            finding,
+            model,
+            Limit::Voltage,
+            &seen,
+            &rating,
+        ));
     }
     out
 }
@@ -1348,10 +1354,22 @@ basis = "Recommended Operating Conditions, Table 1, VDD row"
         };
         let hot = lint("+5V");
         assert_eq!(hot.len(), 1, "{hot:?}");
-        assert_eq!(hot[0].severity, Severity::Medium, "name-assumed level warns");
+        assert_eq!(
+            hot[0].severity,
+            Severity::Medium,
+            "name-assumed level warns"
+        );
         assert!(hot[0].message.contains("5.25 V"), "{}", hot[0].message);
-        assert!(hot[0].message.contains("1.65 V above the 3.60 V"), "{}", hot[0].message);
-        assert!(hot[0].message.contains("esp32s3_wroom"), "{}", hot[0].message);
+        assert!(
+            hot[0].message.contains("1.65 V above the 3.60 V"),
+            "{}",
+            hot[0].message
+        );
+        assert!(
+            hot[0].message.contains("esp32s3_wroom"),
+            "{}",
+            hot[0].message
+        );
         assert!(lint("+3V3").is_empty(), "3.465 V is under 3.6 V");
     }
 

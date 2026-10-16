@@ -10,6 +10,11 @@ value_re   = "(?i)^ATmega328P?$"
 mpn_re     = "(?i)^ATmega328P"
 
 [models.params]
+# Crystal load capacitors: ATmega48A/PA/88A/PA/168A/PA/328/P datasheet, Table 9-3 "Low Power
+# Crystal Oscillator Operating Modes" and Table 9-5 "Full Swing Crystal Oscillator operating modes"
+# (PDF pp. 39-40): recommended range for capacitors C1 and C2 with crystals, 12-22 pF.
+xtal_cap_min_f = 12.0e-12
+xtal_cap_max_f = 22.0e-12
 # hauksbee-mcu backend identifier, tells the co-sim layer which emulator core
 # to instantiate.
 backend = "simavr:atmega328p"
@@ -112,6 +117,11 @@ mpn_re       = "(?i)^ATmega328P"
 footprint_re = '(?i)(QFP|QFN|MLF)[-_]*32([^0-9]|$)'
 
 [models.params]
+# Crystal load capacitors: ATmega48A/PA/88A/PA/168A/PA/328/P datasheet, Table 9-3 "Low Power
+# Crystal Oscillator Operating Modes" and Table 9-5 "Full Swing Crystal Oscillator operating modes"
+# (PDF pp. 39-40): recommended range for capacitors C1 and C2 with crystals, 12-22 pF.
+xtal_cap_min_f = 12.0e-12
+xtal_cap_max_f = 22.0e-12
 backend = "simavr:atmega328p"
 internal_clock = "internal 8 MHz RC oscillator"
 default_clock_hz = 8000000
@@ -192,6 +202,11 @@ mpn_re       = "(?i)^ATmega328P"
 footprint_re = '(?i)(QFN|MLF)[-_]*28([^0-9]|$)'
 
 [models.params]
+# Crystal load capacitors: ATmega48A/PA/88A/PA/168A/PA/328/P datasheet, Table 9-3 "Low Power
+# Crystal Oscillator Operating Modes" and Table 9-5 "Full Swing Crystal Oscillator operating modes"
+# (PDF pp. 39-40): recommended range for capacitors C1 and C2 with crystals, 12-22 pF.
+xtal_cap_min_f = 12.0e-12
+xtal_cap_max_f = 22.0e-12
 backend = "simavr:atmega328p"
 internal_clock = "internal 8 MHz RC oscillator"
 default_clock_hz = 8000000
@@ -276,6 +291,11 @@ sha256 = "6dd5823d902bb87d170f0c26c918c49db4cd3deba906cba870b229f2607e7465"
 value_re = "(?i)^ATmega168V?(MLF|[-_ ]?(10|20)?(AU|MU)R?)$"
 
 [models.params]
+# Crystal load capacitors: ATmega48A/PA/88A/PA/168A/PA/328/P datasheet, Table 9-3 "Low Power
+# Crystal Oscillator Operating Modes" and Table 9-5 "Full Swing Crystal Oscillator operating modes"
+# (PDF pp. 39-40): recommended range for capacitors C1 and C2 with crystals, 12-22 pF.
+xtal_cap_min_f = 12.0e-12
+xtal_cap_max_f = 22.0e-12
 backend = "simavr:atmega168"
 internal_clock = "internal 8 MHz RC oscillator"
 default_clock_hz = 8000000
@@ -365,6 +385,10 @@ sha256 = "182d44b3834632028e2258ee410b3ad33ee89c692695b6dc3e68cbdd08a5d03a"
 value_re = "(?i)^ATmega16U2([-_ ]?(MU|AU)(R|\\(R\\))?)?$"
 
 [models.params]
+# Crystal load capacitors: ATmega8U2/16U2/32U2 datasheet, Table 8-3 "Low Power Crystal Oscillator
+# Operating Modes" (PDF p. 30): recommended range for capacitors C1 and C2, 12-22 pF.
+xtal_cap_min_f = 12.0e-12
+xtal_cap_max_f = 22.0e-12
 backend = "none:atmega16u2"
 
 [models.pins]
@@ -646,6 +670,11 @@ description = "ATmega1284P 8-bit AVR MCU, 44-lead TQFP or 44-pad VQFN/MLF"
 value_re = "(?i)^ATmega1284(P([-_]?(AU|MU|AUR|MUR))?|M|A)$"
 
 [models.params]
+# Crystal load capacitors: ATmega1284P datasheet, Table 10-3 "Low Power Crystal Oscillator Operating
+# Modes" and Table 10-5 "Full Swing Crystal Oscillator operating modes" (PDF pp. 45-46): recommended
+# range for capacitors C1 and C2, 12-22 pF.
+xtal_cap_min_f = 12.0e-12
+xtal_cap_max_f = 22.0e-12
 # hauksbee-mcu backend identifier. simavr models `atmega1284` and `atmega1284p` as
 # distinct cores and this entry names the P.
 backend = "simavr:atmega1284p"
@@ -1050,6 +1079,10 @@ description = "ATmega32U4 8-bit AVR MCU with USB, TQFP-44 or QFN-44"
 value_re = "(?i)^ATmega32U4([-_]?(AU|MU|AUR|MUR|RC))?$"
 
 [models.params]
+# Crystal load capacitors: ATmega16U4/32U4 datasheet, Table 6-3 "Low Power Crystal Oscillator
+# Operating Modes" (PDF p. 30): recommended range for capacitors C1 and C2, 12-22 pF.
+xtal_cap_min_f = 12.0e-12
+xtal_cap_max_f = 22.0e-12
 backend = "simavr:atmega32u4"
 internal_clock = "internal 8 MHz RC oscillator"
 default_clock_hz = 8000000
@@ -1138,6 +1171,10 @@ description = "ATtiny85 8-bit AVR MCU, package not recognised"
 value_re = "(?i)^ATtiny85V?([-_]?(10|20))?([-_]?(PU|SU|SUR|SH|SF|SN|S|P|MU|MUR|MF|M))?$"
 
 [models.params]
+# Crystal load capacitors: ATtiny25/45/85 datasheet, Table 6-12 "Crystal Oscillator Operating Modes"
+# (PDF p. 30): recommended range for capacitors C1 and C2, 12-22 pF.
+xtal_cap_min_f = 12.0e-12
+xtal_cap_max_f = 22.0e-12
 backend = "simavr:attiny85"
 internal_clock = "internal 8 MHz RC oscillator"
 default_clock_hz = 8000000
@@ -1157,6 +1194,10 @@ value_re = "(?i)^ATtiny85V?([-_]?(10|20))?([-_]?(PU|SU|SUR|SH|SF|SN|S|P|MU|MUR|M
 footprint_re = '(?i)(^|[:_])(P?DIP|DIL|SOIC|SOP|SO)[-_]?0?8([^0-9]|$)'
 
 [models.params]
+# Crystal load capacitors: ATtiny25/45/85 datasheet, Table 6-12 "Crystal Oscillator Operating Modes"
+# (PDF p. 30): recommended range for capacitors C1 and C2, 12-22 pF.
+xtal_cap_min_f = 12.0e-12
+xtal_cap_max_f = 22.0e-12
 backend = "simavr:attiny85"
 internal_clock = "internal 8 MHz RC oscillator"
 default_clock_hz = 8000000
@@ -1195,6 +1236,10 @@ value_re = "(?i)^ATtiny85V?([-_]?(10|20))?([-_]?(PU|SU|SUR|SH|SF|SN|S|P|MU|MUR|M
 footprint_re = '(?i)(^|[:_])(V?QFN|MLF|WQFN)[-_]?20([^0-9]|$)'
 
 [models.params]
+# Crystal load capacitors: ATtiny25/45/85 datasheet, Table 6-12 "Crystal Oscillator Operating Modes"
+# (PDF p. 30): recommended range for capacitors C1 and C2, 12-22 pF.
+xtal_cap_min_f = 12.0e-12
+xtal_cap_max_f = 22.0e-12
 backend = "simavr:attiny85"
 internal_clock = "internal 8 MHz RC oscillator"
 default_clock_hz = 8000000

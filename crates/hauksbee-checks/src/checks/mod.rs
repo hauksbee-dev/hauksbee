@@ -40,6 +40,11 @@
 //!   layer's `MissingI2cPullup`): an effective pull-up demanding more sink
 //!   current than the spec's 3 mA driver rating, or advisorily too weak for
 //!   the estimated bus capacitance to meet the rise-time budget.
+//! - [`regulator_cout`]: a linear regulator whose output carries less
+//!   capacitance than its card's stability minimum (`cout_min_f`).
+//! - [`crystal_caps`]: crystal load capacitors far outside the C1/C2 range the
+//!   driving IC's card states (`xtal_cap_min_f`/`xtal_cap_max_f`), for a
+//!   crystal whose value states no CL.
 //! - [`logic_levels`]: a CMOS logic input left between its VCC-scaled VIL
 //!   and VIH, where the datasheet guarantees no logic state.
 //! - [`rail_conflicts`]: a rail more than one source sets the voltage of
@@ -73,6 +78,7 @@ pub mod boot;
 pub mod bus_loading;
 pub mod contention;
 pub mod converter;
+pub mod crystal_caps;
 pub mod dc_stress;
 pub mod device_decode;
 pub mod envelope;
@@ -85,6 +91,7 @@ pub mod node_drive;
 pub mod open_paths;
 pub mod rail_conflicts;
 pub mod rail_decoupling;
+pub mod regulator_cout;
 pub mod ripple;
 pub mod siblings;
 pub mod straps;
@@ -304,6 +311,9 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     report
         .findings
         .extend(bus_loading::bus_loading_lint(board).findings);
+    report
+        .findings
+        .extend(regulator_cout::regulator_cout_lint(board, lib).findings);
     // One binding serves both checks that need the bound board: the rail
     // conflicts read its report, the DC stress pass then consumes it. Binding
     // a large board is not cheap, so it is done once here, not once per check.
@@ -387,6 +397,7 @@ pub fn engine_si(board: &ExtractedBoard, lib: &ModelLibrary, geo_text: Option<&s
     let mut report = board.si_checks(geo_text);
     ampacity::append_ampacity(board, lib, geo_text, &mut report);
     ripple::append_ripple(board, lib, &mut report);
+    crystal_caps::append_crystal_caps(board, lib, &mut report);
     report
 }
 

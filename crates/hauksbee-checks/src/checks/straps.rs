@@ -276,14 +276,15 @@ fn examine_strap(
             "pull-down to ground"
         };
         let far = board.net(p.far).map_or("?", |n| n.name.as_str());
-        let to = if want_high { "the I/O supply" } else { "ground" };
+        let to = if want_high {
+            "the I/O supply"
+        } else {
+            "ground"
+        };
         let against = if no_internal {
             "the pin has no internal pull, so this resistor alone sets the level".to_string()
         } else {
-            format!(
-                "at {} it overrides the pin's internal pull",
-                p.value.trim()
-            )
+            format!("at {} it overrides the pin's internal pull", p.value.trim())
         };
         let what = format!(
             "has a {dir} ({} to '{far}') but normal boot needs {}: the strap is biased to the wrong level ({against}). Move {} to {to}, or replace it with a pull to {to}",
@@ -746,7 +747,12 @@ vih = [0.0, 2.0]
                 strap_board("+3V3", "/BOOT0", vec![stm32(), pull("R1", "100k", 2)]),
                 &[(
                     Medium,
-                    &["boot0", "wrong level", "no internal pull", "Move R1 to ground"],
+                    &[
+                        "boot0",
+                        "wrong level",
+                        "no internal pull",
+                        "Move R1 to ground",
+                    ],
                 )],
             ),
             (

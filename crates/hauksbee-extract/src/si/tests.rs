@@ -218,6 +218,45 @@ fn crystal_unknown_cl_is_info_only() {
     assert!(f.message.contains("CL spec unknown"));
 }
 
+/// A CL the crystal's own value states is the spec: four times the right load
+/// caps (27 pF -> 108 pF, board CL ~58 pF against 18 pF) fires High and names
+/// the stated CL; the board's real 27 pF pair (CL ~17.5 pF) is an ok note.
+#[test]
+fn crystal_cl_stated_in_its_value_is_judged() {
+    let faulty = run_board(
+        &xtal_board("12MHz 18pF", "108p", "108p"),
+        check_crystal_load_cap,
+    );
+    assert_eq!(faulty.finding_count(), 1, "{:?}", faulty.findings);
+    let f = faulty.findings_only().next().unwrap();
+    assert_eq!(f.severity, SiSeverity::High);
+    for says in [
+        "CL ~ 58.0 pF",
+        "CL = 18 pF",
+        "the crystal's value states",
+        "C1=108p",
+    ] {
+        assert!(f.message.contains(says), "{says:?} in {}", f.message);
+    }
+    for value in [
+        "12MHz 18pF",
+        "Q12MHz/20pF/30ppm/2P/HC-49SM(SMD)",
+        "12MHz/12pF",
+    ] {
+        let legal = run_board(&xtal_board(value, "27p", "27p"), check_crystal_load_cap);
+        assert_eq!(legal.finding_count(), 0, "{value}: {:?}", legal.findings);
+        assert!(
+            legal.findings[0].message.contains("- ok"),
+            "{}",
+            legal.findings[0].message
+        );
+    }
+    // A number that is not a plausible CL, or no pF unit, is not read as one.
+    assert_eq!(stated_crystal_cl("32.768kHz"), None);
+    assert_eq!(stated_crystal_cl("100pF-XTAL"), None);
+    assert_eq!(stated_crystal_cl("16 MHz CL=12.5 pF"), Some(12.5));
+}
+
 #[test]
 fn crystal_missing_both_caps_fires() {
     // A discrete crystal with no load caps at all on either terminal.
