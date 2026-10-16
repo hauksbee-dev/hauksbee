@@ -350,9 +350,21 @@ function headlineWithoutConditions(headline: string, conditions: string[]): stri
   return headline.slice(0, headline.length - joined.length).trimEnd()
 }
 
-/** The designator an open-part assumption (`open-part:C2`) is about. */
+/** The part an assumption is about, from its typed remedy's `reference`, else
+ *  its typed scope. The id's namespace (`open-part:C2`) is a key, never parsed. */
+export function assumptionPart(a: EvidenceAssumption): string | undefined {
+  const r = a.remedy
+  let raw: string | undefined
+  if (r && 'reference' in r) raw = r.reference
+  else if (a.scope.type === 'subjects' && Array.isArray(a.scope.value)) {
+    raw = (a.scope.value as { kind?: string; id?: string }[]).find(s => s.kind === 'part' || s.kind === 'pin')?.id
+  }
+  return raw?.split('@')[0].split('/')[0] || undefined
+}
+
+/** The designator an open-part assumption is about. */
 export const openPartRef = (a: EvidenceAssumption): string | null =>
-  a.kind === 'open_part' ? a.id.replace(/^open-part:/, '') : null
+  a.kind === 'open_part' ? assumptionPart(a) ?? null : null
 
 /** The judged scope of a PARTLY JUDGED run: the same numbers the engine's
  *  "Partly judged: ..." sentence states (`2 * nets` claims, less the dependent ones). */

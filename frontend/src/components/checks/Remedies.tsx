@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { EvidenceAssumption, Remedy, RunResponse } from '../../types/report'
-import { plural } from '../../lib/report-view'
+import { assumptionPart, plural } from '../../lib/report-view'
 import { useTermEntry } from '../ui'
 import { ChipList, netsOf, partsOf, RowAction } from '../report/ResultLinks'
 import { requestModelTab, type ModelTab } from '../WritePart'
@@ -39,16 +39,17 @@ export interface CauseGroup {
  *  the visible text keeps only the designator. */
 export const withoutIds = (text: string) => text.replace(/\b[a-z][a-z_-]*:(?=[A-Z0-9])/g, '')
 
-/** The part (and pin) an assumption is about, from its remedy or its id. */
+/** The part (and pin) an assumption is about. The part comes from the typed
+ *  remedy's `reference`, else from the typed scope; the id's namespace is never
+ *  parsed for it. A pin is named only in the id's `part/pin` tail (the scope is
+ *  the part), so it is read from there and only when it extends that part. */
 function targetOf(a: EvidenceAssumption): { part?: string; pin?: string; net?: string } {
   const r = a.remedy
   if (r && 'net' in r) return { net: r.net }
-  const prefixed = /^[a-z_-]+:(.+)$/.exec(a.id)?.[1]
-  const raw = r && 'reference' in r ? r.reference : prefixed
-  if (!raw) return {}
-  const [ref] = raw.split('@')
-  const [part, pin] = ref.split('/')
-  return pin ? { part, pin: `${part}/${pin}` } : part ? { part } : {}
+  const part = assumptionPart(a)
+  if (!part) return {}
+  const tail = a.id.slice(a.id.indexOf(':') + 1)
+  return tail.startsWith(`${part}/`) ? { part, pin: tail.split('@')[0] } : { part }
 }
 
 const uniq = (xs: (string | undefined)[]) => [...new Set(xs.filter((x): x is string => !!x))]

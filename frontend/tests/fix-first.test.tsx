@@ -34,7 +34,7 @@ const fixFirst: FixFirst = {
 }
 
 const open = (id: string): EvidenceAssumption => ({
-  id: `open-part:${id}`, kind: 'open_part', source: 'bind', scope: { type: 'component', value: id },
+  id: `open-part:${id}`, kind: 'open_part', source: 'bind', scope: { type: 'subjects', value: [{ kind: 'part', id }] },
   statement: '', because: '', consequence: '', replacement: '',
 })
 

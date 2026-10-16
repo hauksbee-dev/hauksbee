@@ -14,8 +14,12 @@ import { buildToml, scaffoldRows, supplyToml } from '../src/lib/check-spec'
 import { tomlToBuilder } from '../src/lib/spec-model'
 import type { EvidenceAssumption, Remedy, RunResponse } from '../src/types/report'
 
-const assumption = (id: string, kind: string, remedy: Remedy | undefined, replacement = 'do the thing'): EvidenceAssumption => ({
-  id, kind, source: 's', scope: { type: 'board' }, statement: `${id} is assumed`, because: '', consequence: '',
+const partScope = (id: string) => ({ type: 'subjects', value: [{ kind: 'part', id }] })
+
+const assumption = (
+  id: string, kind: string, remedy: Remedy | undefined, replacement = 'do the thing', scope: EvidenceAssumption['scope'] = { type: 'board' },
+): EvidenceAssumption => ({
+  id, kind, source: 's', scope, statement: `${id} is assumed`, because: '', consequence: '',
   replacement, remedy,
 })
 
@@ -38,8 +42,8 @@ const actions: RemedyActions = {
 
 const registry = [
   assumption('open-part:Q1', 'open_part', { type: 'add_model', reference: 'Q1' }),
-  assumption('open-part:C2', 'open_part', undefined),
-  assumption('inferred-pin-role:D2/1', 'inferred_pin_role', undefined),
+  assumption('open-part:C2', 'open_part', undefined, 'do the thing', partScope('C2')),
+  assumption('inferred-pin-role:D2/1', 'inferred_pin_role', undefined, 'do the thing', partScope('D2')),
   assumption('unpowered:/VIN', 'unpowered_rail', { type: 'add_supply', net: '/VIN', volts_hint: 7 }),
   assumption('note', 'note', { type: 'other' }),
 ]
@@ -52,6 +56,15 @@ describe('what blocks judgement', () => {
     expect(groups[1].pins).toEqual(['D2/1'])
     expect(groups[2].nets).toEqual(['/VIN'])
     expect(openPartCount(groups)).toBe(2)
+  })
+
+  test('a part is named by its remedy or its scope, never by parsing the id', () => {
+    const groups = causeGroups([
+      assumption('open-part:ignored-name', 'open_part', { type: 'add_model', reference: 'U9' }),
+      assumption('open-part:also-ignored', 'open_part', undefined, 'x', partScope('U7')),
+      assumption('open-part:U1', 'open_part', undefined),
+    ])
+    expect(groups[0].parts).toEqual(['U9', 'U7'])
   })
 
   test('drops causes that name nothing to act on', () => {
