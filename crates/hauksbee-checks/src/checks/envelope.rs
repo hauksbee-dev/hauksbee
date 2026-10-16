@@ -312,7 +312,7 @@ impl Divider {
         let ohms = match self.law {
             DividerLaw::Grounded => bottom * (target_v / self.vref_v - 1.0),
             DividerLaw::OutReferenced { iadj_a } => {
-                self.vref_v * bottom / (target_v - self.vref_v - iadj_a * bottom)
+                self.vref_v * bottom / iadj_a.mul_add(-bottom, target_v - self.vref_v)
             }
         };
         (ohms.is_finite() && ohms > 0.0).then_some(ohms)
@@ -1008,17 +1008,19 @@ fn divider_name_findings(
             .iter()
             .filter_map(|n| Some((*n, named_voltage(n)?)))
             .collect();
-        let [(net, named)] = stated[..] else { continue };
+        let [(net, want_v)] = stated[..] else {
+            continue;
+        };
         let band = (
-            named * (1.0 - NAME_TOLERANCE),
-            named * (1.0 + NAME_TOLERANCE),
+            want_v * (1.0 - NAME_TOLERANCE),
+            want_v * (1.0 + NAME_TOLERANCE),
         );
         if divider.range.max_v >= band.0 && divider.range.min_v <= band.1 {
             continue;
         }
         let set = divider.nominal_v();
-        let pct = (set / named - 1.0).abs() * 100.0;
-        let side = if set > named { "above" } else { "below" };
+        let pct = (set / want_v - 1.0).abs() * 100.0;
+        let side = if set > want_v { "above" } else { "below" };
         let leg = |leg: &[(String, f64)]| {
             let parts: Vec<String> = leg
                 .iter()
@@ -1041,16 +1043,16 @@ fn divider_name_findings(
                 "{vref:.3} V x (1 + {bottom} / {top}) plus the ADJ pin current through {bottom}"
             ),
         };
-        let fix = divider.top_for(named).map_or_else(
+        let fix = divider.top_for(want_v).map_or_else(
             || {
                 format!(
-                    "Re-value the divider ({}) so Vout is {named:.2} V",
+                    "Re-value the divider ({}) so Vout is {want_v:.2} V",
                     top_refs.join(", ")
                 )
             },
             |ohms| {
                 format!(
-                    "Make {} about {} (with {} at {bottom}) so Vout is {named:.2} V",
+                    "Make {} about {} (with {} at {bottom}) so Vout is {want_v:.2} V",
                     top_refs.join(" || "),
                     ohms_text(ohms),
                     bottom_refs.join(" || "),
@@ -1058,7 +1060,7 @@ fn divider_name_findings(
             },
         );
         let message = format!(
-            "{} ({}) sets rail '{net}' to {set:.2} V, {pct:.0} % {side} the {named:.2} V its name states: its feedback divider ({} from the output to the feedback pin, {} from it to ground) holds the pin at the {vref:.3} V reference, so Vout = {law} = {set:.2} V, and every part on '{net}' is supplied {set:.2} V instead of {named:.2} V. {fix}; if {set:.2} V is what the board needs, rename the net to say so.",
+            "{} ({}) sets rail '{net}' to {set:.2} V, {pct:.0} % {side} the {want_v:.2} V its name states: its feedback divider ({} from the output to the feedback pin, {} from it to ground) holds the pin at the {vref:.3} V reference, so Vout = {law} = {set:.2} V, and every part on '{net}' is supplied {set:.2} V instead of {want_v:.2} V. {fix}; if {set:.2} V is what the board needs, rename the net to say so.",
             divider.regulator,
             divider.value,
             leg(&divider.top),
