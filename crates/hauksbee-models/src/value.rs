@@ -202,6 +202,11 @@ pub fn parse_current_rating_a(s: &str) -> Option<f64> {
 /// assert_eq!(parse_voltage_rating_v("100nF (25 V) X7R"), Some(25.0));
 /// assert_eq!(parse_voltage_rating_v("C0805-10uF-16VDC"), Some(16.0));
 /// ```
+///
+/// A token that ends in `V` is a rating wherever it sits, so "100n 5V" reads
+/// as a 5 V rating: that is how boards write a capacitor's rating, and a
+/// value field names no rail. The RKM forms (`3V3`, `6V3`) are not read: on a
+/// value they are as often a rail name as a rating.
 #[must_use]
 pub fn parse_voltage_rating_v(s: &str) -> Option<f64> {
     let tokens: Vec<String> = s
@@ -228,6 +233,71 @@ pub fn parse_voltage_rating_v(s: &str) -> Option<f64> {
             return volts(&tokens[i - 1], scale);
         }
         volts(number, scale)
+    })
+}
+
+/// Transient-voltage-suppressor families whose part number carries a voltage
+/// (`SMAJ5.0A`, `P6KE15CA`), with what that voltage is.
+pub const TVS_FAMILIES: [(&str, TvsNameVoltage); 11] = [
+    ("SMAJ", TvsNameVoltage::Standoff),
+    ("SMBJ", TvsNameVoltage::Standoff),
+    ("SMCJ", TvsNameVoltage::Standoff),
+    ("SMDJ", TvsNameVoltage::Standoff),
+    ("SM8S", TvsNameVoltage::Standoff),
+    ("SMF", TvsNameVoltage::Standoff),
+    ("P4KE", TvsNameVoltage::Breakdown),
+    ("P6KE", TvsNameVoltage::Breakdown),
+    ("1.5KE", TvsNameVoltage::Breakdown),
+    ("P6SMB", TvsNameVoltage::Breakdown),
+    ("TPSMB", TvsNameVoltage::Breakdown),
+];
+
+/// Which voltage a TVS family's part number names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TvsNameVoltage {
+    /// The reverse standoff (working) voltage VRWM: SMAJ5.0A stands off 5 V.
+    Standoff,
+    /// The nominal breakdown voltage V(BR): P6KE15A breaks down near 15 V and
+    /// stands off less (12.8 V for the 5 % `A` grade).
+    Breakdown,
+}
+
+/// The lowest standoff a family named by its breakdown voltage states, as a
+/// share of that voltage: the 10 % grade's 0.81 (the 5 % `A` grade is 0.855).
+pub const TVS_STANDOFF_PER_BREAKDOWN: f64 = 0.81;
+
+/// A TVS part number's family, the voltage it names and whether it is
+/// bidirectional (`C` or `CA` after the voltage). `None` for anything else.
+///
+/// ```
+/// use hauksbee_models::value::{parse_tvs_name, TvsNameVoltage};
+/// assert_eq!(parse_tvs_name("SMAJ5.0A"), Some(("SMAJ", 5.0, TvsNameVoltage::Standoff, false)));
+/// assert_eq!(parse_tvs_name("P6KE15CA"), Some(("P6KE", 15.0, TvsNameVoltage::Breakdown, true)));
+/// assert_eq!(parse_tvs_name("SS14"), None);
+/// ```
+#[must_use]
+pub fn parse_tvs_name(value: &str) -> Option<(&'static str, f64, TvsNameVoltage, bool)> {
+    let token: String = value
+        .trim()
+        .to_ascii_uppercase()
+        .chars()
+        .take_while(|c| !c.is_whitespace() && !matches!(c, '(' | '/' | '-' | ','))
+        .collect();
+    TVS_FAMILIES.iter().find_map(|&(family, names)| {
+        let rest = token.strip_prefix(family)?;
+        let number: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        let volts = number
+            .parse::<f64>()
+            .ok()
+            .filter(|v| v.is_finite() && *v > 0.0)?;
+        let suffix = &rest[number.len()..];
+        let bidirectional = suffix.starts_with('C');
+        // The grade and direction letters, then any packaging code.
+        let known = suffix.is_empty() || suffix.starts_with(['A', 'B', 'C']);
+        known.then_some((family, volts, names, bidirectional))
     })
 }
 
@@ -916,6 +986,47 @@ mod tests {
         // No voltage stated: a capacitance, a rail name or a part number.
         for v in ["10uF", "100n", "3V3", "47u X7R", "V", "", "EEE-FK1V100R"] {
             assert_eq!(parse_voltage_rating_v(v), None, "{v:?}");
+        }
+    }
+
+    #[test]
+    fn a_volts_token_on_a_value_is_its_rating_and_an_rkm_voltage_is_not() {
+        // The documented convention: a token ending in V is a rating.
+        for (v, want) in [("100n 5V", 5.0), ("10u 10V X5R", 10.0), ("1u 35 V", 35.0)] {
+            assert_eq!(parse_voltage_rating_v(v), Some(want), "{v:?}");
+        }
+        // RKM voltages read like rail names, so they state no rating.
+        for v in ["10u 6V3", "3V3", "100n 1V8"] {
+            assert_eq!(parse_voltage_rating_v(v), None, "{v:?}");
+        }
+    }
+
+    #[test]
+    fn a_tvs_part_number_names_its_family_voltage() {
+        for (v, family, volts, names, bidir) in [
+            ("SMAJ5.0A", "SMAJ", 5.0, TvsNameVoltage::Standoff, false),
+            ("SMBJ6.0CA", "SMBJ", 6.0, TvsNameVoltage::Standoff, true),
+            ("smcj24a", "SMCJ", 24.0, TvsNameVoltage::Standoff, false),
+            (
+                "SMF5.0A-E3/61T",
+                "SMF",
+                5.0,
+                TvsNameVoltage::Standoff,
+                false,
+            ),
+            ("P6KE15CA", "P6KE", 15.0, TvsNameVoltage::Breakdown, true),
+            ("1.5KE33A", "1.5KE", 33.0, TvsNameVoltage::Breakdown, false),
+            ("P6SMB18A", "P6SMB", 18.0, TvsNameVoltage::Breakdown, false),
+        ] {
+            assert_eq!(
+                parse_tvs_name(v),
+                Some((family, volts, names, bidir)),
+                "{v:?}"
+            );
+        }
+        // Not a TVS part number: a rectifier, a bare family, a capacitance.
+        for v in ["SS14", "SMAJ", "SMA", "1N4148", "10uF", "SMBJ5.0X"] {
+            assert_eq!(parse_tvs_name(v), None, "{v:?}");
         }
     }
 }

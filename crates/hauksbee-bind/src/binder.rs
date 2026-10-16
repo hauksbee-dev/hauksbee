@@ -1445,18 +1445,39 @@ impl PartFacts {
 /// electrolytic and tantalum classes): a floor, not a rating.
 pub const UNRATED_CAPACITOR_VOLTAGE_FLOOR_V: f64 = 6.3;
 
+/// Field names that state a capacitor's rated voltage, compared trimmed,
+/// case-insensitively and with `_` or `-` read as a space. A field merely
+/// mentioning a voltage ("Test Voltage", "Voltage Coefficient", "Ripple
+/// Voltage") states no rating.
+const RATED_VOLTAGE_FIELDS: [&str; 8] = [
+    "voltage",
+    "rated voltage",
+    "voltage rating",
+    "rating",
+    "wv",
+    "vdc",
+    "working voltage",
+    "max voltage",
+];
+
 /// The rated voltage a capacitor's own record states: its value ("10uF/16V",
-/// "100nF 25V X7R"), else a field named for a voltage ("Voltage", "Rated
-/// Voltage") whose text is a voltage or a bare number of volts.
+/// "100nF 25V X7R"), else a rated-voltage field ([`RATED_VOLTAGE_FIELDS`])
+/// whose text is a voltage, or a bare number of volts on a field whose name
+/// is itself a voltage (a bare "Rating" of "0.25" is no voltage).
 fn capacitor_stated_voltage(comp: &Component) -> Option<f64> {
     hauksbee_models::value::parse_voltage_rating_v(&comp.value).or_else(|| {
-        comp.properties
-            .iter()
-            .filter(|(k, _)| k.to_ascii_lowercase().contains("volt"))
-            .find_map(|(_, v)| {
-                hauksbee_models::value::parse_voltage_rating_v(v)
-                    .or_else(|| v.trim().parse::<f64>().ok().filter(|x| *x > 0.0))
+        comp.properties.iter().find_map(|(k, v)| {
+            let key = k.trim().to_ascii_lowercase().replace(['_', '-'], " ");
+            if !RATED_VOLTAGE_FIELDS.contains(&key.as_str()) {
+                return None;
+            }
+            hauksbee_models::value::parse_voltage_rating_v(v).or_else(|| {
+                (key != "rating")
+                    .then(|| v.trim().parse::<f64>().ok())
+                    .flatten()
+                    .filter(|x| x.is_finite() && *x > 0.0)
             })
+        })
     })
 }
 
@@ -2328,6 +2349,13 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
             // part marked as a Zener (its value or symbol says so, or its
             // value is only a voltage) keeps the stated voltage as its
             // breakdown, and one with no stated voltage stays unmodelled.
+            // A TVS named by its family (SMAJ5.0A, P6KE15A) states the
+            // voltage it stands off in its part number. A bidirectional one
+            // (SMBJ6.0CA) conducts both ways past it, which no one-way diode
+            // curve stands in for, so it stays unmodelled.
+            if let Some(tvs) = hauksbee_models::value::parse_tvs_name(&comp.value) {
+                return tvs_fallback(&tvs);
+            }
             let zener = zener_mark(comp);
             if matches!(zener, ZenerMark::Unstated) {
                 return None;
@@ -2379,6 +2407,11 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
                     .collect(),
             );
             entry.ratings.max_voltage_v = Some(UNKNOWN_DIODE_VRRM_FLOOR_V);
+            // Nor is its current rating known: the 1N4148's own is a small
+            // signal diode's. Held to the lowest forward current a small
+            // rectifier is sold with, a stand-in like the voltage floor, so a
+            // power path through an unrecognised diode is named, not passed.
+            entry.ratings.max_current_a = Some(UNKNOWN_DIODE_IF_FLOOR_A);
             return Some(entry);
         }
     }
@@ -2808,6 +2841,56 @@ pub const UNKNOWN_DIODE_VRRM_FLOOR_V: f64 = 20.0;
 /// estimate for small-signal Zeners, not read from any datasheet; it only
 /// keeps the knee sharp enough that the clamp sits at the stated voltage.
 const ZENER_FALLBACK_KNEE_A: f64 = 0.005;
+
+/// The forward current an unrecognised diode is held to: the lowest average
+/// forward current small rectifiers and Schottkys are sold with (BAT54-class
+/// parts are 0.2 A). A stand-in, so passing it is a stated condition.
+pub const UNKNOWN_DIODE_IF_FLOOR_A: f64 = 0.2;
+
+/// The fallback for a TVS whose part number names its family and voltage
+/// ([`hauksbee_models::value::parse_tvs_name`]): the 1N4148 forward curve as a
+/// stand-in, no breakdown modelled (it would clamp a rail on an estimate),
+/// and the standoff the name states as its voltage rating. The card is an
+/// engine fallback, so a rail past that standoff is a stated condition
+/// naming the part, never a failure.
+fn tvs_fallback(
+    &(family, volts, names, bidirectional): &(
+        &str,
+        f64,
+        hauksbee_models::value::TvsNameVoltage,
+        bool,
+    ),
+) -> Option<ModelEntry> {
+    use hauksbee_models::value::{TvsNameVoltage, TVS_STANDOFF_PER_BREAKDOWN};
+    if bidirectional {
+        return None;
+    }
+    let (standoff, how) = match names {
+        TvsNameVoltage::Standoff => (volts, "the standoff its part number names"),
+        TvsNameVoltage::Breakdown => (
+            volts * TVS_STANDOFF_PER_BREAKDOWN,
+            "the lowest standoff its part number's breakdown voltage gives",
+        ),
+    };
+    let mut params = diode_1n4148_params();
+    params.0.remove("bv");
+    let mut entry = make_entry(
+        "tvs_diode_fallback",
+        ComponentKind::Diode,
+        &format!(
+            "generic {family} TVS diode (engine fallback: standoff {standoff:.2} V, {how}; \
+             forward curve estimated from the 1N4148 card, clamp not modelled; put the \
+             ordering code on the component to replace it)"
+        ),
+        params,
+        [("1", "cathode"), ("2", "anode")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+    );
+    entry.ratings.max_voltage_v = Some(standoff);
+    Some(entry)
+}
 
 /// Whether a diode is marked as a Zener, and the breakdown voltage it states.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -12649,6 +12732,75 @@ style = "i2c_pointer"
                 Some(UNKNOWN_DIODE_VRRM_FLOOR_V),
                 "{value}"
             );
+            // And a stand-in forward-current floor.
+            assert_eq!(
+                entry.ratings.max_current_a,
+                Some(UNKNOWN_DIODE_IF_FLOOR_A),
+                "{value}"
+            );
+        }
+    }
+
+    /// A TVS named by its family stands off the voltage its part number
+    /// gives, as a fallback card's (stand-in) rating, with no clamp invented.
+    #[test]
+    fn a_tvs_fallback_takes_its_standoff_from_the_part_number() {
+        let diode = |value: &str| Component {
+            footprint: "Diode_SMD:D_SMA".into(),
+            lib_id: "Device:D_TVS".into(),
+            pins: vec![pin("1", 1), pin("2", 2)],
+            ..comp("D4", value)
+        };
+        for (value, standoff) in [
+            ("SMAJ5.0A", 5.0),
+            ("SMBJ24A", 24.0),
+            // Named by breakdown: the lowest standoff that breakdown gives.
+            (
+                "P6KE15A",
+                15.0 * hauksbee_models::value::TVS_STANDOFF_PER_BREAKDOWN,
+            ),
+        ] {
+            let entry = fallback_entry(&diode(value)).expect("a TVS binds");
+            assert_eq!(entry.id, "tvs_diode_fallback", "{value}");
+            assert_eq!(entry.params.get_f64("bv"), None, "{value}");
+            let got = entry.ratings.max_voltage_v.expect("standoff");
+            assert!((got - standoff).abs() < 1e-9, "{value}: {got} V");
+        }
+        // A bidirectional TVS has no stand-in; a rectifier keeps its own path.
+        assert!(fallback_entry(&diode("SMBJ6.0CA")).is_none());
+        let ss = fallback_entry(&diode("SS14")).map(|e| e.id);
+        assert_ne!(ss.as_deref(), Some("tvs_diode_fallback"));
+    }
+
+    /// Only a field named for the rated voltage states it; one that merely
+    /// mentions a voltage does not.
+    #[test]
+    fn a_capacitor_rating_is_read_only_from_a_rated_voltage_field() {
+        let cap = |key: &str, text: &str| Component {
+            properties: vec![(key.to_string(), text.to_string())],
+            ..comp("C1", "10uF")
+        };
+        for (key, text, want) in [
+            ("Voltage", "25V", 25.0),
+            ("Rated Voltage", "16", 16.0),
+            ("voltage_rating", "50 V", 50.0),
+            ("  WV ", "35", 35.0),
+            ("Rating", "25V", 25.0),
+        ] {
+            assert_eq!(
+                capacitor_stated_voltage(&cap(key, text)),
+                Some(want),
+                "{key}"
+            );
+        }
+        for (key, text) in [
+            ("Test Voltage", "10V"),
+            ("Voltage Coefficient", "-80%/V"),
+            ("Ripple Voltage", "1V"),
+            ("Rating", "0.25"),
+            ("Breakdown Voltage", "100"),
+        ] {
+            assert_eq!(capacitor_stated_voltage(&cap(key, text)), None, "{key}");
         }
     }
 

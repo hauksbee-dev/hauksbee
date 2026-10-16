@@ -243,6 +243,20 @@ pub fn condition(part: &str, s: &StandIn, subject: &str, rating: &str) -> String
     )
 }
 
+/// The words the note for parts whose rated voltage nothing states carries
+/// ([`StandInKind::Unstated`] past its assumed floor).
+///
+/// That is a condition the pass rests on, not a partial judgement: the part
+/// is its own card, only the rating is unknown, so the verdict stays a pass
+/// and names the parts among its conditions.
+pub const UNSTATED_RATING_MARKER: &str = "rated voltage not stated";
+
+/// Whether `message` is the unstated-rating note ([`UNSTATED_RATING_MARKER`]).
+#[must_use]
+pub fn is_unstated_rating(message: &str) -> bool {
+    message.contains(UNSTATED_RATING_MARKER)
+}
+
 /// Whether `message` states a stand-in exceedance ([`condition`]).
 #[must_use]
 pub fn is_condition(message: &str) -> bool {

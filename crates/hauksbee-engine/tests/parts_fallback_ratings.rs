@@ -17,8 +17,15 @@ use crate::support::{run, stdout};
 use std::path::PathBuf;
 
 /// SOD-123 diode D1: pin 1 (cathode) on the rail, pin 2 (anode) to ground
-/// through 100k, so the diode blocks the whole rail.
+/// through 10k, so the diode blocks the whole rail. 10k rather than 100k: a
+/// carded Schottky's modelled leakage (tens of microamps on a 1N5820) would
+/// drop volts across 100k and the junction would never see the rail.
 fn diode_board(value: &str, rail: u32) -> String {
+    diode_board_at(value, &rail.to_string())
+}
+
+/// [`diode_board`] on a rail named `+{rail}V`, `rail` a decimal string.
+fn diode_board_at(value: &str, rail: &str) -> String {
     format!(
         r#"(export (version "E")
   (design (source "parts fallback probe"))
@@ -29,7 +36,7 @@ fn diode_board(value: &str, rail: u32) -> String {
     (comp (ref "D1") (value "{value}")
       (footprint "Diode_SMD:D_SOD-123")
       (libsource (lib "Device") (part "X")))
-    (comp (ref "R1") (value "100k")
+    (comp (ref "R1") (value "10k")
       (footprint "Resistor_SMD:R_0805_2012Metric")
       (libsource (lib "Device") (part "X"))))
   (nets
@@ -121,22 +128,54 @@ impl Probe {
     }
 }
 
+/// Each carded part with its datasheet VRRM (V): Vishay 88746 / 88526,
+/// Diodes DS23022, semiware MBR0520L.
+const CARDED_VRRM: [(&str, u32); 10] = [
+    ("SS12", 20),
+    ("SS13", 30),
+    ("SS14", 40),
+    ("SS15", 50),
+    ("SS16", 60),
+    ("1N5820", 20),
+    ("1N5821", 30),
+    ("MBR0520", 20),
+    ("MBR0520L", 20),
+    ("SB140", 40),
+];
+
+/// `vrrm * percent / 100` as a rail name's decimal, to a tenth of a volt.
+fn rail_at(vrrm: u32, percent: u32) -> String {
+    let tenths = vrrm * percent / 10;
+    if tenths % 10 == 0 {
+        (tenths / 10).to_string()
+    } else {
+        format!("{}.{}", tenths / 10, tenths % 10)
+    }
+}
+
 #[test]
 fn schottkys_with_cards_fail_above_their_own_vrrm() {
-    // Vishay 88746 / 88526, Diodes DS23022, semiware MBR0520L: VRRM per part.
-    for (value, rail) in [
+    // The rails the false-safe was found on, then 5, 10 and 20 % over VRRM.
+    // A junction at its knee clamps a few tens of millivolts under VRRM, so
+    // these trip on the monitor's breakdown rule as well as the plain ratio.
+    let original = [
         ("SS12", 24),
         ("SS13", 36),
-        ("SS14", 60),
-        ("SS15", 72),
-        ("SS16", 100),
-        ("1N5820", 36),
-        ("1N5821", 60),
-        ("MBR0520", 25),
-        ("MBR0520L", 36),
-        ("SB140", 60),
-    ] {
-        let v = check(&format!("{value}_{rail}"), &diode_board(value, rail));
+        ("SS14", 48),
+        ("SS15", 60),
+        ("SS16", 72),
+        ("1N5820", 24),
+        ("1N5821", 36),
+        ("MBR0520", 24),
+        ("MBR0520L", 24),
+        ("SB140", 48),
+    ]
+    .map(|(value, rail)| (value, rail.to_string()));
+    let over = CARDED_VRRM
+        .iter()
+        .flat_map(|&(value, vrrm)| [105, 110, 120].map(|p| (value, rail_at(vrrm, p))));
+    for (value, rail) in original.into_iter().chain(over) {
+        let v = check(&format!("{value}_{rail}"), &diode_board_at(value, &rail));
         assert_eq!(v.outcome, "fail", "{value} on {rail} V: {}", v.why());
         assert!(
             names("D1", &v.findings),
@@ -148,16 +187,12 @@ fn schottkys_with_cards_fail_above_their_own_vrrm() {
 
 #[test]
 fn schottkys_with_cards_pass_below_their_own_vrrm() {
-    for (value, rail) in [
-        ("SS12", 12),
-        ("SS14", 24),
-        ("SS16", 48),
-        ("1N5820", 12),
-        ("1N5821", 24),
-        ("MBR0520", 12),
-        ("SB140", 24),
-    ] {
-        let v = check(&format!("{value}_{rail}"), &diode_board(value, rail));
+    let legal = CARDED_VRRM
+        .iter()
+        .map(|&(value, vrrm)| (value, rail_at(vrrm, 80)))
+        .chain([("SS14", "24".to_owned()), ("1N5821", "24".to_owned())]);
+    for (value, rail) in legal {
+        let v = check(&format!("{value}_{rail}"), &diode_board_at(value, &rail));
         assert_eq!(v.outcome, "pass", "{value} on {rail} V: {}", v.why());
         assert!(
             !names("D1", &v.findings),
@@ -191,13 +226,17 @@ fn an_unrecognised_diode_under_the_class_floor_raises_no_condition() {
 
 #[test]
 fn a_capacitor_with_no_stated_voltage_is_named_as_unverified_on_a_high_rail() {
+    // The part is its own card and only its rating is unknown, so this is a
+    // condition the pass rests on (named in `verdict_conditions`), not a
+    // partly judged run: an unrated decoupling cap is on nearly every board.
     for rail in [12, 24, 48] {
         let v = check(&format!("cap_nov_{rail}"), &cap_board("10uF", rail, ""));
-        assert_eq!(v.outcome, "invalid", "{rail} V: {}", v.why());
+        assert_eq!(v.outcome, "pass", "{rail} V: {}", v.why());
         assert!(
-            v.findings.iter().any(|m| m.contains("C1")
+            v.conditions.iter().any(|m| m.contains("C1")
+                && m.contains("rated voltage not stated")
                 && m.contains("assumed")
-                && m.contains("state C1's rated voltage")),
+                && m.contains("10uF 25V")),
             "{rail} V: the unstated rating is a named condition: {}",
             v.why()
         );

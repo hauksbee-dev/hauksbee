@@ -31,9 +31,11 @@ use hauksbee_bind::stress::{
     bjt_currents, strip_unit_suffix, FaultEvent, FaultKind, GateDrive, RegulatorHeat,
     StandInExceedance, StressMonitor,
 };
-use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};
+use hauksbee_extract::{
+    ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity, INFORMATIONAL_MARKER,
+};
 use hauksbee_ir::{DeviceId, NodeId};
-use hauksbee_models::rating_basis;
+use hauksbee_models::rating_basis::{self, StandInKind, UNSTATED_RATING_MARKER};
 use hauksbee_models::ModelLibrary;
 use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
 
@@ -249,6 +251,7 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
     // part -> the stated condition for its first limit passed that was a
     // placeholder or guessed card's, not its own: never a failing finding.
     let mut stated: BTreeMap<String, String> = BTreeMap::new();
+    let mut unstated: BTreeMap<String, (f64, f64)> = BTreeMap::new();
     // Rails drawn past what their supply gives, and the parts over a rating
     // only at that draw (part -> first clause): one finding, not overstresses.
     let mut overloaded: Vec<rest_supply::Overload> = Vec::new();
@@ -273,7 +276,7 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
         let (overstressed, under_driven, absurd, stand_in) = judge(state, &x);
         let over = rest_supply::overloads(state, &x.0, &x.1);
         note_absurd(&mut impossible, absurd);
-        note_stand_in(&mut stated, stand_in);
+        note_stand_in(&mut stated, &mut unstated, stand_in);
         for (drive, nets) in under_driven {
             let worst = under
                 .entry(drive.reference.clone())
@@ -293,7 +296,7 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
             if let Some(x) = settle(state) {
                 let (strong_over, _, absurd, stand_in) = judge(state, &x);
                 note_absurd(&mut impossible, absurd);
-                note_stand_in(&mut stated, stand_in);
+                note_stand_in(&mut stated, &mut unstated, stand_in);
                 strong_found = strong_over;
             }
             set_drive(state, false);
@@ -326,6 +329,12 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
     let stated: Vec<LintFinding> = (stated.into_iter())
         .filter(|(part, _)| !reported.contains(&part))
         .map(|(part, condition)| stand_in_condition(part, condition))
+        .chain(unstated_rating_note(
+            unstated
+                .into_iter()
+                .filter(|(part, _)| !reported.contains(&part))
+                .collect(),
+        ))
         .collect();
     let rows = (by_part.into_iter().map(|row| (row, Severity::High)))
         .chain(conditional.into_iter().map(|row| (row, Severity::Medium)));
@@ -481,13 +490,54 @@ fn stand_in_condition(part: String, condition: String) -> LintFinding {
 }
 
 /// Keep the first stand-in exceedance seen for each part, as its condition.
-fn note_stand_in(into: &mut BTreeMap<String, String>, events: Vec<StandInExceedance>) {
+/// A part past only an assumed floor (its rating unstated, its card its own)
+/// goes to `unstated` instead, with the most it sees and the floor.
+fn note_stand_in(
+    into: &mut BTreeMap<String, String>,
+    unstated: &mut BTreeMap<String, (f64, f64)>,
+    events: Vec<StandInExceedance>,
+) {
     for e in events {
         let c = &e.fault.component;
-        let part = strip_unit_suffix(c.split(':').next().unwrap_or(c));
-        into.entry(part.to_string())
-            .or_insert_with(|| e.condition());
+        let part = strip_unit_suffix(c.split(':').next().unwrap_or(c)).to_string();
+        if e.stand_in.kind == StandInKind::Unstated {
+            let seen = unstated
+                .entry(part)
+                .or_insert((e.fault.value, e.fault.limit));
+            seen.0 = seen.0.max(e.fault.value);
+        } else {
+            into.entry(part).or_insert_with(|| e.condition());
+        }
     }
+}
+
+/// One note for every part whose rated voltage nothing states and which sees
+/// more than the floor assumed for it: a condition the pass rests on, listed
+/// once for the board, never a fault and never a partial judgement (the part
+/// is its own card; only its rating is unknown). `parts` maps each part to
+/// the most it sees and the assumed floor (V).
+fn unstated_rating_note(parts: BTreeMap<String, (f64, f64)>) -> Option<LintFinding> {
+    if parts.is_empty() {
+        return None;
+    }
+    let refs: Vec<String> = parts.keys().cloned().collect();
+    let seen: Vec<String> = (parts.iter())
+        .map(|(part, (v, floor))| format!("{part} sees {v:.1} V, past the {floor:.1} V assumed"))
+        .collect();
+    Some(LintFinding {
+        check: LintCheck::DcOverstress,
+        severity: Severity::Low,
+        message: format!(
+            "{}: {UNSTATED_RATING_MARKER}, so the lowest rating a part of its class is sold \
+             with is assumed and its real rating is not checked ({}). State each rating in \
+             the value (for example 10uF 25V) or give the manufacturer part number\
+             {INFORMATIONAL_MARKER}.",
+            refs.join(", "),
+            seen.join("; "),
+        ),
+        refs,
+        nets: Vec::new(),
+    })
 }
 
 /// Keep the first impossible value computed for each part, worded as a clause.
@@ -858,6 +908,18 @@ fn rating_detail(
         format!(" (base {}, collector {})", amps(ib), amps(ic))
     } else if f.kind == FaultKind::GateOvervoltage {
         gate_source_nets(bound, device_of, net_of, f, nets)
+    } else if f.kind == FaultKind::Overvoltage
+        && f.value <= f.limit
+        && device_of
+            .get(f.component.as_str())
+            .and_then(|id| bound.circuit.devices.get(id.0 as usize))
+            .is_some_and(|d| matches!(d, hauksbee_ir::Device::Diode { .. }))
+    {
+        // Raised by the monitor's breakdown rule: the junction clamps at its
+        // blocking rating, so the reading is the clamp, not what is applied.
+        " (in reverse breakdown: it conducts at its rating instead of blocking, \
+         so the circuit applies more than it can hold)"
+            .to_string()
     } else {
         String::new()
     }

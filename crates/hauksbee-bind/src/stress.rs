@@ -1735,6 +1735,7 @@ impl StressMonitor {
                     value: tj,
                     limit: tj_max,
                     surge: false,
+                    breakdown: false,
                 });
             } else if let Some(t) = self.temp_by_ref.get_mut(&meta.reference) {
                 // A package that stopped dissipating settles back to ambient
@@ -1755,9 +1756,10 @@ impl StressMonitor {
                 };
                 worst_stress = worst_stress.max(frac);
 
+                let over = frac > 1.0 + OVER_LIMIT_NOISE_MARGIN || chk.breakdown;
                 if chk.surge {
                     // Surge ceiling: trips instantly.
-                    if frac > 1.0 + OVER_LIMIT_NOISE_MARGIN {
+                    if over {
                         self.raise_once(i, &meta, chk, t, circuit, &mut faults);
                     }
                     continue;
@@ -1768,7 +1770,7 @@ impl StressMonitor {
                     .over_chunks
                     .entry(chk.kind.as_str())
                     .or_insert(0);
-                if frac > 1.0 + OVER_LIMIT_NOISE_MARGIN {
+                if over {
                     *counter += 1;
                 } else {
                     *counter = 0;
@@ -1893,6 +1895,9 @@ struct OperatingPoint {
     /// order): `current_a` through a two-terminal's pair, `|IC|`, `|IB|` and
     /// `|IC + IB|` on a BJT, the channel's at a MOSFET's drain and source.
     terminals: [f64; 3],
+    /// Share of a blocking diode's reverse current carried by its breakdown
+    /// term (see [`blocking_breakdown_share`]); 0 for every other device.
+    breakdown_share: f64,
 }
 
 impl OperatingPoint {
@@ -1905,6 +1910,7 @@ impl OperatingPoint {
             voltage_v,
             power_w,
             terminals: [current_a, current_a, 0.0],
+            breakdown_share: 0.0,
         }
     }
 }
@@ -1927,7 +1933,10 @@ fn operating_point(
         Some(Device::Diode { a, k, model, .. }) => {
             let vd = node_v(*a) - node_v(*k);
             let id = diode_current(model, vd, circuit.temp_c);
-            OperatingPoint::new(id.abs(), vd, (vd * id).abs())
+            OperatingPoint {
+                breakdown_share: blocking_breakdown_share(model, vd, circuit.temp_c),
+                ..OperatingPoint::new(id.abs(), vd, (vd * id).abs())
+            }
         }
         Some(Device::Capacitor { a, b, .. }) => {
             // An ideal capacitor's through-current is displacement current,
@@ -2114,6 +2123,46 @@ struct Check {
     value: f64,
     limit: f64,
     surge: bool,
+    /// Over its limit whatever the ratio: a blocking junction driven into
+    /// reverse breakdown at its rating, where the clamp holds the measured
+    /// voltage at the rating while the circuit applies more.
+    breakdown: bool,
+}
+
+/// Breakdown share at and above which a blocking junction is held to be in
+/// reverse breakdown. With no stated knee current the breakdown term is
+/// scaled like the leakage term, so a share of 0.2 is a breakdown current a
+/// quarter of the leakage: past the knee's onset, which only a reverse
+/// voltage at the rating reaches. A rail at 0.8x the rating stays near zero.
+const BREAKDOWN_SHARE: f64 = 0.2;
+
+/// Within this fraction of its blocking rating a junction in breakdown counts
+/// as driven to it.
+const BREAKDOWN_NEAR_RATING: f64 = 0.98;
+
+/// Share of a blocking junction's reverse current carried by its breakdown
+/// term, as the solver's own diode equation splits it.
+///
+/// Zero when forward biased, when no breakdown is modelled, and when the card
+/// states a breakdown knee current (`ibv`): every Zener, TVS and reference
+/// card states one, because regulating at the knee is what such a part is for.
+/// A card with a breakdown voltage and no knee current is a rectifier,
+/// Schottky or signal diode whose `bv` is its blocking rating, and the soft
+/// knee the solver gives it clamps a few tens of millivolts under that
+/// rating, so a rail above it never reads as over it. The share says whether
+/// the junction is conducting in breakdown instead of blocking.
+fn blocking_breakdown_share(model: &hauksbee_ir::DiodeModel, vd: f64, temp_c: f64) -> f64 {
+    if vd >= 0.0 || !model.bv.is_finite() || model.ibv.is_some() {
+        return 0.0;
+    }
+    let nvt = model.n * hauksbee_ir::thermal_voltage_c(temp_c);
+    if nvt <= 0.0 || !nvt.is_finite() {
+        return 0.0;
+    }
+    // The breakdown term is `is * e` against the leakage `is`, so the share is
+    // `e / (1 + e)` whatever `is` is. Clamped like the solver's exponent.
+    let e = (-(model.bv + vd) / nvt).min(40.0).exp();
+    e / (1.0 + e)
 }
 
 /// Build the applicable limit checks for a device's operating point.
@@ -2134,6 +2183,7 @@ fn build_checks(meta: &DeviceMeta, op: &OperatingPoint, peak_a: f64, w: Option<f
             value: peak_a,
             limit: surge,
             surge: true,
+            breakdown: false,
         });
     }
 
@@ -2144,6 +2194,7 @@ fn build_checks(meta: &DeviceMeta, op: &OperatingPoint, peak_a: f64, w: Option<f
                 value,
                 limit,
                 surge: false,
+                breakdown: false,
             });
         }
     };
@@ -2197,6 +2248,15 @@ fn build_checks(meta: &DeviceMeta, op: &OperatingPoint, peak_a: f64, w: Option<f
         | ComponentKind::Dac
         | ComponentKind::Adc => check(FaultKind::PinOvercurrent, op.current_a, r.max_pin_current_a),
         _ => {}
+    }
+    // A blocking junction in reverse breakdown at its rating is over it: the
+    // clamp holds the measured voltage there while the circuit applies more.
+    if meta.kind == ComponentKind::Diode && op.breakdown_share >= BREAKDOWN_SHARE {
+        for c in &mut checks {
+            if c.kind == FaultKind::Overvoltage && c.value >= c.limit * BREAKDOWN_NEAR_RATING {
+                c.breakdown = true;
+            }
+        }
     }
     checks
 }
@@ -3151,6 +3211,29 @@ mod monitor_temp_tests {
         let (_, ib0) = bjt_terminal_currents(&ideal, 0.6, -2.0, vt, t);
         let want = is * (0.6 / vt).exp_m1() / ideal.bf;
         assert!((ib0 - want).abs() <= want * 1e-3, "{ib0} vs {want}");
+    }
+
+    #[test]
+    fn a_blocking_junction_reads_breakdown_only_at_its_rating() {
+        // A Schottky card: bv is its VRRM and it states no knee current.
+        let blocking = hauksbee_ir::DiodeModel {
+            is: 2.87e-5,
+            n: 1.05,
+            bv: 20.0,
+            ..hauksbee_ir::DiodeModel::default()
+        };
+        // Soft-knee clamp a few tens of millivolts under the rating: breakdown.
+        assert!(blocking_breakdown_share(&blocking, -19.97, 27.0) >= BREAKDOWN_SHARE);
+        // 0.8x the rating, forward bias: none.
+        assert!(blocking_breakdown_share(&blocking, -16.0, 27.0) < 1e-6);
+        assert!(blocking_breakdown_share(&blocking, 0.3, 27.0) <= 0.0);
+        // A Zener states its knee current: regulating there is its job.
+        let zener = hauksbee_ir::DiodeModel {
+            ibv: Some(0.049),
+            bv: 5.1,
+            ..hauksbee_ir::DiodeModel::default()
+        };
+        assert!(blocking_breakdown_share(&zener, -5.1, 27.0) <= 0.0);
     }
 
     #[test]
