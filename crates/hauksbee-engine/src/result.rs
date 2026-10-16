@@ -3312,6 +3312,15 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::RegulatorHeldOff => {
             "Pull the regulator's enable pin to its input through 10k-100k, or tie it to the input; keep that pull even when a GPIO switches the rail."
         }
+        LintCheck::SupplyGroundSwapped => {
+            "Swap the nets of the connector's supply and ground pins so each pin reaches the rail its name says."
+        }
+        LintCheck::DiodeReversed => {
+            "Turn the diode round so its cathode is on the more positive net and its anode on the more negative one."
+        }
+        LintCheck::PolarisedCapReversed => {
+            "Turn the capacitor round so its + terminal is on the more positive net and its - terminal on the more negative one."
+        }
         LintCheck::I2cBusLoading => {
             "Re-pick the pull-ups so the sink current stays under 3 mA (R > (Vrail - 0.4 V) / 3 mA) and the rise time fits the bus speed; 2.2k-4.7k suits most 3.3 V buses."
         }

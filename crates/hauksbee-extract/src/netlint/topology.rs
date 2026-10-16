@@ -319,7 +319,7 @@ fn island_finding(
 
 /// A part that is a connector proper: not a test point, mounting hole, switch
 /// or jumper, which `is_connector_like` also admits.
-fn is_connector(c: &Component) -> bool {
+pub(super) fn is_connector(c: &Component) -> bool {
     let r = ref_designator(&c.reference);
     let lib = c.lib_id.to_ascii_lowercase();
     let fp = c.footprint.to_ascii_lowercase();
