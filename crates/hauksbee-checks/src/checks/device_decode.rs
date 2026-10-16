@@ -1959,7 +1959,7 @@ mod program_domain_tests {
                 f[0].message
             );
             assert!(
-                f[0].message.contains("U3") && f[0].message.contains("PROG pin"),
+                f[0].message.contains("U3") && f[0].message.contains("prog pin"),
                 "names the part and the pin: {}",
                 f[0].message
             );
@@ -2003,10 +2003,11 @@ mod program_domain_tests {
     /// still abstains.
     #[test]
     fn a_dnp_prog_resistor_leaves_the_pin_floating_and_silent() {
-        for board in [
-            charger_board("MCP73831T-2ACI/OT", "DNP"),
-            with_test_point(&charger_board("MCP73831T-2ACI/OT", "DNP")),
-        ] {
+        let dnp = charger_board("MCP73831T-2ACI/OT", "2k").replace(
+            "(fp_text reference R8 (at 0 0) (layer F.SilkS))",
+            "(fp_text reference R8 (at 0 0) (layer F.SilkS))\n    (attr smd exclude_from_bom dnp)",
+        );
+        for board in [dnp.clone(), with_test_point(&dnp)] {
             let report = lint(&board);
             assert_eq!(
                 report.of_check(LintCheck::DeviceDecode).count(),
@@ -2053,7 +2054,7 @@ mod program_domain_tests {
                 f[0].message
             );
             assert!(
-                f[0].message.contains("R8") && f[0].message.contains("PROG pin"),
+                f[0].message.contains("R8") && f[0].message.contains("prog pin"),
                 "{}",
                 f[0].message
             );
