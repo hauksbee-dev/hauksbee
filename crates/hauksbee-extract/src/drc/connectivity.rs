@@ -19,6 +19,8 @@ use rstar::{RTree, AABB};
 use super::{
     collect_primitives, point_in_polygon, shape_gap_at, Capsule, ItemKind, NetResolver, Shape,
 };
+use hauksbee_ir::order::quantize_mm;
+
 use crate::dsu::Dsu;
 use crate::gerber::geo::BoundsLeaf;
 
@@ -199,6 +201,21 @@ pub fn copper_connectivity(doc: &forge_sexpr::Document) -> Option<CopperConnecti
         pads.dedup();
         pads
     };
+    // A point on an island that does not depend on member order: the first
+    // required pad by name, else the lowest-left piece of copper.
+    let anchor_of = |members: &[usize]| -> (f64, f64) {
+        let ms = || members.iter().map(|&i| &items[i]);
+        let pad = ms().filter(|m| m.required).min_by(|a, b| {
+            (&a.owner, &a.pad)
+                .cmp(&(&b.owner, &b.pad))
+                .then(a.at.0.total_cmp(&b.at.0))
+                .then(a.at.1.total_cmp(&b.at.1))
+        });
+        pad.or_else(|| {
+            ms().min_by(|a, b| a.at.0.total_cmp(&b.at.0).then(a.at.1.total_cmp(&b.at.1)))
+        })
+        .map_or((0.0, 0.0), |m| m.at)
+    };
     let mut out = CopperConnectivity {
         routed: (0..items.len()).any(|i| live(i) && items[i].kind != Some(ItemKind::Pad)),
         ..CopperConnectivity::default()
@@ -211,8 +228,20 @@ pub fn copper_connectivity(doc: &forge_sexpr::Document) -> Option<CopperConnecti
             continue;
         }
         // The largest island by pad count, then by size, is the net itself.
-        islands.sort_by_key(|(_, m)| {
-            std::cmp::Reverse((m.iter().filter(|&&i| items[i].required).count(), m.len()))
+        // Islands equal on both are told apart by their pads and position, never
+        // by the order the file listed them in: which one is "the rest of the
+        // net" must not depend on it.
+        islands.sort_by(|(_, a), (_, b)| {
+            let size = |m: &Vec<usize>| {
+                std::cmp::Reverse((m.iter().filter(|&&i| items[i].required).count(), m.len()))
+            };
+            size(a)
+                .cmp(&size(b))
+                .then_with(|| pads_of(a).cmp(&pads_of(b)))
+                .then_with(|| {
+                    let (pa, pb) = (anchor_of(a), anchor_of(b));
+                    pa.0.total_cmp(&pb.0).then(pa.1.total_cmp(&pb.1))
+                })
         });
         let main_pads = pads_of(&islands[0].1);
         for (_, members) in &islands[1..] {
@@ -226,20 +255,25 @@ pub fn copper_connectivity(doc: &forge_sexpr::Document) -> Option<CopperConnecti
             if pads.is_empty() && (only_pour || no_connect) {
                 continue;
             }
-            let anchor = members
-                .iter()
-                .map(|&i| &items[i])
-                .find(|m| m.required)
-                .unwrap_or(&items[members[0]]);
+            let (x, y) = anchor_of(members);
             out.islands.push(CopperIsland {
                 net: nets.name_of(net),
                 pads,
                 main_pads: main_pads.clone(),
-                x: anchor.at.0,
-                y: anchor.at.1,
+                x: quantize_mm(x),
+                y: quantize_mm(y),
             });
         }
     }
+    // Nets by name and islands by their pads, so the report order (and what a
+    // cap on the number listed keeps) does not follow the file's net numbering.
+    out.islands.sort_by(|a, b| {
+        a.net
+            .cmp(&b.net)
+            .then_with(|| a.pads.cmp(&b.pads))
+            .then(a.x.total_cmp(&b.x))
+            .then(a.y.total_cmp(&b.y))
+    });
     out.unfilled_zone_nets = unfilled.into_iter().map(|n| nets.name_of(n)).collect();
     out.unfilled_zone_nets.sort();
     Some(out)
