@@ -18,8 +18,9 @@
 //!   and ground exchanged.
 //!
 //! What keeps it silent. A pad is open only when it is on no net, on a
-//! KiCad `unconnected-*` net, alone on a net no other part is on and that is not
-//! named for a rail, or (in a netlist, which lists connected pads only) absent
+//! KiCad `unconnected-*` net, the only pad on a net that is not named for a
+//! rail (two pads of one part tied together, a USB bridge's regulator output
+//! wired to its I/O supply, are wired), or (in a netlist, which lists connected pads only) absent
 //! from the part; a layout or schematic lists every pad, so there an unlisted
 //! pad is an unplaced unit and not judged. A supply family counts only when the
 //! card names its base pad ([`PowerPin::base`]), so a lone optional `vddio2` is
@@ -74,8 +75,10 @@ struct Pad {
 /// The board facts every part's judgement shares.
 struct Wiring<'a> {
     names: HashMap<i64, &'a str>,
-    /// Distinct parts on each net.
-    parts_on: HashMap<i64, usize>,
+    /// Pads on each net, of any part: two pads of one part tied together (a
+    /// supply pin wired to an internal regulator's output pin, say) are not
+    /// open.
+    pads_on: HashMap<i64, usize>,
     /// Whether the board lists unconnected pads (a layout or a schematic does,
     /// a netlist does not), so an absent pad is not one.
     lists_unconnected: bool,
@@ -83,24 +86,19 @@ struct Wiring<'a> {
 
 impl<'a> Wiring<'a> {
     fn of(board: &'a ExtractedBoard) -> Self {
-        let mut parts_on: HashMap<i64, usize> = HashMap::new();
+        let mut pads_on: HashMap<i64, usize> = HashMap::new();
         let mut lists_unconnected = false;
         for comp in &board.components {
-            let mut seen = Vec::new();
             for pin in &comp.pins {
                 match pin.net.filter(|id| *id != 0) {
-                    Some(id) if !seen.contains(&id) => {
-                        seen.push(id);
-                        *parts_on.entry(id).or_default() += 1;
-                    }
-                    Some(_) => {}
+                    Some(id) => *pads_on.entry(id).or_default() += 1,
                     None => lists_unconnected = true,
                 }
             }
         }
         Self {
             names: board.nets.iter().map(|n| (n.id, n.name.as_str())).collect(),
-            parts_on,
+            pads_on,
             lists_unconnected,
         }
     }
@@ -120,7 +118,7 @@ impl<'a> Wiring<'a> {
             return (PadState::Open, String::new(), function);
         };
         let name = self.names.get(&id).copied().unwrap_or("");
-        let lone = self.parts_on.get(&id).copied().unwrap_or(0) <= 1;
+        let lone = self.pads_on.get(&id).copied().unwrap_or(0) <= 1;
         let state = if is_unconnected_net(name) {
             PadState::Open
         } else if is_ground(name) {
@@ -646,6 +644,21 @@ mod tests {
         assert!(power_pin_lint(&board(&NETS, vec![u, load()]), &simple())
             .findings
             .is_empty());
+    }
+
+    /// A bus-powered USB bridge ties its regulator output pin to its I/O
+    /// supply pin and nothing else is on that net: wired, not open.
+    #[test]
+    fn two_supply_pads_of_one_part_tied_together_are_not_open() {
+        let lib = card_lib(
+            &[("1", "vdd"), ("2", "gnd"), ("4", "vio"), ("3", "in_plus")],
+            "",
+        );
+        let tied = run(&lib, &[("1", LONE), ("4", LONE), ("2", GND), ("3", SIG)]);
+        assert!(tied.is_empty(), "{tied:#?}");
+        // Each alone on its own net is still two open supply inputs.
+        let open = run(&lib, &[("2", GND), ("3", SIG)]);
+        assert_eq!(open.len(), 2, "{open:#?}");
     }
 
     #[test]

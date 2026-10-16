@@ -13,8 +13,11 @@
 //!   pad is as often an output as an input.
 //! * A regulated internal rail (`vddcore`, `vddcp`, `vregvdd`, `vcap`), a
 //!   switched or external-option supply (`extvcc`, `vbat`, `vbus`, `vin`,
-//!   `vm`) and an exposed or sense return (`gnd_ep`, `sensgnd`) are not
-//!   primary: a part is not wrong for leaving them to a capacitor or open.
+//!   `vm`), the input of an internal regulator the part can bypass (`uvcc`,
+//!   the USB pad regulator of an AVR: its `UVREGE` bit disables the regulator
+//!   when the output pin is powered directly) and an exposed or sense return
+//!   (`gnd_ep`, `sensgnd`) are not primary: a part is not wrong for leaving
+//!   them to a capacitor or open.
 //! * A numbered role (`vdd2`, `vddio3`) is one more pad of the family its
 //!   digit-free name makes; a family is a supply the part needs only when the
 //!   card also names its base pad (`vdd`, or `vdd1`). A card that lists only
@@ -58,7 +61,7 @@ fn supply_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"^(?P<fam>(?:a|d|io|usb_|t|u|cp)?(?:vcc|vdd)(?:a|b|d|io|ana|q)?)(?P<num>\d*)[a-d]?(?:_[a-d])?$",
+            r"^(?P<fam>(?:a|d|io|usb_|t|cp)?(?:vcc|vdd)(?:a|b|d|io|ana|q)?)(?P<num>\d*)[a-d]?(?:_[a-d])?$",
         )
         .expect("supply role regex")
     })
@@ -144,8 +147,8 @@ mod tests {
     fn internal_rails_options_and_bare_voltages_are_not_primary() {
         for role in [
             "3v3", "5v", "3v3a", "adc_avdd", "vddcore", "vddcp", "vddcr", "vregvdd", "extvcc",
-            "vbat", "vbus", "vin", "vm", "vref", "vcap1", "v3", "gnd_ep", "avss_ep", "sensgnd",
-            "gnd_aux", "vregvss", "in_plus", "out", "en",
+            "vbat", "vbus", "vin", "vm", "uvcc", "vref", "vcap1", "v3", "gnd_ep", "avss_ep",
+            "sensgnd", "gnd_aux", "vregvss", "in_plus", "out", "en",
         ] {
             assert_eq!(power_pin(role), None, "{role}");
         }
