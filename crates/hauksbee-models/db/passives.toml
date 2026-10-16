@@ -583,6 +583,43 @@ max_current_a = 0.75
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Littelfuse 1812L075/33, matched by its ordering code only (the MPN property),
+# never by a rating string: "750mA / 33V" alone also fits other makers' parts.
+# A series fuse with no model is left open, and every rail behind it then never
+# comes up in the solve, so nothing downstream is judged; binding the exact part
+# is what lets those rails be checked.
+# Source: Littelfuse "PolySwitch Resettable PPTC 1812L Series" datasheet,
+#   Revised GD 06/13/22, p.2 Electrical Characteristics, row 1812L075/33
+#   (marking LF075-33): I hold 0.75 A, I trip 1.50 A, V max 33 Vdc, I max 20 A,
+#   P d typ 0.8 W, max time to trip 0.20 s at 8.00 A, R min 0.110 Ohm,
+#   R 1max 0.400 Ohm. The ordering table lists 1812L075/33DR (tape and reel) for
+#   this row.
+[[models]]
+id = "littelfuse_1812l075_33"
+kind = "passive"
+passive_class = "fuse"
+description = "Littelfuse 1812L075/33 resettable PPTC, 0.75 A hold / 33 V, 0.110 Ohm"
+
+[models.match]
+mpn_re = "^1812L075[/-]33(DR|MR)?$"
+
+[models.params]
+# R min is the initial (unsoldered) figure; a reflowed part sits between it and
+# the 0.400 Ohm R 1max, so the rail drop here is a lower bound, as on the
+# 0805L050 and 0ZCJ cards above. This card cannot open either.
+ohms = 0.110
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+[models.ratings]
+# I hold 0.75 A at 20 C still air and V max 33 Vdc (datasheet row above).
+max_current_a = 0.75
+max_voltage_v = 33.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 [[models]]
 id = "fuse_rated"
 kind = "passive"
