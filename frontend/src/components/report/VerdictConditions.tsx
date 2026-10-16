@@ -18,6 +18,7 @@
 // evidence one more click down.
 
 import { useContext } from 'react'
+import { unjudgedGroups } from '../../lib/report-view'
 import type { PartlyJudgedView, VerdictExplanation } from '../../lib/report-view'
 import { entitiesIn } from '../../lib/result-links'
 import { useTermEntry } from '../ui'
@@ -142,13 +143,16 @@ export function VerdictConditions({ conditions }: { conditions: string[] }) {
 
 /** A PARTLY JUDGED run's scope as rows in the warning colour (not the quiet
  *  note accent a conditional pass uses): the parts with no usable model, what
- *  that left unjudged, and what to do. The CLI and `--json` carry the same scope
+ *  that left unjudged (one list, each net named once, grouped by the kind of
+ *  check), and what to do. The CLI and `--json` carry the same scope
  *  as one sentence. The judged count is the coverage gauge's (the result panel
  *  draws it); here it is the row that says it in words. */
 export function PartlyJudged({ scope }: { scope: PartlyJudgedView | null }) {
   const { onGiveModel } = useContext(ResultLinkContext)
   if (!scope) return null
-  const { openParts, wiring, electrical, judged, total } = scope
+  const { openParts, judged, total } = scope
+  const unjudged = unjudgedGroups(scope)
+  const unjudgedNets = unjudged.flatMap(g => g.nets)
   const many = openParts.length !== 1
   const warn = 'var(--warn)'
   return (
@@ -172,16 +176,18 @@ export function PartlyJudged({ scope }: { scope: PartlyJudgedView | null }) {
             <ChipList entities={partsOf(openParts)} />
           </ResultRow>
         )}
-        {wiring.length > 0 && (
-          <ResultRow testId="partly-judged-wiring" accent={warn} glyph={<NetGlyph />} actions={<AddCheck entities={netsOf(wiring)} />}>
-            <span className="font-semibold" style={{ color: 'var(--silk-dim)' }}>Not judged, wiring and value checks on {wiring.length} {wiring.length === 1 ? 'net' : 'nets'}: </span>
-            <ChipList entities={netsOf(wiring)} />
-          </ResultRow>
-        )}
-        {electrical.length > 0 && (
-          <ResultRow testId="partly-judged-electrical" accent={warn} glyph={<NetGlyph />}>
-            <span className="font-semibold" style={{ color: 'var(--silk-dim)' }}>Not judged, electrical checks (levels, ratings, rails) on {electrical.length} {electrical.length === 1 ? 'net' : 'nets'}: </span>
-            <ChipList entities={netsOf(electrical)} />
+        {unjudged.length > 0 && (
+          <ResultRow testId="partly-judged-unjudged" accent={warn} glyph={<NetGlyph />} actions={<AddCheck entities={netsOf(unjudgedNets)} />}>
+            <span className="font-semibold" style={{ color: 'var(--silk-dim)' }}>
+              Not judged on {unjudgedNets.length} {unjudgedNets.length === 1 ? 'net' : 'nets'}
+              {unjudged.length > 1 ? ', by kind' : ''}:
+            </span>
+            {unjudged.map(group => (
+              <div key={group.kind} data-testid={`partly-judged-kind-${group.kind}`} className="mt-1">
+                <span style={{ color: 'var(--silk-dim)' }}>{group.label}, {group.nets.length} {group.nets.length === 1 ? 'net' : 'nets'}: </span>
+                <ChipList entities={netsOf(group.nets)} />
+              </div>
+            ))}
           </ResultRow>
         )}
         {total > 0 && (

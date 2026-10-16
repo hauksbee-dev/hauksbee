@@ -11,7 +11,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { ShellChips } from '../src/components/ShellChips'
 import { PartlyJudged, VerdictConditions } from '../src/components/report/VerdictConditions'
 import { buildReportHtml } from '../src/lib/report-export'
-import { explainReport, reportView } from '../src/lib/report-view'
+import { explainReport, reportView, unjudgedGroups } from '../src/lib/report-view'
 import type { WebReport } from '../src/types/report'
 
 const fixture = (name: string): WebReport =>
@@ -145,7 +145,13 @@ describe('partly judged', () => {
     expect(html).toContain('Not a pass: partly judged')
     expect(html).toContain('No usable model: </span>')
     expect(chipNames(html.slice(html.indexOf('partly-judged-open')))[0]).toBe('Q1')
-    expect(html).toContain('electrical checks (levels, ratings, rails)')
+    expect(html).toContain('electrical checks')
+    // One list under the one heading: every net named once, however many kinds.
+    expect(html.match(/Not judged on/g)).toHaveLength(1)
+    expect(html).not.toContain('partly-judged-wiring')
+    expect(html).not.toContain('partly-judged-electrical')
+    const names = chipNames(html.slice(html.indexOf('partly-judged-unjudged'), html.indexOf('partly-judged-judged')))
+    expect(new Set(names).size).toBe(names.length)
     expect(html).toMatch(/Judged: <\/span>\d+ of \d+ net checks/)
     // A warning, not the quiet note accent of a conditional pass and not an error.
     expect(html).toContain('var(--warn)')
@@ -158,13 +164,24 @@ describe('partly judged', () => {
     const html = renderToStaticMarkup(
       <PartlyJudged scope={{ openParts: ['U1', 'U2'], wiring: ['A'], electrical: nets, judged: 4, total: 20 }} />,
     )
-    const electrical = html.slice(html.indexOf('partly-judged-electrical'), html.indexOf('partly-judged-judged'))
+    const electrical = html.slice(html.indexOf('partly-judged-kind-electrical'), html.indexOf('partly-judged-kind-wiring'))
     expect(chipNames(electrical)).toEqual(['N0', 'N1', 'N2', 'N3', 'N4', 'N5'])
     expect(electrical).toContain('and 3 more')
     expect(electrical).toContain('title="N0, N1, N2, N3, N4, N5, N6, N7, N8"')
-    expect(html).toContain('on 1 net:')
-    expect(html).toContain('on 9 nets:')
+    expect(html).toContain('Not judged on 10 nets, by kind:')
+    expect(html).toContain('wiring and value checks, 1 net:')
+    expect(html).toContain('electrical checks (levels, ratings, rails), 9 nets:')
     expect(html).toContain('give U1, U2 models.')
+  })
+
+  test('a net in both sets is named once, under the kind that covers both', () => {
+    expect(unjudgedGroups({ wiring: ['A', 'B'], electrical: ['A', 'B', 'C'] })).toEqual([
+      { kind: 'both', label: 'wiring, value and electrical checks', nets: ['A', 'B'] },
+      { kind: 'electrical', label: 'electrical checks (levels, ratings, rails)', nets: ['C'] },
+    ])
+    // Control: disjoint sets stay in their own kinds; empty sets give no rows.
+    expect(unjudgedGroups({ wiring: ['W'], electrical: ['E'] }).map(g => g.kind)).toEqual(['electrical', 'wiring'])
+    expect(unjudgedGroups({ wiring: [], electrical: [] })).toEqual([])
   })
 
   test('an older engine that sends only the flag still gets the non-pass block', () => {
