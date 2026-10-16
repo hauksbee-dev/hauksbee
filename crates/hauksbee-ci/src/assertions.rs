@@ -2645,63 +2645,58 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Stri
 
     // Explicit ceiling: compare the peak junction temperature against it.
     if let Some(limit) = a.celsius {
-        return match peak {
-            Some((key, tj)) => {
-                let ok = tj <= limit + 1e-6;
-                let unit = unit_note("hottest unit", &key, &reference);
-                let (tj_s, limit_s) = (fmt_c1(tj), fmt_c(limit));
-                if ok {
-                    (
-                        true,
-                        format!("Tj({reference}) peak {tj_s}{unit} (<= {limit_s})"),
-                        None,
-                    )
-                } else {
-                    (
-                        false,
-                        format!(
-                            "Tj({reference}) peak {tj_s} > ceiling {limit_s} <- FAILED HERE{unit}"
-                        ),
-                        Some(format!(
-                            "{reference} ran {} hotter than your {limit_s} ceiling \
+        return if let Some((key, tj)) = peak {
+            let ok = tj <= limit + 1e-6;
+            let unit = unit_note("hottest unit", &key, &reference);
+            let (tj_s, limit_s) = (fmt_c1(tj), fmt_c(limit));
+            if ok {
+                (
+                    true,
+                    format!("Tj({reference}) peak {tj_s}{unit} (<= {limit_s})"),
+                    None,
+                )
+            } else {
+                (
+                    false,
+                    format!("Tj({reference}) peak {tj_s} > ceiling {limit_s} <- FAILED HERE{unit}"),
+                    Some(format!(
+                        "{reference} ran {} hotter than your {limit_s} ceiling \
                              (peak {tj_s}{unit})",
-                            fmt_c1(tj - limit)
-                        )),
-                    )
-                }
+                        fmt_c1(tj - limit)
+                    )),
+                )
             }
-            None => {
-                // No thermal data. The runner rejects a max_temp on a component
-                // with no thermal model at bind time (`check_trackable_assert_refs`),
-                // so here the part IS stress-monitored and simply never dissipated
-                // measurably: its junction sat at AMBIENT. That is only a pass if
-                // ambient itself is within the ceiling, in a hot-ambient spec a
-                // ceiling below ambient is violated by the idle part sitting at
-                // ambient, not silently skipped.
-                let (ambient_s, limit_s) = (fmt_c1(out.ambient_c), fmt_c(limit));
-                if out.ambient_c <= limit + 1e-6 {
-                    (
-                        true,
-                        format!(
-                            "Tj({reference}): no dissipation measured (idle at ambient \
+        } else {
+            // No thermal data. The runner rejects a max_temp on a component
+            // with no thermal model at bind time (`check_trackable_assert_refs`),
+            // so here the part IS stress-monitored and simply never dissipated
+            // measurably: its junction sat at AMBIENT. That is only a pass if
+            // ambient itself is within the ceiling, in a hot-ambient spec a
+            // ceiling below ambient is violated by the idle part sitting at
+            // ambient, not silently skipped.
+            let (ambient_s, limit_s) = (fmt_c1(out.ambient_c), fmt_c(limit));
+            if out.ambient_c <= limit + 1e-6 {
+                (
+                    true,
+                    format!(
+                        "Tj({reference}): no dissipation measured (idle at ambient \
                              {ambient_s} <= {limit_s}); skipped"
-                        ),
-                        None,
-                    )
-                } else {
-                    (
-                        false,
-                        format!(
-                            "Tj({reference}): idle at ambient {ambient_s} exceeds ceiling \
+                    ),
+                    None,
+                )
+            } else {
+                (
+                    false,
+                    format!(
+                        "Tj({reference}): idle at ambient {ambient_s} exceeds ceiling \
                              {limit_s} (no dissipation, but ambient alone is over-limit)"
-                        ),
-                        Some(format!(
-                            "{reference} sat idle at the {ambient_s} ambient, {} over your \
+                    ),
+                    Some(format!(
+                        "{reference} sat idle at the {ambient_s} ambient, {} over your \
                              {limit_s} ceiling; the ceiling is below the spec's ambient_c",
-                            fmt_c1(out.ambient_c - limit)
-                        )),
-                    )
-                }
+                        fmt_c1(out.ambient_c - limit)
+                    )),
+                )
             }
         };
     }

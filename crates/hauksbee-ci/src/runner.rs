@@ -4287,7 +4287,7 @@ fn main {
         for v in [0.5, 2.0, 1.0] {
             fold_peak(&mut peaks, "R1", v, 0.0);
         }
-        assert_eq!(peaks["R1"], 2.0);
+        assert!((peaks["R1"] - 2.0).abs() < 1e-12);
         let mut w = NetWindow::empty();
         w.observe(3.3);
         w.fold(1.0);

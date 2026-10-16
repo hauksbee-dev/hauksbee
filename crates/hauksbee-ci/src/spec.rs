@@ -210,15 +210,17 @@ pub(crate) fn fmt_c1(celsius: f64) -> String {
 /// Absolute zero (C). No temperature field of a spec may sit at or below it.
 pub const ABSOLUTE_ZERO_C: f64 = -273.15;
 
-/// The hottest ambient (C) a spec may state. No electronic part sits in air
-/// above this (the hottest real cases are a few hundred degrees), so a larger
-/// figure is a unit slip or a typo, and the junction numbers built on it would
-/// be past silicon's melting point anyway.
+/// The hottest ambient (C) a spec may state.
+///
+/// No electronic part sits in air above this (the hottest real cases are a few
+/// hundred degrees), so a larger figure is a unit slip or a typo, and the
+/// junction numbers built on it would be past silicon's melting point anyway.
 pub const MAX_AMBIENT_C: f64 = 500.0;
 
-/// The longest board time (ms) one run may simulate: ten minutes. The
-/// co-simulation spends real time on every simulated millisecond, so a larger
-/// figure does not finish in any useful time, and `1e15` ran until killed.
+/// The longest board time (ms) one run may simulate: ten minutes.
+///
+/// The co-simulation spends real time on every simulated millisecond, so a
+/// larger figure does not finish in any useful time, and `1e15` ran until killed.
 pub const MAX_DURATION_MS: f64 = 600_000.0;
 
 /// The most co-sim frames one run may take (`duration_ms / frame_ms`).
