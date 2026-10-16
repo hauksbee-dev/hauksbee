@@ -255,6 +255,19 @@ pub fn regulator_enable_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetL
     report
 }
 
+/// The concrete fix: pull or tie the pin to its on level.
+fn remedy(label: &str, on_high: bool, in_name: &str) -> String {
+    let to = if on_high {
+        format!("up to the input '{in_name}' through 10k–100k, or tie it to '{in_name}'")
+    } else {
+        "down to ground through 10k–100k, or tie it to ground".to_string()
+    };
+    format!(
+        "Pull {label} {to}; if a GPIO or logic output is meant to switch the rail, keep that \
+         pull so the rail has a defined state while the driver is not yet driving."
+    )
+}
+
 fn judge(
     board: &ExtractedBoard,
     comp: &Component,
@@ -337,19 +350,7 @@ fn judge(
         .params
         .get_f64("vout")
         .map_or_else(String::new, |v| format!(" ({v:.2} V)"));
-    let fix = if on_high {
-        format!(
-            "Pull {label} up to the input '{in_name}' through 10k–100k, or tie it to '{in_name}'; \
-             if a GPIO or logic output is meant to switch the rail, keep that pull so the rail \
-             has a defined state while the driver is not yet driving."
-        )
-    } else {
-        format!(
-            "Pull {label} down to ground through 10k–100k, or tie it to ground; if a GPIO or \
-             logic output is meant to switch the rail, keep that pull so the rail has a defined \
-             state while the driver is not yet driving."
-        )
-    };
+    let fix = remedy(&label, on_high, &in_name);
     let message = format!(
         "{} ({}) {label} pad {} {topology}{unfitted}: {}, so the regulator stays off and its \
          output '{out_name}'{vout} never comes on; everything powered from '{out_name}' is \
