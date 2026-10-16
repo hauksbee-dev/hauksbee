@@ -1196,10 +1196,7 @@ impl StressMonitor {
                     r,
                     "",
                     &e.condition(),
-                    &format!(
-                        "give {r} its own model (its manufacturer part number, or a card from \
-                         its datasheet), then re-run"
-                    ),
+                    &format!("{}, then re-run", e.stand_in.remedy(r)),
                 ));
             }
         }

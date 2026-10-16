@@ -1405,16 +1405,52 @@ impl PartFacts {
                 == Some(hauksbee_models::schema::PassiveClass::Capacitor)
                 || (m.kind == ComponentKind::Passive && passive_letter(comp) == Some('C'));
             if capacitor && (stand_in || ratings.max_voltage_v.is_none()) {
-                let stated = hauksbee_models::value::parse_voltage_rating_v(&comp.value);
+                let stated = capacitor_stated_voltage(comp);
                 if stated.is_some() {
                     ratings.max_voltage_v = stated;
                     ratings.basis.stated_on_board(Limit::Voltage);
                 }
             }
+            // A capacitor that nothing states a voltage for is not unlimited:
+            // a 10 uF MLCC is sold from 6.3 V up, and a rail above the lowest
+            // class destroys the 6.3 V part. Hold it to that floor as an
+            // ASSUMED limit, so a rail past it reads "rating unstated, give
+            // it one" instead of a pass, while every other limit of its card
+            // stays judged.
+            if capacitor && ratings.max_voltage_v.is_none() {
+                ratings.max_voltage_v = Some(UNRATED_CAPACITOR_VOLTAGE_FLOOR_V);
+                ratings.basis.assume(
+                    Limit::Voltage,
+                    hauksbee_models::rating_basis::StandIn {
+                        card: m.id.clone(),
+                        kind: hauksbee_models::rating_basis::StandInKind::Unstated,
+                    },
+                );
+            }
             Arc::new(Rated { ratings, derating })
         });
         Some(Arc::clone(rated))
     }
+}
+
+/// The lowest rated voltage (V) capacitors are commonly sold with (6.3 V
+/// MLCC, electrolytic and tantalum classes). What a capacitor whose value and
+/// fields state no voltage is held to: an assumed floor, not a rating.
+pub const UNRATED_CAPACITOR_VOLTAGE_FLOOR_V: f64 = 6.3;
+
+/// The rated voltage a capacitor's own record states: its value ("10uF/16V",
+/// "100nF 25V X7R"), else a field named for a voltage ("Voltage", "Rated
+/// Voltage") whose text is a voltage or a bare number of volts.
+fn capacitor_stated_voltage(comp: &Component) -> Option<f64> {
+    hauksbee_models::value::parse_voltage_rating_v(&comp.value).or_else(|| {
+        comp.properties
+            .iter()
+            .filter(|(k, _)| k.to_ascii_lowercase().contains("volt"))
+            .find_map(|(_, v)| {
+                hauksbee_models::value::parse_voltage_rating_v(v)
+                    .or_else(|| v.trim().parse::<f64>().ok().filter(|x| *x > 0.0))
+            })
+    })
 }
 
 /// What a board and the library alone decide, for the binder to take.
@@ -2310,12 +2346,23 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
                         .collect(),
                 ));
             }
-            return Some(make_entry(
+            // The forward curve is a stand-in; the BLOCKING voltage is not
+            // known at all. The 1N4148 card's 110 V breakdown belongs to that
+            // part, and a board's unrecognised diode (an SS12 is 20 V) may be
+            // rated a fifth of it, so the junction gets no breakdown and the
+            // part is held to the lowest VRRM any rectifier or Schottky is
+            // sold with ([`UNKNOWN_DIODE_VRRM_FLOOR_V`]) as a stand-in limit.
+            // Past it the finding is a stated condition naming the part, never
+            // a pass and never a failure ([`hauksbee_models::rating_basis`]).
+            let mut params = diode_1n4148_params();
+            params.0.remove("bv");
+            let mut entry = make_entry(
                 "signal_diode_1n4148_fallback",
                 ComponentKind::Diode,
-                "generic signal diode (engine fallback: value=\"D\"/bare diode \
-                 footprint -> 1N4148, Philips/Vishay SPICE model)",
-                diode_1n4148_params(),
+                "generic diode (engine fallback: unrecognised value or bare diode \
+                 footprint -> 1N4148 forward curve, Philips/Vishay SPICE model; blocking \
+                 voltage UNKNOWN, held to a 20 V class floor)",
+                params,
                 // KiCad Device:D Sim.Pins is "1=K 2=A" (SOD cathode=pin1); the
                 // netlist also carries pinfunction K/A which the binder reads
                 // first, so this pad map is the PCB-only-extraction fallback.
@@ -2323,7 +2370,9 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
                     .into_iter()
                     .map(|(k, v)| (k.to_string(), v.to_string()))
                     .collect(),
-            ));
+            );
+            entry.ratings.max_voltage_v = Some(UNKNOWN_DIODE_VRRM_FLOOR_V);
+            return Some(entry);
         }
     }
 
@@ -2739,6 +2788,13 @@ fn diode_1n4148_params() -> hauksbee_models::Params {
     p.set_f64("bv", 110.0);
     p
 }
+
+/// The blocking voltage (V) an unrecognised diode is held to: the lowest VRRM
+/// the common rectifier and Schottky families are sold with (SS12, 1N5820,
+/// MBR0520L, SB120 are all 20 V). A stand-in limit, never a rating: the real
+/// part may block far more, so passing it proves nothing and exceeding it is a
+/// condition to resolve by naming the part, not a fault.
+pub const UNKNOWN_DIODE_VRRM_FLOOR_V: f64 = 20.0;
 
 /// Knee current given to a Zener bound by the engine fallback. ASSUMED: an
 /// estimate for small-signal Zeners, not read from any datasheet; it only
@@ -12333,7 +12389,13 @@ style = "i2c_pointer"
         for (value, lib_id) in [("D", "Device:D"), ("1N4148W", "Device:D")] {
             let entry = fallback_entry(&diode(value, lib_id)).expect("binds");
             assert_eq!(entry.id, "signal_diode_1n4148_fallback", "{value}");
-            assert_eq!(entry.params.get_f64("bv"), Some(110.0), "{value}");
+            // No invented breakdown, and a stand-in blocking floor instead.
+            assert_eq!(entry.params.get_f64("bv"), None, "{value}");
+            assert_eq!(
+                entry.ratings.max_voltage_v,
+                Some(UNKNOWN_DIODE_VRRM_FLOOR_V),
+                "{value}"
+            );
         }
     }
 

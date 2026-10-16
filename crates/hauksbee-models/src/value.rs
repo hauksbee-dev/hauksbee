@@ -190,27 +190,45 @@ pub fn parse_current_rating_a(s: &str) -> Option<f64> {
 ///
 /// `"10uF/16V"`, `"47uF+/6.3V+"` and `"100n 50V"` give 16, 6.3 and 50: a
 /// capacitor value often carries its rated voltage beside the capacitance.
-/// Whitespace, `/`, `_`, `,` and `+` separate tokens; a token must be a number
-/// followed by `V` (or `kV`), so a capacitance or part number is skipped.
+/// Whitespace, `/`, `_`, `,`, `+`, `-`, `;` and parentheses separate tokens; a
+/// token must be a number followed by `V`, `VDC` or `kV` (the unit may be its
+/// own token, `25 V`), so a capacitance or part number is skipped.
 ///
 /// ```
 /// use hauksbee_models::value::parse_voltage_rating_v;
 /// assert_eq!(parse_voltage_rating_v("10uF/16V"), Some(16.0));
 /// assert_eq!(parse_voltage_rating_v("47uF+/6.3V+"), Some(6.3));
 /// assert_eq!(parse_voltage_rating_v("47u"), None);
+/// assert_eq!(parse_voltage_rating_v("100nF (25 V) X7R"), Some(25.0));
+/// assert_eq!(parse_voltage_rating_v("C0805-10uF-16VDC"), Some(16.0));
 /// ```
 #[must_use]
 pub fn parse_voltage_rating_v(s: &str) -> Option<f64> {
-    s.split(|c: char| c.is_whitespace() || matches!(c, '/' | '_' | ',' | '+'))
-        .find_map(|token| {
-            let t = token.to_ascii_uppercase();
-            let (number, scale) = match t.strip_suffix("KV") {
-                Some(n) => (n, 1e3),
-                None => (t.strip_suffix('V')?, 1.0),
-            };
-            let volts = number.parse::<f64>().ok()? * scale;
-            (volts.is_finite() && volts > 0.0).then_some(volts)
+    let tokens: Vec<String> = s
+        .split(|c: char| {
+            c.is_whitespace() || matches!(c, '/' | '_' | ',' | '+' | '(' | ')' | '-' | ';')
         })
+        .filter(|t| !t.is_empty())
+        .map(str::to_ascii_uppercase)
+        .collect();
+    let volts = |number: &str, scale: f64| {
+        let v = number.parse::<f64>().ok()? * scale;
+        (v.is_finite() && v > 0.0).then_some(v)
+    };
+    tokens.iter().enumerate().find_map(|(i, t)| {
+        // "25V", "25VDC", "1.5KV"; or the unit as its own token ("25 V").
+        let (number, scale) = if let Some(n) = t.strip_suffix("KV") {
+            (n, 1e3)
+        } else if let Some(n) = t.strip_suffix("VDC").or_else(|| t.strip_suffix('V')) {
+            (n, 1.0)
+        } else {
+            return None;
+        };
+        if number.is_empty() && i > 0 {
+            return volts(&tokens[i - 1], scale);
+        }
+        volts(number, scale)
+    })
 }
 
 /// A JEDEC semiconductor part number of the `<digit>N<serial>` family (1N4007,
@@ -878,6 +896,26 @@ mod tests {
             "500mA",
         ] {
             assert!(parse_frequency_hz(v).is_none(), "parse_frequency_hz({v:?})");
+        }
+    }
+
+    #[test]
+    fn a_stated_capacitor_voltage_is_read_from_the_forms_boards_write() {
+        for (v, want) in [
+            ("10uF 25V", 25.0),
+            ("10uF/16V", 16.0),
+            ("10 uF 25 V", 25.0),
+            ("100nF (50 V) X7R", 50.0),
+            ("C0805-10uF-16VDC", 16.0),
+            ("100n;63V", 63.0),
+            ("1uF 1.5kV", 1500.0),
+            ("47uF+/6.3V+", 6.3),
+        ] {
+            assert_eq!(parse_voltage_rating_v(v), Some(want), "{v:?}");
+        }
+        // No voltage stated: a capacitance, a rail name or a part number.
+        for v in ["10uF", "100n", "3V3", "47u X7R", "V", "", "EEE-FK1V100R"] {
+            assert_eq!(parse_voltage_rating_v(v), None, "{v:?}");
         }
     }
 }

@@ -1658,6 +1658,10 @@ id = "schottky_generic"
 kind = "diode"
 description = "Generic Schottky diode (value field contains SCHOTTKY)"
 
+[models.source]
+tier = "estimated-fallback"
+validation = "unvalidated"
+
 [models.match]
 value_re = "(?i)SCHOTTKY"
 
@@ -1676,6 +1680,10 @@ rs  = 2.0
 
 [models.ratings]
 max_current_a = 1.0
+# ASSUMED blocking floor, the lowest VRRM the common Schottky families are sold
+# with (SS12, 1N5820, MBR0520L, SB120: 20 V). The board names no part, so the real
+# VRRM may be higher; this is a stand-in limit, and passing it is a condition.
+max_voltage_v = 20.0
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -2932,6 +2940,868 @@ mounting = "vertical PCB, 12.7 mm leads, 63.5 x 63.5 mm Cu pad"
 basis = "Vishay 1N5820/1N5821/1N5822 doc. 88526 Rev. 05-Apr-2019, Thermal Characteristics, RθJL typ, Note 1"
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Schottky rectifiers a board names by a bare part number. Before these cards
+# the resolver sent most of them to the generic diode fallback, which grants no
+# blocking rating at all, so SS12 (20 V) on a 24 V rail passed. Each card's
+# VRRM is the printed row; the forward fit is described per card.
+# n = 1.05 is assumed throughout (the sheets print no ideality factor), as in
+# the 1N581x and 1N5822 cards above. tt and, where the sheet prints no
+# capacitance row, the junction-capacitance shape are left at the binder
+# defaults.
+
+[[models]]
+id = "ss12"
+kind = "diode"
+description = "SS12 Schottky barrier rectifier, 20 V, 1 A, SMA (DO-214AC)"
+
+[models.match]
+value_re = '(?i)^SS12(([-_]?(E3|M3)|H(E3|M3)(_[A-Z])?)(/[0-9A-Z]+)?)?$'
+
+[models.params]
+is  = 1.2030e-06   # one-point fit: VF max 0.5 V at 1.0 A (Vishay 88746, Electrical Characteristics), n and rs assumed
+n   = 1.05       # assumed, an ordinary Schottky ideality factor
+rs  = 0.1300     # ASSUMED, as the 1N5817/1N5818 fits of this 1 A class (0.128/0.140 ohm); the sheet prints one forward point
+bv  = 20.0       # VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0             # IF(AV)
+max_surge_current_a = 40.0      # IFSM, 8.3 ms single half sine-wave
+max_voltage_v = 20.0            # VRRM
+max_junction_temp_c = 150.0     # TJ max
+theta_ja_c_per_w = 88.0         # RthJA typ, 5 x 5 mm copper pads
+# RthJL 28 C/W is junction to lead; the sheet prints no junction-to-case figure.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "VRRM maximum repetitive peak reverse voltage"
+rating = "max_voltage_v"
+max = 20.0
+unit = "V"
+conditions = "TA = 25 C"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, VRRM, SS12 column"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward rectified current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "TL per fig. 1"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IF(AV)"
+[[models.source.characteristic]]
+parameter = "IFSM peak forward surge current"
+rating = "max_surge_current_a"
+max = 40.0
+unit = "A"
+conditions = "8.3 ms single half sine-wave superimposed on rated load"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IFSM"
+[[models.source.characteristic]]
+parameter = "TJ operating junction temperature"
+rating = "max_junction_temp_c"
+max = 150.0
+unit = "°C"
+conditions = "-65 to +150"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, TJ"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 88.0
+unit = "°C/W"
+conditions = "PCB mounted, 5.0 mm x 5.0 mm copper pad areas"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Thermal Characteristics, RθJA typ, Note 1"
+
+[[models]]
+id = "ss13"
+kind = "diode"
+description = "SS13 Schottky barrier rectifier, 30 V, 1 A, SMA (DO-214AC)"
+
+[models.match]
+value_re = '(?i)^SS13(([-_]?(E3|M3)|H(E3|M3)(_[A-Z])?)(/[0-9A-Z]+)?)?$'
+
+[models.params]
+is  = 1.2030e-06   # one-point fit: VF max 0.5 V at 1.0 A (Vishay 88746, Electrical Characteristics), n and rs assumed
+n   = 1.05       # assumed, an ordinary Schottky ideality factor
+rs  = 0.1300     # ASSUMED, as the 1N5817/1N5818 fits of this 1 A class (0.128/0.140 ohm); the sheet prints one forward point
+bv  = 30.0       # VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0             # IF(AV)
+max_surge_current_a = 40.0      # IFSM, 8.3 ms single half sine-wave
+max_voltage_v = 30.0            # VRRM
+max_junction_temp_c = 150.0     # TJ max
+theta_ja_c_per_w = 88.0         # RthJA typ, 5 x 5 mm copper pads
+# RthJL 28 C/W is junction to lead; the sheet prints no junction-to-case figure.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "VRRM maximum repetitive peak reverse voltage"
+rating = "max_voltage_v"
+max = 30.0
+unit = "V"
+conditions = "TA = 25 C"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, VRRM, SS13 column"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward rectified current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "TL per fig. 1"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IF(AV)"
+[[models.source.characteristic]]
+parameter = "IFSM peak forward surge current"
+rating = "max_surge_current_a"
+max = 40.0
+unit = "A"
+conditions = "8.3 ms single half sine-wave superimposed on rated load"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IFSM"
+[[models.source.characteristic]]
+parameter = "TJ operating junction temperature"
+rating = "max_junction_temp_c"
+max = 150.0
+unit = "°C"
+conditions = "-65 to +150"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, TJ"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 88.0
+unit = "°C/W"
+conditions = "PCB mounted, 5.0 mm x 5.0 mm copper pad areas"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Thermal Characteristics, RθJA typ, Note 1"
+
+[[models]]
+id = "ss14"
+kind = "diode"
+description = "SS14 Schottky barrier rectifier, 40 V, 1 A, SMA (DO-214AC)"
+
+[models.match]
+value_re = '(?i)^SS14(([-_]?(E3|M3)|H(E3|M3)(_[A-Z])?)(/[0-9A-Z]+)?)?$'
+
+[models.params]
+is  = 1.2030e-06   # one-point fit: VF max 0.5 V at 1.0 A (Vishay 88746, Electrical Characteristics), n and rs assumed
+n   = 1.05       # assumed, an ordinary Schottky ideality factor
+rs  = 0.1300     # ASSUMED, as the 1N5817/1N5818 fits of this 1 A class (0.128/0.140 ohm); the sheet prints one forward point
+bv  = 40.0       # VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0             # IF(AV)
+max_surge_current_a = 40.0      # IFSM, 8.3 ms single half sine-wave
+max_voltage_v = 40.0            # VRRM
+max_junction_temp_c = 150.0     # TJ max
+theta_ja_c_per_w = 88.0         # RthJA typ, 5 x 5 mm copper pads
+# RthJL 28 C/W is junction to lead; the sheet prints no junction-to-case figure.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "VRRM maximum repetitive peak reverse voltage"
+rating = "max_voltage_v"
+max = 40.0
+unit = "V"
+conditions = "TA = 25 C"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, VRRM, SS14 column"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward rectified current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "TL per fig. 1"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IF(AV)"
+[[models.source.characteristic]]
+parameter = "IFSM peak forward surge current"
+rating = "max_surge_current_a"
+max = 40.0
+unit = "A"
+conditions = "8.3 ms single half sine-wave superimposed on rated load"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IFSM"
+[[models.source.characteristic]]
+parameter = "TJ operating junction temperature"
+rating = "max_junction_temp_c"
+max = 150.0
+unit = "°C"
+conditions = "-65 to +150"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, TJ"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 88.0
+unit = "°C/W"
+conditions = "PCB mounted, 5.0 mm x 5.0 mm copper pad areas"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Thermal Characteristics, RθJA typ, Note 1"
+
+[[models]]
+id = "ss15"
+kind = "diode"
+description = "SS15 Schottky barrier rectifier, 50 V, 1 A, SMA (DO-214AC)"
+
+[models.match]
+value_re = '(?i)^SS15(([-_]?(E3|M3)|H(E3|M3)(_[A-Z])?)(/[0-9A-Z]+)?)?$'
+
+[models.params]
+is  = 1.2035e-10   # one-point fit: VF max 0.75 V at 1.0 A (Vishay 88746, Electrical Characteristics), n and rs assumed
+n   = 1.05       # assumed, an ordinary Schottky ideality factor
+rs  = 0.1300     # ASSUMED, as the 1N5817/1N5818 fits of this 1 A class (0.128/0.140 ohm); the sheet prints one forward point
+bv  = 50.0       # VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0             # IF(AV)
+max_surge_current_a = 40.0      # IFSM, 8.3 ms single half sine-wave
+max_voltage_v = 50.0            # VRRM
+max_junction_temp_c = 150.0     # TJ max
+theta_ja_c_per_w = 88.0         # RthJA typ, 5 x 5 mm copper pads
+# RthJL 28 C/W is junction to lead; the sheet prints no junction-to-case figure.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "VRRM maximum repetitive peak reverse voltage"
+rating = "max_voltage_v"
+max = 50.0
+unit = "V"
+conditions = "TA = 25 C"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, VRRM, SS15 column"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward rectified current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "TL per fig. 1"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IF(AV)"
+[[models.source.characteristic]]
+parameter = "IFSM peak forward surge current"
+rating = "max_surge_current_a"
+max = 40.0
+unit = "A"
+conditions = "8.3 ms single half sine-wave superimposed on rated load"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IFSM"
+[[models.source.characteristic]]
+parameter = "TJ operating junction temperature"
+rating = "max_junction_temp_c"
+max = 150.0
+unit = "°C"
+conditions = "-65 to +150"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, TJ"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 88.0
+unit = "°C/W"
+conditions = "PCB mounted, 5.0 mm x 5.0 mm copper pad areas"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Thermal Characteristics, RθJA typ, Note 1"
+
+[[models]]
+id = "ss16"
+kind = "diode"
+description = "SS16 Schottky barrier rectifier, 60 V, 1 A, SMA (DO-214AC)"
+
+[models.match]
+value_re = '(?i)^SS16(([-_]?(E3|M3)|H(E3|M3)(_[A-Z])?)(/[0-9A-Z]+)?)?$'
+
+[models.params]
+is  = 1.2035e-10   # one-point fit: VF max 0.75 V at 1.0 A (Vishay 88746, Electrical Characteristics), n and rs assumed
+n   = 1.05       # assumed, an ordinary Schottky ideality factor
+rs  = 0.1300     # ASSUMED, as the 1N5817/1N5818 fits of this 1 A class (0.128/0.140 ohm); the sheet prints one forward point
+bv  = 60.0       # VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0             # IF(AV)
+max_surge_current_a = 40.0      # IFSM, 8.3 ms single half sine-wave
+max_voltage_v = 60.0            # VRRM
+max_junction_temp_c = 150.0     # TJ max
+theta_ja_c_per_w = 88.0         # RthJA typ, 5 x 5 mm copper pads
+# RthJL 28 C/W is junction to lead; the sheet prints no junction-to-case figure.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "VRRM maximum repetitive peak reverse voltage"
+rating = "max_voltage_v"
+max = 60.0
+unit = "V"
+conditions = "TA = 25 C"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, VRRM, SS16 column"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward rectified current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "TL per fig. 1"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IF(AV)"
+[[models.source.characteristic]]
+parameter = "IFSM peak forward surge current"
+rating = "max_surge_current_a"
+max = 40.0
+unit = "A"
+conditions = "8.3 ms single half sine-wave superimposed on rated load"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, IFSM"
+[[models.source.characteristic]]
+parameter = "TJ operating junction temperature"
+rating = "max_junction_temp_c"
+max = 150.0
+unit = "°C"
+conditions = "-65 to +150"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Maximum Ratings, TJ"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 88.0
+unit = "°C/W"
+conditions = "PCB mounted, 5.0 mm x 5.0 mm copper pad areas"
+basis = "Vishay SS12-SS16 doc. 88746 Revision 23-Apr-2020, Thermal Characteristics, RθJA typ, Note 1"
+
+[[models]]
+id = "sb120"
+kind = "diode"
+description = "SB120 Schottky barrier rectifier, 20 V, 1 A, DO-41"
+
+[models.match]
+value_re = '(?i)^SB120([-_](A|B|T))?$'
+
+[models.params]
+is  = 1.2030e-06   # one-point fit: VF max 0.5 V at 1.0 A (DS23022, Maximum Ratings and Electrical Characteristics), n and rs assumed
+n   = 1.05       # assumed, an ordinary Schottky ideality factor
+rs  = 0.1300     # ASSUMED, as the 1N5817/1N5818 fits of this 1 A class (0.128/0.140 ohm); the sheet prints one forward point
+bv  = 20.0       # VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0             # IO, average rectified output current
+max_surge_current_a = 40.0      # IFSM, 8.3 ms single half sine-wave
+max_voltage_v = 20.0            # VRRM
+max_junction_temp_c = 125.0     # TJ max, operating
+theta_ja_c_per_w = 50.0         # RthJA typ
+# RthJL 15 C/W is junction to lead; the sheet prints no junction-to-case figure.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "VRRM peak repetitive reverse voltage"
+rating = "max_voltage_v"
+max = 20.0
+unit = "V"
+conditions = "TA = 25 C"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, VRRM/VRWM/VR, SB120 column"
+[[models.source.characteristic]]
+parameter = "IO average rectified output current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "9.5 mm from the case, fig. 1"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IO"
+[[models.source.characteristic]]
+parameter = "IFSM non-repetitive peak forward surge current"
+rating = "max_surge_current_a"
+max = 40.0
+unit = "A"
+conditions = "8.3 ms single half sine-wave, JEDEC method"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IFSM"
+[[models.source.characteristic]]
+parameter = "TJ operating temperature range"
+rating = "max_junction_temp_c"
+max = 125.0
+unit = "°C"
+conditions = "SB120-SB140 to +125, SB150-SB160 to +150"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, TJ"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 50.0
+unit = "°C/W"
+conditions = "typical"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, RθJA"
+
+[[models]]
+id = "sb130"
+kind = "diode"
+description = "SB130 Schottky barrier rectifier, 30 V, 1 A, DO-41"
+
+[models.match]
+value_re = '(?i)^SB130([-_](A|B|T))?$'
+
+[models.params]
+is  = 1.2030e-06   # one-point fit: VF max 0.5 V at 1.0 A (DS23022, Maximum Ratings and Electrical Characteristics), n and rs assumed
+n   = 1.05       # assumed, an ordinary Schottky ideality factor
+rs  = 0.1300     # ASSUMED, as the 1N5817/1N5818 fits of this 1 A class (0.128/0.140 ohm); the sheet prints one forward point
+bv  = 30.0       # VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0             # IO, average rectified output current
+max_surge_current_a = 40.0      # IFSM, 8.3 ms single half sine-wave
+max_voltage_v = 30.0            # VRRM
+max_junction_temp_c = 125.0     # TJ max, operating
+theta_ja_c_per_w = 50.0         # RthJA typ
+# RthJL 15 C/W is junction to lead; the sheet prints no junction-to-case figure.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "VRRM peak repetitive reverse voltage"
+rating = "max_voltage_v"
+max = 30.0
+unit = "V"
+conditions = "TA = 25 C"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, VRRM/VRWM/VR, SB130 column"
+[[models.source.characteristic]]
+parameter = "IO average rectified output current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "9.5 mm from the case, fig. 1"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IO"
+[[models.source.characteristic]]
+parameter = "IFSM non-repetitive peak forward surge current"
+rating = "max_surge_current_a"
+max = 40.0
+unit = "A"
+conditions = "8.3 ms single half sine-wave, JEDEC method"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IFSM"
+[[models.source.characteristic]]
+parameter = "TJ operating temperature range"
+rating = "max_junction_temp_c"
+max = 125.0
+unit = "°C"
+conditions = "SB120-SB140 to +125, SB150-SB160 to +150"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, TJ"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 50.0
+unit = "°C/W"
+conditions = "typical"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, RθJA"
+
+[[models]]
+id = "sb140"
+kind = "diode"
+description = "SB140 Schottky barrier rectifier, 40 V, 1 A, DO-41"
+
+[models.match]
+value_re = '(?i)^SB140([-_](A|B|T))?$'
+
+[models.params]
+is  = 1.2030e-06   # one-point fit: VF max 0.5 V at 1.0 A (DS23022, Maximum Ratings and Electrical Characteristics), n and rs assumed
+n   = 1.05       # assumed, an ordinary Schottky ideality factor
+rs  = 0.1300     # ASSUMED, as the 1N5817/1N5818 fits of this 1 A class (0.128/0.140 ohm); the sheet prints one forward point
+bv  = 40.0       # VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0             # IO, average rectified output current
+max_surge_current_a = 40.0      # IFSM, 8.3 ms single half sine-wave
+max_voltage_v = 40.0            # VRRM
+max_junction_temp_c = 125.0     # TJ max, operating
+theta_ja_c_per_w = 50.0         # RthJA typ
+# RthJL 15 C/W is junction to lead; the sheet prints no junction-to-case figure.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "VRRM peak repetitive reverse voltage"
+rating = "max_voltage_v"
+max = 40.0
+unit = "V"
+conditions = "TA = 25 C"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, VRRM/VRWM/VR, SB140 column"
+[[models.source.characteristic]]
+parameter = "IO average rectified output current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "9.5 mm from the case, fig. 1"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IO"
+[[models.source.characteristic]]
+parameter = "IFSM non-repetitive peak forward surge current"
+rating = "max_surge_current_a"
+max = 40.0
+unit = "A"
+conditions = "8.3 ms single half sine-wave, JEDEC method"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IFSM"
+[[models.source.characteristic]]
+parameter = "TJ operating temperature range"
+rating = "max_junction_temp_c"
+max = 125.0
+unit = "°C"
+conditions = "SB120-SB140 to +125, SB150-SB160 to +150"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, TJ"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 50.0
+unit = "°C/W"
+conditions = "typical"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, RθJA"
+
+[[models]]
+id = "sb150"
+kind = "diode"
+description = "SB150 Schottky barrier rectifier, 50 V, 1 A, DO-41"
+
+[models.match]
+value_re = '(?i)^SB150([-_](A|B|T))?$'
+
+[models.params]
+is  = 7.5928e-10   # one-point fit: VF max 0.7 V at 1.0 A (DS23022, Maximum Ratings and Electrical Characteristics), n and rs assumed
+n   = 1.05       # assumed, an ordinary Schottky ideality factor
+rs  = 0.1300     # ASSUMED, as the 1N5817/1N5818 fits of this 1 A class (0.128/0.140 ohm); the sheet prints one forward point
+bv  = 50.0       # VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0             # IO, average rectified output current
+max_surge_current_a = 40.0      # IFSM, 8.3 ms single half sine-wave
+max_voltage_v = 50.0            # VRRM
+max_junction_temp_c = 150.0     # TJ max, operating
+theta_ja_c_per_w = 50.0         # RthJA typ
+# RthJL 15 C/W is junction to lead; the sheet prints no junction-to-case figure.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "VRRM peak repetitive reverse voltage"
+rating = "max_voltage_v"
+max = 50.0
+unit = "V"
+conditions = "TA = 25 C"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, VRRM/VRWM/VR, SB150 column"
+[[models.source.characteristic]]
+parameter = "IO average rectified output current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "9.5 mm from the case, fig. 1"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IO"
+[[models.source.characteristic]]
+parameter = "IFSM non-repetitive peak forward surge current"
+rating = "max_surge_current_a"
+max = 40.0
+unit = "A"
+conditions = "8.3 ms single half sine-wave, JEDEC method"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IFSM"
+[[models.source.characteristic]]
+parameter = "TJ operating temperature range"
+rating = "max_junction_temp_c"
+max = 150.0
+unit = "°C"
+conditions = "SB120-SB140 to +125, SB150-SB160 to +150"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, TJ"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 50.0
+unit = "°C/W"
+conditions = "typical"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, RθJA"
+
+[[models]]
+id = "sb160"
+kind = "diode"
+description = "SB160 Schottky barrier rectifier, 60 V, 1 A, DO-41"
+
+[models.match]
+value_re = '(?i)^SB160([-_](A|B|T))?$'
+
+[models.params]
+is  = 7.5928e-10   # one-point fit: VF max 0.7 V at 1.0 A (DS23022, Maximum Ratings and Electrical Characteristics), n and rs assumed
+n   = 1.05       # assumed, an ordinary Schottky ideality factor
+rs  = 0.1300     # ASSUMED, as the 1N5817/1N5818 fits of this 1 A class (0.128/0.140 ohm); the sheet prints one forward point
+bv  = 60.0       # VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0             # IO, average rectified output current
+max_surge_current_a = 40.0      # IFSM, 8.3 ms single half sine-wave
+max_voltage_v = 60.0            # VRRM
+max_junction_temp_c = 150.0     # TJ max, operating
+theta_ja_c_per_w = 50.0         # RthJA typ
+# RthJL 15 C/W is junction to lead; the sheet prints no junction-to-case figure.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "VRRM peak repetitive reverse voltage"
+rating = "max_voltage_v"
+max = 60.0
+unit = "V"
+conditions = "TA = 25 C"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, VRRM/VRWM/VR, SB160 column"
+[[models.source.characteristic]]
+parameter = "IO average rectified output current"
+rating = "max_current_a"
+max = 1.0
+unit = "A"
+conditions = "9.5 mm from the case, fig. 1"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IO"
+[[models.source.characteristic]]
+parameter = "IFSM non-repetitive peak forward surge current"
+rating = "max_surge_current_a"
+max = 40.0
+unit = "A"
+conditions = "8.3 ms single half sine-wave, JEDEC method"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, IFSM"
+[[models.source.characteristic]]
+parameter = "TJ operating temperature range"
+rating = "max_junction_temp_c"
+max = 150.0
+unit = "°C"
+conditions = "SB120-SB140 to +125, SB150-SB160 to +150"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, TJ"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 50.0
+unit = "°C/W"
+conditions = "typical"
+basis = "Diodes Incorporated SB120-SB160 DS23022 Rev. 6-2 (Dec 2019), Maximum Ratings, RθJA"
+
+[[models]]
+id = "1n5820"
+kind = "diode"
+description = "1N5820 Schottky barrier rectifier, 20 V, 3 A, DO-201AD"
+
+[models.match]
+value_re = '(?i)^1N5820(-E3(/[0-9A-Z]+)?)?$'
+
+[models.params]
+is  = 2.8663e-05   # two-point fit to VF max 0.475 V at 3.0 A and 0.85 V at 9.4 A (Vishay 88526), n assumed
+n   = 1.05       # assumed, an ordinary Schottky ideality factor
+rs  = 0.0537     # fitted; carries the rise between the two printed forward points
+cjo = 9.346e-10   # CJ typ 200 pF at VR = 4.0 V (Taiwan Semi I2105 prints one row for the 1N5820-1N5822 series): 200p * (1 + 4/0.1094)^0.4252
+vj  = 0.1094      # fitted to Taiwan Semi I2105 Fig. 2, as the 1N5822 card
+m   = 0.4252
+bv  = 20.0       # VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 3.0             # IF(AV) at TL = 95 C, 9.5 mm leads
+max_surge_current_a = 80.0     # IFSM, 8.3 ms single half sine-wave
+max_voltage_v = 20.0            # VRRM
+max_junction_temp_c = 125.0    # TJ max
+theta_ja_c_per_w = 40.0        # RthJA typ, vertical PCB, 2.5in x 2.5in copper
+# RthJL 10 C/W is junction to lead (88526, Thermal Characteristics).
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "VRRM maximum repetitive peak reverse voltage"
+rating = "max_voltage_v"
+max = 20.0
+unit = "V"
+conditions = "TA = 25 C"
+basis = "Vishay 1N5820/1N5821/1N5822 doc. 88526 Rev. 05-Apr-2019, Maximum Ratings, VRRM, 1N5820 column"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward rectified current"
+rating = "max_current_a"
+max = 3.0
+unit = "A"
+conditions = "TL = 95 °C, 9.5 mm (0.375 in) lead length"
+basis = "Vishay 1N5820/1N5821/1N5822 doc. 88526 Rev. 05-Apr-2019, Maximum Ratings, IF(AV)"
+[[models.source.characteristic]]
+parameter = "IFSM peak forward surge current"
+rating = "max_surge_current_a"
+max = 80.0
+unit = "A"
+conditions = "8.3 ms single half sine-wave superimposed on rated load"
+basis = "Vishay 1N5820/1N5821/1N5822 doc. 88526 Rev. 05-Apr-2019, Maximum Ratings, IFSM"
+[[models.source.characteristic]]
+parameter = "TJ operating junction and storage temperature range"
+rating = "max_junction_temp_c"
+max = 125.0
+unit = "°C"
+conditions = "-65 to +125"
+basis = "Vishay 1N5820/1N5821/1N5822 doc. 88526 Rev. 05-Apr-2019, Maximum Ratings, TJ, TSTG"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 40.0
+unit = "°C/W"
+conditions = "vertical PCB mounted, 12.7 mm lead length, 63.5 x 63.5 mm copper pad"
+basis = "Vishay 1N5820/1N5821/1N5822 doc. 88526 Rev. 05-Apr-2019, Thermal Characteristics, RθJA typ, Note 1"
+
+[[models]]
+id = "1n5821"
+kind = "diode"
+description = "1N5821 Schottky barrier rectifier, 30 V, 3 A, DO-201AD"
+
+[models.match]
+value_re = '(?i)^1N5821(-E3(/[0-9A-Z]+)?)?$'
+
+[models.params]
+is  = 1.7573e-05   # two-point fit to VF max 0.5 V at 3.0 A and 0.9 V at 9.4 A (Vishay 88526), n assumed
+n   = 1.05       # assumed, an ordinary Schottky ideality factor
+rs  = 0.0577     # fitted; carries the rise between the two printed forward points
+cjo = 9.346e-10   # CJ typ 200 pF at VR = 4.0 V (Taiwan Semi I2105 prints one row for the 1N5820-1N5822 series): 200p * (1 + 4/0.1094)^0.4252
+vj  = 0.1094      # fitted to Taiwan Semi I2105 Fig. 2, as the 1N5822 card
+m   = 0.4252
+bv  = 30.0       # VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 3.0             # IF(AV) at TL = 95 C, 9.5 mm leads
+max_surge_current_a = 80.0     # IFSM, 8.3 ms single half sine-wave
+max_voltage_v = 30.0            # VRRM
+max_junction_temp_c = 125.0    # TJ max
+theta_ja_c_per_w = 40.0        # RthJA typ, vertical PCB, 2.5in x 2.5in copper
+# RthJL 10 C/W is junction to lead (88526, Thermal Characteristics).
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "VRRM maximum repetitive peak reverse voltage"
+rating = "max_voltage_v"
+max = 30.0
+unit = "V"
+conditions = "TA = 25 C"
+basis = "Vishay 1N5820/1N5821/1N5822 doc. 88526 Rev. 05-Apr-2019, Maximum Ratings, VRRM, 1N5821 column"
+[[models.source.characteristic]]
+parameter = "IF(AV) average forward rectified current"
+rating = "max_current_a"
+max = 3.0
+unit = "A"
+conditions = "TL = 95 °C, 9.5 mm (0.375 in) lead length"
+basis = "Vishay 1N5820/1N5821/1N5822 doc. 88526 Rev. 05-Apr-2019, Maximum Ratings, IF(AV)"
+[[models.source.characteristic]]
+parameter = "IFSM peak forward surge current"
+rating = "max_surge_current_a"
+max = 80.0
+unit = "A"
+conditions = "8.3 ms single half sine-wave superimposed on rated load"
+basis = "Vishay 1N5820/1N5821/1N5822 doc. 88526 Rev. 05-Apr-2019, Maximum Ratings, IFSM"
+[[models.source.characteristic]]
+parameter = "TJ operating junction and storage temperature range"
+rating = "max_junction_temp_c"
+max = 125.0
+unit = "°C"
+conditions = "-65 to +125"
+basis = "Vishay 1N5820/1N5821/1N5822 doc. 88526 Rev. 05-Apr-2019, Maximum Ratings, TJ, TSTG"
+[[models.source.characteristic]]
+parameter = "RθJA thermal resistance junction to ambient"
+rating = "theta_ja_c_per_w"
+typ = 40.0
+unit = "°C/W"
+conditions = "vertical PCB mounted, 12.7 mm lead length, 63.5 x 63.5 mm copper pad"
+basis = "Vishay 1N5820/1N5821/1N5822 doc. 88526 Rev. 05-Apr-2019, Thermal Characteristics, RθJA typ, Note 1"
+
+[[models]]
+id = "mbr0520"
+kind = "diode"
+description = "MBR0520L Schottky barrier rectifier, 20 V, 0.5 A, SOD-123"
+
+[models.match]
+value_re = '(?i)^MBR0520L?(T[13]G?)?$'
+
+[models.params]
+is  = 2.4291e-06   # two-point fit to VF max 0.30 V at 0.1 A and 0.39 V at 0.5 A (semiware A2.0, Electrical Characteristics, MBR0520L column), n assumed
+n   = 1.05       # assumed, an ordinary Schottky ideality factor
+rs  = 0.1158     # fitted; carries the rise between the two printed forward points
+bv  = 20.0       # VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 0.5             # IO, continuous forward current
+max_surge_current_a = 5.5       # IFSM, 8.3 ms single half sine-wave
+max_voltage_v = 20.0            # VRRM
+max_power_w = 0.41             # PD
+max_junction_temp_c = 150.0     # TJ max, operating
+# The sheet prints no thermal resistance, so none is carded.
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.characteristic]]
+parameter = "VRRM peak repetitive reverse voltage"
+rating = "max_voltage_v"
+max = 20.0
+unit = "V"
+conditions = "TA = 25 C"
+basis = "semiware MBR0520L-MBR0540L Product Datasheet Rev. A2.0, Maximum Ratings, VRRM, MBR0520L column"
+[[models.source.characteristic]]
+parameter = "IO continuous forward current"
+rating = "max_current_a"
+max = 0.5
+unit = "A"
+conditions = "TA = 25 C"
+basis = "semiware MBR0520L-MBR0540L Product Datasheet Rev. A2.0, Maximum Ratings, IO"
+[[models.source.characteristic]]
+parameter = "IFSM peak forward surge current"
+rating = "max_surge_current_a"
+max = 5.5
+unit = "A"
+conditions = "8.3 ms single half sine-wave"
+basis = "semiware MBR0520L-MBR0540L Product Datasheet Rev. A2.0, Maximum Ratings, IFSM"
+[[models.source.characteristic]]
+parameter = "PD power dissipation"
+rating = "max_power_w"
+max = 0.41
+unit = "W"
+conditions = "TA = 25 C"
+basis = "semiware MBR0520L-MBR0540L Product Datasheet Rev. A2.0, Maximum Ratings, PD 410 mW"
+[[models.source.characteristic]]
+parameter = "TJ operating junction temperature"
+rating = "max_junction_temp_c"
+max = 150.0
+unit = "°C"
+conditions = "-55 to +150"
+basis = "semiware MBR0520L-MBR0540L Product Datasheet Rev. A2.0, Maximum Ratings, TJ"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # 1N5819HW: the SOD-123 surface-mount 40 V / 1 A Schottky.
 #
 # This exists for the Olimex value "1N5819(S4 SOD-123)", and the marking in that
@@ -2997,12 +3867,12 @@ kind = "diode"
 description = "1N5819HW Schottky rectifier, 40 V, 1 A, SOD-123 surface mount"
 
 [models.match]
-# 1N5819HW / 1N5819W / SS14 / SKM14, and the Olimex composites that name the
+# 1N5819HW / 1N5819W / SKM14 (SS14 has its own SMA card above), and the Olimex composites that name the
 # SOD-123 package explicitly ("1N5819(S4 SOD-123)", and "1N5819S4" once a
 # trailing "(SOD-123)" is split off by the matcher). The bare "1N5819" is NOT
 # matched here: it belongs to the DO-41 entry above, whose thermal ratings are
 # 4.5x apart from these. The S4 caveat in the note above applies to both.
-value_re = "(?i)^(1N5819[HW]W?|SS14|SKM14|1N5819S4|1N5819\\(S4 ?SOD-?123\\))$"
+value_re = "(?i)^(1N5819[HW]W?|SKM14|1N5819S4|1N5819\\(S4 ?SOD-?123\\))$"
 
 [models.params]
 is  = 1.16662e-6  # fitted with n and rs to the 0.1 A and 3.0 A points

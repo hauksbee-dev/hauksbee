@@ -164,6 +164,8 @@ mod open_load_qualifiers;
 mod package_fit_binding;
 #[path = "packaged_asset_sync.rs"]
 mod packaged_asset_sync;
+#[path = "parts_fallback_ratings.rs"]
+mod parts_fallback_ratings;
 #[path = "pin_role_rules.rs"]
 mod pin_role_rules;
 #[path = "power_invariants.rs"]
