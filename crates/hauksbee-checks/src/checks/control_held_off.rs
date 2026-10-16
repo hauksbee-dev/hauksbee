@@ -561,7 +561,7 @@ mod tests {
         assert!(lint(vec![ic("~{RESET}", RST), dnp]).is_empty(), "DNP");
     }
 
-    /// A connector pad may release the pin from outside: a Medium note, and
+    /// A connector pad may release the pin from outside: a Medium finding, and
     /// only when the board pulls the pin off.
     #[test]
     fn a_connector_pad_makes_it_a_medium_note_and_only_with_a_pull() {

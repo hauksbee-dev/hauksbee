@@ -18,7 +18,7 @@
 //! knows. A pin tied straight to the off rail (EN to GND) is a deliberate
 //! choice and is left to the bind report. A connector pad on the net is an
 //! off-board source that may drive the pin, so a net whose only way to the on
-//! level is a connector is a Medium note, not a High fault, and only when the
+//! level is a connector is a Medium finding, not a High one, and only when the
 //! board itself pulls the pin to the off level (with no pull at all the pin is
 //! simply an external enable input). A card that states no open-pin
 //! state, or states the pin is on when open (`en_open = "on"`, an internal
@@ -652,11 +652,12 @@ mod tests {
     }
 
     /// A pull-down to the off level with a header as the only thing that can
-    /// raise the pin is a stated note (Medium), not a failing finding: the
-    /// header may carry an enable. The same header with no pull-down is an
-    /// external enable input, silent (the legal control above).
+    /// raise the pin is a Medium finding naming the header (it may carry an
+    /// enable, so it is not the High "nothing can raise it"). The same header
+    /// with no pull-down is an external enable input, silent (the legal
+    /// control above).
     #[test]
-    fn a_pull_down_and_a_header_is_a_note_not_a_failure() {
+    fn a_pull_down_and_a_header_is_a_medium_finding_that_names_the_header() {
         let pull = part("R1", "100k", &[("1", EN), ("2", GND)]);
         let header = part("JP3", "Conn_01x02", &[("1", EN), ("2", GND)]);
         let found = mic5205(MIC, Some(EN), vec![pull, header]);
