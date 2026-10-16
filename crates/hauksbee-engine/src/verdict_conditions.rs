@@ -45,11 +45,11 @@ const NAMED_ABSTENTIONS: usize = 2;
 /// it counts the rest.
 const NAMED_PER_LABEL: usize = 4;
 
-/// The conditions a pass rests on that the run's findings and assumptions
-/// imply, in a stable order: abstentions first (each a specific unchecked
-/// part), then the modelling assumptions (only when `model_dependent`, the
-/// surfaces whose claims rest on the models: copper-only and descriptive
-/// surfaces do not).
+/// The conditions a pass rests on that the run's findings and assumptions imply.
+///
+/// In a stable order: abstentions first (each a specific unchecked part), then
+/// the modelling assumptions (only when `model_dependent`, the surfaces whose
+/// claims rest on the models: copper-only and descriptive surfaces do not).
 #[must_use]
 pub fn derived(
     findings: &[JsonFinding],

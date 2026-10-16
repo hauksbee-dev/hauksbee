@@ -54,9 +54,11 @@ pub const NOT_JUDGED_JOINER: &str = " Also: ";
 /// lower case, instead of "clean", so the two never disagree.
 pub const INSPECT_BEFORE_ORDERING: &str = "INSPECT BEFORE ORDERING";
 
-/// How a pass condition opens that names the modelling assumptions the checks
-/// were judged on (partly modelled parts, inferred pin roles, reduced-fidelity
-/// models, default values), grouped by their glossary label.
+/// How the pass condition naming the modelling assumptions opens.
+///
+/// It lists the assumptions the checks were judged on (partly modelled parts,
+/// inferred pin roles, reduced-fidelity models, default values), grouped by
+/// their glossary label.
 pub const MODELLING_ASSUMPTIONS_LEAD: &str =
     "Judged on modelling assumptions, each listed in the evidence with how to lift it";
 
