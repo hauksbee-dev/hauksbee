@@ -435,34 +435,9 @@ fn schema_absent_evidence(generator: &mut schemars::SchemaGenerator) -> schemars
 }
 
 impl CiResult {
-    /// One C5.3 refusal shared verbatim by JSON, terminal, `JUnit`, annotations,
-    /// the web checks panel, and MCP.
-    #[must_use]
-    pub fn refusal(&self) -> Option<Refusal> {
-        if !self.analog_invalid() {
-            return None;
-        }
-        let invalid = self.invalid_count();
-        // An assertion is INVALID for one of three reasons, each with its own
-        // fix: an unresolved part undermined its evidence (write or bind a
-        // model), a timing measurement was refused (change the backend or the
-        // assertion), or the analog solve diverged under it (fix the named
-        // net). The footer must send the reader to the right one; "inspect the
-        // failed window" is wrong advice when no window failed.
-        // An open part that would DRIVE the judged net refuses through the member
-        // path ("INVALID: U1 (LM317) has no model ..."), and is the same gap.
-        let open_part = |r: &AssertResult| {
-            r.detail.starts_with("INVALID evidence:")
-                || r.detail.contains(hauksbee_engine::scheduler::OPEN_DRIVER)
-        };
-        let count = |hit: &dyn Fn(&AssertResult) -> bool| {
-            let hit = |r: &&AssertResult| r.invalid && hit(r);
-            self.results.iter().filter(hit).count()
-        };
-        let no_firmware = count(&|r| r.detail.starts_with(crate::runner::NO_FIRMWARE_DETAIL));
-        let evidence = count(&open_part);
-        let timing = count(&|r| r.detail.starts_with("INVALID: timing coverage refusal:"));
-        let paced = count(&|r| r.detail.contains("INVALID: host-paced clock:"));
+    /// The open parts behind the INVALID assertions, as a clause for the
+    /// refusal ("" when none is named).
+    fn open_parts_behind_invalid(&self) -> String {
         // The open parts behind it: those on an INVALID assertion's own path
         // (`open-part:C2` ids on its map), never an unrelated one the run also
         // carries. Only a run whose invalid assertions carry no map at all
@@ -479,7 +454,7 @@ impl CiResult {
             .filter(|r| r.invalid)
             .filter_map(|r| self.evidence.iter().find(|m| m.assertion() == r.label))
             .collect();
-        let first_open = if invalid_maps.is_empty() {
+        if invalid_maps.is_empty() {
             (self.assumptions.iter().find(is_open))
                 .and_then(part_of)
                 .map_or_else(String::new, |part| {
@@ -509,7 +484,38 @@ impl CiResult {
                     format!("; the open parts on their paths are {shown}{more}")
                 }
             }
+        }
+    }
+
+    /// One C5.3 refusal shared verbatim by JSON, terminal, `JUnit`, annotations,
+    /// the web checks panel, and MCP.
+    #[must_use]
+    pub fn refusal(&self) -> Option<Refusal> {
+        if !self.analog_invalid() {
+            return None;
+        }
+        let invalid = self.invalid_count();
+        // An assertion is INVALID for one of three reasons, each with its own
+        // fix: an unresolved part undermined its evidence (write or bind a
+        // model), a timing measurement was refused (change the backend or the
+        // assertion), or the analog solve diverged under it (fix the named
+        // net). The footer must send the reader to the right one; "inspect the
+        // failed window" is wrong advice when no window failed.
+        // An open part that would DRIVE the judged net refuses through the member
+        // path ("INVALID: U1 (LM317) has no model ..."), and is the same gap.
+        let open_part = |r: &AssertResult| {
+            r.detail.starts_with("INVALID evidence:")
+                || r.detail.contains(hauksbee_engine::scheduler::OPEN_DRIVER)
         };
+        let count = |hit: &dyn Fn(&AssertResult) -> bool| {
+            let hit = |r: &&AssertResult| r.invalid && hit(r);
+            self.results.iter().filter(hit).count()
+        };
+        let no_firmware = count(&|r| r.detail.starts_with(crate::runner::NO_FIRMWARE_DETAIL));
+        let evidence = count(&open_part);
+        let timing = count(&|r| r.detail.starts_with("INVALID: timing coverage refusal:"));
+        let paced = count(&|r| r.detail.contains("INVALID: host-paced clock:"));
+        let first_open = self.open_parts_behind_invalid();
         let missing = if self.analog_abort {
             format!(
                 "the analog solve stopped converging and the consecutive-failure abort tripped, so {invalid} assertion(s) were marked INVALID"

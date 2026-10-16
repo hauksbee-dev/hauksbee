@@ -11,6 +11,7 @@
 //! board-wide stress check over an open part is never a pass.
 
 use serde_json::Value;
+use std::fmt::Write as _;
 
 const CARD: &str = r#"[[models]]
 id = "hbtest_local_diode"
@@ -49,47 +50,65 @@ conditions = "TA = 70 °C"
 basis = "test card"
 "#;
 
-/// The diode circuit plus `U9` with its two pins on `u9_nets`.
-fn board(u9_nets: (&str, &str)) -> String {
-    let node = |reference: &str, pin: &str| {
-        format!("(node (ref \"{reference}\") (pin \"{pin}\") (pintype \"passive\"))")
+/// An unidentified part: reference, and its two pins as (net, pin type).
+type OpenPart<'a> = (&'a str, [(&'a str, &'a str); 2]);
+
+/// The diode circuit plus the unidentified parts in `open` (each has no model).
+fn board(open: &[OpenPart]) -> String {
+    let node = |reference: &str, pin: &str, kind: &str| {
+        format!("(node (ref \"{reference}\") (pin \"{pin}\") (pintype \"{kind}\"))")
     };
     let mut nets: Vec<(&str, Vec<String>)> = vec![
-        ("VCC", vec![node("R1", "1")]),
-        ("A", vec![node("R1", "2"), node("D1", "2")]),
-        ("GND", vec![node("D1", "1")]),
+        ("VCC", vec![node("R1", "1", "passive")]),
+        (
+            "A",
+            vec![node("R1", "2", "passive"), node("D1", "2", "passive")],
+        ),
+        ("GND", vec![node("D1", "1", "passive")]),
         ("X", Vec::new()),
     ];
-    for (pin, net) in [("1", u9_nets.0), ("2", u9_nets.1)] {
-        let entry = nets.iter_mut().find(|(n, _)| *n == net).expect("known net");
-        entry.1.push(node("U9", pin));
+    for (reference, pins) in open {
+        for (pin, (net, kind)) in ["1", "2"].into_iter().zip(pins) {
+            let entry = nets.iter_mut().find(|(n, _)| n == net).expect("known net");
+            entry.1.push(node(reference, pin, kind));
+        }
     }
-    let nets: String = (1..)
-        .zip(nets)
-        .filter(|(_, (_, nodes))| !nodes.is_empty())
-        .map(|(code, (name, nodes))| {
-            format!(
-                "    (net (code \"{code}\") (name \"{name}\") {})\n",
+    let mut net_block = String::new();
+    for (code, (name, nodes)) in (1..).zip(nets) {
+        if !nodes.is_empty() {
+            let _ = writeln!(
+                net_block,
+                "    (net (code \"{code}\") (name \"{name}\") {})",
                 nodes.join(" ")
-            )
-        })
-        .collect();
+            );
+        }
+    }
+    let mut comps = String::new();
+    for (reference, _) in open {
+        let _ = write!(
+            comps,
+            "\x20   (comp (ref \"{reference}\") (value \"MYSTERY-IC\") \
+             (footprint \"Package_SO:SOIC-8\")\n\
+             \x20     (libsource (lib \"Mystery\") (part \"MYSTERY-IC\")))\n"
+        );
+    }
     format!(
         "(export (version \"E\")\n  (components\n\
          \x20   (comp (ref \"R1\") (value \"390\") (footprint \"Resistor_SMD:R_0603_1608Metric\"))\n\
          \x20   (comp (ref \"D1\") (value \"HBTEST-LOCAL\") (footprint \"Diode_SMD:D_SOD-123\"))\n\
-         \x20   (comp (ref \"U9\") (value \"MYSTERY-IC\") (footprint \"Package_SO:SOIC-8\")\n\
-         \x20     (libsource (lib \"Mystery\") (part \"MYSTERY-IC\"))))\n\
-         \x20 (nets\n{nets}))\n"
+         {comps}\
+         \x20 )\n\
+         \x20 (nets\n{net_block}))\n"
     )
 }
 
-/// Run the board at `ambient_c` with `asserts` (TOML `[[assert]]` blocks).
-fn run(u9_nets: (&str, &str), ambient_c: f64, asserts: &str) -> (hauksbee_ci::CiResult, Value) {
+/// Run the diode board with `open` unidentified parts at `ambient_c` with
+/// `asserts` (TOML `[[assert]]` blocks).
+fn run_with(open: &[OpenPart], ambient_c: f64, asserts: &str) -> hauksbee_ci::CiResult {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir(dir.path().join("models")).expect("models dir");
     std::fs::write(dir.path().join("models/local.toml"), CARD).expect("card");
-    std::fs::write(dir.path().join("board.net"), board(u9_nets)).expect("board");
+    std::fs::write(dir.path().join("board.net"), board(open)).expect("board");
     let spec = dir.path().join("spec.toml");
     let body = format!(
         "name = \"local\"\nboard = \"board.net\"\nmodels_dir = \"models\"\nduration_ms = 2\n\
@@ -97,7 +116,13 @@ fn run(u9_nets: (&str, &str), ambient_c: f64, asserts: &str) -> (hauksbee_ci::Ci
          [[supply]]\nnet = \"VCC\"\nkind = \"ideal\"\nvolts = 5.0\n{asserts}"
     );
     std::fs::write(&spec, body).expect("spec");
-    let result = hauksbee_ci::run(&crate::support::run_config(spec)).expect("spec runs");
+    hauksbee_ci::run(&crate::support::run_config(spec)).expect("spec runs")
+}
+
+/// Run the board with the passive part `U9` across `u9_nets`.
+fn run(u9_nets: (&str, &str), ambient_c: f64, asserts: &str) -> (hauksbee_ci::CiResult, Value) {
+    let u9 = ("U9", [(u9_nets.0, "passive"), (u9_nets.1, "passive")]);
+    let result = run_with(&[u9], ambient_c, asserts);
     let json = serde_json::from_str(&result.render_json()).expect("CI JSON parses");
     (result, json)
 }
@@ -148,21 +173,21 @@ fn a_clean_board_wide_stress_check_over_an_open_part_is_never_a_pass() {
 }
 
 /// The run's refusal names the open part on the INVALID assertion's path, not
-/// the first one the run happens to carry.
+/// an unrelated one the run also carries. U9 is powered from VCC and can drive
+/// the anode, so a voltage claim on it is not judged; U8 sits on a net the
+/// diode circuit never touches.
 #[test]
 fn the_refusal_names_the_open_part_on_the_path_not_an_unrelated_one() {
     let voltage = "[[assert]]\nname = \"anode up\"\nkind = \"voltage\"\nnet = \"A\"\nmin = 0.1\n";
-    let (on_path, _) = run(("A", "GND"), 25.0, voltage);
-    assert!(on_path.results[0].invalid, "{}", on_path.render_human());
-    let missing = on_path.refusal().expect("refused").missing_prerequisite;
+    let u9 = ("U9", [("A", "output"), ("VCC", "power_in")]);
+    let u8 = ("U8", [("X", "passive"), ("GND", "passive")]);
+    let result = run_with(&[u9, u8], 25.0, voltage);
+    assert!(result.results[0].invalid, "{}", result.render_human());
+    assert_eq!(result.exit_code(), 3, "{}", result.render_human());
+    let missing = result.refusal().expect("refused").missing_prerequisite;
     assert!(missing.contains("U9"), "{missing}");
-
-    let (elsewhere, _) = run(("X", "GND"), 25.0, voltage);
-    if let Some(refusal) = elsewhere.refusal() {
-        assert!(
-            !refusal.missing_prerequisite.contains("U9"),
-            "U9 is not on the anode's path: {}",
-            refusal.missing_prerequisite
-        );
-    }
+    assert!(
+        !missing.contains("U8"),
+        "U8 is not on the anode's path: {missing}"
+    );
 }

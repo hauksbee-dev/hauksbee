@@ -529,8 +529,8 @@ mod tests {
         assert!(s.electrical_dependent.contains(&"SDA".to_string()));
     }
 
-    /// An MCU-like part U1 on SDA and LED_K (two signal pins) and VOUT (its
-    /// rail, a supply group), bound as `kind`, with an open part U3 on `u3_net`.
+    /// An MCU-like part U1 on `SDA` and `LED_K` (two signal pins) and `VOUT` (its
+    /// rail, a supply group), bound as `kind`, with an open part `U3` on `u3_net`.
     fn through_part(kind: &str, u3_net: &'static str) -> JudgementScope {
         let u1_nets: [&str; 4] = ["SDA", "LED_K", "VOUT", "GND"];
         let u3_nets: [&str; 2] = [u3_net, "GND"];

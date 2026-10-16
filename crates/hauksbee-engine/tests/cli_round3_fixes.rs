@@ -158,18 +158,28 @@ fn zero_or_huge_seconds_is_a_usage_error_naming_the_bound() {
 // ── H2: KiCad project files point at the sibling board ──────────────────────
 
 #[test]
-fn kicad_prl_input_points_at_the_sibling_board() {
+fn kicad_prl_input_opens_the_sibling_board_and_says_so() {
+    // A KiCad project file names its design by stem. It opens the sibling
+    // layout (exit 0) and says which file it used, rather than refusing.
     let out = run_board(
         &board("../../testdata/boards/button_pullup.kicad_prl"),
         &["--check"],
     );
+    expect_err(&out, 0, &["KiCad project file", "button_pullup.kicad_pcb"]);
+}
+
+#[test]
+fn kicad_prl_input_with_no_sibling_design_says_which_file_to_pass() {
+    // Control: with no layout or schematic of the same name beside it, the
+    // project file is still refused, and the refusal names the files to pass.
+    let dir = tempfile::tempdir().unwrap();
+    let prl = dir.path().join("lonely.kicad_prl");
+    std::fs::write(&prl, "{}").unwrap();
+    let out = run_board(&prl, &["--check"]);
     expect_err(
         &out,
         1,
-        &[
-            "KiCad project file, not the board",
-            "button_pullup.kicad_pcb",
-        ],
+        &["KiCad project file", ".kicad_pcb", "root schematic"],
     );
 }
 

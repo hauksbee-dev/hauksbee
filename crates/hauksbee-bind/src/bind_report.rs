@@ -189,10 +189,11 @@ pub struct OpenPart {
     pub pins: Vec<(hauksbee_ir::NodeId, bool)>,
 }
 
-/// Whether a pin of a part with no usable model could drive its net, from the
-/// schematic's electrical type: `false` only for `input`, `power_in` and
-/// `no_connect`. An untyped pin (PCB-only extraction) can drive, so a caller
-/// relying on this only ever over-counts drivers.
+/// Whether a pin of a part with no usable model could drive its net.
+///
+/// Read from the schematic's electrical type: `false` only for `input`,
+/// `power_in` and `no_connect`. An untyped pin (PCB-only extraction) can drive,
+/// so a caller relying on this only ever over-counts drivers.
 #[must_use]
 pub fn pin_can_drive(kind: &str) -> bool {
     let k = kind.to_ascii_lowercase();
