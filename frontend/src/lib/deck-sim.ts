@@ -6,6 +6,7 @@
 
 import type { ScopePlot } from '../components/scope-draw'
 import { traceToken } from '../components/scope-draw'
+import { ambiguousDeckExts, deckExts, endsWithAny } from './board-formats'
 
 /** `POST /api/sim`'s answer. `columns`/`rows` are the CSV's own header and rows;
  *  column 0 is the x axis (`time_s`, the swept source, or `frequency`). */
@@ -19,16 +20,14 @@ export interface DeckSimResponse {
   error?: string
 }
 
-/** Extensions that MIGHT be a deck; `.net` is also KiCad, so see `isSpiceDeck`. */
-export const DECK_EXTS = ['.cir', '.sp', '.net']
-
-/** Whether these bytes are a SPICE deck for `/api/sim` rather than a board.
- *  `.cir`/`.sp` belong to nothing else here; `.net` is claimed by KiCad too, so
- *  it is sniffed the way session-store.ts sniffs board-as-code (a KiCad netlist
- *  opens an s-expression, a deck carries at least one dot-card). */
+/** Whether these bytes are a SPICE deck for `/api/sim` rather than a board. The
+ *  deck extensions are the engine's served table (lib/board-formats). Most
+ *  belong to nothing else; `.net` is claimed by KiCad too, so it is sniffed the
+ *  way session-store.ts sniffs board-as-code (a KiCad netlist opens an
+ *  s-expression, a deck carries at least one dot-card). */
 export function isSpiceDeck(fileName: string, head: string): boolean {
-  if (/\.(cir|sp)$/i.test(fileName)) return true
-  if (!/\.net$/i.test(fileName)) return false
+  if (!endsWithAny(fileName, deckExts())) return false
+  if (!endsWithAny(fileName, ambiguousDeckExts())) return true
   if (/^\s*\(/.test(head)) return false
   return /^\s*\.(tran|ac|dc|op|print|end|model|options|temp|subckt)\b/im.test(head)
 }

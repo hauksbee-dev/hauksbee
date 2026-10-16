@@ -1,6 +1,9 @@
 import { expect, test } from 'bun:test'
 import { deckPlots, engineering, isSpiceDeck, runDeck } from '../src/lib/deck-sim'
 import { leftPadFor, ticksAcross } from '../src/components/scope-draw'
+import { seedServedFormats } from './served-formats'
+
+seedServedFormats()
 
 const NET_KICAD = '(export (version "E")\n  (design ...'
 const NET_SPICE = '* divider\nV1 in 0 5\nR1 in out 1k\n.tran 1u 1m\n.end\n'

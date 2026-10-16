@@ -2,8 +2,11 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 import type { WebReport } from '../types/report'
 import {
   countAsserts, defaultSessionName, deleteSession, getSessions, loadSession, refetchServerBoard,
-  renameSession, saveSession, sessionIdFor, setCurrentSessionId, subscribeSessions,
+  expectedBoardSha256, importSessionBundle, renameSession, saveSession, sessionBundle, sessionIdFor, setCurrentSessionId,
+  sha256Hex, subscribeSessions,
 } from '../lib/session-store'
+import type { ImportOutcome } from '../lib/session-store'
+import { boardVerdict } from '../lib/status-vocab'
 import type { SaveOutcome, SavedSession, SessionRow } from '../lib/session-store'
 
 // The saved-session layer above the store: when to write, what the indicator
@@ -34,6 +37,10 @@ export interface SessionsState {
   resume: (id: string) => Promise<ResumeResult>
   /** Forget the offer without deleting anything (the "start fresh" path). */
   dismissResume: () => void
+  /** The session as a portable file, or null when its record is gone. */
+  exportBundle: (id: string) => { fileName: string; text: string } | null
+  /** Read a session file back in and make it the current session. */
+  importBundle: (text: string) => Promise<ImportOutcome>
 }
 
 type ResumeResult =
@@ -70,9 +77,13 @@ export function useSessions(opts: {
   // the index) per character would serialize a whole report each time.
   useEffect(() => {
     if (!reportOk || !report || !sessionId) return
-    const timer = setTimeout(() => {
+    let cancelled = false
+    const timer = setTimeout(async () => {
       const existing = loadSession(sessionId)
       const now = Date.now()
+      const verdict = boardVerdict(report)
+      const specSha256 = spec?.toml ? await sha256Hex(spec.toml) : null
+      if (cancelled) return
       setOutcome(saveSession({
         id: sessionId,
         // A renamed session keeps its name across re-analysis: the name is the
@@ -94,10 +105,13 @@ export function useSessions(opts: {
         spec,
         checks,
         engineVersion,
+        verdict,
+        boardSha256: expectedBoardSha256(report, report.file_name),
+        specSha256,
       }))
       setCurrentSessionId(sessionId)
     }, 450)
-    return () => clearTimeout(timer)
+    return () => { cancelled = true; clearTimeout(timer) }
   }, [reportOk, report, sessionId, analyzedAt, firmwareName, schematicName, spec, checks, engineVersion])
 
   const resume = useCallback(async (id: string): Promise<ResumeResult> => {
@@ -139,5 +153,11 @@ export function useSessions(opts: {
     remove: deleteSession,
     resume,
     dismissResume: () => setResumeDismissed(true),
+    exportBundle: sessionBundle,
+    importBundle: async text => {
+      const result = await importSessionBundle(text)
+      if (result.ok) setResumeDismissed(false)
+      return result
+    },
   }
 }

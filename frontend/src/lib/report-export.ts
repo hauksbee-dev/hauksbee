@@ -48,7 +48,7 @@ export function reportJson(report: WebReport): string {
 /** Hand a string to the browser as a download. One implementation, because
  *  three call sites had three subtly different ones and only two of them
  *  revoked the object URL. */
-export function downloadText(fileName: string, contents: string, mime: string) {
+export function downloadText(fileName: string, contents: BlobPart, mime: string) {
   const url = URL.createObjectURL(new Blob([contents], { type: mime }))
   const a = document.createElement('a')
   a.href = url

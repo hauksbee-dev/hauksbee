@@ -92,6 +92,9 @@ fn build_payload(
             "efforts": efforts,
             "permission_modes": permission_modes,
             "models": models,
+            // Per backend: only a model name with this prefix is compared
+            // against the pick list (absent = every name is).
+            "model_hint_prefix": { "api": extract_config::API_MODEL_HINT_PREFIX },
         },
         "keys": ExtractConfig::keys(),
         "consent_notice": datasheet::CONSENT_NOTICE,
@@ -191,6 +194,7 @@ mod tests {
         assert_eq!(backends.len(), 4, "{text}");
         let presets = value["presets"].as_array().expect("presets array");
         assert!(!presets.is_empty(), "{text}");
+        assert_eq!(value["options"]["model_hint_prefix"]["api"], "gpt-");
         assert!(value["consent_notice"]
             .as_str()
             .is_some_and(|s| !s.is_empty()));

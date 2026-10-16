@@ -579,7 +579,7 @@ export default function SimView({
 
               {/* Full-screen board: no room for a dock, so the card floats. */}
               {boardFullscreen && selection && (
-                <div className="absolute left-3 z-10 flex items-end pointer-events-none" style={{ top: TOOLBAR_CLEARANCE, bottom: 36 }}>
+                <div className="selection-dock absolute left-3 z-10 flex items-end pointer-events-none" style={{ top: TOOLBAR_CLEARANCE, bottom: 36 }}>
                   <div className="pointer-events-auto" style={{ maxHeight: '100%', display: 'flex' }}>{card}</div>
                 </div>
               )}

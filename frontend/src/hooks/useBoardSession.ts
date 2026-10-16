@@ -4,7 +4,8 @@ import type { WebReport } from '../types/report'
 import type { SelectedComponent } from '../components/SelectionCard'
 import { analysisFailureMessage, precheckBoardFile } from '../lib/upload-guard'
 import { inspectZip, zipIsFirmwareOnly } from '../lib/zip-inspect'
-import { DECK_EXTS, isSpiceDeck } from '../lib/deck-sim'
+import { isSpiceDeck } from '../lib/deck-sim'
+import { deckExts, endsWithAny, firmwareExts } from '../lib/board-formats'
 import { api, errorText, fetchFile, isAbort } from '../lib/api'
 
 // The board session: one uploaded (or preloaded) board, its report, its staged
@@ -284,7 +285,7 @@ export function useBoardSession(opts: {
     }
   }, [beginRun, clearRunState])
 
-  const looksLikeFirmware = (name: string) => /\.(elf|hex)$/i.test(name)
+  const looksLikeFirmware = (name: string) => endsWithAny(name, firmwareExts())
 
   // Stage (or unstage) a companion and re-run the board with it. A companion
   // is a real change to what was analysed, not a form field: the standing
@@ -373,7 +374,7 @@ export function useBoardSession(opts: {
     // A SPICE deck is not a board: it has no copper to extract, and the whole
     // point of it is the analysis card inside. `.cir`/`.sp` are decks by name;
     // `.net` is claimed by KiCad too, so the head of the file decides.
-    if (DECK_EXTS.some(e => f.name.toLowerCase().endsWith(e))) {
+    if (endsWithAny(f.name, deckExts())) {
       void f.slice(0, 4096).text().then(head => {
         if (isSpiceDeck(f.name, head)) onDeck(f)
         else acceptBoard(f)

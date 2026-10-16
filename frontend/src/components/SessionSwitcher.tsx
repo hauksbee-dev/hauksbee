@@ -3,12 +3,14 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import type { SessionsState } from '../hooks/useSessions'
 import { hasDefaultName } from '../lib/session-store'
 import type { SessionRow } from '../lib/session-store'
-import { CloseIcon, HistoryIcon, PencilIcon, TrashIcon } from './Icons'
+import { CloseIcon, DownloadIcon, HistoryIcon, PencilIcon, TrashIcon } from './Icons'
+import { VerdictPill } from './VerdictPill'
+import { downloadText } from '../lib/report-export'
 import { relTime } from '../lib/rel-time'
 import { ARRIVE, LEAVE } from '../motion'
 import { useDismissable } from '../hooks/useDismissable'
 
-// The saved-session indicator in the left rail, and the switcher it opens.
+// The saved-session indicator in the navigation, and the switcher it opens.
 //
 // The indicator exists so that "it saved my work" is something the user can SEE
 // rather than discover by accident on their next visit; it names the session and
@@ -88,6 +90,8 @@ export function SessionRail({ state, onResume }: {
 }) {
   const [open, setOpen] = useState(false)
   const [now, setNow] = useState(Date.now())
+  const [importNote, setImportNote] = useState<{ ok: boolean; text: string } | null>(null)
+  const importInput = useRef<HTMLInputElement>(null)
   const reduced = useReducedMotion()
   const wrap = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -98,6 +102,19 @@ export function SessionRail({ state, onResume }: {
   // The panel is fixed and covers part of the work surface, so re-finding the
   // one button that closes it is not an acceptable way out.
   useDismissable(open, wrap, setOpen)
+
+  const importFile = async (file: File | undefined) => {
+    if (!file) return
+    const result = await state.importBundle(await file.text())
+    setImportNote(result.ok
+      ? { ok: true, text: `Imported ${result.name}.` }
+      : { ok: false, text: `Could not import ${file.name}: ${result.reason}.` })
+    if (result.ok) { setOpen(false); onResume(result.id) }
+  }
+  const exportSession = (id: string) => {
+    const bundle = state.exportBundle(id)
+    if (bundle) downloadText(bundle.fileName, bundle.text, 'application/json')
+  }
 
   const note = outcomeNote(state)
   const current = state.current
@@ -113,7 +130,7 @@ export function SessionRail({ state, onResume }: {
 
   return (
     <div ref={wrap}>
-      <div className="px-2.5 pb-1">
+      <div className="session-cell px-2.5 pb-1">
         <button
           type="button"
           data-testid="session-indicator"
@@ -156,6 +173,24 @@ export function SessionRail({ state, onResume }: {
               <div className="text-[11px] font-bold tracking-widest uppercase" style={{ color: 'var(--silk-faint)' }}>
                 Sessions
               </div>
+              <span className="flex-1" />
+              <button
+                type="button"
+                data-testid="session-import"
+                onClick={() => importInput.current?.click()}
+                className="hb-btn hb-press inline-flex items-center gap-1 px-2.5 text-[11px] rounded-lg cursor-pointer"
+                style={{ height: 24 }}
+              >
+                Import a session file
+              </button>
+              <input
+                ref={importInput}
+                data-testid="session-import-input"
+                type="file"
+                accept=".json,application/json"
+                className="hidden"
+                onChange={e => { void importFile(e.target.files?.[0]); e.target.value = '' }}
+              />
               <button
                 type="button"
                 data-testid="session-switcher-close"
@@ -183,6 +218,20 @@ export function SessionRail({ state, onResume }: {
                 </div>
               )}
 
+              {importNote && (
+                <div
+                  data-testid="session-import-note"
+                  className="mx-2.5 mt-2.5 rounded-lg px-2.5 py-2 text-[11px] leading-relaxed"
+                  style={{
+                    background: TONE[importNote.ok ? 'ok' : 'err'].bg,
+                    border: `1px solid ${TONE[importNote.ok ? 'ok' : 'err'].border}`,
+                    color: TONE[importNote.ok ? 'ok' : 'err'].color,
+                  }}
+                >
+                  {importNote.text}
+                </div>
+              )}
+
               {state.rows.length === 0 ? (
                 <div className="px-3 py-3 text-[12px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
                   Nothing saved yet. Analyze a board and this browser keeps the report and the
@@ -198,6 +247,7 @@ export function SessionRail({ state, onResume }: {
                     onOpen={() => { setOpen(false); onResume(row.id) }}
                     onRename={name => state.rename(row.id, name)}
                     onDelete={() => state.remove(row.id)}
+                    onExport={() => exportSession(row.id)}
                   />
                 ))
               )}
@@ -219,13 +269,14 @@ export function SessionRail({ state, onResume }: {
   )
 }
 
-function SessionRowView({ row, now, isCurrent, onOpen, onRename, onDelete }: {
+function SessionRowView({ row, now, isCurrent, onOpen, onRename, onDelete, onExport }: {
   row: SessionRow
   now: number
   isCurrent: boolean
   onOpen: () => void
   onRename: (name: string) => void
   onDelete: () => void
+  onExport: () => void
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(row.name)
@@ -306,9 +357,24 @@ function SessionRowView({ row, now, isCurrent, onOpen, onRename, onDelete }: {
               </span>
             )}
           </div>
+          {row.verdict && (
+            <div className="mt-1 flex">
+              <VerdictPill testId="session-row-verdict" verdict={row.verdict} />
+            </div>
+          )}
           <div className="text-[10.5px] mt-0.5 tnum" style={{ color: 'var(--silk-faint)' }}>
             {facts} &middot; saved {relTime(row.updatedAt, now)}
           </div>
+          {row.boardSha256 && (
+            <div
+              className="text-[10.5px] mt-0.5 truncate"
+              data-testid="session-row-hash"
+              title={`board sha256 ${row.boardSha256}${row.specSha256 ? `\nspec sha256 ${row.specSha256}` : ''}`}
+              style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}
+            >
+              board {row.boardSha256.slice(0, 12)}{row.specSha256 ? ` · spec ${row.specSha256.slice(0, 12)}` : ''}
+            </div>
+          )}
           {!row.hasReport && (
             <div className="text-[10.5px] mt-0.5" style={{ color: 'var(--warn)' }}>
               report not kept (too large); needs the board file again
@@ -327,6 +393,9 @@ function SessionRowView({ row, now, isCurrent, onOpen, onRename, onDelete }: {
             )}
             <SmallButton testId="session-rename" label={`Rename ${row.name}`} onClick={() => { setDraft(row.name); setEditing(true) }}>
               <PencilIcon size={11} /> Rename
+            </SmallButton>
+            <SmallButton testId="session-export" label={`Export ${row.name}`} onClick={onExport} disabled={!row.hasReport}>
+              <DownloadIcon size={11} /> Export
             </SmallButton>
             {confirming ? (
               <>

@@ -1,68 +1,109 @@
-// The accepted board formats, once. Four surfaces name them: the file
-// picker's `accept` attribute, the drop card's small print, the rejection
-// card's "accepted:" line, and the oversize/unknown-extension refusal. All
-// four derive from the array below, because the rejection card is the worst
-// place for a list to be short: it is read only by someone whose file was just
-// refused, and a list with no Altium in it says the tool cannot read Altium.
+// The accepted board formats, served. The engine owns the one table
+// (`ACCEPTED_FORMATS` in hauksbee-bind's board_input.rs) and sends it with
+// `/api/startup` as `board_formats`; the file picker's `accept` attribute, the
+// drop zone's small print, the rejection text, the oversize/unknown-extension
+// refusal, the firmware re-route and the SPICE-deck route all read it from
+// here. This module holds no list of its own: before the server has answered
+// (or against an older server that never sends it) every list is empty, and the
+// callers degrade to "no client-side opinion" (the picker offers every file, the
+// precheck refuses only on size).
 
-interface BoardFormat {
+/** One row of the engine's table. */
+export interface ServedBoardFormat {
   /** The ECAD tool or standard that produces the file. */
   vendor: string
   /** Extensions, with the dot, in the casing a user would recognise. */
   exts: string[]
-  /** Shown in the picker's `accept` list but not in the prose: an extension
-   *  that is only sometimes a board (an Excellon drill file named `.txt`), so
-   *  offering it is right and advertising it as a board format is not. */
-  quiet?: boolean
+  /** `board` goes to the board analyzer, `deck` to the SPICE deck simulator. */
+  route: 'board' | 'deck'
+  /** Offered by the picker but not advertised in prose: an extension that is
+   *  only sometimes a board (an Excellon drill file named `.txt`). */
+  quiet: boolean
 }
 
-const BOARD_FORMATS: BoardFormat[] = [
-  { vendor: 'KiCad', exts: ['.kicad_pcb', '.kicad_sch'] },
-  { vendor: 'Eagle', exts: ['.brd'] },
-  { vendor: 'Altium', exts: ['.PcbDoc'] },
-  { vendor: 'IPC', exts: ['.d356', '.xml'] },
-  { vendor: 'fab archive', exts: ['.zip', '.tgz', '.tar.gz', '.tar'] },
-  { vendor: 'board-as-code', exts: ['.board'] },
-  { vendor: 'SPICE deck', exts: ['.cir', '.sp', '.net'] },
-  { vendor: 'Excellon drill', exts: ['.txt'], quiet: true },
-]
+/** The shape of `board_formats` in `/api/startup`. */
+export interface ServedBoardFormats {
+  formats: ServedBoardFormat[]
+  /** Compiled firmware, which the board zone re-routes rather than refusing. */
+  firmware_exts: string[]
+}
 
-/** Compiled firmware, which the board zone re-routes to the firmware jack
- *  rather than refusing. */
-export const FIRMWARE_EXTS = ['.elf', '.hex']
+let served: ServedBoardFormats | null = null
 
-/** Every extension the board picker offers, lowercase, with the dot. Deduped:
- *  `.net` is claimed by both KiCad and SPICE, and the drop router sniffs the
- *  content to tell them apart (see `isSpiceDeck`). */
-export const BOARD_EXTS: string[] = [...new Set(BOARD_FORMATS.flatMap(f => f.exts.map(e => e.toLowerCase())))]
+/** Record the engine's table. Called once by the boot that reads
+ *  `/api/startup`, before the shell (and so any reader of it) mounts. */
+export function setServedBoardFormats(next: ServedBoardFormats | null | undefined): void {
+  served = next ?? null
+}
 
-/** The `accept` attribute for the board file input. Firmware is included
- *  because a firmware file dropped on the board zone is re-routed, not
- *  refused, and a picker that cannot select it makes that route unreachable
- *  from the keyboard. */
-export const BOARD_ACCEPT_ATTR = [...BOARD_FORMATS.flatMap(f => f.exts), ...FIRMWARE_EXTS].join(',')
+const rows = (): ServedBoardFormat[] => served?.formats ?? []
+
+/** Compiled firmware extensions, lowercase, with the dot. */
+export function firmwareExts(): string[] {
+  return (served?.firmware_exts ?? []).map(e => e.toLowerCase())
+}
+
+/** Extensions routed to the SPICE deck simulator, lowercase, with the dot. */
+export function deckExts(): string[] {
+  return rows().filter(f => f.route === 'deck').flatMap(f => f.exts.map(e => e.toLowerCase()))
+}
+
+/** Deck extensions a board format also claims (`.net`: SPICE or a KiCad
+ *  netlist), which only the file's content can tell apart. */
+export function ambiguousDeckExts(): string[] {
+  const board = new Set(rows().filter(f => f.route === 'board').flatMap(f => f.exts.map(e => e.toLowerCase())))
+  return deckExts().filter(e => board.has(e))
+}
+
+/** Every extension the board picker offers, lowercase, deduped. `.net` is
+ *  claimed by both KiCad and SPICE, and the drop router sniffs the content to
+ *  tell them apart (see `isSpiceDeck`). */
+export function boardExts(): string[] {
+  return [...new Set(rows().flatMap(f => f.exts.map(e => e.toLowerCase())))]
+}
+
+/** The `accept` attribute for the board file input, or undefined (accept any
+ *  file) when the table is not here. Firmware is included because a firmware
+ *  file dropped on the board zone is re-routed, not refused, and a picker that
+ *  cannot select it makes that route unreachable from the keyboard. */
+export function boardAcceptAttr(): string | undefined {
+  const all = [...rows().flatMap(f => f.exts), ...(served?.firmware_exts ?? [])]
+  return all.length > 0 ? all.join(',') : undefined
+}
 
 /** The formats as one sentence fragment, for a refusal or a dead end:
- *  "KiCad .kicad_pcb / .kicad_sch, Eagle .brd, Altium .PcbDoc, ...". */
+ *  "KiCad .kicad_pcb / .kicad_sch / .net, Eagle .brd, ...". Empty without the table. */
 export function acceptedFormatsSentence(): string {
-  return BOARD_FORMATS
+  return rows()
     .filter(f => !f.quiet)
     .map(f => `${f.vendor} ${f.exts.join(' / ')}`)
     .join(', ')
+}
+
+/** Does `name` end in one of `exts` (lowercase, with the dot)? Matches the WHOLE
+ *  extension, so `board.tar.gz` is `.tar.gz`, not `.gz`. */
+export function endsWithAny(name: string, exts: readonly string[]): boolean {
+  const lower = name.toLowerCase()
+  return exts.some(e => lower.endsWith(e))
 }
 
 /**
  * Strip the engine's own trailing "Supported: ..." clause off a board-read
  * error, leaving the diagnostic.
  *
- * The engine's list (crates/hauksbee-engine/src/board_input.rs) is one entry
- * short — no Altium, even though the same sentence reports having TRIED the
- * altium reader — and it renders directly above this app's complete list, so
- * the card would carry two disagreeing lists with the shorter one first. The
- * diagnostic half ("unrecognized board format; tried altium, eagle, ...") is
- * kept verbatim; the list is dropped and `acceptedFormatsSentence()` takes its
- * place. A message with no such clause is returned untouched.
+ * The engine's refusal carries its own copy of the list (generated from the same
+ * table, but without the SPICE decks the browser routes elsewhere), and it
+ * renders directly above this app's list, so the card would carry two lists.
+ * The diagnostic half ("unrecognized board format; tried altium, eagle, ...")
+ * is kept verbatim; the list is dropped and `acceptedFormatsSentence()` takes
+ * its place. A message with no such clause is returned untouched.
  */
 export function withoutEngineFormatList(message: string): string {
-  return message.replace(/\s*Supported:.*$/s, '').trim() || message
+  return message
+    .replace(/\s*Supported:.*$/s, '')
+    // The reader's own "hauksbee reads a KiCad board, ... or a folder or zip of
+    // gerbers" clause is a second copy of the list (engine text; Batch D: serve
+    // a refusal code instead of matching prose).
+    .replace(/:\s*hauksbee reads a KiCad board[^]*?\bgerbers\b/, '')
+    .trim() || message
 }
