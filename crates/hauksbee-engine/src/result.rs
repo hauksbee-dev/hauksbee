@@ -2491,7 +2491,9 @@ pub fn lint_findings_json(report: &NetLintReport) -> Vec<JsonFinding> {
             // The rule that raised a finding states its fix when it can
             // (`own_remedy`); the check kind's advice is the fallback.
             fix: if hauksbee_models::rating_basis::is_not_judged(&f.message) {
-                Some(NOT_JUDGED_FIX.to_string())
+                // A check that names its own remedy keeps it; the rail-level
+                // advice is for the analyses that need a rail declared.
+                Some(f.own_remedy().unwrap_or(NOT_JUDGED_FIX).to_string())
             } else if f.is_abstention() {
                 f.own_remedy()
                     .or_else(|| lint_abstention_hint(f.check))

@@ -442,6 +442,33 @@ fn normalise_unicode(s: &str) -> String {
         .replace(['\u{03a9}', '\u{2126}'], "R") // Ω (ohm sign) → R
 }
 
+/// True for a number written with a space as the thousands separator: a
+/// leading 1-3 digit integer group followed by one or more groups of exactly
+/// three digits (each after whitespace), then the end of the string or a
+/// non-digit. "1 000", "10 000" and "1 000 000" qualify; annotations that
+/// merely start with a digit ("10 1%", "100 1/4W", "100 0603") do not.
+fn is_space_grouped_thousands(mantissa: &str, rest: &str) -> bool {
+    let int = mantissa.strip_prefix(['+', '-']).unwrap_or(mantissa);
+    if !(1..=3).contains(&int.len()) || !int.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    let mut remaining = rest;
+    let mut groups = 0;
+    loop {
+        let trimmed = remaining.trim_start();
+        if trimmed.len() == remaining.len() {
+            break; // a group must follow whitespace
+        }
+        let digits = digit_run(trimmed.as_bytes());
+        if digits != 3 {
+            break;
+        }
+        groups += 1;
+        remaining = &trimmed[digits..];
+    }
+    groups > 0 && remaining.chars().next().is_none_or(|c| !c.is_ascii_digit())
+}
+
 /// Core parser, operating on an ASCII string (after unicode normalisation).
 ///
 /// Grammar (case-insensitive after the leading digit):
@@ -494,6 +521,15 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
     // single value and must stay rejected, never silently fused into "10.5".
     let trimmed = rest.trim_start();
     let rest = if trimmed.starts_with(|c: char| c.is_ascii_digit()) {
+        // "1 000" is a thousands-grouped 1000 or a stray fragment, and reading
+        // it as 1 (the tail dropped as an annotation) is a 1000x error on a
+        // programming resistor: it is not one value, so it is not read. Only
+        // genuine grouping is refused; an annotation that happens to start with
+        // a digit ("10 1%", "100 1/4W", "0.1 50V", "100 0603") still reads as
+        // its first number.
+        if is_space_grouped_thousands(before, rest) {
+            return None;
+        }
         rest
     } else {
         trimmed
@@ -794,6 +830,31 @@ mod tests {
         );
         // Several commas that are not all 3-digit groups are left untouched.
         assert_eq!(normalise_comma_decimal("1,5,20"), "1,5,20");
+    }
+
+    /// A digit group after a space is not an annotation: `1 000` must never
+    /// read as 1 ohm (a 1000x error on a programming resistor). It abstains,
+    /// like `1_000`; spaced units, tolerances and chip-size codes still parse.
+    #[test]
+    fn a_space_grouped_number_is_not_read_as_its_first_group() {
+        for s in ["1 000", "10 000", "4 700", "1 000 000"] {
+            assert!(parse_value(s).is_none(), "{s:?} must not parse");
+        }
+        for (s, si) in [
+            ("1k", 1000.0),
+            ("1 k", 1000.0),
+            ("1.000k", 1000.0),
+            ("100 0603", 100.0),
+            ("47k 1%", 47_000.0),
+            ("10 1%", 10.0),
+            ("4.7 5%", 4.7),
+            ("100 1/4W", 100.0),
+            ("47 0.25W", 47.0),
+            ("0.1 50V", 0.1),
+            ("1000", 1000.0),
+        ] {
+            check(s, si);
+        }
     }
 
     /// Capacitor RKM markings (IEC 60062): the SI letter is the decimal point,
