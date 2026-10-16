@@ -74,7 +74,7 @@ const SUPPLY_PIN_NAMES: [&str; 20] = [
 ];
 
 /// Model-card supply roles (lower-case pin-map roles).
-const SUPPLY_ROLES: [&str; 9] = [
+pub(crate) const SUPPLY_ROLES: [&str; 9] = [
     "vcc", "vdd", "avcc", "vdda", "vddio", "vio", "vcca", "vccb", "v+",
 ];
 

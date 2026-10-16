@@ -40,6 +40,9 @@
 //!   layer's `MissingI2cPullup`): an effective pull-up demanding more sink
 //!   current than the spec's 3 mA driver rating, or advisorily too weak for
 //!   the estimated bus capacitance to meet the rise-time budget.
+//! - [`power_pins`]: a carded IC whose supply pads are all open, whose return
+//!   pads are all open, whose supply sits on ground or whose ground sits on a
+//!   rail, judged from the card's pin roles alone.
 //! - [`regulator_cout`]: a linear regulator whose output carries less
 //!   capacitance than its card's stability minimum (`cout_min_f`).
 //! - [`regulator_enable`]: a linear regulator whose card says an open enable
@@ -100,6 +103,7 @@ pub mod mcu_coverage;
 pub mod model_controls;
 pub mod node_drive;
 pub mod open_paths;
+pub mod power_pins;
 pub mod rail_conflicts;
 pub mod rail_decoupling;
 pub mod regulator_cout;
@@ -372,6 +376,9 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     report
         .findings
         .extend(regulator_cout::regulator_cout_lint(board, lib).findings);
+    report
+        .findings
+        .extend(power_pins::power_pin_lint(board, lib).findings);
     // A regulator held off by its open enable pin is one finding: the
     // extract layer's generic floating-control note on the same pin and net
     // says less (no rail, no datasheet state) and gives way to it.

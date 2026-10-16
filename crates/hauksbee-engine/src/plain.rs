@@ -1664,6 +1664,11 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "This regulator's datasheet says its enable pin turns the part off when nothing drives it. On this board nothing can raise that pin: it is unconnected, or only touches parts that cannot pull it up (a capacitor, a pull-down, a part that is not fitted). The output rail stays at 0 V and every part it powers is dead.".to_string(),
                 "Pull the enable pin up to the regulator's input through a 10k to 100k resistor, or tie it straight to the input. If a microcontroller pin is meant to switch the rail, keep the resistor so the rail has a defined state before firmware runs.".to_string(),
             ),
+            LintCheck::PowerPinWiring => (
+                format!("The chip {parts} is not wired for power. {}", f.message),
+                "Every chip needs its supply pins on a power rail and its ground pins on ground, or it has nothing to run on. Here the datasheet's own supply or ground pins are left unconnected, or the supply is tied to ground (or the ground to the rail), so the chip is dead, and any signal that another part drives into it can leak power backwards through its protection diodes.".to_string(),
+                "Connect each supply pin to the right power rail and each ground pin to ground, as the datasheet's pin table shows, and put a decoupling capacitor at each supply pin.".to_string(),
+            ),
             LintCheck::I2cBusLoading => (
                 format!("The I2C line \"{net}\" has pull-ups, but they are mis-sized for the bus. {}", f.message),
                 "I2C devices can only pull the line LOW; the resistor pulls it back HIGH. Too strong a pull-up and a device cannot sink enough current to make a valid low (the spec guarantees only 3 mA), so reads fail intermittently. Too weak and the line rises too slowly for the clock rate, corrupting edges as more devices load the bus.".to_string(),
