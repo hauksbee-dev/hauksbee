@@ -536,6 +536,11 @@ fn emit_report(
     }
     let verdict = machine.run_verdict();
     crate::run_manifest::note_run_verdict(verdict.verdict);
+    crate::reports::ci_artifacts::note_verdict(
+        verdict.verdict,
+        verdict.partial,
+        verdict.reason.as_deref(),
+    );
     if cfg.json {
         println!("{}", machine.to_json());
     } else if cfg.plain {

@@ -57,6 +57,17 @@ struct CurrentRunArtifacts {
     findings: Vec<JsonFinding>,
     refusal: Option<Refusal>,
     selected_checks: Vec<String>,
+    /// The run's own machine verdict, once the surface has computed it. The
+    /// writers read it so an artifact is never green beside a verdict that is
+    /// not a pass (see [`artifact_findings`]).
+    verdict: Option<NotedVerdict>,
+}
+
+#[derive(Clone)]
+struct NotedVerdict {
+    verdict: String,
+    partial: bool,
+    reason: Option<String>,
 }
 
 thread_local! {
@@ -78,16 +89,19 @@ fn write_current(
     outcome_kind: TerminalOutcomeKind,
 ) -> anyhow::Result<()> {
     let refusal = refusal.or(state.refusal.as_ref());
+    let findings = artifact_findings(&state.findings, refusal, state.verdict.as_ref());
+    // A run that never read the board (a run error) has judged no family, so it
+    // gets no passing "no findings" case for any of them.
+    let selected_checks: &[String] = if matches!(outcome_kind, TerminalOutcomeKind::RunError) {
+        &[]
+    } else {
+        &state.selected_checks
+    };
     let mut errors = Vec::new();
     if let Some(path) = &state.junit {
         if let Err(error) = std::fs::write(
             path,
-            junit_xml_for_checks(
-                &state.board_name,
-                &state.findings,
-                refusal,
-                &state.selected_checks,
-            ),
+            junit_xml_for_checks(&state.board_name, &findings, refusal, selected_checks),
         ) {
             errors.push(format!("writing --junit '{}': {error}", path.display()));
         }
@@ -97,7 +111,7 @@ fn write_current(
             path,
             sarif_json_with_terminal_outcome(
                 &state.board_path,
-                &state.findings,
+                &findings,
                 refusal,
                 exit_code,
                 outcome_kind,
@@ -143,6 +157,7 @@ pub fn begin_run(
         findings: Vec::new(),
         refusal: None,
         selected_checks,
+        verdict: None,
     };
     let pending = Refusal::new(
         "a completed Hauksbee run",
@@ -194,6 +209,67 @@ pub fn set_current_board_path(board_path: &Path) {
             state.board_path = board_path.to_path_buf();
         }
     });
+}
+
+/// Record the run's machine verdict (`pass` | `fail` | `invalid`, its reason
+/// sentence and whether it is a partly judged answer), the one derivation
+/// `--json` prints. The artifact writers then guarantee that JUnit and SARIF
+/// are red whenever it is not a pass, even when the findings they were handed
+/// are all non-gating (an abstained analysis, a DC operating point that did not
+/// solve).
+pub fn note_verdict(verdict: &str, partial: bool, reason: Option<&str>) {
+    CURRENT_RUN.with(|slot| {
+        if let Some(state) = slot.borrow_mut().as_mut() {
+            state.verdict = Some(NotedVerdict {
+                verdict: verdict.to_string(),
+                partial,
+                reason: reason.map(str::to_string),
+            });
+        }
+    });
+}
+
+/// The findings the writers render: the run's own, plus one gate-grade entry
+/// when the run's verdict is not a pass and nothing else in the document is red
+/// (no failing finding, no refusal). The invariant: JUnit and SARIF are never
+/// green beside a `--json` verdict that is not `pass`.
+fn artifact_findings(
+    findings: &[JsonFinding],
+    refusal: Option<&Refusal>,
+    verdict: Option<&NotedVerdict>,
+) -> Vec<JsonFinding> {
+    let mut out = findings.to_vec();
+    let Some(v) = verdict.filter(|v| v.verdict != "pass") else {
+        return out;
+    };
+    if refusal.is_some() || findings.iter().any(is_failure) {
+        return out;
+    }
+    let message = v.reason.clone().unwrap_or_else(|| {
+        format!(
+            "the run's verdict is `{}`, which is not a pass; see the --json verdict_reason",
+            v.verdict
+        )
+    });
+    let kind = match (v.verdict.as_str(), v.partial) {
+        ("invalid", true) => "partly_judged",
+        ("invalid", false) => "undermined",
+        _ => "verdict_fail",
+    };
+    out.push(JsonFinding {
+        check: "evidence".into(),
+        kind: kind.into(),
+        severity: "serious".into(),
+        nets: Vec::new(),
+        location_mm: None,
+        layer: None,
+        refs: Vec::new(),
+        actionable: true,
+        plain: message.clone(),
+        message,
+        fix: Some("resolve what the verdict reason names, then re-run".into()),
+    });
+    out
 }
 
 pub fn set_current_refusal(refusal: Refusal) {
@@ -839,6 +915,115 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("INVALID evidence"));
+    }
+
+    fn noted(verdict: &str, partial: bool) -> NotedVerdict {
+        NotedVerdict {
+            verdict: verdict.into(),
+            partial,
+            reason: Some(format!("PARTLY JUDGED (not a pass): the {verdict} reason")),
+        }
+    }
+
+    /// The invariant: JUnit and SARIF are never green beside a verdict that is
+    /// not a pass, whatever findings they were handed. Faulty case: a partly
+    /// judged and an invalid verdict over warnings only. Controls: a pass stays
+    /// green, and a verdict already red through a failing finding or a refusal
+    /// is not doubled.
+    #[test]
+    fn a_verdict_that_is_not_a_pass_is_never_a_green_artifact() {
+        let warning = finding("drc", "clearance", "warning", "VCC", "ratings abstained");
+        let warning = JsonFinding {
+            actionable: false,
+            ..warning
+        };
+        for (verdict, partial, kind) in [
+            ("invalid", true, "partly_judged"),
+            ("invalid", false, "undermined"),
+            ("fail", false, "verdict_fail"),
+        ] {
+            let v = noted(verdict, partial);
+            let all = artifact_findings(std::slice::from_ref(&warning), None, Some(&v));
+            assert_eq!(all.len(), 2, "{verdict}: one gate-grade entry added");
+            assert_eq!(all[1].kind, kind);
+            let junit = junit_xml("b", &all);
+            assert!(junit.contains("failures=\"1\""), "{verdict}: {junit}");
+            assert!(junit.contains(&format!("the {verdict} reason")), "{junit}");
+            let sarif: serde_json::Value =
+                serde_json::from_str(&sarif_json(Path::new("b.kicad_pcb"), &all)).unwrap();
+            assert!(
+                sarif["runs"][0]["results"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|r| r["level"] == "error"),
+                "{verdict}: SARIF needs an error"
+            );
+        }
+        // Legal controls.
+        let pass = noted("pass", false);
+        assert_eq!(
+            artifact_findings(std::slice::from_ref(&warning), None, Some(&pass)).len(),
+            1,
+            "a pass adds nothing"
+        );
+        assert_eq!(
+            artifact_findings(std::slice::from_ref(&warning), None, None).len(),
+            1,
+            "no noted verdict adds nothing"
+        );
+        let red = finding("drc", "short", "serious", "GND", "GND shorted to +5V");
+        let invalid = noted("invalid", false);
+        assert_eq!(
+            artifact_findings(std::slice::from_ref(&red), None, Some(&invalid)).len(),
+            1,
+            "an already failing finding is not doubled"
+        );
+        let refusal =
+            crate::result::Refusal::new("a claim", "a prerequisite", Vec::<String>::new(), "fix");
+        assert_eq!(
+            artifact_findings(&[], Some(&refusal), Some(&invalid)).len(),
+            0,
+            "a refusal already makes the artifacts red"
+        );
+    }
+
+    /// A run that never read the board (a run error) writes no passing "no
+    /// findings" case; a run that read it and refused a verdict keeps the
+    /// families it did judge clean.
+    #[test]
+    fn an_unread_board_gets_no_passing_cases() {
+        let dir =
+            std::env::temp_dir().join(format!("hauksbee-ci-artifacts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let junit = dir.join("j.xml");
+        let sarif = dir.join("s.sarif");
+        let state = CurrentRunArtifacts {
+            board_name: "b.brd".into(),
+            board_path: "b.brd".into(),
+            junit: Some(junit.clone()),
+            sarif: Some(sarif.clone()),
+            findings: Vec::new(),
+            refusal: None,
+            selected_checks: vec!["drc".into(), "lint".into(), "si".into(), "usb_c".into()],
+            verdict: None,
+        };
+        let refusal =
+            crate::result::Refusal::new("a claim", "unreadable", Vec::<String>::new(), "fix");
+        write_current(&state, Some(&refusal), 1, TerminalOutcomeKind::RunError).unwrap();
+        let unread = std::fs::read_to_string(&junit).unwrap();
+        assert!(!unread.contains("no findings"), "{unread}");
+        assert!(unread.contains("errors=\"1\""), "{unread}");
+        write_current(
+            &state,
+            Some(&refusal),
+            3,
+            TerminalOutcomeKind::AnalysisRefusal,
+        )
+        .unwrap();
+        let read = std::fs::read_to_string(&junit).unwrap();
+        assert!(read.contains("no findings"), "{read}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

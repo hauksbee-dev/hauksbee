@@ -218,6 +218,18 @@ impl CheckReport<'_> {
         ))
         .with_judgement_scope(crate::scope::JudgementScope::of(board, &bound, &blockers));
         let run_verdict = jr.run_verdict();
+        // The CI artifacts are written from the findings alone; tell them the
+        // verdict too, so JUnit and SARIF can never be green beside a verdict
+        // that is not a pass.
+        super::ci_artifacts::note_verdict(
+            run_verdict.verdict,
+            run_verdict.partial,
+            run_verdict.reason.as_deref(),
+        );
+        // Counted against the board's real clearance-rule provenance, the one
+        // the sections and `--json` read, before the match hands it away.
+        let headline_counts =
+            verdict_counts(&drc_structured, &provenance, &lint, &si, usbc.as_ref());
         match mode {
             OutputMode::Json => {
                 jr.triage = Some(triage);
@@ -396,8 +408,7 @@ impl CheckReport<'_> {
             }
         }
         if !matches!(mode, OutputMode::Json) {
-            let (serious, worth_a_look) =
-                verdict_counts(&drc_structured, &lint, &si, usbc.as_ref());
+            let (serious, worth_a_look) = headline_counts;
             print!(
                 "{}",
                 super::render_evidence_appendix(&evidence, quiet, verbose)
@@ -514,12 +525,16 @@ pub(crate) fn machine_report(
 /// counts only: whether the run passed is decided by the shared machine verdict.
 fn verdict_counts(
     drc_structured: &DrcStructured,
+    provenance: &crate::result::ClearanceRuleProvenance,
     lint: &hauksbee_extract::NetLintReport,
     si: &hauksbee_extract::SiReport,
     usbc: Option<&crate::checks::usb_c::UsbcReport>,
 ) -> (usize, usize) {
     use crate::plain::PlainLevel;
-    let drc_plain = crate::plain::plain_drc_structured(drc_structured);
+    // The provenance is the caller's, never a defaulted one: a defaulted rule
+    // marks every below-rule group advisory, which dropped the groups the
+    // sections and `--json` `actionable_count` both list.
+    let drc_plain = crate::plain::plain_drc_structured_with_rule_source(drc_structured, provenance);
     let lint_plain = crate::plain_netlint(lint);
     let si_plain = crate::plain_si(si);
     let mut serious = 0usize;
@@ -1091,7 +1106,7 @@ mod tests {
             summary.unresolved,
             true,
         );
-        let (serious, worth) = super::verdict_counts(&drc, lint, si, None);
+        let (serious, worth) = super::verdict_counts(&drc, &provenance, lint, si, None);
         let json: serde_json::Value = serde_json::from_str(&jr.to_json()).unwrap();
         Surfaces {
             json_verdict: json["verdict"].as_str().unwrap().to_string(),
@@ -1400,5 +1415,112 @@ until = "2030-01-01"
             !out.contains("ci/voltage"),
             "a ci waiver must not be reported by the static suite:\n{out}"
         );
+    }
+
+    fn group(net_b: &str, gap_mm: f64) -> crate::result::DrcGroup {
+        crate::result::DrcGroup {
+            net_a: "GND".into(),
+            net_b: net_b.into(),
+            layer: "F.Cu".into(),
+            count: 1,
+            below_count: 1,
+            at_limit: false,
+            min_gap_mm: gap_mm,
+            min_gap_loc_mm: [3.0, 4.0],
+            rule_mm: 0.2,
+            between: "track \u{2194} track".into(),
+            plain: String::new(),
+            fix: "increase spacing".into(),
+            refs: Vec::new(),
+        }
+    }
+
+    /// The closing VERDICT line's counts and the `--json` `serious_count` /
+    /// `actionable_count` are one fact: the headline's serious count equals
+    /// `serious_count` and serious plus worth-a-look equals `actionable_count`,
+    /// whatever clearance-rule provenance the board has. Counting the groups
+    /// with a defaulted provenance (the original bug) hid every group the
+    /// board's own rule makes an issue (UNO: headline 2, JSON 19).
+    #[test]
+    fn headline_counts_equal_the_json_counts_under_every_rule_provenance() {
+        use crate::result::ClearanceRuleProvenance as Rule;
+        let short = crate::result::DrcShort {
+            net_a: "GND".into(),
+            net_b: "VCC".into(),
+            layer: "F.Cu".into(),
+            gap_mm: 0.0,
+            loc_mm: [1.0, 2.0],
+            severity: "serious".into(),
+            plain: "GND shorts VCC".into(),
+            fix: "separate the copper".into(),
+            refs: Vec::new(),
+        };
+        let rules = [
+            ("board file", Rule::board_file(0.2)),
+            ("project file", Rule::project_file(0.2)),
+            ("defaulted", Rule::defaulted(0.2, false)),
+            ("tool default", Rule::tool_default(0.2)),
+        ];
+        // Gaps on both sides of the 0.127 mm default-rule floor: a default
+        // rule sets some groups aside as advisory, a real rule sets none.
+        let gaps = [0.05, 0.10, 0.13, 0.15, 0.18];
+        for with_short in [false, true] {
+            for with_lint in [false, true] {
+                for (name, rule) in &rules {
+                    let drc = DrcStructured {
+                        clearance_rule_mm: 0.2,
+                        primitive_count: 20,
+                        shorts: if with_short {
+                            vec![short.clone()]
+                        } else {
+                            Vec::new()
+                        },
+                        violations: gaps
+                            .iter()
+                            .enumerate()
+                            .map(|(i, gap)| group(&format!("N{i}"), *gap))
+                            .collect(),
+                        at_limit: Vec::new(),
+                        version_warning: None,
+                        suppression_note: None,
+                    };
+                    let lint_report = NetLintReport {
+                        findings: if with_lint {
+                            vec![lint(
+                                LintCheck::OutputContention,
+                                Severity::High,
+                                "two drivers",
+                            )]
+                        } else {
+                            Vec::new()
+                        },
+                        ..NetLintReport::default()
+                    };
+                    let si = SiReport::default();
+                    let mut findings = lint_findings_json(&lint_report);
+                    findings.extend(si_findings_json(&si));
+                    let would_gate = super::check_gate_fails(&drc, &lint_report, &si, None);
+                    let mut jr = super::machine_report(
+                        "synthetic",
+                        &bind(Vec::new()),
+                        &drc,
+                        Some(rule),
+                        &findings,
+                        would_gate,
+                    );
+                    jr.clearance_rule_source = Some(rule.clone());
+                    let (_, _, json_serious, json_actionable) = jr.verdict();
+                    let (serious, worth) =
+                        super::verdict_counts(&drc, rule, &lint_report, &si, None);
+                    let case = format!("{name} short={with_short} lint={with_lint}");
+                    assert_eq!(serious, json_serious, "{case}: serious");
+                    assert_eq!(
+                        serious + worth,
+                        json_actionable,
+                        "{case}: headline {serious} serious + {worth} worth a look vs JSON actionable_count"
+                    );
+                }
+            }
+        }
     }
 }
