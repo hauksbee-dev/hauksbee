@@ -151,7 +151,7 @@ contains = [
   "[WAIVED] Tj(R1) <= 125 C",
   # The measured value stays on screen: a waiver overrules a finding, it does
   # not delete it.
-  "Tj(R1) peak 156.7C > ceiling 125C",
+  "Tj(R1) peak 156.7 C > ceiling 125 C",
   "waived: bench-verified at 90 C with the enclosure heatsink fitted (until 2027-01-01)",
   "visible here, not gating the build",
   "GREEN",

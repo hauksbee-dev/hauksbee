@@ -18,8 +18,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
-    is_plain_inductor, is_resistor, Component, ExtractedBoard, LintCheck, LintFinding,
-    NetLintReport, Severity,
+    is_capacitor, is_plain_inductor, is_resistor, Component, ExtractedBoard, LintCheck,
+    LintFinding, NetLintReport, Severity, REMEDY_MARKER,
 };
 use hauksbee_ir::evidence::{Assumption, ModelUncertainty};
 use hauksbee_models::derating::{temp_span, TempRef};
@@ -31,6 +31,7 @@ use hauksbee_models::{
 
 use super::BoardStatics;
 use hauksbee_bind::binder::{is_ground, power_rail_voltage, resolve};
+use hauksbee_models::netclass::unreadable_rail_name;
 
 /// The complete DC interval a net can present during normal operation.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -261,6 +262,64 @@ fn adjustable(model: &ModelEntry) -> Option<(&str, f64, DividerLaw)> {
     Some((pin, vref, law))
 }
 
+/// A regulator's board divider and the rail it sets, with the parts that set
+/// it: the evidence a finding needs to name what to change.
+#[derive(Debug, Clone)]
+pub(crate) struct Divider {
+    /// The regulator's reference, `"U2"`, and its value, `"TPS62933"`.
+    regulator: String,
+    value: String,
+    /// The net the divider senses: the rail it sets.
+    sensed: i64,
+    /// The rail's level across the reference interval and resistor tolerances.
+    range: RailRange,
+    /// The reference the regulator holds its feedback pin at, in volts.
+    vref_v: f64,
+    law: DividerLaw,
+    /// The fitted resistors of the top leg (feedback pin to the sensed output)
+    /// and the bottom leg (feedback pin to ground), each with its ohms.
+    top: Vec<(String, f64)>,
+    bottom: Vec<(String, f64)>,
+    /// True when only the two legs (and capacitors) load the feedback node, so
+    /// the divider alone sets the level. A trim resistor, a DAC or any other
+    /// part injecting there makes the closed-form level a guess.
+    sole: bool,
+}
+
+/// The parallel combination of a leg's nominal resistances.
+fn leg_ohms(leg: &[(String, f64)]) -> f64 {
+    leg.iter()
+        .map(|(_, ohms)| ohms.recip())
+        .sum::<f64>()
+        .recip()
+}
+
+impl Divider {
+    /// The level at the nominal reference and nominal resistor values.
+    fn nominal_v(&self) -> f64 {
+        let (top, bottom) = (leg_ohms(&self.top), leg_ohms(&self.bottom));
+        match self.law {
+            DividerLaw::Grounded => self.vref_v * (1.0 + top / bottom),
+            DividerLaw::OutReferenced { iadj_a } => {
+                self.vref_v.mul_add(1.0 + bottom / top, iadj_a * bottom)
+            }
+        }
+    }
+
+    /// The top-leg resistance that would set `target_v` with the bottom leg as
+    /// fitted, when one exists.
+    fn top_for(&self, target_v: f64) -> Option<f64> {
+        let bottom = leg_ohms(&self.bottom);
+        let ohms = match self.law {
+            DividerLaw::Grounded => bottom * (target_v / self.vref_v - 1.0),
+            DividerLaw::OutReferenced { iadj_a } => {
+                self.vref_v * bottom / iadj_a.mul_add(-bottom, target_v - self.vref_v)
+            }
+        };
+        (ohms.is_finite() && ohms > 0.0).then_some(ohms)
+    }
+}
+
 /// The rail an adjustable part ([`adjustable`]) sets with the board's own
 /// divider, and the net it is on: Rtop from the feedback pin to the sensed
 /// output ([`sensed_net`]) and Rbottom from the feedback pin to ground, by the
@@ -273,24 +332,20 @@ fn feedback_output_range(
     (comp, model): (&Component, &ModelEntry),
     uncertainty: &[ModelUncertainty],
     out_net: i64,
-) -> Option<(i64, RailRange)> {
+) -> Option<Divider> {
     let (pin, vref, law) = adjustable(model)?;
     let fb_net = role_net_id(comp, model, pin)?;
     let sensed = sensed_net(board, tied, fb_net, out_net)?;
     let on_output = |n: i64| n == sensed || tied.get(&sensed).is_some_and(|set| set.contains(&n));
     let grounded = |n: i64| board.net(n).is_some_and(|net| is_ground(&net.name));
-    let top = parallel(
-        board
-            .components
-            .iter()
-            .filter_map(|c| resistor_between(c, fb_net, on_output)),
-    )?;
-    let bottom = parallel(
-        board
-            .components
-            .iter()
-            .filter_map(|c| resistor_between(c, fb_net, grounded)),
-    )?;
+    let legs = |far: &dyn Fn(i64) -> bool| -> Vec<(String, (f64, f64))> {
+        (board.components.iter())
+            .filter_map(|c| Some((c.reference.clone(), resistor_between(c, fb_net, far)?)))
+            .collect()
+    };
+    let (top_legs, bottom_legs) = (legs(&on_output), legs(&grounded));
+    let top = parallel(top_legs.iter().map(|(_, leg)| *leg))?;
+    let bottom = parallel(bottom_legs.iter().map(|(_, leg)| *leg))?;
     let (lo, hi) = uncertainty
         .iter()
         .find_map(|u| match u {
@@ -321,7 +376,30 @@ fn feedback_output_range(
         min_v: lo.mul_add(gain_lo, offset_lo),
         max_v: hi.mul_add(gain_hi, offset_hi),
     };
-    Some((sensed, range))
+    let in_divider: BTreeSet<&str> = (top_legs.iter().chain(&bottom_legs))
+        .map(|(r, _)| r.as_str())
+        .collect();
+    // Only the regulator, the two legs and capacitors load the feedback node.
+    let sole = (board.net_members(fb_net).into_iter()).all(|(c, _)| {
+        c.reference == comp.reference
+            || in_divider.contains(c.reference.as_str())
+            || is_capacitor(c)
+            || !AssemblyState::of(c).is_present()
+    });
+    let ohms = |legs: Vec<(String, (f64, f64))>| -> Vec<(String, f64)> {
+        legs.into_iter().map(|(r, (ohms, _))| (r, ohms)).collect()
+    };
+    Some(Divider {
+        regulator: comp.reference.clone(),
+        value: comp.value.trim().to_string(),
+        sensed,
+        range,
+        vref_v: vref,
+        law,
+        top: ohms(top_legs),
+        bottom: ohms(bottom_legs),
+        sole,
+    })
 }
 
 /// Nets joined by a fitted net tie or near-zero-ohm link, each net mapped to
@@ -372,6 +450,8 @@ fn tied_nets(board: &ExtractedBoard) -> BTreeMap<i64, BTreeSet<i64>> {
 /// shares one (see [`BoardStatics`]).
 pub(crate) struct Rails {
     regulators: BTreeMap<i64, RailRange>,
+    /// The divider-set rails, each the only source its net has.
+    dividers: Vec<Divider>,
     batteries: BTreeMap<i64, Option<RailRange>>,
     /// Nets a converter-shaped part drives whose output level no card states
     /// (an unmodelled buck, or a regulator card with no output range), each
@@ -381,13 +461,14 @@ pub(crate) struct Rails {
 
 impl Rails {
     pub(crate) fn of(board: &ExtractedBoard, st: &BoardStatics<'_>) -> Self {
-        let regulators = regulator_ranges(board, st);
+        let (regulators, dividers) = regulator_ranges(board, st);
         let unknown_drivers = converter_driven_nets(board)
             .into_iter()
             .filter(|(net, _)| !regulators.contains_key(net))
             .collect();
         Self {
             regulators,
+            dividers,
             batteries: battery_ranges(board, st),
             unknown_drivers,
         }
@@ -473,8 +554,15 @@ fn converter_driven_nets(board: &ExtractedBoard) -> BTreeMap<i64, String> {
     out
 }
 
-fn regulator_ranges(board: &ExtractedBoard, st: &BoardStatics<'_>) -> BTreeMap<i64, RailRange> {
+/// Every regulator's output range by net, and the board dividers that set a
+/// rail no other regulator also drives.
+fn regulator_ranges(
+    board: &ExtractedBoard,
+    st: &BoardStatics<'_>,
+) -> (BTreeMap<i64, RailRange>, Vec<Divider>) {
     let mut ranges = BTreeMap::new();
+    let mut dividers: Vec<Divider> = Vec::new();
+    let mut sources: BTreeMap<i64, usize> = BTreeMap::new();
     let tied = tied_nets(board);
     for (comp, model) in st.parts(board) {
         let range = model_output_range(model);
@@ -500,11 +588,15 @@ fn regulator_ranges(board: &ExtractedBoard, st: &BoardStatics<'_>) -> BTreeMap<i
             // The divider's rail lands on the net it senses; a card's own set
             // point stays on its output pin's net (a buck's switch node).
             let feedback = feedback_output_range(board, &tied, (comp, model), &uncertainty, net_id);
-            if let Some((sensed, set)) = feedback {
-                ranges.insert(sensed, set);
+            let sensed = feedback.as_ref().map(|d| d.sensed);
+            if let Some(divider) = feedback {
+                ranges.insert(divider.sensed, divider.range);
+                *sources.entry(divider.sensed).or_default() += 1;
+                dividers.push(divider);
             }
-            if let Some(range) = range.filter(|_| feedback.is_none_or(|(n, _)| n != net_id)) {
+            if let Some(range) = range.filter(|_| sensed.is_none_or(|n| n != net_id)) {
                 ranges.insert(net_id, range);
+                *sources.entry(net_id).or_default() += 1;
             }
         }
     }
@@ -533,10 +625,19 @@ fn regulator_ranges(board: &ExtractedBoard, st: &BoardStatics<'_>) -> BTreeMap<i
                     max_v: out.max,
                 };
                 ranges.entry(net_id).or_insert(range);
+                *sources.entry(net_id).or_default() += 1;
             }
         }
     }
-    ranges
+    // A divider speaks for its rail only when nothing else also sources it
+    // (a second regulator, a module's supply pin, even through a net tie).
+    let sole_source = |d: &Divider| {
+        let group = tied.get(&d.sensed).into_iter().flatten();
+        let count = |n: &i64| sources.get(n).copied().unwrap_or(0);
+        count(&d.sensed) + group.map(count).sum::<usize>() == 1
+    };
+    dividers.retain(sole_source);
+    (ranges, dividers)
 }
 
 fn looks_like_battery_connector(comp: &Component) -> bool {
@@ -740,6 +841,12 @@ fn unknown_abstention(net_name: &str, knowledge: &RailKnowledge, reference: &str
         format!(
             "operating envelope on net '{net_name}' abstained: the topology identifies a battery net but no charger card declares its chemistry; add battery_chemistry and the sourced charge-voltage range to the charger model"
         )
+    } else if let Some(why) = unreadable_rail_name(net_name) {
+        // The name looks like it states a voltage; say why no level is taken
+        // from it, so a typo'd rail is not mistaken for an unlabelled one.
+        format!(
+            "operating envelope on net '{net_name}' abstained: its name {why}, so no level is assumed from it; declare the level with a net_drive, or bind the regulator that defines this net, or rename the net to a plain form such as +5V or +3V3"
+        )
     } else {
         format!(
             "operating envelope on net '{net_name}' abstained: declare the level with a net_drive, or bind the regulator that defines this net"
@@ -848,7 +955,141 @@ pub fn envelope_lint_with_drives(
         .iter()
         .map(|(net, v)| (net.clone(), RailRange::point(*v)));
     let st = BoardStatics::of(board, lib);
-    envelope_lint_with_tolerance(board, &st, &points.collect(), (0.0, 0.0), None)
+    let mut report = envelope_lint_with_tolerance(board, &st, &points.collect(), (0.0, 0.0), None);
+    report
+        .findings
+        .extend(divider_name_findings(board, &st, drives));
+    report
+}
+
+/// A divider-set rail may differ from the level its name states by this
+/// fraction before the name and the divider are called inconsistent: the
+/// tolerance of a logic or USB rail (±10 %), wide enough that E24 and E96
+/// resistor rounding never trips it.
+const NAME_TOLERANCE: f64 = 0.10;
+
+/// `1000` as `"1k"`, `100000` as `"100k"`, `30900` as `"30.9k"`.
+fn ohms_text(ohms: f64) -> String {
+    super::device_decode::format_ohms(ohms)
+        .replace(".0k", "k")
+        .replace(".0M", "M")
+}
+
+/// The one voltage a net name states outright (`+3V3`, `5V`, `VDD_1V8`), or
+/// `None` when it states none, several, or is not a positive supply.
+fn named_voltage(name: &str) -> Option<f64> {
+    let spelled = super::ripple::named_rail_voltage(name)?;
+    power_rail_voltage(name)
+        .filter(|read| (read - spelled).abs() < 1e-9)
+        .map(|_| spelled)
+}
+
+/// A rail whose board divider sets a level its own net name contradicts.
+///
+/// The divider is the only thing that fixes an adjustable regulator's output,
+/// and the net name is what the designer meant the rail to be: a `+3V3` net
+/// whose divider computes 4.9 V (a resistor mis-valued, swapped or mis-fitted)
+/// feeds every part on it a rail none of them was chosen for, and no part on
+/// it need carry a supply window for the mistake to be real. Judged only when
+/// the divider alone loads the feedback node and no other source drives the
+/// rail, and only on a name that states one unambiguous voltage; a bare `VCC`
+/// or `VDD` states none, so a buck on it is never second-guessed. Levels the
+/// caller forced (`drives`) are the user's statement, not the divider's.
+fn divider_name_findings(
+    board: &ExtractedBoard,
+    st: &BoardStatics<'_>,
+    drives: &BTreeMap<String, f64>,
+) -> Vec<LintFinding> {
+    let tied = tied_nets(board);
+    let mut out = Vec::new();
+    for divider in st.rails(board).dividers.iter().filter(|d| d.sole) {
+        let group = std::iter::once(divider.sensed)
+            .chain(tied.get(&divider.sensed).into_iter().flatten().copied());
+        let names: Vec<&str> = group
+            .filter_map(|n| board.net(n).map(|net| net.name.as_str()))
+            .collect();
+        if names.iter().any(|n| drives.contains_key(*n)) {
+            continue;
+        }
+        let stated: Vec<(&str, f64)> = names
+            .iter()
+            .filter_map(|n| Some((*n, named_voltage(n)?)))
+            .collect();
+        let [(net, want_v)] = stated[..] else {
+            continue;
+        };
+        let band = (
+            want_v * (1.0 - NAME_TOLERANCE),
+            want_v * (1.0 + NAME_TOLERANCE),
+        );
+        if divider.range.max_v >= band.0 && divider.range.min_v <= band.1 {
+            continue;
+        }
+        let set = divider.nominal_v();
+        let pct = (set / want_v - 1.0).abs() * 100.0;
+        let side = if set > want_v { "above" } else { "below" };
+        let leg = |leg: &[(String, f64)]| {
+            let parts: Vec<String> = leg
+                .iter()
+                .map(|(r, ohms)| format!("{r} {}", ohms_text(*ohms)))
+                .collect();
+            parts.join(" || ")
+        };
+        let (top_refs, bottom_refs): (Vec<&str>, Vec<&str>) = (
+            divider.top.iter().map(|(r, _)| r.as_str()).collect(),
+            divider.bottom.iter().map(|(r, _)| r.as_str()).collect(),
+        );
+        let (vref, top, bottom) = (
+            divider.vref_v,
+            ohms_text(leg_ohms(&divider.top)),
+            ohms_text(leg_ohms(&divider.bottom)),
+        );
+        let law = match divider.law {
+            DividerLaw::Grounded => format!("{vref:.3} V x (1 + {top} / {bottom})"),
+            DividerLaw::OutReferenced { .. } => format!(
+                "{vref:.3} V x (1 + {bottom} / {top}) plus the ADJ pin current through {bottom}"
+            ),
+        };
+        let fix = divider.top_for(want_v).map_or_else(
+            || {
+                format!(
+                    "Re-value the divider ({}) so Vout is {want_v:.2} V",
+                    top_refs.join(", ")
+                )
+            },
+            |ohms| {
+                format!(
+                    "Make {} about {} (with {} at {bottom}) so Vout is {want_v:.2} V",
+                    top_refs.join(" || "),
+                    ohms_text(ohms),
+                    bottom_refs.join(" || "),
+                )
+            },
+        );
+        let message = format!(
+            "{} ({}) sets rail '{net}' to {set:.2} V, {pct:.0} % {side} the {want_v:.2} V its name states: its feedback divider ({} from the output to the feedback pin, {} from it to ground) holds the pin at the {vref:.3} V reference, so Vout = {law} = {set:.2} V, and every part on '{net}' is supplied {set:.2} V instead of {want_v:.2} V. {REMEDY_MARKER}{fix}, or, if {set:.2} V is what the board needs, rename the net to say so.",
+            divider.regulator,
+            divider.value,
+            leg(&divider.top),
+            leg(&divider.bottom),
+        );
+        let mut refs = vec![divider.regulator.clone()];
+        refs.extend(
+            divider
+                .top
+                .iter()
+                .chain(&divider.bottom)
+                .map(|(r, _)| r.clone()),
+        );
+        out.push(LintFinding {
+            check: LintCheck::OperatingEnvelope,
+            severity: Severity::High,
+            message,
+            refs,
+            nets: vec![net.to_string()],
+        });
+    }
+    out
 }
 
 // One match over envelope kinds sharing the resolver and per-net abstention bookkeeping.
@@ -1072,9 +1313,46 @@ fn envelope_lint_with_tolerance(
             .findings
             .extend(supply_abs_max_findings(comp, model, &resolver));
     }
+    report.findings.extend(unreadable_name_abstentions(
+        board,
+        &resolver,
+        &abstained_nets,
+    ));
     fold_starved_rails(&resolver, starved, &mut report);
     estimate_starved_rails(&resolver, st, &unleveled, &mut report);
     report
+}
+
+/// One abstention per supply net whose name seems to state a voltage it does
+/// not state readably (`+1KV`, `+1E3V`, `+5V5V`, `+1V8_3V3`) and whose level
+/// nothing else defines, on every board, whether or not any part on it has an
+/// operating envelope. Without this the same typo is a visible note on a board
+/// with an enveloped part and silent on one without. `already` holds the nets
+/// a part's envelope has abstained on.
+fn unreadable_name_abstentions(
+    board: &ExtractedBoard,
+    resolver: &RailResolver<'_>,
+    already: &BTreeSet<i64>,
+) -> Vec<LintFinding> {
+    board
+        .nets
+        .iter()
+        .filter(|net| !already.contains(&net.id) && unreadable_rail_name(&net.name).is_some())
+        .filter(|net| matches!(resolver.range(net.id), RailKnowledge::Unknown))
+        .filter_map(|net| {
+            let reference = board
+                .components
+                .iter()
+                .filter(|c| c.pins.iter().any(|p| p.net == Some(net.id)))
+                .map(|c| c.reference.as_str())
+                .min()?;
+            Some(unknown_abstention(
+                &net.name,
+                &RailKnowledge::Unknown,
+                reference,
+            ))
+        })
+        .collect()
 }
 
 /// Card pin-map roles that feed an IC's own supply domain: the pins its
@@ -2138,6 +2416,168 @@ dropout_v = 3.0
         assert!(high[0].message.contains("5.01"), "{}", high[0].message);
     }
 
+    /// The divider findings on `parts` for `nets`, with no load on the rail:
+    /// the rail's name and the divider are all there is to judge.
+    fn divider_findings(parts: Vec<Component>, nets: &[(i64, &str)]) -> Vec<LintFinding> {
+        let card = format!("{BOOST_AND_LOAD}\n{BUCK_AND_ADJ}");
+        let lib = library("divname", &card);
+        let report = envelope_lint(&board(nets, parts), &lib);
+        (report.of_check(LintCheck::OperatingEnvelope))
+            .filter(|f| f.message.contains("its feedback divider"))
+            .cloned()
+            .collect()
+    }
+
+    fn boost(top: &str, rail: &str) -> Vec<LintFinding> {
+        let parts = vec![
+            part(
+                "U1",
+                "FB_BOOST",
+                vec![pin("1", 2), pin("2", 1), pin("3", 3), pin("4", 4)],
+            ),
+            resistor("R1", top, 3, 4),
+            resistor("R2", "50k", 3, 1),
+        ];
+        divider_findings(parts, &[(1, "GND"), (2, "VIN"), (3, "FB"), (4, rail)])
+    }
+
+    /// A divider that sets a level its own rail name contradicts is a fault
+    /// with no load on the rail to notice it: 450k over 50k holds a 0.5 V
+    /// reference at 5.0 V on a net named +3V3. The finding names the
+    /// regulator, both resistors, the level, and the top value that would
+    /// give the named level (280k). Legal controls: the divider that gives
+    /// 3.3 V, one inside the name's 10 % band, a name that states no voltage,
+    /// and a name that states another voltage the divider does match.
+    #[test]
+    fn a_divider_that_contradicts_its_rails_name_is_a_finding() {
+        let high = boost("450k", "+3V3");
+        assert_eq!(high.len(), 1, "{high:#?}");
+        let (finding, msg) = (&high[0], &high[0].message);
+        assert_eq!(finding.severity, Severity::High, "{msg}");
+        assert_eq!(finding.refs, ["U1", "R1", "R2"], "{msg}");
+        assert_eq!(finding.nets, ["+3V3"], "{msg}");
+        for part in [
+            "U1 (FB_BOOST)",
+            "5.00 V",
+            "3.30 V",
+            "52 % above",
+            "R1 450k",
+            "R2 50k",
+        ] {
+            assert!(msg.contains(part), "{part}: {msg}");
+        }
+        // The remedy is the finding's own fix, not the check kind's generic advice.
+        let (_, fix) = msg.rsplit_once(REMEDY_MARKER).expect("a remedy");
+        assert!(fix.starts_with("Make R1 about 280k"), "{fix}");
+        let low = boost("200k", "+3V3");
+        assert_eq!(low.len(), 1, "{low:#?}");
+        assert!(low[0].message.contains("below"), "{}", low[0].message);
+        for (top, rail) in [
+            ("280k", "+3V3"),
+            ("300k", "+3V3"),
+            ("450k", "VCC"),
+            ("450k", "VOUT"),
+            ("450k", "+5V"),
+            ("450k", "5V_RF"),
+        ] {
+            let quiet = boost(top, rail);
+            assert!(quiet.is_empty(), "{top} on {rail}: {quiet:#?}");
+        }
+    }
+
+    /// The name is what the designer meant only when it states one voltage:
+    /// two voltage tokens (`5V_TO_3V3`) or an enable named after a rail
+    /// (`3V3_EN`) say nothing about the level, so nothing is judged.
+    #[test]
+    fn an_ambiguous_or_signal_name_is_not_a_stated_level() {
+        for rail in ["5V_TO_3V3", "3V3_EN", "VBUS", "VDD"] {
+            let quiet = boost("450k", rail);
+            assert!(quiet.is_empty(), "{rail}: {quiet:#?}");
+        }
+    }
+
+    /// The divider alone must set the level. A trim resistor into the
+    /// feedback node, or a second regulator on the rail, leaves the closed
+    /// form a guess, so it says nothing. A user-forced level is the user's
+    /// statement, not the divider's.
+    #[test]
+    fn a_divider_is_judged_only_when_it_alone_sets_the_rail() {
+        let regulator = || {
+            part(
+                "U1",
+                "FB_BOOST",
+                vec![pin("1", 2), pin("2", 1), pin("3", 3), pin("4", 4)],
+            )
+        };
+        let nets = [(1, "GND"), (2, "VIN"), (3, "FB"), (4, "+3V3"), (5, "TRIM")];
+        let trimmed = vec![
+            regulator(),
+            resistor("R1", "450k", 3, 4),
+            resistor("R2", "50k", 3, 1),
+            resistor("R3", "100k", 3, 5),
+        ];
+        assert!(divider_findings(trimmed, &nets).is_empty());
+        let plain = vec![
+            regulator(),
+            resistor("R1", "450k", 3, 4),
+            resistor("R2", "50k", 3, 1),
+        ];
+        assert_eq!(divider_findings(plain.clone(), &nets).len(), 1);
+        let mut rival = plain.clone();
+        rival.push(part(
+            "U9",
+            "FB_BOOST",
+            vec![pin("1", 2), pin("2", 1), pin("3", 6), pin("4", 4)],
+        ));
+        let nets_rival = [(1, "GND"), (2, "VIN"), (3, "FB"), (4, "+3V3"), (6, "FB2")];
+        assert!(divider_findings(rival, &nets_rival).is_empty());
+        let lib = library("divforced", &format!("{BOOST_AND_LOAD}\n{BUCK_AND_ADJ}"));
+        let forced = BTreeMap::from([("+3V3".to_string(), 3.3)]);
+        let report = envelope_lint_with_drives(&board(&nets, plain), &lib, &forced);
+        let said = (report.findings.iter()).any(|f| f.message.contains("its feedback divider"));
+        assert!(!said, "{:#?}", report.findings);
+    }
+
+    /// The buck's rail is the net past its inductor, and the finding is on
+    /// that net, not on the switch node its card names. The LM317-law LDO is
+    /// judged by its own law: 240R over 715R is 5.01 V on a +3V3 net, over
+    /// 390R is the 3.3 V the name states.
+    #[test]
+    fn bucks_and_lm317_dividers_are_judged_on_their_own_rail() {
+        let buck = |top: &str, rail: &str| {
+            let mut l1 = part("L1", "10uH", vec![pin("1", 4), pin("2", 5)]);
+            l1.lib_id = "Device:L".into();
+            let parts = vec![
+                part(
+                    "U1",
+                    "FB_BUCK",
+                    vec![pin("1", 2), pin("2", 1), pin("3", 3), pin("4", 4)],
+                ),
+                l1,
+                resistor("R1", top, 3, 5),
+                resistor("R2", "50k", 3, 1),
+            ];
+            let nets = [(1, "GND"), (2, "VIN"), (3, "FB"), (4, "SW"), (5, rail)];
+            divider_findings(parts, &nets)
+        };
+        let high = buck("450k", "+3V3");
+        assert_eq!(high.len(), 1, "{high:#?}");
+        assert_eq!(high[0].nets, ["+3V3"]);
+        assert!(buck("280k", "+3V3").is_empty());
+        let ldo = |bottom: &str| {
+            let parts = vec![
+                part("U1", "ADJ_LDO", vec![pin("1", 3), pin("2", 5), pin("3", 2)]),
+                resistor("R1", "240", 5, 3),
+                resistor("R2", bottom, 3, 1),
+            ];
+            divider_findings(parts, &[(1, "GND"), (2, "VIN"), (3, "ADJ"), (5, "+3V3")])
+        };
+        let high = ldo("715");
+        assert_eq!(high.len(), 1, "{high:#?}");
+        assert!(high[0].message.contains("5.01 V"), "{}", high[0].message);
+        assert!(ldo("390").is_empty(), "{:#?}", ldo("390"));
+    }
+
     /// Ensemble members on one board share its statics, yet each is judged at
     /// its own solved level, whatever order they are asked in.
     #[test]
@@ -2727,5 +3167,50 @@ unlocked_by = "validated behavior"
         .and_then(|o| o.apply_to_board(&mut b))
         .unwrap();
         assert!(starved(&envelope_lint(&b, &lib)).is_empty());
+    }
+    /// A supply net whose name seems to state a voltage it does not state
+    /// readably is named on every board, whether or not a part on it has an
+    /// operating envelope: the same typo was a visible note beside an
+    /// enveloped part and silent on a board of plain resistors.
+    #[test]
+    fn an_unreadable_rail_name_is_an_abstention_on_a_board_with_no_enveloped_part() {
+        let lint = |rail: &str| {
+            let loads = vec![
+                part("R1", "10k", vec![pin("1", 2), pin("2", 1)]),
+                part("R2", "10k", vec![pin("1", 2), pin("2", 1)]),
+            ];
+            envelope_lint(
+                &board(&[(1, "GND"), (2, rail)], loads),
+                &ModelLibrary::builtin(),
+            )
+            .of_check(LintCheck::OperatingEnvelope)
+            .cloned()
+            .collect::<Vec<_>>()
+        };
+        for (rail, why) in [
+            ("+1KV", "scale prefix"),
+            ("+5mV", "scale prefix"),
+            ("+1e3V", "exponent"),
+            ("VCC_1E3V", "exponent"),
+            ("+5V5V", "second V"),
+            ("+1V8_3V3", "two voltages"),
+        ] {
+            let found = lint(rail);
+            assert_eq!(found.len(), 1, "{rail}: {found:?}");
+            assert_eq!(found[0].severity, Severity::Low);
+            assert!(found[0].is_abstention(), "{rail}: {}", found[0].message);
+            assert!(
+                found[0].message.contains(why),
+                "{rail}: {}",
+                found[0].message
+            );
+            assert_eq!(found[0].nets, vec![rail.to_string()]);
+            assert_eq!(found[0].refs, vec!["R1".to_string()]);
+        }
+        // Legal controls: a readable name, a name that states nothing, and a
+        // tap named after a rail say nothing here.
+        for rail in ["+5V", "+3V3_3V3", "VDD", "+12V_FB", "+1KV_EN"] {
+            assert!(lint(rail).is_empty(), "{rail}: {:?}", lint(rail));
+        }
     }
 }

@@ -53,6 +53,10 @@
 //!   crystal whose value states no CL.
 //! - [`logic_levels`]: a CMOS logic input left between its VCC-scaled VIL
 //!   and VIH, where the datasheet guarantees no logic state.
+//! - [`rail_basis`]: a rail powered by its name alone whose only source is a
+//!   part the board does not fit (with no connector or test point on it)
+//!   never comes up; other name-powered rails are stated verdict conditions,
+//!   and a run that powered no rail says it judged none.
 //! - [`rail_conflicts`]: a rail more than one source sets the voltage of
 //!   (two regulators tied, differently named rails joined), from the binder's
 //!   rail-ownership pass.
@@ -104,6 +108,7 @@ pub mod model_controls;
 pub mod node_drive;
 pub mod open_paths;
 pub mod power_pins;
+pub mod rail_basis;
 pub mod rail_conflicts;
 pub mod rail_decoupling;
 pub mod regulator_cout;
@@ -397,6 +402,12 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     report
         .findings
         .extend(rail_conflicts::rail_conflict_findings(&bound.report).findings);
+    // A rail powered by its name alone whose only source is unfitted never
+    // comes up; a run that powered no rail judged no level.
+    report.findings.extend(
+        rail_basis::rail_basis_findings(&hauksbee_bind::rail_basis::rail_bases(board, lib, &bound))
+            .findings,
+    );
     report
         .findings
         .extend(rail_decoupling::decoupling_lint(board, lib).findings);

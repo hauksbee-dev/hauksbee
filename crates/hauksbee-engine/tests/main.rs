@@ -118,6 +118,8 @@ mod generic_led_corners;
 mod generic_mosfet_corner_check;
 #[path = "gerber_determinism.rs"]
 mod gerber_determinism;
+#[path = "ground_names.rs"]
+mod ground_names;
 #[path = "hardware_history.rs"]
 mod hardware_history;
 #[path = "host_serial_cosim.rs"]

@@ -1917,6 +1917,11 @@ fn usb_polarity(n: &str) -> Option<(String, char)> {
 
 fn check_usb_diff_pair(board: &ExtractedBoard, root: &List, report: &mut SiReport) {
     for (pid, mid, _base) in usb_pairs(board) {
+        // A `_DP`/`_DN` pair is USB only when its nets or parts say so: an eDP
+        // lane is no USB pair and USB's skew budget is not its budget.
+        if impedance::pair_class(board, pid, mid) != Some(impedance::ImpedanceClass::UsbDiff) {
+            continue;
+        }
         let lp = routed_length_mm(root, pid);
         let lm = routed_length_mm(root, mid);
         // Both legs must be actually routed to compare lengths.

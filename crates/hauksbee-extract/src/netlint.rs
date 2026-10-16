@@ -22,6 +22,7 @@ use crate::{Component, ExtractedBoard, Net, Pin};
 use hauksbee_models::refdes::RefClass;
 use std::fmt::Write as _;
 
+mod polarity;
 mod topology;
 
 /// One lint finding, severity-tagged, with the evidence to reproduce it.
@@ -276,6 +277,29 @@ pub enum LintCheck {
     /// (`hauksbee_models::pin_roles`), so it needs no supply-range row.
     /// Produced by the engine-layer `power_pins` check.
     PowerPinWiring,
+    /// A connector pin whose own name says supply (`VBUS`, `VCC`, `+5V`, `VIN`)
+    /// wired to a ground net, or a pin named `GND` wired to a positive supply
+    /// rail: supply and ground exchanged at the connector. Produced by
+    /// `polarity.rs` from pin names and net names alone.
+    SupplyGroundSwapped,
+    /// A unidirectional diode (TVS, Zener, Schottky, rectifier) between ground
+    /// and a rail with its anode on the higher-potential net: forward-biased
+    /// across the rail, it clamps the rail to a diode drop. Produced by
+    /// `polarity.rs`.
+    DiodeReversed,
+    /// A polarised capacitor (CP footprint or symbol, `+` pin) with its +
+    /// terminal on the lower-potential of two nets whose order the names fix:
+    /// reverse-biased whenever the board is powered. Produced by
+    /// `polarity.rs`.
+    PolarisedCapReversed,
+    /// A rail the analysis would otherwise power by its name alone whose only
+    /// source is a part the board does not fit (its regulator, or the ferrite
+    /// or 0 ohm link to a powered rail), with no connector, test point or
+    /// battery to bring it in: it never comes up. Also the non-gating notes on
+    /// a rail whose own source is unfitted but may come in from off the board,
+    /// and on a run that powered no rail at all. Produced by the engine-layer
+    /// `rail_basis` check.
+    RailUnpowered,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -300,7 +324,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 32] = [
+    pub const ALL: [Self; 36] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -333,6 +357,10 @@ impl LintCheck {
         Self::GateUnderdrive,
         Self::RegulatorHeldOff,
         Self::PowerPinWiring,
+        Self::SupplyGroundSwapped,
+        Self::DiodeReversed,
+        Self::PolarisedCapReversed,
+        Self::RailUnpowered,
     ];
 
     #[must_use]
@@ -370,6 +398,10 @@ impl LintCheck {
             Self::GateUnderdrive => "gate_underdrive",
             Self::RegulatorHeldOff => "regulator_held_off",
             Self::PowerPinWiring => "power_pin_wiring",
+            Self::SupplyGroundSwapped => "supply_ground_swapped",
+            Self::DiodeReversed => "diode_reversed",
+            Self::PolarisedCapReversed => "polarised_cap_reversed",
+            Self::RailUnpowered => "rail_unpowered",
         }
     }
 }
@@ -430,6 +462,9 @@ impl ExtractedBoard {
         topology::check_ground_islands(self, &mut report);
         topology::check_unwired_connectors(self, &mut report);
         topology::check_reversed_leds(self, &mut report);
+        polarity::check_connector_supply_pins(self, &mut report);
+        polarity::check_diodes_across_rails(self, &mut report);
+        polarity::check_polarised_capacitors(self, &mut report);
         report
     }
 }
