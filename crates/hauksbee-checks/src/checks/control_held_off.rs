@@ -55,7 +55,7 @@ use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
 
 use super::envelope::role_net_id;
 use super::indicators::name_suggests_active_low;
-use super::regulator_enable::{decapitalise, ohms, survey_net, Reg, Survey};
+use super::regulator_enable::{decapitalise, ohms, survey_net, unfitted_note, Reg, Survey};
 
 /// The weakest internal pull-up assumed when a card prints none and does not
 /// say the pin has none.
@@ -357,11 +357,7 @@ fn judge(
         &internal_pull(control.kind, control.role.as_deref(), model),
         rpd,
     )?;
-    let unfitted = match unfitted.as_slice() {
-        [] => String::new(),
-        [one] => format!(" ({one} on the net is not fitted)"),
-        many => format!(" ({} on the net are not fitted)", many.join(", ")),
-    };
+    let unfitted = unfitted_note(&unfitted);
     let supply = supply_name(board, comp, model);
     let label = &control.label;
     let subject = format!(

@@ -380,6 +380,15 @@ pub(super) fn decapitalise(s: &str) -> String {
         .map_or_else(String::new, |f| f.to_lowercase().chain(c).collect())
 }
 
+/// " (R1 on the net is not fitted)", or nothing when every part is fitted.
+pub(super) fn unfitted_note(unfitted: &[String]) -> String {
+    match unfitted {
+        [] => String::new(),
+        [one] => format!(" ({one} on the net is not fitted)"),
+        many => format!(" ({} on the net are not fitted)", many.join(", ")),
+    }
+}
+
 fn judge(
     board: &ExtractedBoard,
     comp: &Component,
@@ -446,11 +455,7 @@ fn judge(
             held.join(", ")
         ),
     };
-    let unfitted = match unfitted.as_slice() {
-        [] => String::new(),
-        [one] => format!(" ({one} on the net is not fitted)"),
-        many => format!(" ({} on the net are not fitted)", many.join(", ")),
-    };
+    let unfitted = unfitted_note(&unfitted);
     let vout = model
         .params
         .get_f64("vout")
