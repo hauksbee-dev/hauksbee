@@ -63,6 +63,10 @@
 //! - [`dc_stress`]: every card rating (junction, channel and driver-pin
 //!   current, resistor wattage, junction temperature) judged at the board's
 //!   solved DC operating point by the co-simulation's own stress monitor.
+//! - [`led_current`]: an LED string's current from the levels its two ends are
+//!   held at, with no solve, against the LED's own rating, an indicator
+//!   package's ceiling, the series resistor's wattage and the driving pin's
+//!   rating: the one LED-current rule.
 //! - [`open_paths`]: the rating claims that pass would read as met whose
 //!   current path runs into a part with no working model, as abstentions.
 
@@ -78,6 +82,7 @@ pub mod device_decode;
 pub mod envelope;
 pub mod floating_inputs;
 pub mod indicators;
+pub mod led_current;
 pub mod logic_levels;
 pub mod mcu_coverage;
 pub mod model_controls;
@@ -94,7 +99,7 @@ pub mod usb_c;
 
 use hauksbee_bind::binder::BoardFacts;
 use hauksbee_bind::variant_sweep::CornerPlan;
-use hauksbee_extract::{ExtractedBoard, NetLintReport, SiReport};
+use hauksbee_extract::{ExtractedBoard, LintCheck, NetLintReport, SiReport};
 use hauksbee_models::ModelLibrary;
 
 /// Net-name classification: the one table (`hauksbee_models::netclass`).
@@ -343,6 +348,17 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     report
         .findings
         .extend(dc_stress::dc_stress_at_corners(board, lib, bound).findings);
+    // An LED string's current judged with no solve (a GPIO-lit string, or a
+    // board whose operating point does not solve). A string the DC stress
+    // pass already overstresses is its finding, not a second one.
+    for judged in led_current::led_strings(board, lib) {
+        let reported = report.findings.iter().any(|f| {
+            f.check == LintCheck::DcOverstress && f.refs.iter().any(|r| judged.string.contains(r))
+        });
+        if !reported {
+            report.findings.push(judged.finding);
+        }
+    }
     // Static surfaces have no solved levels, so the comparator half of this
     // check reads the rail table and abstains on a divider tap; the ADC
     // source-impedance half is pure topology and runs either way.

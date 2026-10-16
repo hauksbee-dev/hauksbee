@@ -17,13 +17,24 @@
 //! footprint's) and the driving pin's current rating.
 //!
 //! A limit from a stand-in card (an LED guessed from its colour, the generic
-//! LED's assumed corners) is a stated condition, never a failing finding
-//! ([`rating_basis`]). An LED whose card names forward-voltage corners is judged
-//! at every corner and the resistor at its stated tolerance: a judged limit
-//! passed at every corner of a rail-held string is high severity, at only some
-//! corners a conditional medium one, and on a firmware- or logic-driven string
-//! medium, since the driver decides when it is lit. A string whose ends are
-//! not both held (an open-drain status pin, a transistor switch) is not judged.
+//! LED's assumed corners) is never a failing finding ([`hauksbee_models::rating_basis`]): the DC
+//! stress pass states it as a condition. One limit holds whatever indicator
+//! LED is fitted: on a chip (0402 to 1206) or round 3/5 mm package the stand-in
+//! card's pulsed peak current ([`package_ceiling`], 100 mA at duty 1/10 for the
+//! Wurth WL-SMCW family the generic card is drawn from, over three times its
+//! 30 mA continuous rating). A steady current past that is past the continuous
+//! rating of any LED in the package, so it is judged as a limit the board
+//! states, like a resistor footprint's wattage.
+//!
+//! An LED whose card names forward-voltage corners is judged at every corner
+//! and the resistor at its stated tolerance: a judged limit passed at every
+//! corner of a rail-held string is high severity, at only some corners a
+//! conditional medium one, and on a firmware- or logic-driven string medium,
+//! since the driver decides when it is lit. A string whose ends are not both
+//! held (an open-drain status pin, a transistor switch) is not judged.
+//!
+//! This is the one LED-current rule: the connectivity lint's old fixed-Vf
+//! estimate is retired in its favour.
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 
@@ -37,7 +48,7 @@ use hauksbee_extract::{
     is_led, is_plain_resistor, Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport,
     Severity,
 };
-use hauksbee_models::rating_basis::{self, Limit, StandIn};
+use hauksbee_models::rating_basis::{Limit, StandIn};
 use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary, Resolution};
 
 use super::envelope::{role_net_id, RailResolver};
@@ -142,22 +153,24 @@ struct Led {
     n: f64,
     rs: f64,
     max_a: Option<Rated>,
+    /// The package ceiling ([`package_ceiling`]) when the card's own current
+    /// rating is a stand-in: amps and the package, in words.
+    ceiling: Option<(f64, String)>,
 }
 
 /// One rating passed in one scenario.
 struct Exceeded {
-    /// The part whose rating it is.
-    part: String,
     /// What was seen, against what.
     clause: String,
-    /// The rating, in words ("25.0 mA current").
-    rating: String,
     stand_in: Option<StandIn>,
 }
 
 /// The string judged at one LED card and one end of the tolerance span.
 struct Scenario {
     amps: f64,
+    /// The LED's forward drop at that current, and the card it is from.
+    drop: f64,
+    card: String,
     corner: String,
     exceeded: Vec<Exceeded>,
 }
@@ -223,7 +236,9 @@ impl Ctx<'_> {
                 .collect(),
             None => vec![res.model.clone()?],
         };
-        let cards: Vec<Led> = models.iter().filter_map(Led::of).collect();
+        let cards: Vec<Led> = (models.iter())
+            .filter_map(|model| Led::of(model, led))
+            .collect();
         (!cards.is_empty() && cards.len() == models.len()).then_some(cards)
     }
 
@@ -327,7 +342,8 @@ impl Ctx<'_> {
                 _ => false,
             }
         };
-        let mut found = (self.statics.parts(self.board)).filter(|(comp, model)| drives(comp, model));
+        let mut found =
+            (self.statics.parts(self.board)).filter(|(comp, model)| drives(comp, model));
         let first = found.next()?;
         found.next().is_none().then_some(first)
     }
@@ -351,8 +367,44 @@ fn span(levels: &[f64]) -> Option<(f64, f64)> {
     (!levels.is_empty()).then_some((min_v, max_v))
 }
 
+/// Footprint words of a mid- or high-power LED package, which no indicator
+/// ceiling bounds.
+const POWER_PACKAGES: [&str; 12] = [
+    "5050", "3535", "2835", "3528", "5730", "3030", "CREE", "LUXEON", "OSLON", "POWER", "PLCC4",
+    "WS2812",
+];
+
+/// Footprint words of a chip (0402 to 1206, inch and metric codes) or round
+/// 3/5 mm through-hole indicator LED package.
+const INDICATOR_PACKAGES: [&str; 16] = [
+    "0402", "0603", "0805", "1206", "1005", "1608", "2012", "3216", "D3.0MM", "D5.0MM", "LED3MM",
+    "LED5MM", "LED-3MM", "LED-5MM", "LED_3MM", "LED_5MM",
+];
+
+/// The steady current no indicator LED on `led`'s package is rated to carry:
+/// the stand-in `model`'s pulsed peak (`max_surge_current_a`), when its
+/// continuous rating is a stand-in's and the footprint names a chip (0402 to
+/// 1206) or round 3/5 mm indicator package. `None` for any other package (a
+/// mid- or high-power LED may carry hundreds of milliamps) or an own card,
+/// whose own rating is judged instead.
+///
+/// Source: the generic LED card's family, Wurth Elektronik WL-SMCW 0603
+/// (150060RS75000 and siblings, rev 002.009, Absolute Maximum Ratings): IF
+/// 30 mA continuous, IF peak 100 mA at duty 1/10 and 1 kHz, every colour.
+fn package_ceiling(led: &Component, model: &ModelEntry) -> Option<(f64, String)> {
+    model.ratings.basis.stand_in_for(Limit::Current)?;
+    let peak = model.ratings.max_surge_current_a.filter(|a| *a > 0.0)?;
+    let footprint = led.footprint.rsplit(':').next().unwrap_or(&led.footprint);
+    let upper = footprint.to_ascii_uppercase();
+    if POWER_PACKAGES.iter().any(|t| upper.contains(t)) {
+        return None;
+    }
+    let indicator = (INDICATOR_PACKAGES.iter()).any(|t| upper.contains(t));
+    indicator.then(|| (peak, footprint.to_string()))
+}
+
 impl Led {
-    fn of(model: &ModelEntry) -> Option<Self> {
+    fn of(model: &ModelEntry, led: &Component) -> Option<Self> {
         let params = &model.params;
         let (is, n) = (params.get_f64("is")?, params.get_f64("n")?);
         let max_a = (model.ratings.max_current_a).map(|amps| {
@@ -365,12 +417,22 @@ impl Led {
             n,
             rs: params.get_f64("rs").unwrap_or(0.0).max(0.0),
             max_a,
+            ceiling: package_ceiling(led, model),
         })
+    }
+
+    fn nvt(&self) -> f64 {
+        self.n * hauksbee_ir::thermal_voltage_c(hauksbee_ir::Circuit::new().temp_c)
+    }
+
+    /// The LED's forward drop carrying `amps`.
+    fn drop(&self, amps: f64) -> f64 {
+        amps.mul_add(self.rs, self.nvt() * (amps / self.is).ln_1p())
     }
 
     /// The current through the LED and `ohms` in series across `volts`.
     fn current(&self, volts: f64, ohms: f64) -> f64 {
-        let nvt = self.n * hauksbee_ir::thermal_voltage_c(hauksbee_ir::Circuit::new().temp_c);
+        let nvt = self.nvt();
         let total = ohms + self.rs;
         let excess = |amps: f64| amps.mul_add(total, nvt * (amps / self.is).ln_1p()) - volts;
         if volts <= 0.0 {
@@ -454,42 +516,49 @@ impl LedString<'_> {
             let dissipated = current * current * r;
             if dissipated > *rating {
                 out.push(Exceeded {
-                    part: s.reference.clone(),
                     clause: format!(
                         "{} dissipates {}, over its {} rating (from {from})",
                         s.reference,
                         watts(dissipated),
                         watts(*rating)
                     ),
-                    rating: format!("{} power", watts(*rating)),
                     stand_in: stand_in.clone(),
                 });
             }
         }
         let reference = &self.led.reference;
+        if let Some((ceiling, package)) = (led.ceiling.as_ref()).filter(|(a, _)| current > *a) {
+            out.push(Exceeded {
+                clause: format!(
+                    "{reference} carries {} steadily, over even the {} pulsed peak (duty 1/10) \
+                     of an indicator LED, past the continuous rating of any LED in its {package} \
+                     package (the generic limit; card '{}' gives no part's own rating)",
+                    amps(current),
+                    amps(*ceiling),
+                    led.card,
+                ),
+                stand_in: None,
+            });
+        }
         if let Some((rating, stand_in)) = (led.max_a.as_ref()).filter(|(a, _)| current > *a) {
             out.push(Exceeded {
-                part: reference.clone(),
                 clause: format!(
                     "{reference} carries {}, over its {} current rating",
                     amps(current),
                     amps(*rating)
                 ),
-                rating: format!("{} current", amps(*rating)),
                 stand_in: stand_in.clone(),
             });
         }
         for d in self.drivers() {
             if let Some((rating, stand_in)) = (d.pin_limit.as_ref()).filter(|(a, _)| current > *a) {
                 out.push(Exceeded {
-                    part: d.reference.clone(),
                     clause: format!(
                         "{}'s pin passes {}, over its {} pin rating",
                         d.reference,
                         amps(current),
                         amps(*rating)
                     ),
-                    rating: format!("{} pin current", amps(*rating)),
                     stand_in: stand_in.clone(),
                 });
             }
@@ -522,6 +591,8 @@ impl LedString<'_> {
                 };
                 out.push(Scenario {
                     amps: current,
+                    drop: card.drop(current),
+                    card: card.card.clone(),
                     corner,
                     exceeded: self.exceeded(card, current, &ohms),
                 });
@@ -589,7 +660,10 @@ impl LedString<'_> {
         } else {
             "low".to_string()
         };
-        format!("'{}' when {} drives it {level} through {ro}", end.net, d.reference)
+        format!(
+            "'{}' when {} drives it {level} through {ro}",
+            end.net, d.reference
+        )
     }
 
     /// What the string carries at `worst`, in words.
@@ -609,12 +683,15 @@ impl LedString<'_> {
             format!(" (at {})", worst.corner)
         };
         format!(
-            "{} lit from {} through {} to {} carries up to {}{corner}",
+            "{} lit from {} through {} to {} carries up to {}{corner}, its forward drop \
+             {:.2} V there (card '{}')",
             self.led.reference,
             Self::held(&self.anode, true),
             resistors.join(" and "),
             Self::held(&self.cathode, false),
             amps(worst.amps),
+            worst.drop,
+            worst.card,
         )
     }
 
@@ -632,15 +709,15 @@ impl LedString<'_> {
             .filter(|c| !c.is_empty())
             .collect();
         at.dedup();
-        let at = if at.is_empty() {
-            "the high end of its rail and resistor tolerance".to_string()
+        let why = if at.is_empty() {
+            " (CONDITIONAL: only at the high end of its rail and resistor tolerances)".to_string()
         } else {
-            at.join(" / ")
+            format!(
+                " (CONDITIONAL: only at {}; the board does not say which part is fitted, so \
+                 the fitted part decides whether it holds)",
+                at.join(" / ")
+            )
         };
-        let why = format!(
-            " (CONDITIONAL: only at {at}; the board does not say which part is fitted, so the \
-             fitted part decides whether it holds)"
-        );
         (Severity::Medium, why)
     }
 
@@ -650,26 +727,21 @@ impl LedString<'_> {
         let by_amps = |x: &&Scenario, y: &&Scenario| x.amps.total_cmp(&y.amps);
         let held: Vec<&Scenario> = scenarios.iter().filter(|s| s.judged()).collect();
         let remedy = self.safe_ohms(cards).map_or_else(String::new, |r| {
-            format!("; a series resistance of at least {} Ω keeps every rating", trim(r))
+            format!(
+                "; a series resistance of at least {} Ω keeps every rating",
+                trim(r)
+            )
         });
-        let (severity, message) = if let Some(worst) = held.iter().max_by(by_amps) {
-            let clauses: Vec<&str> = (worst.exceeded.iter())
-                .filter(|e| e.stand_in.is_none())
-                .map(|e| e.clause.as_str())
-                .collect();
-            let (severity, qualifier) = self.severity(&held, scenarios.len());
-            let subject = self.subject(worst);
-            (severity, format!("{subject}: {}{qualifier}{remedy}", clauses.join("; ")))
-        } else {
-            // Only a stand-in card's limit is passed: the stated condition.
-            let worst = (scenarios.iter())
-                .filter(|s| !s.exceeded.is_empty())
-                .max_by(by_amps)?;
-            let e = worst.exceeded.first()?;
-            let subject = format!("{}, and {}", self.subject(worst), e.clause);
-            let condition = rating_basis::condition(&e.part, e.stand_in.as_ref()?, &subject, &e.rating);
-            (Severity::Low, format!("{condition}{remedy}"))
-        };
+        // Only a judged limit is a finding here: a stand-in card's limit
+        // passed is the condition the DC stress pass states.
+        let worst = held.iter().copied().max_by(by_amps)?;
+        let clauses: Vec<&str> = (worst.exceeded.iter())
+            .filter(|e| e.stand_in.is_none())
+            .map(|e| e.clause.as_str())
+            .collect();
+        let (severity, qualifier) = self.severity(&held, scenarios.len());
+        let subject = self.subject(worst);
+        let message = format!("{subject}: {}{qualifier}{remedy}", clauses.join("; "));
         let mut refs = vec![self.led.reference.clone()];
         refs.extend(self.series.iter().map(|s| s.reference.clone()));
         refs.extend(self.drivers().map(|d| d.reference.clone()));
@@ -682,5 +754,150 @@ impl LedString<'_> {
             refs,
             nets,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::checks::test_support::{board, part};
+
+    const NETS: [(i64, &str); 5] = [
+        (1, "GND"),
+        (2, "+3V3"),
+        (3, "/MID"),
+        (4, "+5V"),
+        (5, "/GPIO"),
+    ];
+
+    fn with_footprint(mut c: Component, footprint: &str) -> Component {
+        c.footprint = footprint.into();
+        c
+    }
+
+    fn led(value: &str, anode: i64, cathode: i64) -> Component {
+        let pads = [("A", anode), ("K", cathode)];
+        with_footprint(part("D1", value, &pads), "LED_SMD:LED_0603_1608Metric")
+    }
+
+    fn resistor(value: &str, a: i64, b: i64) -> Component {
+        let pads = [("1", a), ("2", b)];
+        with_footprint(part("R1", value, &pads), "Resistor_SMD:R_0603_1608Metric")
+    }
+
+    fn lint(parts: Vec<Component>) -> Vec<LintFinding> {
+        let report = led_current_lint(&board(&NETS, parts), &ModelLibrary::builtin());
+        (report.findings.into_iter())
+            .filter(|f| f.check == LintCheck::LedCurrentSanity)
+            .collect()
+    }
+
+    /// Faulty: a red 0603 LED from +3V3 with its cathode resistor cut to
+    /// 1 ohm carries well over 100 mA, past the indicator package's ceiling
+    /// at every end of the rail's band, though its colour card is a stand-in.
+    #[test]
+    fn a_one_ohm_cathode_resistor_overdrives_a_red_indicator() {
+        let found = lint(vec![led("RED", 2, 3), resistor("1", 3, 1)]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        let f = &found[0];
+        assert_eq!(f.severity, Severity::High, "{}", f.message);
+        assert!(f.refs.contains(&"D1".to_string()) && f.refs.contains(&"R1".to_string()));
+        assert!(f.nets.contains(&"+3V3".to_string()), "{:?}", f.nets);
+        for words in [
+            "pulsed peak",
+            "100.0 mA",
+            "'led_red'",
+            "forward drop",
+            "at least",
+        ] {
+            assert!(f.message.contains(words), "{words}: {}", f.message);
+        }
+    }
+
+    /// Legal controls: the same red LED through the board's 120 ohm, and a
+    /// generic LED through 330 ohm or 1k from +3V3 or +5V, are silent.
+    #[test]
+    fn typical_indicator_resistors_are_silent() {
+        assert!(lint(vec![led("RED", 2, 3), resistor("120", 3, 1)]).is_empty());
+        for rail in [2, 4] {
+            for ohms in ["330", "1k"] {
+                let found = lint(vec![resistor(ohms, rail, 3), led("LED", 3, 1)]);
+                assert!(found.is_empty(), "{ohms} on net {rail}: {found:#?}");
+            }
+        }
+    }
+
+    /// A generic LED (colour unknown) from +5V through 1 ohm: past the
+    /// package ceiling at the low forward-voltage corner at least, so a
+    /// gating finding naming the LED and its resistor.
+    #[test]
+    fn a_one_ohm_resistor_on_a_generic_led_is_gating() {
+        let found = lint(vec![resistor("1", 4, 3), led("LED", 3, 1)]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert!(
+            matches!(found[0].severity, Severity::High | Severity::Medium),
+            "{}",
+            found[0].message
+        );
+        assert!(
+            found[0].message.contains("pulsed peak"),
+            "{}",
+            found[0].message
+        );
+    }
+
+    /// A stand-in card's own 25 mA passed, but nothing the board or the
+    /// package states: no finding here (the DC stress pass states that
+    /// condition at its solve).
+    #[test]
+    fn a_stand_in_rating_alone_is_not_a_finding() {
+        // About 30 mA at the red corner: over 25 mA, under the 100 mA ceiling,
+        // and 0.09 W in a 1206's 0.25 W.
+        let series = with_footprint(
+            part("R1", "100", &[("1", 4), ("2", 3)]),
+            "Resistor_SMD:R_1206_3216Metric",
+        );
+        let found = lint(vec![series, led("LED", 3, 1)]);
+        assert!(found.is_empty(), "{found:#?}");
+    }
+
+    /// A DNP option resistor on the anode net is not part of the string: the
+    /// fitted 68 ohm resistor is, and its 0402 wattage is passed at the red
+    /// corner from +5V (the old fixed-Vf rule's R15 case).
+    #[test]
+    fn a_dnp_resistor_beside_the_string_does_not_hide_it() {
+        let series = with_footprint(
+            part("R1", "68", &[("1", 4), ("2", 3)]),
+            "Resistor_SMD:R_0402_1005Metric",
+        );
+        let option = with_footprint(
+            part("R0", "DNP", &[("1", 3), ("2", 1)]),
+            "Resistor_SMD:R_0402_1005Metric",
+        );
+        let found = lint(vec![series, option, led("LED", 3, 1)]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert!(
+            found[0].message.contains("R1 dissipates"),
+            "{}",
+            found[0].message
+        );
+        assert!(!found[0].refs.contains(&"R0".to_string()));
+    }
+
+    /// An MCU pin lighting the LED through 1 ohm passes the pin's own 40 mA
+    /// rating (ATmega328P card); through 330 ohm it does not.
+    #[test]
+    fn a_gpio_lit_led_is_judged_against_the_pin_rating() {
+        let mcu = |r: &str| {
+            let u1 = part("U1", "ATmega328P", &[("7", 4), ("8", 1), ("19", 5)]);
+            vec![u1, resistor(r, 5, 3), led("RED", 3, 1)]
+        };
+        let found = lint(mcu("1"));
+        assert_eq!(found.len(), 1, "{found:#?}");
+        let f = &found[0];
+        assert_eq!(f.severity, Severity::Medium, "{}", f.message);
+        assert!(f.message.contains("U1's pin passes"), "{}", f.message);
+        assert!(f.refs.contains(&"U1".to_string()));
+        assert!(lint(mcu("330")).is_empty());
     }
 }
