@@ -219,6 +219,9 @@ pub fn run(port: u16, open: bool, no_open: bool) -> anyhow::Result<()> {
             // Engine version, for the Environment page's "what am I running"
             // card.
             "version": env!("CARGO_PKG_VERSION"),
+            // The accepted board formats, from the engine's one table, for the
+            // picker, the drop card and the precheck.
+            "board_formats": crate::board_input::accepted_formats_json(),
         })
         .to_string();
         hauksbee_server::serve_frontdoor_on_with_design(

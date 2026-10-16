@@ -5,6 +5,7 @@ import type { AppView } from './components/Sidebar'
 import { UploadView } from './components/UploadView'
 import { BoardView } from './components/BoardView'
 import { checksStorageKey } from './lib/checks-storage'
+import { ChecksLinks } from './components/checks/ChecksLinks'
 import type { ChecksSummary } from './components/ChecksView'
 import { DepsPanel } from './components/DepsPanel'
 import { SettingsView } from './components/SettingsView'
@@ -18,7 +19,7 @@ import { useBoardSession } from './hooks/useBoardSession'
 import { useSessions } from './hooks/useSessions'
 import type { SpecSnapshot } from './hooks/useSessions'
 import type { SavedSession } from './lib/session-store'
-import { BOARD_ACCEPT_ATTR } from './lib/board-formats'
+import { boardAcceptAttr, firmwareExts, setServedBoardFormats } from './lib/board-formats'
 import { BoardTargetIcon, PlayIcon } from './components/Icons'
 import { api } from './lib/api'
 import { CheckHostContext, type CheckHost } from './lib/check-catalog'
@@ -62,6 +63,11 @@ export default function App() {
   useEffect(() => {
     let alive = true
     void api.startup()
+      .then(startup => {
+        // The engine's accepted-formats table, before the first screen reads it.
+        setServedBoardFormats(startup.board_formats)
+        return startup
+      })
       .then(startup => ({
         report: startup.preloaded ? startup.report : null,
         boardName: startup.preloaded ? startup.board_name : null,
@@ -221,6 +227,8 @@ function Shell({ boot }: { boot: Boot }) {
     setView(v)
   }, [deck, driveLive, openLiveSession, reportOk, serverLiveActive, session.liveMode, simMounted])
 
+  const showBoard = useCallback(() => setView('board'), [])
+
   const analyzeAnother = useCallback(() => {
     session.resetFlow()
     setChecksSummary(null)
@@ -311,11 +319,11 @@ function Shell({ boot }: { boot: Boot }) {
   // one.
   const headerBoard = view === 'env' || view === 'settings'
     ? null
-    : view === 'sim' ? (sessionBoard ?? session.boardLabel) : session.boardLabel
+    : view === 'sim' ? (deck ? deck.name : sessionBoard ?? session.boardLabel) : session.boardLabel
 
   return (
     <CheckHostContext.Provider value={checkHost}>
-    <div className="flex h-screen overflow-hidden" style={{ background: 'var(--canvas)', color: 'var(--silk)' }}>
+    <div className="app-shell flex h-screen overflow-hidden" style={{ background: 'var(--canvas)', color: 'var(--silk)' }}>
       <Sidebar
         nav={{
           view,
@@ -333,7 +341,7 @@ function Shell({ boot }: { boot: Boot }) {
         sessions={<SessionRail state={sessions} onResume={resumeSession} />}
       />
 
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         {/* Title row: where you are, what board this is, live status, and the
             primary action. */}
         <header
@@ -345,14 +353,13 @@ function Shell({ boot }: { boot: Boot }) {
                 so it keeps its width and the board name (which has a tooltip
                 and a natural ellipsis point) gives ground first. */}
             <h1 className="text-[15px] font-semibold shrink-0" style={{ margin: 0, color: 'var(--silk)' }}>
-              {VIEW_TITLES[view]}
+              {view === 'sim' && deck ? 'Circuit sim' : VIEW_TITLES[view]}
             </h1>
             {headerBoard && (
               <span
-                className="text-[12px] truncate"
-                // On a phone header this is the only place the board's name
-                // appears (the rail's identity card is icon-collapsed), and it
-                // gets ellipsed there: the full name stays reachable.
+                className="hidden sm:block text-[12px] truncate"
+                // Not on a phone: the one status chip needs the room, and the
+                // report below names the board in its own verdict card.
                 title={headerBoard}
                 style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}
               >
@@ -361,14 +368,12 @@ function Shell({ boot }: { boot: Boot }) {
             )}
           </div>
 
-          <div className="flex-1" />
+          <div className="flex-1 max-sm:hidden" />
 
-          {/* Status chips need about 190px of their own. They appear from `md`,
-              where the header has it to spare once the secondary action is a
-              glyph. A long board name can still leave too little: the row then
-              scrolls horizontally in its own container, so every chip stays
-              reachable and none is served cut in half. */}
-          <div className="hidden md:flex items-center gap-1.5 overflow-x-auto min-w-0">
+          {/* The one status chip. It takes the row's spare width (on a phone
+              all of it) and ellipsizes its label before it pushes the title or a
+              header action off the row; the full text is its hover. */}
+          <div className="flex items-center justify-end min-w-0 max-sm:flex-1">
             <ShellChips
               view={view}
               report={report}
@@ -393,7 +398,7 @@ function Shell({ boot }: { boot: Boot }) {
               name (visually hidden text, not an `aria-label`, so the `title`
               tooltip that names the glyph on hover or long-press matches the
               name instead of adding a second description). */}
-          {report && !session.busy && (
+          {reportOk && !session.busy && (
             <button
               type="button"
               data-testid="header-another-board"
@@ -469,6 +474,7 @@ function Shell({ boot }: { boot: Boot }) {
 
           {reportOk && report && (
             <div style={{ display: view === 'checks' ? 'block' : 'none', height: '100%' }}>
+              <ChecksLinks report={report} onShow={showBoard} selectNet={session.setSelectedNet} selectComponent={session.setSelectedComponent}>
               <Suspense fallback={null}>
               <ChecksView
                 // Remount per board (the key doubles as the localStorage key):
@@ -491,6 +497,7 @@ function Shell({ boot }: { boot: Boot }) {
                 onModelSaved={session.reanalyzeCurrent}
               />
               </Suspense>
+              </ChecksLinks>
             </div>
           )}
 
@@ -523,7 +530,7 @@ function Shell({ boot }: { boot: Boot }) {
           {envVisited && (
             <div className="overflow-y-auto" style={{ display: view === 'env' ? 'block' : 'none', height: '100%' }}>
               <div className="max-w-3xl mx-auto px-6 pb-16 view-enter">
-                <DepsPanel engineVersion={engineVersion} />
+                <DepsPanel engineVersion={engineVersion} onOpenSettings={() => navigate('settings')} />
               </div>
             </div>
           )}
@@ -540,19 +547,19 @@ function Shell({ boot }: { boot: Boot }) {
 
       {/* Hidden file inputs, shared by the drop card and every firmware jack,
           so the report view can keep offering both slots. The board picker's
-          accepted list comes from lib/board-formats, the one such list, so it
+          accepted list is the engine's served table (lib/board-formats), so it
           cannot offer a different set from the one the copy names. */}
       <input
         id="board-file"
         type="file"
-        accept={BOARD_ACCEPT_ATTR}
+        accept={boardAcceptAttr()}
         className="hidden"
         onChange={e => { const f = e.target.files?.[0]; if (f) session.handleBoard(f); e.target.value = '' }}
       />
       <input
         id="firmware-file"
         type="file"
-        accept=".elf,.hex,.zip"
+        accept={[...firmwareExts(), '.zip'].join(',')}
         className="hidden"
         onChange={e => { const f = e.target.files?.[0]; if (f) session.handleFirmware(f); e.target.value = '' }}
       />

@@ -46,8 +46,12 @@ export function DatasheetExtract({
   openParts,
   onSaved,
   onOpenSettings,
+  focus = false,
 }: {
   openParts: WebOpenPart[]
+  /** One part, opened straight on its draft flow: the "Draft from datasheet"
+   *  tab of the model surface, with no list of other parts around it. */
+  focus?: boolean
   onSaved?: () => void
   /** Opens the Settings page's "Datasheet extraction" section, where the
    *  backend that runs an extraction is actually configured. Omitted, the
@@ -178,6 +182,12 @@ export function DatasheetExtract({
     }
   }, [flow, onSaved])
 
+  // In focus mode the one part's flow is open from the start.
+  const first = draftable[0]
+  useEffect(() => {
+    if (focus && first && active?.reference !== first.reference) begin(first)
+  }, [focus, first, active, begin])
+
   if (draftable.length === 0) return null
 
   const base = ready.phase === 'ready' ? ready.info : null
@@ -185,11 +195,12 @@ export function DatasheetExtract({
   const blocked = info !== null && !info.ready
 
   return (
-    <section className="mt-4" data-testid="datasheet-extract">
+    <section className={focus ? '' : 'mt-4'} data-testid="datasheet-extract">
       <div
-        className="rounded-xl px-4 py-3"
-        style={{ border: '1px solid var(--hairline)', background: 'var(--surface)' }}
+        className={focus ? '' : 'rounded-xl px-4 py-3'}
+        style={focus ? undefined : { border: '1px solid var(--hairline)', background: 'var(--surface)' }}
       >
+        {!focus && <>
         <div className="text-[11px] font-bold tracking-widest uppercase" style={{ color: 'var(--silk-faint)' }}>
           Parts with no model
         </div>
@@ -251,6 +262,7 @@ export function DatasheetExtract({
             </div>
           ))}
         </div>
+        </>}
 
         {ready.phase === 'unavailable' && (
           <div
@@ -258,17 +270,17 @@ export function DatasheetExtract({
             className="mt-2.5 rounded-lg px-3 py-2 text-[12px]"
             style={{ border: '1px solid var(--hairline)', color: 'var(--silk-faint)' }}
           >
-            This server does not offer datasheet extraction ({ready.reason}). From a terminal:{' '}
-            <code className="hb-inline">hauksbee models extract --pdf &lt;file&gt; --part &lt;mpn&gt; --kind &lt;kind&gt;</code>
+            This server does not offer datasheet extraction ({ready.reason}).{' '}
+            <TerminalCommand command="hauksbee models extract --pdf <file> --part <mpn> --kind <kind>" />
           </div>
         )}
 
         {active && (
           <div
-            className="mt-3 rounded-lg px-3.5 py-3"
-            style={{ border: '1px solid var(--copper-deep)', background: 'var(--copper-tint)' }}
+            className={focus ? '' : 'mt-3 rounded-lg px-3.5 py-3'}
+            style={focus ? undefined : { border: '1px solid var(--copper-deep)', background: 'var(--copper-tint)' }}
           >
-            <div className="flex items-center justify-between gap-2 flex-wrap">
+            {!focus && <div className="flex items-center justify-between gap-2 flex-wrap">
               <span className="text-[12px] font-semibold" style={{ color: 'var(--silk)' }}>
                 {active.reference}
                 {active.value ? ` · ${active.value}` : ''}
@@ -283,7 +295,7 @@ export function DatasheetExtract({
               >
                 {flow.step === 'running' ? 'Drafting ...' : 'Close'}
               </button>
-            </div>
+            </div>}
 
             {/* Step 1: can it run, and does the user consent. Both before any
                 file picker exists: an extraction that dies on "codex is not

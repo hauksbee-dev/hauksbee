@@ -1,18 +1,25 @@
-// A run that could not be judged names its fixes as buttons, and the builder
-// can say what those fixes write: a bench or USB source, and a part left out
-// as not fitted.
+// A run that could not be judged gathers what blocks it into one list grouped
+// by cause behind one entry chip, each row of checks carries its own result,
+// and the builder can say what the fixes write: a bench or USB source, and a
+// part left out as not fitted.
 
 import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { blockingRemedies } from '../src/components/checks/Remedies'
+import { blockingCauses, causeGroups, openPartCount, OpenPartsSheet, withoutIds } from '../src/components/checks/Remedies'
 import type { RemedyActions } from '../src/components/checks/Remedies'
 import { RunResults } from '../src/components/checks/RunResults'
+import { AssertionEvidence, parseMeasures } from '../src/components/checks/pieces'
+import { identityScaffold, tomlIssues } from '../src/components/WritePart'
 import { buildToml, scaffoldRows, supplyToml } from '../src/lib/check-spec'
 import { tomlToBuilder } from '../src/lib/spec-model'
 import type { EvidenceAssumption, Remedy, RunResponse } from '../src/types/report'
 
-const assumption = (id: string, remedy: Remedy | undefined, replacement = 'do the thing'): EvidenceAssumption => ({
-  id, kind: 'k', source: 's', scope: { type: 'board' }, statement: '', because: '', consequence: '',
+const partScope = (id: string) => ({ type: 'subjects', value: [{ kind: 'part', id }] })
+
+const assumption = (
+  id: string, kind: string, remedy: Remedy | undefined, replacement = 'do the thing', scope: EvidenceAssumption['scope'] = { type: 'board' },
+): EvidenceAssumption => ({
+  id, kind, source: 's', scope, statement: `${id} is assumed`, because: '', consequence: '',
   replacement, remedy,
 })
 
@@ -22,8 +29,9 @@ const invalidRun = (assumptions: EvidenceAssumption[], undermined: string[]): Ru
   verdict_reason: 'Q1 has no model.',
   refusal: undefined,
   assumptions,
+  export_id: 'abc-1',
   results: [{
-    label: 'no faults', passed: false, invalid: true, detail: '',
+    label: 'no faults', kind: 'no_faults', passed: false, invalid: true, detail: '',
     evidence: { assertion: 'no_faults', status: 'undermined', assumptions: undermined },
   }],
 } as unknown as RunResponse)
@@ -32,46 +40,65 @@ const actions: RemedyActions = {
   addSupply: () => {}, markNotFitted: () => {}, openModel: () => {}, applied: () => false,
 }
 
-describe('blocking remedies', () => {
-  const run = invalidRun([
-    assumption('a1', { type: 'add_supply', net: '/VIN', volts_hint: 7 }),
-    assumption('a2', { type: 'add_supply', net: '/VIN', volts_hint: 5 }),
-    assumption('a3', { type: 'add_model', reference: 'Q1' }),
-    assumption('a4', { type: 'other' }),
-    assumption('a5', { type: 'mark_dnp', reference: 'R9' }),
-    assumption('a6', undefined),
-  ], ['a1', 'a2', 'a3', 'a4', 'a6'])
+const registry = [
+  assumption('open-part:Q1', 'open_part', { type: 'add_model', reference: 'Q1' }),
+  assumption('open-part:C2', 'open_part', undefined, 'do the thing', partScope('C2')),
+  assumption('inferred-pin-role:D2/1', 'inferred_pin_role', undefined, 'do the thing', partScope('D2')),
+  assumption('unpowered:/VIN', 'unpowered_rail', { type: 'add_supply', net: '/VIN', volts_hint: 7 }),
+  assumption('note', 'note', { type: 'other' }),
+]
 
-  test('are the typed ones behind the unjudged results, once per target', () => {
-    expect(blockingRemedies(run).map(r => r.key)).toEqual(['add_supply:/VIN', 'add_model:Q1'])
+describe('what blocks judgement', () => {
+  test('is grouped by cause, with every part, pin and net it touches', () => {
+    const groups = causeGroups(registry)
+    expect(groups.map(g => g.kind)).toEqual(['open_part', 'inferred_pin_role', 'unpowered_rail', 'note'])
+    expect(groups[0].parts).toEqual(['Q1', 'C2'])
+    expect(groups[1].pins).toEqual(['D2/1'])
+    expect(groups[2].nets).toEqual(['/VIN'])
+    expect(openPartCount(groups)).toBe(2)
   })
 
-  test('with no result naming them, every typed remedy in the registry is offered', () => {
-    const refused = { ...run, results: [] }
-    expect(blockingRemedies(refused).map(r => r.key)).toEqual(['add_supply:/VIN', 'add_model:Q1', 'mark_dnp:R9'])
+  test('a part is named by its remedy or its scope, never by parsing the id', () => {
+    const groups = causeGroups([
+      assumption('open-part:ignored-name', 'open_part', { type: 'add_model', reference: 'U9' }),
+      assumption('open-part:also-ignored', 'open_part', undefined, 'x', partScope('U7')),
+      assumption('open-part:U1', 'open_part', undefined),
+    ])
+    expect(groups[0].parts).toEqual(['U9', 'U7'])
+  })
+
+  test('drops causes that name nothing to act on', () => {
+    expect(blockingCauses(invalidRun(registry, [])).map(g => g.kind)).not.toContain('note')
+  })
+
+  test('never shows internal ids', () => {
+    expect(withoutIds('open-part:C2 and inferred-pin-role:D2/1')).toBe('C2 and D2/1')
+  })
+
+  test('the sheet offers the five fixes for parts and the supply fix for nets', () => {
+    const html = renderToStaticMarkup(<OpenPartsSheet groups={causeGroups(registry).slice(0, 3)} actions={actions} onClose={() => {}} />)
+    for (const id of ['cause-draft', 'cause-write', 'cause-dnp', 'cause-ignore', 'cause-extend', 'cause-supply']) {
+      expect(html).toContain(`data-testid="${id}"`)
+    }
+    expect(html).toContain('Add a supply on /VIN')
+    expect(html).not.toContain('open-part:')
   })
 })
 
 describe('an unjudged run', () => {
-  const run = invalidRun([
-    assumption('a1', { type: 'add_supply', net: '/VIN', volts_hint: 7 }, 'Power /VIN from the adapter.'),
-    assumption('a3', { type: 'add_model', reference: 'Q1' }),
-    assumption('a5', { type: 'mark_dnp', reference: 'R9' }),
-  ], ['a1', 'a3', 'a5'])
+  const run = invalidRun(registry, ['open-part:Q1'])
   const html = renderToStaticMarkup(
     <RunResults result={run} runKey="k" stale={false} rawMode={false} reportSerious={0} remedyActions={actions} />,
   )
 
-  test('leads with what to fix, not the refusal contract', () => {
-    expect(html).toContain('Not judged yet: 3 things to fix first')
-    expect(html).not.toContain('Some checks could not be judged.')
+  test('says it was not judged and opens what blocks it from one chip with the backend count', () => {
+    expect(html).toContain('NOT JUDGED')
+    expect(html).toContain('data-testid="open-parts-entry"')
+    expect(html).toContain('2 open parts block judgement')
   })
 
-  test('shows one button per remedy', () => {
-    expect(html).toContain('data-testid="remedy-add-supply"')
-    expect(html).toContain('Add a supply on /VIN')
-    expect(html).toContain('Write or draft a model for Q1')
-    expect(html).toContain('R9 is not fitted: leave it out')
+  test('offers the CLI writers\' files for export', () => {
+    expect(html).toContain('data-testid="run-export-open"')
   })
 
   test('keeps the engine sentence one click away', () => {
@@ -79,25 +106,42 @@ describe('an unjudged run', () => {
     expect(html).toContain('Q1 has no model.')
   })
 
-  test('an applied remedy stops asking for a click', () => {
-    const done = renderToStaticMarkup(
-      <RunResults
-        result={run} runKey="k" stale rawMode={false} reportSerious={0}
-        remedyActions={{ ...actions, applied: r => r.type === 'add_supply' }}
-      />,
+  test('the first-run whole-board check explains why it waits, on its row', () => {
+    const row = renderToStaticMarkup(
+      <AssertionEvidence result={run.results![0]} assumptions={registry} inventory={[]} repeats={new Set()} stale={false} />,
     )
-    expect(done).toContain('Done: run the checks again')
+    expect(row).toContain('data-testid="not-judged"')
+    expect(row).toContain('waits on the 2 open parts')
+    expect(row).toContain('data-testid="not-judged-open"')
+  })
+})
+
+describe('measured against its limits', () => {
+  test('reads the runner\'s detail shapes', () => {
+    expect(parseMeasures('GND: max=0.000V (<= 0.75V)')).toEqual([{ values: [0], hi: 0.75, unit: 'V' }])
+    expect(parseMeasures('+3V3 window: min=3.100V < required 3.2V, max=3.400V (<= 3.6V) [min=3.100V max=3.400V]'))
+      .toEqual([{ values: [3.1, 3.4], lo: 3.2, hi: 3.6, unit: 'V' }])
+    expect(parseMeasures('LED: 4 toggles (need >= 2)')).toEqual([{ values: [4], lo: 2, unit: 'toggles' }])
+    expect(parseMeasures('boot 1.20ms (<= 2ms)')).toEqual([{ values: [1.2], hi: 2, unit: 'ms' }])
+    expect(parseMeasures('no stress faults raised')).toEqual([])
+  })
+})
+
+describe('writing a model', () => {
+  test('starts on an identity-only scaffold for the part', () => {
+    const toml = identityScaffold({ reference: 'U1', value: 'XLOGIC9999' })
+    expect(toml).toContain('id = "u1_xlogic9999"')
+    expect(toml).toContain("value_re = '^XLOGIC9999$'")
+    expect(toml).toContain('identity_only = true')
   })
 
-  test('with no typed remedy the older wording stands and the reason is open', () => {
-    const plain = renderToStaticMarkup(
-      <RunResults
-        result={invalidRun([assumption('a4', { type: 'other' })], ['a4'])}
-        runKey="k" stale={false} rawMode={false} reportSerious={0} remedyActions={actions}
-      />,
-    )
-    expect(plain).toContain('Some checks could not be judged.')
-    expect(plain).toMatch(/<details[^>]*open/)
+  test('places validator complaints on their lines, with a fix where one is honest', () => {
+    const toml = '[[models]]\nid = "x"\nkind = "digital"\n[models.match]\nvalue_re = "^X$"\n[models.params]\nidentity_only = true\nwarning = "w"\n'
+    const [issue] = tomlIssues(toml, "entry 'x': identity-only model requires non-empty params.unlocked_by so reports state both")
+    expect(issue.line).toBe(6)
+    expect(issue.fix?.apply(toml)).toContain('[models.params]\nunlocked_by = ')
+    const parse = tomlIssues(toml, 'this is not valid model TOML: TOML parse error at line 3, column 1')
+    expect(parse[0].line).toBe(3)
   })
 })
 

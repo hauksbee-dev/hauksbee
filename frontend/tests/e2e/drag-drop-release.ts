@@ -430,6 +430,9 @@ async function stageFirmware(
   plan: FirmwarePlan,
   failures: string[],
 ): Promise<{ loaded: boolean; detail: string | null }> {
+  // The extra inputs sit behind one disclosure at intake; a user opens it first.
+  const more = page.locator('[data-testid="intake-more"] > summary')
+  if (await more.count() === 1) await more.click()
   const zone = page.locator('[data-testid="firmware-zone"]')
   if (await zone.count() !== 1) {
     failures.push('the intake offered no firmware slot')

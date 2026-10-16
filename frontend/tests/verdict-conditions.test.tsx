@@ -208,10 +208,59 @@ describe('the header chip', () => {
       />,
     )
 
-  test('a conditional pass is not "clean" and a partly judged run is not "undermined"', () => {
-    expect(chip(conditional)).toContain('clean, conditionally')
-    expect(chip(unconditional)).not.toContain('conditionally')
+  test('a conditional pass is not a plain PASS and a partly judged run is INVALID, not a pass', () => {
+    expect(chip(conditional)).toContain('Conditional pass')
+    expect(chip(unconditional)).not.toContain('Conditional')
+    expect(chip(unconditional)).toContain('PASS')
+    expect(chip(partly)).toContain('INVALID')
     expect(chip(partly)).toContain('partly judged, not a pass')
-    expect(chip(partly)).not.toContain('analysis undermined')
+    expect(chip(partly)).not.toContain('undermined')
+  })
+
+  test('is ONE chip: board and checks fold into the worst claim, listed in its hover', () => {
+    const html = renderToStaticMarkup(
+      <ShellChips
+        view="board"
+        report={unconditional}
+        checks={{ passed: 3, failed: 1, invalid: 0, measured: 0 } as never}
+        sim={{ running: false, faults: 0, connected: false, sessionBoard: null } as never}
+        simMounted={false}
+        simOffline={false}
+        sessionBoard={null}
+        sessionMatchesCurrent={false}
+        currentBoard={null}
+        serverLiveActive={false}
+        goTo={noop}
+        onOpenLiveSession={noop}
+        onDriveLive={noop}
+      />,
+    )
+    expect(html.match(/<button/g)?.length).toBe(1)
+    expect(html).toContain('FAIL')
+    expect(html).toContain('1 check failed')
+    expect(html).toContain('Board: PASS')
+  })
+
+  test('Environment and Settings carry no board chip', () => {
+    for (const view of ['env', 'settings'] as const) {
+      const html = renderToStaticMarkup(
+        <ShellChips
+          view={view}
+          report={unconditional}
+          checks={null}
+          sim={{ running: false, faults: 0, connected: false, sessionBoard: null } as never}
+          simMounted={false}
+          simOffline={false}
+          sessionBoard={null}
+          sessionMatchesCurrent={false}
+          currentBoard={null}
+          serverLiveActive={false}
+          goTo={noop}
+          onOpenLiveSession={noop}
+          onDriveLive={noop}
+        />,
+      )
+      expect(html).toBe('')
+    }
   })
 })

@@ -2,6 +2,7 @@ import { parse as parseToml } from 'smol-toml'
 import type { ActionResultMsg } from '../../types/protocol'
 import type { SensorCatalogEntry } from '../../types/report'
 import type { SensorInputRow, SensorRow } from '../../lib/check-spec'
+import { ToBoard } from './ChecksLinks'
 import { AddInlineButton, BuilderSection, Field, RemoveButton, RowCard, RowIssues } from './pieces'
 
 /** Firmware-visible peripherals are data, not a hard-coded dropdown of
@@ -31,7 +32,7 @@ export function SensorBuilder({
       testId="sensor-builder"
       title="Register-map devices"
       caption={sensors.length === 0
-        ? 'Click a sensor or memory IC on the board, or add one here.'
+        ? <><ToBoard>Click a sensor or memory IC on the board</ToBoard>, or add one here.</>
         : 'I²C/SPI behavior from validated local TOML. The exact bytes are embedded in this scenario.'}
       actions={
         <button type="button" className="hb-chip hb-press px-2 py-1 text-[11px]" onClick={onAdd}>

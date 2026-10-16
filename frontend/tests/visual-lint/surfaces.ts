@@ -84,7 +84,7 @@ export const APP_SURFACES: Surface[] = [
   },
   {
     id: 'datasheet-panel',
-    what: 'the "parts with no model" panel: open parts and the drafting jack',
+    what: 'the one "Model this part" entry for a part with no model',
     async reach(page) {
       // The watchy sample is fully bound (no unbound active part), so its
       // report correctly renders no datasheet panel. Upload the engine's own
@@ -93,7 +93,11 @@ export const APP_SURFACES: Surface[] = [
       const board = join(here, '../../../crates/hauksbee-engine/tests/fixtures/plain_check_open_active_ic.kicad_pcb')
       await page.setInputFiles('#board-file', board)
       await page.waitForSelector('[data-testid="report-verdict"]', { timeout: 30_000 })
-      await page.locator('[data-testid="datasheet-extract"]').scrollIntoViewIfNeeded()
+      // The one "Model this part" entry sits in the guessed-parts group, which
+      // starts collapsed; open it as a user would.
+      const closedParts = page.locator('[data-testid="guessed-parts"]:not([open]) > summary')
+      if (await closedParts.count()) await closedParts.click()
+      await page.locator('[data-testid="write-part-open"]').scrollIntoViewIfNeeded()
       await settle(page)
     },
   },
@@ -104,10 +108,8 @@ export const APP_SURFACES: Surface[] = [
       // Dispatch directly: the narrow phone layout scrolls and replaces this
       // row as the active card mounts, which can make Playwright keep waiting
       // for a now-detached click target even though the click already landed.
-      // The guessed-parts group starts collapsed; open it as a user would.
-      const closedParts = page.locator('[data-testid="guessed-parts"]:not([open]) > summary')
-      if (await closedParts.count()) await closedParts.click()
-      await page.locator('[data-testid^="extract-start-"]').first().dispatchEvent('click')
+      await page.locator('[data-testid="write-part-open"]').dispatchEvent('click')
+      await page.locator('[data-testid="model-tab-draft"]').dispatchEvent('click')
       // The consent gate renders once /api/models/extract/ready answers, and a
       // real engine answers it by asking codex whether it is logged in, which
       // is slow. Wait for the gate before looking for its button, or the flow
@@ -125,19 +127,17 @@ export const APP_SURFACES: Surface[] = [
   },
   {
     id: 'write-part-kind',
-    what: 'the "write a part yourself" editor opening on its kind picker',
+    what: 'the "Model U1" surface opening on Write it, an identity-only scaffold that validates',
     async reach(page) {
-      const close = page.locator('[data-testid="extract-close"]')
-      if (await close.count() > 0) await close.first().click()
-      await page.locator('[data-testid="write-part-open"]').scrollIntoViewIfNeeded()
-      const opener = await page.locator('[data-testid="write-part-open"]').textContent()
-      if (!opener?.includes('Write U1 yourself')) {
+      const opener = await page.locator('[data-testid="write-part"]').textContent()
+      if (!opener?.includes('Model U1')) {
         throw new Error(`manual model editor did not name its selected part: ${opener}`)
       }
-      await page.click('[data-testid="write-part-open"]')
-      // The editor opens on "what kind of part is it?": a reference letter does
-      // not say, so no TOML appears until the author chooses.
+      await page.click('[data-testid="model-tab-write"]')
+      // The editor opens on a scaffold that already validates (identity only),
+      // with the kind picker above it for a model that simulates.
       await page.waitForSelector('[data-testid="kind-picker"]')
+      await page.waitForSelector('[data-testid="write-part-status"]:has-text("Valid")', { timeout: 10_000 })
       await page.locator('[data-testid="kind-picker"]').scrollIntoViewIfNeeded()
       await settle(page)
     },
@@ -146,7 +146,7 @@ export const APP_SURFACES: Surface[] = [
     id: 'write-part',
     what: 'the "write a part yourself" editor, TOML with the live validator',
     async reach(page) {
-      await page.click('[data-testid="kind-digital"]')
+      await page.selectOption('[data-testid="kind-select"]', 'digital')
       // The scaffold is requested from the server, and the box is busy (and
       // still holds the generic starter) until it lands.
       await page.waitForSelector('[data-testid="write-part-toml"]:not([aria-busy="true"])')
@@ -166,7 +166,7 @@ export const APP_SURFACES: Surface[] = [
     id: 'write-part-spice',
     what: 'the same editor on its SPICE tab',
     async reach(page) {
-      await page.click('[data-testid="write-part-format-spice"]')
+      await page.selectOption('[data-testid="kind-select"]', 'spice')
       await settle(page, 700)
     },
   },

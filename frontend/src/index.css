@@ -395,7 +395,11 @@ code.hb-inline {
   color: var(--copper-hi);
   font-weight: 600;
 }
-.nav-item:disabled { opacity: 0.38; cursor: default; }
+/* A disabled destination dims its icon and name but not the note that says why
+   (the note must stay readable: it is the explanation). */
+.nav-short { display: none; }
+.nav-item:disabled { cursor: default; }
+.nav-item:disabled > span:first-child, .nav-item:disabled .nav-name { opacity: 0.38; }
 
 /* Narrow windows: the rail narrows to icons with small labels under them, so
    the work surface keeps its width and every destination is still named. The
@@ -408,6 +412,61 @@ code.hb-inline {
   .sidebar .nav-list { padding-inline: 4px; }
   .sidebar .nav-item { flex-direction: column; justify-content: center; gap: 3px; padding: 5px 0; }
   .sidebar .nav-label { flex: none; font-size: 10px; line-height: 1.1; }
+}
+
+/* Phones: the rail becomes a bottom tab bar. Five destinations side by side
+   (icon over a small label) and the theme switch as a narrow sixth cell; the
+   wordmark, saved-session row and board card have no room and give way. The
+   work surface takes the full width above it. 100dvh, not 100vh: a phone
+   browser's collapsing address bar would otherwise push the bar off screen. */
+@media (max-width: 639px) {
+  .app-shell { flex-direction: column; height: 100dvh; }
+  .sidebar {
+    order: 2;
+    width: 100% !important;
+    flex-direction: row;
+    align-items: stretch;
+    border-right: none !important;
+    border-top: 1px solid var(--hairline);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .sidebar .sidebar-brand, .sidebar .sidebar-spacer { display: none; }
+  /* The saved sessions stay reachable: an icon-only cell beside the tabs. */
+  .sidebar .sidebar-extra { display: flex; align-items: stretch; padding: 4px 0; }
+  .sidebar .sidebar-extra > div { display: flex; }
+  .sidebar .session-cell { padding: 0 !important; display: flex; }
+  .sidebar .session-cell .nav-item { flex: none; width: 40px; justify-content: center; padding: 0; }
+  .sidebar .session-cell .sidebar-label { display: none; }
+  .sidebar .has-short .nav-full { display: none; }
+  .sidebar .nav-list { flex-direction: row; flex: 1; min-width: 0; gap: 2px; padding: 4px; }
+  .sidebar .nav-item { flex: 1; width: auto; min-width: 0; min-height: 48px; }
+  .sidebar .theme-cell { display: flex; padding: 4px 4px 4px 0; }
+  .sidebar .theme-cell .nav-item { flex: none; width: 40px; }
+}
+
+/* The floating selection card on a phone: a bottom sheet across the map instead
+   of a card pinned to its left edge. At 390px the card covered most of the map,
+   clipped its own close button against the Layers control, and sat under the
+   thumb, so a tap meant for the map hit a card button. As a sheet it is
+   full-width and short, the map above it stays tappable (the dock itself takes
+   no pointer events; only the card does), and the card scrolls inside it. */
+@media (max-width: 639px) {
+  .selection-dock {
+    top: auto !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0;
+    max-height: 60%;
+    flex-direction: column;
+    justify-content: flex-end;
+  }
+  .selection-dock > div { min-height: 0; width: 100%; }
+  .selection-dock .hb-card {
+    width: 100%;
+    min-width: 0 !important;
+    max-width: none !important;
+    border-radius: 14px 14px 0 0;
+  }
 }
 
 /* ── Session switcher ───────────────────────────────────────────────────── */
@@ -460,6 +519,18 @@ code.hb-inline {
     right: 8px;
     width: auto;
     max-width: none;
+  }
+}
+
+@media (max-width: 639px) {
+  .sidebar .has-short .nav-short { display: inline; }
+  /* Above the bottom tab bar, across the screen. */
+  .session-panel {
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-width: none;
+    bottom: calc(64px + env(safe-area-inset-bottom));
   }
 }
 

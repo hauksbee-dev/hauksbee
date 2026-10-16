@@ -42,7 +42,8 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
   // The guessed-parts group starts collapsed; open it as a user would.
   const closedParts = page.locator('[data-testid="guessed-parts"]:not([open]) > summary')
   if (await closedParts.count()) await closedParts.click()
-  await page.locator('[data-testid^="extract-start-"]').first().dispatchEvent('click')
+  await page.locator('[data-testid="write-part-open"]').dispatchEvent('click')
+  await page.locator('[data-testid="model-tab-draft"]').dispatchEvent('click')
   await page.click('[data-testid="extract-consent-accept"]')
   await page.setInputFiles('[data-testid="extract-file"]', join(repo, 'testdata/datasheets/1N4148.pdf'))
   await page.click('[data-testid="extract-run"]')
@@ -93,7 +94,8 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
     // The guessed-parts group starts collapsed; open it as a user would.
     const closedParts = page.locator('[data-testid="guessed-parts"]:not([open]) > summary')
     if (await closedParts.count()) await closedParts.click()
-    await page.locator('[data-testid^="extract-start-"]').first().dispatchEvent('click')
+    await page.locator('[data-testid="write-part-open"]').dispatchEvent('click')
+    await page.locator('[data-testid="model-tab-draft"]').dispatchEvent('click')
     await page.click('[data-testid="extract-consent-accept"]')
     await page.setInputFiles('[data-testid="extract-file"]', join(repo, 'testdata/datasheets/1N4148.pdf'))
     await page.click('[data-testid="extract-run"]')
@@ -261,15 +263,17 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
     (await page.locator('[data-testid="settings-model-badge-claude-haiku-5-5"]').innerText()).includes('below Luna baseline'))
   ok('a harnessed model is marked with its stage size',
     (await page.locator('[data-testid="settings-model-pick-claude-haiku-5-5"]').innerText()).includes('harnessed: ~100k-token stages'))
-  const escalate = page.locator('[data-testid="settings-escalate"]')
-  await escalate.fill('claude-sonnet-5-5, claude-opus-5-5')
-  ok('the terminal line spells the ladder comma-separated',
-    (await page.locator('[data-testid="settings-terminal"]').innerText()).includes('claude-code.escalate=claude-sonnet-5-5,claude-opus-5-5'))
-  await escalate.fill('none')
-  ok('the word none is the terminal spelling of an empty ladder',
-    (await page.locator('[data-testid="settings-terminal"]').innerText()).includes('claude-code.escalate=none'))
+  const terminal = () => page.locator('[data-testid="settings-terminal"]').innerText()
+  await page.click('[data-testid="settings-escalate-none"]')
+  ok('Never escalate is the terminal spelling of an empty ladder', (await terminal()).includes('claude-code.escalate=none'))
+  await page.click('[data-testid="settings-escalate-pick-claude-sonnet-5-5"]')
+  await page.click('[data-testid="settings-escalate-pick-claude-haiku-5-5"]')
+  ok('the terminal line spells the ladder comma-separated, in the order picked',
+    (await terminal()).includes('claude-code.escalate=claude-sonnet-5-5,claude-haiku-5-5'))
+  ok('a picked model shows its position', (await page.locator('[data-testid="settings-escalate-pick-claude-haiku-5-5"]').innerText()).includes('2.'))
   await shoot(page, '05b-escalate')
-  await escalate.fill('')
+  await page.click('[data-testid="settings-escalate-default"]')
+  ok('Default ladder leaves the setting blank', !(await terminal()).includes('claude-code.escalate='))
 
   // ── 6. Test backend streams and reports ─────────────────────────────────
   step('Test backend streams a reply')

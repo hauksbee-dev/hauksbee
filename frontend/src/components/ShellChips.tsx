@@ -1,25 +1,19 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { WebReport } from '../types/report'
-import { plural, reportVerdictTone, summarizeEvidence } from '../lib/report-view'
+import { boardVerdict, TONE_RANK, TONE_STYLE, useStatusLabel } from '../lib/status-vocab'
+import type { ChipTone, StatusTerm } from '../lib/status-vocab'
 import type { SimShellStatus } from '../SimView'
 import { useGlossary, useTermEntry } from './ui'
 import type { ChecksSummary } from './ChecksView'
 import type { AppView } from './Sidebar'
 
-// The header's status chips. Each one is a claim about a surface, and clicking
-// it goes there; what is claimed depends on which surface you are already on,
-// because the sim view is bound to the SESSION's board while every other view
-// is about the analyzed one.
-
-type ChipTone = 'ok' | 'err' | 'warn' | 'quiet'
-
-const TONES: Record<ChipTone, React.CSSProperties> = {
-  ok: { background: 'var(--ok-bg)', border: '1px solid var(--ok-border)', color: 'var(--ok)' },
-  err: { background: 'var(--err-bg)', border: '1px solid var(--err-border)', color: 'var(--err)' },
-  warn: { background: 'var(--warn-bg)', border: '1px solid var(--warn-border)', color: 'var(--warn)' },
-  quiet: { background: 'var(--surface-2)', border: '1px solid var(--hairline)', color: 'var(--silk-dim)' },
-}
+// The header's ONE status chip. What is on screen is a single claim, the worst
+// thing true of the surface you are on, in the engine glossary's own words
+// (lib/status-vocab); hovering it lists the parts (board verdict, checks, live
+// session) as rows that each go to their surface. The sim view is bound to the
+// SESSION's board while every other view is about the analyzed one, and
+// Environment and Settings are about this machine, so they carry no chip.
 
 interface Chip {
   label: string
@@ -33,6 +27,8 @@ interface Chip {
   actions?: { label: string; testid: string; onClick: () => void }[]
   /** A glossary term the chip's verdict word is: its meaning becomes `explain`. */
   term?: string
+  /** The plain-words hover text, for markup that has no popover (print, tests). */
+  title?: string
 }
 
 /** The chip's explanation and actions. Portalled and fixed-positioned: the
@@ -63,7 +59,7 @@ function ExplainedChip({ chip }: { chip: Chip }) {
     <>
       <span
         ref={anchor}
-        className="inline-flex shrink-0"
+        className="inline-flex min-w-0 max-w-full"
         aria-describedby={pos ? id : undefined}
         onMouseEnter={open}
         onMouseLeave={close}
@@ -121,21 +117,40 @@ function ChipPill({ chip }: { chip: Chip }) {
     <button
       type="button"
       data-testid={chip.testid}
+      title={chip.explain ? undefined : chip.title}
       onClick={chip.onClick}
       disabled={!chip.onClick}
       // A chip is a pill with one line in it. Left shrinkable, "checks 2 passed"
       // wraps to two lines inside a 24px pill and spills out the bottom of it,
       // so the chip keeps its own width and the row clips whole chips instead.
-      className="hb-press inline-flex items-center gap-1.5 px-2.5 rounded-full text-[11px] font-semibold tnum whitespace-nowrap shrink-0"
-      style={{ ...TONES[chip.tone], height: 24, cursor: chip.onClick ? 'pointer' : 'default' }}
+      className="hb-press inline-flex items-center gap-1.5 px-2.5 rounded-full text-[11px] font-semibold tnum whitespace-nowrap min-w-0 max-w-full"
+      style={{ ...TONE_STYLE[chip.tone], height: 24, cursor: chip.onClick ? 'pointer' : 'default' }}
     >
       {chip.pulse && (
         <span className="run-dot" style={{ width: 6, height: 6, borderRadius: 3, background: 'currentColor', display: 'inline-block' }} />
       )}
-      {chip.label}
+      <span className="truncate">{chip.label}</span>
     </button>
   )
 }
+
+/** One thing a surface has to say: a board verdict, the checks, or the live
+ *  session. The header shows the worst of them as its one chip. */
+interface Part {
+  key: 'board' | 'checks' | 'sim'
+  tone: ChipTone
+  /** The glossary term the verdict word is, when the state is one. */
+  term?: StatusTerm
+  /** The short fact beside the verdict word ("3 findings", "2 checks failed"). */
+  detail: string
+  view: AppView
+  pulse?: boolean
+  /** A longer sentence for the hover, replacing the glossary's. */
+  explain?: string
+  actions?: { label: string; testid: string; onClick: () => void }[]
+}
+
+const PART_NAME: Record<Part['key'], string> = { board: 'Board', checks: 'Checks', sim: 'Live sim' }
 
 export function ShellChips({
   view, report, checks, sim, simMounted, simOffline, sessionBoard, sessionMatchesCurrent,
@@ -164,96 +179,59 @@ export function ShellChips({
   onDriveLive: () => void
 }) {
   useGlossary(report?.glossary)
-  const chips: Chip[] = []
-  // Fault chips count faulted PARTS (the card in the sim rail counts its own
-  // fault conditions and labels itself); every surface must say what it counts.
-  const faultChip: Chip = {
-    label: `${sim.faults} part${sim.faults === 1 ? '' : 's'} faulted`,
-    tone: 'err',
-    testid: 'chip-faults',
-    onClick: () => goTo('sim'),
-  }
-  const runningChip = (onClick?: () => void): Chip => ({
-    label: sim.running ? 'sim running' : 'sim paused',
-    tone: sim.running ? 'ok' : 'quiet',
-    testid: 'chip-sim',
-    onClick,
-    pulse: sim.running,
-  })
+  const word = useStatusLabel()
+  // Environment and Settings are about this machine, not a board.
+  if (view === 'env' || view === 'settings') return null
+
+  const parts: Part[] = []
+  const faultDetail = `${sim.faults} part${sim.faults === 1 ? '' : 's'} faulted`
+  const simPart = (): Part => sim.faults > 0
+    ? { key: 'sim', tone: 'err', term: 'fail', detail: faultDetail, view: 'sim' }
+    : { key: 'sim', tone: sim.running ? 'ok' : 'quiet', detail: sim.running ? 'sim running' : 'sim paused', view: 'sim', pulse: sim.running }
 
   if (view === 'sim') {
-    // On the Live Sim view the header describes THE SESSION's board only: the
-    // analyzed board's findings/checks chips belong to the Board/Checks
-    // surfaces, and "another session is live: X" while viewing exactly that
-    // session mislabels the very surface the user is on.
+    // The Live Sim view describes THE SESSION's board only: the analyzed board's
+    // verdict belongs to the Board and Checks surfaces.
     if (simOffline) {
-      chips.push({ label: 'sim offline', tone: 'err', testid: 'chip-sim' })
+      parts.push({ key: 'sim', tone: 'err', detail: 'sim offline', view: 'sim', explain: 'The live session lost its connection. Reload the sim to reconnect.' })
     } else if (sessionMatchesCurrent) {
-      if (sim.faults > 0) chips.push(faultChip)
-      chips.push(runningChip())
+      parts.push(simPart())
     } else if (sessionBoard) {
-      chips.push({ label: `live: ${sessionBoard}`, tone: 'quiet', testid: 'chip-sim', pulse: sim.running })
+      parts.push({ key: 'sim', tone: 'quiet', detail: `live: ${sessionBoard}`, view: 'sim', pulse: sim.running })
     }
   } else {
-    if (report?.ok === true) {
-      const tone = reportVerdictTone(report)
-      const conditional = report.verdict === 'pass' && (report.verdict_conditions ?? []).some(c => c.trim() !== '')
-      chips.push({
-        testid: 'chip-findings',
-        onClick: () => goTo('board'),
-        ...(tone === 'error'
-          ? { tone: 'err' as const, label: report.serious > 0 ? `${report.serious} serious` : report.fix_first?.notice ? 'not routed yet' : 'analysis failed' }
-          : tone === 'warning'
-            // An undermined run-level claim is what the body headline leads
-            // with ("invalid for analysis"); "qualified" beside it reads as a
-            // weaker verdict than the report gives.
-            ? report.partly_judged
-              ? { tone: 'warn' as const, label: 'partly judged, not a pass' }
-              : summarizeEvidence(report.evidence).undermined > 0
-              ? { tone: 'warn' as const, label: 'analysis undermined', term: 'invalid' }
-              : { tone: 'warn' as const, label: report.total > 0 ? plural(report.total, 'finding') : conditional ? 'clean, conditionally' : 'analysis qualified' }
-            // A pass that rests on conditions is never the plain "clean" the chip says for none.
-            : { tone: 'ok' as const, label: conditional ? 'clean, conditionally' : 'analysis clean' }),
-      })
-    }
+    const board = report ? boardVerdict(report) : null
+    if (board) parts.push({ key: 'board', view: 'board', term: board.term, detail: board.detail, tone: board.tone })
     if (checks) {
       const { passed, failed, invalid, measured = 0 } = checks
-      const counts = [passed > 0 || measured === 0 ? `${passed} passed` : '', measured > 0 ? `${measured} measured` : '']
-      const label = `checks ${counts.filter(Boolean).join(', ')}`
-      // A green checks chip must never sit beside the report's own serious
+      // A green checks result must never sit beside the report's own serious
       // findings: a spec that asserts nothing about them has not cleared them.
       const uncovered = report?.ok === true ? report.serious : 0
-      chips.push({
-        testid: 'chip-checks',
-        onClick: () => goTo('checks'),
-        ...(failed > 0
-          ? { tone: 'err' as const, label: `checks ${failed} failed`, term: 'fail' }
-          : invalid > 0
-            ? { tone: 'warn' as const, label: `checks ${invalid} invalid`, term: 'invalid' }
-            : uncovered > 0
-              ? { tone: 'warn' as const, label: `${label}, ${uncovered} serious uncovered` }
-              : { tone: passed > 0 || measured === 0 ? 'ok' as const : 'quiet' as const, label }),
-      })
+      const counts = [passed > 0 || measured === 0 ? `${passed} passed` : '', measured > 0 ? `${measured} measured` : ''].filter(Boolean).join(', ')
+      const green = passed > 0 || measured === 0
+      parts.push(failed > 0
+        ? { key: 'checks', tone: 'err', term: 'fail', detail: `${failed} ${failed === 1 ? 'check' : 'checks'} failed`, view: 'checks' }
+        : invalid > 0
+          ? { key: 'checks', tone: 'warn', term: 'invalid', detail: `${invalid} ${invalid === 1 ? 'check' : 'checks'} invalid`, view: 'checks' }
+          : uncovered > 0
+            ? { key: 'checks', tone: 'warn', term: 'not_checked', detail: `checks ${counts}, ${uncovered} serious uncovered`, view: 'checks' }
+            : { key: 'checks', tone: green ? 'ok' : 'quiet', term: green ? 'pass' : undefined, detail: `checks ${counts}`, view: 'checks' })
     }
     if (simOffline) {
-      chips.push({ label: 'sim offline', tone: 'err', testid: 'chip-sim', onClick: () => goTo('sim') })
+      parts.push({ key: 'sim', tone: 'err', detail: 'sim offline', view: 'sim' })
     } else if (simMounted && sessionMatchesCurrent) {
-      if (sim.faults > 0) chips.push(faultChip)
-      chips.push(runningChip(() => goTo('sim')))
+      parts.push(simPart())
     } else if ((simMounted || serverLiveActive) && sessionBoard) {
       // A session is live for some OTHER board (or a pre-reload launch of this
-      // one): never show "sim running" as if it were this board's. The chip
-      // names the session's board and opens it.
-      // Another tab, an earlier page load or a CLI launch can all have started
-      // it, and a same-named file may differ in content, so the chip only
-      // claims what it knows and says in one line what that means.
+      // one): never show "sim running" as if it were this board's. Another tab,
+      // an earlier page load or a CLI launch can all have started it, and a
+      // same-named file may differ in content, so the chip only claims what it
+      // knows and says in one line what that means.
       const openIt = simMounted ? () => goTo('sim') : onOpenLiveSession
       const sameName = sessionBoard === currentBoard
-      chips.push({
-        label: sameName ? `live session not from this tab: ${sessionBoard}` : `another session is live: ${sessionBoard}`,
-        tone: 'warn',
-        testid: 'chip-sim',
-        onClick: openIt,
+      parts.push({
+        key: 'sim', tone: 'warn', view: 'sim',
+        detail: sameName ? `live session not from this tab: ${sessionBoard}` : `another session is live: ${sessionBoard}`,
         explain: sameName
           ? `The live simulator runs one board at a time, and it is running a ${sessionBoard} that another tab or an earlier page started. This tab cannot tell whether it is the same file.`
           : `The live simulator runs one board at a time, and it is running ${sessionBoard}, not the board you analyzed.`,
@@ -265,13 +243,32 @@ export function ShellChips({
         ],
       })
     } else if (report?.ok === true && sessionMatchesCurrent) {
-      chips.push({ label: 'live session ready', tone: 'ok', testid: 'chip-sim', onClick: onDriveLive })
+      parts.push({ key: 'sim', tone: 'ok', detail: 'live session ready', view: 'sim' })
     }
   }
 
-  return (
-    <>
-      {chips.map((chip, i) => <ChipButton key={`${chip.testid}:${i}`} chip={chip} />)}
-    </>
-  )
+  if (parts.length === 0) return null
+
+  // The worst part is the chip; ties keep the order board, checks, sim.
+  const primary = parts.reduce((a, b) => (TONE_RANK[b.tone] > TONE_RANK[a.tone] ? b : a))
+  const label = (p: Part) => [p.term ? word(p.term) : '', p.detail].filter(Boolean).join(' · ')
+  const chip: Chip = {
+    testid: 'chip-status',
+    label: label(primary),
+    tone: primary.tone,
+    pulse: primary.pulse,
+    onClick: () => goTo(primary.view),
+    term: primary.explain ? undefined : primary.term,
+    explain: primary.explain,
+    title: parts.map(p => `${PART_NAME[p.key]}: ${label(p)}`).join('. '),
+    // One row per part, each going to its own surface; the primary's own
+    // actions (switch to / replace a foreign session) come with it.
+    actions: [
+      ...(primary.actions ?? []),
+      ...(parts.length > 1
+        ? parts.map(p => ({ label: `${PART_NAME[p.key]}: ${label(p)}`, testid: `chip-part-${p.key}`, onClick: () => goTo(p.view) }))
+        : []),
+    ],
+  }
+  return <ChipButton chip={chip} />
 }

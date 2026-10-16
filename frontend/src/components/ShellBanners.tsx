@@ -25,6 +25,12 @@ export function ReplaceLiveConfirm({ launch, onReplace, onOpenRunning, onCancel 
   onOpenRunning: () => void
   onCancel: () => void
 }) {
+  // The same file already running is joined, not replaced: "Open it" is the
+  // primary action. A different board is replaced, and replacing says what it
+  // costs. Either way the other choice stays one click away.
+  const same = launch.activeBoard === launch.targetBoard
+  const openLabel = same ? 'Open it' : 'Open the running session'
+  const replaceLabel = same ? 'Replace it with this page’s copy' : `Replace with ${launch.targetBoard}`
   return (
     <Callout
       tone="warn"
@@ -34,16 +40,28 @@ export function ReplaceLiveConfirm({ launch, onReplace, onOpenRunning, onCancel 
     >
       The server is running a live session for{' '}
       <span style={{ fontFamily: 'var(--font-mono)' }}>{launch.activeBoard}</span>
-      {launch.activeBoard === launch.targetBoard
-        ? ' (launched before this page, so it may not match what you just analyzed)'
-        : ''}
-      . One session runs at a time.
+      {same
+        ? ', launched before this page, so it may not be the copy you just analyzed.'
+        : '. One session runs at a time.'}
+      {' '}Replacing it stops that session: its scope traces, serial log and fault log are lost.
       <div className="mt-2.5 flex flex-wrap gap-2">
-        <button type="button" data-testid="confirm-replace-live" onClick={onReplace} className="hb-btn-primary hb-press px-3 text-[12px]" style={{ height: 30 }}>
-          Replace it with {launch.targetBoard}
+        <button
+          type="button"
+          data-testid="open-running-live"
+          onClick={onOpenRunning}
+          className={`${same ? 'hb-btn-primary' : 'hb-btn'} hb-press px-3 text-[12px] max-w-full`}
+          style={{ height: 30 }}
+        >
+          {openLabel}
         </button>
-        <button type="button" data-testid="open-running-live" onClick={onOpenRunning} className="hb-btn hb-press px-3 text-[12px]" style={{ height: 30 }}>
-          Open the running session
+        <button
+          type="button"
+          data-testid="confirm-replace-live"
+          onClick={onReplace}
+          className={`${same ? 'hb-btn' : 'hb-btn-primary'} hb-press px-3 text-[12px] max-w-full`}
+          style={{ minHeight: 30, whiteSpace: 'normal', textAlign: 'left', overflowWrap: 'anywhere' }}
+        >
+          {replaceLabel}
         </button>
         <button type="button" data-testid="cancel-replace-live" onClick={onCancel} className="hb-btn hb-press px-3 text-[12px]" style={{ height: 30 }}>
           Cancel
@@ -72,8 +90,8 @@ export function LaunchErrorBanner({ error, onOpenEnv }: { error: string; onOpenE
             type="button"
             data-testid="launch-error-open-env"
             onClick={onOpenEnv}
-            className="hb-btn-primary hb-press px-3 text-[12px]"
-            style={{ height: 30 }}
+            className="hb-btn-primary hb-press px-3 py-1 text-[12px] text-left"
+            style={{ minHeight: 30 }}
           >
             Install {missing} on the Environment page
           </button>

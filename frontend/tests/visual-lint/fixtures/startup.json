@@ -1,5 +1,20 @@
 {
  "live": true,
  "preloaded": false,
- "version": "0.1.0"
+ "version": "0.1.0",
+ "board_formats": {
+  "formats": [
+   { "vendor": "KiCad", "exts": [".kicad_pcb", ".kicad_sch", ".net"], "route": "board", "quiet": false },
+   { "vendor": "Eagle", "exts": [".brd"], "route": "board", "quiet": false },
+   { "vendor": "Altium", "exts": [".PcbDoc"], "route": "board", "quiet": false },
+   { "vendor": "IPC-2581", "exts": [".xml"], "route": "board", "quiet": false },
+   { "vendor": "IPC-D-356", "exts": [".d356"], "route": "board", "quiet": false },
+   { "vendor": "ODB++ job", "exts": [".tgz", ".tar.gz", ".tar"], "route": "board", "quiet": false },
+   { "vendor": "fab archive (gerbers, ODB++ or a .board export)", "exts": [".zip"], "route": "board", "quiet": false },
+   { "vendor": "Board-as-Code", "exts": [".board"], "route": "board", "quiet": false },
+   { "vendor": "SPICE deck", "exts": [".cir", ".sp", ".net"], "route": "deck", "quiet": false },
+   { "vendor": "Excellon drill", "exts": [".txt"], "route": "board", "quiet": true }
+  ],
+  "firmware_exts": [".elf", ".hex"]
+ }
 }

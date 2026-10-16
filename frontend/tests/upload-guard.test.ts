@@ -6,6 +6,10 @@ const {
   analysisFailureMessage,
   precheckBoardFile,
 } = await import('../src/lib/upload-guard')
+const { setServedBoardFormats } = await import('../src/lib/board-formats')
+const { SERVED_FORMATS, seedServedFormats } = await import('./served-formats')
+
+seedServedFormats()
 
 test('an oversized board is refused from metadata before any byte can be read', () => {
   const touched: PropertyKey[] = []
@@ -36,6 +40,26 @@ test('a large unknown format refuses while a small mystery file reaches the extr
   expect(precheckBoardFile({ name: 'mystery.bin', size: 21 * 1024 * 1024 } as File))
     .toContain('does not look like a board file')
   expect(precheckBoardFile({ name: 'mystery.bin', size: 1024 } as File)).toBeNull()
+})
+
+test('a large .tar.gz is a known format, not an unknown ".gz"', () => {
+  const big = 21 * 1024 * 1024
+  expect(precheckBoardFile({ name: 'job.tar.gz', size: big } as File)).toBeNull()
+  expect(precheckBoardFile({ name: 'JOB.TAR.GZ', size: big } as File)).toBeNull()
+  expect(precheckBoardFile({ name: 'fw.ELF', size: big } as File)).toBeNull()
+  // The refusal for a real stranger names every served format, tar.gz included.
+  const refusal = precheckBoardFile({ name: 'mystery.gz', size: big } as File)
+  expect(refusal).toContain('does not look like a board file')
+  expect(refusal).toContain('.tar.gz')
+})
+
+test('with no served table the precheck has no opinion about the extension', () => {
+  setServedBoardFormats(null)
+  try {
+    expect(precheckBoardFile({ name: 'mystery.bin', size: 21 * 1024 * 1024 } as File)).toBeNull()
+  } finally {
+    setServedBoardFormats(SERVED_FORMATS)
+  }
 })
 
 test('body-limit and transport failures remain distinct actionable messages', () => {

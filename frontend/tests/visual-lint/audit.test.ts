@@ -146,6 +146,14 @@ test('a comfortable button, and an icon-only one, stay quiet', async () => {
   expect(rules(found)).not.toContain('control-label-overflows')
 })
 
+test('a label that ellipsizes inside its own clipping span fits its button', async () => {
+  const found = await audit(`
+    <div style="width:300px">
+      <button style="width:100px;height:24px;padding:0 8px;display:inline-flex;align-items:center;white-space:nowrap"><span class="t" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">a long single line that cannot fit</span></button>
+    </div>`)
+  expect(rules(found)).not.toContain('control-label-overflows')
+})
+
 test('a screen-reader-only label inside an icon button is not a visible overflow', async () => {
   const sr = 'position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap'
   const found = await audit(`

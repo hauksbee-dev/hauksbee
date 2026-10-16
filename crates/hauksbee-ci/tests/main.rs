@@ -74,3 +74,6 @@ mod tolerance;
 mod unpowered_rail_is_declared;
 mod variant_sweep;
 mod watchdog_coverage_hole;
+// Boots the AVR blinky example through the web runner and the export route.
+#[cfg(all(feature = "avr", feature = "serve"))]
+mod web_export;

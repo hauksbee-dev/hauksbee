@@ -7,6 +7,8 @@ import { hasDefaultName } from '../lib/session-store'
 import { AdditionalEvidencePanel, evidenceSlots } from './AdditionalEvidencePanel'
 import { ArriveOnce, PressCard, SkeletonBar, useDropTarget, useSkeletonSwap } from '../motion'
 import { UploadBanners } from './ui'
+import { VerdictPill } from './VerdictPill'
+import { acceptedFormatsSentence, withoutEngineFormatList } from '../lib/board-formats'
 import { motion, useReducedMotion } from 'motion/react'
 import { CELL, INSTANT } from '../motion'
 
@@ -259,22 +261,35 @@ export function UploadView({ session, onOpenLive, sessions, onResume, avrAvailab
               >
                 {dragReject
                   ? 'That is not a file'
-                  : dragOver ? 'Drop to check' : 'Check my board'}
+                  : dragOver ? 'Drop to check' : uploadError ? 'That file did not work' : 'Check my board'}
               </div>
               <div className="mt-1 text-[13px]" style={{ color: 'var(--silk-dim)' }}>
                 {dragReject
                   ? 'Drag a board file out of your file manager, or click to choose one.'
                   : 'Drop the board design from your project folder, or click anywhere in this card.'}
               </div>
+              {/* A refusal lives where the file was dropped, with the way out:
+                  the same card is the retry (drop or click again). */}
+              {uploadError && !dragReject && (
+                <div
+                  data-testid="upload-error"
+                  role="alert"
+                  className="mt-4 rounded-lg px-3 py-2.5 text-[13px] leading-relaxed text-left"
+                  style={{ background: 'var(--err-bg)', border: '1px solid var(--err-border)', color: 'var(--err-strong)' }}
+                >
+                  {withoutEngineFormatList(uploadError)}
+                </div>
+              )}
 
               {/* primary action, visual only; the label handles activation */}
               <span className="hb-btn-primary inline-flex items-center gap-2 mt-6 px-5 py-2.5 rounded-lg text-sm">
-                <BoardTargetIcon size={15} /> Choose my board
+                <BoardTargetIcon size={15} /> {uploadError ? 'Choose another file' : 'Choose my board'}
               </span>
 
               <div className="mt-6 text-[12px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
-                Works with board designs from KiCad, Eagle and Altium, plus
-                manufacturing packages and Board-as-Code.
+                {uploadError && acceptedFormatsSentence()
+                  ? `Accepted: ${acceptedFormatsSentence()}`
+                  : 'Works with board designs from KiCad, Eagle and Altium, plus manufacturing packages and Board-as-Code.'}
               </div>
             </motion.label>
           )}
@@ -284,7 +299,7 @@ export function UploadView({ session, onOpenLive, sessions, onResume, avrAvailab
               otherwise empty page. */}
           {showSkeleton && <ReportSkeleton />}
 
-          <UploadBanners notice={uploadNotice} error={uploadError} onDismiss={dismissNotice} />
+          <UploadBanners notice={uploadNotice} error={null} onDismiss={dismissNotice} />
 
           {/* Samples, a first report with no file needed at all */}
           {!busy && (
@@ -316,10 +331,22 @@ export function UploadView({ session, onOpenLive, sessions, onResume, avrAvailab
           )}
 
           {/* One companion-input contract feeds report, Checks and Live Sim. */}
-          <AdditionalEvidencePanel
-            placement="intake"
-            {...evidenceSlots(session)}
-          />
+          {!busy && (
+            <details
+              data-testid="intake-more"
+              className="mt-6 mx-auto text-[13px]"
+              style={{ color: 'var(--silk-dim)' }}
+              open={!!(session.firmwareFile || session.schematicFile) || undefined}
+            >
+              <summary className="cursor-pointer text-center" style={{ listStylePosition: 'inside' }}>
+                Add firmware, a schematic or other inputs
+              </summary>
+              <AdditionalEvidencePanel
+                placement="intake"
+                {...evidenceSlots(session)}
+              />
+            </details>
+          )}
 
           {/* Prepare your own project, one line per ECAD, no jargon */}
           {!busy && (
@@ -438,6 +465,11 @@ function ResumeCard({ sessions, onResume }: {
             {row.board.fileName}
           </div>
         )}
+        {row.verdict && (
+          <div className="mt-1.5 flex">
+            <VerdictPill testId="session-resume-verdict" verdict={row.verdict} />
+          </div>
+        )}
         <div className="mt-0.5 text-[11px] tnum" style={{ color: 'var(--silk-faint)' }}>
           {facts} · saved {relTime(row.updatedAt, now)}
         </div>
@@ -462,7 +494,7 @@ function ResumeCard({ sessions, onResume }: {
           </button>
           {others > 0 && (
             <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
-              {others} other saved {others === 1 ? 'session' : 'sessions'} in the rail
+              {others} other saved {others === 1 ? 'session' : 'sessions'} under Sessions
             </span>
           )}
         </div>

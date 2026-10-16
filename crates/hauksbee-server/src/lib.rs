@@ -4,6 +4,7 @@
 //! that board's own file for the geometry viewer. [`Server`] owns the sim loop;
 //! the free functions assemble the drop-zone and unified app routers.
 
+pub mod ci_export;
 pub mod engine;
 pub mod frontdoor;
 pub mod protocol;

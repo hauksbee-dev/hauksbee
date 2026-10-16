@@ -3,9 +3,12 @@ import { api, errorText } from '../lib/api'
 import { tildeHome } from '../lib/display-path'
 import type {
   ExtractAgentConfig, ExtractApiBackendConfig, ExtractBackendAvailability, ExtractBackendsConfig,
-  ExtractPreset, ExtractResolved, ModelChoice, ExtractResolvedApi, ExtractSettings,
+  ExtractPreset, ExtractResolved, ModelChoice, ExtractResolvedApi, ExtractSettings, DepInfo,
 } from '../types/report'
 import { BusyLine, Callout, LogWell, TerminalCommand } from './ui'
+import { useDeps } from '../hooks/useDeps'
+import { InstallButton, InstallProgress } from './DepInstall'
+import { LinkedText } from './LinkedText'
 import { ChevronDownIcon, ChevronRightIcon } from './Icons'
 import { budgetLabel } from './extract/activity'
 import { escalateFromText, escalateToText, labelMap, ladderLabel } from './extract/escalate'
@@ -22,15 +25,9 @@ import { escalateFromText, escalateToText, labelMap, ladderLabel } from './extra
 // applies it and echoes the new state back), matching `hauksbee models backend
 // use <preset>` on the CLI side.
 
-const BACKEND_IDS = ['claude-code', 'agy', 'codex', 'api'] as const
-type BackendId = typeof BACKEND_IDS[number]
-
-const BACKEND_FALLBACK_LABEL: Record<BackendId, string> = {
-  'claude-code': 'Claude Code',
-  agy: 'Antigravity (agy)',
-  codex: 'Codex',
-  api: 'OpenAI-compatible API',
-}
+// Backend ids and display names come from the server (`data.backends`); only
+// the keys of the saved config block per agent CLI are named here.
+type AgentBackendId = 'codex' | 'claude-code' | 'agy'
 
 interface DraftAgent {
   command: string
@@ -175,6 +172,13 @@ function sourceLine(data: ExtractSettings): string {
   return data.exists ? `from ${where}` : `from ${where} (nothing saved yet)`
 }
 
+/** A model name is compared with the pick list only when the server's prefix
+ *  rule for the backend says so (an OpenAI-compatible endpoint may serve any model). */
+function hintsApply(data: ExtractSettings, backend: string, model: string): boolean {
+  const prefix = data.options.model_hint_prefix?.[backend]
+  return !prefix || model.startsWith(prefix)
+}
+
 function availabilityFor(data: ExtractSettings, backend: string): ExtractBackendAvailability | undefined {
   return data.backends.find(b => b.backend === backend)
 }
@@ -256,6 +260,61 @@ function ModelPicks({ picks, current, hintable, onPick }: {
           {current} is not in the current list and is used as written; {(picks.find(p => p.default) ?? picks[0]).name} is recommended.
         </span>
       )}
+    </div>
+  )
+}
+
+/** The escalation ladder as picks: the same one-click shape as the model picker.
+ *  Order is the order picked (shown as 1, 2, ...). "Default ladder" leaves the
+ *  setting blank; "Never escalate" saves it empty. The text spelling the CLI
+ *  takes (`none`, comma-separated) is the stored value and the terminal line. */
+function EscalatePicks({ picks, firstModel, value, effective, onChange }: {
+  picks: ModelChoice[]
+  /** The model tried first; it is not an escalation target. */
+  firstModel: string
+  value: string
+  /** The ladder in effect when the setting is blank. */
+  effective: readonly string[]
+  onChange: (text: string) => void
+}) {
+  const ids = escalateFromText(value)
+  const mode = ids === undefined ? 'default' : ids.length === 0 ? 'none' : 'custom'
+  const chosen = ids ?? []
+  const names = picks.filter(p => p.name !== firstModel).map(p => p.name)
+  // Anything saved that the list does not know stays visible and removable.
+  const options = [...names, ...chosen.filter(id => !names.includes(id) && id !== firstModel)]
+  const labels = labelMap(picks)
+  const toggle = (name: string) => {
+    const from = ids ?? [...effective]
+    const next = from.includes(name) ? from.filter(x => x !== name) : [...from, name]
+    onChange(next.length ? next.join(', ') : 'none')
+  }
+  const pill = (pressed: boolean): React.CSSProperties => ({
+    border: '1px solid var(--hairline)',
+    background: pressed ? 'var(--copper-tint-strong)' : 'var(--surface-2)',
+    color: pressed ? 'var(--copper-hi)' : 'var(--silk-dim)',
+    fontWeight: pressed ? 600 : 400,
+  })
+  return (
+    <div className="mt-1 flex flex-wrap gap-1.5" data-testid="settings-escalate">
+      <button type="button" data-testid="settings-escalate-default" aria-pressed={mode === 'default'}
+        onClick={() => onChange('')} className="hb-press text-[11px] cursor-pointer rounded-md px-2 py-1" style={pill(mode === 'default')}>
+        Default ladder
+      </button>
+      <button type="button" data-testid="settings-escalate-none" aria-pressed={mode === 'none'}
+        onClick={() => onChange('none')} className="hb-press text-[11px] cursor-pointer rounded-md px-2 py-1" style={pill(mode === 'none')}>
+        Never escalate
+      </button>
+      {options.map(name => {
+        const at = chosen.indexOf(name)
+        return (
+          <button key={name} type="button" data-testid={`settings-escalate-pick-${name}`} aria-pressed={at >= 0}
+            onClick={() => toggle(name)} className="hb-press text-[11px] cursor-pointer rounded-md px-2 py-1" style={pill(at >= 0)}>
+            {at >= 0 && <span className="tnum mr-1">{at + 1}.</span>}
+            {labels[name] ?? name}
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -363,6 +422,73 @@ function PresetCard({ preset, labels, availability, customCommand, active, busy,
   )
 }
 
+/** One row per backend the server lists: pick it, see whether it works, fix it
+ *  right there. The problem and its action appear on the selected row only. */
+function BackendRows({ backends, selected, onSelect, deps, depsApi }: {
+  backends: ExtractBackendAvailability[]
+  selected: string
+  onSelect: (backend: string) => void
+  deps: DepInfo[]
+  depsApi: ReturnType<typeof useDeps>
+}) {
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--hairline)' }} data-testid="settings-backends">
+      {backends.map((b, i) => {
+        const active = selected === b.backend
+        const dep = deps.find(d => d.id === b.backend)
+        const signedOut = !!dep && dep.present && dep.sign_in === 'not_signed_in'
+        const problem = !b.available || signedOut
+        return (
+          <div key={b.backend} style={{ borderTop: i > 0 ? '1px solid var(--hairline)' : 'none', background: active ? 'var(--copper-tint)' : 'var(--surface)' }}>
+            <button
+              type="button"
+              data-testid={`settings-backend-${b.backend}`}
+              title={b.detail}
+              aria-pressed={active}
+              onClick={() => onSelect(b.backend)}
+              className="hb-press w-full text-left px-3.5 py-2.5 text-[12px] cursor-pointer flex flex-wrap items-center gap-x-2.5 gap-y-1"
+              style={{ background: 'none', border: 'none', color: active ? 'var(--copper-hi)' : 'var(--silk-dim)', fontWeight: active ? 600 : 400 }}
+            >
+              <span aria-hidden style={{ width: 7, height: 7, borderRadius: 4, flexShrink: 0, display: 'inline-block', background: b.available ? (signedOut ? 'var(--warn)' : 'var(--ok)') : 'var(--err)' }} />
+              <span className="min-w-0">{b.label}</span>
+              {active && <span className="text-[9px] font-bold tracking-widest uppercase" style={{ color: 'var(--copper-hi)' }}>Selected</span>}
+              <span className="flex-1" />
+              <span className="text-[10px] font-bold tracking-widest uppercase" data-testid={`settings-backend-state-${b.backend}`} style={{ color: !b.available ? 'var(--silk-faint)' : signedOut ? 'var(--warn-strong)' : 'var(--ok)' }}>
+                {b.backend === 'api'
+                  ? (b.available ? 'key set' : 'no key set')
+                  : signedOut ? 'installed · not signed in' : b.available ? 'installed' : 'not installed'}
+              </span>
+            </button>
+            {active && problem && (
+              <div className="px-3.5 pb-3 flex flex-col gap-1.5" data-testid="settings-backend-problem">
+                <div className="flex flex-wrap items-start gap-3">
+                  <p className="text-[12px] flex-1 min-w-0 leading-relaxed" data-testid="settings-backend-install" style={{ color: 'var(--warn-strong)' }}>
+                    <LinkedText text={signedOut ? 'Installed, but not signed in. Sign in once with the command below.' : b.install} />
+                  </p>
+                  {dep && !dep.present && dep.installable && (
+                    <InstallButton dep={dep} install={depsApi.install} onInstall={id => void depsApi.runInstall(id)} />
+                  )}
+                </div>
+                {dep && !dep.present && !dep.installable && dep.cost && (
+                  <div className="text-[11px]" style={{ color: 'var(--silk-dim)' }}>
+                    <span style={{ color: 'var(--silk-faint)' }}>Cost: </span>{dep.cost}
+                  </div>
+                )}
+                {dep?.manual && (!dep.present || signedOut) && (
+                  <div className="text-[11px]" style={{ color: 'var(--silk-dim)' }}>
+                    <TerminalCommand command={dep.manual} testId="settings-backend-copy" />
+                  </div>
+                )}
+                <InstallProgress id={b.backend} install={depsApi.install} />
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // ── The view ─────────────────────────────────────────────────────────────
 
 type FetchState =
@@ -385,12 +511,20 @@ type TestState =
 export function SettingsView() {
   const [fetchState, setFetchState] = useState<FetchState>({ phase: 'loading' })
   const [draft, setDraft] = useState<Draft | null>(null)
-  const [selectedBackend, setSelectedBackend] = useState<BackendId>('claude-code')
+  const [selectedBackend, setSelectedBackend] = useState<string>('claude-code')
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [presetBusy, setPresetBusy] = useState<string | null>(null)
   const [presetError, setPresetError] = useState<string | null>(null)
   const [saveState, setSaveState] = useState<SaveState>({ phase: 'idle' })
   const [testState, setTestState] = useState<TestState>({ phase: 'idle' })
+
+  // A finished install changes which backends work: re-read the availability
+  // without touching the draft being edited.
+  const refreshAvailability = useCallback(() => {
+    void api.extractSettings().then(fresh => setFetchState({ phase: 'ready', data: fresh })).catch(() => undefined)
+  }, [])
+  const depsApi = useDeps(refreshAvailability)
+  const deps = depsApi.fetchState.phase === 'ready' ? depsApi.fetchState.deps : []
 
   const load = useCallback(async () => {
     setFetchState({ phase: 'loading' })
@@ -398,7 +532,7 @@ export function SettingsView() {
       const data = await api.extractSettings()
       setFetchState({ phase: 'ready', data })
       setDraft(draftFromConfig(data.config))
-      setSelectedBackend((data.config.backend as BackendId) || (data.resolved.backend as BackendId) || 'claude-code')
+      setSelectedBackend(data.config.backend || data.resolved.backend || 'claude-code')
     } catch (e) {
       setFetchState({ phase: 'unavailable', reason: errorText(e) })
     }
@@ -426,7 +560,7 @@ export function SettingsView() {
       const fresh = await api.extractSettingsPreset(id)
       setFetchState({ phase: 'ready', data: fresh })
       setDraft(draftFromConfig(fresh.config))
-      setSelectedBackend((fresh.config.backend as BackendId) || (fresh.resolved.backend as BackendId) || 'claude-code')
+      setSelectedBackend(fresh.config.backend || fresh.resolved.backend || 'claude-code')
       setSaveState({ phase: 'idle' })
     } catch (e) {
       setPresetError(errorText(e))
@@ -511,7 +645,7 @@ export function SettingsView() {
 
   const availability = availabilityFor(data, selectedBackend)
   const resolvedForSelected = resolvedBlock(data.resolved, selectedBackend)
-  const agentBackend = selectedBackend === 'api' ? 'agy' : selectedBackend
+  const agentBackend: AgentBackendId = selectedBackend === 'api' ? 'agy' : (selectedBackend as AgentBackendId)
   const selectedAgent = draft[agentBackend]
   const setAgent = (key: keyof DraftAgent) => (value: string) =>
     setDraft(d => d && { ...d, [agentBackend]: { ...d[agentBackend], [key]: value } })
@@ -626,44 +760,16 @@ export function SettingsView() {
         <div className="text-[11px] font-bold tracking-widest uppercase mb-2.5" style={{ color: 'var(--silk-faint)' }}>
           Backend
         </div>
-        <div className="inline-flex flex-wrap rounded-lg overflow-hidden" style={{ border: '1px solid var(--hairline)' }}>
-          {BACKEND_IDS.map((id, i) => {
-            const avail = availabilityFor(data, id)
-            const active = selectedBackend === id
-            return (
-              <button
-                key={id}
-                type="button"
-                data-testid={`settings-backend-${id}`}
-                title={avail?.detail}
-                aria-pressed={active}
-                onClick={() => { setSelectedBackend(id); setDraft(d => d && { ...d, backend: id }) }}
-                className="hb-press px-3 py-1.5 text-[12px] cursor-pointer inline-flex items-center gap-1.5"
-                style={{
-                  borderLeft: i > 0 ? '1px solid var(--hairline)' : 'none',
-                  background: active ? 'var(--copper-tint-strong)' : 'var(--surface-2)',
-                  color: active ? 'var(--copper-hi)' : 'var(--silk-dim)',
-                  fontWeight: active ? 600 : 400,
-                }}
-              >
-                <span
-                  aria-hidden
-                  style={{
-                    width: 7, height: 7, borderRadius: 4, flexShrink: 0, display: 'inline-block',
-                    background: avail?.available ? 'var(--ok)' : 'var(--err)',
-                  }}
-                />
-                {avail?.label ?? BACKEND_FALLBACK_LABEL[id]}
-              </button>
-            )
-          })}
-        </div>
+        <BackendRows
+          backends={data.backends}
+          selected={selectedBackend}
+          onSelect={id => { setSelectedBackend(id); setDraft(d => d && { ...d, backend: id }) }}
+          deps={deps}
+          depsApi={depsApi}
+        />
         <div className="mt-1.5 text-[11px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
           Saved routing (save edits to update): {availability?.sends_data_to ?? 'unknown'}
         </div>
-        {availability && !availability.available && (
-          <p className="mt-1.5 text-[12px]" data-testid="settings-backend-install">{availability.install}</p>
-        )}
       </div>
 
       {/* ── Per-backend fields ── */}
@@ -678,7 +784,7 @@ export function SettingsView() {
               <MonoInput testId="settings-model" width="17rem" list="settings-model-options" value={draft.api.model}
                 placeholder={data.resolved.api.model} onChange={setApiModel} />
               <ModelPicks picks={data.options.models.api ?? []} current={draft.api.model || data.resolved.api.model}
-                hintable={/^gpt-/.test(draft.api.model || data.resolved.api.model)} onPick={setApiModel} />
+                hintable={hintsApply(data, 'api', draft.api.model || data.resolved.api.model)} onPick={setApiModel} />
             </Field>
             <Field
               label="API key variable"
@@ -721,8 +827,7 @@ export function SettingsView() {
               label="Escalate to"
               hint={
                 <>
-                  Models tried in order when a tier fails; comma-separated. Blank = the default
-                  ladder, <code className="hb-inline">none</code> = never escalate.{' '}
+                  Models tried in order when a tier fails; click to add or remove, in order.{' '}
                   <span data-testid="settings-escalate-effective">
                     In effect: {resolvedEscalate(data.resolved, selectedBackend)?.length
                       ? ladderLabel(resolvedForSelected.model, resolvedEscalate(data.resolved, selectedBackend), labelMap(data.options.models[selectedBackend]))
@@ -731,8 +836,13 @@ export function SettingsView() {
                 </>
               }
             >
-              <MonoInput testId="settings-escalate" width="30rem" value={fields.escalate}
-                placeholder={escalateToText(resolvedEscalate(data.resolved, selectedBackend))} onChange={fields.setEscalate} />
+              <EscalatePicks
+                picks={data.options.models[selectedBackend] ?? []}
+                firstModel={fields.model || resolvedForSelected.model}
+                value={fields.escalate}
+                effective={resolvedEscalate(data.resolved, selectedBackend) ?? []}
+                onChange={fields.setEscalate}
+              />
             </Field>
           </div>
         )}
@@ -860,7 +970,8 @@ export function SettingsView() {
   )
 }
 
-function resolvedPermission(resolved: ExtractResolved, backend: Exclude<BackendId, 'api'>): string {
+function resolvedPermission(resolved: ExtractResolved, backend: string): string {
   if (backend === 'claude-code') return resolved.claude_code.permission_mode ?? ''
-  return resolved[backend].permission_mode ?? ''
+  if (backend === 'codex' || backend === 'agy') return resolved[backend].permission_mode ?? ''
+  return ''
 }

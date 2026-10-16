@@ -26,6 +26,10 @@ interface NavState {
   faultCount: number
 }
 
+/** Why a destination is greyed out, said on the item (a tooltip alone is
+ *  invisible on a touch screen) and as its hover and accessible hint. */
+const NEEDS_BOARD = 'load a board first'
+
 export function Sidebar({
   nav, report, boardLabel, analyzedAt, theme, onToggleTheme, sessions,
 }: {
@@ -54,20 +58,22 @@ export function Sidebar({
     disabled?: boolean
     hint?: string
     badge?: number
+    /** The label in the phone tab bar, when the full one does not fit a cell. */
+    short?: string
   }[] = [
     { id: 'board', label: 'Board', icon: <BoardTargetIcon size={16} /> },
     {
       id: 'checks', label: 'Checks', icon: <ChecksIcon size={16} />,
       disabled: !nav.checksEnabled,
-      hint: nav.checksEnabled ? undefined : 'Analyze a board first',
+      hint: nav.checksEnabled ? undefined : NEEDS_BOARD,
     },
     {
       id: 'sim', label: 'Live Sim', icon: <LiveIcon size={16} />,
       disabled: !nav.simEnabled,
-      hint: nav.simEnabled ? undefined : 'Analyze a board, then drive it live',
+      hint: nav.simEnabled ? undefined : NEEDS_BOARD,
       badge: nav.faultCount > 0 ? nav.faultCount : undefined,
     },
-    { id: 'env', label: 'Environment', icon: <WrenchIcon size={16} /> },
+    { id: 'env', label: 'Environment', short: 'Env', icon: <WrenchIcon size={16} /> },
     { id: 'settings', label: 'Settings', icon: <GearIcon size={16} /> },
   ]
 
@@ -82,7 +88,7 @@ export function Sidebar({
       }}
     >
       {/* Wordmark + mark */}
-      <div className="flex items-center gap-2.5 px-4" style={{ height: 56, borderBottom: '1px solid var(--hairline)' }}>
+      <div className="sidebar-brand flex items-center gap-2.5 px-4" style={{ height: 56, borderBottom: '1px solid var(--hairline)' }}>
         <img src="/favicon.svg" alt="" width={24} height={24} style={{ borderRadius: 6, flexShrink: 0 }} />
         <span
           className="sidebar-label text-[13px] font-semibold tracking-[0.22em]"
@@ -108,7 +114,21 @@ export function Sidebar({
             aria-current={nav.view === item.id ? 'page' : undefined}
           >
             <span style={{ display: 'inline-flex', flexShrink: 0 }}>{item.icon}</span>
-            <span className="nav-label flex-1">{item.label}</span>
+            <span className="nav-label flex-1 min-w-0">
+              {item.short ? (
+                <span className="nav-name has-short block">
+                  <span className="nav-full">{item.label}</span>
+                  <span className="nav-short" aria-hidden>{item.short}</span>
+                </span>
+              ) : (
+                <span className="nav-name block">{item.label}</span>
+              )}
+              {item.disabled && item.hint && (
+                <span data-testid={`nav-${item.id}-note`} className="nav-note sidebar-label block text-[10px]" style={{ color: 'var(--silk-faint)' }}>
+                  {item.hint}
+                </span>
+              )}
+            </span>
             {item.id === 'sim' && nav.simRunning && (
               <span
                 className="run-dot sidebar-label"
@@ -134,11 +154,12 @@ export function Sidebar({
         ))}
       </div>
 
-      <div className="flex-1" />
+      <div className="sidebar-spacer flex-1" />
 
       {/* Saved sessions, then the active board's identity: what is remembered,
-          then what is loaded. */}
-      {sessions}
+          then what is loaded. On a phone the rail is the bottom tab bar, which
+          has no room for either (the landing page offers the last session). */}
+      <div className="sidebar-extra">{sessions}</div>
 
       {/* Active board identity, pinned */}
       {report?.ok && (
@@ -173,7 +194,7 @@ export function Sidebar({
 /** The rail's footer button that flips between the light and dark themes. */
 export function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }) {
   return (
-    <div className="px-2.5 pb-3">
+    <div className="theme-cell px-2.5 pb-3">
       <button
         type="button"
         data-testid="theme-toggle"

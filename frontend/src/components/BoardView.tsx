@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { BoardRequest, ModelCoverageComponent } from '../types/report'
+import type { BoardRequest, ModelCoverageComponent, WebOpenPart } from '../types/report'
 import { coverageFor, explainReport, modelsOnNet, padNetsOf, plural, reportView, stageWords } from '../lib/report-view'
 import type { BoardSession } from '../hooks/useBoardSession'
 import { WarningIcon } from './Icons'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './BoardViewer'
 import { OpenSelectionsBanner, SelectionCard } from './SelectionCard'
 import { AdditionalEvidencePanel, evidenceSlots } from './AdditionalEvidencePanel'
-import { DatasheetExtract } from './DatasheetExtract'
 import { WritePart } from './WritePart'
-import { acceptedFormatsSentence, withoutEngineFormatList } from '../lib/board-formats'
+import { DropBoardAgain, UploadFailure } from './UploadFailure'
 import { StaggerItem } from '../motion'
 import { ExportMenu } from './ExportMenu'
 import type { SpecSnapshot } from '../hooks/useSessions'
@@ -31,28 +30,6 @@ import { BoardMap } from './report/BoardMap'
 // Landing/UploadView owns getting a board in; everything here owns saying what
 // came back and letting the board be explored. The findings, the qualification
 // panels, the co-sim block and the fallback dot map live in ./report.
-
-/** The file-picker label the dead-end paths offer, styled as a button. */
-function DropBoardAgain({ testId, label, height }: { testId: string; label: string; height: number }) {
-  return (
-    <label
-      htmlFor="board-file"
-      data-testid={testId}
-      role="button"
-      tabIndex={0}
-      onKeyDown={e => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          document.getElementById('board-file')?.click()
-        }
-      }}
-      className="hb-btn-primary hb-press inline-flex items-center px-3.5 text-[13px] cursor-pointer"
-      style={{ height }}
-    >
-      {label}
-    </label>
-  )
-}
 
 export function BoardView({
   session, onQueue, onOpenChecks,
@@ -79,6 +56,7 @@ export function BoardView({
   // a datasheet draft's: the open-selections banner above already offers it.
   const awaitingPick = new Set(r.bind?.open_selections?.map(s => s.reference))
   const openParts = (r.bind?.open_parts ?? []).filter(p => !awaitingPick.has(p.reference))
+  const unmodelled = openParts.filter(part => !part.bound)
   const {
     boardUrl, selectedNet, selectedComponent, setSelectedNet, setSelectedComponent,
     busy, uploadError, uploadNotice, dismissNotice, firmwareFile,
@@ -97,7 +75,7 @@ export function BoardView({
   // it is a "let me look at this properly" gesture, not a setting.
   const [mapFullscreen, setMapFullscreen] = useState(false)
   const [importOverlay, setImportOverlay] = useState(false)
-  const [authoringComponent, setAuthoringComponent] = useState<ModelCoverageComponent | null>(null)
+  const [authoringComponent, setAuthoringComponent] = useState<ModelCoverageComponent | WebOpenPart | null>(null)
   const [authoringSignal, setAuthoringSignal] = useState(0)
   // The two collapsed groups something else can open: the parts the run had to
   // guess at (the banner's link, an Extend click) and the evidence slots (the
@@ -198,42 +176,7 @@ export function BoardView({
   const pointedRefs = useMemo(() => (pointed?.kind === 'part' ? [pointed.ref] : []), [pointed])
   const pointedNets = useMemo(() => (pointed?.kind === 'net' ? [pointed.net] : []), [pointed])
 
-  if (!r.ok) {
-    return (
-      <div className="h-full overflow-y-auto view-enter">
-        <div className="max-w-3xl mx-auto px-6 pt-8 pb-16">
-          <Callout tone="err" testId="report-verdict" className="px-4 py-3.5">
-            {r.error ? withoutEngineFormatList(r.error) : 'Could not read the file.'}
-          </Callout>
-          {r.import_failure && (
-            <Callout
-              tone="warn"
-              testId="import-failure"
-              className="mt-3"
-              title={`Import stopped at ${r.import_failure.stage}`}
-            >
-              {r.import_failure.excerpt && (
-                <pre className="mt-2 overflow-x-auto rounded px-3 py-2 text-[11px]" style={{ background: 'var(--canvas)', border: '1px solid var(--hairline)' }}>
-                  {r.import_failure.excerpt}
-                </pre>
-              )}
-              <div className="mt-2"><b>Suggested fix:</b> {r.import_failure.suggested_fix}</div>
-            </Callout>
-          )}
-          {/* The dead end must not be dead: offer the retry inline instead of
-              sending the user hunting for the header button. The accepted-format
-              list is the app's one copy (lib/board-formats), because the engine's
-              own refusal text omits formats it can in fact read. */}
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <DropBoardAgain testId="try-another-file" label="Try another file" height={32} />
-            <span className="text-[12px]" style={{ color: 'var(--silk-dim)' }}>
-              accepted: {acceptedFormatsSentence()}
-            </span>
-          </div>
-        </div>
-      </div>
-    )
-  }
+  if (!r.ok) return <UploadFailure report={r} session={session} />
 
   // Everything the run had to assume about a part, in one place: the parts with
   // no model, the variants the board leaves open, and what each model covers.
@@ -272,22 +215,42 @@ export function BoardView({
         />
       )}
 
-      {/* Directly under the line that says a model is missing: the offer to
-          draft one. This is the moment the user learns they need it, and the
-          only moment they have the part number and the datasheet in mind. */}
+      {/* Directly under the line that says a model is missing: the one
+          "Model this part" surface (draft from a datasheet, extend, or write
+          it), for whichever part the user picks. */}
       {!restoredFrom && (
         <>
-          <DatasheetExtract
-            openParts={openParts}
-            onSaved={session.reanalyzeCurrent}
-            onOpenSettings={onOpenSettings}
-          />
           <div className="mt-3" ref={authoringRef}>
+            {unmodelled.length > 1 && (
+              <label className="flex flex-wrap items-center gap-1.5 text-[12px] mb-1.5" style={{ color: 'var(--silk-dim)' }}>
+                {plural(unmodelled.length, 'part')} have no model:
+                <select
+                  className="hb-input text-[12px] truncate"
+                  data-testid="model-part-pick"
+                  aria-label="Part to model"
+                  value={authoringComponent?.reference ?? ''}
+                  onChange={e => {
+                    const ref = e.target.value
+                    const pickedPart = coverageFor(r.model_coverage, ref) ?? unmodelled.find(p => p.reference === ref)
+                    if (!pickedPart) return
+                    setAuthoringComponent(pickedPart)
+                    setAuthoringSignal(value => value + 1)
+                  }}
+                  style={{ height: 28, maxWidth: 220 }}
+                >
+                  <option value="" disabled>choose one</option>
+                  {unmodelled.map(p => (
+                    <option key={p.reference} value={p.reference}>{p.reference}{p.value ? ` · ${p.value}` : ''}</option>
+                  ))}
+                </select>
+              </label>
+            )}
             <WritePart
               onSaved={session.reanalyzeCurrent}
-              suggested={authoringComponent ?? openParts.find(part => !part.bound)}
+              suggested={authoringComponent ?? unmodelled[0]}
               openSignal={authoringSignal > 0 ? `${authoringComponent?.reference}:${authoringSignal}` : null}
               boardLabel={boardLabel ?? r.file_name}
+              onOpenSettings={onOpenSettings}
             />
           </div>
         </>
@@ -523,7 +486,7 @@ export function BoardView({
                 resultOverlay={overlayOn ? overlay : null}
               />
               {mapFullscreen && (selectedNet || selectedComponent) && (
-                <div className="absolute left-3 z-10 flex items-end pointer-events-none" style={{ top: TOOLBAR_CLEARANCE, bottom: 12 }}>
+                <div className="selection-dock absolute left-3 z-10 flex items-end pointer-events-none" style={{ top: TOOLBAR_CLEARANCE, bottom: 12 }}>
                   <div className="pointer-events-auto" style={{ maxHeight: '100%', display: 'flex' }}>{card}</div>
                 </div>
               )}

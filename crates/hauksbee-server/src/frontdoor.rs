@@ -50,7 +50,7 @@ type JsonResponse = (StatusCode, [(header::HeaderName, &'static str); 1], String
 /// standard private-network-access defense for a localhost server.
 ///
 /// Returns `Some(response)` when the request must be refused, `None` to proceed.
-fn reject_cross_site(headers: &HeaderMap) -> Option<JsonResponse> {
+pub(crate) fn reject_cross_site(headers: &HeaderMap) -> Option<JsonResponse> {
     let site = headers.get("sec-fetch-site")?.to_str().ok()?;
     // Browser-origin request: only our own page (same-origin) or a direct
     // address-bar navigation (none) may reach these endpoints.
@@ -138,6 +138,7 @@ pub fn check_route_with_design(check: DesignCheckRunner) -> Router {
             .route("/api/ci/measure", post(measure_handler)),
         check,
     )
+    .merge(crate::ci_export::routes())
 }
 
 struct DesignLiveState {
@@ -963,7 +964,8 @@ async fn check_handler(
     })
     .await
     {
-        Ok(json) => json_ok(json),
+        // The run's JUnit, JSON and manifest stay server-side for the export route.
+        Ok(json) => json_ok(crate::ci_export::stash(json)),
         Err(response) => response,
     }
 }

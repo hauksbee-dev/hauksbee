@@ -129,15 +129,6 @@ describe('frontend release gates', () => {
     expect(workflowYaml(injected)).not.toContain('\nspecs:')
   })
 
-  test('the browser picker exposes every single-file and archive input used by CI', async () => {
-    const { BOARD_ACCEPT_ATTR, acceptedFormatsSentence } = await import('../src/lib/board-formats')
-    const accepted = acceptedFormatsSentence()
-    for (const extension of ['.xml', '.zip', '.tgz', '.tar.gz', '.tar']) {
-      expect(BOARD_ACCEPT_ATTR.split(',')).toContain(extension)
-      expect(accepted).toContain(extension)
-    }
-  })
-
   test('every default-feature Rust job installs the immutable simavr prerequisite', () => {
     const setup = readFileSync(join(repository, 'scripts/setup-ci-simavr.sh'), 'utf8')
     const installer = readFileSync(join(repository, 'crates/hauksbee-engine/assets/scripts/install-sims.sh'), 'utf8')

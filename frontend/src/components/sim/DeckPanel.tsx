@@ -4,6 +4,7 @@ import { drawScope } from '../scope-draw'
 import type { ScopePlot } from '../scope-draw'
 import { deckPlots, runDeck, type DeckSimResponse } from '../../lib/deck-sim'
 import { downloadText } from '../../lib/report-export'
+import { plotPng, plotSvg } from '../plot-export'
 import { errorText, isAbort } from '../../lib/api'
 
 // A dropped SPICE deck, run by the engine and shown as one page: the analysis
@@ -23,7 +24,7 @@ const Y_AXIS_WORDS: Record<string, string> = {
 }
 const yAxisWords = (yUnit: string) => Y_AXIS_WORDS[yUnit] ?? (yUnit.trim() || 'unitless')
 
-function Plot({ plot }: { plot: ScopePlot }) {
+function Plot({ plot, stem }: { plot: ScopePlot; stem: string }) {
   const ref = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
     const canvas = ref.current
@@ -47,8 +48,16 @@ function Plot({ plot }: { plot: ScopePlot }) {
       <canvas ref={ref} height={200} role="img" aria-label={`${plot.xLabel}, y axis: ${yAxisWords(plot.yUnit)}`} style={{ display: 'block', width: '100%', height: 200 }} />
       {/* The y quantity in words: the AC plot is dB, the table below it is the
           linear magnitude the CLI printed, and nothing else said so. */}
-      <div className="px-2 py-1 text-[10px]" data-testid="plot-y-caption" style={{ color: 'var(--silk-faint)', borderTop: '1px solid var(--scope-edge)' }}>
-        y axis: {yAxisWords(plot.yUnit)}{plot.yUnit === ' dB' && ' (20·log₁₀ of the magnitude in the table below)'}
+      <div className="px-2 py-1 text-[10px] flex flex-wrap items-center gap-2" data-testid="plot-y-caption" style={{ color: 'var(--silk-faint)', borderTop: '1px solid var(--scope-edge)' }}>
+        <span className="flex-1">y axis: {yAxisWords(plot.yUnit)}{plot.yUnit === ' dB' && ' (20·log₁₀ of the magnitude in the table below)'}</span>
+        <button type="button" className="hb-btn hb-press px-2 text-[10px]" style={{ height: 22 }} data-testid="plot-export-png"
+          onClick={() => void plotPng(plot).then(blob => { if (blob) downloadText(`${stem}.png`, blob, 'image/png') })}>
+          PNG
+        </button>
+        <button type="button" className="hb-btn hb-press px-2 text-[10px]" style={{ height: 22 }} data-testid="plot-export-svg"
+          onClick={() => downloadText(`${stem}.svg`, plotSvg(plot), 'image/svg+xml')}>
+          SVG
+        </button>
       </div>
     </div>
   )
@@ -86,7 +95,8 @@ export function DeckPanel({ file }: { file: File }) {
   return (
     <div className="max-w-3xl mx-auto px-6 py-6 flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
-        <span className="text-[13px] truncate" style={{ fontFamily: 'var(--font-mono)', color: 'var(--silk)' }}>{file.name}</span>
+        {/* The header names the deck from sm up; a phone's header has no room. */}
+        <span className="sm:hidden text-[13px] truncate" style={{ fontFamily: 'var(--font-mono)', color: 'var(--silk)' }}>{file.name}</span>
         {result?.analysis && (
           <span className="hb-chip text-[11px]" data-testid="deck-analysis">{result.analysis.toUpperCase()} (the deck&rsquo;s own card)</span>
         )}
@@ -111,7 +121,7 @@ export function DeckPanel({ file }: { file: File }) {
               <ul className="list-disc pl-4">{(result.notes ?? []).map(n => <li key={n}>{n}</li>)}</ul>
             </Callout>
           )}
-          {deckPlots(result).map(plot => <Plot key={`${plot.yUnit}${plot.xLabel}`} plot={plot} />)}
+          {deckPlots(result).map((plot, i) => <Plot key={`${plot.yUnit}${plot.xLabel}`} plot={plot} stem={`${file.name.replace(/\.[^.]+$/, '')}${i > 0 ? `-${i + 1}` : ''}`} />)}
           <div className="overflow-x-auto">
             <table className="text-[11px] tnum" style={{ fontFamily: 'var(--font-mono)', color: 'var(--silk-dim)', borderCollapse: 'collapse' }}>
               <thead>

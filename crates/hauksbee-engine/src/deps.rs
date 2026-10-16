@@ -414,6 +414,12 @@ fn probe_path_cli(spec: PathCliSpec) -> DepStatus {
 /// Claude Code, the second datasheet-to-model extractor backend: using it
 /// sends datasheet text to Anthropic, so [`PathCliSpec::privacy`] carries
 /// that honesty forward.
+/// Where "write a model by hand" is documented, as the public URL the page
+/// turns into a link (the one `docs_url` transform, not a repo path).
+fn extending_docs_url() -> String {
+    hauksbee_ir::docs_url::docs_url("docs/extending/")
+}
+
 fn probe_claude_code() -> DepStatus {
     probe_path_cli(PathCliSpec {
         bin: "claude",
@@ -422,9 +428,12 @@ fn probe_claude_code() -> DepStatus {
         unlocks: "datasheet-to-model extraction (`hauksbee models extract`, the web Extend flow) via the Claude Code CLI",
         cost: "free if you already pay for Claude: the CLI signs in with that account".to_string(),
         manual: "npm install -g @anthropic-ai/claude-code   # then: claude auth login".to_string(),
-        privacy: "Using this sends the datasheet, and what the agent reads in its sandbox, to Anthropic. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.",
-        absent_detail: "claude not found on PATH. This is optional: extraction also runs via                  codex or an API key, and a model can always be written by hand (one                  TOML file, see docs/extending/)."
-            .to_string(),
+        privacy: "Using this sends the datasheet, and what the agent reads in its sandbox, to Anthropic. Nothing is sent unless you ask for an extraction, and hauksbee never runs it on its own.",
+        absent_detail: format!(
+            "claude not found on PATH. This is optional: extraction also runs via codex or an API key, \
+             and a model can always be written by hand (one TOML file, see {}).",
+            extending_docs_url()
+        ),
         present_detail: "claude CLI found; sign-in is checked only when datasheet extraction is requested."
             .to_string(),
     })
@@ -440,12 +449,15 @@ fn probe_agy() -> DepStatus {
         name: "Antigravity (datasheet extraction)",
         unlocks: "datasheet-to-model extraction (`hauksbee models extract`, the web Extend flow) via Antigravity's `agy` CLI",
         cost: "free if you already use Antigravity: agy signs in with your Google account".to_string(),
-        manual: hauksbee_models::datasheet::Backend::Agy
-            .install_hint()
-            .to_string(),
-        privacy: "Using this sends the datasheet, and anything the agent reads (hauksbee does not confine agy; only its own unverified --sandbox applies), to Google. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.",
-        absent_detail: "agy not found on PATH. This is optional: extraction also runs via                  codex, Claude Code, or an API key, and a model can always be written by hand                  (one TOML file, see docs/extending/)."
-            .to_string(),
+        // Antigravity installs from its own site, not a terminal command; the
+        // install prose is served with the backend, so there is nothing to copy.
+        manual: String::new(),
+        privacy: "Using this sends the datasheet, and anything the agent reads (hauksbee does not confine agy; only its own unverified --sandbox applies), to Google. Nothing is sent unless you ask for an extraction, and hauksbee never runs it on its own.",
+        absent_detail: format!(
+            "agy not found on PATH. This is optional: extraction also runs via codex, Claude Code, \
+             or an API key, and a model can always be written by hand (one TOML file, see {}).",
+            extending_docs_url()
+        ),
         present_detail: "agy CLI found; sign-in is checked only when datasheet extraction is requested."
             .to_string(),
     })
@@ -488,12 +500,12 @@ fn probe_codex() -> DepStatus {
     };
     let Some(bin) = which_codex() else {
         return DepStatus {
-            detail: Some(
+            detail: Some(format!(
                 "codex not found on PATH. This is optional: every other part of hauksbee \
                  works without it, and a model can always be written by hand (one TOML \
-                 file, see docs/extending/)."
-                    .to_string(),
-            ),
+                 file, see {}).",
+                extending_docs_url()
+            )),
             ..base
         };
     };
@@ -590,7 +602,43 @@ pub fn invalidate_deps_cache() {
     SIGNIN_CACHE.clear();
 }
 
-/// The `/api/deps` response body: `{"deps":[...]}`.
+/// SHA-256 of the running executable, streamed and computed once per process:
+/// the one hash of "which build is this" that an environment report can cite.
+fn exe_sha256() -> Option<&'static str> {
+    use sha2::{Digest as _, Sha256};
+    use std::io::Read as _;
+    static HASH: OnceLock<Option<String>> = OnceLock::new();
+    HASH.get_or_init(|| {
+        let mut file = std::fs::File::open(std::env::current_exe().ok()?).ok()?;
+        let mut hasher = Sha256::new();
+        let mut buf = vec![0u8; 1 << 20];
+        loop {
+            let n = file.read(&mut buf).ok()?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+        }
+        Some(crate::run_manifest::bytes_to_hex(&hasher.finalize()))
+    })
+    .as_deref()
+}
+
+/// The `environment` block of `/api/deps`: what a reviewer attaches to a
+/// sign-off record. Engine version, the running binary's hash, the host, and
+/// the same backend probe `hauksbee doctor --json` prints, so the web report
+/// and the CLI's cannot disagree about what is installed.
+fn environment_json() -> serde_json::Value {
+    serde_json::json!({
+        "engine_version": env!("CARGO_PKG_VERSION"),
+        "exe_sha256": exe_sha256(),
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "doctor": crate::commands::doctor::backends_json(),
+    })
+}
+
+/// The `/api/deps` response body: `{"deps":[...],"environment":{...}}`.
 #[must_use]
 pub fn deps_json() -> String {
     let mut cache = deps_cache().lock().unwrap_or_else(PoisonError::into_inner);
@@ -599,8 +647,10 @@ pub fn deps_json() -> String {
             return json.clone();
         }
     }
-    let json = serde_json::to_string(&serde_json::json!({ "deps": probe_all() }))
-        .unwrap_or_else(|_| "{\"deps\":[]}".to_string());
+    let json = serde_json::to_string(
+        &serde_json::json!({ "deps": probe_all(), "environment": environment_json() }),
+    )
+    .unwrap_or_else(|_| "{\"deps\":[]}".to_string());
     *cache = Some((Instant::now(), json.clone()));
     json
 }
