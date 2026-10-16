@@ -320,6 +320,55 @@ fn crystal_cl_stated_in_its_value_is_judged() {
     assert_eq!(stated_crystal_cl("16 MHz CL=12.5 pF"), Some(12.5));
 }
 
+/// The same crystal and load caps on a board whose ground is called `ground`.
+fn xtal_board_grounded(ground: &str) -> ExtractedBoard {
+    pcb(&format!(
+        r#"(net 1 "XIN") (net 2 "XOUT") (net 3 "{ground}")
+        (footprint "Crystal:Crystal_SMD_3225-4Pin"
+          (at 10 10) (layer "F.Cu")
+          (property "Reference" "Y1") (property "Value" "16MHz")
+          (pad "1" smd rect (at -1 0) (net 1 "XIN"))
+          (pad "2" smd rect (at -1 1) (net 3 "{ground}"))
+          (pad "3" smd rect (at 1 0) (net 2 "XOUT"))
+          (pad "4" smd rect (at 1 1) (net 3 "{ground}")))
+        (footprint "Capacitor_SMD:C_0402"
+          (at 8 10) (layer "F.Cu")
+          (property "Reference" "C1") (property "Value" "22p")
+          (pad "1" smd rect (at 0 0) (net 1 "XIN"))
+          (pad "2" smd rect (at 1 0) (net 3 "{ground}")))
+        (footprint "Capacitor_SMD:C_0402"
+          (at 12 10) (layer "F.Cu")
+          (property "Reference" "C2") (property "Value" "22p")
+          (pad "1" smd rect (at 0 0) (net 2 "XOUT"))
+          (pad "2" smd rect (at 1 0) (net 3 "{ground}")))"#
+    ))
+}
+
+/// A load capacitor to a ground counts as one whatever the ground is called:
+/// renaming the ground changes no circuit. The control keeps the "no load
+/// capacitors" finding, so the check is live on each spelling.
+#[test]
+fn load_caps_to_a_ground_count_whatever_the_ground_is_called() {
+    for ground in [
+        "GND",
+        "0V",
+        "GND1",
+        "GROUND",
+        "GNDREF",
+        "AGND",
+        "VSS",
+        "/sheet/0V",
+    ] {
+        let r = run_board(&xtal_board_grounded(ground), check_crystal_load_cap);
+        assert_eq!(r.finding_count(), 0, "{ground}: C1 and C2 load the crystal");
+        assert!(
+            r.of_check(SiCheck::CrystalLoadCap)
+                .any(|f| f.message.contains("pF")),
+            "{ground}: the load the caps present is stated"
+        );
+    }
+}
+
 #[test]
 fn crystal_missing_both_caps_fires() {
     // A discrete crystal with no load caps at all on either terminal.
