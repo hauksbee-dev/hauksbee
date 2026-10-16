@@ -15,8 +15,8 @@ use crate::schematic_ties::SchematicTies;
 
 use super::manifest::capture_manifest;
 use super::{
-    ci_check_selected, ci_surface_is_model_dependent, input_kind_name, valid_digest,
-    warn_sibling_boards, Notes, RunConfig, SelectedSurface,
+    ci_check_selected, input_kind_name, valid_digest, warn_sibling_boards, Notes, RunConfig,
+    SelectedSurface,
 };
 
 pub struct RunInputs {
@@ -208,57 +208,9 @@ fn gather_ci_artifact_findings(
         &maps,
         |m| !finding_messages.contains(m.assertion()),
     ));
-    let blockers = crate::result::unmodelled_critical_refs(
-        &crate::result::BindSummary::from_report(&bound.report),
-    );
-    let blockers = if surface == SelectedSurface::UsbC {
-        crate::reports::usb_c::scoped_blockers(board, &blockers)
-    } else {
-        blockers
-    };
-    // The `--check` verdict judges around open parts it can scope (see
-    // `crate::scope`). Partly judged is never a pass, so its CI artifact is a
-    // red PARTLY JUDGED test naming what was not judged, not a green one.
-    let scope = (surface == SelectedSurface::Check)
-        .then(|| crate::scope::JudgementScope::of(board, &bound, &blockers))
-        .flatten()
-        .filter(|s| s.scopes(&blockers));
-    if ci_surface_is_model_dependent(surface) && !blockers.is_empty() {
-        let (kind, severity, message) = scope.map_or_else(
-            || {
-                let invalid = crate::result::inconclusive_verdict(&blockers);
-                (
-                    "undermined",
-                    "serious",
-                    format!("INVALID evidence: {invalid}"),
-                )
-            },
-            |s| {
-                (
-                    "partly_judged",
-                    "serious",
-                    format!(
-                        "{}: {}",
-                        hauksbee_ir::vocabulary::PARTLY_JUDGED_LEAD,
-                        s.condition()
-                    ),
-                )
-            },
-        );
-        findings.push(crate::result::JsonFinding {
-            check: "evidence".into(),
-            kind: kind.into(),
-            severity: severity.into(),
-            nets: Vec::new(),
-            location_mm: None,
-            layer: None,
-            refs: blockers.clone(),
-            actionable: true,
-            plain: message.clone(),
-            message,
-            fix: Some("supply device models or BOM identity for the named parts".into()),
-        });
-    }
+    // A verdict that is not a pass (unbound key parts, a partly judged board) is
+    // added at the artifact writers from the run's machine report, which is the
+    // one place that words it (see `ci_artifacts::note_verdict`).
     crate::reports::ci_artifacts::set_current_findings(findings.clone());
     Ok(findings)
 }

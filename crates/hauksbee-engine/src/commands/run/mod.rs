@@ -227,19 +227,6 @@ fn ci_check_selected(surface: SelectedSurface, finding: &crate::result::JsonFind
     }
 }
 
-const fn ci_surface_is_model_dependent(surface: SelectedSurface) -> bool {
-    matches!(
-        surface,
-        SelectedSurface::Check
-            | SelectedSurface::Lint
-            | SelectedSurface::Resources
-            | SelectedSurface::UsbC
-            | SelectedSurface::Si
-            | SelectedSurface::Headless
-            | SelectedSurface::BareJson
-    )
-}
-
 fn ci_selected_suites(surface: SelectedSurface) -> Vec<String> {
     let checks: &[&str] = match surface {
         SelectedSurface::Check | SelectedSurface::BareJson => &["drc", "lint", "si", "usb_c"],

@@ -158,8 +158,8 @@ the nets they do not touch found nothing.
 
 Read `verdict` together with `notes` and the `bind` fields, never on its own:
 `thermal.valid: true` under `--thermal --no-strict-thermal` means the table is
-usable, not that the coverage is complete, and the top-level `verdict` can
-still be `invalid` for the undermined evidence behind it while the opt-out
+usable, not that the coverage is complete, and the top-level `verdict` is
+`invalid` (a top-level `refusal` names the open power ICs) while the opt-out
 returns exit 0. That opt-out is one of three places the exit code and the
 verdict deliberately part company, the same way omitting `--strict` leaves a
 `fail` verdict at exit 0. The other two are on the co-sim path: an aborted

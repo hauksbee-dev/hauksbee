@@ -480,6 +480,14 @@ fn gate_item(check: &str, nets: &[String], refs: &[String]) -> String {
 /// refusal itself. No-op outside GitHub Actions.
 pub fn exit_invalid_for_analysis(blockers: &[String]) -> ! {
     ci_artifacts::github_blocker_annotation(blockers);
+    // An invalid verdict with no blocker to name (an undermined run-level
+    // evidence map) still fails the job, so the annotation surface says so too.
+    // A caller that holds the verdict's own reason annotates it first, and this
+    // one is then a no-op.
+    ci_artifacts::github_verdict_annotation(
+        "the run's verdict is invalid: run-level evidence is undermined, so a clean result \
+         would not be trustworthy (see the Evidence section of the report)",
+    );
     ci_artifacts::exit_with_findings(crate::result::EXIT_INVALID_FOR_ANALYSIS, &[])
 }
 

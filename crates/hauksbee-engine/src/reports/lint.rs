@@ -61,20 +61,22 @@ pub(crate) fn emit_quiet(
     // The strap lint only speaks on a fault; say what it examined so a clean
     // strap check is not the same silence as one that never ran.
     let straps = crate::checks::straps::strap_coverage(board, lib);
+    // The machine document is built in EVERY output mode: building it is what
+    // tells the CI artifacts the run's verdict (see `JsonReport::to_json`), so a
+    // `--junit`/`--sarif` beside a text report cannot be green over a verdict
+    // that is not a pass. Only `--json` prints it.
+    let document = lint_json(
+        &bound,
+        &report,
+        (&guesses, &straps),
+        &waived,
+        &blockers,
+        input.inputs,
+        &evidence,
+    )?;
     match mode {
         OutputMode::Json => {
-            println!(
-                "{}",
-                lint_json(
-                    &bound,
-                    &report,
-                    (&guesses, &straps),
-                    &waived,
-                    &blockers,
-                    input.inputs,
-                    &evidence
-                )?
-            );
+            println!("{document}");
         }
         OutputMode::Plain | OutputMode::Text => {
             if mode == OutputMode::Plain {
@@ -240,20 +242,20 @@ pub(crate) fn emit_resources_quiet(
         crate::result::unmodelled_critical_refs(&BindSummary::from_report(&bound.report));
     let human_maps = evidence.maps_for_findings(&lint_findings_json(&report))?;
     let human_evidence = evidence.clone().with_maps(human_maps);
+    // Built in every output mode so the CI artifacts learn the run's verdict
+    // (see `JsonReport::to_json`); only `--json` prints it.
+    let document = lint_json(
+        &bound,
+        &report,
+        (&[], &[]),
+        &waived,
+        &blockers,
+        input.inputs,
+        &evidence,
+    )?;
     match mode {
         OutputMode::Json => {
-            println!(
-                "{}",
-                lint_json(
-                    &bound,
-                    &report,
-                    (&[], &[]),
-                    &waived,
-                    &blockers,
-                    input.inputs,
-                    &evidence
-                )?
-            );
+            println!("{document}");
         }
         OutputMode::Plain => {
             let mut plain = crate::plain_netlint(&report);

@@ -325,6 +325,11 @@ fn thermal_partial_json_is_refused_by_default_and_valid_under_opt_out() {
     let v = json_doc(&out);
     assert_eq!(v["thermal"]["valid"], true);
     assert_eq!(v["thermal"]["coverage"]["partial"], true);
+    assert_eq!(
+        (v["verdict"].as_str(), v["ok"].as_bool()),
+        (Some("invalid"), Some(false)),
+        "the document keeps refusing the complete-coverage claim even though the exit does not:\n{v}"
+    );
     let notes = v["notes"].as_array().expect("coverage note rides notes");
     assert!(
         notes
@@ -911,7 +916,8 @@ fn a_partly_judged_board_is_never_a_pass_on_any_surface() {
     assert_eq!(out.status.code(), Some(3), "stderr: {}", stderr(&out));
     let xml = art.xml();
     assert!(
-        xml.contains("PARTLY JUDGED (not a pass): Q1 has no usable model")
+        xml.contains("PARTLY JUDGED (not a pass): ")
+            && xml.contains("Q1 has no usable model")
             && !junit_all_green(&xml),
         "the JUnit file shows PARTLY JUDGED red, never a pass:\n{xml}"
     );
@@ -1496,7 +1502,7 @@ fn an_invalid_verdict_keeps_the_invalid_shape_in_the_artifact() {
     let xml = art.xml();
     assert_eq!(
         junit_failing_testcases(&xml),
-        vec!["undermined Q1".to_string()],
+        vec!["undermined".to_string()],
         "the blocker is the only gate-grade entry:\n{xml}"
     );
     assert!(
@@ -1775,6 +1781,10 @@ board version 20241229\n\nfn main {\n}\n";
     assert!(
         junit_root(&xml).contains("errors=\"1\"") && xml.contains("no components"),
         "the refusal must replace the stale artifact:\n{xml}"
+    );
+    assert!(
+        !xml.contains("no findings"),
+        "a whole-run refusal judged no family, so no passing case is written:\n{xml}"
     );
     let doc = art.sarif_doc();
     assert!(
@@ -2150,5 +2160,65 @@ fn the_placement_free_refusal_envelope_keeps_ok_iff_pass() {
     assert!(
         v["refusal"]["next_action"].is_string(),
         "the envelope still carries the structured refusal:\n{v}"
+    );
+}
+
+/// The two counts on a `--check` closing line: `<n> serious, <m> worth a look`.
+fn headline_counts(text: &str) -> (usize, usize) {
+    let line = text
+        .lines()
+        .rev()
+        .find(|line| line.starts_with("VERDICT: "))
+        .unwrap_or_else(|| panic!("a closing VERDICT line:\n{text}"));
+    let (before, after) = line
+        .split_once(" serious, ")
+        .unwrap_or_else(|| panic!("`<n> serious, <m> worth a look` in: {line}"));
+    let number = |digits: Option<&str>| {
+        digits
+            .and_then(|d| d.parse::<usize>().ok())
+            .unwrap_or_else(|| panic!("a count in: {line}"))
+    };
+    (
+        number(before.rsplit(' ').next()),
+        number(after.split(' ').next()),
+    )
+}
+
+#[test]
+fn the_check_headline_counts_are_the_json_counts() {
+    // One derivation: the closing line's counts are `--json`'s `serious_count`
+    // and `actionable_count`, not a second tally. The board carries a copper
+    // heads-up (the unvalidated-format note) and a possibly-phantom short that
+    // does not count as serious, over an unbound key part so the closing line
+    // states its counts.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = dir.path().join("phantom_unbound.kicad_pcb");
+    let text = std::fs::read_to_string(fixture("verdict_fet_unbound_shorted.kicad_pcb"))
+        .expect("the shorted, unbound fixture");
+    assert!(
+        text.contains("(version 20171130)"),
+        "the fixture's version moved"
+    );
+    std::fs::write(&board, text.replacen("20171130", "20260206", 1)).expect("stage the board");
+
+    let v = json_doc(&run_board(&board, &["--check", "--json"]));
+    assert!(
+        v["drc"]["shorts"]
+            .as_array()
+            .is_some_and(|shorts| shorts.iter().any(|s| s["severity"] != "serious")),
+        "the fixture must carry a non-serious (phantom) short:\n{v}"
+    );
+    let count = |key: &str| {
+        usize::try_from(v[key].as_u64().unwrap_or_else(|| panic!("{key} in:\n{v}")))
+            .expect("a small count")
+    };
+    let (serious, actionable) = (count("serious_count"), count("actionable_count"));
+
+    let (line_serious, line_worth) = headline_counts(&stdout(&run_board(&board, &["--check"])));
+    assert_eq!(line_serious, serious, "serious: line vs --json");
+    assert_eq!(
+        line_serious + line_worth,
+        actionable,
+        "{line_serious} serious + {line_worth} worth a look vs actionable_count {actionable}"
     );
 }

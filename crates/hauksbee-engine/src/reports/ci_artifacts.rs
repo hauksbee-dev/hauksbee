@@ -78,7 +78,13 @@ thread_local! {
 
 #[derive(Clone, Copy)]
 enum TerminalOutcomeKind {
+    /// The run read the board and judged some families; the artifacts keep the
+    /// families it judged clean.
     AnalysisRefusal,
+    /// The whole run refused its claim ([`exit_with_refusal`]): no family has a
+    /// verdict, so none gets a passing "no findings" case. SARIF reports it as
+    /// the same `invalid-for-analysis` result as [`Self::AnalysisRefusal`].
+    WholeRunRefusal,
     RunError,
 }
 
@@ -90,9 +96,13 @@ fn write_current(
 ) -> anyhow::Result<()> {
     let refusal = refusal.or(state.refusal.as_ref());
     let findings = artifact_findings(&state.findings, refusal, state.verdict.as_ref());
-    // A run that never read the board (a run error) has judged no family, so it
-    // gets no passing "no findings" case for any of them.
-    let selected_checks: &[String] = if matches!(outcome_kind, TerminalOutcomeKind::RunError) {
+    // A run that never read the board (a run error) or refused its whole claim
+    // has judged no family, so it gets no passing "no findings" case for any of
+    // them.
+    let selected_checks: &[String] = if matches!(
+        outcome_kind,
+        TerminalOutcomeKind::RunError | TerminalOutcomeKind::WholeRunRefusal
+    ) {
         &[]
     } else {
         &state.selected_checks
@@ -175,17 +185,41 @@ pub fn begin_run(
     Ok(())
 }
 
+thread_local! {
+    /// The findings and verdict a run-manifest outcome records, kept apart from
+    /// the artifact transaction so `--emit-manifest` without `--junit`/`--sarif`
+    /// records the same gating set the artifacts would carry.
+    static TRACKED: std::cell::RefCell<(Vec<JsonFinding>, Option<NotedVerdict>)> = const {
+        std::cell::RefCell::new((Vec::new(), None))
+    };
+}
+
+/// Record the gating finding ids the manifest carries: the findings, plus the
+/// one gate-grade entry [`artifact_findings`] adds when the noted verdict is not
+/// a pass, so the manifest's gating set is the artifacts' gating set.
+fn note_tracked_gating() {
+    if !crate::run_manifest::tracking_outcome() {
+        return;
+    }
+    let refusal = CURRENT_RUN.with(|slot| slot.borrow().as_ref().and_then(|s| s.refusal.clone()));
+    let all = TRACKED.with(|slot| {
+        let tracked = slot.borrow();
+        artifact_findings(&tracked.0, refusal.as_ref(), tracked.1.as_ref())
+    });
+    crate::run_manifest::note_gating_findings(
+        "",
+        all.iter()
+            .filter(|finding| finding.gates())
+            .map(JsonFinding::group_key),
+    );
+}
+
 /// Replace the selected run's current finding set. Nothing is committed to the
 /// requested paths until the one terminal finalizer below runs.
 pub fn set_current_findings(findings: Vec<JsonFinding>) {
     if crate::run_manifest::tracking_outcome() {
-        crate::run_manifest::note_gating_findings(
-            "",
-            findings
-                .iter()
-                .filter(|finding| finding.gates())
-                .map(JsonFinding::group_key),
-        );
+        TRACKED.with(|slot| slot.borrow_mut().0.clone_from(&findings));
+        note_tracked_gating();
     }
     CURRENT_RUN.with(|slot| {
         if let Some(state) = slot.borrow_mut().as_mut() {
@@ -214,20 +248,43 @@ pub fn set_current_board_path(board_path: &Path) {
 /// Record the run's machine verdict (`pass` | `fail` | `invalid`).
 ///
 /// It is the one derivation `--json` prints, with its reason sentence and
-/// whether it is a partly judged answer. The artifact writers then guarantee
-/// that `JUnit` and SARIF are red whenever it is not a pass, even when the
-/// findings they were handed are all non-gating (an abstained analysis, a DC
-/// operating point that did not solve).
+/// whether it is a partly judged answer. [`crate::result::JsonReport`] is the
+/// only caller (from `run_verdict` and `to_json`), so every surface that builds
+/// its machine document tells the artifacts the same verdict. The artifact
+/// writers then guarantee that `JUnit` and SARIF are red whenever it is not a
+/// pass, even when the findings they were handed are all non-gating (an
+/// abstained analysis, a DC operating point that did not solve).
+///
+/// A no-op when no artifact run or manifest outcome is active. A non-pass
+/// verdict is never replaced by a later pass: a run is only as green as its
+/// worst machine document.
 pub fn note_verdict(verdict: &str, partial: bool, reason: Option<&str>) {
+    let noted = NotedVerdict {
+        verdict: verdict.to_string(),
+        partial,
+        reason: reason.map(str::to_string),
+    };
+    let keep = |current: &Option<NotedVerdict>| {
+        current
+            .as_ref()
+            .is_some_and(|c| c.verdict != "pass" && noted.verdict == "pass")
+    };
     CURRENT_RUN.with(|slot| {
         if let Some(state) = slot.borrow_mut().as_mut() {
-            state.verdict = Some(NotedVerdict {
-                verdict: verdict.to_string(),
-                partial,
-                reason: reason.map(str::to_string),
-            });
+            if !keep(&state.verdict) {
+                state.verdict = Some(noted.clone());
+            }
         }
     });
+    if crate::run_manifest::tracking_outcome() {
+        TRACKED.with(|slot| {
+            let mut tracked = slot.borrow_mut();
+            if !keep(&tracked.1) {
+                tracked.1 = Some(noted);
+            }
+        });
+        note_tracked_gating();
+    }
 }
 
 /// The findings the writers render: the run's own, plus one gate-grade entry
@@ -246,16 +303,19 @@ fn artifact_findings(
     if refusal.is_some() || findings.iter().any(is_failure) {
         return out;
     }
-    let message = v.reason.clone().unwrap_or_else(|| {
+    let reason = v.reason.clone().unwrap_or_else(|| {
         format!(
             "the run's verdict is `{}`, which is not a pass; see the --json verdict_reason",
             v.verdict
         )
     });
-    let kind = match (v.verdict.as_str(), v.partial) {
-        ("invalid", true) => "partly_judged",
-        ("invalid", false) => "undermined",
-        _ => "verdict_fail",
+    // The one place the not-a-pass entry is worded: the verdict's own reason
+    // sentence, labelled in the evidence vocabulary when the run could not be
+    // judged at all (a partly judged answer already leads with its own label).
+    let (kind, message) = match (v.verdict.as_str(), v.partial) {
+        ("invalid", true) => ("partly_judged", reason),
+        ("invalid", false) => ("undermined", format!("INVALID evidence: {reason}")),
+        _ => ("verdict_fail", reason),
     };
     out.push(JsonFinding {
         check: "evidence".into(),
@@ -334,7 +394,7 @@ pub fn exit_with_refusal(code: i32, refusal: &Refusal) -> ! {
             &state,
             Some(refusal),
             code,
-            TerminalOutcomeKind::AnalysisRefusal,
+            TerminalOutcomeKind::WholeRunRefusal,
         ) {
             eprintln!("error: could not finalize requested CI artifact: {error}");
         }
@@ -406,40 +466,56 @@ pub fn evidence_findings_with_gate(
         .collect()
 }
 
-/// GitHub error annotation for unbound verdict-critical parts, so the
-/// annotation surface agrees with the gate-grade JUnit/SARIF entry the same
-/// blockers produce. No-op outside GitHub Actions.
+/// Whether this process has already announced its non-pass verdict on GitHub.
 ///
-/// At most once per process, because multiple report layers can converge on
-/// [`super::exit_invalid_for_analysis`] for the same blocker set.
-pub fn github_blocker_annotation(blockers: &[String]) {
-    static ANNOUNCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if blockers.is_empty() || std::env::var_os("GITHUB_ACTIONS").is_none() {
-        return;
-    }
-    if ANNOUNCED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        return;
-    }
-    eprintln!(
-        "::error title=hauksbee evidence undermined::{}",
-        crate::result::inconclusive_verdict(blockers)
-    );
-}
+/// One annotation per process: several layers can converge on the same exit
+/// (the verdict, then [`super::exit_invalid_for_analysis`]), and the job should
+/// name the cause once.
+static VERDICT_ANNOUNCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// GitHub error annotation for a PARTLY JUDGED run under `--strict`, which
-/// exits 3 like a blocker refusal but says what WAS judged. No-op outside
-/// GitHub Actions.
-pub fn github_partly_judged_annotation(reason: &str) {
+fn announce_verdict_once(title: &str, text: &str) {
     if std::env::var_os("GITHUB_ACTIONS").is_none() {
         return;
     }
+    if VERDICT_ANNOUNCED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
     eprintln!(
-        "::error title=hauksbee PARTLY JUDGED::{}",
-        reason
-            .replace('%', "%25")
+        "::error title={title}::{}",
+        text.replace('%', "%25")
             .replace('\r', "%0D")
             .replace('\n', "%0A")
     );
+}
+
+/// GitHub error annotation for unbound verdict-critical parts, so the
+/// annotation surface agrees with the gate-grade JUnit/SARIF entry the same
+/// blockers produce. No-op outside GitHub Actions, and for no blockers (see
+/// [`github_verdict_annotation`] for a verdict that has none to name).
+///
+/// At most once per process, shared with [`github_verdict_annotation`].
+pub fn github_blocker_annotation(blockers: &[String]) {
+    if blockers.is_empty() {
+        return;
+    }
+    announce_verdict_once(
+        "hauksbee evidence undermined",
+        &crate::result::inconclusive_verdict(blockers),
+    );
+}
+
+/// GitHub error annotation for a strict run whose verdict is not a pass and
+/// that no gate-grade finding explains: partly judged, or invalid with no
+/// blocker list (an undermined run-level evidence map). `reason` is the run
+/// verdict's own sentence, the one `--json` carries as `verdict_reason`. No-op
+/// outside GitHub Actions; at most once per process.
+pub fn github_verdict_annotation(reason: &str) {
+    let title = if reason.starts_with(hauksbee_ir::vocabulary::PARTLY_JUDGED_LEAD) {
+        "hauksbee PARTLY JUDGED"
+    } else {
+        "hauksbee verdict is not a pass"
+    };
+    announce_verdict_once(title, reason);
 }
 
 /// GitHub error annotation for a whole-run refusal.
@@ -735,7 +811,7 @@ fn sarif_json_with_terminal_outcome(
         .collect();
     if let Some(refusal) = refusal {
         let (rule_id, status) = match outcome_kind {
-            TerminalOutcomeKind::AnalysisRefusal => {
+            TerminalOutcomeKind::AnalysisRefusal | TerminalOutcomeKind::WholeRunRefusal => {
                 ("hauksbee/invalid-for-analysis", "invalid_for_analysis")
             }
             TerminalOutcomeKind::RunError => ("hauksbee/run-error", "run_error"),
@@ -989,9 +1065,10 @@ mod tests {
         );
     }
 
-    /// A run that never read the board (a run error) writes no passing "no
-    /// findings" case; a run that read it and refused a verdict keeps the
-    /// families it did judge clean.
+    /// A run that never read the board (a run error) or refused its whole claim
+    /// writes no passing "no findings" case; a run that read the board and ended
+    /// with findings (even beside a retained refusal) keeps the families it did
+    /// judge clean.
     #[test]
     fn an_unread_board_gets_no_passing_cases() {
         let dir =
@@ -1024,6 +1101,17 @@ mod tests {
         .unwrap();
         let read = std::fs::read_to_string(&junit).unwrap();
         assert!(read.contains("no findings"), "{read}");
+        // A whole-run refusal (`exit_with_refusal`) judged no family either.
+        write_current(
+            &state,
+            Some(&refusal),
+            3,
+            TerminalOutcomeKind::WholeRunRefusal,
+        )
+        .unwrap();
+        let refused = std::fs::read_to_string(&junit).unwrap();
+        assert!(!refused.contains("no findings"), "{refused}");
+        assert!(refused.contains("errors=\"1\""), "{refused}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

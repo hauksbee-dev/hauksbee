@@ -3078,6 +3078,11 @@ impl JsonReport {
     pub fn run_verdict(&self) -> RunVerdict {
         let ((_, verdict, _, _), _, reason, partial, not_judged) =
             self.verdict_with_waivers(&mut crate::waiver::WaiverSet::default());
+        // The one place a surface's verdict reaches the CI artifacts: whoever
+        // asks this machine document for its verdict, in whatever output mode,
+        // tells JUnit and SARIF the same answer (a no-op outside a `--junit` /
+        // `--sarif` run).
+        crate::reports::ci_artifacts::note_verdict(verdict, partial, reason.as_deref());
         RunVerdict {
             verdict,
             reason,
@@ -3101,6 +3106,9 @@ impl JsonReport {
     pub fn to_json(&self) -> String {
         let ((ok, verdict, serious, actionable), _, reason, partial, _) =
             self.verdict_with_waivers(&mut crate::waiver::WaiverSet::default());
+        // Printing the document tells the CI artifacts the verdict it states
+        // (see [`Self::run_verdict`]).
+        crate::reports::ci_artifacts::note_verdict(verdict, partial, reason.as_deref());
         let Ok(serde_json::Value::Object(mut value)) = serde_json::to_value(self) else {
             return serde_json::to_string_pretty(self)
                 .unwrap_or_else(|e| format!("{{\"error\":\"failed to serialize: {e}\"}}"));
