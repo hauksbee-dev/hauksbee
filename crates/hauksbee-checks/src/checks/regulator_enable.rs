@@ -250,7 +250,29 @@ pub(super) fn classify(
             o.reference, q.number
         ));
     }
+    // Another part's reset input, whatever alternate function the symbol
+    // names it with (`PC6(/RESET)`), takes a level and sets none.
+    if names_reset_input(q) {
+        return Member::Cannot(format!("{} pin {} (a reset input)", o.reference, q.number));
+    }
     Member::MaySet
+}
+
+/// Whether a pad is a micro's reset input: named for the reset after its port
+/// name (`PC6(/RESET)`, `PA0/NRST`), where the symbol shares the pad with the
+/// pin's port function, and not an output. A bare `RESET` of unstated type
+/// may be a supervisor's output and is left to the caller.
+fn names_reset_input(q: &Pin) -> bool {
+    if q.kind.trim().to_ascii_lowercase().contains("output") {
+        return false;
+    }
+    let name = q.function.trim().to_ascii_uppercase();
+    let is_reset = |t: &str| t.contains("RESET") || matches!(t, "RST" | "NRST" | "MCLR");
+    let mut tokens = name
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty());
+    let first_is_reset = tokens.next().is_some_and(is_reset);
+    !first_is_reset && tokens.any(is_reset)
 }
 
 /// What every other pad on a control net does to the pin's level.

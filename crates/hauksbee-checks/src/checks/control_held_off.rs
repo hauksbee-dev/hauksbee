@@ -513,6 +513,31 @@ mod tests {
         );
     }
 
+    /// A second footprint of the same micro shares the reset net: its reset
+    /// pin (a port name with the reset as an alternate function) takes the
+    /// level and sets none. A bare `RESET` of unstated type may be a
+    /// supervisor's output and keeps the board silent.
+    #[test]
+    fn another_parts_reset_input_does_not_release_it() {
+        let mut alt = part("U2", "SomeMCU", &[("29", RST), ("2", V3), ("3", GND)]);
+        alt.pins[0] = pin_fn("29", RST, "PC6(/RESET)");
+        alt.pins[0].kind = "bidirectional".into();
+        let found = lint(vec![
+            ic("~{RESET}", RST),
+            pull_down("R1", "1k"),
+            alt.clone(),
+        ]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        says(&found[0], &["U2 pin 29 (a reset input)"]);
+        let mut supervisor = alt;
+        supervisor.pins[0] = pin_fn("29", RST, "RESET");
+        supervisor.pins[0].kind = "bidirectional".into();
+        assert!(
+            lint(vec![ic("~{RESET}", RST), pull_down("R1", "1k"), supervisor]).is_empty(),
+            "a bare RESET pin of unstated direction may drive the net"
+        );
+    }
+
     #[test]
     fn a_button_to_ground_and_a_capacitor_do_not_release_it() {
         let button = part("SW1", "SW_Push", &[("1", RST), ("2", GND)]);
