@@ -1664,6 +1664,21 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "This regulator's datasheet says its enable pin turns the part off when nothing drives it. On this board nothing can raise that pin: it is unconnected, or only touches parts that cannot pull it up (a capacitor, a pull-down, a part that is not fitted). The output rail stays at 0 V and every part it powers is dead.".to_string(),
                 "Pull the enable pin up to the regulator's input through a 10k to 100k resistor, or tie it straight to the input. If a microcontroller pin is meant to switch the rail, keep the resistor so the rail has a defined state before firmware runs.".to_string(),
             ),
+            LintCheck::SupplyGroundSwapped => (
+                format!("A connector pin on {parts} is wired to the wrong kind of net. {}", f.message),
+                "The connector's own pin names say which pin is the supply and which is ground, but the board wires a supply pin to ground or a ground pin to a supply rail. Whatever is plugged in here is shorted or fed backwards, and the board never receives the supply it expects.".to_string(),
+                "Swap the nets of the supply and ground pins so each reaches the rail its name says, in the schematic and on the layout.".to_string(),
+            ),
+            LintCheck::DiodeReversed => (
+                format!("A diode on {parts} is fitted backwards across a rail. {}", f.message),
+                "A TVS, Zener or clamp diode across a supply rail is meant to block until the voltage passes its breakdown value. With the anode on the rail and the cathode on ground it is forward-biased instead, so it conducts as soon as the rail is powered and holds the rail at about one diode drop.".to_string(),
+                "Turn the diode round so its cathode is on the more positive net and its anode on the more negative one, in the schematic symbol and on the footprint.".to_string(),
+            ),
+            LintCheck::PolarisedCapReversed => (
+                format!("A polarised capacitor on {parts} is fitted backwards. {}", f.message),
+                "A solid tantalum capacitor tolerates only a small reverse voltage (about a tenth of its rating at room temperature) and an aluminium electrolytic none at all. Wrong polarity short-circuits or damages the part, and an electrolytic can open its pressure vent, which can take the rail down with it.".to_string(),
+                "Turn the capacitor round so its + terminal is on the more positive net, in the schematic symbol and on the footprint.".to_string(),
+            ),
             LintCheck::I2cBusLoading => (
                 format!("The I2C line \"{net}\" has pull-ups, but they are mis-sized for the bus. {}", f.message),
                 "I2C devices can only pull the line LOW; the resistor pulls it back HIGH. Too strong a pull-up and a device cannot sink enough current to make a valid low (the spec guarantees only 3 mA), so reads fail intermittently. Too weak and the line rises too slowly for the clock rate, corrupting edges as more devices load the bus.".to_string(),
