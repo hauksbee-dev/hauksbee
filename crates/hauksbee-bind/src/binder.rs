@@ -3908,10 +3908,11 @@ fn role_node_map_guessed(
     }
 }
 
-/// Each role of `model` on `comp` and the board net id its pad sits on, read
-/// exactly as the binder reads them (pin-functions, the card's pads, then the
-/// pin-rule table). Empty when a rule contradicts a pad the board names, where
-/// the binder leaves the part open.
+/// Each role of `model` on `comp` and the board net id its pad sits on.
+///
+/// Read exactly as the binder reads them (pin-functions, the card's pads, then
+/// the pin-rule table). Empty when a rule contradicts a pad the board names,
+/// where the binder leaves the part open.
 #[must_use]
 pub fn role_nets(
     comp: &Component,

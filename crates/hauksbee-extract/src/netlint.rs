@@ -406,9 +406,7 @@ impl ExtractedBoard {
 // every board check (`hauksbee_models::netclass`).
 // ---------------------------------------------------------------------------
 
-pub use hauksbee_models::netclass::{
-    is_ground, is_positive_supply, is_supply, leaf as norm, rail_voltage,
-};
+pub use hauksbee_models::netclass::{is_ground, is_positive_supply, is_supply, leaf as norm};
 
 /// Is this component a plain two-terminal resistor (the kind that can be a
 /// pull-up)?

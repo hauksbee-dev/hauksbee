@@ -20,7 +20,7 @@
 //! LED's assumed corners) is never a failing finding ([`hauksbee_models::rating_basis`]): the DC
 //! stress pass states it as a condition. One limit holds whatever indicator
 //! LED is fitted: on a chip (0402 to 1206) or round 3/5 mm package the stand-in
-//! card's pulsed peak current ([`package_ceiling`], 100 mA at duty 1/10 for the
+//! card's pulsed peak current (`package_ceiling`: 100 mA at duty 1/10 for the
 //! Wurth WL-SMCW family the generic card is drawn from, over three times its
 //! 30 mA continuous rating). A steady current past that is past the continuous
 //! rating of any LED in the package, so it is judged as a limit the board
@@ -492,7 +492,7 @@ fn trim(v: f64) -> String {
 }
 
 impl LedString<'_> {
-    fn ends(&self) -> [&End; 2] {
+    const fn ends(&self) -> [&End; 2] {
         [&self.anode, &self.cathode]
     }
 
@@ -621,7 +621,8 @@ impl LedString<'_> {
             }
         };
         let mut total = fitted.max(1.0);
-        while total < 1.0e7 {
+        // 2 % steps up to a thousand times the fitted value.
+        for _ in 0..350 {
             let low = total * (1.0 - tolerance);
             let ohms: Vec<f64> = (self.series.iter().enumerate())
                 .map(|(i, s)| low * share(s, i == 0))
@@ -885,7 +886,7 @@ mod tests {
     }
 
     /// An MCU pin lighting the LED through 1 ohm passes the pin's own 40 mA
-    /// rating (ATmega328P card); through 330 ohm it does not.
+    /// rating (the `ATmega328P` card); through 330 ohm it does not.
     #[test]
     fn a_gpio_lit_led_is_judged_against_the_pin_rating() {
         let mcu = |r: &str| {
