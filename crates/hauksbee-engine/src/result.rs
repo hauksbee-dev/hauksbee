@@ -2346,10 +2346,10 @@ pub fn lint_findings_json(report: &NetLintReport) -> Vec<JsonFinding> {
             plain: f.message.clone(),
             // The rule that raised a finding states its fix when it can
             // (`own_remedy`); the check kind's advice is the fallback.
-            fix: if let Some(own) = f.own_remedy().filter(|_| f.is_abstention()) {
-                Some(own.to_string())
-            } else if f.is_abstention() {
-                lint_abstention_hint(f.check).map(str::to_string)
+            fix: if f.is_abstention() {
+                f.own_remedy()
+                    .or_else(|| lint_abstention_hint(f.check))
+                    .map(str::to_string)
             } else if f
                 .message
                 .starts_with(hauksbee_extract::NOT_ROUTED_MESSAGE_PREFIX)

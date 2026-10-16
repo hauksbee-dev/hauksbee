@@ -4960,48 +4960,49 @@ fn merge_bind_warnings(a: Option<String>, b: Option<String>) -> Option<String> {
     a.into_iter().chain(b).reduce(|a, b| format!("{a}; {b}"))
 }
 
-/// The control loop of a linear regulator is not simulated, so its datasheet
-/// output-capacitor requirement is either checked against the board or stated
-/// as a gap; ESR is never guessed because the board file does not carry it.
-fn vreg_stability_warning(
-    comp: &Component,
-    model: &ModelEntry,
+/// The fitted capacitors spanning a regulator's `out` and `gnd` nodes: those
+/// whose value reads as a capacitance with it, then the references of those
+/// whose size is unknown (never counted as 0 F). Unitless values count only
+/// below 10 mF: a bare "4.7" or "10k" names no known unit.
+fn caps_across_output<'c>(
     (out, gnd): (NodeId, NodeId),
-    components: &[Component],
+    components: &'c [Component],
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
-) -> Option<String> {
-    // Fitted capacitors spanning output and ground, with their capacitance
-    // when the value reads as one (no unit or farads); `None` is a capacitor
-    // whose size is unknown, which is never counted as 0 F.
+) -> (Vec<(&'c str, f64)>, Vec<&'c str>) {
     let across_output = |cap: &Component| {
         let pins = logical_passive_pins(cap).ok()?;
         let nodes: Vec<_> = pins.iter().filter_map(|pin| node_of(pin.net)).collect();
         let fitted = AssemblyState::of(cap).is_present() && passive_letter(cap) == Some('C');
         let spans =
             matches!(*nodes.as_slice(), [a, b] if (a, b) == (out, gnd) || (a, b) == (gnd, out));
-        // Unitless only below 10 mF: a bare "4.7" or "10k" names no known unit.
         let farads = parse_value(cap.value.trim())
-            .filter(|v| match v.unit.as_deref() {
-                Some(u) => u == "F",
-                None => v.si < 1e-2,
-            })
+            .filter(|v| v.unit.as_deref().map_or(v.si < 1e-2, |u| u == "F"))
             .map(|v| v.si)
             .filter(|f| f.is_finite() && *f > 0.0);
         (fitted && spans).then_some(farads)
     };
-    let spanning: Vec<_> = components
-        .iter()
-        .filter_map(|cap| Some((cap.reference.as_str(), across_output(cap)?)))
-        .collect();
-    let caps: Vec<_> = spanning
-        .iter()
-        .filter_map(|(reference, farads)| Some((*reference, (*farads)?)))
-        .collect();
-    let unvalued: Vec<_> = spanning
-        .iter()
-        .filter(|(_, farads)| farads.is_none())
-        .map(|(reference, _)| *reference)
-        .collect();
+    let (mut caps, mut unvalued) = (Vec::new(), Vec::new());
+    for cap in components {
+        match across_output(cap) {
+            Some(Some(farads)) => caps.push((cap.reference.as_str(), farads)),
+            Some(None) => unvalued.push(cap.reference.as_str()),
+            None => {}
+        }
+    }
+    (caps, unvalued)
+}
+
+/// The control loop of a linear regulator is not simulated, so its datasheet
+/// output-capacitor requirement is either checked against the board or stated
+/// as a gap; ESR is never guessed because the board file does not carry it.
+fn vreg_stability_warning(
+    comp: &Component,
+    model: &ModelEntry,
+    nodes: (NodeId, NodeId),
+    components: &[Component],
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+) -> Option<String> {
+    let (caps, unvalued) = caps_across_output(nodes, components, node_of);
     let found = caps.iter().map(|(_, farads)| farads).sum::<f64>();
     let refs: Vec<_> = caps.iter().map(|(reference, _)| *reference).collect();
     let counted = if refs.is_empty() {

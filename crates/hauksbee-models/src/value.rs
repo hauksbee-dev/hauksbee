@@ -689,17 +689,6 @@ mod tests {
             // lowercase-n RKM nano values are not JEDEC part numbers
             ("4n7", 4.7e-9),
             ("2n2", 2.2e-9),
-            // capacitor RKM: the letter is the decimal point, leading when < 1
-            ("4u7", 4.7e-6),
-            ("0u1", 0.1e-6),
-            ("u1", 0.1e-6),
-            ("u22", 0.22e-6),
-            ("µ1", 0.1e-6),
-            ("n47", 0.47e-9),
-            ("2p2", 2.2e-12),
-            ("p5", 0.5e-12),
-            ("u1 X7R", 0.1e-6),
-            ("u1/16V", 0.1e-6),
             // letter O as ohms in Altium comments
             ("330O ±1%", 330.0),
             ("10KO ±1%", 10_000.0),
@@ -717,6 +706,26 @@ mod tests {
         );
         // Several commas that are not all 3-digit groups are left untouched.
         assert_eq!(normalise_comma_decimal("1,5,20"), "1,5,20");
+    }
+
+    /// Capacitor RKM markings (IEC 60062): the SI letter is the decimal point,
+    /// leading when the value is below one unit.
+    #[test]
+    fn capacitor_rkm_forms() {
+        for (s, si) in [
+            ("4u7", 4.7e-6),
+            ("0u1", 0.1e-6),
+            ("u1", 0.1e-6),
+            ("u22", 0.22e-6),
+            ("µ1", 0.1e-6),
+            ("n47", 0.47e-9),
+            ("2p2", 2.2e-12),
+            ("p5", 0.5e-12),
+            ("u1 X7R", 0.1e-6),
+            ("u1/16V", 0.1e-6),
+        ] {
+            check(s, si);
+        }
     }
 
     #[test]

@@ -143,10 +143,7 @@ fn caps_across_output(board: &ExtractedBoard, out: i64, gnd: Option<i64>) -> Vec
 /// thousands of them, and which unit a bare number meant is not known.
 fn capacitance(c: &Component) -> Option<f64> {
     parse_value(c.value.trim())
-        .filter(|v| match v.unit.as_deref() {
-            Some(u) => u == "F",
-            None => v.si < 1e-2,
-        })
+        .filter(|v| v.unit.as_deref().map_or(v.si < 1e-2, |u| u == "F"))
         .map(|v| v.si)
         .filter(|f| f.is_finite() && *f > 0.0)
 }

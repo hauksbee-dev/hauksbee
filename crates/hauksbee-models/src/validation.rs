@@ -2614,22 +2614,6 @@ mod tests {
         let mut wrong_type = vreg(&[]);
         wrong_type.params.set_str("cout_min_f", "1u");
         rejects(&wrong_type, "non-negative finite number");
-        // A recommended value: positive, and never below a stated minimum.
-        for bad in [0.0, -1e-6, f64::NAN] {
-            rejects(&vreg(&[("cout_recommended_f", bad)]), "cout_recommended_f");
-        }
-        accepts(&vreg(&[("cout_recommended_f", 22e-6)]));
-        accepts(&vreg(&[("cout_min_f", 1.5e-6), ("cout_recommended_f", 2.2e-6)]));
-        rejects(
-            &vreg(&[("cout_min_f", 4.7e-6), ("cout_recommended_f", 1e-6)]),
-            "less than or equal",
-        );
-        let mut typed = vreg(&[("cout_recommended_f", 22e-6)]);
-        typed.params.set_str("cout_recommended_type", "solid tantalum");
-        accepts(&typed);
-        let mut stray_type = vreg(&[]);
-        stray_type.params.set_str("cout_recommended_type", "solid tantalum");
-        rejects(&stray_type, "beside 'cout_recommended_f'");
         // Adjustable: a `gnd` pin (ground-referenced) needs `iq_a`; without one
         // (LM317 class) the ADJ current `iadj_a` is the quiescent path.
         for (gnd, have, missing) in [(true, "iq_a", "iadj_a"), (false, "iadj_a", "iq_a")] {
@@ -2666,6 +2650,40 @@ mod tests {
             ),
             "out_lo",
         );
+    }
+
+    /// A recommended output capacitance: positive, never below a stated
+    /// minimum, and a named type only beside it.
+    #[test]
+    fn recommended_output_capacitance() {
+        use ComponentKind::Vreg;
+        let vreg = |extra: &[(&str, f64)]| {
+            let mut p = vec![("vout", 3.3), ("dropout_v", 0.3), ("iq_a", 1e-3)];
+            p.extend_from_slice(extra);
+            entry(Vreg, &p)
+        };
+        for bad in [0.0, -1e-6, f64::NAN] {
+            rejects(&vreg(&[("cout_recommended_f", bad)]), "cout_recommended_f");
+        }
+        accepts(&vreg(&[("cout_recommended_f", 22e-6)]));
+        accepts(&vreg(&[
+            ("cout_min_f", 1.5e-6),
+            ("cout_recommended_f", 2.2e-6),
+        ]));
+        rejects(
+            &vreg(&[("cout_min_f", 4.7e-6), ("cout_recommended_f", 1e-6)]),
+            "less than or equal",
+        );
+        let mut typed = vreg(&[("cout_recommended_f", 22e-6)]);
+        typed
+            .params
+            .set_str("cout_recommended_type", "solid tantalum");
+        accepts(&typed);
+        let mut stray_type = vreg(&[]);
+        stray_type
+            .params
+            .set_str("cout_recommended_type", "solid tantalum");
+        rejects(&stray_type, "beside 'cout_recommended_f'");
     }
 
     #[test]
