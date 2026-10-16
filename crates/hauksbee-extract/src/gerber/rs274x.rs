@@ -4466,7 +4466,9 @@ M02*
 
     #[test]
     fn deprecated_words_with_trailing_words_and_lone_terminators_do_not_refuse_a_film() {
-        for extra in ["G71D02*", "G70*", "G90*", "G91*", "G55*", "G54D10*", "*", "%", "G71*"] {
+        for extra in [
+            "G71D02*", "G70*", "G90*", "G91*", "G55*", "G54D10*", "*", "%", "G71*",
+        ] {
             let g = LEGAL_COPPER.replace("%LPD*%", &format!("%LPD*%\n{extra}"));
             assert!(
                 parse_copper_layer(&g).is_ok(),
@@ -4478,7 +4480,7 @@ M02*
 
     #[test]
     fn a_leading_byte_order_mark_does_not_hide_the_first_statement() {
-        let g = format!("\u{{feff}}{LEGAL_COPPER}");
+        let g = format!("\u{feff}{LEGAL_COPPER}");
         assert!(
             parse_copper_layer(&g).is_ok(),
             "{:?}",
@@ -4488,7 +4490,16 @@ M02*
 
     #[test]
     fn skippable_statement_matches_deprecated_words_by_prefix() {
-        for line in ["G71D02*", "G90*", "G91*", "G55*", "*", "%", "\u{feff}G70*", "G04 note*"] {
+        for line in [
+            "G71D02*",
+            "G90*",
+            "G91*",
+            "G55*",
+            "*",
+            "%",
+            "\u{feff}G70*",
+            "G04 note*",
+        ] {
             assert!(skippable_statement(line), "{line}");
         }
         for line in ["X1Y1D09*", "Q7*", "G02X1Y1*"] {
@@ -4508,7 +4519,11 @@ D10*
 X0Y0D03*
 M02*
 ";
-        assert!(parse_copper_layer(good).is_ok(), "{:?}", parse_copper_layer(good));
+        assert!(
+            parse_copper_layer(good).is_ok(),
+            "{:?}",
+            parse_copper_layer(good)
+        );
         // Same film, the macro body is garbage and the aperture is defined from it.
         let bad = good.replace("21,1,2,2,0,0,0", "1,1,0.5");
         let why = copper_fault(&bad);

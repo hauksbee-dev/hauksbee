@@ -693,7 +693,10 @@ fn read_placements(
 ) {
     let mut placements = Vec::new();
     let mut bom = HashMap::new();
-    for text in csvs.iter().filter_map(|c| crate::read_regular_text_lossy(c).ok()) {
+    for text in csvs
+        .iter()
+        .filter_map(|c| crate::read_regular_text_lossy(c).ok())
+    {
         let pnp = placement::parse_pnp(&text);
         if pnp.is_empty() {
             bom.extend(placement::parse_bom(&text));
@@ -2258,7 +2261,9 @@ mod lossy_text_tests {
         let path = dir.join("top.gtl");
         let mut bytes = b"G04 90".to_vec();
         bytes.push(0xB0); // Latin-1 degree sign, not valid UTF-8 on its own
-        bytes.extend_from_slice(b" turn*\n%FSLAX46Y46*%\n%MOMM*%\n%ADD10C,0.6*%\nD10*\nX0Y0D03*\nM02*\n");
+        bytes.extend_from_slice(
+            b" turn*\n%FSLAX46Y46*%\n%MOMM*%\n%ADD10C,0.6*%\nD10*\nX0Y0D03*\nM02*\n",
+        );
         std::fs::write(&path, &bytes).unwrap();
         let text = read_text(&path, "read").expect("a Latin-1 comment is not a refusal");
         let _ = std::fs::remove_dir_all(&dir);
