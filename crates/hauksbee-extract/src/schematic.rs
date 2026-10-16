@@ -93,16 +93,7 @@ pub fn extract_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
         let Some(root_path) = find_hierarchy_root(path) else {
             let needs = path.parent().map_or_else(
                 || "the root schematic of its project".to_string(),
-                |dir| {
-                    format!(
-                        "the root schematic of its project. No .kicad_sch in {} \
-                         carries a (sheet_instances) block and reaches this file \
-                         through its (sheet ... Sheetfile) references. Point \
-                         hauksbee at the root schematic, or supply the whole \
-                         project directory.",
-                        dir.display()
-                    )
-                },
+                orphan_sheet_needs,
             );
             let sheet = path.display().to_string();
             return Err(ExtractError::OrphanSubSheet { sheet, needs });
@@ -111,6 +102,34 @@ pub fn extract_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
     }
 
     extract_root_from_path(path)
+}
+
+/// What an orphan sub-sheet in `dir` needs: the root schematic of its project.
+/// When the project has a root whose hierarchy never uses this file, the file
+/// is a leftover sheet, not a piece of the design, so name the root that is.
+fn orphan_sheet_needs(dir: &Path) -> String {
+    project_root(dir).map_or_else(
+        || {
+            format!(
+                "the root schematic of its project. No .kicad_sch in {} \
+                 carries a (sheet_instances) block and reaches this file \
+                 through its (sheet ... Sheetfile) references. Point \
+                 hauksbee at the root schematic, or supply the whole \
+                 project directory.",
+                dir.display()
+            )
+        },
+        |root| {
+            format!(
+                "the root schematic of its project, and the project's root \
+                 schematic {} does not use it: no (sheet ... Sheetfile) in \
+                 that hierarchy names this file, so it is not part of the \
+                 design. Point hauksbee at {} to check the design.",
+                root.display(),
+                root.display()
+            )
+        },
+    )
 }
 
 /// [`extract_from_path`] with the sub-sheet question already settled.
@@ -231,6 +250,25 @@ fn find_hierarchy_root(sheet: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// The root schematic of the KiCad project in `dir`: the `.kicad_sch` named
+/// like a `.kicad_pro` beside it, when that file is a root. `None` when the
+/// directory holds no project file or its namesake is not a root.
+fn project_root(dir: &Path) -> Option<PathBuf> {
+    let mut projects: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("kicad_pro"))
+        .collect();
+    projects.sort();
+    projects.into_iter().find_map(|pro| {
+        let sch = pro.with_extension("kicad_sch");
+        let text = std::fs::read_to_string(&sch).ok()?;
+        let doc = forge_sexpr::parse(&text).ok()?;
+        is_root_sheet(&doc).then_some(sch)
+    })
 }
 
 /// Whether the sheet tree rooted at `root` reaches `target` (canonicalised).

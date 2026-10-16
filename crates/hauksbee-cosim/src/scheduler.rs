@@ -5534,7 +5534,12 @@ impl Scheduler {
                         if reg.dropout_v.is_some() { "" } else { UNVERIFIED_HEADROOM }
                     ),
                     "validate this rail on hardware or with a behavioural converter model",
-                ),
+                )
+                // The part, as a typed target: the id's `regulator/` namespace
+                // is not a part name.
+                .with_remedy(hauksbee_ir::evidence::Remedy::AddModel {
+                    reference: reg.reference.clone(),
+                }),
             });
         }
         let nets = self.forced_net_names();

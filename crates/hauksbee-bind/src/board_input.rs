@@ -518,28 +518,33 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
 
     // A KiCad PROJECT file (.kicad_pro settings / .kicad_prl local state) is
     // the file the OS file picker often surfaces first, but it carries no
-    // layout. Name the sibling board by stem when it exists.
+    // layout. The project names its design by stem: open the sibling layout
+    // (or, without one, the root schematic), saying so, exactly as a
+    // directory holding one board file is opened.
     let ext_lower = path
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
     if ext_lower == "kicad_pro" || ext_lower == "kicad_prl" {
-        let sibling = path.with_extension("kicad_pcb");
-        let msg = if sibling.exists() {
-            format!(
-                "'{}' is a KiCad project file, not the board. The layout is next to it; try: {}",
-                path.display(),
-                sibling.display()
-            )
-        } else {
-            format!(
-                "'{}' is a KiCad project file, not the board; pass the matching \
-                 .kicad_pcb (the layout) instead",
+        let design = ["kicad_pcb", "kicad_sch"]
+            .into_iter()
+            .map(|ext| path.with_extension(ext))
+            .find(|p| p.is_file());
+        let Some(design) = design else {
+            return Err(BoardInputError::Extract(format!(
+                "'{}' is a KiCad project file, not the board, and no .kicad_pcb or \
+                 .kicad_sch of the same name is next to it; pass the layout (.kicad_pcb) \
+                 or the root schematic instead",
                 path.display()
-            )
+            )));
         };
-        return Err(BoardInputError::Extract(msg));
+        eprintln!(
+            "note: '{}' is a KiCad project file; using its design next to it: {}",
+            path.display(),
+            design.display()
+        );
+        return from_path(&design);
     }
 
     // Read raw bytes first: an Altium `.PcbDoc` is a binary OLE2 container and
@@ -1456,6 +1461,29 @@ fn main {
         let norm = from_path(&p).expect("a zipped .board export must compile");
         assert_eq!(norm.kind, InputKind::BoardCode);
         assert_eq!(norm.board.components.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_kicad_project_file_opens_the_design_it_names() {
+        // The OS file picker surfaces the .kicad_pro first; refusing it left
+        // whole real projects unjudged. It opens the same-stem layout, and
+        // refuses only when no design of that name is beside it.
+        let dir = fresh_dir("kicad_pro");
+        let pro = dir.join("widget.kicad_pro");
+        std::fs::write(&pro, b"{}").unwrap();
+        let err = from_path(&pro).expect_err("no design beside the project yet");
+        assert!(
+            err.to_string().contains("no .kicad_pcb or .kicad_sch"),
+            "{err}"
+        );
+        std::fs::write(dir.join("widget.kicad_pcb"), KICAD).unwrap();
+        let via_pro = from_path(&pro).expect("the project opens its layout");
+        let direct = from_path(&dir.join("widget.kicad_pcb")).expect("layout");
+        assert_eq!(via_pro.kind, InputKind::Text);
+        assert_eq!(via_pro.layout_text, direct.layout_text);
+        assert_eq!(via_pro.board.components.len(), 3);
+        assert_eq!(via_pro.board.nets.len(), direct.board.nets.len());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

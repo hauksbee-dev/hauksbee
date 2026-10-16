@@ -528,6 +528,11 @@ impl OpenPartCause {
             Self::NoModel if !subject.is_empty() && says_not_fitted(value) => Remedy::MarkDnp {
                 reference: reference.to_string(),
             },
+            Self::NoModel if !subject.is_empty() && is_placeholder_value(value) => {
+                Remedy::SetPartNumber {
+                    reference: reference.to_string(),
+                }
+            }
             Self::NoModel if !subject.is_empty() => Remedy::AddModel {
                 reference: reference.to_string(),
             },
@@ -566,6 +571,17 @@ fn rename_sentence(reference: &str, conflict: &str) -> String {
 }
 
 /// Does a part value read as "this position is not populated"?
+/// Whether a part's value is a placeholder the designer left to fill in
+/// (`TBD`, `TBC`, `?`), so the design does not say what the part is.
+fn is_placeholder_value(value: &str) -> bool {
+    let v = value.trim().trim_matches(|c: char| c == '\'' || c == '"');
+    let v = v.to_ascii_lowercase();
+    matches!(
+        v.as_str(),
+        "tbd" | "tbc" | "tba" | "?" | "??" | "???" | "xxx" | "todo"
+    )
+}
+
 fn says_not_fitted(value: &str) -> bool {
     let v = value.trim().to_ascii_lowercase();
     let first = v
@@ -1499,6 +1515,13 @@ impl Assumption {
                 (None, true) => format!(
                     "Add models for those {count} parts to your models directory, or mark them \
                      DNP if the board does not fit them."
+                ),
+                // The design itself gives no value ("TBD"): no model can be
+                // drafted for a part nobody has chosen, so the fix is the value.
+                (None, false) if is_placeholder_value(&value) => format!(
+                    "{reference}'s value in the design is a placeholder ('{value}'): put its \
+                     real value or manufacturer part number on it and re-export, or mark it \
+                     DNP if the board does not fit it."
                 ),
                 (None, false) => format!(
                     "Add a model for {reference} (draft one from its datasheet with `hauksbee \

@@ -1717,3 +1717,35 @@ fn an_open_part_whose_value_says_not_fitted_gets_mark_dnp() {
         assert!(matches!(a.remedy(), Remedy::AddModel { .. }), "{value}");
     }
 }
+
+/// A part whose design value is a placeholder (`TBD`) has nothing to draft a
+/// model from: the fix named is its value, never "add a model". A real value
+/// with no model keeps the model route (control).
+#[test]
+fn a_placeholder_value_asks_for_the_value_not_a_model() {
+    let tbd = Assumption::open_part("C9", "TBD", "no model matched");
+    assert_eq!(
+        tbd.remedy(),
+        &Remedy::SetPartNumber {
+            reference: "C9".into()
+        }
+    );
+    assert!(
+        tbd.replacement().contains("placeholder ('TBD')")
+            && !tbd.replacement().contains("Add a model"),
+        "{}",
+        tbd.replacement()
+    );
+    let real = Assumption::open_part("C9", "100n", "no model matched");
+    assert_eq!(
+        real.remedy(),
+        &Remedy::AddModel {
+            reference: "C9".into()
+        }
+    );
+    assert!(
+        real.replacement().contains("Add a model for C9"),
+        "{}",
+        real.replacement()
+    );
+}

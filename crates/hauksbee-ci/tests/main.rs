@@ -34,6 +34,7 @@ mod hwtrace;
 mod indicator_intent;
 mod init_scaffold;
 mod inkplate_class_demo;
+mod local_undermining;
 mod manifest_cli_contract;
 #[cfg(feature = "renode")]
 mod mcu_descriptor_dir;
