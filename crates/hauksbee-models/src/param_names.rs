@@ -275,6 +275,10 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             "max_adc_source_impedance_ohms",
             "internal_clock",
             "default_clock_hz",
+            // The datasheet's recommended range for each external crystal load
+            // capacitor (C1, C2), read by the crystal load-cap check.
+            "xtal_cap_min_f",
+            "xtal_cap_max_f",
         ],
         ComponentKind::Connector | ComponentKind::Ignore => &[],
     }

@@ -291,8 +291,9 @@ fn parse_farads(v: &str) -> Option<f64> {
 //
 // Reach / honesty. The crystal's CL spec is almost never in the netlist: most
 // boards put only the frequency in the value field ("12MHz", "8MHz"). We can
-// derive CL only from a recognised part-number value (a small datasheet table
-// below), and otherwise emit an INFO note carrying the computed CL_board with no
+// derive CL only from a value that states it ("12MHz 18pF", the way many
+// libraries write the ordering spec) or a recognised part-number value (a
+// small datasheet table below), and otherwise emit an INFO note carrying the computed CL_board with no
 // fire. RTC chips that integrate their own load caps (PCF8523, RV-8263, RV-3028)
 // are recognised and never flagged for "missing caps". This keeps the check at
 // zero false positives on the corpus, where almost every crystal is value="freq".
@@ -371,13 +372,95 @@ fn has_integrated_xtal_caps(value: &str) -> bool {
     .any(|p| v.contains(p))
 }
 
-/// Look up a crystal's datasheet CL (pF) from its value/part-number string.
-fn known_crystal_cl(value: &str) -> Option<(f64, &'static str)> {
+/// A crystal's CL (pF) and where it comes from: the load capacitance its own
+/// value states ("12MHz 18pF", "Q12MHz/20pF/30ppm"), else a recognised part
+/// number's datasheet CL.
+fn known_crystal_cl(value: &str) -> Option<(f64, String)> {
+    if let Some(cl) = stated_crystal_cl(value) {
+        return Some((cl, format!("the crystal's value states CL = {cl} pF")));
+    }
     let v = value.to_ascii_uppercase();
     KNOWN_CRYSTAL_CL
         .iter()
         .find(|(k, _, _)| v.contains(k))
-        .map(|(_, cl, cite)| (*cl, *cite))
+        .map(|(_, cl, cite)| (*cl, (*cite).to_string()))
+}
+
+/// The load capacitance a crystal's value field states: the number right
+/// before a `pF` unit ("12MHz 18pF", "Q12MHz/20pF/30ppm/2P", "16 MHz CL=12.5 pF").
+/// Only 4..=50 pF counts, the span every catalogued quartz CL option sits in,
+/// so a stray number is never read as one.
+fn stated_crystal_cl(value: &str) -> Option<f64> {
+    let up = value.to_ascii_uppercase();
+    let mut from = 0;
+    while let Some(i) = up[from..].find("PF") {
+        let at = from + i;
+        let head = up[..at].trim_end();
+        let start = head
+            .char_indices()
+            .rev()
+            .take_while(|(_, c)| c.is_ascii_digit() || *c == '.')
+            .last()
+            .map_or(head.len(), |(i, _)| i);
+        if let Ok(cl) = head[start..].parse::<f64>() {
+            if (4.0..=50.0).contains(&cl) {
+                return Some(cl);
+            }
+        }
+        from = at + 2;
+    }
+    None
+}
+
+/// One crystal's load-capacitor site, for checks that need the bound models
+/// (the driving IC's card) to judge it.
+#[derive(Debug, Clone)]
+pub struct CrystalSite<'a> {
+    pub crystal: &'a Component,
+    /// The crystal's two signal nets.
+    pub nets: [i64; 2],
+    /// The fitted capacitor directly from each terminal to ground, with its
+    /// value in pF; `None` when there is none or its value does not parse.
+    pub caps: [Option<(&'a Component, f64)>; 2],
+    /// The CL the crystal's value or a known part number states. When it is
+    /// `Some`, `check_crystal_load_cap` judges the caps against it.
+    pub stated_cl_pf: Option<f64>,
+}
+
+/// Every fitted two-terminal crystal (not a ceramic resonator) with its load
+/// caps, the same parts `check_crystal_load_cap` reads.
+#[must_use]
+pub fn crystal_sites(board: &ExtractedBoard) -> Vec<CrystalSite<'_>> {
+    let direct_cap = |net_id: i64| {
+        board.net_members(net_id).iter().find_map(|(c, _)| {
+            let to_ground = AssemblyState::of(c).is_present()
+                && is_capacitor(c)
+                && c.pins.iter().any(|op| {
+                    op.net
+                        .filter(|id| *id != net_id)
+                        .and_then(|id| board.net(id))
+                        .is_some_and(|on| is_ground(&on.name))
+                });
+            to_ground
+                .then(|| parse_farads(&c.value))
+                .flatten()
+                .map(|f| (*c, f * 1e12))
+        })
+    };
+    board
+        .components
+        .iter()
+        .filter(|x| AssemblyState::of(x).is_present() && is_crystal(x) && !is_ceramic_resonator(x))
+        .filter_map(|x| {
+            let nets: [i64; 2] = crystal_signal_nets(board, x).try_into().ok()?;
+            Some(CrystalSite {
+                crystal: x,
+                nets,
+                caps: nets.map(&direct_cap),
+                stated_cl_pf: known_crystal_cl(&x.value).map(|(cl, _)| cl),
+            })
+        })
+        .collect()
 }
 
 /// Is this component a discrete crystal/resonator (ref Y*/X*/XTAL, or a crystal
