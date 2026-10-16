@@ -74,30 +74,34 @@ pub fn regulator_cout_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLin
                 |g| g == id,
             )
         };
-        let caps: Vec<(&Component, f64)> = board
-            .net_members(out)
-            .into_iter()
-            .map(|(c, _)| c)
-            .filter(|c| AssemblyState::of(c).is_present() && is_capacitor(c))
-            .filter(|c| {
-                let nets: Vec<i64> = c.pins.iter().filter_map(|p| p.net).collect();
-                nets.len() == 2
-                    && nets.contains(&out)
-                    && nets.iter().any(|n| *n != out && is_return(*n))
-            })
-            .filter_map(|c| {
-                let f = parse_value(c.value.trim()).map(|v| v.si)?;
-                (f.is_finite() && f > 0.0).then_some((c, f))
-            })
-            .fold(Vec::new(), |mut acc, (c, f)| {
-                if !acc
-                    .iter()
-                    .any(|(seen, _): &(&Component, f64)| seen.reference == c.reference)
-                {
-                    acc.push((c, f));
-                }
-                acc
-            });
+        let mut across: Vec<&Component> = Vec::new();
+        for (c, _) in board.net_members(out) {
+            let nets: Vec<i64> = c.pins.iter().filter_map(|p| p.net).collect();
+            let spans = nets.len() == 2
+                && nets.contains(&out)
+                && nets.iter().any(|n| *n != out && is_return(*n));
+            if spans
+                && AssemblyState::of(c).is_present()
+                && is_capacitor(c)
+                && !across.iter().any(|seen| seen.reference == c.reference)
+            {
+                across.push(c);
+            }
+        }
+        let value = |c: &Component| {
+            parse_value(c.value.trim())
+                .map(|v| v.si)
+                .filter(|f| f.is_finite() && *f > 0.0)
+        };
+        let caps: Vec<(&Component, f64)> = across
+            .iter()
+            .filter_map(|c| Some((*c, value(c)?)))
+            .collect();
+        let unvalued: Vec<&str> = across
+            .iter()
+            .filter(|c| value(c).is_none())
+            .map(|c| c.reference.as_str())
+            .collect();
         let found: f64 = caps.iter().map(|(_, f)| f).sum();
         // A part-per-billion slack, as in the binder: "10uF" parses one ulp
         // short of the card's 10e-6.
@@ -108,6 +112,33 @@ pub fn regulator_cout_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLin
         for (i, (c, f)) in caps.iter().enumerate() {
             let sep = if i == 0 { "" } else { ", " };
             let _ = write!(counted, "{sep}{} {}", c.reference, farads(*f));
+        }
+        if !unvalued.is_empty() {
+            // Capacitors are there but their size is not: the minimum cannot be
+            // judged, so it is a note naming them, never a missing-capacitor fail.
+            report.findings.push(LintFinding {
+                check: LintCheck::OperatingEnvelope,
+                severity: Severity::Low,
+                message: format!(
+                    "{} ({}) output '{}': the {} minimum output capacitance card '{}' states \
+                     for loop stability is not judged, because {} across the output {} no \
+                     readable value. Give {} a capacitance value so the requirement can be \
+                     checked.",
+                    comp.reference,
+                    comp.value.trim(),
+                    out_net.name,
+                    farads(need),
+                    model.id,
+                    unvalued.join(", "),
+                    if unvalued.len() == 1 { "has" } else { "have" },
+                    if unvalued.len() == 1 { "it" } else { "them" },
+                ),
+                refs: std::iter::once(comp.reference.clone())
+                    .chain(unvalued.iter().map(|r| (*r).to_string()))
+                    .collect(),
+                nets: vec![out_net.name.clone()],
+            });
+            continue;
         }
         let (severity, what) = if caps.is_empty() {
             (
@@ -192,6 +223,21 @@ mod tests {
         assert!(none[0]
             .message
             .contains("has no capacitor from output to ground"));
+    }
+
+    /// Capacitors whose value does not parse are present, size unknown: a Low
+    /// note naming them, never "no capacitor".
+    #[test]
+    fn unvalued_output_capacitors_are_a_note_not_a_fail() {
+        let f = lint(&["", "10u"]);
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].severity, Severity::Low);
+        assert!(
+            f[0].message
+                .contains("because C1 across the output has no readable value"),
+            "{}",
+            f[0].message
+        );
     }
 
     #[test]
