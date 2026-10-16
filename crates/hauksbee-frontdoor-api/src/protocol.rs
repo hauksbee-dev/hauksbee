@@ -230,6 +230,11 @@ pub struct FaultInfo {
     /// Whether the circuit was mutated (destructive mode) in response.
     #[serde(default)]
     pub destroyed: bool,
+    /// When `value` is so far past `limit` that the figure is no result (an
+    /// idealised model's number, not the part's), the stress as the engine
+    /// states it, without the figure; a surface shows this, never `value`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub far_past: Option<String>,
 }
 
 /// Live readout of a configurable supply (Feature 1).

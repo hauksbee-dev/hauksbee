@@ -6,7 +6,7 @@
 use crate::runner::RunOutcome;
 use crate::spec::{fmt_c, fmt_c1, Assertion, Spec};
 use hauksbee_engine::scheduler::PeripheralPad;
-use hauksbee_engine::stress::FaultKind;
+use hauksbee_engine::stress::{is_far_past_rating, rating_noun, stress_clause, FaultKind};
 use hauksbee_ir::truncate_ellipsis;
 use std::fmt::Write as _;
 
@@ -2527,16 +2527,23 @@ fn check_no_faults(out: &RunOutcome) -> (bool, String) {
         let f = &out.faults[0];
         // Value and limit are in the fault kind's unit (W, C, A or V); a bare
         // "120.480 > 1.000" says neither what was measured nor in what.
-        let unit = FaultKind::from_str(&f.kind).unit();
+        let kind = FaultKind::from_str(&f.kind);
+        let unit = kind.unit();
+        // Far past its rating the figure is an idealised model's number, not
+        // the part's: the engine's one stress wording states it without one.
+        let first = if is_far_past_rating(kind, f.value, f.limit) {
+            stress_clause(&f.component, kind, f.value, f.limit, rating_noun(kind), "")
+        } else {
+            format!(
+                "{} {} {:.3} {unit} > {:.3} {unit}",
+                f.component, f.kind, f.value, f.limit
+            )
+        };
         (
             false,
             format!(
-                "{} fault(s); first: {} {} {:.3} {unit} > {:.3} {unit} at {:.1}ms",
+                "{} fault(s); first: {first} at {:.1}ms",
                 out.faults.len(),
-                f.component,
-                f.kind,
-                f.value,
-                f.limit,
                 f.t_ms
             ),
         )
@@ -2708,7 +2715,26 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Stri
         .faults
         .iter()
         .find(|f| key_belongs_to_ref(&reference, &f.component) && f.kind == "overtemperature");
-    if let Some(f) = over {
+    if let Some(f) =
+        over.filter(|f| is_far_past_rating(FaultKind::Overtemperature, f.value, f.limit))
+    {
+        let said = stress_clause(
+            &f.component,
+            FaultKind::Overtemperature,
+            f.value,
+            f.limit,
+            rating_noun(FaultKind::Overtemperature),
+            "",
+        );
+        (
+            false,
+            format!(
+                "Tj({}) exceeded device max at {:.1}ms: {said}",
+                f.component, f.t_ms
+            ),
+            Some(said),
+        )
+    } else if let Some(f) = over {
         (
             false,
             format!(

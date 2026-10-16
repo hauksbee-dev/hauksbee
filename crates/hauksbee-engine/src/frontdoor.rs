@@ -1939,14 +1939,21 @@ fn analyze_with_firmware_context(
             if let Some(budget) = captured.error_budget.clone() {
                 let mut maps = report.evidence.clone();
                 for fault in &captured.faults {
-                    if let Ok(map) = evidence.simulation_map(
+                    // Far past its rating the figure is no result: the one
+                    // stress wording states it without the number.
+                    let claim = if fault.is_far_past_rating() {
+                        format!("Firmware co-sim stress: {}", fault.statement())
+                    } else {
                         format!(
                             "Firmware co-sim stress: {} {} = {:.6} (limit {:.6})",
                             fault.component,
                             fault.kind.as_str(),
                             fault.value,
                             fault.limit
-                        ),
+                        )
+                    };
+                    if let Ok(map) = evidence.simulation_map(
+                        claim,
                         &[],
                         std::slice::from_ref(&fault.component),
                         Some(budget.clone()),

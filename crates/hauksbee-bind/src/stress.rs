@@ -217,23 +217,28 @@ pub const FAR_PAST_TEMP_RATIO: f64 = 2.0;
 /// This is relative to the part: a figure that is a plausible overstress for
 /// one part (851 mA through a diode rated 125 mA) is the same finding stated
 /// without a number once it passes [`FAR_PAST_RATIO`] times a current or power
-/// rating or [`FAR_PAST_TEMP_RATIO`] times a junction limit. It stays a fault:
-/// the part is overstressed, only the magnitude is not trusted.
+/// rating or [`FAR_PAST_TEMP_RATIO`] times a junction limit. Whatever the
+/// kind and whatever the limit (none, zero, a voltage), a finite value past
+/// [`implausible_bound`] is far past too. It stays a fault: the part is
+/// overstressed, only the magnitude is not trusted. A non-finite value is no
+/// result at all ([`StressMonitor::implausible`]), never this.
 #[must_use]
 pub fn is_far_past_rating(kind: FaultKind, value: f64, limit: f64) -> bool {
-    if !value.is_finite() || !limit.is_finite() || limit <= 0.0 {
+    if !value.is_finite() {
+        return false;
+    }
+    if is_implausible(kind, value) {
+        return true;
+    }
+    if !limit.is_finite() || limit <= 0.0 {
         return false;
     }
     match kind {
-        FaultKind::Overtemperature => {
-            value > FAR_PAST_TEMP_RATIO * limit || is_implausible(kind, value)
-        }
+        FaultKind::Overtemperature => value > FAR_PAST_TEMP_RATIO * limit,
         FaultKind::Overpower
         | FaultKind::Overcurrent
         | FaultKind::SurgeCurrent
-        | FaultKind::PinOvercurrent => {
-            value.abs() > FAR_PAST_RATIO * limit || is_implausible(kind, value)
-        }
+        | FaultKind::PinOvercurrent => value.abs() > FAR_PAST_RATIO * limit,
         FaultKind::Overvoltage
         | FaultKind::ReverseBias
         | FaultKind::GateOvervoltage
@@ -241,18 +246,176 @@ pub fn is_far_past_rating(kind: FaultKind, value: f64, limit: f64) -> bool {
     }
 }
 
-/// The parenthesised reason a [`is_far_past_rating`] figure is not printed.
+/// Whether a stress passing a stand-in card's limit is a fault after all.
+///
+/// A stand-in's limit says nothing exact about the part, so passing it is a
+/// stated condition, except where no stand-in can be that wrong: a current or
+/// power [`is_far_past_rating`], or any stress past [`implausible_bound`]. A
+/// temperature is not judged by its ratio: it scales with a guessed theta-JA
+/// as well as the guessed limit, so only the absolute bound overrides there.
 #[must_use]
-pub fn far_past_reason(kind: FaultKind) -> String {
+pub fn overrides_stand_in(kind: FaultKind, value: f64, limit: f64) -> bool {
     match kind {
-        FaultKind::Overtemperature => format!(
-            "over {FAR_PAST_TEMP_RATIO:.0}x its limit in C; the exact figure is not physical, \
-             the estimate scales with power and the part fails first"
-        ),
-        _ => format!(
+        FaultKind::Overtemperature => value.is_finite() && is_implausible(kind, value),
+        _ => is_far_past_rating(kind, value, limit),
+    }
+}
+
+/// Why a [`is_far_past_rating`] figure is not printed, true to which test it
+/// failed: past the absolute bound no part sees, or far past the part's own
+/// rating.
+#[must_use]
+pub fn far_past_reason(kind: FaultKind, value: f64) -> String {
+    let bound = implausible_bound(kind);
+    if kind == FaultKind::Overtemperature {
+        if is_implausible(kind, value) {
+            format!(
+                "past {}, hotter than any package survives; the exact figure is not physical, \
+                 the estimate scales with power and the part fails first",
+                stress_quantity(kind, bound)
+            )
+        } else {
+            "the exact figure is not physical: the estimate scales with power and theta-JA, \
+             and the part fails long before it"
+                .to_string()
+        }
+    } else if is_implausible(kind, value) {
+        format!(
+            "past {}, beyond anything a real part sees; the exact figure is not physical, \
+             the supply and the solver set it, not the part",
+            stress_quantity(kind, bound)
+        )
+    } else {
+        format!(
             "over {FAR_PAST_RATIO:.0}x its rating; the exact figure is not physical, the \
              supply and the solver set it, not the part"
-        ),
+        )
+    }
+}
+
+/// A stress figure with its unit, as every report prints one.
+#[must_use]
+pub fn stress_quantity(kind: FaultKind, v: f64) -> String {
+    match kind {
+        FaultKind::Overcurrent | FaultKind::SurgeCurrent | FaultKind::PinOvercurrent => {
+            if v.abs() >= 1.0 {
+                format!("{v:.2} A")
+            } else {
+                format!("{:.1} mA", v * 1e3)
+            }
+        }
+        FaultKind::Overpower => {
+            if v.abs() >= 1.0 {
+                format!("{v:.2} W")
+            } else {
+                format!("{:.0} mW", v * 1e3)
+            }
+        }
+        FaultKind::Overvoltage
+        | FaultKind::ReverseBias
+        | FaultKind::GateOvervoltage
+        | FaultKind::Short => format!("{v:.2} V"),
+        FaultKind::Overtemperature => format!("{v:.0} C"),
+    }
+}
+
+/// What a report calls the rating a `kind` fault passed, after its figure.
+#[must_use]
+pub const fn rating_noun(kind: FaultKind) -> &'static str {
+    match kind {
+        FaultKind::Overcurrent => "current rating",
+        FaultKind::SurgeCurrent => "surge-current rating",
+        FaultKind::PinOvercurrent => "per-pin current limit",
+        FaultKind::Overpower => "power rating",
+        FaultKind::Overvoltage | FaultKind::Short => "voltage rating",
+        FaultKind::ReverseBias => "reverse-voltage rating",
+        FaultKind::GateOvervoltage => "gate-source voltage rating",
+        FaultKind::Overtemperature => "junction-temperature limit",
+    }
+}
+
+/// The verb a report puts between a part and its stress figure.
+const fn stress_verb(kind: FaultKind) -> &'static str {
+    match kind {
+        FaultKind::Overcurrent | FaultKind::SurgeCurrent => "carries",
+        FaultKind::PinOvercurrent => "passes",
+        FaultKind::Overpower => "dissipates",
+        FaultKind::Overvoltage | FaultKind::ReverseBias => "sees",
+        FaultKind::GateOvervoltage => "sees a gate-source voltage of",
+        FaultKind::Overtemperature => "reaches a junction temperature of",
+        FaultKind::Short => "is shorted at",
+    }
+}
+
+/// The verb a report puts before "its <limit>" for a figure far past it.
+const fn far_past_verb(kind: FaultKind) -> &'static str {
+    match kind {
+        FaultKind::Overcurrent | FaultKind::SurgeCurrent => "carries far more than",
+        FaultKind::PinOvercurrent => "passes far more than",
+        FaultKind::Overpower => "dissipates far more than",
+        FaultKind::Overvoltage | FaultKind::Short => "sees far more than",
+        FaultKind::ReverseBias => "sees a reverse voltage far past",
+        FaultKind::GateOvervoltage => "sees a gate-source voltage far past",
+        FaultKind::Overtemperature => "reaches a junction temperature far past",
+    }
+}
+
+/// How every report states one stress: the clause "`component` dissipates
+/// 2.50 W`detail`, over its 250 mW `rated`", or, when the figure is no
+/// result ([`is_far_past_rating`]), "`component` dissipates far more than its
+/// 250 mW `rated` (why no figure is printed)". The single formatter for a
+/// stress figure, so no surface prints an idealised model's absurd number
+/// as fact. `detail` (the nets or currents behind a figure) is dropped with
+/// the figure.
+#[must_use]
+pub fn stress_clause(
+    component: &str,
+    kind: FaultKind,
+    value: f64,
+    limit: f64,
+    rated: &str,
+    detail: &str,
+) -> String {
+    let has_limit = limit.is_finite() && limit > 0.0;
+    if is_far_past_rating(kind, value, limit) {
+        let its = if has_limit {
+            format!("its {} {rated}", stress_quantity(kind, limit))
+        } else {
+            format!("any {rated}")
+        };
+        format!(
+            "{component} {} {its} ({})",
+            far_past_verb(kind),
+            far_past_reason(kind, value)
+        )
+    } else {
+        format!(
+            "{component} {} {}{detail}, over its {} {rated}",
+            stress_verb(kind),
+            stress_quantity(kind, value),
+            stress_quantity(kind, limit),
+        )
+    }
+}
+
+impl FaultEvent {
+    /// This fault as every report states it ([`stress_clause`]).
+    #[must_use]
+    pub fn statement(&self) -> String {
+        stress_clause(
+            &self.component,
+            self.kind,
+            self.value,
+            self.limit,
+            rating_noun(self.kind),
+            "",
+        )
+    }
+
+    /// Whether this fault's figure is no result ([`is_far_past_rating`]).
+    #[must_use]
+    pub fn is_far_past_rating(&self) -> bool {
+        is_far_past_rating(self.kind, self.value, self.limit)
     }
 }
 
@@ -904,11 +1067,16 @@ impl StandInExceedance {
             FaultKind::GateOvervoltage => ("sees", "gate-source voltage"),
         };
         let rating = format!("{} {unit} {what}", fmt_rating(f.limit));
+        // Far past it (a temperature the guessed theta-JA puts past twice its
+        // limit, say) the figure is no result: the one stress wording says so.
         let subject = if is_far_past_rating(f.kind, f.value, f.limit) {
-            format!(
-                "{} {seen} far past its {rating} limit ({})",
-                f.component,
-                far_past_reason(f.kind),
+            stress_clause(
+                &f.component,
+                f.kind,
+                f.value,
+                f.limit,
+                &format!("{what} limit"),
+                "",
             )
         } else {
             format!(
@@ -1486,12 +1654,12 @@ impl StressMonitor {
             return false;
         }
         // A stand-in card's limit says nothing about the part: a condition,
-        // noted once per part and kind, never a fault. Except far past it
-        // (`is_far_past_rating`): no stand-in is that wrong, so the part has
-        // nothing limiting its stress and the guess does not excuse it.
+        // noted once per part and kind, never a fault. Except where no
+        // stand-in is that wrong (`overrides_stand_in`): the part has nothing
+        // limiting its stress and the guess does not excuse it.
         let limit = card_limit(meta, chk.kind);
         let stand_in = limit
-            .filter(|_| !is_far_past_rating(chk.kind, chk.value, chk.limit))
+            .filter(|_| !overrides_stand_in(chk.kind, chk.value, chk.limit))
             .and_then(|l| meta.ratings.basis.stand_in_for(l).map(|s| (l, s)));
         if let Some((limit, stand_in)) = stand_in {
             self.stand_in.push(StandInExceedance {
@@ -1905,7 +2073,9 @@ impl StressMonitor {
                 };
                 if !v.is_finite() {
                     self.implausible.push(event);
-                } else if let Some(stand_in) = w.stand_in {
+                } else if let Some(stand_in) =
+                    (w.stand_in).filter(|_| !overrides_stand_in(FaultKind::Overvoltage, v, w.max_v))
+                {
                     self.stand_in.push(StandInExceedance {
                         fault: event,
                         limit: Limit::Voltage,
@@ -3293,6 +3463,158 @@ mod monitor_temp_tests {
         assert!(
             sustained.is_some_and(|t| (t - 50.0).abs() < 1e-6),
             "sustained read {sustained:?}"
+        );
+    }
+
+    /// A placeholder card's basis: every limit it sets is a stand-in.
+    fn placeholder_basis() -> rating_basis::RatingBasis {
+        rating_basis::RatingBasis {
+            stand_in: Some(StandIn {
+                card: "generic_test".into(),
+                kind: rating_basis::StandInKind::Placeholder,
+            }),
+            board_stated: Vec::new(),
+        }
+    }
+
+    /// A 100 ohm resistor on a placeholder card (theta-JA 100 C/W, Tj limit
+    /// 100 C) held at `volts` until its junction settles: the faults raised
+    /// and the stand-in exceedances noted.
+    fn stand_in_heat(volts: f64) -> (Vec<FaultEvent>, Vec<StandInExceedance>) {
+        let ratings = Ratings {
+            theta_ja_c_per_w: Some(100.0),
+            max_junction_temp_c: Some(100.0),
+            basis: placeholder_basis(),
+            ..Default::default()
+        };
+        let (mut circuit, node, mut monitor) = resistor_monitor(100.0, ratings);
+        let node_v = |n| if n == node { volts } else { 0.0 };
+        let faults = (0..30)
+            .flat_map(|k| {
+                monitor.accumulate_step(&circuit, &node_v, &|_| None, 1e-4);
+                monitor.evaluate(&mut circuit, &node_v, &|_| None, f64::from(k) * 1e-4)
+            })
+            .filter(|f| f.kind == FaultKind::Overtemperature)
+            .collect();
+        let stand_in = (monitor.stand_in.into_iter())
+            .filter(|e| e.fault.kind == FaultKind::Overtemperature)
+            .collect();
+        (faults, stand_in)
+    }
+
+    /// Legal control: a junction estimate 2.2x a stand-in card's limit (25 C
+    /// + 1.95 W * 100 C/W = 220 C against 100 C) rests on a guessed theta-JA
+    /// as well as a guessed limit, so it stays a stated condition, worded
+    /// without its figure. Faulty: past the 1500 C no package survives
+    /// (16 W, 1625 C) no guess excuses it, and it is a fault.
+    #[test]
+    fn a_stand_in_temperature_is_a_condition_until_no_package_survives_it() {
+        let (faults, stand_in) = stand_in_heat(1.95_f64.sqrt() * 10.0);
+        assert!(faults.is_empty(), "{faults:?}");
+        assert_eq!(stand_in.len(), 1, "{stand_in:?}");
+        let said = stand_in[0].condition();
+        assert!(
+            rating_basis::is_condition(&said)
+                && said.contains("far past its 100 C")
+                && said.contains("the exact figure is not physical")
+                && !said.contains("220"),
+            "{said}"
+        );
+        let (faults, stand_in) = stand_in_heat(40.0);
+        assert_eq!(faults.len(), 1, "{faults:?} {stand_in:?}");
+        assert!(stand_in.is_empty(), "{stand_in:?}");
+        let said = faults[0].statement();
+        assert!(
+            said.contains("far past its 100 C")
+                && said.contains("past 1500 C")
+                && !said.contains("1625"),
+            "{said}"
+        );
+    }
+
+    /// Faulty: a voltage past the 10 kV no part sees is far past whatever the
+    /// limit (none, zero, or a stand-in card's), a fault worded without the
+    /// figure. Legal control: 100 V on a stand-in 6 V-max part stays a stated
+    /// condition with its figure, and a real-card 100 V prints its figure.
+    #[test]
+    fn an_absurd_voltage_is_far_past_any_limit_and_beats_a_stand_in() {
+        for limit in [6.0, 0.0, -1.0, f64::NAN] {
+            assert!(
+                is_far_past_rating(FaultKind::Overvoltage, 2.0e4, limit),
+                "{limit}"
+            );
+            assert!(
+                is_far_past_rating(FaultKind::ReverseBias, -2.0e4, limit),
+                "{limit}"
+            );
+            assert!(
+                is_far_past_rating(FaultKind::GateOvervoltage, 2.0e4, limit),
+                "{limit}"
+            );
+        }
+        assert!(!is_far_past_rating(FaultKind::Overvoltage, 100.0, 6.0));
+        assert!(!is_far_past_rating(FaultKind::Overcurrent, 50.0, 0.0));
+        assert!(!is_far_past_rating(FaultKind::Short, 1.0e9, 0.0));
+        let watched = |stand_in: Option<StandIn>, volts: f64| {
+            let (mut circuit, node, mut monitor) = supply_monitor("U1", 6.0);
+            monitor.supply_watches[0].stand_in = stand_in;
+            let faults = drive(&mut monitor, &mut circuit, node, volts, SUSTAIN_CHUNKS + 2);
+            (faults, monitor.stand_in)
+        };
+        let generic = placeholder_basis().stand_in;
+        let (faults, stand_in) = watched(generic.clone(), 2.0e4);
+        assert_eq!((faults.len(), stand_in.len()), (1, 0), "{faults:?}");
+        let said = faults[0].statement();
+        assert!(
+            said.contains("U1 sees far more than its 6.00 V voltage rating")
+                && said.contains("past 10000.00 V")
+                && !said.contains("20000"),
+            "{said}"
+        );
+        let (faults, stand_in) = watched(generic, 100.0);
+        assert_eq!((faults.len(), stand_in.len()), (0, 1), "{faults:?}");
+        assert!(
+            stand_in[0].condition().contains("U1 sees 100 V"),
+            "{}",
+            stand_in[0].condition()
+        );
+        let (faults, _) = watched(None, 100.0);
+        assert_eq!(
+            faults[0].statement(),
+            "U1 sees 100.00 V, over its 6.00 V voltage rating"
+        );
+    }
+
+    /// Faulty: R1 at 24.95 kW against 250 mW is stated far past for the
+    /// test it failed, the 500 W no part sees (not "100x", though it is that
+    /// too); 30 W against 250 mW is under that bound and past 100x its
+    /// rating only. Legal control: 2.5 W against 250 mW prints its figure.
+    #[test]
+    fn the_far_past_reason_is_the_test_the_figure_failed() {
+        let event = |value: f64, limit: f64| FaultEvent {
+            component: "R1".into(),
+            kind: FaultKind::Overpower,
+            value,
+            limit,
+            t: 0.0,
+            destroyed: false,
+        };
+        let absurd = event(24_950.0, 0.25).statement();
+        assert!(
+            absurd
+                .starts_with("R1 dissipates far more than its 250 mW power rating (past 500.00 W")
+                && !absurd.contains("24950")
+                && !absurd.contains("100x"),
+            "{absurd}"
+        );
+        let ratio = event(30.0, 0.25).statement();
+        assert!(
+            ratio.contains("far more than its 250 mW") && ratio.contains("over 100x its rating"),
+            "{ratio}"
+        );
+        assert_eq!(
+            event(2.5, 0.25).statement(),
+            "R1 dissipates 2.50 W, over its 250 mW power rating"
         );
     }
 

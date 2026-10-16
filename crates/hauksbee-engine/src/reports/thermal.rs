@@ -78,15 +78,21 @@ pub(crate) fn emit_quiet(
     // just has no board location to back a map, as on the co-sim surface.
     let mut unmapped = Vec::new();
     for (reference, tj_c, over_limit) in &rows {
+        let claim = far_past(reference, *tj_c, *over_limit).map_or_else(
+            || {
+                format!(
+                    "{reference} peak junction temperature is {tj_c:.3} C ({})",
+                    if over_limit.is_some() {
+                        "over limit"
+                    } else {
+                        "within limit"
+                    }
+                )
+            },
+            |said| format!("{said} (over limit)"),
+        );
         let map = evidence.check_simulation_map_if_mapped(
-            format!(
-                "{reference} peak junction temperature is {tj_c:.3} C ({})",
-                if *over_limit {
-                    "over limit"
-                } else {
-                    "within limit"
-                }
-            ),
+            claim,
             &[],
             std::slice::from_ref(reference),
             Some(budget.clone()),
@@ -132,7 +138,7 @@ pub(crate) fn emit_quiet(
                 .map(|(r, tj, over)| ThermalDeviceJson {
                     reference: r.clone(),
                     tj_c: *tj,
-                    over_limit: *over,
+                    over_limit: over.is_some(),
                 })
                 .collect(),
             coverage: Some(coverage.clone()),
@@ -202,11 +208,25 @@ pub(crate) fn emit_quiet(
     Ok(())
 }
 
+/// A thermal row: the device, its peak junction temperature (C), and its
+/// junction limit (C) when an overtemperature fault fired for it.
+type ThermalRow = (String, f64, Option<f64>);
+
+/// The engine's one stress wording for a row so far past its junction limit
+/// that the figure is no result ([`crate::stress::is_far_past_rating`]).
+fn far_past(reference: &str, tj: f64, over_limit: Option<f64>) -> Option<String> {
+    use crate::stress::{is_far_past_rating, rating_noun, stress_clause, FaultKind};
+    let kind = FaultKind::Overtemperature;
+    over_limit
+        .filter(|&limit| is_far_past_rating(kind, tj, limit))
+        .map(|limit| stress_clause(reference, kind, tj, limit, rating_noun(kind), ""))
+}
+
 /// Run a short headless co-sim and collect the steady-state junction-temperature
-/// estimate per dissipating device. Returns `(reference, peak_Tj_C, over_limit)`
-/// rows, sorted hottest-first.
+/// estimate per dissipating device. Returns `(reference, peak_Tj_C, limit if
+/// over it)` rows, sorted hottest-first.
 #[allow(clippy::while_float, reason = "f64 time sum fixes the frame count")]
-fn collect_thermal(engine: &mut HauksbeeEngine, seconds: f64) -> Vec<(String, f64, bool)> {
+fn collect_thermal(engine: &mut HauksbeeEngine, seconds: f64) -> Vec<ThermalRow> {
     use hauksbee_frontdoor_api::engine::Engine;
     use std::collections::HashMap;
 
@@ -235,11 +255,11 @@ fn collect_thermal(engine: &mut HauksbeeEngine, seconds: f64) -> Vec<(String, f6
         t += frame_dt;
     }
 
-    let mut rows: Vec<(String, f64, bool)> = peak_temp
+    let mut rows: Vec<ThermalRow> = peak_temp
         .into_iter()
         .filter(|(_, v)| v.is_finite())
         .map(|(r, tj)| {
-            let over = overtemp.contains_key(&r);
+            let over = overtemp.get(&r).map(|&(_, limit)| limit);
             (r, tj, over)
         })
         .collect();
@@ -290,7 +310,7 @@ fn emit_thermal_coverage_caveat(coverage: &CheckCoverage, open_refs: &[String]) 
 /// because the dissipating devices are unresolved/open), print a loud WARNING
 /// naming the reason rather than a near-empty table that reads as "runs cool".
 fn render_thermal_text(
-    rows: &[(String, f64, bool)],
+    rows: &[ThermalRow],
     ambient_c: f64,
     validity: &Validity,
     coverage: &CheckCoverage,
@@ -335,22 +355,35 @@ fn render_thermal_text(
          ├────────────────────┼───────────┼──────────┤"
     );
     let mut n_over = 0;
+    let mut far = Vec::new();
     for (reference, tj, over) in rows {
-        let status = if *over {
+        let status = if over.is_some() {
             n_over += 1;
             "OVER".to_string()
         } else {
             "ok".to_string()
         };
+        // Far past its limit the figure is no result: the cell says so and
+        // the one stress wording follows the table.
+        let said = far_past(reference, *tj, *over);
+        let tj = if said.is_some() {
+            "far past".to_string()
+        } else {
+            format!("{tj:.1}")
+        };
+        far.extend(said);
         let _ = writeln!(
             out,
-            "│ {:<18} │ {:>7.1}   │ {:<8} │",
+            "│ {:<18} │ {:>9} │ {:<8} │",
             truncate(reference, 18),
             tj,
             status
         );
     }
     let _ = writeln!(out, "└────────────────────┴───────────┴──────────┘");
+    for said in far {
+        let _ = writeln!(out, "  {said}");
+    }
     if n_over > 0 {
         let _ = writeln!(
             out,
@@ -397,6 +430,36 @@ mod tests {
         );
     }
 
+    /// Faulty: a 998 C junction estimate against a 150 C limit prints no
+    /// figure; the row says far past and the stress is stated after the
+    /// table. Legal control: 180 C over the same limit prints its figure.
+    #[test]
+    fn a_junction_far_past_its_limit_prints_no_figure() {
+        let coverage = CheckCoverage {
+            resolved_fraction: 1.0,
+            dissipating_count: 2,
+            total_active_count: 2,
+            open_active_on_live_circuit: 0,
+            partial: false,
+        };
+        let text = render_thermal_text(
+            &[
+                ("Q1".to_string(), 998.0, Some(150.0)),
+                ("Q2".to_string(), 180.0, Some(150.0)),
+            ],
+            25.0,
+            &Validity::valid(),
+            &coverage,
+        );
+        assert!(
+            !text.contains("998")
+                && text.contains("far past")
+                && text.contains("Q1 reaches a junction temperature far past its 150 C")
+                && text.contains("180.0"),
+            "{text}"
+        );
+    }
+
     #[test]
     fn partial_thermal_table_names_unmodelled_power_parts_inline() {
         let coverage = CheckCoverage {
@@ -409,8 +472,8 @@ mod tests {
         let validity = Validity::valid();
         let text = render_thermal_text(
             &[
-                ("R1".to_string(), 25.1, false),
-                ("R2".to_string(), 25.0, false),
+                ("R1".to_string(), 25.1, None),
+                ("R2".to_string(), 25.0, None),
             ],
             25.0,
             &validity,

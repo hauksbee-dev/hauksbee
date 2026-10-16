@@ -38,6 +38,7 @@ fn fault_info_serializes_kind_not_fault_kind() {
         limit: 1.0,
         t: 0.5,
         destroyed: false,
+        far_past: None,
     });
     let json = serde_json::to_value(ServerMessage::SimFrame(frame)).unwrap();
     let fault = &json["faults"][0];

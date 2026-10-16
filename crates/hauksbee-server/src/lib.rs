@@ -1491,6 +1491,7 @@ mod rate_honesty_tests {
                     limit: 1.0,
                     t: 0.01,
                     destroyed: false,
+                    far_past: None,
                 });
             let mut other = s.shared.tx.subscribe();
             for command in [

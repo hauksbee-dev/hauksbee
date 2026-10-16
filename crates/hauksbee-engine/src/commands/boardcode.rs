@@ -566,6 +566,10 @@ fn check_json(r: &crate::boardcode::CheckReport) -> String {
                     "limit": f.limit,
                     "t": f.t,
                     "destroyed": f.destroyed,
+                    // Set when `value` is so far past `limit` that the figure
+                    // is no result: the stress as the engine states it, to
+                    // show in its place.
+                    "far_past": f.is_far_past_rating().then(|| f.statement()),
                 })
             })
             .collect::<Vec<_>>(),

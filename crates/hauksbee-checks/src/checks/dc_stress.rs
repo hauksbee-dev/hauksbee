@@ -28,7 +28,7 @@ use hauksbee_bind::binder::{
     bind_board, held_off_rails, is_ground, power_rail_voltage, BoundBoard,
 };
 use hauksbee_bind::stress::{
-    bjt_currents, far_past_reason, is_far_past_rating, strip_unit_suffix, FaultEvent, FaultKind,
+    bjt_currents, stress_clause, stress_quantity, strip_unit_suffix, FaultEvent, FaultKind,
     GateDrive, RegulatorHeat, StandInExceedance, StressMonitor,
 };
 use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};
@@ -211,20 +211,36 @@ fn record_fault(
 /// The parts of a state's `found` and `strong_found` stresses that survive
 /// the rails being held to what their supplies can give.
 ///
-/// A part dropped there is over a rating only at a draw no supply gives; its
-/// first clause goes to `only_ideal`. Returns whether the held re-judge did
-/// not solve.
+/// A part still past a stand-in card's limit there (an LED with no series
+/// resistor, held to a USB port's 0.5 A) is neither cleared nor a fault: its
+/// stated condition at the held rail goes to `stated`, never the claim that
+/// it is within its ratings. A part dropped otherwise is over a rating only
+/// at a draw no supply gives; its first clause goes to `only_ideal`. Returns
+/// whether the held re-judge did not solve.
 fn hold_overloaded_rails(
     state: &mut BoundBoard,
     over: &[rest_supply::Overload],
     found: &mut Vec<PartFault>,
     strong_found: &mut Vec<PartFault>,
     only_ideal: &mut BTreeMap<String, String>,
+    stated: &mut BTreeMap<String, String>,
 ) -> bool {
     let real = held_to_capability(state, over);
-    let keep = |part: &str| real.as_ref().is_some_and(|r| r.iter().any(|p| p == part));
+    let keep = |part: &str| {
+        real.as_ref()
+            .is_some_and(|(r, _)| r.iter().any(|p| p == part))
+    };
+    let held_condition = |part: &str| {
+        real.as_ref()
+            .and_then(|(_, conditions)| conditions.get(part).cloned())
+    };
     for (part, clauses, _) in found.iter().chain(strong_found.iter()) {
-        if !keep(part.as_str()) {
+        if keep(part.as_str()) {
+            continue;
+        }
+        if let Some(condition) = held_condition(part.as_str()) {
+            stated.insert(part.clone(), condition);
+        } else {
             only_ideal
                 .entry(part.clone())
                 .or_insert_with(|| clauses.first().cloned().unwrap_or_default());
@@ -301,8 +317,14 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
         // A draw no supply gives: keep only the parts still over a rating
         // with the rails held to what their supplies can give.
         if !over.is_empty() {
-            held_unsolved |=
-                hold_overloaded_rails(state, &over, &mut found, &mut strong_found, &mut only_ideal);
+            held_unsolved |= hold_overloaded_rails(
+                state,
+                &over,
+                &mut found,
+                &mut strong_found,
+                &mut only_ideal,
+                &mut stated,
+            );
             rest_supply::note_overloads(&mut overloaded, over);
         }
         for fault in found {
@@ -345,8 +367,7 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
         held_unsolved,
     ));
     findings.extend(abstained_note(&unsolved));
-    let pulled: Vec<String> = overloaded.iter().map(|o| o.net.clone()).collect();
-    findings.extend((dead.filter(|d| !d.is_empty())).map(|d| dead_rail_note(d, &pulled)));
+    findings.extend((dead.filter(|d| !d.is_empty())).map(|d| dead_rail_note(d, &overloaded)));
     NetLintReport { findings }
 }
 
@@ -390,23 +411,32 @@ fn dead_rails(bound: &BoundBoard, solved: &(Workspace, Vec<f64>)) -> BTreeMap<St
 
 /// The note naming the rails no state brought up: the parts on them were
 /// held to their ratings at a dead rail, so none of them was judged. A rail in
-/// `pulled` (one the board draws more from than its supply gives) was not left unpowered by anything missing: the draw
-/// pulled it down, and the note says so instead of blaming an absent source.
-fn dead_rail_note(dead: BTreeMap<String, (f64, f64)>, pulled: &[String]) -> LintFinding {
-    let is_pulled = |net: &String| pulled.contains(net);
+/// `pulled` (one the board draws more from than its supply gives) was not left
+/// unpowered by anything missing: the draw pulled it down, and the note says
+/// so instead of blaming an absent source, calling it a near-short only when
+/// it is one ([`rest_supply::Overload::is_near_short`]).
+fn dead_rail_note(
+    dead: BTreeMap<String, (f64, f64)>,
+    pulled: &[rest_supply::Overload],
+) -> LintFinding {
+    let pull = |net: &String| pulled.iter().find(|o| &o.net == net);
     let rails: Vec<String> = (dead.iter())
         .map(|(net, (v, named))| {
             let v = if v.abs() < 0.005 { 0.0 } else { *v };
-            if is_pulled(net) {
-                format!("'{net}' (pulled down to {v:.2} V by the draw on it; its name says {named:.2} V)")
-            } else {
-                format!("'{net}' (solved at {v:.2} V; its name says {named:.2} V)")
+            match pull(net) {
+                Some(o) if o.is_near_short() => format!(
+                    "'{net}' (pulled down to {v:.2} V by a near-short on it; its name says {named:.2} V)"
+                ),
+                Some(_) => format!(
+                    "'{net}' (pulled down to {v:.2} V by the draw on it; its name says {named:.2} V)"
+                ),
+                None => format!("'{net}' (solved at {v:.2} V; its name says {named:.2} V)"),
             }
         })
         .collect();
-    let cause = if dead.keys().all(is_pulled) {
-        "the rail was pulled down by a draw no supply gives (a near-short on it), so it \
-         never sat at its level"
+    let cause = if dead.keys().all(|n| pull(n).is_some()) {
+        "the rail was pulled down by a draw more than its supply gives, so it never sat at \
+         its level"
     } else {
         "the rail did not come up in the solved operating point (an input with no declared \
          source, or a supply the model could not start)"
@@ -464,7 +494,7 @@ fn rest_finding(
 
 /// The note for a part whose stress came out as no finite number: the
 /// rating was not checked there, which is not a pass. (A finite figure however
-/// absurd is a fault, worded without the figure: [`far_past_clause`].)
+/// absurd is a fault, worded without the figure: [`stress_clause`].)
 fn not_a_number_note(part: String, clause: &str) -> LintFinding {
     let mut note = not_judged_note(
         &format!(
@@ -505,13 +535,8 @@ fn note_stand_in(into: &mut BTreeMap<String, String>, events: Vec<StandInExceeda
 fn note_absurd(into: &mut BTreeMap<String, String>, events: Vec<FaultEvent>) {
     for f in events {
         let part = strip_unit_suffix(f.component.split(':').next().unwrap_or(&f.component));
-        into.entry(part.to_string()).or_insert_with(|| {
-            if f.value.is_finite() {
-                format!("{} {}", verb(f.kind), quantity(f.kind, f.value))
-            } else {
-                format!("{} a non-finite value", verb(f.kind))
-            }
-        });
+        into.entry(part.to_string())
+            .or_insert_with(|| format!("{} came out as no finite number", f.kind.as_str()));
     }
 }
 
@@ -582,16 +607,22 @@ fn unknown_state_faults(
 }
 
 /// The parts over a rating in `bound`'s current state with each rail of
-/// `over` held to what its supply can give ([`rest_supply`]), the rails then
+/// `over` held to what its supply can give ([`rest_supply`]), and the stated
+/// condition of each part past a stand-in card's limit there, the rails then
 /// put back. `None` when the held board does not solve.
 fn held_to_capability(
     bound: &mut BoundBoard,
     over: &[rest_supply::Overload],
-) -> Option<Vec<String>> {
+) -> Option<(Vec<String>, BTreeMap<String, String>)> {
     let saved = rest_supply::hold_to_capability(bound, over);
     let real = settle(bound).map(|x| {
-        let (still, ..) = judge(bound, &x);
-        still.into_iter().map(|(part, ..)| part).collect()
+        let (still, _, _, stand_in) = judge(bound, &x);
+        let mut conditions = BTreeMap::new();
+        note_stand_in(&mut conditions, stand_in);
+        (
+            still.into_iter().map(|(part, ..)| part).collect(),
+            conditions,
+        )
     });
     rest_supply::release(bound, saved);
     real
@@ -835,17 +866,14 @@ fn judge(bound: &mut BoundBoard, solved: &(Workspace, Vec<f64>)) -> Judged {
                 .into_values()
                 .map(|(f, ..)| {
                     let rated = rating_phrase(f, trips.contains(f.component.as_str()));
-                    if is_far_past_rating(f.kind, f.value, f.limit) {
-                        return far_past_clause(f, rated);
-                    }
-                    let detail = rating_detail(bound, &device_of, &net_of, f, bjt(f), &mut nets);
-                    format!(
-                        "{} {} {}{detail}, over its {} {rated}",
-                        f.component,
-                        verb(f.kind),
-                        quantity(f.kind, f.value),
-                        quantity(f.kind, f.limit),
-                    )
+                    // Far past the rating the figure is no result, nor are the
+                    // currents behind it: the one stress wording drops both.
+                    let detail = if f.is_far_past_rating() {
+                        String::new()
+                    } else {
+                        rating_detail(bound, &device_of, &net_of, f, bjt(f), &mut nets)
+                    };
+                    stress_clause(&f.component, f.kind, f.value, f.limit, rated, &detail)
                 })
                 .collect();
             (part, clauses, nets)
@@ -869,7 +897,11 @@ fn rating_detail(
         if let Some(hauksbee_ir::Device::Bjt { b, .. }) = bound.circuit.devices.get(id.0 as usize) {
             nets.extend(net_of.get(b).map(|n| (*n).to_string()));
         }
-        format!(" (base {}, collector {})", amps(ib), amps(ic))
+        format!(
+            " (base {}, collector {})",
+            stress_quantity(FaultKind::Overcurrent, ib),
+            stress_quantity(FaultKind::Overcurrent, ic)
+        )
     } else if f.kind == FaultKind::GateOvervoltage {
         gate_source_nets(bound, device_of, net_of, f, nets)
     } else {
@@ -929,57 +961,6 @@ const fn kind_class(kind: FaultKind) -> u8 {
         FaultKind::Overvoltage | FaultKind::ReverseBias => 3,
         FaultKind::GateOvervoltage => 4,
         FaultKind::Short => 5,
-    }
-}
-
-/// The clause for a part so far past a rating that the figure is not a result
-/// ([`is_far_past_rating`]): the fact, the rating it is past and why no number
-/// is printed. A circuit that gives the part no limit at all is the usual
-/// cause (a diode straight across a rail); the finding's remedy says to add
-/// the series limit.
-fn far_past_clause(f: &FaultEvent, rated: &str) -> String {
-    let past = match f.kind {
-        FaultKind::Overtemperature => "reaches a junction temperature far past",
-        FaultKind::Overpower => "dissipates far more than",
-        _ => "carries far more than",
-    };
-    format!(
-        "{} {past} its {} {rated} ({})",
-        f.component,
-        quantity(f.kind, f.limit),
-        far_past_reason(f.kind),
-    )
-}
-
-const fn verb(kind: FaultKind) -> &'static str {
-    match kind {
-        FaultKind::Overcurrent | FaultKind::SurgeCurrent => "carries",
-        FaultKind::PinOvercurrent => "passes",
-        FaultKind::Overpower => "dissipates",
-        FaultKind::Overvoltage | FaultKind::ReverseBias => "sees",
-        FaultKind::GateOvervoltage => "sees a gate-source voltage of",
-        FaultKind::Overtemperature => "reaches a junction temperature of",
-        FaultKind::Short => "is shorted at",
-    }
-}
-
-fn amps(a: f64) -> String {
-    if a.abs() >= 1.0 {
-        format!("{a:.2} A")
-    } else {
-        format!("{:.1} mA", a * 1e3)
-    }
-}
-
-fn quantity(kind: FaultKind, v: f64) -> String {
-    match kind {
-        FaultKind::Overcurrent | FaultKind::SurgeCurrent | FaultKind::PinOvercurrent => amps(v),
-        FaultKind::Overpower => format!("{:.0} mW", v * 1e3),
-        FaultKind::Overvoltage
-        | FaultKind::ReverseBias
-        | FaultKind::GateOvervoltage
-        | FaultKind::Short => format!("{v:.2} V"),
-        FaultKind::Overtemperature => format!("{v:.0} C"),
     }
 }
 
@@ -1233,6 +1214,55 @@ mod tests {
         }
     }
 
+    /// Faulty: a generic LED straight across a USB 2.0 port's +5V (declared
+    /// 0.5 A) through a 0 ohm link. At the solve's rail it is far past its
+    /// stand-in rating; held to the 0.5 A the port gives it is some 20x that
+    /// stand-in, which a stand-in can be wrong by, so it is the part's stated
+    /// condition (not a pass) with the held figure, never hidden and never
+    /// called within its ratings. The draw is 12x the port's limit, which is
+    /// no near-short, so nothing says one.
+    #[test]
+    fn a_stand_in_led_across_a_weak_usb_port_is_still_reported() {
+        let nets = [(1, "GND"), (2, "+5V"), (3, "/MID")];
+        let link = part("R1", "0", &[("1", 2), ("2", 3)]);
+        let led = part("D1", "LED", &[("A", 3), ("K", 1)]);
+        let mut bound = bind_board(&board(&nets, vec![link, led]), &ModelLibrary::builtin());
+        let BoundBoard {
+            circuit, supplies, ..
+        } = &mut bound;
+        let leg = (supplies.iter_mut())
+            .find(|l| l.net_name == "+5V")
+            .expect("+5V is powered by its name");
+        leg.reconfigure(
+            circuit,
+            hauksbee_bind::PowerSupply::Usb {
+                spec: hauksbee_bind::UsbSpec::V5_0_5A,
+            },
+        );
+        let report = dc_stress_findings(bound);
+        let on = findings_on(&report, "D1");
+        assert!(
+            on.iter().any(|f| f.severity != Severity::Low
+                || (rating_basis::is_condition(&f.message)
+                    && f.message.contains("D1 carries")
+                    && f.message.contains("past its"))),
+            "{:#?}",
+            report.findings
+        );
+        assert!(
+            !(report.findings.iter())
+                .any(|f| f.refs.iter().any(|r| r == "D1")
+                    && f.message.contains("within its ratings")),
+            "{:#?}",
+            report.findings
+        );
+        assert!(
+            !(report.findings.iter()).any(|f| f.message.contains("near-short")),
+            "{:#?}",
+            report.findings
+        );
+    }
+
     /// Faulty: a steady ~200 mA through a DO-35 1N4148 is past its 150 mA
     /// average forward current IF(AV) (Vishay 81857 p.1). The card used to rate
     /// DC current by the 300 mA continuous-IF row and called this board fine.
@@ -1457,32 +1487,64 @@ mod tests {
         );
     }
 
-    /// A 2512 resistor of `value` straight across a named +5V rail.
-    fn resistor_across_5v(value: &str) -> NetLintReport {
+    /// `count` 2512 resistors of `value` in parallel straight across a named
+    /// +5V rail, whose stiff source is 1 milliohm.
+    fn resistors_across_5v(value: &str, count: usize) -> NetLintReport {
         let nets = [(1, "GND"), (2, "+5V")];
-        let mut r = part("R1", value, &[("1", 2), ("2", 1)]);
-        r.footprint = "Resistor_SMD:R_2512_6332Metric".into();
-        dc_stress_lint(&board(&nets, vec![r]), &ModelLibrary::builtin())
+        let parts = (1..=count)
+            .map(|k| {
+                let mut r = part(&format!("R{k}"), value, &[("1", 2), ("2", 1)]);
+                r.footprint = "Resistor_SMD:R_2512_6332Metric".into();
+                r
+            })
+            .collect();
+        dc_stress_lint(&board(&nets, parts), &ModelLibrary::builtin())
     }
 
-    /// Faulty: a 1e-9 ohm resistor is bound at the solver's floor, so the rail
-    /// draws thousands of amps and collapses. No figure of that is physical,
-    /// so none is printed, and the rail's dead-rail note names the draw that
-    /// pulled it down rather than a missing source. Legal control: 30 ohm is
-    /// quiet.
-    #[test]
-    fn a_resistor_at_the_solver_floor_prints_no_draw_and_explains_the_dead_rail() {
-        let report = resistor_across_5v("1e-9");
-        let rest = (report.findings.iter())
+    /// The rest-draw finding of `report`, which must exist.
+    fn rest_draw(report: &NetLintReport) -> &LintFinding {
+        (report.findings.iter())
             .find(|f| f.message.starts_with(rest_supply::OPENING))
-            .unwrap_or_else(|| panic!("no rest-draw finding: {:#?}", report.findings));
+            .unwrap_or_else(|| panic!("no rest-draw finding: {:#?}", report.findings))
+    }
+
+    /// Faulty: 5 milliohm (stamped as written) across +5V draws some 830 A
+    /// with the rail still at about 4.2 V, well above half its named level.
+    /// The draw is a near-short, so no figure of it is printed, and the rail
+    /// is up, so no dead-rail note. Legal control: 30 ohm is quiet.
+    #[test]
+    fn a_near_short_draw_prints_no_figure_and_the_rail_is_still_up() {
+        let report = resistors_across_5v("0.005", 1);
+        let rest = rest_draw(&report);
         assert!(
             rest.message.contains("a near-short") && rest.message.contains("not physical"),
             "{}",
             rest.message
         );
         assert!(
-            !rest.message.contains("4995") && !rest.message.contains(" mW"),
+            !rest.message.contains("833") && !rest.message.contains(" mW"),
+            "{}",
+            rest.message
+        );
+        assert!(
+            !(report.findings.iter()).any(|f| f.message.contains("pulled down")),
+            "{:#?}",
+            report.findings
+        );
+        let fine = resistors_across_5v("30", 1);
+        assert!(fine.findings.is_empty(), "{:#?}", fine.findings);
+    }
+
+    /// Faulty: two 1 milliohm resistors in parallel (0.5 milliohm, stamped as
+    /// written) across +5V hold the rail at about 1.7 V, clearly under half
+    /// its named 5 V. The dead-rail note names the near-short that pulled it
+    /// down, not a missing source, and the draw prints no figure.
+    #[test]
+    fn a_rail_a_near_short_pulls_down_says_so() {
+        let report = resistors_across_5v("0.001", 2);
+        let rest = rest_draw(&report);
+        assert!(
+            rest.message.contains("a near-short") && !rest.message.contains("3333"),
             "{}",
             rest.message
         );
@@ -1490,13 +1552,13 @@ mod tests {
             .find(|f| rating_basis::is_not_judged(&f.message))
             .unwrap_or_else(|| panic!("no dead-rail note: {:#?}", report.findings));
         assert!(
-            dead.message.contains("pulled down") && !dead.message.contains("no declared source"),
+            dead.message.contains("pulled down to 1.6")
+                && dead.message.contains("by a near-short on it")
+                && !dead.message.contains("no declared source"),
             "{}",
             dead.message
         );
         assert!(!dead.message.contains("-0.00"), "{}", dead.message);
-        let fine = resistor_across_5v("30");
-        assert!(fine.findings.is_empty(), "{:#?}", fine.findings);
     }
 
     /// Faulty: past twice its junction limit the temperature is stated as
@@ -1512,6 +1574,9 @@ mod tests {
         assert!(!far(FaultKind::Overcurrent, 0.851, 0.125));
         assert!(far(FaultKind::Overpower, 3.0e3, 1e3));
         assert!(!far(FaultKind::Overvoltage, 50.0, 3.3));
+        assert!(far(FaultKind::Overvoltage, 2.0e4, 3.3));
+        assert!(far(FaultKind::Overcurrent, 600.0, 0.0));
+        assert!(!far(FaultKind::Overcurrent, 6.0, 0.0));
         assert!(!far(FaultKind::Overcurrent, f64::NAN, 0.1));
     }
 

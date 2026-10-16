@@ -124,7 +124,9 @@ export function FaultPanel({ faults, activeRefs, unsupportedReasons, notes, onCl
                     </td>
                     <td style={cell}>
                       <div className="flex items-baseline gap-1" style={{ fontFamily: 'var(--font-mono)' }}>
-                        <span style={{ color: active ? 'var(--err-strong)' : 'var(--silk-dim)' }}>{f.value.toPrecision(3)}{unit && ` ${unit}`}</span>
+                        <span style={{ color: active ? 'var(--err-strong)' : 'var(--silk-dim)' }} title={f.far_past}>
+                          {f.far_past ? 'far past' : <>{f.value.toPrecision(3)}{unit && ` ${unit}`}</>}
+                        </span>
                         <span className="text-[10px]" style={{ color: 'var(--silk-faint)' }}>/ {f.limit.toPrecision(3)}{unit && ` ${unit}`}</span>
                       </div>
                       {/* The rating sits at the bar's midpoint; the fill is the value. */}

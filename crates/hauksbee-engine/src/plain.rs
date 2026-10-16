@@ -1947,6 +1947,13 @@ pub fn plain_faults(faults: &[FaultEvent]) -> PlainReport {
                 "Reduce the power it dissipates, move to a package with lower thermal resistance, add copper pour / a heatsink to carry heat away, or improve airflow / lower the ambient. The estimate assumes still air, so real cooling helps.".to_string(),
             ),
         };
+        // Far past its rating the figure is an idealised model's number, not
+        // the part's: say so in the one stress wording, with no number.
+        let what = if f.is_far_past_rating() {
+            format!("{}.", f.statement())
+        } else {
+            what
+        };
         let why = if f.destroyed {
             format!("{why} In this simulation the part was pushed past the point of failure.")
         } else {
@@ -2382,6 +2389,30 @@ mod tests {
             plain_faults(&[fault(false)]).findings[0].level,
             PlainLevel::Warning
         );
+    }
+
+    /// Faulty: R1 computed at 24.95 kW against 250 mW (a near-zero resistor
+    /// on an ideal rail) is stated far past its rating, with no figure.
+    /// Legal control: 2.5 W against it prints the figure as before.
+    #[test]
+    fn an_absurd_stress_is_stated_far_past_without_its_figure() {
+        let fault = |value| FaultEvent {
+            component: "R1".to_string(),
+            kind: FaultKind::Overpower,
+            value,
+            limit: 0.25,
+            t: 0.0,
+            destroyed: false,
+        };
+        let absurd = &plain_faults(&[fault(24_950.0)]).findings[0].what;
+        assert!(
+            absurd.starts_with("R1 dissipates far more than its 250 mW power rating")
+                && !absurd.contains("24.95")
+                && !absurd.contains("24950"),
+            "{absurd}"
+        );
+        let real = &plain_faults(&[fault(2.5)]).findings[0].what;
+        assert!(real.contains("2.50 W") && !real.contains("far"), "{real}");
     }
 
     #[test]

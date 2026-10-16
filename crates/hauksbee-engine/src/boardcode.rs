@@ -405,12 +405,19 @@ pub fn render_check_report(r: &CheckReport) -> String {
             "├────────────────────────────┼──────────────┼────────────┼────────────┼───────┤"
         );
         for f in &r.faults {
+            // Far past its rating the figure is no result: the cell says so
+            // and the one stress wording follows the table.
+            let value = if f.is_far_past_rating() {
+                "far past".to_string()
+            } else {
+                format!("{:.4}", f.value)
+            };
             let _ = writeln!(
                 s,
-                "│ {:<26} │ {:<12} │ {:>10.4} │ {:>10.4} │ {:<5} │",
+                "│ {:<26} │ {:<12} │ {:>10} │ {:>10.4} │ {:<5} │",
                 truncate(&f.component, 26),
                 f.kind.as_str(),
-                f.value,
+                value,
                 f.limit,
                 if f.destroyed { "yes" } else { "no" },
             );
@@ -419,6 +426,9 @@ pub fn render_check_report(r: &CheckReport) -> String {
             s,
             "└────────────────────────────┴──────────────┴────────────┴────────────┴───────┘"
         );
+        for f in r.faults.iter().filter(|f| f.is_far_past_rating()) {
+            let _ = writeln!(s, "  {}", f.statement());
+        }
     }
     // The conditions a verdict rests on, faulted or not, as the live notes show them.
     for a in &r.assumptions {
@@ -480,6 +490,33 @@ mod render_tests {
         // A destructive fault also fails (backward compat).
         r.faults[0].destroyed = true;
         assert!(!r.healthy(), "a destroyed fault must fail health");
+    }
+
+    /// Faulty: a 24.95 kW overpower on a 250 mW part prints no figure in the
+    /// table and states the fault far past its rating after it. Legal
+    /// control: a 0.5 W overpower prints its figure.
+    #[test]
+    fn an_absurd_fault_figure_is_not_printed() {
+        let mut r = report(1.0);
+        for value in [24_950.0, 0.5] {
+            r.faults.push(FaultEvent {
+                component: "R1".into(),
+                kind: crate::stress::FaultKind::Overpower,
+                value,
+                limit: 0.25,
+                t: 0.0,
+                destroyed: false,
+            });
+        }
+        let s = render_check_report(&r);
+        assert!(
+            !s.contains("24950") && s.contains("far past") && s.contains("0.5000"),
+            "{s}"
+        );
+        assert!(
+            s.contains("R1 dissipates far more than its 250 mW power rating"),
+            "{s}"
+        );
     }
 
     #[test]

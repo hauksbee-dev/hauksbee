@@ -106,6 +106,9 @@ export interface SimFault {
   t: number
   /** Whether the circuit was mutated (destructive mode) in response. */
   destroyed?: boolean
+  /** Set when `value` is so far past `limit` that the figure is no result:
+   *  the engine's statement of the stress without it. Show this, never `value`. */
+  far_past?: string
 }
 
 /** Live readout of a configurable supply (SimFrame.supply_states values). */

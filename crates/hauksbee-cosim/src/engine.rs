@@ -386,6 +386,7 @@ impl Engine for HauksbeeEngine {
             .drain_faults()
             .into_iter()
             .map(|f| FaultInfo {
+                far_past: f.is_far_past_rating().then(|| f.statement()),
                 component: f.component,
                 kind: f.kind.as_str().to_string(),
                 value: f.value,

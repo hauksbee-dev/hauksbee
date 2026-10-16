@@ -105,7 +105,8 @@ export function faultsJson(p: SimProvenance, faults: SimFault[], unitOf: (kind: 
   return `${JSON.stringify({
     provenance: p,
     faults: faults.map(f => ({
-      part: f.component, kind: f.kind, value: f.value, rating: f.limit, unit: unitOf(f.kind),
+      part: f.component, kind: f.kind, value: f.far_past ? null : f.value, rating: f.limit, unit: unitOf(f.kind),
+      ...(f.far_past ? { far_past: f.far_past } : {}),
       sim_time_s: f.t, destroyed: !!f.destroyed,
     })),
   }, null, 2)}\n`

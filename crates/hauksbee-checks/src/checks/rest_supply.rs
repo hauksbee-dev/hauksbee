@@ -153,17 +153,14 @@ fn amps(a: f64) -> String {
     format!("{a:.2} A")
 }
 
-/// A draw as the finding says it: the figure, or for a near-short past
-/// [`hauksbee_bind::implausible_bound`] the bound it is past, since the
-/// solver's figure there is set by its own floors, not by the board.
-fn draw(a: f64) -> String {
-    if hauksbee_bind::is_implausible(FaultKind::Overcurrent, a) {
-        format!(
-            "over {} (a near-short; the exact figure is not physical)",
-            amps(hauksbee_bind::implausible_bound(FaultKind::Overcurrent))
-        )
-    } else {
-        amps(a)
+impl Overload {
+    /// Whether the draw is a near-short: so far past what the supply gives
+    /// ([`hauksbee_bind::is_far_past_rating`], the rule every stress figure
+    /// follows) that the ideal rail and the solver's floors set the figure,
+    /// not the board.
+    #[must_use]
+    pub fn is_near_short(&self) -> bool {
+        hauksbee_bind::is_far_past_rating(FaultKind::Overcurrent, self.draw_a, self.limit_a)
     }
 }
 
@@ -192,13 +189,20 @@ pub fn implausible_rest_finding(
                     amps(o.limit_a)
                 )
             };
-            format!("{} from {}, more than {limit}", draw(o.draw_a), o.net)
+            if o.is_near_short() {
+                format!(
+                    "far more than {limit} from {} (a near-short: {})",
+                    o.net,
+                    hauksbee_bind::far_past_reason(FaultKind::Overcurrent, o.draw_a)
+                )
+            } else {
+                format!("{} from {}, more than {limit}", amps(o.draw_a), o.net)
+            }
         })
         .collect();
-    // Past the bound no supply or part reaches, the draw is the solver's
-    // figure for a near-short, and so are the per-part figures it implies.
-    let near_short =
-        (over.iter()).any(|o| hauksbee_bind::is_implausible(FaultKind::Overcurrent, o.draw_a));
+    // On a near-short the draw is the solver's figure, and so are the
+    // per-part figures it implies.
+    let near_short = over.iter().any(Overload::is_near_short);
     let shown: Vec<String> = (parts.iter().take(SHOWN))
         .map(|(part, clause)| {
             if near_short {
@@ -263,8 +267,10 @@ mod tests {
     }
 
     /// Faulty: a draw past the bound no supply reaches is a near-short, and
-    /// its exact figure (the solver's floor, not the board's) is not printed.
-    /// Legal control: a plausible 21.2 A is printed as before.
+    /// its exact figure (the solver's floor, not the board's) is not printed;
+    /// so is a 350 A draw on a 3 A supply, under that bound but over 100x
+    /// what the supply gives, with the true reason for each. Legal control: a
+    /// plausible 21.2 A is printed as before.
     #[test]
     fn a_near_short_draw_is_not_printed_as_a_figure() {
         let parts: BTreeMap<String, String> =
@@ -278,12 +284,24 @@ mod tests {
         let f = implausible_rest_finding(&short, &parts, false).expect("a finding");
         assert!(f.message.starts_with(OPENING), "{}", f.message);
         assert!(
-            f.message.contains("over 500.00 A") && f.message.contains("not physical"),
+            f.message.contains("far more than the 3.00 A assumed")
+                && f.message.contains("past 500.00 A")
+                && f.message.contains("not physical"),
             "{}",
             f.message
         );
         assert!(
             !f.message.contains("4995") && !f.message.contains("24950"),
+            "{}",
+            f.message
+        );
+        let ideal = [Overload {
+            draw_a: 350.0,
+            ..short[0].clone()
+        }];
+        let f = implausible_rest_finding(&ideal, &parts, false).expect("a finding");
+        assert!(
+            f.message.contains("a near-short: over 100x") && !f.message.contains("350"),
             "{}",
             f.message
         );
