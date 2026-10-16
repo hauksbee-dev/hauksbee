@@ -33,6 +33,10 @@ describe('verdict tag', () => {
     expect(verdictTag(partly)).toBe('PARTLY JUDGED')
     expect(verdictTag({ ...partly, partly_judged: false })).toBe('inconclusive')
     expect(verdictTag({ ...conditional, verdict_conditions: [] })).toBe('clean')
+    // A pass with items to inspect is never "clean": the engine's tag is used.
+    const inspect = { ...conditional, verdict_inspect: 'inspect before ordering (2 items)' }
+    expect(verdictTag(inspect)).toBe('inspect before ordering (2 items), conditionally')
+    expect(verdictTag({ ...inspect, verdict_conditions: [] })).toBe('inspect before ordering (2 items)')
   })
 })
 

@@ -779,8 +779,18 @@ impl OrderTriage {
             .chain(&self.inspect)
             .map(|e| norm(&e.statement))
             .collect();
+        // An abstention said once for several parts ("... (D1 and D2).") is
+        // the listed statement with the parts it covers appended.
+        let is_listed = |c: &str| {
+            let c = norm(c);
+            listed.contains(&c)
+                || (listed.iter()).any(|l| {
+                    c.strip_prefix(l.as_str())
+                        .is_some_and(|rest| rest.starts_with(" ("))
+                })
+        };
         (verdict.conditions.iter())
-            .filter(|c| !listed.contains(&norm(c)))
+            .filter(|c| !is_listed(c))
             .map(String::as_str)
             .collect()
     }
@@ -2154,6 +2164,7 @@ mod tests {
             conditions: Vec::new(),
             partial: false,
             not_judged: Some(said.to_string()),
+            inspect: 0,
         };
         let out = triage.render(&failing);
         assert_eq!(out.matches(said).count(), 1, "{out}");

@@ -835,6 +835,14 @@ pub struct Assumption {
     // publication breaks every validating consumer, so it is pinned now.
     #[schemars(with = "String")]
     expires: Option<String>,
+    /// The reader-facing name of what the claim is about (a designator such as
+    /// `U7`, a check such as `drc`, "the input reader's coverage"), when the
+    /// constructor knows one: what a summary names instead of the id's raw
+    /// key (`U7-tj-max`, `reader-note/<digest>`). Internal, like
+    /// `collision_base_id`: the sentences already carry it on the wire.
+    #[serde(skip)]
+    #[schemars(skip)]
+    subject_name: Option<String>,
 }
 
 /// Trim a caller-supplied data fragment so the constructors, not the caller,
@@ -1060,6 +1068,24 @@ impl Assumption {
         self
     }
 
+    /// The reader-facing name of what this claim is about (a designator, a
+    /// check, a net), when its constructor knew one. A summary that names
+    /// claims reads this rather than the id's key, which can be an
+    /// occurrence id or a digest.
+    #[must_use]
+    pub fn subject_name(&self) -> Option<&str> {
+        self.subject_name.as_deref()
+    }
+
+    /// Record the reader-facing subject name (nothing for a blank one).
+    fn named(mut self, name: &str) -> Self {
+        let name = name.trim();
+        if !name.is_empty() && name != AssumptionId::UNNAMED_SUBJECT {
+            self.subject_name = Some(name.to_string());
+        }
+        self
+    }
+
     /// A constructor's narrower term for its kind.
     const fn with_term(mut self, term: Term) -> Self {
         self.term = term;
@@ -1171,6 +1197,7 @@ impl Assumption {
             replacement,
             remedy: Remedy::Other,
             expires,
+            subject_name: None,
         };
         built.checked()
     }
@@ -1297,6 +1324,7 @@ impl Assumption {
             None,
         )
         .with_term(Term::ExecutablePartial)
+        .named(reference)
     }
 
     /// A datasheet operating requirement this run MEASURED as violated (a
@@ -1543,6 +1571,9 @@ impl Assumption {
             built.collision_base_id = built.id.clone();
         }
         built.remedy = cause.remedy(&subject, &reference, &value, reason);
+        if !subject.is_empty() {
+            built.subject_name = Some(subject.clone());
+        }
         built.checked()
     }
 
@@ -1562,6 +1593,7 @@ impl Assumption {
         // so the sentence names what it can rather than leaving a hole. The id
         // keeps the raw subject: see `open_part`.
         let subject = component_subject.trim().to_string();
+        let name = reference;
         let reference = or_else(reference, "an unnamed part");
         let requested = or_else(requested, "the part the board asks for");
         let stand_in = or_else(stand_in, "a stand-in model");
@@ -1585,6 +1617,7 @@ impl Assumption {
             ),
             None,
         );
+        let built = built.named(name);
         // A substitute MCU core is closed by an SoC descriptor, not a part model.
         if source == AssumptionSource::Binder {
             built.with_remedy(Remedy::AddModel { reference })
@@ -1715,6 +1748,7 @@ impl Assumption {
             format!("{}/{}", component_subject.trim(), fragment(pin))
         };
         let part_ref = component_subject.trim();
+        let name = reference;
         let reference = or_else(reference, "an unnamed part");
         let pin = or_else(pin, "an unnamed pin");
         let role = or_else(role, "inferred");
@@ -1737,6 +1771,7 @@ impl Assumption {
             ),
             None,
         )
+        .named(name)
     }
 
     /// A parameter took a documented default because no input carried a value;
@@ -1754,6 +1789,7 @@ impl Assumption {
             format!("{}.{}", component_subject.trim(), fragment(parameter))
         };
         let part_ref = component_subject.trim();
+        let name = reference;
         let reference = or_else(reference, "an unnamed part");
         let parameter = or_else(parameter, "a parameter");
         let value = or_else(value, "the documented default");
@@ -1774,6 +1810,7 @@ impl Assumption {
             ),
             None,
         )
+        .named(name)
     }
 
     /// Every placed part was treated as fitted, because the input carries no
@@ -1808,6 +1845,7 @@ impl Assumption {
             None,
         )
         .with_remedy(Remedy::AddBom)
+        .named(&input)
     }
 
     /// A whole check could not run on this input class. `because` and
@@ -1857,6 +1895,7 @@ impl Assumption {
             ),
             None,
         )
+        .named(&named)
     }
 
     /// The run happened but never exercised `subject` (a bus, an ADC channel,
@@ -1890,6 +1929,7 @@ impl Assumption {
             ),
             None,
         )
+        .named(&subject_text)
     }
 
     /// The result was produced at reduced fidelity by a documented degraded
@@ -1922,6 +1962,7 @@ impl Assumption {
             ),
             None,
         )
+        .named(&subject_text)
     }
 
     /// A net held by an ideal source: the check cannot fail there for a board
@@ -1951,6 +1992,11 @@ impl Assumption {
             ),
             None,
         )
+        .named(&if subject.is_empty() {
+            String::new()
+        } else {
+            format!("net {subject}")
+        })
     }
 
     /// The producing parser has a known limitation that can fabricate or miss
@@ -1985,6 +2031,7 @@ impl Assumption {
             ),
             None,
         )
+        .named(&subject_text)
     }
 
     /// The surfaced record of an applied waiver. The gating machinery stays in

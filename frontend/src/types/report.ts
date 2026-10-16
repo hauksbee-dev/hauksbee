@@ -413,6 +413,11 @@ export interface WebReport {
    *  board: a fail or an invalid run never reads as a pass in the browser.
    *  Absent on reports from engines that predate it. */
   verdict?: 'pass' | 'fail' | 'invalid'
+  /** On a pass with items the order triage lists to inspect, the verdict's tag
+   *  for it ("inspect before ordering (3 items)"): the words the CLI's closing
+   *  `VERDICT:` line uses, so the browser never calls that pass clean. Absent
+   *  otherwise. */
+  verdict_inspect?: string
   /** True when the verdict is PARTLY JUDGED: `invalid`, never a pass. Some key
    *  parts have no usable model, so the checks they could change were not
    *  judged; `judgement_scope` says which. The same flag `--json` prints. */

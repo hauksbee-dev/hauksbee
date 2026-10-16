@@ -274,6 +274,32 @@ fn refuse_timing_claims(results: &mut [assertions::AssertResult], refusals: &[St
     }
 }
 
+/// The conditions the assertions' evidence implies, worded as every engine
+/// surface words them: the assumptions some evidence map cites, minus the
+/// member-sweep records built from `stated` (already said, in its own words).
+fn evidence_conditions(
+    evidence: &hauksbee_engine::BoardEvidence,
+    stated: &[String],
+) -> Vec<String> {
+    let norm = |s: &str| s.trim().trim_end_matches('.').to_ascii_lowercase();
+    let stated: std::collections::BTreeSet<String> = stated.iter().map(|c| norm(c)).collect();
+    let cited: std::collections::BTreeSet<&hauksbee_ir::evidence::AssumptionId> = evidence
+        .maps()
+        .iter()
+        .flat_map(|m| m.assumptions().iter())
+        .collect();
+    let on_path: Vec<Assumption> = evidence
+        .assumptions()
+        .iter()
+        .filter(|a| cited.contains(a.id()) && !stated.contains(&norm(a.statement())))
+        .cloned()
+        .collect();
+    hauksbee_engine::verdict_conditions::assumption_conditions(&on_path)
+        .into_iter()
+        .filter(|c| !stated.contains(&norm(c)))
+        .collect()
+}
+
 /// The order-stable, deduped union of one per-member message list across the
 /// ensemble. One discipline for every honesty channel: a substitution, a
 /// coverage hole, a dead rail or a timing refusal in ONE member is one in the
@@ -848,6 +874,13 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     // A guessed AVR core clock puts every delay, baud rate and PWM period in
     // the run at risk of being off by the clock ratio: never a clean pass.
     verdict_conditions.extend(union_across(&outcomes, |o| &o.clock_assumptions));
+    // What the assertions' evidence rests on, in the words every engine
+    // surface gives it (`verdict_conditions::assumption_conditions`): parts
+    // with no model, model-fidelity assumptions, checks not run. Only the
+    // assumptions some assertion's evidence cites, and not the member-sweep
+    // records made above from the conditions already stated.
+    verdict_conditions.extend(evidence_conditions(&evidence, &verdict_conditions));
+    verdict_conditions.dedup();
     Ok(CiResult {
         spec_name: spec.name.clone(),
         board: spec.board.display().to_string(),

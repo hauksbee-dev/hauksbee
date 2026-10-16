@@ -223,10 +223,10 @@ impl CheckReport<'_> {
         .with_condition(rails_entered)
         .with_condition(rails_held)
         .with_judgement_scope(crate::scope::JudgementScope::of(board, &bound, &blockers));
+        // The verdict carries the triage's inspect count, so the closing
+        // line's tag and the web headline read the same number.
+        jr.inspect_items = triage.inspect.len();
         let run_verdict = jr.run_verdict();
-        // The closing line's tag reads the triage's inspect bucket, which the
-        // JSON arm hands to the machine document.
-        let inspect_items = triage.inspect.len();
         match mode {
             OutputMode::Json => {
                 jr.triage = Some(triage);
@@ -434,7 +434,6 @@ impl CheckReport<'_> {
                 verdict_line(
                     &run_verdict,
                     (serious, worth_a_look),
-                    inspect_items,
                     drc_structured.version_warning.as_deref(),
                 )
             );
@@ -575,7 +574,6 @@ fn verdict_counts(
 pub(crate) fn verdict_line(
     verdict: &RunVerdict,
     (serious, worth_a_look): (usize, usize),
-    inspect: usize,
     copper_unvalidated: Option<&str>,
 ) -> String {
     let Some(reason) = verdict.reason.as_deref() else {
@@ -592,15 +590,9 @@ pub(crate) fn verdict_line(
             );
         }
         // A pass with items the triage lists to inspect is not clean: the tag
-        // says what the triage bucket says, so the two never disagree.
-        let tag = match inspect {
-            0 => "clean".to_string(),
-            n => format!(
-                "{} ({n} item{})",
-                hauksbee_ir::vocabulary::INSPECT_BEFORE_ORDERING.to_lowercase(),
-                if n == 1 { "" } else { "s" }
-            ),
-        };
+        // says what the triage bucket says (the verdict carries its count, as
+        // the web headline reads it), so the two never disagree.
+        let tag = verdict.inspect_tag().unwrap_or_else(|| "clean".to_string());
         // A pass that rests on an assumption says so on the line itself.
         return if conditions.is_empty() {
             format!("VERDICT: {tag}: 0 serious, {worth_a_look} worth a look")
@@ -1094,14 +1086,13 @@ mod tests {
             super::machine_report("synthetic", &summary, &drc, None, &findings, would_gate);
         jr.verdict_conditions = conditions.iter().map(ToString::to_string).collect();
         // A scope over `nets` named nets, one of which ("VB") the open parts touch.
-        let jr = jr.with_judgement_scope(scope_nets.map(|nets| crate::scope::JudgementScope {
+        let mut jr = jr.with_judgement_scope(scope_nets.map(|nets| crate::scope::JudgementScope {
             open_parts: unmodelled_parts.iter().map(ToString::to_string).collect(),
             nets,
             wiring_dependent: vec!["VB".into()],
             electrical_dependent: vec!["VB".into()],
             held_rails: Vec::new(),
         }));
-        let run_verdict = jr.run_verdict();
         let triage = crate::plain::order_triage_with_rule_source(
             &drc,
             &provenance,
@@ -1112,18 +1103,15 @@ mod tests {
             summary.unresolved,
             true,
         );
+        jr.inspect_items = triage.inspect.len();
+        let run_verdict = jr.run_verdict();
         let (serious, worth) = super::verdict_counts(&drc, lint, si, None);
         let json: serde_json::Value = serde_json::from_str(&jr.to_json()).unwrap();
         Surfaces {
             json_verdict: json["verdict"].as_str().unwrap().to_string(),
             json_reason: json["verdict_reason"].as_str().map(str::to_string),
             triage: triage.render(&run_verdict),
-            line: super::verdict_line(
-                &run_verdict,
-                (serious, worth),
-                triage.inspect.len(),
-                copper_unvalidated,
-            ),
+            line: super::verdict_line(&run_verdict, (serious, worth), copper_unvalidated),
         }
     }
 
@@ -1309,14 +1297,18 @@ mod tests {
 
     #[test]
     fn a_pass_with_items_to_inspect_is_never_called_clean() {
-        let pass = crate::result::RunVerdict::default();
-        let line = super::verdict_line(&pass, (0, 17), 17, None);
+        let pass = crate::result::RunVerdict {
+            inspect: 17,
+            ..crate::result::RunVerdict::default()
+        };
+        let line = super::verdict_line(&pass, (0, 17), None);
         assert!(
             line.starts_with("VERDICT: inspect before ordering (17 items): 0 serious"),
             "{line}"
         );
         // Control: nothing to inspect is clean.
-        let line = super::verdict_line(&pass, (0, 0), 0, None);
+        let pass = crate::result::RunVerdict::default();
+        let line = super::verdict_line(&pass, (0, 0), None);
         assert!(line.starts_with("VERDICT: clean: 0 serious"), "{line}");
     }
 

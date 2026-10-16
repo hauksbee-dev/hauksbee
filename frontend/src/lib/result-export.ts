@@ -19,9 +19,13 @@ export const REBUILT_NOTE =
   + 'included. Run the reproduce command for the full document.'
 
 /** The CLI's verdict word for a report, as `VERDICT: <tag>:` prints it. */
-export function verdictTag(r: Pick<WebReport, 'verdict' | 'partly_judged' | 'verdict_conditions' | 'serious'>): string {
+export function verdictTag(r: Pick<WebReport, 'verdict' | 'partly_judged' | 'verdict_conditions' | 'verdict_inspect' | 'serious'>): string {
   const verdict = r.verdict ?? (r.serious > 0 ? 'fail' : undefined)
-  if (verdict === 'pass') return (r.verdict_conditions ?? []).some(c => c.trim()) ? 'clean, conditionally' : 'clean'
+  if (verdict === 'pass') {
+    // A pass with items to inspect is tagged in the engine's words, never "clean".
+    const tag = r.verdict_inspect?.trim() || 'clean'
+    return (r.verdict_conditions ?? []).some(c => c.trim()) ? `${tag}, conditionally` : tag
+  }
   if (verdict === 'fail') return 'failing'
   if (r.partly_judged) return 'PARTLY JUDGED'
   return 'inconclusive'
