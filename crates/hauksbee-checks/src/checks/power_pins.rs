@@ -871,10 +871,16 @@ mod tests {
         for (p, r) in pins {
             writeln!(map, "\"{p}\" = \"{r}\"").unwrap();
         }
+        // A card declaring behaviour (as FT231X's 3V3OUT law does) is not identity-only.
+        let identity = if extra.contains("[[models.behavioral") {
+            ""
+        } else {
+            "[models.params]\nidentity_only = true\nwarning = \"identity only\"\n\
+             unlocked_by = \"validated behavior\"\n"
+        };
         let card = format!(
             "[[models]]\nid = \"pwr_test\"\nkind = \"{kind}\"\ndescription = \"power pin fixture\"\n\
-             [models.match]\nvalue_re = \"^PWRTEST$\"\n[models.params]\nidentity_only = true\n\
-             warning = \"identity only\"\nunlocked_by = \"validated behavior\"\n{extra}\n[models.pins]\n{map}"
+             [models.match]\nvalue_re = \"^PWRTEST$\"\n{identity}{extra}\n[models.pins]\n{map}"
         );
         let dir =
             std::env::temp_dir().join(format!("hauksbee_power_pins_{}_{n}", std::process::id()));
