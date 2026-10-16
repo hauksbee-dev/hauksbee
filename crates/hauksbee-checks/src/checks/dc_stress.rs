@@ -385,7 +385,7 @@ fn rest_finding(
     }
 }
 
-/// Closes the clause of every [`model_error`] note, so a surface can tell the
+/// Closes the clause of every `model_error` note, so a surface can tell the
 /// note from a part overstress.
 pub const MODEL_ERROR_MARKER: &str = ", which no real part can see";
 
