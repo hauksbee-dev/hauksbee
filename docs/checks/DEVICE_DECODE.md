@@ -46,7 +46,8 @@ model-DB entry. The remaining evidence and refusal path is family-specific:
   voltage or timer-band judgement. Floating, tied-off, or otherwise unresolvable
   documented modes remain silent.
 - TPS25982 treats a floating ILIM network as silent, reports an unparseable ILIM
-  resistor as a low-severity **unjudgeable** note, and reports an out-of-range
+  resistor as a low-severity abstention (not judged, so the verdict is never a
+  pass), and reports an out-of-range
   82--1650 ohm resistor as medium severity. An in-range resistor gets a low
   informational decode; a medium connector-budget finding requires a rated
   connector on a reachable protected path.

@@ -1541,8 +1541,6 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "The boot strap-pin check needs the part's model to know which pins are straps and what level they want at reset, so a strap-bearing MCU that is not in the model database is skipped. A clean lint result therefore does NOT mean its boot straps were verified, and a mis-strapped boot pin is latched by hardware at reset, before any firmware runs.".to_string(),
                 "Check the boot/strap pins (e.g. BOOT0, or the ESP32 strapping pins) by hand against the datasheet, or supply a device model with --models-dir so hauksbee can check them automatically.".to_string(),
             ),
-            // The abstention is the check saying it did not judge, so it must
-            // not read as the violation the arm below describes.
             // A decode that could not read the setting resistor says which part
             // and why; that is not a missing rail level.
             LintCheck::DeviceDecode if hauksbee_models::rating_basis::is_not_judged(&f.message) => (
@@ -1550,6 +1548,8 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 format!("The part's current or mode is set by a resistor, and the design files do not let the tool read it as one (a duplicate designator, a designator that does not say resistor, or no resistor to ground). The verdict is not a pass. Detail: {}", f.message),
                 "Make the resistor readable as the detail says (rename the duplicate, use a conventional R designator and a numeric value), then re-check.".to_string(),
             ),
+            // The abstention is the check saying it did not judge, so it must
+            // not read as the violation the arm below describes.
             LintCheck::OperatingEnvelope | LintCheck::DeviceDecode if f.is_abstention() => (
                 format!("An operating-condition check on {parts} (net \"{net}\") could not be judged, so it is unchecked, not known to be wrong."),
                 format!("The check needs the level the net actually sits at, or the part's identity, and the design files do not give it. Detail: {}", f.message),

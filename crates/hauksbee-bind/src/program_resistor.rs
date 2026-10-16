@@ -44,6 +44,27 @@ pub fn electrical_terminal_nets(component: &Component) -> Option<(i64, i64)> {
     (first != second).then_some((first, second))
 }
 
+/// How many distinct pads of `component` are connected to a net. A part with
+/// at most one (a test point, a single-pad marker, a stub resistor with one
+/// dangling leg) carries no DC current between nets, so no programming network
+/// reads through it and it is not a part the network could mis-read.
+#[must_use]
+pub fn connected_pad_count(component: &Component) -> usize {
+    let connected = component.pins.iter().filter(|pin| pin.net.is_some());
+    if component
+        .pins
+        .iter()
+        .any(|pin| pin.number.trim().is_empty())
+    {
+        // Unnumbered pads cannot be told apart from one pad on two layers.
+        return connected.count();
+    }
+    connected
+        .map(|pin| pin.number.trim())
+        .collect::<BTreeSet<_>>()
+        .len()
+}
+
 /// A two-terminal part's terminal nets; `None` marks an unconnected terminal.
 type TerminalNets = (Option<i64>, Option<i64>);
 
@@ -196,6 +217,19 @@ pub enum ProgramUnread {
 }
 
 impl ProgramUnread {
+    /// A part whose value is not a readable resistance: the one wording every
+    /// check uses when a programming resistor's value does not parse.
+    #[must_use]
+    pub fn unreadable_value(reference: &str, value: &str) -> Self {
+        Self::Part {
+            reference: reference.to_string(),
+            why: format!(
+                "has the value '{value}', which is not a readable resistance (a number with an \
+                 optional k or M multiplier); state it as a single number such as 10k"
+            ),
+        }
+    }
+
     /// One plain clause for a report: what stopped the reading.
     #[must_use]
     pub fn describe(&self) -> String {
@@ -324,6 +358,11 @@ fn program_network_edges(
             {
                 continue;
             }
+            if connected_pad_count(component) <= 1 {
+                // A test point, single-pad marker or dangling stub on the net
+                // joins it to nothing, so it cannot change the equivalent.
+                continue;
+            }
             let Ok(Some(terminals)) = electrical_terminal_net_options(component) else {
                 // A multi-/single-terminal (or contradictory) device on the
                 // programming net can change its DC equivalent (a trim pot is the
@@ -339,9 +378,6 @@ fn program_network_edges(
             let far = match terminals {
                 (Some(first), Some(second)) if first == net_id && second != net_id => second,
                 (Some(first), Some(second)) if second == net_id && first != net_id => first,
-                (Some(first), None) | (None, Some(first)) if first == net_id => {
-                    return Err(unread_part(component, "has an unconnected second terminal"));
-                }
                 _ => continue,
             };
 
@@ -405,11 +441,9 @@ fn unread_series(component: &Component) -> ProgramUnread {
              one part",
             refusal.reason()
         ),
-        _ if hauksbee_models::value::parse_value(&component.value).is_none() => format!(
-            "has the value '{}', which is not a readable resistance (a number with an optional \
-             k or M multiplier); state it as a single number such as 10k",
-            component.value
-        ),
+        _ if hauksbee_models::value::parse_value(&component.value).is_none() => {
+            return ProgramUnread::unreadable_value(&component.reference, &component.value);
+        }
         _ => format!(
             "(value '{}', footprint '{}') is not identified as a plain resistor by its \
              reference designator, so its value is not read as the programming resistance; use \
@@ -453,6 +487,7 @@ pub fn program_resistance_to_ground(
 /// the extreme of a too-small programming resistor, and anything the walk
 /// could not read says which part or limit stopped it, so a check that rests
 /// on the resistance can abstain by name instead of going silent.
+#[must_use]
 pub fn program_network_reading(
     components: &[Component],
     is_ground: &dyn Fn(i64) -> Option<bool>,

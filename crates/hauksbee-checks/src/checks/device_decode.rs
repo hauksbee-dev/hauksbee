@@ -43,8 +43,8 @@
 //! `docs/checks/DEVICE_DECODE.md` and `docs/about/LIMITATIONS.md`.)
 //! TPS25982's revised evidence contract makes one narrow distinction: a floating
 //! ILIM pin is still silent, while an assembled but unreadable ILIM resistor gets
-//! a non-gating Low "unjudgeable" note. Neither state can produce a protective
-//! connector-budget warning.
+//! a Low abstention that reads as not judged. Neither state can produce a
+//! protective connector-budget warning.
 //!
 //! ## CYPD3177 seed (the fault this check reproduces)
 //!
@@ -411,8 +411,10 @@ pub fn device_decode_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLint
 /// `max_program_ohms`): a fitted resistor from the programming pin to ground
 /// outside that range is a Medium finding, because the part is then outside
 /// its specified operation whatever the programming equation would return.
-/// Silent when the part is absent or unmodelled, the card states no range, the
-/// pin is floating, or a leg's value cannot be read.
+/// Silent when the part is absent or unmodelled, the card states no range, or
+/// the pin is floating. A leg whose value cannot be read is the one parameter
+/// that decides the check missing, so it abstains by name (not judged, never a
+/// pass), unless the programming-domain check already abstained on the same pin.
 fn check_program_range(
     board: &ExtractedBoard,
     comp: &Component,
@@ -440,8 +442,28 @@ fn check_program_range(
     let Ok(net) = hauksbee_bind::component_evidence::role_net(part, model, &program.pin) else {
         return;
     };
-    let ProgramResistor::Parsed { reference, ohms } = program_resistor_to_ground(board, net) else {
-        return;
+    let (reference, ohms) = match program_resistor_to_ground(board, net) {
+        ProgramResistor::Floating => return,
+        ProgramResistor::Unparseable { reference, value } => {
+            let net_name = board.net(net).map(|n| n.name.clone()).unwrap_or_default();
+            let already_abstained = report.findings.iter().any(|f| {
+                f.check == LintCheck::DeviceDecode
+                    && f.is_abstention()
+                    && f.refs.first() == Some(&comp.reference)
+                    && f.nets == [net_name.clone()]
+            });
+            if !already_abstained {
+                report.findings.push(program_pin_unreadable(
+                    comp,
+                    &program.pin.to_ascii_uppercase(),
+                    &net_name,
+                    &ProgramUnread::unreadable_value(&reference, &value),
+                    "its resistance is unchecked against the range the datasheet allows",
+                ));
+            }
+            return;
+        }
+        ProgramResistor::Parsed { reference, ohms } => (reference, ohms),
     };
     let Some((bound, below)) = program.out_of_program_range(ohms) else {
         return;
@@ -494,9 +516,11 @@ fn check_program_range(
 // network the walk cannot read (a duplicate designator, a reference spelling
 // that does not say "resistor", no resistor path to ground) is the one
 // parameter that decides this check missing, so the check abstains by name
-// (`not judged, which is not a pass`) and the verdict is never a pass. A
-// generic stand-in card, a protection-limit law, or a sense-scaled law (which
-// needs the sense shunt) stays silent.
+// (`not judged, which is not a pass`) and the verdict is never a pass. A pin
+// with nothing fitted on it (no resistor, or only a DNP one) is floating and
+// stays silent. A generic stand-in card, a protection-limit law, or a
+// sense-scaled law (which needs the sense shunt, and for which a shorted
+// programming resistor is zero current, not unbounded) stays silent.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Margin over a card's programming ceiling before the programmed current is
@@ -537,7 +561,7 @@ fn check_program_domain(
     lib: &ModelLibrary,
     report: &mut NetLintReport,
 ) {
-    use hauksbee_models::schema::CurrentProgramSemantics;
+    use hauksbee_models::schema::{CurrentProgramEquation, CurrentProgramSemantics};
     // A programmed part has supply, ground and the programming pin at least;
     // two-terminal parts never carry a programming law, so skip resolving them.
     if comp.pins.len() < 3 {
@@ -568,6 +592,15 @@ fn check_program_domain(
     let Ok(net) = hauksbee_bind::component_evidence::role_net(part, &model, &program.pin) else {
         return;
     };
+    // The sense-scaled law needs the sense shunt, and a shorted programming
+    // resistor there is zero current (the control voltage collapses), never the
+    // unbounded current of the one-resistor laws: no verdict here either way.
+    if matches!(
+        program.equation,
+        CurrentProgramEquation::SenseScaledResistance { .. }
+    ) {
+        return;
+    }
     let net_name = board.net(net).map(|n| n.name.clone()).unwrap_or_default();
     let (ohms, path) = match super::ampacity::program_reading(board, net, 4, Some(index)) {
         ProgramReading::Ohms(ohms, path) => (ohms, path),
@@ -578,6 +611,13 @@ fn check_program_domain(
             return;
         }
         ProgramReading::Unread(ProgramUnread::UnknownNet) => return,
+        // A floating pin (nothing fitted on it) is the explicit user rule: absent
+        // or floating stays silent, as for every other programming pin here.
+        ProgramReading::Unread(ProgramUnread::NoPath)
+            if !has_fitted_member_besides(board, net, comp) =>
+        {
+            return;
+        }
         ProgramReading::Unread(why) => {
             report.findings.push(unread_program_finding(
                 comp, program, ceiling_a, &net_name, &why,
@@ -672,6 +712,17 @@ fn shorted_program_finding(
     }
 }
 
+/// Whether any fitted component other than `ic` is joined to `net` by more
+/// than one pad: a resistor, a capacitor, an open link, anything a reader could
+/// have to read. A DNP part, a test point or another single-pad marker is not.
+fn has_fitted_member_besides(board: &ExtractedBoard, net: i64, ic: &Component) -> bool {
+    board.net_members(net).into_iter().any(|(member, _)| {
+        !std::ptr::eq(member, ic)
+            && !matches!(AssemblyState::of(member), AssemblyState::DnpAbsent(_))
+            && hauksbee_bind::program_resistor::connected_pad_count(member) > 1
+    })
+}
+
 /// The abstention for a programming network the walk could not read: the one
 /// parameter that decides [`check_program_domain`] is missing, so the check
 /// says so by name, and the verdict reads it as not judged, never a pass.
@@ -681,6 +732,31 @@ fn unread_program_finding(
     ceiling_a: f64,
     net_name: &str,
     why: &ProgramUnread,
+) -> LintFinding {
+    program_pin_unreadable(
+        comp,
+        &program.pin,
+        net_name,
+        why,
+        &format!(
+            "its programmed current is unchecked against the {ceiling_a:.3} A the datasheet \
+             specifies"
+        ),
+    )
+}
+
+/// The one abstention for a programming pin whose resistance cannot be read
+/// (an unparseable value, a duplicate designator, an unclassifiable reference,
+/// no resistor path, a network too large): every check that rests on a program
+/// pin's resistance raises it, so none can read an unreadable setting as a pass.
+/// `unchecked` says what therefore stays unchecked. Low, marked as an abstention
+/// and as not judged, with the remedy that fits the reason.
+fn program_pin_unreadable(
+    comp: &Component,
+    pin: &str,
+    net_name: &str,
+    why: &ProgramUnread,
+    unchecked: &str,
 ) -> LintFinding {
     let remedy = match why {
         ProgramUnread::Part { .. } => {
@@ -697,12 +773,10 @@ fn unread_program_finding(
         }
     };
     let what = format!(
-        "{} ({}) programming-resistor check{ABSTENTION_MARKER}: its {} pin's resistance to \
-         ground on net '{net_name}' could not be read off the board ({}), so its programmed \
-         current is unchecked against the {ceiling_a:.3} A the datasheet specifies",
+        "{} ({}) programming-resistor check{ABSTENTION_MARKER}: its {pin} pin's resistance to \
+         ground on net '{net_name}' could not be read off the board ({}), so {unchecked}",
         comp.reference,
         comp.value,
-        program.pin,
         why.describe(),
     );
     let mut refs = vec![comp.reference.clone()];
@@ -1017,18 +1091,13 @@ fn check_tps25982_ilim(
     let (r_ref, ohms) = match program_resistor_to_ground(board, ilim_net_id) {
         ProgramResistor::Floating => return, // explicit user rule: absent/floating stays silent
         ProgramResistor::Unparseable { reference, value } => {
-            report.findings.push(LintFinding {
-                check: LintCheck::DeviceDecode,
-                severity: Severity::Low,
-                message: format!(
-                    "{} eFuse current limit is unjudgeable: ILIM resistor {reference} value \
-                     '{value}' is not parseable, so no current-limit band or connector-budget \
-                     verdict is claimed",
-                    efuse.reference
-                ),
-                refs: vec![efuse.reference.clone(), reference],
-                nets: vec![ilim_net_name.to_string()],
-            });
+            report.findings.push(program_pin_unreadable(
+                efuse,
+                "ILIM",
+                ilim_net_name,
+                &ProgramUnread::unreadable_value(&reference, &value),
+                "no current-limit band or connector-budget verdict is claimed",
+            ));
             return;
         }
         ProgramResistor::Parsed { reference, ohms } => (reference, ohms),
@@ -1875,10 +1944,10 @@ mod program_domain_tests {
 
     /// The one parameter that decides this check cannot be read: the check
     /// abstains by name (low, not judged, a remedy) and never reads as a clean
-    /// pass. An unparseable value and an unfitted resistor are such cases.
+    /// pass. An unparseable value is such a case.
     #[test]
     fn an_unreadable_prog_resistor_abstains_by_name() {
-        for prog in ["RC0603", "DNP", "1 000", "1_000"] {
+        for prog in ["RC0603", "1 000", "1_000"] {
             let report = lint(&charger_board("MCP73831T-2ACI/OT", prog));
             let f: Vec<_> = report.of_check(LintCheck::DeviceDecode).collect();
             assert_eq!(f.len(), 1, "PROG = {prog} must abstain once: {f:?}");
@@ -1895,6 +1964,56 @@ mod program_domain_tests {
                 f[0].message
             );
             assert!(f[0].own_remedy().is_some(), "{}", f[0].message);
+        }
+    }
+
+    /// A single-pad part (a test point) joined to the PROG net is not a
+    /// programming element: the 2k resistor still reads, in range and silent,
+    /// and a too-small resistor still fires with the test point present.
+    fn with_test_point(board: &str) -> String {
+        let tp = r#"  (module TestPoint:TestPoint_Pad_D1.0mm (layer F.Cu) (at 140 100)
+    (fp_text reference TP1 (at 0 0) (layer F.SilkS))
+    (fp_text value TP (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 4 "/charger/PROG"))
+  )
+"#;
+        let end = board.rfind(')').expect("closing paren");
+        format!("{}{tp})\n", &board[..end])
+    }
+
+    #[test]
+    fn a_single_pad_test_point_on_the_prog_net_is_not_a_false_alarm() {
+        let clean = lint(&with_test_point(&charger_board("MCP73831T-2ACI/OT", "2k")));
+        assert_eq!(
+            clean.of_check(LintCheck::DeviceDecode).count(),
+            0,
+            "{:?}",
+            clean.findings
+        );
+        let fault = lint(&with_test_point(&charger_board("MCP73831T-2ACI/OT", "200")));
+        let f: Vec<_> = fault.of_check(LintCheck::DeviceDecode).collect();
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].severity, Severity::Medium, "{}", f[0].message);
+    }
+
+    /// Floating PROG disables the charger (datasheet), and the file's rule is
+    /// that an absent or floating programming pin stays silent: an unfitted
+    /// (DNP) resistor, alone or beside a test point, is not an abstention. A
+    /// fitted but unreadable member (the duplicate and reference tests below)
+    /// still abstains.
+    #[test]
+    fn a_dnp_prog_resistor_leaves_the_pin_floating_and_silent() {
+        for board in [
+            charger_board("MCP73831T-2ACI/OT", "DNP"),
+            with_test_point(&charger_board("MCP73831T-2ACI/OT", "DNP")),
+        ] {
+            let report = lint(&board);
+            assert_eq!(
+                report.of_check(LintCheck::DeviceDecode).count(),
+                0,
+                "{:?}",
+                report.findings
+            );
         }
     }
 
@@ -2408,7 +2527,7 @@ mod tps25982_tests {
     }
 
     #[test]
-    fn floating_ilim_is_silent_and_unparseable_ilim_is_explicitly_unjudgeable() {
+    fn floating_ilim_is_silent_and_unparseable_ilim_abstains_by_name() {
         let floating = lint(&tps_board("TPS259824LNRGET", None, Some("EFUSE_OUT")));
         assert_eq!(floating.of_check(LintCheck::DeviceDecode).count(), 0);
 
@@ -2420,8 +2539,15 @@ mod tps25982_tests {
         let rows: Vec<_> = unreadable.of_check(LintCheck::DeviceDecode).collect();
         assert_eq!(rows.len(), 1, "{:#?}", unreadable.findings);
         assert_eq!(rows[0].severity, Severity::Low);
-        assert!(rows[0].message.contains("unjudgeable"));
-        assert!(rows[0].message.contains("not parseable"));
+        assert!(rows[0].is_abstention(), "{}", rows[0].message);
+        assert!(
+            hauksbee_models::rating_basis::is_not_judged(&rows[0].message),
+            "the verdict reads it as not judged: {}",
+            rows[0].message
+        );
+        assert!(rows[0].message.contains("ILIM"));
+        assert!(rows[0].message.contains("not a readable resistance"));
+        assert!(rows[0].own_remedy().is_some(), "{}", rows[0].message);
     }
 
     #[test]
