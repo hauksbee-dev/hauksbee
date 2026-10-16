@@ -518,6 +518,7 @@ fn volts(v: f64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
@@ -550,14 +551,14 @@ mod tests {
     fn card_lib(pins: &[(&str, &str)], extra: &str) -> ModelLibrary {
         static N: AtomicUsize = AtomicUsize::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
-        let pins: String = pins
-            .iter()
-            .map(|(p, r)| format!("\"{p}\" = \"{r}\"\n"))
-            .collect();
+        let mut map = String::new();
+        for (p, r) in pins {
+            writeln!(map, "\"{p}\" = \"{r}\"").unwrap();
+        }
         let card = format!(
             "[[models]]\nid = \"pwr_test\"\nkind = \"digital\"\ndescription = \"power pin fixture\"\n\
              [models.match]\nvalue_re = \"^PWRTEST$\"\n[models.params]\nidentity_only = true\n\
-             warning = \"identity only\"\n{extra}\n[models.pins]\n{pins}"
+             warning = \"identity only\"\nunlocked_by = \"validated behavior\"\n{extra}\n[models.pins]\n{map}"
         );
         let dir =
             std::env::temp_dir().join(format!("hauksbee_power_pins_{}_{n}", std::process::id()));
