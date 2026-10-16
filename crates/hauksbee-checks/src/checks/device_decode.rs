@@ -81,12 +81,13 @@
 //!     decoded and the Note-1 check still runs.
 
 use super::{is_ground_name, is_unconnected_net, norm};
+use hauksbee_bind::program_resistor::{ProgramReading, ProgramUnread};
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
     is_plain_resistor as is_source_classified_resistor, Component, ExtractedBoard, LintCheck,
-    LintFinding, NetLintReport, Severity, INFORMATIONAL_MARKER,
+    LintFinding, NetLintReport, Severity, ABSTENTION_MARKER, INFORMATIONAL_MARKER, REMEDY_MARKER,
 };
-use hauksbee_models::rating_basis::Limit;
+use hauksbee_models::rating_basis::{not_judged, Limit};
 use hauksbee_models::value::parse_value;
 use hauksbee_models::{ComponentKind, ModelLibrary};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -459,7 +460,7 @@ fn check_program_range(
              datasheet allows on {pin}, so the part is outside its specified operation; \
              fit a value inside the datasheet's programming range",
             comp.reference,
-            if ohms < 10.0 {
+            if (0.01..10.0).contains(&ohms) {
                 format!("{ohms:.2}")
             } else {
                 format_ohms(ohms)
@@ -487,9 +488,15 @@ fn check_program_range(
 // the part outside its specified range: the binder then clamps to the ceiling
 // and reports only a reduced-fidelity assumption, so without this finding a
 // charger PROG resistor a decade too low passes. The read is the same populated
-// resistance-to-ground walk the ampacity attribution and the binder use; an
-// unreadable network, a generic stand-in card, a protection-limit law, or a
-// sense-scaled law (which needs the sense shunt) stays silent.
+// resistance-to-ground walk the ampacity attribution and the binder use. A pin
+// shorted to ground (a 0 ohm resistor or closed link) is the extreme of the
+// same fault and is reported as one: the equation diverges as R goes to 0. A
+// network the walk cannot read (a duplicate designator, a reference spelling
+// that does not say "resistor", no resistor path to ground) is the one
+// parameter that decides this check missing, so the check abstains by name
+// (`not judged, which is not a pass`) and the verdict is never a pass. A
+// generic stand-in card, a protection-limit law, or a sense-scaled law (which
+// needs the sense shunt) stays silent.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Margin over a card's programming ceiling before the programmed current is
@@ -561,10 +568,22 @@ fn check_program_domain(
     let Ok(net) = hauksbee_bind::component_evidence::role_net(part, &model, &program.pin) else {
         return;
     };
-    let Some((ohms, path)) =
-        super::ampacity::program_resistance_to_ground(board, net, 4, Some(index))
-    else {
-        return;
+    let net_name = board.net(net).map(|n| n.name.clone()).unwrap_or_default();
+    let (ohms, path) = match super::ampacity::program_reading(board, net, 4, Some(index)) {
+        ProgramReading::Ohms(ohms, path) => (ohms, path),
+        ProgramReading::Shorted(links) => {
+            report.findings.push(shorted_program_finding(
+                comp, program, ceiling_a, &net_name, links,
+            ));
+            return;
+        }
+        ProgramReading::Unread(ProgramUnread::UnknownNet) => return,
+        ProgramReading::Unread(why) => {
+            report.findings.push(unread_program_finding(
+                comp, program, ceiling_a, &net_name, &why,
+            ));
+            return;
+        }
     };
     let Some(asked_a) = program.equation_current_a(ohms) else {
         return;
@@ -572,8 +591,37 @@ fn check_program_domain(
     if asked_a <= ceiling_a * PROGRAM_DOMAIN_GRACE {
         return;
     }
-    let net_name = board.net(net).map(|n| n.name.clone()).unwrap_or_default();
-    let fix = min_program_ohms(program, ohms, ceiling_a).map_or_else(
+    let fix = program_fix(program, ohms, ceiling_a);
+    let mut refs = vec![comp.reference.clone()];
+    refs.extend(path.iter().cloned());
+    report.findings.push(LintFinding {
+        check: LintCheck::DeviceDecode,
+        severity: Severity::Medium,
+        message: format!(
+            "{} ({}) is programmed outside its specified range: its {} resistor {} = {} ohm \
+             on net '{net_name}' asks for {} by the part's programming equation, \
+             above the {ceiling_a:.3} A the datasheet specifies for programmed operation, so \
+             the part either overheats delivering it or limits at an unspecified point; {fix}",
+            comp.reference,
+            comp.value,
+            program.pin,
+            path.join("+"),
+            format_ohms(ohms),
+            format_amps(asked_a),
+        ),
+        refs,
+        nets: vec![net_name],
+    });
+}
+
+/// The fix for a programming resistor that is too small: the least resistance
+/// whose equation current is within the card's ceiling.
+fn program_fix(
+    program: &hauksbee_models::schema::CurrentProgram,
+    from_ohms: f64,
+    ceiling_a: f64,
+) -> String {
+    min_program_ohms(program, from_ohms, ceiling_a).map_or_else(
         || {
             "fit the resistor the datasheet's programming table gives for the current wanted"
                 .to_string()
@@ -585,26 +633,89 @@ fn check_program_domain(
                 format_ohms(min)
             )
         },
-    );
+    )
+}
+
+/// A programming pin tied to ground (zero ohms, by a ground net or by `0R` /
+/// closed links alone): the equation `I = k / R` diverges, the extreme of the
+/// too-small resistor [`check_program_domain`] reports for any other value.
+fn shorted_program_finding(
+    comp: &Component,
+    program: &hauksbee_models::schema::CurrentProgram,
+    ceiling_a: f64,
+    net_name: &str,
+    links: Vec<String>,
+) -> LintFinding {
+    let via = if links.is_empty() {
+        "directly".to_string()
+    } else {
+        format!("through {} (a 0 ohm link)", links.join("+"))
+    };
     let mut refs = vec![comp.reference.clone()];
-    refs.extend(path.iter().cloned());
-    report.findings.push(LintFinding {
+    refs.extend(links);
+    LintFinding {
         check: LintCheck::DeviceDecode,
         severity: Severity::Medium,
         message: format!(
-            "{} ({}) is programmed outside its specified range: its {} resistor {} = {} ohm \
-             on net '{net_name}' asks for {asked_a:.3} A by the part's programming equation, \
-             above the {ceiling_a:.3} A the datasheet specifies for programmed operation, so \
-             the part either overheats delivering it or limits at an unspecified point; {fix}",
+            "{} ({}) is programmed outside its specified range: its {} pin on net '{net_name}' \
+             is tied to ground {via}, 0 ohm, so the part's programming equation asks for an \
+             unbounded current, far above the {ceiling_a:.3} A the datasheet specifies for \
+             programmed operation, so the part either overheats delivering it or limits at an \
+             unspecified point; {}",
             comp.reference,
             comp.value,
             program.pin,
-            path.join("+"),
-            format_ohms(ohms),
+            program_fix(program, 1e-3, ceiling_a),
         ),
         refs,
-        nets: vec![net_name],
-    });
+        nets: vec![net_name.to_string()],
+    }
+}
+
+/// The abstention for a programming network the walk could not read: the one
+/// parameter that decides [`check_program_domain`] is missing, so the check
+/// says so by name, and the verdict reads it as not judged, never a pass.
+fn unread_program_finding(
+    comp: &Component,
+    program: &hauksbee_models::schema::CurrentProgram,
+    ceiling_a: f64,
+    net_name: &str,
+    why: &ProgramUnread,
+) -> LintFinding {
+    let remedy = match why {
+        ProgramUnread::Part { .. } => {
+            "make that part readable (rename a duplicate designator, or give the resistor a \
+             conventional R designator and a numeric value), then re-check"
+        }
+        ProgramUnread::NoPath => {
+            "fit the programming resistor from the pin to a ground net so its current can be \
+             read, then re-check"
+        }
+        ProgramUnread::TooComplex | ProgramUnread::UnknownNet => {
+            "reduce the pin's network to one resistor, or a short parallel or series set, to \
+             ground, then re-check"
+        }
+    };
+    let what = format!(
+        "{} ({}) programming-resistor check{ABSTENTION_MARKER}: its {} pin's resistance to \
+         ground on net '{net_name}' could not be read off the board ({}), so its programmed \
+         current is unchecked against the {ceiling_a:.3} A the datasheet specifies",
+        comp.reference,
+        comp.value,
+        program.pin,
+        why.describe(),
+    );
+    let mut refs = vec![comp.reference.clone()];
+    if let ProgramUnread::Part { reference, .. } = why {
+        refs.push(reference.clone());
+    }
+    LintFinding {
+        check: LintCheck::DeviceDecode,
+        severity: Severity::Low,
+        message: format!("{} {REMEDY_MARKER}{remedy}", not_judged(&what)),
+        refs,
+        nets: vec![net_name.to_string()],
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1241,14 +1352,30 @@ fn check_bq2407x_ts(board: &ExtractedBoard, u: &Component, report: &mut NetLintR
     });
 }
 
-/// Human ohms: 4700 -> "4.7k", 470 -> "470".
+/// Human ohms: 4700 -> "4.7k", 470 -> "470", 0.001 -> "0.001", 1e-6 -> "1.00e-6".
+/// A value under one ohm keeps its significant figures: it is never rounded to
+/// "0", which would read as a short.
 pub(crate) fn format_ohms(ohms: f64) -> String {
     if ohms >= 1_000_000.0 {
         format!("{:.1}M", ohms / 1_000_000.0)
     } else if ohms >= 1_000.0 {
         format!("{:.1}k", ohms / 1_000.0)
-    } else {
+    } else if ohms >= 0.9995 || ohms <= 0.0 || !ohms.is_finite() {
         format!("{ohms:.0}")
+    } else if ohms >= 1e-3 {
+        format!("{ohms:.3}")
+    } else {
+        format!("{ohms:.2e}")
+    }
+}
+
+/// Amps for a message: three decimals up to ten thousand amps, then
+/// scientific notation, so an absurd equation current stays readable.
+fn format_amps(amps: f64) -> String {
+    if amps.abs() < 1e4 {
+        format!("{amps:.3} A")
+    } else {
+        format!("{amps:.3e} A")
     }
 }
 
@@ -1692,7 +1819,7 @@ mod program_domain_tests {
   (net 5 "/charger/STAT")
   (module Package_TO_SOT_SMD:SOT-23-5 (layer F.Cu) (at 100 100)
     (fp_text reference U3 (at 0 0) (layer F.SilkS))
-    (fp_text value {value} (at 0 2) (layer F.Fab))
+    (fp_text value "{value}" (at 0 2) (layer F.Fab))
     (pad 1 smd rect (at 0 0) (net 5 "/charger/STAT"))
     (pad 2 smd rect (at 0 1) (net 1 "GND"))
     (pad 3 smd rect (at 0 2) (net 3 "VBAT"))
@@ -1701,7 +1828,7 @@ mod program_domain_tests {
   )
   (module Resistor_SMD:R_0603 (layer F.Cu) (at 110 100)
     (fp_text reference R8 (at 0 0) (layer F.SilkS))
-    (fp_text value {prog} (at 0 2) (layer F.Fab))
+    (fp_text value "{prog}" (at 0 2) (layer F.Fab))
     (pad 1 smd rect (at 0 0) (net 4 "/charger/PROG"))
     (pad 2 smd rect (at 2 0) (net 1 "GND"))
   )
@@ -1732,11 +1859,10 @@ mod program_domain_tests {
     }
 
     /// Legal controls: the datasheet's 2k (exactly the ceiling), the E96 1.91k
-    /// inside the grace, and an ordinary 10k all stay silent; so does an
-    /// unparseable resistor and an unfitted one.
+    /// inside the grace, and an ordinary 10k all stay silent.
     #[test]
-    fn in_range_or_unreadable_prog_resistors_stay_silent() {
-        for prog in ["2k", "1.91k", "10k", "RC0603", "DNP"] {
+    fn in_range_prog_resistors_stay_silent() {
+        for prog in ["2k", "1.91k", "10k", "100k"] {
             let report = lint(&charger_board("MCP73831T-2ACI/OT", prog));
             assert_eq!(
                 report.of_check(LintCheck::DeviceDecode).count(),
@@ -1745,6 +1871,168 @@ mod program_domain_tests {
                 report.findings
             );
         }
+    }
+
+    /// The one parameter that decides this check cannot be read: the check
+    /// abstains by name (low, not judged, a remedy) and never reads as a clean
+    /// pass. An unparseable value and an unfitted resistor are such cases.
+    #[test]
+    fn an_unreadable_prog_resistor_abstains_by_name() {
+        for prog in ["RC0603", "DNP", "1 000", "1_000"] {
+            let report = lint(&charger_board("MCP73831T-2ACI/OT", prog));
+            let f: Vec<_> = report.of_check(LintCheck::DeviceDecode).collect();
+            assert_eq!(f.len(), 1, "PROG = {prog} must abstain once: {f:?}");
+            assert_eq!(f[0].severity, Severity::Low, "{}", f[0].message);
+            assert!(f[0].is_abstention(), "{}", f[0].message);
+            assert!(
+                hauksbee_models::rating_basis::is_not_judged(&f[0].message),
+                "the verdict reads it as not judged: {}",
+                f[0].message
+            );
+            assert!(
+                f[0].message.contains("U3") && f[0].message.contains("PROG pin"),
+                "names the part and the pin: {}",
+                f[0].message
+            );
+            assert!(f[0].own_remedy().is_some(), "{}", f[0].message);
+        }
+    }
+
+    /// H1: a second part with the same designator makes the PROG resistor
+    /// ambiguous, so the check abstains naming R8 and the duplicate, instead
+    /// of dropping the finding the single-R8 board gets. The one-resistor
+    /// board with the same fault still fires, and the legal control is silent.
+    #[test]
+    fn a_duplicate_designator_on_the_prog_resistor_abstains() {
+        let duplicate = r#"  (module Resistor_SMD:R_0603 (layer F.Cu) (at 120 100)
+    (fp_text reference R8 (at 0 0) (layer F.SilkS))
+    (fp_text value 1k (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 1 "GND"))
+    (pad 2 smd rect (at 2 0) (net 1 "GND"))
+  )
+"#;
+        let with_duplicate = |prog: &str| {
+            let board = charger_board("MCP73831T-2ACI/OT", prog);
+            let end = board.rfind(')').expect("closing paren");
+            format!("{}{duplicate})\n", &board[..end])
+        };
+        for prog in ["1k", "10k"] {
+            let report = lint(&with_duplicate(prog));
+            let f: Vec<_> = report.of_check(LintCheck::DeviceDecode).collect();
+            assert_eq!(f.len(), 1, "PROG = {prog}: {f:?}");
+            assert!(f[0].is_abstention(), "{}", f[0].message);
+            assert!(
+                f[0].message.contains("duplicate designator") && f[0].message.contains("R8"),
+                "{}",
+                f[0].message
+            );
+        }
+        // Control: without the duplicate the 1k fault fires and the 10k is silent.
+        let fault = lint(&charger_board("MCP73831T-2ACI/OT", "1k"));
+        assert!(fault
+            .of_check(LintCheck::DeviceDecode)
+            .any(|f| f.severity == Severity::Medium));
+        let clean = lint(&charger_board("MCP73831T-2ACI/OT", "10k"));
+        assert_eq!(clean.of_check(LintCheck::DeviceDecode).count(), 0);
+    }
+
+    /// H3: a reference that does not classify the part as a resistor leaves
+    /// the PROG resistance unread, so the check abstains naming it; the same
+    /// board with a conventional designator fires or stays silent as it should.
+    #[test]
+    fn an_unclassifiable_reference_spelling_abstains() {
+        for reference in ["R-8", "RES8", "X8", "RN8"] {
+            let board = charger_board("MCP73831T-2ACI/OT", "1k").replace("R8", reference);
+            let report = lint(&board);
+            let f: Vec<_> = report.of_check(LintCheck::DeviceDecode).collect();
+            assert_eq!(f.len(), 1, "{reference}: {f:?}");
+            assert!(f[0].is_abstention(), "{reference}: {}", f[0].message);
+            assert!(
+                f[0].message.contains(reference) && f[0].message.contains("not identified"),
+                "{}",
+                f[0].message
+            );
+        }
+        let ok = lint(&charger_board("MCP73831T-2ACI/OT", "1k"));
+        assert!(ok
+            .of_check(LintCheck::DeviceDecode)
+            .any(|f| f.severity == Severity::Medium));
+    }
+
+    /// H2: PROG shorted to ground (a 0 ohm resistor, or the pin on the ground
+    /// net) is the extreme of the over-current fault and is reported as one,
+    /// like 10 ohm or 1 milliohm. MCP73831: IREG = 1000 V / RPROG, RPROG 2-67
+    /// kOhm. A 0 ohm link in series with a real resistor is not a short.
+    #[test]
+    fn a_prog_pin_shorted_to_ground_is_flagged() {
+        for prog in ["0", "0R", "0 ohm"] {
+            let report = lint(&charger_board("MCP73831T-2ACI/OT", prog));
+            let f: Vec<_> = report.of_check(LintCheck::DeviceDecode).collect();
+            assert_eq!(f.len(), 1, "PROG = {prog}: {f:?}");
+            assert_eq!(f[0].severity, Severity::Medium, "{}", f[0].message);
+            assert!(
+                f[0].message.contains("tied to ground")
+                    && f[0].message.contains("R8")
+                    && f[0].message.contains("at least 2.0k"),
+                "{}",
+                f[0].message
+            );
+            assert!(f[0].refs.contains(&"U3".to_string()) && f[0].refs.contains(&"R8".to_string()));
+        }
+        // The pin on the ground net itself.
+        let direct = charger_board("MCP73831T-2ACI/OT", "10k").replace(
+            r#"(pad 5 smd rect (at 1 1) (net 4 "/charger/PROG"))"#,
+            r#"(pad 5 smd rect (at 1 1) (net 1 "GND"))"#,
+        );
+        let report = lint(&direct);
+        let f: Vec<_> = report.of_check(LintCheck::DeviceDecode).collect();
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].severity, Severity::Medium);
+        assert!(f[0].message.contains("directly"), "{}", f[0].message);
+        // Control: a 0 ohm link ahead of a real 10k resistor reads 10k, silent.
+        let series = charger_board("MCP73831T-2ACI/OT", "0R")
+            .replace(
+                r#"(pad 2 smd rect (at 2 0) (net 1 "GND"))"#,
+                r#"(pad 2 smd rect (at 2 0) (net 6 "/charger/PROGX"))"#,
+            )
+            .replacen(
+                r#"(net 5 "/charger/STAT")"#,
+                r#"(net 5 "/charger/STAT")(net 6 "/charger/PROGX")"#,
+                1,
+            );
+        let series = format!(
+            "{}  (module Resistor_SMD:R_0603 (layer F.Cu) (at 130 100)\n    (fp_text reference R9 (at 0 0) (layer F.SilkS))\n    (fp_text value 10k (at 0 2) (layer F.Fab))\n    (pad 1 smd rect (at 0 0) (net 6 \"/charger/PROGX\"))\n    (pad 2 smd rect (at 2 0) (net 1 \"GND\"))\n  )\n)\n",
+            &series[..series.rfind(')').expect("closing paren")]
+        );
+        let report = lint(&series);
+        assert_eq!(
+            report.of_check(LintCheck::DeviceDecode).count(),
+            0,
+            "{:?}",
+            report.findings
+        );
+    }
+
+    /// N2: a sub-ohm programming resistor is flagged with its value in
+    /// significant figures, never printed as "0 ohm"; the absurd equation
+    /// current stays readable.
+    #[test]
+    fn a_sub_ohm_prog_resistor_prints_its_value() {
+        let report = lint(&charger_board("MCP73831T-2ACI/OT", "1m"));
+        let f: Vec<_> = report.of_check(LintCheck::DeviceDecode).collect();
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(
+            f[0].message.contains("= 0.001 ohm") && !f[0].message.contains("= 0 ohm"),
+            "{}",
+            f[0].message
+        );
+        assert!(f[0].message.contains("e6 A"), "{}", f[0].message);
+        assert_eq!(format_ohms(0.001), "0.001");
+        assert_eq!(format_ohms(0.5), "0.500");
+        assert_eq!(format_ohms(1e-6), "1.00e-6");
+        assert_eq!(format_ohms(0.0), "0");
+        assert_eq!(format_ohms(470.0), "470");
+        assert_eq!(format_ohms(4700.0), "4.7k");
     }
 
     /// A part with no programming law is never judged, whatever sits on pin 5.

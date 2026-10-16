@@ -406,6 +406,13 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
     // single value and must stay rejected, never silently fused into "10.5".
     let trimmed = rest.trim_start();
     let rest = if trimmed.starts_with(|c: char| c.is_ascii_digit()) {
+        // "1 000" is a thousands-grouped 1000 or a stray fragment, and reading
+        // it as 1 (the tail dropped as an annotation) is a 1000x error on a
+        // programming resistor: it is not one value, so it is not read.
+        // A trailing chip-size code ("100 0603") is a package, not a digit group.
+        if rest.starts_with(char::is_whitespace) && strip_size_code(trimmed).is_none() {
+            return None;
+        }
         rest
     } else {
         trimmed
@@ -706,6 +713,26 @@ mod tests {
         );
         // Several commas that are not all 3-digit groups are left untouched.
         assert_eq!(normalise_comma_decimal("1,5,20"), "1,5,20");
+    }
+
+    /// A digit group after a space is not an annotation: "1 000" must never
+    /// read as 1 ohm (a 1000x error on a programming resistor). It abstains,
+    /// like "1_000"; spaced units, tolerances and chip-size codes still parse.
+    #[test]
+    fn a_space_grouped_number_is_not_read_as_its_first_group() {
+        for s in ["1 000", "10 000", "4 700", "1 000 000", "2 2"] {
+            assert!(parse_value(s).is_none(), "{s:?} must not parse");
+        }
+        for (s, si) in [
+            ("1k", 1000.0),
+            ("1 k", 1000.0),
+            ("1.000k", 1000.0),
+            ("100 0603", 100.0),
+            ("47k 1%", 47_000.0),
+            ("1000", 1000.0),
+        ] {
+            check(s, si);
+        }
     }
 
     /// Capacitor RKM markings (IEC 60062): the SI letter is the decimal point,

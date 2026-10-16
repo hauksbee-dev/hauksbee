@@ -179,6 +179,50 @@ pub fn classify_series(comp: &Component) -> Series {
     }
 }
 
+/// Why a programming network could not be read off the board.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProgramUnread {
+    /// A part on the network cannot be read as a plain resistor or link: its
+    /// reference and the plain reason (a refused duplicate designator, a
+    /// reference and footprint that do not say "resistor", a stray pin).
+    Part { reference: String, why: String },
+    /// No populated resistor path reaches ground from the programming pin.
+    NoPath,
+    /// The network is larger than the bounded reader solves, or its nodal
+    /// system has no unique answer.
+    TooComplex,
+    /// The programming pin's net is not a net of this board.
+    UnknownNet,
+}
+
+impl ProgramUnread {
+    /// One plain clause for a report: what stopped the reading.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Part { reference, why } => format!("{reference} {why}"),
+            Self::NoPath => "no populated resistor path to ground".to_string(),
+            Self::TooComplex => {
+                "the network is too large or ambiguous to solve for one resistance".to_string()
+            }
+            Self::UnknownNet => "the programming pin's net is not on the board".to_string(),
+        }
+    }
+}
+
+/// What a programming pin's network to ground reads as.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProgramReading {
+    /// An equivalent resistance in ohms, and the parts that carry it.
+    Ohms(f64, Vec<String>),
+    /// The pin is joined to ground by closed links alone (a `0R`, a closed
+    /// solder jumper) or sits on a ground net itself: zero ohms, the extreme
+    /// of a too-small programming resistor. The closed links are listed.
+    Shorted(Vec<String>),
+    /// The resistance cannot be read; a check that rests on it must say so.
+    Unread(ProgramUnread),
+}
+
 #[derive(Clone)]
 struct ResistanceEdge {
     first: i64,
@@ -251,15 +295,15 @@ fn unite(parents: &mut [usize], left: usize, right: usize) {
 
 /// The resistive/closed edges of the programming network around `start`.
 ///
-/// The walk goes at most `max_hops` nets deep. `None` when it meets an
-/// unreadable part, exceeds its size bounds, or never reaches ground.
+/// The walk goes at most `max_hops` nets deep. `Err` says why it met an
+/// unreadable part, exceeded its size bounds, or never reached ground.
 fn program_network_edges(
     components: &[Component],
     is_ground: &dyn Fn(i64) -> Option<bool>,
     start: i64,
     max_hops: usize,
     excluded_component: Option<usize>,
-) -> Option<Vec<ResistanceEdge>> {
+) -> Result<Vec<ResistanceEdge>, ProgramUnread> {
     const MAX_PROGRAM_NODES: usize = 32;
     const MAX_PROGRAM_EDGES: usize = 64;
 
@@ -285,14 +329,19 @@ fn program_network_edges(
                 // programming net can change its DC equivalent (a trim pot is the
                 // common case). Ignore only the programmed IC itself, passed above.
                 if component.pins.iter().any(|pin| pin.net == Some(net_id)) {
-                    return None;
+                    return Err(unread_part(
+                        component,
+                        "is not a two-terminal part (or its pads disagree on their nets)",
+                    ));
                 }
                 continue;
             };
             let far = match terminals {
                 (Some(first), Some(second)) if first == net_id && second != net_id => second,
                 (Some(first), Some(second)) if second == net_id && first != net_id => first,
-                (Some(first), None) | (None, Some(first)) if first == net_id => return None,
+                (Some(first), None) | (None, Some(first)) if first == net_id => {
+                    return Err(unread_part(component, "has an unconnected second terminal"));
+                }
                 _ => continue,
             };
 
@@ -300,7 +349,7 @@ fn program_network_edges(
                 Series::Ohms(ohms) if ohms.is_finite() && ohms > 0.0 => (ohms, false),
                 Series::Closed => (0.0, true),
                 Series::Open => continue,
-                Series::Ohms(_) | Series::Unknown => return None,
+                Series::Ohms(_) | Series::Unknown => return Err(unread_series(component)),
             };
             if consumed_components.insert(component_index) {
                 edges.push(ResistanceEdge {
@@ -311,27 +360,67 @@ fn program_network_edges(
                     closed,
                 });
                 if edges.len() > MAX_PROGRAM_EDGES {
-                    return None;
+                    return Err(ProgramUnread::TooComplex);
                 }
             }
             if discovered_nets.insert(far) && discovered_nets.len() > MAX_PROGRAM_NODES {
-                return None;
+                return Err(ProgramUnread::TooComplex);
             }
 
-            if is_ground(far)? {
+            if is_ground(far).ok_or(ProgramUnread::UnknownNet)? {
                 reached_ground = true;
                 continue;
             }
             if let Entry::Vacant(entry) = depth_by_net.entry(far) {
                 if depth >= max_hops {
-                    return None;
+                    return Err(ProgramUnread::TooComplex);
                 }
                 entry.insert(depth + 1);
                 queue.push_back((far, depth + 1));
             }
         }
     }
-    reached_ground.then_some(edges)
+    if reached_ground {
+        Ok(edges)
+    } else {
+        Err(ProgramUnread::NoPath)
+    }
+}
+
+/// A part the walk cannot read, with the plain reason.
+fn unread_part(component: &Component, why: &str) -> ProgramUnread {
+    ProgramUnread::Part {
+        reference: component.reference.clone(),
+        why: why.to_string(),
+    }
+}
+
+/// Why [`classify_series`] could not read a part on the network: a refused
+/// identity (a duplicate designator the board cannot resolve) first, else a
+/// reference, value and footprint that do not say "resistor".
+fn unread_series(component: &Component) -> ProgramUnread {
+    let why = match AssemblyState::of(component) {
+        AssemblyState::IdentityUnknown(refusal) => format!(
+            "cannot be trusted as the programming resistor ({}); rename the duplicate so it is \
+             one part",
+            refusal.reason()
+        ),
+        _ if hauksbee_models::value::parse_value(&component.value).is_none() => format!(
+            "has the value '{}', which is not a readable resistance (a number with an optional \
+             k or M multiplier); state it as a single number such as 10k",
+            component.value
+        ),
+        _ => format!(
+            "(value '{}', footprint '{}') is not identified as a plain resistor by its \
+             reference designator, so its value is not read as the programming resistance; use \
+             a conventional designator such as R1",
+            component.value, component.footprint
+        ),
+    };
+    ProgramUnread::Part {
+        reference: component.reference.clone(),
+        why,
+    }
 }
 
 /// The populated DC-equivalent resistance from `start` to ground, plus the
@@ -352,11 +441,45 @@ pub fn program_resistance_to_ground(
     max_hops: usize,
     excluded_component: Option<usize>,
 ) -> Option<(f64, Vec<String>)> {
-    if is_ground(start)? {
-        return None;
+    match program_network_reading(components, is_ground, start, max_hops, excluded_component) {
+        ProgramReading::Ohms(ohms, path) => Some((ohms, path)),
+        ProgramReading::Shorted(_) | ProgramReading::Unread(_) => None,
+    }
+}
+
+/// [`program_resistance_to_ground`], keeping the reason it has no resistance:
+/// a pin shorted to ground reads as zero ohms ([`ProgramReading::Shorted`]),
+/// the extreme of a too-small programming resistor, and anything the walk
+/// could not read says which part or limit stopped it, so a check that rests
+/// on the resistance can abstain by name instead of going silent.
+pub fn program_network_reading(
+    components: &[Component],
+    is_ground: &dyn Fn(i64) -> Option<bool>,
+    start: i64,
+    max_hops: usize,
+    excluded_component: Option<usize>,
+) -> ProgramReading {
+    let Some(start_is_ground) = is_ground(start) else {
+        return ProgramReading::Unread(ProgramUnread::UnknownNet);
+    };
+    if start_is_ground {
+        return ProgramReading::Shorted(Vec::new());
     }
 
-    let edges = program_network_edges(components, is_ground, start, max_hops, excluded_component)?;
+    let edges =
+        match program_network_edges(components, is_ground, start, max_hops, excluded_component) {
+            Ok(edges) => edges,
+            Err(unread) => return ProgramReading::Unread(unread),
+        };
+    solve_program_network(&edges, is_ground, start)
+}
+
+fn solve_program_network(
+    edges: &[ResistanceEdge],
+    is_ground: &dyn Fn(i64) -> Option<bool>,
+    start: i64,
+) -> ProgramReading {
+    let unsolved = || ProgramReading::Unread(ProgramUnread::TooComplex);
 
     let mut node_ids: Vec<i64> = edges
         .iter()
@@ -372,7 +495,7 @@ pub fn program_resistance_to_ground(
         .collect();
 
     let mut parents: Vec<usize> = (0..node_ids.len()).collect();
-    for edge in &edges {
+    for edge in edges {
         if edge.closed {
             unite(
                 &mut parents,
@@ -390,7 +513,13 @@ pub fn program_resistance_to_ground(
         .map(|(index, _)| root(&mut parents, index))
         .collect();
     if ground_roots.contains(&start_root) {
-        return None;
+        // Only closed links join the pin to ground: zero ohms.
+        let links: BTreeSet<String> = edges
+            .iter()
+            .filter(|edge| edge.closed)
+            .map(|edge| edge.reference.clone())
+            .collect();
+        return ProgramReading::Shorted(links.into_iter().collect());
     }
 
     let variable_roots: BTreeSet<usize> = (0..node_ids.len())
@@ -411,7 +540,7 @@ pub fn program_resistance_to_ground(
         }
         let g = 1.0 / edge.ohms;
         if !g.is_finite() || g <= 0.0 {
-            return None;
+            return unsolved();
         }
         if let Some(&index) = variable_index.get(&first) {
             conductance[index][index] += g;
@@ -427,11 +556,16 @@ pub fn program_resistance_to_ground(
         }
     }
     let mut injection = vec![0.0; variable_roots.len()];
-    injection[*variable_index.get(&start_root)?] = 1.0;
-    let voltages = solve_linear(conductance, injection)?;
-    let equivalent_ohms = voltages[*variable_index.get(&start_root)?];
+    let Some(&start_index) = variable_index.get(&start_root) else {
+        return unsolved();
+    };
+    injection[start_index] = 1.0;
+    let Some(voltages) = solve_linear(conductance, injection) else {
+        return unsolved();
+    };
+    let equivalent_ohms = voltages[start_index];
     if !equivalent_ohms.is_finite() || equivalent_ohms <= 0.0 {
-        return None;
+        return unsolved();
     }
 
     let voltage = |component_root: usize| -> f64 {
@@ -440,7 +574,7 @@ pub fn program_resistance_to_ground(
             .map_or(0.0, |&index| voltages[index])
     };
     let mut references = BTreeSet::new();
-    for edge in &edges {
+    for edge in edges {
         if edge.closed {
             references.insert(edge.reference.clone());
             continue;
@@ -452,5 +586,5 @@ pub fn program_resistance_to_ground(
             references.insert(edge.reference.clone());
         }
     }
-    Some((equivalent_ohms, references.into_iter().collect()))
+    ProgramReading::Ohms(equivalent_ohms, references.into_iter().collect())
 }

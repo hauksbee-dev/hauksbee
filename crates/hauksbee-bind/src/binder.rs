@@ -5635,8 +5635,14 @@ fn charge_limit(
             let amps = program.operating_current_a(ohms);
             let why = amps.is_none().then(|| {
                 format!(
-                    "the {ohms:.0} ohm programming network {} asks for a current outside this \
+                    "the {} ohm programming network {} asks for a current outside this \
                      card's sourced operating domain",
+                    // A sub-ohm network keeps its significant figures, never "0".
+                    if ohms >= 0.9995 {
+                        format!("{ohms:.0}")
+                    } else {
+                        format!("{ohms:.3e}")
+                    },
                     path.join("+")
                 )
             });

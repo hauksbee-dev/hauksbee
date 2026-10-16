@@ -38,8 +38,8 @@ use hauksbee_extract::{
 use hauksbee_models::ModelLibrary;
 
 use hauksbee_bind::program_resistor::{
-    classify_series, electrical_terminal_nets, program_resistance_to_ground as read_program_ohms,
-    Series,
+    classify_series, electrical_terminal_nets, program_network_reading as read_program_network,
+    program_resistance_to_ground as read_program_ohms, ProgramReading, Series,
 };
 use hauksbee_bind::{binder::resolve, component_evidence::role_net};
 use hauksbee_extract::assembly::{AssemblyState, FittedComponent};
@@ -129,6 +129,28 @@ pub(super) fn program_resistance_to_ground(
             .map(|net| super::converter::is_ground_net(&net.name))
     };
     read_program_ohms(
+        &board.components,
+        &is_ground,
+        start,
+        max_hops,
+        excluded_component,
+    )
+}
+
+/// [`program_resistance_to_ground`], keeping why there is no resistance: a pin
+/// shorted to ground, or the part that could not be read.
+pub(super) fn program_reading(
+    board: &ExtractedBoard,
+    start: i64,
+    max_hops: usize,
+    excluded_component: Option<usize>,
+) -> ProgramReading {
+    let is_ground = |id| {
+        board
+            .net(id)
+            .map(|net| super::converter::is_ground_net(&net.name))
+    };
+    read_program_network(
         &board.components,
         &is_ground,
         start,
