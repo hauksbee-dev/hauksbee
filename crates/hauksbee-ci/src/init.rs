@@ -10,7 +10,8 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use hauksbee_engine::{bind_board, is_ground, power_rail_voltage};
+use hauksbee_engine::{bind_board, is_ground, power_rail_voltage, BoundBoard};
+use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 
 use crate::error::SpecError;
@@ -269,27 +270,53 @@ pub fn scaffold(board: &Path) -> Result<Scaffold, SpecError> {
         .map(|leg| (leg.net_name.clone(), leg.supply.nominal_volts()))
         .collect();
     Ok(Scaffold {
-        supplies: scaffold_supplies(board, rails),
+        supplies: scaffold_supplies(board, &extracted, &bound, rails),
     })
 }
 
 /// The detected rails, sorted, then the regulator inputs they leave unpowered.
 /// Seeding one input can expose the regulator behind it, so the probe repeats
 /// until the list stops growing (bounded: a cascade is a few stages deep).
-fn scaffold_supplies(board: &Path, mut rails: Vec<(String, f64)>) -> Vec<ScaffoldSupply> {
+///
+/// Every supply passes the run's own refusal rule ([`runner::supply_refusal`])
+/// before it is written: one on a rail a board part already drives moves to
+/// the undriven input the run names instead, and one with no such place is
+/// left out, so the scaffold never emits a spec its own run rejects.
+fn scaffold_supplies(
+    board: &Path,
+    extracted: &ExtractedBoard,
+    bound: &BoundBoard,
+    mut rails: Vec<(String, f64)>,
+) -> Vec<ScaffoldSupply> {
     rails.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut supplies: Vec<ScaffoldSupply> = rails
-        .iter()
-        .map(|(net, v)| ScaffoldSupply::rail(net, *v))
-        .collect();
+    let mut supplies: Vec<ScaffoldSupply> = Vec::new();
+    for (net, v) in &rails {
+        if placement(extracted, bound, &supplies, net.clone(), None).is_some_and(|(n, _)| &n == net)
+        {
+            supplies.push(ScaffoldSupply::rail(net, *v));
+        }
+    }
     for _ in 0..4 {
         // One input per pass, the one that wants the most volts: a cascade's
         // first stage (12 V into a 5 V regulator feeding a 3.3 V one) is the
         // highest, and powering it powers the stages behind it, which must not
         // also get a source of their own on the regulator's output.
         let volts = |hint: Option<f64>| hint.map_or(9.0, f64::ceil);
-        let Some((net, hint)) = unsupported_regulator_inputs(board, &supplies)
+        let Some(found) = unsupported_regulator_inputs(board, &supplies) else {
+            // The run refused the draft, so it is never handed to the user:
+            // the last regulator input added goes (the rails passed the same
+            // rule above, and the first draft has no input to drop).
+            if supplies
+                .last()
+                .is_some_and(|s| s.origin == "regulator_input")
+            {
+                supplies.pop();
+            }
+            break;
+        };
+        let Some((net, hint)) = found
             .into_iter()
+            .filter_map(|(net, hint)| placement(extracted, bound, &supplies, net, hint))
             .max_by(|a, b| volts(a.1).total_cmp(&volts(b.1)))
         else {
             break;
@@ -301,14 +328,40 @@ fn scaffold_supplies(board: &Path, mut rails: Vec<(String, f64)>) -> Vec<Scaffol
     supplies
 }
 
+/// Where the run accepts a supply proposed on `net` after the draft
+/// `supplies`: `net` itself, or, on a rail a board part already drives, the
+/// undriven input at the top of that part's chain (with the least voltage its
+/// card asks there, which replaces the downstream `hint`). `None` when the run
+/// would refuse it and names nowhere else, or the place is already declared.
+fn placement(
+    extracted: &ExtractedBoard,
+    bound: &BoundBoard,
+    supplies: &[ScaffoldSupply],
+    net: String,
+    hint: Option<f64>,
+) -> Option<(String, Option<f64>)> {
+    let earlier: Vec<&str> = supplies.iter().map(|s| s.net.as_str()).collect();
+    let (net, hint) = match runner::supply_refusal(bound, extracted, &net, &earlier) {
+        None => (net, hint),
+        Some(refusal) => {
+            let (instead, min_v) = refusal.instead?;
+            if runner::supply_refusal(bound, extracted, &instead, &earlier).is_some() {
+                return None;
+            }
+            (instead, min_v)
+        }
+    };
+    (!earlier.contains(&net.as_str())).then_some((net, hint))
+}
+
 /// Regulator inputs the draft `supplies` leave without DC support, with the
 /// most input voltage any regulator on that net needs. A 1 ms run of the draft
 /// reports them as `AddSupply` remedies, so this is the verdict a real run
-/// would reach; a draft that cannot be probed reports none.
+/// would reach. `None` when the run refuses the draft.
 fn unsupported_regulator_inputs(
     board: &Path,
     supplies: &[ScaffoldSupply],
-) -> Vec<(String, Option<f64>)> {
+) -> Option<Vec<(String, Option<f64>)>> {
     use hauksbee_ir::evidence::Remedy;
     let abs = std::fs::canonicalize(board).unwrap_or_else(|_| board.to_path_buf());
     let mut text = format!(
@@ -320,13 +373,12 @@ fn unsupported_regulator_inputs(
         text.push_str(&s.toml_block(false));
     }
     text.push_str("\n[[assert]]\nkind = \"no_faults\"\n");
-    let Ok(mut spec) = toml::from_str::<crate::spec::Spec>(&text) else {
-        return Vec::new();
-    };
+    let mut spec = toml::from_str::<crate::spec::Spec>(&text).ok()?;
     spec.normalize();
-    let Ok(outcomes) = spec.validate().and_then(|()| runner::run_spec(&spec)) else {
-        return Vec::new();
-    };
+    let outcomes = spec
+        .validate()
+        .and_then(|()| runner::run_spec(&spec))
+        .ok()?;
     let mut found: Vec<(String, Option<f64>)> = Vec::new();
     for a in outcomes
         .iter()
@@ -347,7 +399,7 @@ fn unsupported_regulator_inputs(
             None => found.push((net.clone(), volts_hint)),
         }
     }
-    found
+    Some(found)
 }
 
 /// Render the starter spec's TOML text for `board`.
@@ -449,6 +501,8 @@ fn render_spec_at_with_run_hint(
     // scaffold powers exactly what a run would.
     let scaffolded = scaffold_supplies(
         board,
+        &extracted,
+        &bound,
         bound
             .supplies
             .iter()

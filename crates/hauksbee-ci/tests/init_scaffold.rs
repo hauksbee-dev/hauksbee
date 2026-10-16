@@ -510,3 +510,106 @@ fn an_unpowered_cascade_asks_for_its_first_stage_only() {
         "only the cascade's first stage is asked for"
     );
 }
+
+/// U1 drives +5V through the series inductor L1, and U2 takes its input from
+/// +5V. A bare run asks for a supply on +5V (U2's unpowered input), but the
+/// run refuses a supply there, since it would fight U1. The scaffold applies
+/// the run's own refusal rule and declares the supply on U1's undriven input
+/// instead, so the first spec runs (the moco-od501 shape: init exited 0 and
+/// wrote a `+5V` supply that `run` then rejected).
+#[test]
+fn init_moves_a_supply_off_a_rail_a_part_drives_to_that_parts_input() {
+    let board = repo("crates/hauksbee-ci/tests/fixtures/regulator_behind_inductor.board");
+    let scaffold = hauksbee_ci::init::scaffold(&board).expect("scaffold the board");
+    let nets: Vec<(&str, &str)> = scaffold
+        .supplies
+        .iter()
+        .map(|s| (s.net.as_str(), s.origin))
+        .collect();
+    assert_eq!(
+        nets,
+        [("VIN", "regulator_input")],
+        "the supply goes on U1's input, never on the +5V rail U1 drives: {:?}",
+        scaffold.supplies
+    );
+    assert!(
+        scaffold.supplies[0].volts >= 6.0,
+        "above the AMS1117-5.0 dropout, got {} V",
+        scaffold.supplies[0].volts
+    );
+
+    // Faulty control: the supply the old scaffold wrote is one the run
+    // refuses, and the refusal names the net the scaffold now declares.
+    let text = format!(
+        "name = \"owned rail\"\nboard = '{}'\nduration_ms = 1\n\n[[supply]]\nnet = \"+5V\"\n\
+         kind = \"bench\"\nvolts = 5.0\n\n[[assert]]\nkind = \"no_faults\"\n",
+        board.display()
+    );
+    let path = std::env::temp_dir().join(format!(
+        "hauksbee_ci_owned_rail_{}.toml",
+        std::process::id()
+    ));
+    std::fs::write(&path, text).unwrap();
+    let spec = Spec::load(&path).expect("the spec loads");
+    let msg = hauksbee_ci::runner::run_spec(&spec)
+        .err()
+        .expect("a supply on +5V is refused")
+        .to_string();
+    assert!(
+        msg.contains("already driven by U1") && msg.contains("net = \"VIN\""),
+        "{msg}"
+    );
+}
+
+/// The scaffold must never emit a spec its own run rejects: on boards with
+/// named rails, an MCU, regulator inputs, a regulator cascade and a rail
+/// behind a series conductor, the starter spec `init` writes loads, checks
+/// clean and starts a run without a refusal.
+#[test]
+fn every_scaffold_passes_its_own_runs_validation() {
+    let boards = [
+        (blinky(), "rt_blinky"),
+        (watchy(), "rt_watchy"),
+        (repo("examples/board-as-code/stormduino.board"), "rt_storm"),
+        (
+            repo("crates/hauksbee-ci/tests/fixtures/regulator.board"),
+            "rt_reg",
+        ),
+        (
+            repo("crates/hauksbee-ci/tests/fixtures/regulator_behind_inductor.board"),
+            "rt_behind",
+        ),
+    ];
+    for (src, tag) in boards {
+        let board = copy_board_to_tempdir(&src, tag);
+        let spec_path = init_to(&board, board.parent())
+            .unwrap_or_else(|e| panic!("{tag}: init scaffolds a spec, got: {e}"));
+        // The refusals this guards against happen when the run attaches its
+        // supplies, before any time is simulated, so 1 ms tests the same thing.
+        let text = std::fs::read_to_string(&spec_path).unwrap();
+        let short: Vec<&str> = text
+            .lines()
+            .map(|l| {
+                if l.starts_with("duration_ms") {
+                    "duration_ms = 1"
+                } else {
+                    l
+                }
+            })
+            .collect();
+        std::fs::write(&spec_path, short.join("\n")).unwrap();
+        let diagnostics = hauksbee_ci::check::check_spec(
+            &spec_path,
+            &hauksbee_ci::check::CheckOptions::default(),
+        );
+        assert!(
+            diagnostics.is_empty(),
+            "{tag}: the scaffold checks clean, got {diagnostics:?}"
+        );
+        let spec = Spec::load(&spec_path)
+            .unwrap_or_else(|e| panic!("{tag}: the scaffold loads, got: {e}"));
+        if let Err(e) = hauksbee_ci::runner::run_spec(&spec) {
+            panic!("{tag}: the run refused the spec init wrote: {e}\n{text}");
+        }
+    }
+}

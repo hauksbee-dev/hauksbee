@@ -1740,6 +1740,28 @@ impl BoardEvidence {
         map.assuming_open_parts_high_impedance(&self.registry, self.today)
     }
 
+    /// Recompute one map's status with the static check's rule for which open
+    /// parts forbid a conclusive verdict
+    /// ([`crate::result::unmodelled_critical_refs`]): an open part named in
+    /// `critical_refs` keeps undermining the map, and any other open part (a
+    /// connector, a passive) becomes a stated condition. One rule, so a run and
+    /// a check of the same board cannot disagree about the same missing part.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EvidenceError::InvalidAssumption`] if the map cites an assumption
+    /// absent from this evidence's registry, so its status cannot be recomputed.
+    pub fn map_with_noncritical_open_parts_qualified(
+        &self,
+        map: EvidenceMap,
+        critical_refs: &[String],
+    ) -> Result<EvidenceMap, EvidenceError> {
+        map.assuming_open_parts_qualified_unless(&self.registry, self.today, |a| {
+            a.subject_name()
+                .is_none_or(|name| critical_refs.iter().any(|r| r == name))
+        })
+    }
+
     /// Error budget for transient/thermal/co-sim numeric claims, populated from
     /// the solver options actually used plus the run's measured windows.
     /// Forwards to [`hauksbee_cosim::error_budget::transient_error_budget`],

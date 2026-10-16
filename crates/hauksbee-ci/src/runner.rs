@@ -3776,14 +3776,84 @@ fn drive_net(bound: &mut BoundBoard, net: &str, kind: SourceKind) {
     }
 }
 
+/// Why the run refuses a `[[supply]]` on a net, and where it would take one.
+pub(crate) struct SupplyRefusal {
+    /// The refusal, naming the fix.
+    pub note: String,
+    /// When a board part already sets the rail: the undriven input at the top
+    /// of its driver chain, with the least voltage that part needs there when
+    /// its card says. `None` when there is no such net to move the supply to.
+    pub instead: Option<(String, Option<f64>)>,
+}
+
+/// Whether the run refuses a `[[supply]]` on `net`, given the nets of the
+/// supplies declared before it: a board part already drives the rail, or an
+/// `earlier` supply sits on the same rail through a series conductor. The one
+/// rule both the run (`attach_supply`) and the scaffold (`init`) apply, so
+/// `init` never writes a supply the run then rejects.
+pub(crate) fn supply_refusal(
+    bound: &BoundBoard,
+    board: &ExtractedBoard,
+    net: &str,
+    earlier: &[&str],
+) -> Option<SupplyRefusal> {
+    let node = bound.node(net).filter(|n| !n.is_ground())?;
+    supply_refusal_in(&supply_domains(bound), bound, board, net, node, earlier)
+}
+
+/// The rail domains a declared supply is judged against: every board driver
+/// except the supply legs themselves.
+fn supply_domains(bound: &BoundBoard) -> RailDomains {
+    let legs: Vec<_> = bound.supplies.iter().map(|l| l.vsource).collect();
+    RailDomains::new(&bound.circuit, &bound.behavioral, &legs)
+}
+
+fn supply_refusal_in(
+    domains: &RailDomains,
+    bound: &BoundBoard,
+    board: &ExtractedBoard,
+    net: &str,
+    node: NodeId,
+    earlier: &[&str],
+) -> Option<SupplyRefusal> {
+    let feed_of = |part: &str| {
+        let (input, min_v) = bound.feed_of(part)?;
+        let name = bound.circuit.node_name(input);
+        let net = board.nets.iter().find(|n| n.name == name).map(|n| n.id);
+        let comp = board.components.iter().find(|c| c.reference == part);
+        let pin = comp.and_then(|c| c.pins.iter().find(|p| p.net.is_some() && p.net == net));
+        let pin = pin.map(|p| p.number.clone());
+        Some(Feed { input, min_v, pin })
+    };
+    if let Some(note) = domains.owned_note(&bound.circuit, net, node, feed_of) {
+        let instead = domains
+            .owner_feed(node, feed_of)
+            .map(|f| (bound.circuit.node_name(f.input).to_string(), f.min_v));
+        return Some(SupplyRefusal { note, instead });
+    }
+    let other = earlier.iter().find(|e| {
+        bound
+            .node(e)
+            .is_some_and(|n| n != node && !n.is_ground() && domains.joined(n, node))
+    })?;
+    Some(SupplyRefusal {
+        note: format!(
+            "'{other}' is the same rail through a series conductor and already has a \
+             declared supply; two supplies on one rail fight, so declare only one"
+        ),
+        instead: None,
+    })
+}
+
 /// Attach (or reconfigure) a power-supply leg on a supply net.
 ///
 /// A declared supply is the source of its whole rail (see
 /// `hauksbee_bind::rail_owner`), so it has one meaning only where nothing on
 /// the board sets that rail: on a regulator's output, or beside a supply
 /// declared `earlier` on the same rail, it would fight the other source, and
-/// the run refuses instead. An auto-rail on a net joined to this one through a
-/// series conductor (a ferrite from VBUS to +5V) gives way to it.
+/// the run refuses instead ([`supply_refusal`]). An auto-rail on a net joined
+/// to this one through a series conductor (a ferrite from VBUS to +5V) gives
+/// way to it.
 fn attach_supply(
     bound: &mut BoundBoard,
     board: &ExtractedBoard,
@@ -3797,20 +3867,13 @@ fn attach_supply(
     if node.is_ground() {
         return Ok(());
     }
-    let legs: Vec<_> = bound.supplies.iter().map(|l| l.vsource).collect();
-    let domains = RailDomains::new(&bound.circuit, &bound.behavioral, &legs);
-    let refuse = |why: String| Err(SpecError::Invalid(format!("supply on '{}': {why}", s.net)));
-    let feed_of = |part: &str| {
-        let (input, min_v) = bound.feed_of(part)?;
-        let name = bound.circuit.node_name(input);
-        let net = board.nets.iter().find(|n| n.name == name).map(|n| n.id);
-        let comp = board.components.iter().find(|c| c.reference == part);
-        let pin = comp.and_then(|c| c.pins.iter().find(|p| p.net.is_some() && p.net == net));
-        let pin = pin.map(|p| p.number.clone());
-        Some(Feed { input, min_v, pin })
-    };
-    if let Some(why) = domains.owned_note(&bound.circuit, &s.net, node, feed_of) {
-        return refuse(why);
+    let domains = supply_domains(bound);
+    let earlier: Vec<&str> = earlier.iter().map(|e| e.net.as_str()).collect();
+    if let Some(refusal) = supply_refusal_in(&domains, bound, board, &s.net, node, &earlier) {
+        return Err(SpecError::Invalid(format!(
+            "supply on '{}': {}",
+            s.net, refusal.note
+        )));
     }
     let joined: Vec<String> = bound
         .supplies
@@ -3818,12 +3881,6 @@ fn attach_supply(
         .filter(|l| l.net != node && domains.joined(l.net, node))
         .map(|l| l.net_name.clone())
         .collect();
-    if let Some(other) = joined.iter().find(|n| earlier.iter().any(|e| &e.net == *n)) {
-        return refuse(format!(
-            "'{other}' is the same rail through a series conductor and already has a \
-             declared supply; two supplies on one rail fight, so declare only one"
-        ));
-    }
     for net in &joined {
         bound.suppress_rail(net);
     }

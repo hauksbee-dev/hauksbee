@@ -677,6 +677,44 @@ pub fn gather_findings_with_schematic(
     Ok(findings)
 }
 
+/// The findings that fail `hauksbee check` on the board at `board_path`: the
+/// board loaded through the shared normalizer with its Eagle companion
+/// schematic, the full static suite run with this board's waivers, and only the
+/// findings that gate ([`crate::result::JsonFinding::gates`]) kept. A simulation
+/// run of the same board (`hauksbee-ci`) reads them so it can never report a
+/// pass that the board's own static verdict fails.
+///
+/// # Errors
+///
+/// Returns an error when the board cannot be loaded or the DRC cannot run over
+/// it, as [`gather_findings_with_schematic`].
+pub fn static_gating_findings(
+    board_path: &Path,
+    lib: &ModelLibrary,
+) -> anyhow::Result<Vec<crate::result::JsonFinding>> {
+    let norm = crate::board_input::from_path(board_path)?;
+    let altium_present = norm.is_binary();
+    let text = norm.layout_text.unwrap_or_default();
+    // The same `<eagle>` head sniff `hauksbee check` uses to look for ties.
+    let board_is_eagle = text
+        .chars()
+        .take(512)
+        .collect::<String>()
+        .contains("<eagle");
+    let ties = crate::schematic_ties::resolve(board_path, &norm.board, None, board_is_eagle)?;
+    let mut findings = gather_findings_with_schematic(
+        board_path,
+        &norm.board,
+        &text,
+        &norm.raw,
+        altium_present,
+        lib,
+        ties.as_ref(),
+    )?;
+    findings.retain(crate::result::JsonFinding::gates);
+    Ok(findings)
+}
+
 /// Apply this board's waivers to the whole static suite, in one place, and
 /// return the findings they overruled.
 ///

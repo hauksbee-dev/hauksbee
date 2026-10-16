@@ -4141,9 +4141,30 @@ impl EvidenceMap {
     /// [`EvidenceError::InvalidAssumption`] when the map cites an assumption
     /// `registry` does not hold, so the status cannot be recomputed.
     pub fn assuming_open_parts_high_impedance(
+        self,
+        registry: &EvidenceRegistry,
+        today: RunDate,
+    ) -> Result<Self, EvidenceError> {
+        self.assuming_open_parts_qualified_unless(registry, today, |_| false)
+    }
+
+    /// As [`Self::assuming_open_parts_high_impedance`], except that an
+    /// `OpenPart` assumption for which `critical` holds keeps its normal,
+    /// verdict-blocking effect. The caller passes the one shared rule for which
+    /// unmodelled parts forbid a conclusive verdict (an active IC or a discrete
+    /// transistor), so a run-level claim over a board whose only gaps are
+    /// passive parts and connectors reads as a stated condition, the same way
+    /// the static check reads it, while a missing IC still refuses the verdict.
+    ///
+    /// # Errors
+    ///
+    /// [`EvidenceError::InvalidAssumption`] when the map cites an assumption
+    /// `registry` does not hold, so the status cannot be recomputed.
+    pub fn assuming_open_parts_qualified_unless(
         mut self,
         registry: &EvidenceRegistry,
         today: RunDate,
+        critical: impl Fn(&Assumption) -> bool,
     ) -> Result<Self, EvidenceError> {
         let mut on_path = Vec::with_capacity(self.assumptions.len());
         for id in &self.assumptions {
@@ -4158,7 +4179,7 @@ impl EvidenceMap {
         }
         let non_open: Vec<Assumption> = on_path
             .iter()
-            .filter(|a| a.kind != AssumptionKind::OpenPart)
+            .filter(|a| a.kind != AssumptionKind::OpenPart || critical(a))
             .cloned()
             .collect();
         let base = Self::derive_status(&non_open, today);

@@ -47,6 +47,18 @@ pub const DRAFT_MODELS_NEXT_STEP: &str =
 /// can split them where the engine joined them.
 pub const NOT_JUDGED_JOINER: &str = " Also: ";
 
+/// The assertion kind a CI run reports a finding of the board's own static
+/// check under (`hauksbee check`), so a run never reads green over a board
+/// whose static verdict fails. The JSON `kind`, the `JUnit` classname and the
+/// human row all carry it.
+pub const STATIC_CHECK_KIND: &str = "static_check";
+
+/// How a CI run states a gating static-check finding: the run cannot pass
+/// while `hauksbee check` fails the same board on it.
+pub const STATIC_CHECK_FAILS_LEAD: &str =
+    "FAIL: the board's own static check (hauksbee check) fails on this finding, so this run \
+     cannot pass";
+
 /// The order-triage bucket for findings a person must look at before ordering.
 ///
 /// A run whose only items are in this bucket is a pass (nothing blocks), but

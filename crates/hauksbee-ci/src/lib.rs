@@ -43,6 +43,7 @@ pub mod runner;
 pub mod scenarios;
 pub mod search;
 pub mod spec;
+pub mod static_gate;
 pub mod tolerance;
 pub mod waveforms;
 
@@ -798,6 +799,32 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
             );
         }
     }
+    // A board-wide stress claim is the claim `hauksbee check` makes about the
+    // same board, so it judges open parts by the check's rule, defined once
+    // (`unmodelled_critical_refs`): an open active IC or transistor still
+    // refuses the verdict, while an open connector or passive becomes a stated
+    // condition on it, exactly as the check states it. Without the bind
+    // summary the rule cannot be applied, so the map keeps its status.
+    let mut critical_open: Vec<String> = Vec::new();
+    for bind in outcomes.iter().filter_map(|o| o.bind.as_ref()) {
+        for r in hauksbee_engine::result::unmodelled_critical_refs(bind) {
+            if !critical_open.contains(&r) {
+                critical_open.push(r);
+            }
+        }
+    }
+    let bound_any = outcomes.iter().any(|o| o.bind.is_some());
+    for (result, map) in results.iter().zip(maps.iter_mut()) {
+        if !bound_any || result.kind != "no_faults" || !map.is_undermined() {
+            continue;
+        }
+        *map = evidence
+            .map_with_noncritical_open_parts_qualified(map.clone(), &critical_open)
+            .map_err(SpecError::invalid(format!(
+                "recomputing evidence for assertion '{}'",
+                result.label
+            )))?;
+    }
     evidence = evidence.with_maps(maps);
     // A rail only a do-not-populate part would power is dead because of the
     // assembly the run was asked to judge: a failure there is a true answer
@@ -866,6 +893,23 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
                     result.detail
                 );
             }
+        }
+    }
+    // The board's own static verdict: a finding that fails `hauksbee check`
+    // fails this run too, as its own named row, so a simulation-only spec can
+    // never read GREEN over a board its static check fails. Judged with the
+    // run's model library and the board's waiver file, like the check.
+    match hauksbee_engine::reports::check::static_gating_findings(&spec.board_path(), &lib) {
+        Ok(findings) => {
+            results.extend(static_gate::static_check_results(&findings, outcomes.len()))
+        }
+        Err(e) => {
+            let msg = format!(
+                "the board's static check (hauksbee check) could not run ({e:#}), so this run \
+                 does not cover what it judges"
+            );
+            eprintln!("WARNING: {msg}");
+            notes.push(msg);
         }
     }
     // A pass that left a host-paced time bound unjudged is a conditional pass
