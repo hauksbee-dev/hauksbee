@@ -1112,6 +1112,14 @@ pub struct StrapPin {
     /// behaviour (never fire on a floating net).
     #[serde(default)]
     pub internal_pull: StrapInternalPull,
+    /// For a strap whose level matters only in the alternate mode another
+    /// strap selects (ESP32-C3 GPIO8: any level in SPI boot, high required for
+    /// Joint Download Boot), the role of that boot-select strap. A floating
+    /// net is then a fault only when the board can drive that strap (its net
+    /// reaches a button, header or other part); otherwise the alternate mode
+    /// is unreachable and the float is harmless.
+    #[serde(default)]
+    pub only_with: Option<String>,
     /// Sourced input thresholds in the datasheet's affine form
     /// `[per_vdd, offset_v]`: VIL max and VIH min are `per_vdd * VDD + offset_v`
     /// on the part's `vdd` pin. Without both, a pull divider is not judged.

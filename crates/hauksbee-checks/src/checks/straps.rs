@@ -93,7 +93,31 @@ pub fn strap_lint_with_drives(
             // that is the fault, not a non-event. This is the boot-mode latch the
             // firmware cannot override.
             if is_unconnected_net(&net.name) || net_is_isolated_to(board, net_id, comp) {
-                if strap.internal_pull == StrapInternalPull::None {
+                if let (StrapInternalPull::None, Some(selector)) =
+                    (strap.internal_pull, strap.only_with.as_deref())
+                {
+                    // A mode-qualifying strap: its float matters only when the
+                    // board can select the mode it qualifies.
+                    if selector_is_drivable(board, comp, model, selector) {
+                        report.findings.push(LintFinding {
+                            check: LintCheck::StrapPin,
+                            severity: Severity::Medium,
+                            message: format!(
+                                "{} strap pin {} ({}) is left floating (net '{}' has no pull resistor and \
+                                 the pin has no internal pull), and the board can drive the {} boot \
+                                 strap: the level this pin must hold in that mode is undefined at reset ({})",
+                                comp.reference,
+                                pad_num,
+                                strap.role,
+                                net.name,
+                                selector,
+                                strap.note
+                            ),
+                            refs: vec![comp.reference.clone()],
+                            nets: vec![net.name.clone()],
+                        });
+                    }
+                } else if strap.internal_pull == StrapInternalPull::None {
                     // High (vs the wrong-pull arm's Medium): a wrong static pull at
                     // least boots *deterministically* wrong, so it is caught on the
                     // first power-up at the bench. A float boots correctly often
@@ -119,6 +143,27 @@ pub fn strap_lint_with_drives(
         }
     }
     report
+}
+
+/// Whether the board can drive the boot-select strap `selector` of `comp`: its
+/// net is located and reaches something besides this part (a button, header,
+/// pull or host). An unlocatable selector counts as not drivable, so a card
+/// error never manufactures a finding.
+fn selector_is_drivable(
+    board: &ExtractedBoard,
+    comp: &Component,
+    model: &ModelEntry,
+    selector: &str,
+) -> bool {
+    let Some(strap) = model.straps.iter().find(|s| s.role == selector) else {
+        return false;
+    };
+    let Ok((_, net_id)) = strap_site(comp, model, strap) else {
+        return false;
+    };
+    board.net(net_id).is_some_and(|net| {
+        !is_unconnected_net(&net.name) && !net_is_isolated_to(board, net_id, comp)
+    })
 }
 
 /// Map a strap role to the pad that carries it, then to that pad's net, or say
