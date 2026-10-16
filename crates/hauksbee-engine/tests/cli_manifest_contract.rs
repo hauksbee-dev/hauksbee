@@ -127,6 +127,25 @@ fn copy_board_into(dir: &std::path::Path) {
     .unwrap();
 }
 
+/// Every string under `value` that is an absolute path, or `--flag=` followed by one.
+fn collect_absolute_strings(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(text) => {
+            let path = text.split_once('=').map_or(text.as_str(), |(_, v)| v);
+            if std::path::Path::new(path).is_absolute() {
+                out.push(text.clone());
+            }
+        }
+        serde_json::Value::Array(items) => {
+            items.iter().for_each(|v| collect_absolute_strings(v, out));
+        }
+        serde_json::Value::Object(map) => {
+            map.values().for_each(|v| collect_absolute_strings(v, out));
+        }
+        _ => {}
+    }
+}
+
 #[test]
 fn manifest_paths_are_project_relative_and_replay_from_a_copy_elsewhere() {
     let original = tempfile::tempdir().unwrap();
@@ -152,6 +171,14 @@ fn manifest_paths_are_project_relative_and_replay_from_a_copy_elsewhere() {
         "the capturing directory must not be in the manifest: {text}"
     );
     assert_eq!(doc["inputs"][0]["path"], "board.kicad_pcb");
+    // No recorded argument or option may name an absolute path, however the
+    // platform spells the capturing directory (`\\?\` prefix, 8.3 short names).
+    let mut absolute = Vec::new();
+    collect_absolute_strings(&doc["invocation"], &mut absolute);
+    assert!(
+        absolute.is_empty(),
+        "invocation holds absolute paths {absolute:?}: {text}"
+    );
     assert!(doc["root_hint"].as_str().is_some(), "{text}");
     let outcome = &doc["outcome"];
     assert!(
