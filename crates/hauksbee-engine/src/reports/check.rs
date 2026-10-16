@@ -216,6 +216,8 @@ impl CheckReport<'_> {
             &drc_structured,
             &provenance,
         ))
+        // And one on spacing nobody measured, from an input with no copper geometry.
+        .with_condition(super::drc::unmeasured_spacing_condition(input.input_kind))
         .with_judgement_scope(crate::scope::JudgementScope::of(board, &bound, &blockers));
         let run_verdict = jr.run_verdict();
         match mode {

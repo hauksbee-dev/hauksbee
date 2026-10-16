@@ -181,18 +181,77 @@ pub enum PrimKind {
 ///
 /// None today: a hard parse error still yields every primitive recovered
 /// before it, and a garbage file yields none. The `Result` keeps the signature
-/// shared with the other film readers.
+/// shared with the other film readers. A caller that must not build a board
+/// from a damaged copper film uses [`parse_copper_layer`] instead.
 pub fn parse_layer(text: &str) -> Result<Vec<CopperPrim>, String> {
+    Ok(parse_layer_checked(text).0)
+}
+
+/// [`parse_layer`] for a COPPER film, refusing one that cannot be read whole.
+///
+/// A copper layer that is truncated, garbled, or draws with something it never
+/// defined does not make an empty layer, it makes a board with its routing
+/// quietly missing: fewer nets, no clearance problems on the copper that was
+/// dropped, and a clean verdict over a board nobody read. So the layer is
+/// refused, with the reasons, rather than reconstructed from what survived.
+///
+/// # Errors
+///
+/// A sentence fragment per fault, joined by `; `, completing "it ...": the file
+/// has no `M02` end-of-file record (cut short), it holds a statement that is not
+/// RS-274X, it draws with an aperture it never defined or with an impossible
+/// size, it states no units or format, or a coordinate lies beyond any board.
+pub fn parse_copper_layer(text: &str) -> Result<Vec<CopperPrim>, String> {
+    let (prims, faults) = parse_layer_checked(text);
+    if faults.is_empty() {
+        Ok(prims)
+    } else {
+        Err(faults.join("; "))
+    }
+}
+
+/// Statements a reader may skip without losing copper: comments, attribute
+/// metadata, and the deprecated codes that carry no geometry here. Anything else
+/// the parser rejected (an unknown word, a malformed aperture or coordinate, an
+/// operation before the format is declared) is geometry this reader dropped.
+fn skippable_statement(line: &str) -> bool {
+    let line = line.trim();
+    if let Some(body) = line.strip_prefix('%') {
+        return [
+            "TF", "TA", "TO", "TD", "AM", "LN", "IN", "IP", "OF", "SF", "AS", "MI", "IO", "IR",
+        ]
+        .iter()
+        .any(|p| body.starts_with(p));
+    }
+    let code = line.trim_end_matches('*');
+    line.starts_with("G04")
+        || matches!(
+            code,
+            "G54" | "G55" | "G70" | "G71" | "G74" | "G75" | "G90" | "G91" | "M00" | "M01"
+        )
+}
+
+/// Largest coordinate or aperture size (in the file's own units) that any real
+/// board reaches: 100 metres in millimetres, far past a 10-metre panel.
+const MAX_SANE_EXTENT: f64 = 100_000.0;
+
+fn parse_layer_checked(text: &str) -> (Vec<CopperPrim>, Vec<String>) {
     let normalized = normalize_rs274x(text);
     // `parse` returns the partially-built document even on a hard error (the
     // error and the doc-so-far are paired). Per-command parse errors are kept
     // inside `doc.commands` as `Err` and skipped by `doc.commands()`. We want
     // every primitive we *can* recover, so we take the doc in both cases; a
-    // truly empty/garbage file simply yields no primitives.
+    // truly empty/garbage file simply yields no primitives. What was dropped is
+    // reported alongside, for the caller that cannot accept a partial read.
+    let mut faults: Vec<String> = Vec::new();
     let doc = match gerber_parser::parse(BufReader::new(normalized.as_bytes())) {
         Ok(doc) => doc,
-        Err((doc, _err)) => doc,
+        Err((doc, err)) => {
+            faults.push(format!("could not be read to the end ({err})"));
+            doc
+        }
     };
+    note_unreadable_statements(&doc, &mut faults);
 
     let mut plotter = Plotter::new(&doc);
     for cmd in doc.commands() {
@@ -201,9 +260,85 @@ pub fn parse_layer(text: &str) -> Result<Vec<CopperPrim>, String> {
     // A well-formed file closes every `%SR%` with `%SR*%`, but tolerate a block
     // left open at end-of-file (M02 without an explicit close) by flushing it.
     plotter.flush_step_repeat();
+    for fault in std::mem::take(&mut plotter.faults) {
+        if !faults.contains(&fault) {
+            faults.push(fault);
+        }
+    }
     let mut out = plotter.out;
     apply_clears(&mut out, plotter.clears);
-    Ok(out)
+    (out, faults)
+}
+
+/// What the parser rejected or could not find, as faults (see
+/// [`parse_copper_layer`]).
+fn note_unreadable_statements(doc: &gerber_parser::GerberDoc, faults: &mut Vec<String>) {
+    use gerber_types::MCode;
+    const MAX_LISTED: usize = 3;
+    let mut ended = false;
+    let mut listed = 0;
+    for cmd in &doc.commands {
+        match cmd {
+            Ok(Command::FunctionCode(FunctionCode::MCode(MCode::EndOfFile))) => {
+                // Whatever follows `M02` is outside the file.
+                ended = true;
+                break;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                if matches!(e.error, gerber_parser::ContentError::NoEndOfFile) {
+                    continue;
+                }
+                let Some((line_no, content)) = &e.line else {
+                    continue;
+                };
+                if skippable_statement(content) || listed >= MAX_LISTED {
+                    continue;
+                }
+                listed += 1;
+                let shown: String = content.chars().take(40).collect();
+                faults.push(format!(
+                    "has a statement that is not valid RS-274X at line {line_no} (`{shown}`)"
+                ));
+            }
+        }
+    }
+    if !ended {
+        faults.push(
+            "has no M02 end-of-file record, so it was cut short or is not a gerber file"
+                .to_string(),
+        );
+    }
+    let draws = doc.commands().iter().any(|c| {
+        matches!(
+            c,
+            Command::FunctionCode(FunctionCode::DCode(gerber_types::DCode::Operation(_)))
+        )
+    });
+    if draws && doc.units.is_none() {
+        faults.push(
+            "never states its units (%MOMM or %MOIN), so the scale of every coordinate is unknown"
+                .to_string(),
+        );
+    }
+    for (code, aperture) in &doc.apertures {
+        let sizes: Vec<f64> = match aperture {
+            Aperture::Circle(Circle { diameter, .. })
+            | Aperture::Polygon(GPolygon { diameter, .. }) => vec![*diameter],
+            Aperture::Rectangle(Rectangular { x, y, .. })
+            | Aperture::Obround(Rectangular { x, y, .. }) => vec![*x, *y],
+            Aperture::Macro(..) => Vec::new(),
+        };
+        if sizes
+            .iter()
+            .any(|v| !v.is_finite() || *v < 0.0 || *v > MAX_SANE_EXTENT)
+        {
+            faults.push(format!(
+                "defines aperture D{code} with a size that is not a real length"
+            ));
+            break;
+        }
+    }
 }
 
 /// The closed outlines that bound a shape's copper, for use as cut contours.
@@ -1517,6 +1652,11 @@ struct Plotter<'a> {
     ab_depth: usize,
     /// Polarity to restore when the outermost `%AB` body closes.
     ab_saved_dark: bool,
+    /// Codes defined as `%AB` blocks. The plotter keeps no image for them, but
+    /// flashing one is legal, so it must not read as an undefined aperture.
+    block_codes: std::collections::HashSet<i32>,
+    /// Why the film cannot be trusted whole (see [`parse_copper_layer`]).
+    faults: Vec<String>,
     /// Arc interpolation quadrant mode. `false` = multi-quadrant (G75, the
     /// modern default and what KiCad emits): I/J are signed vectors to the
     /// centre. `true` = single-quadrant (G74, legacy CAM dialects): I/J are
@@ -1655,6 +1795,8 @@ impl<'a> Plotter<'a> {
             mirror_identity: true,
             ab_depth: 0,
             ab_saved_dark: true,
+            block_codes: std::collections::HashSet::new(),
+            faults: Vec::new(),
             single_quadrant: false,
             sr: None,
             cur_aper_function: None,
@@ -1741,6 +1883,46 @@ impl<'a> Plotter<'a> {
         }
     }
 
+    /// Record a reason the film cannot be trusted whole (first eight kept).
+    fn fault(&mut self, why: String) {
+        if self.faults.len() < 8 && !self.faults.contains(&why) {
+            self.faults.push(why);
+        }
+    }
+
+    /// A dark draw or flash needs an aperture that exists. Drawing with an
+    /// undefined one paints nothing (a flash) or a guessed hairline (a stroke),
+    /// either way copper the film meant that is not in the reconstruction.
+    fn require_aperture(&mut self) {
+        if self.ab_depth > 0 {
+            return;
+        }
+        match self.aperture {
+            None => self.fault("draws before any aperture is selected".to_string()),
+            Some(code)
+                if !self.doc.apertures.contains_key(&code) && !self.block_codes.contains(&code) =>
+            {
+                self.fault(format!(
+                    "draws with aperture D{code}, which it never defines"
+                ));
+            }
+            Some(_) => {}
+        }
+    }
+
+    /// The pen must stay on the board: a coordinate that is not a finite length,
+    /// or lies beyond a hundred metres, is a corrupted number, and everything
+    /// drawn from it would be placed nowhere real.
+    fn check_position(&mut self) {
+        let limit = MAX_SANE_EXTENT * self.to_mm;
+        if !(self.x.is_finite() && self.y.is_finite())
+            || self.x.abs() > limit
+            || self.y.abs() > limit
+        {
+            self.fault("has a coordinate far outside any real board".to_string());
+        }
+    }
+
     fn coord(&self, c: &Coordinates) -> (f64, f64) {
         let nx = c.x.map(num).map_or(self.x, |v| v * self.to_mm);
         let ny = c.y.map(num).map_or(self.y, |v| v * self.to_mm);
@@ -1769,7 +1951,10 @@ impl<'a> Plotter<'a> {
             },
             Command::FunctionCode(FunctionCode::DCode(d)) => match d {
                 gerber_types::DCode::SelectAperture(code) => self.aperture = Some(*code),
-                gerber_types::DCode::Operation(op) => self.operation(op),
+                gerber_types::DCode::Operation(op) => {
+                    self.operation(op);
+                    self.check_position();
+                }
             },
             Command::ExtendedCode(ExtendedCode::LoadPolarity(p)) => {
                 self.dark = matches!(p, Polarity::Dark);
@@ -1794,7 +1979,8 @@ impl<'a> Plotter<'a> {
                 self.mirror_identity = matches!(m, gerber_types::Mirroring::None);
             }
             Command::ExtendedCode(ExtendedCode::ApertureBlock(ab)) => match ab {
-                gerber_types::ApertureBlock::Open { .. } => {
+                gerber_types::ApertureBlock::Open { code } => {
+                    self.block_codes.insert(*code);
                     if self.ab_depth == 0 {
                         self.ab_saved_dark = self.dark;
                     }
@@ -2022,6 +2208,7 @@ impl<'a> Plotter<'a> {
                     contour.extend(seg);
                 } else if self.dark {
                     // A routed segment of the current aperture's width.
+                    self.require_aperture();
                     let width = self.aperture_line_width();
                     match self.interp {
                         InterpolationMode::Linear => {
@@ -2068,6 +2255,7 @@ impl<'a> Plotter<'a> {
                     self.y = ny;
                 }
                 if self.dark {
+                    self.require_aperture();
                     self.flash();
                 } else if let Some(shape) = self.flash_shape_for_clear() {
                     // A clear flash is an antipad: the classic way a negative
@@ -4153,5 +4341,129 @@ M02*
         } else {
             panic!("macro flash must instantiate a polygon, not a fallback disc");
         }
+    }
+    /// A complete, legal two-flash, one-track copper film.
+    const LEGAL_COPPER: &str = "\
+G04 Layer*
+%FSLAX46Y46*%
+%MOMM*%
+%LPD*%
+%ADD10C,0.600000*%
+D10*
+X10000000Y10000000D03*
+X11000000Y10000000D03*
+X10000000Y10000000D02*
+X11000000Y10000000D01*
+M02*
+";
+
+    fn copper_fault(text: &str) -> String {
+        parse_copper_layer(text).expect_err("an unreadable copper film must be refused")
+    }
+
+    #[test]
+    fn a_legal_copper_film_is_read_whole() {
+        let prims = parse_copper_layer(LEGAL_COPPER).expect("legal film");
+        assert!(!prims.is_empty());
+    }
+
+    #[test]
+    fn an_intentionally_empty_but_complete_layer_is_legal() {
+        let g = "%FSLAX46Y46*%\n%MOMM*%\n%LPD*%\nM02*\n";
+        assert!(parse_copper_layer(g).expect("empty layer").is_empty());
+    }
+
+    #[test]
+    fn legal_ignorable_statements_do_not_refuse_a_film() {
+        let g = LEGAL_COPPER.replace(
+            "%LPD*%",
+            "%LPD*%\n%TF.GenerationSoftware,KiCad,Pcbnew,9.0*%\nG75*\nG90*\n%LNTop*%",
+        );
+        assert!(
+            parse_copper_layer(&g).is_ok(),
+            "{:?}",
+            parse_copper_layer(&g)
+        );
+    }
+
+    #[test]
+    fn trailing_bytes_after_m02_are_outside_the_file() {
+        let g = format!("{LEGAL_COPPER}\x1a\n");
+        assert!(parse_copper_layer(&g).is_ok());
+    }
+
+    #[test]
+    fn empty_and_garbage_copper_are_refused() {
+        assert!(copper_fault("").contains("M02"));
+        let g = copper_fault("hello world\n");
+        assert!(
+            g.contains("not valid RS-274X") && g.contains("hello world"),
+            "{g}"
+        );
+    }
+
+    #[test]
+    fn truncated_copper_is_refused_as_cut_short() {
+        let no_m02 = LEGAL_COPPER.replace("M02*\n", "");
+        assert!(copper_fault(&no_m02).contains("cut short"));
+        let half = &LEGAL_COPPER[..LEGAL_COPPER.len() / 2];
+        assert!(copper_fault(half).contains("cut short"));
+    }
+
+    #[test]
+    fn copper_without_a_format_or_units_is_refused() {
+        let no_fs = LEGAL_COPPER.replace("%FSLAX46Y46*%\n", "");
+        assert!(!copper_fault(&no_fs).is_empty());
+        let no_mo = LEGAL_COPPER.replace("%MOMM*%\n", "");
+        assert!(copper_fault(&no_mo).contains("units"));
+    }
+
+    #[test]
+    fn copper_drawn_with_an_undefined_aperture_is_refused() {
+        let g = LEGAL_COPPER.replacen("D10*\nX10", "D11*\nX10", 1);
+        let why = copper_fault(&g);
+        assert!(
+            why.contains("aperture D11") && why.contains("never defines"),
+            "{why}"
+        );
+        // The control: the same flash under the defined aperture is fine.
+        assert!(parse_copper_layer(LEGAL_COPPER).is_ok());
+    }
+
+    #[test]
+    fn a_flashed_aperture_block_is_not_an_undefined_aperture() {
+        let g = "\
+%FSLAX46Y46*%
+%MOMM*%
+%ADD10C,0.6*%
+%ABD11*%
+D10*
+X0Y0D03*
+%AB*%
+D11*
+X5000000Y5000000D03*
+M02*
+";
+        assert!(parse_copper_layer(g).is_ok(), "{:?}", parse_copper_layer(g));
+    }
+
+    #[test]
+    fn impossible_aperture_sizes_and_coordinates_are_refused() {
+        for size in ["-0.6", "nan", "1e9"] {
+            let g = LEGAL_COPPER.replace("C,0.600000", &format!("C,{size}"));
+            assert!(
+                parse_copper_layer(&g).is_err(),
+                "aperture size {size} must be refused"
+            );
+        }
+        let far = LEGAL_COPPER.replace("X11000000", "X99999999999999999");
+        assert!(copper_fault(&far).contains("outside any real board"));
+    }
+
+    #[test]
+    fn the_lenient_reader_still_returns_what_it_could_parse() {
+        // Outlines and drill films keep the forgiving read.
+        let g = LEGAL_COPPER.replace("M02*\n", "");
+        assert!(!parse_layer(&g).unwrap().is_empty());
     }
 }

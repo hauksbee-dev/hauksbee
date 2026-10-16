@@ -1606,6 +1606,7 @@ fn analyze_normalized_with_context(
             .as_ref()
             .and_then(|p| crate::reports::drc::default_rules_condition(&drc_structured, p)),
     )
+    .with_condition(crate::reports::drc::unmeasured_spacing_condition(norm.kind))
     .with_judgement_scope(crate::scope::JudgementScope::of(
         board,
         bound,

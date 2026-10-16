@@ -642,7 +642,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
     // Read raw bytes first: an Altium `.PcbDoc` is a binary OLE2 container and
     // would fail a UTF-8 read. Text formats are recovered losslessly from
     // these bytes. Keep the actionable not-found error.
-    let raw = std::fs::read(path).map_err(|e| {
+    let raw = hauksbee_extract::read_regular_file(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             BoardInputError::NotFound {
                 path: path.display().to_string(),

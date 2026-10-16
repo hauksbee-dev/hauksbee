@@ -1031,6 +1031,34 @@ pub(crate) fn merge_duplicate_references(components: Vec<Component>) -> Vec<Comp
     out
 }
 
+/// Read an input file whole, but only if it is a regular file.
+///
+/// `std::fs::read` on a device or pipe has no end: a board path that is (or
+/// links to) `/dev/zero` grows the buffer until the process is killed, and a
+/// FIFO with no writer blocks forever. Neither is a board, so both are refused
+/// up front with a message that says why, for every reader that opens a path.
+///
+/// # Errors
+///
+/// An [`std::io::ErrorKind::InvalidInput`] error for anything that is not a
+/// regular file, otherwise whatever opening or reading the file raises (a
+/// missing file is still [`std::io::ErrorKind::NotFound`]).
+pub fn read_regular_file(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    let kind = std::fs::metadata(path)?.file_type();
+    if !kind.is_file() {
+        let what = if kind.is_dir() {
+            "a directory"
+        } else {
+            "not a regular file (a device, pipe or socket)"
+        };
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{what}; hauksbee reads board files, not streams"),
+        ));
+    }
+    std::fs::read(path)
+}
+
 /// Builders for the hand-made boards the unit tests use.
 #[cfg(test)]
 pub(crate) mod testutil {
@@ -1432,5 +1460,46 @@ mod schematic_pin_name_tests {
         for ((set, device, tech), want) in cases {
             assert_eq!(pn(set, device, tech).as_deref(), want, "{set} {device}");
         }
+    }
+}
+
+#[cfg(test)]
+mod read_regular_file_tests {
+    use super::read_regular_file;
+
+    #[test]
+    fn a_regular_file_reads_whole() {
+        let path = std::env::temp_dir().join(format!("hauksbee_regular_{}", std::process::id()));
+        std::fs::write(&path, b"(kicad_pcb)").unwrap();
+        assert_eq!(read_regular_file(&path).unwrap(), b"(kicad_pcb)");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_missing_file_stays_not_found() {
+        let err = read_regular_file(std::path::Path::new("/no/such/hauksbee/board")).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_endless_device_is_refused_instead_of_read_until_the_process_dies() {
+        // /dev/zero never ends: `fs::read` on it grows until the OOM killer
+        // answers. A symlink to it is the same file once metadata follows it.
+        let err = read_regular_file(std::path::Path::new("/dev/zero")).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("not a regular file"), "{err}");
+        let link = std::env::temp_dir().join(format!("hauksbee_zero_link_{}", std::process::id()));
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink("/dev/zero", &link).unwrap();
+        let through = read_regular_file(&link).unwrap_err();
+        let _ = std::fs::remove_file(&link);
+        assert_eq!(through.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn a_directory_is_refused_with_its_own_wording() {
+        let err = read_regular_file(&std::env::temp_dir()).unwrap_err();
+        assert!(err.to_string().contains("a directory"), "{err}");
     }
 }

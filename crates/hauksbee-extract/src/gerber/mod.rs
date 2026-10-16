@@ -801,8 +801,18 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
             )?;
             declared_physical_max = declared_physical_max.max(l);
         }
-        layer_prims[*index] = rs274x::parse_layer(&text)
-            .map_err(|e| ExtractError::Xml(format!("parse copper {}: {e}", film(path))))?;
+        // A copper film that cannot be read whole is refused by name. Building
+        // the board from whatever survived would report fewer nets than the job
+        // has and judge a half-read board as if it were the whole one.
+        layer_prims[*index] = rs274x::parse_copper_layer(&text).map_err(|e| {
+            ExtractError::Gerber(format!(
+                "copper layer {} cannot be read: it {e}. Reconstructing the board without \
+                 that layer would drop its routing and report a smaller, wrong board, so the \
+                 job is refused. Re-export the layer from your CAD tool, or remove the file \
+                 if it is not part of this board.",
+                film(path)
+            ))
+        })?;
     }
 
     // Read every drill file into hits and work out what it says about plating
@@ -1706,7 +1716,7 @@ pub fn from_gerber_zip_named(
 ) -> Result<GerberExtraction, ExtractError> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
-    let bytes = std::fs::read(zip_path)
+    let bytes = crate::read_regular_file(zip_path)
         .map_err(|e| ExtractError::Xml(format!("read zip {}: {e}", film(zip_path))))?;
     // Uniqueness only, and nothing here reaches the report: pid plus a
     // process-local counter plus the clock, because a bare clock reading can
@@ -1761,10 +1771,27 @@ fn single_subdir(dir: &Path) -> Option<PathBuf> {
     (it.next().is_none() && first.is_dir()).then_some(first)
 }
 
-/// Minimal zip extractor (stored + deflate) so we don't pull a zip crate for
-/// one use. Most fab zips are deflate.
+/// Unpack a gerber zip into `out`, refusing one that inflates past the same
+/// total ceiling as an ODB++ archive.
+///
+/// The ceiling covers the WHOLE archive, not each member: a bomb split across a
+/// thousand members must not slip past a per-member limit. It is checked against
+/// each member's declared size BEFORE inflating (so a lying header cannot buy
+/// memory) and enforced again while reading (so a header that understates the
+/// payload is caught), and every member written to disk counts, so the scratch
+/// directory is bounded too. Hitting it is an error naming the limit, not a
+/// truncated read: a job silently missing its last layers is the half-board this
+/// crate refuses to produce.
 fn unzip_into(bytes: &[u8], out: &Path) -> Result<(), ExtractError> {
+    unzip_within(bytes, out, crate::odbpp::tree::MAX_INFLATED_BYTES)
+}
+
+/// [`unzip_into`] with the ceiling supplied, so a test can prove the refusal
+/// without inflating half a gigabyte.
+fn unzip_within(bytes: &[u8], out: &Path, mut budget: u64) -> Result<(), ExtractError> {
     use std::io::Read;
+    let too_large =
+        || ExtractError::Gerber(crate::odbpp::tree::expansion_limit_message("gerber job"));
     let reader = std::io::Cursor::new(bytes);
     let mut archive =
         zip::ZipArchive::new(reader).map_err(|e| ExtractError::Xml(format!("zip open: {e}")))?;
@@ -1781,6 +1808,9 @@ fn unzip_into(bytes: &[u8], out: &Path) -> Result<(), ExtractError> {
         if is_archive_noise(&name) {
             continue;
         }
+        if file.size() > budget {
+            return Err(too_large());
+        }
         // The archive's own layout is kept: two films with one basename in
         // different folders must not overwrite each other, and the directory
         // reader recurses anyway.
@@ -1790,8 +1820,16 @@ fn unzip_into(bytes: &[u8], out: &Path) -> Result<(), ExtractError> {
                 .map_err(|e| ExtractError::Xml(format!("zip mkdir {}: {e}", film(parent))))?;
         }
         let mut buf = Vec::with_capacity(usize::try_from(file.size()).unwrap_or(0));
-        file.read_to_end(&mut buf)
+        // `take(budget + 1)` so a member that exactly fills the budget succeeds
+        // and one that exceeds it is detected rather than silently truncated.
+        (&mut file)
+            .take(budget + 1)
+            .read_to_end(&mut buf)
             .map_err(|e| ExtractError::Xml(format!("zip read: {e}")))?;
+        if buf.len() as u64 > budget {
+            return Err(too_large());
+        }
+        budget -= buf.len() as u64;
         std::fs::write(&dest, buf)
             .map_err(|e| ExtractError::Xml(format!("zip write {}: {e}", film(&dest))))?;
     }
@@ -2134,5 +2172,72 @@ mod drill_sniff_tests {
         ));
         assert!(drill_is_gerber_format("%ADD10C,0.3*%\n", Some("drl")));
         assert!(drill_is_gerber_format("G04 drill*\n", Some("art")));
+    }
+}
+
+#[cfg(test)]
+mod unzip_cap_tests {
+    use super::unzip_within;
+
+    /// A deflated zip of (name, bytes) members.
+    fn zip_of(members: &[(&str, Vec<u8>)]) -> Vec<u8> {
+        use std::io::Write;
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for (name, bytes) in members {
+            w.start_file(*name, opts).unwrap();
+            w.write_all(bytes).unwrap();
+        }
+        w.finish().unwrap().into_inner()
+    }
+
+    fn unzip_with_budget(zip: &[u8], budget: u64) -> Result<(), super::ExtractError> {
+        let dir = std::env::temp_dir().join(format!(
+            "hauksbee_unzip_cap_{}_{budget}_{}",
+            std::process::id(),
+            zip.len()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let result = unzip_within(zip, &dir, budget);
+        let _ = std::fs::remove_dir_all(&dir);
+        result
+    }
+
+    #[test]
+    fn a_gerber_zip_that_inflates_past_the_ceiling_is_refused_with_the_shared_message() {
+        // 2 MiB of zeros deflates to a few KiB: the classic bomb shape.
+        let zip = zip_of(&[("board-F_Cu.gbr", vec![0u8; 2 << 20])]);
+        assert!(zip.len() < 64 << 10, "the fixture must be a small zip");
+        let err = unzip_with_budget(&zip, 1 << 20)
+            .expect_err("past the ceiling")
+            .to_string();
+        assert!(err.contains("gerber job expands to more than"), "{err}");
+        assert!(
+            err.contains("unpack it and point hauksbee at the directory"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn the_ceiling_covers_the_whole_archive_not_each_member() {
+        let two = zip_of(&[
+            ("a.gbr", vec![0u8; 700 << 10]),
+            ("b.gbr", vec![0u8; 700 << 10]),
+        ]);
+        assert!(
+            unzip_with_budget(&two, 1 << 20).is_err(),
+            "two members exceed one ceiling"
+        );
+        // The control: one member of the same size fits the same ceiling.
+        let one = zip_of(&[("a.gbr", vec![0u8; 700 << 10])]);
+        assert!(unzip_with_budget(&one, 1 << 20).is_ok());
+    }
+
+    #[test]
+    fn an_archive_that_exactly_fills_the_ceiling_is_legal() {
+        let zip = zip_of(&[("a.gbr", vec![7u8; 1 << 20])]);
+        assert!(unzip_with_budget(&zip, 1 << 20).is_ok());
+        assert!(unzip_with_budget(&zip, (1 << 20) - 1).is_err());
     }
 }

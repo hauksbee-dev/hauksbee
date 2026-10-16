@@ -57,14 +57,7 @@ impl OdbTree {
     /// so a legitimately enormous job reads as a limit to raise rather than as a
     /// corrupt file.
     fn too_large() -> ExtractError {
-        ExtractError::Odb(format!(
-            "this ODB++ job expands to more than {} MiB, which is past the limit \
-             hauksbee will hold in memory for one job. That is far larger than any \
-             real fab job, so the archive is most likely malformed or hostile; if \
-             it genuinely is that big, unpack it and point hauksbee at the \
-             directory instead",
-            MAX_INFLATED_BYTES / (1024 * 1024)
-        ))
+        ExtractError::Odb(expansion_limit_message("ODB++ job"))
     }
 
     /// Insert one member, inflating and un-suffixing a `.Z`/`.gz` payload.
@@ -308,6 +301,21 @@ pub fn is_gzip(bytes: &[u8]) -> bool {
 /// mis-named archive readable and keeps a random binary out.
 pub fn looks_like_tar(bytes: &[u8]) -> bool {
     bytes.len() >= 265 && (&bytes[257..262] == b"ustar")
+}
+
+/// The refusal for an archive that expands past [`MAX_INFLATED_BYTES`], worded
+/// once for every archive reader (ODB++ and gerber zips) so the same hostile
+/// upload gets the same answer whichever door it comes through. `what` names the
+/// job kind, e.g. `"gerber job"`.
+pub(crate) fn expansion_limit_message(what: &str) -> String {
+    format!(
+        "this {what} expands to more than {} MiB, which is past the limit \
+         hauksbee will hold in memory for one job. That is far larger than any \
+         real fab job, so the archive is most likely malformed or hostile; if \
+         it genuinely is that big, unpack it and point hauksbee at the \
+         directory instead",
+        MAX_INFLATED_BYTES / (1024 * 1024)
+    )
 }
 
 /// The ceiling on what one job may inflate to, in total.

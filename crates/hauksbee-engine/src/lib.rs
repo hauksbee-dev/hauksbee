@@ -36,6 +36,10 @@
 //! had before the split, so `hauksbee_engine::binder::bind_board` and friends
 //! are unchanged for downstream crates.
 
+// Must stay first: it shadows `print!`/`println!`/`eprint!`/`eprintln!` for every
+// module declared after it, so board-file text cannot reach a terminal raw.
+#[macro_use]
+pub mod safe_out;
 pub mod boardcode;
 pub mod commands;
 pub mod deps;

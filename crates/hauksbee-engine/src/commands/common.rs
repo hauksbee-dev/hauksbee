@@ -51,7 +51,7 @@ pub fn read_board_text(path: &Path) -> anyhow::Result<String> {
 
 /// The board file's bytes, with [`read_board_text`]'s not-found guidance.
 fn read_board_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
-    std::fs::read(path).map_err(|e| {
+    hauksbee_extract::read_regular_file(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             // The suggestion matches the INVOKING surface (this reader serves
             // to-code): a `hauksbee run` command here answered the wrong

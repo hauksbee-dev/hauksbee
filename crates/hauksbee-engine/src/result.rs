@@ -1466,6 +1466,9 @@ impl ClearanceRuleProvenance {
                 "CLEARANCE RULE SOURCE: TOOL DEFAULT {:.3} mm; this importer did not read design rules, so these are default rules, not your rules.",
                 self.value_mm
             ),
+            // A zero report-wide value is no rule at all: nothing could be flagged
+            // against it, so it must not read as a rule the board file carries.
+            ClearanceRuleSource::BoardFile if self.value_mm <= 0.0 => "CLEARANCE RULE SOURCE: none; this input carries no clearance rule Hauksbee reads, so no copper spacing was measured.".to_string(),
             ClearanceRuleSource::BoardFile => format!(
                 "CLEARANCE RULE SOURCE: clearance carried by the board file (report-wide value {:.3} mm).",
                 self.value_mm
