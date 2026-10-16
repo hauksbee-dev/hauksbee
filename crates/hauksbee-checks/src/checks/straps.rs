@@ -188,7 +188,7 @@ fn selector_is_drivable(
                 .iter()
                 .filter_map(|p| p.net)
                 .filter(|id| *id != net_id);
-            return !far.all(holds_normal);
+            return !far.all(&holds_normal);
         }
         !hauksbee_extract::is_capacitor(c)
     })
@@ -1035,8 +1035,14 @@ vih = [0.0, 2.0]
         ] {
             assert!(got[0].1.contains(needle), "'{needle}' not in {}", got[0].1);
         }
-        // A pull-down on GPIO9 selects download mode outright: still a fault.
-        assert_eq!(run(float, vec![on("R6", "10k", 5, 1)]).len(), 1);
+        // A pull-down on GPIO9 selects download mode outright: GPIO8's float is
+        // still a fault (beside GPIO9's own wrong-level finding).
+        let down = run(float, vec![on("R6", "10k", 5, 1)]);
+        assert_eq!(
+            down.iter().filter(|(_, m)| m.contains("(gpio8)")).count(),
+            1,
+            "{down:#?}"
+        );
         // Fixed: a pull-up holds GPIO8 high.
         let fixed = run("/GPIO8", vec![up9(), button(), on("R23", "10k", 3, 2)]);
         assert!(fixed.is_empty(), "{fixed:#?}");
