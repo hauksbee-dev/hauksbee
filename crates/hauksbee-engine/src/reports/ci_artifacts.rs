@@ -211,12 +211,13 @@ pub fn set_current_board_path(board_path: &Path) {
     });
 }
 
-/// Record the run's machine verdict (`pass` | `fail` | `invalid`, its reason
-/// sentence and whether it is a partly judged answer), the one derivation
-/// `--json` prints. The artifact writers then guarantee that JUnit and SARIF
-/// are red whenever it is not a pass, even when the findings they were handed
-/// are all non-gating (an abstained analysis, a DC operating point that did not
-/// solve).
+/// Record the run's machine verdict (`pass` | `fail` | `invalid`).
+///
+/// It is the one derivation `--json` prints, with its reason sentence and
+/// whether it is a partly judged answer. The artifact writers then guarantee
+/// that `JUnit` and SARIF are red whenever it is not a pass, even when the
+/// findings they were handed are all non-gating (an abstained analysis, a DC
+/// operating point that did not solve).
 pub fn note_verdict(verdict: &str, partial: bool, reason: Option<&str>) {
     CURRENT_RUN.with(|slot| {
         if let Some(state) = slot.borrow_mut().as_mut() {
@@ -231,7 +232,7 @@ pub fn note_verdict(verdict: &str, partial: bool, reason: Option<&str>) {
 
 /// The findings the writers render: the run's own, plus one gate-grade entry
 /// when the run's verdict is not a pass and nothing else in the document is red
-/// (no failing finding, no refusal). The invariant: JUnit and SARIF are never
+/// (no failing finding, no refusal). The invariant: `JUnit` and SARIF are never
 /// green beside a `--json` verdict that is not `pass`.
 fn artifact_findings(
     findings: &[JsonFinding],
@@ -1002,7 +1003,7 @@ mod tests {
             board_name: "b.brd".into(),
             board_path: "b.brd".into(),
             junit: Some(junit.clone()),
-            sarif: Some(sarif.clone()),
+            sarif: Some(sarif),
             findings: Vec::new(),
             refusal: None,
             selected_checks: vec!["drc".into(), "lint".into(), "si".into(), "usb_c".into()],

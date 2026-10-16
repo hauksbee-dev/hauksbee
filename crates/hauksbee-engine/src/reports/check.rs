@@ -1494,7 +1494,6 @@ until = "2030-01-01"
                         } else {
                             Vec::new()
                         },
-                        ..NetLintReport::default()
                     };
                     let si = SiReport::default();
                     let mut findings = lint_findings_json(&lint_report);
