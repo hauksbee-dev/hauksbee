@@ -476,7 +476,14 @@ fn render_spec_at_with_run_hint(
     // Rails the binder found by name but could not put a voltage to. Same
     // detector the run uses, so the scaffold asks about exactly the nets the
     // report would later warn about.
-    let unpowered = runner::unpowered_supply_nets(&extracted, &bound, &[]);
+    // A rail a board resistor feeds from a powered node is the board's own
+    // answer, not a gap: the run solves it as wired, so no [[supply]] is
+    // proposed there (the same rule the run's dead-rail census applies).
+    let (unpowered, resistor_fed) = crate::rail_feed::split_dead_and_fed(
+        &bound,
+        runner::unpowered_supply_nets(&extracted, &bound, &[]),
+        &[],
+    );
 
     // Reference rail voltage the boot-coverage "driven high" threshold keys off:
     // the highest detected supply or rail, falling back to 3.3 V.
@@ -629,6 +636,16 @@ fn render_spec_at_with_run_hint(
                      # current_limit_a = {BENCH_LIMIT_A:.1}"
                 );
             }
+        }
+    }
+
+    // Say why a supply-named rail got no question, so its absence is not a gap.
+    if !resistor_fed.is_empty() {
+        s.push_str(
+            "\n# These supply-named nets are fed by the board itself, so no supply is proposed:\n",
+        );
+        for fed in &resistor_fed {
+            let _ = writeln!(s, "# {}", fed.reason());
         }
     }
 

@@ -36,6 +36,7 @@ pub mod integrate;
 pub mod lint;
 pub mod measure;
 pub mod progress;
+pub(crate) mod rail_feed;
 pub mod report;
 pub mod runner;
 pub mod scenarios;
@@ -754,7 +755,17 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         }
     }
     evidence = evidence.with_maps(maps);
-    let any_dead_rail = outcomes.iter().any(|o| !o.dead_rails.is_empty());
+    // A rail only a do-not-populate part would power is dead because of the
+    // assembly the run was asked to judge: a failure there is a true answer
+    // about that assembly, and the banner names the fit that changes it. Only
+    // a rail whose voltage is simply unknown makes the operating point fiction.
+    let any_dead_rail = outcomes.iter().any(|o| {
+        let dnp = |net: &String| {
+            let opening = format!("{net}: {}", hauksbee_engine::DNP_CAUSE_OPENING);
+            o.dead_rail_causes.iter().any(|c| c.starts_with(&opening))
+        };
+        o.dead_rails.iter().any(|net| !dnp(net))
+    });
     for result in &mut results {
         if floating_reds.contains(&result.label) {
             // A floating-net RED already carries its own diagnosis; the

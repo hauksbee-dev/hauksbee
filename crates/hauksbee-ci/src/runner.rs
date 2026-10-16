@@ -546,7 +546,8 @@ pub struct RunOutcome {
     /// fiction, so every analog number in this outcome has to be read knowing
     /// they were dead.
     pub dead_rails: Vec<String>,
-    /// `NET: sentence` for each dead rail a held-off regulator explains.
+    /// `NET: sentence` for each dead rail a held-off regulator or a
+    /// do-not-populate source explains.
     pub dead_rail_causes: Vec<String>,
     /// Ids of bus peripherals that were bound but NEVER exercised (their
     /// platform models no matching bus controller). A `peripheral` assertion
@@ -732,40 +733,25 @@ fn dead_rails(board: &ExtractedBoard, bound: &BoundBoard, spec: &Spec) -> Vec<St
         .map(|s| s.net.as_str())
         .chain(spec.net_drives.iter().map(|d| d.net.as_str()))
         .collect();
-    let held_off: Vec<String> = hauksbee_engine::held_off_rails(bound)
-        .into_iter()
-        .map(|(net, _)| net)
-        .collect();
-    let powered: std::collections::HashSet<NodeId> = bound
-        .supplies
-        .iter()
-        .map(|leg| leg.net_name.as_str())
-        .chain(answered.iter().copied())
-        .filter_map(|net| bound.node(net))
-        .collect();
-    unpowered_supply_nets(board, bound, &answered)
-        .into_iter()
-        .filter(|rail| {
-            held_off.contains(rail)
-                || !bound
-                    .node(rail)
-                    .is_some_and(|node| resistor_fed(bound, node, &powered))
-        })
-        .collect()
+    let unpowered = unpowered_supply_nets(board, bound, &answered);
+    crate::rail_feed::split_dead_and_fed(bound, unpowered, &answered).0
 }
 
-/// Whether a board resistor ties `node` directly to one of the `powered` nodes.
-fn resistor_fed(
+/// [`hauksbee_engine::dnp_sourced_rails`] for a run: a rail the spec powers or
+/// drives has its answer.
+fn dnp_sourced_rails(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
     bound: &BoundBoard,
-    node: NodeId,
-    powered: &std::collections::HashSet<NodeId>,
-) -> bool {
-    bound.circuit.iter().any(|(_, device)| match device {
-        Device::Resistor { a, b, .. } => {
-            (*a == node && powered.contains(b)) || (*b == node && powered.contains(a))
-        }
-        _ => false,
-    })
+    spec: &Spec,
+) -> Vec<hauksbee_engine::DnpSourcedRail> {
+    let answered = |net: &str| {
+        spec.supplies.iter().any(|s| s.net == net) || spec.net_drives.iter().any(|d| d.net == net)
+    };
+    hauksbee_engine::dnp_sourced_rails(board, lib, bound)
+        .into_iter()
+        .filter(|rail| !answered(&rail.net))
+        .collect()
 }
 
 /// Run the spec and return one [`RunOutcome`] per seed (>=1).
@@ -2110,12 +2096,21 @@ fn run_one(
     // can POWER a rail has been applied by then, so anything still unpowered
     // is unpowered for the whole run, and any analog number below has to be
     // read knowing it.
-    let dead_rails = bias_bound(&mut bound, &board, spec, &drives)?;
-    let dead_rail_causes = hauksbee_engine::held_off_rails(&bound)
+    let mut dead_rails = bias_bound(&mut bound, &board, spec, &drives)?;
+    let mut dead_rail_causes: Vec<String> = hauksbee_engine::held_off_rails(&bound)
         .into_iter()
         .filter(|(net, _)| dead_rails.contains(net))
         .map(|(net, why)| format!("{net}: {why}"))
         .collect();
+    // A rail only a do-not-populate part would power is dead too, whatever it
+    // is called, and its cause names the part and the fit that powers it.
+    for rail in dnp_sourced_rails(&board, lib, &bound, spec) {
+        if !dead_rails.contains(&rail.net) {
+            dead_rails.push(rail.net.clone());
+        }
+        dead_rail_causes.push(format!("{}: {}", rail.net, rail.cause()));
+    }
+    dead_rails.sort();
     let (mut probe, watch) = crate::search::prepare(spec, &board, &mut bound, plan);
     // A ramped rail is a COLD power-on, which a stamped leg cannot express: it
     // sits at its setpoint from t=0 and the operating point pre-charges every

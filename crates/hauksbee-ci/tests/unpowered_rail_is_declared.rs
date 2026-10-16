@@ -260,6 +260,76 @@ fn the_scaffolds_questions_cover_every_rail_the_first_run_warns_about() {
 
 
 
+/// `two_rail_board` plus a resistor `RFEED` from `powered` (pin 1) to
+/// `fed` (pin 2): the board itself feeds `fed` from a powered rail.
+fn board_with_a_resistor_fed_rail(dir: &Path, powered: &str, fed: &str) -> PathBuf {
+    let path = two_rail_board(dir.join("resistor_fed.net"), powered, fed);
+    let net = std::fs::read_to_string(&path).expect("read board");
+    let net = net
+        .replace(
+            "  )\n  (nets\n",
+            "    (comp (ref \"RFEED\") (value \"4.7k\") \
+             (footprint \"Resistor_SMD:R_0603_1608Metric\") \
+             (libsource (lib \"Device\") (part \"R\")))\n  )\n  (nets\n",
+        )
+        .replace(
+            "      (node (ref \"R9\") (pin \"1\")))",
+            "      (node (ref \"R9\") (pin \"1\"))\n      (node (ref \"RFEED\") (pin \"1\")))",
+        )
+        .replace(
+            &format!("(name \"{fed}\")\n"),
+            &format!("(name \"{fed}\")\n      (node (ref \"RFEED\") (pin \"2\"))\n"),
+        );
+    std::fs::write(&path, net).expect("write board");
+    path
+}
+
+#[test]
+fn a_rail_the_board_feeds_through_a_resistor_gets_no_supply_and_a_reason() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = board_with_a_resistor_fed_rail(dir.path(), "VCC", "VDD_A");
+    let toml = hauksbee_ci::init::render_spec(&board).expect("scaffold");
+    assert!(
+        !toml.contains("net = \"VDD_A\""),
+        "no [[supply]] question for a resistor-fed rail:\n{toml}"
+    );
+    assert!(
+        toml.contains(
+            "VDD_A is fed from VCC through RFEED (4.7k); not proposing a [[supply]] for it"
+        ),
+        "the scaffold names the feed it saw:\n{toml}"
+    );
+}
+
+#[test]
+fn a_rail_with_no_feed_at_all_is_still_proposed() {
+    // The control for the resistor-fed rule: nothing ties VDD_A to a powered
+    // rail, so the scaffold still asks and gives no "fed from" reason.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = board_with_a_nameless_rail(dir.path());
+    let toml = hauksbee_ci::init::render_spec(&board).expect("scaffold");
+    assert!(
+        toml.contains("# net = \"VDD_A\""),
+        "an unfed rail is still proposed:\n{toml}"
+    );
+    assert!(
+        !toml.contains("VDD_A is fed from"),
+        "and no feed is claimed for it:\n{toml}"
+    );
+}
+
+#[test]
+fn the_run_and_the_scaffold_agree_on_a_resistor_fed_rail() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = board_with_a_resistor_fed_rail(dir.path(), "VCC", "VDD_A");
+    let result = run(&spec_for(dir.path(), &board, ""));
+    assert!(
+        result.dead_rails.is_empty(),
+        "the run does not call a resistor-fed rail dead: {:?}",
+        result.dead_rails
+    );
+}
+
 #[test]
 fn a_rail_a_regulator_drives_is_not_called_dead_or_offered_a_supply() {
     // VDD_A names no voltage, but an AMS1117-3.3 makes it from VCC. It is
@@ -296,4 +366,140 @@ fn a_rail_a_regulator_drives_is_not_called_dead_or_offered_a_supply() {
     );
     let toml = hauksbee_ci::init::render_spec(&path).expect("scaffold");
     assert!(!toml.contains("net = \"VDD_A\""), "{toml}");
+}
+
+/// A carrier board whose `+5P` rail (eight 10k loads to `RTN`) is powered only
+/// by the `+5V` pin of a plug-in module `A1`, marked do-not-populate when
+/// `dnp` (the usual way to leave a socketed module off the assembly). `VCC`
+/// is the rail the spec powers.
+fn module_powered_board(dir: &Path, dnp: bool) -> PathBuf {
+    let mut nodes_rail = String::new();
+    let mut nodes_return = String::new();
+    let mut comps = String::new();
+    let flag = if dnp {
+        " (property (name \"dnp\"))"
+    } else {
+        ""
+    };
+    let _ = writeln!(
+        comps,
+        "    (comp (ref \"A1\") (value \"Module\") \
+         (libsource (lib \"MCU_Module\") (part \"Module\")){flag})"
+    );
+    for i in 1..=9 {
+        let _ = writeln!(
+            comps,
+            "    (comp (ref \"R{i}\") (value \"10k\") \
+             (footprint \"Resistor_SMD:R_0603_1608Metric\") \
+             (libsource (lib \"Device\") (part \"R\")))"
+        );
+        if i < 9 {
+            let _ = writeln!(nodes_rail, "      (node (ref \"R{i}\") (pin \"1\"))");
+            let _ = writeln!(nodes_return, "      (node (ref \"R{i}\") (pin \"2\"))");
+        }
+    }
+    let net = format!(
+        "(export (version \"E\")\n  (components\n{comps}  )\n  (nets\n\
+         \x20   (net (code \"1\") (name \"VCC\")\n      (node (ref \"R9\") (pin \"1\")))\n\
+         \x20   (net (code \"2\") (name \"+5P\")\n\
+         \x20     (node (ref \"A1\") (pin \"27\") (pinfunction \"+5V\") (pintype \"power_out\"))\n\
+         {nodes_rail})\n\
+         \x20   (net (code \"3\") (name \"GND\")\n\
+         \x20     (node (ref \"A1\") (pin \"29\") (pinfunction \"GND\") (pintype \"power_in\")))\n\
+         \x20   (net (code \"4\") (name \"RTN\")\n{nodes_return})\n\
+         \x20   (net (code \"5\") (name \"RAIL_LOAD\")\n      (node (ref \"R9\") (pin \"2\")))\n  ))\n"
+    );
+    let path = dir.join(if dnp {
+        "module_dnp.net"
+    } else {
+        "module_fitted.net"
+    });
+    std::fs::write(&path, net).expect("write board");
+    path
+}
+
+/// The rail-check spec with `head` (top-level keys such as `fit`) first.
+fn spec_with_head(dir: &Path, board: &Path, head: &str) -> PathBuf {
+    let spec = dir.join("spec.toml");
+    std::fs::write(
+        &spec,
+        format!(
+            "name = \"rail check\"\n\
+             board = {}\n\
+             duration_ms = 2\n{head}\
+             [[supply]]\n\
+             net = \"VCC\"\n\
+             kind = \"ideal\"\n\
+             volts = 5.0\n\
+             [[assert]]\n\
+             kind = \"no_faults\"\n",
+            support::toml_path(board)
+        ),
+    )
+    .expect("write spec");
+    spec
+}
+
+/// Faulty assembly for the real board: a rail only a do-not-populate module
+/// powers is dead, and the report names the module and the fit that powers
+/// it, whatever the rail is called (`+5P` names a voltage, so before this the
+/// run solved it at the fraction of a volt input clamps back-power it to and
+/// said nothing).
+#[test]
+fn a_rail_only_a_dnp_module_powers_is_named_with_the_fit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = module_powered_board(dir.path(), true);
+    let result = run(&spec_with_head(dir.path(), &board, ""));
+    assert!(
+        result.dead_rails.iter().any(|r| r == "+5P"),
+        "{:?}",
+        result.dead_rails
+    );
+    let cause = (result.dead_rail_causes.iter())
+        .find(|c| c.starts_with("+5P: "))
+        .unwrap_or_else(|| panic!("no cause: {:?}", result.dead_rail_causes));
+    for want in ["A1", "do-not-populate", "fit = [\"A1\"]", "--fit A1"] {
+        assert!(cause.contains(want), "{want}: {cause}");
+    }
+    let human = result.render_human();
+    assert!(human.contains("UNPOWERED RAIL"), "{human}");
+    assert!(human.contains("fit = [\"A1\"]"), "{human}");
+    assert!(
+        !human.contains("holds these regulators off"),
+        "a DNP source is not a held-off regulator:\n{human}"
+    );
+}
+
+/// Legal control: with the module fitted by the spec, its pin powers the
+/// rail and nothing is dead.
+#[test]
+fn fitting_the_module_powers_its_rail() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = module_powered_board(dir.path(), true);
+    let result = run(&spec_with_head(dir.path(), &board, "fit = [\"A1\"]\n"));
+    assert!(
+        !result.dead_rails.iter().any(|r| r == "+5P"),
+        "{:?} {:?}",
+        result.dead_rails,
+        result.dead_rail_causes
+    );
+}
+
+/// Legal control: a module the board fits never reads as a DNP source.
+#[test]
+fn a_fitted_modules_rail_is_never_called_dnp_sourced() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = module_powered_board(dir.path(), false);
+    let result = run(&spec_with_head(dir.path(), &board, ""));
+    assert!(
+        !result.dead_rails.iter().any(|r| r == "+5P"),
+        "{:?} {:?}",
+        result.dead_rails,
+        result.dead_rail_causes
+    );
+    assert!(
+        !(result.dead_rail_causes.iter()).any(|c| c.contains("do-not-populate")),
+        "{:?}",
+        result.dead_rail_causes
+    );
 }

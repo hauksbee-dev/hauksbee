@@ -102,6 +102,7 @@ pub use checks::usb_c::{
 pub use decoupling::{apply_parasitics, CapClass, EsrEsl};
 pub use engine::HauksbeeEngine;
 pub use evidence::BoardEvidence;
+pub use hauksbee_bind::dnp_rails::{dnp_sourced_rails, DnpSourcedRail, DNP_CAUSE_OPENING};
 // Re-export the firmware-path guard so downstream crates (hauksbee-ci) can
 // validate a spec's firmware path before it reaches the native emulator loader,
 // without taking a direct dependency on hauksbee-mcu.

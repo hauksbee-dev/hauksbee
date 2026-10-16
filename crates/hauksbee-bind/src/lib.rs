@@ -30,6 +30,7 @@ pub mod board_input;
 pub mod boardcode;
 pub mod component_evidence;
 pub mod digital;
+pub mod dnp_rails;
 pub mod drivers;
 pub mod firmware_input;
 pub mod logic;
@@ -65,6 +66,7 @@ pub use boardcode::{
     code_to_board_text, decompile_any_to_code, decompile_board_to_code, load_code,
     program_from_extracted,
 };
+pub use dnp_rails::{dnp_sourced_rails, DnpSourcedRail, DNP_CAUSE_OPENING};
 pub use power_supply::{BatteryProtection, Chemistry, PowerSupply, SupplyLeg, UsbSpec};
 pub use shorts::{AppliedShort, BRIDGE_OHMS};
 pub use stress::{is_implausible, FaultEvent, FaultKind, StressMonitor};

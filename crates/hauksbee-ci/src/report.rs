@@ -356,8 +356,9 @@ pub struct CiJsonReport {
     /// result below was solved with these rails at 0 V.
     pub dead_rails: Vec<String>,
     /// Why a `dead_rails` entry is dead when the board says so (a regulator
-    /// held off by its enable pin), as `NET: sentence`. A net absent here
-    /// names a supply but not a voltage.
+    /// held off by its enable pin, or a rail only a do-not-populate part would
+    /// power), as `NET: sentence`. A net absent here names a supply but not a
+    /// voltage.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dead_rail_causes: Vec<String>,
     /// Waiver-file housekeeping: a lapsed waiver, an active waiver that matched
@@ -812,7 +813,11 @@ impl CiResult {
         for cause in &self.dead_rail_causes {
             let _ = writeln!(s, "        {cause}.");
         }
-        if !self.dead_rail_causes.is_empty() {
+        let dnp = |c: &&String| {
+            c.split_once(": ")
+                .is_some_and(|(_, why)| why.starts_with(hauksbee_engine::DNP_CAUSE_OPENING))
+        };
+        if self.dead_rail_causes.iter().any(|c| !dnp(&c)) {
             s.push_str(
                 "        The board holds these regulators off, so their rails sat at 0 V\n\
                  \x20       and every result below was solved with them dead. If the board\n\

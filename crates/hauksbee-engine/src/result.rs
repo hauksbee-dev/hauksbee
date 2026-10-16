@@ -179,7 +179,11 @@ impl<'a> VerdictCause<'a> {
             Self::Failing { count, first } => (
                 format!(
                     "{count} blocking problem(s){}",
-                    first.map_or_else(String::new, |(what, _)| format!(", first: {what}"))
+                    // A finding's own remedy is the next step: not said twice.
+                    first.map_or_else(String::new, |(what, _)| {
+                        let said = what.rsplit_once(hauksbee_extract::REMEDY_MARKER);
+                        format!(", first: {}", said.map_or(what, |(w, _)| w.trim_end()))
+                    })
                 ),
                 first
                     .map(|(_, fix)| fix)
@@ -2347,6 +2351,8 @@ pub fn lint_findings_json(report: &NetLintReport) -> Vec<JsonFinding> {
                 .starts_with(hauksbee_extract::NOT_ROUTED_MESSAGE_PREFIX)
             {
                 Some(hauksbee_extract::NOT_ROUTED_FIX.to_string())
+            } else if let Some(own) = f.own_remedy() {
+                Some(own.to_string())
             } else {
                 lint_fix_hint(f.check, f.severity).map(str::to_string)
             },
@@ -4031,5 +4037,63 @@ mod tests {
         assert!(serde_json::to_string(&note)
             .unwrap()
             .contains("\"boot_control_net\""));
+    }
+
+    /// Faulty: a starved-rail finding that worked out its own remedy (a feed
+    /// resistance bound) is acted on by that remedy, on the JSON fix and on
+    /// the verdict's next step, never by the check kind's "move the pin"
+    /// advice; and the verdict does not say the remedy twice.
+    #[test]
+    fn a_findings_own_remedy_is_its_fix_and_the_verdicts_next_step() {
+        let message = "'ANALOG_VDD' is starved: it reaches only 0.119 V. Remedy: Feed the rail \
+                       through no more than 122 ohm in total, or directly from '+5V'.";
+        let json = lint_findings_json(&hauksbee_extract::NetLintReport {
+            findings: vec![hauksbee_extract::LintFinding {
+                check: LintCheck::OperatingEnvelope,
+                severity: Severity::High,
+                message: message.to_string(),
+                refs: vec!["R_SHUNT".to_string()],
+                nets: vec!["ANALOG_VDD".to_string()],
+            }],
+        });
+        let fix = json[0].fix.as_deref().expect("a fix");
+        assert!(
+            fix.starts_with("Feed the rail through no more than 122 ohm"),
+            "{fix}"
+        );
+        assert!(!fix.contains("compatible rail"), "{fix}");
+        let reason = VerdictCause::Failing {
+            count: 1,
+            first: Some((json[0].plain.as_str(), fix)),
+        }
+        .reason();
+        assert_eq!(
+            reason.matches("no more than 122 ohm").count(),
+            1,
+            "{reason}"
+        );
+        assert!(
+            reason.contains("first: 'ANALOG_VDD' is starved"),
+            "{reason}"
+        );
+    }
+
+    /// Legal control: a finding with no remedy of its own keeps the check
+    /// kind's advice.
+    #[test]
+    fn a_finding_without_its_own_remedy_keeps_the_kind_advice() {
+        let json = lint_findings_json(&hauksbee_extract::NetLintReport {
+            findings: vec![hauksbee_extract::LintFinding {
+                check: LintCheck::OperatingEnvelope,
+                severity: Severity::High,
+                message: "U1 VIN at 6.2 V is above its 5.5 V maximum".to_string(),
+                refs: vec!["U1".to_string()],
+                nets: vec!["VIN".to_string()],
+            }],
+        });
+        assert_eq!(
+            json[0].fix.as_deref(),
+            lint_fix_hint(LintCheck::OperatingEnvelope, Severity::High)
+        );
     }
 }
