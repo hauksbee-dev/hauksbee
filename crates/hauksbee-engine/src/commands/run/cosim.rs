@@ -710,19 +710,21 @@ mod tests {
         let partial = RunVerdict {
             verdict: "invalid",
             reason: Some(
-                "PARTLY JUDGED: an analysis did not run to a result: the co-sim's analog \
+                "PARTLY JUDGED (not a pass): an analysis did not run to a result: the co-sim's analog \
                  solve did not converge over 1 window(s)"
                     .into(),
             ),
             conditions: Vec::new(),
             partial: true,
+            not_judged: None,
         };
         let line = closing_verdict_line(&partial, &PlainReport::default()).unwrap();
         assert!(
             line.starts_with(&format!(
-                "VERDICT: {}: ",
+                "VERDICT: {}: 0 serious, 0 worth a look; an analysis",
                 hauksbee_ir::vocabulary::PARTLY_JUDGED_LEAD
-            )) && line.contains("did not converge"),
+            )) && line.contains("did not converge")
+                && !line.contains("PARTLY JUDGED: "),
             "{line}"
         );
         assert_eq!(

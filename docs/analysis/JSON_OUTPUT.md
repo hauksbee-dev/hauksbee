@@ -145,7 +145,9 @@ draws no more than that rail's source can supply) and at a signal pin of a
 processor, ADC or connector (`electrical_dependent`: levels, ratings and rails
 not judged). A finding on any judged check is `fail`, with the scope's sentence
 ("... has no usable model, so the checks it could change are not judged ...")
-after "Also:" in `verdict_reason`. With nothing found and at least one
+after "Also:" in `verdict_reason` (the plain and text reports print that sentence
+once, on its own `NOT JUDGED:` line after the failures, and the closing `VERDICT:`
+line keeps the whole reason, as here). With nothing found and at least one
 electrical check judged, the run is PARTLY JUDGED, which is never a pass:
 `verdict` is `invalid`, `ok` is `false`, `partly_judged` is `true`,
 `verdict_reason` starts `PARTLY JUDGED (not a pass):`, and a `--strict` run

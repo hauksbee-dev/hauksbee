@@ -292,6 +292,37 @@ export interface PartlyJudgedView {
   total: number
 }
 
+/** What a partly judged run left unjudged, each net named once under the kind
+ *  of check that was not judged on it. The electrical set holds the wiring set
+ *  (a part that cannot be modelled changes the electrical claim on every net it
+ *  can reach, and the wiring claim on the nets it touches), so a flat pair of
+ *  lists names the touched nets twice. */
+export type UnjudgedKind = 'both' | 'electrical' | 'wiring'
+export interface UnjudgedGroup {
+  kind: UnjudgedKind
+  /** What was not judged on these nets, in words. */
+  label: string
+  nets: string[]
+}
+
+const UNJUDGED_LABELS: Record<UnjudgedKind, string> = {
+  both: 'wiring, value and electrical checks',
+  electrical: 'electrical checks (levels, ratings, rails)',
+  wiring: 'wiring and value checks',
+}
+
+export function unjudgedGroups(scope: Pick<PartlyJudgedView, 'wiring' | 'electrical'>): UnjudgedGroup[] {
+  const wiring = new Set(scope.wiring)
+  const electrical = new Set(scope.electrical)
+  const pick = (names: string[], keep: (n: string) => boolean) => [...new Set(names)].filter(keep)
+  const groups: UnjudgedGroup[] = [
+    { kind: 'both', label: UNJUDGED_LABELS.both, nets: pick(scope.wiring, n => electrical.has(n)) },
+    { kind: 'electrical', label: UNJUDGED_LABELS.electrical, nets: pick(scope.electrical, n => !wiring.has(n)) },
+    { kind: 'wiring', label: UNJUDGED_LABELS.wiring, nets: pick(scope.wiring, n => !electrical.has(n)) },
+  ]
+  return groups.filter(g => g.nets.length > 0)
+}
+
 export interface ReportView {
   tone: ReportVerdictTone
   palette: { border: string; background: string }

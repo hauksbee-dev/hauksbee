@@ -235,16 +235,28 @@ impl CheckReport<'_> {
             }
             OutputMode::Plain => {
                 print!("{}", triage.render(&run_verdict));
-                // The unmodelled key parts are stated once. The triage headline
-                // already carries them (named, with the next step) when the run is
-                // not a pass and its lists have nothing else to lead with; only
-                // then is the standalone banner and the open-IC heads-up left out.
-                let named_in_triage = run_verdict.verdict == "invalid"
-                    && (run_verdict.partial
-                        || (triage.do_not_order.is_empty() && triage.inspect.is_empty()))
-                    && run_verdict.reason.as_deref().is_some_and(|reason| {
-                        reason.contains(&crate::result::refs_summary(&blockers))
-                    });
+                // The unmodelled key parts are stated once. The triage block
+                // already carries them when the run is not a pass: its headline
+                // (named, with the next step) when its lists have nothing else
+                // to lead with, or, for a failing run, the NOT JUDGED line after
+                // the failures. Only then is the standalone banner and the
+                // open-IC heads-up left out.
+                let named = crate::result::refs_summary(&blockers);
+                let named_in_triage = match run_verdict.verdict {
+                    "invalid" => {
+                        (run_verdict.partial
+                            || (triage.do_not_order.is_empty() && triage.inspect.is_empty()))
+                            && run_verdict
+                                .reason
+                                .as_deref()
+                                .is_some_and(|reason| reason.contains(&named))
+                    }
+                    "fail" => run_verdict
+                        .not_judged
+                        .as_deref()
+                        .is_some_and(|said| said.contains(&named)),
+                    _ => false,
+                };
                 // The scope banner once, above every section; each model-dependent
                 // section then points back at the verdict instead of repeating it.
                 if !blockers.is_empty() && !named_in_triage {
@@ -342,7 +354,12 @@ impl CheckReport<'_> {
                 if !triage.not_covered.is_empty() {
                     println!("NOT COVERED: {}", triage.not_covered);
                 }
-                if !blockers.is_empty() {
+                // A failing run says what it did not judge in the verdict's own
+                // words, on one line; the INCONCLUSIVE sentence is for a run
+                // whose verdict is that it cannot vouch.
+                if let Some(line) = run_verdict.not_judged_line() {
+                    println!("{line}");
+                } else if !blockers.is_empty() {
                     println!("{}", crate::result::inconclusive_verdict(&blockers));
                 }
                 println!("\n== {} ==", drc_structured.section_title(&provenance));
@@ -359,14 +376,16 @@ impl CheckReport<'_> {
                 println!(
                     "\n== Connectivity / lint (incl. MCU resource conflicts, boot strap pins) =="
                 );
-                // Verdict first in each model-dependent section: the extract body's
-                // "no findings." must sit under the refusal, not above it.
-                if !blockers.is_empty() {
+                // Verdict first in a model-dependent section that found nothing:
+                // the extract body's "no findings." must sit under the refusal,
+                // not above it. A section that lists findings claims no clean
+                // bill, so it needs no pointer.
+                if !blockers.is_empty() && lint.findings.is_empty() {
                     println!("{}", crate::plain::INCONCLUSIVE_SEE_TOP);
                 }
                 print!("{}", hauksbee_extract::render_netlint(&lint));
                 println!("\n== Signal integrity ==");
-                if !blockers.is_empty() {
+                if !blockers.is_empty() && si.finding_count() == 0 {
                     println!("{}", crate::plain::INCONCLUSIVE_SEE_TOP);
                 }
                 print!("{}", hauksbee_extract::render_si(&si));
@@ -1305,6 +1324,39 @@ mod tests {
                         "{name}: unmodelled parts hidden in:\n{text}"
                     );
                 }
+                // The triage block says it once, on its own line after the
+                // failures, and the failure sentence above does not carry it too.
+                let said: Vec<&str> = got
+                    .triage
+                    .lines()
+                    .filter(|l| l.starts_with("NOT JUDGED: "))
+                    .collect();
+                assert_eq!(
+                    said.len(),
+                    1,
+                    "{name}: one NOT JUDGED line:\n{}",
+                    got.triage
+                );
+                assert!(
+                    said[0].contains(&list) && said[0].contains(caveat),
+                    "{name}: the line names the parts: {}",
+                    said[0]
+                );
+                assert_eq!(
+                    got.triage.matches("no usable model").count(),
+                    1,
+                    "{name}: said once in the triage block:\n{}",
+                    got.triage
+                );
+                assert!(!got.triage.contains(" Also: "), "{name}:\n{}", got.triage);
+            } else {
+                // Control: nothing was left unjudged on a failing run, or the
+                // run is not a failing one, so there is no such line.
+                assert!(
+                    !got.triage.contains("NOT JUDGED"),
+                    "{name}: unexpected NOT JUDGED line:\n{}",
+                    got.triage
+                );
             }
         }
     }
