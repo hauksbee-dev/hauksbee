@@ -156,8 +156,8 @@ fn rail_at(vrrm: u32, percent: u32) -> String {
 #[test]
 fn schottkys_with_cards_fail_above_their_own_vrrm() {
     // The rails the false-safe was found on, then 5, 10 and 20 % over VRRM.
-    // A junction at its knee clamps a few tens of millivolts under VRRM, so
-    // these trip on the monitor's breakdown rule as well as the plain ratio.
+    // A junction past its knee clamps within tens of millivolts of VRRM, so
+    // these trip on the monitor's breakdown rule, not the plain ratio.
     let original = [
         ("SS12", 24),
         ("SS13", 36),
@@ -205,8 +205,8 @@ fn schottkys_with_cards_pass_below_their_own_vrrm() {
 #[test]
 fn a_rail_exactly_at_a_diodes_vrrm_is_not_over_it() {
     // The boundary: VRRM is the most a diode may block, so a rail at it is
-    // legal, and the breakdown rule must not read the clamp's few tens of
-    // millivolts under VRRM as the circuit exceeding it. 1.05x is over (see
+    // legal, and the breakdown rule must not read the junction sitting at its
+    // knee as the circuit exceeding it. 1.05x is over (see
     // `schottkys_with_cards_fail_above_their_own_vrrm`).
     for &(value, vrrm) in &CARDED_VRRM {
         let rail = vrrm.to_string();

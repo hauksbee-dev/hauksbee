@@ -2129,12 +2129,14 @@ struct Check {
     breakdown: bool,
 }
 
-/// Breakdown share at and above which a blocking junction is held to be in
-/// reverse breakdown. With no stated knee current the breakdown term is
-/// scaled like the leakage term, so a share of 0.2 is a breakdown current a
-/// quarter of the leakage: past the knee's onset, which only a reverse
-/// voltage at the rating reaches. A rail at 0.8x the rating stays near zero.
-const BREAKDOWN_SHARE: f64 = 0.2;
+/// Breakdown share above which a blocking junction is held to be in reverse
+/// breakdown. The breakdown term equals the leakage at exactly the blocking
+/// rating, a share of one half, and a junction fed by a rail at or under the
+/// rating cannot be driven past it (its reverse voltage is at most the
+/// rail's), so a share of one half or less is a part used within its rating.
+/// Only a rail over the rating pushes the junction beyond that point. The
+/// margin keeps the exact boundary (a rail equal to VRRM) legal.
+const BREAKDOWN_SHARE: f64 = 0.55;
 
 /// Within this fraction of its blocking rating a junction in breakdown counts
 /// as driven to it.
@@ -2148,9 +2150,9 @@ const BREAKDOWN_NEAR_RATING: f64 = 0.98;
 /// card states one, because regulating at the knee is what such a part is for.
 /// A card with a breakdown voltage and no knee current is a rectifier,
 /// Schottky or signal diode whose `bv` is its blocking rating, and the soft
-/// knee the solver gives it clamps a few tens of millivolts under that
-/// rating, so a rail above it never reads as over it. The share says whether
-/// the junction is conducting in breakdown instead of blocking.
+/// knee the solver gives it clamps within tens of millivolts of that rating,
+/// so a rail above it never reads as over it by the voltage alone. The share
+/// says whether the junction is conducting in breakdown instead of blocking.
 fn blocking_breakdown_share(model: &hauksbee_ir::DiodeModel, vd: f64, temp_c: f64) -> f64 {
     if vd >= 0.0 || !model.bv.is_finite() || model.ibv.is_some() {
         return 0.0;
@@ -3222,8 +3224,10 @@ mod monitor_temp_tests {
             bv: 20.0,
             ..hauksbee_ir::DiodeModel::default()
         };
-        // Soft-knee clamp a few tens of millivolts under the rating: breakdown.
-        assert!(blocking_breakdown_share(&blocking, -19.97, 27.0) >= BREAKDOWN_SHARE);
+        // Driven past the rating: breakdown. At it, the share is one half.
+        assert!(blocking_breakdown_share(&blocking, -20.02, 27.0) >= BREAKDOWN_SHARE);
+        assert!(blocking_breakdown_share(&blocking, -20.0, 27.0) < BREAKDOWN_SHARE);
+        assert!(blocking_breakdown_share(&blocking, -19.97, 27.0) < BREAKDOWN_SHARE);
         // 0.8x the rating, forward bias: none.
         assert!(blocking_breakdown_share(&blocking, -16.0, 27.0) < 1e-6);
         assert!(blocking_breakdown_share(&blocking, 0.3, 27.0) <= 0.0);
