@@ -3399,16 +3399,24 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::SupplyGroundSwapped | LintCheck::DiodeReversed | LintCheck::PolarisedCapReversed => {
             polarity_fix_hint(check)
         }
-        LintCheck::RegulatorHeldOff | LintCheck::RailUnpowered | LintCheck::ControlHeldOff | LintCheck::I2cBusLoading => supply_fix_hint(check),
+        LintCheck::RegulatorHeldOff
+        | LintCheck::PowerPinWiring
+        | LintCheck::RailUnpowered
+        | LintCheck::ControlHeldOff
+        | LintCheck::I2cBusLoading => supply_fix_hint(check),
     })
 }
 
-/// Fix hints for the supply-side checks: a held-off regulator, an unpowered rail,
-/// a reset or enable held off by its pull and an overloaded I2C pull-up.
+/// Fix hints for the supply-side checks: a held-off regulator, a miswired IC
+/// power pin, an unpowered rail, a reset or enable held off by its pull and an
+/// overloaded I2C pull-up.
 const fn supply_fix_hint(check: LintCheck) -> &'static str {
     match check {
         LintCheck::RegulatorHeldOff => {
             "Pull the regulator's enable pin to its input through 10k-100k, or tie it to the input; keep that pull even when a GPIO switches the rail."
+        }
+        LintCheck::PowerPinWiring => {
+            "Connect every supply pin of the chip to its power rail and every ground pin to ground, as its datasheet pin table shows."
         }
         LintCheck::RailUnpowered => {
             "Fit the rail's regulator or link, or bring the rail in on a connector or test point; name each supply net with its voltage so the rail is judged."

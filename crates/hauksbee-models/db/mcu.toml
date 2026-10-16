@@ -1158,6 +1158,16 @@ max_v = 5.5
 abs_max_v = 6.0
 basis = "Atmel-7766J ATmega16U4/32U4 datasheet, Features, Operating Voltages 2.7-5.5 V; Section 29.1 Absolute Maximum Ratings, Maximum Operating Voltage 6.0 V"
 
+# UVCC is only the USB pad regulator's input (2.2.11). Figure 21-6 (Typical Self
+# Powered Application with 3.0V to 3.6V I/O, p.259) leaves UVCC unconnected and
+# feeds UCAP from the 3.3 V supply (UHWCON bit UVREGE: "Clear to disable the
+# USB pad regulator"). The
+# ATmega16U2's own Figures 20-3 to 20-6 connect UVCC in every mode, so its card
+# carries no such row.
+[[models.optional_supplies]]
+role = "uvcc"
+basis = "Atmel-7766J ATmega16U4/32U4 datasheet, Figure 21-6 Typical Self Powered Application with 3.0V to 3.6V I/O: UVCC not connected, UCAP on the external 3.0-3.6 V supply; 2.2.11 UVCC: USB Pads Internal Regulator Input supply voltage"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ATtiny85 (and the low-voltage ATtiny85V), simavr core "attiny85".
 #

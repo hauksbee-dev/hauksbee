@@ -270,6 +270,13 @@ pub enum LintCheck {
     /// the rail never comes on. Produced by the engine-layer
     /// `regulator_enable` check.
     RegulatorHeldOff,
+    /// A carded IC's power pads wired to nothing, or to the wrong side: every
+    /// pad of a supply family on no net, every return pad on no net, a supply
+    /// pad on ground, or a return pad on a supply rail the part's own supply
+    /// does not sit above. Read from the card's pin roles alone
+    /// (`hauksbee_models::pin_roles`), so it needs no supply-range row.
+    /// Produced by the engine-layer `power_pins` check.
+    PowerPinWiring,
     /// A connector pin whose own name says supply (`VBUS`, `VCC`, `+5V`, `VIN`)
     /// wired to a ground net, or a pin named `GND` wired to a positive supply
     /// rail: supply and ground exchanged at the connector. Produced by
@@ -322,7 +329,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 37] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -354,6 +361,7 @@ impl LintCheck {
         Self::FloatingGate,
         Self::GateUnderdrive,
         Self::RegulatorHeldOff,
+        Self::PowerPinWiring,
         Self::SupplyGroundSwapped,
         Self::DiodeReversed,
         Self::PolarisedCapReversed,
@@ -395,6 +403,7 @@ impl LintCheck {
             Self::FloatingGate => "floating_gate",
             Self::GateUnderdrive => "gate_underdrive",
             Self::RegulatorHeldOff => "regulator_held_off",
+            Self::PowerPinWiring => "power_pin_wiring",
             Self::SupplyGroundSwapped => "supply_ground_swapped",
             Self::DiodeReversed => "diode_reversed",
             Self::PolarisedCapReversed => "polarised_cap_reversed",

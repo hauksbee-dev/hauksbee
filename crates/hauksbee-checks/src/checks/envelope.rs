@@ -1358,7 +1358,7 @@ fn unreadable_name_abstentions(
 /// Card pin-map roles that feed an IC's own supply domain: the pins its
 /// `ratings.max_voltage_v` (the schema's "IC supply abs max") rates. Regulator
 /// and charger inputs (`vin`, `vbus`, `vbat`) are rated by their own rows.
-const IC_SUPPLY_ROLES: [&str; 15] = [
+pub(crate) const IC_SUPPLY_ROLES: [&str; 15] = [
     "vcc", "vdd", "vddio", "iovdd", "vio", "vccio", "vcca", "vccb", "dvdd", "avdd", "vdda", "avcc",
     "dvcc", "3v3", "v+",
 ];

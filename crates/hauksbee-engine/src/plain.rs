@@ -1659,6 +1659,11 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "This regulator's datasheet says its enable pin turns the part off when nothing drives it. On this board nothing can raise that pin: it is unconnected, or only touches parts that cannot pull it up (a capacitor, a pull-down, a part that is not fitted). The output rail stays at 0 V and every part it powers is dead.".to_string(),
                 "Pull the enable pin up to the regulator's input through a 10k to 100k resistor, or tie it straight to the input. If a microcontroller pin is meant to switch the rail, keep the resistor so the rail has a defined state before firmware runs.".to_string(),
             ),
+            LintCheck::PowerPinWiring => (
+                format!("The chip {parts} is not wired for power. {}", f.message),
+                "Every chip needs its supply pins on a power rail and its ground pins on ground, or it has nothing to run on. Here the datasheet's own supply or ground pins are left unconnected, or the supply is tied to ground (or the ground to the rail), so the chip is dead, and any signal that another part drives into it can leak power backwards through its protection diodes.".to_string(),
+                "Connect each supply pin to the right power rail and each ground pin to ground, as the datasheet's pin table shows, and put a decoupling capacitor at each supply pin.".to_string(),
+            ),
             LintCheck::SupplyGroundSwapped => (
                 format!("A connector pin on {parts} is wired to the wrong kind of net. {}", f.message),
                 "The connector's own pin names say which pin is the supply and which is ground, but the board wires a supply pin to ground or a ground pin to a supply rail. Whatever is plugged in here is shorted or fed backwards, and the board never receives the supply it expects.".to_string(),
