@@ -146,7 +146,7 @@ const CARDED_VRRM: [(&str, u32); 10] = [
 /// `vrrm * percent / 100` as a rail name's decimal, to a tenth of a volt.
 fn rail_at(vrrm: u32, percent: u32) -> String {
     let tenths = vrrm * percent / 10;
-    if tenths % 10 == 0 {
+    if tenths.is_multiple_of(10) {
         (tenths / 10).to_string()
     } else {
         format!("{}.{}", tenths / 10, tenths % 10)
@@ -200,6 +200,39 @@ fn schottkys_with_cards_pass_below_their_own_vrrm() {
             v.why()
         );
     }
+}
+
+#[test]
+fn a_rail_exactly_at_a_diodes_vrrm_is_not_over_it() {
+    // The boundary: VRRM is the most a diode may block, so a rail at it is
+    // legal, and the breakdown rule must not read the clamp's few tens of
+    // millivolts under VRRM as the circuit exceeding it. 1.05x is over (see
+    // `schottkys_with_cards_fail_above_their_own_vrrm`).
+    for &(value, vrrm) in &CARDED_VRRM {
+        let rail = vrrm.to_string();
+        let v = check(&format!("{value}_at_{rail}"), &diode_board_at(value, &rail));
+        assert_eq!(v.outcome, "pass", "{value} on {rail} V: {}", v.why());
+        assert!(
+            !names("D1", &v.findings),
+            "{value} at its VRRM: {}",
+            v.why()
+        );
+    }
+}
+
+#[test]
+fn a_tvs_named_by_its_standoff_is_quiet_at_or_under_it() {
+    // SMF28A stands off 28 V (Vishay SMF series). Rails at and under that
+    // are what it is for; a rail past it is a stated condition, never a pass
+    // of the stand-in and never a failure.
+    for rail in ["12", "24", "28"] {
+        let v = check(&format!("tvs_{rail}"), &diode_board_at("SMF28A", rail));
+        assert_eq!(v.outcome, "pass", "SMF28A on {rail} V: {}", v.why());
+        assert!(!names("D1", &v.findings), "SMF28A on {rail} V: {}", v.why());
+    }
+    let v = check("tvs_36", &diode_board_at("SMF28A", "36"));
+    assert_eq!(v.outcome, "invalid", "SMF28A on 36 V: {}", v.why());
+    assert!(names("D1", &v.findings), "{}", v.why());
 }
 
 #[test]

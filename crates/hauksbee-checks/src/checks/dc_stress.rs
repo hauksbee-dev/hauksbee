@@ -329,12 +329,7 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
     let stated: Vec<LintFinding> = (stated.into_iter())
         .filter(|(part, _)| !reported.contains(&part))
         .map(|(part, condition)| stand_in_condition(part, condition))
-        .chain(unstated_rating_note(
-            unstated
-                .into_iter()
-                .filter(|(part, _)| !reported.contains(&part))
-                .collect(),
-        ))
+        .chain(unstated_rating_note(&unstated, &reported))
         .collect();
     let rows = (by_part.into_iter().map(|row| (row, Severity::High)))
         .chain(conditional.into_iter().map(|row| (row, Severity::Medium)));
@@ -514,13 +509,19 @@ fn note_stand_in(
 /// One note for every part whose rated voltage nothing states and which sees
 /// more than the floor assumed for it: a condition the pass rests on, listed
 /// once for the board, never a fault and never a partial judgement (the part
-/// is its own card; only its rating is unknown). `parts` maps each part to
+/// is its own card; only its rating is unknown). `unstated` maps each part to
 /// the most it sees and the assumed floor (V).
-fn unstated_rating_note(parts: BTreeMap<String, (f64, f64)>) -> Option<LintFinding> {
+fn unstated_rating_note(
+    unstated: &BTreeMap<String, (f64, f64)>,
+    reported: &[&String],
+) -> Option<LintFinding> {
+    let parts: BTreeMap<&String, &(f64, f64)> = (unstated.iter())
+        .filter(|(part, _)| !reported.contains(part))
+        .collect();
     if parts.is_empty() {
         return None;
     }
-    let refs: Vec<String> = parts.keys().cloned().collect();
+    let refs: Vec<String> = parts.keys().map(|p| (*p).clone()).collect();
     let seen: Vec<String> = (parts.iter())
         .map(|(part, (v, floor))| format!("{part} sees {v:.1} V, past the {floor:.1} V assumed"))
         .collect();

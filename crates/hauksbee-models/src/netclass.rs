@@ -784,6 +784,21 @@ mod tests {
     }
 
     #[test]
+    fn a_rail_named_with_a_decimal_reads_that_voltage() {
+        // The rails a reverse-breakdown probe sits on (105 % of a 30 V and a
+        // 50 V Schottky's VRRM): a decimal rail name is a rail at that voltage.
+        for (name, want) in [
+            ("+31.5V", 31.5),
+            ("+52.5V", 52.5),
+            ("+21V", 21.0),
+            ("+48V", 48.0),
+        ] {
+            assert_eq!(rail_voltage(name), Some(want), "{name}");
+            assert_eq!(class_of(name), Rail(want), "{name}");
+        }
+    }
+
+    #[test]
     fn a_rail_magnitude_takes_one_sign_and_a_finite_positive_number() {
         for magnitude in ["+5V", "-5V", "NaNV", "infV", "0V", "1..2V", "5V_MON"] {
             assert_eq!(

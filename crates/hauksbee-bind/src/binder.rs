@@ -2848,11 +2848,12 @@ const ZENER_FALLBACK_KNEE_A: f64 = 0.005;
 pub const UNKNOWN_DIODE_IF_FLOOR_A: f64 = 0.2;
 
 /// The fallback for a TVS whose part number names its family and voltage
-/// ([`hauksbee_models::value::parse_tvs_name`]): the 1N4148 forward curve as a
-/// stand-in, no breakdown modelled (it would clamp a rail on an estimate),
-/// and the standoff the name states as its voltage rating. The card is an
-/// engine fallback, so a rail past that standoff is a stated condition
-/// naming the part, never a failure.
+/// ([`hauksbee_models::value::parse_tvs_name`]).
+///
+/// It takes the 1N4148 forward curve as a stand-in, no breakdown modelled (it
+/// would clamp a rail on an estimate), and the standoff the name states as its
+/// voltage rating. The card is an engine fallback, so a rail past that
+/// standoff is a stated condition naming the part, never a failure.
 fn tvs_fallback(
     &(family, volts, names, bidirectional): &(
         &str,
