@@ -1573,6 +1573,14 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 format!("The board's resting state was solved and every rated part held to its ratings there, but this part's current runs into a part with no working model: one the design files give no usable value or model for, left open, or a trimmer whose setting they do not give. The simulation carried no current (or a guessed one) through it, so a clean reading here proves nothing. Detail: {}", f.message),
                 "Give the part the detail names a model or a usable value (a card, a numeric resistance, the trimmer's setting), then re-check.".to_string(),
             ),
+            // A value no real part can see is the model's error, not the part's.
+            LintCheck::DcOverstress
+                if f.message.contains(crate::checks::dc_stress::MODEL_ERROR_MARKER) =>
+            (
+                format!("A stress computed on {parts} is impossible for a real part, so it is a modelling or binding error, not an overstress. {}", f.message),
+                "The board's resting state was solved and every rated part held to its ratings there. This value is beyond anything a real part survives long enough to see, so it says the model is wrong (a wrong value or rating, a part that is not fitted, a missing series part), not that the part is overstressed. It was not counted as a fault.".to_string(),
+                "Check the named part's value, card and fitted state against the schematic and datasheet, then re-check.".to_string(),
+            ),
             // The resting draw is past what the rail's supply can give, so
             // the ideal rail's overstress figures are the solve's, not the
             // board's: a supply or model question, never a part overstress.

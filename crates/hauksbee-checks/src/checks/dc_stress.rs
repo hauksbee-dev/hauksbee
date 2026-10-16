@@ -356,13 +356,17 @@ fn rest_finding(
     }
 }
 
+/// Closes the clause of every [`model_error`] note, so a surface can tell the
+/// note from a part overstress.
+pub const MODEL_ERROR_MARKER: &str = ", which no real part can see";
+
 /// The low-severity note for a part whose computed stress no real part can see.
 fn model_error(part: String, clause: &str) -> LintFinding {
     LintFinding {
         check: LintCheck::DcOverstress,
         severity: Severity::Low,
         message: format!(
-            "{part} {clause}, which no real part can see: this is a modelling or \
+            "{part} {clause}{MODEL_ERROR_MARKER}: this is a modelling or \
              binding error (a wrong value or rating, or a part that is not fitted), not an \
              overstress finding, so it was not reported as one"
         ),
