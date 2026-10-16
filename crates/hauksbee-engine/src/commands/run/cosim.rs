@@ -719,7 +719,10 @@ mod tests {
         };
         let line = closing_verdict_line(&partial, &PlainReport::default()).unwrap();
         assert!(
-            line.starts_with("VERDICT: PARTLY JUDGED: ") && line.contains("did not converge"),
+            line.starts_with(&format!(
+                "VERDICT: {}: ",
+                hauksbee_ir::vocabulary::PARTLY_JUDGED_LEAD
+            )) && line.contains("did not converge"),
             "{line}"
         );
         assert_eq!(
