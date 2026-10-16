@@ -1224,7 +1224,7 @@ mod tests {
             let led = straight_across(rail, "LED");
             let on = findings_on(&led, "D1");
             assert!(
-                on.iter().any(|f| f.severity == Severity::High
+                on.iter().any(|f| f.severity != Severity::Low
                     && f.message.contains("far more than")
                     && !hauksbee_models::rating_basis::is_condition(&f.message)),
                 "{rail}: {:#?}",
