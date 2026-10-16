@@ -185,6 +185,66 @@ const SETTLE_SWEEPS: usize = 8;
 /// in, the clauses describing the trip, and the nets named.
 type PartFaults = (Vec<&'static str>, Vec<String>, Vec<String>);
 
+/// One part's stress faults: `(part, clauses, nets)`.
+type PartFault = (String, Vec<String>, Vec<String>);
+
+/// Record a part's fault in `label`'s state: the state, the first clauses
+/// seen, and every net named.
+fn record_fault(
+    by_part: &mut BTreeMap<String, PartFaults>,
+    label: &'static str,
+    (part, clauses, nets): PartFault,
+) {
+    let entry = by_part.entry(part).or_default();
+    entry.0.push(label);
+    if entry.1.is_empty() {
+        entry.1 = clauses;
+    }
+    entry.2.extend(nets);
+}
+
+/// The note that a state's DC operating point did not solve.
+fn unsolved_note(states: &[&str]) -> LintFinding {
+    LintFinding {
+        check: LintCheck::DcOverstress,
+        severity: Severity::Low,
+        message: format!(
+            "the board's DC operating point did not solve {}, so no part was checked \
+             against its ratings there",
+            states.join(" or ")
+        ),
+        refs: Vec::new(),
+        nets: Vec::new(),
+    }
+}
+
+/// The parts of a state's `found` and `strong_found` stresses that survive
+/// the rails being held to what their supplies can give.
+///
+/// A part dropped there is over a rating only at a draw no supply gives; its
+/// first clause goes to `only_ideal`. Returns whether the held re-judge did
+/// not solve.
+fn hold_overloaded_rails(
+    state: &mut BoundBoard,
+    over: &[rest_supply::Overload],
+    found: &mut Vec<PartFault>,
+    strong_found: &mut Vec<PartFault>,
+    only_ideal: &mut BTreeMap<String, String>,
+) -> bool {
+    let real = held_to_capability(state, over);
+    let keep = |part: &str| real.as_ref().is_some_and(|r| r.iter().any(|p| p == part));
+    for (part, clauses, _) in found.iter().chain(strong_found.iter()) {
+        if !keep(part.as_str()) {
+            only_ideal
+                .entry(part.clone())
+                .or_insert_with(|| clauses.first().cloned().unwrap_or_default());
+        }
+    }
+    found.retain(|(part, ..)| keep(part.as_str()));
+    strong_found.retain(|(part, ..)| keep(part.as_str()));
+    real.is_none()
+}
+
 /// [`dc_stress_lint`] over an already bound board.
 #[must_use]
 pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
@@ -246,39 +306,18 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
         // A draw no supply gives: keep only the parts still over a rating
         // with the rails held to what their supplies can give.
         if !over.is_empty() {
-            let real = held_to_capability(state, &over);
-            held_unsolved |= real.is_none();
-            let keep = |part: &str| real.as_ref().is_some_and(|r| r.iter().any(|p| p == part));
-            for (part, clauses, _) in found.iter().chain(&strong_found) {
-                if !keep(part.as_str()) {
-                    only_ideal
-                        .entry(part.clone())
-                        .or_insert_with(|| clauses.first().cloned().unwrap_or_default());
-                }
-            }
-            found.retain(|(part, ..)| keep(part.as_str()));
-            strong_found.retain(|(part, ..)| keep(part.as_str()));
+            held_unsolved |=
+                hold_overloaded_rails(state, &over, &mut found, &mut strong_found, &mut only_ideal);
             rest_supply::note_overloads(&mut overloaded, over);
         }
-        for (part, clauses, nets) in found {
-            let entry = by_part.entry(part.clone()).or_default();
-            entry.0.push(label);
-            if entry.1.is_empty() {
-                entry.1 = clauses;
-            }
-            entry.2.extend(nets);
-            weak.push(part);
+        for fault in found {
+            weak.push(fault.0.clone());
+            record_fault(&mut by_part, label, fault);
         }
-        for (part, clauses, nets) in strong_found {
-            if weak.contains(&part) {
-                continue;
+        for fault in strong_found {
+            if !weak.contains(&fault.0) {
+                record_fault(&mut by_part, strong_label, fault);
             }
-            let entry = by_part.entry(part).or_default();
-            entry.0.push(strong_label);
-            if entry.1.is_empty() {
-                entry.1 = clauses;
-            }
-            entry.2.extend(nets);
         }
     }
     // A part over a rating at a plausible draw in any state is reported there.
@@ -311,17 +350,7 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
         held_unsolved,
     ));
     if !unsolved.is_empty() {
-        findings.push(LintFinding {
-            check: LintCheck::DcOverstress,
-            severity: Severity::Low,
-            message: format!(
-                "the board's DC operating point did not solve {}, so no part was checked \
-                 against its ratings there",
-                unsolved.join(" or ")
-            ),
-            refs: Vec::new(),
-            nets: Vec::new(),
-        });
+        findings.push(unsolved_note(&unsolved));
     }
     NetLintReport { findings }
 }

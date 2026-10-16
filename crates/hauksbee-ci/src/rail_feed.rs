@@ -14,7 +14,7 @@ use hauksbee_ir::{Device, NodeId};
 
 /// A rail the board feeds through a resistor from a powered node.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ResistorFed {
+pub struct ResistorFed {
     /// The supply-named rail.
     pub rail: String,
     /// The powered net the resistor ties it to.
@@ -51,7 +51,7 @@ fn format_ohms(ohms: f64) -> String {
 
 /// The nodes something powers: every supply leg the binder stamped, plus every
 /// net in `answered` (a net the spec declares a supply on or drives).
-pub(crate) fn powered_nodes(bound: &BoundBoard, answered: &[&str]) -> HashSet<NodeId> {
+pub fn powered_nodes(bound: &BoundBoard, answered: &[&str]) -> HashSet<NodeId> {
     bound
         .supplies
         .iter()
@@ -89,7 +89,7 @@ fn feeding_resistor(
 ///
 /// `answered` is every net the spec already powers or drives; the binder's own
 /// supply legs count as powered too. A held-off regulator rail is always dead.
-pub(crate) fn split_dead_and_fed(
+pub fn split_dead_and_fed(
     bound: &BoundBoard,
     unpowered: Vec<String>,
     answered: &[&str],
@@ -102,14 +102,14 @@ pub(crate) fn split_dead_and_fed(
     let mut dead = Vec::new();
     let mut fed = Vec::new();
     for rail in unpowered {
-        let feed = if held_off.contains(&rail) {
+        let source = if held_off.contains(&rail) {
             None
         } else {
             bound
                 .node(&rail)
                 .and_then(|node| feeding_resistor(bound, node, &powered))
         };
-        match feed {
+        match source {
             Some((resistor, ohms, from)) => fed.push(ResistorFed {
                 from: bound.circuit.node_name(from).to_string(),
                 rail,

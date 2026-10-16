@@ -508,7 +508,7 @@
           "type": "array"
         },
         "dead_rail_causes": {
-          "description": "Why a `dead_rails` entry is dead when the board says so (a regulator\nheld off by its enable pin), as `NET: sentence`. A net absent here\nnames a supply but not a voltage.",
+          "description": "Why a `dead_rails` entry is dead when the board says so (a regulator\nheld off by its enable pin, or a rail only a do-not-populate part would\npower), as `NET: sentence`. A net absent here names a supply but not a\nvoltage.",
           "items": {
             "type": "string"
           },

@@ -61,10 +61,12 @@ pub const INFORMATIONAL_MARKER: &str = " (informational)";
 /// gets built. Footprint or pin-map differences never carry it.
 pub const CHECK_BEFORE_ORDERING: &str = "Check before ordering: ";
 
-/// Opens the closing sentence of a finding that computed its own remedy (a
-/// resistance bound, a feed to use): everything after it is that remedy, and
-/// every surface's "what to do" and the verdict's next step use it in place of
-/// the check kind's generic advice ([`LintFinding::own_remedy`]).
+/// Opens the closing sentence of a finding that computed its own remedy.
+///
+/// The remedy is a resistance bound or a feed to use. Everything after the
+/// marker is that remedy, and every surface's "what to do" and the verdict's
+/// next step use it in place of the check kind's generic advice
+/// ([`LintFinding::own_remedy`]).
 pub const REMEDY_MARKER: &str = "Remedy: ";
 
 impl LintFinding {

@@ -84,9 +84,10 @@ fn would_source(lib: &ModelLibrary, comp: &Component) -> BTreeSet<i64> {
 }
 
 /// Every rail of `bound` that nothing powers and that only do-not-populate
-/// parts would source, ordered by net name. A rail a supply leg, a regulator
-/// or a switch from a powered rail already feeds is not one, nor is a net no
-/// fitted part touches (it feeds nothing).
+/// parts would source, ordered by net name.
+///
+/// A rail a supply leg, a regulator or a switch from a powered rail already
+/// feeds is not one, nor is a net no fitted part touches (it feeds nothing).
 #[must_use]
 pub fn dnp_sourced_rails(
     board: &ExtractedBoard,

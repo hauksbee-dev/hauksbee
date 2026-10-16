@@ -164,6 +164,42 @@ fn control_lint_covers(board: &ExtractedBoard, comp: &Component, pin: &Pin) -> b
         && board.net_members(net.id).len() == 1
 }
 
+/// The finding for a part's inputs left with no driver, pull or connection.
+fn open_inputs_finding(
+    board: &ExtractedBoard,
+    comp: &Component,
+    open: &[&InputPin<'_>],
+) -> LintFinding {
+    let flagged_nc = open.iter().filter(|p| pin_is_no_connect(p.pin)).count();
+    let names = compress_labels(open.iter().map(|p| p.label.as_str()));
+    let nc_note = if flagged_nc > 0 {
+        " They carry a no-connect flag, but the part has no internal pull on them, so the flag leaves them floating."
+    } else {
+        ""
+    };
+    let nets: Vec<String> = open
+        .iter()
+        .filter_map(|p| p.pin.net.and_then(|id| board.net(id)))
+        .map(|n| n.name.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    LintFinding {
+        check: LintCheck::FloatingInput,
+        severity: Severity::High,
+        message: format!(
+            "{} {}: {} {} {} unconnected (no driver, pull resistor or other connection); CMOS inputs must not float. A floating input reads random levels and can draw shoot-through current; tie each one high or low, or drive it.{nc_note}",
+            comp.reference,
+            comp.value,
+            if open.len() == 1 { "input" } else { "inputs" },
+            names,
+            if open.len() == 1 { "is" } else { "are" },
+        ),
+        refs: vec![comp.reference.clone()],
+        nets,
+    }
+}
+
 /// Every floating CMOS input, one finding per part.
 #[must_use]
 pub fn floating_input_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
@@ -220,6 +256,7 @@ pub fn floating_input_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLin
             .filter(|(c, _)| {
                 matches!(AssemblyState::of(c), AssemblyState::DnpAbsent(_))
                     && !is_test_point_or_hole(c)
+                    && !is_jumper(c)
                     && (is_logic_or_switch_ref(c) || is_connector_like(c) || is_module_like(c))
             })
             .map(|(c, _)| c.reference.as_str())
@@ -247,34 +284,9 @@ pub fn floating_input_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLin
         if open.is_empty() {
             continue;
         }
-        let flagged_nc = open.iter().filter(|p| pin_is_no_connect(p.pin)).count();
-        let names = compress_labels(open.iter().map(|p| p.label.as_str()));
-        let nc_note = if flagged_nc > 0 {
-            " They carry a no-connect flag, but the part has no internal pull on them, so the flag leaves them floating."
-        } else {
-            ""
-        };
-        let nets: Vec<String> = open
-            .iter()
-            .filter_map(|p| p.pin.net.and_then(|id| board.net(id)))
-            .map(|n| n.name.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        report.findings.push(LintFinding {
-            check: LintCheck::FloatingInput,
-            severity: Severity::High,
-            message: format!(
-                "{} {}: {} {} {} unconnected (no driver, pull resistor or other connection); CMOS inputs must not float. A floating input reads random levels and can draw shoot-through current; tie each one high or low, or drive it.{nc_note}",
-                comp.reference,
-                comp.value,
-                if open.len() == 1 { "input" } else { "inputs" },
-                names,
-                if open.len() == 1 { "is" } else { "are" },
-            ),
-            refs: vec![comp.reference.clone()],
-            nets,
-        });
+        report
+            .findings
+            .push(open_inputs_finding(board, comp, &open));
     }
     for (drivers, group) in by_dnp {
         report.findings.push(match group.as_slice() {
@@ -285,16 +297,21 @@ pub fn floating_input_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLin
     report
 }
 
+/// A solder or pin jumper (`JP`, `SJ`): the link the assembled board leaves
+/// open when it is do-not-populate, so it drives nothing. Its `J` designator
+/// would otherwise read as a connector.
+fn is_jumper(c: &Component) -> bool {
+    matches!(
+        hauksbee_models::refdes::prefix(&c.reference).as_str(),
+        "JP" | "SJ"
+    )
+}
+
 /// A part that may drive a net though its designator does not say IC: three
-/// or more pins, and a designator that does not call it a passive, a diode or
-/// a jumper. A plug-in module (`A101`), a sub-assembly or an oddly named IC.
-/// A do-not-populate jumper is the link the assembled board leaves open, so it
-/// drives nothing.
+/// or more pins, and a designator that does not call it a passive or a diode.
+/// A plug-in module (`A101`), a sub-assembly or an oddly named IC.
 fn is_module_like(c: &Component) -> bool {
-    use hauksbee_models::refdes::{prefix, RefClass};
-    if matches!(prefix(&c.reference).as_str(), "JP" | "SJ") {
-        return false;
-    }
+    use hauksbee_models::refdes::RefClass;
     let passive = matches!(
         RefClass::of(&c.reference),
         RefClass::Resistor

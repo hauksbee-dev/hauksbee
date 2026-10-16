@@ -58,7 +58,7 @@ pub struct Overload {
 
 /// What `supply` can source, A, and whether that is its declared limit.
 #[must_use]
-pub fn capability(supply: &PowerSupply) -> (f64, bool) {
+pub const fn capability(supply: &PowerSupply) -> (f64, bool) {
     match supply {
         PowerSupply::Bench {
             current_limit_a, ..
@@ -154,9 +154,11 @@ fn amps(a: f64) -> String {
 }
 
 /// The one finding for the parts over a rating only at a draw their supply
-/// cannot give: `parts` maps each to its first clause at the ideal rail.
-/// `unsolved` says the re-judge with the rails held did not solve, so no part
-/// could be cleared or kept there.
+/// cannot give.
+///
+/// `parts` maps each to its first clause at the ideal rail. `unsolved` says the
+/// re-judge with the rails held did not solve, so no part could be cleared or
+/// kept there.
 #[must_use]
 pub fn implausible_rest_finding(
     over: &[Overload],
