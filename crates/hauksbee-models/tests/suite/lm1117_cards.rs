@@ -112,7 +112,16 @@ fn lm1117_ratings_and_packages_are_the_ti_figures() {
         OperatingEnvelope::SupplyRange { abs_max_basis, .. }
             if abs_max_basis.contains("7.1 Absolute Maximum Ratings")
     )));
-    let theta: Vec<(String, f64)> = m
+    // A resolved card drops its cited rows, so read them from the card as written.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("db/vreg.toml");
+    let text = std::fs::read_to_string(path).expect("vreg.toml readable");
+    let db: hauksbee_models::schema::DbFile = toml::from_str(&text).expect("vreg.toml parses");
+    let written = db
+        .models
+        .into_iter()
+        .find(|e| e.id == m.id)
+        .expect("card in vreg.toml");
+    let theta: Vec<(String, f64)> = written
         .source
         .as_ref()
         .expect("source block")

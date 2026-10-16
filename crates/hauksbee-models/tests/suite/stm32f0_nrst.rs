@@ -9,7 +9,7 @@ use super::*;
 
 #[test]
 fn the_nrst_pin_is_a_reset_role_that_the_card_does_not_demand_a_pull_up_for() {
-    let m = expect_model("STM32F072CBT6");
+    let m = resolve_part("STM32F072CBT6").expect("STM32F072CBT6 resolves");
     assert_eq!(m.id, "stm32f072c");
     assert_pins(&m, &pins("7=reset"));
     assert!(
