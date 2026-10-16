@@ -174,6 +174,8 @@ mod parts_fallback_ratings;
 mod pin_role_rules;
 #[path = "power_invariants.rs"]
 mod power_invariants;
+#[path = "power_pin_corpus.rs"]
+mod power_pin_corpus;
 #[path = "power_supply.rs"]
 mod power_supply;
 #[path = "rail_suppression_and_cc_floor.rs"]

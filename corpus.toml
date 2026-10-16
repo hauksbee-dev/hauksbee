@@ -822,6 +822,10 @@ expect = [
   "hardware/eurorack-pmod-r3.3/eurorack-pmod-pcb.kicad_pcb",
   "hardware/eurorack-pmod-r3.3/eurorack-pmod-pcb.kicad_sch",
   "hardware/eurorack-pmod-r2.2/eurorack-pmod-pcb.kicad_pcb",
+  # The U5 power-pin pin (crates/hauksbee-engine/tests/power_pin_corpus.rs) reads these.
+  "hardware/eurorack-pmod-r3.1/eurorack-pmod-pcb.kicad_pcb",
+  "hardware/eurorack-pmod-r3.2/eurorack-pmod-pcb.kicad_pcb",
+  "hardware/eurorack-pmod-r3.5/eurorack-pmod-pcb.kicad_pcb",
 ]
 
 # ---------------------------------------------------------------------------
