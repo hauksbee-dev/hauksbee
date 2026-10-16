@@ -407,6 +407,18 @@
       "label": "Report only",
       "short": "This command reports problems but still exits 0, so a script or CI job will not fail on them.",
       "what_to_do": "Add --strict to make serious findings fail the build."
+    },
+    {
+      "term": "mcu_halted",
+      "label": "Halted",
+      "short": "The emulated microcontroller is not executing firmware right now: the simulation is paused, the firmware has stopped (a fault, a sleep it never wakes from, or the end of main), or its supply is below the operating range.",
+      "what_to_do": "Press play; if it stays halted while the sim runs, check the MCU's supply rail and the serial output for a crash message."
+    },
+    {
+      "term": "uart_activity",
+      "label": "UART traffic",
+      "short": "The microcontroller sent or received bytes on its serial port (UART) in the last two seconds of real time; the console shows what it printed.",
+      "what_to_do": "Open the Serial tab to read the output or type input to the firmware."
     }
   ]
 }
