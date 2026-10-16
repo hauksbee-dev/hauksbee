@@ -663,7 +663,18 @@ fn check_diff_pairs(board: &ExtractedBoard, root: &List, stackup: &Stackup, repo
         let Some(class) = class else {
             // Nothing on the pair says which standard it is, so there is no
             // target to hold its impedance to. Say so rather than judge it
-            // against another interface's number.
+            // against another interface's number. A plane void under the pair
+            // is a fact about the copper, not about the standard, so it is
+            // still named.
+            let void = match reference_plane_under_pair(root, pid, mid) {
+                ReferencePlane::Missing(missing) => {
+                    format!(
+                        "; reference missing under trace - {}, so the return path detours there",
+                        missing.describe_span()
+                    )
+                }
+                _ => String::new(),
+            };
             report.findings.push(SiFinding {
                 check: SiCheck::ControlledImpedance,
                 severity: SiSeverity::Info,
@@ -671,7 +682,7 @@ fn check_diff_pairs(board: &ExtractedBoard, root: &List, stackup: &Stackup, repo
                     "{pname} / {mname}: differential pair of unidentified standard, no impedance \
                      target applied (W~{w:.3} mm, S~{s:.3} mm). Nothing on its nets or parts says \
                      USB, Ethernet or DisplayPort/HDMI/LVDS; name the interface in the net names \
-                     (a USB_, ETH_ or EDP_ prefix) to have it judged [{}]",
+                     (a USB_, ETH_ or EDP_ prefix) to have it judged{void} [{}]",
                     stackup.describe()
                 ),
                 refs: vec![],

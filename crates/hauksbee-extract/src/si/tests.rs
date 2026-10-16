@@ -1442,3 +1442,33 @@ fn a_pair_of_unidentified_standard_gets_no_target() {
     assert!(!f.message.contains("USB differential"), "{}", f.message);
     assert!(!f.message.contains("target 90"), "{}", f.message);
 }
+
+#[test]
+fn a_pair_of_unidentified_standard_still_names_a_void_under_it() {
+    // The plane void is a fact about the copper, whatever the standard: dropping
+    // the pair's standard must not drop the void it crosses.
+    let void = format!("{} {}", rect_fill(-5.0, 6.0), rect_fill(14.0, 25.0));
+    let text = impedance_usb_over_plane(&void)
+        .replace("USB_DP", "LPCUD_DP")
+        .replace("USB_DM", "LPCUD_DN");
+    let r = run_text(&text, impedance::check_controlled_impedance);
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("a note");
+    assert!(f.message.contains("unidentified standard"), "{}", f.message);
+    assert!(
+        f.message.contains("reference missing under trace")
+            && f.message.contains("~8.00 mm across"),
+        "{}",
+        f.message
+    );
+    assert_eq!(f.severity, SiSeverity::Info, "no standard, no defect claim");
+    // The same copper on a pair that says USB keeps its Medium finding.
+    let usb = run_text(
+        &impedance_usb_over_plane(&void),
+        impedance::check_controlled_impedance,
+    );
+    let u = usb.of_check(SiCheck::ControlledImpedance).next().unwrap();
+    assert_eq!(u.severity, SiSeverity::Medium);
+}
