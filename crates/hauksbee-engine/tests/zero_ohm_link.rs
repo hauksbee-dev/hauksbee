@@ -89,3 +89,50 @@ fn zero_ohm_resistor_circuit_solves() {
         "MID sits at the rail through the milliohm link, got {mid}"
     );
 }
+
+/// A value below the solver's 1 micro-ohm floor is bound at the floor, and the
+/// bind row says so (the figures through it are the floor's, not the value's).
+/// Legal control: a 1k part and a 1 milli-ohm shunt bind untouched and unwarned.
+#[test]
+fn a_resistor_below_the_solver_floor_binds_at_the_floor_and_says_so() {
+    let board = ExtractedBoard {
+        name: "below_floor_test".to_string(),
+        nets: vec![
+            crate::support::net(1, "+5V".to_string()),
+            crate::support::net(2, "MID".to_string()),
+            crate::support::net(3, "GND".to_string()),
+        ],
+        components: vec![
+            comp("R1", "1e-9", vec![pin("1", 1), pin("2", 2)]),
+            comp("R2", "1k", vec![pin("1", 2), pin("2", 3)]),
+            comp("R3", "0.001", vec![pin("1", 1), pin("2", 3)]),
+        ],
+    };
+    let bound = bind_board(&board, &ModelLibrary::builtin());
+    let floor = bound
+        .circuit
+        .devices
+        .iter()
+        .find_map(|d| match d {
+            Device::Resistor { name, ohms, .. } if name == "R1" => Some(*ohms),
+            _ => None,
+        })
+        .expect("R1 is stamped");
+    assert!(
+        (floor - 1e-6).abs() < 1e-15,
+        "R1 binds at the floor, got {floor}"
+    );
+    let warning = bound
+        .report
+        .row("R1")
+        .and_then(|r| r.warning.as_deref())
+        .expect("the floor stamp is loud");
+    assert!(
+        warning.contains("below the solver's 1 micro-ohm floor") && warning.contains("1e-9"),
+        "{warning}"
+    );
+    for fine in ["R2", "R3"] {
+        let row = bound.report.row(fine).expect("a bind row");
+        assert!(row.warning.is_none(), "{fine}: {:?}", row.warning);
+    }
+}
