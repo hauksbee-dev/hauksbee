@@ -357,14 +357,10 @@ impl CheckReport<'_> {
                 // A failing run says what it did not judge in the verdict's own
                 // words, on one line; the INCONCLUSIVE sentence is for a run
                 // whose verdict is that it cannot vouch.
-                match (&run_verdict.not_judged, run_verdict.verdict) {
-                    (Some(said), "fail") => {
-                        println!("{}: {said}", hauksbee_ir::vocabulary::NOT_JUDGED_LEAD)
-                    }
-                    _ if !blockers.is_empty() => {
-                        println!("{}", crate::result::inconclusive_verdict(&blockers));
-                    }
-                    _ => {}
+                if let Some(line) = run_verdict.not_judged_line() {
+                    println!("{line}");
+                } else if !blockers.is_empty() {
+                    println!("{}", crate::result::inconclusive_verdict(&blockers));
                 }
                 println!("\n== {} ==", drc_structured.section_title(&provenance));
                 if unrouted {

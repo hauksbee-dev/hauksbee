@@ -420,10 +420,10 @@ impl JudgementScope {
         };
         format!(
             "{parts} {has} no usable model, so the checks {it} could change are not judged: \
-             {what}. The other {} of {} net checks were judged.{held} Draft the model(s) with \
-             `hauksbee models extract --unmodelled <board>` to judge the rest.",
+             {what}. The other {} of {} net checks were judged.{held} {}",
             self.judged(),
             2 * self.nets,
+            hauksbee_ir::vocabulary::DRAFT_MODELS_NEXT_STEP,
         )
     }
 }

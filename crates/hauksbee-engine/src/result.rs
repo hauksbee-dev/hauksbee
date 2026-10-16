@@ -68,7 +68,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use hauksbee_extract::{DrcReport, ViolationKind};
-use hauksbee_ir::vocabulary::NOT_JUDGED_JOINER;
+use hauksbee_ir::vocabulary::{DRAFT_MODELS_NEXT_STEP, NOT_JUDGED_JOINER, NOT_JUDGED_LEAD};
 
 // The role-aware bind summary lives with the bind report in hauksbee-bind;
 // it stays reachable here so `hauksbee_engine::result::BindSummary` and the
@@ -314,6 +314,23 @@ impl RunVerdict {
     #[must_use]
     pub fn is_pass(&self) -> bool {
         self.verdict == "pass"
+    }
+
+    /// The line a failing run prints once, after its failures: the lead, what
+    /// was not judged, and (when that sentence does not already) the way to
+    /// judge it. `None` for any other verdict.
+    #[must_use]
+    pub fn not_judged_line(&self) -> Option<String> {
+        let said = self
+            .not_judged
+            .as_deref()
+            .filter(|_| self.verdict == "fail")?;
+        let next = if said.contains(DRAFT_MODELS_NEXT_STEP) {
+            String::new()
+        } else {
+            format!(" {DRAFT_MODELS_NEXT_STEP}")
+        };
+        Some(format!("{NOT_JUDGED_LEAD}: {said}{next}"))
     }
 
     /// [`Self::reason`] without the sentence naming what was not judged, for a

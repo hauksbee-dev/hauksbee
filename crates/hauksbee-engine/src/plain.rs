@@ -790,16 +790,8 @@ impl OrderTriage {
         Self::write_bucket(&mut out, "CHECKED AND OK", &self.checked_ok);
         // What a failing run did not judge, said once, on one line after its
         // failures: the verdict, then the failures, then this.
-        if let Some(not_judged) = verdict
-            .not_judged
-            .as_deref()
-            .filter(|_| verdict.verdict == "fail")
-        {
-            let _ = writeln!(
-                out,
-                "{}: {not_judged}",
-                hauksbee_ir::vocabulary::NOT_JUDGED_LEAD
-            );
+        if let Some(line) = verdict.not_judged_line() {
+            let _ = writeln!(out, "{line}");
         }
         if !self.not_covered.is_empty() {
             let _ = writeln!(out, "NOT COVERED: {}", self.not_covered);
@@ -2119,6 +2111,13 @@ mod tests {
         assert!(
             out.contains(&format!("NOT JUDGED: {said}")),
             "the line is labelled: {out}"
+        );
+        assert!(
+            out.contains(&format!(
+                "NOT JUDGED: {said} {}",
+                hauksbee_ir::vocabulary::DRAFT_MODELS_NEXT_STEP
+            )),
+            "the line says how to judge the rest: {out}"
         );
         assert!(
             out.find("DO NOT ORDER:") < out.find("NOT JUDGED:"),

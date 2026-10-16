@@ -394,24 +394,41 @@ fn plain_check_surfaces_open_active_ic_bind_honesty() {
         out.status.code()
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.contains("active IC(s) are unresolved")
-            && stdout.contains("INCOMPLETE")
-            && stdout.contains("--models-dir"),
-        "plain --check must surface the open-active-IC bind honesty; got:\n{stdout}"
+    // The board fails, so the report says what it did not judge once: one
+    // NOT JUDGED line after the failures names the open part and how to judge
+    // it. The INCONCLUSIVE banner and the open-IC heads-up would say it again.
+    let said: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.starts_with("NOT JUDGED: "))
+        .collect();
+    assert_eq!(
+        said.len(),
+        1,
+        "plain --check must surface the open-active-IC bind honesty once; got:\n{stdout}"
     );
-    // And it must not be a false alarm on the copper checks; the heads-up
-    // explicitly says the DRC below is unaffected.
     assert!(
-        stdout.contains("copper checks below are unaffected"),
-        "the heads-up must keep the copper verdict trustworthy; got:\n{stdout}"
+        said[0].contains("U1")
+            && said[0].contains("no usable model")
+            && said[0].contains("hauksbee models extract --unmodelled"),
+        "the line names the part and the way to judge it: {}",
+        said[0]
     );
-    // R39: the heads-up must point at a REAL flag. The bind table comes from
-    // `--report`; naming "--bind" instead earns clap's "unexpected argument",
-    // so the guidance must say --report.
+    assert!(
+        !stdout.contains("active IC(s) are unresolved") && !stdout.contains("INCONCLUSIVE:"),
+        "nothing repeats the NOT JUDGED line; got:\n{stdout}"
+    );
+    // And it must not be a false alarm on the copper checks: the coverage line
+    // says geometry and decode rules need no simulation model.
+    assert!(
+        stdout.contains("Copper geometry and datasheet decode rules do not require"),
+        "the report must keep the copper verdict trustworthy; got:\n{stdout}"
+    );
+    // R39: the bind-table pointer must name a REAL flag. The bind table comes
+    // from `--report`; naming "--bind" instead earns clap's "unexpected
+    // argument", so the guidance must say --report.
     assert!(
         stdout.contains("--report") && !stdout.contains("--bind"),
-        "the bind-table heads-up must reference the real --report flag, not --bind; got:\n{stdout}"
+        "the bind-table pointer must reference the real --report flag, not --bind; got:\n{stdout}"
     );
 }
 

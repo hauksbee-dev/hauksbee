@@ -269,7 +269,8 @@ fn quiet_keeps_summary_but_suppresses_per_item_evidence_appendix() {
         "verdict remains visible:\n{text}"
     );
     assert!(
-        text.contains("active IC(s) are unresolved/open"),
+        text.lines()
+            .any(|l| l.starts_with("NOT JUDGED: ") && l.contains("U1")),
         "open-part summary remains visible:\n{text}"
     );
     assert!(

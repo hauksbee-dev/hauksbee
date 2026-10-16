@@ -37,6 +37,11 @@ pub const PARTLY_JUDGED_LEAD: &str = "PARTLY JUDGED (not a pass)";
 /// same facts under their own heading.
 pub const NOT_JUDGED_LEAD: &str = "NOT JUDGED";
 
+/// The step that judges what a run left unjudged for want of a model. The
+/// scope sentence and the `NOT JUDGED` line both end with it.
+pub const DRAFT_MODELS_NEXT_STEP: &str =
+    "Draft the model(s) with `hauksbee models extract --unmodelled <board>` to judge the rest.";
+
 /// What joins a failing verdict's own sentence to the sentence naming what it
 /// did not judge, in `verdict_reason`, so a surface that prints the two apart
 /// can split them where the engine joined them.
