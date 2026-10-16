@@ -72,9 +72,11 @@ fn open_reason(comp: &Component, row: &BindRow) -> Option<&'static str> {
     (is_pot(comp) && !named).then_some("a trimmer whose wiper setting the board does not give")
 }
 
-/// A rail or ground: not a current path between two parts.
+/// A rail the binder holds at a stated voltage, or ground: not a current path
+/// between two parts. A supply that states no voltage (`VBAT`) is not held, so
+/// a part feeding it is still on the path.
 fn is_rail(net: &str) -> bool {
-    is_ground(net) || super::is_ground_name(net) || power_rail_voltage(net).is_some()
+    is_ground(net) || power_rail_voltage(net).is_some()
 }
 
 /// Most fitted parts a net may carry and still read as one part's load path

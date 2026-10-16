@@ -41,8 +41,8 @@ use forge_sexpr::List;
 use crate::assembly::AssemblyState;
 use crate::gerber::geo::{point_in_polygon, polygon_bounds};
 use crate::netlint::{
-    has_signal_role_token, i2c_role, is_capacitor, is_ground, is_resistor, is_unconnected_net,
-    norm, numeric_rail_magnitude, parse_ohms,
+    i2c_role, is_capacitor, is_connector_like, is_ground, is_resistor, is_supply,
+    is_unconnected_net, norm, parse_ohms,
 };
 use crate::part_class::{self, connected_pads};
 use crate::{Component, ExtractedBoard};
@@ -196,68 +196,17 @@ pub mod impedance;
 
 // ===========================================================================
 // Net / part helpers. The name classifiers the --si and --lint reports must
-// agree on (`norm`, `is_ground`, `i2c_role`, `numeric_rail_magnitude`) live in
-// `netlint` and are shared, so the two surfaces cannot classify one net two
+// agree on (`norm`, `is_ground`, `is_supply`, `i2c_role`, `is_connector_like`)
+// live in `netlint` and are shared, so the two surfaces cannot classify one net two
 // ways; what follows is what only this module needs.
 // ===========================================================================
-
-/// Power-rail nominal voltage by net name (only the rails the I2C check needs to
-/// know the high level of). `None` for non-rail nets.
-fn rail_voltage(name: &str) -> Option<f64> {
-    let n = norm(name);
-    // Table kept in lockstep with netlint's rail_voltage: the --si I2C checks are
-    // meant to MIRROR the --lint pull-up-presence check, so a token netlint reads
-    // as a rail (VCC5V/VCC5, VPP/VDD_IO) but si.rs does not would classify the same
-    // net differently across the two reports (a --si vs --lint disagreement).
-    match n.as_str() {
-        "+5V" | "5V" | "VCC" | "VDD" | "+VCC" | "VBUS" | "+5V0" | "VCC5V" | "VCC5" => Some(5.0),
-        "+3V3" | "3V3" | "+3.3V" | "3.3V" | "VCC3V3" | "VDD3V3" | "VDD3P3" | "+3V3A" => Some(3.3),
-        "+3V" | "3V" | "+3V0" | "3V0" => Some(3.0),
-        "+1V8" | "1V8" | "1.8V" | "VDD1V8" => Some(1.8),
-        "+2V8" | "2V8" => Some(2.8),
-        "VBAT" | "VBATT" | "VSYS" | "VIN" | "+VBAT" | "VPP" | "VDDIO" | "VDD_IO" | "VIO" => {
-            Some(3.7)
-        }
-        _ => {
-            // Reject rail-named SIGNAL nets: a `3V3_EN` / `1V8_PG` enable or
-            // power-good net is not the rail, so a resistor tapping it must not
-            // count as an I2C pull-up (shares netlint's token table so the
-            // two reports cannot classify the same net two ways).
-            if has_signal_role_token(&n) {
-                None
-            } else if let Some(v) = numeric_rail_magnitude(&n) {
-                // A numerically-named rail carries its own magnitude ("5V0",
-                // "+12V", "24V", "+15V0"). netlint's rail_voltage recognises these
-                // via the same grammar; si.rs must too, or a pull-up returning to a
-                // bare "5V0" rail is not seen as rail-like and the I2C rise-time
-                // audit is silently skipped (a --si vs --lint disagreement).
-                Some(v)
-            } else if n.contains("5V")
-                && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS"))
-            {
-                // Loose 5V rail, but only with rail context (+/VCC/VBUS) so a
-                // signal net that merely embeds "5V" is not misread, mirrors
-                // netlint's guarded 5V fallback.
-                Some(5.0)
-            } else if n.contains("3V3") || n.contains("3.3V") || n.contains("3P3") {
-                Some(3.3)
-            } else if n.contains("1V8") {
-                Some(1.8)
-            } else if n.contains("VBAT") || n.contains("VSYS") {
-                Some(3.7)
-            } else {
-                None
-            }
-        }
-    }
-}
 
 /// A net is rail-like if its name is a rail, or it structurally behaves like a
 /// local supply (a bypass cap to ground sits on it). Used by the I2C check to
 /// recognise pull-ups to CAD-auto-named local rails.
 fn net_is_raillike(board: &ExtractedBoard, net_id: i64) -> bool {
     if let Some(n) = board.net(net_id) {
-        if rail_voltage(&n.name).is_some() {
+        if is_supply(&n.name) {
             return true;
         }
     }
@@ -777,23 +726,6 @@ fn is_fast_mode_name(name: &str) -> bool {
     let n = norm(name);
     n.split(|c: char| !c.is_ascii_alphanumeric())
         .any(|t| t == "FM" || t == "FAST")
-}
-
-fn is_connector_like(c: &Component) -> bool {
-    let r = c.reference.to_ascii_uppercase();
-    let lib = c.lib_id.to_ascii_lowercase();
-    let fp = c.footprint.to_ascii_lowercase();
-    r.starts_with('J')
-        || r.starts_with("CN")
-        || r.starts_with("CON")
-        || r.starts_with("TP")
-        || r.starts_with("UEXT")
-        || r.starts_with("EXT")
-        || lib.contains("connector")
-        || lib.contains("header")
-        || fp.contains("header")
-        || fp.contains("connector")
-        || fp.contains("uext")
 }
 
 /// Find the effective pull-up resistance on an I2C net: every resistor with one

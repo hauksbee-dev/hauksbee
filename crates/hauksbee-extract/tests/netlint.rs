@@ -80,6 +80,51 @@ fn resistor_designator_on_capacitor_footprint_is_flagged() {
     assert!(f.message.contains("R1"));
 }
 
+/// Legal control: an R, C or L chip on another passive's chip land of the same
+/// EIA size fits and solders, so it is a naming note that names the size.
+#[test]
+fn passive_on_a_same_size_chip_land_is_a_note() {
+    let comps = r"
+    (comp (ref L1) (value 10uH) (footprint Resistor_SMD:R_0603_1608Metric))
+    (comp (ref R1) (value 8.2k) (footprint Capacitor_SMD:C_0603_1608Metric))";
+    let nets = r#"
+    (net (code 1) (name "A") (node (ref L1) (pin 1)) (node (ref R1) (pin 1)))
+    (net (code 2) (name "B") (node (ref L1) (pin 2)) (node (ref R1) (pin 2)))"#;
+    let r = lint(comps, nets);
+    let found: Vec<_> = r.of_check(LintCheck::DesignatorFootprintMismatch).collect();
+    assert_eq!(found.len(), 2, "{found:?}");
+    for f in found {
+        assert_eq!(f.severity, Severity::Low, "{}", f.message);
+        assert!(f.message.contains("Same 0603 chip size"), "{}", f.message);
+    }
+}
+
+/// Still flagged: a land with no chip size code, a non-passive on a resistor
+/// land, a resistor on a transistor package, and a part whose family matches.
+#[test]
+fn passive_on_a_land_that_may_not_fit_stays_a_warning() {
+    let comps = r"
+    (comp (ref L1) (value 10uH) (footprint complib:R_SPECIAL))
+    (comp (ref L2) (value 10uH) (footprint Inductor_SMD:L_Bourns_SRR1260))
+    (comp (ref R2) (value 1k) (footprint Package_TO_SOT_SMD:SOT-23))";
+    let nets = r#"
+    (net (code 1) (name "A") (node (ref L1) (pin 1)) (node (ref L2) (pin 1)) (node (ref R2) (pin 1)))
+    (net (code 2) (name "B") (node (ref L1) (pin 2)) (node (ref L2) (pin 2)) (node (ref R2) (pin 2)))"#;
+    let r = lint(comps, nets);
+    let found: Vec<_> = r.of_check(LintCheck::DesignatorFootprintMismatch).collect();
+    // L1's land has a resistor family name and no size code; L2 is on an
+    // inductor land; R2's SOT-23 names no passive family, so only L1 fires.
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].refs, ["L1"]);
+    assert_eq!(found[0].severity, Severity::Medium);
+    // A transistor designator claims no passive, so it is never compared.
+    let r = lint(
+        r"(comp (ref Q1) (value BC847) (footprint Resistor_SMD:R_0603))",
+        r#"(net (code 1) (name "A") (node (ref Q1) (pin 1)))"#,
+    );
+    assert_eq!(count(&r, LintCheck::DesignatorFootprintMismatch), 0);
+}
+
 #[test]
 fn impossible_capacitance_for_0603_is_flagged() {
     let comps = r"

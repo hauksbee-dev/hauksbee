@@ -20,6 +20,11 @@ const NAMED_ESCAPES: &[(&str, &str)] = &[
     ("{gt}", ">"),
     ("{bar}", "|"),
     ("{space}", " "),
+    ("{backslash}", "\\"),
+    ("{dollar}", "$"),
+    ("{tab}", "\t"),
+    ("{return}", "\n"),
+    // `{brace}` last: a `{` restored earlier must not start a new token.
     ("{brace}", "{"),
 ];
 

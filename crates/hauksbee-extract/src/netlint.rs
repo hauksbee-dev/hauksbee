@@ -19,6 +19,7 @@
 use crate::assembly::AssemblyState;
 use crate::part_class::{self, connected_pads, ref_designator};
 use crate::{Component, ExtractedBoard, Net, Pin};
+use hauksbee_models::refdes::RefClass;
 use std::fmt::Write as _;
 
 mod topology;
@@ -402,146 +403,13 @@ impl ExtractedBoard {
 }
 
 // ---------------------------------------------------------------------------
-// Net classification helpers (kept local so the lint is self-contained).
+// Net classification: one table for the lint, the SI checks, the binder and
+// every board check (`hauksbee_models::netclass`).
 // ---------------------------------------------------------------------------
 
-/// Normalise a net name: trim, drop a leading hierarchical path and `/`, upper.
-#[must_use]
-pub fn norm(name: &str) -> String {
-    let n = name.trim();
-    // Keep only the leaf of a hierarchical net path so "/Power/+3V3" -> "+3V3".
-    let leaf = n.rsplit('/').next().unwrap_or(n);
-    leaf.trim().to_ascii_uppercase()
-}
-
-/// Ground net?
-#[must_use]
-pub fn is_ground(name: &str) -> bool {
-    let n = norm(name);
-    matches!(
-        n.as_str(),
-        "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "PGND" | "VSS" | "GNDIO" | "0"
-    ) || n.starts_with("GND")
-}
-
-/// Power-rail nominal voltage by net name, mirroring the engine binder's table.
-/// Returns `None` for non-rail nets.
-fn rail_voltage(name: &str) -> Option<f64> {
-    let n = norm(name);
-    match n.as_str() {
-        "+5V" | "5V" | "VCC" | "VDD" | "+VCC" | "VBUS" | "+5V0" | "VCC5V" | "VCC5" => Some(5.0),
-        "+3V3" | "3V3" | "+3.3V" | "3.3V" | "VCC3V3" | "VDD3V3" | "VDD3P3" | "+3V3A" => Some(3.3),
-        "+3V" | "3V" | "+3V0" | "3V0" => Some(3.0),
-        "+1V8" | "1V8" | "1.8V" | "VDD1V8" => Some(1.8),
-        "+2V8" | "2V8" => Some(2.8),
-        "+12V" | "12V" => Some(12.0),
-        // Battery / system rails that pull-ups legitimately tie to. Treated as a
-        // rail for the "is a pull-up present" test (exact voltage immaterial
-        // there); a nominal Li-ion midpoint is used for any current math.
-        "VBAT" | "VBATT" | "VSYS" | "VIN" | "+VBAT" | "VPP" | "VDDIO" | "VDD_IO" | "VIO" => {
-            Some(3.7)
-        }
-        // A numeric rail carries its own magnitude ("+15V", "24V", "+15V0").
-        // This MUST precede the loose contains("5V") branch: "+15V" contains
-        // the substring "5V" and starts with '+', so without this it was
-        // mislabeled a 5 V rail.
-        _ => numeric_rail_magnitude(&n).or_else(|| {
-            if n.contains("5V") && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS")) {
-                Some(5.0)
-            } else if (n.contains("3V3") || n.contains("3.3V") || n.contains("3P3"))
-                && !has_signal_role_token(&n)
-            {
-                Some(3.3)
-            } else if n.contains("1V8") && !has_signal_role_token(&n) {
-                Some(1.8)
-            } else if n == "VBAT"
-                || n.ends_with("/VBAT")
-                || n.contains("VBAT")
-                || n.contains("VSYS")
-            {
-                Some(3.7)
-            } else {
-                None
-            }
-        }),
-    }
-}
-
-/// True when a rail-named net carries an enable/status/monitor/select token,
-/// making it a SIGNAL net (`3V3_EN`, `1V8_PG`, `3V3_SEL`, `3V3_DET`), not the
-/// rail itself. The `numeric_rail_magnitude` full-consumption guard catches
-/// these for the pure `<digits>V<digits>` grammar, but the loose `contains`
-/// fallbacks (3V3/1V8) need the same protection or a divider tapping such a
-/// sense net is miscounted as a pull-up and a genuine finding is suppressed.
-pub fn has_signal_role_token(n: &str) -> bool {
-    n.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| {
-        matches!(
-            t,
-            "EN" | "ENABLE"
-                | "PG"
-                | "PGOOD"
-                | "POWERGOOD"
-                | "GOOD"
-                | "SEL"
-                | "SELECT"
-                | "DET"
-                | "DETECT"
-                | "MON"
-                | "MONITOR"
-                | "STAT"
-                | "STATUS"
-                | "FLT"
-                | "FAULT"
-                | "INT"
-                | "IRQ"
-                | "RST"
-                | "RESET"
-                | "CTRL"
-                | "CTL"
-        )
-    })
-}
-
-/// A rail whose name carries its own numeric magnitude: an optional leading
-/// '+', then digits, 'V', and optional trailing digits, plain "15V"/"24V" or
-/// the KiCad digit-V-digit "5V0"/"3V3" form. Returns `None` for names that
-/// don't start with a digit after the optional '+' (VCC, `VDD_IO`), leaving them
-/// to the token heuristics. Mirrors the engine binder's `positive_rail_fallback`.
-pub fn numeric_rail_magnitude(n: &str) -> Option<f64> {
-    let rest = n.strip_prefix('+').unwrap_or(n);
-    let int_part: String = rest
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
-    if int_part.is_empty() {
-        return None;
-    }
-    let after = rest[int_part.len()..].strip_prefix('V')?;
-    let frac: String = after.chars().take_while(char::is_ascii_digit).collect();
-    // The name must be ENTIRELY consumed by the "<digits>V<digits>" grammar.
-    // Otherwise rail-named SIGNAL nets, "5V_DET", "3V3_EN", "5V_SEL", "12V_PG",
-    // over-match as real rails ("5V_DET" → 5.0 V), so net_is_raillike wrongly
-    // reports a monitor/enable net as a supply and suppresses genuine findings
-    // (a missing I2C pull-up whose divider taps a "5V_DET" sense net).
-    if !after[frac.len()..].is_empty() {
-        return None;
-    }
-    let mag: f64 = if frac.is_empty() {
-        int_part.parse().ok()?
-    } else {
-        format!("{}.{}", int_part.trim_end_matches('.'), frac)
-            .parse()
-            .ok()?
-    };
-    // No upper clamp. A `mag <= 60.0` ceiling silently rejects any
-    // rail above 60 V and falls back to the 5 V default, so `rail_voltage("+65V")`
-    // returns 5.0 and check_led_current under-counts the drive, suppressing a
-    // genuine over-current finding. Real boards run 65 V motor rails, 100 V+ LED
-    // strings, 400 V PFC buses; the magnitude is whatever the token says as long
-    // as it is a positive, finite number. (Mirrors binder.rs::embedded_rail_magnitude,
-    // which is unclamped in the same spirit.)
-    (mag > 0.0 && mag.is_finite()).then_some(mag)
-}
+pub use hauksbee_models::netclass::{
+    is_ground, is_positive_supply, is_supply, leaf as norm, rail_voltage,
+};
 
 /// Is this component a plain two-terminal resistor (the kind that can be a
 /// pull-up)?
@@ -686,6 +554,8 @@ pub fn is_connector_like(c: &Component) -> bool {
         || r == "POWER"
         || r.starts_with("IOH")
         || r.starts_with("IOL")
+        || r.starts_with("UEXT")
+        || r.starts_with("EXT")
     {
         return true;
     }
@@ -722,6 +592,8 @@ pub fn is_connector_like(c: &Component) -> bool {
     // Footprint / package geometry: pin rows, headers, sockets, board-to-board
     // and edge connectors (Hirose DF-series, SODIMM, FPC/FFC, card edge).
     fp.contains("header")
+        || fp.contains("connector")
+        || fp.contains("uext")
         || fp.contains("pinhead")
         || fp.contains("socket")
         || fp.contains("sodimm")
@@ -732,8 +604,8 @@ pub fn is_connector_like(c: &Component) -> bool {
         || fp.contains("fpc")
         || fp.contains("ffc")
         || fp.contains("edge")
-        || fp.contains("_1x")
-        || fp.contains("_2x")
+        // Pin rows (`_1x04`, `_2x20`) come through the grid parser, which tells
+        // them from an IC body (`LGA-12_2x2mm`); a bare `_2x` substring did not.
         || is_pin_array_package(&c.footprint)
         || is_module_socket(c)
 }
@@ -932,25 +804,13 @@ pub fn is_placeholder_value(value: &str) -> bool {
         .any(|p| value.trim().eq_ignore_ascii_case(p))
 }
 
+/// The passive ('R', 'C' or 'L') a designator claims, from the one prefix
+/// table (`hauksbee_models::refdes`): `LED1`, `LS1`, `CR1` and `RN1` claim none.
 fn passive_prefix(reference: &str) -> Option<char> {
-    let r = ref_designator(reference);
-    let first = r.chars().next()?;
-    match first {
-        'R' if !r.starts_with("RV") && !r.starts_with("RT") && !r.starts_with("RN") => Some('R'),
-        'C' if !r.starts_with("CN") && !r.starts_with("CON") => Some('C'),
-        // The 'L' arm must exclude the many non-inductor L-prefixed designators,
-        // LED (light-emitting diode), LS (loudspeaker/buzzer), LDR (photoresistor),
-        // LCD (display), or an LED1/LS1 with a blank value fires a false
-        // "set the actual L value" placeholder finding and an LDR on a resistor
-        // footprint fires a false designator/footprint-family mismatch. Mirrors
-        // the guarded R/C arms and the file's own is_led().
-        'L' if !r.starts_with("LED")
-            && !r.starts_with("LS")
-            && !r.starts_with("LDR")
-            && !r.starts_with("LCD") =>
-        {
-            Some('L')
-        }
+    match RefClass::of(reference) {
+        RefClass::Resistor => Some('R'),
+        RefClass::Capacitor => Some('C'),
+        RefClass::Inductor => Some('L'),
         _ => None,
     }
 }
@@ -970,9 +830,64 @@ fn footprint_family(footprint: &str) -> Option<char> {
 
 fn package_code(footprint: &str) -> Option<&'static str> {
     let fp = footprint.to_ascii_lowercase();
-    ["0201", "0402", "0603", "0805", "1206", "1210"]
-        .into_iter()
-        .find(|code| fp.contains(code))
+    [
+        "0201", "0402", "0603", "0805", "1206", "1210", "1812", "2010", "2512",
+    ]
+    .into_iter()
+    .find(|code| fp.contains(code))
+}
+
+/// The passive a family letter names, for a sentence.
+const fn passive_word(family: char) -> &'static str {
+    match family {
+        'R' => "resistor",
+        'C' => "capacitor",
+        _ => "inductor",
+    }
+}
+
+/// A designator on another passive's footprint, and how much it matters.
+///
+/// Two-terminal R, C and L chips of one EIA size share one IPC chip land
+/// within tenths of a millimetre, so an `L5` on `R_0603` fits and solders:
+/// that is a library naming note. A land with no chip size code (a radial, a
+/// power-inductor body, a named package) or a part that is not two pads may
+/// really not fit, which stays a warning.
+fn designator_footprint_finding(c: &Component, prefix: char, family: char) -> LintFinding {
+    let pads: std::collections::BTreeSet<&str> = c.pins.iter().map(|p| p.number.as_str()).collect();
+    let shared_chip = package_code(&c.footprint).filter(|_| pads.len() == 2);
+    let (severity, message) = shared_chip.map_or_else(
+        || {
+            (
+                Severity::Medium,
+                format!(
+                    "{} is a {prefix} designator but uses {family} footprint '{}'",
+                    c.reference, c.footprint
+                ),
+            )
+        },
+        |size| {
+            (
+                Severity::Low,
+                format!(
+                    "{} is a {prefix} designator on a {family} chip land '{}'. Same {size} chip \
+                     size, so the part fits; the land is the generic {} variant. Rename the \
+                     footprint to the {} land if the BOM tooling keys on it",
+                    c.reference,
+                    c.footprint,
+                    passive_word(family),
+                    passive_word(prefix)
+                ),
+            )
+        },
+    );
+    LintFinding {
+        check: LintCheck::DesignatorFootprintMismatch,
+        severity,
+        message,
+        refs: vec![c.reference.clone()],
+        nets: Vec::new(),
+    }
 }
 
 fn parse_capacitance_uf(value: &str) -> Option<f64> {
@@ -1101,16 +1016,9 @@ fn check_design_file_qc(board: &ExtractedBoard, report: &mut NetLintReport) {
 
         if let Some(family) = footprint_family(&c.footprint) {
             if family != prefix {
-                report.findings.push(LintFinding {
-                    check: LintCheck::DesignatorFootprintMismatch,
-                    severity: Severity::Medium,
-                    message: format!(
-                        "{} is a {} designator but uses {} footprint '{}'",
-                        c.reference, prefix, family, c.footprint
-                    ),
-                    refs: vec![c.reference.clone()],
-                    nets: Vec::new(),
-                });
+                report
+                    .findings
+                    .push(designator_footprint_finding(c, prefix, family));
             }
         }
 
@@ -1145,10 +1053,8 @@ fn check_design_file_qc(board: &ExtractedBoard, report: &mut NetLintReport) {
 /// missing. A bus signal never carries a cap-to-ground, so this does not
 /// misclassify SDA/SCL themselves.
 fn net_is_raillike(board: &ExtractedBoard, net_id: i64) -> bool {
-    if let Some(n) = board.net(net_id) {
-        if rail_voltage(&n.name).is_some() {
-            return true;
-        }
+    if board.net(net_id).is_some_and(|n| is_supply(&n.name)) {
+        return true;
     }
     let mem = members(board, net_id);
     // A bypass cap to ground on this net?
@@ -1810,7 +1716,6 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                 // the whole story on this net.
                 behind_bus_switch = true;
             }
-            let r = c.reference.to_ascii_uppercase();
             if is_host_silicon(c) {
                 active_refs.insert(c.reference.as_str());
             }
@@ -1831,15 +1736,17 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
             // credit would fail toward silence twice on one unknown.
             let two_pin_series = c.pins.len() == 2
                 && ((is_resistor(c) && parse_ohms(&c.value).is_none_or(|o| o < 1_000.0))
-                    || r.starts_with("FB")
-                    || (r.starts_with('L') && !r.starts_with("LED")));
+                    || matches!(
+                        RefClass::of(&c.reference),
+                        RefClass::FerriteBead | RefClass::Inductor
+                    ));
             if two_pin_series {
                 for op in &c.pins {
                     match op.net {
                         Some(oid) if oid != net.id => {
-                            let far_named_ground_or_rail = board.net(oid).is_some_and(|n| {
-                                is_ground(&n.name) || rail_voltage(&n.name).is_some()
-                            });
+                            let far_named_ground_or_rail = board
+                                .net(oid)
+                                .is_some_and(|n| is_ground(&n.name) || is_supply(&n.name));
                             if far_named_ground_or_rail {
                                 continue;
                             }
@@ -2085,15 +1992,24 @@ pub fn control_role(function: &str) -> Option<&'static str> {
     }
 }
 
+/// A part whose control pins the floating-control lint judges.
+///
+/// An IC (`U`, `IC`, `MCU`) or a transistor (`Q`). The floating-inputs board check reads
+/// the same predicate so the two never report one pin twice.
+#[must_use]
+pub fn is_logic_or_switch_ref(c: &Component) -> bool {
+    matches!(
+        RefClass::of(&c.reference),
+        RefClass::ActiveIc | RefClass::Transistor
+    )
+}
+
 fn check_floating_control_pins(board: &ExtractedBoard, report: &mut NetLintReport) {
     // Fitted logic/active parts only: an unassembled IC has no pin to float, a
     // refused record's functions are not evidence, and "EN" means nothing on a
     // connector or passive.
     let active = |c: &&Component| {
-        let r = c.reference.to_ascii_uppercase();
-        AssemblyState::of(c).is_present()
-            && !is_connector_like(c)
-            && (r.starts_with('U') || r.starts_with("IC") || r.starts_with('Q'))
+        AssemblyState::of(c).is_present() && !is_connector_like(c) && is_logic_or_switch_ref(c)
     };
     for c in board.components.iter().filter(active) {
         for p in &c.pins {
@@ -3511,57 +3427,7 @@ mod passive_prefix_tests {
 
 #[cfg(test)]
 mod rail_and_cap_tests {
-    use super::{parse_capacitance_uf, rail_voltage};
-
-    #[test]
-    fn numeric_rails_keep_their_magnitude() {
-        // "+15V"/"+25V"/"+35V" contain the substring "5V" and start with
-        // '+', so the loose fallback mislabeled them 5.0 V.
-        assert_eq!(rail_voltage("+15V"), Some(15.0));
-        assert_eq!(rail_voltage("+25V"), Some(25.0));
-        assert_eq!(rail_voltage("+35V"), Some(35.0));
-        assert_eq!(rail_voltage("24V"), Some(24.0));
-        assert_eq!(rail_voltage("+15V0"), Some(15.0));
-        // Genuine 5 V rails still resolve to 5.
-        assert_eq!(rail_voltage("+5V"), Some(5.0));
-        assert_eq!(rail_voltage("VCC5V"), Some(5.0));
-        // A hierarchical leaf still normalises.
-        assert_eq!(rail_voltage("/Power/+15V"), Some(15.0));
-    }
-
-    #[test]
-    fn rail_named_signal_nets_are_not_rails() {
-        // Numeric_rail_magnitude read only the leading "<digits>V<digits>"
-        // and ignored any trailing text, so rail-named SIGNAL nets over-matched
-        // as supplies ("5V_DET" -> 5.0 V). net_is_raillike then wrongly treated a
-        // presence/enable/select net as a rail, e.g. suppressing a missing I2C
-        // pull-up whose divider taps a "5V_DET" sense net. A name must be entirely
-        // consumed by the numeric-rail grammar to count.
-        // These reach the numeric-rail grammar (they start with a digit and are
-        // not exact-arm rails); the trailing signal suffix must disqualify them.
-        assert_eq!(rail_voltage("5V_DET"), None);
-        assert_eq!(rail_voltage("5V_DETECT"), None);
-        assert_eq!(rail_voltage("12V_PG"), None);
-        assert_eq!(rail_voltage("24V_MON"), None);
-        // The 5V branch had a rail-context guard but the 3V3/1V8 loose
-        // `contains` fallbacks did not, so a `3V3_EN` / `1V8_PG` signal net (which
-        // fails the numeric-rail full-consumption check and drops to the fallback)
-        // still read as a rail, suppressing a genuine missing-pull-up finding
-        // when a divider tapped it. The signal-role token must disqualify them.
-        assert_eq!(rail_voltage("3V3_EN"), None);
-        assert_eq!(rail_voltage("1V8_EN"), None);
-        assert_eq!(rail_voltage("3V3_PG"), None);
-        assert_eq!(rail_voltage("3V3_SEL"), None);
-        assert_eq!(rail_voltage("1V8_PGOOD"), None);
-        // Genuine numeric rails (whole name consumed) still resolve.
-        assert_eq!(rail_voltage("5V"), Some(5.0));
-        assert_eq!(rail_voltage("3V3"), Some(3.3));
-        assert_eq!(rail_voltage("+12V"), Some(12.0));
-        assert_eq!(rail_voltage("15V0"), Some(15.0));
-        // A rail name that EMBEDS 3V3 without a signal role is still a rail.
-        assert_eq!(rail_voltage("MCU_3V3"), Some(3.3));
-        assert_eq!(rail_voltage("VCC_3V3"), Some(3.3));
-    }
+    use super::parse_capacitance_uf;
 
     #[test]
     fn r_style_capacitance_keeps_the_fractional_part() {
@@ -3574,21 +3440,6 @@ mod rail_and_cap_tests {
         assert_eq!(parse_capacitance_uf("4.7uF"), Some(4.7));
         assert_eq!(parse_capacitance_uf("10u"), Some(10.0));
         assert_eq!(parse_capacitance_uf("100nF"), Some(0.1));
-    }
-
-    #[test]
-    fn high_voltage_rails_above_sixty_volts_keep_their_magnitude() {
-        // Numeric_rail_magnitude clamped `mag <= 60.0` and fell back to the
-        // 5 V default above it, so rail_voltage("+65V") returned Some(5.0). That
-        // under-counted the drive in check_led_current and suppressed a genuine
-        // over-current finding on high-voltage LED strings / motor rails. Real
-        // boards run well past 60 V; the magnitude is whatever the token says.
-        assert_eq!(rail_voltage("+65V"), Some(65.0));
-        assert_eq!(rail_voltage("100V"), Some(100.0));
-        assert_eq!(rail_voltage("+400V"), Some(400.0));
-        assert_eq!(rail_voltage("48V"), Some(48.0));
-        // The 60 V boundary itself and below are unaffected.
-        assert_eq!(rail_voltage("60V"), Some(60.0));
     }
 
     #[test]

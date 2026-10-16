@@ -452,6 +452,11 @@ fn emit_report(
                 message: sub.message(),
             });
         }
+        // A guessed AVR clock puts every delay, baud rate and PWM period in the
+        // run at risk of being off by the ratio: never silent.
+        for guess in engine.scheduler().clock_assumptions() {
+            jr.push_coverage_note(format!("assumed AVR clock: {guess}"));
+        }
         if zero_activity {
             jr.push_coverage_note(crate::execution::NO_EXECUTION_MESSAGE);
         }
@@ -534,6 +539,11 @@ fn emit_report(
             report.heads_up.push(crate::plain::HeadsUp::note(format!(
                 "co-sim ran on a SUBSTITUTE chip: {}",
                 sub.message()
+            )));
+        }
+        for guess in engine.scheduler().clock_assumptions() {
+            report.heads_up.push(crate::plain::HeadsUp::note(format!(
+                "co-sim assumed an AVR clock: {guess}"
             )));
         }
         if zero_activity {

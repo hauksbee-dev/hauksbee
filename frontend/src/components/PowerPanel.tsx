@@ -11,7 +11,8 @@
  */
 
 import { useState } from 'react'
-import type { BoardInfoMsg, ClientMessage, SimFrame } from '../types/protocol'
+import type { BoardInfoMsg, ClientMessage, PowerSupplyWire, SimFrame } from '../types/protocol'
+import { sameSupply, supplyLabel } from './sim/session-seed'
 import { toWireSupply, supplyNetNames, appliedVolts, fromWireSupply, SUPPLY_DEFAULTS } from '../lib/supply-wire'
 import type { SupplyConfig, SupplyType } from '../lib/supply-wire'
 import { displayNet } from '../lib/net-name'
@@ -20,27 +21,33 @@ interface PowerPanelProps {
   boardInfo: BoardInfoMsg | null
   frame: SimFrame | null
   send: (msg: ClientMessage) => void
+  /** What each rail runs now, when the owner tracks it (the session seed and
+   *  edits since); BoardInfo's launch-time map otherwise. */
+  supplies?: Record<string, PowerSupplyWire>
+  /** Told of every edit, after it is sent, so the owner's map stays true. */
+  onSupply?: (net: string, wire: PowerSupplyWire) => void
+  /** The checks spec's supply per rail: each rail says whether it matches. */
+  checksSupplies?: Record<string, PowerSupplyWire>
 }
 
-export function PowerPanel({ boardInfo, frame, send }: PowerPanelProps) {
+export function PowerPanel({ boardInfo, frame, send, supplies: running, onSupply, checksSupplies }: PowerPanelProps) {
   // power_supplies is a net -> config map (omitted when the board has none);
   // extract the net names. Treating it as an array crashed the whole view.
-  const supplies = boardInfo?.power_supplies
+  const supplies = running ?? boardInfo?.power_supplies
   const supplyNets = supplyNetNames(supplies)
   // Only rails the user has edited live here; an untouched rail reads what the
   // server says it runs, so VDD_3V3 is not shown (or first edited) at 5 V.
   const [edited, setEdited] = useState<Record<string, SupplyConfig>>({})
-  const configFor = (net: string, from = edited) => from[net] ?? fromWireSupply(supplies?.[net])
+  const configFor = (net: string) => edited[net] ?? fromWireSupply(supplies?.[net])
 
   function updateConfig(net: string, patch: Partial<SupplyConfig>) {
-    setEdited(prev => {
-      const next = { ...prev, [net]: { ...configFor(net, prev), ...patch } }
-      // The server deserializes a tagged enum, and the raw UI config fails
-      // serde there, leaving the panel silently doing nothing. Map to the wire
-      // shape.
-      send({ type: 'SetPowerSupply', net, supply: toWireSupply(next[net]) })
-      return next
-    })
+    const cfg = { ...configFor(net), ...patch }
+    setEdited(prev => ({ ...prev, [net]: cfg }))
+    // The server deserializes a tagged enum, and the raw UI config fails serde
+    // there, leaving the panel silently doing nothing. Map to the wire shape.
+    const wire = toWireSupply(cfg)
+    send({ type: 'SetPowerSupply', net, supply: wire })
+    onSupply?.(net, wire)
   }
 
   // Live rail readout comes from the frame: the rail's solved voltage and the
@@ -81,6 +88,18 @@ export function PowerPanel({ boardInfo, frame, send }: PowerPanelProps) {
                 )}
               </span>
             </div>
+            {checksSupplies?.[net] && (
+              <span
+                data-testid={`rail-vs-checks-${net}`}
+                className="text-[10px] self-start px-1.5 py-0.5 rounded"
+                title={`The checks spec runs this rail on ${supplyLabel(checksSupplies[net])}`}
+                style={sameSupply(supplies?.[net], checksSupplies[net])
+                  ? { color: 'var(--ok)', background: 'var(--ok-bg)', border: '1px solid var(--ok-border)' }
+                  : { color: 'var(--warn-strong)', background: 'var(--warn-bg)', border: '1px solid var(--warn-border)' }}
+              >
+                {sameSupply(supplies?.[net], checksSupplies[net]) ? 'same as checks' : `checks: ${supplyLabel(checksSupplies[net])}`}
+              </span>
+            )}
             {overLimit && state && (
               <div
                 role="status"

@@ -512,6 +512,9 @@ function Shell({ boot }: { boot: Boot }) {
                 sessionMatchesCurrent={sessionMatchesCurrent}
                 modelCoverage={report?.model_coverage ?? null}
                 componentAssertions={report?.component_assertions ?? null}
+                report={reportOk ? report : null}
+                specToml={spec?.toml ?? null}
+                engineVersion={engineVersion}
                 onRelaunch={reportOk && session.liveMode !== 'none' ? relaunchWithCurrent : undefined}
               />
             </div>

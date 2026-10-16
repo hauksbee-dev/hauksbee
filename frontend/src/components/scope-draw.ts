@@ -31,6 +31,8 @@ export interface ScopePlot {
   yFloor?: [number, number]
   /** Drawn centred in place of the plot; for "no probes attached" etc. */
   hint?: string | null
+  /** Moments to mark with a labelled vertical rule (the live scope's faults). */
+  markers?: { x: number; label: string }[]
 }
 
 /** CSS token for probe slot idx; used by the canvas beams AND the list dots. */
@@ -157,6 +159,25 @@ export function drawScope(ctx: CanvasRenderingContext2D, W: number, H: number, p
   ctx.fillStyle = cssToken('--scope-axis')
   ctx.textAlign = 'center'
   ctx.fillText(plot.xLabel, PAD_L + plotW / 2, H - 4)
+
+  // Event rules under the traces: where in time something happened.
+  const markColor = cssToken('--err')
+  ctx.font = 'bold 9px JetBrains Mono, monospace'
+  ctx.textAlign = 'left'
+  for (const m of plot.markers ?? []) {
+    if (m.x < xMin || m.x > xMax) continue
+    const px = xAt(m.x)
+    ctx.strokeStyle = markColor
+    ctx.fillStyle = markColor
+    ctx.lineWidth = 1
+    ctx.setLineDash([3, 3])
+    ctx.beginPath()
+    ctx.moveTo(px, PAD_T)
+    ctx.lineTo(px, PAD_T + plotH)
+    ctx.stroke()
+    ctx.setLineDash([])
+    ctx.fillText(m.label, Math.min(px + 3, PAD_L + plotW - ctx.measureText(m.label).width), PAD_T + 9)
+  }
 
   // Traces: multi-pass phosphor bloom, at a fraction of the strength in light
   // mode or the beam reads as smudge on paper.

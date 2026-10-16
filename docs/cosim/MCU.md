@@ -229,6 +229,18 @@ limitation rather than as a silicon-equivalent clock.
 | `renode:stm32l0` | clock-truth gate passes at 2 MHz, within 5% of the 2.097 MHz MSI default | SysTick fixture in `tests/clock_truth.rs`; 16x slow against a 32 MHz PLL, stated as a timing limitation |
 | `qemu:esp32` / `-s3` / `-c3` | host-paced: approximate, about 2x apart across hosts for instruction-bound boot | `tests/qemu_clock_truth.rs`; reports carry a timing limitation, and time bounds are reported unjudged (conditional), never hard PASS/FAIL; a net never driven or a bus never exercised still FAILs |
 
+**AVR core clock.** One rule, in `avr_clock_plan` (hauksbee-cosim scheduler):
+the firmware's `.fuse` low byte decides the source and CKDIV8 on this board;
+with no fuses, the crystal bound to XTAL1/XTAL2 when its value states a
+frequency; otherwise the card's `default_clock_hz` (8 MHz for a bare chip's
+internal RC: ATmega328P datasheet DS40002061A section 9.2.1, PDF page 37; 16 MHz
+for the Arduino Nano and Pro Micro module cards). A card default is a guess and
+is never silent: the run prints a WARNING, the co-sim JSON carries a coverage
+note, and the CI result carries a verdict condition. CKDIV8 (the factory
+setting, which makes a fresh ATmega328P run at 1 MHz) is not assumed; set
+`FUSES` in the firmware ELF to state it. A part with no card clock is refused,
+not given a number.
+
 The descriptor loader cross-checks each declared clock against its platform and
 refuses a mismatch or a Renode platform with no core-clock declaration
 (`soc::check_clock_declarations`). `tests/clock_truth.rs` gates supported parts

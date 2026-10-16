@@ -504,6 +504,11 @@ pub struct RunOutcome {
     /// ([`crate::tolerance::VariantCoverage::conditions`]). The same sentences on
     /// every member of a run; empty when every combination ran.
     pub verdict_conditions: Vec<String>,
+    /// Each AVR core clock this member's co-sim had to guess (no fuses, no
+    /// crystal frequency; the card's default): the run's timing rests on it, so
+    /// the verdict carries it as a condition
+    /// ([`hauksbee_engine::scheduler::Scheduler::clock_assumptions`]).
+    pub clock_assumptions: Vec<String>,
     /// Full `(t_s, volts)` waveforms for the nets any `hwtrace` assertion
     /// probes, sampled at the frame cadence (held-stale frames excluded, like
     /// every other analog aggregate). Empty when the spec has no hwtrace
@@ -2561,6 +2566,7 @@ fn run_one(
         interior: plan.interior,
         variants: plan.variants.clone(),
         verdict_conditions: Vec::new(),
+        clock_assumptions: engine.scheduler().clock_assumptions().to_vec(),
         net_series,
         substitutions: engine
             .scheduler()

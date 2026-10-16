@@ -274,6 +274,7 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             "module",
             "max_adc_source_impedance_ohms",
             "internal_clock",
+            "default_clock_hz",
         ],
         ComponentKind::Connector | ComponentKind::Ignore => &[],
     }

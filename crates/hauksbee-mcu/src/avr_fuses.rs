@@ -143,7 +143,10 @@ impl AvrClockSelect {
     }
 }
 
-fn fmt_hz(hz: u64) -> String {
+/// A frequency as `8 MHz` / `128 kHz` / `1234 Hz`, for the sentences that
+/// report a clock.
+#[must_use]
+pub fn fmt_hz(hz: u64) -> String {
     if hz >= 1_000_000 && hz.is_multiple_of(1_000_000) {
         format!("{} MHz", hz / 1_000_000)
     } else if hz.is_multiple_of(1_000) {
