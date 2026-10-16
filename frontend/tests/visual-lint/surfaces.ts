@@ -93,6 +93,10 @@ export const APP_SURFACES: Surface[] = [
       const board = join(here, '../../../crates/hauksbee-engine/tests/fixtures/plain_check_open_active_ic.kicad_pcb')
       await page.setInputFiles('#board-file', board)
       await page.waitForSelector('[data-testid="report-verdict"]', { timeout: 30_000 })
+      // The one "Model this part" entry sits in the guessed-parts group, which
+      // starts collapsed; open it as a user would.
+      const closedParts = page.locator('[data-testid="guessed-parts"]:not([open]) > summary')
+      if (await closedParts.count()) await closedParts.click()
       await page.locator('[data-testid="write-part-open"]').scrollIntoViewIfNeeded()
       await settle(page)
     },
@@ -104,7 +108,6 @@ export const APP_SURFACES: Surface[] = [
       // Dispatch directly: the narrow phone layout scrolls and replaces this
       // row as the active card mounts, which can make Playwright keep waiting
       // for a now-detached click target even though the click already landed.
-      // The guessed-parts group starts collapsed; open it as a user would.
       await page.locator('[data-testid="write-part-open"]').dispatchEvent('click')
       await page.locator('[data-testid="model-tab-draft"]').dispatchEvent('click')
       // The consent gate renders once /api/models/extract/ready answers, and a

@@ -42,7 +42,8 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
   // The guessed-parts group starts collapsed; open it as a user would.
   const closedParts = page.locator('[data-testid="guessed-parts"]:not([open]) > summary')
   if (await closedParts.count()) await closedParts.click()
-  await page.locator('[data-testid^="extract-start-"]').first().dispatchEvent('click')
+  await page.locator('[data-testid="write-part-open"]').dispatchEvent('click')
+  await page.locator('[data-testid="model-tab-draft"]').dispatchEvent('click')
   await page.click('[data-testid="extract-consent-accept"]')
   await page.setInputFiles('[data-testid="extract-file"]', join(repo, 'testdata/datasheets/1N4148.pdf'))
   await page.click('[data-testid="extract-run"]')
@@ -93,7 +94,8 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
     // The guessed-parts group starts collapsed; open it as a user would.
     const closedParts = page.locator('[data-testid="guessed-parts"]:not([open]) > summary')
     if (await closedParts.count()) await closedParts.click()
-    await page.locator('[data-testid^="extract-start-"]').first().dispatchEvent('click')
+    await page.locator('[data-testid="write-part-open"]').dispatchEvent('click')
+    await page.locator('[data-testid="model-tab-draft"]').dispatchEvent('click')
     await page.click('[data-testid="extract-consent-accept"]')
     await page.setInputFiles('[data-testid="extract-file"]', join(repo, 'testdata/datasheets/1N4148.pdf'))
     await page.click('[data-testid="extract-run"]')
