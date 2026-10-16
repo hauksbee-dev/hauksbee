@@ -437,9 +437,6 @@ fn is_plain_diode(c: &Component) -> bool {
 /// Whether the part may conduct both ways: a bidirectional TVS (`SMBJ6.0CA`,
 /// `P6KE15C`, "bidir" in its name).
 fn maybe_bidirectional(c: &Component) -> bool {
-    const TVS_FAMILIES: [&str; 11] = [
-        "SMAJ", "SMBJ", "SMCJ", "SMDJ", "SM8S", "P4KE", "P6KE", "1.5KE", "P6SMB", "SMF", "TPSMB",
-    ];
     let text = format!("{} {} {}", c.value, c.lib_id, c.footprint).to_ascii_uppercase();
     if ["BIDIR", "BI-DIR", "BI_DIR", "BIPOLAR"]
         .iter()
@@ -459,7 +456,9 @@ fn maybe_bidirectional(c: &Component) -> bool {
             .and_then(|head| head.chars().last())
             .is_some_and(|ch| ch.is_ascii_digit())
     };
-    digit_before("CA") || (digit_before("C") && TVS_FAMILIES.iter().any(|f| token.starts_with(f)))
+    digit_before("CA")
+        || (digit_before("C")
+            && (hauksbee_models::value::TVS_FAMILIES.iter()).any(|(f, _)| token.starts_with(*f)))
 }
 
 pub(super) fn check_diodes_across_rails(board: &ExtractedBoard, report: &mut NetLintReport) {

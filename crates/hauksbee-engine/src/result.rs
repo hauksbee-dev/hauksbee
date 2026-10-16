@@ -2867,6 +2867,23 @@ impl JsonReport {
         self.assumptions = evidence.assumptions().to_vec();
         self.evidence = evidence.maps().to_vec();
         self.verdict_conditions = evidence.conditions().to_vec();
+        // Parts whose rated voltage nothing states, seen past the floor
+        // assumed for them: the pass rests on their real ratings, so it
+        // names them (`rating_basis::UNSTATED_RATING_MARKER`).
+        let unstated: Vec<String> = (self.findings.iter().flatten())
+            .filter(|f| hauksbee_models::rating_basis::is_unstated_rating(&f.message))
+            .map(|f| {
+                f.message
+                    .replace(hauksbee_extract::INFORMATIONAL_MARKER, "")
+                    .trim()
+                    .to_string()
+            })
+            .collect();
+        for c in unstated {
+            if !self.verdict_conditions.contains(&c) {
+                self.verdict_conditions.push(c);
+            }
+        }
         self
     }
 

@@ -50,6 +50,10 @@ pub enum StandInKind {
     /// A real card the resolver guessed from the part's class, value or
     /// footprint, not one matched to this part.
     Guessed,
+    /// The part's own card and the board state no such limit at all (a
+    /// capacitor whose value names no rated voltage), so the lowest value its
+    /// class is sold with is assumed: a floor, not a rating.
+    Unstated,
 }
 
 /// The card a part's limits came from when they are not its own.
@@ -67,6 +71,7 @@ impl StandIn {
         match self.kind {
             StandInKind::Placeholder => "generic",
             StandInKind::Guessed => "guessed",
+            StandInKind::Unstated => "assumed",
         }
     }
 
@@ -78,8 +83,27 @@ impl StandIn {
             StandInKind::Guessed => {
                 "a card guessed from the part's class, value or footprint, not matched to its part number"
             }
+            StandInKind::Unstated => {
+                "the value and fields state no such rating, so the lowest value the part's class \
+                 is sold with is assumed"
+            }
         };
         format!("card '{}', {why}", self.card)
+    }
+
+    /// What the board's author can do to have `part` judged on its own limit.
+    #[must_use]
+    pub fn remedy(&self, part: &str) -> String {
+        match self.kind {
+            StandInKind::Unstated => format!(
+                "state {part}'s rated voltage in its value (for example 10uF 25V) or give it \
+                 its manufacturer part number"
+            ),
+            _ => format!(
+                "give {part} its own model (its manufacturer part number, or a card from its \
+                 datasheet)"
+            ),
+        }
     }
 }
 
@@ -92,6 +116,10 @@ pub struct RatingBasis {
     /// Limits the board states itself (a value's rated voltage or hold
     /// current), which stay the part's own whatever card it bound.
     pub board_stated: Vec<Limit>,
+    /// Stand-in limits for single limits of an otherwise own card: a floor
+    /// assumed where neither the card nor the board states one
+    /// ([`StandInKind::Unstated`]). Other limits of the part stay judged.
+    pub assumed: Vec<(Limit, StandIn)>,
 }
 
 impl RatingBasis {
@@ -121,6 +149,7 @@ impl RatingBasis {
                 kind,
             }),
             board_stated: Vec::new(),
+            assumed: Vec::new(),
         }
     }
 
@@ -134,7 +163,21 @@ impl RatingBasis {
     /// The stand-in card `limit` came from, when it is not the part's own.
     #[must_use]
     pub fn stand_in_for(&self, limit: Limit) -> Option<&StandIn> {
-        (self.stand_in.as_ref()).filter(|_| !self.board_stated.contains(&limit))
+        if self.board_stated.contains(&limit) {
+            return None;
+        }
+        // A limit named as an assumed floor says so, whatever the rest of the card is.
+        (self.assumed.iter())
+            .find(|(l, _)| *l == limit)
+            .map(|(_, s)| s)
+            .or(self.stand_in.as_ref())
+    }
+
+    /// Record that `limit` is an assumed floor, not the part's rating.
+    pub fn assume(&mut self, limit: Limit, stand_in: StandIn) {
+        if !self.assumed.iter().any(|(l, _)| *l == limit) {
+            self.assumed.push((limit, stand_in));
+        }
     }
 
     /// Record that the board itself states `limit`.
@@ -186,13 +229,32 @@ pub const CONDITION_MARKER: &str = "so this is a condition, not a fault";
 /// part needs its own model.
 #[must_use]
 pub fn condition(part: &str, s: &StandIn, subject: &str, rating: &str) -> String {
+    let adjective = s.adjective();
+    let article = if adjective.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        "an"
+    } else {
+        "a"
+    };
     format!(
-        "{subject}: judged against a {} {rating} rating ({}), not {part}'s own datasheet, \
-         {CONDITION_MARKER}; give {part} its own model (its manufacturer part number, or a card \
-         from its datasheet) to judge it",
-        s.adjective(),
+        "{subject}: judged against {article} {adjective} {rating} rating ({}), not {part}'s own \
+         datasheet, {CONDITION_MARKER}; {} to judge it",
         s.provenance(),
+        s.remedy(part),
     )
+}
+
+/// The words the note for parts whose rated voltage nothing states carries
+/// ([`StandInKind::Unstated`] past its assumed floor).
+///
+/// That is a condition the pass rests on, not a partial judgement: the part
+/// is its own card, only the rating is unknown, so the verdict stays a pass
+/// and names the parts among its conditions.
+pub const UNSTATED_RATING_MARKER: &str = "rated voltage not stated";
+
+/// Whether `message` is the unstated-rating note ([`UNSTATED_RATING_MARKER`]).
+#[must_use]
+pub fn is_unstated_rating(message: &str) -> bool {
+    message.contains(UNSTATED_RATING_MARKER)
 }
 
 /// Whether `message` states a stand-in exceedance ([`condition`]).
@@ -307,5 +369,39 @@ mod tests {
             judge(&own, Limit::Voltage, "Q1", seen, "30 V"),
             Judgement::Fails
         );
+    }
+
+    #[test]
+    fn an_assumed_floor_is_a_condition_for_that_limit_only() {
+        let mut basis = RatingBasis::of(&resolution(
+            ModelSourceTier::CuratedLibrary,
+            Confidence::Exact,
+        ));
+        basis.assume(
+            Limit::Voltage,
+            StandIn {
+                card: "card".into(),
+                kind: StandInKind::Unstated,
+            },
+        );
+        // The card's other limits stay judged; the floored one does not.
+        assert!(!basis.judges(Limit::Voltage));
+        assert!(basis.judges(Limit::Current));
+        let seen = "C1 sees 24.00 V, over its 6.30 V rating";
+        let Judgement::Condition(text) = judge(&basis, Limit::Voltage, "C1", seen, "6.3 V") else {
+            panic!("an assumed floor must not fail");
+        };
+        assert!(
+            text.contains("judged against an assumed 6.3 V rating"),
+            "{text}"
+        );
+        assert!(text.contains("state C1's rated voltage") && is_condition(&text));
+        assert_eq!(
+            judge(&basis, Limit::Current, "C1", "C1 sees 2 A", "1 A"),
+            Judgement::Fails
+        );
+        // A rating the board then states replaces the floor.
+        basis.stated_on_board(Limit::Voltage);
+        assert!(basis.judges(Limit::Voltage));
     }
 }
