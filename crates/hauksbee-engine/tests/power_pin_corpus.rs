@@ -47,7 +47,8 @@ fn power_pin_findings(root: &std::path::Path, revision: &str) -> Vec<LintFinding
         .collect()
 }
 
-/// The fault: VCC (pad 6) of the 6-lead 24AA025UID is on no net.
+/// The fault: VCC (pad 6) of the 6-lead 24AA025UID is on no net, and it is
+/// the only power-pin fault on the board.
 #[test]
 fn eurorack_pmod_u5_vcc_pad_is_unpowered_on_r32_r33_r35() {
     let Some(root) = corpus_root() else { return };
@@ -61,6 +62,14 @@ fn eurorack_pmod_u5_vcc_pad_is_unpowered_on_r32_r33_r35() {
             on_u5.len(),
             1,
             "{revision}: exactly one power-pin finding on U5, got: {:#?}",
+            found.iter().map(|f| &f.message).collect::<Vec<_>>()
+        );
+        // Nothing else on the board is a power-pin fault: the CY8CMBR3108's
+        // VCC pad is its regulator output, decoupled and otherwise open.
+        assert_eq!(
+            found.len(),
+            1,
+            "{revision}: U5 is the only power-pin finding, got: {:#?}",
             found.iter().map(|f| &f.message).collect::<Vec<_>>()
         );
         let f = on_u5[0];

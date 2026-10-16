@@ -14974,6 +14974,10 @@ gnd_pin = "7"
 vih = 2.1  # Tables 15/20: VIH = 0.7 x VDD, evaluated at VDD = 3.0 V (the corner voh/vol use)
 vil = 0.9  # Tables 15/20: VIL = 0.3 x VDD, evaluated at VDD = 3.0 V (the corner voh/vol use)
 
+[[models.optional_supplies]]
+role = "vcc"
+basis = "Infineon CY8CMBR3108 datasheet, Table 14: VDD 1.8-5.5 V with VCC not shorted to VDD and connected to a 0.1 uF decoupling capacitor (VCC is the internal regulator output); only the 1.71-1.89 V range ties VCC to VDD"
+
 [models.ratings]
 max_voltage_v = 6.0 # Source: Table 12, VDD_MAX, max, VDD relative to VSS
 max_pin_current_a = 0.025 # Source: Table 12, I_IO, max, per GPIO
