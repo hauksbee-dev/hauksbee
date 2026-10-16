@@ -328,7 +328,7 @@ pub enum ImpedanceClass {
     UsbDiff,
     /// Ethernet MDI / other 100 ohm differential pair.
     EthernetDiff,
-    /// A DisplayPort / eDP / HDMI (TMDS) / LVDS lane: 100 ohm differential.
+    /// A `DisplayPort` / `eDP` / HDMI (TMDS) / LVDS lane: 100 ohm differential.
     DisplayDiff,
     /// A generic single-ended 50 ohm high-speed line.
     SingleEnded50,
@@ -427,7 +427,7 @@ fn classified_pairs(board: &ExtractedBoard) -> Vec<(i64, i64, Option<ImpedanceCl
 /// The standard a differential pair belongs to, from what the board says about
 /// it, or `None` when it says nothing: a `_DP`/`_DN` suffix is a USB data pair,
 /// a DisplayPort lane and a vendor's private link alike, and a 90 ohm USB target
-/// printed against an eDP lane (100 ohm) reads as a fault that is not there.
+/// printed against an `eDP` lane (100 ohm) reads as a fault that is not there.
 ///
 /// In order: a display token in either net's name (`EDP`, `DISPLAYPORT`,
 /// `HDMI`, `TMDS`, `LVDS`) is a display lane; an Ethernet token is Ethernet;
@@ -469,6 +469,7 @@ fn is_display_name(name: &str) -> bool {
 /// either net on a part that says it is USB (a `USB` connector or ESD array,
 /// a pin named `USB_DP` or `D+`).
 fn has_usb_evidence(board: &ExtractedBoard, pid: i64, mid: i64, names: &[String]) -> bool {
+    const USB_PIN_FUNCTIONS: [&str; 4] = ["D+", "D-", "DP", "DM"];
     if names.iter().any(|n| n.contains("USB")) {
         return true;
     }
@@ -479,7 +480,6 @@ fn has_usb_evidence(board: &ExtractedBoard, pid: i64, mid: i64, names: &[String]
     if names.iter().any(bare) {
         return true;
     }
-    const USB_PIN_FUNCTIONS: [&str; 4] = ["D+", "D-", "DP", "DM"];
     board.components.iter().any(|c| {
         let on_pair = || {
             c.pins
