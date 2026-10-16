@@ -1039,6 +1039,7 @@ mod tests {
             nets,
             wiring_dependent: vec!["VB".into()],
             electrical_dependent: vec!["VB".into()],
+            held_rails: Vec::new(),
         }));
         let run_verdict = jr.run_verdict();
         let triage = crate::plain::order_triage_with_rule_source(

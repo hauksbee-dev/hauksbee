@@ -685,11 +685,9 @@ pub fn bind_board_driven(
         // nothing is plugged into it in the specified scenario, so it drives nothing.
         let is_port = is_port_class(&ref_prefix(&comp.reference));
         if matches!(outcome, BindOutcome::Unresolved { .. }) && !is_port {
-            let can_drive = |kind: &str| {
-                let k = kind.to_ascii_lowercase();
-                !(k.starts_with("input") || k.starts_with("power_in") || k.contains("no_connect"))
+            let pin = |p: &hauksbee_extract::Pin| {
+                Some((node_of(p.net)?, crate::bind_report::pin_can_drive(&p.kind)))
             };
-            let pin = |p: &hauksbee_extract::Pin| Some((node_of(p.net)?, can_drive(&p.kind)));
             report.open_parts.push(crate::bind_report::OpenPart {
                 reference: comp.reference.clone(),
                 value: comp.value.clone(),

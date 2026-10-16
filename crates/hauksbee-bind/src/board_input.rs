@@ -1473,7 +1473,10 @@ fn main {
         let pro = dir.join("widget.kicad_pro");
         std::fs::write(&pro, b"{}").unwrap();
         let err = from_path(&pro).expect_err("no design beside the project yet");
-        assert!(err.to_string().contains("no .kicad_pcb or .kicad_sch"), "{err}");
+        assert!(
+            err.to_string().contains("no .kicad_pcb or .kicad_sch"),
+            "{err}"
+        );
         std::fs::write(dir.join("widget.kicad_pcb"), KICAD).unwrap();
         let via_pro = from_path(&pro).expect("the project opens its layout");
         let direct = from_path(&dir.join("widget.kicad_pcb")).expect("layout");
