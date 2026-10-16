@@ -3120,11 +3120,7 @@ impl JsonReport {
         // than reading "pass" beside an INCONCLUSIVE coverage note. Gated by
         // `bind_gates_verdict`: the copper-only and descriptive surfaces
         // deliberately do not refuse (see the field's doc).
-        let blockers = if self.bind_gates_verdict {
-            unmodelled_critical_refs(&self.bind)
-        } else {
-            Vec::new()
-        };
+        let blockers = self.verdict_open_parts();
         let refused = self.refused_cause();
         // `fail` covers both routes to a failing gate: a serious finding, and a
         // finding this surface's own (wider) strict gate fails on. The second
@@ -3218,6 +3214,31 @@ impl JsonReport {
             .collect()
     }
 
+    /// The parts whose missing models make the verdict not a pass: the
+    /// verdict-critical unmodelled parts, on a surface whose verdict they
+    /// gate. The CI artifacts name them on the not-a-pass case, so the result
+    /// stays linked to the parts it is about.
+    fn verdict_open_parts(&self) -> Vec<String> {
+        if self.bind_gates_verdict {
+            unmodelled_critical_refs(&self.bind)
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// The sentence a CI test case carries for a partly judged run: the
+    /// partly judged label, then the judgement scope's one sentence naming the
+    /// open parts and what was not judged. `None` when the run is not judged
+    /// around a scope (the verdict reason itself is then the case's words).
+    fn partly_judged_case(&self) -> Option<String> {
+        let scope = self.active_scope(&self.verdict_open_parts())?;
+        Some(format!(
+            "{}: {}",
+            hauksbee_ir::vocabulary::PARTLY_JUDGED_LEAD,
+            scope.condition()
+        ))
+    }
+
     /// The machine verdict as the human surfaces carry it: the SAME derivation
     /// [`Self::to_json`] prints, so a triage headline or a closing `VERDICT:`
     /// line built from this can never disagree with the `verdict` field.
@@ -3229,7 +3250,13 @@ impl JsonReport {
         // asks this machine document for its verdict, in whatever output mode,
         // tells JUnit and SARIF the same answer (a no-op outside a `--junit` /
         // `--sarif` run).
-        crate::reports::ci_artifacts::note_verdict(verdict, partial, reason.as_deref());
+        crate::reports::ci_artifacts::note_verdict(
+            verdict,
+            partial,
+            reason.as_deref(),
+            &self.verdict_open_parts(),
+            self.partly_judged_case().as_deref(),
+        );
         RunVerdict {
             verdict,
             reason,
@@ -3260,7 +3287,13 @@ impl JsonReport {
             self.verdict_with_waivers(&mut crate::waiver::WaiverSet::default());
         // Printing the document tells the CI artifacts the verdict it states
         // (see [`Self::run_verdict`]).
-        crate::reports::ci_artifacts::note_verdict(verdict, partial, reason.as_deref());
+        crate::reports::ci_artifacts::note_verdict(
+            verdict,
+            partial,
+            reason.as_deref(),
+            &self.verdict_open_parts(),
+            self.partly_judged_case().as_deref(),
+        );
         let Ok(serde_json::Value::Object(mut value)) = serde_json::to_value(self) else {
             return serde_json::to_string_pretty(self)
                 .unwrap_or_else(|e| format!("{{\"error\":\"failed to serialize: {e}\"}}"));

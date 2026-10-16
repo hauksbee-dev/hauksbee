@@ -916,8 +916,8 @@ fn a_partly_judged_board_is_never_a_pass_on_any_surface() {
     assert_eq!(out.status.code(), Some(3), "stderr: {}", stderr(&out));
     let xml = art.xml();
     assert!(
-        xml.contains("PARTLY JUDGED (not a pass): ")
-            && xml.contains("Q1 has no usable model")
+        xml.contains("PARTLY JUDGED (not a pass): Q1 has no usable model")
+            && xml.contains("testcase name=\"partly_judged Q1\"")
             && !junit_all_green(&xml),
         "the JUnit file shows PARTLY JUDGED red, never a pass:\n{xml}"
     );
@@ -1502,7 +1502,7 @@ fn an_invalid_verdict_keeps_the_invalid_shape_in_the_artifact() {
     let xml = art.xml();
     assert_eq!(
         junit_failing_testcases(&xml),
-        vec!["undermined".to_string()],
+        vec!["undermined Q1".to_string()],
         "the blocker is the only gate-grade entry:\n{xml}"
     );
     assert!(

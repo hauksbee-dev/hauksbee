@@ -69,6 +69,10 @@ struct NotedVerdict {
     verdict: String,
     partial: bool,
     reason: Option<String>,
+    /// The parts whose missing models left the run not a pass.
+    open_parts: Vec<String>,
+    /// A partly judged run's case text: the label and the scope's sentence.
+    partly_judged_case: Option<String>,
 }
 
 thread_local! {
@@ -259,11 +263,19 @@ pub fn set_current_board_path(board_path: &Path) {
 /// A no-op when no artifact run or manifest outcome is active. A non-pass
 /// verdict is never replaced by a later pass: a run is only as green as its
 /// worst machine document.
-pub fn note_verdict(verdict: &str, partial: bool, reason: Option<&str>) {
+pub fn note_verdict(
+    verdict: &str,
+    partial: bool,
+    reason: Option<&str>,
+    open_parts: &[String],
+    partly_judged_case: Option<&str>,
+) {
     let noted = NotedVerdict {
         verdict: verdict.to_string(),
         partial,
         reason: reason.map(str::to_string),
+        open_parts: open_parts.to_vec(),
+        partly_judged_case: partly_judged_case.map(str::to_string),
     };
     let is_pass = noted.verdict == "pass";
     let keep = move |current: &Option<NotedVerdict>| {
@@ -313,7 +325,10 @@ fn artifact_findings(
     // sentence, labelled in the evidence vocabulary when the run could not be
     // judged at all (a partly judged answer already leads with its own label).
     let (kind, message) = match (v.verdict.as_str(), v.partial) {
-        ("invalid", true) => ("partly_judged", reason),
+        ("invalid", true) => (
+            "partly_judged",
+            v.partly_judged_case.clone().unwrap_or(reason),
+        ),
         ("invalid", false) => ("undermined", format!("INVALID evidence: {reason}")),
         _ => ("verdict_fail", reason),
     };
@@ -324,7 +339,11 @@ fn artifact_findings(
         nets: Vec::new(),
         location_mm: None,
         layer: None,
-        refs: Vec::new(),
+        refs: if kind == "verdict_fail" {
+            Vec::new()
+        } else {
+            v.open_parts.clone()
+        },
         actionable: true,
         plain: message.clone(),
         message,
@@ -1001,6 +1020,8 @@ mod tests {
             verdict: verdict.into(),
             partial,
             reason: Some(format!("PARTLY JUDGED (not a pass): the {verdict} reason")),
+            open_parts: vec!["U1".into()],
+            partly_judged_case: None,
         }
     }
 
@@ -1025,6 +1046,10 @@ mod tests {
             let all = artifact_findings(std::slice::from_ref(&warning), None, Some(&v));
             assert_eq!(all.len(), 2, "{verdict}: one gate-grade entry added");
             assert_eq!(all[1].kind, kind);
+            // The case names the open parts, so a result stays linked to the
+            // parts it is about (a failing verdict names none).
+            let named = if verdict == "fail" { "" } else { "U1" };
+            assert_eq!(all[1].refs.join(","), named, "{verdict}: open parts named");
             let junit = junit_xml("b", &all);
             assert!(junit.contains("failures=\"1\""), "{verdict}: {junit}");
             assert!(junit.contains(&format!("the {verdict} reason")), "{junit}");
