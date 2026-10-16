@@ -406,7 +406,7 @@ const MAX_SWEEP_POINTS: f64 = 1_000_000.0;
 const MAX_TRAN_POINTS: f64 = 20_000_000.0;
 
 /// The analysis a deck runs when none is forced: its own card, `.tran` first.
-fn deck_analysis(d: &Directives) -> Analysis {
+const fn deck_analysis(d: &Directives) -> Analysis {
     if d.tran.is_some() {
         Analysis::Tran
     } else if d.dc.is_some() {
