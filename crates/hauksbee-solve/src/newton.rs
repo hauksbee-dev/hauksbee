@@ -360,13 +360,24 @@ impl Workspace {
     /// residual when nothing is pinned; with pins, the plain one also counts
     /// each pinned output's distance from the rail its inputs select.
     pub fn pinned_dc_residual_inf_norm(&mut self, circuit: &Circuit, opts: &SolverOptions) -> f64 {
+        self.pinned_dc_residual_inf_norm_with(circuit, opts, false)
+    }
+
+    /// As [`Self::pinned_dc_residual_inf_norm`], stamped under the `use_ic`
+    /// the point was solved with (see [`Self::dc_residual_inf_norm_with`]).
+    pub fn pinned_dc_residual_inf_norm_with(
+        &mut self,
+        circuit: &Circuit,
+        opts: &SolverOptions,
+        use_ic: bool,
+    ) -> f64 {
         let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
         let empty = ReactiveState::new(circuit.devices.len());
         let frozen = (self.cmp_freeze.take(), self.switch_freeze.take());
         self.cmp_freeze = (!self.pinned_comparators.is_empty())
             .then(|| self.pinned_comparators.iter().copied().collect());
         let r = residual_argmax_at(
-            self, circuit, opts, 0.0, coeffs, &empty, true, false, opts.gmin, 1.0, 0.0,
+            self, circuit, opts, 0.0, coeffs, &empty, true, use_ic, opts.gmin, 1.0, 0.0,
         );
         (self.cmp_freeze, self.switch_freeze) = frozen;
         r.0
@@ -1713,16 +1724,24 @@ fn converged(x: &[f64], xp: &[f64], layout: &Layout, opts: &SolverOptions) -> bo
 }
 
 /// Solve the DC operating point into `ws.x`. Tries plain Newton, then gmin
-/// stepping, then source stepping, before reporting failure.
+/// stepping, then source stepping, then the staged ladder, before reporting
+/// failure.
 ///
 /// When `use_ic` is set, reactive elements that declare an initial condition
 /// are pinned to it, giving the transient "initial conditions" operating point
 /// rather than the steady-state DC bias.
 ///
+/// `Ok` means `ws.x` is a root of the circuit: a caller may read voltages and
+/// currents off it and judge them. A ladder that ends on its relaxed power-on
+/// stand-in (see [`DcStart::RelaxedSeed`]), or on a staged point whose KCL
+/// residual is not a root's, is an error here; a march that only needs a
+/// starting state takes it through [`dc_start_point`] instead.
+///
 /// # Errors
 ///
 /// The final stage's failure (non-convergence, a singular system or a
-/// behavioral fault) once every homotopy stage has been tried.
+/// behavioral fault) once every homotopy stage has been tried, and a
+/// non-convergence when the point the ladder ended on is not a root.
 pub fn dc_operating_point(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -1743,12 +1762,17 @@ pub fn dc_operating_point(
 /// BJT gm/gpi/go, MOSFET gm/gds) at the wrong point, silently corrupting the
 /// Bode response. This entry point forces `use_ic = false` so AC always sees the
 /// real DC bias.
+///
+/// # Errors
+///
+/// As [`dc_operating_point`], including a point that is not a root.
 pub fn dc_operating_point_no_ic(
     ws: &mut Workspace,
     circuit: &Circuit,
     opts: &SolverOptions,
 ) -> SolveResult<()> {
-    dc_solve(ws, circuit, opts, false, None)
+    let r = dc_solve(ws, circuit, opts, false, None);
+    accept_root(ws, circuit, opts, false, r)
 }
 
 /// Solve the DC operating point, optionally warm-started from a `seed` (a prior
@@ -1763,20 +1787,129 @@ pub fn dc_operating_point_no_ic(
 ///
 /// # Errors
 ///
-/// As [`dc_operating_point`]: the cold path's failure after every stage.
+/// As [`dc_operating_point`]: the cold path's failure after every stage, or
+/// a point that is not a root.
 pub fn dc_operating_point_seeded(
     ws: &mut Workspace,
     circuit: &Circuit,
     opts: &SolverOptions,
     seed: Option<&[f64]>,
 ) -> SolveResult<()> {
-    let use_ic = circuit.iter().any(|(_, d)| {
+    let use_ic = has_reactive_ic(circuit);
+    let r = dc_solve(ws, circuit, opts, use_ic, seed);
+    accept_root(ws, circuit, opts, use_ic, r)
+}
+
+/// What [`dc_start_point`] left in `ws.x`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use = "a relaxed seed is not an operating point; match on it"]
+pub enum DcStart {
+    /// A root of the circuit (exactly what [`dc_operating_point`] accepts).
+    Root,
+    /// No root: every rung of the staged ladder stalled and `ws.x` is the
+    /// relaxed power-on point, every diode replaced by a 1 GΩ stand-in. It
+    /// is a fine STARTING STATE for a march, which integrates the full
+    /// circuit forward from it, and nothing else: a junction it leaves
+    /// forward-biased never carries the current its own equation gives
+    /// there, so a voltage or current read off it is the solve's, not the
+    /// circuit's. [`Workspace::relaxed_seed_adopted`] is set.
+    RelaxedSeed,
+}
+
+/// The starting state of a march: the DC operating point when one exists,
+/// else the staged ladder's relaxed power-on point, told apart by the
+/// returned [`DcStart`].
+///
+/// For seeding only (a transient's t = 0 state, a relaxation's first
+/// estimate). Anything that reads `ws.x` to judge or report it uses
+/// [`dc_operating_point`], which refuses the relaxed point.
+///
+/// # Errors
+///
+/// As [`dc_operating_point`], except that a relaxed seed is returned as
+/// [`DcStart::RelaxedSeed`].
+pub fn dc_start_point(
+    ws: &mut Workspace,
+    circuit: &Circuit,
+    opts: &SolverOptions,
+    seed: Option<&[f64]>,
+) -> SolveResult<DcStart> {
+    dc_solve(ws, circuit, opts, has_reactive_ic(circuit), seed)?;
+    Ok(if ws.relaxed_seed_adopted {
+        DcStart::RelaxedSeed
+    } else {
+        DcStart::Root
+    })
+}
+
+/// Whether any capacitor or inductor states an initial condition, which every
+/// DC entry point but the AC one honours (`use_ic`).
+fn has_reactive_ic(circuit: &Circuit) -> bool {
+    circuit.iter().any(|(_, d)| {
         matches!(
             d,
             Device::Capacitor { ic: Some(_), .. } | Device::Inductor { ic: Some(_), .. }
         )
-    });
-    dc_solve(ws, circuit, opts, use_ic, seed)
+    })
+}
+
+/// KCL imbalance (amps, worst node) above which a point the staged ladder
+/// accepted is not taken as a root.
+///
+/// Its regularized rungs converge on a step test against a circuit with a
+/// 1e-7 S gmin floor and a 10 mΩ branch resistor, so measured on the
+/// pristine circuit a genuine staged root leaves at most that floor's leak,
+/// microamps at board voltages. A milliamp of unexplained current at a node
+/// is no operating point in any sense a rating or a reading could use, and
+/// a junction evaluated volts past conduction is many decades above it.
+const STAGED_ROOT_KCL_TOL: f64 = 1e-3;
+
+/// The gate between [`dc_solve`] and a caller that reads `ws.x` as an
+/// operating point: `r`'s error passes through; an `Ok` stands only when the
+/// point is a root.
+///
+/// The ladder's own acceptance is a step-norm test, and on its regularized
+/// rungs a step test against a different circuit; only the plain rungs are
+/// already residual-gated (inside `newton_solve`). So the staged outcomes
+/// are checked here independently of how they were reached: the adopted
+/// relaxed seed is refused outright, and any other staged point must close
+/// KCL on the pristine circuit (comparators the ladder pinned held at their
+/// pins, as the march releases them) within [`STAGED_ROOT_KCL_TOL`]. The
+/// workspace keeps the point and its flags either way, for diagnostics.
+fn accept_root(
+    ws: &mut Workspace,
+    circuit: &Circuit,
+    opts: &SolverOptions,
+    use_ic: bool,
+    r: SolveResult<()>,
+) -> SolveResult<()> {
+    r?;
+    if !ws.used_staged_dc {
+        return Ok(());
+    }
+    let why = if ws.relaxed_seed_adopted {
+        "every continuation stalled, and the relaxed power-on point the staged \
+         ladder ended on (every diode open) is a starting state for a transient, \
+         not a solution of the circuit"
+    } else {
+        let res = ws.pinned_dc_residual_inf_norm_with(circuit, opts, use_ic);
+        if res.is_finite() && res <= STAGED_ROOT_KCL_TOL {
+            return Ok(());
+        }
+        if *STAGED_DBG {
+            eprintln!("[staged] point refused as a root: KCL residual {res:e} A");
+        }
+        "the point the staged ladder ended on leaves currents unbalanced at a \
+         node, so it is not a solution of the circuit"
+    };
+    Err(SolveError::NonConvergence {
+        message: format!("DC operating point did not converge: {why}"),
+        phase: SolvePhase::Dc,
+        time: None,
+        dt: None,
+        iterations: None,
+        blame: None,
+    })
 }
 
 /// Polish `seed` into the DC operating point by plain Newton from it, and
@@ -1796,12 +1929,7 @@ pub fn dc_polish(
         return false;
     }
     // The same `.ic` handling as every other DC entry point.
-    let use_ic = circuit.iter().any(|(_, d)| {
-        matches!(
-            d,
-            Device::Capacitor { ic: Some(_), .. } | Device::Inductor { ic: Some(_), .. }
-        )
-    });
+    let use_ic = has_reactive_ic(circuit);
     ws.x.copy_from_slice(seed);
     let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
     let empty = ReactiveState::new(circuit.devices.len());
@@ -3053,6 +3181,40 @@ mod tests {
 
     fn node_v(ws: &Workspace, n: NodeId) -> f64 {
         ws.layout.node(n).map(|i| ws.x[i]).unwrap()
+    }
+
+    /// The independent acceptance gate on staged outcomes. Legal: a genuine
+    /// root (+5V through a diode and 1k, 4.3 mA) passes even when the ladder
+    /// that found it was the staged one. Faulty: the same circuit's point with
+    /// the diode forward-biased by the whole rail, labelled a staged root (as
+    /// any future rung that accepts on a step test could), is refused for its
+    /// open KCL; the adopted relaxed seed is refused outright. Neither refusal
+    /// puts a figure in its message.
+    #[test]
+    fn a_staged_point_is_an_operating_point_only_if_it_closes_kcl() {
+        let mut c = Circuit::new();
+        let (hi, k) = (c.node("HI"), c.node("K"));
+        vdc(&mut c, "V5", hi, 5.0);
+        diode(&mut c, "D1", hi, k, DiodeModel::default());
+        res(&mut c, "R1", k, GND, 1e3);
+        let opts = SolverOptions::default();
+        let mut ws = Workspace::new(&c);
+        dc_operating_point(&mut ws, &c, &opts).expect("a diode and a resistor solve");
+        let root = ws.x.clone();
+        assert!(!ws.used_staged_dc);
+        ws.used_staged_dc = true;
+        assert!(accept_root(&mut ws, &c, &opts, false, Ok(())).is_ok());
+
+        ws.x[ws.layout.node(k).unwrap()] = 0.0;
+        let err = accept_root(&mut ws, &c, &opts, false, Ok(())).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("did not converge"), "{msg}");
+        assert!(!msg.chars().any(|ch| ch.is_ascii_digit()), "{msg}");
+
+        ws.x.copy_from_slice(&root);
+        ws.relaxed_seed_adopted = true;
+        let err = accept_root(&mut ws, &c, &opts, false, Ok(())).unwrap_err();
+        assert!(err.to_string().contains("relaxed power-on point"), "{err}");
     }
 
     /// `(NaN).abs() > tol` is false, so a tolerance-only test would accept a

@@ -11,7 +11,7 @@
 //! buried bodies): docs/how-and-why/hauksbee-solve/transient.md
 
 use crate::error::{SolveError, SolvePhase, SolveResult};
-use crate::newton::{dc_operating_point_seeded, newton_solve, newton_solve_event, Workspace};
+use crate::newton::{dc_start_point, newton_solve, newton_solve_event, Workspace};
 use crate::options::{DcInit, Integration, SolverOptions, StepControl, Strategy, SwitchModel};
 use crate::stamp::{ComparatorLatch, IntegCoeffs};
 use crate::system::ReactiveState;
@@ -100,6 +100,13 @@ pub struct StepSample<'a> {
     pub time: f64,
     /// All unknowns: node voltages `[0..n_nodes]` then branch currents.
     pub x: &'a [f64],
+    /// `x` is the march's starting state but no state of the circuit: the
+    /// t = 0 sample of a march that opened on the staged ladder's relaxed
+    /// seed ([`crate::DcStart::RelaxedSeed`]) or on an estimate assembled
+    /// without a DC root. A consumer may keep it as the point the march
+    /// left from, never read a voltage, current or power off it; every
+    /// later sample is a solution of the circuit.
+    pub stand_in: bool,
 }
 
 /// Numerical diagnostics measured at the final accepted transient point.
@@ -268,6 +275,11 @@ impl Transient {
         }
 
         let diagnostics = self.run_streaming_with_diagnostics(circuit, tstop, |s| {
+            // A stand-in start is no state of the circuit, so no waveform
+            // reports it: the waveform opens at the first solved step.
+            if s.stand_in {
+                return;
+            }
             wf.push_nodes(&s);
             for (slot, &idx) in wf.branch_currents.iter_mut().zip(branch_outputs.iter()) {
                 slot.1.push(s.x.get(idx).copied().unwrap_or(0.0));
@@ -486,9 +498,13 @@ impl Transient {
             // leaves the workspace flag at 0. A continuation discards the point,
             // so one it cannot reach (a limited rail collapsed at DC under bulk
             // that holds it up) does not stop the march; each step must converge.
-            let dc = dc_operating_point_seeded(&mut ws, circuit, opts, dc_seed);
-            if !continuing {
-                dc?;
+            // The march's starting state, which may be the staged ladder's
+            // relaxed seed (`ws.relaxed_seed_adopted()`, handled below): the
+            // march integrates the full circuit forward from it.
+            if let Err(e) = dc_start_point(&mut ws, circuit, opts, dc_seed) {
+                if !continuing {
+                    return Err(e);
+                }
             }
         }
 
@@ -611,6 +627,7 @@ impl Transient {
         sink(StepSample {
             time: 0.0,
             x: &ws.x,
+            stand_in: ws.relaxed_seed_adopted(),
         });
 
         let mut first_step = true;
@@ -1042,7 +1059,11 @@ impl Transient {
                     dt = dt.max(0.25 * left).clamp(dt_min, dt_max);
                 }
             }
-            sink(StepSample { time: t, x: &ws.x });
+            sink(StepSample {
+                time: t,
+                x: &ws.x,
+                stand_in: false,
+            });
         }
         Ok(TransientDiagnostics {
             final_residual,
