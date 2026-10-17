@@ -217,8 +217,10 @@ fn kicad_reports_do_not_depend_on_file_order() {
     }
 }
 
-/// The committed `declared.brd` fixture grown to four parts and five signals
-/// with tracks a few micrometres inside the clearance rule, so clearance
+/// The committed `declared.brd` fixture grown to four parts and five signals.
+/// The tracks sit clearly inside the 6 mil (0.1524 mm) clearance rule, at
+/// 0.05 mm and 0.07 mm gaps: the DRC forgives the last 5 micrometres under a
+/// rule as routing-to-rule, so a gap within that would raise nothing. Clearance
 /// pairs, a short and the signal numbering (an Eagle net id is its position in
 /// `<signals>`) all take part. `reversed` lists `<elements>` and `<signals>`
 /// back to front.
@@ -237,7 +239,7 @@ fn eagle_board(reversed: bool) -> String {
         r#"<signal name="AGND"><contactref element="R1" pad="2"/><wire x1="5" y1="-5" x2="5" y2="5" width="0.5" layer="1"/><wire x1="5" y1="-5" x2="5" y2="5" width="0.5" layer="16"/></signal>"#,
         r#"<signal name="VCC"><contactref element="R2" pad="2"/><contactref element="R3" pad="1"/><wire x1="10" y1="-5" x2="10" y2="5" width="0.5" layer="1"/></signal>"#,
         r#"<signal name="SIG"><contactref element="R3" pad="2"/><contactref element="R10" pad="1"/><wire x1="10.55" y1="-5" x2="10.55" y2="5" width="0.5" layer="1"/></signal>"#,
-        r#"<signal name="AREF"><contactref element="R10" pad="2"/><wire x1="11.2" y1="-5" x2="11.2" y2="5" width="0.5" layer="1"/></signal>"#,
+        r#"<signal name="AREF"><contactref element="R10" pad="2"/><wire x1="11.12" y1="-5" x2="11.12" y2="5" width="0.5" layer="1"/></signal>"#,
     ];
     if reversed {
         elements.reverse();

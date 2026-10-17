@@ -84,6 +84,11 @@ pub struct CachedOracle {
     bin: PathBuf,
     identity: Vec<u8>,
     directory: PathBuf,
+    /// Whether the environment this oracle was built in carries a `SPICE*`
+    /// override (for example `SPICE_LIB_DIR`). Such a variable can point ngspice
+    /// at mutable models or code the cache key does not see, so every run is
+    /// uncached while it is set.
+    spice_env_overrides: bool,
 }
 
 impl CachedOracle {
@@ -99,12 +104,23 @@ impl CachedOracle {
             bin,
             identity,
             directory: directory.to_path_buf(),
+            spice_env_overrides: std::env::vars_os()
+                .any(|(name, _)| name.to_string_lossy().starts_with("SPICE")),
         }
+    }
+
+    /// This oracle as if built in an environment with no `SPICE*` override, so a
+    /// test of the cache itself gives the same answer on a machine whose shell
+    /// exports `SPICE_LIB_DIR` as on one whose shell does not.
+    #[cfg(test)]
+    const fn without_ambient_spice_env(mut self) -> Self {
+        self.spice_env_overrides = false;
+        self
     }
 
     fn cache_path(&self, netlist: &str) -> Option<PathBuf> {
         // These overrides may point at mutable external models/code: run them uncached.
-        if std::env::vars_os().any(|(name, _)| name.to_string_lossy().starts_with("SPICE")) {
+        if self.spice_env_overrides {
             return None;
         }
         let mut hash = Sha256::new();
@@ -379,11 +395,17 @@ fn cache_tracks_inputs_and_never_reuses_failed_or_timed_runs() {
     };
     let success = format!("printf '%s' '{GOOD}'");
     install(&success);
-    let oracle = CachedOracle::new(&bin, dir.path());
+    let oracle = CachedOracle::new(&bin, dir.path()).without_ambient_spice_env();
     let deck = "test\n.include Model.inc\n.end\n";
     std::fs::write(dir.path().join("Model.inc"), ".inc nested.inc\n").unwrap();
     std::fs::write(dir.path().join("nested.inc"), "R1 a 0 1k\n").unwrap();
     let path = oracle.cache_path(deck).unwrap();
+    let mut overridden = CachedOracle::new(&bin, dir.path());
+    overridden.spice_env_overrides = true;
+    assert!(
+        overridden.cache_path(deck).is_none(),
+        "a SPICE* override in the environment must switch the cache off"
+    );
     assert_eq!(oracle.run(deck).as_deref(), Some(GOOD));
     assert_eq!(oracle.run(deck).as_deref(), Some(GOOD));
     assert_eq!(std::fs::read(&count).unwrap().len(), 1);
