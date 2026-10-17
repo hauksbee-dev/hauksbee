@@ -1238,19 +1238,12 @@ fn component_assertion_capabilities(
     board: &ExtractedBoard,
     bound: &BoundBoard,
 ) -> std::collections::BTreeMap<String, Vec<String>> {
-    let current_devices =
-        unit_index(
-            bound
-                .circuit
-                .devices
-                .iter()
-                .filter_map(|device| match device {
-                    Device::Resistor { name, .. } | Device::Diode { name, .. } => {
-                        Some((name.as_str(), ()))
-                    }
-                    _ => None,
-                }),
-        );
+    let current_devices = unit_index(bound.circuit.devices.iter().filter_map(
+        |device| match device {
+            Device::Resistor { name, .. } | Device::Diode { name, .. } => Some((name.as_str(), ())),
+            _ => None,
+        },
+    ));
     let metas = unit_index(
         bound
             .device_meta
@@ -1302,12 +1295,7 @@ fn component_ratings(
         .filter_map(|component| {
             let reference = &component.reference;
             let mut out = ComponentRatings::default();
-            for meta in metas
-                .get(reference.as_str())
-                .into_iter()
-                .flatten()
-                .copied()
-            {
+            for meta in metas.get(reference.as_str()).into_iter().flatten().copied() {
                 tighter(&mut out.max_current_a, meta.ratings.max_current_a);
                 tighter(&mut out.max_pin_current_a, meta.ratings.max_pin_current_a);
                 tighter(&mut out.max_power_w, meta.ratings.max_power_w);
@@ -3263,15 +3251,29 @@ mod tests {
     #[test]
     fn the_unit_index_answers_exactly_what_the_scan_did() {
         let names = [
-            "R1", "R1_q1", "R1_s", "R10", "U3_e2", "U3", "U3_x", "Q_q", "_q", "_s_q", "A_b_q9", "", "R1_Q1",
+            "R1", "R1_q1", "R1_s", "R10", "U3_e2", "U3", "U3_x", "Q_q", "_q", "_s_q", "A_b_q9", "",
+            "R1_Q1",
         ];
         let index = unit_index(names.iter().map(|n| (*n, ())));
-        let references = ["R1", "R10", "U3", "Q", "", "_s", "A", "A_b", "R", "R1_", "R1_Q1", "U3_x"];
+        let references = [
+            "R1", "R10", "U3", "Q", "", "_s", "A", "A_b", "R", "R1_", "R1_Q1", "U3_x",
+        ];
         for reference in references {
             let scanned = names.iter().any(|n| ref_or_unit_matches(reference, n));
-            assert_eq!(index.contains_key(reference), scanned, "reference {reference:?}");
-            let scanned_count = names.iter().filter(|n| ref_or_unit_matches(reference, n)).count();
-            assert_eq!(index.get(reference).map_or(0, Vec::len), scanned_count, "reference {reference:?}");
+            assert_eq!(
+                index.contains_key(reference),
+                scanned,
+                "reference {reference:?}"
+            );
+            let scanned_count = names
+                .iter()
+                .filter(|n| ref_or_unit_matches(reference, n))
+                .count();
+            assert_eq!(
+                index.get(reference).map_or(0, Vec::len),
+                scanned_count,
+                "reference {reference:?}"
+            );
         }
     }
 

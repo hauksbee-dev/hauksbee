@@ -486,7 +486,10 @@ fn join_footprint_links(root: &List, items: &[ItemMeta], dsu: &mut Dsu) {
         if m.kind == Some(ItemKind::Pad) && m.copper != Copper::None {
             let lands = pads.entry((m.owner.as_str(), m.pad.as_str())).or_default();
             if lands.is_empty() && !m.pad.is_empty() {
-                numbers.entry(m.owner.as_str()).or_default().push(m.pad.as_str());
+                numbers
+                    .entry(m.owner.as_str())
+                    .or_default()
+                    .push(m.pad.as_str());
             }
             lands.push(i);
         }

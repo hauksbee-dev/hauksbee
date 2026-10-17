@@ -963,9 +963,8 @@ impl ModelLibrary {
             (tier, layer, score, le.compiled.regex_specificity())
         };
         let prepared = matcher::PreparedValue::of(q);
-        let matched = || {
-            (self.entries.iter()).filter(|le| le.compiled.matches_prepared(q, &prepared))
-        };
+        let matched =
+            || (self.entries.iter()).filter(|le| le.compiled.matches_prepared(q, &prepared));
         if let Some(le) = matched().max_by_key(|le| (rank(le), Reverse(&le.compiled.entry.id))) {
             let (id, top) = (&le.compiled.entry.id, rank(le));
             // Siblings of an orderable-variant set are not a tie: `variants::select`

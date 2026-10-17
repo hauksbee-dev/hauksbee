@@ -634,9 +634,7 @@ impl BoardEvidence {
         }
         let inductors: Vec<BTreeSet<i64>> = (board.components.iter())
             .filter(|c| {
-                let row = first_row
-                    .get(c.reference.as_str())
-                    .map(|row| &row.outcome);
+                let row = first_row.get(c.reference.as_str()).map(|row| &row.outcome);
                 matches!(row, Some(BindOutcome::Analog { device }) if device.starts_with("L "))
             })
             .map(|c| c.pins.iter().filter_map(|p| p.net).filter(live).collect())
