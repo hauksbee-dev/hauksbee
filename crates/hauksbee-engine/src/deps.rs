@@ -1721,12 +1721,15 @@ echo "codex-cli 0.0.0""#,
     }
 
     /// A status command that hangs is killed at its limit, not waited on.
+    /// Serialised and spelled by absolute path because sibling tests point
+    /// `PATH` at a temp dir: a `sleep` that is not found exits at once.
     #[cfg(unix)]
     #[test]
     fn output_within_kills_a_hung_command() {
+        let _serial = serial_guard();
         let started = Instant::now();
         let out = output_within(
-            Command::new("/bin/sh").args(["-c", "exec sleep 30"]),
+            Command::new("/bin/sleep").arg("30"),
             Duration::from_millis(200),
         );
         assert!(out.is_none());
