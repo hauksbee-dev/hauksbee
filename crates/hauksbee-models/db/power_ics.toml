@@ -1770,6 +1770,13 @@ unlocked_by = "a validated MP2650 NVDC buck/boost, CC/CV charge, OTG, ADC, prote
 "28" = "acok"
 "29" = "iap"
 "30" = "ian"
+
+# VCC is the charger's own 3.6 V LDO output (fed from IN or SYS, whichever is
+# higher, or from the battery when the input is absent); the board only
+# decouples it, and may pull the open-drain flag pins up to it.
+[[models.optional_supplies]]
+role = "vcc"
+basis = "Monolithic Power Systems MP2650 Rev. 1.0 (4/22/2022), PIN FUNCTIONS (continued) (p.6): pin 26 VCC is the 'VCC LDO output. VCC can provide 3.6V/50mA for internal circuits, as well as the pull-up voltage for the open-drain pins. Connect a 10uF ceramic capacitor from VCC to AGND'; Electrical Characteristics (p.7): VCC LDO output voltage 3.4 / 3.6 / 3.73 V; Operation, VCC LDO Output (p.22): VCC is supplied from either VIN or VSYS, whichever is higher, and from the battery when the input is absent"
 # TPD4EUSB30, Texas Instruments SLVSAC2G (revised June 2021):
 # https://www.ti.com/lit/ds/symlink/tpd4eusb30.pdf
 # Four rail-to-ground TVS channels. The laws use the sourced 7 V minimum

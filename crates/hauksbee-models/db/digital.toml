@@ -13343,6 +13343,13 @@ warning = "source-bound supply-draw model: the awake VM current (8.5 mA typ, 13 
 "41" = "gnd_ep"
 "EP" = "gnd_ep2"
 
+# DVDD is the part's own 5 V regulator OUTPUT, decoupled by one 1 uF capacitor
+# and nothing else; the board never feeds it (VM and VDRAIN are the supplies,
+# and neither is a primary supply role).
+[[models.optional_supplies]]
+role = "dvdd"
+basis = "TI DRV835x SLVSDY6A (rev. June 2019), Pin Functions 40-Pin DRV8353 Devices (p.6): pin 38 DVDD is the '5-V internal regulator output. Connect a X5R or X7R, 1-uF, 6.3-V ceramic capacitor between the DVDD and GND pins. This regulator can source up to 10 mA externally'; 7.5 Electrical Characteristics (p.12): VDVDD DVDD regulator voltage 4.75 / 5 / 5.25 V at IDVDD = 0 to 10 mA; Figure 63 Primary Application Schematic (p.66) and Table 21 (p.67) CDVDD 1 uF from DVDD to GND"
+
 [models.ratings]
 max_voltage_v = 80.0
 max_junction_temp_c = 150.0
