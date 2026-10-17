@@ -1018,7 +1018,7 @@ pub fn is_open_pin_warning(warning: &str) -> bool {
 /// The text of one pin-rule role guess, as stored in [`BindRow::guesses`].
 ///
 /// It is carried unchanged into `--json`. The binder writes it here and
-/// [`group_pin_role_guesses`] reads it back through [`parse_rule_guess`], so the
+/// [`group_pin_role_guesses`] reads it back through `parse_rule_guess`, so the
 /// wording has one definition.
 #[must_use]
 pub fn rule_guess_text(
