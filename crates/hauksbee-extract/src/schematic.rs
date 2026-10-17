@@ -91,6 +91,19 @@ pub fn extract_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
 
     if !is_root_sheet(&doc) {
         let Some(root_path) = find_hierarchy_root(path) else {
+            // A schematic with nothing on it (a valid header and no symbols,
+            // sheets, wires or labels) is no sub-sheet: a sub-sheet exists to
+            // be wired into a parent. Calling it one sent the user hunting for
+            // a root schematic when the file simply has no parts.
+            if is_blank_schematic(&doc) {
+                return Err(ExtractError::Corrupt(format!(
+                    "{} is a valid KiCad schematic but has no parts on it (no \
+                     symbols, sheets, wires or labels), so there is nothing to \
+                     check. Open it in KiCad and draw the circuit, or point \
+                     hauksbee at the schematic that holds your design.",
+                    path.display()
+                )));
+            }
             let needs = path.parent().map_or_else(
                 || "the root schematic of its project".to_string(),
                 orphan_sheet_needs,
@@ -102,6 +115,27 @@ pub fn extract_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
     }
 
     extract_root_from_path(path)
+}
+
+/// Whether a `(kicad_sch ...)` document carries nothing at all: no placed
+/// symbol, sheet, wire, bus, junction, no-connect or label of any kind.
+fn is_blank_schematic(doc: &Document) -> bool {
+    const CONTENT: [&str; 11] = [
+        "symbol",
+        "sheet",
+        "wire",
+        "bus",
+        "junction",
+        "no_connect",
+        "label",
+        "global_label",
+        "hierarchical_label",
+        "bus_entry",
+        "directive_label",
+    ];
+    doc.root().is_some_and(|r| {
+        r.name() == Some("kicad_sch") && CONTENT.iter().all(|k| r.find_all(k).next().is_none())
+    })
 }
 
 /// What an orphan sub-sheet in `dir` needs: the root schematic of its project.
@@ -491,6 +525,13 @@ struct NetlistBuilder {
 /// the stack budget of `add_sheet_doc`.
 const MAX_SHEET_DEPTH: usize = 64;
 
+/// The most sheet INSTANCES one hierarchy may expand to. Each placement of a
+/// sub-sheet is a separate set of parts, so a sheet drawn twice on every level
+/// of an N-level hierarchy ("a diamond") is 2^N instances from N tiny files:
+/// 24 files of 300 bytes ran for minutes. Real boards stay in the hundreds, and
+/// a 5000-sheet flat fan is still read; the cap only stops the multiplication.
+const MAX_SHEET_INSTANCES: usize = 10_000;
+
 /// The most distinct sheet files the alias pre-pass parses. Far above any real
 /// hierarchy; a bound so a generated project cannot make the pre-pass unbounded.
 const MAX_HIERARCHY_FILES: usize = 4096;
@@ -600,6 +641,9 @@ impl NetlistBuilder {
             });
         }
 
+        if self.next_sheet as usize >= MAX_SHEET_INSTANCES {
+            return Err(self.too_many_instances());
+        }
         let sheet: SheetId = self.next_sheet;
         self.next_sheet += 1;
         let display = self
@@ -1147,7 +1191,8 @@ impl NetlistBuilder {
             let key = child.canonicalize().unwrap_or_else(|_| child.clone());
             let is_cycle = self.ancestor_sheets.contains(&key);
             if self.sheet_depth < MAX_SHEET_DEPTH && !is_cycle {
-                if let Some(doc) = self.sheet_doc(&child, &key) {
+                {
+                    let doc = self.load_child_sheet(sub, &file, &child, &key)?;
                     let child_dir = child.parent().map(Path::to_path_buf);
                     self.sheet_depth += 1;
                     self.ancestor_sheets.push(key);
@@ -1164,11 +1209,117 @@ impl NetlistBuilder {
                     self.sheet_depth -= 1;
                     result?;
                 }
-                // A sub-sheet that cannot be read or parsed is not fatal: the
-                // board is incomplete, not unreadable.
             }
         }
         Ok(())
+    }
+
+    /// The file name of the sheet currently being expanded: the one whose
+    /// `(sheet ...)` entry is being followed.
+    fn current_sheet_file(&self) -> String {
+        self.ancestor_sheets
+            .last()
+            .map_or_else(|| "the root schematic".to_string(), |p| file_label(p))
+    }
+
+    /// The error for a hierarchy that expands past [`MAX_SHEET_INSTANCES`],
+    /// naming the sheet chain that was being expanded when the cap was hit.
+    fn too_many_instances(&self) -> ExtractError {
+        let names: Vec<String> = self.ancestor_sheets.iter().map(|p| file_label(p)).collect();
+        // A deep chain keeps its top and its tail, the two ends a user acts on.
+        let chain = if names.len() > 8 {
+            format!(
+                "{} > ... ({} sheets) ... > {}",
+                names[..3].join(" > "),
+                names.len() - 6,
+                names[names.len() - 3..].join(" > ")
+            )
+        } else {
+            names.join(" > ")
+        };
+        let at = self
+            .pending_display
+            .as_deref()
+            .map_or(String::new(), |d| format!(" (sheet path {d})"));
+        ExtractError::Corrupt(format!(
+            "this schematic hierarchy expands to more than {MAX_SHEET_INSTANCES} sheet \
+             instances, so hauksbee stopped reading it. It was still expanding \
+             {chain}{at} when it hit the limit. Every placement of a sub-sheet is a \
+             separate copy of its parts, so a sheet that places the same child \
+             several times, inside a child that is itself placed several times, \
+             multiplies out of control (two placements per level over 14 levels is \
+             already 16384). Check the (sheet ... Sheetfile) references along that \
+             chain for a sheet placed more often than intended, or open a smaller \
+             part of the design directly."
+        ))
+    }
+
+    /// A sub-sheet's parsed document for the recursion, or the reason the
+    /// design cannot be read whole. A sheet that is missing, unreadable, damaged
+    /// or not a schematic is NOT skipped: the hierarchy would then be checked
+    /// without whatever that sheet carries, and a pass over the rest would read
+    /// as a pass for the design. The message names the child file and the sheet
+    /// that references it.
+    fn load_child_sheet(
+        &self,
+        sub: &List,
+        file: &str,
+        child: &Path,
+        key: &Path,
+    ) -> Result<Rc<Document>, ExtractError> {
+        if let Some(doc) = self.parsed_sheets.get(key) {
+            return Ok(Rc::clone(doc));
+        }
+        let parent = self.current_sheet_file();
+        let name = sheet_property(sub, "Sheetname").or_else(|| sheet_property(sub, "Sheet name"));
+        let who = name.map_or_else(
+            || format!("a sheet in {parent}"),
+            |n| format!("the sheet '{n}' in {parent}"),
+        );
+        let fix = format!(
+            "Hauksbee will not check a design with a sheet left out, because a \
+             fault on that sheet would go unseen. Put a good copy of '{file}' next \
+             to {parent} (restore it from version control, or re-save it from \
+             KiCad), or in KiCad open {parent}, select the sheet and correct its \
+             File name, then run again."
+        );
+        let text = match crate::read_regular_string(child) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(ExtractError::Corrupt(format!(
+                    "{who} points at the sub-sheet file '{file}', and that file does \
+                     not exist (looked for {}). {fix}",
+                    child.display()
+                )));
+            }
+            Err(e) => {
+                return Err(ExtractError::Corrupt(format!(
+                    "{who} points at the sub-sheet file '{file}', which cannot be \
+                     read ({e}). {fix}"
+                )));
+            }
+        };
+        let doc = match forge_sexpr::parse(&text) {
+            Ok(d) => d,
+            Err(e) => {
+                return Err(ExtractError::Corrupt(format!(
+                    "the sub-sheet file '{file}' ({who}) is damaged or cut short and \
+                     cannot be parsed: {e}. {fix}"
+                )));
+            }
+        };
+        match doc.root().and_then(List::name) {
+            Some("kicad_sch") => Ok(Rc::new(doc)),
+            Some(other) => Err(ExtractError::Corrupt(format!(
+                "the sub-sheet file '{file}' ({who}) is not a KiCad schematic: it \
+                 starts with ({other} ...) where a (kicad_sch ...) sheet was \
+                 expected. {fix}"
+            ))),
+            None => Err(ExtractError::Corrupt(format!(
+                "the sub-sheet file '{file}' ({who}) is empty or is not a KiCad \
+                 schematic: it has no (kicad_sch ...) section. {fix}"
+            ))),
+        }
     }
 
     /// A sub-sheet's parsed document: from the hierarchy pre-pass when it ran,
@@ -1178,7 +1329,12 @@ impl NetlistBuilder {
             return Some(Rc::clone(doc));
         }
         let text = crate::read_regular_string(path).ok()?;
-        forge_sexpr::parse(&text).ok().map(Rc::new)
+        // Only a real `(kicad_sch ...)` is cached: an empty or foreign file
+        // must reach `load_child_sheet`, which names it, not be waved through.
+        forge_sexpr::parse(&text)
+            .ok()
+            .filter(|d| d.root().and_then(List::name) == Some("kicad_sch"))
+            .map(Rc::new)
     }
 
     /// Parse every sheet file the root reaches, once each, and gather their
@@ -2283,6 +2439,14 @@ fn property(sym: &List, key: &str) -> Option<String> {
 /// writes these keys with a space (`"Sheet file"`, `"Sheet name"`) and
 /// KiCad 7 onward without, so keys compare with spaces ignored; matching only
 /// one spelling silently dropped every sub-sheet of a KiCad 6 hierarchy.
+/// A sheet file's own name, for messages (the directory is the user's already).
+fn file_label(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
 fn sheet_property(sheet: &List, key: &str) -> Option<String> {
     let bare = |k: &str| k.chars().filter(|c| *c != ' ').collect::<String>();
     let key = bare(key);

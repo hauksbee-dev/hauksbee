@@ -426,3 +426,202 @@ fn a_kicad_6_reused_sheet_takes_each_placements_designator() {
     assert!(n.contains_key("R2.1"), "right placement is R2: {n:?}");
     assert_ne!(n["R1.1"], n["R2.1"], "local NODE labels stay per placement");
 }
+
+// ---------------------------------------------------------------------------
+// Hostile and damaged hierarchies: bounded expansion, and every refusal names
+// the file the user has to fix.
+// ---------------------------------------------------------------------------
+
+const SCH_HEAD: &str = "(kicad_sch (version 20230121) (generator eeschema)\n";
+
+fn sheet_entry(name: &str, file: &str) -> String {
+    format!(
+        " (sheet (at 0 0) (size 20 20)\n  (property \"Sheetname\" \"{name}\")\n  \
+         (property \"Sheetfile\" \"{file}\")\n )\n"
+    )
+}
+
+/// A scratch project directory, removed on drop.
+struct Project(PathBuf);
+
+impl Project {
+    fn new(tag: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("hauksbee-hier-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        Self(dir)
+    }
+
+    fn write(&self, name: &str, text: &str) -> PathBuf {
+        let p = self.0.join(name);
+        std::fs::write(&p, text).expect("write scratch file");
+        p
+    }
+
+    /// A root schematic placing the given `(sheet name, file)` pairs.
+    fn root(&self, sheets: &[(&str, &str)]) -> PathBuf {
+        let body: String = sheets.iter().map(|(n, f)| sheet_entry(n, f)).collect();
+        self.write(
+            "root.kicad_sch",
+            &format!("{SCH_HEAD}{body} (sheet_instances (path \"/\" (page \"1\")))\n)\n"),
+        )
+    }
+
+    /// `depth` levels, each placing the next one twice: 2^depth leaf instances
+    /// from `depth + 1` tiny files. Returns the root, `L0.kicad_sch`.
+    fn diamond(&self, depth: usize) -> PathBuf {
+        for i in 1..depth {
+            let body = format!(
+                "{SCH_HEAD}{}{})\n",
+                sheet_entry("a", &format!("L{}.kicad_sch", i + 1)),
+                sheet_entry("b", &format!("L{}.kicad_sch", i + 1))
+            );
+            self.write(&format!("L{i}.kicad_sch"), &body);
+        }
+        self.write(&format!("L{depth}.kicad_sch"), &format!("{SCH_HEAD})\n"));
+        self.write(
+            "L0.kicad_sch",
+            &format!(
+                "{SCH_HEAD}{}{} (sheet_instances (path \"/\" (page \"1\")))\n)\n",
+                sheet_entry("a", "L1.kicad_sch"),
+                sheet_entry("b", "L1.kicad_sch")
+            ),
+        )
+    }
+}
+
+impl Drop for Project {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn path_error(path: &std::path::Path) -> String {
+    match ExtractedBoard::from_kicad_schematic_path(path) {
+        Ok(_) => panic!("expected a refusal for {}", path.display()),
+        Err(e) => e.to_string(),
+    }
+}
+
+/// D1: a sheet placed twice on every level multiplies to 2^depth instances.
+/// 24 files used to run for minutes; the expansion is now capped, finishes
+/// fast, and the error names the limit and the chain being expanded.
+#[test]
+fn a_hierarchy_diamond_is_refused_at_the_instance_cap_not_expanded() {
+    let p = Project::new("diamond-deep");
+    let root = p.diamond(24);
+    let started = std::time::Instant::now();
+    let msg = path_error(&root);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(60),
+        "the cap must stop the expansion promptly, took {:?}",
+        started.elapsed()
+    );
+    assert!(
+        msg.contains("10000 sheet instances"),
+        "names the limit: {msg}"
+    );
+    assert!(
+        msg.contains("L0.kicad_sch > L1.kicad_sch"),
+        "names the sheet chain being expanded: {msg}"
+    );
+    assert!(msg.contains("Sheetfile"), "says what to check next: {msg}");
+}
+
+/// The cap does not touch a diamond that is merely reused: 2^5 instances read
+/// as before.
+#[test]
+fn a_small_hierarchy_diamond_still_reads() {
+    let p = Project::new("diamond-small");
+    let root = p.diamond(5);
+    ExtractedBoard::from_kicad_schematic_path(&root).expect("a small diamond is a valid design");
+}
+
+/// W3: a valid schematic with nothing on it is not a "sub-sheet that needs the
+/// root schematic"; it has no parts, and the message says so.
+#[test]
+fn an_empty_schematic_is_told_it_has_no_parts_not_that_it_is_a_sub_sheet() {
+    let p = Project::new("blank");
+    let f = p.write("blank.kicad_sch", &format!("{SCH_HEAD})\n"));
+    let msg = path_error(&f);
+    assert!(msg.contains("has no parts"), "{msg}");
+    assert!(msg.contains("blank.kicad_sch"), "names the file: {msg}");
+    assert!(!msg.contains("sub-sheet"), "not a sub-sheet: {msg}");
+}
+
+/// W8: an empty child sheet file is described in user words, with the file and
+/// the sheet that references it, never "root is None".
+#[test]
+fn an_empty_child_sheet_is_named_in_user_words() {
+    let p = Project::new("empty-child");
+    p.write("bad.kicad_sch", "");
+    let root = p.root(&[("bad", "bad.kicad_sch")]);
+    let msg = path_error(&root);
+    assert!(!msg.contains("None"), "no Rust Option debug: {msg}");
+    assert!(msg.contains("'bad.kicad_sch'"), "names the child: {msg}");
+    assert!(
+        msg.contains("'bad' in root.kicad_sch"),
+        "names the parent: {msg}"
+    );
+    assert!(msg.contains("empty"), "{msg}");
+}
+
+/// W8: the generic wrong-root sentence has no Rust `None` in it either.
+#[test]
+fn a_file_with_no_top_level_section_is_not_described_as_root_is_none() {
+    let e = hauksbee_extract::ExtractError::WrongRoot {
+        expected: "kicad_sch",
+        found: None,
+    };
+    let msg = e.to_string();
+    assert!(!msg.contains("None"), "{msg}");
+    assert!(msg.contains("kicad_sch"), "{msg}");
+}
+
+/// W9: a missing child sheet is named, with the sheet that points at it.
+#[test]
+fn a_missing_child_sheet_is_named_with_its_parent() {
+    let p = Project::new("missing-child");
+    let root = p.root(&[("power", "missing.kicad_sch")]);
+    let msg = path_error(&root);
+    assert!(
+        msg.contains("'missing.kicad_sch'"),
+        "names the child: {msg}"
+    );
+    assert!(msg.contains("does not exist"), "{msg}");
+    assert!(
+        msg.contains("'power' in root.kicad_sch"),
+        "names the parent: {msg}"
+    );
+    assert!(!msg.contains("parsed, but is empty"), "{msg}");
+}
+
+/// W9: a truncated child sheet is named as damaged, with its parent.
+#[test]
+fn a_truncated_child_sheet_is_named_as_damaged() {
+    let p = Project::new("trunc-child");
+    p.write("bad.kicad_sch", "(kicad_sch (version 20230121) (symbol");
+    let root = p.root(&[("bad", "bad.kicad_sch")]);
+    let msg = path_error(&root);
+    assert!(msg.contains("'bad.kicad_sch'"), "names the child: {msg}");
+    assert!(msg.contains("damaged or cut short"), "{msg}");
+    assert!(
+        msg.contains("'bad' in root.kicad_sch"),
+        "names the parent: {msg}"
+    );
+}
+
+/// W9, nested: the sheet named as the parent is the one that holds the
+/// reference, not the root.
+#[test]
+fn a_missing_grandchild_names_its_immediate_parent_sheet() {
+    let p = Project::new("missing-grandchild");
+    p.write(
+        "mid.kicad_sch",
+        &format!("{SCH_HEAD}{})\n", sheet_entry("leaf", "gone.kicad_sch")),
+    );
+    let root = p.root(&[("mid", "mid.kicad_sch")]);
+    let msg = path_error(&root);
+    assert!(msg.contains("'gone.kicad_sch'"), "{msg}");
+    assert!(msg.contains("'leaf' in mid.kicad_sch"), "{msg}");
+}
