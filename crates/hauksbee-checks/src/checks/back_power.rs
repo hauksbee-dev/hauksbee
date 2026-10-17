@@ -44,9 +44,12 @@
 //! - Pull-up resistor to a higher rail: **Medium**. The resistor bounds the
 //!   clamp current, and higher-voltage-tolerant pins make this idiom
 //!   legitimate on SOME parts. Where the card rates a signal pin with its own
-//!   `supply_range` envelope, that rating replaces the clamp assumption;
-//!   otherwise the finding says what the clamp path is and names the
-//!   exception the reader must verify.
+//!   `supply_range` envelope, or lists it in an `input_tolerance` envelope (a
+//!   74LVC input's `VI` abs max of 6.5 V at any VCC), that supply-independent
+//!   rating replaces the clamp assumption
+//!   ([`hauksbee_models::declared_pin_ceiling_v`]): a rail at or under it is
+//!   silent, a rail above it still fires. Otherwise the finding says what the
+//!   clamp path is and names the exception the reader must verify.
 //!
 //! Pins the check deliberately skips: supply and ground roles (they belong on
 //! rails), and roles that are higher-voltage inputs by design (`vin`, `vbus`,
@@ -57,7 +60,7 @@ use std::collections::BTreeSet;
 use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
 };
-use hauksbee_models::{ModelLibrary, OperatingEnvelope};
+use hauksbee_models::{declared_pin_ceiling_v, ModelLibrary};
 
 use hauksbee_bind::binder::power_rail_voltage;
 use hauksbee_extract::assembly::AssemblyState;
@@ -91,27 +94,6 @@ fn is_skipped_role(role: &str) -> bool {
         || role.starts_with("gnd")
         || matches!(role, "vss" | "agnd" | "dgnd" | "pgnd" | "gndio" | "nc")
         || matches!(role, "vin" | "vbus" | "vbat" | "vsys" | "raw" | "vmot")
-}
-
-/// The highest voltage the card itself rates `role` for: the ceiling of any
-/// `supply_range` envelope declared on that pin (its abs max when printed).
-/// A pin with a declared range is rated against that range, not against a
-/// clamp to its part's supply: a current-sense amplifier's IN+/IN- take a
-/// 40 V common mode from a 1.8 V supply. The envelope check judges the pin.
-fn declared_pin_ceiling_v(model: &hauksbee_models::ModelEntry, role: &str) -> Option<f64> {
-    model
-        .envelope
-        .iter()
-        .filter_map(|e| match e {
-            OperatingEnvelope::SupplyRange {
-                pin,
-                max_v,
-                abs_max_v,
-                ..
-            } if pin == role => Some(abs_max_v.unwrap_or(*max_v)),
-            _ => None,
-        })
-        .reduce(f64::max)
 }
 
 /// A plain two-terminal, assembled resistor, on the shared part-class ladder.
@@ -241,7 +223,7 @@ pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
             let Some(net) = board.net(id) else { continue };
             // A rail at or under the pin's own declared rating is not a clamp
             // fault; a rail above it still fires.
-            let ceiling = declared_pin_ceiling_v(&model, role);
+            let ceiling = declared_pin_ceiling_v(&model.envelope, role);
             let clamps = |rail_v: f64| {
                 rail_v > supply_v + CLAMP_MARGIN_V && ceiling.is_none_or(|c| rail_v > c)
             };
@@ -623,6 +605,63 @@ basis = "Absolute Maximum Ratings, IN+ row""#,
             count(&card(""), "+5V"),
             1,
             "no rating: the clamp rule holds"
+        );
+    }
+
+    /// A quad buffer `value` (74x125 pinout: pad 1 OE1, 2 A1, 3 Y1, 7 GND,
+    /// 14 VCC) on +3V3 whose pad `pad` carries a 10k pull-up to `rail`.
+    fn quad_buffer_pull_board(value: &str, pad: u8, rail: &str) -> String {
+        format!(
+            r#"(kicad_pcb (version 20221018) (generator pcbnew)
+  (net 0 "") (net 1 "GND") (net 2 "{rail}") (net 3 "/SIG") (net 4 "+3V3")
+  (footprint "Package_SO:SOIC-14_3.9x8.7mm_P1.27mm" (layer "F.Cu") (at 100 100)
+    (property "Reference" "U5" (at 0 0)) (property "Value" "{value}" (at 0 2))
+    (pad "{pad}" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 3 "/SIG"))
+    (pad "7" smd rect (at 0 1) (size 1 1) (layers "F.Cu") (net 1 "GND"))
+    (pad "14" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 4 "+3V3")))
+  (footprint "Resistor_SMD:R_0603_1608Metric" (layer "F.Cu") (at 120 100)
+    (property "Reference" "R7" (at 0 0)) (property "Value" "10k" (at 0 2))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 3 "/SIG"))
+    (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 2 "{rail}"))))"#
+        )
+    }
+
+    /// A 5 V-tolerant input (the curated 74LVC125A card's `input_tolerance`,
+    /// VI up to 5.5 V recommended and 6.5 V absolute whatever VCC is) takes a
+    /// 5 V pull-up at a 3.3 V supply: silent. The 74HC125, whose inputs are
+    /// rated only to VCC + 0.5 V, still fires on the same board, and so does
+    /// the LVC part's driven output and a pull-up above the declared ceiling.
+    #[test]
+    fn a_five_volt_tolerant_input_takes_a_five_volt_pull_up() {
+        let count = |value: &str, pad: u8, rail: &str| {
+            run(&quad_buffer_pull_board(value, pad, rail))
+                .of_check(LintCheck::BackPower)
+                .count()
+        };
+        assert_eq!(
+            count("74LVC125AD", 2, "+5V"),
+            0,
+            "an LVC input is 5 V-tolerant at VCC 3.3 V"
+        );
+        assert_eq!(
+            count("74LVC125AD", 1, "+5V"),
+            0,
+            "the LVC output-enable input is 5 V-tolerant too"
+        );
+        assert_eq!(
+            count("74HC125D", 2, "+5V"),
+            1,
+            "a 74HC input is rated only to VCC + 0.5 V"
+        );
+        assert_eq!(
+            count("74LVC125AD", 3, "+5V"),
+            1,
+            "the LVC output is not covered by the input rating"
+        );
+        assert_eq!(
+            count("74LVC125AD", 2, "+12V"),
+            1,
+            "12 V is above the input's 6.5 V absolute maximum"
         );
     }
 

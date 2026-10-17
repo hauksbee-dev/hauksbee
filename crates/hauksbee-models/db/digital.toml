@@ -5189,6 +5189,14 @@ supply_static_ua = 1.0
 max_pin_current_a = 0.025
 max_voltage_v = 6.5
 
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a", "b"]
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Diodes 74AHCT1G32 DS35184 Rev. 1-2, Recommended Operating Conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "Diodes 74AHCT1G32 DS35184 Rev. 1-2, Absolute Maximum Ratings, VI input voltage range -0.5 V to 6.5 V"
+
 [models.logic]
 inputs = ["a", "b"]
 outputs = ["y1"]
@@ -5377,8 +5385,12 @@ reason = "datasheet publishes a finite maximum but no finite minimum VOL specifi
 value_re = "(?i)^SN74AHCT14"
 
 [models.params]
-voh = 3.8 # Source: Table 6.5 Electrical Characteristics, SN74AHCT14 min, VCC = 4.5 V, IOH = -8 mA
-vol = 0.44 # Source: Table 6.5 Electrical Characteristics, SN74AHCT14 max, VCC = 4.5 V, IOL = 8 mA
+voh = 4.4 # Source: Table 6.5 Electrical Characteristics, SN74AHCT14 min, VCC = 4.5 V, IOH = -50 uA (the light-load level)
+vol = 0.1 # Source: Table 6.5 Electrical Characteristics, SN74AHCT14 max, VCC = 4.5 V, IOL = 50 uA (the light-load level)
+# Table 6.5 at VCC = 4.5 V, -40 to 125 C column: VOH 3.8 V min at IOH = -8 mA,
+# VOL 0.44 V max at IOL = 8 mA. (4.4 - 3.8) / 8 mA = 75 ohm high side,
+# (0.44 - 0.1) / 8 mA = 42.5 ohm low side; the weaker side drives both.
+ro = 75.0
 vih = 1.9 # Source: Table 6.5 Electrical Characteristics, SN74AHCT14 VT+ max, VCC = 4.5 V
 vil = 0.5 # Source: Table 6.5 Electrical Characteristics, SN74AHCT14 VT- min, VCC = 4.5 V
 tpd_s = 4.0e-9 # Source: Table 6.6 Switching Characteristics, TA = 25 C typ, A to Y, CL = 15 pF
@@ -5406,6 +5418,14 @@ max_voltage_v = 7.0 # Source: Table 6.1 Absolute Maximum Ratings, VCC supply vol
 "12" = "y6"
 "13" = "a6"
 "14" = "vcc"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a1", "a2", "a3", "a4", "a5", "a6"]
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI SN74AHCT14 SCLS246T, 6.3 Recommended Operating Conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "TI SN74AHCT14 SCLS246T, 6.1 Absolute Maximum Ratings, VI input voltage range -0.5 V to 7 V"
 
 [models.logic]
 # Table 5-1 identifies six A/Y channels; Section 3 states that each performs Y = !A.
@@ -5537,6 +5557,15 @@ max_v = 3.6
 abs_max_v = 4.6
 basis = "TI SN74AVC1T45 SCES530L, 5.3 Recommended Operating Conditions, VCCB 1.2 V to 3.6 V; 5.1 Absolute Maximum Ratings, VCCB -0.5 V to 4.6 V"
 
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["dir"]
+max_v = 3.6
+abs_max_v = 4.6
+basis = "TI SN74AVC1T45 SCES530L, 5.3 Recommended Operating Conditions, VI input voltage 0 V to 3.6 V"
+abs_max_basis = "TI SN74AVC1T45 SCES530L, 5.1 Absolute Maximum Ratings, VI input voltage, control inputs -0.5 V to 4.6 V"
+note = "the A and B I/O ports are not listed: their -0.5 V to 4.6 V row holds only in the high-impedance or power-off state, and a driven port is rated VCCO + 0.5 V"
+
 [models.logic]
 # Table 7-1: DIR low, B data to the A bus; DIR high, A data to the B bus.
 inputs = ["dir", "a1_in", "b1_in"]
@@ -5634,6 +5663,14 @@ max_v = 3.6
 abs_max_v = 6.5
 basis = "Nexperia 74LVC125A Rev. 12, Table 5 VCC 1.65 V to 3.6 V (functional from 1.2 V); Table 4 VCC -0.5 V to +6.5 V"
 
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a1", "a2", "a3", "a4", "oe_n_1", "oe_n_2", "oe_n_3", "oe_n_4"]
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Nexperia 74LVC125A Rev. 12, Table 5 Recommended operating conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "Nexperia 74LVC125A Rev. 12, Table 4 Limiting values, VI input voltage -0.5 V to +6.5 V"
+
 [models.logic]
 # Table 3: nOE low passes nA to nY; nOE high puts nY in high impedance.
 inputs = ["a1", "a2", "a3", "a4", "oe_n_1", "oe_n_2", "oe_n_3", "oe_n_4"]
@@ -5717,6 +5754,14 @@ min_v = 1.65
 max_v = 5.5
 abs_max_v = 6.5
 basis = "Nexperia 74LVC1G125 Rev. 17.1, Table 6 VCC 1.65 V to 5.5 V; Table 5 VCC -0.5 V to +6.5 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a", "oe_n"]
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Nexperia 74LVC1G125 Rev. 17.1, Table 6 Recommended operating conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "Nexperia 74LVC1G125 Rev. 17.1, Table 5 Limiting values, VI input voltage -0.5 V to +6.5 V"
 
 [models.logic]
 inputs = ["a", "oe_n"]
@@ -5882,6 +5927,14 @@ max_v = 5.5
 abs_max_v = 6.5
 basis = "TI SN74LVC2G34 SCES359J, 6.3 VCC 1.65 V to 5.5 V; 6.1 VCC -0.5 V to 6.5 V"
 
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a1", "a2"]
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC2G34 SCES359J, 6.3 Recommended Operating Conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "TI SN74LVC2G34 SCES359J, 6.1 Absolute Maximum Ratings, VI input voltage -0.5 V to 6.5 V"
+
 [models.logic]
 inputs = ["a1", "a2"]
 outputs = ["y1", "y2"]
@@ -5953,6 +6006,14 @@ min_v = 1.6
 max_v = 5.5
 abs_max_v = 7.0
 basis = "TI SN74LV1T34 SCLS743E, 6.3 VCC 1.6 V to 5.5 V; 6.1 VCC -0.5 V to 7.0 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a"]
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI SN74LV1T34 SCLS743E, 6.3 Recommended Operating Conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "TI SN74LV1T34 SCLS743E, 6.1 Absolute Maximum Ratings, VI input voltage range -0.5 V to 7.0 V"
 
 [models.logic]
 inputs = ["a"]
@@ -6031,6 +6092,14 @@ min_v = 1.6
 max_v = 5.5
 abs_max_v = 7.0
 basis = "TI SN74LV1T126 SCLS744D, 6.3 VCC 1.6 V to 5.5 V; 6.1 VCC -0.5 V to 7.0 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a", "oe"]
+max_v = 5.5
+abs_max_v = 7.0
+basis = "TI SN74LV1T126 SCLS744D, 6.3 Recommended Operating Conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "TI SN74LV1T126 SCLS744D, 6.1 Absolute Maximum Ratings, VI input voltage range -0.5 V to 7.0 V"
 
 [models.logic]
 inputs = ["a", "oe"]
@@ -6197,6 +6266,14 @@ max_v = 5.5
 abs_max_v = 6.5
 basis = "TI SN74LVC1G04 SCES214AF, 5.3 Recommended Operating Conditions VCC 1.65 V to 5.5 V; 5.1 Absolute Maximum Ratings VCC -0.5 V to 6.5 V"
 
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a"]
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Nexperia 74LVC1G04 Rev. 18.1, Table 6 Recommended operating conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "Nexperia 74LVC1G04 Rev. 18.1, Table 5 Limiting values, VI input voltage -0.5 V to +6.5 V"
+
 [models.logic]
 # Behaviour source: SN74LVC1G04 SCES214AF, 3 Description: the device performs the Boolean function Y = A with the output inverted (inverter).
 inputs = ["a"]
@@ -6271,6 +6348,14 @@ min_v = 1.65
 max_v = 5.5
 abs_max_v = 6.5
 basis = "TI SN74LVC1G08 SCES217AA, 5.3 Recommended Operating Conditions VCC 1.65 V to 5.5 V; 5.1 Absolute Maximum Ratings VCC -0.5 V to 6.5 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a", "b"]
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Nexperia 74LVC1G08 Rev. 16.1, Table 6 Recommended operating conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "Nexperia 74LVC1G08 Rev. 16.1, Table 5 Limiting values, VI input voltage -0.5 V to +6.5 V"
 
 [models.logic]
 # Behaviour source: SN74LVC1G08 SCES217AA, 3 Description: positive-AND gate, Y = A . B.
@@ -6374,6 +6459,14 @@ max_v = 5.5
 abs_max_v = 6.5
 basis = "Nexperia 74LVC1G14, Table 6 Recommended operating conditions VCC 1.65 V to 5.5 V; Table 5 Limiting values VCC -0.5 V to +6.5 V"
 
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a"]
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Nexperia 74LVC1G14 Rev. 19.1, Table 6 Recommended operating conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "Nexperia 74LVC1G14 Rev. 19.1, Table 5 Limiting values, VI input voltage -0.5 V to +6.5 V"
+
 [models.logic]
 # Behaviour source: Nexperia 74LVC1G14, 'Functional description': inverting Schmitt-trigger stage. The Schmitt behaviour is in the vih/vil thresholds above (the engine retains the prior input state between vil and vih), not here.
 inputs = ["a"]
@@ -6476,6 +6569,14 @@ max_v = 5.5
 abs_max_v = 6.5
 basis = "Nexperia 74LVC1G17, Table 6 Recommended operating conditions VCC 1.65 V to 5.5 V; Table 5 Limiting values VCC -0.5 V to +6.5 V"
 
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a"]
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Nexperia 74LVC1G17 Rev. 16.1, Table 6 Recommended operating conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "Nexperia 74LVC1G17 Rev. 16.1, Table 5 Limiting values, VI input voltage -0.5 V to +6.5 V"
+
 [models.logic]
 # Behaviour source: Nexperia 74LVC1G17, 'Functional description': non-inverting Schmitt-trigger stage. The Schmitt behaviour is in the vih/vil thresholds above (the engine retains the prior input state between vil and vih), not here.
 inputs = ["a"]
@@ -6553,6 +6654,14 @@ max_v = 5.5
 abs_max_v = 7.0
 basis = "TI SN74AHC1G04 SCLS318V, 5.3 Recommended Operating Conditions VCC 2 V to 5.5 V; 5.1 Absolute Maximum Ratings VCC -0.5 V to 7 V"
 
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a"]
+max_v = 5.5
+abs_max_v = 7.0
+basis = "Nexperia 74AHC1G04; 74AHCT1G04 Rev. 14, Table 6 Recommended operating conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "Nexperia 74AHC1G04; 74AHCT1G04 Rev. 14, Table 5 Limiting values, VI input voltage -0.5 V to +7.0 V"
+
 [models.logic]
 # Behaviour source: SN74AHC1G04 SCLS318V, 3 Description: inverter, Y = !A.
 inputs = ["a"]
@@ -6629,6 +6738,14 @@ min_v = 2.0
 max_v = 5.5
 abs_max_v = 7.0
 basis = "TI SN74AHC1G08 SCLS314R, 5.3 Recommended Operating Conditions VCC 2 V to 5.5 V; 5.1 Absolute Maximum Ratings VCC -0.5 V to 7 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a", "b"]
+max_v = 5.5
+abs_max_v = 7.0
+basis = "Nexperia 74AHC1G08; 74AHCT1G08 Rev. 10.1, Table 6 Recommended operating conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "Nexperia 74AHC1G08; 74AHCT1G08 Rev. 10.1, Table 5 Limiting values, VI input voltage -0.5 V to +7.0 V"
 
 [models.logic]
 # Behaviour source: SN74AHC1G08 SCLS314R, 3 Description: positive-AND gate, Y = A . B.
@@ -6802,6 +6919,15 @@ min_v = 1.65
 max_v = 5.5
 abs_max_v = 6.5
 basis = "TI SN74LVC1T45 SCES515N, 5.3 Recommended Operating Conditions, VCCB 1.65 V to 5.5 V; 5.1 Absolute Maximum Ratings, VCCB -0.5 V to 6.5 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["dir"]
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC1T45 SCES515N, 5.3 Recommended Operating Conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "TI SN74LVC1T45 SCES515N, 5.1 Absolute Maximum Ratings, VI input voltage -0.5 V to 6.5 V"
+note = "the A and B I/O ports are not listed: their -0.5 V to 6.5 V row holds only in the high-impedance or power-off state, and a driven port is rated VCCO + 0.5 V"
 
 [models.logic]
 # Table 7-1: DIR low, B data to the A bus; DIR high, A data to the B bus.
@@ -7026,6 +7152,15 @@ max_v = 3.6
 abs_max_v = 4.6
 basis = "TI SN74AVC4T245 SCES576I, 5.3 VCCB 1.2 V to 3.6 V; 5.1 VCCB -0.5 V to 4.6 V"
 
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["1dir", "2dir", "1oe_n", "2oe_n"]
+max_v = 3.6
+abs_max_v = 4.6
+basis = "TI SN74AVC4T245 SCES576I, 5.3 Recommended Operating Conditions, VI input voltage 0 V to 3.6 V"
+abs_max_basis = "TI SN74AVC4T245 SCES576I, 5.1 Absolute Maximum Ratings, VI input voltage range, control inputs -0.5 V to 4.6 V"
+note = "the A and B I/O ports are not listed: their -0.5 V to 4.6 V row holds only in the high-impedance or power-off state, and a driven port is rated VCCO + 0.5 V"
+
 [models.logic]
 # Table 7-1, per half: OE low and DIR low, B data to the A bus; OE low and DIR
 # high, A data to the B bus; OE high, both ports Hi-Z. The A side drives only
@@ -7183,6 +7318,15 @@ max_v = 5.5
 abs_max_v = 6.5
 basis = "TI SN74LVC8T245 SCES584D, 5.3 VCCB 1.65 V to 5.5 V; 5.1 VCCB -0.5 V to 6.5 V"
 
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["dir", "oe_n"]
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC8T245 SCES584D, 5.3 Recommended Operating Conditions, VI input voltage, control inputs 0 V to 5.5 V"
+abs_max_basis = "TI SN74LVC8T245 SCES584D, 5.1 Absolute Maximum Ratings, VI input voltage range, control inputs -0.5 V to 6.5 V"
+note = "the A and B I/O ports are not listed: their -0.5 V to 6.5 V row holds only in the high-impedance or power-off state, and a driven port is rated VCCO + 0.5 V"
+
 [models.logic]
 # Table 7-1: OE low and DIR low, B data to the A bus; OE low and DIR high, A
 # data to the B bus; OE high, both ports Hi-Z.
@@ -7318,6 +7462,14 @@ min_v = 1.65
 max_v = 5.5
 abs_max_v = 6.5
 basis = "TI SN74LVC2G126 SCES205N, 6.3 VCC 1.65 V to 5.5 V; 6.1 VCC -0.5 V to 6.5 V"
+
+[[models.envelope]]
+kind = "input_tolerance"
+pins = ["a1", "a2", "oe_1", "oe_2"]
+max_v = 5.5
+abs_max_v = 6.5
+basis = "TI SN74LVC2G126 SCES205N, 6.3 Recommended Operating Conditions, VI input voltage 0 V to 5.5 V"
+abs_max_basis = "TI SN74LVC2G126 SCES205N, 6.1 Absolute Maximum Ratings, VI input voltage -0.5 V to 6.5 V"
 
 [models.logic]
 # Table 8-1: nOE high passes nA to nY; nOE low puts nY in high impedance.

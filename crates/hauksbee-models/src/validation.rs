@@ -607,6 +607,45 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                     format!("operating envelope input_common_mode needs at least two input roles and a finite non-negative headroom_v, got {} and {headroom_v}", inputs.len())
                 });
             }
+            OperatingEnvelope::InputTolerance {
+                pins,
+                max_v,
+                abs_max_v,
+                abs_max_basis,
+                ..
+            } => {
+                p.require(!pins.is_empty(), || {
+                    "operating envelope input_tolerance needs at least one input role in pins"
+                        .into()
+                });
+                for role in pins {
+                    p.require(has_role_ci(entry, role), || {
+                        not_a_role("operating envelope input_tolerance pin", role)
+                    });
+                    // A driven output (or a bidirectional port, which the logic
+                    // block declares as an output too) is rated VCC + 0.5 V
+                    // whatever its high-impedance row says.
+                    let driven = entry
+                        .logic
+                        .outputs
+                        .iter()
+                        .any(|out| out.eq_ignore_ascii_case(role));
+                    p.require(!driven, || {
+                        format!("operating envelope input_tolerance pin '{role}' is a logic output; only an input in every mode takes a supply-independent rating")
+                    });
+                }
+                p.require(max_v.is_finite() && *max_v > 0.0, || {
+                    format!("operating envelope input_tolerance max_v must be a finite positive voltage, got {max_v}")
+                });
+                p.require(
+                    !abs_max_v.is_some_and(|v| !v.is_finite() || v < *max_v),
+                    || format!("operating envelope input_tolerance abs_max_v must be finite and at least max_v {max_v}"),
+                );
+                p.require(
+                    abs_max_basis.trim().is_empty() || abs_max_v.is_some(),
+                    || "operating envelope abs_max_basis needs the abs_max_v it cites".into(),
+                );
+            }
         }
     }
 
@@ -1676,16 +1715,38 @@ pub const LEAD_STANDARDS: &[(&str, &str)] = &[
         "SOT-89",
         "JEDEC TO-243 top view, leads down: 1, 2, 3 left to right, the tab joined to 2",
     ),
+    (
+        "SOT-323",
+        "JEITA SC-70 (Nexperia SOT323 outline) top view: 1 lower-left, 2 lower-right, 3 top",
+    ),
+    (
+        "SOT-416",
+        "JEITA SC-75 (Nexperia SOT416 outline) top view: 1 lower-left, 2 lower-right, 3 top",
+    ),
+    (
+        "SOT-523",
+        "the SC-75 body (Nexperia SOT416 outline) top view: 1 lower-left, 2 lower-right, 3 top",
+    ),
 ];
 
 /// The package body `package` spells and its [`LEAD_STANDARDS`] numbering.
+///
+/// The three-lead bodies smaller than SOT-23 (SOT-323, SOT-416, SOT-523) have
+/// no row of their own in the package-body table, which reads them as the
+/// catch-all `SOT`; for those the spelling itself names the standard.
 #[must_use]
 pub fn lead_standard(package: &str) -> Option<(&'static str, &'static str)> {
-    let body = crate::package::package_body(package)?.name;
+    let body = crate::package::package_body(package).map(|b| b.name);
+    let squash = |s: &str| {
+        let kept = s.chars().filter(char::is_ascii_alphanumeric);
+        kept.map(|c| c.to_ascii_uppercase()).collect::<String>()
+    };
+    let spelled = squash(package.rsplit(':').next().unwrap_or(package));
+    let small = |name: &str| matches!(body, None | Some("SOT")) && spelled.contains(&squash(name));
     LEAD_STANDARDS
         .iter()
         .copied()
-        .find(|(name, _)| *name == body)
+        .find(|(name, _)| body == Some(*name) || small(name))
 }
 
 /// The P7 table as prompt lines.
@@ -2818,6 +2879,33 @@ mod tests {
     }
 
     #[test]
+    fn input_tolerance_rates_inputs_only_with_an_ordered_ceiling() {
+        let fixture = |body: &str| -> ModelEntry {
+            toml::from_str(&format!(
+                "id = \"t\"\nkind = \"digital\"\n[pins]\n\"1\" = \"vcc\"\n\"2\" = \"a\"\n\
+                 \"3\" = \"y\"\n\"4\" = \"gnd\"\n[logic]\ninputs = [\"a\"]\noutputs = [\"y\"]\n\
+                 [logic.comb]\ny = \"a\"\n[[envelope]]\nkind = \"input_tolerance\"\n{body}"
+            ))
+            .unwrap()
+        };
+        let ok = "pins = [\"a\"]\nmax_v = 5.5\nabs_max_v = 6.5\nbasis = \"ROC, VI row\"";
+        accepts(&fixture(ok));
+        rejects(&fixture(&ok.replace("[\"a\"]", "[\"y\"]")), "logic output");
+        rejects(&fixture(&ok.replace("[\"a\"]", "[\"b\"]")), "b");
+        rejects(&fixture(&ok.replace("[\"a\"]", "[]")), "at least one");
+        rejects(&fixture(&ok.replace("6.5", "5.0")), "abs_max_v");
+        rejects(
+            &fixture(&ok.replace("max_v = 5.5", "max_v = -1.0")),
+            "max_v",
+        );
+        rejects(
+            &fixture("pins = [\"a\"]\nmax_v = 5.5\nbasis = \"R\"\nabs_max_basis = \"L\""),
+            "abs_max_basis",
+        );
+        rejects(&fixture("pins = [\"a\"]\nmax_v = 5.5"), "basis");
+    }
+
+    #[test]
     fn identity_only_requires_an_explicit_unlock_and_no_behavior() {
         let mut e = diode();
         e.params = Params::default();
@@ -3398,8 +3486,22 @@ pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
             "{problems:?}"
         );
         assert!(draft_pin_map_problems(&card("TO-247")).is_empty());
+        // DMG1013T: a lettered SOT523 top view is numbered by the SC-75 outline.
+        let sot523 = draft_pin_map_problems(&card("SOT523"));
+        assert!(
+            sot523[0].contains("lead letters (D, G, S)") && sot523[0].contains("SC-75"),
+            "{sot523:?}"
+        );
         assert_eq!(lead_standard("SOT-23").map(|s| s.0), Some("SOT-23"));
         assert_eq!(lead_standard("SOT-23-6"), None);
+        assert_eq!(lead_standard("SOT523").map(|s| s.0), Some("SOT-523"));
+        assert_eq!(
+            lead_standard("Package_TO_SOT_SMD:SOT-416").map(|s| s.0),
+            Some("SOT-416")
+        );
+        assert_eq!(lead_standard("SOT-323").map(|s| s.0), Some("SOT-323"));
+        assert_eq!(lead_standard("SOT-363"), None);
+        assert_eq!(lead_standard("SOT-353"), None);
     }
 
     /// Round 3: one 8-pin PDIP/SOIC map for an EEPROM whose SOT-23-6 numbers

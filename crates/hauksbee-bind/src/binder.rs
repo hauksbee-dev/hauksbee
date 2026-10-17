@@ -10883,6 +10883,15 @@ style = "i2c_pointer"
         for (footprint, pins, names, gate, guessed, needle) in [
             ("SOT-23", letters, "S G D", Some(NodeId(2)), 0, "Analog"),
             ("SOT-23", letters, "", Some(NodeId(1)), 3, rule),
+            // DMG1013T: a lettered SOT523 top view on KiCad's SOT-523 footprint.
+            (
+                "Package_TO_SOT_SMD:SOT-523",
+                letters,
+                "",
+                Some(NodeId(1)),
+                3,
+                rule,
+            ),
             ("SOT-89-3", letters, "", None, 0, open),
             ("SOT-23", letters, "S", None, 0, clash),
             ("SOT-89-3", numbers, "", Some(NodeId(2)), 0, "Analog"),
@@ -11650,6 +11659,10 @@ style = "i2c_pointer"
             "SC-70",
             "SC70-3",
             "TO-236",
+            "Package_TO_SOT_SMD:SOT-523",
+            "SOT523",
+            "Package_TO_SOT_SMD:SOT-416",
+            "SC-75",
         ] {
             for (kind, expected) in [
                 (ComponentKind::Nmos, ["gate", "source", "drain"]),

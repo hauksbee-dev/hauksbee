@@ -1735,7 +1735,14 @@ VICR/CMVR row, emit one input_common_mode per channel: `supply` its positive
 supply, `inputs` that channel's two inputs, `headroom_v` the test supply minus
 the range's upper end (0 V to V+ - 1.5 V is 1.5; none reaching V+). Emit one
 supply_range or input_common_mode per printed temperature row, each with its
-`conditions` (TA = 25 °C; TA = −40 °C to 85 °C); the upper end is the guaranteed
+`conditions` (TA = 25 °C; TA = −40 °C to 85 °C). Where an input's VI row is a
+fixed voltage whatever the supply (a 5 V-tolerant input: VI −0.5 V to 6.5 V,
+not VCC + 0.5 V; an MCU's five-volt-tolerant pins), emit one input_tolerance:
+`pins` the roles that row covers that are inputs in every mode (data and
+control inputs; never an output or a bidirectional I/O, which is driven to
+VCC + 0.5 V), `max_v` the recommended VI maximum, `abs_max_v` the
+absolute-maximum VI; a VI written relative to VCC is no input_tolerance. The
+upper end is the guaranteed
 (min/max) cell, never typ (typ alone: omit the entry). Pins, supplies and inputs
 are roles from [models.pins], never pad numbers. Every `basis` names the exact
 table and row; add `abs_max_v` only when the absolute-maximum table publishes
@@ -1796,7 +1803,8 @@ const PIN_NUMBERING: &str = r#"PIN NUMBERING, read this before you fill in [mode
       package's own column and its own figure: a figure labelled with another
       package is not yours, and the checker compares the two.
   P7. LETTERS ONLY (G/S/D, B/C/E at unnumbered leads) with the view and pin 1
-      drawn: number [models.pins] by the package standard and name it and the
+      drawn (a three-lead SOT's drawn top view fixes its leads by position
+      alone): number [models.pins] by the package standard and name it and the
       view in the P6 block (pins as printed); results mark those pins assumed:
         standard = "<the package's standard, from the P7 table below>"
       The checker refuses letters on a package that table lists. Otherwise,
@@ -2628,7 +2636,13 @@ ROLE names `vcc` or `vdd` and `gnd` or `vss`, so map those roles consistently.
 Use indexed functional roles (`a1`, `y1`, etc.) consistently for repeated
 channels; do not collapse multiple gates onto generic `in`/`out`.
 Choose `voh`, `vol`, `vih`, and `vil` at one cited supply/load/temperature corner;
-do not mix corners. State whether each source value is typical or guaranteed and
+do not mix corners. `voh` and `vol` are the LIGHT-LOAD levels (the |IOH|/|IOL| of
+about 20-100 uA row, often `VCC - 0.2 V`, written as a `[models.levels]` `voh`
+table when it follows VCC), never a row printed at a heavy test current such as
+IOH = -24 mA: the output is driven as `voh` behind `ro`, so derive
+`ro` = |VOH_light - VOH_heavy| / |IOH| from the heaviest row at the same supply
+and corner, and keep that row as a characteristic.
+State whether each source value is typical or guaranteed and
 that fixed simulation levels are not universal datasheet bounds. VT+ and VT- are
 static switching thresholds; do not substitute dynamic or noise values. A Schmitt
 input takes vih = VT+ and vil = VT- as plain typ numbers (no typ: VT+ max, VT- min),
@@ -5596,6 +5610,9 @@ mod tests {
         assert!(comparator.contains("VICR/CMVR row, emit one input_common_mode per channel"));
         assert!(comparator.contains("input_common_mode per printed temperature row, each with its"));
         assert!(comparator.contains("(min/max) cell, never typ (typ alone: omit the entry)"));
+        let logic = build_prompt("LVC_FIXTURE", "digital", "x");
+        assert!(logic.contains("fixed voltage whatever the supply (a 5 V-tolerant input"));
+        assert!(logic.contains("never an output or a bidirectional I/O"));
         assert!(bjt.contains("Identity-only is a last resort. A typ-only or max-only row"));
         assert!(bjt.contains("P7 numbers it; else\n   key by lead letters A/K, G/S/D"));
         assert!(bjt.contains("one missing"));
