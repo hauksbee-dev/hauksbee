@@ -23,7 +23,6 @@ own board, firmware, and spec, and the one local command that runs them, and
 | [`ingest/SCHEMATICS.md`](ingest/SCHEMATICS.md) | Schematic (`.kicad_sch`) extraction |
 | [`ingest/BOM.md`](ingest/BOM.md) | BOM and pick-and-place: the dialects, the column mapping, and what a part number changes about binding |
 | [`ingest/DNP.md`](ingest/DNP.md) | Do-not-populate parts: what gets simulated, and how to change it |
-| [`ingest/BOARD_AS_CODE.md`](ingest/BOARD_AS_CODE.md) | Decompile / edit / recompile a board as editable code |
 | [`ingest/IMPORT_DIAGNOSTICS.md`](ingest/IMPORT_DIAGNOSTICS.md) | The import coverage panel: what each reader recovered per component, before binding |
 
 **"What does it check, and can I trust the findings?"**: [`checks/`](checks/)

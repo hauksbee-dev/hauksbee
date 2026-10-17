@@ -46,9 +46,9 @@ function renderWorkflow(specStem: string, commit: string, tag: string): string {
 name: hardware-ci
 on:
   push:
-    paths: ["ci/**", "*.toml", ".github/workflows/**", "hardware/**", "firmware/**", "models/**", "**/*.kicad_pcb", "**/*.kicad_sch", "**/*.net", "**/*.brd", "**/*.PcbDoc", "**/*.d356", "**/*.board", "**/*.xml", "**/*.zip", "**/*.tgz", "**/*.tar.gz", "**/*.tar"]
+    paths: ["ci/**", "*.toml", ".github/workflows/**", "hardware/**", "firmware/**", "models/**", "**/*.kicad_pcb", "**/*.kicad_sch", "**/*.net", "**/*.brd", "**/*.PcbDoc", "**/*.d356", "**/*.xml", "**/*.zip", "**/*.tgz", "**/*.tar.gz", "**/*.tar"]
   pull_request:
-    paths: ["ci/**", "*.toml", ".github/workflows/**", "hardware/**", "firmware/**", "models/**", "**/*.kicad_pcb", "**/*.kicad_sch", "**/*.net", "**/*.brd", "**/*.PcbDoc", "**/*.d356", "**/*.board", "**/*.xml", "**/*.zip", "**/*.tgz", "**/*.tar.gz", "**/*.tar"]
+    paths: ["ci/**", "*.toml", ".github/workflows/**", "hardware/**", "firmware/**", "models/**", "**/*.kicad_pcb", "**/*.kicad_sch", "**/*.net", "**/*.brd", "**/*.PcbDoc", "**/*.d356", "**/*.xml", "**/*.zip", "**/*.tgz", "**/*.tar.gz", "**/*.tar"]
 concurrency:
   group: hauksbee-\${{ github.workflow }}-\${{ github.ref }}
   cancel-in-progress: true

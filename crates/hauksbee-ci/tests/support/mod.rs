@@ -19,20 +19,23 @@ pub fn write_tmp(name: &str, body: &str) -> PathBuf {
     p
 }
 
-/// One board-DSL pad: number `n` on net `net`, placed at x = `n` mm. Lands are
+/// One `KiCad` pad: number `n` on net `net`, placed at x = `n` mm. Lands are
 /// 0.6 mm wide on that 1 mm pitch, so neighbouring pads of a part keep a 0.4 mm
 /// gap: the fixture's copper is physically valid, never a short the static
-/// check would rightly flag.
+/// check would rightly flag. The net id is a placeholder that [`board_text`]
+/// numbers once it has seen every net of the board.
 pub fn pad(n: u32, net: &str) -> String {
-    format!("pad \"{n}\" smd rect at {n} 0 size 0.6 1.5 layers [F.Cu F.Mask] net \"{net}\"\n")
+    format!(
+        "(pad {n} smd rect (at {n} 0 0) (size 0.6 1.5) (layers \"F.Cu\" \"F.Mask\") (net 0 \"{net}\"))\n"
+    )
 }
 
-/// Why a Board-as-Code fixture's "not routed" finding is waived: the `.board`
-/// form places parts and joins nets but cannot carry copper, so every such
-/// fixture is a pre-layout board by construction. The committed fixtures
-/// directory carries the same waiver in its `hauksbee-waivers.toml`.
-pub const PLACEMENT_ONLY_REASON: &str = "placement-only Board-as-Code fixture: the .board \
-     form cannot carry copper, so the board is pre-layout by construction";
+/// Why a placement-only fixture's "not routed" finding is waived: the board
+/// places parts and joins nets but carries no copper, so it is a pre-layout
+/// board by construction. The committed fixtures directory carries the same
+/// waiver in its `hauksbee-waivers.toml`.
+pub const PLACEMENT_ONLY_REASON: &str = "placement-only fixture: parts are placed and netted \
+     but carry no copper, so the board is pre-layout by construction";
 
 /// Why a hand-written layout fixture's "not routed" finding is waived: its
 /// suite judges the netlist, so the parts are placed and netted but left
@@ -40,16 +43,16 @@ pub const PLACEMENT_ONLY_REASON: &str = "placement-only Board-as-Code fixture: t
 pub const PRE_LAYOUT_REASON: &str = "pre-layout fixture: placed and netted but left \
      unrouted on purpose, since this suite judges the netlist";
 
-/// Write a placement-only Board-as-Code board `name` with `body`, beside the
-/// waiver for its not-routed finding (see [`PLACEMENT_ONLY_REASON`]). The
-/// waived finding stays a visible row of every run; [`assert_placement_waived`]
-/// checks that.
+/// Write a placement-only board `name` with `body` (see [`board_text`]),
+/// beside the waiver for its not-routed finding (see
+/// [`PLACEMENT_ONLY_REASON`]). The waived finding stays a visible row of every
+/// run; [`assert_placement_waived`] checks that.
 pub fn placement_board(name: &str, body: &str) -> PathBuf {
     let board = write_tmp(name, body);
     let mut nets: Vec<&str> = body
-        .split("net \"")
+        .split("(net ")
         .skip(1)
-        .filter_map(|rest| rest.split('"').next())
+        .filter_map(|rest| rest.split('"').nth(1))
         .filter(|n| !n.is_empty())
         .collect();
     nets.sort_unstable();
@@ -91,12 +94,50 @@ pub fn assert_placement_waived(result: &hauksbee_ci::CiResult) {
     );
 }
 
-/// One board-DSL component: reference `r`, footprint `lib`, value `val`, placed
+/// One `KiCad` footprint: reference `r`, library id `lib`, value `val`, placed
 /// at x = `x`, carrying `pads` (built from [`pad`]).
 // Callers hand over freshly built pad strings; owning them keeps call sites borrow-free.
 #[allow(clippy::needless_pass_by_value)]
 pub fn comp(r: &str, lib: &str, val: &str, x: usize, pads: String) -> String {
-    format!("comp {r} lib \"{lib}\" val \"{val}\" layer \"F.Cu\" at {x} 20 rot 0 {{\n{pads}}}\n")
+    format!(
+        "(footprint \"{lib}\" (layer \"F.Cu\") (at {x} 20 0) (property \"Reference\" \"{r}\") (property \"Value\" \"{val}\")\n{pads})\n"
+    )
+}
+
+/// A whole `.kicad_pcb` text from footprints built with [`comp`]: the board
+/// header, one `(net id "name")` row per net, and `parts` with every pad's
+/// placeholder net id replaced by that net's number.
+///
+/// `declared` lists nets the board names even when no pad joins them (a net a
+/// spec asserts on, for instance); every net a pad names is declared too.
+pub fn board_text(declared: &[&str], parts: &str) -> String {
+    let mut nets: Vec<String> = declared.iter().map(|n| (*n).to_string()).collect();
+    for rest in parts.split("(net 0 \"").skip(1) {
+        if let Some(name) = rest.split('"').next() {
+            if !nets.iter().any(|n| n == name) {
+                nets.push(name.to_string());
+            }
+        }
+    }
+    let mut parts = parts.to_string();
+    let mut header = String::new();
+    for (i, name) in nets.iter().enumerate() {
+        let id = i + 1;
+        let _ = writeln!(header, "(net {id} \"{name}\")");
+        parts = parts.replace(
+            &format!("(net 0 \"{name}\")"),
+            &format!("(net {id} \"{name}\")"),
+        );
+    }
+    format!(
+        "(kicad_pcb (version 20171130) (generator \"pcbnew\")\n\
+         (general (thickness 1.6)) (paper \"A4\")\n\
+         (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (36 \"B.SilkS\" user) \
+         (37 \"F.SilkS\" user) (38 \"B.Mask\" user) (39 \"F.Mask\" user) \
+         (44 \"Edge.Cuts\" user) (48 \"B.Fab\" user) (49 \"F.Fab\" user))\n\
+         (setup (pad_to_mask_clearance 0))\n\
+         (net 0 \"\")\n{header}{parts})\n"
+    )
 }
 
 /// Write `body` to a spec file named `name` and load it, which must succeed.

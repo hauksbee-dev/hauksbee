@@ -41,8 +41,7 @@ fn every_sample_board_has_real_copper_and_an_outline() {
             segments > 0,
             "{rel} has no copper traces. It is offered as a sample on a tool that claims \
              to start from the copper, so shipping a pad cloud argues against the product. \
-             Route it: `hauksbee to-code <board> --out b.board` then `hauksbee from-code \
-             b.board --out <board> --relayout --route`."
+             Route it in your PCB tool and re-export the board."
         );
         assert!(
             edge > 0,

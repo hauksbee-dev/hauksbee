@@ -6,8 +6,7 @@ body:
     attributes:
       value: |
         Attach only material you are allowed to publish. A minimal board or
-        redacted export is useful; `hauksbee to-code <board>` can produce a
-        smaller editable reproduction. Do not post confidential design data.
+        redacted export is useful. Do not post confidential design data.
   - type: textarea
     id: what
     attributes:
@@ -40,4 +39,4 @@ body:
     id: board
     attributes:
       label: Board file
-      description: Optional. Attach a shareable minimal input or redacted `to-code` form; never attach confidential design data.
+      description: Optional. Attach a shareable minimal input or a redacted export; never attach confidential design data.

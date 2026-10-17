@@ -13,7 +13,7 @@
 //! the working directory itself), or `~/...` under the home directory, so a
 //! manifest replays from a colleague's checkout. Absolute paths from older
 //! manifests are still read as they are. Each resolved backend (simavr, QEMU,
-//! Renode, ngspice, kicad-cli, freerouting) is recorded with its version and
+//! Renode, ngspice, kicad-cli) is recorded with its version and
 //! the SHA-256 of its binary, found by the same discovery `hauksbee doctor` uses.
 //!
 //! A finished run can also leave an [`Outcome`] in its manifest (verdict, exit

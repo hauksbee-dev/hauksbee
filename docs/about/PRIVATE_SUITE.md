@@ -9,8 +9,8 @@ This page makes that omitted coverage explicit.
 
 ## What is missing
 
-**96 tests: 91 in the 25 absent files below, plus 5 removed from files that
-otherwise ship. Also absent: 11 engine examples and one solver example.**
+**93 tests: 89 in the 24 absent files below, plus 4 removed from files that
+otherwise ship. Also absent: 10 engine examples and one solver example.**
 
 | Suite | Tests | What it covers |
 |---|---|---|
@@ -27,7 +27,6 @@ otherwise ship. Also absent: 11 engine examples and one solver example.**
 | `tarski_outcome_search` | 2 | Outcome search on a board cell: intended outcomes violated with culprits, and the repaired cell passing |
 | `inhibitory_miswire` | 3 | A miswire found in hardware, then derived from the netlist |
 | `asbuilt_equivalence` | 5 | That the declarative as-built overlay reproduces the imperative rework it replaced |
-| `boardcode_miswire` | 2 | Round-trip through the board-as-code form |
 | `hardware_history` | 2 | Replay against recorded hardware traces |
 | `mcp4728_cosim` | 2 | DAC peripheral co-simulation |
 | `tarski_decomposition_analysis` | 1 | Tearing choices on a mesh that does not converge fused |
@@ -40,8 +39,8 @@ otherwise ship. Also absent: 11 engine examples and one solver example.**
 | `bug_hunt_physics` | 6 | Timing values and calibrated expectations from the private layout |
 | `avr_mcu_tests` | 6 | AVR execution against firmware from the private T1-devboard repository |
 
-The five tests missing from files that otherwise ship are in
-`spec_and_assertions`, `cli_boardcode`, `extract`, `unpowered_rail_is_declared`
+The four tests missing from files that otherwise ship are in
+`spec_and_assertions`, `extract`, `unpowered_rail_is_declared`
 and `hauksbee-cosim`'s `scheduler`. The scheduler test requires the private NEP
 board and is ignored by default; its presence is not a public test pass. Those files keep the
 rest of their coverage.

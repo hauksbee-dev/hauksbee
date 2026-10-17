@@ -12,7 +12,6 @@ first line of the file.
 | `04_boot_firmware_headless.txt` | `hauksbee run --firmware --headless`: boots the demo firmware on the emulated ATmega328P, shows the most-active nets and the UART banner. |
 | `05_ci_spec_green.txt` | `hauksbee-ci run blinky.toml`: rail + UART + blink + no-faults assertions, all GREEN, exit 0. |
 | `08_ci_spec_transient.txt` | `hauksbee-ci run olimex_wifi_burst_transient.toml`: a `rail_window` transient assertion riding an ESP32 WiFi burst, GREEN. |
-| `09_board_as_code_loop.txt` | The board-as-code loop: `to-code` → `from-code --incremental` → `check-code` on the real stormduino board. |
 | `10_doctor.txt` | `scripts/doctor.sh`: the environment report (which backends are present and what each unlocks). |
 | `11_boot_coverage_pass_fail.txt` | `boot-coverage` on a Hi-Z MOSFET gate: PASS (firmware drives it in time) and FAIL (firmware leaves it floating), on the built-in AVR backend. |
 
@@ -21,9 +20,6 @@ first line of the file.
 - The UART lines in `04` and `05` carry raw ANSI colour escapes (e.g. `^[[32m`)
   because the demo firmware prints a coloured banner; that is the real byte
   stream the firmware emitted, shown verbatim.
-- `09` prints `avr_sadly_crashed` on stderr before the check report: stormduino
-  carries an AVR that the firmware-less `check-code` run halts. It is benign,
-  the structural check still completes and reports no faults. Shown as captured.
 - `03`/`08` use the corpus board at `board-corpus/famous/olimex_esp32`; they need
   that corpus present.
 - The Watchy v1.5 e-paper boot-coverage specs

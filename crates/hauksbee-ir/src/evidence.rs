@@ -2288,7 +2288,6 @@ pub enum ArtifactKind {
     OdbPlusPlus,
     Ipc2581,
     Ipc356,
-    BoardCode,
     Bom,
     Placement,
     Elf,

@@ -6,8 +6,7 @@
 //! below, so this file is intentionally thin.
 //!
 //! Subcommands: `run` (bind a board, then report / TUI / co-sim / serve), `serve`
-//! (web front door), `to-code` / `from-code` / `check-code` (Board-as-Code), `sim`
-//! (SPICE deck), `doctor` (backend availability), `models lint`. See each
+//! (web front door), `sim` (SPICE deck), `doctor` (backend availability), `models lint`. See each
 //! `Command` variant (or `--help`) for the full flag surface.
 
 use std::path::PathBuf;
@@ -19,7 +18,7 @@ use hauksbee_ir::{eprintln, println};
 /// Execute the system your design files already contain.
 ///
 /// Point `hauksbee` at a board file (`KiCad`, Eagle, Altium, IPC-2581, ODB++,
-/// IPC-D-356, gerbers, or Board-as-Code) and it extracts the circuit, binds
+/// IPC-D-356, or gerbers) and it extracts the circuit, binds
 /// device models, runs the static checks, and can co-simulate the firmware on
 /// an emulated MCU. CI is one consumer of the engine (`hauksbee-ci`). Start
 /// with `run --report`.
@@ -33,8 +32,8 @@ use hauksbee_ir::{eprintln, println};
     // as "hauksbee-run", a binary that does not exist. `hauksbee --version` is
     // the one version surface.
     // No infer_subcommands: inference made `hauksbee check board.kicad_pcb`
-    // silently resolve to check-code (a nonsense DSL parse error on a board
-    // file) and `hauksbee se` start a blocking server. Clap's did-you-mean
+    // silently resolve to a different subcommand and `hauksbee se` start a
+    // blocking server. Clap's did-you-mean
     // suggestion on the full names covers the convenience without the traps.
     arg_required_else_help = true,
     after_help = "try it now: hauksbee run --example blinky --check --plain",
@@ -74,7 +73,7 @@ enum Command {
     /// These reports are informational and exit 0 by default, even when they
     /// list findings. Add `--strict` to FAIL (exit 2) on a real defect, or
     /// `--plain` for a verdict a non-engineer can read. For the full assertion /
-    /// fault flow, gate on `hauksbee-ci` or `hauksbee check-code`.
+    /// fault flow, gate on `hauksbee-ci`.
     ///
     /// Exit contract: 0 = clean or report-only, 1 = input error (a missing or
     /// unreadable file), 2 = findings under --strict, or a usage error such as
@@ -109,53 +108,6 @@ enum Command {
     /// Example:
     ///   hauksbee reproduce run.manifest.json
     Reproduce(ReproduceArgs),
-
-    /// Decompile a board into editable Board-as-Code text.
-    ///
-    /// Example:
-    ///   hauksbee to-code my_board.kicad_pcb --out my_board.board
-    #[command(verbatim_doc_comment)]
-    ToCode(ToCodeArgs),
-
-    /// Recompile Board-as-Code back into a `.kicad_pcb`.
-    ///
-    /// Optionally re-place the parts (`--relayout`/`--incremental`) and route
-    /// them (`--route` via freerouting, or `--route-grid` for the in-tree A*).
-    ///
-    /// Example:
-    ///   hauksbee from-code my_board.board --out my_board.kicad_pcb --route
-    #[command(verbatim_doc_comment)]
-    FromCode(FromCodeArgs),
-
-    /// Merge an externally routed Specctra SES file back onto a board.
-    ///
-    /// The return half of `from-code --route-dsn`: export the DSN, route it
-    /// with any Specctra-capable router on your own clock (the freerouting
-    /// GUI, a long headless run, a different autorouter entirely), then merge
-    /// the SES it produced. The board is recompiled from the same `.board`
-    /// source (placement is deterministic, so pads land where the DSN said),
-    /// the SES copper is merged on, and the SAME post-merge audit the built-in
-    /// `--route` path runs judges the result: real routed connections, the
-    /// internal DRC, and the endpoint-net assertion. `--route-strict` gates on
-    /// that audit exactly as `from-code --route-strict` does. This also makes
-    /// a route a cacheable, diffable artifact: keep the SES, re-merge at will.
-    ///
-    /// Example:
-    ///   hauksbee from-code my.board --out my.kicad_pcb --route-dsn my.dsn
-    ///   java -jar freerouting.jar -de my.dsn -do my.ses   # any router, any time
-    ///   hauksbee merge-ses my.board my.ses --out my.kicad_pcb --route-strict
-    #[command(verbatim_doc_comment)]
-    MergeSes(MergeSesArgs),
-
-    /// Recompile, bind, co-sim with the stress monitor, print a fault report.
-    ///
-    /// This is the edit -> simulate loop: exits non-zero if a fault is raised,
-    /// so it drops straight into a script or pre-commit hook.
-    ///
-    /// Example:
-    ///   hauksbee check-code my_board.board --seconds 0.2
-    #[command(verbatim_doc_comment)]
-    CheckCode(CheckCodeArgs),
 
     /// Simulate a SPICE deck (`.cir`) and write the results as CSV.
     ///
@@ -252,7 +204,7 @@ enum Command {
     #[command(verbatim_doc_comment)]
     Models(ModelsArgs),
 
-    /// Watch a board, `.board`, or hauksbee-ci spec and re-run the right check
+    /// Watch a board or hauksbee-ci spec and re-run the right check
     /// on every file change. Ctrl-C exits with the last run's code.
     ///
     /// Example:
@@ -308,7 +260,7 @@ enum InstallCommand {
 
 #[derive(Parser)]
 struct WatchArgs {
-    /// Board, `.board`, or hauksbee-ci spec (`.toml`) to watch.
+    /// Board or hauksbee-ci spec (`.toml`) to watch.
     #[arg(value_name = "TARGET")]
     target: PathBuf,
     /// Stream plain-language reports (default: the expert report).
@@ -790,8 +742,7 @@ fn parse_seconds(s: &str) -> Result<f64, String> {
 #[allow(clippy::doc_markdown, reason = "clap prints these docs as --help")]
 struct RunArgs {
     /// Board input: KiCad (.kicad_pcb / .kicad_sch / .net), Eagle (.brd),
-    /// Altium (.PcbDoc), IPC-D-356 (.d356), a gerber folder or zip, or
-    /// Board-as-Code (.board).
+    /// Altium (.PcbDoc), IPC-D-356 (.d356), or a gerber folder or zip.
     ///
     /// The one format list; every other surface accepts the same set.
     // Not `required_unless_present`: the run orchestrator's error names --example.
@@ -1289,111 +1240,6 @@ struct RunArgs {
 }
 
 #[derive(Parser)]
-struct ToCodeArgs {
-    /// Board file to decompile.
-    #[arg(value_name = "BOARD")]
-    board: PathBuf,
-
-    /// Write the Board-as-Code to this file (default: print to stdout).
-    #[arg(long, value_name = "FILE")]
-    out: Option<PathBuf>,
-}
-
-#[derive(Parser)]
-#[allow(clippy::struct_excessive_bools, reason = "each bool is one CLI flag")]
-#[allow(clippy::doc_markdown, reason = "clap prints these docs as --help")]
-struct FromCodeArgs {
-    /// Board-as-Code file (or directory) to recompile.
-    #[arg(value_name = "CODE")]
-    code: PathBuf,
-
-    /// Write the `.kicad_pcb` here (default: print to stdout).
-    #[arg(long, value_name = "FILE")]
-    out: Option<PathBuf>,
-
-    /// Re-place every part from scratch before emitting.
-    #[arg(long, conflicts_with = "incremental")]
-    relayout: bool,
-
-    /// Re-place only parts that moved, keeping the rest pinned.
-    #[arg(long)]
-    incremental: bool,
-
-    /// Autoroute via freerouting (falls back to the grid A* if absent).
-    #[arg(long, conflicts_with = "route_grid")]
-    route: bool,
-
-    /// Force the in-tree grid A* router instead of freerouting.
-    #[arg(long)]
-    route_grid: bool,
-
-    /// Fail (exit non-zero) when the route leaves open connections, a serious
-    /// (short) DRC finding, or a wrong-net endpoint. Only affects a routing run.
-    #[arg(long)]
-    route_strict: bool,
-
-    /// Wall-clock budget in seconds for the freerouting run before it is
-    /// killed (and the grid A* fallback takes over). The default 180 s only
-    /// covers small boards: a real 137-part board legitimately needs 12-15
-    /// minutes, so raise this (e.g. --route-timeout 1200) rather than let the
-    /// fallback silently take over.
-    #[arg(long, value_name = "SECS", default_value_t = 180)]
-    route_timeout: u64,
-
-    /// Maximum freerouting optimisation passes (its `-mp`). Fewer passes
-    /// finish sooner at some routing-quality cost.
-    #[arg(long, value_name = "N", default_value_t = 10)]
-    route_passes: u32,
-
-    /// Explicit freerouting jar to run, overriding $FREEROUTING_JAR and the
-    /// conventional-location search (tools/ up the tree, ~/.local/share/freerouting).
-    #[arg(long, value_name = "JAR")]
-    freerouting_jar: Option<PathBuf>,
-
-    /// Write the Specctra routing DSN to this file and STOP before routing:
-    /// route it with any Specctra-capable router, for as long as you like,
-    /// then merge the SES back with `hauksbee merge-ses`. The unrouted board
-    /// is still emitted to --out/stdout as usual.
-    #[arg(long, value_name = "FILE", conflicts_with_all = ["route", "route_grid"])]
-    route_dsn: Option<PathBuf>,
-
-    /// Emit one machine-readable JSON object for the routing run on stdout
-    /// instead of prose: {"nets_total","connections_routed","unrouted",
-    /// "segments","vias","seconds","engine","drc_serious",
-    /// "endpoint_net_violations"} (with --route-dsn: {"ok","dsn"}). Requires
-    /// --out so the board text does not share stdout, and a routing flag
-    /// (--route/--route-grid/--route-dsn) to describe.
-    #[arg(long, requires = "out")]
-    json: bool,
-}
-
-#[derive(Parser)]
-struct MergeSesArgs {
-    /// Board-as-Code file (or directory) the DSN was exported from.
-    #[arg(value_name = "CODE")]
-    code: PathBuf,
-
-    /// The routed Specctra SES file to merge (coordinate scale auto-detected).
-    #[arg(value_name = "SES")]
-    ses: PathBuf,
-
-    /// Write the routed `.kicad_pcb` here (default: print to stdout).
-    #[arg(long, value_name = "FILE")]
-    out: Option<PathBuf>,
-
-    /// Fail (exit non-zero) when the merged route leaves open connections, a
-    /// serious (short) DRC finding, or a wrong-net endpoint.
-    #[arg(long)]
-    route_strict: bool,
-
-    /// Emit one machine-readable JSON object for the merge on stdout (same
-    /// shape as `from-code --route --json`, engine "merged-ses"). Requires
-    /// --out so the board text does not share stdout.
-    #[arg(long, requires = "out")]
-    json: bool,
-}
-
-#[derive(Parser)]
 struct ServeArgs {
     /// Port for the local web front door. If busy, the next free port is
     /// bound instead and the printed URL reflects the real one.
@@ -1480,51 +1326,6 @@ struct DoctorArgs {
     json: bool,
 }
 
-#[derive(Parser)]
-#[allow(clippy::doc_markdown, reason = "clap prints these docs as --help")]
-struct CheckCodeArgs {
-    /// Board-as-Code file (or directory) to check.
-    #[arg(value_name = "CODE")]
-    code: PathBuf,
-
-    /// Seconds of simulated time to run the stress monitor for.
-    #[arg(
-        long,
-        default_value_t = 0.2,
-        value_name = "N",
-        value_parser = parse_seconds,
-        allow_negative_numbers = true
-    )]
-    seconds: f64,
-
-    /// Run the stress monitor in destructive mode (parts can be destroyed).
-    #[arg(long)]
-    destructive: bool,
-
-    /// Ambient temperature (C) for the steady-state junction-temperature
-    /// estimate (Tj = Tambient + P * theta_JA) and temperature-dependent
-    /// ratings. Default 25 C.
-    #[arg(
-        long,
-        value_name = "C",
-        value_parser = parse_ambient,
-        allow_negative_numbers = true,
-        help_heading = "Advanced / analyses"
-    )]
-    ambient: Option<f64>,
-
-    /// Extra model directory (highest priority), layered over the built-in DB.
-    #[arg(long, value_name = "DIR", help_heading = "Advanced / analyses")]
-    models_dir: Option<PathBuf>,
-
-    /// Emit the check as one JSON object ({"ok","board","components","nets",
-    /// "resolved_fraction","unresolved","simulated_seconds","active_nets",
-    /// "faults"}) instead of the human table. The exit code is unchanged
-    /// (1 when a part is destroyed).
-    #[arg(long)]
-    json: bool,
-}
-
 fn artifact_flag_value(args: &[String], flag: &str) -> Option<PathBuf> {
     args.iter()
         .take_while(|arg| arg.as_str() != "--")
@@ -1546,7 +1347,7 @@ fn invalidate_run_artifacts_after_parse_error(args: &[String], error: &clap::Err
     use hauksbee_engine::reports::ci_artifacts::paths_alias;
     // The only global option accepted before a top-level subcommand is the
     // value-less --quiet flag. Do not scan arbitrary positional values for the
-    // word `run`: e.g. in `to-code run --junit FILE`, `run` is a board name and
+    // word `run`: e.g. in `sim run --junit FILE`, `run` is a deck name and
     // grants no permission to mutate FILE.
     let mut run_index = 1;
     while args.get(run_index).is_some_and(|arg| arg == "--quiet") {
@@ -1665,9 +1466,6 @@ fn main() -> anyhow::Result<()> {
     // Applies to every subcommand that has a `--json` flag.
     let json = match &cli.command {
         Command::Run(args) | Command::Check(args) => args.json,
-        Command::FromCode(args) => args.json,
-        Command::MergeSes(args) => args.json,
-        Command::CheckCode(args) => args.json,
         Command::Models(args) => match &args.command {
             ModelsCommand::Resolve(r) => r.json,
             ModelsCommand::Backend(ModelsBackendCommand::Show(s)) => s.json,
@@ -1686,51 +1484,6 @@ fn main() -> anyhow::Result<()> {
             hauksbee_engine::commands::run::run_with_schematic(cfg, quiet, schematic.as_deref())
         }
         Command::Reproduce(args) => hauksbee_engine::run_manifest::reproduce(&args.manifest),
-        Command::ToCode(args) => {
-            hauksbee_engine::commands::boardcode::to_code(&args.board, args.out.as_deref())
-        }
-        Command::FromCode(args) => hauksbee_engine::commands::boardcode::from_code(
-            &args.code,
-            &hauksbee_engine::commands::boardcode::FromCodeOpts {
-                out: args.out,
-                relayout: args.relayout,
-                incremental: args.incremental,
-                route: args.route,
-                route_grid: args.route_grid,
-                route_strict: args.route_strict,
-                route_timeout_secs: args.route_timeout,
-                route_passes: args.route_passes,
-                freerouting_jar: args.freerouting_jar,
-                route_dsn: args.route_dsn,
-                json: args.json,
-            },
-        ),
-        Command::MergeSes(args) => hauksbee_engine::commands::boardcode::merge_ses(
-            &args.code,
-            &args.ses,
-            args.out.as_deref(),
-            args.route_strict,
-            args.json,
-        ),
-        Command::CheckCode(args) => {
-            // A board file handed to check-code would otherwise fall into the
-            // DSL parser and emit a nonsense parse error; name the actual fix.
-            if board_extension(&args.code) {
-                eprintln!(
-                    "error: check-code reads Board-as-Code (.board) files; for board checks run: \
-                     hauksbee run {} --check",
-                    args.code.display()
-                );
-                std::process::exit(2);
-            }
-            let opts = hauksbee_engine::CheckOptions {
-                seconds: args.seconds,
-                destructive: args.destructive,
-                ambient_c: args.ambient,
-                models_dir: args.models_dir,
-            };
-            hauksbee_engine::commands::boardcode::check(&args.code, &opts, args.json)
-        }
         Command::Serve(args) => {
             #[cfg(feature = "serve")]
             {
@@ -1894,8 +1647,7 @@ fn lowercase_extension(p: &std::path::Path) -> String {
 }
 
 /// Whether a path carries an extension of a BOARD design format (the inputs
-/// `run` reads). Deliberately does NOT include `.board`: Board-as-Code is the
-/// one format `check-code` legitimately reads.
+/// `run` reads).
 fn board_extension(p: &std::path::Path) -> bool {
     matches!(
         lowercase_extension(p).as_str(),
@@ -1904,13 +1656,13 @@ fn board_extension(p: &std::path::Path) -> bool {
 }
 
 /// Whether a bare first argument looks like a board input rather than a
-/// subcommand: a board-format extension, a `.board` file, or an existing
+/// subcommand: a board-format extension, or an existing
 /// gerber directory/zip. Used only for the no-subcommand hint, so it must
 /// never match a real subcommand name (none contain a dot or a path
 /// separator that resolves to a file).
 fn looks_like_board_input(p: &std::path::Path) -> bool {
     board_extension(p)
-        || matches!(lowercase_extension(p).as_str(), "board" | "zip")
+        || lowercase_extension(p) == "zip"
         || p.is_dir() && p.exists() && p.to_str().is_some_and(|s| s.contains('/'))
 }
 

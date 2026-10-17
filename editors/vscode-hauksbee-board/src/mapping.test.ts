@@ -3,17 +3,16 @@
 //
 //   boot_gate_pass.junit.xml   hauksbee-ci run examples/boot_gate_pass.toml --junit ...   (exit 0)
 //   boot_gate_fail.junit.xml   hauksbee-ci run examples/boot_gate_fail.toml --junit ...   (exit 1)
-//   run_check_blinky.json      hauksbee run examples/board-as-code/blinky.board --check --json
-//   run_check_stormduino.json  hauksbee run examples/board-as-code/stormduino.board --check --json
+//   run_check_blinky.json      hauksbee run blinky --check --json
+//   run_check_stormduino.json  hauksbee run stormduino --check --json
 //
-// plus the matching spec TOML / .board sources for line mapping.
+// plus the matching spec TOML sources for line mapping.
 
 import { describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as path from "path";
 import {
   assertBlockLines,
-  locateInBoard,
   mapCiJUnit,
   mapEngineCheck,
   parseJUnit,
@@ -120,15 +119,14 @@ describe("mapCiJUnit", () => {
 
 describe("mapEngineCheck (real hauksbee run --check --json output)", () => {
   test("clean board (blinky): zero diagnostics, passed", () => {
-    const mapped = mapEngineCheck(read("run_check_blinky.json"), null);
+    const mapped = mapEngineCheck(read("run_check_blinky.json"));
     expect(mapped.diagnostics).toEqual([]);
     expect(mapped.summary.passed).toBe(true);
     expect(mapped.summary.label).toBe("check clean");
   });
 
   test("stormduino: 11 findings mapped with severities and codes", () => {
-    const boardText = read("stormduino.board");
-    const mapped = mapEngineCheck(read("run_check_stormduino.json"), boardText);
+    const mapped = mapEngineCheck(read("run_check_stormduino.json"));
     expect(mapped.diagnostics.length).toBe(11);
     // All severities are warning/info on this board (lint + usb_c).
     expect(mapped.summary.errors).toBe(0);
@@ -139,26 +137,21 @@ describe("mapEngineCheck (real hauksbee run --check --json output)", () => {
     expect(r9).toBeDefined();
     expect(r9!.severity).toBe("warning");
     expect(r9!.code).toBe("lint/designator_footprint_mismatch");
-    // `comp R9` sits on 1-based line 92 of stormduino.board.
-    expect(r9!.line).toBe(91);
+    // Findings carry no source line, so they land at file level.
+    expect(r9!.line).toBe(0);
     // The fix line is appended to the message.
     expect(r9!.message).toContain("fix: Make the reference/value and footprint agree");
   });
 
-  test("no board text -> findings land at file level", () => {
-    const mapped = mapEngineCheck(read("run_check_stormduino.json"), null);
-    for (const d of mapped.diagnostics) expect(d.line).toBe(0);
-  });
-
   test("error envelope ({ok:false}) becomes one file-level error", () => {
-    const mapped = mapEngineCheck(JSON.stringify({ ok: false, error: "no MCU found" }), null);
+    const mapped = mapEngineCheck(JSON.stringify({ ok: false, error: "no MCU found" }));
     expect(mapped.diagnostics.length).toBe(1);
     expect(mapped.diagnostics[0].severity).toBe("error");
     expect(mapped.diagnostics[0].message).toBe("no MCU found");
   });
 
   test("garbage stdout becomes one file-level error, not a throw", () => {
-    const mapped = mapEngineCheck("not json at all", null);
+    const mapped = mapEngineCheck("not json at all");
     expect(mapped.diagnostics.length).toBe(1);
     expect(mapped.summary.passed).toBe(false);
   });
@@ -196,7 +189,7 @@ describe("mapEngineCheck (real hauksbee run --check --json output)", () => {
         at_limit: [],
       },
     };
-    const mapped = mapEngineCheck(JSON.stringify(base), null);
+    const mapped = mapEngineCheck(JSON.stringify(base));
     expect(mapped.diagnostics.length).toBe(2);
     const short = mapped.diagnostics.find((d) => d.code === "drc/short")!;
     expect(short.severity).toBe("error");
@@ -210,22 +203,9 @@ describe("mapEngineCheck (real hauksbee run --check --json output)", () => {
       ...base,
       drc: { ...base.drc, version_warning: "KiCad 10 board: copper extraction unvalidated" },
     };
-    const downgraded = mapEngineCheck(JSON.stringify(withWarning), null);
+    const downgraded = mapEngineCheck(JSON.stringify(withWarning));
     const s2 = downgraded.diagnostics.find((d) => d.code === "drc/short")!;
     expect(s2.severity).toBe("info");
     expect(s2.message).toContain("unvalidated");
-  });
-});
-
-describe("locateInBoard", () => {
-  const boardText = read("stormduino.board");
-  test("locates a comp by ref", () => {
-    expect(locateInBoard(boardText, ["R9"], [])).toBe(91);
-  });
-  test("ref not found falls through to nets, then 0", () => {
-    expect(locateInBoard(boardText, ["ZZ99"], ["NO_SUCH_NET"])).toBe(0);
-  });
-  test("regex metacharacters in refs/nets do not throw", () => {
-    expect(locateInBoard(boardText, ["R9(+)"], ["Net-(U1-D+)"])).toBe(0);
   });
 });

@@ -1,7 +1,7 @@
 {
   "name": "hauksbee-board",
   "displayName": "Hauksbee",
-  "description": "Hauksbee hardware checks in VS Code: lint, completion and hovers for hauksbee-ci spec TOML, syntax highlighting for .board files, run CI specs and board checks, findings as diagnostics.",
+  "description": "Hauksbee hardware checks in VS Code: lint, completion and hovers for hauksbee-ci spec TOML, run CI specs and board checks, findings as diagnostics.",
   "version": "0.3.0",
   "publisher": "hauksbee-dev",
   "license": "Apache-2.0",
@@ -53,21 +53,6 @@
     "typescript": "^5.4.0"
   },
   "contributes": {
-    "languages": [
-      {
-        "id": "hauksbee-board",
-        "aliases": ["Hauksbee Board", "board-dsl"],
-        "extensions": [".board"],
-        "configuration": "./language-configuration.json"
-      }
-    ],
-    "grammars": [
-      {
-        "language": "hauksbee-board",
-        "scopeName": "source.board",
-        "path": "./syntax/board.tmLanguage.json"
-      }
-    ],
     "commands": [
       {
         "command": "hauksbee.runCiSpec",

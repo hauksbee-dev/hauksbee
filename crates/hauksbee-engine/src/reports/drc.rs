@@ -704,7 +704,7 @@ mod tests {
             );
         }
         // The controls: inputs whose copper the DRC reads carry no such condition.
-        for kind in [InputKind::Text, InputKind::Altium, InputKind::BoardCode] {
+        for kind in [InputKind::Text, InputKind::Altium] {
             assert!(unmeasured_spacing_condition(kind).is_none(), "{kind:?}");
         }
     }

@@ -10,7 +10,6 @@ straight into hauksbee.
 hauksbee run my_board.brd --report --plain   # which parts were modelled
 hauksbee run my_board.brd --drc --plain      # shorts and clearance from the copper
 hauksbee run my_board.brd --lint --plain     # design lint in plain language
-hauksbee to-code my_board.brd                # decompile to editable Board-as-Code
 ```
 
 There is no flag and no conversion step. `hauksbee run` sniffs the file

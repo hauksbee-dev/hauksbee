@@ -93,7 +93,6 @@ _INPUT_FORMATS = {
     ".brd": "eagle_brd",
     ".pcbdoc": "altium_pcbdoc",
     ".d356": "ipc_356",
-    ".board": "hauksbee_board",
 }
 
 SELECTOR_VERSION = 1
@@ -188,8 +187,6 @@ def _input_format(path: Path) -> str | None:
         if names is None:
             return None
         folded = [name.casefold() for name in names]
-        if sum(name.endswith(".board") for name in folded) == 1:
-            return "hauksbee_board_archive"
         if any("/matrix/matrix" in f"/{name}" for name in folded) and any(
             "/steps/" in f"/{name}" for name in folded
         ):
@@ -656,7 +653,7 @@ def materialize_candidate(candidate: Candidate, destination: Path) -> Path:
         re.sub(r"[^a-zA-Z0-9._-]+", "-", candidate.source_id).strip("-") or "board"
     )
     if not candidate.bundle_members:
-        suffix = "".join(candidate.absolute_path.suffixes) or ".board"
+        suffix = "".join(candidate.absolute_path.suffixes)
         staged_path = destination / f"{safe_source}-{candidate.board_id[6:14]}{suffix}"
         payload = candidate.absolute_path.read_bytes()
         if hashlib.sha256(payload).hexdigest() != candidate.sha256:

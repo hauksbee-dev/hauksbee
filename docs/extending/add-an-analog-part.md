@@ -128,8 +128,7 @@ role binds the pin OPEN:
     `in_out_1a` / `in_out_1b` with `ctrl_1`, and so on up to `ctrl_4`.
 
 The fastest way to build a correct `[models.pins]` block for an unfamiliar
-footprint: run `hauksbee to-code <a board that already uses the part>` and
-copy the pad numbers, or read the closest entry in
+footprint: read the pad numbers off a board that already uses the part, or the closest entry in
 `crates/hauksbee-models/db/*.toml`.
 
 ## Lint it, then prove it binds

@@ -1,8 +1,8 @@
 //! Small helpers shared by more than one command handler.
 //!
-//! They cover board-text loading, the Board-as-Code header sniff, the served-file name,
-//! and the websocket server launcher (`hauksbee serve` and `run --serve` both reach
-//! it).
+//! They cover the served-file name, the board file a saved session keeps for
+//! resume, error-message hygiene, and the websocket server launcher
+//! (`hauksbee serve` and `run --serve` both reach it).
 
 use hauksbee_ir::eprintln;
 #[cfg(feature = "serve")]
@@ -13,74 +13,6 @@ use std::path::{Path, PathBuf};
 use hauksbee_server::Server;
 
 use crate::engine::HauksbeeEngine;
-
-/// Read a text board file for `to-code`, refusing directories and binary formats.
-///
-/// # Errors
-///
-/// Returns an error if `path` is a directory, does not exist or cannot be read, is
-/// a recognised but unsupported board format, or is not valid UTF-8 text.
-pub fn read_board_text(path: &Path) -> anyhow::Result<String> {
-    // A directory here would surface as the raw OS errno ("Is a directory");
-    // say what is wrong and note the asymmetry with from-code, which accepts
-    // a directory holding one .board file.
-    if path.is_dir() {
-        anyhow::bail!(
-            "'{}' is a directory; to-code reads a single board file, so pass the \
-             .kicad_pcb inside it (from-code does accept a directory containing one \
-             .board file; to-code does not).",
-            path.display()
-        );
-    }
-    let bytes = read_board_bytes(path)?;
-    // A format hauksbee recognises and does not read must say so HERE too. This
-    // reader decodes UTF-8, and a pre-Eagle-6 binary board came back as "stream
-    // did not contain valid UTF-8" — true, useless, and different from what
-    // every other surface says about the same file.
-    if let Some(message) = crate::board_input::unsupported_format_refusal(
-        path.file_name().and_then(|s| s.to_str()).unwrap_or("board"),
-        &bytes,
-    ) {
-        anyhow::bail!("{message}");
-    }
-    String::from_utf8(bytes).map_err(|_| {
-        anyhow::anyhow!(
-            "'{}' is a binary board file; to-code decompiles a text board \
-             (.kicad_pcb, KiCad netlist, Eagle .brd XML, IPC-D-356)",
-            path.display()
-        )
-    })
-}
-
-/// The board file's bytes, with [`read_board_text`]'s not-found guidance.
-fn read_board_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
-    hauksbee_extract::read_regular_file(path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            // The suggestion matches the INVOKING surface (this reader serves
-            // to-code): a `hauksbee run` command here answered the wrong
-            // question. Never suggest an unrunnable command: the checkout path
-            // only exists inside a hauksbee source tree.
-            let checkout = Path::new("crates/hauksbee-ci/examples/boards/blinky.kicad_pcb");
-            let suggestion = if checkout.exists() {
-                "try:  hauksbee to-code crates/hauksbee-ci/examples/boards/blinky.kicad_pcb"
-                    .to_string()
-            } else {
-                "to-code decompiles an existing board file; any .kicad_pcb / .brd works".to_string()
-            };
-            anyhow::anyhow!(
-                "no board file at '{}'. Check the path ({suggestion}).",
-                path.display()
-            )
-        } else {
-            anyhow::anyhow!("reading '{}': {e}", path.display())
-        }
-    })
-}
-
-/// True when the text is a Board-as-Code (`.board`) DSL source, recognised by
-/// the header `program_from_extracted`/`to_code` emit. Lets a `.board` saved
-/// without that extension still route through the recompile path.
-pub use hauksbee_bind::board_input::is_board_code_header;
 
 /// Width-cap every line of an error message that quotes file content.
 ///
@@ -238,18 +170,14 @@ fn csv_fields(line: &str) -> Vec<&str> {
 }
 
 /// Retain the exact uploaded text behind `/boards/{name}` for an honest saved-
-/// session re-run. In particular, Board-as-Code evidence authenticates the DSL
-/// bytes, not the compiled `KiCad` layout used internally by the solver.
+/// session re-run.
 pub(crate) fn resumable_board_file(
     name: &str,
     contents: &[u8],
     kind: crate::board_input::InputKind,
 ) -> Option<(String, String)> {
     use crate::board_input::InputKind;
-    if !matches!(
-        kind,
-        InputKind::Text | InputKind::Schematic | InputKind::BoardCode
-    ) {
+    if !matches!(kind, InputKind::Text | InputKind::Schematic) {
         return None;
     }
     std::str::from_utf8(contents)
@@ -258,8 +186,8 @@ pub(crate) fn resumable_board_file(
 }
 
 /// The layout text the viewer should draw when the retained board file is not
-/// itself that layout (a `.board` keeps its source for resume; the viewer
-/// needs the compiled `KiCad` text).
+/// itself that layout (a schematic keeps its source for resume; the viewer
+/// needs the extracted `KiCad` text).
 fn drawable_layout(
     board_file: Option<&(String, String)>,
     layout_text: Option<&str>,
@@ -643,15 +571,15 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn saved_board_code_session_retains_the_authenticated_source_bytes() {
-        let source = "board demo { outline rect(0mm, 0mm, 20mm, 10mm) }";
+    fn saved_session_retains_the_authenticated_source_bytes() {
+        let source = "(kicad_pcb (version 20171130))";
         let retained = resumable_board_file(
-            "demo.board",
+            "demo.kicad_pcb",
             source.as_bytes(),
-            crate::board_input::InputKind::BoardCode,
+            crate::board_input::InputKind::Text,
         )
-        .expect("text Board-as-Code can be retained");
-        assert_eq!(retained.0, "demo.board");
+        .expect("text board can be retained");
+        assert_eq!(retained.0, "demo.kicad_pcb");
         assert_eq!(retained.1, source);
         assert!(resumable_board_file(
             "fabrication.zip",
@@ -686,24 +614,6 @@ mod tests {
                 .is_some_and(|items| items.iter().any(|item| item["role"] == "schematic")),
             "causal uploaded schematic must appear in evidence inventory: {report}"
         );
-    }
-
-    #[test]
-    fn shipped_web_analyzer_keeps_the_localized_import_refusal() {
-        let analyze = schematic_analyzer();
-        let source = b"board version 1\nthis is not valid board code\n";
-        let report: serde_json::Value =
-            serde_json::from_str(&analyze("broken.board", source, None, None))
-                .expect("production web analyzer returns JSON");
-        assert_eq!(report["ok"], false);
-        assert_eq!(report["import_failure"]["stage"], "Board-as-Code compiler");
-        assert_eq!(
-            report["import_failure"]["excerpt"],
-            "line 2: this is not valid board code"
-        );
-        assert!(report["import_failure"]["suggested_fix"]
-            .as_str()
-            .is_some_and(|fix| fix.contains("exact line")));
     }
 
     #[test]

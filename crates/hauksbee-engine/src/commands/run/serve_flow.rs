@@ -62,7 +62,6 @@ pub fn emit_or_serve(
     let text = &run_inputs.text;
     let input_kind = run_inputs.input_kind;
     let is_altium = run_inputs.is_altium;
-    let is_board_code = run_inputs.is_board_code;
     let schematic_ties = &artifacts.schematic_ties;
     let mut engine = sim.engine;
     // Non-TTY invocation with no report flag and no explicit --serve: a pipe or
@@ -111,14 +110,9 @@ pub fn emit_or_serve(
     // supplied (then include the in-process co-sim, matching the drop path).
     // The analyzers take the board as raw bytes (so binary formats survive)
     // and normalize by file name, exactly like the drop path. Binary (Altium)
-    // and Board-as-Code inputs hand over the file's own bytes: a `.board`
-    // name with the recompiled KiCad text would be re-"compiled" as DSL and
-    // fail. Plain text boards hand over the layout text.
-    let report_bytes: &[u8] = if is_altium || is_board_code {
-        raw
-    } else {
-        text.as_bytes()
-    };
+    // inputs hand over the file's own bytes. Plain text boards hand over the
+    // layout text.
+    let report_bytes: &[u8] = if is_altium { raw } else { text.as_bytes() };
     // Firmware was already path-validated above; a read error here is
     // unexpected, so fall back to the board-only report rather than fail. The
     // preloaded browser report must read the same as `--drc` on the same path,
@@ -164,7 +158,7 @@ pub fn emit_or_serve(
     .to_string();
 
     let served_board_file = preloaded_board_file(&board_url, raw, input_kind, text);
-    // A retained `.board` source is not drawable; the compiled layout is.
+    // A retained source that is not itself the layout is not drawable; the extracted layout is.
     let layout_file = (served_board_file.1 != *text).then(|| text.clone());
     crate::commands::common::serve(
         engine,

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Removed: the `.board` (Board-as-Code) language contribution, its syntax
+  grammar and language configuration, and the `.board` line-location logic in
+  **Check Board File**. Hauksbee no longer reads `.board` files. Findings on
+  every remaining board format are reported at file level, as they already were
+  for `.kicad_pcb`.
+
 ## 0.3.0
 
 Full editing support for `hauksbee-ci` spec TOML, none of which needs a binary.

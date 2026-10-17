@@ -410,7 +410,7 @@ fn init_refuses_to_overwrite_an_existing_spec() {
 /// the first spec is judged.
 #[test]
 fn init_powers_a_regulator_input_nothing_else_supplies() {
-    let board = repo("examples/board-as-code/stormduino.board");
+    let board = repo("crates/hauksbee-ci/tests/fixtures/stormduino.kicad_pcb");
     let scaffold = hauksbee_ci::init::scaffold(&board).expect("scaffold the board");
     let nets: Vec<(&str, &str)> = scaffold
         .supplies
@@ -450,7 +450,10 @@ fn init_powers_a_regulator_input_nothing_else_supplies() {
 /// list, as data, with no file written.
 #[test]
 fn init_json_lists_the_supplies_and_writes_nothing() {
-    let board = copy_board_to_tempdir(&repo("examples/board-as-code/stormduino.board"), "json");
+    let board = copy_board_to_tempdir(
+        &repo("crates/hauksbee-ci/tests/fixtures/stormduino.kicad_pcb"),
+        "json",
+    );
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_hauksbee-ci"))
         .args(["init", "--json"])
         .arg(&board)
@@ -483,7 +486,7 @@ fn init_json_lists_the_supplies_and_writes_nothing() {
 #[test]
 fn an_unpowered_cascade_asks_for_its_first_stage_only() {
     use hauksbee_ir::evidence::Remedy;
-    let board = repo("examples/board-as-code/stormduino.board");
+    let board = repo("crates/hauksbee-ci/tests/fixtures/stormduino.kicad_pcb");
     let text = format!(
         "name = \"bare\"\nboard = '{}'\nduration_ms = 1\n\n[[assert]]\nkind = \"no_faults\"\n",
         board.display()
@@ -519,7 +522,7 @@ fn an_unpowered_cascade_asks_for_its_first_stage_only() {
 /// wrote a `+5V` supply that `run` then rejected).
 #[test]
 fn init_moves_a_supply_off_a_rail_a_part_drives_to_that_parts_input() {
-    let board = repo("crates/hauksbee-ci/tests/fixtures/regulator_behind_inductor.board");
+    let board = repo("crates/hauksbee-ci/tests/fixtures/regulator_behind_inductor.kicad_pcb");
     let scaffold = hauksbee_ci::init::scaffold(&board).expect("scaffold the board");
     let nets: Vec<(&str, &str)> = scaffold
         .supplies
@@ -570,13 +573,16 @@ fn every_scaffold_passes_its_own_runs_validation() {
     let boards = [
         (blinky(), "rt_blinky"),
         (watchy(), "rt_watchy"),
-        (repo("examples/board-as-code/stormduino.board"), "rt_storm"),
         (
-            repo("crates/hauksbee-ci/tests/fixtures/regulator.board"),
+            repo("crates/hauksbee-ci/tests/fixtures/stormduino.kicad_pcb"),
+            "rt_storm",
+        ),
+        (
+            repo("crates/hauksbee-ci/tests/fixtures/regulator.kicad_pcb"),
             "rt_reg",
         ),
         (
-            repo("crates/hauksbee-ci/tests/fixtures/regulator_behind_inductor.board"),
+            repo("crates/hauksbee-ci/tests/fixtures/regulator_behind_inductor.kicad_pcb"),
             "rt_behind",
         ),
     ];

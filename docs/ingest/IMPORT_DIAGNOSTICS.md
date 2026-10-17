@@ -35,8 +35,7 @@ An unreadable input keeps the ordinary refusal and adds the parser stage plus a
 stage-specific suggested fix. The failure excerpt is conservatively minimized:
 it contains only the exact line number named by the underlying parser, capped
 at 300 characters. If the parser did not localize the failure, no arbitrary
-line is shown as causal. Board-as-Code points to `hauksbee from-code` for the
-full diagnostic; fab packages are told to remove manifest ambiguity or provide
+line is shown as causal. Fab packages are told to remove manifest ambiguity or provide
 the original CAD source.
 
 This is not a general-purpose standalone fixture reducer. A one-line excerpt

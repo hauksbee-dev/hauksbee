@@ -25,6 +25,6 @@ the same real design rule instead of manufacturing 0.200 mm warnings.
 
 | File | Source | Why this sample |
 |---|---|---|
-| `blinky.kicad_pcb` | `crates/hauksbee-ci/examples/boards/` | Small clean board: a healthy report in seconds. Routed with hauksbee's own board-as-code plus freerouting path, so it has real copper and a board outline rather than floating pads. |
+| `blinky.kicad_pcb` | `crates/hauksbee-ci/examples/boards/` | Small clean board: a healthy report in seconds. It has real copper and a board outline rather than floating pads. |
 | `watchy.kicad_pcb` + `watchy.LICENSE` | `crates/hauksbee-ci/examples/boards/` plus its project clearance | A real shipped product (sqfmi Watchy): what a report looks like on a non-trivial board. |
 | `boot_gate.kicad_pcb` + `boot_gate.hex` | examples boards + `testdata/firmware/boot_gate_a/` | Board + firmware pair: the co-sim demo. The firmware drives a MOSFET gate at power-up, and the report says so. |

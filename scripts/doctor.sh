@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # doctor.sh - check the environment and report what each tool unlocks.
 #
-# hauksbee's core (extract, bind, solve, the static checks, board-as-code, the
+# hauksbee's core (extract, bind, solve, the static checks, the
 # AVR co-sim via the built-in simavr) needs nothing but the binaries. The extra
 # tools below unlock specific backends and exports; this reports what is present
 # and what each missing one would add, so you know exactly what to install for
@@ -235,11 +235,9 @@ printf '\n'
 [ "$QUIET" -eq 1 ] || log "Optional (each unlocks a backend or export)"
 
 report optional kicad-cli \
-  "SVG/Gerber export of re-laid-out boards (board-as-code --relayout visuals); KiCad 11 headless schematic ops"
+  "KiCad 11 headless schematic ops"
 report optional simavr \
   "(also built in) external AVR backend cross-check for ATmega/ATtiny firmware co-sim"
-report optional freerouting \
-  "production autorouting of recompiled boards over Specctra DSN (board-as-code routing)"
 
 printf '\n'
 # Firmware co-sim backends. These are NOT plain PATH checks (see the discovery
@@ -263,7 +261,7 @@ printf '\n'
 if [ "$missing" -eq 0 ]; then
   log "${C_GREEN}All tools present.${C_RESET} ${present} found."
 else
-  log "${present} present, ${missing} optional/absent. Core hauksbee (static checks, board-as-code, built-in AVR co-sim) works now."
+  log "${present} present, ${missing} optional/absent. Core hauksbee (static checks, built-in AVR co-sim) works now."
 fi
 
 if [ "$required_missing" -gt 0 ] && [ "${HAUKSBEE_DOCTOR_STRICT:-0}" = "1" ]; then

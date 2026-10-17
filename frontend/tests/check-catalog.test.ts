@@ -255,7 +255,7 @@ describe('the preview', () => {
 
 describe('the spec as offers read it', () => {
   test('counts assertions, finds scenarios, and strips the portable header', () => {
-    const toml = 'board = "../hardware/x.board"\nfirmware = "../firmware/x.hex"\nname = "n"\n\n[[scenario]]\nid = "boot"\n\n[[assert]]\nkind = "voltage"\n\n[[assert]]\nkind = "voltage"\n'
+    const toml = 'board = "../hardware/x.kicad_pcb"\nfirmware = "../firmware/x.hex"\nname = "n"\n\n[[scenario]]\nid = "boot"\n\n[[assert]]\nkind = "voltage"\n\n[[assert]]\nkind = "voltage"\n'
     expect(countAsserts(toml)).toBe(2)
     expect(scenarioIds(toml)).toEqual(['boot'])
     expect(specBody(toml)).toBe('name = "n"\n\n[[scenario]]\nid = "boot"\n\n[[assert]]\nkind = "voltage"\n\n[[assert]]\nkind = "voltage"\n')

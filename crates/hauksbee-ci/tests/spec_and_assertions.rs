@@ -81,7 +81,7 @@ fn malformed_assertions_and_unknown_fields_are_rejected() {
 /// and each rejection must name the offending token and say why.
 #[test]
 fn an_assertion_that_could_never_be_evaluated_is_rejected_not_silently_green() {
-    let starter = "examples/board-as-code/starter.board";
+    let starter = "crates/hauksbee-ci/tests/fixtures/starter.kicad_pcb";
     let inkplate = "testdata/inkplate_class.net";
     for (case, board, assertion, wants) in [
         (
@@ -184,42 +184,56 @@ fn demo_firmware_blink_uart_and_rail_all_pass() {
 }
 
 #[test]
-fn board_as_code_spec_runs_end_to_end() {
-    // B5: a spec may point straight at a Board-as-Code `.board` source.
-    // hauksbee-ci used to reject it with "compile it to a layout first with
-    // from-code --route"; the shared normalizer compiles it in-process (the
-    // compiled text carries full net connectivity, and CI is netlist-driven,
-    // so no routing step is needed). The board must bind and the voltage
-    // assertion on one of its nets must actually evaluate.
-    // Its two 0.5 mm lands sit 0.5 mm apart, so the static check has no short
-    // to flag, and with one pad per net there is nothing left to route.
-    let board = support::write_tmp(
-        "cell.board",
-        r#"# Board-as-Code (hauksbee board DSL v1)
-board version 20241229
-
-fn main {
-    net "A"
-    net "B"
-    comp R1 lib "Resistor_SMD:R_0402_1005Metric" val "10k" layer "F.Cu" at 0 0 rot 0 {
-        pad "1" smd rect at 0 0 size 0.5 0.5 layers [F.Cu] net "A"
-        pad "2" smd rect at 1 0 size 0.5 0.5 layers [F.Cu] net "B"
-    }
-}
-"#,
+fn a_spec_pointing_straight_at_a_kicad_board_runs_end_to_end() {
+    // A spec may point straight at a board file: CI loads it in-process with no
+    // pre-compile or routing step (the board text carries full net
+    // connectivity, and CI is netlist-driven). The board must bind and the
+    // voltage assertion on one of its nets must actually evaluate.
+    // Its two pads sit 0.4 mm apart, so the static check has no short to flag,
+    // and with one pad per net there is nothing left to route.
+    let parts = support::comp(
+        "R1",
+        "Resistor_SMD:R_0402_1005Metric",
+        "10k",
+        0,
+        support::pad(1, "A") + &support::pad(2, "B"),
     );
+    let board = support::write_tmp("cell.kicad_pcb", &support::board_text(&[], &parts));
     let p = support::write_tmp(
-        "board_as_code.toml",
+        "kicad_board.toml",
         &format!(
             "board={}\nduration_ms=1\n[[supply]]\nnet=\"A\"\nkind=\"ideal\"\nvolts=3.3\n\
              [[assert]]\nkind=\"voltage\"\nnet=\"A\"\nmin=3.0\nmax=3.6\n",
             support::toml_path(&board)
         ),
     );
-    let result = run(&support::run_config(p)).expect(".board spec runs");
+    let result = run(&support::run_config(p)).expect("kicad_pcb spec runs");
     support::assert_green(
         &result,
-        "the supplied rail on the compiled .board must hold 3.3 V",
+        "the supplied rail on the loaded board must hold 3.3 V",
+    );
+}
+
+/// A spec pointing at a `.board` file gets the refusal any unreadable file
+/// gets: the formats hauksbee does read, with no special case for the name.
+#[test]
+fn a_dot_board_file_is_refused_like_any_unrecognised_format() {
+    let board = support::write_tmp("something.board", "not a board at all\n");
+    let p = support::write_tmp(
+        "dot_board.toml",
+        &format!(
+            "board={}\nduration_ms=1\n[[assert]]\nkind=\"no_faults\"\n",
+            support::toml_path(&board)
+        ),
+    );
+    let msg = run(&support::run_config(p)).unwrap_err().to_string();
+    assert!(
+        msg.contains("unrecognized board format") && msg.contains("KiCad") && msg.contains("Eagle"),
+        "the refusal names the accepted formats: {msg}"
+    );
+    assert!(
+        !msg.contains("Board-as-Code") && !msg.contains("DSL"),
+        "no special case for the retired name: {msg}"
     );
 }
 
@@ -344,13 +358,13 @@ fn rc_delay_board() -> String {
         40,
         support::pad(1, "PU") + &support::pad(2, "GND"),
     );
-    format!("board version 20171130\nfn main {{\nnet \"V33\"\nnet \"PU\"\nnet \"GND\"\n{parts}}}\n")
+    support::board_text(&["V33", "PU", "GND"], &parts)
 }
 
 /// The RC-delay board with `supply` as its `[[supply]]` body and `asserts`
 /// appended, run for 40 ms.
 fn rc_delay_run(case: &str, supply: &str, asserts: &str) -> hauksbee_ci::CiResult {
-    let board = support::placement_board(&format!("{case}.board"), &rc_delay_board());
+    let board = support::placement_board(&format!("{case}.kicad_pcb"), &rc_delay_board());
     support::run_body(
         &format!("{case}.toml"),
         &format!(

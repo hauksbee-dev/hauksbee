@@ -134,9 +134,9 @@ jobs:
               $state = if ($server.HasExited) { "exit $($server.ExitCode)" } else { "timeout" }
               throw "the Windows release server never became ready ($state):`n$stderrText"
             }
-            $board = (Resolve-Path examples\board-as-code\starter.board).Path
+            $board = (Resolve-Path crates\hauksbee-ci\examples\boards\blinky.kicad_pcb).Path
             $env:HB_E2E_BASE = "http://127.0.0.1:8417"
-            $env:HB_BOARD_FILES = ConvertTo-Json -Compress @($board) # starter.board
+            $env:HB_BOARD_FILES = ConvertTo-Json -Compress @($board) # blinky.kicad_pcb
             $env:HB_RELEASE_COHORT = "smoke"
             $env:HB_E2E_OUT = (Resolve-Path output\windows-frontdoor).Path
             bun frontend/tests/e2e/drag-drop-release.ts

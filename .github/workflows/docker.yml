@@ -9,8 +9,7 @@
 #   ghcr.io/hauksbee-dev/hauksbee:slim     prebuilt binaries + model db + simavr;
 #                                      the everyday CI image (no kicad-cli).
 #   ghcr.io/hauksbee-dev/hauksbee:full     slim plus Renode, the Espressif QEMU fork,
-#                                      and freerouting; STM32 / ESP32 co-sim and
-#                                      autorouting.
+#                                      STM32 / ESP32 co-sim.
 #
 # Each is also tagged with the version (e.g. :slim-0.1.0, :full-0.1.0) and, on a
 # tag push, :latest / :full-latest. The full image builds FROM the slim manifest,
@@ -300,34 +299,9 @@ jobs:
                   >"$esp32" 2>&1 || { cat "$esp32"; exit 21; }
                 ! grep -Eq "SKIP:|not installed|not found|zero net toggles|0 active nets" "$esp32" || { cat "$esp32"; exit 22; }
                 grep -Eq "UART|toggle|active net|firmware" "$esp32" || { cat "$esp32"; exit 23; }
-
-                route_log="$(mktemp)"
-                timeout 90 hauksbee from-code /opt/hauksbee/external-smoke/blinky.board \
-                  --out /tmp/blinky-routed.kicad_pcb --route --route-passes 2 \
-                  >"$route_log" 2>&1 || { cat "$route_log"; exit 21; }
-                grep -F "freerouting handoff" "$route_log" >/dev/null || { cat "$route_log"; exit 24; }
-                grep -F "merged" "$route_log" >/dev/null || { cat "$route_log"; exit 24; }
-                test -s /tmp/blinky-routed.kicad_pcb
               fi
-              set +e
-              # 60s covers the arm64 leg, where the JVM runs under qemu-user
-              # emulation and cold start alone can blow the old 15s allowance
-              # before the banner is logged. Native amd64 prints it in ~2s.
-              timeout 60 java -jar /opt/freerouting.jar --help >/tmp/freerouting-smoke.log 2>&1
-              freerouting_status=$?
-              set -e
-              # freerouting 1.9.0 has no headless --help: it logs its version,
-              # then tries to open its GUI and dies with a HeadlessException
-              # (exit 1) inside a container. Launch-to-version is what this
-              # smoke proves; real routing is proven by the from-code --route
-              # run above. Accept a clean exit, the 124 timeout kill, or the
-              # documented headless exit 1, requiring the HeadlessException
-              # marker in that last case so any other crash still fails.
-              { [ "$freerouting_status" -eq 0 ] || [ "$freerouting_status" -eq 124 ] || { [ "$freerouting_status" -eq 1 ] && grep -q "HeadlessException" /tmp/freerouting-smoke.log; }; } || { cat /tmp/freerouting-smoke.log; exit 25; }
-              grep -F "Freerouting v1.9.0" /tmp/freerouting-smoke.log >/dev/null || { cat /tmp/freerouting-smoke.log; exit 25; }
               test -s /usr/share/doc/hauksbee/third-party/RENODE-LICENSE
               test -s /usr/share/doc/hauksbee/third-party/QEMU-COPYING
-              test -s /usr/share/doc/hauksbee/third-party/FREEROUTING-LICENSE
               test -s /usr/share/doc/hauksbee/SOURCE-OFFER.txt
               test -s /usr/share/doc/hauksbee/source/hauksbee-source.tar.gz
               test -s /usr/share/doc/hauksbee/source/simavr-source.tar.gz

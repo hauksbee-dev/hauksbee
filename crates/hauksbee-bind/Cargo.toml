@@ -26,8 +26,6 @@ hauksbee-extract = { version = "0.1.0-beta.6", path = "../hauksbee-extract" }
 hauksbee-models = { version = "0.1.0-beta.6", path = "../hauksbee-models" }
 hauksbee-ir = { version = "0.1.0-beta.6", path = "../hauksbee-ir" }
 hauksbee-solve = { version = "0.1.0-beta.6", path = "../hauksbee-solve" }
-forge-model = { workspace = true }
-forge-codegen = { workspace = true }
 # Sandboxed arithmetic/boolean expression evaluator for behavioural-model laws
 # and FSM guards (see the hauksbee-engine manifest for the rationale and the
 # licence pin).

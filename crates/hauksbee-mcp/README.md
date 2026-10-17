@@ -16,7 +16,6 @@ only the `tools` capability.
 | `run_checks` | Runs a `hauksbee-ci` spec against a board, booting optional firmware on the emulated MCU, and returns the machine verdict: `passed`, per-assertion results, `run_valid`, coverage and substitution data. |
 | `list_capabilities` | The scope table as data: which report kinds and assertion kinds exist, which board and firmware formats are accepted, and which MCU backends this machine actually has, probed with the engine's own discovery. |
 | `model_coverage` | Read-only staged coverage for every connected active device: identity, executable scope, declared completeness, sources, pins/nets, implemented and missing behavior. The returned preparation command is explicitly marked as requiring user approval. |
-| `board_to_code` | Decompiles a text-format board (KiCad `.kicad_pcb`, Eagle `.brd`) into the editable Board-as-Code text form. |
 | `simulate_deck` | Runs a SPICE deck like `hauksbee sim` and returns `{analysis, columns, time, rows, notes}`. A long run is thinned to `max_rows` and says so. A deck the solver cannot answer honestly comes back as the `invalid_for_analysis` refusal. |
 | `doctor` | The co-sim backend probe as `hauksbee doctor --json`: `{backends: [{name, status, available, detail, summary}]}`, including the datasheet-extraction backend. |
 | `models_lint` | Validates a model TOML file like `hauksbee models lint`: `{clean, checked, findings, warnings, lines}`. Read-only. |
@@ -92,7 +91,7 @@ working directory, so absolute paths are safer.
 `schematic_path`. `run_checks` takes `board_path`, `spec_toml` (the spec
 without `board`, `firmware`, or `schematic` keys) and the same optional paths.
 `model_coverage` takes `board_path` and optional `models_dir`.
-`board_to_code` takes `board_path`. `run_script` takes `source`.
+`run_script` takes `source`.
 `simulate_deck` takes `deck_path` and optional `print` (probe names),
 `analysis` (`op`, `tran`, `ac` or `dc`) and `max_rows`. `models_lint` takes
 `file_path`. `list_capabilities` and `doctor` take nothing. The per-tool argument table, the refusal

@@ -39,14 +39,11 @@ fn board(r2: &str, rb: &str) -> String {
         let lib = "Resistor_SMD:R_0805_2012Metric";
         parts += &comp(r, lib, val, 40 + i * 8, pad(1, a) + &pad(2, b));
     }
-    let nets = ["VCC", "GND", "OUT", "TH", "VIN", "X", "NY", "NC"]
-        .map(|n| format!("net \"{n}\"\n"))
-        .concat();
-    format!("board version 20171130\nfn main {{\n{nets}{parts}}}\n")
+    support::board_text(&["VCC", "GND", "OUT", "TH", "VIN", "X", "NY", "NC"], &parts)
 }
 
 fn run(case: &str, r2: &str, rb: &str) -> hauksbee_ci::CiResult {
-    let path = support::placement_board("outcome.board", &board(r2, rb));
+    let path = support::placement_board("outcome.kicad_pcb", &board(r2, rb));
     support::run_body(
         &format!("{case}.toml"),
         &format!(
@@ -110,7 +107,7 @@ fn a_weak_logic_high_names_the_divider_that_starves_it() {
     assert!(gate.contains("RB") && gate.contains("RA"), "{gate}");
 }
 
-/// A board-DSL board from `(ref, footprint, value, nets)` rows.
+/// A `.kicad_pcb` text from `(ref, footprint, value, nets)` rows.
 fn parts_board(parts: &[(&str, &str, &str, &[&str])]) -> String {
     let mut nets: Vec<&str> = parts.iter().flat_map(|p| p.3.iter().copied()).collect();
     nets.sort_unstable();
@@ -121,12 +118,7 @@ fn parts_board(parts: &[(&str, &str, &str, &[&str])]) -> String {
             comp(r, lib, val, 10 + i * 8, pads)
         })
         .collect();
-    let nets = nets
-        .iter()
-        .map(|n| format!("net \"{n}\"\n"))
-        .collect::<Vec<_>>()
-        .concat();
-    format!("board version 20171130\nfn main {{\n{nets}{body}}}\n")
+    support::board_text(&nets, &body)
 }
 
 const R0805: &str = "Resistor_SMD:R_0805_2012Metric";
@@ -149,7 +141,7 @@ fn a_driven_rail_reaches_the_parts_that_read_their_levels_from_it() {
         ("R3", R0805, "10k", &["CTL", "GND"]),
         ("R4", R0805, "10k", &["B", "GND"]),
     ]);
-    let path = support::placement_board("rail.board", &board);
+    let path = support::placement_board("rail.kicad_pcb", &board);
     let spec = support::load_spec(
         "rail.toml",
         &format!(
@@ -198,7 +190,7 @@ fn a_pulse_must_be_high_enough_for_long_enough_at_the_input_it_drives() {
                 &["X", "GND"],
             ),
         ]);
-        let path = support::placement_board("pulse.board", &board);
+        let path = support::placement_board("pulse.kicad_pcb", &board);
         support::run_body(
             "pulse.toml",
             &format!(
@@ -246,7 +238,7 @@ fn a_relation_across_conditions_names_the_pair_that_breaks_it() {
         ("R1", R0805, "820k", &["SET", "TH"]),
         ("R2", R0805, "270k", &["TH", "GND"]),
     ]);
-    let path = support::placement_board("relation.board", &board);
+    let path = support::placement_board("relation.kicad_pcb", &board);
     let rows = [
         ("level up", "increases", "net = \"TH\"", None),
         ("rate down", "decreases", "ref = \"U1\"", None),

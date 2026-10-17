@@ -1533,7 +1533,6 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             "QEMU_XTENSA_ARM64_SHA256",
             "QEMU_RISCV32_AMD64_SHA256",
             "QEMU_RISCV32_ARM64_SHA256",
-            "FREEROUTING_SHA256",
         ):
             self.assertRegex(dockerfile, rf"ARG {knob}=[0-9a-f]{{64}}")
         def checksums(relative: str) -> dict[str, str]:
@@ -1546,21 +1545,17 @@ class PrivateReleasePolicyTests(unittest.TestCase):
 
         renode = checksums("scripts/renode-checksums.txt")
         qemu = checksums("scripts/espressif-qemu-checksums.txt")
-        freerouting = checksums("scripts/freerouting-checksums.txt")
         self.assertEqual(args["RENODE_AMD64_SHA256"], renode["renode-1.16.1.linux-portable-dotnet.tar.gz"])
         self.assertEqual(args["RENODE_ARM64_SHA256"], renode["renode-1.16.1.linux-arm64-portable-dotnet.tar.gz"])
         self.assertEqual(args["QEMU_XTENSA_AMD64_SHA256"], qemu["qemu-xtensa-softmmu-esp_develop_9.2.2_20260417-x86_64-linux-gnu.tar.xz"])
         self.assertEqual(args["QEMU_XTENSA_ARM64_SHA256"], qemu["qemu-xtensa-softmmu-esp_develop_9.2.2_20260417-aarch64-linux-gnu.tar.xz"])
         self.assertEqual(args["QEMU_RISCV32_AMD64_SHA256"], qemu["qemu-riscv32-softmmu-esp_develop_9.2.2_20260417-x86_64-linux-gnu.tar.xz"])
         self.assertEqual(args["QEMU_RISCV32_ARM64_SHA256"], qemu["qemu-riscv32-softmmu-esp_develop_9.2.2_20260417-aarch64-linux-gnu.tar.xz"])
-        self.assertEqual(args["FREEROUTING_SHA256"], freerouting["freerouting-1.9.0.jar"])
         for verification in (
             "printf '%s  %s\\n' \"$rsha\" /tmp/renode.tar.gz | sha256sum -c -;",
             "printf '%s  %s\\n' \"$qsha\" /tmp/qemu.tar.xz | sha256sum -c -;",
-            "printf '%s  %s\\n' \"$FREEROUTING_SHA256\" \"/opt/freerouting-${FREEROUTING_VERSION}.jar\" | sha256sum -c -",
             "printf '%s  %s\\n' \"$RENODE_LICENSE_SHA256\" /usr/share/doc/hauksbee/third-party/RENODE-LICENSE | sha256sum -c -;",
-            "printf '%s  %s\\n' \"$QEMU_LICENSE_SHA256\" /usr/share/doc/hauksbee/third-party/QEMU-COPYING | sha256sum -c -;",
-            "printf '%s  %s\\n' \"$FREEROUTING_LICENSE_SHA256\" /usr/share/doc/hauksbee/third-party/FREEROUTING-LICENSE | sha256sum -c -",
+            "printf '%s  %s\\n' \"$QEMU_LICENSE_SHA256\" /usr/share/doc/hauksbee/third-party/QEMU-COPYING | sha256sum -c -",
         ):
             self.assertIn(verification, dockerfile)
         workflow = (ROOT / ".github/workflows/docker.yml").read_text()
@@ -1573,7 +1568,6 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             "renode --version",
             "qemu-system-xtensa --version",
             "qemu-system-riscv32 --version",
-            'grep -F "Freerouting v1.9.0"',
         ):
             self.assertIn(command, workflow)
         verify = workflow.index("Verify slim and full image contents and labels")
@@ -1611,13 +1605,12 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn('--tag "${IMAGE}:full-${VERSION}"', promotion)
         self.assertNotIn("SLIM_DIGEST", promotion)
         self.assertNotIn("FULL_DIGEST", promotion)
-        for notice in ("RENODE-LICENSE", "QEMU-COPYING", "FREEROUTING-LICENSE"):
+        for notice in ("RENODE-LICENSE", "QEMU-COPYING"):
             self.assertIn(
                 f"test -s /usr/share/doc/hauksbee/third-party/{notice}", workflow
             )
         self.assertIn("CORRESPONDING SOURCE OFFER", dockerfile)
         self.assertRegex(dockerfile, r"ARG ESP_QEMU_SOURCE_COMMIT=[0-9a-f]{40}")
-        self.assertRegex(dockerfile, r"ARG FREEROUTING_SOURCE_COMMIT=[0-9a-f]{40}")
         self.assertIn("at least three years", dockerfile)
         self.assertIn("security@hauksbee.dev", dockerfile)
         self.assertIn(
@@ -1914,12 +1907,10 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("hauksbee-ci run boot_gate_pass.toml", docker)
         self.assertIn("/opt/hauksbee/crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb", dockerfile)
         full_dockerfile = (ROOT / "docker/Dockerfile.full").read_text()
-        for fixture in ("stm32.kicad_pcb", "stm32.elf", "esp32.kicad_pcb", "esp32-flash.bin", "blinky.board"):
+        for fixture in ("stm32.kicad_pcb", "stm32.elf", "esp32.kicad_pcb", "esp32-flash.bin"):
             self.assertIn(f"/opt/hauksbee/external-smoke/{fixture}", full_dockerfile)
         self.assertIn("/opt/hauksbee/external-smoke/stm32.elf", docker)
         self.assertIn("/opt/hauksbee/external-smoke/esp32-flash.bin", docker)
-        self.assertIn("freerouting handoff", docker)
-        self.assertIn("--route --route-passes 2", docker)
 
     def test_release_plans_do_not_advertise_a_public_installer_endpoint(self) -> None:
         for relative in (

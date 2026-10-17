@@ -1795,11 +1795,10 @@ fn strict_boot_verdict_agrees_with_the_strict_boot_exit() {
 
 #[test]
 fn a_pre_analysis_refusal_replaces_stale_requested_artifacts() {
-    const EMPTY_BOARD_DSL: &str = "# Board-as-Code (hauksbee board DSL v1)\n\
-board version 20241229\n\nfn main {\n}\n";
+    const EMPTY_BOARD: &str = "(kicad_pcb (version 20171130) (host pcbnew 5.1.0))\n";
     let art = Artifacts::new("out");
-    let board = art.dir.path().join("empty.board");
-    std::fs::write(&board, EMPTY_BOARD_DSL).expect("empty board fixture");
+    let board = art.dir.path().join("empty.kicad_pcb");
+    std::fs::write(&board, EMPTY_BOARD).expect("empty board fixture");
     std::fs::write(&art.junit, "stale green JUnit from a previous run").expect("stale junit");
     std::fs::write(&art.sarif, "stale green SARIF from a previous run").expect("stale sarif");
 
@@ -2040,10 +2039,10 @@ fn clap_error_for_a_non_run_command_never_mutates_run_artifact_flags() {
     let original = b"this file belongs to the caller, not to a run";
     std::fs::write(&alleged_junit, original).expect("seed caller file");
 
-    // Here `run` is the positional BOARD argument to `to-code`, not the
-    // selected top-level subcommand. `--junit` is invalid for `to-code` and
+    // Here `run` is the positional DECK argument to `sim`, not the
+    // selected top-level subcommand. `--junit` is invalid for `sim` and
     // must not grant the parse-error path permission to mutate its value.
-    let out = run(&["to-code", "run", "--junit", alleged_junit.to_str().unwrap()]);
+    let out = run(&["sim", "run", "--junit", alleged_junit.to_str().unwrap()]);
 
     assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
     assert_eq!(

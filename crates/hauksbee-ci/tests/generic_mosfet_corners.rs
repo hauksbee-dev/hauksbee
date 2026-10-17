@@ -22,10 +22,9 @@ fn run(vg: f64) -> hauksbee_ci::CiResult {
     {
         b += &comp(r, R0805, val, 40 + i * 30, pad(1, a) + &pad(2, k));
     }
-    let nets = "net \"G\"\nnet \"OUT\"\nnet \"GND\"\nnet \"VCC\"\nnet \"IN\"\n";
     let p = support::write_tmp(
-        "pmos-corners.board",
-        &format!("board version 1\nfn main {{\n{nets}{b}}}\n"),
+        "pmos-corners.kicad_pcb",
+        &support::board_text(&["G", "OUT", "GND", "VCC", "IN"], &b),
     );
     let spec = format!(
         "name = \"generic pmos at {vg} V\"\nboard = {}\nduration_ms = 3\n[[supply]]\nnet = \"VCC\"\n\

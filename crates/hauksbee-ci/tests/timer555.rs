@@ -47,10 +47,7 @@ fn board(c_nf: Option<f64>, reset_net: &str) -> String {
         };
         parts += &comp(r, lib, &val, 40 + i * 8, pad(1, a) + &pad(2, b));
     }
-    let nets = ["VCC", "GND", "OUT", "THRES", "DISCH", "CTRL"]
-        .map(|n| format!("net \"{n}\"\n"))
-        .concat();
-    format!("board version 20171130\nfn main {{\n{nets}{parts}}}\n")
+    support::board_text(&["VCC", "GND", "OUT", "THRES", "DISCH", "CTRL"], &parts)
 }
 
 /// Run one spec that ends at `end_ms` with one assertion on OUT and report
@@ -58,7 +55,7 @@ fn board(c_nf: Option<f64>, reset_net: &str) -> String {
 /// unmodelled or open part: the composite drives OUT, so nothing may claim it
 /// does not.
 fn passes(case: &str, src: &str, end_ms: f64, assertion: &str) -> bool {
-    let board_path = support::write_tmp("t.board", src);
+    let board_path = support::write_tmp("t.kicad_pcb", src);
     let spec = support::write_tmp(
         "t.toml",
         &format!(

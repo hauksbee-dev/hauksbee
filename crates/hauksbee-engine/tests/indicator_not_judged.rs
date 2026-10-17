@@ -8,17 +8,23 @@
 //! it.
 
 use crate::support::{run_board, stdout};
+use std::fmt::Write as _;
 
 const LINE: &str = "indicator meaning and signal polarity versus intent: not checked";
 
 /// `READY_N` -> U1 (74LVC1G17 buffer) -> 1 kOhm -> red LED D1 to ground.
 fn board() -> std::path::PathBuf {
+    const NETS: [&str; 6] = ["VCC", "GND", "READY_N", "LED_DRV", "LED_A", "NC"];
+    let net_id = |net: &str| NETS.iter().position(|n| *n == net).unwrap() + 1;
     let pad = |n: &str, x: u32, net: &str| {
-        format!("pad \"{n}\" smd rect at {x} 0 size 2 1.5 layers [F.Cu F.Mask] net \"{net}\"\n")
+        format!(
+            "(pad {n} smd rect (at {x} 0 0) (size 2 1.5) (layers \"F.Cu\" \"F.Mask\") (net {} \"{net}\"))\n",
+            net_id(net)
+        )
     };
     let comp = |r: &str, lib: &str, val: &str, x: u32, pads: String| {
         format!(
-            "comp {r} lib \"{lib}\" val \"{val}\" layer \"F.Cu\" at {x} 20 rot 0 {{\n{pads}}}\n"
+            "(footprint \"{lib}\" (layer \"F.Cu\") (at {x} 20 0) (property \"Reference\" \"{r}\") (property \"Value\" \"{val}\")\n{pads})\n"
         )
     };
     let u1: String = ["NC", "READY_N", "GND", "LED_DRV", "VCC"]
@@ -41,15 +47,16 @@ fn board() -> std::path::PathBuf {
             40,
             pad("K", 1, "GND") + &pad("A", 3, "LED_A"),
         );
-    let nets = ["VCC", "GND", "READY_N", "LED_DRV", "LED_A", "NC"]
-        .map(|n| format!("net \"{n}\"\n"))
-        .concat();
+    let mut nets = String::new();
+    for (i, n) in NETS.iter().enumerate() {
+        let _ = writeln!(nets, "(net {} \"{n}\")", i + 1);
+    }
     let dir = std::env::temp_dir().join(format!("hauksbee_indicator_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("indicator.board");
+    let path = dir.join("indicator.kicad_pcb");
     std::fs::write(
         &path,
-        format!("board version 20171130\nfn main {{\n{nets}{parts}}}\n"),
+        format!("(kicad_pcb (version 20171130) (generator pcbnew)\n(net 0 \"\")\n{nets}{parts})\n"),
     )
     .unwrap();
     path
@@ -85,7 +92,7 @@ fn plain_and_json_say_the_indicator_polarity_was_not_checked() {
 #[test]
 fn the_web_report_carries_the_same_note_without_failing() {
     let bytes = std::fs::read(board()).unwrap();
-    let report = hauksbee_engine::frontdoor::analyze("indicator.board", &bytes);
+    let report = hauksbee_engine::frontdoor::analyze("indicator.kicad_pcb", &bytes);
     assert!(report.ok, "{:?}", report.error);
     let triage = report.triage.as_ref().expect("triage");
     assert!(triage.not_covered.contains(LINE), "{}", triage.not_covered);

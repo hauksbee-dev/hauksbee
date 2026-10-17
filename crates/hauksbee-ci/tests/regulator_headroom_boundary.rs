@@ -32,7 +32,7 @@ fn minimum_input_v() -> f64 {
 }
 
 fn exit_code_at(dir: &Path, volts: f64) -> i32 {
-    let board = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/regulator.board");
+    let board = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/regulator.kicad_pcb");
     let spec = dir.join(format!("boundary-{volts}.toml"));
     let body = format!(
         "name = \"headroom boundary\"\nboard = {}\nduration_ms = 3\n\
@@ -71,7 +71,7 @@ fn an_input_exactly_on_the_dropout_bound_is_supported() {
 #[test]
 fn a_supply_on_the_regulated_rail_is_pointed_at_the_regulator_input() {
     let d = tempfile::tempdir().expect("tempdir");
-    let board = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/regulator.board");
+    let board = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/regulator.kicad_pcb");
     let spec = d.path().join("on-output.toml");
     let body = format!(
         "name = \"supply on the output\"\nboard = {}\nduration_ms = 3\n\

@@ -1219,7 +1219,7 @@ pub fn read_regular_text_lossy(path: &std::path::Path) -> std::io::Result<String
 /// truncated). The error carries the shared expansion-limit wording used by the
 /// gerber and ODB++ readers, so the same hostile upload gets the same answer
 /// from every door. Callers that open a single member out of a user's zip
-/// (a netlist, a `.board` file) use this instead of `read_to_end`.
+/// (a netlist, a layout file) use this instead of `read_to_end`.
 ///
 /// # Errors
 ///

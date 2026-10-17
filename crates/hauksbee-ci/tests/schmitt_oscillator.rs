@@ -32,7 +32,7 @@ fn run(
     frame_ms: f64,
     want_hz: f64,
 ) -> hauksbee_ci::CiResult {
-    let board = support::repo("crates/hauksbee-ci/tests/fixtures/hc14_oscillator.board");
+    let board = support::repo("crates/hauksbee-ci/tests/fixtures/hc14_oscillator.kicad_pcb");
     support::run_body(
         name,
         &format!(

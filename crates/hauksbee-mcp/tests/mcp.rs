@@ -124,7 +124,6 @@ fn handshake_lists_every_tool_with_schemas() {
         "run_checks",
         "list_capabilities",
         "model_coverage",
-        "board_to_code",
         "simulate_deck",
         "doctor",
         "models_lint",
@@ -460,22 +459,6 @@ fn list_capabilities_reports_backends_probed_on_this_machine() {
         .iter()
         .any(|a| a == "voltage"));
     assert!(v["formats"]["board"].as_array().unwrap().len() >= 5);
-}
-
-#[test]
-fn board_to_code_returns_the_editable_text_form() {
-    let mut c = McpClient::start();
-    let (v, is_error) = c.call_tool(
-        "board_to_code",
-        &json!({ "board_path": fixture("testdata/boards/button_pullup.kicad_pcb") }),
-    );
-    assert!(!is_error, "{v}");
-    assert_eq!(v["board"], "button_pullup.kicad_pcb");
-    let code = v["code"].as_str().expect("code text");
-    assert!(
-        code.contains("BTN"),
-        "the code names the board's nets:\n{code}"
-    );
 }
 
 #[test]

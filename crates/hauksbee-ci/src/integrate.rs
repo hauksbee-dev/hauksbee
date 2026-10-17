@@ -161,7 +161,7 @@ fn plain_hook_script() -> String {
          [ -z \"$staged\" ] && exit 0\n\
          staged_lower=$(printf '%s' \"$staged\" | tr '[:upper:]' '[:lower:]')\n\
          case \"$staged_lower\" in\n\
-         \x20 *.kicad_pcb*|*.kicad_sch*|*.net*|*.brd*|*.d356*|*.pcbdoc*|*.board*|*.xml*|*.zip*|*.tgz*|*.tar.gz*|*.tar*|*.toml*|*.hex*|*.elf*)\n\
+         \x20 *.kicad_pcb*|*.kicad_sch*|*.net*|*.brd*|*.d356*|*.pcbdoc*|*.xml*|*.zip*|*.tgz*|*.tar.gz*|*.tar*|*.toml*|*.hex*|*.elf*)\n\
          \x20   # A hauksbee-ci spec is a TOML file with a top-level `board = ...`,\n\
          \x20   # looked for in the HAUKSBEE_CI_SPECS directories (colon-separated,\n\
          \x20   # default `ci:.`), the same contract `hauksbee-ci init` prints.\n\
@@ -265,9 +265,9 @@ fn github_workflow_yaml_for(
          \n\
          on:\n\
          \x20 push:\n\
-         \x20   paths: [\"ci/**\", \"*.toml\", \".github/workflows/**\", \"hardware/**\", \"firmware/**\", \"models/**\", \"**/*.kicad_pcb\", \"**/*.kicad_sch\", \"**/*.net\", \"**/*.brd\", \"**/*.PcbDoc\", \"**/*.d356\", \"**/*.board\", \"**/*.xml\", \"**/*.zip\", \"**/*.tgz\", \"**/*.tar.gz\", \"**/*.tar\"]\n\
+         \x20   paths: [\"ci/**\", \"*.toml\", \".github/workflows/**\", \"hardware/**\", \"firmware/**\", \"models/**\", \"**/*.kicad_pcb\", \"**/*.kicad_sch\", \"**/*.net\", \"**/*.brd\", \"**/*.PcbDoc\", \"**/*.d356\", \"**/*.xml\", \"**/*.zip\", \"**/*.tgz\", \"**/*.tar.gz\", \"**/*.tar\"]\n\
          \x20 pull_request:\n\
-         \x20   paths: [\"ci/**\", \"*.toml\", \".github/workflows/**\", \"hardware/**\", \"firmware/**\", \"models/**\", \"**/*.kicad_pcb\", \"**/*.kicad_sch\", \"**/*.net\", \"**/*.brd\", \"**/*.PcbDoc\", \"**/*.d356\", \"**/*.board\", \"**/*.xml\", \"**/*.zip\", \"**/*.tgz\", \"**/*.tar.gz\", \"**/*.tar\"]\n\
+         \x20   paths: [\"ci/**\", \"*.toml\", \".github/workflows/**\", \"hardware/**\", \"firmware/**\", \"models/**\", \"**/*.kicad_pcb\", \"**/*.kicad_sch\", \"**/*.net\", \"**/*.brd\", \"**/*.PcbDoc\", \"**/*.d356\", \"**/*.xml\", \"**/*.zip\", \"**/*.tgz\", \"**/*.tar.gz\", \"**/*.tar\"]\n\
          \n\
          concurrency:\n\
          \x20 group: hauksbee-${{{{ github.workflow }}}}-${{{{ github.ref }}}}\n\

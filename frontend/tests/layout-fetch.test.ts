@@ -20,7 +20,7 @@ function serve(routes: Record<string, string | number>): string[] {
 }
 
 const KICAD = '(kicad_pcb (version 20240108) (net 0 ""))'
-const DSL = 'board "rails" {\n  part R1 ...\n}\n'
+const SCH = '(kicad_sch (version 20231120) (generator "eeschema"))\n'
 
 test('a native KiCad layout is drawn as served, with no second request', async () => {
   const asked = serve({ '/boards/b.kicad_pcb': KICAD })
@@ -28,15 +28,15 @@ test('a native KiCad layout is drawn as served, with no second request', async (
   expect(asked).toEqual(['/boards/b.kicad_pcb'])
 })
 
-test('a retained .board source draws the compiled layout the server kept', async () => {
-  const asked = serve({ '/boards/b.board': DSL, '/boards/b.board/layout': KICAD })
-  expect(await fetchLayoutText('/boards/b.board')).toBe(KICAD)
-  expect(asked).toEqual(['/boards/b.board', '/boards/b.board/layout'])
+test('a retained schematic source draws the extracted layout the server kept', async () => {
+  const asked = serve({ '/boards/b.kicad_sch': SCH, '/boards/b.kicad_sch/layout': KICAD })
+  expect(await fetchLayoutText('/boards/b.kicad_sch')).toBe(KICAD)
+  expect(asked).toEqual(['/boards/b.kicad_sch', '/boards/b.kicad_sch/layout'])
 })
 
-test('with no compiled layout the source comes back, so the parser says it has none', async () => {
-  serve({ '/boards/b.board': DSL, '/boards/b.board/layout': '{"available":false}' })
-  expect(await fetchLayoutText('/boards/b.board')).toBe(DSL)
-  serve({ '/boards/b.board': DSL })
-  expect(await fetchLayoutText('/boards/b.board')).toBe(DSL)
+test('with no extracted layout the source comes back, so the parser says it has none', async () => {
+  serve({ '/boards/b.kicad_sch': SCH, '/boards/b.kicad_sch/layout': '{"available":false}' })
+  expect(await fetchLayoutText('/boards/b.kicad_sch')).toBe(SCH)
+  serve({ '/boards/b.kicad_sch': SCH })
+  expect(await fetchLayoutText('/boards/b.kicad_sch')).toBe(SCH)
 })

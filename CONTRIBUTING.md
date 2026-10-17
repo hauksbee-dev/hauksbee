@@ -374,7 +374,7 @@ The short version:
 | `hauksbee-engine` | Binds it together: the checks, the reports, the CLI |
 | `hauksbee-ci` | Declarative TOML specs and assertions for pipelines |
 | `hauksbee-server` | The web front door |
-| `hauksbee-mcp` | The stdio MCP server: the analyse/check/decompile flow as tools for AI agents |
+| `hauksbee-mcp` | The stdio MCP server: the analyse/check flow as tools for AI agents |
 | `hauksbee-testkit` | Shared test plumbing: locates test assets and fixtures for the suites |
 
 ## Licensing of contributions
@@ -412,8 +412,6 @@ this repository, so the `dco` check does not run on them, but they carry a
 
 A board file that reproduces the problem is worth more than any description. If
 you cannot share the board, a minimal reconstruction is the next best thing.
-`hauksbee to-code <board>` produces an editable text form that is often small
-enough to paste.
 
 For security issues, see `SECURITY.md`. Do not open a public issue.
 

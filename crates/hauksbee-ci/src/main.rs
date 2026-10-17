@@ -332,7 +332,8 @@ struct MeasureArgs {
 
 #[derive(Parser)]
 struct InitArgs {
-    /// Board file to scaffold a spec from (.`kicad_pcb`, .`kicad_sch`, .net, .brd, .`PcbDoc`, .d356, .board).
+    /// Board file to scaffold a spec from (any format `hauksbee-ci run` reads:
+    /// KiCad, Eagle, Altium, IPC-2581, IPC-D-356, ODB++ or a fab archive).
     /// With no argument, looks for exactly one board file in the current
     /// directory and tells you the command to run on it.
     #[arg(value_name = "BOARD")]
@@ -741,7 +742,7 @@ fn cmd_init(args: InitArgs) -> ExitCode {
 /// one board file, name the exact command; otherwise list what was found.
 /// Always an error (nothing was scaffolded).
 fn suggest_board_in_cwd() -> anyhow::Error {
-    const BOARD_EXTS: &[&str] = &["kicad_pcb", "kicad_sch", "net", "brd", "d356", "board"];
+    const BOARD_EXTS: &[&str] = &["kicad_pcb", "kicad_sch", "net", "brd", "d356"];
     let mut boards: Vec<String> = std::fs::read_dir(".")
         .into_iter()
         .flat_map(std::iter::Iterator::flatten)
@@ -759,8 +760,8 @@ fn suggest_board_in_cwd() -> anyhow::Error {
     match boards.as_slice() {
         [] => anyhow::anyhow!(
             "init needs a board file and none was found here. \
-             Run `hauksbee-ci init <board>` with a .kicad_pcb, .kicad_sch, \
-             .net, .brd, .PcbDoc, .d356 or .board file."
+             Run `hauksbee-ci init <board>` with one of: {}.",
+            hauksbee_engine::board_input::supported_formats_sentence()
         ),
         [one] => anyhow::anyhow!("found {one}; run:  hauksbee-ci init {one}"),
         many => anyhow::anyhow!(

@@ -3,8 +3,6 @@
 # Everything the slim image has, plus:
 #   Renode                  STM32 / nRF52 / RISC-V firmware co-sim (.repl boards)
 #   Espressif QEMU fork     ESP32 / ESP32-S3 / ESP32-C3 firmware co-sim
-#   freerouting 1.9.0       production autorouting of recompiled boards (DSN->SES)
-#   default-jre-headless    the JRE freerouting runs on
 #
 # It does NOT install esp-idf. esp-idf is only needed to BUILD ESP32 firmware;
 # at RUNTIME the Espressif QEMU binary plus a merged flash image are enough, and
@@ -12,7 +10,7 @@
 # the image RUNS firmware, it does not compile it.
 #
 # The backends are discovered at runtime via the HAUKSBEE_* env vars set below
-# (see crates/hauksbee-mcu and forge-codegen), so they work out of the box.
+# (see crates/hauksbee-mcu), so they work out of the box.
 #
 # BUILD CONTEXT and multi-arch: identical to Dockerfile.slim. Build from the
 # parent dir holding this repo (forge-* crates are vendored inside it):
@@ -35,18 +33,14 @@ ARG RENODE_VERSION=1.16.1
 ARG ESP_QEMU_TAG=esp-develop-9.2.2-20260417
 ARG ESP_QEMU_FILE=esp_develop_9.2.2_20260417
 ARG ESP_QEMU_SOURCE_COMMIT=40edccac415693c5130f91c01d84176ae6008566
-ARG FREEROUTING_VERSION=1.9.0
-ARG FREEROUTING_SOURCE_COMMIT=c88ad67e6d7cdb83ad52589a84e43ef9fe1e8620
 ARG RENODE_AMD64_SHA256=00e113cdbd0f5354cf2f64bbe3f5a070d8958409542fca66e45ac97d982938c0
 ARG RENODE_ARM64_SHA256=fff3a098c96ed0a4ffbdff3f028c9c5fde432db09587c7bd7c99406180f90007
 ARG QEMU_XTENSA_AMD64_SHA256=0eecb2a34a5586c0e59110f77b9343b7b336e82fdb0e1a30e1dc1bab8a547e35
 ARG QEMU_XTENSA_ARM64_SHA256=00de5985094c14e47d1b38464a006b8ed64fd0fa7a289c56da24f3a329f65339
 ARG QEMU_RISCV32_AMD64_SHA256=547f03e04701a92cbb699f7f7d015adc1f5b5ef93cbb94c0dd9b7107e2d84e77
 ARG QEMU_RISCV32_ARM64_SHA256=a9f7b98636008edcf7a11c96f10b3a3ec83c2a890fc54c3e3ceb3ec9edace427
-ARG FREEROUTING_SHA256=9084a4888937a7f31f857ecc12aa7a37407f51160e4d2892dff9c9bb47ae3102
 ARG RENODE_LICENSE_SHA256=f81b19ff9bc4b30fae51a59452ed227cbf35af683c50e7e5b443fd4eb04881c7
 ARG QEMU_LICENSE_SHA256=6f04ae8364d0079a192b14635f4b1da294ce18724c034c39a6a41d1b09df6100
-ARG FREEROUTING_LICENSE_SHA256=fe3eea6c599e23a00c08c5f5cb2320c30adc8f8687db5fcec9b79a662c53ff6b
 
 # buildx provides TARGETARCH automatically; declaring it lets us consume it to
 # pick the amd64 vs arm64 release asset for the prebuilt backends.
@@ -63,13 +57,11 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # Runtime libraries the prebuilt backends need:
 #   Renode (-dotnet portable)  libicu72, libgssapi-krb5-2 (bundles its runtime)
 #   Espressif QEMU             libglib2.0-0, libpixman-1-0, libgcrypt20, libslirp0, libsdl2-2.0-0
-#   freerouting                default-jre-headless (OpenJDK 17)
 #   curl + xz-utils            fetch + unpack the release tarballs
 # hadolint ignore=DL3008
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl \
-        default-jre-headless \
         git \
         libgcrypt20 \
         libglib2.0-0 \
@@ -86,7 +78,6 @@ RUN apt-get update \
          printf '%s' "$resolved"; \
        } \
     && test "$(resolve_tag https://github.com/espressif/qemu.git "$ESP_QEMU_TAG")" = "$ESP_QEMU_SOURCE_COMMIT" \
-    && test "$(resolve_tag https://github.com/freerouting/freerouting.git "v$FREEROUTING_VERSION")" = "$FREEROUTING_SOURCE_COMMIT" \
     && apt-get purge -y git \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
@@ -127,13 +118,6 @@ RUN set -eux; \
     test -x /opt/qemu/bin/qemu-system-xtensa; \
     test -x /opt/qemu/bin/qemu-system-riscv32
 
-# freerouting 1.9.0: the arch-independent jar. 1.9.0's headless batch reliably
-# writes the SES and exits, which is why it is pinned (newer 2.x stalls).
-RUN curl -fsSL -o /opt/freerouting-${FREEROUTING_VERSION}.jar \
-      "https://github.com/freerouting/freerouting/releases/download/v${FREEROUTING_VERSION}/freerouting-${FREEROUTING_VERSION}.jar" \
-    && printf '%s  %s\n' "$FREEROUTING_SHA256" "/opt/freerouting-${FREEROUTING_VERSION}.jar" | sha256sum -c - \
-    && ln -s /opt/freerouting-${FREEROUTING_VERSION}.jar /opt/freerouting.jar
-
 # Exact upstream licence texts for every bundled simulator/tool. These are
 # downloaded from the same immutable release refs as the binaries, hash-checked
 # before staging, and retained beside Hauksbee's own notices.
@@ -144,25 +128,20 @@ RUN set -eux; \
     printf '%s  %s\n' "$RENODE_LICENSE_SHA256" /usr/share/doc/hauksbee/third-party/RENODE-LICENSE | sha256sum -c -; \
     curl -fsSL -o /usr/share/doc/hauksbee/third-party/QEMU-COPYING \
       "https://raw.githubusercontent.com/espressif/qemu/${ESP_QEMU_TAG}/COPYING"; \
-    printf '%s  %s\n' "$QEMU_LICENSE_SHA256" /usr/share/doc/hauksbee/third-party/QEMU-COPYING | sha256sum -c -; \
-    curl -fsSL -o /usr/share/doc/hauksbee/third-party/FREEROUTING-LICENSE \
-      "https://raw.githubusercontent.com/freerouting/freerouting/v${FREEROUTING_VERSION}/LICENSE"; \
-    printf '%s  %s\n' "$FREEROUTING_LICENSE_SHA256" /usr/share/doc/hauksbee/third-party/FREEROUTING-LICENSE | sha256sum -c -
+    printf '%s  %s\n' "$QEMU_LICENSE_SHA256" /usr/share/doc/hauksbee/third-party/QEMU-COPYING | sha256sum -c -
 
-# GPL corresponding-source offer for the two bundled GPL tools. The exact
+# GPL corresponding-source offer for the bundled GPL tools. The exact
 # public source refs are named for immediate network access; the written offer
 # remains valid for at least three years and is available to any recipient if
 # an upstream host ever disappears.
 RUN printf '%s\n' \
       'CORRESPONDING SOURCE OFFER' \
       '' \
-      'Hauksbee and libsimavr (GPL-3.0 combined binaries),' \
-      'Espressif QEMU (GPL-2.0-only), and freerouting (GPL-3.0) are covered.' \
+      'Hauksbee and libsimavr (GPL-3.0 combined binaries) and' \
+      'Espressif QEMU (GPL-2.0-only) are covered.' \
       '' \
       'Espressif QEMU (GPL-2.0-only):' \
       "  https://github.com/espressif/qemu/tree/${ESP_QEMU_SOURCE_COMMIT}" \
-      'freerouting (GPL-3.0):' \
-      "  https://github.com/freerouting/freerouting/tree/${FREEROUTING_SOURCE_COMMIT}" \
       '' \
       'For at least three years after this image version is distributed,' \
       'Hauksbee will provide any recipient the complete corresponding source' \
@@ -172,23 +151,21 @@ RUN printf '%s\n' \
       > /usr/share/doc/hauksbee/third-party/SOURCE-OFFER.txt
 
 # The image contains separately licensed works: Hauksbee/libsimavr and
-# freerouting under GPL-3.0, Espressif QEMU under GPL-2.0, and Renode under MIT.
+# Espressif QEMU under GPL-2.0, and Renode under MIT.
 # Exact upstream texts and the corresponding-source offer are retained under
 # /usr/share/doc/hauksbee/third-party.
 LABEL org.opencontainers.image.title="hauksbee (full)" \
-      org.opencontainers.image.description="hauksbee slim plus Renode, the Espressif QEMU fork, and freerouting: STM32 / ESP32 co-sim and production autorouting." \
+      org.opencontainers.image.description="hauksbee slim plus Renode, the Espressif QEMU fork: STM32 / ESP32 co-sim." \
       org.opencontainers.image.source="https://github.com/hauksbee-dev/hauksbee" \
       org.opencontainers.image.licenses="GPL-3.0-only AND GPL-2.0-only AND MIT"
 
 # Wire the backend discovery env vars so the tools are found with no setup:
 #   HAUKSBEE_RENODE       full path to the renode launcher
 #   HAUKSBEE_QEMU_DIR     dir holding qemu-system-xtensa / qemu-system-riscv32
-#   FREEROUTING_JAR       the freerouting jar forge-codegen routes through
 ENV HAUKSBEE_RENODE=/usr/local/bin/renode \
     HAUKSBEE_QEMU_DIR=/opt/qemu/bin \
     HAUKSBEE_QEMU_XTENSA=/opt/qemu/bin/qemu-system-xtensa \
-    HAUKSBEE_QEMU_RISCV32=/opt/qemu/bin/qemu-system-riscv32 \
-    FREEROUTING_JAR=/opt/freerouting.jar
+    HAUKSBEE_QEMU_RISCV32=/opt/qemu/bin/qemu-system-riscv32
 
 # Retain the small, compiled external-backend fixtures used to prove the final
 # image can do more than execute each tool's --version/help path.
@@ -200,7 +177,6 @@ COPY --chown=hauksbee:hauksbee hauksbee/testdata/firmware/esp32_blinky/flash.bin
 # backend validates a flash .bin's ISA against sibling ELFs, and without this
 # file the only sibling here is the ARM stm32.elf, which fails every run.
 COPY --chown=hauksbee:hauksbee hauksbee/testdata/firmware/esp32_blinky/esp32_blinky.elf /opt/hauksbee/external-smoke/esp32_blinky.elf
-COPY --chown=hauksbee:hauksbee hauksbee/examples/board-as-code/blinky.board /opt/hauksbee/external-smoke/blinky.board
 
 USER hauksbee
 WORKDIR /work

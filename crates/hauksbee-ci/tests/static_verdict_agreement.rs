@@ -89,7 +89,7 @@ fn a_board_its_static_check_fails_never_runs_green() {
 
 /// Legal control: a board the static check passes gets no static row, so its
 /// run's verdict is exactly what its own assertions say. The control is the
-/// routed `boot_gate` layout, short-free: a placement-only `.board` fixture is
+/// routed `boot_gate` layout, short-free: a placement-only fixture is
 /// never check-clean, since it carries no copper.
 #[test]
 fn a_board_its_static_check_passes_adds_no_row() {
@@ -114,7 +114,7 @@ fn a_board_its_static_check_passes_adds_no_row() {
 /// check states it; the same open part as an IC (designator U1) refuses it.
 #[test]
 fn an_open_connector_is_a_condition_and_an_open_ic_refuses_the_verdict() {
-    let board = fixture("open_connector.board");
+    let board = fixture("open_connector.kicad_pcb");
     let r = support::run_body(
         "open conn.toml",
         &no_faults_spec(&board, Some(("+5V", 5.0))),
@@ -133,7 +133,10 @@ fn an_open_connector_is_a_condition_and_an_open_ic_refuses_the_verdict() {
     support::assert_placement_waived(&r);
 
     let text = std::fs::read_to_string(&board).unwrap();
-    let ic = support::placement_board("open_ic.board", &text.replace("comp J1 ", "comp U1 "));
+    // The same footprint renumbered as an IC: its Reference property J1 -> U1.
+    let as_ic = text.replace("\"Reference\"\"J1\"", "\"Reference\"\"U1\"");
+    assert_ne!(as_ic, text, "the connector's reference must be rewritten");
+    let ic = support::placement_board("open_ic.kicad_pcb", &as_ic);
     let r = support::run_body("open ic.toml", &no_faults_spec(&ic, Some(("+5V", 5.0))));
     let human = r.render_human();
     assert!(

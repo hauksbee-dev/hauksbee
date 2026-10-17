@@ -827,7 +827,7 @@ export function BoardViewer({
       {error && (
         <div className="absolute inset-0 flex items-center justify-center">
           {/* An input with no PCB geometry is an empty state, not an error: a
-              board-as-code file simulates fine and has nothing to draw. */}
+              schematic-only file simulates fine and has nothing to draw. */}
           <div className="px-4 py-3 rounded-lg text-sm" data-testid={error === NO_LAYOUT ? 'board-no-layout' : 'board-error'}
             style={error === NO_LAYOUT
               ? { background: 'var(--overlay-chip-bg)', color: 'var(--overlay-chip-text)', border: '1px solid var(--rule)' }

@@ -1,7 +1,7 @@
 //! `hauksbee watch <target>`: re-run the right check on every file change.
 //!
 //! The pitch is "CI for hardware on every change", so this closes the local
-//! loop: point it at a board, a Board-as-Code `.board`, or a `hauksbee-ci` spec
+//! loop: point it at a board or a `hauksbee-ci` spec
 //! and it re-runs the appropriate check whenever a file it depends on changes.
 //!
 //! ## What re-runs
@@ -9,11 +9,10 @@
 //! | target kind            | detected by            | re-runs                              |
 //! |------------------------|------------------------|--------------------------------------|
 //! | board layout / netlist | `.kicad_pcb`/`.kicad_sch`/`.brd`/`.d356`/`.net`/gerber | `hauksbee run <board> --check --strict` |
-//! | Board-as-Code          | `.board` (or DSL header) | `hauksbee check-code <file>`       |
 //! | hauksbee-ci spec       | `.toml`                | `hauksbee-ci run <spec>`             |
 //!
 //! Each run is a **subprocess** re-invocation of the real CLI (this binary for
-//! boards / `.board`, the sibling `hauksbee-ci` for specs), not an in-process
+//! boards, the sibling `hauksbee-ci` for specs), not an in-process
 //! call. That is deliberate: the engine cannot depend on `hauksbee-ci` (it would
 //! be a dependency cycle), so a spec re-run must shell out regardless; making all
 //! three kinds uniform also means a panicking or `process::exit`-ing run cannot
@@ -53,8 +52,6 @@ pub enum Target {
     Board,
     /// A `.kicad_sch` schematic → same suite, but sub-sheets are siblings.
     Schematic,
-    /// A Board-as-Code `.board` DSL file → `check-code`.
-    BoardCode,
     /// A `hauksbee-ci` spec TOML → the spec through `hauksbee-ci`.
     Spec,
 }
@@ -82,15 +79,14 @@ const BOARD_EXTS: &[&str] = &[
 ];
 
 impl Target {
-    /// Detect the target kind from the path (extension first, then the
-    /// Board-as-Code header sniff the rest of the CLI uses). Returns a loud,
+    /// Detect the target kind from the path's extension. Returns a loud,
     /// actionable error listing the accepted targets when nothing matches, so an
     /// unrecognized target refuses rather than silently doing the wrong check.
     ///
     /// # Errors
     ///
-    /// Returns an error listing the accepted targets if neither the extension nor a
-    /// Board-as-Code header identifies the file.
+    /// Returns an error listing the accepted targets if the extension does not
+    /// identify the file.
     pub fn detect(path: &Path) -> anyhow::Result<Self> {
         let ext = path
             .extension()
@@ -98,17 +94,9 @@ impl Target {
             .map(str::to_ascii_lowercase);
         match ext.as_deref() {
             Some("kicad_sch") => return Ok(Self::Schematic),
-            Some("board") => return Ok(Self::BoardCode),
             Some("toml") => return Ok(Self::Spec),
             Some(e) if BOARD_EXTS.contains(&e) => return Ok(Self::Board),
             _ => {}
-        }
-        // No decisive extension: a `.board` saved under another name is still
-        // recognized by its DSL header (mirrors `run`'s content sniff).
-        if let Ok(text) = std::fs::read_to_string(path) {
-            if crate::commands::common::is_board_code_header(&text) {
-                return Ok(Self::BoardCode);
-            }
         }
         anyhow::bail!("{}", accepted_targets_msg(path));
     }
@@ -120,7 +108,6 @@ fn accepted_targets_msg(path: &Path) -> String {
     format!(
         "don't know how to watch '{}'. `hauksbee watch` accepts:\n  \
          - a board layout or netlist: .kicad_pcb, .kicad_sch, .brd, .d356, .net, gerbers (runs the static checks)\n  \
-         - a Board-as-Code file: .board (runs check-code)\n  \
          - a hauksbee-ci spec: .toml (runs the spec through hauksbee-ci)",
         path.display()
     )
@@ -141,7 +128,7 @@ pub enum Verdict {
 impl Verdict {
     /// Map a target kind + child exit code to a verdict. The exit-code contracts
     /// come from each subcommand's own docs (`run --strict` gates on 2;
-    /// `hauksbee-ci` uses 0/1/2/3; `check-code` exits 1 when unhealthy).
+    /// `hauksbee-ci` uses 0/1/2/3).
     #[must_use]
     pub const fn classify(target: Target, code: i32) -> Self {
         match target {
@@ -149,10 +136,6 @@ impl Verdict {
                 0 => Self::Pass,
                 2 => Self::Fail,
                 _ => Self::Error,
-            },
-            Target::BoardCode => match code {
-                0 => Self::Pass,
-                _ => Self::Fail,
             },
             Target::Spec => match code {
                 0 => Self::Pass,
@@ -175,7 +158,7 @@ impl Verdict {
 
 /// Build the subprocess command for one run of `target` on `path`.
 ///
-/// Boards / `.board` re-invoke THIS executable (`current_exe`); a spec re-invokes
+/// Boards re-invoke THIS executable (`current_exe`); a spec re-invokes
 /// the sibling `hauksbee-ci`. `--plain` streams plain-language reports for the
 /// board suite (the other kinds have no plain flag).
 fn build_command(target: Target, path: &Path, plain: bool) -> anyhow::Result<Command> {
@@ -188,11 +171,6 @@ fn build_command(target: Target, path: &Path, plain: bool) -> anyhow::Result<Com
             if plain {
                 c.arg("--plain");
             }
-            c
-        }
-        Target::BoardCode => {
-            let mut c = Command::new(&self_exe);
-            c.arg("check-code").arg(path);
             c
         }
         Target::Spec => {
@@ -241,7 +219,6 @@ impl WatchSet {
     ///   clearances from there).
     /// - **Schematic**: every `*.kicad_sch` in the directory (`KiCad` keeps a
     ///   sheet hierarchy's sub-sheets beside the root sheet) + the `.kicad_pro`.
-    /// - **`BoardCode`**: just the `.board` file.
     /// - **Spec**: the spec TOML + the board and firmware it names + any sensor
     ///   `spec_file`s, resolved relative to the spec's directory (a minimal TOML
     ///   extract of just those path fields; the engine cannot reach hauksbee-ci's
@@ -267,7 +244,6 @@ impl WatchSet {
                     }
                 }
             }
-            Target::BoardCode => {}
             Target::Spec => raw.extend(spec_referenced_paths(path)),
         }
         Self::from_paths(raw)
@@ -652,7 +628,6 @@ fn print_banner(target: Target, path: &Path, set: &WatchSet) {
     let kind = match target {
         Target::Board => "board (static check suite)",
         Target::Schematic => "schematic (static check suite)",
-        Target::BoardCode => "Board-as-Code (check-code)",
         Target::Spec => "hauksbee-ci spec",
     };
     println!("hauksbee watch: {} ({})", path.display(), kind);
@@ -721,14 +696,10 @@ mod tests {
     }
 
     #[test]
-    fn detects_schematic_boardcode_and_spec() {
+    fn detects_schematic_and_spec() {
         assert_eq!(
             Target::detect(Path::new("b.kicad_sch")).unwrap(),
             Target::Schematic
-        );
-        assert_eq!(
-            Target::detect(Path::new("b.board")).unwrap(),
-            Target::BoardCode
         );
         assert_eq!(Target::detect(Path::new("ci.toml")).unwrap(), Target::Spec);
     }
@@ -740,7 +711,7 @@ mod tests {
             .to_string();
         assert!(err.contains("don't know how to watch"), "{err}");
         assert!(err.contains(".kicad_pcb"), "{err}");
-        assert!(err.contains(".board"), "{err}");
+        assert!(!err.contains(".board"), "{err}");
         assert!(err.contains(".toml"), "{err}");
     }
 
@@ -750,9 +721,6 @@ mod tests {
         assert_eq!(Verdict::classify(Target::Board, 0), Verdict::Pass);
         assert_eq!(Verdict::classify(Target::Board, 2), Verdict::Fail);
         assert_eq!(Verdict::classify(Target::Board, 1), Verdict::Error);
-        // check-code: nonzero is a failed check.
-        assert_eq!(Verdict::classify(Target::BoardCode, 0), Verdict::Pass);
-        assert_eq!(Verdict::classify(Target::BoardCode, 1), Verdict::Fail);
         // hauksbee-ci: 0 green / 1 red / 2 spec-error / 3 invalid-for-analysis.
         assert_eq!(Verdict::classify(Target::Spec, 0), Verdict::Pass);
         assert_eq!(Verdict::classify(Target::Spec, 1), Verdict::Fail);
@@ -828,13 +796,5 @@ mod tests {
         // Guardrail: the settle window stays in the documented 200-300ms band.
         assert!(DEBOUNCE >= Duration::from_millis(200));
         assert!(DEBOUNCE <= Duration::from_millis(300));
-    }
-
-    #[test]
-    fn boardcode_detected_by_header_without_extension() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = dir.path().join("mystery");
-        std::fs::write(&f, "// Board-as-Code v1\nboard version 1\n").unwrap();
-        assert_eq!(Target::detect(&f).unwrap(), Target::BoardCode);
     }
 }

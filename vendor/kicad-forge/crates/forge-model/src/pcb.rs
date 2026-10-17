@@ -680,8 +680,7 @@ fn net_name(list: &List) -> Option<String> {
 
 /// Format an f64 for KiCad output: up to 6 decimal places, no trailing zeros.
 ///
-/// Public because downstream emitters (e.g. the library copy-through in
-/// forge-codegen) must format coordinates identically to the builder, or the
+/// Public because downstream emitters must format coordinates identically to the builder, or the
 /// same board would emit two different textual spellings of one number.
 pub fn fmt_f64(v: f64) -> String {
     // Check for integer value.

@@ -360,9 +360,9 @@ test.skipIf(!hasFrontdoorReport)('import diagnostics expose recovered, partial, 
 test('a parser refusal renders only its localized excerpt and suggested fix', async () => {
   const failed: WebReport = {
     ok: false,
-    error: 'Board-as-Code parse error at line 2',
+    error: 'Netlist parse error at line 2',
     board_name: '',
-    file_name: 'broken.board',
+    file_name: 'broken.net',
     num_components: 0,
     num_nets: 0,
     headline: 'Could not read the file.',
@@ -371,15 +371,15 @@ test('a parser refusal renders only its localized excerpt and suggested fix', as
     sections: [],
     components: [],
     import_failure: {
-      stage: 'Board-as-Code compiler',
-      excerpt: 'line 2: this is not valid board code',
+      stage: 'KiCad netlist parser',
+      excerpt: 'line 2: this is not a valid netlist',
       suggested_fix: 'Edit the exact line shown below, then rerun.',
     },
   }
   const html = await boardHtml(session(failed))
   expect(html).toContain('data-testid="import-failure"')
-  expect(html).toContain('Import stopped at Board-as-Code compiler')
-  expect(html).toContain('line 2: this is not valid board code')
+  expect(html).toContain('Import stopped at KiCad netlist parser')
+  expect(html).toContain('line 2: this is not a valid netlist')
   expect(html).toContain('Suggested fix:')
 })
 

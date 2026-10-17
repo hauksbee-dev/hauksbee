@@ -24,7 +24,7 @@ repos:
 
 That is the whole setup, provided the `hauksbee` binary is on `PATH` (or
 `HAUKSBEE_BIN` points at it). Every staged `.kicad_pcb`, `.kicad_sch`, `.net`,
-`.brd`, `.d356`, `.PcbDoc`, or `.board` file is checked; gate-grade findings
+`.brd`, `.d356`, or `.PcbDoc` file is checked; gate-grade findings
 block the commit. Exit codes pass through unchanged: `2` means findings, `3`
 means the run was invalid for analysis (the analog solve aborted), and both
 block. See `docs/ci/CI.md` (Exit codes) for the exact gating semantics of

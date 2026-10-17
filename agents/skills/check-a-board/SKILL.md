@@ -1,6 +1,6 @@
 ---
 name: check-a-board
-description: Check a PCB or schematic end to end with Hauksbee - import it, see which parts bound to models, run the static checks, and report the verdict with its evidence. Use when asked to check, review, or "is this board OK to order" for a KiCad, Eagle, Altium, IPC-D-356, gerber, or Board-as-Code file.
+description: Check a PCB or schematic end to end with Hauksbee - import it, see which parts bound to models, run the static checks, and report the verdict with its evidence. Use when asked to check, review, or "is this board OK to order" for a KiCad, Eagle, Altium, IPC-D-356, or gerber file.
 ---
 
 # Check a board
@@ -17,7 +17,7 @@ hauksbee run --example blinky --check --plain   # smoke test, exit 0
 ```
 
 Accepted inputs: `.kicad_pcb`, `.kicad_sch`, `.net`, `.brd`, `.PcbDoc`,
-`.d356`, a gerber folder or zip, or `.board`. A missing file exits 1 with
+`.d356`, or a gerber folder or zip. A missing file exits 1 with
 `error: no board file at ...`.
 
 ## 2. See what bound

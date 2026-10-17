@@ -6,10 +6,9 @@ and finding out in CI. So there are two halves:
 
 - **Spec TOML editing**: completion, hovers and linting, all generated from
   the Rust `Spec` type. Works with **no binaries installed**.
-- **Running checks**: a **thin shell-out client** (no language server; LSP for
-  the `.board` DSL is deferred until the DSL stabilises) that runs the
-  `hauksbee` / `hauksbee-ci` binaries you already have and renders their
-  results as native diagnostics.
+- **Running checks**: a **thin shell-out client** (no language server) that
+  runs the `hauksbee` / `hauksbee-ci` binaries you already have and renders
+  their results as native diagnostics.
 
 ## Editing a hauksbee-ci spec
 
@@ -138,15 +137,11 @@ for syntax highlighting and formatting. The two compose rather than compete:
   current spec TOML (or a picker) and maps every failed assertion to an Error
   diagnostic **on its `[[assert]]` block** in the spec.
 - **`Hauksbee: Check Board File`**: runs
-  `hauksbee run <board> --check --json` on the current `.board` / `.kicad_pcb`
+  `hauksbee run <board> --check --json` on the current `.kicad_pcb`
   / `.kicad_sch` / `.net` / `.brd` / `.d356` file and maps the findings
-  (lint + signal integrity + USB-C + DRC) to diagnostics. On `.board` files,
-  findings are located at the offending `comp <ref>` / `net "…"` line.
+  (lint + signal integrity + USB-C + DRC) to diagnostics.
 - **`Hauksbee: Validate CI Spec`**: forces the loader lint layer on the current
   spec, whatever `hauksbee.spec.loaderCheck` says.
-- **Syntax highlighting** for hauksbee Board-as-Code `.board` files
-  (comments, `fn`/`instance` blocks, `comp`/`slot`/`pad`/`net` statements,
-  layer lists, placement constraints).
 - **Status bar**: pass/fail and finding count for the most recent run; click
   it (or run `Hauksbee: Re-run Last Check`) to re-run.
 
@@ -215,8 +210,7 @@ trusting a repository you did not write.
 Machine formats consumed (as of hauksbee-ci 0.1 / hauksbee engine 0.1):
 
 - `hauksbee run --check --json` emits a structured report with a `findings`
-  array and a `drc` section. (`hauksbee check-code` has no `--json`; the board
-  command uses `run --check --json`, which accepts `.board` files.)
+  array and a `drc` section.
 - `hauksbee-ci run --junit <out.xml>` writes JUnit XML with one `<testcase>` per
   assertion, in spec order. That is the format the **Run CI Spec** command
   consumes, because it is the one that reports per-assertion outcomes.
@@ -247,9 +241,7 @@ extension reconstructs them honestly:
   testcase *N* is attached to the *N*-th `[[assert]]` block. If the block
   count and testcase count disagree (stale buffer), diagnostics fall back to
   file level rather than guess.
-- `.board`: the first `comp <ref>` line for the finding's first ref, else the
-  `net "…"` declaration for its first net, else file level.
-- Other board formats (`.kicad_pcb` etc.): file level.
+- Board files (`.kicad_pcb` etc.): file level.
 
 Diagnostics from the previous run are replaced on every re-run.
 
@@ -347,12 +339,3 @@ Still worth a human eye, since no automated check covers appearance:
 - [ ] the `✓ spec ok` status-bar item and its red counterpart
 - [ ] completion and hover *rendering* (markdown, sort order, icons)
 - [ ] the run commands' notifications with the binaries off PATH
-
-## Board DSL keyword inventory (grammar reference, confirmed from the parser)
-
-Top-level structural: `board`, `fn`, `instance`, `comp`, `slot`, `net`, `pad`,
-`space`, `pin`, `lock`. Board sub-directives: `version`, `outline`, `size`.
-Inline property keys: `lib`, `val`, `pads`, `layer`, `at`, `rot`, `size`,
-`drill`, `layers`, `nonet`, `edge`. Pad kinds: `smd`, `thru_hole`,
-`np_thru_hole`, `connect`. Pad shapes: `rect`, `roundrect`, `oval`, `circle`,
-`trapezoid`, `custom`.

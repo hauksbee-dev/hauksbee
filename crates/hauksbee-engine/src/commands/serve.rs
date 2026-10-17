@@ -189,18 +189,14 @@ pub fn run(port: u16, open: bool, no_open: bool) -> anyhow::Result<()> {
             crate::commands::common::warn_if_dist_stale(static_dir);
             println!("\n  hauksbee is live. Open this in your browser:\n");
             println!("      http://{bound}\n");
-            println!("  Drop a board file (.kicad_pcb / .kicad_sch / .brd / .board / gerber zip) to get a");
+            println!("  Drop a board file (.kicad_pcb / .kicad_sch / .brd / gerber zip) to get a");
             println!("  plain-language report. Optionally drop firmware (.elf / .hex) to run a");
             // Was "Nothing leaves your machine", which stopped being true when
             // this same server grew /api/models/extract. That path has its own
             // consent notice and never runs unasked, but a blanket promise in
             // the first thing a user reads is the wrong place to be approximate.
-            println!(
-                "  short co-sim. Your board never leaves this machine. The one thing that"
-            );
-            println!(
-                "  can is a datasheet you explicitly send for model extraction, which asks"
-            );
+            println!("  short co-sim. Your board never leaves this machine. The one thing that");
+            println!("  can is a datasheet you explicitly send for model extraction, which asks");
             println!("  first. Ctrl-C to stop.\n");
         } else {
             println!("\n  hauksbee serve needs the web app built once:\n");

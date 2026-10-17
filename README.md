@@ -62,7 +62,7 @@ autorouting). Use immutable version/digest references, not floating tags. See
 
 ### Board evidence
 
-Native KiCad, Eagle, Altium, IPC-2581, ODB++, schematic-only, and Board-as-Code inputs become one electrical intermediate representation. Static checks, model binding, solver construction, and firmware coupling all consume that same representation rather than separate hand-translated, often idealised diagrams.
+Native KiCad, Eagle, Altium, IPC-2581, ODB++, and schematic-only inputs become one electrical intermediate representation. Static checks, model binding, solver construction, and firmware coupling all consume that same representation rather than separate hand-translated, often idealised diagrams.
 
 ### Fab evidence
 
@@ -190,22 +190,7 @@ The engine couples MCU pins and peripherals to the solved board. Current backend
 
 UART boot is not promoted to a GPIO claim. A mailbox-backed peripheral is not promoted to native register observation. A simulator-only result is not promoted to hardware validation.
 
-## Board-as-Code and reproducibility
-
-The extracted board is editable, not a terminal report:
-
-```bash
-hauksbee to-code board.kicad_pcb --out board.board
-hauksbee check-code board.board
-hauksbee from-code board.board --out rebuilt.kicad_pcb --route-dsn board.dsn
-# route board.dsn with any Specctra router, then merge its SES output:
-hauksbee merge-ses board.board routed.ses --out routed.kicad_pcb
-```
-
-`from-code --route` autoroutes in one step instead; the `--route-dsn` and
-`merge-ses` pair is for routing externally.
-
-See [BOARD_AS_CODE](docs/ingest/BOARD_AS_CODE.md) for the preserved topology, current identity limits, and round-trip gates.
+## Reproducibility
 
 For an analysis run, emit an immutable manifest:
 

@@ -81,7 +81,7 @@ if [ "$MODE" = "auto" ]; then
       find . \( -name .git -o -name '.hauksbee*' \) -prune \
         -o \( -iname '*.kicad_pcb' -o -iname '*.kicad_sch' -o -iname '*.net' \
                -o -iname '*.brd' -o -iname '*.PcbDoc' -o -iname '*.d356' \
-               -o -iname '*.board' -o -iname '*.zip' -o -iname '*.tgz' \
+               -o -iname '*.zip' -o -iname '*.tgz' \
                -o -iname '*.tar.gz' -o -iname '*.tar' \) -print 2>/dev/null
       while IFS= read -r -d '' candidate; do
         if is_ipc2581_xml "$candidate"; then

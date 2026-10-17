@@ -15,7 +15,7 @@
 //! * [`program_resistor`]: the resistance a programming pin sees to ground.
 //! * [`stress`], [`thermal`], [`shorts`]: the per-device envelopes and the
 //!   fault monitor that watches them during a run.
-//! * [`board_input`], [`firmware_input`], [`boardcode`], [`schematic_ties`],
+//! * [`board_input`], [`firmware_input`], [`schematic_ties`],
 //!   [`asbuilt`], [`waiver`]: the inputs a run is bound from.
 //! * [`bind_report`]: the per-component bind verdicts and their summary.
 //!
@@ -27,7 +27,6 @@ pub mod behavioral;
 pub mod bind_report;
 pub mod binder;
 pub mod board_input;
-pub mod boardcode;
 pub mod component_evidence;
 pub mod digital;
 pub mod dnp_rails;
@@ -63,10 +62,6 @@ pub use binder::{
     names_a_supply_of_unknown_voltage, power_rail_voltage, unpowered_supply_nets, BoundBoard,
 };
 pub use board_input::{BoardInputError, InputKind, NormalizedBoard};
-pub use boardcode::{
-    code_to_board_text, decompile_any_to_code, decompile_board_to_code, load_code,
-    program_from_extracted,
-};
 pub use dnp_rails::{dnp_sourced_rails, DnpSourcedRail, DNP_CAUSE_OPENING};
 pub use power_supply::{BatteryProtection, Chemistry, PowerSupply, SupplyLeg, UsbSpec};
 pub use shorts::{AppliedShort, BRIDGE_OHMS};

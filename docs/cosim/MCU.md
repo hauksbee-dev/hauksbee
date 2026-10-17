@@ -1158,7 +1158,7 @@ prints `nrf52840  builtin(0)  mcu`).
 A committed board and firmware pair runs end to end:
 
 ```
-hauksbee run testdata/firmware/renode_demos/nrf52840-zephyr_shell.board \
+hauksbee run testdata/firmware/renode_demos/nrf52840-zephyr_shell.kicad_pcb \
   --firmware testdata/firmware/renode_demos/nrf52840-zephyr_shell.elf \
   --headless --seconds 2
 ```

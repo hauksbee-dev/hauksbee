@@ -77,10 +77,6 @@ one_board="$work/one_board"
 mkdir -p "$one_board/hardware"
 touch "$one_board/hardware/board.kicad_pcb"
 
-board_as_code="$work/board_as_code"
-mkdir -p "$board_as_code/hardware"
-touch "$board_as_code/hardware/blinky.board"
-
 fab_archive="$work/fab_archive"
 mkdir -p "$fab_archive/fab"
 touch "$fab_archive/fab/release.tar.gz"
@@ -132,11 +128,6 @@ run_resolve "$one_board" auto "" "" ""
 expect_rc "one board (no ci/ spec) auto-detects" 0
 expect "  ...as mode check" "check" "$(got_mode)"
 expect "  ...naming that board" "hardware/board.kicad_pcb" "$(got_board)"
-
-run_resolve "$board_as_code" auto "" "" ""
-expect_rc "one Board-as-Code file auto-detects" 0
-expect "  ...as mode check" "check" "$(got_mode)"
-expect "  ...naming that board" "hardware/blinky.board" "$(got_board)"
 
 run_resolve "$fab_archive" auto "" "" ""
 expect_rc "one ODB++ or fab archive auto-detects" 0

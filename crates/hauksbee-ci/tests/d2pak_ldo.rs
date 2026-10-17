@@ -47,7 +47,7 @@ fn a_d2pak_ldo_regulates_from_5v_and_refuses_an_input_short_of_its_dropout() {
     let seen = (
         run_at(d.path(), named, 5.0),
         run_at(d.path(), named, 4.6).0,
-        run_at(d.path(), "d2pak_ldo.board", 5.0),
+        run_at(d.path(), "d2pak_ldo.kicad_pcb", 5.0),
     );
     assert_eq!(
         seen,

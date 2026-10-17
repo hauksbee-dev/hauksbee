@@ -48,9 +48,7 @@ hauksbee run crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb --drc
 By default these `hauksbee run` reports are informational: they print findings
 but exit 0. Add `--strict` to make them FAIL on a real problem (see
 [Gate a pipeline](#gate-a-pipeline-with---strict) below). Or gate on
-`hauksbee-ci` / `hauksbee check-code` (the same gate for Board-as-Code `.board`
-sources, see [BOARD_AS_CODE.md](../ingest/BOARD_AS_CODE.md)) for the full
-assertion/fault flow.
+`hauksbee-ci` for the full assertion/fault flow.
 
 `hauksbee --help` lists every command. `hauksbee run --help` (or any
 `<command> --help`) shows that command's flags with an example. Swap in your own
@@ -212,20 +210,6 @@ analysis runs locally, inside the `hauksbee serve` process. (A hosted
 version would be a packaging job around the same `bytes -> JSON` core, not new
 analysis work.)
 
-## Board-as-Code examples
-
-[`examples/board-as-code/`](../../examples/board-as-code). Decompile a real
-`.kicad_pcb` to editable text, edit it, recompile, re-simulate. Full DSL
-reference: [`docs/ingest/BOARD_AS_CODE.md`](../ingest/BOARD_AS_CODE.md).
-
-| Example | What it is |
-|---|---|
-| [`blinky.board`](../../examples/board-as-code/blinky.board) | The 5-component ATmega328P demo board as DSL: the smallest real example to read. |
-| [`stormduino.board`](../../examples/board-as-code/stormduino.board) | A real 51-component corpus board, with repeated hardware factored into `fn` blocks. |
-
-The edit-then-recheck loop and the miswire walkthrough (with expected output)
-are in the [board-as-code README](../../examples/board-as-code/README.md).
-
 ## hauksbee-ci spec examples
 
 [`examples/ci-specs/`](../../examples/ci-specs) + the canonical specs in
@@ -267,7 +251,6 @@ flows, each file labeled with the command that produced it.
 | Boot firmware headless | [`04_boot_firmware_headless.txt`](../../examples/sessions/04_boot_firmware_headless.txt) |
 | CI spec GREEN | [`05_ci_spec_green.txt`](../../examples/sessions/05_ci_spec_green.txt) |
 | Transient `rail_window` spec | [`08_ci_spec_transient.txt`](../../examples/sessions/08_ci_spec_transient.txt) |
-| Board-as-code loop | [`09_board_as_code_loop.txt`](../../examples/sessions/09_board_as_code_loop.txt) |
 | Environment doctor | [`10_doctor.txt`](../../examples/sessions/10_doctor.txt) |
 | Boot-coverage PASS / FAIL | [`11_boot_coverage_pass_fail.txt`](../../examples/sessions/11_boot_coverage_pass_fail.txt) |
 
@@ -282,7 +265,7 @@ CI-safe (colours auto-disable when not on a TTY or when `NO_COLOR` is set).
 | Script | What it does |
 |---|---|
 | [`install.sh`](../../scripts/install.sh) | Build `hauksbee` + `hauksbee-ci` (release) and install them onto PATH. `--prefix`, `--symlink`, `--no-build`. |
-| [`doctor.sh`](../../scripts/doctor.sh) | Report which tools (kicad-cli, simavr, qemu, renode, freerouting) are present and what each unlocks. |
+| [`doctor.sh`](../../scripts/doctor.sh) | Report which tools (kicad-cli, simavr, qemu, renode) are present and what each unlocks. |
 | [`ci.sh`](../../scripts/ci.sh) | Run one or more specs the pleasant-in-CI way: finds/builds the binary, writes a JUnit file per spec, exits non-zero if any spec is RED. |
 | [`bundle.sh`](../../scripts/bundle.sh) | Build a versioned binary bundle (the two bins + db + integrations + examples + scripts) as a `.tar.gz` with a checksum. |
 

@@ -26,7 +26,6 @@ pub struct RunInputs {
     pub(crate) text: String,
     pub(crate) input_kind: InputKind,
     pub(crate) is_altium: bool,
-    pub(crate) is_board_code: bool,
     pub(crate) reader_notes: Vec<String>,
     pub(crate) lib: ModelLibrary,
     pub(crate) inputs: Vec<JsonInputEvidence>,
@@ -259,7 +258,7 @@ pub fn prepare_run_inputs(
     // for an interactive user, and pure noise in report and pipeline output).
     let notes = Notes::new(quiet, cfg.json);
     warn_sibling_boards(&cfg.board, notes);
-    // Every input format (gerber dir/zip, binary Altium, Board-as-Code, KiCad
+    // Every input format (gerber dir/zip, binary Altium, KiCad
     // schematic hierarchy, the text layout/netlist formats) routes through the
     // ONE normalizer shared with the web front door and hauksbee-ci, including
     // the file-stem name fallback for titleless boards. `raw` keeps the file's
@@ -270,7 +269,6 @@ pub fn prepare_run_inputs(
     let input_kind = norm.kind;
     let input_notes = norm.notes.clone();
     let is_altium = norm.is_binary();
-    let is_board_code = norm.kind == crate::board_input::InputKind::BoardCode;
     let reader_notes = norm.notes;
     let raw = norm.raw;
     let text = norm.layout_text.unwrap_or_default();
@@ -577,7 +575,6 @@ pub fn prepare_run_inputs(
             text,
             input_kind,
             is_altium,
-            is_board_code,
             reader_notes,
             lib,
             inputs,

@@ -146,7 +146,7 @@ fn watch_refuses_unknown_target() {
         "stderr: {stderr}"
     );
     assert!(
-        stderr.contains(".board"),
+        stderr.contains(".kicad_pcb"),
         "accepted targets listed: {stderr}"
     );
     assert!(

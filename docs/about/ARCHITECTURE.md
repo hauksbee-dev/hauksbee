@@ -77,8 +77,7 @@ the ones above it in this table.
 
 Outside the workspace:
 
-- `vendor/kicad-forge`: lossless KiCad parse and produce, a typed model, and
-  board-to-code with repeat detection. It is its own workspace and is used
+- `vendor/kicad-forge`: lossless KiCad parse and produce, and a typed model. It is its own workspace and is used
   through path dependencies.
 - `frontend/`: the React app that `hauksbee serve` hosts.
 - `crates/hauksbee-models/db/`: the built-in device model cards (TOML), and
