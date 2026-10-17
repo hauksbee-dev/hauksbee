@@ -219,6 +219,11 @@ impl Supply {
 pub struct Circuit {
     /// Node names indexed by `NodeId.0`. Entry 0 is the ground name.
     node_names: Vec<String>,
+    /// `node_names[1..]` by lower-cased name, so interning a name is a lookup, not
+    /// a scan of every node (a board of 100k nets cost 100k squared compares).
+    /// Not serialized; a circuit read back rebuilds it on its first `node` call.
+    #[serde(skip)]
+    node_index: std::collections::HashMap<String, u32>,
     /// All devices, in insertion order. Index is the `DeviceId`.
     pub devices: Vec<Device>,
     /// Ambient temperature in Celsius. SPICE default is 27 C.
@@ -255,6 +260,7 @@ impl Circuit {
     pub fn new() -> Self {
         Self {
             node_names: vec!["0".to_string()],
+            node_index: std::collections::HashMap::new(),
             devices: Vec::new(),
             temp_c: 27.0,
             initial_conditions: Vec::new(),
@@ -276,15 +282,19 @@ impl Circuit {
         if name == "0" || name.eq_ignore_ascii_case("gnd") {
             return NodeId::GROUND;
         }
-        if let Some(i) = self
-            .node_names
-            .iter()
-            .position(|n| n.eq_ignore_ascii_case(name))
-        {
-            return NodeId(id_u32(i));
+        if self.node_index.len() + 1 != self.node_names.len() {
+            self.node_index = (self.node_names.iter().enumerate().skip(1))
+                .rev()
+                .map(|(i, n)| (n.to_ascii_lowercase(), id_u32(i)))
+                .collect();
+        }
+        let lowered = name.to_ascii_lowercase();
+        if let Some(&i) = self.node_index.get(&lowered) {
+            return NodeId(i);
         }
         let id = id_u32(self.node_names.len());
         self.node_names.push(name.to_string());
+        self.node_index.insert(lowered, id);
         NodeId(id)
     }
 
@@ -310,6 +320,12 @@ impl Circuit {
     pub fn find_node(&self, name: &str) -> Option<NodeId> {
         if name == "0" || name.eq_ignore_ascii_case("gnd") {
             return Some(NodeId::GROUND);
+        }
+        if self.node_index.len() + 1 == self.node_names.len() {
+            return self
+                .node_index
+                .get(&name.to_ascii_lowercase())
+                .map(|&i| NodeId(i));
         }
         self.node_names
             .iter()

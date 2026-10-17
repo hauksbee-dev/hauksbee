@@ -104,8 +104,17 @@ static EXPOSED_PAD: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new
 /// A `KiCad` library prefix (`Package_DFN_QFN:`) is no part of the body.
 #[must_use]
 pub fn package_body(name: &str) -> Option<Body> {
+    // The table's names squashed once, not once per lookup.
+    static SQUASHED: std::sync::LazyLock<Vec<Vec<String>>> = std::sync::LazyLock::new(|| {
+        BODIES
+            .iter()
+            .map(|r| r.0.iter().map(|s| squash(s)).collect())
+            .collect()
+    });
     let squashed = squash(name.rsplit(':').next().unwrap_or(name));
-    let row = (BODIES.iter()).find(|r| r.0.iter().any(|s| squashed.contains(&squash(s))));
+    let row = (BODIES.iter().zip(SQUASHED.iter()))
+        .find(|(_, names)| names.iter().any(|s| squashed.contains(s.as_str())))
+        .map(|(row, _)| row);
     row.map(|&(names, family, theta_ja_c_per_w, power)| Body {
         name: names[0],
         family: Some(family).filter(|f| !f.is_empty()),

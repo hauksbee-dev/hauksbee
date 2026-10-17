@@ -20,12 +20,19 @@
 #[must_use]
 pub fn leaf(name: &str) -> String {
     let n = name.trim();
-    n.rsplit('/')
-        .next()
-        .unwrap_or(n)
-        .trim()
-        .to_ascii_uppercase()
+    let leaf = n.rsplit('/').next().unwrap_or(n).trim();
+    // Every classifier below reads the leaf in full, many times a board. A real
+    // one is a few dozen bytes; a megabyte-long one states nothing a prefix does
+    // not, so only the first [`MAX_LEAF_BYTES`] are read.
+    let mut end = leaf.len().min(MAX_LEAF_BYTES);
+    while !leaf.is_char_boundary(end) {
+        end -= 1;
+    }
+    leaf[..end].to_ascii_uppercase()
 }
+
+/// Longest net-name leaf the classifiers read.
+const MAX_LEAF_BYTES: usize = 512;
 
 /// A ground-family net: the reference every other voltage is measured from,
 /// or a named split of it (AGND, DGND, PGND, GNDA, ISOGND, a numbered GND2,

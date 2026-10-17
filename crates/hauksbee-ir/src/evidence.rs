@@ -3700,10 +3700,11 @@ impl NetScope {
         S: Into<String>,
     {
         let mut out = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for net in nets {
             let net = net.into();
             non_blank("net_scope.net", &net)?;
-            if !out.contains(&net) {
+            if seen.insert(net.clone()) {
                 out.push(net);
             }
         }

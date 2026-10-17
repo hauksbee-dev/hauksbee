@@ -480,11 +480,15 @@ fn push_net_graphics(root: &List, nets: &mut NetResolver, buckets: &mut super::L
 /// the tie between different nets is the short sweep's business.
 fn join_footprint_links(root: &List, items: &[ItemMeta], dsu: &mut Dsu) {
     let mut pads: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
+    // Each footprint's own pad numbers, so a footprint reads its pads and not the board's.
+    let mut numbers: HashMap<&str, Vec<&str>> = HashMap::new();
     for (i, m) in items.iter().enumerate() {
         if m.kind == Some(ItemKind::Pad) && m.copper != Copper::None {
-            pads.entry((m.owner.as_str(), m.pad.as_str()))
-                .or_default()
-                .push(i);
+            let lands = pads.entry((m.owner.as_str(), m.pad.as_str())).or_default();
+            if lands.is_empty() && !m.pad.is_empty() {
+                numbers.entry(m.owner.as_str()).or_default().push(m.pad.as_str());
+            }
+            lands.push(i);
         }
     }
     for fp in root.find_all("footprint").chain(root.find_all("module")) {
@@ -519,9 +523,11 @@ fn join_footprint_links(root: &List, items: &[ItemMeta], dsu: &mut Dsu) {
             != Some("no")
         {
             groups.extend(
-                pads.keys()
-                    .filter(|(o, n)| *o == owner && !n.is_empty())
-                    .map(|(_, n)| vec![(*n).to_string()]),
+                numbers
+                    .get(owner.as_str())
+                    .into_iter()
+                    .flatten()
+                    .map(|n| vec![(*n).to_string()]),
             );
         }
         for group in groups {
@@ -531,11 +537,13 @@ fn join_footprint_links(root: &List, items: &[ItemMeta], dsu: &mut Dsu) {
                 .flatten()
                 .copied()
                 .collect();
+            // Every member on one net joins the first on it (not each pair: a
+            // group of k pads would cost k squared).
+            let mut first_on: HashMap<i64, usize> = HashMap::new();
             for &a in &members {
-                for &b in &members {
-                    if a < b && items[a].net == items[b].net {
-                        dsu.union(a, b);
-                    }
+                let first = *first_on.entry(items[a].net).or_insert(a);
+                if first != a {
+                    dsu.union(first, a);
                 }
             }
         }

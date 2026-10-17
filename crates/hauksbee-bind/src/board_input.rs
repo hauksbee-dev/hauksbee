@@ -159,6 +159,7 @@ impl NormalizedBoard {
     #[must_use]
     fn canonical(mut self) -> Self {
         self.board.canonicalize();
+        self.notes.extend(cut_oversize_fields(&mut self.board));
         self
     }
 
@@ -192,6 +193,66 @@ impl NormalizedBoard {
     pub fn is_gerber_archive(&self) -> bool {
         self.kind == InputKind::Gerber
     }
+}
+
+/// Longest part field (value, library id, footprint, designator) the run reads.
+///
+/// A real value or footprint name is a few dozen bytes; the model library
+/// already matches only the first [`hauksbee_models::matcher::MAX_MATCH_FIELD_BYTES`]
+/// of any field, but every other consumer (value parsing, class guesses,
+/// report echoes) would read, copy and print all of a megabyte. Past this
+/// length nothing more can identify a part, so the field is cut once, here.
+const MAX_PART_FIELD_BYTES: usize = hauksbee_models::matcher::MAX_MATCH_FIELD_BYTES;
+/// Longest value of a part's extra property (datasheet link, description, order code).
+const MAX_PROPERTY_BYTES: usize = 4096;
+/// The mark a cut field ends in. It is no unit or magnitude, so a cut value
+/// reads as unparseable, which is what a megabyte of text in a value field is.
+const CUT_MARK: char = '\u{2026}';
+
+/// `text` cut to at most `limit` bytes (on a character boundary) plus [`CUT_MARK`];
+/// `false` when it was already short enough.
+fn cut_text(text: &mut String, limit: usize) -> bool {
+    if text.len() <= limit {
+        return false;
+    }
+    let mut end = limit;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    text.push(CUT_MARK);
+    true
+}
+
+/// Cut every part field past its limit and say so: one note for the board,
+/// naming how many fields were cut and the first part, so the verdict does not
+/// pretend it read text it did not.
+fn cut_oversize_fields(board: &mut ExtractedBoard) -> Option<String> {
+    let (mut cut, mut first) = (0usize, None::<String>);
+    for comp in &mut board.components {
+        let mut here = 0;
+        for field in [
+            &mut comp.value,
+            &mut comp.lib_id,
+            &mut comp.footprint,
+            &mut comp.reference,
+        ] {
+            here += usize::from(cut_text(field, MAX_PART_FIELD_BYTES));
+        }
+        for (_, value) in &mut comp.properties {
+            here += usize::from(cut_text(value, MAX_PROPERTY_BYTES));
+        }
+        if here > 0 {
+            first.get_or_insert_with(|| comp.reference.chars().take(40).collect());
+            cut += here;
+        }
+    }
+    let first = first?;
+    Some(format!(
+        "{cut} part field(s) were longer than {MAX_PART_FIELD_BYTES} bytes, far past any real value or \
+         footprint name, and were read only up to that length (first: part {first}); \
+         the text after it is not evidence of what the part is"
+    ))
 }
 
 /// How to name this input kind in a user-facing sentence.

@@ -1686,6 +1686,54 @@ fn model_cs_net(
 /// known-valid values and only `expect`s that they stay valid.
 #[must_use]
 pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::Resolution {
+    // The answer reads the part's identity (value, footprint, library id, fields,
+    // pad numbers and names) and the class of its designator; not where it sits,
+    // which nets its pads are on, or the digits of its designator. So a board of
+    // thousands of parts that differ only by those asks the question once.
+    let mut res = lib.memoised_part(&part_identity_key(comp), || {
+        library_resolution_uncached(lib, comp)
+    });
+    res.query.reference = Some(comp.reference.clone());
+    if let Some(selection) = res.selection.as_mut() {
+        selection.reference.clone_from(&comp.reference);
+    }
+    res
+}
+
+/// Everything [`library_resolution_uncached`] reads about a part, as one string.
+fn part_identity_key(comp: &Component) -> String {
+    use std::fmt::Write;
+    let reference = comp.reference.as_str();
+    let letters = reference.trim_start_matches(|c: char| c.is_ascii_alphabetic());
+    let class = if letters.len() < reference.len() && letters.bytes().all(|b| b.is_ascii_digit()) {
+        // A letters-then-digits designator ("R1017"): only its class is read.
+        format!("{}~", ref_prefix(reference))
+    } else {
+        format!("={reference}")
+    };
+    let active = hauksbee_models::matcher::is_active_ic_ref(reference);
+    let mut key = format!(
+        "{class}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1d",
+        u8::from(active),
+        comp.value,
+        comp.lib_id,
+        comp.footprint,
+        u8::from(comp.dnp)
+    );
+    for (k, v) in &comp.properties {
+        let _ = write!(key, "{k}\x1e{v}\x1f");
+    }
+    key.push('\x1d');
+    for p in &comp.pins {
+        let _ = write!(key, "{}\x1e{}\x1e{}\x1f", p.number, p.function, p.kind);
+    }
+    key
+}
+
+fn library_resolution_uncached(
+    lib: &ModelLibrary,
+    comp: &Component,
+) -> hauksbee_models::Resolution {
     let mut res = record_resolution(lib, comp);
     // A part-number FIELD on the design (`MPN`, `Manufacturer_No`, an Eagle
     // `PART_NUMBER` attribute) reaches only the few cards written with an

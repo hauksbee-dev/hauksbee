@@ -18,6 +18,11 @@ export const REBUILT_NOTE =
   + 'the verdict, reason, conditions, judged scope and findings are the engine\'s; the per-check sections are not '
   + 'included. Run the reproduce command for the full document.'
 
+export const OMITTED_NOTE =
+  'This board is large, so the server left its full run --check --json document out of the page '
+  + '(it repeats the findings, evidence and copper detail shown here). The verdict, reason, conditions, '
+  + 'judged scope and findings below are the engine\'s; run the reproduce command for the full document.'
+
 /** The CLI's verdict word for a report, as `VERDICT: <tag>:` prints it. */
 export function verdictTag(r: Pick<WebReport, 'verdict' | 'partly_judged' | 'verdict_conditions' | 'verdict_inspect' | 'serious'>): string {
   const verdict = r.verdict ?? (r.serious > 0 ? 'fail' : undefined)
@@ -63,7 +68,7 @@ export function checkReportDocument(r: WebReport): { doc: CheckReportJson | Reco
     ...(r.verdict_reason ? { verdict_reason: r.verdict_reason } : {}),
     serious_count: r.serious,
     actionable_count: r.total,
-    export_note: REBUILT_NOTE,
+    export_note: r.check_report_omitted_bytes ? OMITTED_NOTE : REBUILT_NOTE,
     board: r.board_name || r.file_name,
     ...(r.inventory?.length ? { inventory: r.inventory } : {}),
     ...(r.assumptions?.length ? { assumptions: r.assumptions } : {}),

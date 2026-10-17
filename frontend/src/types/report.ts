@@ -432,6 +432,10 @@ export interface WebReport {
    *  sessions saved before it existed; the export then rebuilds the verdict
    *  fields from this report. */
   check_report?: CheckReportJson | null
+  /** Set instead of `check_report` when the document was too large to send
+   *  (its size in bytes); the export then rebuilds the verdict fields and says
+   *  to run the reproduce command for the full document. */
+  check_report_omitted_bytes?: number | null
 }
 
 /** One finding of the `run --check --json` document. */

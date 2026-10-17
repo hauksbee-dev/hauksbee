@@ -417,6 +417,10 @@ pub struct ModelLibrary {
     /// must not queue behind each other (measured: a mutex here left a quarter
     /// of each worker's time waiting on the lock).
     resolved: std::sync::RwLock<Option<std::collections::HashMap<ComponentQuery, Resolution>>>,
+    /// Whole-part answers a caller layered over [`Self::resolve`] (the binder's
+    /// fallbacks), by a key the caller builds from everything the answer reads.
+    /// Cleared with [`Self::resolved`].
+    parts: std::sync::RwLock<Option<std::collections::HashMap<String, Resolution>>>,
 }
 
 /// Resolutions [`ModelLibrary`] keeps before it starts over, so a long-lived
@@ -435,6 +439,7 @@ impl ModelLibrary {
             pin_rules: PinRuleTable::empty(),
             unmodelled: UnmodelledTable::empty(),
             resolved: std::sync::RwLock::new(None),
+            parts: std::sync::RwLock::new(None),
         }
     }
 
@@ -783,16 +788,48 @@ impl ModelLibrary {
     /// are layer 40, the highest, and match by exact card name, so they are
     /// checked before the entry scan.
     pub fn resolve(&self, q: &ComponentQuery) -> Resolution {
-        let cached = |m: &Option<std::collections::HashMap<_, Resolution>>| {
-            m.as_ref().and_then(|m| m.get(q).cloned())
+        // The designator reaches a resolution in only two ways: whether it is an
+        // active IC (a footprint-only discrete card never speaks for one), and the
+        // text echoed back in `query` and the variant selection. So the memo is keyed
+        // by the designator's class, and the caller's own text is put back on a hit:
+        // a board of N parts that differ only by designator costs one library scan.
+        let class_ref = q.reference.as_deref().map(|r| {
+            if matcher::is_active_ic_ref(r) {
+                "U".to_string()
+            } else {
+                "R".to_string()
+            }
+        });
+        let key_holder;
+        let key = if q.reference == class_ref {
+            q
+        } else {
+            let mut k = q.clone();
+            k.reference.clone_from(&class_ref);
+            key_holder = k;
+            &key_holder
         };
-        if let Some(r) = self.resolved.read().ok().and_then(|m| cached(&m)) {
-            return r;
+        let with_designator = |mut r: Resolution| {
+            if q.reference != class_ref {
+                r.query.reference.clone_from(&q.reference);
+                if let Some(s) = r.selection.as_mut() {
+                    s.reference = q.reference.clone().unwrap_or_default();
+                }
+            }
+            r
+        };
+        if let Some(r) = self
+            .resolved
+            .read()
+            .ok()
+            .and_then(|m| m.as_ref().and_then(|m| m.get(key).cloned()))
+        {
+            return with_designator(r);
         }
         // A field of a megabyte is matched against every library entry in full:
         // match on the cut one, so one hostile value cannot stall the run.
-        let r = q.bounded_for_matching().map_or_else(
-            || self.resolve_uncached(q),
+        let r = key.bounded_for_matching().map_or_else(
+            || self.resolve_uncached(key),
             |bounded| self.resolve_uncached(&bounded),
         );
         if let Ok(mut memo) = self.resolved.write() {
@@ -800,9 +837,32 @@ impl ModelLibrary {
             if memo.len() >= RESOLVED_CAP {
                 memo.clear();
             }
-            memo.insert(q.clone(), r.clone());
+            memo.insert(key.clone(), r.clone());
         }
-        r
+        with_designator(r)
+    }
+
+    /// The answer a caller layers over [`Self::resolve`] for the part `key`
+    /// names, worked out by `compute` the first time and remembered after.
+    ///
+    /// `key` must hold everything `compute` reads: two parts with one key get
+    /// one answer. A board of thousands of parts that differ only by designator
+    /// and wiring asks the same question once.
+    pub fn memoised_part(&self, key: &str, compute: impl FnOnce() -> Resolution) -> Resolution {
+        let held = (self.parts.read().ok())
+            .and_then(|memo| memo.as_ref().and_then(|memo| memo.get(key).cloned()));
+        if let Some(held) = held {
+            return held;
+        }
+        let answer = compute();
+        if let Ok(mut memo) = self.parts.write() {
+            let memo = memo.get_or_insert_with(std::collections::HashMap::new);
+            if memo.len() >= RESOLVED_CAP {
+                memo.clear();
+            }
+            memo.insert(key.to_string(), answer.clone());
+        }
+        answer
     }
 
     /// The MCU cards, in load order.
@@ -880,6 +940,9 @@ impl ModelLibrary {
         if let Ok(memo) = self.resolved.get_mut() {
             *memo = None;
         }
+        if let Ok(memo) = self.parts.get_mut() {
+            *memo = None;
+        }
     }
 
     /// [`Self::resolve`] without the memo: one scan of every entry.
@@ -899,7 +962,10 @@ impl ModelLibrary {
             let (tier, layer) = (le.provenance.tier().priority(), le.layer.priority());
             (tier, layer, score, le.compiled.regex_specificity())
         };
-        let matched = || self.entries.iter().filter(|le| le.compiled.matches(q));
+        let prepared = matcher::PreparedValue::of(q);
+        let matched = || {
+            (self.entries.iter()).filter(|le| le.compiled.matches_prepared(q, &prepared))
+        };
         if let Some(le) = matched().max_by_key(|le| (rank(le), Reverse(&le.compiled.entry.id))) {
             let (id, top) = (&le.compiled.entry.id, rank(le));
             // Siblings of an orderable-variant set are not a tie: `variants::select`
