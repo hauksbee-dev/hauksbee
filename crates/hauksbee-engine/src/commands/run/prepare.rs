@@ -39,6 +39,9 @@ pub struct RunArtifacts {
     pub(crate) asbuilt_board: Option<ExtractedBoard>,
     pub(crate) schematic_ties: Option<SchematicTies>,
     pub(crate) ci_findings: Option<Vec<JsonFinding>>,
+    /// The static check a combined run printed ahead of its co-sim, whose
+    /// closing line and `--strict` exits are left for the co-sim to close.
+    pub(crate) static_outcome: Option<crate::reports::check::CheckOutcome>,
 }
 
 /// One manufacturing-input row of the run's input inventory: what the artifact
@@ -416,11 +419,17 @@ pub fn prepare_run_inputs(
     // --probe records live waveforms, which only exist during a co-sim; it is
     // meaningless for the static reports and the interactive server. Fail loudly
     // rather than silently ignore the flag.
-    if !cfg.probe.is_empty() && surface != SelectedSurface::Headless {
+    if !cfg.probe.is_empty()
+        && !matches!(
+            surface,
+            SelectedSurface::Headless | SelectedSurface::CheckThenCosim
+        )
+    {
         anyhow::bail!("--probe records co-sim waveforms and needs --headless");
     }
 
     validate_flag_consistency(cfg, any_report_flag)?;
+    super::ignored_flags::warn(cfg, surface);
 
     // --asbuilt describes the physical board, so it is validated and applied on
     // EVERY path, not only the simulating one (the static report branches used
@@ -578,6 +587,7 @@ pub fn prepare_run_inputs(
             asbuilt_board,
             schematic_ties,
             ci_findings,
+            static_outcome: None,
         },
     ))
 }

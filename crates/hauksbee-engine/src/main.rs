@@ -89,6 +89,7 @@ enum Command {
     ///   hauksbee run board.kicad_pcb --report --plain
     ///   hauksbee run board.kicad_pcb --drc --plain --strict
     ///   hauksbee run board.kicad_pcb --firmware blink.hex --headless --seconds 2   # firmware co-sim
+    ///   hauksbee run board.kicad_pcb --plain --seconds 2   # checks, then a 2 s co-sim, one verdict
     #[command(verbatim_doc_comment)]
     Run(RunArgs),
 
@@ -876,7 +877,14 @@ struct RunArgs {
     #[arg(long, value_name = "FILE", help_heading = "CI output")]
     emit_manifest: Option<PathBuf>,
 
-    /// Seconds of simulated time to run under --headless.
+    /// Seconds of simulated time, for the surfaces that simulate:
+    /// --headless, --thermal, --serial-attach, and bare --plain.
+    ///
+    /// Bare --plain alone prints the static check triage. Add an explicit
+    /// --seconds N and it also co-simulates the board for N seconds in the
+    /// same run, closing on one verdict that covers both. The static reports
+    /// (--report, --drc, --lint, --si, ...) simulate no time: a --seconds
+    /// beside one is not used, and the run says so. Default 1.
     #[arg(
         long,
         default_value_t = 1.0,
@@ -952,7 +960,8 @@ struct RunArgs {
     /// do.
     ///
     /// Applies to --drc/--lint/--si/--resources/--usb-c and to --headless
-    /// faults.
+    /// faults. On its own it runs the whole static check; with an explicit
+    /// --seconds N it then co-simulates for N seconds and ends on one verdict.
     #[arg(long, visible_alias = "explain", help_heading = "Start here")]
     plain: bool,
 
@@ -1673,7 +1682,7 @@ fn main() -> anyhow::Result<()> {
         // the shared JSON/text error envelope below.
         Command::Run(mut args) | Command::Check(mut args) => {
             let schematic = args.schematic.take();
-            let cfg = run_config(args);
+            let cfg = run_config(args, explicit_run_flags(&raw_args));
             hauksbee_engine::commands::run::run_with_schematic(cfg, quiet, schematic.as_deref())
         }
         Command::Reproduce(args) => hauksbee_engine::run_manifest::reproduce(&args.manifest),
@@ -1905,12 +1914,44 @@ fn looks_like_board_input(p: &std::path::Path) -> bool {
         || p.is_dir() && p.exists() && p.to_str().is_some_and(|s| s.contains('/'))
 }
 
+/// The long flags the user typed on `run`'s command line, as `--name`.
+///
+/// Clap fills a flag that carries a default exactly like one the user typed;
+/// only its value source tells them apart. The run needs the difference to
+/// treat an explicit `--seconds` as a request and to say so when a flag it was
+/// given goes unused.
+fn explicit_run_flags(raw_args: &[String]) -> Vec<String> {
+    use clap::CommandFactory;
+    let command = Cli::command();
+    let Ok(matches) = command.clone().try_get_matches_from(raw_args) else {
+        return Vec::new();
+    };
+    let Some((name, typed)) = matches.subcommand() else {
+        return Vec::new();
+    };
+    let Some(subcommand) = command.find_subcommand(name) else {
+        return Vec::new();
+    };
+    subcommand
+        .get_arguments()
+        .filter(|arg| {
+            typed.value_source(arg.get_id().as_str())
+                == Some(clap::parser::ValueSource::CommandLine)
+        })
+        .filter_map(|arg| arg.get_long().map(|long| format!("--{long}")))
+        .collect()
+}
+
 /// Deconstruct the parsed `RunArgs` (clap) into the library's plain
 /// [`hauksbee_engine::commands::run::RunConfig`],
 /// so the run orchestrator lives in `hauksbee_engine::commands::run` while
 /// argument parsing stays here.
-fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
+fn run_config(
+    a: RunArgs,
+    explicit_flags: Vec<String>,
+) -> hauksbee_engine::commands::run::RunConfig {
     hauksbee_engine::commands::run::RunConfig {
+        explicit_flags,
         // Empty when neither BOARD nor --example was given. The run
         // orchestrator resolves examples, and refuses an empty board, only
         // after it has opened the requested fail-closed artifact transaction.

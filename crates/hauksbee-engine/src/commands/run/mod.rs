@@ -9,6 +9,7 @@ use hauksbee_ir::eprintln;
 
 mod cosim;
 mod cosim_gates;
+mod ignored_flags;
 mod manifest;
 mod prepare;
 mod serve_flow;
@@ -119,6 +120,20 @@ pub struct RunConfig {
     /// Normalized argv (tool name, then exact arguments) with
     /// `--emit-manifest` removed so replay cannot clobber its evidence.
     pub manifest_command: Vec<String>,
+    /// The long flags (`--seconds`, `--chunk-us`, ...) the user typed on the
+    /// command line, as opposed to ones that carry their default. Flags only
+    /// matter to a surface that uses them: this is how a flag the chosen
+    /// surface ignores is said aloud instead of dropped, and how an explicit
+    /// `--seconds` is told apart from the default one second.
+    pub explicit_flags: Vec<String>,
+}
+
+impl RunConfig {
+    /// Whether the user typed `flag` (`--seconds`) on the command line.
+    #[must_use]
+    pub fn passed(&self, flag: &str) -> bool {
+        self.explicit_flags.iter().any(|passed| passed == flag)
+    }
 }
 
 pub(crate) const fn input_kind_name(kind: crate::board_input::InputKind) -> &'static str {
@@ -169,6 +184,9 @@ enum SelectedSurface {
     Thermal,
     Serial,
     Headless,
+    /// Bare `--plain` with an explicit `--seconds`: the combined static check,
+    /// then the headless co-sim for that long, closed by one verdict.
+    CheckThenCosim,
     BareJson,
     Default,
 }
@@ -214,7 +232,7 @@ const fn selected_surface(cfg: &RunConfig) -> SelectedSurface {
 
 fn ci_check_selected(surface: SelectedSurface, finding: &crate::result::JsonFinding) -> bool {
     match surface {
-        SelectedSurface::Check | SelectedSurface::BareJson => {
+        SelectedSurface::Check | SelectedSurface::CheckThenCosim | SelectedSurface::BareJson => {
             matches!(finding.check.as_str(), "drc" | "lint" | "si" | "usb_c")
         }
         SelectedSurface::Drc => finding.check == "drc",
@@ -231,6 +249,7 @@ fn ci_check_selected(surface: SelectedSurface, finding: &crate::result::JsonFind
 fn ci_selected_suites(surface: SelectedSurface) -> Vec<String> {
     let checks: &[&str] = match surface {
         SelectedSurface::Check | SelectedSurface::BareJson => &["drc", "lint", "si", "usb_c"],
+        SelectedSurface::CheckThenCosim => &["drc", "lint", "si", "usb_c", "cosim"],
         SelectedSurface::Bind => &["bind"],
         SelectedSurface::Drc => &["drc"],
         SelectedSurface::Ampacity => &["ampacity"],
@@ -383,17 +402,25 @@ pub fn run_with_schematic(
         || cfg.usb_c
         || cfg.thermal
         || cfg.check;
-    if cfg.plain
+    let bare_plain = cfg.plain
         && !any_report_flag
         && !cfg.headless
         && !cfg.serve
         && !cfg.list_nets
         && !cfg.serial_attach
-        && cfg.ac.is_none()
-    {
+        && cfg.ac.is_none();
+    if bare_plain {
         cfg.check = true;
     }
-    let surface = selected_surface(&cfg);
+    // An explicit --seconds beside bare --plain asks for simulated time as well
+    // as the checks: run the checks, then co-simulate for that long, in this
+    // one invocation. The default second does not (bare `--plain` stays the
+    // static triage), and --json has no prose form to append to.
+    let surface = if bare_plain && !cfg.emit_netlist && !cfg.json && cfg.passed("--seconds") {
+        SelectedSurface::CheckThenCosim
+    } else {
+        selected_surface(&cfg)
+    };
     begin_ci_artifact_run(&cfg, surface)?;
     let result = (|| {
         if let Some(name) = cfg.example.as_deref() {
@@ -439,6 +466,7 @@ fn run_inner(
         return Ok(());
     }
     let prebound = artifacts.prebound.take();
+    let static_outcome = artifacts.static_outcome.take();
     let mut sim = simulation::build_live_simulation(
         &cfg,
         &run_inputs,
@@ -452,6 +480,7 @@ fn run_inner(
         &run_inputs,
         &artifacts,
         &mut sim,
+        static_outcome,
     )? {
         return Ok(());
     }

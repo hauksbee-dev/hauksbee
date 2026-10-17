@@ -65,6 +65,8 @@ mod cli_refusal_surfaces;
 mod cli_round2_fixes;
 #[path = "cli_round3_fixes.rs"]
 mod cli_round3_fixes;
+#[path = "cli_run_plain_seconds.rs"]
+mod cli_run_plain_seconds;
 #[path = "cli_sim_help_honesty.rs"]
 mod cli_sim_help_honesty;
 #[path = "cli_strict_plain.rs"]

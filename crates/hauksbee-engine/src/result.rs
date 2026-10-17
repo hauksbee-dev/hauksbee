@@ -338,6 +338,61 @@ impl RunVerdict {
         self.verdict == "pass"
     }
 
+    /// How bad the verdict is, for taking the worst of several: a failure
+    /// outranks a run that could not be judged, which outranks a pass.
+    const fn severity(&self) -> u8 {
+        match self.verdict.as_bytes() {
+            b"fail" => 2,
+            b"pass" => 0,
+            _ => 1,
+        }
+    }
+
+    /// The one verdict of a run that judged the same board twice, once
+    /// statically (`self`) and once by co-simulating it (`later`): the worst of
+    /// the two, never softer than either.
+    ///
+    /// A pass is only as good as both passes, and rests on both passes'
+    /// conditions. When only one is not a pass, its words stand. When both
+    /// are, the static one leads and the other follows after the same joiner
+    /// a failing verdict uses for what it did not judge, unless the two say
+    /// the same thing (both refuse over the same unmodelled parts).
+    #[must_use]
+    pub fn combine(&self, later: &Self) -> Self {
+        let (first, second) = if later.severity() > self.severity() {
+            (later, self)
+        } else {
+            (self, later)
+        };
+        if first.severity() == 0 {
+            let mut conditions = self.conditions.clone();
+            for condition in &later.conditions {
+                if !conditions.contains(condition) {
+                    conditions.push(condition.clone());
+                }
+            }
+            return Self {
+                conditions,
+                inspect: self.inspect + later.inspect,
+                ..Self::default()
+            };
+        }
+        let reason = match (&first.reason, &second.reason) {
+            (Some(lead), Some(follow)) if second.severity() > 0 && lead != follow => {
+                Some(format!("{lead}{NOT_JUDGED_JOINER}{follow}"))
+            }
+            (reason, _) => reason.clone(),
+        };
+        Self {
+            verdict: first.verdict,
+            reason,
+            conditions: Vec::new(),
+            partial: first.partial,
+            not_judged: first.not_judged.clone(),
+            inspect: 0,
+        }
+    }
+
     /// "inspect before ordering (N items)" for a pass with items the triage
     /// lists to inspect, in the triage bucket's own words; `None` when there
     /// are none (or the run did not pass).
@@ -4636,5 +4691,94 @@ mod tests {
             json[0].fix.as_deref(),
             lint_fix_hint(LintCheck::OperatingEnvelope, Severity::High)
         );
+    }
+
+    fn verdict(
+        verdict: &'static str,
+        reason: Option<&str>,
+        partial: bool,
+        conditions: &[&str],
+        inspect: usize,
+    ) -> RunVerdict {
+        RunVerdict {
+            verdict,
+            reason: reason.map(str::to_string),
+            conditions: conditions.iter().map(ToString::to_string).collect(),
+            partial,
+            not_judged: None,
+            inspect,
+        }
+    }
+
+    /// A run that judged the board twice is only as good as its worse pass,
+    /// whichever pass was worse, and never reads softer than either.
+    #[test]
+    fn the_combined_verdict_is_the_worse_of_the_two_passes() {
+        let pass = verdict("pass", None, false, &[], 0);
+        let invalid = verdict("invalid", Some("cannot vouch."), false, &[], 0);
+        let fail = verdict("fail", Some("1 blocking problem(s)."), false, &[], 0);
+        for (stat, cosim, want) in [
+            (&pass, &pass, "pass"),
+            (&pass, &invalid, "invalid"),
+            (&invalid, &pass, "invalid"),
+            (&pass, &fail, "fail"),
+            (&fail, &pass, "fail"),
+            (&invalid, &fail, "fail"),
+            (&fail, &invalid, "fail"),
+            (&invalid, &invalid, "invalid"),
+            (&fail, &fail, "fail"),
+        ] {
+            assert_eq!(stat.combine(cosim).verdict, want, "{stat:?} + {cosim:?}");
+        }
+    }
+
+    /// Words of a non-pass stand as they are when only one pass is one; two
+    /// that say different things are both kept, the static one leading, and two
+    /// that say the same thing (the same unmodelled parts) are said once.
+    #[test]
+    fn the_combined_reason_keeps_what_each_pass_found_and_says_a_shared_one_once() {
+        let pass = verdict("pass", None, false, &[], 0);
+        let fail = verdict("fail", Some("1 blocking problem(s)."), false, &[], 0);
+        let stress = verdict("fail", Some("a MOSFET is overstressed."), false, &[], 0);
+        let same = verdict("invalid", Some("2 key parts have no model."), false, &[], 0);
+        assert_eq!(
+            pass.combine(&fail).reason.as_deref(),
+            Some("1 blocking problem(s).")
+        );
+        assert_eq!(
+            fail.combine(&stress).reason.as_deref(),
+            Some(&*format!(
+                "1 blocking problem(s).{NOT_JUDGED_JOINER}a MOSFET is overstressed."
+            ))
+        );
+        assert_eq!(
+            same.combine(&same).reason.as_deref(),
+            Some("2 key parts have no model.")
+        );
+        // A partly judged pass stays partly judged when nothing worse is found.
+        let partly = verdict("invalid", Some("PARTLY JUDGED: x."), true, &[], 0);
+        let combined = partly.combine(&pass);
+        assert!(
+            combined.partial && combined.verdict == "invalid",
+            "{combined:?}"
+        );
+        // A failure outranks it, and is not called partly judged.
+        assert!(!partly.combine(&fail).partial);
+    }
+
+    /// A pass rests on both passes' assumptions, each once, and on every item
+    /// either pass asked to be inspected.
+    #[test]
+    fn a_combined_pass_carries_both_passes_conditions_and_inspect_counts() {
+        let stat = verdict("pass", None, false, &["rail held", "default rules"], 2);
+        let cosim = verdict("pass", None, false, &["rail held", "assumed clock"], 1);
+        let combined = stat.combine(&cosim);
+        assert_eq!(combined.verdict, "pass");
+        assert_eq!(
+            combined.conditions,
+            ["rail held", "default rules", "assumed clock"]
+        );
+        assert_eq!(combined.inspect, 3);
+        assert_eq!(combined.reason, None);
     }
 }
