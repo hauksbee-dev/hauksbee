@@ -19,7 +19,9 @@
 //! an op-amp family), so a family sheet that lists the part among others is
 //! silent. 74-series logic is compared by family and function, where the
 //! family letters matter: `74HC_HCT4051` lists HC and HCT, `sn74LS157` does
-//! not list HC. Whatever cannot be parsed is silent.
+//! not list HC. Whatever cannot be parsed is silent. So is a file name that
+//! does not itself read as one specific part number (`cx5r`, `X7R_series`):
+//! a series or family document.
 
 use crate::layout_lint::{is_part_number, normalise_mpn};
 
@@ -32,6 +34,12 @@ use crate::layout_lint::{is_part_number, normalise_mpn};
 #[must_use]
 pub fn datasheet_names_other_part(identities: &[&str], locator: &str) -> Option<String> {
     let stem = file_stem(locator)?;
+    // The file name itself must read as one specific part number. A vendor's
+    // series sheet (`cx5r`), a product-family name or a bare word is a
+    // document about many parts, and says nothing against any one of them.
+    if !is_part_number(&stem) || names_a_series(&stem) {
+        return None;
+    }
     let tokens: Vec<String> = stem
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|t| !t.is_empty())
@@ -58,6 +66,18 @@ pub fn datasheet_names_other_part(identities: &[&str], locator: &str) -> Option<
         }
     }
     judged.then_some(stem)
+}
+
+/// Whether a file name says in words that it covers a series or family.
+fn names_a_series(stem: &str) -> bool {
+    stem.split(|c: char| !c.is_ascii_alphanumeric())
+        .map(str::to_ascii_lowercase)
+        .any(|t| {
+            matches!(
+                t.as_str(),
+                "series" | "family" | "families" | "group" | "generic" | "catalog" | "catalogue"
+            )
+        })
 }
 
 /// The file name of a link or path that ends in `.pdf`, without the extension.
@@ -462,6 +482,14 @@ mod tests {
             ("OPA379AIDCKR", "https://www.ti.com/lit/gpn/opa2336?dl=1"),
             ("OPA379AIDCKR", "~"),
             ("OPA379AIDCKR", "datasheet.pdf"),
+            // A series or product-family document, not one part's datasheet.
+            ("OPA379AIDCKR", "https://example.com/cx5r.pdf"),
+            ("OPA379AIDCKR", "https://example.com/X7R_series.pdf"),
+            ("OPA379AIDCKR", "https://example.com/OPA2336_family.pdf"),
+            (
+                "OPA379AIDCKR",
+                "https://example.com/ER-TFT1.28-2_Series.pdf",
+            ),
             ("OPA379AIDCKR", "https://example.com/5c7a3b9e0f1d4a2b.pdf"),
             (
                 "ESP32-WROOM-32E",

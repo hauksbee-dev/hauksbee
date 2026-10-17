@@ -10,7 +10,10 @@
 //! The judgement is [`hauksbee_extract::datasheet_identity`]'s, which is
 //! deliberately conservative: only a link that ends in `.pdf` and carries a
 //! part-number-like file name is read, document numbers and generic names say
-//! nothing, and a family sheet that lists the part is silent. A finding is
+//! nothing, and a family sheet that lists the part is silent. Only parts
+//! `hauksbee models extract --unmodelled` would offer are judged (active ICs and
+//! transistors): a passive links its vendor's series sheet and a connector the
+//! mating part's, and neither is ever drafted into a model. A finding is
 //! `Severity::Low` and never gates; it asks the reader to look.
 
 use std::collections::BTreeMap;
@@ -21,6 +24,7 @@ use hauksbee_extract::datasheet_identity::datasheet_names_other_part;
 use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity, REMEDY_MARKER,
 };
+use hauksbee_models::refdes::RefClass;
 
 /// One component whose `Datasheet` field names another device.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,12 +59,31 @@ pub fn datasheet_field(comp: &Component) -> Option<&str> {
         .map(|(_, v)| v.trim())
 }
 
+/// Whether a model would be drafted for this part.
+///
+/// The class the check verdict counts as key parts (`unmodelled_critical`) and
+/// `models extract --unmodelled` offers: an active IC or a discrete transistor
+/// by designator. Passives, connectors and mechanical parts are never judged.
+#[must_use]
+pub fn is_extraction_candidate(comp: &Component) -> bool {
+    matches!(
+        RefClass::of(&comp.reference),
+        RefClass::ActiveIc | RefClass::Transistor
+    )
+}
+
 /// The component's `Datasheet` field when it clearly names another device.
+///
+/// Only [`is_extraction_candidate`] parts are judged, here, so the lint and the
+/// pre-send doubt in `models extract --unmodelled` apply one rule.
 ///
 /// Every part number the component carries (each manufacturer-part-number
 /// field, then its value) is tried: the link agrees when any of them does.
 #[must_use]
 pub fn component_doubt(comp: &Component) -> Option<DatasheetDoubt> {
+    if !is_extraction_candidate(comp) {
+        return None;
+    }
     let locator = datasheet_field(comp)?;
     let mut identities: Vec<&str> = comp
         .properties
@@ -194,6 +217,46 @@ mod tests {
                 "https://www.yageo.com/upload/PYu-RC_Group_51_RoHS_L_12.pdf",
             ),
         ]);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn passives_and_connectors_are_never_judged() {
+        // A capacitor linking its vendor's series sheet, and a connector
+        // linking the mating part's, are legitimate; even a link that would be
+        // a clear mismatch on an IC is not read on a part nobody models.
+        let found = lint(vec![
+            part("C1", "GRM155R71C104KA88D", "https://example.com/cx5r.pdf"),
+            part(
+                "C2",
+                "GRM155R71C104KA88D",
+                "https://example.com/X7R_series.pdf",
+            ),
+            part(
+                "C3",
+                "GRM155R71C104KA88D",
+                "https://example.com/GRM188R60J106ME47.pdf",
+            ),
+            part(
+                "X1",
+                "ABC-24F024",
+                "https://example.com/ER-TFT1.28-2_Datasheet.pdf",
+            ),
+            part("J1", "ABC-24F024", "https://example.com/XYZ-9000-DS.pdf"),
+            part("L1", "LQM21PN2R2", "https://example.com/other4700.pdf"),
+        ]);
+        assert!(found.is_empty(), "{found:?}");
+        assert!(!is_extraction_candidate(&part("R1", "10k", "")));
+        assert!(is_extraction_candidate(&part("Q1", "BSS138", "")));
+    }
+
+    #[test]
+    fn an_ic_with_a_series_sheet_is_silent() {
+        let found = lint(vec![part(
+            "U1",
+            "OPA379AIDCKR",
+            "https://example.com/cx5r.pdf",
+        )]);
         assert!(found.is_empty(), "{found:?}");
     }
 
