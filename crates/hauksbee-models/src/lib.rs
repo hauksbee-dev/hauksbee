@@ -1365,7 +1365,8 @@ mod tests {
              voh = { min = 2.0, unit = \"V\", conditions = \"VCC = 3 V, IOH = -24 mA\", basis = \"5.5 VOH\" }\n\
              vol = { max = 0.8, unit = \"V\", conditions = \"VCC = 3 V, IOL = 24 mA\", basis = \"5.5 VOL\" }\n",
             "lvc",
-            SourceLayer::UserDir,
+            // Builtin skips the executable-behaviour validation this bare card would fail.
+            SourceLayer::Builtin,
         )
         .unwrap();
         let resolved = by_value(&l, "LVCX");

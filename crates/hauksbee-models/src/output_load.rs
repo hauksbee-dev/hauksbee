@@ -246,10 +246,14 @@ pub fn light_load_levels(entry: &mut ModelEntry) -> (Vec<Characteristic>, Vec<Mo
 /// number equal to a cited heavy-load row's guaranteed column.
 #[must_use]
 pub fn heavy_level_warnings(entry: &ModelEntry) -> Vec<String> {
-    if !matches!(
-        entry.kind,
-        ComponentKind::Digital | ComponentKind::ShiftRegister
-    ) {
+    // The cards [`light_load_levels`] repairs: an identity-only card is never driven.
+    let identity = entry.params.get_bool("identity_only") == Some(true);
+    if identity
+        || !matches!(
+            entry.kind,
+            ComponentKind::Digital | ComponentKind::ShiftRegister
+        )
+    {
         return Vec::new();
     }
     let mut out = Vec::new();
@@ -342,7 +346,7 @@ mod tests {
 
     #[test]
     fn a_light_load_or_stated_card_is_left_alone() {
-        let light = "voh = { min = 3.1, unit = \"V\", conditions = \"VCC = 3.3 V, IOH = -100 uA\" }\nro = 25.0";
+        let light = "voh = { min = 3.1, unit = \"V\", conditions = \"VCC = 3.3 V, IOH = -100 uA\", basis = \"VOH\" }\nro = 25.0";
         let mut entry = card(light, "");
         let before = format!("{:?}", entry.params);
         let (rows, records) = light_load_levels(&mut entry);
