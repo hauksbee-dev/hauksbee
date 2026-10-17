@@ -1286,6 +1286,8 @@ mod tests {
     /// regulator's output pad is excused, not the rest of the part's power.
     #[test]
     fn a_regulator_output_supply_left_on_its_capacitor_is_silent() {
+        /// (value, regulator-output pad, supply-side pads, return pads)
+        type Case<'a> = (&'a str, &'a str, &'a [(&'a str, i64)], &'a [&'a str]);
         let lib = ModelLibrary::builtin();
         let check = |value: &str, pads: &[(&str, i64)]| {
             let parts = vec![
@@ -1294,8 +1296,7 @@ mod tests {
             ];
             power_pin_lint(&board(&NETS, parts), &lib).findings
         };
-        // (value, regulator-output pad, supply-side pads, return pads)
-        let cases: [(&str, &str, &[(&str, i64)], &[&str]); 4] = [
+        let cases: [Case; 4] = [
             ("DRV8353S", "38", &[("3", V5), ("4", V5)], &["39", "25"]),
             ("MP2650", "26", &[("1", V5), ("22", V5)], &["4", "19", "27"]),
             ("ProMicro", "21", &[("24", V5)], &["3", "4", "23"]),
@@ -1344,7 +1345,13 @@ mod tests {
         let found = run(&wired);
         assert!(found.is_empty(), "{found:#?}");
         // DVDD tied to nothing: the regulator output pad is not on its net.
-        let untied = [("1", V33), ("48", V33), ("44", V33), ("23", LONE), ("57", GND)];
+        let untied = [
+            ("1", V33),
+            ("48", V33),
+            ("44", V33),
+            ("23", LONE),
+            ("57", GND),
+        ];
         let found = run(&untied);
         assert_eq!(found.len(), 1, "{found:#?}");
         says(&found[0], &["no supply", "pads 23 (DVDD), 50 (DVDD2)"]);
