@@ -165,6 +165,32 @@ pub enum ExtractError {
     OrphanSubSheet { sheet: String, needs: String },
 }
 
+/// How the coverage note for an unread sub-sheet file opens.
+///
+/// The reader writes it ([`unread_sheet_note`]) and the evidence layer
+/// recognises it ([`split_unread_sheet_note`]) from this one definition, so the
+/// note travels the reader-notes channel and arrives at the verdict as
+/// unchecked scope.
+pub const UNREAD_SHEET_NOTE_PREFIX: &str = "Sub-sheet not read: ";
+
+/// The coverage note for a sub-sheet file the reader had to leave out.
+///
+/// `subject` is the file and the sheet that references it; `detail` is the
+/// whole-sentence account of what is wrong and how to fix it.
+#[must_use]
+pub fn unread_sheet_note(subject: &str, detail: &str) -> String {
+    format!("{UNREAD_SHEET_NOTE_PREFIX}{subject}: {detail}")
+}
+
+/// The `(subject, detail)` of a note written by [`unread_sheet_note`], or
+/// `None` for any other note.
+#[must_use]
+pub fn split_unread_sheet_note(note: &str) -> Option<(&str, &str)> {
+    note.strip_prefix(UNREAD_SHEET_NOTE_PREFIX)?
+        .split_once(": ")
+        .filter(|(subject, detail)| !subject.is_empty() && !detail.is_empty())
+}
+
 /// The sentence for a file whose top-level section is not the expected one.
 /// `None` means the parser found no top-level section at all (an empty or
 /// whitespace-only file), which is said in those words, not as a Rust `None`.
@@ -402,10 +428,27 @@ impl ExtractedBoard {
     /// (sub-sheets resolved relative to the file's directory).
     ///
     /// # Errors
-    /// Fails when the file or a sub-sheet cannot be read or is not a
-    /// well-formed KiCad schematic.
+    /// Fails when the file cannot be read or is not a well-formed KiCad
+    /// schematic. A sub-sheet that cannot be read is left out of the read
+    /// (see [`Self::from_kicad_schematic_path_with_notes`] for the note).
     pub fn from_kicad_schematic_path(path: &Path) -> Result<Self, ExtractError> {
         schematic::extract_from_path(path)
+    }
+
+    /// [`Self::from_kicad_schematic_path`], plus the coverage notes the read
+    /// owes the verdict: one sentence for each sub-sheet file that could not be
+    /// read (missing, cut short, empty or not a schematic). The sheets that were
+    /// read are still extracted, so a fault on them is still found; a caller
+    /// that reports a verdict must carry the notes with it, because a design
+    /// with an unread sheet is not an unconditionally clean one.
+    ///
+    /// # Errors
+    /// As [`Self::from_kicad_schematic_path`] for the root and for hierarchy
+    /// limits; an unreadable sub-sheet is a note, not an error.
+    pub fn from_kicad_schematic_path_with_notes(
+        path: &Path,
+    ) -> Result<(Self, Vec<String>), ExtractError> {
+        schematic::extract_from_path_with_notes(path)
     }
 
     /// Name the pads of layout components that carry no pin names (a scripted,

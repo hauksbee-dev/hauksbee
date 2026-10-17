@@ -55,6 +55,8 @@ mod cli_firmware_guard;
 mod cli_hostile_input_wording;
 #[path = "cli_manifest_contract.rs"]
 mod cli_manifest_contract;
+#[path = "cli_missing_subsheet.rs"]
+mod cli_missing_subsheet;
 #[path = "cli_models_cmds.rs"]
 mod cli_models_cmds;
 #[path = "cli_models_lint.rs"]

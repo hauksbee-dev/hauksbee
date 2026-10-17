@@ -811,7 +811,9 @@ fn from_path_in_file_order(path: &Path) -> Result<NormalizedBoard, BoardInputErr
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("kicad_sch"));
     if is_sch {
-        let board = ExtractedBoard::from_kicad_schematic_path(path)
+        // A sub-sheet file that cannot be read is left out and said so: its
+        // notes ride the reader-notes channel to the verdict as unchecked scope.
+        let (board, notes) = ExtractedBoard::from_kicad_schematic_path_with_notes(path)
             .map_err(|e| BoardInputError::Schematic(e.to_string()))?;
         return Ok(normalized(
             path,
@@ -819,7 +821,7 @@ fn from_path_in_file_order(path: &Path) -> Result<NormalizedBoard, BoardInputErr
             Some(text),
             raw,
             InputKind::Schematic,
-            Vec::new(),
+            notes,
         ));
     }
 

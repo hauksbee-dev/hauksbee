@@ -503,6 +503,31 @@ fn path_error(path: &std::path::Path) -> String {
     }
 }
 
+/// The coverage notes of a read that goes on without a sub-sheet it cannot read:
+/// the board is still extracted (so a fault on the sheets that were read is
+/// found) and each unread sheet is one note.
+fn path_notes(path: &std::path::Path) -> Vec<String> {
+    match ExtractedBoard::from_kicad_schematic_path_with_notes(path) {
+        Ok((_, notes)) => notes,
+        Err(e) => panic!("expected a read with notes for {}: {e}", path.display()),
+    }
+}
+
+/// One note, as the reader writes it for the evidence layer.
+fn only_note(path: &std::path::Path) -> String {
+    let mut notes = path_notes(path);
+    assert_eq!(notes.len(), 1, "one unread sheet, one note: {notes:?}");
+    let note = notes.remove(0);
+    let (subject, detail) = hauksbee_extract::split_unread_sheet_note(&note)
+        .unwrap_or_else(|| panic!("not an unread-sheet note: {note}"));
+    assert!(
+        detail.contains("NOT read"),
+        "says it was not checked: {note}"
+    );
+    assert!(!subject.is_empty());
+    note
+}
+
 /// D1: a sheet placed twice on every level multiplies to 2^depth instances.
 /// 24 files used to run for minutes; the expansion is now capped, finishes
 /// fast, and the error names the limit and the chain being expanded.
@@ -556,7 +581,7 @@ fn an_empty_child_sheet_is_named_in_user_words() {
     let p = Project::new("empty-child");
     p.write("bad.kicad_sch", "");
     let root = p.root(&[("bad", "bad.kicad_sch")]);
-    let msg = path_error(&root);
+    let msg = only_note(&root);
     assert!(!msg.contains("None"), "no Rust Option debug: {msg}");
     assert!(msg.contains("'bad.kicad_sch'"), "names the child: {msg}");
     assert!(
@@ -583,7 +608,7 @@ fn a_file_with_no_top_level_section_is_not_described_as_root_is_none() {
 fn a_missing_child_sheet_is_named_with_its_parent() {
     let p = Project::new("missing-child");
     let root = p.root(&[("power", "missing.kicad_sch")]);
-    let msg = path_error(&root);
+    let msg = only_note(&root);
     assert!(
         msg.contains("'missing.kicad_sch'"),
         "names the child: {msg}"
@@ -602,7 +627,7 @@ fn a_truncated_child_sheet_is_named_as_damaged() {
     let p = Project::new("trunc-child");
     p.write("bad.kicad_sch", "(kicad_sch (version 20230121) (symbol");
     let root = p.root(&[("bad", "bad.kicad_sch")]);
-    let msg = path_error(&root);
+    let msg = only_note(&root);
     assert!(msg.contains("'bad.kicad_sch'"), "names the child: {msg}");
     assert!(msg.contains("damaged or cut short"), "{msg}");
     assert!(
@@ -621,7 +646,31 @@ fn a_missing_grandchild_names_its_immediate_parent_sheet() {
         &format!("{SCH_HEAD}{})\n", sheet_entry("leaf", "gone.kicad_sch")),
     );
     let root = p.root(&[("mid", "mid.kicad_sch")]);
-    let msg = path_error(&root);
+    let msg = only_note(&root);
     assert!(msg.contains("'gone.kicad_sch'"), "{msg}");
     assert!(msg.contains("'leaf' in mid.kicad_sch"), "{msg}");
+}
+
+/// A sheet that cannot be read does not stop the read: the sheets that can be
+/// read are extracted, the unread one is a note, and a sheet placed twice is
+/// one note, not two.
+#[test]
+fn an_unreadable_child_sheet_is_left_out_and_the_rest_is_still_read() {
+    let p = Project::new("unread-continues");
+    p.write("bad.kicad_sch", "(kicad_sch (version 20230121) (symbol");
+    let root = p.root(&[("one", "bad.kicad_sch"), ("two", "bad.kicad_sch")]);
+    let (_, notes) = ExtractedBoard::from_kicad_schematic_path_with_notes(&root)
+        .expect("an unreadable sub-sheet is a note, not an error");
+    assert_eq!(notes.len(), 1, "the same file is one note: {notes:?}");
+    assert!(notes[0].contains("'bad.kicad_sch'"), "{notes:?}");
+    // The plain entry point reads on the same way.
+    ExtractedBoard::from_kicad_schematic_path(&root).expect("reads without the notes");
+}
+
+/// A fully readable hierarchy owes no notes.
+#[test]
+fn a_readable_hierarchy_has_no_unread_sheet_notes() {
+    let p = Project::new("no-notes");
+    let root = p.diamond(3);
+    assert!(path_notes(&root).is_empty());
 }
