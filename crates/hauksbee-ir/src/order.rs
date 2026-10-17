@@ -71,10 +71,11 @@ pub fn sorted_refs(refs: &[String]) -> Vec<String> {
     out
 }
 
-/// Whether the pair (`name_a`, `id_a`) comes before (`name_b`, `id_b`) in the
-/// canonical direction for a pair of nets: by name, the id only breaking a tie
-/// between two nets that share one. A pair of nets is the same pair however the
-/// file numbered them, so the finding that names it must read the same way.
+/// Whether (`name_a`, `id_a`) comes first in a net pair's canonical direction.
+///
+/// The order is by name, the id only breaking a tie between two nets that
+/// share one. A pair of nets is the same pair however the file numbered them,
+/// so the finding that names it must read the same way.
 #[must_use]
 pub fn net_pair_in_order(name_a: &str, id_a: i64, name_b: &str, id_b: i64) -> bool {
     (name_a, id_a) <= (name_b, id_b)
@@ -87,8 +88,8 @@ mod tests {
     #[test]
     fn quantizing_removes_the_noise_a_different_operand_order_leaves() {
         assert_eq!(
-            quantize_mm(0.194_500_000_000_000_5),
-            quantize_mm(0.194_500_000_000_000_45)
+            quantize_mm(0.194_500_000_000_000_5).to_bits(),
+            quantize_mm(0.194_500_000_000_000_45).to_bits()
         );
         assert!((quantize_mm(0.195_000_4) - 0.195).abs() < 1e-12);
     }

@@ -901,7 +901,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     // run's model library and the board's waiver file, like the check.
     match hauksbee_engine::reports::check::static_gating_findings(&spec.board_path(), &lib) {
         Ok(findings) => {
-            results.extend(static_gate::static_check_results(&findings, outcomes.len()))
+            results.extend(static_gate::static_check_results(&findings, outcomes.len()));
         }
         Err(e) => {
             let msg = format!(

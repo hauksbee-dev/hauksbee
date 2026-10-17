@@ -551,10 +551,10 @@ fn init_moves_a_supply_off_a_rail_a_part_drives_to_that_parts_input() {
     ));
     std::fs::write(&path, text).unwrap();
     let spec = Spec::load(&path).expect("the spec loads");
-    let msg = hauksbee_ci::runner::run_spec(&spec)
-        .err()
-        .expect("a supply on +5V is refused")
-        .to_string();
+    let Err(err) = hauksbee_ci::runner::run_spec(&spec) else {
+        panic!("a supply on +5V is refused");
+    };
+    let msg = err.to_string();
     assert!(
         msg.contains("already driven by U1") && msg.contains("net = \"VIN\""),
         "{msg}"

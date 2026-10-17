@@ -23,7 +23,7 @@ fn no_faults_spec(board: &std::path::Path, supply: Option<(&str, f64)>) -> Strin
     )
 }
 
-/// boot_gate carries two real copper shorts, so `hauksbee check` fails it.
+/// `boot_gate` carries two real copper shorts, so `hauksbee check` fails it.
 /// A spec that only asserts `no_faults` used to say nothing about them; the
 /// run now fails on each, naming the short in every surface it writes.
 #[test]

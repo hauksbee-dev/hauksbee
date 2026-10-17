@@ -190,32 +190,8 @@ pub fn copper_connectivity(doc: &forge_sexpr::Document) -> Option<CopperConnecti
             None => islands.push((root, vec![i])),
         }
     }
-    let pads_of = |members: &[usize]| -> Vec<String> {
-        let mut pads: Vec<String> = members
-            .iter()
-            .map(|&i| &items[i])
-            .filter(|m| m.required)
-            .map(|m| format!("{}.{}", m.owner, m.pad))
-            .collect();
-        pads.sort();
-        pads.dedup();
-        pads
-    };
-    // A point on an island that does not depend on member order: the first
-    // required pad by name, else the lowest-left piece of copper.
-    let anchor_of = |members: &[usize]| -> (f64, f64) {
-        let ms = || members.iter().map(|&i| &items[i]);
-        let pad = ms().filter(|m| m.required).min_by(|a, b| {
-            (&a.owner, &a.pad)
-                .cmp(&(&b.owner, &b.pad))
-                .then(a.at.0.total_cmp(&b.at.0))
-                .then(a.at.1.total_cmp(&b.at.1))
-        });
-        pad.or_else(|| {
-            ms().min_by(|a, b| a.at.0.total_cmp(&b.at.0).then(a.at.1.total_cmp(&b.at.1)))
-        })
-        .map_or((0.0, 0.0), |m| m.at)
-    };
+    let pads_of = |members: &[usize]| island_pads(items, members);
+    let anchor_of = |members: &[usize]| island_anchor(items, members);
     let mut out = CopperConnectivity {
         routed: (0..items.len()).any(|i| live(i) && items[i].kind != Some(ItemKind::Pad)),
         ..CopperConnectivity::default()
@@ -277,6 +253,33 @@ pub fn copper_connectivity(doc: &forge_sexpr::Document) -> Option<CopperConnecti
     out.unfilled_zone_nets = unfilled.into_iter().map(|n| nets.name_of(n)).collect();
     out.unfilled_zone_nets.sort();
     Some(out)
+}
+
+/// The required pads of an island, as sorted, deduplicated `REF.PAD` names.
+fn island_pads(items: &[ItemMeta], members: &[usize]) -> Vec<String> {
+    let mut pads: Vec<String> = members
+        .iter()
+        .map(|&i| &items[i])
+        .filter(|m| m.required)
+        .map(|m| format!("{}.{}", m.owner, m.pad))
+        .collect();
+    pads.sort();
+    pads.dedup();
+    pads
+}
+
+/// A point on an island that does not depend on member order: the first
+/// required pad by name, else the lowest-left piece of copper.
+fn island_anchor(items: &[ItemMeta], members: &[usize]) -> (f64, f64) {
+    let ms = || members.iter().map(|&i| &items[i]);
+    let pad = ms().filter(|m| m.required).min_by(|a, b| {
+        (&a.owner, &a.pad)
+            .cmp(&(&b.owner, &b.pad))
+            .then(a.at.0.total_cmp(&b.at.0))
+            .then(a.at.1.total_cmp(&b.at.1))
+    });
+    pad.or_else(|| ms().min_by(|a, b| a.at.0.total_cmp(&b.at.0).then(a.at.1.total_cmp(&b.at.1))))
+        .map_or((0.0, 0.0), |m| m.at)
 }
 
 /// Whether the board renamed a copper layer.

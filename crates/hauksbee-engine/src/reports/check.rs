@@ -677,10 +677,11 @@ pub fn gather_findings_with_schematic(
     Ok(findings)
 }
 
-/// The findings that fail `hauksbee check` on the board at `board_path`: the
-/// board loaded through the shared normalizer with its Eagle companion
-/// schematic, the full static suite run with this board's waivers, and only the
-/// findings that gate ([`crate::result::JsonFinding::gates`]) kept. A simulation
+/// The findings that fail `hauksbee check` on the board at `board_path`.
+///
+/// The board is loaded through the shared normalizer with its Eagle companion
+/// schematic, the full static suite runs with this board's waivers, and only
+/// the findings that gate ([`crate::result::JsonFinding::gates`]) are kept. A simulation
 /// run of the same board (`hauksbee-ci`) reads them so it can never report a
 /// pass that the board's own static verdict fails.
 ///

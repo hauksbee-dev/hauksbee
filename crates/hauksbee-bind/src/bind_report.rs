@@ -608,9 +608,11 @@ fn bulk_fallback_passive_kind(row: &BindRow) -> Option<&'static str> {
     }
 }
 
-/// Natural sort key for a reference designator: alpha prefix (case-folded),
-/// then the numeric part as a NUMBER (so R2 sorts before R10), then any
-/// remaining suffix. The one definition lives in [`hauksbee_ir::order`].
+/// Natural sort key for a reference designator.
+///
+/// The key is the alpha prefix (case-folded), then the numeric part as a
+/// NUMBER (so R2 sorts before R10), then any remaining suffix. The one
+/// definition lives in [`hauksbee_ir::order`].
 ///
 /// Shared by every user-facing table that lists parts.
 #[must_use]

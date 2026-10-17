@@ -756,7 +756,7 @@ impl ExtractedBoard {
 /// way whatever order the file listed them in. Parts equal in every field are
 /// interchangeable.
 fn cmp_components(a: &Component, b: &Component) -> std::cmp::Ordering {
-    let position = |c: &Component| c.position.map(|(x, y, r)| [x, y, r]);
+    let position = |c: &Component| c.position.map(<[f64; 3]>::from);
     let cmp_position = |x: Option<[f64; 3]>, y: Option<[f64; 3]>| match (x, y) {
         (None, None) => std::cmp::Ordering::Equal,
         (None, Some(_)) => std::cmp::Ordering::Less,

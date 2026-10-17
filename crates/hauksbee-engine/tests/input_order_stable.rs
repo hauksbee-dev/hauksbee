@@ -226,13 +226,13 @@ fn eagle_board(reversed: bool) -> String {
     let base = include_str!("../../hauksbee-extract/tests/fixtures/eagle_ties/declared.brd");
     let head = base.split("<elements>").next().unwrap();
     let tail = base.rsplit("</signals>").next().unwrap();
-    let mut elements = vec![
+    let mut elements = [
         r#"<element name="R1" library="device" package="R0603" value="10k" x="20" y="20"/>"#,
         r#"<element name="R2" library="device" package="R0603" value="1k" x="20" y="24"/>"#,
         r#"<element name="R3" library="device" package="R0603" value="4.7k" x="20" y="28"/>"#,
         r#"<element name="R10" library="device" package="R0603" value="100k" x="20" y="32"/>"#,
     ];
-    let mut signals = vec![
+    let mut signals = [
         r#"<signal name="GND"><contactref element="R1" pad="1"/><contactref element="R2" pad="1"/><via x="5" y="0" extent="1-16" drill="0.3" diameter="0.8"/></signal>"#,
         r#"<signal name="AGND"><contactref element="R1" pad="2"/><wire x1="5" y1="-5" x2="5" y2="5" width="0.5" layer="1"/><wire x1="5" y1="-5" x2="5" y2="5" width="0.5" layer="16"/></signal>"#,
         r#"<signal name="VCC"><contactref element="R2" pad="2"/><contactref element="R3" pad="1"/><wire x1="10" y1="-5" x2="10" y2="5" width="0.5" layer="1"/></signal>"#,

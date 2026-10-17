@@ -47,10 +47,12 @@ pub const DRAFT_MODELS_NEXT_STEP: &str =
 /// can split them where the engine joined them.
 pub const NOT_JUDGED_JOINER: &str = " Also: ";
 
-/// The assertion kind a CI run reports a finding of the board's own static
-/// check under (`hauksbee check`), so a run never reads green over a board
-/// whose static verdict fails. The JSON `kind`, the `JUnit` classname and the
-/// human row all carry it.
+/// The assertion kind a CI run reports a static-check finding under.
+///
+/// A finding of the board's own static check (`hauksbee check`) is reported
+/// under it, so a run never reads green over a board whose static verdict
+/// fails. The JSON `kind`, the `JUnit` classname and the human row all carry
+/// it.
 pub const STATIC_CHECK_KIND: &str = "static_check";
 
 /// How a CI run states a gating static-check finding: the run cannot pass
