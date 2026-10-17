@@ -83,7 +83,7 @@ do = "run"
 cmd = ["{bin}/hauksbee", "run", "boot_gate.kicad_pcb", "--check", "--strict", "--plain"]
 exit = 2
 max_seconds = 30
-contains = ["[SERIOUS]", "\"GND\" and \"+5V\", are touching"]
+contains = ["[SERIOUS]", "\"+5V\" and \"GND\", are touching"]
 not_contains = ["Waived"]
 
 [[step]]
@@ -124,8 +124,8 @@ max_seconds = 30
 contains = [
   "== Waived (2) ==",
   "These findings fired and were overruled. They are not in the gate.",
-  "drc/short: GND to +5V on B.Cu",
-  "drc/short: GND to +5V on F.Cu",
+  "drc/short: +5V to GND on B.Cu",
+  "drc/short: +5V to GND on F.Cu",
   # The reason and the expiry both have to be on screen, or the waived section
   # is a list nobody can audit.
   "because: measured open on the assembled panel; the pad geometry in the file is wrong (until 2027-01-01)",

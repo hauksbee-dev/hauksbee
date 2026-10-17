@@ -127,7 +127,7 @@ for_max_ms = 1.0
     // And the measured minimum during the window must be a genuine brownout
     // (well below 3 V), not a marginal sag.
     assert!(
-        window.detail.contains("min=") && window.detail.contains("dip<3V"),
+        window.detail.contains("min=") && window.detail.contains("dip<3 V"),
         "rail_window detail should report the brownout dip: {}",
         window.detail
     );

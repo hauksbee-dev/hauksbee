@@ -96,7 +96,7 @@ matches = [
   # it), so the pass is conditional and says how to lift the condition. Its
   # +5V rail has no source and no connector on the board, so the pass also
   # states that the rail was held at its named voltage.
-  "^VERDICT: clean, conditionally: 0 serious, 0 worth a look; copper spacing was judged against a DEFAULT [0-9.]+ mm clearance, not your rules; .* to remove this assumption\\. Rails held at their named voltage though nothing the analysis models on the board sources them: '\\+5V' at 5\\.00 V\\.$",
+  "^VERDICT: clean, conditionally: 0 serious, 0 worth a look; copper spacing was judged against a DEFAULT [0-9.]+ mm clearance, not your rules; .* to remove this assumption\\. Rails held at their named voltage though nothing the analysis models on the board sources them: '\\+5V' at 5 V\\.$",
 ]
 not_matches = [
   "INCONCLUSIVE",

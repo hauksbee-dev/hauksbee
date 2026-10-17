@@ -96,10 +96,10 @@ prints each paragraph in full):
 note: this board has no routed copper (no track segments): the spacing check had only pads to compare, so a clean result here says nothing about routing that does not exist yet.
 2 issues found, 2 serious.
 
-1. [SERIOUS] Two separate connections, "GND" and "+5V", are touching,
+1. [SERIOUS] Two separate connections, "+5V" and "GND", are touching,
    near x=112.0 mm, y=100.0 mm on the back copper layer (B.Cu).
      Why it matters: These are meant to be electrically separate. Where they
-       touch they become one connection (a short), so "GND" and "+5V" will be
+       touch they become one connection (a short), so "+5V" and "GND" will be
        forced to the same voltage ... if one is a power rail it can pull large
        current and overheat.
      What to do:     Pull the two pieces of copper apart so there is a clear gap

@@ -187,9 +187,9 @@ A tolerance ensemble fills `coverage` and can fail on several members:
  "coverage":"tolerance corners: 4 deterministic min/max corner(s) + 6 interior probe(s) over 2 component(s): bounds the worst case only where the response is monotonic in each value, and the probes sample the interior for a point that breaks an assertion the corners passed (evidence for that monotonicity, not proof of it)",
  "results":[{"label":"VOUT within the tight [2.4, 2.6] V window on every corner",
    "kind":"voltage","passed":false,"invalid":false,
-   "detail":"corner 1: VOUT: min=2.250V < required 2.4V <- FAILED HERE, ...",
+   "detail":"corner 1: VOUT: min=2.25 V < required 2.4 V <- FAILED HERE, ...",
    "failing_seed":1,"failing_seeds":[1,2,5],"seeds_total":10,
-   "why":"VOUT settled 0.150 V below your floor (2.250 V vs min 2.4 V)"}]}
+   "why":"VOUT settled 150 mV below your floor (2.25 V vs min 2.4 V)"}]}
 ```
 
 A refusal: `run_valid: false`, `exit_code: 3`, and the affected assertion is

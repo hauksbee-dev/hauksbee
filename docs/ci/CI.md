@@ -501,8 +501,8 @@ the exact sampled values:
 
 ```
 [FAIL] VOUT stays in [2.4, 2.6] V across the tolerance ensemble
-      seed 8: VOUT: min=2.695V (>= 2.4V), max=2.708V > allowed 2.6V <- FAILED HERE ... [R1=9.17k, R2=10.7k]; passed 19/24 seeds (failing: 8, 10, 16, 18, 19)
-      why: VOUT rose to 2.708 V, 0.108 V above your 2.6 V ceiling ...
+      seed 8: VOUT: min=2.695 V (>= 2.4 V), max=2.708 V > allowed 2.6 V <- FAILED HERE ... [R1=9.17k, R2=10.7k]; passed 19/24 seeds (failing: 8, 10, 16, 18, 19)
+      why: VOUT rose to 2.708 V, 108 mV above your 2.6 V ceiling ...
 ```
 
 (The violated bound carries the `<- FAILED HERE` marker with the observed
@@ -705,8 +705,8 @@ intent:
 [FAIL] trips at 0.387 V
       seed 1: U1 fires 1 time(s), first tripping at 0.773 V; intended 0.387 V +/- 0.039 V [at VCC=5V]
       why: U1 trips 0.386 V above the intended level (2.00x)
-        culprit 1: R2 (150k): +10% moves it +0.064 V
-        culprit 2: R1 (820k): +10% moves it -0.060 V
+        culprit 1: R2 (150k): +10% moves it +64 mV
+        culprit 2: R1 (820k): +10% moves it -60 mV
         fix: R2 150k -> 73.2k meets the intent (rerun: U1 fires 1 time(s), first tripping at 0.410 V; ...)
 ```
 
@@ -828,7 +828,7 @@ covers come out of the gate and appear in their own section:
 ```
 == Waived (2) ==
 These findings fired and were overruled. They are not in the gate.
-  drc/short: GND to +5V on B.Cu
+  drc/short: +5V to GND on B.Cu
       because: the pour bridges these on purpose (until 2026-12-31)
 ```
 
@@ -942,11 +942,15 @@ hold while the input is still undefined).
 
 ### The two-sided demo
 
-One constructed board, `crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb`:
+One constructed board, `crates/hauksbee-ci/examples/boards/boot_gate_clean.kicad_pcb`:
 an ATmega328P whose PB0 drives a 2N7002 N-MOSFET gate, with **no pull resistor on
 the gate net** - so at reset the gate floats (Hi-Z), exactly the undefined-default
 shape. Two real AVR firmware variants (built with `avr-gcc`,
-`testdata/firmware/boot_gate_{a,b}/`):
+`testdata/firmware/boot_gate_{a,b}/`). It is the same parts as
+`boards/boot_gate.kicad_pcb`, routed with no copper short: that sibling keeps its
+two deliberate GND/+5V shorts as the DRC and waiver fixture, and a CI run cannot
+go GREEN over a board whose own `hauksbee check` fails, so the demo needs the
+clean one:
 
 ```bash
 # variant A configures PB0 promptly and drives the gate HIGH -> PASS
@@ -958,7 +962,7 @@ hauksbee-ci run crates/hauksbee-ci/examples/boot_gate_pass.toml
 hauksbee-ci run crates/hauksbee-ci/examples/boot_gate_fail.toml
 #   [FAIL] GATE_CTRL driven to >= 3 V within 20 ms of reset
 #          control net 'GATE_CTRL' was never driven to >= 3 V (firmware left it
-#          Hi-Z / undefined through the whole run); observed range [-0.000, -0.000] V
+#          Hi-Z / undefined through the whole run); observed range [0 V, 0 V]
 ```
 
 The check has teeth only because variant B goes RED: the same board, the

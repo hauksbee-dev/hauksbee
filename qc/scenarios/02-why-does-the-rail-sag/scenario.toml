@@ -71,9 +71,9 @@ contains = [
   "RED",
   # The bound it checked, the value it saw, and the gap between them.
   "+5V window: min >= 4.85 V [burst]",
-  "min=4.755V < required 4.85V",
+  "min=4.755 V < required 4.85 V",
   "FAILED HERE",
-  "why: +5V sagged to 4.755 V in the window, 0.095 V below your 4.85 V floor",
+  "why: +5V sagged to 4.755 V in the window, 95.12 mV below your 4.85 V floor",
 ]
 matches = ["^RED - 0/1 assertions passed in [0-9.]+s$"]
 # A diagnosis, not a stack trace.
@@ -97,7 +97,7 @@ contains = [
   "GREEN",
   # The rail now sits above the floor, and the number moved the way the
   # diagnosis said it would.
-  "min=4.918V (>= 4.85V)",
+  "min=4.918 V (>= 4.85 V)",
 ]
 matches = ["^GREEN - 1/1 assertions passed in [0-9.]+s$"]
 not_contains = ["[FAIL]", "RED"]
