@@ -55,7 +55,13 @@ fn board(grounded: bool, r1: f64, r2: Option<f64>, rl: Option<f64>) -> String {
     .enumerate()
     {
         let Some(val) = val else { continue };
-        let lib = "Resistor_SMD:R_0805_2012Metric";
+        // The load is a 1210 (1/2 W): the 33R grounded-rail load dissipates
+        // 330 mW, past an 0805's 1/8 W, and a fixture must not overstress a part.
+        let lib = if r == "RL" {
+            "Resistor_SMD:R_1210_3225Metric"
+        } else {
+            "Resistor_SMD:R_0805_2012Metric"
+        };
         parts += &comp(r, lib, &val.to_string(), 40 + i * 8, pad(1, a) + &pad(2, b));
     }
     format!("board version 20171130\nfn main {{\nnet \"VIN\"\nnet \"VOUT\"\nnet \"GND\"\nnet \"ADJ\"\n{parts}}}\n")
@@ -92,7 +98,8 @@ fn an_adjustable_regulator_solves_its_rail_and_refuses_what_it_cannot_support() 
         ("grounded low headroom", grounded, Some(10e3), Some(33.0), 3.5, 3.3, None, false),
     ];
     for (case, (gnd, r1), r2, rl, vin, want, rail, starved) in rows {
-        let board_path = support::write_tmp(&format!("{case}.board"), &board(gnd, r1, r2, rl));
+        let board_path =
+            support::placement_board(&format!("{case}.board"), &board(gnd, r1, r2, rl));
         let band = |name: &str, v: f64| {
             let (min, max) = (v - 1e-3, v + 1e-3);
             format!("[[assert]]\nkind = \"voltage\"\nname = \"{name}\"\nnet = \"VOUT\"\nmin = {min}\nmax = {max}\nafter_ms = 1.0\n")
@@ -114,6 +121,7 @@ fn an_adjustable_regulator_solves_its_rail_and_refuses_what_it_cannot_support() 
             ..support::run_config(spec)
         };
         let r = hauksbee_ci::run(&cfg).expect("run the spec");
+        support::assert_placement_waived(&r);
         let a = support::row(&r, "vout regulates");
         if let Some(rail) = rail {
             // SOLVED, not declared: the rail is the same 5.036 V either way, so
@@ -155,7 +163,8 @@ fn an_adjustable_regulator_solves_its_rail_and_refuses_what_it_cannot_support() 
 /// the reason the number cannot be trusted.
 #[test]
 fn a_measurement_is_undermined_by_the_same_evidence_a_bound_is() {
-    let board_path = support::write_tmp("starved.board", &board(false, 240.0, Some(720.0), None));
+    let board_path =
+        support::placement_board("starved.board", &board(false, 240.0, Some(720.0), None));
     let spec = support::write_tmp(
         "starved-probe.toml",
         &format!(
@@ -201,7 +210,7 @@ fn an_adj_pin_with_only_a_capacitor_is_refused_not_given_a_rail() {
     let text = format!(
         "board version 20171130\nfn main {{\nnet \"VIN\"\nnet \"VOUT\"\nnet \"GND\"\nnet \"ADJ\"\n{parts}}}\n"
     );
-    let board_path = support::write_tmp("adj-cap-only.board", &text);
+    let board_path = support::placement_board("adj-cap-only.board", &text);
     let spec = support::write_tmp(
         "adj-cap-only.toml",
         &format!(

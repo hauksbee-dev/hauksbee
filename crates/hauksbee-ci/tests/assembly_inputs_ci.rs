@@ -10,6 +10,8 @@ use hauksbee_ci::run;
 
 use crate::support::{bin, stderr, stdout};
 
+/// A routed board: VCC joined above the parts and GND below, so the static
+/// check has no copper finding to add to the gate this suite is about.
 const BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
   (net 1 "GND")
@@ -31,7 +33,15 @@ const BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
     (fp_text reference U4 (at 0 0) (layer F.SilkS))
     (fp_text value 25LC256 (at 0 2) (layer F.Fab))
     (pad 1 smd rect (at 0 0) (net 2 "VCC"))
-    (pad 4 smd rect (at 1 0) (net 1 "GND"))))"#;
+    (pad 4 smd rect (at 1 0) (net 1 "GND")))
+  (segment (start 10 20) (end 10 18) (width 0.25) (layer F.Cu) (net 2))
+  (segment (start 12 20) (end 12 18) (width 0.25) (layer F.Cu) (net 2))
+  (segment (start 15 20) (end 15 18) (width 0.25) (layer F.Cu) (net 2))
+  (segment (start 10 18) (end 15 18) (width 0.25) (layer F.Cu) (net 2))
+  (segment (start 11 20) (end 11 22) (width 0.25) (layer F.Cu) (net 1))
+  (segment (start 13 20) (end 13 22) (width 0.25) (layer F.Cu) (net 1))
+  (segment (start 16 20) (end 16 22) (width 0.25) (layer F.Cu) (net 1))
+  (segment (start 11 22) (end 16 22) (width 0.25) (layer F.Cu) (net 1)))"#;
 
 const BOM: &str = "Designator,Value,MPN,Manufacturer,Footprint\n\
                    R1,10k,RC0402FR-0710KL,Yageo,R_0402_1005Metric\n\

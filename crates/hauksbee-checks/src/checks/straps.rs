@@ -313,6 +313,21 @@ fn examine_strap(
     //     board puts a 10R between the oscillator and GPIO0.
     if let Some(osc) = clock_source_reaching(board, net_id).filter(|o| o.reference != mcu.reference)
     {
+        // A clock whose enable a modelled detector holds off from power-up until
+        // the part's own enable/reset input has risen is the designed fix for
+        // this fault: whether it lasts past the latch is timing, which a netlist
+        // check does not judge. That is an abstention (Low), never a pass.
+        if let Some(gate) = clock_held_off_past_reset(board, lib, osc, net_id, (mcu, model)) {
+            let what = format!(
+                "cannot judge the clock from {} ({}): {}, so the clock is absent at the reset latch only if that release lags the strap hold time; the timing is not judged, so its boot level is unchecked",
+                osc.reference, osc.value, gate.said
+            );
+            return push(
+                Severity::Low,
+                what,
+                vec![osc.reference.clone(), gate.detector],
+            );
+        }
         let what = format!("carries a free-running clock source {} ({}): a clock present at the reset latch can mis-strap the part", osc.reference, osc.value);
         return push(Severity::High, what, vec![osc.reference.clone()]); // the clock is the dominant fault
     }
@@ -622,6 +637,203 @@ fn oscillator_driving_net(board: &ExtractedBoard, net_id: i64) -> Option<&Compon
     for (c, _p) in board.net_members(net_id) {
         if is_clock_oscillator(c) {
             return Some(c);
+        }
+    }
+    None
+}
+
+/// A detector found holding a strap clock's enable off through reset.
+struct ClockGate {
+    /// The detector's reference.
+    detector: String,
+    /// How it gates the clock, for the finding.
+    said: String,
+}
+
+/// Is `role` a strapped part's enable or reset input (the pin whose rising
+/// edge latches the straps)?
+fn enable_or_reset_role(role: &str) -> bool {
+    matches!(role, "en" | "enable" | "chip_en" | "chip_pu")
+        || role
+            .split('_')
+            .any(|t| matches!(t, "reset" | "rst" | "nrst" | "resetn"))
+}
+
+/// Whether net `id` follows one of `reset_nets`, so a detector `det` sensing it
+/// releases only after the reset does.
+///
+/// It does when it is that net, or a node that only the reset net charges (an
+/// RC delay into the detector): every other part on
+/// it is a resistor from the reset net, a capacitor to ground, the detector
+/// itself, or a discharge path that can only carry current away from it (a
+/// diode anode, directly or through one resistor, per the diode's card). Read
+/// from the topology and the cards, never the names: the reset net's own
+/// pull-up reaches the rail through one resistor too, but the rail has its
+/// own sources, and a detector on it releases with the supply, not after the
+/// reset.
+fn follows_reset(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    reset_nets: &[i64],
+    id: i64,
+    det: &str,
+) -> bool {
+    let from_reset = |c: &Component, id: i64| {
+        is_assembled_resistor(c)
+            && c.pins
+                .iter()
+                .any(|p| p.net.is_some_and(|n| n != id && reset_nets.contains(&n)))
+    };
+    let to_ground = |c: &Component, id: i64| {
+        hauksbee_extract::is_capacitor(c)
+            && c.pins.iter().any(|p| {
+                p.net.is_some_and(|n| {
+                    n != id && board.net(n).is_some_and(|n| is_ground_name(&n.name))
+                })
+            })
+    };
+    // Current leaves `id` through this pin only: it is a fitted diode's anode.
+    let anode_on = |c: &Component, id: i64| {
+        AssemblyState::of(c).fitted().is_some_and(|f| {
+            resolve(lib, f).model.is_some_and(|card| {
+                card.kind == ComponentKind::Diode
+                    && c.pins.iter().filter(|p| p.net == Some(id)).all(|p| {
+                        card.pins
+                            .get(&p.number)
+                            .is_some_and(|r| r.to_ascii_lowercase().starts_with("anode"))
+                    })
+            })
+        })
+    };
+    let discharges = |c: &Component, id: i64| {
+        anode_on(c, id)
+            || is_assembled_resistor(c)
+                && c.pins
+                    .iter()
+                    .filter_map(|p| p.net)
+                    .filter(|&n| n != id)
+                    .all(|n| {
+                        board
+                            .net_members(n)
+                            .iter()
+                            .all(|(o, _)| o.reference == c.reference || anode_on(o, n))
+                    })
+    };
+    if reset_nets.contains(&id) {
+        return true;
+    }
+    let members = board.net_members(id);
+    members.iter().any(|(c, _)| from_reset(c, id))
+        && members.iter().all(|(c, _)| {
+            c.reference == det || from_reset(c, id) || to_ground(c, id) || discharges(c, id)
+        })
+}
+
+/// The oscillator `osc` reaching strap net `strap_net` has an enable held low
+/// from power-up by a fitted part whose card says so, and that part's sensing
+/// input follows `mcu`'s own enable/reset net.
+///
+/// Every link is read from the cards, never from names: the detector's card
+/// holds its output pin at 0 V in its FSM's initial state (a voltage law
+/// `only_in_state` that state), it leaves that state on a guard over the
+/// voltage of a pin that sits on the MCU card's enable/reset net or one
+/// assembled resistor from it, and the oscillator's pad on the gated net is
+/// not on the clock's path to the strap. A detector sensing a rail, or one
+/// with no card, gates nothing the check can see.
+fn clock_held_off_past_reset(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    osc: &Component,
+    strap_net: i64,
+    (mcu, model): (&Component, &ModelEntry),
+) -> Option<ClockGate> {
+    let power = |id: i64| {
+        board
+            .net(id)
+            .is_none_or(|n| is_ground_name(&n.name) || is_rail_name(&n.name))
+    };
+    // The MCU's enable/reset nets, by its card's roles.
+    let reset_nets: Vec<i64> = mcu
+        .pins
+        .iter()
+        .filter(|p| {
+            model
+                .pins
+                .get(&p.number)
+                .is_some_and(|role| enable_or_reset_role(&role.to_ascii_lowercase()))
+        })
+        .filter_map(|p| p.net)
+        .filter(|&id| !power(id))
+        .collect();
+    if reset_nets.is_empty() {
+        return None;
+    }
+    // The clock's own path: the strap net and every net one resistor from it.
+    let mut clock_path = vec![strap_net];
+    for (c, _) in board.net_members(strap_net) {
+        if is_assembled_resistor(c) {
+            clock_path.extend(c.pins.iter().filter_map(|p| p.net));
+        }
+    }
+    for gate_net in osc.pins.iter().filter_map(|p| p.net) {
+        if power(gate_net) || clock_path.contains(&gate_net) {
+            continue;
+        }
+        for (det, det_pin) in board.net_members(gate_net) {
+            if det.reference == osc.reference || det.reference == mcu.reference {
+                continue;
+            }
+            let Some(fitted) = AssemblyState::of(det).fitted() else {
+                continue;
+            };
+            let Some(card) = resolve(lib, fitted).model else {
+                continue;
+            };
+            let Some(fsm) = card.behavioral.fsm.as_ref() else {
+                continue;
+            };
+            let Some(initial) = fsm.initial.as_ref().or_else(|| fsm.states.first()) else {
+                continue;
+            };
+            let Some(out_role) = card.pins.get(&det_pin.number) else {
+                continue;
+            };
+            let holds_low = card.behavioral.laws.iter().any(|law| {
+                law.kind == hauksbee_models::behavioral::LawKind::Voltage
+                    && law.a == *out_role
+                    && law.only_in_state.as_deref() == Some(initial.as_str())
+                    && law.expr.trim().parse::<f64>().is_ok_and(|v| v == 0.0)
+            });
+            if !holds_low {
+                continue;
+            }
+            // The pins whose voltage releases the detector from its initial state.
+            let sensed = det.pins.iter().find_map(|p| {
+                let role = card.pins.get(&p.number)?;
+                let var = format!("v_{role}");
+                let releases = fsm
+                    .transitions
+                    .iter()
+                    .any(|t| t.from == *initial && t.guard.contains(&var));
+                let net = p.net?;
+                (releases && follows_reset(board, lib, &reset_nets, net, &det.reference))
+                    .then(|| (role.clone(), net))
+            });
+            let Some((sense_role, sense_net)) = sensed else {
+                continue;
+            };
+            let name = |id: i64| board.net(id).map_or("", |n| n.name.as_str());
+            return Some(ClockGate {
+                detector: det.reference.clone(),
+                said: format!(
+                    "{} ({}) holds its enable net '{}' low from power-up until its {sense_role} input on '{}', which follows {}'s enable/reset, passes the detector's threshold",
+                    det.reference,
+                    det.value,
+                    name(gate_net),
+                    name(sense_net),
+                    mcu.reference
+                ),
+            });
         }
     }
     None
@@ -1156,6 +1368,100 @@ vih = [0.0, 2.0]
             &faulty,
             &solved,
             &[(Medium, &["2.364-3.15 V", "4 rail corner(s)"])],
+        );
+    }
+
+    /// The Olimex rev-L fix: the clock's enable is held low by a detector whose
+    /// card holds its output low from power-up, and the detector senses the
+    /// ESP32's EN through an RC. Whether that lasts past the strap hold time is
+    /// timing, so the lint abstains (Low, unchecked); it never calls it clean.
+    /// A diode that can only discharge the detector's input (its anode there,
+    /// through a resistor, as rev L's BAT54A does) keeps it behind EN. The
+    /// faulty controls keep the High: a detector that senses the rail releases
+    /// with the supply, not after EN; a diode that charges the input from the
+    /// rail bypasses the delay; and a plain pull-up gates nothing.
+    #[test]
+    fn a_clock_held_off_through_reset_is_unchecked_not_clean() {
+        let none = BTreeMap::new();
+        // Nets: 1 GND, 2 rail, 3 strap, 4 clock out, 6 enable, 8 EN, 9 detector
+        // input, 10 the far side of a resistor off the detector input.
+        let gated_with = |sense: i64, detector: bool, extra: Vec<Component>| {
+            let mut parts = vec![
+                part("U3", "ESP-WROOM-32", &[("2", 2), ("25", 3), ("3", 8)]),
+                osc("CR1", 4),
+                part("R36", "10R", &[("1", 4), ("2", 3)]),
+                part("R34", "10k", &[("1", 6), ("2", 2)]),
+                part("R24", "10k", &[("1", 8), ("2", 2)]),
+                part("R52", "100k", &[("1", 9), ("2", 8)]),
+                part("C32", "1uF", &[("1", 9), ("2", 1)]),
+            ];
+            if detector {
+                parts.push(part("U11", "HX7027", &[("1", 6), ("2", 1), ("3", sense)]));
+            }
+            parts.extend(extra);
+            board(
+                &[
+                    (1, "GND"),
+                    (2, "+3V3"),
+                    (3, "/GPIO0"),
+                    (4, "Net-(CR1-OUT)"),
+                    (6, "/OSC_DIS"),
+                    (8, "/ESP_EN"),
+                    (9, "Net-(U11-VIn)"),
+                    (10, "Net-(D10-CA)"),
+                ],
+                parts,
+            )
+        };
+        let gated = |sense: i64, detector: bool| gated_with(sense, detector, vec![]);
+        // BAT54A: pads 1 and 2 cathodes, pad 3 the common anode.
+        let discharge = || {
+            vec![
+                part("D10", "BAT54A", &[("1", 2), ("2", 8), ("3", 10)]),
+                part("R58", "49.9R", &[("1", 10), ("2", 9)]),
+            ]
+        };
+        let charge_from_rail = || {
+            vec![
+                part("D10", "BAT54A", &[("1", 10), ("2", 10), ("3", 2)]),
+                part("R58", "49.9R", &[("1", 10), ("2", 9)]),
+            ]
+        };
+        check(
+            "detector behind EN",
+            &gated(9, true),
+            &none,
+            &[(Low, &["CR1", "U11", "/OSC_DIS", "unchecked"])],
+        );
+        check(
+            "detector on EN itself",
+            &gated(8, true),
+            &none,
+            &[(Low, &["CR1", "U11", "unchecked"])],
+        );
+        check(
+            "detector behind EN with a diode discharge path",
+            &gated_with(9, true, discharge()),
+            &none,
+            &[(Low, &["CR1", "U11", "unchecked"])],
+        );
+        check(
+            "detector input charged from the rail through a diode",
+            &gated_with(9, true, charge_from_rail()),
+            &none,
+            &[(High, &["CR1", "free-running clock"])],
+        );
+        check(
+            "detector on the rail",
+            &gated(2, true),
+            &none,
+            &[(High, &["CR1", "free-running clock"])],
+        );
+        check(
+            "pull-up only",
+            &gated(9, false),
+            &none,
+            &[(High, &["CR1", "free-running clock"])],
         );
     }
 

@@ -1891,6 +1891,10 @@ backend = "qemu:esp32"
 # "p0<bit>" convention; both spellings resolve to the same port/bit.
 "1"  = "vss"        # GND
 "2"  = "vdd"        # 3V3
+# ESP32-WROOM-32E & WROOM-32UE Datasheet v2.1, Table 3 "Pin Definitions": EN is
+# pad 3, "High: On; enables the chip. Low: Off; the chip shuts down" (CHIP_PU,
+# whose rising edge latches the straps: Table 5, tH >= 1 ms after it).
+"3"  = "en"
 "25" = "gpio0"
 "24" = "gpio2"      # alive indicator on the QEMU demo board (LED path)
 "29" = "gpio5"

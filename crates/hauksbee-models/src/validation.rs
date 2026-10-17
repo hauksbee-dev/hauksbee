@@ -756,6 +756,13 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         p.require(!opt.basis.trim().is_empty(), || {
             format!("[[models.optional_supplies]] '{r}' needs a basis citing the datasheet")
         });
+        if let Some(input) = &opt.regulated_from {
+            p.require(entry.pins.values().any(|v| v == input), || {
+                format!(
+                    "[[models.optional_supplies]] '{r}' regulated_from '{input}' is not a role in [models.pins]"
+                )
+            });
+        }
     }
     for (rail, roles) in &entry.level_rails {
         let unmapped = std::iter::once(rail)

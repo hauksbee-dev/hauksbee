@@ -9231,6 +9231,11 @@ dropout_v = 2.7e-1  # derived: VCC LDO dropout max 0.27 V (VIN = 4.5V, IVCC = 5m
 "12" = "sw" # LX switching node
 "EP" = "gnd" # Exposed pad; connect to SGND
 
+# VCC is the internal LDO's output, never a supply the board feeds.
+[[models.optional_supplies]]
+role = "vcc"
+basis = "Analog Devices MAX17760 datasheet 19-100795 Rev 2, Pin Description (p.12): pin 3 VCC is the '5V LDO Output. Bypass VCC with a 1uF ceramic capacitor to PGND. LDO doesn't support external loading on VCC'; Electrical Characteristics (p.5): LINEAR REGULATOR (VCC) output 4.75-5.25 V for 6 V <= VIN <= 76 V"
+
 [models.ratings]
 max_current_a = 0.3 # Source: page 1 feature summary and Ordering Information; rated output current
 max_voltage_v = 80.0 # Source: Absolute Maximum Ratings, VIN to SGND, +80V upper limit

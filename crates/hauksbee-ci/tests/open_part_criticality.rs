@@ -60,7 +60,8 @@ fn part(reference: &str, value: &str, pads: &[(&str, u8, &str)]) -> String {
 
 fn run(name: &str, extra: &str) -> CiResult {
     let board = support::write_tmp(&format!("{name}.kicad_pcb"), &board(extra));
-    support::run_body(
+    support::write_unrouted_waiver(&board, &["GND", "+5V", "VOUT"], support::PRE_LAYOUT_REASON);
+    let result = support::run_body(
         &format!("{name}.toml"),
         &format!(
             "name = \"{name}\"\nboard = {}\nduration_ms = 1\n\
@@ -69,7 +70,9 @@ fn run(name: &str, extra: &str) -> CiResult {
              [[assert]]\nkind = \"no_faults\"\n",
             support::toml_path(&board)
         ),
-    )
+    );
+    support::assert_placement_waived(&result);
+    result
 }
 
 /// Control: an unidentified single-pad part on ground (a shield tab, say). It

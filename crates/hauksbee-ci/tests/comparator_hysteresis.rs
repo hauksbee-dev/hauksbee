@@ -61,7 +61,7 @@ fn board(rf: Option<&str>) -> String {
 /// exactly `[after_ms, end_ms]`; the input there is `t` volts on the way up and
 /// `10 - t` on the way down.
 fn out_is(case: &str, rf: Option<&str>, after_ms: f64, end_ms: f64, high: bool) -> bool {
-    let path = support::write_tmp("schmitt.board", &board(rf));
+    let path = support::placement_board("schmitt.board", &board(rf));
     // The high level is WHATEVER THE BOARD MAKES IT -- the open-collector claim:
     // 4.7826 V when RF loads the pull-up, 5.000 V when it does not. A push-pull
     // stage answers its own `out_hi` both times and fails one. Low is VOL = RON
@@ -222,14 +222,24 @@ fn sourced_supply_envelopes_follow_the_solved_rails() {
         |nets: &[&str], at: u32| (at..).zip(nets).map(|(i, n)| pad(i, n)).collect::<String>();
     let u1 = pads(&["N1", "OUT", "GND", "VN", "N5", "OUT", "VP"], 1);
     let u2 = pads(&["VCC", "VCC", "GND", "GND"], 2) + &pad(12, "GND");
+    // The rails come in on J1, as on a real board: without it nothing on the
+    // board feeds U1's supply pads and the static check rightly fails it.
+    let j1 = pads(&["VP", "VN", "VCC", "GND"], 1);
     let parts = comp("U1", "Package_DIP:DIP-8_W7.62mm", "LM741", 20, u1)
-        + &comp("U2", "Package_DIP:DIP-14_W7.62mm", "LM339B", 40, u2);
+        + &comp("U2", "Package_DIP:DIP-14_W7.62mm", "LM339B", 40, u2)
+        + &comp(
+            "J1",
+            "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical",
+            "Conn_01x04",
+            60,
+            j1,
+        );
     let nets = ["VP", "VN", "VCC", "GND", "OUT", "N1", "N5"].map(|n| format!("net \"{n}\"\n"));
     let board = format!(
         "board version 20171130\nfn main {{\n{}{parts}}}\n",
         nets.concat()
     );
-    let path = support::write_tmp("envelopes.board", &board);
+    let path = support::placement_board("envelopes.board", &board);
     for (case, vp, vcc, net, want, says) in [
         ("under minimum", 5.0, 5.0, "OUT", 3, "the 10..18 V"),
         ("legal control", 12.0, 5.0, "OUT", 0, ""),
@@ -251,6 +261,7 @@ fn sourced_supply_envelopes_follow_the_solved_rails() {
         assert_eq!(human.contains("[INVALID]"), want == 3, "{case}: {human}");
         assert_eq!(human.contains("outside the"), flagged, "{case}: {human}");
         assert!(human.contains(says), "{case}: {human}");
+        support::assert_placement_waived(&r);
     }
 }
 
@@ -333,7 +344,7 @@ fn a_rail_starved_through_its_feed_resistor_fails_naming_the_feed() {
         "board version 20171130\nfn main {{\n{}{parts}}}\n",
         nets.concat()
     );
-    let path = support::write_tmp("starved_feed.board", &board);
+    let path = support::placement_board("starved_feed.board", &board);
     let r = support::run_body(
         "starved.toml",
         &format!(

@@ -962,6 +962,31 @@ impl CiResult {
         self.render_human_for(true, None)
     }
 
+    /// Whether the run only measured, and the passed/total counts its headline
+    /// states, given the assertion counts `passed` of `total`.
+    ///
+    /// A run of nothing but measurements judged nothing, so it must not borrow
+    /// the word a run of held assertions earns. A waived row was a failure the
+    /// waiver overruled, not a held assertion, so measurements beside waived
+    /// rows still judged nothing; the counts are then the measurements', and the
+    /// waived rows are named in the note.
+    fn headline_counts(&self, passed: usize, total: usize) -> (bool, usize, usize) {
+        let all_measured = self.results.iter().any(|r| r.measured)
+            && self
+                .results
+                .iter()
+                .all(|r| r.measured || r.waived.is_some());
+        if !all_measured {
+            return (false, passed, total);
+        }
+        let measured = self.results.iter().filter(|r| r.measured);
+        (
+            true,
+            measured.clone().filter(|r| r.passed).count(),
+            measured.count(),
+        )
+    }
+
     /// The terminal report. `verbose` restores the error budget and per-model
     /// lines; `spec` is the path to print in the "then rerun" line of an
     /// INVALID run (the command the reader types next).
@@ -1027,9 +1052,7 @@ impl CiResult {
         for (tag, msg) in self.honesty_notes() {
             let _ = writeln!(out, "  {tag}: {msg}");
         }
-        // A run of nothing but measurements judged nothing, so it must not
-        // borrow the word a run of held assertions earns.
-        let all_measured = !self.results.is_empty() && self.results.iter().all(|r| r.measured);
+        let (all_measured, passed, total) = self.headline_counts(passed, total);
         let verdict = self.verdict_word(all_measured);
         let waived = self.waived_count();
         let waived_note = if waived > 0 {

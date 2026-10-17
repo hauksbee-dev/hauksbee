@@ -69,7 +69,15 @@ fn only_what_an_open_part_can_drive_is_refused() {
         ("MID", 7.0, 8.0),  // ... and unrelated FAIL keep their verdicts
     ];
     let r = run("all.toml", &asserts);
-    let flags: Vec<(bool, bool)> = r.results.iter().map(|a| (a.passed, a.invalid)).collect();
+    // The fixture is placement-only: its waived not-routed row stays listed
+    // after the assertions' rows, and is not one of them.
+    support::assert_placement_waived(&r);
+    let flags: Vec<(bool, bool)> = r
+        .results
+        .iter()
+        .filter(|a| a.kind != hauksbee_ir::vocabulary::STATIC_CHECK_KIND)
+        .map(|a| (a.passed, a.invalid))
+        .collect();
     let (pass, fail, invalid) = ((true, false), (false, false), (false, true));
     let unproven = (true, true); // in band, but the band is not evidence
     assert_eq!(

@@ -15,13 +15,13 @@
 //!      ESP32 (Watchy) and RP2040 (rp2040-minimal) boards, whose straps are
 //!      genuinely examined and correctly biased - so the clean is real, not
 //!      vacuous;
-//!   3. HONEST REACH LIMIT, encoded as a test: the lint fires on the rev-E-FIXED
-//!      revisions too (e.g. rev L), because the fix is a *time-domain power-
-//!      sequencing* change (FET3/FET4 gating PHY power via `OSC_DIS`) that does NOT
-//!      alter the GPIO0 net - the 50 MHz oscillator still reaches GPIO0 through
-//!      R36 in every revision. A static netlist check cannot see the fix. This is
-//!      recorded as ground truth (verified from the rev-D and rev-L files), not
-//!      papered over with a forced "clean on fixed".
+//!   3. the rev-E fix is seen where its parts are modelled: in rev L the
+//!      HX7027 detector U11 holds the oscillator's enable (`OSC_DIS`) low until
+//!      its input, an RC delay (R52 100k, C32 1 uF) off the ESP32's EN, passes
+//!      its threshold. The clock is then absent at the reset latch only if that
+//!      release lags the strap hold time, which a static check does not time, so
+//!      the lint abstains: one Low "unchecked" finding, not a High fault and not
+//!      a silent clean. Revisions whose detector has no card stay High.
 //!
 //! Corpus-gated (skipped when board-corpus is absent), with `HAUKSBEE_REQUIRE_CORPUS=1`
 //! turning absence into a hard fail so the calibration cannot vacuously green-out.
@@ -86,13 +86,12 @@ fn olimex_rev_d_gpio0_clock_flagged() {
     );
 }
 
-/// The honest reach limit, pinned: the rev-E-FIXED revision (rev L) STILL fires
-/// on GPIO0, because the fix is not netlist-visible. This is verified ground
-/// truth, not a missing test: if a future change made the lint go clean on rev L
-/// it would be claiming to see a fix that is not in the netlist, which is exactly
-/// the false confidence the calibration forbids. So the test asserts it fires.
+/// The fixed revision (rev L): the oscillator still reaches GPIO0 through R36,
+/// but its enable is held off by a card-modelled detector that follows the
+/// ESP32's EN, so the lint abstains at Low ("unchecked") instead of raising the
+/// rev-D fault. It must not go silent: the release timing is not judged.
 #[test]
-fn olimex_rev_l_still_fires_fix_is_not_netlist_visible() {
+fn olimex_rev_l_gated_clock_is_unchecked_not_flagged() {
     let Some(root) = corpus_root() else { return };
     let pcb = root.join("olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_pcb");
     if !pcb.exists() {
@@ -104,9 +103,21 @@ fn olimex_rev_l_still_fires_fix_is_not_netlist_visible() {
     assert_eq!(
         f.len(),
         1,
-        "rev L still carries the 50 MHz clock on GPIO0 in the netlist"
+        "rev L keeps one GPIO0 strap row: {:?}",
+        f.iter().map(|x| &x.message).collect::<Vec<_>>()
     );
     assert!(f[0].nets.iter().any(|n| n.contains("GPIO0")));
+    assert!(
+        matches!(f[0].severity, Severity::Low),
+        "a clock held off through reset is an abstention, not a fault: {}",
+        f[0].message
+    );
+    assert!(f[0].message.contains("unchecked"), "{}", f[0].message);
+    assert!(
+        f[0].refs.iter().any(|r| r == "U11"),
+        "names the detector: {:?}",
+        f[0].refs
+    );
 }
 
 /// Known-good ESP32 board (Watchy v2.0, ESP32-PICO-D4): its GPIO0 strap is

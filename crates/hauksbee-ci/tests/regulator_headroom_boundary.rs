@@ -45,7 +45,10 @@ fn exit_code_at(dir: &Path, volts: f64) -> i32 {
         spec,
         ..RunConfig::default()
     };
-    hauksbee_ci::run(&cfg).expect("run the spec").exit_code()
+    let r = hauksbee_ci::run(&cfg).expect("run the spec");
+    // The fixture is placement-only: its waived not-routed row stays listed.
+    support::assert_placement_waived(&r);
+    r.exit_code()
 }
 
 #[test]

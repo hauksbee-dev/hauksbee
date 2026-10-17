@@ -45,7 +45,7 @@ fn board(rs: &str, div: bool, refnet: &str, (lib, [k, f, a]): Pkg) -> String {
 /// tells its reader about U1, and return whether the assertion passed
 /// numerically (INVALID is pinned inside: set on starved boards only).
 fn vka_in(case: &str, rs: &str, div: bool, refnet: &str, (min, max): (f64, f64), pkg: Pkg) -> bool {
-    let path = support::write_tmp("tl431.board", &board(rs, div, refnet, pkg));
+    let path = support::placement_board("tl431.board", &board(rs, div, refnet, pkg));
     let r = support::run_body(
         &format!("{case}.toml"),
         &format!(
@@ -56,6 +56,7 @@ fn vka_in(case: &str, rs: &str, div: bool, refnet: &str, (min, max): (f64, f64),
             support::toml_path(&path),
         ),
     );
+    support::assert_placement_waived(&r);
     // `warning` -> `[partial model]` -> `Assumption` is the only route reaching
     // a reader, so the refusal and the NOT-MODELLED gaps are checked THERE.
     let human = r.render_human().to_lowercase();

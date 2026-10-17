@@ -641,6 +641,43 @@ pub fn gather_findings_with_schematic(
     lib: &ModelLibrary,
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<Vec<crate::result::JsonFinding>> {
+    gather_static(
+        board_path,
+        board,
+        text,
+        raw,
+        altium_present,
+        lib,
+        schematic_ties,
+    )
+    .map(|g| g.kept)
+}
+
+/// The static suite's findings after the board's waivers, and the findings
+/// those waivers overruled.
+struct GatheredStatic {
+    kept: Vec<crate::result::JsonFinding>,
+    /// Each finding a waiver excused, with that waiver's "reason (until date)".
+    waived: Vec<(crate::result::JsonFinding, String)>,
+}
+
+/// One finding's identity for telling the waived ones apart: every field a
+/// finding is reported by.
+fn finding_key(f: &crate::result::JsonFinding) -> (&str, &str, &str, &str, &[String], &[String]) {
+    (&f.check, &f.kind, &f.severity, &f.message, &f.nets, &f.refs)
+}
+
+/// [`gather_findings_with_schematic`], keeping what the waivers overruled so a
+/// surface can list it as waived instead of dropping it.
+fn gather_static(
+    board_path: &Path,
+    board: &ExtractedBoard,
+    text: &str,
+    raw: &[u8],
+    altium_present: bool,
+    lib: &ModelLibrary,
+    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
+) -> anyhow::Result<GatheredStatic> {
     let (clearance_input, mut drc) = super::run_drc(board_path, board, text, raw, altium_present)?;
 
     // The companion schematic's declarations, applied before anything reads the
@@ -656,25 +693,49 @@ pub fn gather_findings_with_schematic(
     let mut si = crate::checks::engine_si(board, lib, geo_text);
     let usbc = crate::usb_c_report(board);
 
+    let provenance =
+        super::clearance_provenance(clearance_input.as_ref(), board_path, text, drc.clearance_mm);
+    let eagle_untied = text.contains("<eagle") && schematic_ties.is_none();
+    let findings = |drc: &hauksbee_extract::DrcReport,
+                    lint: &hauksbee_extract::NetLintReport,
+                    si: &hauksbee_extract::SiReport| {
+        let structured =
+            DrcStructured::from_report_with_ties(drc, qualification.as_ref(), eagle_untied)
+                .with_clearance_rule_provenance(&provenance);
+        let mut findings = super::drc::drc_findings(&structured, Some(&provenance));
+        findings.extend(lint_findings_json(lint));
+        findings.extend(si_findings_json(si));
+        findings.extend(usbc.as_ref().and_then(usbc_finding_json));
+        findings
+    };
+    let before = findings(&drc, &lint, &si);
+
     // The same waivers, applied the same way, as every surface that gates: the
     // artifact must not carry a finding the exit code excused, or the other way
     // round.
     let mut waivers = load_waivers(board_path);
     let _ = apply_static_waivers(&mut waivers, &mut lint, &mut si, &mut drc);
+    let kept = findings(&drc, &lint, &si);
 
-    let provenance =
-        super::clearance_provenance(clearance_input.as_ref(), board_path, text, drc.clearance_mm);
-    let structured = DrcStructured::from_report_with_ties(
-        &drc,
-        qualification.as_ref(),
-        text.contains("<eagle") && schematic_ties.is_none(),
-    )
-    .with_clearance_rule_provenance(&provenance);
-    let mut findings = super::drc::drc_findings(&structured, Some(&provenance));
-    findings.extend(lint_findings_json(&lint));
-    findings.extend(si_findings_json(&si));
-    findings.extend(usbc.as_ref().and_then(usbc_finding_json));
-    Ok(findings)
+    // What the waivers took out: every finding before them, less (one for one)
+    // every finding still standing after them.
+    let mut standing: Vec<_> = kept.iter().map(finding_key).collect();
+    let mut reasons = load_waivers(board_path);
+    let mut waived = Vec::new();
+    for f in &before {
+        if let Some(i) = standing.iter().position(|k| *k == finding_key(f)) {
+            standing.swap_remove(i);
+            continue;
+        }
+        let why = reasons
+            .take_waiver(&f.check, &f.kind, &f.nets, &f.refs, &f.message)
+            .map_or_else(
+                || "excluded by the board's own DRC exclusions".to_string(),
+                |w| format!("{} (until {})", w.reason, w.until),
+            );
+        waived.push((f.clone(), why));
+    }
+    Ok(GatheredStatic { kept, waived })
 }
 
 /// The findings that fail `hauksbee check` on the board at `board_path`.
@@ -693,6 +754,27 @@ pub fn static_gating_findings(
     board_path: &Path,
     lib: &ModelLibrary,
 ) -> anyhow::Result<Vec<crate::result::JsonFinding>> {
+    static_gate(board_path, lib).map(|g| g.gating)
+}
+
+/// What `hauksbee check` gates on for one board, split by the board's waivers.
+#[derive(Debug, Clone, Default)]
+pub struct StaticGate {
+    /// The findings that fail the check.
+    pub gating: Vec<crate::result::JsonFinding>,
+    /// Findings that would fail it but a waiver overrules, each with the
+    /// waiver's "reason (until date)". Listed, never hidden.
+    pub waived: Vec<(crate::result::JsonFinding, String)>,
+}
+
+/// [`static_gating_findings`] plus the gate-grade findings the board's waiver
+/// file overrules, so a surface that reports the static verdict can list them
+/// as waived.
+///
+/// # Errors
+///
+/// As [`static_gating_findings`].
+pub fn static_gate(board_path: &Path, lib: &ModelLibrary) -> anyhow::Result<StaticGate> {
     let norm = crate::board_input::from_path(board_path)?;
     let altium_present = norm.is_binary();
     let text = norm.layout_text.unwrap_or_default();
@@ -703,7 +785,7 @@ pub fn static_gating_findings(
         .collect::<String>()
         .contains("<eagle");
     let ties = crate::schematic_ties::resolve(board_path, &norm.board, None, board_is_eagle)?;
-    let mut findings = gather_findings_with_schematic(
+    let gathered = gather_static(
         board_path,
         &norm.board,
         &text,
@@ -712,8 +794,11 @@ pub fn static_gating_findings(
         lib,
         ties.as_ref(),
     )?;
-    findings.retain(crate::result::JsonFinding::gates);
-    Ok(findings)
+    let mut gating = gathered.kept;
+    gating.retain(crate::result::JsonFinding::gates);
+    let mut waived = gathered.waived;
+    waived.retain(|(f, _)| f.gates());
+    Ok(StaticGate { gating, waived })
 }
 
 /// Apply this board's waivers to the whole static suite, in one place, and
