@@ -570,8 +570,24 @@ impl BindReport {
         for (r, w) in self.warnings() {
             let _ = writeln!(out, "  ⚠ {r}: {w}");
         }
-        for (r, g) in self.guess_warnings() {
-            let _ = writeln!(out, "  ? {r}: {g}");
+        if include_bulk_passives {
+            // The full form: one line per guessed pad.
+            for (r, g) in self.guess_warnings() {
+                let _ = writeln!(out, "  ? {r}: {g}");
+            }
+        } else {
+            // Identical guesses across parts read as one line; --verbose has
+            // every pad.
+            let grouped = group_pin_role_guesses(self.guess_warnings());
+            for line in &grouped {
+                let _ = writeln!(out, "{line}");
+            }
+            if grouped.len() < guess_count {
+                let _ = writeln!(
+                    out,
+                    "  (identical guesses are grouped above; --verbose lists every pad)"
+                );
+            }
         }
         // Legend for the Conf column, shown only when a row is not `exact` so a
         // first-timer knows whether to worry about a `guessed`/`family` row.
@@ -999,6 +1015,154 @@ pub fn is_open_pin_warning(warning: &str) -> bool {
         || w.contains("all i/o pins open")
 }
 
+/// The text of one pin-rule role guess, as stored in [`BindRow::guesses`].
+///
+/// It is carried unchanged into `--json`. The binder writes it here and
+/// [`group_pin_role_guesses`] reads it back through [`parse_rule_guess`], so the
+/// wording has one definition.
+#[must_use]
+pub fn rule_guess_text(
+    pad: &str,
+    role: &str,
+    rule_id: &str,
+    footprint: &str,
+    pad_count: usize,
+) -> String {
+    format!(
+        "pad {pad} role '{role}' guessed from rule '{rule_id}' (no explicit pin-function; \
+         footprint \"{footprint}\", {pad_count} pads)"
+    )
+}
+
+/// The parts of a [`rule_guess_text`] string: one pad's role, the rule id that
+/// gave it, and everything after the rule (the footprint and pad count it
+/// matched).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuleGuess<'a> {
+    pad: &'a str,
+    role: &'a str,
+    rule_id: &'a str,
+    tail: &'a str,
+}
+
+fn parse_rule_guess(guess: &str) -> Option<RuleGuess<'_>> {
+    let rest = guess.strip_prefix("pad ")?;
+    let (pad, rest) = rest.split_once(" role '")?;
+    let (role, rest) = rest.split_once("' guessed from rule '")?;
+    let (rule_id, tail) = rest.split_once("' (")?;
+    (!pad.contains(' ')).then_some(RuleGuess {
+        pad,
+        role,
+        rule_id,
+        tail,
+    })
+}
+
+/// Parts named on a grouped guess line before the rest are counted.
+const GROUPED_REFS_SHOWN: usize = 3;
+
+/// One output line of [`group_pin_role_guesses`]: either parts sharing a
+/// pad-to-role map, or a guess printed as it stands.
+enum GuessEntry<'a> {
+    Group {
+        pads: Vec<RuleGuess<'a>>,
+        refs: Vec<&'a str>,
+    },
+    Verbatim(String),
+}
+
+/// Collapse pin-role guesses into one line per distinct guess.
+///
+/// The same rule, footprint and pad-to-role map across parts is one line naming
+/// the parts compactly (the first few, then a count) and the pad map once. A
+/// part whose guesses do not all come from a pin rule (a package-standard
+/// numbering, say) keeps its own per-guess lines, unchanged. Groups keep the
+/// order their first part appears in, so the output is stable for a board.
+///
+/// `guesses` is `(reference, guess text)` in report order. The per-pad lines
+/// remain available through `--verbose` and the `--json` document, which this
+/// does not touch.
+#[must_use]
+pub fn group_pin_role_guesses<'a>(
+    guesses: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Vec<String> {
+    let mut per_part: Vec<(&str, Vec<&str>)> = Vec::new();
+    for (reference, guess) in guesses {
+        match per_part.last_mut() {
+            Some((previous, texts)) if *previous == reference => texts.push(guess),
+            _ => per_part.push((reference, vec![guess])),
+        }
+    }
+    let mut entries: Vec<GuessEntry<'_>> = Vec::new();
+    for (reference, texts) in &per_part {
+        let parsed: Option<Vec<RuleGuess<'_>>> =
+            texts.iter().map(|text| parse_rule_guess(text)).collect();
+        let Some(pads) = parsed else {
+            entries.extend(
+                texts
+                    .iter()
+                    .map(|text| GuessEntry::Verbatim(format!("  ? {reference}: {text}"))),
+            );
+            continue;
+        };
+        let same_map = entries.iter_mut().find_map(|entry| match entry {
+            GuessEntry::Group { pads: seen, refs } if *seen == pads => Some(refs),
+            _ => None,
+        });
+        match same_map {
+            Some(refs) => refs.push(reference),
+            None => entries.push(GuessEntry::Group {
+                pads,
+                refs: vec![reference],
+            }),
+        }
+    }
+    entries
+        .into_iter()
+        .map(|entry| match entry {
+            GuessEntry::Verbatim(line) => line,
+            GuessEntry::Group { pads, refs } => grouped_guess_line(&pads, &refs),
+        })
+        .collect()
+}
+
+fn grouped_guess_line(pads: &[RuleGuess<'_>], refs: &[&str]) -> String {
+    let shown = refs
+        .iter()
+        .take(GROUPED_REFS_SHOWN)
+        .copied()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let parts = if refs.len() > GROUPED_REFS_SHOWN {
+        format!(
+            "{shown} and {} more ({} parts)",
+            refs.len() - GROUPED_REFS_SHOWN,
+            refs.len()
+        )
+    } else {
+        shown
+    };
+    let map = pads
+        .iter()
+        .map(|g| format!("pad {} role '{}'", g.pad, g.role))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut ids: Vec<&str> = Vec::new();
+    for g in pads {
+        if !ids.contains(&g.rule_id) {
+            ids.push(g.rule_id);
+        }
+    }
+    let noun = if ids.len() > 1 { "rules" } else { "rule" };
+    let ids = ids
+        .iter()
+        .map(|id| format!("'{id}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let tail = pads.first().map_or("", |g| g.tail);
+    format!("  ? {parts}: {map} guessed from {noun} {ids} ({tail}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1101,6 +1265,95 @@ mod tests {
         );
         let full = report.render_table();
         assert!(full.contains("│ C1 ") && full.contains("│ R1 "), "{full}");
+    }
+
+    fn guessed_fet(reference: &str, rule: &str, footprint: &str, roles: &[&str]) -> BindRow {
+        BindRow {
+            guesses: roles
+                .iter()
+                .enumerate()
+                .map(|(i, role)| {
+                    rule_guess_text(&(i + 1).to_string(), role, rule, footprint, roles.len())
+                })
+                .collect(),
+            ..sourced_row(reference, "nmos", ModelSourceTier::CuratedLibrary)
+        }
+    }
+
+    #[test]
+    fn rule_guess_text_round_trips_through_the_parser() {
+        let text = rule_guess_text("2", "source", "nmos_sot23_g1_s2_d3", "SOT-23", 3);
+        let parsed = parse_rule_guess(&text).expect("parses");
+        assert_eq!(
+            (parsed.pad, parsed.role, parsed.rule_id),
+            ("2", "source", "nmos_sot23_g1_s2_d3")
+        );
+        assert_eq!(
+            parsed.tail,
+            "no explicit pin-function; footprint \"SOT-23\", 3 pads)"
+        );
+        assert_eq!(
+            parse_rule_guess("pad 1 role 'a' numbered from package standard \"x\""),
+            None
+        );
+    }
+
+    #[test]
+    fn identical_pin_role_guesses_print_as_one_line_and_verbose_keeps_every_pad() {
+        let mut report = BindReport::default();
+        let roles = ["gate", "source", "drain"];
+        for i in 0..22 {
+            report.push(guessed_fet(
+                &format!("Q{i}"),
+                "nmos_g1_s2_d3",
+                "SOT-23",
+                &roles,
+            ));
+        }
+        // Same rule, different footprint: its own line.
+        report.push(guessed_fet("Q99", "nmos_g1_s2_d3", "SOT-523", &roles));
+        // A different pad map under another rule: its own line.
+        report.push(guessed_fet(
+            "Q100",
+            "nmos_g1_d2_s3",
+            "SOT-23",
+            &["gate", "drain", "source"],
+        ));
+
+        let compact = report.render_table_compact();
+        let lines: Vec<&str> = compact.lines().filter(|l| l.starts_with("  ? ")).collect();
+        assert_eq!(lines.len(), 3, "{compact}");
+        assert_eq!(
+            lines[0],
+            "  ? Q0, Q1, Q2 and 19 more (22 parts): pad 1 role 'gate', pad 2 role 'source', \
+             pad 3 role 'drain' guessed from rule 'nmos_g1_s2_d3' (no explicit pin-function; \
+             footprint \"SOT-23\", 3 pads)"
+        );
+        assert!(
+            lines[1].starts_with("  ? Q99: pad 1 role 'gate'"),
+            "{compact}"
+        );
+        assert!(lines[2].contains("rule 'nmos_g1_d2_s3'"), "{compact}");
+        // The summary still counts every guessed pad.
+        assert!(compact.contains("72 pin-role guesses"), "{compact}");
+
+        let verbose = report.render_table();
+        let per_pad = verbose.lines().filter(|l| l.starts_with("  ? ")).count();
+        assert_eq!(per_pad, 72, "{verbose}");
+    }
+
+    #[test]
+    fn a_single_part_guess_keeps_its_original_wording() {
+        let mut report = BindReport::default();
+        report.push(guessed_fet("Q1", "nmos_g1_s2_d3", "SOT-23", &["gate"]));
+        let compact = report.render_table_compact();
+        assert!(
+            compact.contains(
+                "  ? Q1: pad 1 role 'gate' guessed from rule 'nmos_g1_s2_d3' (no explicit \
+                 pin-function; footprint \"SOT-23\", 1 pads)\n"
+            ),
+            "{compact}"
+        );
     }
 
     #[test]

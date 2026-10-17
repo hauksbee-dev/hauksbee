@@ -449,7 +449,17 @@ impl CheckReport<'_> {
                 verdict_line(
                     &run_verdict,
                     (serious, worth_a_look),
-                    drc_structured.version_warning.as_deref(),
+                    drc_structured
+                        .version_warning
+                        .as_deref()
+                        .map(|reason| CopperUnvalidated {
+                            reason,
+                            issues: crate::plain::plain_drc_structured_with_rule_source(
+                                &drc_structured,
+                                &provenance,
+                            )
+                            .potential_copper_issue_count(),
+                        }),
                 )
             );
         }
@@ -537,6 +547,17 @@ pub(crate) fn machine_report(
     jr
 }
 
+/// An UNVALIDATED copper result on the closing line: why it is unvalidated and
+/// how many potential copper issues the copper section itself lists. The count
+/// comes from the same plain report that section prints, never from the
+/// all-checks "worth a look" total, which also counts lint and signal-integrity
+/// findings.
+#[derive(Clone, Copy)]
+pub(crate) struct CopperUnvalidated<'a> {
+    pub reason: &'a str,
+    pub issues: usize,
+}
+
 /// The single closing verdict line for `--check` (U4).
 ///
 /// Its tag comes from the shared [`RunVerdict`] (the one `--json` prints), never
@@ -549,19 +570,20 @@ pub(crate) fn machine_report(
 pub(crate) fn verdict_line(
     verdict: &RunVerdict,
     (serious, worth_a_look): (usize, usize),
-    copper_unvalidated: Option<&str>,
+    copper_unvalidated: Option<CopperUnvalidated<'_>>,
 ) -> String {
     let Some(reason) = verdict.reason.as_deref() else {
         let conditions = verdict.conditions.join(" ");
-        if let Some(copper) = copper_unvalidated {
+        if let Some(CopperUnvalidated { reason, issues }) = copper_unvalidated {
             let on = if conditions.is_empty() {
                 String::new()
             } else {
                 format!(" Conditions: {conditions}")
             };
             return format!(
-                "VERDICT: copper UNVALIDATED: {worth_a_look} potential issue(s); unmatched \
-                 copper findings remain tool-only and none counted as serious. Reason: {copper}{on}"
+                "VERDICT: copper UNVALIDATED: {}; unmatched copper findings remain tool-only \
+                 and none counted as serious. Reason: {reason}{on}",
+                crate::plain::potential_copper_issues(issues)
             );
         }
         // A pass with items the triage lists to inspect is not clean: the tag
@@ -594,13 +616,14 @@ pub(crate) fn verdict_line(
     };
     // The copper caveat is added to the verdict, never in place of it, so this
     // line never hides the reason `--json` gives.
-    let copper = copper_unvalidated.map_or_else(String::new, |copper| {
-        format!(
-            " Copper from this board format is UNVALIDATED: unmatched copper findings remain \
+    let copper =
+        copper_unvalidated.map_or_else(String::new, |CopperUnvalidated { reason, .. }| {
+            format!(
+                " Copper from this board format is UNVALIDATED: unmatched copper findings remain \
              tool-only and none counted as serious unless KiCad's own DRC confirms the exact net \
-             pair. Reason: {copper}"
-        )
-    });
+             pair. Reason: {reason}"
+            )
+        });
     format!("VERDICT: {tag}: {serious} serious, {worth_a_look} worth a look; {reason}{copper}")
 }
 
@@ -1190,6 +1213,8 @@ mod tests {
         json_reason: Option<String>,
         triage: String,
         line: String,
+        /// The copper section's own one-line verdict.
+        copper_section_verdict: String,
     }
 
     fn surfaces(
@@ -1204,11 +1229,12 @@ mod tests {
             clearance_mm: 0.2,
             findings: Vec::new(),
             primitive_count: 2,
-            version_warning: None,
+            version_warning: copper_unvalidated.map(str::to_string),
             zone_pad_overlaps_suppressed: Some(0),
             excluded: Vec::new(),
         });
         let provenance = crate::result::ClearanceRuleProvenance::defaulted(0.2, false);
+        let copper_plain = crate::plain::plain_drc_structured_with_rule_source(&drc, &provenance);
         let summary = bind(unmodelled(unmodelled_parts));
         let mut findings = lint_findings_json(lint);
         findings.extend(si_findings_json(si));
@@ -1250,7 +1276,15 @@ mod tests {
             json_verdict: json["verdict"].as_str().unwrap().to_string(),
             json_reason: json["verdict_reason"].as_str().map(str::to_string),
             triage: triage.render(&run_verdict),
-            line: super::verdict_line(&run_verdict, (serious, worth), copper_unvalidated),
+            line: super::verdict_line(
+                &run_verdict,
+                (serious, worth),
+                copper_unvalidated.map(|reason| super::CopperUnvalidated {
+                    reason,
+                    issues: copper_plain.potential_copper_issue_count(),
+                }),
+            ),
+            copper_section_verdict: copper_plain.verdict(),
         }
     }
 
@@ -1432,6 +1466,49 @@ mod tests {
                 )
             },
         ]
+    }
+
+    /// The closing line's copper count is the copper section's own, not the
+    /// all-checks "worth a look" total: two non-copper notes beside an
+    /// UNVALIDATED copper result with nothing listed must not read as two
+    /// potential copper issues.
+    #[test]
+    fn unvalidated_copper_count_is_the_copper_sections_not_the_worth_a_look_total() {
+        let notes = vec![
+            lint(
+                LintCheck::UncheckedMcu,
+                Severity::Low,
+                "U4 has no boot-strap table, so its boot strap-pins were NOT checked",
+            ),
+            lint(
+                LintCheck::UncheckedMcu,
+                Severity::Low,
+                "U5 has no boot-strap table, so its boot strap-pins were NOT checked",
+            ),
+        ];
+        let got = surfaces(
+            &NetLintReport { findings: notes },
+            &SiReport {
+                findings: Vec::new(),
+            },
+            &[],
+            &[],
+            Some("board newer than the validated KiCad format"),
+            None,
+        );
+        assert!(
+            got.copper_section_verdict
+                .starts_with("No potential copper issues listed"),
+            "{}",
+            got.copper_section_verdict
+        );
+        assert!(
+            got.line
+                .starts_with("VERDICT: copper UNVALIDATED: no potential copper issues listed;"),
+            "{}",
+            got.line
+        );
+        assert!(!got.line.contains("2 potential"), "{}", got.line);
     }
 
     #[test]

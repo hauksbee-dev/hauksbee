@@ -191,6 +191,25 @@ fn divider_max_v(board: &ExtractedBoard, net_id: i64) -> Option<f64> {
     (grounded && conductance > 0.0).then(|| sourced / conductance)
 }
 
+/// The sentence that names the model card file when the user supplied it (a
+/// `--models-dir` or user-directory card), so the fix can say which file takes
+/// the `input_tolerance` row. Empty for a built-in or pack model, which the user
+/// does not edit in place.
+fn user_card_suffix(lib: &ModelLibrary, comp: &Component) -> String {
+    use hauksbee_models::SourceLayer;
+    let Some(part) = AssemblyState::of(comp).fitted() else {
+        return String::new();
+    };
+    let resolution = hauksbee_bind::binder::resolve(lib, part);
+    match (resolution.layer, resolution.origin) {
+        (
+            Some(SourceLayer::ModelsDirFlag | SourceLayer::UserDir | SourceLayer::UserConfigDir),
+            Some(origin),
+        ) => format!("{}{origin}", hauksbee_extract::MODEL_CARD_MESSAGE_MARKER),
+        _ => String::new(),
+    }
+}
+
 /// Run the back-powering lint over every modelled part on the board.
 #[must_use]
 pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
@@ -261,7 +280,7 @@ pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
                             supply_net,
                             format_volts(supply_v),
                             format_volts(supply_v)
-                        ),
+                        ) + &user_card_suffix(lib, comp),
                         refs: vec![comp.reference.clone()],
                         nets: vec![net.name.clone()],
                     });
@@ -304,7 +323,7 @@ pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
                             format_volts(supply_v),
                             format_volts(supply_v),
                             format_volts(rail_v)
-                        ),
+                        ) + &user_card_suffix(lib, comp),
                         refs: vec![comp.reference.clone(), r_ref],
                         nets: vec![net.name.clone(), rail_net],
                     });
@@ -605,6 +624,70 @@ basis = "Absolute Maximum Ratings, IN+ row""#,
             count(&card(""), "+5V"),
             1,
             "no rating: the clamp rule holds"
+        );
+    }
+
+    /// A finding on a part whose card is a user-supplied file names that file,
+    /// so the fix can say where the `input_tolerance` row goes; a built-in
+    /// model names none (the user does not edit it in place).
+    #[test]
+    fn a_user_supplied_card_is_named_in_the_finding_and_a_builtin_is_not() {
+        let card = r#"
+[[models]]
+id = "sense_amp"
+kind = "digital"
+description = "card-file fixture"
+[models.match]
+value_re = "^SENSE_AMP$"
+[models.params]
+identity_only = true
+warning = "identity only"
+unlocked_by = "validated behavior"
+[models.pins]
+"1" = "vcc"
+"2" = "gnd"
+"3" = "in_plus"
+"#;
+        let board = r#"(kicad_pcb (version 20221018) (generator pcbnew)
+  (net 0 "") (net 1 "GND") (net 2 "+5V") (net 4 "+3V3")
+  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 100 100)
+    (property "Reference" "U4" (at 0 0)) (property "Value" "SENSE_AMP" (at 0 2))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 4 "+3V3"))
+    (pad "2" smd rect (at 0 1) (size 1 1) (layers "F.Cu") (net 1 "GND"))
+    (pad "3" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 2 "+5V"))))"#;
+        let dir = std::env::temp_dir().join(format!(
+            "hauksbee_back_power_card_file_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("sense_amp.toml");
+        std::fs::write(&file, card).unwrap();
+        let mut lib = ModelLibrary::empty();
+        assert!(
+            lib.load_dir_layer(&dir, hauksbee_models::SourceLayer::ModelsDirFlag)
+                .is_empty(),
+            "fixture card loads"
+        );
+        let parsed = ExtractedBoard::from_kicad_pcb(board).expect("parse");
+        let report = back_power_lint(&parsed, &lib);
+        let finding = report.of_check(LintCheck::BackPower).next().expect("fires");
+        assert_eq!(
+            hauksbee_extract::model_card_file_in(&finding.message),
+            Some(file.display().to_string().as_str()),
+            "{}",
+            finding.message
+        );
+
+        let builtin = run(&esp32_pull_board("+5V"));
+        let finding = builtin
+            .of_check(LintCheck::BackPower)
+            .next()
+            .expect("fires");
+        assert_eq!(
+            hauksbee_extract::model_card_file_in(&finding.message),
+            None,
+            "{}",
+            finding.message
         );
     }
 

@@ -329,6 +329,23 @@ pub const DNP_PULLUP_MESSAGE_MARKER: &str = "do-not-populate";
 /// no-drift reason as [`DNP_PULLUP_MESSAGE_MARKER`].
 pub const SPI_PULLUP_MESSAGE_MARKER: &str = "wired for SPI mode";
 
+/// The phrase a finding's message ends on when the part's model card is a user file.
+///
+/// That is a `--models-dir` or user-directory card, and the text after the
+/// phrase is its path. The plain renderer reads it back with
+/// [`model_card_file_in`] so its fix names the file to edit; shared for the same
+/// no-drift reason as [`DNP_PULLUP_MESSAGE_MARKER`].
+pub const MODEL_CARD_MESSAGE_MARKER: &str = " Model card file: ";
+
+/// The user-supplied model card file a finding message names, if it does.
+#[must_use]
+pub fn model_card_file_in(message: &str) -> Option<&str> {
+    message
+        .rsplit_once(MODEL_CARD_MESSAGE_MARKER)
+        .map(|(_, file)| file.trim())
+        .filter(|file| !file.is_empty())
+}
+
 impl LintCheck {
     /// Every variant, for exhaustiveness-style tests in downstream crates
     /// (e.g. "every check has a plain-language template"). Grows with the
