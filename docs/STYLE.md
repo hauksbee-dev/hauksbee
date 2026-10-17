@@ -24,7 +24,7 @@ between a message that closes the loop and one that sends someone to the source.
 Good:
 
 ```
-error: 'mystery.brd': unrecognized board format: hauksbee reads a KiCad board, schematic or netlist, an Eagle board, an Altium .PcbDoc (binary or ASCII), an IPC-D-356 netlist, or a folder or zip of gerbers
+error: 'mystery.brd': unrecognized board format: hauksbee reads a KiCad board, schematic or netlist, an Eagle board, an Altium .PcbDoc (binary or ASCII), an EasyEDA board (Standard .json or Pro .epcb/.epro), an IPC-2581 document, an ODB++ job (folder, .tgz or .zip), an IPC-D-356 netlist, or a folder or zip of gerbers
 ```
 
 It names the file, names the failure, and every format it lists is a thing the

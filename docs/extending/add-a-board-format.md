@@ -25,9 +25,10 @@ pub trait BoardReader: Send + Sync {
 }
 ```
 
-`Registry::builtin()` holds nine shipped readers in a documented order:
-Altium, ODB++, Protel ASCII, IPC-2581, Eagle, KiCad netlist, KiCad schematic,
-KiCad PCB, and IPC-D-356. Detection walks front to back, and the first reader
+`Registry::builtin()` holds the shipped readers in a documented order
+(`Registry::reader_names()` lists them): Altium, ODB++, the EasyEDA project
+archive, Protel ASCII, EasyEDA, IPC-2581, Eagle, KiCad netlist, KiCad
+schematic, KiCad PCB, and IPC-D-356. Detection walks front to back, and the first reader
 to claim the bytes wins. When nothing matches, the error lists every reader it
 tried.
 

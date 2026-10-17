@@ -333,7 +333,7 @@ struct MeasureArgs {
 #[derive(Parser)]
 struct InitArgs {
     /// Board file to scaffold a spec from (any format `hauksbee-ci run` reads:
-    /// KiCad, Eagle, Altium, IPC-2581, IPC-D-356, ODB++ or a fab archive).
+    /// KiCad, Eagle, Altium, EasyEDA, IPC-2581, IPC-D-356, ODB++ or a fab archive).
     /// With no argument, looks for exactly one board file in the current
     /// directory and tells you the command to run on it.
     #[arg(value_name = "BOARD")]

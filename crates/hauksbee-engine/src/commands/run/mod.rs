@@ -146,6 +146,7 @@ pub(crate) const fn input_kind_name(kind: crate::board_input::InputKind) -> &'st
         InputKind::Ipc356Archive => "fab_ipc356",
         InputKind::Odb => "odbpp",
         InputKind::Ipc2581 => "ipc2581",
+        InputKind::Easyeda => "easyeda",
     }
 }
 

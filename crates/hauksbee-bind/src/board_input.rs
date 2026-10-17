@@ -52,7 +52,7 @@ use hauksbee_extract::{ExtractError, ExtractedBoard};
 /// What kind of input the normalizer recognised.
 ///
 /// Call sites use this where they would otherwise keep `is_binary` / `is_gerber`
-/// flags; the `layout_text == None` kinds (Altium, Gerber, Odb, Ipc2581) need
+/// flags; the `layout_text == None` kinds (Altium, Gerber, Odb, Ipc2581, Easyeda) need
 /// different DRC handling from the text ones and from each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputKind {
@@ -77,6 +77,10 @@ pub enum InputKind {
     /// An IPC-2581 (DPMX) design-exchange document. Text, but not KiCad-parseable
     /// text, so it carries no `layout_text` either.
     Ipc2581,
+    /// An EasyEDA (JLCEDA) board: a Standard `.json` PCB, a Pro `.epcb`, or a
+    /// project archive of either. The netlist is READ from the file's own part
+    /// and pad records; copper is counted but not kept, so there is no layout text.
+    Easyeda,
 }
 
 /// One board input, normalized: the extracted board plus everything the
@@ -141,7 +145,11 @@ impl NormalizedBoard {
     pub const fn is_gerber(&self) -> bool {
         matches!(
             self.kind,
-            InputKind::Gerber | InputKind::Ipc356Archive | InputKind::Odb | InputKind::Ipc2581
+            InputKind::Gerber
+                | InputKind::Ipc356Archive
+                | InputKind::Odb
+                | InputKind::Ipc2581
+                | InputKind::Easyeda
         )
     }
 
@@ -227,6 +235,7 @@ pub const fn input_kind_phrase(kind: InputKind) -> &'static str {
         InputKind::Ipc356Archive => "a fab archive carrying an IPC-D-356 netlist",
         InputKind::Odb => "an ODB++ job",
         InputKind::Ipc2581 => "an IPC-2581 document",
+        InputKind::Easyeda => "an EasyEDA board",
         InputKind::Altium => "an Altium .PcbDoc",
         InputKind::Schematic => "a schematic",
         InputKind::Text => "this input",
@@ -333,6 +342,7 @@ pub const ACCEPTED_FORMATS: &[AcceptedFormat] = &[
     board_format("KiCad", &[".kicad_pcb", ".kicad_sch", ".net"]),
     board_format("Eagle", &[".brd"]),
     board_format("Altium", &[".PcbDoc"]),
+    board_format("EasyEDA", &[".json", ".epcb", ".epro"]),
     board_format("IPC-2581", &[".xml"]),
     board_format("IPC-D-356", &[".d356"]),
     board_format("ODB++ job", &[".tgz", ".tar.gz", ".tar"]),
@@ -434,10 +444,16 @@ fn refuse_eagle_binary(file_name: &str, raw: &[u8]) -> Result<(), BoardInputErro
 /// would work.
 #[must_use]
 pub fn unsupported_format_refusal(file_name: &str, raw: &[u8]) -> Option<String> {
-    hauksbee_extract::looks_like_eagle_binary(raw).then(|| {
-        format!(
+    if hauksbee_extract::looks_like_eagle_binary(raw) {
+        return Some(format!(
             "'{file_name}': {}",
             hauksbee_extract::eagle_binary_message()
+        ));
+    }
+    hauksbee_extract::easyeda::looks_like_easyeda_pro_v3(raw).then(|| {
+        format!(
+            "'{file_name}': {}",
+            hauksbee_extract::easyeda::PRO_V3_MESSAGE
         )
     })
 }
@@ -483,6 +499,12 @@ fn from_bytes_in_file_order(
             kind: InputKind::Odb,
             notes: out.stats.notes(),
         });
+    }
+
+    // An EasyEDA board or project archive, content-sniffed ahead of the zip
+    // branch below (which would call any zip gerbers) and the text sniffer.
+    if let Some(norm) = easyeda_input(file_name, contents, None)? {
+        return Ok(norm);
     }
 
     // Binary-first: `from_auto_bytes` claims a recognised binary board (OLE2
@@ -701,6 +723,11 @@ fn from_path_in_file_order(path: &Path) -> Result<NormalizedBoard, BoardInputErr
         ));
     }
 
+    // An EasyEDA board or project archive, ahead of the zip branch below.
+    if let Some(norm) = easyeda_input(&file_name, &raw, Some(path))? {
+        return Ok(norm);
+    }
+
     // A `.zip` is a fab archive, the same form the web drop zone accepts.
     // Within it, prefer its own IPC-D-356 connectivity before falling back to
     // gerber reconstruction.
@@ -795,6 +822,7 @@ fn from_path_in_file_order(path: &Path) -> Result<NormalizedBoard, BoardInputErr
             "brd" => Some("an Eagle board"),
             "d356" => Some("an IPC-D-356 netlist"),
             "net" => Some("a KiCad netlist"),
+            "epcb" | "epro" => Some("an EasyEDA board"),
             _ => None,
         };
         known.map_or_else(
@@ -822,10 +850,47 @@ fn from_path_in_file_order(path: &Path) -> Result<NormalizedBoard, BoardInputErr
     ))
 }
 
+/// An EasyEDA board or project archive in `raw`, or `None` when it is neither.
+/// `path` is `Some` for the CLI path, which names the board after its file when
+/// the document carries no title.
+fn easyeda_input(
+    file_name: &str,
+    raw: &[u8],
+    path: Option<&Path>,
+) -> Result<Option<NormalizedBoard>, BoardInputError> {
+    let out = if hauksbee_extract::easyeda::looks_like_easyeda_archive(raw) {
+        hauksbee_extract::easyeda::extract_archive(raw)
+    } else if hauksbee_extract::easyeda::looks_like_easyeda(raw) {
+        hauksbee_extract::easyeda::extract(raw)
+    } else {
+        return Ok(None);
+    }
+    .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
+    let norm = NormalizedBoard {
+        board: out.board,
+        layout_text: None,
+        raw: raw.to_vec(),
+        kind: InputKind::Easyeda,
+        notes: out.stats.notes(),
+    };
+    Ok(Some(match path {
+        Some(p) => with_name_fallback(norm, p),
+        None => norm,
+    }))
+}
+
 /// Board-format files directly inside `dir` (no recursion), sorted. The
 /// directory head of [`from_path`] consults this before assuming gerbers.
 fn board_files_in(dir: &Path) -> Vec<std::path::PathBuf> {
-    const BOARD_EXTS: &[&str] = &["kicad_pcb", "kicad_sch", "brd", "pcbdoc", "d356"];
+    const BOARD_EXTS: &[&str] = &[
+        "kicad_pcb",
+        "kicad_sch",
+        "brd",
+        "pcbdoc",
+        "d356",
+        "epcb",
+        "epro",
+    ];
     let mut found: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(rd) = std::fs::read_dir(dir) {
         for e in rd.flatten() {
@@ -848,6 +913,11 @@ fn board_files_in(dir: &Path) -> Vec<std::path::PathBuf> {
             // root element decide, the same way the reader registry does.
             if ext == "xml" && ipc2581_head(&p) {
                 found.push(p);
+                continue;
+            }
+            // Likewise `.json`: only an EasyEDA Standard PCB document counts.
+            if ext == "json" && easyeda_head(&p) {
+                found.push(p);
             }
         }
     }
@@ -869,6 +939,20 @@ fn ipc2581_head(path: &Path) -> bool {
     let mut head = vec![0u8; 4096];
     f.read(&mut head)
         .is_ok_and(|n| hauksbee_extract::ipc2581::looks_like_ipc2581(&head[..n]))
+}
+
+/// Does this file's leading bytes declare an EasyEDA PCB document?
+fn easyeda_head(path: &Path) -> bool {
+    use std::io::Read;
+    if !std::fs::metadata(path).is_ok_and(|m| m.is_file()) {
+        return false;
+    }
+    let Ok(f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = Vec::new();
+    f.take(64 * 1024).read_to_end(&mut head).is_ok()
+        && hauksbee_extract::easyeda::looks_like_easyeda(&head)
 }
 
 /// The CLI/CI wording for a failed gerber reverse-extraction from a path.
@@ -1452,6 +1536,99 @@ fn main {
             msg.contains(".PcbDoc"),
             "the supported list must include Altium: {msg}"
         );
+    }
+
+    const EASYEDA_STD: &[u8] = include_bytes!(
+        "../../hauksbee-extract/tests/fixtures/easyeda/rpitx-coax-gp1212-gp731.json"
+    );
+    const EASYEDA_PRO: &[u8] =
+        include_bytes!("../../hauksbee-extract/tests/fixtures/easyeda/nano-hub-pcb1.epcb");
+
+    #[test]
+    fn easyeda_is_listed_among_the_accepted_formats() {
+        let sentence = supported_formats_sentence();
+        assert!(sentence.contains("EasyEDA"), "{sentence}");
+        for ext in [".json", ".epcb", ".epro"] {
+            assert!(sentence.contains(ext), "{ext} missing from: {sentence}");
+        }
+        let json = accepted_formats_json();
+        let easyeda = json["formats"]
+            .as_array()
+            .expect("formats array")
+            .iter()
+            .find(|f| f["vendor"] == "EasyEDA")
+            .unwrap_or_else(|| panic!("EasyEDA row missing from {json}"));
+        assert_eq!(easyeda["route"], "board");
+        assert_eq!(input_kind_phrase(InputKind::Easyeda), "an EasyEDA board");
+        let msg = from_bytes("nope.txt", b"this is not a board file at all")
+            .expect_err("garbage must not normalize")
+            .web_message();
+        assert!(
+            msg.contains("EasyEDA"),
+            "the drop error names EasyEDA: {msg}"
+        );
+    }
+
+    #[test]
+    fn an_easyeda_board_normalizes_without_layout_text() {
+        for (name, bytes, parts) in [
+            ("gp1212.json", EASYEDA_STD, 4),
+            ("hub.epcb", EASYEDA_PRO, 23),
+        ] {
+            let norm = from_bytes(name, bytes).expect("easyeda normalizes");
+            assert_eq!(norm.kind, InputKind::Easyeda);
+            // No checkable copper: it takes the geometry-less (spacing not
+            // checked) path rather than being measured as if it had geometry.
+            assert!(norm.is_gerber() && !norm.is_gerber_archive());
+            assert!(norm.layout_text.is_none());
+            assert_eq!(norm.raw, bytes, "raw bytes survive");
+            assert_eq!(norm.board.components.len(), parts, "{name}");
+            assert!(
+                norm.notes
+                    .iter()
+                    .any(|n| n.contains("not reverse-engineered from copper")
+                        && n.contains("were not run")),
+                "the reader's copper limit travels with the board: {:?}",
+                norm.notes
+            );
+        }
+    }
+
+    #[test]
+    fn an_easyeda_board_reads_by_content_not_by_extension() {
+        let norm = from_bytes("pasted.txt", EASYEDA_STD).expect("content decides");
+        assert_eq!(norm.kind, InputKind::Easyeda);
+    }
+
+    #[test]
+    fn an_easyeda_project_archive_normalizes() {
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default();
+        w.start_file("project.json", opts).unwrap();
+        w.write_all(b"{}").unwrap();
+        w.start_file("PCB1.epcb", opts).unwrap();
+        w.write_all(EASYEDA_PRO).unwrap();
+        let zip = w.finish().unwrap().into_inner();
+        let norm = from_bytes("hub.epro", &zip).expect("archive normalizes");
+        assert_eq!(norm.kind, InputKind::Easyeda);
+        assert_eq!(norm.board.components.len(), 23);
+    }
+
+    #[test]
+    fn an_easyeda_refusal_is_specific_and_names_the_file() {
+        let cut = &EASYEDA_STD[..EASYEDA_STD.len() / 2];
+        let msg = from_bytes("cut.json", cut)
+            .expect_err("a truncated export is refused")
+            .to_string();
+        assert!(
+            msg.contains("'cut.json'") && msg.contains("truncated"),
+            "{msg}"
+        );
+        // An ordinary JSON file is not an EasyEDA board.
+        let msg = from_bytes("package.json", br#"{"name":"x","version":"1"}"#)
+            .expect_err("not a board")
+            .to_string();
+        assert!(!msg.contains("EasyEDA file"), "{msg}");
     }
 
     #[test]

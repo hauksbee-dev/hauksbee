@@ -24,6 +24,9 @@
 //!   it reverse-engineered from copper, so a board that only ever leaves its CAD
 //!   tool as an ODB++ `.tgz` or an IPC-2581 XML is fully ingestible. See
 //!   [`odbpp`] and [`ipc2581`] for what each carries and what is dropped.
+//! - [`ExtractedBoard::from_easyeda`], an EasyEDA / JLCEDA board: a Standard
+//!   edition `.json` PCB document or a Pro edition `.epcb` / `.epro`. See
+//!   [`easyeda`] for what it reads and what it names as unsupported.
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-extract/README.md (the
 //! crate tour) and docs/how-and-why/hauksbee-extract/netlist.md (the
@@ -37,6 +40,7 @@ pub mod dnp;
 pub mod drc;
 mod dsu;
 mod eagle;
+pub mod easyeda;
 /// The pre-Eagle-6 BINARY drawing detector and its refusal message. Exported
 /// because the board-input normalizer has to refuse this format on the RAW
 /// bytes, ahead of reader selection: the lossy UTF-8 decode every text reader
@@ -138,6 +142,10 @@ pub enum ExtractError {
     /// An IPC-2581 document problem, already phrased as a whole human sentence.
     #[error("{0}")]
     Ipc2581(String),
+    /// An EasyEDA (JLCEDA) board problem, already phrased as a whole human
+    /// sentence that names what the file is and what to do next.
+    #[error("{0}")]
+    Easyeda(String),
     #[error("{}", wrong_root_text(.expected, .found.as_deref()))]
     WrongRoot {
         expected: &'static str,
@@ -679,6 +687,25 @@ impl ExtractedBoard {
     /// not readable IPC-2581.
     pub fn from_ipc2581(text: &str) -> Result<Self, ExtractError> {
         ipc2581::extract(text).map(|e| e.board)
+    }
+
+    /// EasyEDA (JLCEDA) board: a Standard edition `.json` PCB document or a Pro
+    /// edition `.epcb` layout. See [`easyeda`]; [`easyeda::extract`] keeps the
+    /// read's accounting.
+    ///
+    /// # Errors
+    /// [`ExtractError::Easyeda`] when the bytes are not a readable EasyEDA PCB.
+    pub fn from_easyeda(bytes: &[u8]) -> Result<Self, ExtractError> {
+        easyeda::extract(bytes).map(|e| e.board)
+    }
+
+    /// EasyEDA project archive (Pro `.epro`, or a zip of Standard `.json` PCBs).
+    ///
+    /// # Errors
+    /// [`ExtractError::Easyeda`] when the archive cannot be unpacked, holds no
+    /// board, or the board it holds does not read.
+    pub fn from_easyeda_archive(bytes: &[u8]) -> Result<Self, ExtractError> {
+        easyeda::extract_archive(bytes).map(|e| e.board)
     }
 
     /// ASCII Protel board export (`|RECORD=Board|KIND=Protel_Advanced_PCB`

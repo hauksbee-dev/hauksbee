@@ -20,6 +20,8 @@ mod eagle_drc;
 mod eagle_drc_corpus;
 #[path = "eagle_tie_fixtures.rs"]
 mod eagle_tie_fixtures;
+#[path = "easyeda.rs"]
+mod easyeda;
 #[path = "erc_contention_corpus.rs"]
 mod erc_contention_corpus;
 #[path = "exchange_formats.rs"]

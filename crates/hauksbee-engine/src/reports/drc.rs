@@ -332,8 +332,8 @@ pub(crate) fn unorderable_input(
 }
 
 /// The condition a pass rests on when the input carried connectivity but no
-/// copper geometry the DRC measures (a gerber, IPC-D-356, ODB++ or IPC-2581
-/// input), so copper spacing was never examined at all.
+/// copper geometry the DRC measures (a gerber, IPC-D-356, ODB++, IPC-2581
+/// or EasyEDA input), so copper spacing was never examined at all.
 ///
 /// Distinct from [`default_rules_condition`], which is about a rule that WAS
 /// applied but is not the board's own. Here no rule could be applied: an empty
@@ -344,7 +344,11 @@ pub(crate) fn unmeasured_spacing_condition(kind: crate::board_input::InputKind) 
     use crate::board_input::InputKind;
     matches!(
         kind,
-        InputKind::Gerber | InputKind::Ipc356Archive | InputKind::Odb | InputKind::Ipc2581
+        InputKind::Gerber
+            | InputKind::Ipc356Archive
+            | InputKind::Odb
+            | InputKind::Ipc2581
+            | InputKind::Easyeda
     )
     .then(|| {
         format!(
@@ -695,6 +699,7 @@ mod tests {
             InputKind::Ipc356Archive,
             InputKind::Odb,
             InputKind::Ipc2581,
+            InputKind::Easyeda,
         ] {
             let condition = unmeasured_spacing_condition(kind)
                 .unwrap_or_else(|| panic!("{kind:?} must state that spacing was not measured"));

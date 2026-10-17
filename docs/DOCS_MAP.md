@@ -18,6 +18,7 @@ own board, firmware, and spec, and the one local command that runs them, and
 | File | Covers |
 |---|---|
 | [`ingest/ALTIUM.md`](ingest/ALTIUM.md) | Altium `.PcbDoc`: the user path, then the binary ingest internals |
+| [`ingest/EASYEDA.md`](ingest/EASYEDA.md) | EasyEDA Standard `.json` and Pro `.epcb`/`.epro`: what is read, counted and not read |
 | [`ingest/EAGLE.md`](ingest/EAGLE.md) | Eagle `.brd` (and Fusion 360 Electronics): what is read, what is not |
 | [`ingest/GERBER.md`](ingest/GERBER.md) | Gerber + pick-and-place reverse extraction |
 | [`ingest/SCHEMATICS.md`](ingest/SCHEMATICS.md) | Schematic (`.kicad_sch`) extraction |

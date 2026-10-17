@@ -42,6 +42,7 @@
         "gerber_archive",
         "odb_plus_plus",
         "ipc2581",
+        "easyeda",
         "ipc356",
         "bom",
         "placement",

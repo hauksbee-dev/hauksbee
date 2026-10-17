@@ -1129,7 +1129,7 @@ pub fn plain_drc_structured_with_rule_source(
         && st.at_limit.is_empty()
     {
         // The input read no clearance rule at all: a netlist or fabrication
-        // files (gerbers, ODB++, IPC-2581). Their copper, where they have any,
+        // files (gerbers, ODB++, IPC-2581, EasyEDA). Their copper, where they have any,
         // was read for connectivity and never measured, and routing is not the
         // fix: the layout file is.
         if provenance.no_rule_read {
@@ -1139,7 +1139,7 @@ pub fn plain_drc_structured_with_rule_source(
                  the files do contain traces and pours."
                     .to_string(),
                 "Clearance DRC compares copper shapes against each other. A netlist has no \
-                 copper at all, and fabrication files (gerbers, ODB++, IPC-2581) are read for \
+                 copper at all, and fabrication files (gerbers, ODB++, IPC-2581) and EasyEDA boards are read for \
                  connectivity, not measured for gaps. Everything else in this report still \
                  applies.",
                 "Run hauksbee on the board's layout file (.kicad_pcb, .brd, .PcbDoc) to \
