@@ -10,6 +10,7 @@ use hauksbee_ir::{eprintln, print, println};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use hauksbee_checks::checks::datasheet_field::{component_doubt, DatasheetDoubt};
 use hauksbee_ir::evidence::{
     ModelLayer, ModelSource, ModelSourceTier, ModelUncertainty, ModelValidation,
 };
@@ -1518,6 +1519,55 @@ pub struct UnmodelledPart {
     pub references: Vec<String>,
     /// A local PDF path or an http(s) URL; `None` when the board names none.
     pub datasheet: Option<String>,
+    /// Set when `datasheet` is the board's own `Datasheet` field and its file
+    /// name clearly belongs to a different device.
+    pub doubt: Option<DatasheetDoubt>,
+}
+
+/// Parts the verdict counts as having no usable model that extraction is not
+/// offered for, with the one line saying why, so the two counts reconcile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetAside {
+    pub references: Vec<String>,
+    pub why: String,
+}
+
+/// Everything `models extract --unmodelled` works from, taken from the same
+/// bind report the `check` verdict counts its unmodelled key parts in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnmodelledPlan {
+    /// How many key parts the verdict says have no usable model.
+    pub blocking: usize,
+    pub parts: Vec<UnmodelledPart>,
+    pub set_aside: Vec<SetAside>,
+}
+
+impl UnmodelledPlan {
+    /// The reconciliation line, plus one line per group set aside.
+    #[must_use]
+    pub fn reconciliation(&self) -> Vec<String> {
+        let offered: usize = self.parts.iter().map(|p| p.references.len()).sum();
+        let aside: usize = self.set_aside.iter().map(|a| a.references.len()).sum();
+        let mut lines = vec![format!(
+            "The check verdict counts {} key part(s) with no usable model: {offered} offered above \
+             ({} part number(s)){}.",
+            self.blocking,
+            self.parts.len(),
+            if aside == 0 {
+                String::new()
+            } else {
+                format!(", {aside} not offered")
+            }
+        )];
+        for a in &self.set_aside {
+            lines.push(format!(
+                "  not offered: {}: {}",
+                a.references.join(" "),
+                a.why
+            ));
+        }
+        lines
+    }
 }
 
 /// A usable datasheet locator from a board property: a URL or an existing file
@@ -1531,10 +1581,46 @@ fn datasheet_locator(text: &str, board_dir: &Path) -> Option<String> {
     (!text.is_empty() && text != "~" && path.is_file()).then(|| path.display().to_string())
 }
 
-/// Connected active parts the library leaves unresolved, by part number.
+/// The datasheet one component is drafted from, and the doubt about it.
 ///
-/// Each carries the datasheet it names; `overrides` are `PART=SOURCE` pairs
-/// (a part number, board value or reference) that win over the board's field.
+/// An override (`PART=SOURCE`, naming the part number, value or reference)
+/// wins and is never doubted; otherwise the board's own `Datasheet` field is
+/// used, with a doubt when its file name clearly belongs to another device.
+fn datasheet_for(
+    comp: &hauksbee_extract::Component,
+    part: &str,
+    chosen: &[(&str, &str)],
+    board_dir: &Path,
+) -> (Option<String>, Option<DatasheetDoubt>) {
+    let named = |key: &str| {
+        [part, comp.value.as_str(), comp.reference.as_str()]
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case(key))
+    };
+    if let Some((_, source)) = chosen.iter().find(|(key, _)| named(key)) {
+        let locator =
+            datasheet_locator(source, Path::new("")).unwrap_or_else(|| (*source).to_string());
+        return (Some(locator), None);
+    }
+    let field = comp
+        .properties
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("datasheet"));
+    (
+        field.and_then(|(_, v)| datasheet_locator(v, board_dir)),
+        component_doubt(comp),
+    )
+}
+
+/// The key parts the check verdict counts as having no usable model, by part
+/// number.
+///
+/// The set is the verdict's own ([`crate::result::unmodelled_critical`]):
+/// active ICs and discrete transistors that bound to no model, plus active ICs
+/// whose card leaves pins open. Each part number carries the datasheet it
+/// names; `overrides` are `PART=SOURCE` pairs (a part number, board value or
+/// reference) that win over the board's field. A counted part that cannot take
+/// a datasheet model is set aside with its reason, never dropped.
 ///
 /// # Errors
 ///
@@ -1544,7 +1630,7 @@ pub fn unmodelled_parts(
     lib: &ModelLibrary,
     board_dir: &Path,
     overrides: &[String],
-) -> anyhow::Result<Vec<UnmodelledPart>> {
+) -> anyhow::Result<UnmodelledPlan> {
     let mut chosen: Vec<(&str, &str)> = Vec::new();
     for pair in overrides {
         let Some((key, source)) = pair
@@ -1555,31 +1641,45 @@ pub fn unmodelled_parts(
         };
         chosen.push((key.trim(), source.trim()));
     }
-    let stages = coverage_snapshot(board, lib).components;
+    let bound = crate::binder::bind_board(board, lib);
+    let summary = crate::result::BindSummary::from_report(&bound.report);
+    let blockers = crate::result::unmodelled_critical(&summary);
     let mut parts: Vec<UnmodelledPart> = Vec::new();
-    for comp in &board.components {
-        let unresolved = stages.iter().any(|row| {
-            row.reference == comp.reference && matches!(row.stage, CoverageStage::Unresolved)
-        });
-        let Some(part) = crate::binder::component_mpn(comp).filter(|_| unresolved) else {
+    let mut set_aside: Vec<SetAside> = Vec::new();
+    let mut aside = |reference: &str, why: String| {
+        if let Some(group) = set_aside.iter_mut().find(|a| a.why == why) {
+            group.references.push(reference.to_string());
+        } else {
+            set_aside.push(SetAside {
+                references: vec![reference.to_string()],
+                why,
+            });
+        }
+    };
+    for blocker in &blockers {
+        let reference = blocker.part.reference.as_str();
+        let Some(comp) = board.components.iter().find(|c| c.reference == reference) else {
+            aside(reference, "it is not in the board file".into());
             continue;
         };
-        let named = |key: &str| {
-            [&part, &comp.value, &comp.reference]
-                .iter()
-                .any(|n| n.eq_ignore_ascii_case(key))
+        if blocker.has_card {
+            aside(
+                reference,
+                "it already has a model card, but pins are left open on the live circuit, which a \
+                 new card from the datasheet would not change"
+                    .into(),
+            );
+            continue;
+        }
+        let Some(part) = crate::binder::component_mpn(comp) else {
+            aside(
+                reference,
+                "the board gives it no part number (empty value, no MPN field): fill one in, then rerun"
+                    .into(),
+            );
+            continue;
         };
-        let datasheet = (chosen.iter().find(|(key, _)| named(key)))
-            .map(|(_, source)| {
-                datasheet_locator(source, Path::new("")).unwrap_or_else(|| (*source).to_string())
-            })
-            .or_else(|| {
-                let field = comp
-                    .properties
-                    .iter()
-                    .find(|(k, _)| k.eq_ignore_ascii_case("datasheet"));
-                field.and_then(|(_, v)| datasheet_locator(v, board_dir))
-            });
+        let (datasheet, doubt) = datasheet_for(comp, &part, &chosen, board_dir);
         let at = (parts
             .iter()
             .position(|p| p.part.eq_ignore_ascii_case(&part)))
@@ -1590,12 +1690,16 @@ pub fn unmodelled_parts(
                 footprints: Vec::new(),
                 references: Vec::new(),
                 datasheet: None,
+                doubt: None,
             });
             parts.len() - 1
         });
         let entry = &mut parts[at];
         entry.references.push(comp.reference.clone());
-        entry.datasheet = entry.datasheet.take().or(datasheet);
+        if entry.datasheet.is_none() && datasheet.is_some() {
+            entry.datasheet = datasheet;
+            entry.doubt = doubt;
+        }
         if !comp.value.trim().is_empty() && !entry.aliases.contains(&comp.value) {
             entry.aliases.push(comp.value.clone());
         }
@@ -1606,7 +1710,14 @@ pub fn unmodelled_parts(
     for entry in &mut parts {
         entry.references.sort_by_key(|r| natural_ref_key(r));
     }
-    Ok(parts)
+    for group in &mut set_aside {
+        group.references.sort_by_key(|r| natural_ref_key(r));
+    }
+    Ok(UnmodelledPlan {
+        blocking: blockers.len(),
+        parts,
+        set_aside,
+    })
 }
 
 /// Download a datasheet URL into `dir` with `curl` (no shell), refusing
@@ -1733,6 +1844,64 @@ fn part_kinds<'a>(
     }
 }
 
+/// What `--unmodelled` says when no part can be offered: nothing is counted, or
+/// everything counted is set aside with its reason.
+fn say_nothing_to_extract(plan: &UnmodelledPlan, board_path: &Path) {
+    if plan.blocking == 0 {
+        println!(
+            "No key part on {} (active IC or transistor) is unmodelled; nothing to extract.",
+            board_path.display()
+        );
+        return;
+    }
+    println!(
+        "Nothing on {} can be extracted from a datasheet.",
+        board_path.display()
+    );
+    for line in plan.reconciliation() {
+        println!("{line}");
+    }
+}
+
+/// The table of parts offered, then how it reconciles with the verdict.
+fn say_unmodelled(plan: &UnmodelledPlan, board_path: &Path) {
+    let rows: Vec<Vec<String>> = (plan.parts.iter())
+        .map(|p| {
+            vec![
+                p.part.clone(),
+                p.references.join(" "),
+                p.datasheet.clone().unwrap_or_else(|| "none".into()),
+            ]
+        })
+        .collect();
+    println!(
+        "Unmodelled key parts (active ICs and transistors) on {}:",
+        board_path.display()
+    );
+    println!("{}", box_table(&["part", "references", "datasheet"], &rows));
+    for line in plan.reconciliation() {
+        println!("{line}");
+    }
+}
+
+/// Say, before anything is sent, which board datasheet links appear to belong
+/// to another device; returns how many.
+fn say_datasheet_doubts(ready: &[&UnmodelledPart]) -> usize {
+    let mut said = 0;
+    for (part, doubt) in ready
+        .iter()
+        .filter_map(|p| p.doubt.as_ref().map(|d| (*p, d)))
+    {
+        println!(
+            "{}; pass --datasheet '{}=<correct pdf>' or confirm",
+            doubt.sentence(),
+            part.part
+        );
+        said += 1;
+    }
+    said
+}
+
 /// `hauksbee models extract --unmodelled <board>`: draft every unmodelled part.
 ///
 /// Covers each connected active part the board leaves unmodelled, from the
@@ -1770,26 +1939,14 @@ pub fn extract_unmodelled(
         .collect();
     let lib = ModelLibrary::builtin_with_user_dirs(&extra);
     let board_dir = board_path.parent().unwrap_or_else(|| Path::new("."));
-    let parts = unmodelled_parts(&normalized.board, &lib, board_dir, overrides)?;
-    let kind_of = part_kinds(&parts, &kinds, &template.kind_str);
+    let plan = unmodelled_parts(&normalized.board, &lib, board_dir, overrides)?;
+    let parts = &plan.parts;
+    let kind_of = part_kinds(parts, &kinds, &template.kind_str);
     if parts.is_empty() {
-        println!(
-            "No connected active part on {} is unmodelled; nothing to extract.",
-            board_path.display()
-        );
+        say_nothing_to_extract(&plan, board_path);
         return Ok(());
     }
-    let rows: Vec<Vec<String>> = (parts.iter())
-        .map(|p| {
-            vec![
-                p.part.clone(),
-                p.references.join(" "),
-                p.datasheet.clone().unwrap_or_else(|| "none".into()),
-            ]
-        })
-        .collect();
-    println!("Unmodelled active parts on {}:", board_path.display());
-    println!("{}", box_table(&["part", "references", "datasheet"], &rows));
+    say_unmodelled(&plan, board_path);
     let (ready, missing): (Vec<_>, Vec<_>) = parts.iter().partition(|p| p.datasheet.is_some());
     for p in &missing {
         println!(
@@ -1802,9 +1959,15 @@ pub fn extract_unmodelled(
     if ready.is_empty() {
         return Ok(());
     }
+    let doubted = say_datasheet_doubts(&ready);
     let question = format!(
-        "Fetch and send {} datasheet(s) and draft a model for each?",
-        ready.len()
+        "Fetch and send {} datasheet(s) and draft a model for each{}?",
+        ready.len(),
+        if doubted == 0 {
+            String::new()
+        } else {
+            format!(" ({doubted} of them look like another part's, see above)")
+        }
     );
     if !extract_consent(template, assume_yes, &question)? {
         return Ok(());
@@ -3467,12 +3630,95 @@ mod tests {
             }],
         };
         let lib = hauksbee_models::ModelLibrary::builtin_with_user_dirs(&[]);
-        let parts = super::unmodelled_parts(&board, &lib, std::path::Path::new(""), &[]).unwrap();
+        let parts = super::unmodelled_parts(&board, &lib, std::path::Path::new(""), &[])
+            .unwrap()
+            .parts;
         assert_eq!(parts.len(), 1, "{parts:?}");
         assert_eq!(
             parts[0].footprints,
             ["Package_SO:SOIC-20W_7.5x12.8mm_P1.27mm"]
         );
+    }
+
+    /// Every part the verdict counts as having no usable model is either
+    /// offered for extraction or set aside with its reason: a discrete MOSFET is
+    /// offered like an IC, a part with no part number is set aside, and the
+    /// counts reconcile with the verdict's own set.
+    #[test]
+    fn a_discrete_mosfet_is_offered_and_the_counts_reconcile_with_the_verdict() {
+        let pin = |number: &str, net| hauksbee_extract::Pin {
+            number: number.into(),
+            net: Some(net),
+            ..Default::default()
+        };
+        let part =
+            |reference: &str, value: &str, footprint: &str, pins| hauksbee_extract::Component {
+                reference: reference.into(),
+                value: value.into(),
+                footprint: footprint.into(),
+                properties: vec![(
+                    "Datasheet".into(),
+                    "https://example.com/xfet1013t.pdf".into(),
+                )],
+                pins,
+                ..Default::default()
+            };
+        let board = hauksbee_extract::ExtractedBoard {
+            name: "q".into(),
+            nets: vec![
+                hauksbee_extract::Net::new(1, "GND"),
+                hauksbee_extract::Net::new(2, "+5V"),
+                hauksbee_extract::Net::new(3, "GATE"),
+            ],
+            components: vec![
+                part(
+                    "Q1",
+                    "XFET1013T-7",
+                    "Package_TO_SOT_SMD:SOT-523",
+                    vec![pin("1", 3), pin("2", 2), pin("3", 1)],
+                ),
+                part(
+                    "Q2",
+                    "XFET1013T-7",
+                    "Package_TO_SOT_SMD:SOT-523",
+                    vec![pin("1", 3), pin("2", 2), pin("3", 1)],
+                ),
+                part(
+                    "U1",
+                    "",
+                    "Package_SO:SOIC-8",
+                    vec![pin("1", 3), pin("4", 1), pin("8", 2)],
+                ),
+            ],
+        };
+        let lib = hauksbee_models::ModelLibrary::builtin_with_user_dirs(&[]);
+        let plan = super::unmodelled_parts(&board, &lib, std::path::Path::new(""), &[]).unwrap();
+        let bound = crate::binder::bind_board(&board, &lib);
+        let verdict = crate::result::unmodelled_critical_refs(
+            &crate::result::BindSummary::from_report(&bound.report),
+        );
+        assert!(verdict.contains(&"Q1".to_string()), "{verdict:?}");
+        let mut accounted: Vec<String> = plan
+            .parts
+            .iter()
+            .flat_map(|p| p.references.clone())
+            .chain(plan.set_aside.iter().flat_map(|a| a.references.clone()))
+            .collect();
+        accounted.sort_by_key(|r| super::natural_ref_key(r));
+        assert_eq!(accounted, verdict, "{plan:?}");
+        assert_eq!(plan.blocking, verdict.len());
+        let fet = plan.parts.iter().find(|p| p.part == "XFET1013T-7").unwrap();
+        assert_eq!(fet.references, ["Q1", "Q2"]);
+        assert_eq!(fet.footprints, ["Package_TO_SOT_SMD:SOT-523"]);
+        assert!(
+            plan.reconciliation()[0].contains("offered above"),
+            "{plan:?}"
+        );
+        // Every set-aside group says why, in one line.
+        assert!(plan
+            .set_aside
+            .iter()
+            .all(|a| !a.why.contains('\n') && !a.why.is_empty()));
     }
 
     #[test]

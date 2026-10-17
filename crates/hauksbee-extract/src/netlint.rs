@@ -305,6 +305,11 @@ pub enum LintCheck {
     /// release it: the part is never enabled, or is held in reset for good.
     /// Produced by the engine-layer `control_held_off` check.
     ControlHeldOff,
+    /// A part's `Datasheet` field names a file for a different device or logic
+    /// family (a link left over from the part it was copied from). A model
+    /// drafted from that file would describe the wrong part. Low severity and
+    /// non-gating. Produced by the engine-layer `datasheet_field` check.
+    DatasheetMismatch,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -329,7 +334,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 38] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -367,6 +372,7 @@ impl LintCheck {
         Self::PolarisedCapReversed,
         Self::RailUnpowered,
         Self::ControlHeldOff,
+        Self::DatasheetMismatch,
     ];
 
     #[must_use]
@@ -409,6 +415,7 @@ impl LintCheck {
             Self::PolarisedCapReversed => "polarised_cap_reversed",
             Self::RailUnpowered => "rail_unpowered",
             Self::ControlHeldOff => "control_held_off",
+            Self::DatasheetMismatch => "datasheet_mismatch",
         }
     }
 }

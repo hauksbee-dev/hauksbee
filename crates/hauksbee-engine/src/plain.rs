@@ -1732,6 +1732,13 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "This pin has a resistor to ground, and nothing else on its net can raise it: no pull-up, no GPIO or supervisor output, no switch to a supply. An enable that stays low never turns the part on, and a reset that stays low holds the part in reset so it never runs. The usual cause is a pull-up whose far end was wired to ground, or a pull-up that is not fitted.".to_string(),
                 "Connect the pull resistor to the part's supply rail instead of ground, or drive the pin from a GPIO or a supervisor.".to_string(),
             ),
+            LintCheck::DatasheetMismatch => (
+                f.message
+                    .rsplit_once(hauksbee_extract::REMEDY_MARKER)
+                    .map_or_else(|| f.message.clone(), |(said, _)| said.trim().to_string()),
+                "The Datasheet field is what the model extractor reads and what a reviewer opens, and its file name here is another part's. It is usually a link left over from the part the symbol was copied from. Nothing about the circuit is wrong, but a model drafted from that file would describe the wrong device.".to_string(),
+                "Replace the Datasheet field with the datasheet for this part's own part number, then re-check.".to_string(),
+            ),
             LintCheck::I2cBusLoading => (
                 format!("The I2C line \"{net}\" has pull-ups, but they are mis-sized for the bus. {}", f.message),
                 "I2C devices can only pull the line LOW; the resistor pulls it back HIGH. Too strong a pull-up and a device cannot sink enough current to make a valid low (the spec guarantees only 3 mA), so reads fail intermittently. Too weak and the line rises too slowly for the clock rate, corrupting edges as more devices load the bus.".to_string(),
