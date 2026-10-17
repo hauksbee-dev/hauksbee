@@ -289,3 +289,111 @@ fn run_resolve(board: &std::path::Path, models: &std::path::Path) -> String {
         .expect("run hauksbee");
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
+
+/// A board with two unmodelled op-amps: U1's `Datasheet` link names another
+/// device (an OPA2336 sheet on an OPA379-class part), U2's names its own.
+fn wrong_link_board(dir: &std::path::Path) -> PathBuf {
+    let pad = |n: u32| {
+        format!("(pad \"{n}\" smd rect (at {n} 0) (size 1 1) (layers \"F.Cu\") (net {n} \"N{n}\"))")
+    };
+    let part = |r: &str, value: &str, link: &str, at: u32| {
+        let pads: String = (1..=5).map(pad).collect();
+        format!(
+            "(footprint \"Package_TO_SOT_SMD:SOT-23-5\" (layer \"F.Cu\") (at {at} 100) \
+             (property \"Reference\" \"{r}\") (property \"Value\" \"{value}\") \
+             (property \"Datasheet\" \"{link}\") {pads})"
+        )
+    };
+    let nets = (1..=5).fold(String::new(), |mut acc, n| {
+        let _ = write!(acc, "(net {n} \"N{n}\")");
+        acc
+    });
+    let u1 = part(
+        "U1",
+        "XOPAMP379-TR",
+        "https://example.com/ds/opa2336.pdf",
+        100,
+    );
+    let u2 = part(
+        "U2",
+        "XCOMP555-TR",
+        "https://example.com/ds/xcomp555.pdf",
+        120,
+    );
+    let board = dir.join("wrong_link.kicad_pcb");
+    std::fs::write(
+        &board,
+        format!("(kicad_pcb (version 20221018) (generator pcbnew) (net 0 \"\") {nets} {u1} {u2})"),
+    )
+    .unwrap();
+    board
+}
+
+/// The datasheet a board names for a part but belongs to another device is
+/// said before anything is sent, naming the flag that fixes it; a link that
+/// names the part's own sheet is not mentioned.
+#[test]
+fn a_datasheet_link_naming_another_part_is_flagged_before_anything_is_sent() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = wrong_link_board(dir.path());
+    let run = Command::new(hauksbee())
+        .args(["models", "extract", "--unmodelled"])
+        .arg(&board)
+        .stdin(Stdio::null())
+        .output()
+        .expect("run hauksbee");
+    let so = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        so.contains(
+            "the board's datasheet for XOPAMP379-TR appears to be for opa2336; \
+             pass --datasheet 'XOPAMP379-TR=<correct pdf>' or confirm"
+        ),
+        "{so}"
+    );
+    assert!(
+        !so.contains("datasheet for XCOMP555-TR appears"),
+        "a right link stays silent:\n{so}"
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("without consent"),
+        "and nothing is sent unasked"
+    );
+}
+
+/// The same wrong link is a low-severity note in the lint, not a gate.
+#[test]
+fn the_lint_notes_a_datasheet_link_naming_another_part() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = wrong_link_board(dir.path());
+    let out = run(&["run", board.to_str().unwrap(), "--lint", "--json"]);
+    let so = String::from_utf8_lossy(&out.stdout);
+    assert!(so.contains("datasheet_mismatch"), "{so}");
+    assert!(
+        so.contains("the board's datasheet for XOPAMP379-TR appears to be for opa2336"),
+        "{so}"
+    );
+    assert!(!so.contains("datasheet for XCOMP555-TR"), "{so}");
+}
+
+/// A discrete transistor the verdict counts as having no usable model is
+/// offered for extraction like an IC, and the list's count reconciles with the
+/// verdict's. (`verdict_fet_unbound` is the board whose power FET Q1 has none.)
+#[test]
+fn a_discrete_mosfet_the_verdict_counts_is_offered_for_extraction() {
+    let board = crate::support::board("tests/fixtures/verdict_fet_unbound.kicad_pcb");
+    let check = run(&["run", board.to_str().unwrap(), "--lint", "--plain"]);
+    let said = String::from_utf8_lossy(&check.stdout);
+    assert!(said.contains("Q1"), "the verdict names Q1:\n{said}");
+    let run = Command::new(hauksbee())
+        .args(["models", "extract", "--unmodelled"])
+        .arg(&board)
+        .stdin(Stdio::null())
+        .output()
+        .expect("run hauksbee");
+    let so = String::from_utf8_lossy(&run.stdout);
+    assert!(so.contains("XFET9999") && so.contains("Q1"), "{so}");
+    assert!(
+        so.contains("The check verdict counts 1 key part(s) with no usable model: 1 offered above"),
+        "{so}"
+    );
+}

@@ -546,7 +546,7 @@ fn unrecognised_extras(rest: &str) -> BTreeSet<String> {
 
 /// A part number reduced for comparison: upper case, no whitespace, and the
 /// `#...` lead-free/packaging tail some vendors append dropped.
-fn normalise_mpn(s: &str) -> String {
+pub fn normalise_mpn(s: &str) -> String {
     let s: String = s
         .chars()
         .filter(|c| !c.is_whitespace())
@@ -558,7 +558,7 @@ fn normalise_mpn(s: &str) -> String {
 /// Does this text read as a single manufacturer part number: one token with a
 /// letter and a digit that no passive-value reading explains, and not a
 /// distributor's own order code?
-fn is_part_number(s: &str) -> bool {
+pub fn is_part_number(s: &str) -> bool {
     let s = s.trim();
     s.len() >= 5
         && !s.contains(char::is_whitespace)

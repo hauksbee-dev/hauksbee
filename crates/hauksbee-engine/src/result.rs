@@ -713,23 +713,51 @@ pub fn run_level_undermined(
         .any(|map| map.is_undermined() && !is_finding_assertion(map.assertion()))
 }
 
+/// One part the verdict counts as having no usable model.
+#[derive(Debug, Clone, Copy)]
+pub struct VerdictBlocker<'a> {
+    pub part: &'a UnresolvedActive,
+    /// True when the part DID resolve to a model card but sits open on the live
+    /// circuit (an active IC with undriven pins); false when no card resolved.
+    pub has_card: bool,
+}
+
+/// Every part the verdict counts as having no usable model, in reference order.
+///
+/// The single source behind the verdict's count and named parts and
+/// behind `hauksbee models extract --unmodelled`, so the two cannot disagree.
 #[must_use]
-pub fn unmodelled_critical_refs(summary: &BindSummary) -> Vec<String> {
-    let mut refs: Vec<String> = summary
+pub fn unmodelled_critical(summary: &BindSummary) -> Vec<VerdictBlocker<'_>> {
+    let mut blockers: Vec<VerdictBlocker<'_>> = summary
         .active_path_unresolved
         .iter()
         .filter(|u| is_verdict_critical(u))
+        .map(|part| VerdictBlocker {
+            part,
+            has_card: false,
+        })
         .chain(
             summary
                 .resolved_but_open_active
                 .iter()
-                .filter(|u| u.active_ic),
+                .filter(|u| u.active_ic)
+                .map(|part| VerdictBlocker {
+                    part,
+                    has_card: true,
+                }),
         )
-        .map(|u| u.reference.clone())
         .collect();
-    refs.sort_by_key(|r| crate::reports::bind::natural_ref_key(r));
-    refs.dedup();
-    refs
+    blockers.sort_by_key(|b| crate::reports::bind::natural_ref_key(&b.part.reference));
+    blockers.dedup_by(|a, b| a.part.reference == b.part.reference);
+    blockers
+}
+
+#[must_use]
+pub fn unmodelled_critical_refs(summary: &BindSummary) -> Vec<String> {
+    unmodelled_critical(summary)
+        .into_iter()
+        .map(|b| b.part.reference.clone())
+        .collect()
 }
 
 /// The one INCONCLUSIVE verdict sentence the lint/SI/check surfaces share.
@@ -3484,6 +3512,9 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         }
         LintCheck::ValuePackageSanity => {
             "Check the value against the package: lower the value, pick a larger package, or correct the value field."
+        }
+        LintCheck::DatasheetMismatch => {
+            "Replace the Datasheet field with the datasheet for this part's own part number."
         }
         LintCheck::PlaceholderValue => {
             "Replace the placeholder with the actual passive value before ordering or trusting simulation."

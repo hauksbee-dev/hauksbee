@@ -33,6 +33,7 @@ pub mod altium;
 pub mod assembly;
 pub mod bom;
 pub mod dnp;
+pub mod datasheet_identity;
 pub mod drc;
 mod dsu;
 mod eagle;
