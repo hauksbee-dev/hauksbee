@@ -16,9 +16,11 @@
 //! whose card carries a rating (a junction's current, a driver pin's or switch
 //! channel's current, a resistor's wattage, a package's junction temperature)
 //! is judged by the physics the solver settled on. A board whose DC solve
-//! fails, or whose named rails never come up in it, gets one low-severity note
-//! saying what was not judged ([`rating_basis::not_judged`]): never silence,
-//! and never a pass.
+//! fails, or ends only on the solver's relaxed power-on stand-in (every diode
+//! switched off: no root of the circuit, so no real junction current), or
+//! whose named rails never come up in it, gets one low-severity note saying
+//! what was not judged ([`rating_basis::not_judged`]): never silence, never a
+//! pass, and never a figure the circuit does not give.
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 
@@ -266,7 +268,7 @@ fn strong_corner_faults(
 ) -> Vec<PartFault> {
     let mut strong_found = Vec::new();
     if set_drive(state, true) {
-        if let Some(x) = settle(state) {
+        if let Ok(x) = settle(state) {
             let (strong_over, _, absurd, stand_in) = judge(state, &x);
             note_absurd(impossible, absurd);
             note_stand_in(stated, unstated, stand_in);
@@ -306,9 +308,12 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
         if registers_high && !set_registers_high(state) {
             continue; // no clocked state: the second pass would repeat the first
         }
-        let Some(x) = settle(state) else {
-            unsolved.push(label);
-            continue;
+        let x = match settle(state) {
+            Ok(x) => x,
+            Err(why) => {
+                unsolved.push((label, why));
+                continue;
+            }
         };
         let here = dead_rails(state, &x);
         dead.get_or_insert_with(|| here.clone())
@@ -391,15 +396,37 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
     NetLintReport { findings }
 }
 
-/// The note that the check abstained in the `unsolved` states, whose DC
-/// operating point did not solve; none when every state solved.
-fn abstained_note(unsolved: &[&str]) -> Option<LintFinding> {
-    (!unsolved.is_empty()).then(|| {
+/// The note that the check abstained in the `unsolved` states, each with
+/// why its DC gave no operating point to judge; none when every state solved.
+fn abstained_note(unsolved: &[(&str, Unsettled)]) -> Option<LintFinding> {
+    let states = |why: Unsettled| -> Vec<&str> {
+        (unsolved.iter())
+            .filter(|(_, w)| *w == why)
+            .map(|(label, _)| *label)
+            .collect()
+    };
+    let (failed, stand_in) = (states(Unsettled::NoSolve), states(Unsettled::StandIn));
+    let mut why = Vec::new();
+    if !failed.is_empty() {
+        why.push(format!(
+            "{}: the board's DC operating point did not solve",
+            failed.join(" or ")
+        ));
+    }
+    if !stand_in.is_empty() {
+        why.push(format!(
+            "{}: the DC solve found no operating point of the whole circuit, only its \
+             power-on stand-in with every diode switched off, where a junction's own \
+             equation gives a current it never carried",
+            stand_in.join(" or ")
+        ));
+    }
+    (!why.is_empty()).then(|| {
         not_judged_note(
             &format!(
-                "the DC ratings check abstained {}: the board's DC operating point did not \
-                 solve, so no part was checked against its ratings there",
-                unsolved.join(" or ")
+                "the DC ratings check abstained {}, so no part was checked against its \
+                 ratings there",
+                why.join("; and ")
             ),
             Vec::new(),
         )
@@ -673,7 +700,7 @@ fn unknown_state_faults(
 ) -> BTreeMap<String, PartFaults> {
     let mut conditional = BTreeMap::new();
     if set_unknown_state_loads(bound, true) {
-        if let Some(x) = settle(bound) {
+        if let Ok(x) = settle(bound) {
             for (part, clauses, nets) in judge(bound, &x).0 {
                 // A stand-in limit passed only here is no more a fault than at
                 // rest; the monitor already kept it out of the trips.
@@ -696,7 +723,7 @@ fn held_to_capability(
     over: &[rest_supply::Overload],
 ) -> Option<(Vec<String>, BTreeMap<String, String>)> {
     let saved = rest_supply::hold_to_capability(bound, over);
-    let real = settle(bound).map(|x| {
+    let real = settle(bound).ok().map(|x| {
         let (still, _, _, stand_in) = judge(bound, &x);
         let mut conditions = BTreeMap::new();
         // A part past only an assumed floor is no part of `found`, so it has no
@@ -744,8 +771,8 @@ const ARMING_SETTLED: f64 = 1e-6;
 /// A converter is stamped disarmed and only an update arms it (enable high,
 /// feedback sensed), so without this every rail a buck or boost makes stays
 /// at 0 V here and nothing it powers is judged. Returns the solution vector
-/// of the last solve.
-fn settle(bound: &mut BoundBoard) -> Option<(Workspace, Vec<f64>)> {
+/// of the last solve, or why there is no operating point to judge.
+fn settle(bound: &mut BoundBoard) -> Result<(Workspace, Vec<f64>), Unsettled> {
     let drive_state = |b: &BoundBoard| -> Vec<(bool, u64)> {
         (b.digital.iter())
             .flat_map(|d| d.drivers.values())
@@ -763,7 +790,7 @@ fn settle(bound: &mut BoundBoard) -> Option<(Workspace, Vec<f64>)> {
     };
     let mut ws = Workspace::new(&bound.circuit);
     for _ in 0..SETTLE_SWEEPS {
-        dc_operating_point(&mut ws, &bound.circuit, &SolverOptions::default()).ok()?;
+        solve_dc(&mut ws, bound)?;
         let before = drive_state(bound);
         let x = ws.x.clone();
         let layout = &ws.layout;
@@ -786,13 +813,38 @@ fn settle(bound: &mut BoundBoard) -> Option<(Workspace, Vec<f64>)> {
             .map(|d| d.update_converter(circuit, &node_v))
             .fold(0.0, f64::max);
         if drive_state(bound) == before && arming < ARMING_SETTLED {
-            return Some((ws, x));
+            return Ok((ws, x));
         }
     }
     // Still moving (an oscillator, say): judge the last solved state anyway.
-    dc_operating_point(&mut ws, &bound.circuit, &SolverOptions::default()).ok()?;
+    solve_dc(&mut ws, bound)?;
     let x = ws.x.clone();
-    Some((ws, x))
+    Ok((ws, x))
+}
+
+/// Why a state's DC gave no operating point to judge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Unsettled {
+    /// No rung of the solver's DC ladder converged.
+    NoSolve,
+    /// The ladder ended on its relaxed power-on point (every diode a 1 GΩ
+    /// stand-in) for want of a root of the whole circuit. A junction that
+    /// point leaves forward-biased never carried the current its own
+    /// equation gives there, so a rating judged at it would report a figure
+    /// (hundreds of amps, on a working board) that is the solve's, not the
+    /// circuit's.
+    StandIn,
+}
+
+/// One DC operating-point solve of `bound` into `ws`, accepted only when it
+/// is a root of the whole circuit ([`Unsettled`] otherwise).
+fn solve_dc(ws: &mut Workspace, bound: &BoundBoard) -> Result<(), Unsettled> {
+    dc_operating_point(ws, &bound.circuit, &SolverOptions::default())
+        .map_err(|_| Unsettled::NoSolve)?;
+    if ws.relaxed_seed_adopted() {
+        return Err(Unsettled::StandIn);
+    }
+    Ok(())
 }
 
 /// The finding for a class-only MOSFET (bound to an assumed corner set) that
@@ -1276,6 +1328,104 @@ mod tests {
             4.0e3
         ));
         assert!(!hauksbee_bind::is_implausible(FaultKind::Overpower, 2.0));
+    }
+
+    /// A cell-balancing leg, as on a battery board: +5V through a 1N4148
+    /// into /K, and /K through 1k to ground, so the diode carries 4.3 mA.
+    /// With `astable`, the same circuit shares its DC with a loop that has no
+    /// self-consistent DC state (a switch that discharges the very input
+    /// that closes it), so the solver's ladder finds no root of the whole
+    /// circuit and ends on its relaxed power-on point, every diode a 1 GΩ
+    /// stand-in: there /K sits at 0 V and D1's own equation, read at 5 V
+    /// forward, gives kiloamps it never carried. Returns the report and
+    /// whether the solve adopted that relaxed point.
+    fn balancing_leg(astable: bool) -> (NetLintReport, bool) {
+        use hauksbee_ir::{Circuit, DiodeModel};
+        use hauksbee_testkit::circuits::{cap, diode, res, sw, vdc, GND};
+        let nets = [(1, "GND"), (2, "+5V"), (3, "/K")];
+        let parts = vec![
+            part("D1", "1N4148", &[("A", 2), ("K", 3)]),
+            part("R1", "1k", &[("1", 3), ("2", 1)]),
+        ];
+        let mut bound = bind_board(&board(&nets, parts), &ModelLibrary::builtin());
+        if astable {
+            let c: &mut Circuit = &mut bound.circuit;
+            let (vs, integ, cmp) = (c.node("~VS"), c.node("~INTEG"), c.node("~CMP"));
+            let (a, out) = (c.node("~A"), c.node("~OUT"));
+            vdc(c, "~V5", vs, 5.0);
+            sw(c, "~Sk", vs, cmp, integ, (2.5075, 2.4925), 1.0);
+            res(c, "~Rpd", cmp, GND, 10e3);
+            res(c, "~Rcharge", cmp, a, 1e3);
+            diode(c, "~Dstretch", a, out, DiodeModel::default());
+            cap(c, "~Cs", out, GND, 10e-12);
+            res(c, "~Rstretch", out, GND, 150e3);
+            res(c, "~Rint", vs, integ, 100e3);
+            cap(c, "~Cint", integ, GND, 1e-9);
+            sw(c, "~Sreset", integ, GND, out, (1.75, 1.25), 6.0);
+        }
+        let mut ws = Workspace::new(&bound.circuit);
+        let solved = dc_operating_point(&mut ws, &bound.circuit, &SolverOptions::default());
+        let relaxed = solved.is_ok() && ws.relaxed_seed_adopted();
+        (dc_stress_findings(bound), relaxed)
+    }
+
+    /// Faulty solve, legal board: when the DC ends on the relaxed stand-in,
+    /// the kiloamp figure D1 would read there is the solve's, not the
+    /// circuit's, so the check abstains with a not-judged note saying so and
+    /// raises nothing on D1, where it used to raise a serious "not physical"
+    /// overstress (the MNT Reform motherboard's eight balancing diodes).
+    /// Legal control: the same leg on a DC that solves is silent, and the
+    /// genuine near-zero-resistance diode still reads as serious.
+    #[test]
+    fn a_figure_read_off_the_relaxed_stand_in_is_not_judged() {
+        let (report, relaxed) = balancing_leg(true);
+        assert!(relaxed, "fixture drift: the DC found a root");
+        assert!(
+            findings_on(&report, "D1").is_empty(),
+            "{:#?}",
+            report.findings
+        );
+        assert!(
+            !(report.findings.iter())
+                .any(|f| matches!(f.severity, Severity::High | Severity::Medium)),
+            "{:#?}",
+            report.findings
+        );
+        let note = (report.findings.iter())
+            .find(|f| rating_basis::is_not_judged(&f.message))
+            .unwrap_or_else(|| panic!("no not-judged note: {:#?}", report.findings));
+        assert_eq!(note.severity, Severity::Low);
+        assert!(note.is_abstention(), "{}", note.message);
+        assert!(
+            note.message.contains("every diode switched off") && !note.message.contains(" A "),
+            "{}",
+            note.message
+        );
+        let (solved, relaxed) = balancing_leg(false);
+        assert!(!relaxed);
+        assert!(solved.findings.is_empty(), "{:#?}", solved.findings);
+        let genuine = diode_at("1N4148", "0.0001R");
+        let found = findings_on(&genuine, "D1");
+        assert_eq!(found.len(), 1, "{:#?}", genuine.findings);
+        assert_eq!(found[0].severity, Severity::High, "{}", found[0].message);
+    }
+
+    /// A diode clamping a net that only an unmodelled part (no model, left
+    /// open) drives: nothing on the board sets the clamped net, so no current
+    /// is the circuit's and nothing serious is said about the diode.
+    #[test]
+    fn a_diode_on_a_net_only_an_unmodelled_part_drives_is_not_serious() {
+        let nets = [(1, "GND"), (2, "+5V"), (3, "/CLAMP")];
+        let parts = vec![
+            part("D1", "1N4148", &[("A", 2), ("K", 3)]),
+            part("U1", "ZQX-NOSUCHPART-9", &[("1", 3), ("2", 1), ("3", 2)]),
+        ];
+        let report = dc_stress_lint(&board(&nets, parts), &ModelLibrary::builtin());
+        assert!(
+            !report.findings.iter().any(|f| f.severity == Severity::High),
+            "{:#?}",
+            report.findings
+        );
     }
 
     /// A load straight across a rail through a 0 ohm link (no series limit),
