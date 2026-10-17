@@ -21,6 +21,7 @@ pub mod evidence;
 pub mod glossary;
 mod models;
 pub mod order;
+pub mod progress;
 pub mod run_record;
 mod source;
 mod spice;

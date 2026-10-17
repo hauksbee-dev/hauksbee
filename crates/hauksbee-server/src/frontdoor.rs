@@ -1115,6 +1115,49 @@ async fn scaffold_handler(
     }
 }
 
+/// Whether the page asked for the answer as a stream (`Accept: text/event-stream`).
+/// A caller that does not ask, which is every caller written before the loading
+/// bar, gets the one JSON document it always got.
+fn wants_stream(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|accept| accept.contains("text/event-stream"))
+}
+
+/// Run an analysis on the blocking pool and stream it as SSE: `progress` events
+/// (`{stage, label, fraction, elapsed_ms}`) while it works, then exactly one
+/// `done` event whose data is the same JSON document the plain endpoint answers,
+/// or one `error` event when the analysis panics.
+///
+/// Progress goes through `try_send`, so a client that stops reading cannot park
+/// the analysis; the `done` frame waits for room, because it is the answer.
+fn stream_analysis(analyze: DesignAnalyzer, upload: DesignUpload) -> Response {
+    let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
+    let plan = hauksbee_ir::progress::Plan {
+        bytes: upload.board.bytes.len() as u64,
+        simulate_s: None,
+    };
+    tokio::task::spawn_blocking(move || {
+        let progress_tx = tx.clone();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            hauksbee_ir::progress::with_reporter(
+                plan,
+                move |update| {
+                    let _ = progress_tx.try_send(sse_event("progress", &update.to_json()));
+                },
+                || (analyze)(upload),
+            )
+        }));
+        let last = outcome.map_or_else(
+            |_| sse_event("error", "the analysis task panicked; see the server log"),
+            |json| sse_event("done", &json),
+        );
+        let _ = tx.blocking_send(last);
+    });
+    sse_response(rx)
+}
+
 /// POST `/api/analyze`: the raw board file as the request body, with the
 /// original filename in the `X-Board-Filename` header (the page sets it).
 /// Board files may be text (KiCad/Eagle/IPC), a zip (gerbers) or a binary
@@ -1125,11 +1168,11 @@ async fn analyze_handler_design_raw(
     State(state): State<Arc<DesignState>>,
     headers: HeaderMap,
     body: Bytes,
-) -> impl IntoResponse {
+) -> Response {
     if let Some(resp) = reject_cross_site(&headers) {
-        return resp;
+        return resp.into_response();
     }
-    let json = (state.analyze)(DesignUpload {
+    let upload = DesignUpload {
         board: NamedUpload {
             name: board_filename(&headers).to_string(),
             bytes: body.to_vec(),
@@ -1141,8 +1184,11 @@ async fn analyze_handler_design_raw(
         variant: None,
         asbuilt: None,
         models: Vec::new(),
-    });
-    json_ok(json)
+    };
+    if wants_stream(&headers) {
+        return stream_analysis(state.analyze.clone(), upload).into_response();
+    }
+    json_ok((state.analyze)(upload)).into_response()
 }
 
 /// POST `/api/analyze-with-firmware`: a `multipart/form-data` upload with a
@@ -1155,23 +1201,26 @@ async fn analyze_design_handler(
     State(state): State<Arc<DesignState>>,
     headers: HeaderMap,
     mut multipart: Multipart,
-) -> impl IntoResponse {
+) -> Response {
     if let Some(resp) = reject_cross_site(&headers) {
-        return resp;
+        return resp.into_response();
     }
     let parts = match parse_upload(&mut multipart).await {
         Ok(parts) => parts,
-        Err(message) => return json_error(&message),
+        Err(message) => return json_error(&message).into_response(),
     };
     let upload = match parts.into_design_upload() {
         Ok(upload) => upload,
-        Err(message) => return json_error(message),
+        Err(message) => return json_error(message).into_response(),
     };
     let analyze = state.analyze.clone();
+    if wants_stream(&headers) {
+        return stream_analysis(analyze, upload).into_response();
+    }
     let Ok(json) = tokio::task::spawn_blocking(move || (analyze)(upload)).await else {
-        return json_error("the analysis task panicked; see the server log");
+        return json_error("the analysis task panicked; see the server log").into_response();
     };
-    json_ok(json)
+    json_ok(json).into_response()
 }
 
 /// POST `/api/sim`: the raw SPICE deck as the request body, its file name in

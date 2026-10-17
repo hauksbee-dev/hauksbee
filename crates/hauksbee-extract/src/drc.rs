@@ -2677,10 +2677,13 @@ fn sweep_buckets(
     name_of: impl Fn(i64) -> String,
 ) -> DrcReport {
     let max_clearance = rules.max_clearance();
+    let primitive_count: usize = buckets.by_layer.values().map(Vec::len).sum();
+    // The copper to sweep is now known: the load bar counts primitives from here.
+    hauksbee_ir::progress::begin_sweep(primitive_count);
     let mut report = DrcReport {
         clearance_mm: rules.default_clearance_mm,
         findings: Vec::new(),
-        primitive_count: buckets.by_layer.values().map(Vec::len).sum(),
+        primitive_count,
         version_warning: None,
         zone_pad_overlaps_suppressed: Some(0),
         excluded: Vec::new(),
@@ -2776,6 +2779,7 @@ fn sweep_buckets(
 
         // ── Edge / clearance sweep (R-tree pruned) ──────────────────────────
         for p in &prims {
+            hauksbee_ir::progress::advance_in(hauksbee_ir::progress::Stage::Copper, 1);
             // Query window: this primitive's bounds inflated by the clearance.
             let query = AABB::from_corners(
                 [p.bounds[0] - max_clearance, p.bounds[1] - max_clearance],

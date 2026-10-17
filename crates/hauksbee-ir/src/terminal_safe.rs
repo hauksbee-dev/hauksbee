@@ -67,6 +67,8 @@ pub fn terminal_safe(text: &str) -> Cow<'_, str> {
 /// `print!` with the text made terminal-safe. Use through the macro.
 #[doc(hidden)]
 pub fn print(args: Arguments<'_>) {
+    // A progress bar on this line would run into the text.
+    crate::progress::clear_stderr_line();
     let text = std::fmt::format(args);
     ::std::print!("{}", terminal_safe(&text));
 }
@@ -75,6 +77,8 @@ pub fn print(args: Arguments<'_>) {
 /// (a CRLF line ending carried in from a file) is dropped, not shown as an escape.
 #[doc(hidden)]
 pub fn println(args: Arguments<'_>) {
+    // A progress bar on this line would run into the text.
+    crate::progress::clear_stderr_line();
     let text = std::fmt::format(args);
     let text = text.strip_suffix('\r').unwrap_or(&text);
     ::std::println!("{}", terminal_safe(text));
@@ -83,6 +87,8 @@ pub fn println(args: Arguments<'_>) {
 /// `eprint!` with the text made terminal-safe. Use through the macro.
 #[doc(hidden)]
 pub fn eprint(args: Arguments<'_>) {
+    // A progress bar on this line would run into the text.
+    crate::progress::clear_stderr_line();
     let text = std::fmt::format(args);
     ::std::eprint!("{}", terminal_safe(&text));
 }
@@ -90,6 +96,8 @@ pub fn eprint(args: Arguments<'_>) {
 /// `eprintln!` with the text made terminal-safe; see [`println`] for the CR rule.
 #[doc(hidden)]
 pub fn eprintln(args: Arguments<'_>) {
+    // A progress bar on this line would run into the text.
+    crate::progress::clear_stderr_line();
     let text = std::fmt::format(args);
     let text = text.strip_suffix('\r').unwrap_or(&text);
     ::std::eprintln!("{}", terminal_safe(text));

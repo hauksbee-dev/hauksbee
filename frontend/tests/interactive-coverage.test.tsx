@@ -39,6 +39,7 @@ function session(report: WebReport): BoardSession {
   return {
     report,
     busy: null,
+    loadProgress: null,
     uploadError: null,
     uploadNotice: null,
     dismissNotice: noop,

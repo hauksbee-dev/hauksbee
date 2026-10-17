@@ -5,6 +5,7 @@
 
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_ir::{eprintln, println};
+use hauksbee_models::ModelLibrary;
 
 use crate::binder::{bind_board, BoundBoard};
 use crate::engine::HauksbeeEngine;
@@ -17,6 +18,12 @@ pub struct SimulationContext {
     pub(crate) engine: HauksbeeEngine,
     pub(crate) board_evidence: BoardEvidence,
     pub(crate) probe_known_nets: Vec<String>,
+}
+
+/// One bind of `board`, counted on the load bar as a single pass.
+fn bind_counted(board: &ExtractedBoard, lib: &ModelLibrary) -> BoundBoard {
+    hauksbee_ir::progress::begin_bind(board.components.len(), 1);
+    bind_board(board, lib)
 }
 
 pub fn build_live_simulation(
@@ -36,7 +43,7 @@ pub fn build_live_simulation(
     // in scope), then build the engine from the bound board. When --asbuilt was
     // given, the overlay was already validated, applied and narrated up front;
     // reuse that bound board rather than re-binding and re-applying.
-    let bound = prebound.take().unwrap_or_else(|| bind_board(board, lib));
+    let bound = prebound.take().unwrap_or_else(|| bind_counted(board, lib));
     let mut board_evidence = crate::evidence::board_evidence(
         board,
         &bound.report,

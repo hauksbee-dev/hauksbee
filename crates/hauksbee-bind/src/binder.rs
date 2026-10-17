@@ -552,7 +552,9 @@ pub fn bind_board_driven(
     let mut dnp_mcus: Vec<(String, String)> = Vec::new();
 
     // ── Pass 2: bind every component ────────────────────────────────────────
+    hauksbee_ir::progress::bind_derived(board.components.len());
     for (index, comp) in board.components.iter().enumerate() {
+        hauksbee_ir::progress::advance_in(hauksbee_ir::progress::Stage::Bind, 1);
         // The three-state assembled-component contract, asked once per part:
         // only a Present record reaches model resolution; the two absent
         // states each leave a visible row rather than a silent hole.

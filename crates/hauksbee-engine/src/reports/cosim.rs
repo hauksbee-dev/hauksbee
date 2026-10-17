@@ -457,7 +457,16 @@ pub fn run_headless(
     // Probe recording: one (time_s, [volts per probed net]) row per chunk. The
     // net order follows the order the user gave, which becomes the CSV columns.
     let mut probe_rows: Vec<(f64, Vec<f64>)> = Vec::new();
+    // Frames, not seconds, so the bar moves once per frame stepped.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a frame count for a progress bar; positive and far below u64::MAX"
+    )]
+    let frames = (seconds / frame_dt).ceil() as u64;
+    hauksbee_ir::progress::begin(hauksbee_ir::progress::Stage::Simulate, frames);
     while t < seconds {
+        hauksbee_ir::progress::advance_in(hauksbee_ir::progress::Stage::Simulate, 1);
         // Refuse rather than fake: under --strict, stop as soon as the
         // analog solve has been stuck for a whole streak of chunks. Continuing
         // would burn wall time producing more held-voltage frames the strict gate
