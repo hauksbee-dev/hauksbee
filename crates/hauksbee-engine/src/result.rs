@@ -1733,26 +1733,26 @@ impl DrcGroup {
             )
         } else if self.below_count == self.count {
             format!(
-                "{} vs {}: {} on {}, below {} (tightest {:.3} mm, {})",
+                "{} vs {}: {} on {}, below {} (tightest {}, {})",
                 self.net_a,
                 self.net_b,
                 loc(self.count),
                 self.layer,
                 rule,
-                self.min_gap_mm,
+                hauksbee_ir::units::format_gap_mm(self.min_gap_mm),
                 self.between
             )
         } else {
             // Mixed: some below, the remainder exactly at the limit.
             format!(
-                "{} vs {}: {} on {} ({} below {}, tightest {:.3} mm; {} at the limit)",
+                "{} vs {}: {} on {} ({} below {}, tightest {}; {} at the limit)",
                 self.net_a,
                 self.net_b,
                 loc(self.count),
                 self.layer,
                 self.below_count,
                 rule,
-                self.min_gap_mm,
+                hauksbee_ir::units::format_gap_mm(self.min_gap_mm),
                 self.count - self.below_count,
             )
         }
@@ -2061,9 +2061,10 @@ impl DrcStructured {
             .collect();
         let tightest = advisory.iter().map(|g| g.min_gap_mm).reduce(f64::min)?;
         Some(format!(
-            "DEFAULT-RULE NOTE: {} net pair(s) are closer than the {:.3} mm default (tightest {tightest:.3} mm) but not closer than {DEFAULT_RULE_SPACING_FLOOR_MM:.3} mm (5 mil); without your rules that is no evidence of a problem, so they are not listed as issues.",
+            "DEFAULT-RULE NOTE: {} net pair(s) are closer than the {:.3} mm default (tightest {}) but not closer than {DEFAULT_RULE_SPACING_FLOOR_MM:.3} mm (5 mil); without your rules that is no evidence of a problem, so they are not listed as issues.",
             advisory.len(),
             self.clearance_rule_mm,
+            hauksbee_ir::units::format_gap_mm(tightest),
         ))
     }
 
@@ -3966,6 +3967,47 @@ mod tests {
             jr.drc = Some(st);
             jr.clearance_rule_source = Some(provenance.clone());
             assert_eq!(jr.verdict().3, issues, "{gap} mm actionable count");
+        }
+    }
+
+    #[test]
+    fn a_sub_micron_clearance_gap_never_prints_as_zero_mm() {
+        // A gap above the 1e-9 mm touch band is NOT contact, but it rounds to
+        // `0.000` at three decimals, which reads as a short. Every gap sentence
+        // (label, JSON message, plain finding) must say `< 0.001 mm` instead.
+        let provenance = ClearanceRuleProvenance::project_file(0.2);
+        for gap in [2e-9, 1e-8, 1e-7, 4.9e-7, 4.9e-4] {
+            let group = DrcGroup {
+                net_a: "SDA".into(),
+                net_b: "SCL".into(),
+                layer: "F.Cu".into(),
+                count: 1,
+                below_count: 1,
+                at_limit: false,
+                min_gap_mm: gap,
+                min_gap_loc_mm: [3.0, 4.0],
+                rule_mm: 0.2,
+                between: "track \u{2194} track".into(),
+                plain: String::new(),
+                fix: "increase spacing".into(),
+                refs: Vec::new(),
+            };
+            let label = group.label();
+            assert!(label.contains("< 0.001 mm"), "{gap}: {label}");
+            assert!(!label.contains("0.000 mm"), "{gap}: {label}");
+            let st = DrcStructured {
+                clearance_rule_mm: 0.2,
+                primitive_count: 20,
+                shorts: Vec::new(),
+                violations: vec![group],
+                at_limit: Vec::new(),
+                version_warning: None,
+                suppression_note: None,
+            };
+            let plain = crate::plain::plain_drc_structured_with_rule_source(&st, &provenance);
+            let what = &plain.findings[0].what;
+            assert!(what.contains("< 0.001 mm"), "{gap}: {what}");
+            assert!(!what.contains("0.000 mm"), "{gap}: {what}");
         }
     }
 
