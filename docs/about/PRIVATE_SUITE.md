@@ -9,7 +9,7 @@ This page makes that omitted coverage explicit.
 
 ## What is missing
 
-**93 tests: 89 in the 24 absent files below, plus 4 removed from files that
+**94 tests: 90 in the 25 absent files below, plus 4 removed from files that
 otherwise ship. Also absent: 10 engine examples and one solver example.**
 
 | Suite | Tests | What it covers |
@@ -26,6 +26,7 @@ otherwise ship. Also absent: 10 engine examples and one solver example.**
 | `flagship_brownout` | 3 | The brownout CI scenario, red and repaired |
 | `tarski_outcome_search` | 2 | Outcome search on a board cell: intended outcomes violated with culprits, and the repaired cell passing |
 | `inhibitory_miswire` | 3 | A miswire found in hardware, then derived from the netlist |
+| `netlist_edit_miswire` | 1 | The same miswire repaired as a text edit of the netlist, then re-simulated |
 | `asbuilt_equivalence` | 5 | That the declarative as-built overlay reproduces the imperative rework it replaced |
 | `hardware_history` | 2 | Replay against recorded hardware traces |
 | `mcp4728_cosim` | 2 | DAC peripheral co-simulation |
