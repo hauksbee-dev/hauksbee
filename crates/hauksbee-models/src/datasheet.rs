@@ -1803,7 +1803,8 @@ const PIN_NUMBERING: &str = r#"PIN NUMBERING, read this before you fill in [mode
       package's own column and its own figure: a figure labelled with another
       package is not yours, and the checker compares the two.
   P7. LETTERS ONLY (G/S/D, B/C/E at unnumbered leads) with the view and pin 1
-      drawn: number [models.pins] by the package standard and name it and the
+      drawn (a three-lead SOT's drawn top view fixes its leads by position
+      alone): number [models.pins] by the package standard and name it and the
       view in the P6 block (pins as printed); results mark those pins assumed:
         standard = "<the package's standard, from the P7 table below>"
       The checker refuses letters on a package that table lists. Otherwise,

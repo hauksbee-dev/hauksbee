@@ -65,6 +65,17 @@ roles = { "1" = "cathode", "2" = "anode" }
 # shrunk and carries the same pad order, so the four rules below share one
 # footprint pattern.
 #
+# SOT-416 (SC-75) and SOT-523 are the next size down and number their leads the
+# same way. Nexperia's SOT416 package outline (Package information, 31 January
+# 2025, Fig. 1 "Package outline SC-75 (SOT416)") numbers 1 lower-left, 2
+# lower-right, 3 top, as its SOT323 (Fig. 1, 27 May 2022) and SOT23 outlines
+# do; Diodes' SOT523 outline (Rev. 2018-04-09) draws the same body (D 1.60, body
+# 0.80, overall 1.60, lead span 1.00, pitch 0.50 mm nominal) without numbers;
+# and KiCad's SOT-523 and SOT-416 footprints place pads 1 and 2 on one side and
+# 3 alone opposite, as SOT-23. A sheet printing only a lettered top view of such
+# a part (Diodes DMG1013T: D top, G lower-left, S lower-right) therefore binds
+# G-S-D on pads 1-2-3, reported per pad as a guess.
+#
 # THE PATTERN IS SPELLED LOOSELY ON PURPOSE, and `pad_count = 3` is what keeps
 # it honest. It used to be `SOT-23(?:$|[^-0-9])`, which reads every KiCad
 # footprint name correctly and NONE of the ones other CAD tools write: Eagle
@@ -82,7 +93,7 @@ roles = { "1" = "cathode", "2" = "anode" }
 [[pin_rules]]
 id = "bjt_sot23_b1_e2_c3"
 description = "SOT-23 BJT: pad1=base, pad2=emitter, pad3=collector"
-footprint_re = "(?ix) SOT-?23 | SOT-?323 | SC-?70 | SC-?59 | TO-?236"
+footprint_re = "(?ix) SOT-?23 | SOT-?323 | SC-?70 | SC-?59 | TO-?236 | SOT-?523 | SOT-?416 | SC-?75"
 kind = "bjt_npn"
 pad_count = 3
 roles = { "1" = "base", "2" = "emitter", "3" = "collector" }
@@ -90,7 +101,7 @@ roles = { "1" = "base", "2" = "emitter", "3" = "collector" }
 [[pin_rules]]
 id = "bjt_sot23_b1_e2_c3_pnp"
 description = "SOT-23 BJT (PNP): pad1=base, pad2=emitter, pad3=collector"
-footprint_re = "(?ix) SOT-?23 | SOT-?323 | SC-?70 | SC-?59 | TO-?236"
+footprint_re = "(?ix) SOT-?23 | SOT-?323 | SC-?70 | SC-?59 | TO-?236 | SOT-?523 | SOT-?416 | SC-?75"
 kind = "bjt_pnp"
 pad_count = 3
 roles = { "1" = "base", "2" = "emitter", "3" = "collector" }
@@ -100,7 +111,7 @@ roles = { "1" = "base", "2" = "emitter", "3" = "collector" }
 [[pin_rules]]
 id = "nmos_sot23_g1_s2_d3"
 description = "SOT-23 N-MOSFET: pad1=gate, pad2=source, pad3=drain"
-footprint_re = "(?ix) SOT-?23 | SOT-?323 | SC-?70 | SC-?59 | TO-?236"
+footprint_re = "(?ix) SOT-?23 | SOT-?323 | SC-?70 | SC-?59 | TO-?236 | SOT-?523 | SOT-?416 | SC-?75"
 kind = "nmos"
 pad_count = 3
 roles = { "1" = "gate", "2" = "source", "3" = "drain" }
@@ -108,7 +119,7 @@ roles = { "1" = "gate", "2" = "source", "3" = "drain" }
 [[pin_rules]]
 id = "pmos_sot23_g1_s2_d3"
 description = "SOT-23 P-MOSFET: pad1=gate, pad2=source, pad3=drain"
-footprint_re = "(?ix) SOT-?23 | SOT-?323 | SC-?70 | SC-?59 | TO-?236"
+footprint_re = "(?ix) SOT-?23 | SOT-?323 | SC-?70 | SC-?59 | TO-?236 | SOT-?523 | SOT-?416 | SC-?75"
 kind = "pmos"
 pad_count = 3
 roles = { "1" = "gate", "2" = "source", "3" = "drain" }

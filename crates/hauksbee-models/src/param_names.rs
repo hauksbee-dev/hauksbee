@@ -517,6 +517,7 @@ pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
         }
     }
     out.extend(row_slips(entry, rows));
+    out.extend(stated_abstentions(entry));
     out.extend(law_warning(entry, rows).or_else(|| ron_miss(entry)));
     out.extend(gain_warning(entry, rows));
     out.extend(channel_slips(entry, rows));
@@ -531,6 +532,33 @@ pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
         ));
     }
     out
+}
+
+/// An `unknown` record abstaining (`ABSTAIN: ...`) on a param the card states.
+///
+/// The two contradict: the evidence says the value cannot be known while the
+/// simulator reads one. Measured: a PMOS draft kept the abstention its first,
+/// failed attempt wrote beside the vto and kp its passing attempt fitted.
+fn stated_abstentions(entry: &ModelEntry) -> Vec<String> {
+    let records = entry.source.iter().flat_map(|s| &s.uncertainty);
+    let abstains = records.filter_map(|u| match u {
+        hauksbee_ir::evidence::ModelUncertainty::Unknown { parameter, reason }
+            if reason.trim_start().starts_with("ABSTAIN") =>
+        {
+            Some(parameter)
+        }
+        _ => None,
+    });
+    let stated = abstains.filter(|name| entry.params.0.contains_key(name.as_str()));
+    stated
+        .map(|name| {
+            format!(
+                "[[models.source.uncertainty]] abstains on '{name}' while [models.params] states \
+                 it: keep the param with its derivation and drop the abstention, or drop the \
+                 param and keep the abstention, never both"
+            )
+        })
+        .collect()
 }
 
 /// A param or current-program constant grossly off every row printing it. A
@@ -894,6 +922,120 @@ pub(crate) fn ron_miss(entry: &ModelEntry) -> Option<String> {
     })
 }
 
+/// What a MOSFET card's level-1 law rests on, as uncertainty records its
+/// evidence carries.
+///
+/// - `vto`: a cited VGS(th) row (25 °C or unstated) printing min and max but no
+///   typ is the threshold's declared range, so `vto` inside it is recorded as
+///   that specification-limits interval, its basis saying where in the range
+///   `vto` sits (the midpoint when no typ is printed). A nominal read from a
+///   min/max-only row is never a silent typical value.
+/// - `rds_on`: the law `1/(kp·w_over_l·(|VGS| - |vto|)) + rd + rs` against every
+///   cited RDS(on) row (typ, else max), as the signed percentage error at each
+///   VGS: the fit error of kp, rd and rs, an estimated range, never a bound.
+///
+/// Empty for any other kind, and for a card without the rows or params.
+#[must_use]
+pub fn mosfet_law_evidence(entry: &ModelEntry) -> Vec<hauksbee_ir::evidence::ModelUncertainty> {
+    use hauksbee_ir::evidence::{ModelIntervalKind, ModelUncertainty};
+    let p = &entry.params;
+    let mos = matches!(entry.kind, ComponentKind::Nmos | ComponentKind::Pmos);
+    let Some(vto) = p.get_f64("vto").filter(|_| mos) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let own: Vec<_> = p.rows().map(|r| r.1.clone()).collect();
+    let rows = [cited_rows(entry), &own].concat();
+    let threshold = |r: &&Characteristic| {
+        (symbol(r, "VGSth") || symbol(r, "VTH")) && at_25(r) && r.typ.is_none()
+    };
+    // A `vto` written as the row itself already declares that row's interval.
+    let as_row = matches!(p.0.get("vto"), Some(crate::schema::ParamValue::Row(_)));
+    for row in rows.iter().filter(threshold).filter(|_| !as_row) {
+        let Some(((a, b), scale)) = row
+            .min
+            .zip(row.max)
+            .zip(crate::units::scale_between(&row.unit, "V"))
+        else {
+            continue;
+        };
+        let (low, high) = (a.min(b) * scale, a.max(b) * scale);
+        // Compared by magnitude: a PMOS sheet may print VGS(th) unsigned.
+        let (lo, hi, v) = (
+            low.abs().min(high.abs()),
+            low.abs().max(high.abs()),
+            vto.abs(),
+        );
+        if !(lo - 1e-9..=hi + 1e-9).contains(&v) {
+            continue;
+        }
+        let mid = f64::midpoint(lo, hi);
+        let place = if (v - mid).abs() <= 1e-6 * mid.max(1e-9) {
+            "is the min/max midpoint, no typ printed".to_string()
+        } else {
+            format!("is {v} V by magnitude inside it, no typ printed")
+        };
+        let basis = format!(
+            "{} ({}), min and max columns: the threshold's declared range; vto = {vto} V {place}",
+            row.parameter, row.basis
+        );
+        let record = ModelUncertainty::interval("vto", low, high, "V", basis);
+        out.extend(record.ok());
+        break;
+    }
+    let (Some(kp), true) = (p.get_f64("kp"), vto.is_finite()) else {
+        return out;
+    };
+    let kp = kp * p.get_f64("w_over_l").unwrap_or(1.0);
+    let ohmic = p.get_f64("rd").unwrap_or(0.0) + p.get_f64("rs").unwrap_or(0.0);
+    let points = at_bias(&rows, ["RDSon", "V_?GS", "V", "ohm"]);
+    let typ_at = |vgs: f64| {
+        points
+            .iter()
+            .any(|(x, _, r)| r.typ.is_some() && (x - vgs).abs() < 1e-9)
+    };
+    let mut errors: Vec<(f64, f64, &str)> = Vec::new();
+    for &(vgs, printed, row) in &points {
+        let over = vgs - vto.abs();
+        // A sheet printing typ and max at one VGS as two rows: the law answers the typ.
+        let column = if row.typ.is_some() { "typ" } else { "max" };
+        if over <= 0.0 || kp <= 0.0 || (column == "max" && typ_at(vgs)) {
+            continue;
+        }
+        let law = (kp * over).recip() + ohmic;
+        errors.push((vgs, 100.0 * (law - printed) / printed, column));
+    }
+    if errors.is_empty() {
+        return out;
+    }
+    errors.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let (low, high) = errors
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), e| {
+            (l.min(e.1), h.max(e.1))
+        });
+    let points: Vec<String> = errors
+        .iter()
+        .map(|(vgs, e, column)| format!("|VGS| {vgs} V {e:+.1}% vs {column}"))
+        .collect();
+    let basis = format!(
+        "level-1 law 1/(kp*(|VGS| - |vto|)) + rd + rs (kp {kp}, vto {vto} V, rd + rs {ohmic} ohm) \
+         against the cited RDS(on) rows: {}; the fit error at the printed rows, not a bound",
+        points.join(", ")
+    );
+    let round = |v: f64| (v * 10.0).round() / 10.0;
+    let record = ModelUncertainty::interval_with_kind(
+        "rds_on",
+        round(low),
+        round(high),
+        "%",
+        ModelIntervalKind::EstimatedRange,
+        basis,
+    );
+    out.extend(record.ok());
+    out
+}
+
 /// Slope and intercept of `y` on `x`, by least squares.
 fn line(x: &[f64], y: &[f64]) -> (f64, f64) {
     let mean = |v: &[f64]| v.iter().sum::<f64>() / v.iter().map(|_| 1.0).sum::<f64>();
@@ -1207,6 +1349,77 @@ mod tests {
         format!(
             "[[models.behavioral.laws]]\nname = \"l\"\nkind = \"current\"\na = \"vplus\"\nb = \"gnd\"\nexpr = \"{expr}\"\n"
         )
+    }
+
+    /// A PMOS whose sheet prints VGS(th) min/max only and three RDS(on) typ rows
+    /// (Diodes DMG1013T, DS31784 Rev. 7-2): its midpoint vto carries the
+    /// declared threshold range, its law carries the fit error at each row, and
+    /// an abstention left beside the stated vto and kp is flagged.
+    #[test]
+    fn a_mosfet_law_states_its_threshold_range_and_fit_error() {
+        use hauksbee_ir::evidence::{ModelIntervalKind, ModelUncertainty};
+        let row = |typ: f64, vgs: f64, id: f64| {
+            format!(
+                "[[models.source.characteristic]]\nparameter = \"RDS(ON) Static Drain-Source On-Resistance\"\n\
+                 typ = {typ}\nunit = \"ohm\"\nconditions = \"VGS = {vgs} V, ID = {id} mA; TA = +25°C\"\n\
+                 basis = \"Electrical Characteristics, RDS(ON), typ column\"\n"
+            )
+        };
+        let source = format!(
+            "[models.source]\ntier = \"datasheet-derived\"\nvalidation = \"physical-bounds-only\"\n\
+             [[models.source.uncertainty]]\nstatus = \"unknown\"\nparameter = \"vto\"\n\
+             reason = \"ABSTAIN: VGS(TH) has min/max but no typical value\"\n\
+             [[models.source.characteristic]]\nparameter = \"VGS(TH) Gate Threshold Voltage\"\n\
+             min = -0.5\nmax = -1.0\nunit = \"V\"\nconditions = \"VDS = VGS, ID = -250 μA\"\n\
+             basis = \"Electrical Characteristics, VGS(TH), min/max columns\"\n{}{}{}",
+            row(0.5, -4.5, -350.0),
+            row(0.7, -2.5, -300.0),
+            row(1.0, -1.8, -150.0)
+        );
+        let card = entry(
+            "pmos",
+            "vto = -0.75\nkp = 1.25\nrd = 0.15\nrs = 0.15",
+            &source,
+        );
+        let records = mosfet_law_evidence(&card);
+        let [ModelUncertainty::Interval {
+            parameter,
+            low,
+            high,
+            kind,
+            basis,
+            ..
+        }, ModelUncertainty::Interval {
+            parameter: law,
+            low: lo,
+            high: hi,
+            kind: law_kind,
+            basis: law_basis,
+            ..
+        }] = &records[..]
+        else {
+            panic!("two intervals: {records:?}");
+        };
+        assert_eq!((parameter.as_str(), *low, *high), ("vto", -1.0, -0.5));
+        assert_eq!(*kind, ModelIntervalKind::SpecificationLimits);
+        assert!(basis.contains("midpoint, no typ printed"), "{basis}");
+        // 1/(1.25*(4.5-0.75)) + 0.3 = 0.5133 (+2.7%); at 2.5 V 0.7571 (+8.2%);
+        // at 1.8 V 1.0619 (+6.2%).
+        assert_eq!((law.as_str(), *lo, *hi), ("rds_on", 2.7, 8.2));
+        assert_eq!(*law_kind, ModelIntervalKind::EstimatedRange);
+        assert!(
+            law_basis.contains("|VGS| 1.8 V +6.2% vs typ"),
+            "{law_basis}"
+        );
+        let warned = source_warnings(&card);
+        assert!(
+            warned
+                .iter()
+                .any(|w| w.contains("abstains on 'vto' while [models.params] states")),
+            "{warned:?}"
+        );
+        // An NMOS with no threshold or RDS(on) rows states nothing it cannot cite.
+        assert!(mosfet_law_evidence(&entry("nmos", "vto = 1\nkp = 0.1", "")).is_empty());
     }
 
     #[test]

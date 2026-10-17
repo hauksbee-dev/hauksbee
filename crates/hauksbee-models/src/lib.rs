@@ -1049,6 +1049,14 @@ impl ModelLibrary {
                 let rows = compiled.entry.params.rows();
                 let rows = rows.filter_map(|(key, row)| param_names::row_characteristic(key, row));
                 source.characteristic.extend(rows);
+                // What a MOSFET law rests on (vto's declared threshold range, the
+                // law's error at each RDS(on) row) is stated, never left in a
+                // comment; it joins, not replaces, the model-error record.
+                let law = param_names::mosfet_law_evidence(&compiled.entry);
+                if source.uncertainty.is_empty() && !law.is_empty() {
+                    source.uncertainty.push(default_model_uncertainty(&id));
+                }
+                source.uncertainty.extend(law);
             }
             let provenance = model_source(
                 declaration.as_ref(),
@@ -1164,13 +1172,7 @@ pub fn model_source(
     let mut uncertainty = declared
         .map(|s| s.uncertainty.clone())
         .filter(|values| !values.is_empty())
-        .unwrap_or_else(|| {
-            vec![ModelUncertainty::unknown(
-                format!("{id}.model"),
-                "the source publishes no validated numeric error interval",
-            )
-            .expect("static unknown uncertainty is valid")]
-        });
+        .unwrap_or_else(|| vec![default_model_uncertainty(id)]);
     // A characteristic row printing min and max states its interval, unless a
     // declared one already names that parameter or those bounds.
     for row in declared.iter().flat_map(|s| &s.characteristic) {
@@ -1190,6 +1192,15 @@ pub fn model_source(
         uncertainty,
     )
     .map_err(|error| error.to_string())
+}
+
+/// The model-error record a source declaring none carries.
+fn default_model_uncertainty(id: &str) -> ModelUncertainty {
+    ModelUncertainty::unknown(
+        format!("{id}.model"),
+        "the source publishes no validated numeric error interval",
+    )
+    .expect("static unknown uncertainty is valid")
 }
 
 const fn model_layer(layer: SourceLayer) -> ModelLayer {

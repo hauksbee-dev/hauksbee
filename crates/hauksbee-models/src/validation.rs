@@ -1715,16 +1715,38 @@ pub const LEAD_STANDARDS: &[(&str, &str)] = &[
         "SOT-89",
         "JEDEC TO-243 top view, leads down: 1, 2, 3 left to right, the tab joined to 2",
     ),
+    (
+        "SOT-323",
+        "JEITA SC-70 (Nexperia SOT323 outline) top view: 1 lower-left, 2 lower-right, 3 top",
+    ),
+    (
+        "SOT-416",
+        "JEITA SC-75 (Nexperia SOT416 outline) top view: 1 lower-left, 2 lower-right, 3 top",
+    ),
+    (
+        "SOT-523",
+        "the SC-75 body (Nexperia SOT416 outline) top view: 1 lower-left, 2 lower-right, 3 top",
+    ),
 ];
 
 /// The package body `package` spells and its [`LEAD_STANDARDS`] numbering.
+///
+/// The three-lead bodies smaller than SOT-23 (SOT-323, SOT-416, SOT-523) have
+/// no row of their own in the package-body table, which reads them as the
+/// catch-all `SOT`; for those the spelling itself names the standard.
 #[must_use]
 pub fn lead_standard(package: &str) -> Option<(&'static str, &'static str)> {
-    let body = crate::package::package_body(package)?.name;
+    let body = crate::package::package_body(package).map(|b| b.name);
+    let squash = |s: &str| {
+        let kept = s.chars().filter(char::is_ascii_alphanumeric);
+        kept.map(|c| c.to_ascii_uppercase()).collect::<String>()
+    };
+    let spelled = squash(package.rsplit(':').next().unwrap_or(package));
+    let small = |name: &str| matches!(body, None | Some("SOT")) && spelled.contains(&squash(name));
     LEAD_STANDARDS
         .iter()
         .copied()
-        .find(|(name, _)| *name == body)
+        .find(|(name, _)| body == Some(*name) || small(name))
 }
 
 /// The P7 table as prompt lines.
@@ -3464,8 +3486,22 @@ pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
             "{problems:?}"
         );
         assert!(draft_pin_map_problems(&card("TO-247")).is_empty());
+        // DMG1013T: a lettered SOT523 top view is numbered by the SC-75 outline.
+        let sot523 = draft_pin_map_problems(&card("SOT523"));
+        assert!(
+            sot523[0].contains("lead letters (D, G, S)") && sot523[0].contains("SC-75"),
+            "{sot523:?}"
+        );
         assert_eq!(lead_standard("SOT-23").map(|s| s.0), Some("SOT-23"));
         assert_eq!(lead_standard("SOT-23-6"), None);
+        assert_eq!(lead_standard("SOT523").map(|s| s.0), Some("SOT-523"));
+        assert_eq!(
+            lead_standard("Package_TO_SOT_SMD:SOT-416").map(|s| s.0),
+            Some("SOT-416")
+        );
+        assert_eq!(lead_standard("SOT-323").map(|s| s.0), Some("SOT-323"));
+        assert_eq!(lead_standard("SOT-363"), None);
+        assert_eq!(lead_standard("SOT-353"), None);
     }
 
     /// Round 3: one 8-pin PDIP/SOIC map for an EEPROM whose SOT-23-6 numbers
