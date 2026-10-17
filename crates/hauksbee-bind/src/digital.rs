@@ -105,34 +105,58 @@ impl LogicLevels {
         self.on_rail(m, rail)
     }
 
-    /// Read the card's `[models.levels]` tables at `rail` (no rail, or no
-    /// tables: the fixed levels).
+    /// Tie the levels to `rail` and read the card's `[models.levels]` tables at
+    /// its voltage (no tables: the fixed levels). Any non-ground rail is
+    /// recorded, tables or not, so the output levels can always be bounded by
+    /// the supply they are driven from (see [`Self::at`]).
     #[must_use]
     pub fn on_rail(mut self, m: &ModelEntry, rail: Option<NodeId>) -> Self {
         self.supply = rail
-            .filter(|n| !n.is_ground() && !m.levels.is_empty())
+            .filter(|n| !n.is_ground())
             .map(|n| (n, Arc::new(m.levels.clone())));
         self
     }
 
-    /// These levels with each tabled one evaluated at the rail's voltage.
+    /// These levels at the rail's present voltage: each tabled level evaluated
+    /// at it (while the rail reads as powered), and the output levels held
+    /// inside the supply they are driven from, so a push-pull output never
+    /// sits above its own rail or below its ground. A card's fixed `voh` is a
+    /// level at ONE supply (an HC card's scalar is its 4.5 V row); it is not a
+    /// licence to drive that level from a 3.3 V rail, or from a rail the solve
+    /// has not resolved yet.
     #[must_use]
     pub fn at(&self, node_v: &dyn Fn(NodeId) -> f64) -> Self {
         let Some((rail, tables)) = &self.supply else {
             return self.clone();
         };
         let vcc = node_v(*rail);
-        if vcc < SupplyDraw::POWERED_THRESHOLD_V {
-            return self.clone();
+        let mut levels = if vcc < SupplyDraw::POWERED_THRESHOLD_V {
+            self.clone()
+        } else {
+            let get = |key: &str, fixed: f64| tables.get(key).map_or(fixed, |t| level_at(t, vcc));
+            Self {
+                voh: get("voh", self.voh),
+                vol: get("vol", self.vol),
+                vih: get("vih", self.vih),
+                vil: get("vil", self.vil),
+                ..self.clone()
+            }
+        };
+        if vcc.is_finite() {
+            let top = vcc.max(0.0);
+            levels.voh = levels.voh.clamp(0.0, top);
+            levels.vol = levels.vol.clamp(0.0, levels.voh);
         }
-        let get = |key: &str, fixed: f64| tables.get(key).map_or(fixed, |t| level_at(t, vcc));
-        Self {
-            voh: get("voh", self.voh),
-            vol: get("vol", self.vol),
-            vih: get("vih", self.vih),
-            vil: get("vil", self.vil),
-            ..self.clone()
-        }
+        levels
+    }
+
+    /// Whether the supply these levels are tied to reads as unpowered (below
+    /// [`SupplyDraw::POWERED_THRESHOLD_V`]). `false` for levels tied to no rail.
+    #[must_use]
+    pub fn supply_down(&self, node_v: &dyn Fn(NodeId) -> f64) -> bool {
+        self.supply
+            .as_ref()
+            .is_some_and(|(rail, _)| node_v(*rail) < SupplyDraw::POWERED_THRESHOLD_V)
     }
 
     /// Convert a sampled voltage to a logic level using hysteresis. `prev` is
@@ -549,14 +573,19 @@ impl DigitalComponent {
     }
 
     /// Re-read every supply-referenced level at its rail's present voltage.
-    fn refresh_levels(&mut self, node_v: &dyn Fn(NodeId) -> f64) {
+    pub fn refresh_levels(&mut self, node_v: &dyn Fn(NodeId) -> f64) {
+        // Read the supply BEFORE the levels are replaced with their evaluated
+        // copy (the copy keeps the rail, but a down rail must also let go of
+        // the outputs: an unpowered part drives nothing, and certainly not
+        // the card's fixed level for some other supply).
+        let supply_down = self.levels.supply_down(node_v);
         self.levels = self.levels.at(node_v);
         for l in self.rails.pins.values_mut() {
             *l = l.at(node_v);
         }
         let down =
             |n: &Option<NodeId>| n.is_none_or(|n| node_v(n) < SupplyDraw::POWERED_THRESHOLD_V);
-        self.rails.isolated = self.rails.nets.iter().any(down);
+        self.rails.isolated = supply_down || self.rails.nets.iter().any(down);
     }
 
     /// The volts pin `role` drives for `high`: its own rail's level.
@@ -2070,6 +2099,98 @@ mod tests {
                         (g, w) => g.is_none() && w.is_none(),
                     },
                     "{row}: {got:?} vs {want:?}"
+                );
+            }
+        }
+    }
+    /// A synthetic 3.3 V digital part whose scalar `voh` is a 4.5 V-row level
+    /// (the shape of an HC card), with and without a supply-dependent table.
+    fn synthetic_hc(with_table: bool) -> hauksbee_models::ModelEntry {
+        let mut m = hauksbee_models::ModelEntry::default();
+        m.params.0.insert("voh".into(), 4.5.into());
+        m.params.0.insert("vol".into(), 0.1.into());
+        m.params.0.insert("vih".into(), 3.15.into());
+        m.params.0.insert("vil".into(), 1.35.into());
+        if with_table {
+            m.levels =
+                BTreeMap::from([("voh".to_string(), vec![[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]])]);
+        }
+        m
+    }
+
+    /// What a one-output part drives onto its pin (`None`: let go of it) when
+    /// its input reads high and its supply reads `vcc`.
+    fn driven_high(m: &hauksbee_models::ModelEntry, vcc: f64) -> Option<f64> {
+        let mut circuit = Circuit::new();
+        let [input, out, rail] = ["A", "Y", "VCC"].map(|n| circuit.node(n));
+        let drivers = HashMap::from([(
+            "y1".to_string(),
+            PinDriver::stamp(&mut circuit, out, "y1", "y1", 42.0),
+        )]);
+        let r = roles(&[("a1", input), ("y1", out), ("vcc", rail)]);
+        let mut part = DigitalComponent::new("U1".into(), m, r, drivers).expect("passthrough");
+        part.tick(&mut circuit, &|n| {
+            if n == input {
+                3.3
+            } else if n == rail {
+                vcc
+            } else {
+                0.0
+            }
+        });
+        let drv = &part.drivers["y1"];
+        drv.enabled
+            .then(|| match &circuit.devices[drv.vsource.0 as usize] {
+                Device::Vsource {
+                    kind: SourceKind::Dc(v),
+                    ..
+                } => *v,
+                _ => f64::NAN,
+            })
+    }
+
+    /// A push-pull output never sits above its own supply, whatever the card's
+    /// fixed `voh` says: not at the first tick before the rail is resolved
+    /// (0 V), not on a 3.3 V rail, with a level table or without one. Only a
+    /// POWERED rail drives, and then at the table's level for that rail.
+    #[test]
+    fn an_output_never_exceeds_its_own_supply() {
+        for with_table in [true, false] {
+            let m = synthetic_hc(with_table);
+            for vcc in [0.0, 0.3, 0.9, 1.2, 1.8, 2.5, 3.0, 3.3, 3.6, 5.0, 5.5] {
+                if let Some(v) = driven_high(&m, vcc) {
+                    assert!(
+                        (0.0..=vcc + 1e-9).contains(&v),
+                        "table={with_table}: {v} V driven from a {vcc} V rail"
+                    );
+                }
+            }
+            // The unresolved rail drives nothing at all (no 4.5 V-row level).
+            assert_eq!(driven_high(&m, 0.0), None, "table={with_table}");
+        }
+        let tabled = synthetic_hc(true);
+        assert!((driven_high(&tabled, 3.3).unwrap() - 3.2).abs() < 1e-9);
+        assert!((driven_high(&tabled, 5.0).unwrap() - 4.9).abs() < 1e-9);
+        // Without a table the fixed level is only ever bounded by the rail.
+        let flat = synthetic_hc(false);
+        assert!((driven_high(&flat, 3.3).unwrap() - 3.3).abs() < 1e-9);
+        assert!((driven_high(&flat, 5.0).unwrap() - 4.5).abs() < 1e-9);
+    }
+
+    /// The level bound itself: drive levels stay inside `[0, vcc]` and `vol`
+    /// never above `voh`, at every rail voltage, including unresolved ones.
+    #[test]
+    fn levels_stay_inside_the_rail() {
+        for with_table in [true, false] {
+            let m = synthetic_hc(with_table);
+            let base = LogicLevels::from_params(&m).on_supply(&m, &roles(&[("vcc", NodeId(1))]));
+            for vcc in [-0.5, 0.0, 0.5, 1.0, 1.7, 3.3, 5.0, 6.0] {
+                let l = base.at(&|_| vcc);
+                assert!(l.voh <= vcc.max(0.0) + 1e-9, "voh {} at {vcc}", l.voh);
+                assert!(
+                    l.vol >= 0.0 && l.vol <= l.voh + 1e-9,
+                    "vol {} at {vcc}",
+                    l.vol
                 );
             }
         }

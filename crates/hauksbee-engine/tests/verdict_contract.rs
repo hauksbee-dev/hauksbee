@@ -1609,6 +1609,34 @@ fn cosim_junit_agrees_with_the_cosim_json_verdict_about_bind_blockers() {
 }
 
 #[test]
+fn a_board_with_no_processor_and_no_firmware_says_nothing_about_firmware_execution() {
+    // cosim_fault_led carries no processor and the run is given no firmware: a
+    // quiet run there has no firmware to have failed to execute, so no surface
+    // may claim the firmware did not run. The machine document carries the one
+    // neutral line instead, and the plain text and stderr stay silent.
+    let board = fixture("cosim_fault_led.kicad_pcb");
+    let plain = run_board(&board, HEADLESS);
+    assert_eq!(plain.status.code(), Some(0), "stderr: {}", stderr(&plain));
+    for text in [stdout(&plain), stderr(&plain)] {
+        assert!(
+            !text.contains("firmware executed") && !text.contains("vouch for firmware"),
+            "no firmware-execution claim on a board with no processor:\n{text}"
+        );
+    }
+    let json = run_board(&board, HEADLESS_JSON);
+    let doc = json_doc(&json);
+    let notes = note_messages(&doc);
+    assert!(
+        notes.contains(&"no processor on this board: no firmware was run"),
+        "the neutral line rides the machine document: {notes:?}"
+    );
+    assert!(
+        notes.iter().all(|n| !n.contains("firmware executed")),
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn the_cosim_refusal_rewrite_keeps_every_finding_the_complete_artifact_carried() {
     // A strict co-sim that refuses (zero activity here) rewrites the artifacts
     // with the refusal attached. That rewrite is the dangerous one: writing the
@@ -1646,7 +1674,7 @@ fn the_cosim_refusal_rewrite_keeps_every_finding_the_complete_artifact_carried()
         stderr(&out)
     );
     assert!(
-        stderr(&out).contains("no evidence the firmware executed"),
+        stderr(&out).contains("no processor on this board: no firmware was run"),
         "the refusal is not silenced by the fault gate taking the exit:\n{}",
         stderr(&out)
     );
