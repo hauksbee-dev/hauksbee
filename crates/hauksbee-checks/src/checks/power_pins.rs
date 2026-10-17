@@ -1325,10 +1325,11 @@ mod tests {
     fn an_rp2040_core_supply_tied_to_its_regulator_output_is_fed() {
         let lib = ModelLibrary::builtin();
         let run = |pads: &[(&str, i64)]| {
-            let parts = vec![
-                part("U1", "RP2040", pads),
-                part("C1", "1uF", &[("1", LONE), ("2", GND)]),
-            ];
+            // The QFN-56 footprint selects the card that maps every pad; the
+            // identity entry for a bare `RP2040` knows only the boot strap.
+            let mut u = part("U1", "RP2040", pads);
+            u.footprint = "Package_DFN_QFN:QFN-56-1EP_7x7mm_P0.4mm_EP3.2x3.2mm".into();
+            let parts = vec![u, part("C1", "1uF", &[("1", LONE), ("2", GND)])];
             power_pin_lint(&board(&NETS, parts), &lib).findings
         };
         let wired = [
