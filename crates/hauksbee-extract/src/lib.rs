@@ -138,7 +138,7 @@ pub enum ExtractError {
     /// An IPC-2581 document problem, already phrased as a whole human sentence.
     #[error("{0}")]
     Ipc2581(String),
-    #[error("not a {expected} file (root is {found:?})")]
+    #[error("{}", wrong_root_text(.expected, .found.as_deref()))]
     WrongRoot {
         expected: &'static str,
         found: Option<String>,
@@ -163,6 +163,27 @@ pub enum ExtractError {
     /// derived from a fragment would be read as a fact about the board.
     #[error("{sheet} is a hierarchical sub-sheet, not a complete design. It needs {needs}")]
     OrphanSubSheet { sheet: String, needs: String },
+}
+
+/// The sentence for a file whose top-level section is not the expected one.
+/// `None` means the parser found no top-level section at all (an empty or
+/// whitespace-only file), which is said in those words, not as a Rust `None`.
+fn wrong_root_text(expected: &str, found: Option<&str>) -> String {
+    found.map_or_else(
+        || {
+            format!(
+                "this file is empty or is not a {expected} file: it has no top-level \
+                 ({expected} ...) section. Re-export or re-save it from your design \
+                 tool, or check that you named the right file"
+            )
+        },
+        |found| {
+            format!(
+                "not a {expected} file: it starts with ({found} ...) where \
+                 ({expected} ...) was expected. Check that you named the right file"
+            )
+        },
+    )
 }
 
 /// Refuse a file still carrying Git merge-conflict markers.
