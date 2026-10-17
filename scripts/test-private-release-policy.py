@@ -328,6 +328,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             "docs/dev-plans/tasks.md",
             "docs/ci/RELEASE_RUNBOOK.md",
             "frontend/capture/cards.ts",
+            "frontend/vite.config.ts",
             "scripts/build-private-beta-snapshot.sh",
             "scripts/make-public.sh",
         }
@@ -389,7 +390,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             target.write_text(Path(__file__).read_text())
             helper = "def drop_test(path, name):\n" + helper
             helper = helper.replace("'scripts/test-private-release-policy.py'", repr(str(target)))
-            exec(compile(helper, "mirror-policy-curation", "exec"), {"pathlib": pathlib})
+            exec(compile(helper, "mirror-policy-curation", "exec"), {"pathlib": pathlib, "re": re})
             retained = ast.parse(target.read_text())
             methods = {node.name for node in ast.walk(retained) if isinstance(node, ast.FunctionDef)}
             launcher_methods = {
