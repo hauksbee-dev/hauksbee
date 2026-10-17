@@ -101,7 +101,7 @@ pub struct StageSpec {
 /// (every stage change and tick, with its time) over `testdata/boards`
 /// (`pic_programmer`, `stickhub`: 63 and 94 parts), `stickhub` tiled 4, 12 and 30
 /// times into synthetic `.kicad_pcb` files (up to 31 MB, 2,800 parts, about 290,000
-/// copper primitives) and the 6 MB `tarski_inputsystem.net` (6,884 parts, no
+/// copper primitives) and a 6 MB private netlist (6,884 parts, no
 /// layout). A stage's duration is the time from its first report to the next
 /// stage's; dividing by its unit count gave a figure per board and the boards
 /// agreed to within about 20% (read 6 to 8 microseconds per KB, bind 0.13 to
@@ -186,7 +186,7 @@ pub const STAGES: [StageSpec; 8] = [
 /// are rails) before it visits a single part, and that derivation is most of its
 /// time on a large board. A bind therefore counts `BIND_STEPS` units per part:
 /// `BIND_STEPS - 1` for the derivation ([`bind_derived`]) and one for the visit
-/// to the part (a tick per part). Measured on `tarski_inputsystem.net`, where the
+/// to the part (a tick per part). Measured on a 6,884-part netlist, where the
 /// derivation took about three times as long as the visits.
 pub const BIND_STEPS: u64 = 4;
 

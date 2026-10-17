@@ -366,7 +366,7 @@ pub fn engine_lint_swept(
 
 /// The lint's progress, in `LINT_UNITS`: each tick below is the share, in
 /// percent, of the lint's wall time spent in the passes just run, measured
-/// with a sampling profiler on `testdata/tarski_inputsystem.net` (6,884 parts).
+/// with a sampling profiler on a private 6,884-part netlist.
 /// The bar only needs the shape (a handful of passes carry most of the time),
 /// so a pass that later speeds up or slows down moves the bar a little off the
 /// clock and nothing else.
