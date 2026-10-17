@@ -8,6 +8,7 @@ import { AdditionalEvidencePanel, evidenceSlots } from './AdditionalEvidencePane
 import { ArriveOnce, PressCard, SkeletonBar, useDropTarget, useSkeletonSwap } from '../motion'
 import { UploadBanners } from './ui'
 import { VerdictPill } from './VerdictPill'
+import { LoadBar } from './LoadBar'
 import { acceptedFormatsSentence, withoutEngineFormatList } from '../lib/board-formats'
 import { motion, useReducedMotion } from 'motion/react'
 import { CELL, INSTANT } from '../motion'
@@ -95,7 +96,7 @@ export function UploadView({ session, onOpenLive, sessions, onResume, avrAvailab
   avrAvailable?: boolean
 }) {
   const {
-    busy, uploadError, uploadNotice, dismissNotice, handleBoard, runSample,
+    busy, loadProgress, uploadError, uploadNotice, dismissNotice, handleBoard, runSample,
   } = session
   const reduced = useReducedMotion()
 
@@ -210,6 +211,7 @@ export function UploadView({ session, onOpenLive, sessions, onResume, avrAvailab
                   with a co-sim of <span style={{ fontFamily: 'var(--font-mono)' }}>{busy.firmware}</span>
                 </div>
               )}
+              <LoadBar progress={loadProgress} />
               <div className="mt-3 text-[12px]" style={{ color: 'var(--silk-faint)' }}>
                 Extracting the circuit from the copper and running the checks. Further
                 uploads are paused until this finishes.

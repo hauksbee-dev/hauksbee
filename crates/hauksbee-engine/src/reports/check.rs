@@ -206,15 +206,21 @@ impl CheckReport<'_> {
             } => (mode, verbose, oracle, quiet, defer),
             CheckDisplay::CombinedJson => (OutputMode::Json, false, false, false, false),
         };
+        hauksbee_ir::progress::begin_bind(board.components.len(), 1);
         let mut bound = bind_board(board, lib);
         let summary = BindSummary::from_report(&bound.report);
         // The lint judges the board at every assumed corner of a class-only
         // part; the evidence then says the result holds across them.
+        hauksbee_ir::progress::begin(
+            hauksbee_ir::progress::Stage::Nets,
+            hauksbee_ir::progress::LINT_UNITS,
+        );
         let (mut lint, corner_plan) = crate::checks::engine_lint_swept(board, lib);
         if let Some(plan) = &corner_plan {
             plan.mark(&mut bound.report);
         }
         let evidence = input.evidence(&bound.report)?;
+        hauksbee_ir::progress::begin(hauksbee_ir::progress::Stage::Copper, 0);
         let (clearance_input, mut drc) = input.drc()?;
         let evidence = evidence.with_custom_rules_coverage(
             clearance_input
@@ -234,9 +240,11 @@ impl CheckReport<'_> {
         // the same trace-ampacity + input-cap-ripple findings as the dedicated
         // `--si` report (the bare `si_checks` omitted them, giving `--check` a false
         // "looks healthy" over an under-width power trace).
+        hauksbee_ir::progress::begin(hauksbee_ir::progress::Stage::Signals, 0);
         let mut si = crate::checks::engine_si(board, lib, input.geo_text());
         // USB-C CC compliance, only when the board has a USB-C receptacle.
         let usbc = crate::usb_c_report(board);
+        hauksbee_ir::progress::begin(hauksbee_ir::progress::Stage::Report, 0);
 
         // Waivers: overrule a finding this board's owner judged wrong, without
         // switching the check off for everyone. Findings an active waiver covers

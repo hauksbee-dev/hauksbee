@@ -685,3 +685,101 @@ async fn sim_refuses_cross_site_requests() {
         "the deck must not have run: {resp}"
     );
 }
+
+// ---- Streamed analysis (the board-load progress bar) ----
+
+/// Serve the design routes with an analyzer that does a little reported work, so
+/// the streamed answer has progress frames to carry.
+async fn spawn_reporting() -> std::net::SocketAddr {
+    use hauksbee_ir::progress::{advance_in, begin, Stage};
+    let analyze: frontdoor::DesignAnalyzer = Arc::new(|upload| {
+        begin(Stage::Bind, 4);
+        for _ in 0..4 {
+            advance_in(Stage::Bind, 1);
+        }
+        serde_json::json!({ "ok": true, "len": upload.board.bytes.len() }).to_string()
+    });
+    let sim: frontdoor::DeckSimulator = Arc::new(|_, _| Ok(String::new()));
+    support::spawn_router(frontdoor::api_routes_with_design(analyze, sim)).await
+}
+
+#[tokio::test]
+async fn a_streamed_analysis_carries_progress_frames_then_the_same_report() {
+    let addr = spawn_reporting().await;
+    let body = b"(kicad_pcb tiny)";
+    let plain = support::http(
+        addr,
+        &raw_post(
+            "/api/analyze",
+            "X-Board-Filename: t.kicad_pcb\r\n",
+            body.len(),
+        ),
+        body,
+    )
+    .await;
+    assert!(
+        plain.contains("application/json"),
+        "plain stays JSON: {plain:.200}"
+    );
+    assert!(
+        !plain.contains("event: progress"),
+        "plain has no frames: {plain}"
+    );
+
+    let streamed = support::http(
+        addr,
+        &raw_post(
+            "/api/analyze",
+            "X-Board-Filename: t.kicad_pcb\r\nAccept: text/event-stream\r\n",
+            body.len(),
+        ),
+        body,
+    )
+    .await;
+    assert!(streamed.contains("200 OK"), "{streamed:.200}");
+    assert!(
+        streamed.contains("text/event-stream"),
+        "SSE type: {streamed:.300}"
+    );
+    assert!(
+        streamed.contains("event: progress"),
+        "progress frames: {streamed}"
+    );
+    assert!(
+        streamed.contains("\"fraction\":1.0"),
+        "ends at 1: {streamed}"
+    );
+    assert!(
+        streamed.contains("event: done"),
+        "terminal done frame: {streamed}"
+    );
+    assert!(
+        streamed.contains(&format!("data: {{\"len\":{},\"ok\":true}}", body.len())),
+        "the done frame is the plain answer: {streamed}"
+    );
+    assert!(
+        !streamed.contains("event: error"),
+        "no error on success: {streamed}"
+    );
+    // The done frame comes last: nothing is streamed after the answer.
+    assert!(
+        streamed.rfind("event: progress") < streamed.rfind("event: done"),
+        "progress never follows done: {streamed}"
+    );
+}
+
+#[tokio::test]
+async fn a_panicking_streamed_analysis_ends_in_one_error_frame() {
+    let analyze: frontdoor::DesignAnalyzer = Arc::new(|_| panic!("boom"));
+    let sim: frontdoor::DeckSimulator = Arc::new(|_, _| Ok(String::new()));
+    let addr = support::spawn_router(frontdoor::api_routes_with_design(analyze, sim)).await;
+    let body = b"x";
+    let resp = support::http(
+        addr,
+        &raw_post("/api/analyze", "Accept: text/event-stream\r\n", body.len()),
+        body,
+    )
+    .await;
+    assert!(resp.contains("event: error"), "{resp}");
+    assert!(!resp.contains("event: done"), "{resp}");
+}

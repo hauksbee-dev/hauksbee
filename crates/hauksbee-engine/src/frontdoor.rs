@@ -1407,6 +1407,7 @@ fn analyze_normalized_with_context(
     // (`altium_drc`) for a binary board, the KiCad layout text otherwise. A
     // gerber archive has neither; its DRC section says so below instead of
     // reporting a vacuous "no problems".
+    hauksbee_ir::progress::begin(hauksbee_ir::progress::Stage::Copper, 0);
     let drc = if is_binary {
         ExtractedBoard::altium_drc(&norm.raw).unwrap_or_default()
     } else if is_gerber {
@@ -1475,6 +1476,7 @@ fn analyze_normalized_with_context(
     let bound = match prebound {
         Some(bound) => bound,
         None => {
+            hauksbee_ir::progress::begin_bind(board.components.len(), 1);
             fallback_bound = bind_board(board, lib);
             &fallback_bound
         }
@@ -1487,6 +1489,10 @@ fn analyze_normalized_with_context(
     // + the unchecked-strap-bearing-MCU coverage note), so the web report never
     // prints "Looks healthy" over a strap-bearing MCU whose BOOT0 was unexamined.
     // Swept across the assumed corners of class-only parts, as `--check` is.
+    hauksbee_ir::progress::begin(
+        hauksbee_ir::progress::Stage::Nets,
+        hauksbee_ir::progress::LINT_UNITS,
+    );
     let (mut lint, corner_plan) = crate::checks::engine_lint_swept(board, lib);
     lint.findings
         .extend(crate::checks::layout_lint(board, text_view, None).findings);
@@ -1498,6 +1504,7 @@ fn analyze_normalized_with_context(
     // chokepoint so the web report carries the trace-ampacity + input-cap-ripple
     // findings too; the bare `si_checks` left the web "Signal integrity" section
     // silently missing an under-width power trace the CLI `--si` flags.
+    hauksbee_ir::progress::begin(hauksbee_ir::progress::Stage::Signals, 0);
     let si = crate::checks::engine_si(board, lib, text_view);
     let mut si_plain = plain_si(&si);
     si_plain.unmodelled_critical.clone_from(&verdict_blockers);
@@ -1574,6 +1581,7 @@ fn analyze_normalized_with_context(
     let total: usize = sections.iter().map(|s| s.findings.len()).sum();
     // An unrouted board holds its copper findings back and the not-routed state
     // is not a defect, so neither counts as an issue.
+    hauksbee_ir::progress::begin(hauksbee_ir::progress::Stage::Report, 0);
     let fix_first = crate::plain::fix_first(&drc_plain, &lint_plain, usbc.as_ref(), &si_plain);
     let (total, serious) = if fix_first.notice.is_some() {
         crate::plain::without_pre_layout(&drc_plain, &lint_plain, total, serious)
@@ -2652,7 +2660,10 @@ fn run_web_cosim_with_bound(
     let frame_dt = 1.0 / 1000.0;
     let mut last_uart: Vec<u8> = Vec::new();
     let mut faults: Vec<FaultEvent> = Vec::new();
+    hauksbee_ir::progress::will_simulate(f64::from(FRAMES) * frame_dt);
+    hauksbee_ir::progress::begin(hauksbee_ir::progress::Stage::Simulate, u64::from(FRAMES));
     for _ in 0..FRAMES {
+        hauksbee_ir::progress::advance_in(hauksbee_ir::progress::Stage::Simulate, 1);
         let frame = engine.step(frame_dt);
         // Concatenate per-MCU UART in a STABLE (sorted-by-MCU-key) order, plain
         // `values()` is HashMap iteration order, so a multi-MCU board's merged
@@ -3160,10 +3171,23 @@ pub fn analyze_with_firmware_json_with_ties(
 pub fn analyze_design_json(upload: hauksbee_frontdoor_api::frontdoor::DesignUpload) -> String {
     let error_json = |name: &str, message: String| to_json_or_failure(&unreadable(name, message));
     let name = upload.board.name.clone();
+    if upload.firmware.is_some() {
+        // The firmware co-sim covers 200 one-millisecond frames (`FRAMES`).
+        hauksbee_ir::progress::will_simulate(0.2);
+    }
     let prepared = match crate::web_design::prepare(upload) {
         Ok(prepared) => prepared,
         Err(error) => return error_json(&name, error),
     };
+    // Firmware makes two more binds (the co-sim's and the evidence pass's).
+    hauksbee_ir::progress::begin_bind(
+        prepared.norm.board.components.len(),
+        if prepared.upload.firmware.is_some() {
+            3
+        } else {
+            1
+        },
+    );
     let static_bound = match prepared.bind() {
         Ok(bound) => bound,
         Err(error) => return error_json(&name, error),

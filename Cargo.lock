@@ -1432,6 +1432,7 @@ dependencies = [
  "anyhow",
  "axum",
  "hauksbee-frontdoor-api",
+ "hauksbee-ir",
  "hauksbee-mcu",
  "serde_json",
  "tokio",

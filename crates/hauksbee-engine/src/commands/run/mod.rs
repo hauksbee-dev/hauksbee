@@ -443,7 +443,92 @@ pub fn run_with_schematic(
     result
 }
 
+/// A load shorter than this shows no bar at all.
+const BAR_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Where `HAUKSBEE_PROGRESS_LOG` points, for measuring the bar against the clock.
+const PROGRESS_LOG_ENV: &str = "HAUKSBEE_PROGRESS_LOG";
+
+/// What the progress reporter needs to know about a run, taken before the
+/// config moves into the work.
+struct ProgressAsk {
+    board: std::path::PathBuf,
+    json: bool,
+    serve: bool,
+    seconds: f64,
+    quiet: bool,
+    surface: SelectedSurface,
+}
+
+impl ProgressAsk {
+    /// The stderr bar is for a person at a terminal: not under `--quiet`, not
+    /// for machine output, not in CI or on a dumb terminal, and never on stdout,
+    /// which carries the report. The TUI and the serial bridge keep running after
+    /// the load, so a bar there would never clear.
+    fn bar_wanted(&self) -> bool {
+        !self.quiet
+            && !self.json
+            && !self.serve
+            && !matches!(
+                self.surface,
+                SelectedSurface::Serial | SelectedSurface::Default
+            )
+            && std::io::IsTerminal::is_terminal(&std::io::stderr())
+            && std::env::var_os("CI").is_none_or(|v| v.is_empty())
+            && std::env::var_os("TERM").is_none_or(|t| t != "dumb")
+    }
+
+    /// Run `work` with load progress going to the places that asked for it: the
+    /// stderr bar, and the measurement log when `HAUKSBEE_PROGRESS_LOG` names one.
+    fn run<R>(&self, work: impl FnOnce() -> R) -> R {
+        use hauksbee_ir::progress;
+        let mut bar = self.bar_wanted().then(|| progress::stderr_bar(BAR_DELAY));
+        let mut log = std::env::var_os(PROGRESS_LOG_ENV)
+            .and_then(|path| progress::log_to(std::path::Path::new(&path)));
+        if bar.is_none() && log.is_none() {
+            return work();
+        }
+        let plan = progress::Plan {
+            bytes: std::fs::metadata(&self.board).map_or(0, |m| m.len()),
+            simulate_s: matches!(
+                self.surface,
+                SelectedSurface::Headless | SelectedSurface::CheckThenCosim
+            )
+            .then_some(self.seconds),
+        };
+        progress::with_reporter(
+            plan,
+            move |update| {
+                if let Some(sink) = bar.as_mut() {
+                    sink(update);
+                }
+                if let Some(sink) = log.as_mut() {
+                    sink(update);
+                }
+            },
+            work,
+        )
+    }
+}
+
 fn run_inner(
+    cfg: RunConfig,
+    quiet: bool,
+    surface: SelectedSurface,
+    schematic: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
+    let ask = ProgressAsk {
+        board: cfg.board.clone(),
+        json: cfg.json,
+        serve: cfg.serve,
+        seconds: cfg.seconds,
+        quiet,
+        surface,
+    };
+    ask.run(move || run_inner_work(cfg, quiet, surface, schematic))
+}
+
+fn run_inner_work(
     mut cfg: RunConfig,
     quiet: bool,
     surface: SelectedSurface,

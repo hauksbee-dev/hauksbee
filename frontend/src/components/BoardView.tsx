@@ -1,3 +1,4 @@
+import { loadPercent } from './LoadBar'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BoardRequest, ModelCoverageComponent, WebOpenPart } from '../types/report'
 import { coverageFor, explainReport, modelsOnNet, padNetsOf, plural, reportView, stageWords } from '../lib/report-view'
@@ -59,7 +60,7 @@ export function BoardView({
   const unmodelled = openParts.filter(part => !part.bound)
   const {
     boardUrl, selectedNet, selectedComponent, setSelectedNet, setSelectedComponent,
-    busy, uploadError, uploadNotice, dismissNotice, firmwareFile,
+    busy, loadProgress, uploadError, uploadNotice, dismissNotice, firmwareFile,
     boardFile, boardLabel, liveMode, onEmptyBoard, restoredFrom,
   } = session
 
@@ -300,6 +301,11 @@ export function BoardView({
             Analyzing <span style={{ fontFamily: 'var(--font-mono)' }}>{busy.board}</span>
             {busy.firmware && <>{' + co-sim of '}<span style={{ fontFamily: 'var(--font-mono)' }}>{busy.firmware}</span></>}
             {' ...'}
+            {loadProgress && (
+              <span data-testid="reanalysis-progress" style={{ color: 'var(--silk-dim)' }}>
+                {loadProgress.label}, {loadPercent(loadProgress.fraction)}%
+              </span>
+            )}
           </div>
         )}
         <UploadBanners

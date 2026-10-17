@@ -668,6 +668,21 @@ code.hb-inline {
 @keyframes barSheen { to { background-position: 250% 0, 0 0; } }
 @media (prefers-reduced-motion: reduce) { .extract-bar > span { transition: none; animation: none; } }
 
+/* The board-load bar: a determinate fill, driven by the engine's own progress
+   reports, with the stage in words and the percentage under it. It moves only
+   when a report arrives, so there is no animation to reduce; the width change
+   is eased for sighted users and not at all under reduced motion. */
+.load-bar-track { height: 6px; border-radius: 3px; background: var(--rule); overflow: hidden; }
+.load-bar-track > span {
+  display: block; height: 100%; border-radius: inherit; background: var(--copper);
+  transition: width 0.25s ease-out;
+}
+.load-bar-text {
+  display: flex; justify-content: space-between; gap: 12px; margin-top: 6px;
+  font-size: 12px; color: var(--silk-dim);
+}
+@media (prefers-reduced-motion: reduce) { .load-bar-track > span { transition: none; } }
+
 /* Toasts (bottom-left over the canvas, so they enter from the left) */
 @keyframes slideInLeft {
   from { transform: translateX(-24px); opacity: 0; }

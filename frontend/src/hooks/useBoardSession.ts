@@ -6,7 +6,7 @@ import { analysisFailureMessage, precheckBoardFile } from '../lib/upload-guard'
 import { inspectZip, zipIsFirmwareOnly } from '../lib/zip-inspect'
 import { isSpiceDeck } from '../lib/deck-sim'
 import { deckExts, endsWithAny, firmwareExts } from '../lib/board-formats'
-import { api, errorText, fetchFile, isAbort } from '../lib/api'
+import { api, errorText, fetchFile, isAbort, type LoadProgress } from '../lib/api'
 
 // The board session: one uploaded (or preloaded) board, its report, its staged
 // firmware, and the live-sim affordance for it. The app shell needs this shared
@@ -57,6 +57,10 @@ export interface BoardSession {
   report: WebReport | null
   /** In-progress upload; while set, further uploads are blocked. */
   busy: { board: string; firmware: string | null } | null
+  /** How far the in-progress analysis is, in the engine's own stage words.
+   *  Null until the first report arrives, and always null against a server
+   *  that does not stream: the busy card then shows its spinner as before. */
+  loadProgress: LoadProgress | null
   uploadError: string | null
   /** Something the app DID on the user's behalf that they did not ask for and
    *  would otherwise have to infer (a project zip dropped on the board zone
@@ -139,6 +143,7 @@ export function useBoardSession(opts: {
 
   const [report, setReport] = useState<WebReport | null>(preloadedReport)
   const [busy, setBusy] = useState<{ board: string; firmware: string | null } | null>(null)
+  const [loadProgress, setLoadProgress] = useState<LoadProgress | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploadNotice, setUploadNotice] = useState<string | null>(null)
   const [firmwareFile, setFirmwareFile] = useState<File | null>(null)
@@ -243,6 +248,7 @@ export function useBoardSession(opts: {
     // storage" caveat: the surfaces would otherwise keep telling the user to
     // re-drop a file they just dropped.
     setRestoredFrom(null)
+    setLoadProgress(null)
     setRunEpoch(n => n + 1)
   }, [])
 
@@ -268,7 +274,10 @@ export function useBoardSession(opts: {
       if (isCurrent()) setBoardUrl(null)
     }
     try {
-      const parsed = await api.analyze(board, firmware, schematic, signal, supplementalRef.current)
+      // The bar never goes backwards, whatever order frames are handled in.
+      const parsed = await api.analyze(board, firmware, schematic, signal, supplementalRef.current, p => {
+        if (isCurrent()) setLoadProgress(prev => (prev && prev.fraction > p.fraction ? prev : p))
+      })
       if (isCurrent()) {
         setReport(parsed)
         setAnalyzedAt(Date.now())
@@ -281,7 +290,10 @@ export function useBoardSession(opts: {
       const status = (e as { status?: number }).status
       if (isCurrent()) setUploadError(analysisFailureMessage(e, { status, size: board.size }))
     } finally {
-      if (isCurrent()) setBusy(null)
+      if (isCurrent()) {
+        setBusy(null)
+        setLoadProgress(null)
+      }
     }
   }, [beginRun, clearRunState])
 
@@ -578,6 +590,7 @@ export function useBoardSession(opts: {
   return {
     report,
     busy,
+    loadProgress,
     uploadError,
     uploadNotice,
     dismissNotice: () => setUploadNotice(null),

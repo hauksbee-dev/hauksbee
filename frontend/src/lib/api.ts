@@ -127,6 +127,58 @@ export async function postSse(url: string, body: FormData | undefined, onFrame: 
   await readSseStream(res.body, onFrame)
 }
 
+// ── Board-load progress ──────────────────────────────────────────────────────
+// Loading a large board takes tens of seconds. A page that asks for the
+// analysis as a stream (`Accept: text/event-stream`) gets `progress` frames while
+// it runs and then one `done` frame carrying the same JSON document the plain
+// endpoint answers. A server or a test double that does not stream answers the
+// plain JSON, and the page reads that exactly as before.
+
+/** Where a board load is: the stage in user words and the overall fraction. */
+export interface LoadProgress {
+  stage: string
+  /** The words for the current stage, from the engine's one stage table. */
+  label: string
+  /** Overall progress, 0..1. The engine never reports a smaller value than before. */
+  fraction: number
+  elapsedMs: number
+}
+
+/** One `progress` frame's data, or null when it is not a progress report. */
+export function parseLoadProgress(data: string): LoadProgress | null {
+  try {
+    const v = JSON.parse(data) as Partial<Record<'stage' | 'label' | 'fraction' | 'elapsed_ms', unknown>>
+    if (typeof v.label !== 'string' || typeof v.fraction !== 'number' || !Number.isFinite(v.fraction)) return null
+    return {
+      stage: typeof v.stage === 'string' ? v.stage : '',
+      label: v.label,
+      fraction: Math.min(1, Math.max(0, v.fraction)),
+      elapsedMs: typeof v.elapsed_ms === 'number' ? v.elapsed_ms : 0,
+    }
+  } catch {
+    return null
+  }
+}
+
+/** Read a streamed analysis: progress frames go to `onProgress`, and the answer
+ *  is the `done` frame's data. `done` is undefined when the stream ended without
+ *  one (a dropped connection), which the caller answers by asking again without
+ *  streaming; `error` is the engine's own message when it reported one. */
+export async function readAnalysisStream(
+  body: ReadableStream<Uint8Array>,
+  onProgress: (p: LoadProgress) => void,
+): Promise<{ done?: string; error?: string }> {
+  const out: { done?: string; error?: string } = {}
+  await readSseStream(body, frame => {
+    if (frame.event === 'progress') {
+      const p = parseLoadProgress(frame.data)
+      if (p) onProgress(p)
+    } else if (frame.event === 'done') out.done = frame.data
+    else if (frame.event === 'error') out.error = frame.data
+  })
+  return out
+}
+
 /** Read a settings answer, preferring the server's own refusal message over
  *  the bare status line: both settings writes report a 400 in the body. */
 const settingsOrRefusal = async (sent: Promise<Response>): Promise<ExtractSettings> => {
@@ -166,23 +218,43 @@ export const api = {
     schematic: File | null,
     signal: AbortSignal,
     supplemental?: SupplementalDesignFiles,
+    onProgress?: (p: LoadProgress) => void,
   ): Promise<WebReport> => {
     const hasSupplemental = !!supplemental && (
       !!supplemental.bom || !!supplemental.placement || !!supplemental.variant
       || !!supplemental.asbuilt || supplemental.models.length > 0
     )
-    const res = firmware || schematic || hasSupplemental
-      ? await fetch('/api/analyze-with-firmware', { method: 'POST', body: buildBoardUpload(board, firmware, schematic, supplemental), signal })
-      : await fetch('/api/analyze', {
-          method: 'POST',
-          headers: { 'X-Board-Filename': board.name, 'Content-Type': 'application/octet-stream' },
-          body: board,
-          signal,
-        })
-    if (!res.ok) {
+    const send = (stream: boolean) => {
+      const accept: Record<string, string> = stream ? { Accept: 'text/event-stream' } : {}
+      return firmware || schematic || hasSupplemental
+        ? fetch('/api/analyze-with-firmware', {
+            method: 'POST',
+            headers: accept,
+            body: buildBoardUpload(board, firmware, schematic, supplemental),
+            signal,
+          })
+        : fetch('/api/analyze', {
+            method: 'POST',
+            headers: { 'X-Board-Filename': board.name, 'Content-Type': 'application/octet-stream', ...accept },
+            body: board,
+            signal,
+          })
+    }
+    const refuse = async (res: Response): Promise<never> => {
       const err = new Error((await res.text()).trim().slice(0, 400) || statusLine(res)) as Error & { status?: number }
       err.status = res.status
       throw err
+    }
+    let res = await send(!!onProgress)
+    if (!res.ok) return refuse(res)
+    if (onProgress && res.body && (res.headers.get('content-type') ?? '').includes('text/event-stream')) {
+      const streamed = await readAnalysisStream(res.body, onProgress)
+      if (streamed.done !== undefined) return JSON.parse(streamed.done) as WebReport
+      if (streamed.error !== undefined) throw new Error(streamed.error)
+      // The stream ended with no answer (a dropped connection, a proxy that cut
+      // it): the report still has to arrive, so ask again the plain way.
+      res = await send(false)
+      if (!res.ok) return refuse(res)
     }
     return readJson<WebReport>(res)
   },
