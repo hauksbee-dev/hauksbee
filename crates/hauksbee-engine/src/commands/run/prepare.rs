@@ -435,7 +435,7 @@ pub fn prepare_run_inputs(
         // The same overlay on the extraction, so the static checks (lint,
         // envelope, bind, SI...) judge the reworked board too.
         let mut static_board = board.clone();
-        let static_report = overlay.apply_to_board(&mut static_board)?;
+        let static_report = overlay.apply_to_board(&mut static_board, &lib)?;
         // Under --json stdout must stay one machine document, so the applied
         // narration is suppressed there (the validation above still ran).
         if !quiet && !cfg.json {

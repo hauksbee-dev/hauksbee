@@ -44,15 +44,17 @@
 //! mutations, no transient, no DC, preserving the prep-stays-solve-free
 //! invariant the earlier hand-written preparation code established.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 use serde::Deserialize;
 use toml::Spanned;
 
-use hauksbee_extract::{Component, ExtractedBoard, Pin};
+use hauksbee_extract::assembly::AssemblyState;
+use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
 use hauksbee_ir::{levenshtein, Device, NodeId};
 use hauksbee_models::value::parse_value;
+use hauksbee_models::ModelLibrary;
 
 use crate::binder::BoundBoard;
 
@@ -364,6 +366,33 @@ pub struct AsBuiltOverlay {
 #[derive(Debug, Clone, Default)]
 pub struct AsBuiltReport {
     pub lines: Vec<String>,
+    /// Entries [`AsBuiltOverlay::apply_to_board`] could not carry onto the
+    /// static board, so a static finding on the parts and nets they touch is
+    /// the design's, not the reworked board's. Always empty from
+    /// [`AsBuiltOverlay::apply`].
+    pub unapplied: Vec<UnappliedEntry>,
+}
+
+/// One overlay entry the static board does not carry, with what it touches.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnappliedEntry {
+    /// The entry as the overlay names it (`replace NEURON_SWITCH601`).
+    pub entry: String,
+    /// Why the static board cannot carry it.
+    pub why: String,
+    /// The board parts the entry reworks.
+    pub refs: Vec<String>,
+    /// The board nets the entry reworks.
+    pub nets: Vec<String>,
+}
+
+impl UnappliedEntry {
+    /// Whether a finding on `refs` and `nets` names a part or net this entry
+    /// reworks, so the finding cannot be read as the reworked board's.
+    #[must_use]
+    pub fn touches(&self, refs: &[String], nets: &[String]) -> bool {
+        refs.iter().any(|r| self.refs.contains(r)) || nets.iter().any(|n| self.nets.contains(n))
+    }
 }
 
 impl AsBuiltOverlay {
@@ -832,43 +861,43 @@ impl AsBuiltOverlay {
     }
 }
 
-/// The overlay entries a static check can represent on an [`ExtractedBoard`]:
-/// fitted resistor/capacitor values, bodge-wire net merges and wired-on parts.
-/// The rest (switch trip points, cut/lifted transistor terminals) are circuit
-/// behaviour only the simulated board carries.
+/// The overlay on an [`ExtractedBoard`], so the static checks judge the
+/// reworked board: fitted resistor/capacitor values, severed transistor
+/// terminals (cut and lift), bodge-wire net merges and wired-on parts. Switch
+/// trip points are circuit behaviour only the simulated board carries; they,
+/// and any entry the static board cannot carry, are listed in
+/// [`AsBuiltReport::unapplied`] with the parts and nets they touch.
 impl AsBuiltOverlay {
-    /// Apply the static-representable entries to `board`, in the same order as
-    /// [`apply`](Self::apply) (replace, jumper, fit), so the static checks judge
-    /// the reworked board and not the design. [`apply`](Self::apply) is the
-    /// authority on whether the overlay describes the board and fails loudly;
-    /// this mirrors it onto the extraction, leaving a line in the report for
-    /// each entry it cannot represent.
+    /// Apply the overlay to `board`, in the same order as
+    /// [`apply`](Self::apply) (replace, cut, lift, jumper, fit), so the static
+    /// checks judge the reworked board and not the design.
+    /// [`apply`](Self::apply) is the authority on what each entry does: a cut
+    /// or lift is applied to the board bound with `lib` by that same code, and
+    /// every terminal it floats is traced back through the part's pin roles
+    /// (the binder's own [`role_pads`](crate::binder::role_pads)) to the pads
+    /// it severs, which move to a fresh one-pad net. An entry the static board
+    /// cannot carry is left as designed and listed in the report's
+    /// [`unapplied`](AsBuiltReport::unapplied), never dropped.
     ///
     /// # Errors
     ///
-    /// Returns the first `[[jumper]]` or `[[fit]]` entry that names a net the
-    /// board lacks, joins a net to itself, reuses a part reference, or lacks
-    /// exactly one of `ohms`/`farads`.
+    /// Returns the first `[[cut]]` or `[[lift]]` entry that does not describe
+    /// the bound board (as [`apply`](Self::apply)), or the first `[[jumper]]`
+    /// or `[[fit]]` entry that names a net the board lacks, joins a net to
+    /// itself, reuses a part reference, or lacks exactly one of `ohms`/`farads`.
     pub fn apply_to_board(
         &self,
         board: &mut ExtractedBoard,
+        lib: &ModelLibrary,
     ) -> Result<AsBuiltReport, AsBuiltError> {
         let mut report = AsBuiltReport::default();
+        // Found on the design board, as the simulation binds it before the
+        // overlay: a value swap moves no terminal, so the order is the same.
+        let floated = self.floated_terminals(board, lib)?;
         for rep in &self.doc.replaces {
             Self::replace_on_board(rep, board, &mut report);
         }
-        for cut in &self.doc.cuts {
-            report.lines.push(format!(
-                "cut {}: not represented in static checks (simulated circuit only)",
-                cut.net_glob.get_ref()
-            ));
-        }
-        for lift in &self.doc.lifts {
-            report.lines.push(format!(
-                "lift {}: not represented in static checks (simulated circuit only)",
-                lift.reference.get_ref()
-            ));
-        }
+        sever_on_board(board, lib, floated, &mut report);
         for jumper in &self.doc.jumpers {
             self.jumper_on_board(jumper, board, &mut report)?;
         }
@@ -878,14 +907,68 @@ impl AsBuiltOverlay {
         Ok(report)
     }
 
+    /// Every terminal the overlay's cuts and lifts float, read off the board
+    /// bound with `lib` after [`apply`](Self::apply)'s own cut and lift steps
+    /// ran on it, grouped by entry in application order.
+    fn floated_terminals(
+        &self,
+        board: &ExtractedBoard,
+        lib: &ModelLibrary,
+    ) -> Result<Floated, AsBuiltError> {
+        let mut floated = Floated::default();
+        if self.doc.cuts.is_empty() && self.doc.lifts.is_empty() {
+            return Ok(floated);
+        }
+        let mut bound = crate::binder::bind_board(board, lib);
+        let mut next_float = self.check_node_space(&bound)?;
+        let mut scratch = AsBuiltReport::default();
+        for cut in &self.doc.cuts {
+            let before = bjt_terminals(&bound);
+            self.apply_cut(cut, &mut bound, &mut next_float, &mut scratch)?;
+            let entry = format!("cut {}", cut.net_glob.get_ref());
+            floated.entries.push((entry, "cut", moved(&before, &bound)));
+        }
+        for lift in &self.doc.lifts {
+            let before = bjt_terminals(&bound);
+            self.apply_lift(lift, &mut bound, &mut next_float, &mut scratch)?;
+            let entry = format!("lift {} {:?}", lift.reference.get_ref(), lift.terminal);
+            floated
+                .entries
+                .push((entry, "lift", moved(&before, &bound)));
+        }
+        floated.net_nodes = bound.net_nodes;
+        Ok(floated)
+    }
+
     fn replace_on_board(rep: &Replace, board: &mut ExtractedBoard, report: &mut AsBuiltReport) {
         let reference = rep.reference.get_ref().as_str();
-        let value = rep.set.ohms.or(rep.set.farads);
-        let Some(value) = value else {
+        let named: Vec<String> = (board.components.iter())
+            .filter(|c| c.reference.contains(reference))
+            .map(|c| c.reference.clone())
+            .collect();
+        let unapplied = |why: String| UnappliedEntry {
+            entry: format!("replace {reference}"),
+            why,
+            refs: named.clone(),
+            nets: Vec::new(),
+        };
+        if rep.set.von.is_some() || rep.set.voff.is_some() {
+            let trip = SetValues {
+                von: rep.set.von,
+                voff: rep.set.voff,
+                ..SetValues::default()
+            };
+            let why = format!(
+                "{} is a switch trip point, which only the simulated circuit carries",
+                describe_set(&trip)
+            );
             report.lines.push(format!(
                 "replace {reference}: {} not represented in static checks (simulated circuit only)",
-                describe_set(&rep.set)
+                describe_set(&trip)
             ));
+            report.unapplied.push(unapplied(why));
+        }
+        let Some(value) = rep.set.ohms.or(rep.set.farads) else {
             return;
         };
         let was = rep.was.as_ref().and_then(|w| w.ohms.or(w.farads));
@@ -909,6 +992,11 @@ impl AsBuiltOverlay {
                 "replace {reference}: matched {} static part(s), expected {expected}; left as designed",
                 hits.len()
             ));
+            report.unapplied.push(unapplied(format!(
+                "the board's part values match {} part(s) where the entry expects {expected}, \
+                 so the static board keeps the designed value",
+                hits.len()
+            )));
             return;
         }
         for &i in &hits {
@@ -1030,6 +1118,206 @@ impl AsBuiltOverlay {
             fit.to.get_ref()
         ));
         Ok(())
+    }
+}
+
+/// The terminals an overlay's cuts and lifts float on the bound board.
+#[derive(Default)]
+struct Floated {
+    /// Per entry, in application order: its name, its op ("cut" or "lift")
+    /// and every terminal it floated.
+    entries: Vec<(String, &'static str, Vec<FloatedTerminal>)>,
+    /// The bound board's net names to nodes (cuts and lifts move terminals,
+    /// never nets).
+    net_nodes: HashMap<String, NodeId>,
+}
+
+/// One device terminal a cut or lift floated, and the node it left.
+struct FloatedTerminal {
+    device: String,
+    terminal: Terminal,
+    was: NodeId,
+}
+
+const TERMINALS: [Terminal; 3] = [Terminal::Base, Terminal::Collector, Terminal::Emitter];
+
+impl Terminal {
+    /// The binder's role name for this terminal (a dual part's unit suffix,
+    /// `_q2`, follows it).
+    const fn role(self) -> &'static str {
+        match self {
+            Self::Base => "base",
+            Self::Collector => "collector",
+            Self::Emitter => "emitter",
+        }
+    }
+}
+
+/// Every transistor's terminal nodes, in [`TERMINALS`] order, by device index.
+fn bjt_terminals(bound: &BoundBoard) -> Vec<Option<[NodeId; 3]>> {
+    (bound.circuit.devices.iter())
+        .map(|d| match d {
+            Device::Bjt { b, c, e, .. } => Some([*b, *c, *e]),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The terminals whose node differs from `before`: what one entry floated.
+fn moved(before: &[Option<[NodeId; 3]>], bound: &BoundBoard) -> Vec<FloatedTerminal> {
+    let after = bjt_terminals(bound);
+    let mut out = Vec::new();
+    for ((dev, old), new) in bound.circuit.devices.iter().zip(before).zip(&after) {
+        let (Some(old), Some(new)) = (old, new) else {
+            continue;
+        };
+        for ((terminal, was), now) in TERMINALS.iter().zip(old).zip(new) {
+            if was != now {
+                out.push(FloatedTerminal {
+                    device: dev.name().to_string(),
+                    terminal: *terminal,
+                    was: *was,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// The board part a stamped transistor came from, and its unit suffix: the
+/// binder names a single transistor after its reference and each unit of a
+/// multi-transistor package `<reference>_q<n>`.
+fn owner(by_ref: &HashMap<&str, usize>, device: &str) -> Option<(usize, String)> {
+    if let Some(&i) = by_ref.get(device) {
+        return Some((i, String::new()));
+    }
+    let (reference, unit) = device.rsplit_once("_q")?;
+    let numbered = !unit.is_empty() && unit.bytes().all(|b| b.is_ascii_digit());
+    let &i = by_ref.get(reference).filter(|_| numbered)?;
+    Some((i, format!("_q{unit}")))
+}
+
+/// The pins of `comp` that make up `terminal` (with unit `suffix`) on one of
+/// `was_nets`, read through the part's pin roles exactly as the binder bound
+/// them. Empty when the part resolves to no model or the role to no pad there.
+fn terminal_pins(
+    comp: &Component,
+    lib: &ModelLibrary,
+    terminal: Terminal,
+    suffix: &str,
+    was_nets: &[i64],
+) -> Vec<usize> {
+    let Some(part) = AssemblyState::of(comp).fitted() else {
+        return Vec::new();
+    };
+    let resolution = crate::binder::resolve(lib, part);
+    let Some(model) = resolution.model.as_ref() else {
+        return Vec::new();
+    };
+    let role = format!("{}{suffix}", terminal.role());
+    let pads = crate::binder::role_pads(comp, model, lib.pin_rules(), &role);
+    (comp.pins.iter().enumerate())
+        .filter(|(_, p)| pads.contains(&p.number) && p.net.is_some_and(|n| was_nets.contains(&n)))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// "a, b, c and 87 more": a long list kept to one line.
+fn first_few(items: &[String]) -> String {
+    const SHOWN: usize = 3;
+    if items.len() <= SHOWN {
+        return items.join(", ");
+    }
+    format!(
+        "{} and {} more",
+        items[..SHOWN].join(", "),
+        items.len() - SHOWN
+    )
+}
+
+/// Move every pad a floated terminal maps to onto a fresh one-pad net (the
+/// static twin of the simulation's fresh floating node), and list each entry
+/// whose terminals could not all be traced to a pad as unapplied.
+fn sever_on_board(
+    board: &mut ExtractedBoard,
+    lib: &ModelLibrary,
+    floated: Floated,
+    report: &mut AsBuiltReport,
+) {
+    let mut next_id = board.nets.iter().map(|n| n.id).max().unwrap_or(0) + 1;
+    for (entry, op, terminals) in floated.entries {
+        let by_ref: HashMap<&str, usize> = (board.components.iter().enumerate())
+            .map(|(i, c)| (c.reference.as_str(), i))
+            .collect();
+        let mut cuts: Vec<(usize, usize)> = Vec::new();
+        let mut untraced = UnappliedEntry {
+            entry: entry.clone(),
+            ..UnappliedEntry::default()
+        };
+        let mut missed: Vec<String> = Vec::new();
+        for t in &terminals {
+            let was_nets: Vec<i64> = (board.nets.iter())
+                .filter(|n| floated.net_nodes.get(&n.name) == Some(&t.was))
+                .map(|n| n.id)
+                .collect();
+            let found = owner(&by_ref, &t.device).map(|(ci, suffix)| {
+                let pins =
+                    terminal_pins(&board.components[ci], lib, t.terminal, &suffix, &was_nets);
+                (ci, pins)
+            });
+            match found {
+                Some((ci, pins)) if !pins.is_empty() => {
+                    cuts.extend(pins.into_iter().map(|pi| (ci, pi)));
+                }
+                other => {
+                    let part = other.map_or_else(
+                        || t.device.clone(),
+                        |(ci, _)| board.components[ci].reference.clone(),
+                    );
+                    missed.push(format!("{} {}", t.device, t.terminal.role()));
+                    untraced.refs.push(part);
+                    untraced.nets.extend(
+                        (board.nets.iter())
+                            .filter(|n| was_nets.contains(&n.id))
+                            .map(|n| n.name.clone()),
+                    );
+                }
+            }
+        }
+        let mut severed: Vec<String> = Vec::new();
+        for (ci, pi) in cuts {
+            let comp = &mut board.components[ci];
+            let pin = &mut comp.pins[pi];
+            let name = format!("asbuilt-{op}-({}-Pad{})", comp.reference, pin.number);
+            severed.push(format!("{} pad {}", comp.reference, pin.number));
+            pin.net = Some(next_id);
+            board.nets.push(Net::new(next_id, name));
+            next_id += 1;
+        }
+        if !severed.is_empty() {
+            report.lines.push(format!(
+                "{entry}: {} pad(s) severed onto their own nets ({})",
+                severed.len(),
+                first_few(&severed)
+            ));
+        }
+        if !missed.is_empty() {
+            report.lines.push(format!(
+                "{entry}: {} terminal(s) not traced to a pad, left as designed ({})",
+                missed.len(),
+                first_few(&missed)
+            ));
+            untraced.why = format!(
+                "the simulated board floats {} but no pad of the part could be traced to \
+                 that terminal through its pin roles",
+                first_few(&missed)
+            );
+            untraced.refs.sort();
+            untraced.refs.dedup();
+            untraced.nets.sort();
+            untraced.nets.dedup();
+            report.unapplied.push(untraced);
+        }
     }
 }
 
@@ -1351,6 +1639,7 @@ mod tests {
 
     #[test]
     fn overlay_applies_replace_jumper_and_fit_to_the_static_board() {
+        let lib = ModelLibrary::builtin();
         let net = |id, name: &str| hauksbee_extract::Net {
             id,
             name: name.to_string(),
@@ -1384,7 +1673,7 @@ ohms = 4700.0
             "unit",
         )
         .unwrap();
-        let report = overlay.apply_to_board(&mut board).unwrap();
+        let report = overlay.apply_to_board(&mut board, &lib).unwrap();
         assert_eq!(board.components[0].value, "0.001");
         assert_eq!(board.components[1].pins[1].net, Some(1), "C merged onto A");
         assert!(board.nets.iter().all(|n| n.name != "C"));
@@ -1397,6 +1686,9 @@ ohms = 4700.0
             .lines
             .iter()
             .any(|l| l.contains("ANALOG_SWITCH1") && l.contains("not represented")));
+        // The trip point the static board cannot carry is listed, not dropped.
+        assert_eq!(report.unapplied.len(), 1, "{:?}", report.unapplied);
+        assert_eq!(report.unapplied[0].entry, "replace ANALOG_SWITCH1");
         // A `was` that disagrees with the board leaves the part as designed.
         let mut other = board.clone();
         other.components[1].value = "10k".into();
@@ -1405,11 +1697,137 @@ ohms = 4700.0
             "unit",
         )
         .unwrap();
-        stale.apply_to_board(&mut other).unwrap();
+        let report = stale.apply_to_board(&mut other, &lib).unwrap();
         assert_eq!(other.components[1].value, "10k");
+        // ...and lists the entry as unapplied, naming the part it would rework.
+        assert_eq!(report.unapplied.len(), 1, "{:?}", report.unapplied);
+        assert_eq!(report.unapplied[0].refs, ["R2"]);
+        assert!(report.unapplied[0].touches(&["R2".into()], &[]));
+        assert!(!report.unapplied[0].touches(&["R1".into()], &["A".into()]));
         // A jumper onto a net the board lacks is a hard error.
         let bad =
             AsBuiltOverlay::parse("[[jumper]]\nfrom = \"A\"\nto = \"NOPE\"\n", "unit").unwrap();
-        assert!(bad.apply_to_board(&mut other).is_err());
+        assert!(bad.apply_to_board(&mut other, &lib).is_err());
+    }
+
+    /// A dual transistor (BCM847BS, SOT-363) wired like one Tarski inhibitory
+    /// cell: unit 2's base on the switch net, unit 1 diode-connected (base and
+    /// collector on one net), both emitters on ground.
+    fn dual_bjt_board() -> ExtractedBoard {
+        ExtractedBoard::from_kicad_netlist(
+            r#"(export (version "E")
+  (components
+    (comp (ref "Q1") (value "BCM847BS,135") (footprint "Package_TO_SOT_SMD:SOT-363_SC-70-6"))
+    (comp (ref "R1") (value "10k") (footprint "Resistor_SMD:R_0402_1005Metric"))
+    (comp (ref "R2") (value "1k") (footprint "Resistor_SMD:R_0402_1005Metric")))
+  (nets
+    (net (code "1") (name "GND")
+      (node (ref "Q1") (pin "1") (pinfunction "E1") (pintype "passive"))
+      (node (ref "Q1") (pin "4") (pinfunction "E2") (pintype "passive")))
+    (net (code "2") (name "SW_A")
+      (node (ref "Q1") (pin "5") (pinfunction "B2") (pintype "passive"))
+      (node (ref "R1") (pin "1") (pintype "passive")))
+    (net (code "3") (name "B1")
+      (node (ref "Q1") (pin "2") (pinfunction "B1") (pintype "passive"))
+      (node (ref "Q1") (pin "6") (pinfunction "C1") (pintype "passive"))
+      (node (ref "R2") (pin "1") (pintype "passive")))
+    (net (code "4") (name "C2")
+      (node (ref "Q1") (pin "3") (pinfunction "C2") (pintype "passive")))
+    (net (code "5") (name "+5V")
+      (node (ref "R1") (pin "2") (pintype "passive"))
+      (node (ref "R2") (pin "2") (pintype "passive")))))"#,
+        )
+        .expect("fixture netlist parses")
+    }
+
+    fn net_of(board: &ExtractedBoard, reference: &str, pad: &str) -> String {
+        let pin = (board.components.iter())
+            .find(|c| c.reference == reference)
+            .and_then(|c| c.pins.iter().find(|p| p.number == pad))
+            .expect("pad exists");
+        let id = pin.net.expect("pad is connected");
+        board.net(id).expect("net exists").name.clone()
+    }
+
+    #[test]
+    fn a_cut_severs_the_base_pad_the_simulation_floats_on_the_static_board() {
+        let lib = ModelLibrary::builtin();
+        let mut board = dual_bjt_board();
+        let overlay = AsBuiltOverlay::parse(
+            "[[cut]]\nnet_glob = \"SW_*\"\nterminal = \"base\"\n",
+            "unit",
+        )
+        .unwrap();
+        // The simulated board floats exactly one base...
+        let mut bound = crate::binder::bind_board(&board, &lib);
+        overlay
+            .apply(&mut bound)
+            .expect("the cut describes the bound board");
+        let report = overlay.apply_to_board(&mut board, &lib).unwrap();
+        // ...and the static board severs that base's pad, and only it.
+        assert!(report.unapplied.is_empty(), "{:?}", report.unapplied);
+        assert_eq!(net_of(&board, "Q1", "5"), "asbuilt-cut-(Q1-Pad5)");
+        assert_eq!(net_of(&board, "R1", "1"), "SW_A", "the switch side stays");
+        assert_eq!(net_of(&board, "Q1", "2"), "B1");
+        assert!(
+            report.lines.iter().any(|l| l.contains("Q1 pad 5")),
+            "{:?}",
+            report.lines
+        );
+        // A cut that matches a different number of terminals than declared is
+        // refused here exactly as on the simulated board.
+        let drifted = AsBuiltOverlay::parse(
+            "[[cut]]\nnet_glob = \"SW_*\"\nterminal = \"base\"\nexpect_matches = 2\n",
+            "unit",
+        )
+        .unwrap();
+        let err = drifted
+            .apply_to_board(&mut dual_bjt_board(), &lib)
+            .unwrap_err();
+        assert!(matches!(err, AsBuiltError::MatchCount { .. }), "{err}");
+    }
+
+    #[test]
+    fn a_lift_severs_one_terminal_by_its_pin_role_not_by_its_net() {
+        // Unit 1's base and collector share net B1: only the pin role tells
+        // the base pad (2) from the collector pad (6).
+        let lib = ModelLibrary::builtin();
+        let mut board = dual_bjt_board();
+        let overlay =
+            AsBuiltOverlay::parse("[[lift]]\nref = \"Q1_q1\"\nterminal = \"base\"\n", "unit")
+                .unwrap();
+        let report = overlay.apply_to_board(&mut board, &lib).unwrap();
+        assert!(report.unapplied.is_empty(), "{:?}", report.unapplied);
+        assert_eq!(net_of(&board, "Q1", "2"), "asbuilt-lift-(Q1-Pad2)");
+        assert_eq!(net_of(&board, "Q1", "6"), "B1", "the collector stays");
+        assert_eq!(net_of(&board, "Q1", "5"), "SW_A", "the other unit stays");
+    }
+
+    #[test]
+    fn a_terminal_with_no_traceable_pad_is_listed_unapplied() {
+        let by_ref = HashMap::from([("Q1", 0usize)]);
+        assert_eq!(owner(&by_ref, "Q1"), Some((0, String::new())));
+        assert_eq!(owner(&by_ref, "Q1_q2"), Some((0, "_q2".to_string())));
+        assert_eq!(owner(&by_ref, "Q1_qx"), None);
+        assert_eq!(owner(&by_ref, "Q7"), None);
+        // A floated terminal whose device is no board part is not dropped.
+        let mut board = dual_bjt_board();
+        let floated = Floated {
+            entries: vec![(
+                "lift X9 Base".to_string(),
+                "lift",
+                vec![FloatedTerminal {
+                    device: "X9".to_string(),
+                    terminal: Terminal::Base,
+                    was: NodeId(1),
+                }],
+            )],
+            net_nodes: HashMap::new(),
+        };
+        let mut report = AsBuiltReport::default();
+        sever_on_board(&mut board, &ModelLibrary::builtin(), floated, &mut report);
+        assert_eq!(report.unapplied.len(), 1, "{:?}", report.unapplied);
+        assert_eq!(report.unapplied[0].refs, ["X9"]);
+        assert!(report.unapplied[0].why.contains("X9 base"));
     }
 }

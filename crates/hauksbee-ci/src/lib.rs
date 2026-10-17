@@ -900,8 +900,51 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     // never read GREEN over a board its static check fails. Judged with the
     // run's model library and the board's waiver file, like the check.
     // A finding the board's waiver file overrules keeps its row, marked waived.
-    match hauksbee_engine::reports::check::static_gate(&spec.board_path(), &lib) {
+    // With an `asbuilt` overlay the check judges the reworked board the
+    // simulation ran: the same overlay, applied to the static board.
+    let asbuilt_path = spec.asbuilt_path();
+    let gate = (asbuilt_path.as_deref())
+        .map(hauksbee_engine::asbuilt::AsBuiltOverlay::load)
+        .transpose()
+        .map_err(anyhow::Error::from)
+        .and_then(|overlay| {
+            hauksbee_engine::reports::check::static_gate_as_built(
+                &spec.board_path(),
+                &lib,
+                overlay.as_ref(),
+            )
+        });
+    let mut static_conditions: Vec<String> = Vec::new();
+    match gate {
         Ok(gate) => {
+            if let (Some(report), Some(path)) = (&gate.as_built, &asbuilt_path) {
+                // Narrated beside the run (stderr), as `hauksbee --asbuilt` does.
+                if !report.lines.is_empty() {
+                    eprintln!(
+                        "static check judged the as-built board ({}):",
+                        path.display()
+                    );
+                    for line in &report.lines {
+                        eprintln!("  {line}");
+                    }
+                }
+                // An entry the static board could not carry leaves its parts
+                // judged as designed: the run says so in its verdict.
+                static_conditions.extend(report.unapplied.iter().map(|u| {
+                    format!(
+                        "the static check judged the as-built board without overlay entry {} \
+                         ({}); findings on {} are the design's",
+                        u.entry,
+                        u.why,
+                        u.refs
+                            .iter()
+                            .chain(&u.nets)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                }));
+            }
             results.extend(static_gate::gate_rows(&gate, outcomes.len()));
         }
         Err(e) => {
@@ -919,6 +962,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     // `verdict_conditions`). Added after the member-sweep assumptions above,
     // which are built from the sweep's own sentences only.
     let mut verdict_conditions = verdict_conditions;
+    verdict_conditions.extend(static_conditions);
     verdict_conditions.extend(assertions::host_paced_conditions(&results));
     // A guessed AVR core clock puts every delay, baud rate and PWM period in
     // the run at risk of being off by the clock ratio: never a clean pass.

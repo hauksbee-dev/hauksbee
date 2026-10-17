@@ -380,6 +380,19 @@ The overlay is fail-loud: an entry that matches nothing (or a different number
 of devices/terminals than it declares) aborts the run with a line-numbered
 error and a did-you-mean suggestion. The engine CLI accepts the same overlay with `hauksbee run board --asbuilt board.asbuilt.toml`.
 
+The board's own static check, which adds a failing `static_check:` row per
+gating finding, judges the same reworked board. The overlay is applied to the
+static board first, the way `hauksbee --asbuilt --check` applies it: fitted
+values, jumpers and fitted parts directly, and each cut or lifted transistor
+terminal traced through the part's pin roles to the pad it severs, which then
+sits on its own net (named `asbuilt-cut-(REF-PadN)`). A finding the rework
+removes is gone, one it does not touch stays, and one it creates is reported.
+An entry the static board cannot carry (a switch trip point, `von`/`voff`) is
+never dropped: every static row on a part or net it reworks reads
+`NOT JUDGED on the as-built board` (exit 3, not a pass), and the run carries a
+verdict condition naming the entry. The copper (DRC) checks still read the
+design files. Plain `hauksbee check` (no spec) judges the board as designed.
+
 ### Initial-state fuzzing: `[fuzz]`
 
 Real boards power up with undefined register and latch states. Fuzzing runs the
