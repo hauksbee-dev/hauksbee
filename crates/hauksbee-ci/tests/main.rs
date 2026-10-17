@@ -67,6 +67,7 @@ mod shunt_reference;
 mod spec_and_assertions;
 mod spec_models_dir_and_waveforms;
 mod spice_models_cli;
+mod static_verdict_agreement;
 mod tarski_outcome_search;
 mod tarski_staged_replay;
 mod timer555;

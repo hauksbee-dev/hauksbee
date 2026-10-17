@@ -302,6 +302,16 @@ impl RailDomains {
         ))
     }
 
+    /// The net [`Self::owned_note`] tells the user to declare instead: the
+    /// undriven input at the top of `node`'s driver chain. `None` when nothing
+    /// sets `node` or the chain has no such input. A spec scaffold uses it to
+    /// write the supply where the run accepts one, from the same rule.
+    #[must_use]
+    pub fn owner_feed(&self, node: NodeId, feed_of: impl Fn(&str) -> Option<Feed>) -> Option<Feed> {
+        let first = self.setters_of(node).into_iter().next()?;
+        self.upstream_feed(first, &feed_of).map(|(_, feed)| feed)
+    }
+
     /// The undriven feed at the top of `from`'s chain, with the parts on the
     /// way (topmost first). `None` when a part's input is unknown or the chain
     /// loops, so the note never names a net the runner would refuse in turn.
@@ -672,6 +682,11 @@ mod tests {
             !note.contains("'+5V'") && note.contains("a battery or a connector"),
             "{note}"
         );
+        // The redirect a scaffold writes is the net the note names.
+        assert_eq!(d.owner_feed(out, feeds), Some(feed(vin, Some(5.3))));
+        assert_eq!(d.owner_feed(mid, feeds), Some(feed(vin, Some(5.3))));
+        // The undriven input itself has no owner, so nothing redirects it.
+        assert_eq!(d.owner_feed(vin, feeds), None);
     }
 
     /// A charger's limited output (`Ichg_` into a node, a 0 V ammeter to the

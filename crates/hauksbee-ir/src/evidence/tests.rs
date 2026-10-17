@@ -1566,6 +1566,30 @@ fn open_parts_downgrade_needs_no_other_undermining_kind() {
     assert_eq!(map.status(), EvidenceStatus::Undermined);
 }
 
+/// The shared criticality rule: an open connector on the path is a stated
+/// condition, while an open part the caller marks critical still refuses.
+#[test]
+fn only_the_open_parts_the_caller_marks_critical_keep_undermining() {
+    let connector = Assumption::open_part("CONN3", "STEMMA_I2C_QT", "No model");
+    let ic = Assumption::open_part("U4", "TPS7A02", "No model");
+    let registry = EvidenceRegistry::new(vec![connector.clone(), ic.clone()]).unwrap();
+    let critical = |a: &Assumption| a.subject_name() == Some("U4");
+    // Legal: only the connector is open, so the claim is qualified, not refused.
+    let map = EvidenceMap::new("no faults", std::slice::from_ref(&connector), today());
+    assert_eq!(map.status(), EvidenceStatus::Undermined);
+    let map = map
+        .assuming_open_parts_qualified_unless(&registry, today(), critical)
+        .unwrap();
+    assert_eq!(map.status(), EvidenceStatus::Qualified);
+    assert_eq!(map.assumptions().len(), 1, "the assumption stays listed");
+    // Faulty: the open IC on the same path still undermines it.
+    let map = EvidenceMap::new("no faults", &[connector, ic], today());
+    let map = map
+        .assuming_open_parts_qualified_unless(&registry, today(), critical)
+        .unwrap();
+    assert_eq!(map.status(), EvidenceStatus::Undermined);
+}
+
 // ── glossary terms and typed remedies ───────────────────────────────
 
 #[test]
