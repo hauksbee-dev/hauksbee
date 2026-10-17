@@ -231,9 +231,9 @@ fn sourced_supply_envelopes_follow_the_solved_rails() {
     );
     let path = support::write_tmp("envelopes.board", &board);
     for (case, vp, vcc, net, want, says) in [
-        ("under minimum", 5.0, 5.0, "OUT", 3, "the 10.000..18.000 V"),
+        ("under minimum", 5.0, 5.0, "OUT", 3, "the 10..18 V"),
         ("legal control", 12.0, 5.0, "OUT", 0, ""),
-        ("medium limit", 12.0, 31.0, "VCC", 0, "the 2.000..30.000 V"),
+        ("medium limit", 12.0, 31.0, "VCC", 0, "the 2..30 V"),
     ] {
         let rails = [("VP", vp), ("VN", -12.0), ("VCC", vcc)]
             .map(|(n, v)| format!("[[supply]]\nnet = \"{n}\"\nkind = \"ideal\"\nvolts = {v}\n"));

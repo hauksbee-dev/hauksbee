@@ -31,6 +31,7 @@ use hauksbee_models::{
 
 use super::BoardStatics;
 use hauksbee_bind::binder::{is_ground, power_rail_voltage, resolve};
+use hauksbee_ir::units::{format_amps, format_percent, format_series, format_volts};
 use hauksbee_models::netclass::unreadable_rail_name;
 
 /// The complete DC interval a net can present during normal operation.
@@ -1045,34 +1046,35 @@ fn divider_name_findings(
             ohms_text(leg_ohms(&divider.bottom)),
         );
         let law = match divider.law {
-            DividerLaw::Grounded => format!("{vref:.3} V x (1 + {top} / {bottom})"),
+            DividerLaw::Grounded => format!("{} x (1 + {top} / {bottom})", format_volts(vref)),
             DividerLaw::OutReferenced { .. } => format!(
-                "{vref:.3} V x (1 + {bottom} / {top}) plus the ADJ pin current through {bottom}"
+                "{} x (1 + {bottom} / {top}) plus the ADJ pin current through {bottom}",
+                format_volts(vref)
             ),
         };
         let fix = divider.top_for(want_v).map_or_else(
             || {
                 format!(
-                    "Re-value the divider ({}) so Vout is {want_v:.2} V",
-                    top_refs.join(", ")
+                    "Re-value the divider ({}) so Vout is {}",
+                    top_refs.join(", "),
+                    format_volts(want_v)
                 )
             },
             |ohms| {
                 format!(
-                    "Make {} about {} (with {} at {bottom}) so Vout is {want_v:.2} V",
+                    "Make {} about {} (with {} at {bottom}) so Vout is {}",
                     top_refs.join(" || "),
                     ohms_text(ohms),
                     bottom_refs.join(" || "),
+                    format_volts(want_v)
                 )
             },
         );
-        let message = format!(
-            "{} ({}) sets rail '{net}' to {set:.2} V, {pct:.0} % {side} the {want_v:.2} V its name states: its feedback divider ({} from the output to the feedback pin, {} from it to ground) holds the pin at the {vref:.3} V reference, so Vout = {law} = {set:.2} V, and every part on '{net}' is supplied {set:.2} V instead of {want_v:.2} V. {REMEDY_MARKER}{fix}, or, if {set:.2} V is what the board needs, rename the net to say so.",
+        let message = format!( "{} ({}) sets rail '{net}' to {}, {} {side} the {} its name states: its feedback divider ({} from the output to the feedback pin, {} from it to ground) holds the pin at the {} reference, so Vout = {law} = {}, and every part on '{net}' is supplied {} instead of {}. {REMEDY_MARKER}{fix}, or, if {} is what the board needs, rename the net to say so.",
             divider.regulator,
-            divider.value,
+            divider.value, format_volts(set), format_percent(pct, 0), format_volts(want_v),
             leg(&divider.top),
-            leg(&divider.bottom),
-        );
+            leg(&divider.bottom), format_volts(vref), format_volts(set), format_volts(set), format_volts(want_v), format_volts(set));
         let mut refs = vec![divider.regulator.clone()];
         refs.extend(
             divider
@@ -1183,19 +1185,21 @@ fn envelope_lint_with_tolerance(
                         };
                         severity = at_most(severity, cap);
                         format!(
-                            " The range is assumed: ±5 % around the {nominal:.3} V the net name \
+                            " The range is assumed: ±5 % around the {} the net name \
                              implies, since no regulator, battery or solved run states this \
-                             rail's level; confirm the real supply tolerance."
+                             rail's level; confirm the real supply tolerance.",
+                            format_volts(nominal)
                         )
                     } else if declared_only && nominal_inside && !above_abs_max {
                         // The rail's own nominal suits the part: moving the
                         // pin to another rail would change the circuit, while
                         // the margin lives in the rail's set point.
                         format!(
-                            " The {nominal:.3} V nominal is inside the window; only the rail's \
+                            " The {} nominal is inside the window; only the rail's \
                              tolerance corner leaves it, so tighten or lower the set point \
                              (feedback divider, regulator grade) or use a part rated for the \
-                             full range."
+                             full range.",
+                            format_volts(nominal)
                         )
                     } else {
                         compatible_supply_rail(&resolver, net_id, *min_v, *max_v)
@@ -1218,15 +1222,14 @@ fn envelope_lint_with_tolerance(
                         .filter(|_| above_abs_max)
                         .map(|limit| {
                             format!(
-                                ", {:.2} V above its {limit:.2} V absolute maximum",
-                                range.max_v - limit
+                                ", {} above its {} absolute maximum",
+                                format_volts(range.max_v - limit),
+                                format_volts(limit)
                             )
                         })
                         .unwrap_or_default();
-                    let seen = format!(
-                        "{} role {pin} on '{}' presents {:.3}..{:.3} V, outside the {:.3}..{:.3} V operating envelope{over_abs}",
-                        comp.reference, net.name, range.min_v, range.max_v, min_v, max_v
-                    );
+                    let seen = format!( "{} role {pin} on '{}' presents {}, outside the {} operating envelope{over_abs}",
+                        comp.reference, net.name, format_series(&[range.min_v, range.max_v], "..", "V"), format_series(&[*min_v, *max_v], "..", "V"));
                     // The window and the absolute maximum come from different
                     // tables: a finding that states the latter cites both.
                     let citation = abs_max_v.filter(|_| above_abs_max).map_or_else(
@@ -1240,7 +1243,7 @@ fn envelope_lint_with_tolerance(
                         refs: vec![comp.reference.clone()],
                         nets: vec![net.name.clone()],
                     };
-                    let rating = format!("{min_v:.3}..{max_v:.3} V supply");
+                    let rating = format!("{} supply", format_series(&[*min_v, *max_v], "..", "V"));
                     report.findings.push(stated_if_stand_in(
                         finding,
                         model,
@@ -1274,22 +1277,17 @@ fn envelope_lint_with_tolerance(
                     if known.len() != 2 || known[0].max_v <= known[1].min_v {
                         continue;
                     }
-                    let seen = format!(
-                        "{} has '{}' at up to {:.3} V above '{}' at {:.3} V, against its {lower} <= {upper} rail order",
-                        comp.reference, lower_net.name, known[0].max_v, upper_net.name, known[1].min_v
-                    );
+                    let seen = format!( "{} has '{}' at up to {} above '{}' at {}, against its {lower} <= {upper} rail order",
+                        comp.reference, lower_net.name, format_volts(known[0].max_v), upper_net.name, format_volts(known[1].min_v));
                     let finding = LintFinding {
                         check: LintCheck::OperatingEnvelope,
                         severity: finding_severity(envelope.severity()),
-                        message: format!(
-                            "{} requires {lower} <= {upper}, but '{}' reaches {:.3} V while '{}' falls to {:.3} V, so {:.3} <= {:.3} is false; basis: \"{basis}\". Tie {lower} to a rail no higher than {upper}, or raise {upper} so the full ranges do not cross.",
+                        message: format!( "{} requires {lower} <= {upper}, but '{}' reaches {} while '{}' falls to {}, so {} <= {} is false; basis: \"{basis}\". Tie {lower} to a rail no higher than {upper}, or raise {upper} so the full ranges do not cross.",
                             comp.reference,
-                            lower_net.name,
-                            known[0].max_v,
-                            upper_net.name,
-                            known[1].min_v,
-                            known[0].max_v,
-                            known[1].min_v
+                            lower_net.name, format_volts(known[0].max_v),
+                            upper_net.name, format_volts(known[1].min_v),
+                            format_volts(known[0].max_v),
+                            format_volts(known[1].min_v)
                         ),
                         refs: vec![comp.reference.clone()],
                         nets: vec![lower_net.name.clone(), upper_net.name.clone()],
@@ -1437,15 +1435,12 @@ fn supply_abs_max_findings(
             (Severity::High, "")
         };
         let over = range.max_v - abs_max;
-        let seen = format!(
-            "{} supply pin {role} on '{}' reaches {:.2} V{level}, {over:.2} V above the {abs_max:.2} V absolute-maximum supply on card '{}'",
-            comp.reference, net.name, range.max_v, model.id
+        let seen = format!( "{} supply pin {role} on '{}' reaches {}{level}, {} above the {} absolute-maximum supply on card '{}'",
+            comp.reference, net.name, format_volts(range.max_v), format_volts(over), format_volts(abs_max), model.id
         );
         let message = driver.map_or_else(
             || {
-                format!(
-                    "{seen}: the part can be damaged. Feed {role} from a rail that stays at or below {abs_max:.2} V (inside the card's recommended supply), or fit a part rated for this rail."
-                )
+                format!( "{seen}: the part can be damaged. Feed {role} from a rail that stays at or below {} (inside the card's recommended supply), or fit a part rated for this rail.", format_volts(abs_max))
             },
             |driver| {
                 let nominal = f64::midpoint(range.min_v, range.max_v);
@@ -1459,7 +1454,7 @@ fn supply_abs_max_findings(
             refs: vec![comp.reference.clone()],
             nets: vec![net.name.clone()],
         };
-        let rating = format!("{abs_max:.2} V absolute-maximum supply");
+        let rating = format!("{} absolute-maximum supply", format_volts(abs_max));
         out.push(stated_if_stand_in(
             finding,
             model,
@@ -1476,9 +1471,10 @@ fn supply_abs_max_findings(
 /// level, so the comparison is a question to answer, never a fault.
 fn unknown_driver_note(net: &str, nominal: f64, driver: &str) -> String {
     format!(
-        " The level is not known: only the net name suggests {nominal:.2} V, and '{net}' is driven by \
+        " The level is not known: only the net name suggests {}, and '{net}' is driven by \
          {driver}, a converter whose output no model states. Declare the rail's level with a \
-         net_drive (or give {driver} a card with its output), then re-check."
+         net_drive (or give {driver} a card with its output), then re-check.",
+        format_volts(nominal)
     )
 }
 
@@ -1681,20 +1677,17 @@ fn explain_starved(
         refs.join(", ")
     };
     let max_ohms = super::device_decode::format_ohms(headroom_v / draw_a);
-    let (count, milliamps, feed_v) = (refs.len(), draw_a * 1e3, feed.max_v);
+    let (count, feed_v) = (refs.len(), feed.max_v);
+    let draw = format_amps(draw_a);
     let fed_by = resistors.join(" and ");
     let message = reached.map_or_else(
         || {
-            format!(
-                "'{}' is likely starved (estimate from the cards' stated supply current; no operating point was solved): the {count} part(s) it powers ({listed}) need at least {need_v:.3} V, but their {milliamps:.1} mA static supply draw alone through {fed_by} from '{feed_name}' ({feed_v:.3} V) would drop {drop_v:.1} V, more than the {headroom_v:.3} V of headroom, so the rail cannot come up and those parts would not run. Remedy: Feed the rail through no more than {max_ohms} ohm in total, or directly from '{feed_name}'.",
-                net.name,
-            )
+            format!( "'{}' is likely starved (estimate from the cards' stated supply current; no operating point was solved): the {count} part(s) it powers ({listed}) need at least {}, but their {draw} static supply draw alone through {fed_by} from '{feed_name}' ({}) would drop {}, more than the {} of headroom, so the rail cannot come up and those parts would not run. Remedy: Feed the rail through no more than {max_ohms} ohm in total, or directly from '{feed_name}'.",
+                net.name, format_volts(need_v), format_volts(feed_v), format_volts(drop_v), format_volts(headroom_v))
         },
         |rail| {
-            format!(
-                "'{}' is starved: it reaches only {:.3} V, below the {need_v:.3} V minimum supply of the {count} part(s) it powers ({listed}). Their {milliamps:.1} mA static supply draw through {fed_by} from '{feed_name}' ({feed_v:.3} V) drops {drop_v:.1} V, more than the {headroom_v:.3} V of headroom, so the rail cannot come up and those parts do not run. Remedy: Feed the rail through no more than {max_ohms} ohm in total, or directly from '{feed_name}'.",
-                net.name, rail.max_v,
-            )
+            format!( "'{}' is starved: it reaches only {}, below the {} minimum supply of the {count} part(s) it powers ({listed}). Their {draw} static supply draw through {fed_by} from '{feed_name}' ({}) drops {}, more than the {} of headroom, so the rail cannot come up and those parts do not run. Remedy: Feed the rail through no more than {max_ohms} ohm in total, or directly from '{feed_name}'.",
+                net.name, format_volts(rail.max_v), format_volts(need_v), format_volts(feed_v), format_volts(drop_v), format_volts(headroom_v))
         },
     );
     let mut all_refs: Vec<String> = feeds.iter().map(|(r, ..)| r.clone()).collect();
@@ -1903,8 +1896,8 @@ basis = "Recommended Operating Conditions, Table 1, VDD row"
         );
         for says in [
             "U1 role vdd on '+5V'",
-            "4.750..5.250 V",
-            "1.65 V above its 3.60 V absolute maximum",
+            "4.75..5.25 V",
+            "1.65 V above its 3.6 V absolute maximum",
             "Table 6-1",
         ] {
             assert!(
@@ -1964,7 +1957,7 @@ basis = "Recommended Operating Conditions, Table 1, VDD row"
         for says in [
             "U21 (TPS62410)",
             "net_drive",
-            "only the net name suggests 5.00 V",
+            "only the net name suggests 5 V",
         ] {
             assert!(
                 driven[0].message.contains(says),
@@ -2100,11 +2093,11 @@ basis = "Recommended Operating Conditions, VDD row"
         // +5V reads 4.75..5.25 V: past the 4.0 V absolute maximum.
         let only_roc = message("ONLY_ROC", "+5V");
         assert!(
-            only_roc.contains("above its 4.00 V absolute maximum"),
+            only_roc.contains("above its 4 V absolute maximum"),
             "{only_roc}"
         );
         assert!(
-            only_roc.contains("records no source for its 4.00 V absolute maximum"),
+            only_roc.contains("records no source for its 4 V absolute maximum"),
             "{only_roc}"
         );
         let both = message("BOTH", "+5V");
@@ -2215,7 +2208,7 @@ basis = "Recommended Operating Conditions, V+ row"
             .collect();
         assert_eq!(found.len(), 1, "{found:?}");
         let msg = &found[0].message;
-        assert!(msg.contains("5.000..5.000"), "{msg}");
+        assert!(msg.contains("5..5 V"), "{msg}");
         assert!(!msg.contains("assumed"), "{msg}");
         assert_eq!(found[0].severity, Severity::Medium, "{msg}");
     }
@@ -2387,11 +2380,7 @@ dropout_v = 3.0
         };
         let high = buck("450k");
         assert_eq!(high.len(), 1, "{high:#?}");
-        assert!(
-            high[0].message.contains("5.000..5.000"),
-            "{}",
-            high[0].message
-        );
+        assert!(high[0].message.contains("5..5 V"), "{}", high[0].message);
         assert_ne!(high[0].severity, Severity::Low, "{}", high[0].message);
         assert!(buck("270k").is_empty(), "{:#?}", buck("270k"));
     }
@@ -2458,9 +2447,9 @@ dropout_v = 3.0
         assert_eq!(finding.nets, ["+3V3"], "{msg}");
         for part in [
             "U1 (FB_BOOST)",
-            "5.00 V",
-            "3.30 V",
-            "52 % above",
+            "5 V",
+            "3.3 V",
+            "52% above",
             "R1 450k",
             "R2 50k",
         ] {
@@ -2663,7 +2652,7 @@ dropout_v = 3.0
         let finding = found
             .next()
             .expect("an exact out-of-band forced level must fire");
-        assert!(finding.message.contains("3.800..3.800"));
+        assert!(finding.message.contains("3.8..3.8 V"));
         // (run min, run max): a steady rail, one grazing the edge within solver
         // tolerance, one that sags out and recovers to 3.3 V (its final level
         // alone would pass), and one that overshoots.
@@ -2771,7 +2760,7 @@ basis = "Recommended Operating Conditions, VCCA <= VCCB note"
             .next()
             .expect("3.465 V is not <= 2.85 V");
         assert!(finding.message.contains("3.465"));
-        assert!(finding.message.contains("2.850"));
+        assert!(finding.message.contains("2.85 V"));
     }
 
     const ROWS_CARD: &str = r#"
@@ -2879,7 +2868,7 @@ envelope = [
         assert_eq!(findings.len(), 1, "{findings:?}");
         assert_eq!(
             findings[0].message,
-            "U9 requires vcca <= vccb, but 'V_SYS' reaches 3.300 V while 'VSW' falls to 3.000 V, so 3.300 <= 3.000 is false; basis: \"TI TXB0101 SCES639F, Section 5.3 Recommended Operating Conditions, note (2): VCCA must be less than or equal to VCCB\". Tie vcca to a rail no higher than vccb, or raise vccb so the full ranges do not cross."
+            "U9 requires vcca <= vccb, but 'V_SYS' reaches 3.3 V while 'VSW' falls to 3 V, so 3.3 V <= 3 V is false; basis: \"TI TXB0101 SCES639F, Section 5.3 Recommended Operating Conditions, note (2): VCCA must be less than or equal to VCCB\". Tie vcca to a rail no higher than vccb, or raise vccb so the full ranges do not cross."
         );
     }
 
@@ -2937,7 +2926,7 @@ vout_setpoint_high = 4.23
             .of_check(LintCheck::OperatingEnvelope)
             .find(|finding| finding.refs == ["D1"])
             .expect("the 3.0 V Li-ion floor must violate the 3.5 V load floor");
-        assert!(finding.message.contains("3.000..4.230"));
+        assert!(finding.message.contains("3..4.23 V"));
     }
 
     #[test]
@@ -3100,7 +3089,7 @@ unlocked_by = "validated behavior"
         for says in [
             "'VA' is starved",
             &format!("reaches only {va:.3} V"),
-            "2.700 V minimum supply of the 3 part(s)",
+            "2.7 V minimum supply of the 3 part(s)",
             "3.3 mA static supply draw through R1 (1.0k ohm) from '+5V'",
             "drops 3.3 V",
             "no more than 697 ohm",

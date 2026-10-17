@@ -55,6 +55,7 @@ use hauksbee_extract::{
     is_capacitor, is_test_point_or_hole, is_unconnected_net, Component, ExtractedBoard, LintCheck,
     LintFinding, NetLintReport, Pin, Severity, REMEDY_MARKER,
 };
+use hauksbee_ir::units::format_number;
 use hauksbee_models::behavioral::LawKind;
 use hauksbee_models::netclass::{is_positive_supply, is_supply, rail_voltage};
 use hauksbee_models::pin_roles::{power_pin, PowerKind, PowerPin};
@@ -637,11 +638,21 @@ impl Part<'_> {
             }
             let window = self.window(&pads);
             let range = window.map_or(String::new(), |(lo, hi)| {
-                format!(" (datasheet supply {}-{} V)", volts(lo), volts(hi))
+                format!(
+                    " (datasheet supply {}-{} V)",
+                    format_number(lo, 2),
+                    format_number(hi, 2)
+                )
             });
             let to = window.map_or_else(
                 || format!("the {} supply rail", family.to_ascii_uppercase()),
-                |(lo, hi)| format!("a {}-{} V supply rail", volts(lo), volts(hi)),
+                |(lo, hi)| {
+                    format!(
+                        "a {}-{} V supply rail",
+                        format_number(lo, 2),
+                        format_number(hi, 2)
+                    )
+                },
             );
             let message = format!(
                 "{} has no supply on its {family_up} input: {pads_text} {is} on no net, or on \
@@ -778,7 +789,13 @@ impl Part<'_> {
                 let window = self.window(grounded);
                 let to = window.map_or_else(
                     || "its supply rail".to_string(),
-                    |(lo, hi)| format!("a {}-{} V supply rail", volts(lo), volts(hi)),
+                    |(lo, hi)| {
+                        format!(
+                            "a {}-{} V supply rail",
+                            format_number(lo, 2),
+                            format_number(hi, 2)
+                        )
+                    },
                 );
                 format!(
                     "{} has its supply on ground: {sup} (supply, card '{id}') is on '{net}', so \
@@ -820,11 +837,6 @@ fn pads_text(pads: &[&Pad]) -> String {
         if pads.len() == 1 { "pad" } else { "pads" },
         list.join(", ")
     )
-}
-
-fn volts(v: f64) -> String {
-    let s = format!("{v:.2}");
-    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 #[cfg(test)]

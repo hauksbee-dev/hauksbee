@@ -80,7 +80,7 @@ fn a_missed_threshold_names_its_worst_condition_culprits_and_repair() {
     // divider's bottom leg solves toward 820k * 0.387 / 4.613 = 68.8k and stops
     // once the rerun lands inside the 10% tolerance.
     let trips = why(&r, "trips");
-    assert!(trips.contains("first tripping at 0.77"), "{trips}");
+    assert!(trips.contains("first tripping at 773"), "{trips}");
     assert!(trips.contains("VCC=5V"), "{trips}");
     assert!(
         trips.contains("R2 150k -> 7") || trips.contains("R2 150k -> 6"),

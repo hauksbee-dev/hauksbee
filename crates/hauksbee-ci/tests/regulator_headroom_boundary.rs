@@ -85,8 +85,8 @@ fn a_supply_on_the_regulated_rail_is_pointed_at_the_regulator_input() {
     let msg = err.to_string();
     let fix = format!(
         "Declare the supply on U1's input instead: net = \"VIN\" (or ref = \"U1\", pin = \"3\"), \
-         at least {:.2} V.",
-        minimum_input_v()
+         at least {}.",
+        hauksbee_ir::units::format_volts(minimum_input_v())
     );
     assert!(msg.contains("'VOUT' is already driven by U1"), "{msg}");
     assert!(msg.contains(&fix), "{msg}");

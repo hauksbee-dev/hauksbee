@@ -10,6 +10,7 @@ use super::{
 };
 use crate::result::{BindSummary, BootGateJson, JsonNote, JsonNoteKind, JsonReport, Refusal};
 use hauksbee_cosim::scheduler::{AdcDrop, DriverContention, ShortPulse, UnexercisedBus};
+use hauksbee_ir::units::format_volts;
 use hauksbee_ir::{eprintln, print, println};
 
 pub(super) struct AnalogStatus {
@@ -308,10 +309,11 @@ fn assemble_evidence_and_ci_artifacts(
         for activity in &summary.activity_summary {
             // A net the board's evidence does not hold (blank, merged) has no
             // causal path to map: its activity stays in the summary only.
+            let (lo, hi) = (format_volts(activity.v_min), format_volts(activity.v_max));
             cosim_maps.extend(board_evidence.simulation_map_if_mapped(
                 format!(
-                    "{} toggled {} times between {:.6} V and {:.6} V",
-                    activity.net, activity.toggles, activity.v_min, activity.v_max
+                    "{} toggled {} times between {lo} and {hi}",
+                    activity.net, activity.toggles
                 ),
                 std::slice::from_ref(&activity.net),
                 &[],

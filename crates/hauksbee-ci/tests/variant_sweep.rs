@@ -37,7 +37,7 @@ fn an_undetermined_variant_set_is_swept_or_refused_never_guessed() {
         ("every member passes", same, 5.5, "", true, false, 2, "held across 2 seeds"),
         ("the members split", same, 3.4, "", false, false, 2, "seed 0 with U3 as variant xyz1234B"),
         ("pinouts differ", other, 3.4, "", false, true, 1, "Selection required for U3: the 2 XYZ1234"),
-        ("the spec selects", other, 3.4, select, true, false, 1, "settled 3.300V"),
+        ("the spec selects", other, 3.4, select, true, false, 1, "settled 3.3 V"),
     ];
     for (case, b_pins, max, extra, passed, invalid, seeds, detail) in rows {
         let models = support::write_tmp("xyz.toml", &card(b_pins));

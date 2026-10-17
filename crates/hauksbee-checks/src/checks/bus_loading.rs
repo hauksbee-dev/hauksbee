@@ -42,6 +42,7 @@ use hauksbee_extract::{
 };
 
 use hauksbee_bind::binder::power_rail_voltage;
+use hauksbee_ir::units::{format_amps, format_volts};
 
 /// Maximum sink current (A) a standard I2C open-drain driver guarantees at
 /// VOL: 3 mA per UM10204.
@@ -166,13 +167,14 @@ pub fn bus_loading_lint(board: &ExtractedBoard) -> NetLintReport {
                 severity: Severity::Medium,
                 message: format!(
                     "I2C line \"{}\" is pulled up by {:.0} ohm effective ({}) to a \
-                     {rail_v:.1} V rail: holding the line at the 0.4 V VOL takes \
-                     {:.1} mA, above the 3 mA an I2C open-drain driver is specified \
+                     {} rail: holding the line at the 0.4 V VOL takes \
+                     {}, above the 3 mA an I2C open-drain driver is specified \
                      to sink, so a device on the bus may never produce a valid low.",
                     net.name,
                     r_eff,
                     refs.join("+"),
-                    sink_a * 1e3,
+                    format_volts(rail_v),
+                    format_amps(sink_a)
                 ),
                 refs,
                 nets: vec![net.name.clone()],
@@ -290,8 +292,8 @@ mod tests {
         assert_eq!(f[0].severity, Severity::Medium);
         assert!(f[0].nets.contains(&"/SDA".to_string()));
         assert!(
-            f[0].message.contains("8.8 mA"),
-            "(3.3 - 0.4) V / 330 ohm = 8.8 mA must appear: {}",
+            f[0].message.contains("8.788 mA"),
+            "(3.3 - 0.4) V / 330 ohm = 8.788 mA must appear: {}",
             f[0].message
         );
     }

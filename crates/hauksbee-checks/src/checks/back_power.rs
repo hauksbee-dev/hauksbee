@@ -61,6 +61,7 @@ use hauksbee_models::{ModelLibrary, OperatingEnvelope};
 
 use hauksbee_bind::binder::power_rail_voltage;
 use hauksbee_extract::assembly::AssemblyState;
+use hauksbee_ir::units::format_volts;
 
 /// Margin (V) a rail must exceed the part's supply by before the finding
 /// fires: one clamp-diode drop, the threshold at which the protection clamp
@@ -266,12 +267,18 @@ pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
                         check: LintCheck::BackPower,
                         severity: Severity::High,
                         message: format!(
-                            "{} pad {pad} ({role}) is wired directly to {} ({rail_v:.1} V) \
-                             while {}'s supply {} is {supply_v:.1} V: the pin's protection \
-                             clamp conducts from the higher rail into the {supply_v:.1} V \
+                            "{} pad {pad} ({role}) is wired directly to {} ({}) \
+                             while {}'s supply {} is {}: the pin's protection \
+                             clamp conducts from the higher rail into the {} \
                              domain with nothing to limit the current (back-powering; past \
                              the VCC+0.5 V input abs-max).",
-                            comp.reference, net.name, comp.reference, supply_net
+                            comp.reference,
+                            net.name,
+                            format_volts(rail_v),
+                            comp.reference,
+                            supply_net,
+                            format_volts(supply_v),
+                            format_volts(supply_v)
                         ),
                         refs: vec![comp.reference.clone()],
                         nets: vec![net.name.clone()],
@@ -302,12 +309,19 @@ pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
                         severity,
                         message: format!(
                             "{} pad {pad} ({role}) on \"{}\" is pulled up through {r_ref} \
-                             to {rail_net} ({rail_v:.1} V) while {}'s supply {} is \
-                             {supply_v:.1} V: current flows through the pin clamp into the \
-                             {supply_v:.1} V domain, back-powering it when it is off and \
+                             to {rail_net} ({}) while {}'s supply {} is \
+                             {}: current flows through the pin clamp into the \
+                             {} domain, back-powering it when it is off and \
                              sitting past the VCC+0.5 V input abs-max when it is on, \
-                             unless this pin is explicitly {rail_v:.1} V-tolerant.",
-                            comp.reference, net.name, comp.reference, supply_net
+                             unless this pin is explicitly {}-tolerant.",
+                            comp.reference,
+                            net.name,
+                            format_volts(rail_v),
+                            comp.reference,
+                            supply_net,
+                            format_volts(supply_v),
+                            format_volts(supply_v),
+                            format_volts(rail_v)
                         ),
                         refs: vec![comp.reference.clone(), r_ref],
                         nets: vec![net.name.clone(), rail_net],
@@ -417,7 +431,7 @@ mod tests {
         assert!(f[0].refs.contains(&"U3".to_string()));
         assert!(f[0].refs.contains(&"R7".to_string()));
         assert!(
-            f[0].message.contains("5.0 V") && f[0].message.contains("3.3 V"),
+            f[0].message.contains("5 V") && f[0].message.contains("3.3 V"),
             "finding must carry both domain voltages: {}",
             f[0].message
         );

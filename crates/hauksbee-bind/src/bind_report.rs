@@ -16,6 +16,7 @@
 
 use hauksbee_ir::evidence::{Assumption, ModelSource, ModelSourceTier};
 use hauksbee_ir::truncate_ellipsis;
+use hauksbee_ir::units::{format_percent, format_volts};
 use hauksbee_models::Confidence;
 use serde::Serialize;
 use std::fmt::Write as _;
@@ -83,7 +84,7 @@ impl BindOutcome {
             Self::Behavioral { device } => format!("behavioral {device}"),
             Self::Digital { kind } => format!("digital {kind}"),
             Self::Mcu { backend } => format!("mcu {backend}"),
-            Self::PowerRail { volts } => format!("rail {volts:.2}V"),
+            Self::PowerRail { volts } => format!("rail {}", format_volts(volts)),
             Self::Skipped { reason } => format!("skipped ({reason})"),
             Self::Unresolved { reason } => {
                 let reason = reason
@@ -557,14 +558,14 @@ impl BindReport {
         };
         let _ = writeln!(
             out,
-            "\n{} of {} non-ignored components resolved ({:.0}%); {}, {} digital, {}, {}",
+            "\n{} of {} non-ignored components resolved ({}); {}, {} digital, {}, {}",
             self.resolved_count(),
             self.non_ignored_count(),
-            self.resolved_fraction() * 100.0,
+            format_percent(self.resolved_fraction() * 100.0, 0),
             plural(self.mcu_count(), "MCU", "MCUs"),
             self.count_where(|o| matches!(o, BindOutcome::Digital { .. })),
             plural(self.warnings().count(), "warning", "warnings"),
-            plural(guess_count, "pin-role guess", "pin-role guesses"),
+            plural(guess_count, "pin-role guess", "pin-role guesses")
         );
         for (r, w) in self.warnings() {
             let _ = writeln!(out, "  ⚠ {r}: {w}");

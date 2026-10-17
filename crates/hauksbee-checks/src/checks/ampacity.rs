@@ -46,6 +46,7 @@ use hauksbee_extract::assembly::{AssemblyState, FittedComponent};
 use hauksbee_extract::drc::connectivity::{path_neck_from_text, PathNeck};
 use hauksbee_extract::trace_current::Bottleneck;
 use hauksbee_extract::Component;
+use hauksbee_ir::units::{format_amps, format_celsius, format_percent, format_volts};
 
 /// Direction of a regulated through-current at one of a component's rail pins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,10 +85,7 @@ impl Attribution {
             .collect::<Vec<_>>()
             .join("; plus ");
         if self.into_components_a > 0.0 && self.out_of_components_a > 0.0 {
-            citation = format!(
-                "{citation}; net-flow balance uses max({:.3} A load side, {:.3} A source side), not their double-counted sum",
-                self.into_components_a, self.out_of_components_a
-            );
+            citation = format!( "{citation}; net-flow balance uses max({} load side, {} source side), not their double-counted sum", format_amps(self.into_components_a), format_amps(self.out_of_components_a));
         }
         (current_a, citation)
     }
@@ -342,8 +340,10 @@ fn attribute_currents(board: &ExtractedBoard, lib: &ModelLibrary) -> Attribution
             Some((equation_current_a, current_a, ohms, path, nets, sense)) => {
                 let limit_note = if equation_current_a > current_a {
                     format!(
-                        "; equation requests {equation_current_a:.3} A, bounded by the \
-                         {current_a:.3} A normal-operating limit"
+                        "; equation requests {}, bounded by the \
+                         {} normal-operating limit",
+                        format_amps(equation_current_a),
+                        format_amps(current_a)
                     )
                 } else {
                     String::new()
@@ -361,16 +361,16 @@ fn attribute_currents(board: &ExtractedBoard, lib: &ModelLibrary) -> Attribution
                     })
                     .unwrap_or_default();
                 let citation = format!(
-                    "{} ({}) regulated current {:.3} A programmed by {} on {} \
+                    "{} ({}) regulated current {} programmed by {} on {} \
                      ({:.0} ohm){}{} [datasheet equation]",
                     comp.reference,
                     model.id,
-                    current_a,
+                    format_amps(current_a),
                     path.join("+"),
                     role,
                     ohms,
                     sense_note,
-                    limit_note,
+                    limit_note
                 );
                 if current_a <= 0.0 {
                     continue;
@@ -492,20 +492,20 @@ fn ampacity_message(f: &TraceCurrentFinding, dt_c: f64) -> (SiSeverity, String) 
         return (
             SiSeverity::Info,
             format!(
-                "net '{}' carries a cited {:.2} A, and its lowest-rated routed trace is \
-                 {:.2} mm, which IPC-2221 rates at only {:.2} A ({}, {:.0} C rise); that \
+                "net '{}' carries a cited {}, and its lowest-rated routed trace is \
+                 {:.2} mm, which IPC-2221 rates at only {} ({}, {} rise); that \
                  would need >= {:.2} mm. This is NOT a verdict: the copper weight was \
                  assumed, and the real board may be heavier copper that carries it. \
                  Declare the stackup (or upload a fab drawing) to turn this into a \
                  decision. Attributed from: {}",
                 f.net,
-                f.cited_current_a,
+                format_amps(f.cited_current_a),
                 f.bottleneck_width_mm,
-                f.ampacity_a,
+                format_amps(f.ampacity_a),
                 f.describe_copper(),
-                dt_c,
+                format_celsius(dt_c),
                 f.required_width_mm,
-                f.citation,
+                f.citation
             ),
         );
     };
@@ -517,28 +517,28 @@ fn ampacity_message(f: &TraceCurrentFinding, dt_c: f64) -> (SiSeverity, String) 
     } else {
         format!(
             " Its lowest DECLARED-copper trace, {} at {:.2} mm, independently rates \
-             only {:.2} A, which is what makes this a verdict rather than an \
+             only {}, which is what makes this a verdict rather than an \
              artefact of an assumed copper weight.",
             d.layer.as_deref().unwrap_or("(unnamed layer)"),
             d.width_mm,
-            d.ampacity_a,
+            format_amps(d.ampacity_a)
         )
     };
     (
         SiSeverity::High,
         format!(
-            "net '{}' carries a cited {:.2} A, but its lowest-rated routed trace is \
-             {:.2} mm and IPC-2221 rates that at only {:.2} A ({}, {:.0} C rise); \
+            "net '{}' carries a cited {}, but its lowest-rated routed trace is \
+             {:.2} mm and IPC-2221 rates that at only {} ({}, {} rise); \
              needs >= {:.2} mm.{} Attributed from: {}",
             f.net,
-            f.cited_current_a,
+            format_amps(f.cited_current_a),
             f.bottleneck_width_mm,
-            f.ampacity_a,
+            format_amps(f.ampacity_a),
             f.describe_copper(),
-            dt_c,
+            format_celsius(dt_c),
             f.required_width_mm,
             evidence,
-            f.citation,
+            f.citation
         ),
     )
 }
@@ -619,11 +619,13 @@ fn inductor_implied_load(
     Some((
         load,
         format!(
-            "the {load:.2} A its inductor {inductor} implies ({:.0} uH at {:.0} kHz and \
-             {vout:.1} V out, with ripple at least {:.0} % of load)",
+            "the {} its inductor {inductor} implies ({:.0} uH at {:.0} kHz and \
+             {} out, with ripple at least {} of load)",
+            format_amps(load),
             l * 1e6,
             fsw / 1e3,
-            MIN_RIPPLE_RATIO * 100.0
+            format_volts(vout),
+            format_percent(MIN_RIPPLE_RATIO * 100.0, 0)
         ),
     ))
 }
@@ -650,6 +652,16 @@ fn output_rail_width(
             Some((rail.name.clone(), width))
         })
         .max_by(|a, b| a.1.total_cmp(&b.1))
+}
+
+/// How a rail's routed width reads in a finding: millimetres, or "a pour" when
+/// the rail is a plane with no finite track width.
+fn rail_width_text(width_mm: f64) -> String {
+    if width_mm.is_finite() {
+        format!("{width_mm:.2} mm")
+    } else {
+        "a pour".to_string()
+    }
 }
 
 /// A buck converter's switch node routed on a trace rated for less than half
@@ -762,28 +774,27 @@ fn switch_node_findings(
         if b.width_mm >= rail.1 {
             continue;
         }
-        let rail_text = if rail.1.is_finite() {
-            format!("{:.2} mm", rail.1)
-        } else {
-            "a pour".to_string()
-        };
+        let rail_text = rail_width_text(rail.1);
         out.push(SiFinding {
             check: SiCheck::TraceAmpacity,
             severity: SiSeverity::Medium,
             message: format!(
-                "switch node '{}' of {} ({}, a {rated:.1} A buck) is routed at {:.2} mm, which \
-                 IPC-2221 rates at {ampacity:.2} A ({basis}, {:.0} C rise), under {size_basis}, \
+                "switch node '{}' of {} ({}, a {} buck) is routed at {:.2} mm, which \
+                 IPC-2221 rates at {} ({basis}, {} rise), under {size_basis}, \
                  while its output rail '{}' is routed at \
                  {rail_text}. The switch node carries the full inductor current while the \
                  switch is on, so it is the narrowest point of the power path; it needs >= \
-                 {:.2} mm for {rated:.1} A.",
+                 {:.2} mm for {}.",
                 net.name,
                 comp.reference,
                 model.id,
+                format_amps(rated),
                 b.width_mm,
-                audit.dt_c,
+                format_amps(ampacity),
+                format_celsius(audit.dt_c),
                 rail.0,
                 hauksbee_extract::ipc2221_min_width_mm(rated, oz, audit.dt_c, b.external),
+                format_amps(rated)
             ),
             refs: vec![comp.reference.clone()],
             nets: vec![net.name.clone()],
@@ -861,9 +872,7 @@ pub fn append_ampacity(
             || "No normal-operating ceiling is declared; an absolute rating is not substituted."
                 .to_string(),
             |amps| {
-                format!(
-                    "Its {amps:.2} A normal-operating ceiling is a capability, not a load, so it is not charged to the rail."
-                )
+                format!( "Its {} normal-operating ceiling is a capability, not a load, so it is not charged to the rail.", format_amps(amps))
             },
         );
         report.findings.push(SiFinding {

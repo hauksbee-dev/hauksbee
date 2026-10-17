@@ -24,6 +24,7 @@ use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, Net, NetLintReport, Severity, REMEDY_MARKER,
 };
 use hauksbee_ir::evidence::Assumption;
+use hauksbee_ir::units::format_volts;
 use hauksbee_models::rating_basis::Limit;
 use hauksbee_models::OperatingEnvelope::InputCommonMode;
 use hauksbee_models::{ModelEntry, ModelLibrary, OperatingEnvelope};
@@ -106,15 +107,17 @@ fn channel_flag(cx: &Ctx, c: &Component, m: &ModelEntry, e: &OperatingEnvelope) 
     let levels = inputs.iter().map(|role| cx.level(c, m, role));
     let seen: Vec<(String, f64)> = levels.collect::<Option<_>>()?;
     seen.iter().all(|(_, x)| *x > limit).then_some(())?;
-    let show = |(n, x): &(String, f64)| format!("'{n}' {x:.3} V");
+    let show = |(n, x): &(String, f64)| format!("'{n}' {}", format_volts(x));
     let shown: Vec<String> = seen.iter().map(show).collect();
     let nets = seen.iter().map(|(n, _)| n.clone()).collect();
-    let message = format!("{r} has every input of one channel above its common-mode range: {}, all above V('{rail}') {sup:.3} V - {headroom_v:.3} V = {limit:.3} V, so the output state it reports is not guaranteed; basis: \"{basis}\". Keep at least one input below that ceiling (divide the signal down, or move the pair to a lower rail).", shown.join(" and "));
+    let message = format!( "{r} has every input of one channel above its common-mode range: {}, all above V('{rail}') {} - {} = {}, so the output state it reports is not guaranteed; basis: \"{basis}\". Keep at least one input below that ceiling (divide the signal down, or move the pair to a lower rail).", shown.join(" and "), format_volts(sup), format_volts(headroom_v), format_volts(limit));
     let severity = super::envelope::finding_severity(e.severity());
     let seen = format!(
-        "{r} has every input of one channel above V('{rail}') - {headroom_v:.3} V = {limit:.3} V"
+        "{r} has every input of one channel above V('{rail}') - {} = {}",
+        format_volts(headroom_v),
+        format_volts(limit)
     );
-    let rating = format!("{headroom_v:.3} V common-mode headroom");
+    let rating = format!("{} common-mode headroom", format_volts(headroom_v));
     let flag = finding(c, severity, nets, message);
     let flag = super::envelope::stated_if_stand_in(flag, m, Limit::Envelope, &seen, &rating);
     Some((flag, true))
@@ -269,7 +272,7 @@ mod tests {
     ];
 
     /// What the one expected common-mode message must name.
-    const CHANNEL_SAYS: &str = "U1|'INP' 4.306 V|'INM' 4.000 V|3.500 V|SLCS006Z";
+    const CHANNEL_SAYS: &str = "U1|'INP' 4.306 V|'INM' 4 V|3.5 V|SLCS006Z";
 
     /// (label, divider resistor value, capacitor at the pin, findings expected).
     const ADC_FEEDS: &[(&str, &str, Option<&str>, usize)] = &[

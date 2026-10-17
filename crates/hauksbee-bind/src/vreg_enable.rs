@@ -37,6 +37,7 @@ use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
 use hauksbee_models::ModelEntry;
 
 use crate::program_resistor::{is_ground_net, program_resistance_to_ground};
+use hauksbee_ir::units::format_volts;
 
 /// Guaranteed-on level assumed for an on-high pin whose card states none:
 /// the common CMOS regulator enable reads high from 0.9 to 2 V, and a 1.8 V
@@ -319,9 +320,10 @@ impl Plan {
             return gated(gate(node, Some(why)), None);
         }
         let caveat = (!stated).then(|| {
+            let (on, off) = (format_volts(on_v), format_volts(off_v));
             format!(
                 "{}{who}: its {pin} pin levels are not on the card, so the output is switched \
-                 at an assumed {on_v:.2} V on / {off_v:.2} V off; a level between them, or a \
+                 at an assumed {on} on / {off} off; a level between them, or a \
                  part whose real levels differ, may read differently on the board",
                 Assumption::PARTIAL_MODEL_MARKER
             )
@@ -484,7 +486,7 @@ impl Plan {
             }
             None => {}
         }
-        let rail = vout.map_or_else(String::new, |v| format!("{v:.2} V "));
+        let rail = vout.map_or_else(String::new, |v| format!("{} ", format_volts(v)));
         let held = g.held_off.as_ref().map(|why| {
             format!(
                 "{r} ({}): held off: {why}, so its {rail}output rail is unpowered and \

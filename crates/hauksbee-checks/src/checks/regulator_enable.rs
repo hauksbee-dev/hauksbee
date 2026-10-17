@@ -45,6 +45,7 @@ use hauksbee_models::{ComponentKind, Confidence, ModelEntry, ModelLibrary};
 
 use super::envelope::role_net_id;
 use super::model_controls::low_side_sink;
+use hauksbee_ir::units::{format_amps, format_volts};
 
 /// Why the card says an open pin holds the part off.
 enum OffWhenOpen {
@@ -77,7 +78,7 @@ impl OffWhenOpen {
             let value = if key.ends_with("_ohms") {
                 ohms(v)
             } else {
-                format!("{:.3} µA", v * 1e6)
+                format_amps(v)
             };
             return Some(Self::Pull { up, value });
         }
@@ -583,7 +584,7 @@ fn judge(
     let vout = model
         .params
         .get_f64("vout")
-        .map_or_else(String::new, |v| format!(" ({v:.2} V)"));
+        .map_or_else(String::new, |v| format!(" ({})", format_volts(v)));
     let fix = remedy(&label, on_high, &in_name);
     let (severity, message) = if external.is_empty() {
         (
@@ -698,7 +699,7 @@ mod tests {
                 "U1 (MIC5205-3.3YM5) EN pad 3 is alone on net '/LDO_EN'",
                 "logic-low or open = shutdown",
                 "card 'mic5205_3v3'",
-                "output '+3V3' (3.30 V) never comes on",
+                "output '+3V3' (3.3 V) never comes on",
             ],
         );
         assert_eq!(
@@ -806,7 +807,7 @@ mod tests {
             &[
                 "which holds only R1 to 'GND'",
                 "the only thing on it that can raise it is JP3 pin 1, an off-board source",
-                "output '+3V3' (3.30 V) never comes on",
+                "output '+3V3' (3.3 V) never comes on",
             ],
         );
         assert!(f.own_remedy().is_some(), "{}", f.message);

@@ -55,6 +55,7 @@ use std::collections::{HashMap, HashSet};
 
 use forge_sexpr::List;
 use hauksbee_ir::truncate_ellipsis;
+use hauksbee_ir::units::format_amps;
 
 /// Copper weight in ounces per square foot. 1 oz = 35 um = 1.378 mil thick.
 pub const OZ_1: f64 = 1.0;
@@ -961,12 +962,16 @@ pub fn render_trace_capacity_report(rows: &[TraceCapacityRow]) -> String {
                     r.min_width_mm
                         .map_or_else(|| "-".to_string(), |w| format!("{w:.3} mm")),
                     if r.capacity_10c_a.is_finite() {
-                        format!("{:.2} A", r.capacity_10c_a)
+                        format_amps(r.capacity_10c_a)
                     } else {
                         "-".to_string()
                     },
                     if r.capacity_20c_a.is_finite() {
-                        format!("20C {:.2} A, {}", r.capacity_20c_a, compact_copper(r))
+                        format!(
+                            "20C {}, {}",
+                            format_amps(r.capacity_20c_a),
+                            compact_copper(r)
+                        )
                     } else {
                         "-".to_string()
                     },

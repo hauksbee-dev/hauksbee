@@ -30,6 +30,7 @@ use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
 
 use super::analog_inputs::Flag;
 use super::envelope::RailRange;
+use hauksbee_ir::units::{format_series, format_volts};
 
 /// Below this the part's supply is not up, and its inputs are not judged.
 const POWERED_V: f64 = 1.0;
@@ -63,13 +64,24 @@ fn undefined(span: RailRange, (vil, vih): (f64, f64)) -> Option<String> {
     let inside = |v: f64| v > vil + EDGE_V && v < vih - EDGE_V;
     let (lo, hi) = (span.min_v, span.max_v);
     if (hi - lo).abs() < EDGE_V {
-        inside(hi).then(|| format!("sits at {hi:.3} V"))
+        inside(hi).then(|| format!("sits at {}", format_volts(hi)))
     } else if inside(lo) && inside(hi) {
-        Some(format!("stays between {lo:.3} and {hi:.3} V"))
+        Some(format!(
+            "stays between {}",
+            format_series(&[lo, hi], " and ", "V")
+        ))
     } else if inside(hi) {
-        Some(format!("peaks at only {hi:.3} V and never reaches VIH"))
+        Some(format!(
+            "peaks at only {} and never reaches VIH",
+            format_volts(hi)
+        ))
     } else {
-        inside(lo).then(|| format!("bottoms at only {lo:.3} V and never falls to VIL"))
+        inside(lo).then(|| {
+            format!(
+                "bottoms at only {} and never falls to VIL",
+                format_volts(lo)
+            )
+        })
     }
 }
 
@@ -183,7 +195,7 @@ fn part_flags(
             .flatten()
             .map(|ro| format!(" {r} also drives this pad through {ro:.0} Ohm; while it does, a pull-up, pull-down or load on the net that fights that drive holds the pad here, so keep any such resistor far above {ro:.0} Ohm or drive the net harder."))
             .unwrap_or_default();
-        let message = format!("undefined logic level at {r} {role} (net '{net}'): it {how}, between VIL {vil:.3} V and VIH {vih:.3} V for VCC = {vcc:.3} V on '{rail}', so the part's datasheet guarantees no logic state there and it may read either way, toggle, or draw shoot-through current. Drive the input to a valid level for this supply (a stronger or level-shifted drive, a lower supply for the part, or a part with lower thresholds); the band is the card's {} read at VCC.{own}", if m.levels.contains_key("vih") { "VCC-scaled [models.levels] table" } else { "vil/vih corner" });
+        let message = format!( "undefined logic level at {r} {role} (net '{net}'): it {how}, between VIL {} and VIH {} for VCC = {} on '{rail}', so the part's datasheet guarantees no logic state there and it may read either way, toggle, or draw shoot-through current. Drive the input to a valid level for this supply (a stronger or level-shifted drive, a lower supply for the part, or a part with lower thresholds); the band is the card's {} read at VCC.{own}", format_volts(vil), format_volts(vih), format_volts(vcc), if m.levels.contains_key("vih") { "VCC-scaled [models.levels] table" } else { "vil/vih corner" });
         let finding = LintFinding {
             check: LintCheck::OperatingEnvelope,
             severity: Severity::High,
@@ -263,10 +275,10 @@ mod tests {
         for says in [
             "U1 ctrl",
             "'CTRL'",
-            "sits at 2.300 V",
-            "VIL 1.500 V",
-            "VIH 3.500 V",
-            "VCC = 5.000 V",
+            "sits at 2.3 V",
+            "VIL 1.5 V",
+            "VIH 3.5 V",
+            "VCC = 5 V",
         ] {
             assert!(m.contains(says), "{says:?} in {m}");
         }
@@ -316,7 +328,7 @@ mod tests {
         assert!(undefined(span(0.0, 5.0), band).is_none(), "a full swing");
         assert!(undefined(span(0.0, 1.5), band).is_none(), "a valid low");
         let peak = undefined(span(1.5, 2.35), band).expect("a sawtooth below VIH");
-        assert!(peak.contains("peaks at only 2.350 V"), "{peak}");
+        assert!(peak.contains("peaks at only 2.35 V"), "{peak}");
         assert!(undefined(span(2.0, 2.5), band).is_some_and(|s| s.contains("stays")));
         assert!(undefined(span(2.0, 5.0), band).is_some_and(|s| s.contains("never falls")));
     }

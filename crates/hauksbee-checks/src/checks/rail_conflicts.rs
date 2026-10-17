@@ -106,7 +106,7 @@ mod tests {
         assert_eq!(found.len(), 1, "{:?}", named.findings);
         assert_eq!(found[0].severity, Severity::Low);
         assert!(
-            found[0].message.contains("U2 (5.00 V)"),
+            found[0].message.contains("U2 (5 V)"),
             "{}",
             found[0].message
         );

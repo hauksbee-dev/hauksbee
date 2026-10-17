@@ -122,7 +122,7 @@ fn a_conflicting_source_on_a_supplied_rail_still_solves() {
     );
     assert_eq!(out.status.code(), Some(3), "{text}\n{}", stderr(&out));
     for want in [
-        "outside the 1.800..5.500 V operating envelope",
+        "outside the 1.8..5.5 V operating envelope",
         "U1 overvoltage 60.000 V > 6.000 V",
     ] {
         assert!(text.contains(want), "missing {want:?}:\n{text}");
@@ -209,7 +209,7 @@ fn an_unevaluable_behavioural_law_is_clamped_rather_than_poisoning_the_solve() {
         "the fixture's assertion must have been evaluated:\n{stdout}"
     );
     assert!(
-        stdout.contains("2.500V"),
+        stdout.contains("2.5 V"),
         "a clamped law leaves the 1k/1k divider at half the rail:\n{stdout}"
     );
 }

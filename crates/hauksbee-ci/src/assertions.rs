@@ -4,10 +4,13 @@
 //! fuzzing meaningful: the rail must come up across all random power-up states).
 
 use crate::runner::RunOutcome;
-use crate::spec::{fmt_c, fmt_c1, Assertion, Spec};
+use crate::spec::{Assertion, Spec};
 use hauksbee_engine::scheduler::PeripheralPad;
 use hauksbee_engine::stress::{is_far_past_rating, rating_noun, stress_clause, FaultKind};
 use hauksbee_ir::truncate_ellipsis;
+use hauksbee_ir::units::{
+    format_amps, format_celsius, format_celsius_to, format_percent, format_volts,
+};
 use std::fmt::Write as _;
 
 /// The result of one assertion across all seeds.
@@ -493,8 +496,8 @@ fn member_invalid_reason(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> Opti
     if let Some((key, tj)) = tj.filter(|(_, tj)| melted("overtemperature", *tj)) {
         return Some(format!(
             "{UNPHYSICAL_FIGURE} the junction estimate for {key} reached {}, past silicon's              {} melting point; no part holds that temperature, so the power behind it is              not a physical result. Check that part's value, its supply voltage and `ambient_c`.",
-            fmt_c(tj.round()),
-            fmt_c(TJ_IMPOSSIBLE_C),
+            format_celsius_to(tj.round(), 3),
+            format_celsius_to(TJ_IMPOSSIBLE_C, 3),
         ));
     }
     // Content the firmware had not produced by the end of a host-paced run is not
@@ -1362,10 +1365,10 @@ fn check_model_coverage(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, 
             checks.push((
                 got >= floor,
                 format!(
-                    "active ICs bound {} ({:.1}%), floor {:.1}%",
+                    "active ICs bound {} ({}), floor {}",
                     bind.critical_parts_bound,
-                    got * 100.0,
-                    floor * 100.0
+                    format_percent(got * 100.0, 1),
+                    format_percent(floor * 100.0, 1)
                 ),
             ));
         }
@@ -1382,11 +1385,11 @@ fn check_model_coverage(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, 
             checks.push((
                 got >= floor,
                 format!(
-                    "parts bound {}/{} ({:.1}%), floor {:.1}%",
+                    "parts bound {}/{} ({}), floor {}",
                     bind.resolved,
                     bind.non_ignored,
-                    got * 100.0,
-                    floor * 100.0
+                    format_percent(got * 100.0, 1),
+                    format_percent(floor * 100.0, 1)
                 ),
             ));
         }
@@ -1523,24 +1526,24 @@ fn check_rail_window(
     if let Some(lo) = a.min {
         v.clause(
             win.min_v >= lo - 1e-6,
-            format!("min={:.3}V (>= {lo}V)", win.min_v),
-            format!("min={:.3}V < required {lo}V", win.min_v),
+            format!("min={} (>= {lo}V)", format_volts(win.min_v)),
+            format!("min={} < required {lo}V", format_volts(win.min_v)),
             format!(
-                "{net} sagged to {:.3} V in the window, {:.3} V below your {lo} V floor",
-                win.min_v,
-                lo - win.min_v
+                "{net} sagged to {} in the window, {} below your {lo} V floor",
+                format_volts(win.min_v),
+                format_volts(lo - win.min_v)
             ),
         );
     }
     if let Some(hi) = a.max {
         v.clause(
             win.max_v <= hi + 1e-6,
-            format!("max={:.3}V (<= {hi}V)", win.max_v),
-            format!("max={:.3}V > allowed {hi}V", win.max_v),
+            format!("max={} (<= {hi}V)", format_volts(win.max_v)),
+            format!("max={} > allowed {hi}V", format_volts(win.max_v)),
             format!(
-                "{net} rose to {:.3} V in the window, {:.3} V above your {hi} V ceiling",
-                win.max_v,
-                win.max_v - hi
+                "{net} rose to {} in the window, {} above your {hi} V ceiling",
+                format_volts(win.max_v),
+                format_volts(win.max_v - hi)
             ),
         );
     }
@@ -1567,10 +1570,10 @@ fn check_rail_window(
         );
     }
     let detail = format!(
-        "{net} window: {} [min={:.3}V max={:.3}V]",
+        "{net} window: {} [min={} max={}]",
         v.parts(),
-        win.min_v,
-        win.max_v
+        format_volts(win.min_v),
+        format_volts(win.max_v)
     );
     v.finish(detail)
 }
@@ -2104,22 +2107,23 @@ fn check_voltage(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Strin
         let signed = |v: f64| sign * (v - limit);
         let why = if signed(win.last_v) <= 1e-6 {
             format!(
-                "{net} {verb} {worst:.3} V, {:.3} V {side} {limit} V {noun}, \
-                 before settling back to {:.3} V",
-                signed(worst),
-                win.last_v
+                "{net} {verb} {}, {} {side} {limit} V {noun}, \
+                 before settling back to {}",
+                format_volts(worst),
+                format_volts(signed(worst)),
+                format_volts(win.last_v)
             )
         } else {
             format!(
-                "{net} settled {:.3} V {side} {noun} ({:.3} V vs {label} {limit} V)",
-                signed(win.last_v),
-                win.last_v
+                "{net} settled {} {side} {noun} ({} vs {label} {limit} V)",
+                format_volts(signed(win.last_v)),
+                format_volts(win.last_v)
             )
         };
         v.clause(
             signed(worst) <= 1e-6,
-            format!("{label}={worst:.3}V ({cmp} {limit}V)"),
-            format!("{label}={worst:.3}V {breach} {limit}V"),
+            format!("{label}={} ({cmp} {limit}V)", format_volts(worst)),
+            format!("{label}={} {breach} {limit}V", format_volts(worst)),
             why,
         );
     }
@@ -2128,8 +2132,9 @@ fn check_voltage(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Strin
         // level answers a different question than `after_ms` asked, so the
         // window's own span IS the number.
         v.pass(format!(
-            "min={:.3}V max={:.3}V measured",
-            win.min_v, win.max_v
+            "min={} max={} measured",
+            format_volts(win.min_v),
+            format_volts(win.max_v)
         ));
     }
     let when = if thr > 0.0 {
@@ -2137,7 +2142,11 @@ fn check_voltage(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Strin
     } else {
         String::new()
     };
-    let detail = format!("{net}{when}: {} [settled {:.3}V]", v.parts(), win.last_v);
+    let detail = format!(
+        "{net}{when}: {} [settled {}]",
+        v.parts(),
+        format_volts(win.last_v)
+    );
     v.finish(detail)
 }
 
@@ -2277,13 +2286,16 @@ fn check_toggle(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String
         let why = (!ok).then(|| {
             format!(
                 "{net} ran at {measured}, outside your {lo:.2}-{hi:.2} Hz band \
-                 ({freq} Hz ±{:.0}%)",
-                tol * 100.0
+                 ({freq} Hz ±{})",
+                format_percent(tol * 100.0, 0)
             )
         });
         return (
             ok,
-            format!("{net}: {measured} (want {freq} Hz ±{:.0}%)", tol * 100.0),
+            format!(
+                "{net}: {measured} (want {freq} Hz ±{})",
+                format_percent(tol * 100.0, 0)
+            ),
             why,
         );
     }
@@ -2355,7 +2367,8 @@ fn check_pulse_width(
         &format!("{net}'s {level} pulse"),
     );
     let detail = format!(
-        "{net}: {level} pulse {ms:.4} ms +-{err:.1}% (edge timing): {}",
+        "{net}: {level} pulse {ms:.4} ms +-{} (edge timing): {}",
+        format_percent(err, 1),
         v.parts()
     );
     v.finish(detail)
@@ -2412,7 +2425,10 @@ pub(crate) fn edge_rate(series: &[(f64, f64)], dt_s: f64) -> Result<(f64, String
     let (hz, err) = (periods as f64 / span, 200.0 * dt_s / span);
     Ok((
         hz,
-        format!("{hz:.1} Hz ±{err:.1}% (edge timing, {periods} periods)"),
+        format!(
+            "{hz:.1} Hz ±{} (edge timing, {periods} periods)",
+            format_percent(err, 1)
+        ),
     ))
 }
 
@@ -2659,15 +2675,15 @@ fn over_device_max(f: &crate::runner::RunFault) -> (bool, String, Option<String>
         format!(
             "Tj({}) exceeded device max: {} > {} at {:.1}ms",
             f.component,
-            fmt_c1(f.value),
-            fmt_c1(f.limit),
+            format_celsius(f.value),
+            format_celsius(f.limit),
             f.t_ms
         ),
         Some(format!(
             "{} ran {} past its own {} max junction temperature at {:.1} ms",
             f.component,
-            fmt_c1(f.value - f.limit),
-            fmt_c1(f.limit),
+            format_celsius(f.value - f.limit),
+            format_celsius(f.limit),
             f.t_ms
         )),
     )
@@ -2690,7 +2706,7 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Stri
         return if let Some((key, tj)) = peak {
             let ok = tj <= limit + 1e-6;
             let unit = unit_note("hottest unit", &key, &reference);
-            let (tj_s, limit_s) = (fmt_c1(tj), fmt_c(limit));
+            let (tj_s, limit_s) = (format_celsius(tj), format_celsius_to(limit, 3));
             if ok {
                 (
                     true,
@@ -2704,7 +2720,7 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Stri
                     Some(format!(
                         "{reference} ran {} hotter than your {limit_s} ceiling \
                              (peak {tj_s}{unit})",
-                        fmt_c1(tj - limit)
+                        format_celsius(tj - limit)
                     )),
                 )
             }
@@ -2716,7 +2732,7 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Stri
             // ambient itself is within the ceiling, in a hot-ambient spec a
             // ceiling below ambient is violated by the idle part sitting at
             // ambient, not silently skipped.
-            let (ambient_s, limit_s) = (fmt_c1(out.ambient_c), fmt_c(limit));
+            let (ambient_s, limit_s) = (format_celsius(out.ambient_c), format_celsius_to(limit, 3));
             if out.ambient_c <= limit + 1e-6 {
                 (
                     true,
@@ -2736,7 +2752,7 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Stri
                     Some(format!(
                         "{reference} sat idle at the {ambient_s} ambient, {} over your \
                              {limit_s} ceiling; the ceiling is below the spec's ambient_c",
-                        fmt_c1(out.ambient_c - limit)
+                        format_celsius(out.ambient_c - limit)
                     )),
                 )
             }
@@ -2770,7 +2786,10 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Stri
             None,
         );
     };
-    let detail = format!("Tj({reference}) peak {}, within device max", fmt_c1(tj));
+    let detail = format!(
+        "Tj({reference}) peak {}, within device max",
+        format_celsius(tj)
+    );
     (true, detail, None)
 }
 
@@ -3600,7 +3619,7 @@ mod tests {
         let (ok, msg, _) = check_seed(&a, &out, 1.0);
         assert!(ok, "{msg}");
         assert!(
-            msg.starts_with("EN over the whole 200 ms run: min=3.300V (>= 3V)"),
+            msg.starts_with("EN over the whole 200 ms run: min=3.3 V (>= 3V)"),
             "{msg}"
         );
         assert!(
@@ -3644,7 +3663,7 @@ mod tests {
         assert!(
             reason.contains("Judged after 50 ms, the level holds")
                 && reason.contains("leaves out an excursion earlier in the run")
-                && reason.contains("min=0.000V < required 3V"),
+                && reason.contains("min=0 V < required 3V"),
             "{reason}"
         );
         let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
@@ -3694,7 +3713,7 @@ mod tests {
         let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
         assert!(r.passed && !r.invalid, "{}", r.detail);
         assert!(
-            r.detail.starts_with("VREG after 50ms: min=3.300V"),
+            r.detail.starts_with("VREG after 50ms: min=3.3 V"),
             "{}",
             r.detail
         );
@@ -3822,7 +3841,7 @@ mod tests {
         let (ok, msg, _) = check_seed(&a, &out, 1.0);
         assert!(ok, "{msg}");
         assert!(
-            msg.starts_with("LOAD over the whole 200 ms run: min=3.300V (>= 3V)"),
+            msg.starts_with("LOAD over the whole 200 ms run: min=3.3 V (>= 3V)"),
             "{msg}"
         );
         let spec: Spec = toml::from_str(
@@ -4161,7 +4180,7 @@ mod tests {
         let (ok, detail) = check_no_faults(&fault("overpower", 120.48, 1.0));
         assert!(!ok);
         assert!(
-            detail.contains("first: R1 dissipates far more than its 1.00 W power rating")
+            detail.contains("first: R1 dissipates far more than its 1 W power rating")
                 && !detail.contains("120.48")
                 && detail.ends_with("at 0.4ms"),
             "{detail}"
@@ -4453,32 +4472,18 @@ mod tests {
     }
 }
 
-/// Adaptive current formatting: a sub-100 uA peak printed as "0.0000A" is
-/// illegible, so the unit follows the magnitude (A / mA / uA; exact zero stays
-/// "0 A").
-pub(crate) fn format_amps(amps: f64) -> String {
-    let mag = amps.abs();
-    if amps == 0.0 {
-        "0 A".to_string()
-    } else if mag >= 0.1 {
-        format!("{amps:.4} A")
-    } else if mag >= 1e-4 {
-        format!("{:.3} mA", amps * 1e3)
-    } else {
-        format!("{:.3} uA", amps * 1e6)
-    }
-}
-
 #[cfg(test)]
 mod format_amps_tests {
-    use super::format_amps;
+    use hauksbee_ir::units::format_amps;
 
+    /// Currents state their unit by magnitude, in the one shared form.
     #[test]
     fn small_currents_get_legible_units() {
         assert_eq!(format_amps(0.0), "0 A");
-        assert_eq!(format_amps(1.2345), "1.2345 A");
-        assert_eq!(format_amps(0.0123), "12.300 mA");
+        assert_eq!(format_amps(1.2345), "1.234 A");
+        assert_eq!(format_amps(0.0123), "12.3 mA");
         // The old rendering of this value was "0.0000A".
-        assert_eq!(format_amps(4.2e-5), "42.000 uA");
+        assert_eq!(format_amps(4.2e-5), "42 uA");
+        assert_eq!(format_amps(-0.0), "0 A");
     }
 }

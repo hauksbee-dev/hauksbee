@@ -45,6 +45,7 @@ use crate::power_supply::{PowerSupply, SupplyLeg};
 use crate::program_resistor::{is_ground_net, program_resistance_to_ground};
 use crate::stress::DeviceMeta;
 use hauksbee_extract::assembly::{AssemblyState, FittedComponent};
+use hauksbee_ir::units::{format_amps, format_engineering_web, format_percent, format_volts};
 
 /// Default supply voltage for an ideal +5V rail.
 pub const DEFAULT_VCC: f64 = 5.0;
@@ -860,10 +861,14 @@ pub fn bind_board_driven(
                     nets: vec![leg.net_name.clone(), name.clone()],
                     unfitted_alternate: None,
                     message: format!(
-                        "'{name}' ({volts:.2} V by name) and '{}' ({held:.2} V) are one rail \
+                        "'{name}' ({} by name) and '{}' ({}) are one rail \
                          through a series conductor; only '{}' takes a supply, so '{name}' \
-                         reads {held:.2} V",
-                        leg.net_name, leg.net_name
+                         reads {}",
+                        format_volts(volts),
+                        leg.net_name,
+                        format_volts(held),
+                        leg.net_name,
+                        format_volts(held)
                     ),
                 });
             }
@@ -883,7 +888,7 @@ pub fn bind_board_driven(
         supplies.push(leg);
         report.push(BindRow::without_model(
             format!("RAIL:{name}"),
-            format!("{volts:.2}V"),
+            format_volts(volts),
             Confidence::Exact,
             BindOutcome::PowerRail { volts },
         ));
@@ -2882,9 +2887,10 @@ fn tvs_fallback(
         "tvs_diode_fallback",
         ComponentKind::Diode,
         &format!(
-            "generic {family} TVS diode (engine fallback: standoff {standoff:.2} V, {how}; \
+            "generic {family} TVS diode (engine fallback: standoff {}, {how}; \
              forward curve estimated from the 1N4148 card, clamp not modelled; put the \
-             ordering code on the component to replace it)"
+             ordering code on the component to replace it)",
+            format_volts(standoff)
         ),
         params,
         [("1", "cathode"), ("2", "anode")]
@@ -3497,10 +3503,10 @@ fn resolve_resistor_bins<'m>(
         let via = path.join("+");
         let Some(bin) = table.select(ohms) else {
             notes.push(format!(
-                "its `{pin}` strap {via} reads {ohms:.0} ohm, which is within {:.0}% of no row \
+                "its `{pin}` strap {via} reads {ohms:.0} ohm, which is within {} of no row \
                  of the datasheet's table, so the settings it selects ({names}) are not set and \
                  what depends on them is not modelled",
-                table.tolerance * 100.0
+                format_percent(table.tolerance * 100.0, 0)
             ));
             continue;
         };
@@ -4422,7 +4428,7 @@ fn bind_passive(
         circuit.add(Device::resistor(comp.reference.clone(), a, b, ohms));
         return (
             BindOutcome::Analog {
-                device: format!("R {}", fmt_eng(ohms, "Ω")),
+                device: format!("R {}", format_engineering_web(ohms, "Ω")),
             },
             entry_warning(comp, model),
         );
@@ -4467,8 +4473,8 @@ fn bind_passive(
                 BindOutcome::Analog {
                     device: format!(
                         "L {} + DCR {}",
-                        fmt_eng(rkm_henries(&p), "H"),
-                        fmt_eng(dcr, "Ω")
+                        format_engineering_web(rkm_henries(&p), "H"),
+                        format_engineering_web(dcr, "Ω")
                     ),
                 },
                 entry_warning(comp, model),
@@ -4516,7 +4522,10 @@ fn bind_passive(
             circuit.add(Device::capacitor(comp.reference.clone(), left, b, p.si));
             return (
                 BindOutcome::Analog {
-                    device: format!("C {} with sourced parasitics", fmt_eng(p.si, "F")),
+                    device: format!(
+                        "C {} with sourced parasitics",
+                        format_engineering_web(p.si, "F")
+                    ),
                 },
                 entry_warning(comp, model),
             );
@@ -4666,9 +4675,9 @@ fn passive_device(
         let note = format!(
             "{name}: value '{}' ({}) is below the {} conditioning floor, bound as a {} link so the solve stays finite (a stiffer conductance would lose the matrix's small pivots)",
             comp.value,
-            fmt_eng(p.si, "ohm"),
-            fmt_eng(ZERO_OHM_JUMPER_OHMS, "ohm"),
-            fmt_eng(ZERO_OHM_JUMPER_OHMS, "ohm"),
+            format_engineering_web(p.si, "ohm"),
+            format_engineering_web(ZERO_OHM_JUMPER_OHMS, "ohm"),
+            format_engineering_web(ZERO_OHM_JUMPER_OHMS, "ohm"),
         );
         (
             Device::resistor(name, a, b, ZERO_OHM_JUMPER_OHMS),
@@ -5242,8 +5251,8 @@ fn vreg_stability_warning(
                  directly from output to ground (counted: {counted}), and {} across the output \
                  {} no readable capacitance value, so the requirement is not judged",
                 comp.reference,
-                fmt_eng(required, "F"),
-                fmt_eng(found, "F"),
+                format_engineering_web(required, "F"),
+                format_engineering_web(found, "F"),
                 unvalued.join(", "),
                 if unvalued.len() == 1 { "has" } else { "have" }
             ),
@@ -5254,8 +5263,8 @@ fn vreg_stability_warning(
                 "{} requires at least {} output capacitance for stability, but {} was found \
                  directly from output to ground (counted: {counted})",
                 comp.reference,
-                fmt_eng(required, "F"),
-                fmt_eng(found, "F")
+                format_engineering_web(required, "F"),
+                format_engineering_web(found, "F")
             ),
         ),
         // A recommended (sufficient, not minimum) value: a shortfall is
@@ -5266,8 +5275,8 @@ fn vreg_stability_warning(
                 "the datasheet recommends {} output capacitance for stability (a recommended \
                  value, not a stated minimum), and {} was found directly from output to ground \
                  (counted: {counted}{}); stability below the recommendation is not confirmed",
-                fmt_eng(recommended?, "F"),
-                fmt_eng(found, "F"),
+                format_engineering_web(recommended?, "F"),
+                format_engineering_web(found, "F"),
                 if unvalued.is_empty() {
                     String::new()
                 } else {
@@ -5281,8 +5290,8 @@ fn vreg_stability_warning(
                 "control-loop stability requires output-capacitor ESR in {}..{}, but the board \
                  file does not carry capacitor ESR and it is not guessed from value or footprint \
                  (counted: {counted})",
-                fmt_eng(esr("cout_esr_min_ohm")?, "Ω"),
-                fmt_eng(esr("cout_esr_max_ohm")?, "Ω")
+                format_engineering_web(esr("cout_esr_min_ohm")?, "Ω"),
+                format_engineering_web(esr("cout_esr_max_ohm")?, "Ω")
             ),
         ),
         _ => return None,
@@ -5346,7 +5355,10 @@ fn bind_vreg(
         });
         return (
             BindOutcome::Behavioral {
-                device: format!("vreg {:.1}V behavioral converter", conv.vout_setpoint),
+                device: format!(
+                    "vreg {} behavioral converter",
+                    format_volts(conv.vout_setpoint)
+                ),
             },
             merge_bind_warnings(entry_warning(comp, model), loop_note),
         );
@@ -5492,8 +5504,8 @@ fn bind_vreg(
     ];
     let source = gated.map_or_else(|| "source".to_string(), |g| format!("source, {g}"));
     let device = port_label.map_or_else(
-        || format!("vreg {vout:.1}V {source}"),
-        |port| format!("vreg {vout:.1}V {source}; {port}"),
+        || format!("vreg {} {source}", format_volts(vout)),
+        |port| format!("vreg {} {source}; {port}", format_volts(vout)),
     );
     // A held-off rail is a finding about the board, not a gap in the model, so
     // it rides after the caveats rather than taking their marker.
@@ -5844,11 +5856,12 @@ fn charge_limit(
     let ilim = amps.unwrap_or(0.0).max(1e-6);
     let assumption = assumed.map(|why| {
         format!(
-            "{}{reference} ({}): {why}, so the charge-current limit is the card's {ilim:.3} A \
+            "{}{reference} ({}): {why}, so the charge-current limit is the card's {} \
              normal-operating ceiling, not a value read from this board; the charge current \
              and the input current it draws are upper bounds",
             Assumption::PARTIAL_MODEL_MARKER,
-            comp.value
+            comp.value,
+            format_amps(ilim)
         )
     });
     (ilim, assumption)
@@ -5989,15 +6002,16 @@ fn stamp_charger(
     if let Some(amps) = stage.iq_a.filter(|i| i.is_finite()) {
         supply_draw(circuit, format!("Iq_{reference}"), (input, gnd), amps);
     }
+    let (vf, il) = (format_volts(vfloat), format_amps(ilim));
     let label = if stage.port {
         let capped = if ilim < programmed {
             " (the input-current limit)"
         } else {
             ""
         };
-        format!("charge port {vfloat:.2}V CC/CV, {ilim:.3}A limit{capped}")
+        format!("charge port {vf} CC/CV, {il} limit{capped}")
     } else {
-        format!("linear charger {vfloat:.1}V CC/CV, {ilim:.3}A limit")
+        format!("linear charger {vf} CC/CV, {il} limit")
     };
     StampedCharger { label, assumption }
 }
@@ -6222,7 +6236,7 @@ fn bind_adj_vreg(
     ];
     (
         BindOutcome::Analog {
-            device: format!("vreg {vref:.3}V adjustable reference{gated}"),
+            device: format!("vreg {} adjustable reference{gated}", format_volts(vref)),
         },
         merge_bind_warnings(join_caveats(comp, caveats), held_off),
     )
@@ -6382,7 +6396,10 @@ fn bind_shunt_ref(
     ));
     (
         BindOutcome::Analog {
-            device: format!("shunt reference {vref:.3}V (the board's divider sets the cathode)"),
+            device: format!(
+                "shunt reference {} (the board's divider sets the cathode)",
+                format_volts(vref)
+            ),
         },
         // WHICH PADS the card's map took as each terminal, said next to the
         // result: this part's pad order is package-dependent, so a map that
@@ -7927,75 +7944,11 @@ fn is_ctrl_role(role: &str) -> bool {
 
 fn device_label(d: &Device) -> String {
     match d {
-        Device::Resistor { ohms, .. } => format!("R {}", fmt_eng(*ohms, "Ω")),
-        Device::Capacitor { farads, .. } => format!("C {}", fmt_eng(*farads, "F")),
-        Device::Inductor { henries, .. } => format!("L {}", fmt_eng(*henries, "H")),
+        Device::Resistor { ohms, .. } => format!("R {}", format_engineering_web(*ohms, "Ω")),
+        Device::Capacitor { farads, .. } => format!("C {}", format_engineering_web(*farads, "F")),
+        Device::Inductor { henries, .. } => format!("L {}", format_engineering_web(*henries, "H")),
         other => other.name().to_string(),
     }
-}
-
-/// Format a physical quantity with an SI prefix scaled to its magnitude, so a
-/// 390 pF cap reads "390 pF" rather than "0.000 µF". Picks the prefix that puts
-/// the mantissa in [1, 1000) and prints a sensible number of significant digits.
-/// `unit` is the bare unit symbol ("F", "H", "Ω").
-pub(crate) fn fmt_eng(value: f64, unit: &str) -> String {
-    // Prefix table from pico to mega; covers caps (pF..mF), inductors (nH..H),
-    // resistors (mΩ..MΩ). Each entry is (10^exponent, prefix).
-    const PREFIXES: &[(f64, &str)] = &[
-        (1e6, "M"),
-        (1e3, "k"),
-        (1e0, ""),
-        (1e-3, "m"),
-        (1e-6, "µ"),
-        (1e-9, "n"),
-        (1e-12, "p"),
-    ];
-    if value == 0.0 || !value.is_finite() {
-        return format!("0 {unit}");
-    }
-    let neg = value < 0.0;
-    let v = value.abs();
-    // Pick the largest prefix whose scale leaves a mantissa >= 1 (so 390 pF uses
-    // "p", 1.5 kΩ uses "k"). Fall back to the smallest prefix for tiny values.
-    let idx = PREFIXES
-        .iter()
-        .position(|(s, _)| v >= *s)
-        .unwrap_or(PREFIXES.len() - 1);
-    let (mut scale, mut prefix) = PREFIXES[idx];
-    let mut mantissa = v / scale;
-    // 3 significant figures: more decimals for small mantissas, fewer for large.
-    let decimals = |m: f64| -> u8 {
-        if m >= 100.0 {
-            0
-        } else if m >= 10.0 {
-            1
-        } else {
-            2
-        }
-    };
-    // Decade carry: rounding the mantissa to its significant figures can push it
-    // to 1000 (e.g. 999.6 -> "1000"), which renders "1000 kΩ", outside the
-    // promised [1,1000) range and inconsistent with the sibling format_engineering
-    // (tolerance.rs), which has this exact guard. Promote to the next-larger prefix
-    // so it reads "1 MΩ" instead. Only when a larger prefix exists (idx > 0).
-    let round_to = |m: f64, d: u8| {
-        let p = 10f64.powi(i32::from(d));
-        (m * p).round() / p
-    };
-    if idx > 0 && round_to(mantissa, decimals(mantissa)) >= 1000.0 {
-        (scale, prefix) = PREFIXES[idx - 1];
-        mantissa = v / scale;
-    }
-    let s = format!("{mantissa:.*}", usize::from(decimals(mantissa)));
-    // Trim trailing fractional zeros for a clean read ("4.70" -> "4.7"), but
-    // only when a decimal point is present, so "390" is never stripped to "39".
-    let s = if s.contains('.') {
-        s.trim_end_matches('0').trim_end_matches('.').to_string()
-    } else {
-        s
-    };
-    let sign = if neg { "-" } else { "" };
-    format!("{sign}{s} {prefix}{unit}")
 }
 
 /// Map an `ATmega328P` / Arduino-Nano role string to a `(port, bit)` GPIO id.
@@ -10977,7 +10930,7 @@ style = "i2c_pointer"
                 "{case}: {warning:?}"
             );
             assert!(
-                matches!(outcome, BindOutcome::Behavioral { device } if device == format!("vreg {vout:.1}V source")),
+                matches!(outcome, BindOutcome::Behavioral { device } if device == format!("vreg {} source", format_volts(vout))),
                 "{case}"
             );
             assert!(
@@ -12893,7 +12846,7 @@ style = "i2c_pointer"
     }
 
     #[test]
-    fn fmt_eng_scales_to_the_magnitude_and_carries_across_decades() {
+    fn engineering_values_scale_to_the_magnitude_and_carry_across_decades() {
         for (value, unit, want) in [
             (390e-12, "F", "390 pF"),
             (4.7e-9, "F", "4.7 nF"),
@@ -12905,15 +12858,16 @@ style = "i2c_pointer"
             (1_000_000.0, "Ω", "1 MΩ"),
             (0.05, "Ω", "50 mΩ"),
             (0.0, "F", "0 F"),
-            (f64::NAN, "Ω", "0 Ω"),
+            (f64::NAN, "Ω", "not a number"),
+            (-0.0, "Ω", "0 Ω"),
             (999_600.0, "Ω", "1 MΩ"),
             (999.6, "Ω", "1 kΩ"),
             (0.9996, "Ω", "1 Ω"),
             (999.6e-6, "F", "1 mF"),
             (990.0, "Ω", "990 Ω"),
-            (2_200_000_000.0, "Ω", "2200 MΩ"),
+            (2_200_000_000.0, "Ω", "2.2 GΩ"),
         ] {
-            assert_eq!(fmt_eng(value, unit), want);
+            assert_eq!(format_engineering_web(value, unit), want);
         }
     }
 

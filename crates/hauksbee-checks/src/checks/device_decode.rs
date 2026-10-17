@@ -640,7 +640,7 @@ fn check_program_domain(
         message: format!(
             "{} ({}) is programmed outside its specified range: its {} resistor {} = {} ohm \
              on net '{net_name}' asks for {} by the part's programming equation, \
-             above the {ceiling_a:.3} A the datasheet specifies for programmed operation, so \
+             above the {} the datasheet specifies for programmed operation, so \
              the part either overheats delivering it or limits at an unspecified point; {fix}",
             comp.reference,
             comp.value,
@@ -648,6 +648,7 @@ fn check_program_domain(
             path.join("+"),
             format_ohms(ohms),
             format_amps(asked_a),
+            format_amps(ceiling_a)
         ),
         refs,
         nets: vec![net_name],
@@ -668,9 +669,10 @@ fn program_fix(
         },
         |min| {
             format!(
-                "fit at least {} ohm for the {ceiling_a:.3} A ceiling, or the value the \
+                "fit at least {} ohm for the {} ceiling, or the value the \
                  datasheet's programming table gives for the current wanted",
-                format_ohms(min)
+                format_ohms(min),
+                format_amps(ceiling_a)
             )
         },
     )
@@ -699,13 +701,14 @@ fn shorted_program_finding(
         message: format!(
             "{} ({}) is programmed outside its specified range: its {} pin on net '{net_name}' \
              is tied to ground {via}, 0 ohm, so the part's programming equation asks for an \
-             unbounded current, far above the {ceiling_a:.3} A the datasheet specifies for \
+             unbounded current, far above the {} the datasheet specifies for \
              programmed operation, so the part either overheats delivering it or limits at an \
              unspecified point; {}",
             comp.reference,
             comp.value,
             program.pin,
-            program_fix(program, 1e-3, ceiling_a),
+            format_amps(ceiling_a),
+            program_fix(program, 1e-3, ceiling_a)
         ),
         refs,
         nets: vec![net_name.to_string()],
@@ -739,8 +742,9 @@ fn unread_program_finding(
         net_name,
         why,
         &format!(
-            "its programmed current is unchecked against the {ceiling_a:.3} A the datasheet \
-             specifies"
+            "its programmed current is unchecked against the {} the datasheet \
+             specifies",
+            format_amps(ceiling_a)
         ),
     )
 }
@@ -902,6 +906,7 @@ fn is_tps25982(c: &Component) -> bool {
 }
 
 use super::straps::is_assembled_resistor as is_plain_resistor;
+use hauksbee_ir::units::{format_amps, format_series};
 
 enum ProgramResistor {
     Floating,
@@ -1127,15 +1132,13 @@ fn check_tps25982_ilim(
         severity: Severity::Low,
         message: format!(
             "{} eFuse current-limit decode{INFORMATIONAL_MARKER}: ILIM resistor {r_ref} = {} ohm \
-             decodes to {:.2}/{:.2}/{:.2} A min/typ/max across the TPS25982 \
+             decodes to {} min/typ/max across the TPS25982 \
              datasheet tolerance band (Section 7.3.3.3 Equation 8 scaled by the \
              Section 6.5 full-temperature 100-ohm row); this note alone makes no \
              connector-budget verdict",
             efuse.reference,
             format_ohms(ohms),
-            band.min_a,
-            band.typ_a,
-            band.max_a,
+            format_series(&[band.min_a, band.typ_a, band.max_a], "/", "A")
         ),
         refs: vec![efuse.reference.clone(), r_ref.clone()],
         nets: vec![ilim_net_name.to_string()],
@@ -1164,20 +1167,18 @@ fn check_tps25982_ilim(
             severity: Severity::Medium,
             message: format!(
                 "{} eFuse connector budget: {r_ref} = {} ohm decodes to \
-                 {:.2}/{:.2}/{:.2} A min/typ/max, while connected {} ({}) is rated \
-                 {:.2} A on the {} conduction path; the minimum {:.2} A exceeds the \
-                 rating plus the explicit 10% grace ({:.2} A). {fix}",
+                 {} min/typ/max, while connected {} ({}) is rated \
+                 {} on the {} conduction path; the minimum {} exceeds the \
+                 rating plus the explicit 10% grace ({}). {fix}",
                 efuse.reference,
                 format_ohms(ohms),
-                band.min_a,
-                band.typ_a,
-                band.max_a,
+                format_series(&[band.min_a, band.typ_a, band.max_a], "/", "A"),
                 witness.reference,
                 witness.model_id,
-                witness.rating_a,
+                format_amps(witness.rating_a),
                 witness.path_net,
-                band.min_a,
-                grace_a,
+                format_amps(band.min_a),
+                format_amps(grace_a)
             ),
             refs: vec![efuse.reference.clone(), r_ref.clone(), witness.reference],
             nets: vec![ilim_net_name.to_string(), witness.path_net],
@@ -1435,16 +1436,6 @@ pub(crate) fn format_ohms(ohms: f64) -> String {
         format!("{ohms:.3}")
     } else {
         format!("{ohms:.2e}")
-    }
-}
-
-/// Amps for a message: three decimals up to ten thousand amps, then
-/// scientific notation, so an absurd equation current stays readable.
-fn format_amps(amps: f64) -> String {
-    if amps.abs() < 1e4 {
-        format!("{amps:.3} A")
-    } else {
-        format!("{amps:.3e} A")
     }
 }
 
@@ -1916,7 +1907,7 @@ mod program_domain_tests {
         assert!(f[0].refs.contains(&"U3".to_string()) && f[0].refs.contains(&"R8".to_string()));
         assert_eq!(f[0].nets, vec!["/charger/PROG".to_string()]);
         assert!(
-            f[0].message.contains("5.000 A") && f[0].message.contains("0.500 A"),
+            f[0].message.contains("5 A") && f[0].message.contains("500 mA"),
             "{}",
             f[0].message
         );
@@ -2190,7 +2181,7 @@ mod program_domain_tests {
             "{}",
             f[0].message
         );
-        assert!(f[0].message.contains("e6 A"), "{}", f[0].message);
+        assert!(f[0].message.contains("1 MA"), "{}", f[0].message);
         assert_eq!(format_ohms(0.001), "0.001");
         assert_eq!(format_ohms(0.5), "0.500");
         assert_eq!(format_ohms(1e-6), "1.00e-6");
@@ -2524,7 +2515,7 @@ mod tps25982_tests {
         let message = &warnings[0].message;
         assert!(message.contains("12.85/14.71/15.99 A"), "{message}");
         assert!(
-            message.contains("10.00 A") && message.contains("11.00 A"),
+            message.contains("10 A") && message.contains("11 A"),
             "{message}"
         );
         assert!(message.contains("10% grace"), "{message}");

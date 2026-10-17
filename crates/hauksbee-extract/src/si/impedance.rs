@@ -104,6 +104,7 @@ use super::{
 };
 use crate::gerber::geo::{point_in_polygon, seg_seg_dist};
 use crate::ExtractedBoard;
+use hauksbee_ir::units::{format_percent, format_percent_signed};
 
 // ===========================================================================
 // Stackup model.
@@ -837,7 +838,7 @@ fn judge(
     // only when it reports an off-target deviation, and +1% is not one.
     if let Some(why) = confidence_caveat(stackup) {
         let band = if in_band {
-            format!(", within +-{:.0}%", Z_TOLERANCE * 100.0)
+            format!(", within +-{}", format_percent(Z_TOLERANCE * 100.0, 0))
         } else {
             String::new()
         };
@@ -845,11 +846,11 @@ fn judge(
             check: SiCheck::ControlledImpedance,
             severity: SiSeverity::Info,
             message: format!(
-                "{} [target {:.0} ohm, {}]: estimate {:+.0}% from target{band} - info only ({})",
+                "{} [target {:.0} ohm, {}]: estimate {} from target{band} - info only ({})",
                 detail,
                 target,
                 class.kind_label(),
-                dev * 100.0,
+                format_percent_signed(dev * 100.0, 0),
                 why
             ),
             refs: vec![],
@@ -863,12 +864,12 @@ fn judge(
             check: SiCheck::ControlledImpedance,
             severity: SiSeverity::Info,
             message: format!(
-                "{} vs target {:.0} ohm, {} ({:+.1}%, within +-{:.0}%) - ok [{}]",
+                "{} vs target {:.0} ohm, {} ({}, within +-{}) - ok [{}]",
                 detail,
                 target,
                 class.kind_label(),
-                dev * 100.0,
-                Z_TOLERANCE * 100.0,
+                format_percent_signed(dev * 100.0, 1),
+                format_percent(Z_TOLERANCE * 100.0, 0),
                 stackup.describe()
             ),
             refs: vec![],
@@ -886,12 +887,12 @@ fn judge(
             check: SiCheck::ControlledImpedance,
             severity: sev,
             message: format!(
-                "{} vs target {:.0} ohm, {}: {:+.1}% deviation exceeds +-{:.0}% tolerance [{}]",
+                "{} vs target {:.0} ohm, {}: {} deviation exceeds +-{} tolerance [{}]",
                 detail,
                 target,
                 class.kind_label(),
-                dev * 100.0,
-                Z_TOLERANCE * 100.0,
+                format_percent_signed(dev * 100.0, 1),
+                format_percent(Z_TOLERANCE * 100.0, 0),
                 stackup.describe()
             ),
             refs: vec![],

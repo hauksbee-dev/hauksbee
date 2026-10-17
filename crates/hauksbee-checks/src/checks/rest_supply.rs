@@ -28,6 +28,7 @@ use std::collections::BTreeMap;
 use hauksbee_bind::binder::BoundBoard;
 use hauksbee_bind::{FaultKind, PowerSupply};
 use hauksbee_extract::{LintCheck, LintFinding, Severity, REMEDY_MARKER};
+use hauksbee_ir::units::format_amps;
 use hauksbee_solve::Workspace;
 
 /// The current assumed available from a rail no spec gives a supply for, A.
@@ -149,10 +150,6 @@ pub fn note_overloads(into: &mut Vec<Overload>, seen: Vec<Overload>) {
 /// How many parts the finding quotes before "and N more".
 const SHOWN: usize = 3;
 
-fn amps(a: f64) -> String {
-    format!("{a:.2} A")
-}
-
 impl Overload {
     /// Whether the draw is a near-short: so far past what the supply gives
     /// ([`hauksbee_bind::is_far_past_rating`], the rule every stress figure
@@ -182,11 +179,11 @@ pub fn implausible_rest_finding(
     let rails: Vec<String> = (over.iter())
         .map(|o| {
             let limit = if o.declared {
-                format!("its supply's declared {} limit", amps(o.limit_a))
+                format!("its supply's declared {} limit", format_amps(o.limit_a))
             } else {
                 format!(
                     "the {} assumed for a supply no spec declares",
-                    amps(o.limit_a)
+                    format_amps(o.limit_a)
                 )
             };
             if o.is_near_short() {
@@ -196,7 +193,11 @@ pub fn implausible_rest_finding(
                     hauksbee_bind::far_past_reason(FaultKind::Overcurrent, o.draw_a)
                 )
             } else {
-                format!("{} from {}, more than {limit}", amps(o.draw_a), o.net)
+                format!(
+                    "{} from {}, more than {limit}",
+                    format_amps(o.draw_a),
+                    o.net
+                )
             }
         })
         .collect();
@@ -284,8 +285,8 @@ mod tests {
         let f = implausible_rest_finding(&short, &parts, false).expect("a finding");
         assert!(f.message.starts_with(OPENING), "{}", f.message);
         assert!(
-            f.message.contains("far more than the 3.00 A assumed")
-                && f.message.contains("past 500.00 A")
+            f.message.contains("far more than the 3 A assumed")
+                && f.message.contains("past 500 A")
                 && f.message.contains("not physical"),
             "{}",
             f.message
@@ -310,7 +311,7 @@ mod tests {
             ..short[0].clone()
         }];
         let f = implausible_rest_finding(&real, &parts, false).expect("a finding");
-        assert!(f.message.contains("21.20 A") && f.message.contains("24950 mW"));
+        assert!(f.message.contains("21.2 A") && f.message.contains("24950 mW"));
     }
 
     #[test]
@@ -333,8 +334,8 @@ mod tests {
         assert_eq!(f.severity, Severity::Medium);
         assert!(f.message.starts_with(OPENING), "{}", f.message);
         for want in [
-            "21.20 A from +5P",
-            "3.00 A assumed",
+            "21.2 A from +5P",
+            "3 A assumed",
             "5 part(s)",
             "and 2 more",
             "within its ratings",

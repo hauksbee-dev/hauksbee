@@ -40,6 +40,7 @@ use hauksbee_models::ModelLibrary;
 use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
 
 use super::rest_supply;
+use hauksbee_ir::units::format_volts;
 
 /// Bind `board`, solve its DC operating point, and report every part held
 /// past a rating there, at every assumed corner ([`dc_stress_at_corners`]).
@@ -444,12 +445,20 @@ fn dead_rail_note(
             let v = if v.abs() < 0.005 { 0.0 } else { *v };
             match pull(net) {
                 Some(o) if o.is_near_short() => format!(
-                    "'{net}' (pulled down to {v:.2} V by a near-short on it; its name says {named:.2} V)"
+                    "'{net}' (pulled down to {} by a near-short on it; its name says {})",
+                    format_volts(v),
+                    format_volts(named)
                 ),
                 Some(_) => format!(
-                    "'{net}' (pulled down to {v:.2} V by the draw on it; its name says {named:.2} V)"
+                    "'{net}' (pulled down to {} by the draw on it; its name says {})",
+                    format_volts(v),
+                    format_volts(named)
                 ),
-                None => format!("'{net}' (solved at {v:.2} V; its name says {named:.2} V)"),
+                None => format!(
+                    "'{net}' (solved at {}; its name says {})",
+                    format_volts(v),
+                    format_volts(named)
+                ),
             }
         })
         .collect();
@@ -579,7 +588,13 @@ fn unstated_rating_note(
     }
     let refs: Vec<String> = parts.keys().map(|p| (*p).clone()).collect();
     let seen: Vec<String> = (parts.iter())
-        .map(|(part, (v, floor))| format!("{part} sees {v:.1} V, past the {floor:.1} V assumed"))
+        .map(|(part, (v, floor))| {
+            format!(
+                "{part} sees {}, past the {} assumed",
+                format_volts(v),
+                format_volts(floor)
+            )
+        })
         .collect();
     Some(LintFinding {
         check: LintCheck::DcOverstress,
@@ -808,10 +823,13 @@ fn gate_underdrive(
         severity: Severity::High,
         message: format!(
             "{reference} has no part number, so it is bounded by assumed corners; at the corner \
-             {at} it conducts with |VGS| = {vgs:.2} V, below the {th:.2} V maximum VGS(th) of \
+             {at} it conducts with |VGS| = {}, below the {} maximum VGS(th) of \
              its class, so a part nearer {} is not guaranteed to turn on: put the MPN on \
-             {reference} to remove this assumption, or drive its gate to at least {spec:.2} V",
-            others.join(" or ")
+             {reference} to remove this assumption, or drive its gate to at least {}",
+            format_volts(vgs),
+            format_volts(th),
+            others.join(" or "),
+            format_volts(spec)
         ),
         refs: vec![reference.to_string()],
         nets,
@@ -1162,7 +1180,7 @@ mod tests {
         let f = supply[0];
         assert_eq!(f.severity, Severity::Medium);
         assert!(f.message.contains("from +5V"), "{}", f.message);
-        assert!(f.message.contains("3.00 A assumed"), "{}", f.message);
+        assert!(f.message.contains("3 A assumed"), "{}", f.message);
         assert!(f.refs.iter().any(|r| r == "D0"), "{:?}", f.refs);
         assert!(f.refs.iter().any(|r| r == "D39"), "{:?}", f.refs);
     }
