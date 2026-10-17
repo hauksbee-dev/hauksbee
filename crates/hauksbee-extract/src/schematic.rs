@@ -84,6 +84,23 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
 /// question about it. If no parent can be found, it refuses rather than return a
 /// netlist that will be read as fact ([`ExtractError::OrphanSubSheet`]).
 pub fn extract_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
+    extract_from_path_with_notes(path).map(|(board, _)| board)
+}
+
+/// [`extract_from_path`], plus the coverage notes the read owes the caller: one
+/// whole sentence per sub-sheet file that could not be read (missing, cut short,
+/// empty or not a schematic). The hierarchy is still extracted from the sheets
+/// that were read, so a fault on one of them is still found, but the caller must
+/// carry these notes to the verdict: a result that did not read a sheet is not
+/// an unconditional "clean". An unreadable sheet is wholly absent (a file that
+/// does not parse yields no partial document), so the nets of the sheets that
+/// were read are exactly what they are with that sheet missing.
+///
+/// # Errors
+/// As [`extract_from_path`].
+pub fn extract_from_path_with_notes(
+    path: &Path,
+) -> Result<(ExtractedBoard, Vec<String>), ExtractError> {
     let text = crate::read_regular_string(path)
         .map_err(|e| ExtractError::Xml(format!("read {}: {e}", path.display())))?;
     crate::reject_merge_conflict(&text)?;
@@ -167,7 +184,7 @@ fn orphan_sheet_needs(dir: &Path) -> String {
 }
 
 /// [`extract_from_path`] with the sub-sheet question already settled.
-fn extract_root_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
+fn extract_root_from_path(path: &Path) -> Result<(ExtractedBoard, Vec<String>), ExtractError> {
     let text = crate::read_regular_string(path)
         .map_err(|e| ExtractError::Xml(format!("read {}: {e}", path.display())))?;
     let doc = forge_sexpr::parse(&text)?;
@@ -186,7 +203,8 @@ fn extract_root_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
         .ancestor_sheets
         .push(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
     let root = builder.add_sheet_doc(&doc, "/", base.as_deref(), Some(name))?;
-    Ok(builder.finish(root))
+    let notes = std::mem::take(&mut builder.unread_sheets);
+    Ok((builder.finish(root), notes))
 }
 
 /// Every `(bus_alias "NAME" (members "A" "B" ...))` a sheet defines, in
@@ -518,6 +536,12 @@ struct NetlistBuilder {
     /// cycles; this stops a pathological but acyclic chain (a generated project
     /// nesting thousands of unique sheets) from reaching the same stack limit.
     sheet_depth: usize,
+    /// One whole sentence per sub-sheet file that could not be read, each once
+    /// (a sheet placed several times is one file). The read goes on without it.
+    unread_sheets: Vec<String>,
+    /// The files behind `unread_sheets`, so a file placed under several sheet
+    /// names is said once (under the first sheet that referenced it).
+    unread_files: Vec<PathBuf>,
 }
 
 /// The deepest `Sheetfile` chain followed. KiCad's own hierarchies are a
@@ -587,6 +611,8 @@ impl NetlistBuilder {
             pending_display: None,
             ancestor_sheets: Vec::new(),
             sheet_depth: 0,
+            unread_sheets: Vec::new(),
+            unread_files: Vec::new(),
         }
     }
 
@@ -1191,8 +1217,19 @@ impl NetlistBuilder {
             let key = child.canonicalize().unwrap_or_else(|_| child.clone());
             let is_cycle = self.ancestor_sheets.contains(&key);
             if self.sheet_depth < MAX_SHEET_DEPTH && !is_cycle {
-                {
-                    let doc = self.load_child_sheet(sub, &file, &child, &key)?;
+                // A sheet that cannot be read is left out and said so (see
+                // `load_child_sheet`); the rest of the hierarchy is still read.
+                let loaded = match self.load_child_sheet(sub, &file, &child, &key) {
+                    Ok(doc) => Some(doc),
+                    Err(note) => {
+                        if !self.unread_files.contains(&key) {
+                            self.unread_files.push(key.clone());
+                            self.unread_sheets.push(note);
+                        }
+                        None
+                    }
+                };
+                if let Some(doc) = loaded {
                     let child_dir = child.parent().map(Path::to_path_buf);
                     self.sheet_depth += 1;
                     self.ancestor_sheets.push(key);
@@ -1254,71 +1291,65 @@ impl NetlistBuilder {
         ))
     }
 
-    /// A sub-sheet's parsed document for the recursion, or the reason the
-    /// design cannot be read whole. A sheet that is missing, unreadable, damaged
-    /// or not a schematic is NOT skipped: the hierarchy would then be checked
-    /// without whatever that sheet carries, and a pass over the rest would read
-    /// as a pass for the design. The message names the child file and the sheet
-    /// that references it.
+    /// A sub-sheet's parsed document for the recursion, or the coverage note
+    /// for a sheet that cannot be read: missing, unreadable, cut short, empty or
+    /// not a schematic. Such a sheet is left out of the read, never silently: the
+    /// note names the child file and the sheet that references it, says that
+    /// nothing on the sheet was checked, and says how to cover it. The caller
+    /// carries the note to the verdict, which then cannot read as unconditionally
+    /// clean ([`extract_from_path_with_notes`]).
     fn load_child_sheet(
         &self,
         sub: &List,
         file: &str,
         child: &Path,
         key: &Path,
-    ) -> Result<Rc<Document>, ExtractError> {
+    ) -> Result<Rc<Document>, String> {
         if let Some(doc) = self.parsed_sheets.get(key) {
             return Ok(Rc::clone(doc));
         }
         let parent = self.current_sheet_file();
         let name = sheet_property(sub, "Sheetname").or_else(|| sheet_property(sub, "Sheet name"));
-        let who = name.map_or_else(
-            || format!("a sheet in {parent}"),
-            |n| format!("the sheet '{n}' in {parent}"),
+        let subject = name.map_or_else(
+            || format!("'{file}' (a sheet in {parent})"),
+            |n| format!("'{file}' (the sheet '{n}' in {parent})"),
         );
-        let fix = format!(
-            "Hauksbee will not check a design with a sheet left out, because a \
-             fault on that sheet would go unseen. Put a good copy of '{file}' next \
-             to {parent} (restore it from version control, or re-save it from \
-             KiCad), or in KiCad open {parent}, select the sheet and correct its \
-             File name, then run again."
+        let consequence = format!(
+            "That sheet was NOT read, so nothing on it was checked and a net that \
+             runs to it may look unconnected. Put a good copy of '{file}' next to \
+             {parent} (restore it from version control, or re-save it from KiCad), \
+             or in KiCad open {parent}, select the sheet and correct its File name, \
+             then run again to cover it."
         );
+        let note = |what: String| Err(crate::unread_sheet_note(&subject, &what));
         let text = match crate::read_regular_string(child) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err(ExtractError::Corrupt(format!(
-                    "{who} points at the sub-sheet file '{file}', and that file does \
-                     not exist (looked for {}). {fix}",
+                return note(format!(
+                    "the file does not exist (looked for {}). {consequence}",
                     child.display()
-                )));
+                ));
             }
-            Err(e) => {
-                return Err(ExtractError::Corrupt(format!(
-                    "{who} points at the sub-sheet file '{file}', which cannot be \
-                     read ({e}). {fix}"
-                )));
-            }
+            Err(e) => return note(format!("the file cannot be read ({e}). {consequence}")),
         };
         let doc = match forge_sexpr::parse(&text) {
             Ok(d) => d,
             Err(e) => {
-                return Err(ExtractError::Corrupt(format!(
-                    "the sub-sheet file '{file}' ({who}) is damaged or cut short and \
-                     cannot be parsed: {e}. {fix}"
-                )));
+                return note(format!(
+                    "the file is damaged or cut short and cannot be parsed: {e}. {consequence}"
+                ));
             }
         };
         match doc.root().and_then(List::name) {
             Some("kicad_sch") => Ok(Rc::new(doc)),
-            Some(other) => Err(ExtractError::Corrupt(format!(
-                "the sub-sheet file '{file}' ({who}) is not a KiCad schematic: it \
-                 starts with ({other} ...) where a (kicad_sch ...) sheet was \
-                 expected. {fix}"
-            ))),
-            None => Err(ExtractError::Corrupt(format!(
-                "the sub-sheet file '{file}' ({who}) is empty or is not a KiCad \
-                 schematic: it has no (kicad_sch ...) section. {fix}"
-            ))),
+            Some(other) => note(format!(
+                "the file is not a KiCad schematic: it starts with ({other} ...) where a \
+                 (kicad_sch ...) sheet was expected. {consequence}"
+            )),
+            None => note(format!(
+                "the file is empty or is not a KiCad schematic: it has no (kicad_sch ...) \
+                 section. {consequence}"
+            )),
         }
     }
 

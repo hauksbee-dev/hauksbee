@@ -545,6 +545,10 @@ impl BoardEvidence {
             if !seen_reader_notes.insert(normalized) {
                 continue;
             }
+            if let Some(unread) = unread_sheet_assumption(normalized) {
+                assumptions.push(unread);
+                continue;
+            }
             classify_reader_note(
                 normalized,
                 &component_subjects,
@@ -2361,6 +2365,23 @@ fn input_contributions(kind: crate::board_input::InputKind) -> Vec<Contribution>
         });
     }
     out
+}
+
+/// The unchecked-scope assumption for a sub-sheet file the reader had to leave
+/// out, or `None` for any other note. The rest of the design was read and
+/// judged, but nothing on that sheet was, so the verdict names the sheet as
+/// scope the run did not cover.
+fn unread_sheet_assumption(note: &str) -> Option<Assumption> {
+    let (subject, detail) = hauksbee_extract::split_unread_sheet_note(note)?;
+    let key = note_key("unread-sheet", subject);
+    Some(Assumption::not_exercised(
+        AssumptionSource::Reader,
+        Subject::new(&key, &format!("the sub-sheet {subject}")),
+        Scope::Board,
+        detail,
+        "restore or re-save the sub-sheet file next to its parent sheet, or correct its File \
+         name in KiCad, then re-run",
+    ))
 }
 
 fn classify_reader_note(

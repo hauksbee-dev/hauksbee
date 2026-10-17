@@ -53,6 +53,8 @@ mod cli_eagle_tie_contract;
 mod cli_firmware_guard;
 #[path = "cli_manifest_contract.rs"]
 mod cli_manifest_contract;
+#[path = "cli_missing_subsheet.rs"]
+mod cli_missing_subsheet;
 #[path = "cli_models_cmds.rs"]
 mod cli_models_cmds;
 #[path = "cli_models_lint.rs"]
