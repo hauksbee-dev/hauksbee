@@ -3153,7 +3153,7 @@ unlocked_by = "validated behavior"
             "[[replace]]\nref = \"R1\"\nset = { ohms = 0.001 }\n",
             "test",
         )
-        .and_then(|o| o.apply_to_board(&mut b))
+        .and_then(|o| o.apply_to_board(&mut b, &lib))
         .unwrap();
         assert!(starved(&envelope_lint(&b, &lib)).is_empty());
     }

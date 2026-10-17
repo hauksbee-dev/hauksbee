@@ -6,10 +6,19 @@
 //! finding that fails the check becomes a failing row of the run, named with
 //! its parts, nets and fix on every surface the run writes (human, JSON,
 //! `JUnit`, GitHub annotations).
+//!
+//! A spec with an `asbuilt` overlay is judged on the reworked board: the
+//! overlay is applied to the static board before the check runs
+//! ([`hauksbee_engine::reports::check::static_gate_as_built`]), so the static
+//! rows agree with the board the simulation ran. A finding on a part or net
+//! an overlay entry reworks but the static board could not carry is the
+//! design's: its row is NOT JUDGED (invalid), never a pass.
 
 use hauksbee_engine::reports::check::StaticGate;
 use hauksbee_engine::result::JsonFinding;
-use hauksbee_ir::vocabulary::{STATIC_CHECK_FAILS_LEAD, STATIC_CHECK_KIND};
+use hauksbee_ir::vocabulary::{
+    STATIC_CHECK_FAILS_LEAD, STATIC_CHECK_KIND, STATIC_CHECK_NOT_JUDGED_LEAD,
+};
 
 use crate::assertions::AssertResult;
 
@@ -20,7 +29,7 @@ pub fn static_check_results(findings: &[JsonFinding], seeds_total: usize) -> Vec
     gate_rows(
         &StaticGate {
             gating: findings.to_vec(),
-            waived: Vec::new(),
+            ..StaticGate::default()
         },
         seeds_total,
     )
@@ -67,8 +76,25 @@ pub fn gate_rows(gate: &StaticGate, seeds_total: usize) -> Vec<AssertResult> {
         } else {
             &finding.plain
         };
+        // A finding on parts an unapplied rework touches is the design's (a
+        // waived one stays what its waiver says).
+        let unapplied = (gate.as_built.as_ref())
+            .filter(|_| waiver.is_none())
+            .and_then(|report| {
+                (report.unapplied.iter()).find(|u| u.touches(&finding.refs, &finding.nets))
+            });
+        let detail = unapplied.map_or_else(
+            || format!("{STATIC_CHECK_FAILS_LEAD}: [{}] {said}", finding.severity),
+            |u| {
+                format!(
+                    "{STATIC_CHECK_NOT_JUDGED_LEAD} ({}: {}): [{}] {said}",
+                    u.entry, u.why, finding.severity
+                )
+            },
+        );
         rows.push(AssertResult {
-            detail: format!("{STATIC_CHECK_FAILS_LEAD}: [{}] {said}", finding.severity),
+            detail,
+            invalid: unapplied.is_some(),
             why: Some(
                 finding
                     .fix
@@ -132,6 +158,7 @@ mod tests {
     #[test]
     fn a_waived_gating_finding_keeps_its_row_marked_waived() {
         let gate = StaticGate {
+            as_built: None,
             gating: vec![finding("drc", "serious")],
             waived: vec![
                 (
@@ -164,5 +191,40 @@ mod tests {
         // An informational lint note passes `hauksbee check`, so it cannot fail the run.
         assert!(static_check_results(&[finding("lint", "info")], 1).is_empty());
         assert!(static_check_results(&[], 1).is_empty());
+    }
+
+    #[test]
+    fn a_finding_on_a_rework_the_static_board_could_not_carry_is_not_judged() {
+        use hauksbee_engine::asbuilt::{AsBuiltReport, UnappliedEntry};
+        let report = AsBuiltReport {
+            lines: Vec::new(),
+            unapplied: vec![UnappliedEntry {
+                entry: "replace U2".into(),
+                why: "von=3.6 is a switch trip point".into(),
+                refs: vec!["U2".into()],
+                nets: Vec::new(),
+            }],
+        };
+        let mut other = finding("lint", "serious");
+        other.refs = vec!["U9".into()];
+        other.nets = vec!["GPIO7".into()];
+        let gate = StaticGate {
+            gating: vec![finding("lint", "serious"), other],
+            waived: Vec::new(),
+            as_built: Some(report),
+        };
+        let rows = gate_rows(&gate, 1);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        // On U2: the design's finding, not judged on the reworked board.
+        assert!(rows[0].invalid && !rows[0].passed, "{:?}", rows[0]);
+        assert!(
+            rows[0].detail.starts_with(STATIC_CHECK_NOT_JUDGED_LEAD)
+                && rows[0].detail.contains("replace U2"),
+            "{}",
+            rows[0].detail
+        );
+        // Untouched by the rework: an ordinary failure.
+        assert!(!rows[1].invalid && !rows[1].passed);
+        assert!(rows[1].detail.starts_with(STATIC_CHECK_FAILS_LEAD));
     }
 }

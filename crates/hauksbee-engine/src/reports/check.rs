@@ -765,6 +765,10 @@ pub struct StaticGate {
     /// Findings that would fail it but a waiver overrules, each with the
     /// waiver's "reason (until date)". Listed, never hidden.
     pub waived: Vec<(crate::result::JsonFinding, String)>,
+    /// The as-built overlay the board was judged under, when there was one:
+    /// what it changed on the static board, and each entry it could not carry
+    /// (a finding on the parts or nets such an entry touches is the design's).
+    pub as_built: Option<crate::asbuilt::AsBuiltReport>,
 }
 
 /// [`static_gating_findings`] plus the gate-grade findings the board's waiver
@@ -775,6 +779,25 @@ pub struct StaticGate {
 ///
 /// As [`static_gating_findings`].
 pub fn static_gate(board_path: &Path, lib: &ModelLibrary) -> anyhow::Result<StaticGate> {
+    static_gate_as_built(board_path, lib, None)
+}
+
+/// [`static_gate`] on the board as reworked by `overlay`, when there is one.
+///
+/// The overlay is applied to the extraction exactly as `hauksbee --asbuilt
+/// --check` applies it ([`crate::asbuilt::AsBuiltOverlay::apply_to_board`]),
+/// so a finding the rework removes is gone and one it creates is found. The
+/// copper (DRC) checks still read the design files.
+///
+/// # Errors
+///
+/// As [`static_gating_findings`], and when the overlay does not describe the
+/// board.
+pub fn static_gate_as_built(
+    board_path: &Path,
+    lib: &ModelLibrary,
+    overlay: Option<&crate::asbuilt::AsBuiltOverlay>,
+) -> anyhow::Result<StaticGate> {
     let norm = crate::board_input::from_path(board_path)?;
     let altium_present = norm.is_binary();
     let text = norm.layout_text.unwrap_or_default();
@@ -784,10 +807,15 @@ pub fn static_gate(board_path: &Path, lib: &ModelLibrary) -> anyhow::Result<Stat
         .take(512)
         .collect::<String>()
         .contains("<eagle");
+    // Ties belong to the design files, so they are read off the design board.
     let ties = crate::schematic_ties::resolve(board_path, &norm.board, None, board_is_eagle)?;
+    let mut board = norm.board;
+    let as_built = overlay
+        .map(|overlay| overlay.apply_to_board(&mut board, lib))
+        .transpose()?;
     let gathered = gather_static(
         board_path,
-        &norm.board,
+        &board,
         &text,
         &norm.raw,
         altium_present,
@@ -798,7 +826,11 @@ pub fn static_gate(board_path: &Path, lib: &ModelLibrary) -> anyhow::Result<Stat
     gating.retain(crate::result::JsonFinding::gates);
     let mut waived = gathered.waived;
     waived.retain(|(f, _)| f.gates());
-    Ok(StaticGate { gating, waived })
+    Ok(StaticGate {
+        gating,
+        waived,
+        as_built,
+    })
 }
 
 /// Apply this board's waivers to the whole static suite, in one place, and

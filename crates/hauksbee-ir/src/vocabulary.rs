@@ -61,6 +61,16 @@ pub const STATIC_CHECK_FAILS_LEAD: &str =
     "FAIL: the board's own static check (hauksbee check) fails on this finding, so this run \
      cannot pass";
 
+/// How a CI run states a gating static-check finding it cannot judge as built.
+///
+/// The finding is on a part or net that an as-built overlay entry reworks but
+/// the static board could not carry, so it is the design's: not judged on the
+/// reworked board, and the run cannot pass on it either.
+pub const STATIC_CHECK_NOT_JUDGED_LEAD: &str =
+    "NOT JUDGED on the as-built board: the board's own static check (hauksbee check) fails the \
+     design on this finding, and the rework of these parts could not be applied to the static \
+     board";
+
 /// The order-triage bucket for findings a person must look at before ordering.
 ///
 /// A run whose only items are in this bucket is a pass (nothing blocks), but

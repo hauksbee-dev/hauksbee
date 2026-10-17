@@ -4088,6 +4088,42 @@ pub fn role_nets(
         .collect()
 }
 
+/// The pads of `comp` that carry `role` as the binder binds it.
+///
+/// Each pad whose own role (its first naming source, then the pin-rule table
+/// for an unnamed pad) is `role` and which sits on the net [`role_nets`] binds
+/// `role` to.
+///
+/// This is how a terminal of a stamped device is traced back to copper (the
+/// as-built overlay's cuts and lifts, mirrored onto the static board). Empty
+/// when the role is unbound or the part would be left open.
+#[must_use]
+pub fn role_pads(
+    comp: &Component,
+    model: &ModelEntry,
+    pin_rules: &hauksbee_models::PinRuleTable,
+    role: &str,
+) -> Vec<String> {
+    let Some(&net) = role_nets(comp, model, pin_rules).get(role) else {
+        return Vec::new();
+    };
+    let (kind, pad_count) = (model.kind, comp.pins.len());
+    let own_role = |pin: &hauksbee_extract::Pin| {
+        let named = pad_role_sources(pin, &model.pins, Some(kind))
+            .into_iter()
+            .flatten()
+            .next();
+        named.or_else(|| {
+            (pin_rules.role_for_pad(&comp.footprint, Some(kind), pad_count, &pin.number))
+                .map(|inferred| inferred.role)
+        })
+    };
+    (comp.pins.iter())
+        .filter(|pin| pin.net == Some(net) && own_role(pin).as_deref() == Some(role))
+        .map(|pin| pin.number.clone())
+        .collect()
+}
+
 /// Two pads of one signal role on two nets: the role map keeps one, floating a
 /// unit. (One pad on two nets is a board contradiction, refused elsewhere.)
 /// Only multi-unit kinds: elsewhere a repeated role is one internal node (an
