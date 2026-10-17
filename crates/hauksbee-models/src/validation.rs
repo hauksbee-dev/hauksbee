@@ -607,6 +607,45 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                     format!("operating envelope input_common_mode needs at least two input roles and a finite non-negative headroom_v, got {} and {headroom_v}", inputs.len())
                 });
             }
+            OperatingEnvelope::InputTolerance {
+                pins,
+                max_v,
+                abs_max_v,
+                abs_max_basis,
+                ..
+            } => {
+                p.require(!pins.is_empty(), || {
+                    "operating envelope input_tolerance needs at least one input role in pins"
+                        .into()
+                });
+                for role in pins {
+                    p.require(has_role_ci(entry, role), || {
+                        not_a_role("operating envelope input_tolerance pin", role)
+                    });
+                    // A driven output (or a bidirectional port, which the logic
+                    // block declares as an output too) is rated VCC + 0.5 V
+                    // whatever its high-impedance row says.
+                    let driven = entry
+                        .logic
+                        .outputs
+                        .iter()
+                        .any(|out| out.eq_ignore_ascii_case(role));
+                    p.require(!driven, || {
+                        format!("operating envelope input_tolerance pin '{role}' is a logic output; only an input in every mode takes a supply-independent rating")
+                    });
+                }
+                p.require(max_v.is_finite() && *max_v > 0.0, || {
+                    format!("operating envelope input_tolerance max_v must be a finite positive voltage, got {max_v}")
+                });
+                p.require(
+                    !abs_max_v.is_some_and(|v| !v.is_finite() || v < *max_v),
+                    || format!("operating envelope input_tolerance abs_max_v must be finite and at least max_v {max_v}"),
+                );
+                p.require(
+                    abs_max_basis.trim().is_empty() || abs_max_v.is_some(),
+                    || "operating envelope abs_max_basis needs the abs_max_v it cites".into(),
+                );
+            }
         }
     }
 
@@ -2815,6 +2854,33 @@ mod tests {
         rejects(&fixture(&row("VCC = 3.3 V")), "must name a temperature");
         let twice = row("TA = 25 °C") + "\n[[envelope]]\nkind = \"supply_range\"\n";
         rejects(&fixture(&(twice + &row("TA=25°C"))), "once per channel");
+    }
+
+    #[test]
+    fn input_tolerance_rates_inputs_only_with_an_ordered_ceiling() {
+        let fixture = |body: &str| -> ModelEntry {
+            toml::from_str(&format!(
+                "id = \"t\"\nkind = \"digital\"\n[pins]\n\"1\" = \"vcc\"\n\"2\" = \"a\"\n\
+                 \"3\" = \"y\"\n\"4\" = \"gnd\"\n[logic]\ninputs = [\"a\"]\noutputs = [\"y\"]\n\
+                 [logic.comb]\ny = \"a\"\n[[envelope]]\nkind = \"input_tolerance\"\n{body}"
+            ))
+            .unwrap()
+        };
+        let ok = "pins = [\"a\"]\nmax_v = 5.5\nabs_max_v = 6.5\nbasis = \"ROC, VI row\"";
+        accepts(&fixture(ok));
+        rejects(&fixture(&ok.replace("[\"a\"]", "[\"y\"]")), "logic output");
+        rejects(&fixture(&ok.replace("[\"a\"]", "[\"b\"]")), "b");
+        rejects(&fixture(&ok.replace("[\"a\"]", "[]")), "at least one");
+        rejects(&fixture(&ok.replace("6.5", "5.0")), "abs_max_v");
+        rejects(
+            &fixture(&ok.replace("max_v = 5.5", "max_v = -1.0")),
+            "max_v",
+        );
+        rejects(
+            &fixture("pins = [\"a\"]\nmax_v = 5.5\nbasis = \"R\"\nabs_max_basis = \"L\""),
+            "abs_max_basis",
+        );
+        rejects(&fixture("pins = [\"a\"]\nmax_v = 5.5"), "basis");
     }
 
     #[test]

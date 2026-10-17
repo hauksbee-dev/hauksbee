@@ -1305,6 +1305,9 @@ fn envelope_lint_with_tolerance(
                 // pins, not the rail interval this resolver derives: they are
                 // evaluated in `super::analog_inputs`.
                 OperatingEnvelope::InputCommonMode { .. } => {}
+                // A supply-independent input ceiling raises the clamp limit
+                // `super::back_power` judges a pin against; it rates no rail.
+                OperatingEnvelope::InputTolerance { .. } => {}
             }
         }
         report

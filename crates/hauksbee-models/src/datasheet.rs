@@ -1735,7 +1735,14 @@ VICR/CMVR row, emit one input_common_mode per channel: `supply` its positive
 supply, `inputs` that channel's two inputs, `headroom_v` the test supply minus
 the range's upper end (0 V to V+ - 1.5 V is 1.5; none reaching V+). Emit one
 supply_range or input_common_mode per printed temperature row, each with its
-`conditions` (TA = 25 °C; TA = −40 °C to 85 °C); the upper end is the guaranteed
+`conditions` (TA = 25 °C; TA = −40 °C to 85 °C). Where an input's VI row is a
+fixed voltage whatever the supply (a 5 V-tolerant input: VI −0.5 V to 6.5 V,
+not VCC + 0.5 V; an MCU's five-volt-tolerant pins), emit one input_tolerance:
+`pins` the roles that row covers that are inputs in every mode (data and
+control inputs; never an output or a bidirectional I/O, which is driven to
+VCC + 0.5 V), `max_v` the recommended VI maximum, `abs_max_v` the
+absolute-maximum VI; a VI written relative to VCC is no input_tolerance. The
+upper end is the guaranteed
 (min/max) cell, never typ (typ alone: omit the entry). Pins, supplies and inputs
 are roles from [models.pins], never pad numbers. Every `basis` names the exact
 table and row; add `abs_max_v` only when the absolute-maximum table publishes
@@ -5596,6 +5603,9 @@ mod tests {
         assert!(comparator.contains("VICR/CMVR row, emit one input_common_mode per channel"));
         assert!(comparator.contains("input_common_mode per printed temperature row, each with its"));
         assert!(comparator.contains("(min/max) cell, never typ (typ alone: omit the entry)"));
+        let logic = build_prompt("LVC_FIXTURE", "digital", "x");
+        assert!(logic.contains("fixed voltage whatever the supply (a 5 V-tolerant input"));
+        assert!(logic.contains("never an output or a bidirectional I/O"));
         assert!(bjt.contains("Identity-only is a last resort. A typ-only or max-only row"));
         assert!(bjt.contains("P7 numbers it; else\n   key by lead letters A/K, G/S/D"));
         assert!(bjt.contains("one missing"));

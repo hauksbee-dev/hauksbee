@@ -1360,6 +1360,55 @@ pub enum OperatingEnvelope {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         conditions: String,
     },
+    /// A SUPPLY-INDEPENDENT ceiling on input pins: the `pins` roles take up
+    /// to `max_v` (the recommended `VI` maximum) and `abs_max_v` (the
+    /// absolute-maximum `VI`) whatever the part's supply is, the rating an
+    /// over-voltage-tolerant input prints (74LVC `VI` −0.5 V to +6.5 V at any
+    /// VCC, an MCU's five-volt-tolerant pin). Such a pin has no clamp to its
+    /// own supply, so a rail above that supply but under this ceiling is no
+    /// back-powering path. A pin rated `VCC + 0.5 V` has no such row: the
+    /// clamp to its supply is its ceiling. A [`Self::SupplyRange`] cannot carry
+    /// this: its `min_v` is read as a supply floor, and it takes one pin.
+    InputTolerance {
+        pins: Vec<String>,
+        max_v: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        abs_max_v: Option<f64>,
+        #[serde(default)]
+        severity: EnvelopeSeverity,
+        /// The Recommended Operating Conditions `VI` row `max_v` is read from.
+        #[serde(default)]
+        basis: String,
+        /// The Absolute Maximum Ratings `VI` row `abs_max_v` is read from.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        abs_max_basis: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        note: String,
+    },
+}
+
+/// The highest voltage a card rates the signal pin `role` for, independent of
+/// the part's supply: the absolute maximum (else the recommended maximum) of
+/// every `supply_range` row on that pin and every `input_tolerance` row
+/// listing it. `None` when the card rates the pin only through its supply.
+#[must_use]
+pub fn declared_pin_ceiling_v(envelope: &[OperatingEnvelope], role: &str) -> Option<f64> {
+    let ceiling = |e: &OperatingEnvelope| match e {
+        OperatingEnvelope::SupplyRange {
+            pin,
+            max_v,
+            abs_max_v,
+            ..
+        } if pin.eq_ignore_ascii_case(role) => Some(abs_max_v.unwrap_or(*max_v)),
+        OperatingEnvelope::InputTolerance {
+            pins,
+            max_v,
+            abs_max_v,
+            ..
+        } if pins.iter().any(|p| p.eq_ignore_ascii_case(role)) => Some(abs_max_v.unwrap_or(*max_v)),
+        _ => None,
+    };
+    envelope.iter().filter_map(ceiling).reduce(f64::max)
 }
 
 /// Whether a supply row's `basis` already names a second source for its
@@ -1417,7 +1466,8 @@ impl OperatingEnvelope {
         match self {
             Self::SupplyRange { basis, .. }
             | Self::RailOrder { basis, .. }
-            | Self::InputCommonMode { basis, .. } => basis,
+            | Self::InputCommonMode { basis, .. }
+            | Self::InputTolerance { basis, .. } => basis,
         }
     }
 
@@ -1426,7 +1476,8 @@ impl OperatingEnvelope {
         match self {
             Self::SupplyRange { severity, .. }
             | Self::RailOrder { severity, .. }
-            | Self::InputCommonMode { severity, .. } => *severity,
+            | Self::InputCommonMode { severity, .. }
+            | Self::InputTolerance { severity, .. } => *severity,
         }
     }
 
@@ -1436,18 +1487,18 @@ impl OperatingEnvelope {
         match self {
             Self::SupplyRange { conditions: c, .. }
             | Self::InputCommonMode { conditions: c, .. } => c,
-            Self::RailOrder { .. } => "",
+            Self::RailOrder { .. } | Self::InputTolerance { .. } => "",
         }
     }
 
     /// The limit every temperature row of one channel shares; `None` for a
-    /// rail order, which has no rows.
+    /// rail order or an input tolerance, which have no rows.
     #[must_use]
     pub fn channel(&self) -> Option<String> {
         match self {
             Self::SupplyRange { pin, .. } => Some(format!("supply range of {pin}")),
             Self::InputCommonMode { inputs, .. } => Some(format!("{inputs:?} common-mode range")),
-            Self::RailOrder { .. } => None,
+            Self::RailOrder { .. } | Self::InputTolerance { .. } => None,
         }
     }
 }

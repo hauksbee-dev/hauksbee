@@ -98,9 +98,9 @@ pub use pack::{Pack, PackError, PackManifest, PackRecord, PackStore, Provenance}
 pub use pin_rules::{InferredRole, PinRule, PinRuleTable};
 pub use profile::{LoadProfile, Segment};
 pub use schema::{
-    abs_max_citation, basis_names_abs_max, ComponentKind, EnvelopeSeverity, ModelCoverage,
-    ModelEntry, ModelSourceReference, OperatingEnvelope, Params, PeripheralPower, PeripheralSpec,
-    StrapInternalPull, StrapLevel, StrapPin,
+    abs_max_citation, basis_names_abs_max, declared_pin_ceiling_v, ComponentKind, EnvelopeSeverity,
+    ModelCoverage, ModelEntry, ModelSourceReference, OperatingEnvelope, Params, PeripheralPower,
+    PeripheralSpec, StrapInternalPull, StrapLevel, StrapPin,
 };
 pub use sensor_spec::{
     Bus, Encoding, ProtocolStyle, RegisterSpec, Sensor, SensorSpec, SensorSpecError,
