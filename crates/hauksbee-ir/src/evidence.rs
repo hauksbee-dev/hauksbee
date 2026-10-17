@@ -111,6 +111,16 @@ pub enum EvidenceError {
     /// A required identifier or collection is empty.
     #[error("{field} must not be empty")]
     Empty { field: &'static str },
+    /// The input has no connections to judge: parts, if any, but no nets. The
+    /// sentence is what a user reads, so it names what was found and what to do.
+    #[error(
+        "this input has no connections to check: Hauksbee found no nets (no routed copper, \
+         and no netlist or IPC-D-356 file to read connections from), so it cannot judge \
+         the board from its parts alone. Give it a layout with routed copper, or add the \
+         design's netlist or IPC-D-356 file next to it (for a fab archive, include the \
+         file with the connections), then run it again"
+    )]
+    NoNets,
     /// An assumption registry contains the same stable id twice.
     #[error("duplicate assumption id {id}")]
     DuplicateAssumption { id: String },

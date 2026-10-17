@@ -799,6 +799,7 @@ mod tests {
             partial: true,
             not_judged: None,
             inspect: 0,
+            unorderable: None,
         };
         let line = closing_verdict_line(&partial, &PlainReport::default()).unwrap();
         assert!(

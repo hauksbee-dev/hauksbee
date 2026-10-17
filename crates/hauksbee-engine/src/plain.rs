@@ -754,6 +754,20 @@ impl OrderTriage {
         // A failing run's not-judged sentence is its own line, below the
         // failures (see `render`), so the headline does not carry it too.
         let reason = verdict.reason_without_not_judged().unwrap_or_default();
+        // A schematic that passes its checks is not "OK TO ORDER": there is no
+        // board to order. The lead says what was and was not judged instead.
+        if let Some(why) = verdict.unorderable.as_deref() {
+            let rest = verdict.conditions_without(why);
+            return if rest.is_empty() {
+                format!("{}: {why}", hauksbee_ir::vocabulary::NOT_ORDERABLE_LEAD)
+            } else {
+                format!(
+                    "{}: {why} Also: {}",
+                    hauksbee_ir::vocabulary::NOT_ORDERABLE_LEAD,
+                    rest.join(" ")
+                )
+            };
+        }
         match verdict.verdict {
             // The reason starts "PARTLY JUDGED (not a pass)".
             _ if verdict.partial => reason.to_string(),
@@ -811,7 +825,10 @@ impl OrderTriage {
         // Three empty lists read as a missing answer, so a clean triage says
         // so in one line and the empty buckets are left out. A failed run says
         // so in the same place even when the buckets below do not name its cause.
-        if (self.do_not_order.is_empty() && self.inspect.is_empty()) || verdict.partial {
+        if (self.do_not_order.is_empty() && self.inspect.is_empty())
+            || verdict.partial
+            || verdict.unorderable.is_some()
+        {
             let _ = writeln!(out, "{}", Self::empty_headline(verdict));
         } else if verdict.verdict == "fail" && self.do_not_order.is_empty() {
             let _ = writeln!(
@@ -1111,6 +1128,26 @@ pub fn plain_drc_structured_with_rule_source(
         && st.violations.is_empty()
         && st.at_limit.is_empty()
     {
+        // The input read no clearance rule at all: a netlist or fabrication
+        // files (gerbers, ODB++, IPC-2581). Their copper, where they have any,
+        // was read for connectivity and never measured, and routing is not the
+        // fix: the layout file is.
+        if provenance.no_rule_read {
+            out.push_note(HeadsUp::glossed(
+                "Copper spacing was not checked: this input gave Hauksbee connectivity (what \
+                 connects to what) but no copper geometry it measures gaps on, even where \
+                 the files do contain traces and pours."
+                    .to_string(),
+                "Clearance DRC compares copper shapes against each other. A netlist has no \
+                 copper at all, and fabrication files (gerbers, ODB++, IPC-2581) are read for \
+                 connectivity, not measured for gaps. Everything else in this report still \
+                 applies.",
+                "Run hauksbee on the board's layout file (.kicad_pcb, .brd, .PcbDoc) to \
+                 check spacing, or run your CAD tool's design-rule check on the layout \
+                 before ordering.",
+            ));
+            return out;
+        }
         out.push_note(HeadsUp::glossed(
             "No copper was checked: copper spacing was not measured on these inputs, which \
              gave Hauksbee connectivity but no copper geometry it measures gaps on."
@@ -2198,6 +2235,7 @@ mod tests {
             partial: false,
             not_judged: Some(said.to_string()),
             inspect: 0,
+            unorderable: None,
         };
         let out = triage.render(&failing);
         assert_eq!(out.matches(said).count(), 1, "{out}");

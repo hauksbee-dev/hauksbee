@@ -54,6 +54,8 @@ mod gerber_uconsole;
 mod gerber_x2;
 #[path = "gerber_x2_roles.rs"]
 mod gerber_x2_roles;
+#[path = "hostile_input_wording.rs"]
+mod hostile_input_wording;
 #[path = "ingest_robustness.rs"]
 mod ingest_robustness;
 #[path = "kicad_dru.rs"]

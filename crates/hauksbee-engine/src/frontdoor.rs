@@ -833,6 +833,15 @@ fn verdict_headline(verdict: &crate::result::RunVerdict, current: &str, serious:
             .to_string(),
         "invalid" if inconclusive.contains(&current) => current.to_string(),
         "invalid" => "Not conclusive: nothing found blocks ordering, but this run cannot vouch for the board; see the reason below.".to_string(),
+        _ if verdict.unorderable.is_some() => {
+            // A schematic has no board to order: say what was judged instead.
+            let why = verdict.unorderable.as_deref().unwrap_or_default();
+            let mut lead = hauksbee_ir::vocabulary::NOT_ORDERABLE_TAG.to_string();
+            if let Some(first) = lead.get_mut(0..1) {
+                first.make_ascii_uppercase();
+            }
+            format!("{lead}: {why}")
+        }
         _ => {
             // A pass with items the triage lists to inspect is not plainly OK
             // to order: it takes the tag the closing `VERDICT:` line prints.
@@ -1402,8 +1411,11 @@ fn analyze_normalized_with_context(
             .clone()
             .unwrap_or_else(|| crate::result::ClearanceRuleProvenance::defaulted(0.0, false)),
     );
+    // A gerber archive reads no clearance rule: say so, not a default value
+    // nobody measured against.
     let gerber_default_source =
-        crate::result::ClearanceRuleProvenance::defaulted(drc_structured.clearance_rule_mm, false);
+        crate::result::ClearanceRuleProvenance::defaulted(drc_structured.clearance_rule_mm, false)
+            .with_no_rule_read();
     let drc_rule_source = clearance_rule_source
         .as_ref()
         .unwrap_or(&gerber_default_source);
@@ -1645,6 +1657,10 @@ fn analyze_normalized_with_context(
             .and_then(|p| crate::reports::drc::default_rules_condition(&drc_structured, p)),
     )
     .with_condition(crate::reports::drc::unmeasured_spacing_condition(norm.kind))
+    .with_unorderable_input(crate::reports::drc::unorderable_input(
+        norm.kind,
+        norm.layout_text.as_deref(),
+    ))
     .with_condition(rails_entered)
     .with_condition(rails_held)
     .with_judgement_scope(crate::scope::JudgementScope::of(

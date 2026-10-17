@@ -249,6 +249,7 @@ impl CheckReport<'_> {
             text,
             drc.clearance_mm,
         );
+        let provenance = super::drc::without_unread_rule(provenance, input.input_kind);
         let mut drc_structured = DrcStructured::from_report_with_ties(
             &drc,
             qualification.as_ref(),
@@ -341,6 +342,8 @@ impl CheckReport<'_> {
         ))
         // And one on spacing nobody measured, from an input with no copper geometry.
         .with_condition(super::drc::unmeasured_spacing_condition(input.input_kind))
+        // A schematic passes its own checks and is still nothing to order.
+        .with_unorderable_input(super::drc::unorderable_input(input.input_kind, None))
         // And on every rail held at its named voltage with nothing on the
         // board modelled to source it: from a connector, or from nothing seen.
         .with_condition(rails_entered)
@@ -678,7 +681,23 @@ pub(crate) fn verdict_line(
     copper_unvalidated: Option<CopperUnvalidated<'_>>,
 ) -> String {
     let Some(reason) = verdict.reason.as_deref() else {
+        // A schematic that passes is not "clean" to order: no board exists
+        // yet. The tag says so, and the sentence that says why is the lead
+        // of the conditions.
+        let unorderable = verdict.unorderable.as_deref();
         let conditions = verdict.conditions.join(" ");
+        if let (Some(why), None) = (unorderable, &copper_unvalidated) {
+            let rest = verdict.conditions_without(why).join(" ");
+            let also = if rest.is_empty() {
+                String::new()
+            } else {
+                format!(" Also: {rest}")
+            };
+            return format!(
+                "VERDICT: {}: 0 serious, {worth_a_look} worth a look; {why}{also}",
+                hauksbee_ir::vocabulary::NOT_ORDERABLE_TAG
+            );
+        }
         if let Some(CopperUnvalidated { reason, issues }) = copper_unvalidated {
             let on = if conditions.is_empty() {
                 String::new()

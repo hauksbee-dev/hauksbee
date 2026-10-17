@@ -789,7 +789,12 @@ impl ModelLibrary {
         if let Some(r) = self.resolved.read().ok().and_then(|m| cached(&m)) {
             return r;
         }
-        let r = self.resolve_uncached(q);
+        // A field of a megabyte is matched against every library entry in full:
+        // match on the cut one, so one hostile value cannot stall the run.
+        let r = q.bounded_for_matching().map_or_else(
+            || self.resolve_uncached(q),
+            |bounded| self.resolve_uncached(&bounded),
+        );
         if let Ok(mut memo) = self.resolved.write() {
             let memo = memo.get_or_insert_with(std::collections::HashMap::new);
             if memo.len() >= RESOLVED_CAP {
@@ -1343,6 +1348,42 @@ mod tests {
 
     fn lib() -> ModelLibrary {
         ModelLibrary::builtin()
+    }
+
+    /// A megabyte-long value used to cost a megabyte times every library entry
+    /// (a 3 MB one did not finish in two minutes). It is matched on its first
+    /// kilobyte now, and the answer for a short value is unchanged.
+    #[test]
+    fn a_huge_value_string_resolves_in_bounded_time() {
+        let started = std::time::Instant::now();
+        let huge = ComponentQuery {
+            value: Some("1".repeat(3_000_000)),
+            reference: Some("R3".to_string()),
+            ..Default::default()
+        };
+        let _ = lib().resolve(&huge);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "took {:?}",
+            started.elapsed()
+        );
+        let bounded = huge.bounded_for_matching().expect("cut");
+        assert_eq!(bounded.value.as_deref().map(str::len), Some(1024));
+        let short = ComponentQuery {
+            value: Some("10k".to_string()),
+            ..Default::default()
+        };
+        assert!(short.bounded_for_matching().is_none());
+    }
+
+    #[test]
+    fn a_cut_value_stays_on_a_character_boundary() {
+        let q = ComponentQuery {
+            value: Some("é".repeat(2_000)),
+            ..Default::default()
+        };
+        let cut = q.bounded_for_matching().expect("cut").value.expect("value");
+        assert!(cut.len() <= 1024 && cut.chars().all(|c| c == 'é'));
     }
 
     fn by_value(l: &ModelLibrary, value: &str) -> Resolution {
