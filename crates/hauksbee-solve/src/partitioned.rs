@@ -60,7 +60,7 @@ use rayon::prelude::*;
 
 use crate::error::{SolveError, SolvePhase, SolveResult};
 use crate::linear::LinearIsland;
-use crate::newton::{dc_operating_point, newton_solve, Workspace};
+use crate::newton::{dc_start_point, newton_solve, DcStart, Workspace};
 use crate::options::{ParallelPolicy, SolverOptions, StepControl};
 use crate::orchestrate::balance::{
     ensure_balanced, settle_rails, BalancePolicy, RailChannel, RailLoads,
@@ -554,7 +554,7 @@ impl PartitionedTransient {
         };
 
         // Seed all islands from a DC operating point, then exchange.
-        self.seed(circuit)?;
+        let stand_in = self.seed(circuit)?;
 
         // Cache exponentials for every linear island at this dt.
         for li in &mut self.linear {
@@ -567,6 +567,7 @@ impl PartitionedTransient {
         sink(StepSample {
             time: 0.0,
             x: &xglobal,
+            stand_in,
         });
 
         let mut t = 0.0;
@@ -612,6 +613,7 @@ impl PartitionedTransient {
             sink(StepSample {
                 time: t,
                 x: &xglobal,
+                stand_in: false,
             });
         }
         Ok(())
@@ -907,13 +909,21 @@ impl PartitionedTransient {
     /// byte-for-byte the legacy behaviour: the fallback only engages when the
     /// global DC errors, so the `rail_tear` bit-gate (whose fixtures have a
     /// converging DC) is untouched.
-    fn seed(&mut self, circuit: &Circuit) -> SolveResult<()> {
+    ///
+    /// Returns whether the seed is a stand-in rather than an operating point
+    /// (the relaxed seed, a decomposed estimate, an island's guess), which
+    /// the t = 0 sample then says ([`StepSample::stand_in`]).
+    fn seed(&mut self, circuit: &Circuit) -> SolveResult<bool> {
         // Use the monolithic DC solve to get a globally-consistent operating
         // point, then distribute it to island states and the exchange buffer.
+        // A starting state, so the staged ladder's relaxed seed serves as
+        // it does for the monolithic march.
         let mut ws = Workspace::new(circuit);
-        if dc_operating_point(&mut ws, circuit, &self.opts).is_err() {
-            return self.seed_decomposed(circuit);
-        }
+        let Ok(start) = dc_start_point(&mut ws, circuit, &self.opts, None) else {
+            self.seed_decomposed(circuit)?;
+            return Ok(true);
+        };
+        let mut stand_in = start == DcStart::RelaxedSeed;
         // Fill exchange buffer with node voltages (ground stays 0).
         for ni in 1..=self.n_nodes {
             self.vbuf[ni] = node_v(&ws, crate::node_id(ni));
@@ -928,9 +938,9 @@ impl PartitionedTransient {
         // Seed nonlinear islands from the same DC point (its boundary voltages
         // are in the buffer now); a block whose own DC fails fails the seed.
         for nl in &mut self.nonlinear {
-            nl.seed_from_vbuf(&self.vbuf, &self.opts, true)?;
+            stand_in |= nl.seed_from_vbuf(&self.vbuf, &self.opts, true)?;
         }
-        Ok(())
+        Ok(stand_in)
     }
 
     /// Decomposed seed for when the whole-circuit DC has no solution.
@@ -989,7 +999,7 @@ impl PartitionedTransient {
         //    writing each island's internal nodes back so the emitted t=0
         //    sample and the next step's boundary reads are consistent.
         for nl in &mut self.nonlinear {
-            nl.seed_from_vbuf(&self.vbuf, &self.opts, false)?;
+            let _guess = nl.seed_from_vbuf(&self.vbuf, &self.opts, false)?;
             nl.write_back(&mut self.vbuf);
         }
         Ok(())
@@ -1462,15 +1472,18 @@ impl NonlinearIsland {
     /// failure is expected, not fatal: the island may itself be an astable
     /// with no fixed point) the boundary estimates are projected onto every
     /// mapped node as the accepted start and the first marching steps
-    /// integrate out of the guess.
+    /// integrate out of the guess. Returns whether that start is a stand-in
+    /// (the guess, or the island's relaxed seed) rather than its DC root.
     fn seed_from_vbuf(
         &mut self,
         vbuf: &[f64],
         opts: &SolverOptions,
         strict: bool,
-    ) -> SolveResult<()> {
+    ) -> SolveResult<bool> {
         self.refresh_boundary(vbuf);
-        if let Err(e) = dc_operating_point(&mut self.ws, &self.sub, opts) {
+        let start = dc_start_point(&mut self.ws, &self.sub, opts, None);
+        let stand_in = start != Ok(DcStart::Root);
+        if let Err(e) = start {
             if strict {
                 return Err(e);
             }
@@ -1485,7 +1498,7 @@ impl NonlinearIsland {
         }
         self.x_accepted.copy_from_slice(&self.ws.x);
         crate::transient::seed_reactive_state(&mut self.state, &self.sub, &self.ws, opts);
-        Ok(())
+        Ok(stand_in)
     }
 
     /// Refresh boundary source values from the global exchange buffer.

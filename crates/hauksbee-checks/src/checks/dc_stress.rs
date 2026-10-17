@@ -839,12 +839,16 @@ enum Unsettled {
 /// One DC operating-point solve of `bound` into `ws`, accepted only when it
 /// is a root of the whole circuit ([`Unsettled`] otherwise).
 fn solve_dc(ws: &mut Workspace, bound: &BoundBoard) -> Result<(), Unsettled> {
-    dc_operating_point(ws, &bound.circuit, &SolverOptions::default())
-        .map_err(|_| Unsettled::NoSolve)?;
-    if ws.relaxed_seed_adopted() {
-        return Err(Unsettled::StandIn);
-    }
-    Ok(())
+    // `dc_operating_point` refuses every point that is not a root; the
+    // workspace still says whether the refusal was the relaxed stand-in.
+    let solved = dc_operating_point(ws, &bound.circuit, &SolverOptions::default());
+    solved.map_err(|_| {
+        if ws.relaxed_seed_adopted() {
+            Unsettled::StandIn
+        } else {
+            Unsettled::NoSolve
+        }
+    })
 }
 
 /// The finding for a class-only MOSFET (bound to an assumed corner set) that
@@ -1365,7 +1369,7 @@ mod tests {
         }
         let mut ws = Workspace::new(&bound.circuit);
         let solved = dc_operating_point(&mut ws, &bound.circuit, &SolverOptions::default());
-        let relaxed = solved.is_ok() && ws.relaxed_seed_adopted();
+        let relaxed = solved.is_err() && ws.relaxed_seed_adopted();
         (dc_stress_findings(bound), relaxed)
     }
 

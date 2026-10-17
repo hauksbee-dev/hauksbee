@@ -16,9 +16,10 @@
 use crate::shared::{add_capacitor, add_resistor, add_vdc};
 use hauksbee_ir::{Circuit, DiodeModel, NodeId};
 use hauksbee_solve::{
-    dc_operating_point, run_op, Probe, RobustnessLadder, SolverOptions, Strategy, Workspace,
+    dc_operating_point, dc_operating_point_seeded, dc_start_point, run_op, AcAnalysis, AcSpec,
+    DcStart, Probe, RobustnessLadder, SolverOptions, Strategy, Sweep, Transient, Workspace,
 };
-use hauksbee_testkit::circuits::{comparator, diode, res, vswitch};
+use hauksbee_testkit::circuits::{comparator, diode, res, sw, vswitch};
 
 fn build(n_stage: usize, diode_is: f64) -> (Circuit, NodeId, Vec<NodeId>) {
     let mut c = Circuit::new();
@@ -257,10 +258,12 @@ fn run_op_rejects_staged_dc_relaxed_surrogate() {
     let opts = SolverOptions::default();
     let c = build_comparator_diode_chatter();
 
-    // The seeding-layer contract is preserved: Ok, flagged, huge residual.
+    // The operating point the ladder settles on pins the chattering
+    // comparator (a root of the pinned circuit), so it is accepted, but its
+    // free residual is huge.
     let mut ws = Workspace::new(&c);
     dc_operating_point(&mut ws, &c, &opts)
-        .expect("dc_operating_point must still adopt the relaxed surrogate for seeding");
+        .expect("the pinned comparator point is a root of the pinned circuit");
     assert!(
         ws.used_staged_dc(),
         "the staged-DC fallback should have engaged"
@@ -279,6 +282,103 @@ fn run_op_rejects_staged_dc_relaxed_surrogate() {
         err.to_string().contains("did not converge"),
         "error should say non-convergence, got: {err}"
     );
+}
+
+/// A cell-balancing leg (+5V through a diode into K, K through 1k to ground)
+/// sharing its DC with a loop that has no self-consistent DC state: a switch
+/// that discharges the very integrator input that closes it, through a
+/// diode pulse stretcher. Every rung of the staged ladder stalls and it
+/// ends on its relaxed power-on point, every diode a 1 GΩ stand-in, where
+/// the leg's diode sits forward-biased by the whole rail.
+fn build_astable_reset_loop() -> Circuit {
+    let mut c = Circuit::new();
+    let (p5, k) = (c.node("P5"), c.node("K"));
+    add_vdc(&mut c, "V5", p5, NodeId::GROUND, 5.0);
+    diode(&mut c, "D1", p5, k, DiodeModel::default());
+    add_resistor(&mut c, "R1", k, NodeId::GROUND, 1e3);
+    let (vs, integ, cmp) = (c.node("VS"), c.node("INTEG"), c.node("CMP"));
+    let (a, out) = (c.node("A"), c.node("OUT"));
+    add_vdc(&mut c, "VS", vs, NodeId::GROUND, 5.0);
+    sw(&mut c, "SK", vs, cmp, integ, (2.5075, 2.4925), 1.0);
+    add_resistor(&mut c, "RPD", cmp, NodeId::GROUND, 10e3);
+    add_resistor(&mut c, "RCHARGE", cmp, a, 1e3);
+    diode(&mut c, "DSTRETCH", a, out, DiodeModel::default());
+    add_capacitor(&mut c, "CS", out, NodeId::GROUND, 10e-12, None);
+    add_resistor(&mut c, "RSTRETCH", out, NodeId::GROUND, 150e3);
+    add_resistor(&mut c, "RINT", vs, integ, 100e3);
+    add_capacitor(&mut c, "CINT", integ, NodeId::GROUND, 1e-9, None);
+    sw(
+        &mut c,
+        "SRESET",
+        integ,
+        NodeId::GROUND,
+        out,
+        (1.75, 1.25),
+        6.0,
+    );
+    c
+}
+
+/// Faulty solve: every entry point that hands back an OPERATING POINT (to
+/// read, linearize or report) refuses the relaxed surrogate, the warm-started
+/// one included (a seed at the surrogate itself falls back to the same cold
+/// ladder), and AC does not linearize around it. Legal use: `dc_start_point`
+/// still hands it over labelled, and a march opens on it and says so.
+#[test]
+fn every_operating_point_entry_refuses_the_relaxed_surrogate() {
+    let opts = SolverOptions::default();
+    let c = build_astable_reset_loop();
+
+    let mut ws = Workspace::new(&c);
+    let start = dc_start_point(&mut ws, &c, &opts, None).expect("a starting state");
+    assert_eq!(start, DcStart::RelaxedSeed);
+    assert!(ws.relaxed_seed_adopted());
+    let res = ws.dc_residual_inf_norm(&c, &opts);
+    assert!(
+        res.is_nan() || res > 1e-3,
+        "test premise: the surrogate is no root, residual {res:e}"
+    );
+    let surrogate = ws.x.clone();
+
+    let mut ws = Workspace::new(&c);
+    let err = dc_operating_point(&mut ws, &c, &opts).expect_err("the surrogate is no root");
+    assert!(ws.relaxed_seed_adopted(), "the refusal still says why");
+    assert!(err.to_string().contains("did not converge"), "{err}");
+    let mut ws = Workspace::new(&c);
+    assert!(dc_operating_point_seeded(&mut ws, &c, &opts, Some(&surrogate)).is_err());
+
+    let spec = AcSpec {
+        fstart: 1.0,
+        fstop: 1e3,
+        points: 2,
+        sweep: Sweep::Decade,
+    };
+    assert!(
+        AcAnalysis::new(opts).run(&c, &spec).is_err(),
+        "AC linearized around the relaxed surrogate"
+    );
+    assert!(run_op(&c, &opts, &[Probe::NodeVoltage("K".into())]).is_err());
+
+    let (wf, diag) = Transient::new(opts)
+        .run_with_diagnostics(&c, 1e-6)
+        .expect("the march still opens on the surrogate");
+    let op = diag
+        .operating_point
+        .expect("a DC-started march reports its t = 0 point");
+    assert!(op.relaxed_seed_adopted);
+    // The surrogate is no state of the circuit, so no waveform reports it,
+    // and a streaming consumer is told which sample it is.
+    assert!(
+        wf.time.first().is_some_and(|&t| t > 0.0),
+        "{:?}",
+        wf.time.first()
+    );
+    let mut flags = Vec::new();
+    Transient::new(opts)
+        .run_streaming(&c, 1e-6, |s| flags.push((s.time, s.stand_in)))
+        .expect("streamed march");
+    assert_eq!(flags.first(), Some(&(0.0, true)));
+    assert!(flags.iter().skip(1).all(|&(_, stand_in)| !stand_in));
 }
 
 /// Control for the honesty gate: an ordinary convergent circuit (including one

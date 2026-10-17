@@ -36,7 +36,7 @@ use hauksbee_mcu::{Mcu, PinId};
 use hauksbee_models::{Bus, PeripheralSpec};
 use hauksbee_solve::{
     dc_operating_point_seeded, DcInit, Layout, MarchCarry, OperatingPointReport, SolverOptions,
-    Transient, TransientDiagnostics, Workspace,
+    StepSample, Transient, TransientDiagnostics, Workspace,
 };
 
 use crate::peripherals::{
@@ -169,6 +169,20 @@ impl ChunkThermalAccum {
         self.drive_s = 0.0;
         self.start_x.clear();
         self.steps.clear();
+    }
+
+    /// Take a streamed sample as the march's `start_x` if it is the first,
+    /// and say whether it is a stand-in ([`StepSample::stand_in`]): the
+    /// relaxed seed of a DC with no root, where the march left from but no
+    /// state of the board. Nothing is read off one: no step series, no
+    /// published or recovered state, no charge or power, so every trapezoid
+    /// opens at the first solved step and a march that fails before one
+    /// recovers nothing.
+    fn open_at(&mut self, s: &StepSample) -> bool {
+        if self.start_x.is_empty() {
+            self.start_x.extend_from_slice(s.x);
+        }
+        s.stand_in
     }
 
     /// Record one accepted step at the watched nodes (ground reads 0 V).
@@ -4262,8 +4276,8 @@ impl Scheduler {
         let mut drive_prev: Option<(f64, Vec<f64>)> = None;
         let watch = &self.step_watch;
         let res = t.run_streaming_seeded_with_diagnostics(&self.circuit, tstop, seed, |s| {
-            if thermal.start_x.is_empty() {
-                thermal.start_x.extend_from_slice(s.x);
+            if thermal.open_at(&s) {
+                return;
             }
             thermal.record_step(watch, s.time, s.x);
             final_x.clear();

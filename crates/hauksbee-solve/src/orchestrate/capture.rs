@@ -62,7 +62,7 @@ use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, PwlPoint, SourceKind};
 
 use crate::decompose::conduction::ConductionGraph;
 use crate::decompose::rails::fragment_blocks;
-use crate::newton::{dc_operating_point, dc_polish, Workspace};
+use crate::newton::{dc_polish, dc_start_point, Workspace};
 use crate::options::{DcInit, Partitioning, SolverOptions, StepControl};
 use crate::orchestrate::{resample, uniform_grid};
 use crate::partition::{Partition, RailTear};
@@ -534,9 +534,11 @@ pub fn execute_stiff_group_held_capped(
     };
     let mut rest: HashMap<u32, f64> = HashMap::new();
     let mut bootstrapped = false;
+    // Rest ESTIMATES that seed the relaxation rounds below, so the staged
+    // ladder's relaxed seed serves as a first guess like any other.
     let whole_dc = {
         let mut ws = Workspace::new(sub);
-        dc_operating_point(&mut ws, sub, opts).ok().map(|()| ws)
+        dc_start_point(&mut ws, sub, opts, None).ok().map(|_| ws)
     };
     if let Some(ws) = whole_dc {
         for c in candidates {
@@ -560,7 +562,7 @@ pub fn execute_stiff_group_held_capped(
                 }
             }
             let mut ws = Workspace::new(&cap);
-            let solved = dc_operating_point(&mut ws, &cap, opts).is_ok();
+            let solved = dc_start_point(&mut ws, &cap, opts, None).is_ok();
             for c in cluster {
                 let v = if solved {
                     g2l.get(&c.0)
@@ -899,7 +901,8 @@ pub fn execute_composed_group(
     let mut bootstrapped = true;
     {
         let mut ws = Workspace::new(sub);
-        if dc_operating_point(&mut ws, sub, opts).is_ok() {
+        // Seeds for the rail-balance passes, which correct them.
+        if dc_start_point(&mut ws, sub, opts, None).is_ok() {
             bootstrapped = false;
             for s in signal_cuts {
                 rest.insert(s.0, ws.layout.node(*s).map_or(0.0, |i| ws.x[i]));

@@ -45,7 +45,8 @@ frozen at the converged DC operating point. AC reuses:
 
 - the same MNA `Layout` (node + branch unknown numbering),
 - the same `dc_operating_point` solve (real Newton with gmin / source-stepping
-  homotopy),
+  homotopy), which returns only a root: a ladder that ends on its relaxed
+  power-on stand-in is an error, so AC never linearizes about it,
 
 and extends only the linear-algebra step to complex. The DC OP is computed
 once per sweep. Only the per-frequency complex assemble-and-solve repeats.

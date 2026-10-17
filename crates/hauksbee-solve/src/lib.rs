@@ -76,7 +76,9 @@ pub use diagnostics::take_strategy_activations;
 pub use error::{SolveError, SolvePhase, SolveResult};
 pub use linear::LinearIsland;
 pub use loop_stability::{margins_from_bode, phase_margin, LoopStability, StabilityMargins};
-pub use newton::{dc_operating_point, dc_operating_point_seeded, Workspace};
+pub use newton::{
+    dc_operating_point, dc_operating_point_seeded, dc_start_point, DcStart, Workspace,
+};
 pub use options::{
     AssemblyMode, DcInit, DeviceEffects, EventRetryTuning, Integration, NewtonBypass,
     ParallelPolicy, Partitioning, RobustnessLadder, SolverOptions, StepControl, Strategy,
