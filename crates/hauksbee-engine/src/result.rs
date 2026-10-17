@@ -2302,7 +2302,9 @@ impl Serialize for JsonFinding {
         if let Some(layer) = &self.layer {
             state.serialize_field("layer", layer)?;
         }
-        state.serialize_field("refs", &self.refs)?;
+        // The implicated parts are a set: print them in natural designator
+        // order so a file that lists its parts differently reports the same.
+        state.serialize_field("refs", &hauksbee_ir::order::sorted_refs(&self.refs))?;
         state.serialize_field("actionable", &self.actionable)?;
         state.serialize_field("message", &self.message)?;
         state.serialize_field("plain", &self.plain)?;

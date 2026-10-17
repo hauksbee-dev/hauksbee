@@ -609,23 +609,12 @@ fn bulk_fallback_passive_kind(row: &BindRow) -> Option<&'static str> {
 
 /// Natural sort key for a reference designator: alpha prefix (case-folded),
 /// then the numeric part as a NUMBER (so R2 sorts before R10), then any
-/// remaining suffix.
+/// remaining suffix. The one definition lives in [`hauksbee_ir::order`].
 ///
 /// Shared by every user-facing table that lists parts.
 #[must_use]
 pub fn natural_ref_key(reference: &str) -> (String, u64, String) {
-    let prefix: String = reference
-        .chars()
-        .take_while(|c| !c.is_ascii_digit())
-        .collect();
-    let rest = &reference[prefix.len()..];
-    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    let suffix = rest[digits.len()..].to_string();
-    (
-        prefix.to_ascii_uppercase(),
-        digits.parse().unwrap_or(0),
-        suffix,
-    )
+    hauksbee_ir::order::natural_ref_key(reference)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -813,6 +802,17 @@ impl BindSummary {
                 });
             }
         }
+
+        // The rows come in the order the board file listed its parts; the
+        // summary is what reaches JSON, so it reads the same whatever that was.
+        let by_part = |a: &UnresolvedActive, b: &UnresolvedActive| {
+            hauksbee_ir::order::cmp_refs(&a.reference, &b.reference)
+                .then_with(|| a.value.cmp(&b.value))
+                .then_with(|| a.reason.cmp(&b.reason))
+                .then_with(|| a.consequence.cmp(&b.consequence))
+        };
+        active_path_unresolved.sort_by(by_part);
+        resolved_but_open_active.sort_by(by_part);
 
         Self {
             resolved: report.resolved_count(),

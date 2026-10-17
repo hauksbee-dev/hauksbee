@@ -20,6 +20,7 @@ pub mod docs_url;
 pub mod evidence;
 pub mod glossary;
 mod models;
+pub mod order;
 pub mod run_record;
 mod source;
 mod spice;

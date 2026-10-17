@@ -668,6 +668,23 @@ impl ExtractedBoard {
         reader::Registry::builtin().read(text.as_bytes(), None)
     }
 
+    /// Put the board's lists in canonical order: components by designator
+    /// (natural, then every other field), nets by name.
+    ///
+    /// A board file lists its parts and nets in whatever order the CAD tool
+    /// wrote them, and reordering the file does not change the circuit. Every
+    /// consumer downstream (the binder's duplicate-designator pairs, the checks'
+    /// iteration, the lists in the report) reads these two vectors, so putting
+    /// them in one order here makes the whole report independent of the file's
+    /// order instead of fixing each list where it surfaces. Net ids are left as
+    /// the reader assigned them: pins refer to them, and nothing indexes `nets`
+    /// by id.
+    pub fn canonicalize(&mut self) {
+        self.components.sort_by(cmp_components);
+        self.nets
+            .sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+    }
+
     #[must_use]
     pub fn net(&self, id: i64) -> Option<&Net> {
         self.nets.iter().find(|n| n.id == id)
@@ -732,6 +749,40 @@ impl ExtractedBoard {
         }
         lint
     }
+}
+
+/// Total order on components: designator first (natural, so R2 precedes R10),
+/// then every other field, so two parts that differ in anything sort the same
+/// way whatever order the file listed them in. Parts equal in every field are
+/// interchangeable.
+fn cmp_components(a: &Component, b: &Component) -> std::cmp::Ordering {
+    let position = |c: &Component| c.position.map(|(x, y, r)| [x, y, r]);
+    let cmp_position = |x: Option<[f64; 3]>, y: Option<[f64; 3]>| match (x, y) {
+        (None, None) => std::cmp::Ordering::Equal,
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (Some(_), None) => std::cmp::Ordering::Greater,
+        (Some(x), Some(y)) => x
+            .iter()
+            .zip(y.iter())
+            .map(|(p, q)| p.total_cmp(q))
+            .find(|o| o.is_ne())
+            .unwrap_or(std::cmp::Ordering::Equal),
+    };
+    let pins = |c: &Component| -> Vec<(String, Option<i64>, String, String)> {
+        c.pins
+            .iter()
+            .map(|p| (p.number.clone(), p.net, p.function.clone(), p.kind.clone()))
+            .collect()
+    };
+    hauksbee_ir::order::cmp_refs(&a.reference, &b.reference)
+        .then_with(|| a.value.cmp(&b.value))
+        .then_with(|| a.lib_id.cmp(&b.lib_id))
+        .then_with(|| a.footprint.cmp(&b.footprint))
+        .then_with(|| a.layer.cmp(&b.layer))
+        .then_with(|| a.dnp.cmp(&b.dnp))
+        .then_with(|| cmp_position(position(a), position(b)))
+        .then_with(|| a.properties.cmp(&b.properties))
+        .then_with(|| pins(a).cmp(&pins(b)))
 }
 
 /// Reverse KiCad's `{token}` name escape.
@@ -1569,5 +1620,55 @@ mod read_regular_file_tests {
     fn a_directory_is_refused_with_its_own_wording() {
         let err = read_regular_file(&std::env::temp_dir()).unwrap_err();
         assert!(err.to_string().contains("a directory"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod canonical_order_tests {
+    use super::{Component, ExtractedBoard, Net};
+
+    fn part(reference: &str, value: &str) -> Component {
+        Component {
+            reference: reference.into(),
+            value: value.into(),
+            ..Component::default()
+        }
+    }
+
+    fn board(refs: &[(&str, &str)], nets: &[(i64, &str)]) -> ExtractedBoard {
+        ExtractedBoard {
+            name: "t".into(),
+            nets: nets.iter().map(|&(i, n)| Net::new(i, n)).collect(),
+            components: refs.iter().map(|&(r, v)| part(r, v)).collect(),
+        }
+    }
+
+    #[test]
+    fn components_and_nets_come_out_in_one_order_whatever_the_file_order() {
+        let mut a = board(
+            &[("R10", "1k"), ("R2", "1k"), ("C1", "1u"), ("R2", "0")],
+            &[(2, "VCC"), (1, "GND"), (3, "AREF")],
+        );
+        let mut b = board(
+            &[("R2", "0"), ("C1", "1u"), ("R2", "1k"), ("R10", "1k")],
+            &[(3, "AREF"), (1, "GND"), (2, "VCC")],
+        );
+        a.canonicalize();
+        b.canonicalize();
+        let refs = |x: &ExtractedBoard| -> Vec<(String, String)> {
+            x.components
+                .iter()
+                .map(|c| (c.reference.clone(), c.value.clone()))
+                .collect()
+        };
+        assert_eq!(refs(&a), refs(&b));
+        // Natural order (R2 before R10), duplicates ordered by their contents.
+        let order: Vec<&str> = a.components.iter().map(|c| c.reference.as_str()).collect();
+        assert_eq!(order, ["C1", "R2", "R2", "R10"]);
+        let names = |x: &ExtractedBoard| -> Vec<(i64, String)> {
+            x.nets.iter().map(|n| (n.id, n.name.clone())).collect()
+        };
+        assert_eq!(names(&a), names(&b));
+        assert_eq!(a.nets[0].name, "AREF");
     }
 }

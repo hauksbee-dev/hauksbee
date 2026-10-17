@@ -128,6 +128,16 @@ pub struct NormalizedBoard {
 }
 
 impl NormalizedBoard {
+    /// The board with its parts and nets in canonical order
+    /// ([`ExtractedBoard::canonicalize`]), so what the report says does not
+    /// depend on the order the input file listed them in. Every loader above
+    /// ends here, which makes the CLI, CI and the web front door agree.
+    #[must_use]
+    fn canonical(mut self) -> Self {
+        self.board.canonicalize();
+        self
+    }
+
     /// A binary Altium board: DRC comes from the raw bytes twin, and there is
     /// no layout text. What call sites mean by `is_binary` / `altium.is_some()`.
     #[must_use]
@@ -415,6 +425,14 @@ pub fn unsupported_format_refusal(file_name: &str, raw: &[u8]) -> Option<String>
 /// zip that cannot be routed, Board-as-Code that does not compile, or content
 /// no reader recognises or can parse.
 pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, BoardInputError> {
+    from_bytes_in_file_order(file_name, contents).map(NormalizedBoard::canonical)
+}
+
+#[allow(clippy::too_many_lines)] // the format-dispatch ladder, in precedence order
+fn from_bytes_in_file_order(
+    file_name: &str,
+    contents: &[u8],
+) -> Result<NormalizedBoard, BoardInputError> {
     refuse_eagle_binary(file_name, contents)?;
 
     // An ODB++ archive, checked before anything else because its container is a
@@ -544,8 +562,12 @@ pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, B
 /// Returns [`BoardInputError::NotFound`] or [`BoardInputError::Io`] when the
 /// path cannot be read, and the same format errors as [`from_bytes`] plus
 /// gerber-directory and `.kicad_sch` hierarchy failures.
-#[allow(clippy::too_many_lines)] // the format-dispatch ladder, in precedence order
 pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
+    from_path_in_file_order(path).map(NormalizedBoard::canonical)
+}
+
+#[allow(clippy::too_many_lines)] // the format-dispatch ladder, in precedence order
+fn from_path_in_file_order(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
     let file_name = path
         .file_name()
         .and_then(|s| s.to_str())

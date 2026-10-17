@@ -136,6 +136,8 @@ mod i2c_sensor_cosim_renode;
 mod indicator_not_judged;
 #[path = "inhibitory_miswire.rs"]
 mod inhibitory_miswire;
+#[path = "input_order_stable.rs"]
+mod input_order_stable;
 #[path = "interactive_coverage_parity.rs"]
 mod interactive_coverage_parity;
 #[path = "json_finding_public_api.rs"]
