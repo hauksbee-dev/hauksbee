@@ -3,18 +3,15 @@
 //! while the verdict names the missing sheet as scope the run did not cover, so
 //! a clean result over the rest cannot read as a clean design.
 //!
-//! The Easyduino ESP32-S3 fixtures are verbatim upstream root schematics; each
-//! test copies the root alone, so its `References.kicad_sch` sheet is missing.
+//! The Easyduino ESP32-S3 fixtures are verbatim upstream root schematics
+//! without the `References.kicad_sch` sheet they name (see the fixture README).
 
 use crate::support::{board, run_board};
 
 fn json_run(side: &str) -> (i32, serde_json::Value) {
-    let src = board(&format!(
-        "../../qc/defect_regressions/fixtures/easyduino_esp32s3_uart_tx_crossed/{side}/Easyduino_ESP32S3.kicad_sch"
+    let root = board(&format!(
+        "tests/fixtures/easyduino_missing_subsheet/{side}.kicad_sch"
     ));
-    let dir = tempfile::tempdir().expect("temp dir");
-    let root = dir.path().join("Easyduino_ESP32S3.kicad_sch");
-    std::fs::copy(&src, &root).expect("copy the root sheet alone");
     let out = run_board(&root, &["--check", "--json", "--strict"]);
     let code = out.status.code().expect("exit code");
     let doc = serde_json::from_slice(&out.stdout).expect("a JSON report on stdout");
