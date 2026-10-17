@@ -2177,6 +2177,87 @@ mod tests {
         assert!((driven_high(&flat, 5.0).unwrap() - 4.5).abs() < 1e-9);
     }
 
+    /// Control for a card whose level rows are printed at a heavy test current
+    /// (TI SN74LVC244A, SCAS414AG 5.5, 25 °C column): VOH 2.3 V min at VCC 3 V,
+    /// IOH = -24 mA, and VCC - 0.2 V at IOH = -100 uA over 1.65 V to 3.6 V;
+    /// VOL 0.55 V max at 24 mA and 0.1 V at 100 uA. Loaded as cards load, an
+    /// unloaded output sits within 0.2 V of its rail, and a 24 mA load drops it
+    /// by I·ro through the resistance the binder stamps, landing on the
+    /// datasheet's own loaded row at its 3 V test supply.
+    #[test]
+    fn a_heavy_load_level_row_drives_the_rail_unloaded_and_drops_by_i_ro() {
+        let src = "[[models]]\nid = \"lvc\"\nkind = \"digital\"\ndescription = \"t\"\n\
+            [models.params]\n\
+            voh = { min = 2.3, unit = \"V\", conditions = \"VCC = 3 V, IOH = -24 mA, TA = 25 °C\", basis = \"5.5 VOH\" }\n\
+            vol = { max = 0.55, unit = \"V\", conditions = \"VCC = 3 V, IOL = 24 mA, TA = 25 °C\", basis = \"5.5 VOL\" }\n\
+            vih = 2.0\nvil = 0.8\n\
+            [models.source]\ntier = \"datasheet-derived\"\n\
+            [[models.source.characteristic]]\nparameter = \"VOH\"\nunit = \"V\"\n\
+            conditions = \"VCC = 1.65 V to 3.6 V, IOH = -100 uA, TA = 25 °C\"\nbasis = \"5.5 VOH, VCC - 0.2\"\n\
+            [[models.source.characteristic]]\nparameter = \"VOL\"\nmax = 0.1\nunit = \"V\"\n\
+            conditions = \"VCC = 1.65 V to 3.6 V, IOL = 100 uA, TA = 25 °C\"\nbasis = \"5.5 VOL\"\n";
+        let db: hauksbee_models::schema::DbFile = toml::from_str(src).expect("fixture parses");
+        let mut m = db.models.into_iter().next().expect("one card");
+        hauksbee_models::output_load::light_load_levels(&mut m);
+        let (i, ro) = (0.024_f64, LogicLevels::from_params(&m).ro);
+        // max((2.8 - 2.3) / 24 mA, (0.55 - 0.1) / 24 mA) = 20.8 ohm.
+        assert!((ro - 20.8).abs() < 1e-9, "ro {ro}");
+        for vcc in [1.8, 2.5, 3.0, 3.3, 3.6] {
+            let (open, ohms) = stamped_high(&m, vcc, ro);
+            assert!(
+                open <= vcc && vcc - open <= 0.2 + 1e-9,
+                "{open} V unloaded on {vcc} V"
+            );
+            // A load drawing about 24 mA: the Thevenin divider through the stamped ro.
+            let load = i.mul_add(-ro, open) / i;
+            let loaded = open * load / (load + ohms);
+            assert!(
+                i.mul_add(-ro, open - loaded).abs() < 1e-9,
+                "{vcc} V: {open} -> {loaded}"
+            );
+            if (vcc - 3.0).abs() < 1e-9 {
+                assert!((loaded - 2.3).abs() < 0.01, "the 24 mA row: {loaded}");
+            }
+        }
+    }
+
+    /// The level and series resistance a one-output part stamps onto its pin
+    /// when its input reads high, its supply reads `vcc` and its driver is
+    /// stamped at `ro` (as the binder stamps it).
+    fn stamped_high(m: &hauksbee_models::ModelEntry, vcc: f64, ro: f64) -> (f64, f64) {
+        let mut circuit = Circuit::new();
+        let [input, out, rail] = ["A", "Y", "VCC"].map(|n| circuit.node(n));
+        let drivers = HashMap::from([(
+            "y1".to_string(),
+            PinDriver::stamp(&mut circuit, out, "y1", "y1", ro),
+        )]);
+        let r = roles(&[("a1", input), ("y1", out), ("vcc", rail)]);
+        let mut part = DigitalComponent::new("U1".into(), m, r, drivers).expect("passthrough");
+        part.tick(&mut circuit, &|n| {
+            if n == input {
+                3.3
+            } else if n == rail {
+                vcc
+            } else {
+                0.0
+            }
+        });
+        let drv = &part.drivers["y1"];
+        assert!(drv.enabled, "drives at {vcc} V");
+        let level = match &circuit.devices[drv.vsource.0 as usize] {
+            Device::Vsource {
+                kind: SourceKind::Dc(v),
+                ..
+            } => *v,
+            other => panic!("a DC source: {other:?}"),
+        };
+        let ohms = match &circuit.devices[drv.resistor.0 as usize] {
+            Device::Resistor { ohms, .. } => *ohms,
+            other => panic!("a resistor: {other:?}"),
+        };
+        (level, ohms)
+    }
+
     /// The level bound itself: drive levels stay inside `[0, vcc]` and `vol`
     /// never above `voh`, at every rail voltage, including unresolved ones.
     #[test]

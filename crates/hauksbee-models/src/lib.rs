@@ -65,6 +65,7 @@ pub mod logic_spec;
 pub mod matcher;
 pub mod mcu_modules;
 pub mod netclass;
+pub mod output_load;
 pub mod pack;
 pub mod package;
 pub mod param_names;
@@ -1031,6 +1032,9 @@ impl ModelLibrary {
             entry.derating = derating::Derating::of(&entry);
             entry.pin_standard = validation::pin_standard(&entry).map(str::to_owned);
             entry.pin_package = validation::pin_package(&entry).map(str::to_owned);
+            // A level printed at a heavy test current is the light-load level
+            // behind an output resistance (`output_load`), for every digital card.
+            let (load_rows, load_records) = output_load::light_load_levels(&mut entry);
             let mut declaration = entry.source.take();
             if let Some(Err(e)) = declaration.as_ref().map(schema::ModelSourceSpec::validate) {
                 return Err(invalid(format!("[models.source]: {e}")));
@@ -1048,11 +1052,13 @@ impl ModelLibrary {
             if let Some(source) = declaration.as_mut() {
                 let rows = compiled.entry.params.rows();
                 let rows = rows.filter_map(|(key, row)| param_names::row_characteristic(key, row));
-                source.characteristic.extend(rows);
+                source.characteristic.extend(rows.chain(load_rows));
                 // What a MOSFET law rests on (vto's declared threshold range, the
-                // law's error at each RDS(on) row) is stated, never left in a
-                // comment; it joins, not replaces, the model-error record.
-                let law = param_names::mosfet_law_evidence(&compiled.entry);
+                // law's error at each RDS(on) row), and a loaded level's light-load
+                // working, is stated, never left in a comment; it joins, not
+                // replaces, the model-error record.
+                let mut law = param_names::mosfet_law_evidence(&compiled.entry);
+                law.extend(load_records);
                 if source.uncertainty.is_empty() && !law.is_empty() {
                     source.uncertainty.push(default_model_uncertainty(&id));
                 }
@@ -1344,6 +1350,39 @@ mod tests {
             value: Some(value.to_string()),
             ..Default::default()
         })
+    }
+
+    /// A loaded digital card whose `voh`/`vol` rows are printed at 24 mA (the
+    /// extracted SN74LVC244A shape, SCAS414AG 5.5) resolves with the
+    /// light-load level, a derived `ro`, and both workings on its evidence.
+    #[test]
+    fn a_loaded_level_row_resolves_as_its_light_load_level() {
+        let mut l = ModelLibrary::empty();
+        l.load_toml_str(
+            "[[models]]\nid = \"lvc\"\nkind = \"digital\"\n[models.source]\n\
+             tier = \"datasheet-derived\"\nvalidation = \"physical-bounds-only\"\n\
+             [models.match]\nvalue_re = \"^LVCX$\"\n[models.params]\n\
+             voh = { min = 2.0, unit = \"V\", conditions = \"VCC = 3 V, IOH = -24 mA\", basis = \"5.5 VOH\" }\n\
+             vol = { max = 0.8, unit = \"V\", conditions = \"VCC = 3 V, IOL = 24 mA\", basis = \"5.5 VOL\" }\n",
+            "lvc",
+            SourceLayer::UserDir,
+        )
+        .unwrap();
+        let resolved = by_value(&l, "LVCX");
+        let model = resolved.model.expect("resolves");
+        assert!((model.params.get_f64("voh").unwrap() - 3.0).abs() < 1e-9);
+        assert!((model.params.get_f64("ro").unwrap() - 41.7).abs() < 1e-9);
+        let records = resolved
+            .provenance
+            .expect("a source")
+            .uncertainty()
+            .to_vec();
+        let named = |p: &str| {
+            records.iter().any(
+                |u| matches!(u, ModelUncertainty::Interval { parameter, .. } if parameter == p),
+            )
+        };
+        assert!(named("voh") && named("vol") && named("ro"), "{records:?}");
     }
 
     fn card(name: &str, kind: spice_input::SpiceCardKind, model_type: Option<&str>) -> SpiceCard {

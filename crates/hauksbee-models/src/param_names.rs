@@ -518,6 +518,7 @@ pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
     }
     out.extend(row_slips(entry, rows));
     out.extend(stated_abstentions(entry));
+    out.extend(crate::output_load::heavy_level_warnings(entry));
     out.extend(law_warning(entry, rows).or_else(|| ron_miss(entry)));
     out.extend(gain_warning(entry, rows));
     out.extend(channel_slips(entry, rows));

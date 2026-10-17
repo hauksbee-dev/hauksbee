@@ -5385,8 +5385,12 @@ reason = "datasheet publishes a finite maximum but no finite minimum VOL specifi
 value_re = "(?i)^SN74AHCT14"
 
 [models.params]
-voh = 3.8 # Source: Table 6.5 Electrical Characteristics, SN74AHCT14 min, VCC = 4.5 V, IOH = -8 mA
-vol = 0.44 # Source: Table 6.5 Electrical Characteristics, SN74AHCT14 max, VCC = 4.5 V, IOL = 8 mA
+voh = 4.4 # Source: Table 6.5 Electrical Characteristics, SN74AHCT14 min, VCC = 4.5 V, IOH = -50 uA (the light-load level)
+vol = 0.1 # Source: Table 6.5 Electrical Characteristics, SN74AHCT14 max, VCC = 4.5 V, IOL = 50 uA (the light-load level)
+# Table 6.5 at VCC = 4.5 V, -40 to 125 C column: VOH 3.8 V min at IOH = -8 mA,
+# VOL 0.44 V max at IOL = 8 mA. (4.4 - 3.8) / 8 mA = 75 ohm high side,
+# (0.44 - 0.1) / 8 mA = 42.5 ohm low side; the weaker side drives both.
+ro = 75.0
 vih = 1.9 # Source: Table 6.5 Electrical Characteristics, SN74AHCT14 VT+ max, VCC = 4.5 V
 vil = 0.5 # Source: Table 6.5 Electrical Characteristics, SN74AHCT14 VT- min, VCC = 4.5 V
 tpd_s = 4.0e-9 # Source: Table 6.6 Switching Characteristics, TA = 25 C typ, A to Y, CL = 15 pF

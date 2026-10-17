@@ -1387,10 +1387,11 @@ pub enum OperatingEnvelope {
     },
 }
 
-/// The highest voltage a card rates the signal pin `role` for, independent of
-/// the part's supply: the absolute maximum (else the recommended maximum) of
-/// every `supply_range` row on that pin and every `input_tolerance` row
-/// listing it. `None` when the card rates the pin only through its supply.
+/// The highest voltage a card rates the signal pin `role` for, whatever its supply.
+///
+/// The absolute maximum (else the recommended maximum) of every `supply_range`
+/// row on that pin and every `input_tolerance` row listing it. `None` when the
+/// card rates the pin only through its supply.
 #[must_use]
 pub fn declared_pin_ceiling_v(envelope: &[OperatingEnvelope], role: &str) -> Option<f64> {
     let ceiling = |e: &OperatingEnvelope| match e {
