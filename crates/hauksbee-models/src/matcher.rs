@@ -24,6 +24,34 @@ pub struct CompiledEntry {
     property_res: Vec<(String, Regex)>,
 }
 
+/// A query's value as the value rules read it, worked out once per library scan.
+pub struct PreparedValue {
+    value: String,
+    /// Length of the value without a trailing parenthesised package.
+    bare: Option<usize>,
+}
+
+impl PreparedValue {
+    /// A comma is normalised before the value regex runs, by the same rule
+    /// the value parser uses: "4,7k" is 4.7k, "10,000" and "4,700uF" are
+    /// thousands groupings.
+    ///
+    /// A part value often carries its package as a trailing parenthesis
+    /// ("BAT54A(SOT23-3)"). The rule may name the whole string or only the
+    /// part, so it matches if either spelling does.
+    #[must_use]
+    pub fn of(q: &ComponentQuery) -> Self {
+        let value = crate::value::normalise_comma_decimal(q.value.as_deref().unwrap_or(""));
+        // The suffix pattern is anchored, so the bare part is a prefix of the value.
+        let bare = strip_package_suffix(&value).map(str::len);
+        Self { value, bare }
+    }
+
+    fn bare(&self) -> Option<&str> {
+        self.bare.map(|end| &self.value[..end])
+    }
+}
+
 impl CompiledEntry {
     /// Compile a [`ModelEntry`]'s match rules into regex objects.
     ///
@@ -63,6 +91,14 @@ impl CompiledEntry {
     /// Rules are AND-ed: every populated rule must match.
     #[must_use]
     pub fn matches(&self, q: &ComponentQuery) -> bool {
+        self.matches_prepared(q, &PreparedValue::of(q))
+    }
+
+    /// [`Self::matches`] with the query's value already normalised: a library
+    /// scan asks every entry about the same query, so the work on the value
+    /// (a copy, a regex for a package suffix) is done once, not once per entry.
+    #[must_use]
+    pub fn matches_prepared(&self, q: &ComponentQuery, prepared: &PreparedValue) -> bool {
         fn field(v: Option<&String>) -> &str {
             v.map_or("", String::as_str)
         }
@@ -75,16 +111,10 @@ impl CompiledEntry {
                 query_lid == lid
             }
         });
-        // A comma is normalised before the value regex runs, by the same rule
-        // the value parser uses: "4,7k" is 4.7k, "10,000" and "4,700uF" are
-        // thousands groupings.
-        let value = crate::value::normalise_comma_decimal(field(q.value.as_ref()));
-        // A part value often carries its package as a trailing parenthesis
-        // ("BAT54A(SOT23-3)"). The rule may name the whole string or only the
-        // part, so it matches if either spelling does.
-        let bare = strip_package_suffix(&value);
+        let value = prepared.value.as_str();
+        let bare = prepared.bare();
         let re_ok = |re: &Option<Regex>, text: &str| re.as_ref().is_none_or(|re| re.is_match(text));
-        let value_ok = |re: &Option<Regex>| re_ok(re, &value) || bare.is_some_and(|b| re_ok(re, b));
+        let value_ok = |re: &Option<Regex>| re_ok(re, value) || bare.is_some_and(|b| re_ok(re, b));
         // Named source properties: every authored rule is required, and a
         // missing property is not evidence, so it cannot match.
         let properties_ok = self.property_res.iter().all(|(expected_key, regex)| {

@@ -238,6 +238,30 @@ fn push_model_rows(
     Ok(())
 }
 
+/// What [`open_part_bound`] looks parts and nets up in, built once per board so
+/// each row is a lookup, not a scan of every part and net.
+struct OpenPartIndex<'a> {
+    by_reference: HashMap<&'a str, Vec<&'a hauksbee_extract::Component>>,
+    ground_nets: HashSet<i64>,
+}
+
+impl<'a> OpenPartIndex<'a> {
+    fn of(board: &'a ExtractedBoard) -> Self {
+        let mut by_reference: HashMap<&str, Vec<&hauksbee_extract::Component>> = HashMap::new();
+        for c in &board.components {
+            by_reference.entry(c.reference.trim()).or_default().push(c);
+        }
+        let ground_nets = (board.nets.iter())
+            .filter(|n| crate::binder::is_ground(&n.name))
+            .map(|n| n.id)
+            .collect();
+        Self {
+            by_reference,
+            ground_nets,
+        }
+    }
+}
+
 /// The worst-case bound that makes the open part `reference` unable to change
 /// any result, or `None` when it stays critical. One rule, sound for ANY part:
 ///
@@ -256,19 +280,14 @@ fn push_model_rows(
 /// current from outside), several pads on one net (a charged part shorted by
 /// copper is stressed where no check sees it), and every clamp, connector or
 /// active part, whose worst case nothing on an open part bounds.
-fn open_part_bound(board: &ExtractedBoard, reference: &str) -> Option<String> {
+fn open_part_bound(index: &OpenPartIndex<'_>, reference: &str) -> Option<String> {
     let reference = reference.trim();
-    let mut named = board
-        .components
-        .iter()
-        .filter(|c| c.reference.trim() == reference);
-    let (part, None) = (named.next()?, named.next()) else {
+    let [part] = index.by_reference.get(reference)?[..] else {
         return None;
     };
     let first = part.pins.first()?;
     let net = first.net?;
-    let ground = |n: &hauksbee_extract::Net| n.id == net && crate::binder::is_ground(&n.name);
-    let single = board.nets.iter().any(ground)
+    let single = index.ground_nets.contains(&net)
         && part
             .pins
             .iter()
@@ -407,8 +426,9 @@ impl BoardEvidence {
         let (component_subjects, row_subjects) = component_occurrence_subjects(board, report);
         let mut assumptions = Vec::new();
         let mut conditions = Vec::new();
+        let open_index = OpenPartIndex::of(board);
         let row_bounds: Vec<Option<String>> = (report.rows.iter())
-            .map(|row| open_part_bound(board, &row.reference))
+            .map(|row| open_part_bound(&open_index, &row.reference))
             .collect();
         assumptions.extend(open_part_assumptions(report, &row_subjects, &row_bounds));
         // A variant set the board could not narrow bound a same-pinout stand-in.
@@ -605,9 +625,18 @@ impl BoardEvidence {
             .map(|name| ((*name).to_string(), BTreeSet::new()))
             .collect();
         let live = |id: &i64| net_names.get(id).is_some_and(|n| !crate::is_ground(n));
+        // The first bind row per reference (what `BindReport::row` returns),
+        // found once instead of by a scan of every row for each component.
+        let mut first_row: HashMap<&str, &crate::reports::bind::BindRow> =
+            HashMap::with_capacity(report.rows.len());
+        for row in &report.rows {
+            first_row.entry(row.reference.as_str()).or_insert(row);
+        }
         let inductors: Vec<BTreeSet<i64>> = (board.components.iter())
             .filter(|c| {
-                let row = report.row(&c.reference).map(|row| &row.outcome);
+                let row = first_row
+                    .get(c.reference.as_str())
+                    .map(|row| &row.outcome);
                 matches!(row, Some(BindOutcome::Analog { device }) if device.starts_with("L "))
             })
             .map(|c| c.pins.iter().filter_map(|p| p.net).filter(live).collect())

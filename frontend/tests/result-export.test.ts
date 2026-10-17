@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { checkReportDocument, checkReportJson, cliCommand, REBUILT_NOTE, reportMarkdown, verdictTag } from '../src/lib/result-export'
+import { checkReportDocument, checkReportJson, cliCommand, OMITTED_NOTE, REBUILT_NOTE, reportMarkdown, verdictTag } from '../src/lib/result-export'
 import { entitiesIn, linkify, resultOverlay, vocabulary } from '../src/lib/result-links'
 import { reportView } from '../src/lib/report-view'
 import type { CheckReportJson, WebReport } from '../src/types/report'
@@ -50,6 +50,13 @@ describe('the CI verdict JSON', () => {
     expect(exact).toBe(true)
     expect(doc).toBe(engine)
     expect(JSON.parse(checkReportJson({ ...failing, check_report: engine }))).toEqual(engine)
+  })
+
+  test('a large board whose document was left out says so instead of claiming an old engine', () => {
+    const { doc, exact } = checkReportDocument({ ...failing, check_report: undefined, check_report_omitted_bytes: 12_000_000 })
+    expect(exact).toBe(false)
+    expect(doc.export_note).toBe(OMITTED_NOTE)
+    expect(doc.verdict).toBe(failing.verdict ?? 'fail')
   })
 
   test('a rebuilt document uses only the CLI fields, says it is rebuilt, and keeps the verdict', () => {

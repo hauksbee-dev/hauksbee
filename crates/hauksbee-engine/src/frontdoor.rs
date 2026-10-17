@@ -569,6 +569,11 @@ impl ComponentRatings {
     }
 }
 
+/// The largest `run --check --json` document sent inside a web report. A real
+/// board's is well under 1 MiB; past this the document only repeats what the
+/// report already carries, so it is left out.
+const WEB_CHECK_REPORT_MAX_BYTES: usize = 8 * 1024 * 1024;
+
 /// The whole payload sent back to the browser after an upload.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct WebReport {
@@ -724,6 +729,12 @@ pub struct WebReport {
     /// JSON" export is the CI's own document rather than a re-derivation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_report: Option<serde_json::Value>,
+    /// Set (to the document's size in bytes) instead of `check_report` when the
+    /// document is too large to send to a browser. Its content is already in
+    /// the report's own sections, evidence and triage; the full document is
+    /// what `hauksbee run --check --json` prints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_report_omitted_bytes: Option<usize>,
     /// The `--check` machine document for the static board, which the verdict
     /// is derived from. Firmware co-sim faults are folded into a copy of it
     /// when the verdict is derived, never into this one.
@@ -774,7 +785,16 @@ impl WebReport {
             machine.findings.get_or_insert_with(Vec::new).extend(faults);
         }
         let verdict = machine.run_verdict();
-        self.check_report = serde_json::from_str(&machine.to_json()).ok();
+        let document = machine.to_json();
+        if document.len() > WEB_CHECK_REPORT_MAX_BYTES {
+            // A very large board's document repeats the report's evidence,
+            // findings and copper detail; the browser already has those.
+            self.check_report = None;
+            self.check_report_omitted_bytes = Some(document.len());
+        } else {
+            self.check_report = serde_json::from_str(&document).ok();
+            self.check_report_omitted_bytes = None;
+        }
         self.pre_verdict_headline.clone_from(&self.headline);
         self.headline = verdict_headline(&verdict, &self.headline, self.serious);
         self.verdict = verdict.verdict.to_string();
@@ -1180,11 +1200,35 @@ fn unreadable(file_name: &str, error: String) -> WebReport {
     unreadable_with_import_failure(file_name, error, None)
 }
 
+/// Whether a bound device name belongs to the component with this reference:
+/// the reference itself, or a multi-unit/section suffix of it (`_q`, `_s`, `_e`).
+/// The reference definition; [`unit_index`] answers the same question for every
+/// component in one pass (a test keeps the two equal).
+#[cfg(test)]
 fn ref_or_unit_matches(reference: &str, device_name: &str) -> bool {
     device_name == reference
         || device_name.strip_prefix(reference).is_some_and(|suffix| {
             suffix.starts_with("_q") || suffix.starts_with("_s") || suffix.starts_with("_e")
         })
+}
+
+/// Values indexed by every reference their name matches under
+/// [`ref_or_unit_matches`]: the whole name, and each prefix that ends where a
+/// `_q`/`_s`/`_e` unit suffix starts. One pass over the devices, so looking a
+/// component up costs its name length instead of a scan of every device.
+fn unit_index<'a, T: Copy>(
+    items: impl Iterator<Item = (&'a str, T)>,
+) -> std::collections::HashMap<&'a str, Vec<T>> {
+    let mut index: std::collections::HashMap<&'a str, Vec<T>> = std::collections::HashMap::new();
+    for (name, value) in items {
+        index.entry(name).or_default().push(value);
+        for (at, _) in name.match_indices('_') {
+            if matches!(name.as_bytes().get(at + 1), Some(b'q' | b's' | b'e')) {
+                index.entry(&name[..at]).or_default().push(value);
+            }
+        }
+    }
+    index
 }
 
 /// Capabilities for component-scoped assertions, derived from the bound
@@ -1194,32 +1238,35 @@ fn component_assertion_capabilities(
     board: &ExtractedBoard,
     bound: &BoundBoard,
 ) -> std::collections::BTreeMap<String, Vec<String>> {
-    let current_devices: Vec<&str> = bound
-        .circuit
-        .devices
-        .iter()
-        .filter_map(|device| match device {
-            Device::Resistor { name, .. } | Device::Diode { name, .. } => Some(name.as_str()),
-            _ => None,
-        })
-        .collect();
+    let current_devices =
+        unit_index(
+            bound
+                .circuit
+                .devices
+                .iter()
+                .filter_map(|device| match device {
+                    Device::Resistor { name, .. } | Device::Diode { name, .. } => {
+                        Some((name.as_str(), ()))
+                    }
+                    _ => None,
+                }),
+        );
+    let metas = unit_index(
+        bound
+            .device_meta
+            .iter()
+            .map(|meta| (meta.reference.as_str(), ())),
+    );
 
     board
         .components
         .iter()
         .filter_map(|component| {
             let mut kinds = Vec::new();
-            if current_devices
-                .iter()
-                .any(|name| ref_or_unit_matches(&component.reference, name))
-            {
+            if current_devices.contains_key(component.reference.as_str()) {
                 kinds.push("max_current".to_string());
             }
-            if bound
-                .device_meta
-                .iter()
-                .any(|meta| ref_or_unit_matches(&component.reference, &meta.reference))
-            {
+            if metas.contains_key(component.reference.as_str()) {
                 kinds.push("max_temp".to_string());
             }
             (!kinds.is_empty()).then(|| (component.reference.clone(), kinds))
@@ -1239,23 +1286,34 @@ fn component_ratings(
             (a, b) => a.or(b),
         };
     }
+    let metas = unit_index(
+        bound
+            .device_meta
+            .iter()
+            .map(|meta| (meta.reference.as_str(), meta)),
+    );
+    let mut digital = std::collections::HashMap::new();
+    for d in &bound.digital {
+        digital.entry(d.reference.as_str()).or_insert(d);
+    }
     board
         .components
         .iter()
         .filter_map(|component| {
             let reference = &component.reference;
             let mut out = ComponentRatings::default();
-            for meta in bound
-                .device_meta
-                .iter()
-                .filter(|m| ref_or_unit_matches(reference, &m.reference))
+            for meta in metas
+                .get(reference.as_str())
+                .into_iter()
+                .flatten()
+                .copied()
             {
                 tighter(&mut out.max_current_a, meta.ratings.max_current_a);
                 tighter(&mut out.max_pin_current_a, meta.ratings.max_pin_current_a);
                 tighter(&mut out.max_power_w, meta.ratings.max_power_w);
                 tighter(&mut out.max_voltage_v, meta.ratings.max_voltage_v);
             }
-            if let Some(d) = bound.digital.iter().find(|d| &d.reference == reference) {
+            if let Some(d) = digital.get(reference.as_str()) {
                 out.vih = Some(d.levels.vih);
                 out.vil = Some(d.levels.vil);
             }
@@ -3201,6 +3259,21 @@ fn top_gpio_nets(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_unit_index_answers_exactly_what_the_scan_did() {
+        let names = [
+            "R1", "R1_q1", "R1_s", "R10", "U3_e2", "U3", "U3_x", "Q_q", "_q", "_s_q", "A_b_q9", "", "R1_Q1",
+        ];
+        let index = unit_index(names.iter().map(|n| (*n, ())));
+        let references = ["R1", "R10", "U3", "Q", "", "_s", "A", "A_b", "R", "R1_", "R1_Q1", "U3_x"];
+        for reference in references {
+            let scanned = names.iter().any(|n| ref_or_unit_matches(reference, n));
+            assert_eq!(index.contains_key(reference), scanned, "reference {reference:?}");
+            let scanned_count = names.iter().filter(|n| ref_or_unit_matches(reference, n)).count();
+            assert_eq!(index.get(reference).map_or(0, Vec::len), scanned_count, "reference {reference:?}");
+        }
+    }
 
     #[test]
     fn a_blank_board_name_falls_back_to_the_file_stem() {
