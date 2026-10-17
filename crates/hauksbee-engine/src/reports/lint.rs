@@ -155,21 +155,12 @@ fn render_pin_role_guesses(guesses: &[(String, String)]) -> String {
         }
         return s;
     }
-    // Group by the inferred pattern, keeping first-seen order so the output is
-    // deterministic for a given board.
-    let mut order: Vec<&str> = Vec::new();
-    let mut counts: std::collections::HashMap<&str, (usize, &str)> =
-        std::collections::HashMap::new();
-    for (r, g) in guesses {
-        let entry = counts.entry(g.as_str()).or_insert_with(|| {
-            order.push(g.as_str());
-            (0, r.as_str())
-        });
-        entry.0 += 1;
-    }
-    for pattern in order {
-        let (n, first) = counts[pattern];
-        let _ = writeln!(s, "  ? {pattern} (x{n}, e.g. {first})");
+    // The bind table's grouping: identical guesses (same rule, footprint and
+    // pad map) across parts become one line naming the parts compactly.
+    for line in hauksbee_bind::bind_report::group_pin_role_guesses(
+        guesses.iter().map(|(r, g)| (r.as_str(), g.as_str())),
+    ) {
+        let _ = writeln!(s, "{line}");
     }
     let _ = writeln!(s, "  the per-part mapping is in --json (bind_role notes)");
     s

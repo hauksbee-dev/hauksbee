@@ -4049,10 +4049,12 @@ fn role_node_map_guessed(
             clash = clash.or_else(|| (canon(&own) != canon(role)).then_some(why));
         } else if !m.contains_key(role) {
             m.insert(role.clone(), node);
-            guesses.push(format!(
-                "pad {n} role '{role}' guessed from rule '{id}' (no explicit pin-function; \
-                 footprint \"{}\", {pad_count} pads)",
-                comp.footprint
+            guesses.push(crate::bind_report::rule_guess_text(
+                n,
+                role,
+                id,
+                &comp.footprint,
+                pad_count,
             ));
         }
     }

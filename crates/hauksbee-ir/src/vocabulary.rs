@@ -112,6 +112,29 @@ pub const FITTED_BY_DEFAULT_CONDITION: &str =
     "Every placed part was judged as fitted, because {subjects} carries no BOM or populate flag: \
      a part the board leaves unfitted (DNP) was judged as present.";
 
+/// What to do when a back-powering finding names a pin the datasheet documents
+/// as tolerant of the higher rail.
+///
+/// The answer is the model-card row that records it, so the
+/// warning becomes a verified exception. `card_file` is the user-supplied card
+/// (a `--models-dir` or user-directory file) when the part's model came from
+/// one, so the fix names the file to edit.
+///
+/// One definition: the plain report and the `--json` fix hint both read it.
+#[must_use]
+pub fn back_power_tolerance_fix(card_file: Option<&str>) -> String {
+    let card = card_file.map_or_else(
+        || "the part's model card".to_string(),
+        |file| format!("the part's model card, `{file}`,"),
+    );
+    format!(
+        "If the pin is documented as tolerant of the higher rail (some are), record that in \
+         {card} so the warning becomes a verified exception: add an `input_tolerance` row to \
+         its `[[models.envelope]]` (kind = \"input_tolerance\", pins = [the pin's role], max_v, \
+         abs_max_v, basis = the datasheet table the figures come from)."
+    )
+}
+
 /// The pass condition for parts with no model on a pass (a verdict-critical
 /// one makes the run PARTLY JUDGED instead): `{n}` is how many and
 /// `{subjects}` names them, a few by name and the rest counted.

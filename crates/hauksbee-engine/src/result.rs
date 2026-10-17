@@ -3470,6 +3470,18 @@ const fn polarity_fix_hint(check: LintCheck) -> &'static str {
     }
 }
 
+/// The machine-readable fix for a back-powering finding. The tolerance wording
+/// is the shared vocabulary's, the same sentence the plain report ends on.
+fn back_power_fix_hint() -> &'static str {
+    static HINT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        format!(
+            "Pull the pin up to the part's own supply rail instead, or put a proper level shifter between the domains. {}",
+            hauksbee_ir::vocabulary::back_power_tolerance_fix(None)
+        )
+    });
+    HINT.as_str()
+}
+
 /// A concise suggested fix for a lint finding kind, for the machine-readable `fix` field.
 ///
 /// `None` when no template applies. Severity disambiguates the resource-conflict
@@ -3528,9 +3540,7 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::OperatingEnvelope => {
             "Move the pin to a compatible rail, or change the rail so its full operating range satisfies the quoted datasheet condition."
         }
-        LintCheck::BackPower => {
-            "Pull the pin up to the part's own supply rail instead, or put a proper level shifter between the domains; if the pin is documented higher-voltage-tolerant, note that in the design."
-        }
+        LintCheck::BackPower => back_power_fix_hint(),
         LintCheck::RailConflict => {
             "Leave one source on the rail: unfit the extra regulator or jumper, or split the rail so each source feeds its own net."
         }

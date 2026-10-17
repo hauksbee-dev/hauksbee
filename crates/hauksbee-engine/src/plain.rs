@@ -270,6 +270,14 @@ impl PlainReport {
         v
     }
 
+    /// How many potential copper issues this report lists: the one number the
+    /// plain verdict and the closing `VERDICT:` line both read, so the two
+    /// surfaces cannot count differently.
+    #[must_use]
+    pub const fn potential_copper_issue_count(&self) -> usize {
+        self.findings.len()
+    }
+
     /// The one-line overall verdict.
     #[must_use]
     pub fn verdict(&self) -> String {
@@ -279,7 +287,8 @@ impl PlainReport {
             let serious = self.serious_count();
             if n == 0 {
                 return format!(
-                    "No potential copper issues listed, but this result is UNVALIDATED: {reason}"
+                    "{}, but this result is UNVALIDATED: {reason}",
+                    sentence_case(&potential_copper_issues(0))
                 );
             }
             let issues = if n == 1 { "issue" } else { "issues" };
@@ -1036,6 +1045,24 @@ pub fn plain_drc(report: &DrcReport) -> PlainReport {
     plain_drc_structured(&crate::result::DrcStructured::from_report(report))
 }
 
+/// The copper issue count as a phrase, shared by the plain verdict and the
+/// closing `VERDICT:` line of an UNVALIDATED copper result.
+#[must_use]
+pub(crate) fn potential_copper_issues(count: usize) -> String {
+    match count {
+        0 => "no potential copper issues listed".to_string(),
+        1 => "1 potential copper issue".to_string(),
+        n => format!("{n} potential copper issues"),
+    }
+}
+
+fn sentence_case(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
 /// Translate the *grouped* DRC ([`crate::result::DrcStructured`]) for the plain /
 /// web surfaces.
 ///
@@ -1612,7 +1639,10 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
             LintCheck::BackPower => (
                 format!("A pin on {parts} (net \"{net}\") sits in a higher voltage domain than the chip's own supply. {}", f.message),
                 "Chip inputs have a small protection diode from the pin to the chip's supply. Pull the pin above that supply and the diode conducts: current flows from the higher rail through the chip into the lower rail. With the chip's supply off, the higher rail keeps the \"off\" domain half-powered (parts misbehave instead of resetting cleanly); powered on, the pin sits past its absolute-maximum rating unless it is specifically rated tolerant.".to_string(),
-                "Pull the signal up to the chip's own supply rail instead, or level-shift between the domains. If the pin is documented as tolerant of the higher rail (some are), record that so the warning is a verified exception.".to_string(),
+                format!(
+                    "Pull the signal up to the chip's own supply rail instead, or level-shift between the domains. {}",
+                    hauksbee_ir::vocabulary::back_power_tolerance_fix(hauksbee_extract::model_card_file_in(&f.message))
+                ),
             ),
             LintCheck::RailConflict => (
                 format!("More than one source sets the voltage of one rail (net \"{net}\"). {}", f.message),
@@ -2321,6 +2351,41 @@ mod tests {
                 "{check:?} has an empty template field"
             );
         }
+    }
+
+    /// The back-power fix says how to record a tolerant pin (an
+    /// `input_tolerance` envelope row on the card), names the card file when
+    /// the message carries one, and the `--json` hint reads the same wording.
+    #[test]
+    fn back_power_fix_names_the_input_tolerance_row_and_the_card_file() {
+        let fix = |message: &str| {
+            let report = NetLintReport {
+                findings: vec![LintFinding {
+                    check: LintCheck::BackPower,
+                    severity: Severity::Medium,
+                    message: message.to_string(),
+                    refs: vec!["U3".to_string()],
+                    nets: vec!["SIG".to_string()],
+                }],
+            };
+            plain_netlint(&report).findings[0].fix.clone()
+        };
+        let generic = fix("U3 pad 2 is pulled up.");
+        for needle in ["input_tolerance", "max_v", "abs_max_v", "basis"] {
+            assert!(generic.contains(needle), "{generic}");
+        }
+        assert!(!generic.contains("cards/"), "{generic}");
+        let named = fix(&format!(
+            "U3 pad 2 is pulled up.{}cards/sense_amp.toml",
+            hauksbee_extract::MODEL_CARD_MESSAGE_MARKER
+        ));
+        assert!(named.contains("`cards/sense_amp.toml`"), "{named}");
+        let json_hint = crate::result::lint_fix_hint(LintCheck::BackPower, Severity::Medium)
+            .expect("back power has a hint");
+        assert!(
+            json_hint.contains(&hauksbee_ir::vocabulary::back_power_tolerance_fix(None)),
+            "{json_hint}"
+        );
     }
 
     /// A Low strap finding is the lint's abstention: worded as unchecked in the
