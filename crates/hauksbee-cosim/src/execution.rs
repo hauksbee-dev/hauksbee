@@ -26,6 +26,13 @@ pub const NO_EXECUTION_MESSAGE: &str = "co-sim saw no evidence the firmware exec
      symbol not reached, no firmware GPIO drive, no UART output); this result cannot vouch \
      for firmware behaviour";
 
+/// What a quiet run says instead when the board carries no processor and no
+/// firmware was supplied.
+///
+/// There is no firmware to have executed, so the run says nothing about
+/// firmware execution beyond this neutral line.
+pub const NO_PROCESSOR_MESSAGE: &str = "no processor on this board: no firmware was run";
+
 /// A fact the run either observed, observed false, or could not observe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]

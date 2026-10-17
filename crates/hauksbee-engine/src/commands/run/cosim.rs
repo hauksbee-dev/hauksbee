@@ -23,6 +23,9 @@ pub(super) struct AnalogStatus {
 
 pub(super) struct ActivityStatus {
     pub(super) zero: bool,
+    /// No processor is bound and no firmware was supplied: there is no
+    /// firmware to have executed, so firmware-execution wording is wrong.
+    pub(super) no_processor: bool,
     /// Executing MCUs that still cannot count as a firmware pass, one line each.
     pub(super) pass_blockers: Vec<String>,
     pub(super) strict_refusal: Option<Refusal>,
@@ -60,6 +63,22 @@ pub fn run_headless(
     Ok(())
 }
 
+/// The strict refusal for a quiet run on a board with no processor and no
+/// firmware: it names the missing processor, not a firmware that never ran.
+fn no_processor_refusal() -> Refusal {
+    Refusal::new(
+        "a strict co-simulation verdict that depends on a processor",
+        format!(
+            "{}, and nothing else on the board was driven",
+            crate::execution::NO_PROCESSOR_MESSAGE
+        ),
+        vec!["board extraction, binding, and static copper findings remain valid"],
+        "bind a processor and supply firmware if the board needs one, or run without --strict",
+    )
+}
+
+// One flat gather of independent run observations, each a few lines.
+#[allow(clippy::too_many_lines)]
 fn execute_and_collect_observations(
     cfg: &RunConfig,
     run_inputs: &RunInputs,
@@ -136,6 +155,7 @@ fn execute_and_collect_observations(
     // Execution evidence (entry reached, firmware pin edges, UART) decides
     // when the run gathered it; see `Scheduler::firmware_quiet`.
     let zero = engine.scheduler().firmware_quiet(total_toggles, uart_seen);
+    let no_processor = cfg.firmware.is_none() && !engine.scheduler().has_processor();
     let pass_blockers = engine.scheduler().firmware_pass_blockers();
     let strict_refusal = if cfg.strict && abort {
         Some(Refusal::new(
@@ -146,6 +166,8 @@ fn execute_and_collect_observations(
                 vec!["static board/copper findings and explicitly non-analog observations remain available"],
                 "inspect the first analog non-convergence diagnosis below, fix its named net/device, then rerun the same strict command",
             ))
+    } else if cfg.strict && zero && no_processor {
+        Some(no_processor_refusal())
     } else if cfg.strict && zero {
         Some(Refusal::new(
                 "firmware behavior during this strict co-simulation",
@@ -198,6 +220,7 @@ fn execute_and_collect_observations(
         },
         activity: ActivityStatus {
             zero,
+            no_processor,
             pass_blockers,
             strict_refusal,
             boot_advisory,
@@ -464,7 +487,9 @@ fn emit_report(
         for guess in engine.scheduler().clock_assumptions() {
             jr.push_coverage_note(format!("assumed AVR clock: {guess}"));
         }
-        if zero_activity {
+        if zero_activity && observations.activity.no_processor {
+            jr.push_coverage_note(crate::execution::NO_PROCESSOR_MESSAGE);
+        } else if zero_activity {
             jr.push_coverage_note(crate::execution::NO_EXECUTION_MESSAGE);
         }
         for blocker in &observations.activity.pass_blockers {
@@ -558,7 +583,9 @@ fn emit_report(
                 "co-sim assumed an AVR clock: {guess}"
             )));
         }
-        if zero_activity {
+        // A board with no processor and no firmware has nothing to say about
+        // firmware execution; the neutral line rides the JSON coverage notes.
+        if zero_activity && !observations.activity.no_processor {
             report.heads_up.push(crate::plain::HeadsUp::note(
                 crate::execution::NO_EXECUTION_MESSAGE,
             ));

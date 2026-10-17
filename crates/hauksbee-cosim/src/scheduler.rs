@@ -748,6 +748,13 @@ pub struct Scheduler {
     /// never converged and has failed a whole abort streak from t = 0 is
     /// re-solving the same cold start: see [`Self::dead_from_start`].
     analog_ever_converged: bool,
+    /// The rails as the board's DC operating point at t = 0 holds them, solved
+    /// once for the digital parts' first look at their supplies (before any
+    /// chunk has solved); `None` when that solve did not converge.
+    /// See [`Self::digital_view_volts`].
+    initial_rail_view: Option<Vec<f64>>,
+    /// The t = 0 DC solve behind [`Self::initial_rail_view`] has been tried.
+    initial_rail_view_tried: bool,
     /// The dead-from-start notice has been printed for this run.
     dead_from_start_noted: bool,
     /// The solver's message from the most recent failed chunk (e.g. "Newton
@@ -1590,6 +1597,8 @@ impl Scheduler {
             consecutive_failed_chunks: 0,
             max_consecutive_failed_chunks: 0,
             analog_ever_converged: false,
+            initial_rail_view: None,
+            initial_rail_view_tried: false,
             dead_from_start_noted: false,
             last_solve_error: None,
             reset_failure: None,
@@ -3196,6 +3205,14 @@ impl Scheduler {
         m
     }
 
+    /// Whether the board carries any processor the run bound: a live core, or
+    /// one left idle because no firmware was given. A board with none has no
+    /// firmware to run, so nothing about firmware execution is worth saying.
+    #[must_use]
+    pub const fn has_processor(&self) -> bool {
+        !self.mcus.is_empty() || !self.idle_mcus.is_empty()
+    }
+
     /// Number of live MCU cores.
     #[must_use]
     pub const fn mcu_count(&self) -> usize {
@@ -3468,6 +3485,18 @@ impl Scheduler {
         self.establish_regulation();
         self.gate_model_peripherals_from_rails();
 
+        // Every digital part, chain-owned and edge-replayed ones included,
+        // re-reads its supply BEFORE anything drives an output this chunk (MCU
+        // edge replay, tick, chain apply, parallel memory), so no path drives a
+        // level read at a stale or never-resolved rail.
+        {
+            let volts = self.digital_view_volts();
+            let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
+            for d in &mut self.digital {
+                d.refresh_levels(&node_v);
+            }
+        }
+
         // Integer microseconds for `run_micros`, banking the sub-microsecond
         // remainder across chunks so the firmware clock does not drift from sim
         // time. The floored value is deliberately NOT clamped up to 1: a
@@ -3620,7 +3649,7 @@ impl Scheduler {
         // above, so ticking them once per chunk too would double-drive them with
         // a stale, pulse-collapsed sample.
         {
-            let volts = self.node_volts.clone();
+            let volts = self.digital_view_volts();
             let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
             for (i, d) in self.digital.iter_mut().enumerate() {
                 if self.chain_chips.contains(&i)
@@ -3657,7 +3686,7 @@ impl Scheduler {
         // chips are skipped by the tick loop but still switch, so this runs over
         // ALL digital components. Parts without supply params no-op.
         {
-            let volts = self.node_volts.clone();
+            let volts = self.digital_view_volts();
             let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
             for d in &mut self.digital {
                 d.update_supply(&mut self.circuit, chunk, &node_v);
@@ -4114,6 +4143,93 @@ impl Scheduler {
             // *delivered to the net* is the negative of that. Signed: current
             // pushed back into a supply is not load.
             s.update(&mut self.circuit, -i, t, chunk);
+        }
+    }
+
+    /// The node voltages the digital parts read their supplies and inputs
+    /// from: the previous chunk's solved operating point. Before ANY chunk has
+    /// solved there is none, and the all-zero placeholder would read every rail
+    /// as dead, so the first look takes the board's DC operating point at t = 0
+    /// (supplies standing at their t = 0 values, the same "powered forever"
+    /// reading the converters settle with; a ramped or absent supply solves to
+    /// 0 V and stays unpowered). That solve is made once; if it does not
+    /// converge the rails an ideal DC source holds directly stand at that value
+    /// and every other rail stays at zero: unresolved, so its parts drive
+    /// nothing yet.
+    fn digital_view_volts(&mut self) -> Vec<f64> {
+        if self.analog_ever_converged {
+            return self.node_volts.clone();
+        }
+        if !self.initial_rail_view_tried {
+            self.initial_rail_view = self.solve_initial_rail_view();
+            self.initial_rail_view_tried = true;
+        }
+        let mut volts = self.node_volts.clone();
+        if let Some(dc) = &self.initial_rail_view {
+            for (slot, &v) in volts.iter_mut().zip(dc).skip(1) {
+                if *slot == 0.0 {
+                    *slot = v;
+                }
+            }
+        } else {
+            self.seed_ideal_sources(&mut volts);
+        }
+        volts
+    }
+
+    /// The circuit's DC operating point as it stands (node voltages, indexed by
+    /// node), or `None` when the solve does not converge.
+    fn solve_initial_rail_view(&self) -> Option<Vec<f64>> {
+        let mut circuit = self.circuit.clone();
+        circuit.temp_c = self.opts.temperature_c;
+        let mut ws = Workspace::new(&circuit);
+        let seed = ws.x.clone();
+        dc_operating_point_seeded(&mut ws, &circuit, &self.opts, Some(&seed)).ok()?;
+        let (x, layout) = (&ws.x, &ws.layout);
+        Some(
+            (0..circuit.node_count())
+                .map(|node| {
+                    u32::try_from(node)
+                        .ok()
+                        .map(NodeId)
+                        .and_then(|n| layout.node(n))
+                        .map_or(0.0, |i| x[i])
+                })
+                .collect(),
+        )
+    }
+
+    /// Stand each net an ideal DC source (or a configured supply's source)
+    /// holds directly at that source's value, where `volts` still reads zero.
+    fn seed_ideal_sources(&self, volts: &mut [f64]) {
+        let leg_sources = self.supplies.iter().filter_map(|leg| {
+            match self.circuit.devices.get(leg.vsource.0 as usize)? {
+                Device::Vsource {
+                    kind: SourceKind::Dc(v),
+                    ..
+                } => Some((leg.net, *v)),
+                _ => None,
+            }
+        });
+        let direct = self
+            .circuit
+            .devices
+            .iter()
+            .filter_map(|device| match device {
+                Device::Vsource {
+                    p,
+                    n,
+                    kind: SourceKind::Dc(v),
+                    ..
+                } if *n == NodeId::GROUND => Some((*p, *v)),
+                _ => None,
+            });
+        for (net, v) in leg_sources.chain(direct) {
+            if let Some(slot) = volts.get_mut(net.0 as usize) {
+                if *slot == 0.0 {
+                    *slot = v;
+                }
+            }
         }
     }
 
@@ -5635,6 +5751,8 @@ impl Scheduler {
         self.consecutive_failed_chunks = 0;
         self.max_consecutive_failed_chunks = 0;
         self.analog_ever_converged = false;
+        self.initial_rail_view = None;
+        self.initial_rail_view_tried = false;
         self.dead_from_start_noted = false;
         self.last_solve_error = None;
         for st in self.stats.values_mut() {
@@ -11536,6 +11654,94 @@ data_out = ["io0"]
         cool.step(8.0e-3);
         assert!((tj(&cool) - 35.0).abs() < 1.0, "got {:.3}", tj(&cool));
         assert!(overtemp(&mut cool).is_empty());
+    }
+
+    // ── Digital output levels follow the part's actual supply ────────────────
+
+    /// A synthetic 3.3 V digital part whose card carries a scalar `voh` of 4.5
+    /// (an HC card's 4.5 V row) beside a supply-dependent table must never put
+    /// an output above its own 3.3 V rail, at ANY sample: not on the first
+    /// chunk, before any solve has resolved the supply (which sits behind a
+    /// series resistance, so no source holds it directly), and not after.
+    #[test]
+    fn a_digital_output_never_exceeds_its_supply_at_any_sample() {
+        for with_table in [true, false] {
+            let mut model = hauksbee_models::ModelEntry::default();
+            for (key, v) in [("voh", 4.5), ("vol", 0.1), ("vih", 2.0), ("vil", 0.8)] {
+                model.params.0.insert(key.into(), v.into());
+            }
+            if with_table {
+                model.levels = std::collections::BTreeMap::from([(
+                    "voh".to_string(),
+                    vec![[2.0, 1.9], [4.5, 4.4], [6.0, 5.9]],
+                )]);
+            }
+            let mut circuit = Circuit::new();
+            let [src, vcc, a, y] = ["SRC", "VCC", "A", "Y"].map(|n| circuit.node(n));
+            for (name, node) in [("V_SRC", src), ("V_A", a)] {
+                circuit.add(Device::Vsource {
+                    name: name.into(),
+                    p: node,
+                    n: NodeId::GROUND,
+                    kind: SourceKind::Dc(3.3),
+                });
+            }
+            // The supply reaches the part through a series resistance, and the
+            // output is unconnected but for a light load.
+            stamp_resistor(&mut circuit, "R_FERRITE".into(), src, vcc, 0.5);
+            stamp_resistor(&mut circuit, "R_VCC".into(), vcc, NodeId::GROUND, 10_000.0);
+            stamp_resistor(&mut circuit, "R_LOAD".into(), y, NodeId::GROUND, 100_000.0);
+            let drivers = HashMap::from([(
+                "y1".to_string(),
+                hauksbee_bind::drivers::PinDriver::stamp(
+                    &mut circuit,
+                    y,
+                    "Y",
+                    "y1",
+                    hauksbee_bind::drivers::DEFAULT_RO,
+                ),
+            )]);
+            let roles = HashMap::from([
+                ("a1".to_string(), a),
+                ("y1".to_string(), y),
+                ("vcc".to_string(), vcc),
+            ]);
+            let part =
+                hauksbee_bind::digital::DigitalComponent::new("U1".into(), &model, roles, drivers)
+                    .expect("passthrough compiles");
+            let nets = HashMap::from([
+                ("SRC".to_string(), src),
+                ("VCC".to_string(), vcc),
+                ("A".to_string(), a),
+                ("Y".to_string(), y),
+            ]);
+            let bound = bound_board("levels", circuit, nets, vec![part], Vec::new());
+            let mut sched =
+                Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+            sched.chunk_s = 1.0e-4;
+            let mut worst: f64 = 0.0;
+            for chunk in 0..20 {
+                sched.step(1.0e-4);
+                let (v_vcc, v_y) = (
+                    sched.net_voltage("VCC").unwrap(),
+                    sched.net_voltage("Y").unwrap(),
+                );
+                worst = worst.max(v_y);
+                assert!(
+                    (-1e-9..=v_vcc + 1e-6).contains(&v_y) && v_y <= 3.3 + 1e-6,
+                    "table={with_table} chunk {chunk}: Y = {v_y} V on a {v_vcc} V rail"
+                );
+            }
+            // Powered, a high input is a high output: at the table's 3.3 V
+            // level, or (no table) the rail itself, never the 4.5 V row.
+            let want = if with_table { 3.2 } else { 3.3 };
+            let y = sched.net_voltage("Y").unwrap();
+            assert!(
+                (y - want).abs() < 0.02,
+                "table={with_table}: Y settled at {y} V"
+            );
+            assert!(worst <= 3.3 + 1e-6, "table={with_table}: peak {worst} V");
+        }
     }
 
     // ── Sub-chunk pulses, timing policy and runtime contention ───────────────

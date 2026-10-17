@@ -35,11 +35,16 @@ pub(super) fn enforce_gates(
     // refusal (exit 3), not a clean pass. The UART-AND-toggles guard avoids
     // false positives on firmware that is busy on the bus but quiet on GPIO.
     if zero_activity {
-        eprintln!(
-            "WARNING: {} (the MCU may have stalled at boot, run no I/O, or the \
-             firmware may not match this board).",
-            crate::execution::NO_EXECUTION_MESSAGE
-        );
+        // A board with no processor and no firmware has no firmware to have
+        // stalled: the warning is skipped there (a strict run still refuses
+        // below, with the neutral wording its refusal carries).
+        if !observations.activity.no_processor {
+            eprintln!(
+                "WARNING: {} (the MCU may have stalled at boot, run no I/O, or the \
+                 firmware may not match this board).",
+                crate::execution::NO_EXECUTION_MESSAGE
+            );
+        }
         if cfg.strict && !analog_abort {
             publish_refusal(cfg.json, strict_refusal.as_ref());
             // `fail` outranks `invalid`, the same precedence the verdict
