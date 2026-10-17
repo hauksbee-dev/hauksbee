@@ -20,7 +20,8 @@ use crate::{Component, ExtractError, Pin};
 const UNIT_MM: f64 = 0.0254;
 
 const VALUE_UNRESOLVED_REASON: &str =
-    "no value in the EasyEDA Pro layout; Pro keeps values with the schematic and device library";
+    "no value in the EasyEDA Pro layout; Pro keeps values in the project's device library, so \
+     give the whole .epro project (or a BOM) to read them";
 
 /// Most nodes searched in a project file for a footprint title.
 const PROJECT_NODE_BUDGET: usize = 100_000;
@@ -65,9 +66,9 @@ fn json_error(line: usize, e: &serde_json::Error) -> ExtractError {
     ))
 }
 
-/// Title of the library object `uuid` in a project file: the nearest object
-/// keyed by that uuid with a readable title. Best effort, bounded.
-fn lookup_title(project: &Value, uuid: &str) -> Option<String> {
+/// The library object `uuid` in a project file: the nearest object keyed by
+/// that uuid. Best effort, bounded.
+fn find_object<'a>(project: &'a Value, uuid: &str) -> Option<&'a serde_json::Map<String, Value>> {
     let mut stack = vec![(project, 0_usize)];
     let mut seen = 0_usize;
     while let Some((node, depth)) = stack.pop() {
@@ -78,16 +79,7 @@ fn lookup_title(project: &Value, uuid: &str) -> Option<String> {
         match node {
             Value::Object(map) => {
                 if let Some(Value::Object(hit)) = map.get(uuid) {
-                    for key in ["display_title", "title", "name"] {
-                        if let Some(t) = hit
-                            .get(key)
-                            .and_then(Value::as_str)
-                            .map(str::trim)
-                            .filter(|t| !t.is_empty())
-                        {
-                            return Some(clip(t));
-                        }
-                    }
+                    return Some(hit);
                 }
                 stack.extend(map.values().map(|v| (v, depth + 1)));
             }
@@ -96,6 +88,72 @@ fn lookup_title(project: &Value, uuid: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// The readable title of a library object, if it has one.
+fn object_title(object: &serde_json::Map<String, Value>) -> Option<String> {
+    ["display_title", "title", "name"].iter().find_map(|key| {
+        object
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(clip)
+    })
+}
+
+/// Title of the library object `uuid` in a project file.
+fn lookup_title(project: &Value, uuid: &str) -> Option<String> {
+    find_object(project, uuid).and_then(object_title)
+}
+
+/// What a project's device library says about one part: the device record a
+/// layout's `Device` attribute points at.
+///
+/// INFERRED, not specified: the layout of `project.json` below was read from
+/// public EasyEDA Pro project exports (a top-level `devices` object keyed by the
+/// device uuid, each with a `title` and an `attributes` object holding `Value`,
+/// `Manufacturer Part`, `Manufacturer` and `Supplier Part`). It is covered by the
+/// in-test project archives, not by a real `.epro` fixture.
+#[derive(Default)]
+struct DeviceIdentity {
+    /// The part's value when the device record states one, else its
+    /// manufacturer part number (which names the part outright).
+    value: String,
+    /// Properties to attach (`Manufacturer Part`, `Manufacturer`, `Supplier Part`).
+    properties: Vec<(String, String)>,
+}
+
+fn device_identity(project: &Value, uuid: &str) -> DeviceIdentity {
+    let record = project
+        .get("devices")
+        .and_then(|d| d.get(uuid))
+        .and_then(Value::as_object)
+        .or_else(|| find_object(project, uuid));
+    let Some(attributes) = record
+        .and_then(|r| r.get("attributes"))
+        .and_then(Value::as_object)
+    else {
+        return DeviceIdentity::default();
+    };
+    let attr = |key: &str| {
+        attributes
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(clip)
+    };
+    let mut identity = DeviceIdentity::default();
+    for key in ["Manufacturer Part", "Manufacturer", "Supplier Part"] {
+        if let Some(v) = attr(key) {
+            identity.properties.push((key.to_string(), v));
+        }
+    }
+    identity.value = attr("Value")
+        .or_else(|| attr("Manufacturer Part"))
+        .unwrap_or_default();
+    identity
 }
 
 /// The board's name from a project file, else from the member path.
@@ -349,14 +407,24 @@ impl Doc {
                         properties.push(("footprint_uuid".to_string(), clip(&p.footprint_uuid)));
                     }
                 }
+                let mut value = p.value;
                 if !p.device_uuid.is_empty() {
                     let device = project.and_then(|pr| lookup_title(pr, &p.device_uuid));
                     properties.push((
                         "device".to_string(),
                         device.unwrap_or_else(|| clip(&p.device_uuid)),
                     ));
+                    // The layout's own Value attribute wins; the device library
+                    // fills only what the layout leaves empty.
+                    if let Some(pr) = project {
+                        let identity = device_identity(pr, &p.device_uuid);
+                        if value.is_empty() {
+                            value = identity.value;
+                        }
+                        properties.extend(identity.properties);
+                    }
                 }
-                if p.value.is_empty() {
+                if value.is_empty() {
                     properties.push((
                         VALUE_UNRESOLVED_KEY.to_string(),
                         VALUE_UNRESOLVED_REASON.to_string(),
@@ -377,7 +445,7 @@ impl Doc {
                 };
                 Component {
                     reference,
-                    value: p.value,
+                    value,
                     lib_id: if footprint.is_empty() {
                         String::new()
                     } else {

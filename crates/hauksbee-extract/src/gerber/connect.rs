@@ -882,6 +882,12 @@ pub fn reconstruct(
         let top_pads = layers_of.iter().filter(|&&l| l == 0).count();
         components.push(Component {
             reference: refdes,
+            properties: vec![(
+                crate::altium::VALUE_UNRESOLVED_KEY.to_string(),
+                "no value in the gerber film: it names the part and its pads, not the value \
+                 or package"
+                    .to_string(),
+            )],
             position: Some((sx / n, sy / n, 0.0)),
             layer: if top_pads * 2 >= layers_of.len() {
                 "F.Cu".into()
@@ -1667,6 +1673,17 @@ mod tests {
             u3.value.is_empty() && u3.footprint.is_empty(),
             "the film does not know value/package; they are not invented"
         );
+        // And the absence is stated, not read as a placeholder the designer left.
+        assert!(u3.value_not_carried(), "the film cannot hold a value");
+    }
+
+    #[test]
+    fn a_placed_part_keeps_its_own_value_column_so_an_empty_value_is_still_flagged() {
+        // A P&P row has a value column, so an empty value there is the
+        // designer's, not the format's: no marker, the placeholder lint applies.
+        let layer = vec![x2_pad(0.0, 0.0, "R1", "1", "VCC")];
+        let (board, _) = reconstruct("t", vec![layer], &[], &[placement("R1", 0.0, 0.0)]);
+        assert!(!board.component("R1").unwrap().value_not_carried());
     }
 
     #[test]

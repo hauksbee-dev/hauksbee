@@ -1093,7 +1093,11 @@ fn check_design_file_qc(board: &ExtractedBoard, report: &mut NetLintReport) {
             .properties
             .iter()
             .any(|(k, v)| crate::bom::is_mpn_property_key(k) && !v.trim().is_empty());
+        // A value the INPUT cannot carry is not a placeholder the designer left:
+        // the run states it once as reduced scope (the parts' values are unknown,
+        // supply a BOM) rather than blocking the order on it.
         if is_placeholder_value(value_trimmed)
+            && !c.value_not_carried()
             && !has_mpn
             && !crate::dnp::is_jumper_or_net_tie(c)
             && !crate::dnp::unbought(c)

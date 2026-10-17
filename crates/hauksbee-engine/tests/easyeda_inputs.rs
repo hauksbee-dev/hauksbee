@@ -100,8 +100,64 @@ fn a_part_with_no_value_is_an_open_part_not_a_guess() {
         ids.iter().any(|i| i == "open-part:U1"),
         "U1 has no value in this file and no model, so it is open: {ids:?}"
     );
-    let ignored = json["inputs"][0]["ignored"].to_string();
-    assert!(ignored.contains("carry no value"), "{ignored}");
+    // The reduced scope is the engine's own statement (one wording for every
+    // input), not a reader note.
+    let not_covered = json["triage"]["not_covered"].as_str().unwrap_or_default();
+    assert!(
+        not_covered.contains("carry no value in this input") && not_covered.contains("--bom"),
+        "{not_covered}"
+    );
+}
+
+/// A Pro `.epcb` does not carry values (the `Device` attribute is a UUID into the
+/// project's device library). That is a reduced scope, stated as such, not a
+/// blocking "placeholder value" finding on every part.
+#[test]
+fn a_pro_board_without_values_is_not_blocked_for_placeholders() {
+    let (_, json) = check_json(&fixture(NANO));
+    let findings = json["findings"].to_string();
+    assert!(
+        !findings.contains("placeholder value"),
+        "values the file cannot hold are not placeholders: {findings}"
+    );
+    assert_ne!(json["verdict"], "fail", "{}", json["verdict"]);
+    let not_covered = json["triage"]["not_covered"].as_str().unwrap_or_default();
+    assert!(
+        not_covered.contains("23 parts carry no value in this input")
+            && not_covered.contains("not judged")
+            && not_covered.contains("--bom"),
+        "{not_covered}"
+    );
+    let plain = run(&["run", fixture(NANO).to_str().unwrap(), "--check", "--plain"]);
+    let plain = String::from_utf8_lossy(&plain.stdout);
+    assert!(!plain.contains("NOT OK TO ORDER"), "{plain}");
+    assert!(!plain.contains("placeholder value"), "{plain}");
+}
+
+/// With the BOM beside the board the values are read, and nothing is left
+/// to state as unread for the parts the BOM names.
+#[test]
+fn a_bom_supplies_the_values_a_pro_board_lacks() {
+    let bom = fixture("nano-hub-bom.csv");
+    let out = run(&[
+        "run",
+        fixture(NANO).to_str().unwrap(),
+        "--bom",
+        bom.to_str().unwrap(),
+        "--check",
+        "--json",
+    ]);
+    let json: Value = serde_json::from_slice(&out.stdout).expect("json");
+    assert!(
+        !json["findings"].to_string().contains("placeholder value"),
+        "{}",
+        json["findings"]
+    );
+    let not_covered = json["triage"]["not_covered"].as_str().unwrap_or_default();
+    assert!(
+        !not_covered.contains("23 parts carry no value"),
+        "the BOM filled the values: {not_covered}"
+    );
 }
 
 #[test]

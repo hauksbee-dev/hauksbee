@@ -1655,7 +1655,7 @@
           "type": "object"
         },
         {
-          "description": "Supply a BOM that marks the parts that are not fitted.",
+          "description": "Supply a BOM beside the board: it marks the parts that are not fitted\nand supplies the values a board file does not carry.",
           "properties": {
             "type": {
               "const": "add_bom",

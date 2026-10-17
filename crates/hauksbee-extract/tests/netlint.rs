@@ -165,6 +165,47 @@ lint_tests! {
     "";
 }
 
+/// A value the input cannot hold (the reader marks it `value_unresolved`) is
+/// unknown, not a placeholder; the same empty or generic value from a format
+/// that carries values is still flagged.
+#[test]
+fn a_value_the_input_cannot_hold_is_not_a_placeholder() {
+    let comps = r"
+    (comp (ref C1) (value C) (footprint Capacitor_SMD:C_0402))
+    (comp (ref C2) (value C) (footprint Capacitor_SMD:C_0402))
+    (comp (ref R9) (value ?) (footprint Resistor_SMD:R_0402))";
+    // No marker anywhere: all three are real placeholders, exactly as before.
+    assert_eq!(count(&lint(comps, ""), LintCheck::PlaceholderValue), 3);
+    // An empty value with the reader's marker is unknown, so it is not flagged;
+    // a typed placeholder is flagged even on a board whose reader sets the marker.
+    let r = lint_with(comps, "", |b| {
+        for c in &mut b.components {
+            c.properties.push((
+                hauksbee_extract::altium::VALUE_UNRESOLVED_KEY.to_string(),
+                "no value in this input".to_string(),
+            ));
+            if c.reference == "C1" {
+                c.value = String::new();
+            }
+        }
+    });
+    assert_eq!(
+        count(&r, LintCheck::PlaceholderValue),
+        2,
+        "C1 only is exempt"
+    );
+    assert!(r
+        .of_check(LintCheck::PlaceholderValue)
+        .all(|f| !f.message.contains("C1")));
+    // An empty value with no marker (KiCad left it blank) is still flagged.
+    let r = lint_with(comps, "", |b| {
+        for c in &mut b.components {
+            c.value = String::new();
+        }
+    });
+    assert_eq!(count(&r, LintCheck::PlaceholderValue), 3);
+}
+
 #[test]
 fn ordinary_passive_values_and_matching_footprints_are_clean() {
     let comps = r"

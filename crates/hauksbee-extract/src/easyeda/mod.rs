@@ -245,15 +245,10 @@ impl EasyedaStats {
             self.copper.sentence()
         )];
         out.extend(self.caveats.iter().cloned());
-        if !self.value_unresolved.is_empty() {
-            out.push(format!(
-                "{} part(s) carry no value in this EasyEDA file ({}); EasyEDA keeps \
-                 values with the schematic symbol, so the value-dependent checks treat \
-                 them as unresolved rather than guessing one.",
-                self.value_unresolved.len(),
-                sample_list(&self.value_unresolved)
-            ));
-        }
+        // The parts whose value this file cannot carry (`value_unresolved`) get no
+        // note here: each is marked with `VALUE_UNRESOLVED_KEY`, and the engine
+        // states the reduced scope once from the board itself, which stays true
+        // after a BOM supplies some of them.
         out.extend(crate::exchange_disclosures(
             &self.artwork,
             &self.nets_without_pads,

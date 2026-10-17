@@ -316,6 +316,7 @@ impl CheckReport<'_> {
         // not judged; say so instead of letting a clean triage imply it was.
         let indicators = crate::checks::indicators::indicator_traces(board, lib);
         triage.add_not_covered(crate::checks::indicators::not_judged_note(&indicators));
+        triage.add_not_covered(crate::plain::values_not_carried_note(board));
         // This surface's own exit gate, computed before anything renders so the
         // machine document can state the same outcome the exit code will. It is
         // wider than the `serious` severity on purpose (medium lint findings, any

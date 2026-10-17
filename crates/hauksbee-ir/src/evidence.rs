@@ -448,7 +448,8 @@ pub enum Remedy {
     RenameDuplicate { reference: String, conflict: String },
     /// Give the spec firmware to run.
     AddFirmware,
-    /// Supply a BOM that marks the parts that are not fitted.
+    /// Supply a BOM beside the board: it marks the parts that are not fitted
+    /// and supplies the values a board file does not carry.
     AddBom,
     /// Install a simulator backend (`hauksbee install <id>`).
     InstallBackend { id: String },
@@ -487,7 +488,9 @@ impl Remedy {
                  re-export"
             ),
             Self::AddFirmware => "add firmware = \"path/to/app.elf\" to the spec".to_string(),
-            Self::AddBom => "pass a BOM that marks unfitted parts: --bom bom.csv".to_string(),
+            Self::AddBom => "pass a BOM beside the board: --bom bom.csv (it supplies values the \
+                 board file lacks and marks unfitted parts)"
+                .to_string(),
             Self::InstallBackend { id } => format!("hauksbee install {id}"),
             Self::ProvideProjectRules { file } => {
                 format!("put the project's {file} next to the board file and rerun")
@@ -510,6 +513,10 @@ enum OpenPartCause {
     AmbiguousReference,
     /// The library named what blocks a model ([`Assumption::UNLOCKED_BY_MARKER`]).
     NamedBlocker,
+    /// The input cannot carry a value (the reader says "no value in ..."): no
+    /// model can be chosen for a part nobody has said anything about, and the
+    /// designer has not left anything unset. A BOM supplies it.
+    ValueNotCarried,
 }
 
 impl OpenPartCause {
@@ -521,6 +528,8 @@ impl OpenPartCause {
             Self::DuplicateDesignator
         } else if r.starts_with("ambiguous inferred reference") {
             Self::AmbiguousReference
+        } else if r.starts_with(crate::vocabulary::VALUE_NOT_CARRIED_REASON_LEAD) {
+            Self::ValueNotCarried
         } else {
             Self::NoModel
         }
@@ -535,6 +544,7 @@ impl OpenPartCause {
                 reference: duplicate_name(reference).to_string(),
                 conflict: duplicate_conflict(reason),
             },
+            Self::ValueNotCarried => Remedy::AddBom,
             Self::NoModel if !subject.is_empty() && says_not_fitted(value) => Remedy::MarkDnp {
                 reference: reference.to_string(),
             },
@@ -1550,6 +1560,17 @@ impl Assumption {
                 (None, _) if cause == OpenPartCause::DuplicateDesignator => {
                     rename_sentence(&reference, &duplicate_conflict(reason))
                 }
+                // The input holds no value for the part: say where the value
+                // comes from, not that a model is missing.
+                (None, _) if cause == OpenPartCause::ValueNotCarried => format!(
+                    "{} {}",
+                    if plural {
+                        format!("The values of those {count} parts are not in this input.")
+                    } else {
+                        format!("{reference}'s value is not in this input.")
+                    },
+                    crate::vocabulary::VALUES_NOT_CARRIED_NEXT_STEP
+                ),
                 (None, true) => format!(
                     "Add models for those {count} parts to your models directory, or mark them \
                      DNP if the board does not fit them."

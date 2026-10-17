@@ -9,6 +9,10 @@
 //! parameter says so).
 
 use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
+
+/// Why an IPC-D-356 part has no value, for the engine's bind report.
+const VALUE_UNRESOLVED_REASON: &str =
+    "no value in the IPC-D-356 netlist: it records net-to-pad connectivity only";
 use hauksbee_ir::eprintln;
 use std::collections::HashMap;
 
@@ -182,6 +186,13 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
         .map(|reference| Component {
             pins: comps.remove(&reference).unwrap_or_default(),
             reference,
+            // An IPC-D-356 test-point netlist names a part and its pads, never
+            // its value. Saying so keeps the absence from reading as a value
+            // the designer left unset.
+            properties: vec![(
+                crate::altium::VALUE_UNRESOLVED_KEY.to_string(),
+                VALUE_UNRESOLVED_REASON.to_string(),
+            )],
             ..Default::default()
         })
         .collect();
@@ -244,6 +255,20 @@ mod tests {
         let mut s = base.as_bytes()[..32].to_vec();
         s.extend_from_slice(coord.as_bytes());
         String::from_utf8(s).unwrap()
+    }
+
+    #[test]
+    fn every_component_is_marked_as_carrying_no_value() {
+        let rec = record("GND", "R1", "1");
+        let board = extract(&format!("{rec}\n")).unwrap();
+        let c = &board.components[0];
+        assert!(c.value.is_empty() && c.value_not_carried());
+        assert!(
+            c.properties
+                .iter()
+                .any(|(k, v)| k == crate::altium::VALUE_UNRESOLVED_KEY
+                    && v.starts_with("no value in"))
+        );
     }
 
     #[test]
