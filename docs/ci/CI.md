@@ -828,7 +828,7 @@ covers come out of the gate and appear in their own section:
 ```
 == Waived (2) ==
 These findings fired and were overruled. They are not in the gate.
-  drc/short: GND to +5V on B.Cu
+  drc/short: +5V to GND on B.Cu
       because: the pour bridges these on purpose (until 2026-12-31)
 ```
 
@@ -942,11 +942,15 @@ hold while the input is still undefined).
 
 ### The two-sided demo
 
-One constructed board, `crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb`:
+One constructed board, `crates/hauksbee-ci/examples/boards/boot_gate_clean.kicad_pcb`:
 an ATmega328P whose PB0 drives a 2N7002 N-MOSFET gate, with **no pull resistor on
 the gate net** - so at reset the gate floats (Hi-Z), exactly the undefined-default
 shape. Two real AVR firmware variants (built with `avr-gcc`,
-`testdata/firmware/boot_gate_{a,b}/`):
+`testdata/firmware/boot_gate_{a,b}/`). It is the same parts as
+`boards/boot_gate.kicad_pcb`, routed with no copper short: that sibling keeps its
+two deliberate GND/+5V shorts as the DRC and waiver fixture, and a CI run cannot
+go GREEN over a board whose own `hauksbee check` fails, so the demo needs the
+clean one:
 
 ```bash
 # variant A configures PB0 promptly and drives the gate HIGH -> PASS

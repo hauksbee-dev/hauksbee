@@ -10,9 +10,14 @@
 # decidable by running the firmware: variant A configures PB0 as an output and
 # drives it HIGH promptly, so the gate is actively driven to a defined level well
 # within the deadline. This spec PASSES.
+#
+# The board is boards/boot_gate_clean.kicad_pcb: the same four parts as
+# boards/boot_gate.kicad_pcb, routed with no copper short. The sibling keeps two
+# deliberate GND/+5V shorts (the DRC and waiver fixture), and hauksbee-ci will
+# not go GREEN over a board whose own `hauksbee check` fails.
 
 name = "boot_coverage: MOSFET gate driven promptly (PASS)"
-board = "boards/boot_gate.kicad_pcb"
+board = "boards/boot_gate_clean.kicad_pcb"
 firmware = "../../../testdata/firmware/boot_gate_a/boot_gate.hex"
 mcu = "atmega328p"
 duration_ms = 50

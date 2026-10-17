@@ -25,7 +25,7 @@ Same board, same two assertions, opposite verdict.
 On the board's own value: `Tj(R1) peak 91.7 C (<= 125 C)`, no stress faults,
 GREEN.
 
-With the swap: `Tj(R1) peak 225.0 C`, and `R1 overpower 2.500 W > 1.000 W`. RED,
+With the swap: `Tj(R1) peak 225 C`, and `R1 overpower 2.500 W > 1.000 W`. RED,
 exit 1.
 
 The numbers are the point. 5 V across 30 ohm is 0.83 W and 5 V across 10 ohm is

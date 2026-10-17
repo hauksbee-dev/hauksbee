@@ -12,7 +12,9 @@ shorts, because `crates/hauksbee-engine/tests/waiver_gate.rs` asserts it gates
 red before any waiver exists, and that premise is what stops the waiver tests
 passing vacuously. The sample is the same board routed clean, so a first run
 shows the co-simulation rather than a red verdict. Both bind identically: four
-parts, one active IC, the MCU found.
+parts, one active IC, the MCU found. The sample is byte-identical to
+`crates/hauksbee-ci/examples/boards/boot_gate_clean.kicad_pcb`, which the
+`boot_gate_pass`/`boot_gate_fail` CI examples run on.
 
 `watchy.kicad_pcb` is the other deliberate exception. KiCad keeps this design's
 0.150 mm default clearance in the sibling `.kicad_pro`; a one-file browser
