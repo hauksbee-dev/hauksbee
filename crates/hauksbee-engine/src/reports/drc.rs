@@ -60,6 +60,7 @@ pub(crate) fn emit_with_schematic_quiet(
         text,
         report.clearance_mm,
     );
+    let provenance = without_unread_rule(provenance, input.input_kind);
     let mut structured = DrcStructured::from_report_with_ties(
         &report,
         qualification.as_ref(),
@@ -104,6 +105,7 @@ pub(crate) fn emit_with_schematic_quiet(
         .extend(default_rules_condition(&structured, &provenance));
     jr.verdict_conditions
         .extend(unmeasured_spacing_condition(input.input_kind));
+    jr = jr.with_unorderable_input(unorderable_input(input.input_kind, None));
     jr.push_coverage_note(crate::scope::single_check_note("DRC"));
     if provenance.source == crate::result::ClearanceRuleSource::Defaulted {
         jr.push_coverage_note(provenance.cli_notice());
@@ -281,6 +283,52 @@ pub(crate) fn default_rules_condition(
          {lift} to remove this assumption.",
         provenance.value_mm
     ))
+}
+
+/// The provenance, marked as having read no clearance rule when the input
+/// kind carries none: fabrication files, netlists and schematics. Their report
+/// then says "none", not a default or a board-file value nobody measured
+/// against.
+pub(crate) fn without_unread_rule(
+    provenance: crate::result::ClearanceRuleProvenance,
+    kind: crate::board_input::InputKind,
+) -> crate::result::ClearanceRuleProvenance {
+    if unmeasured_spacing_condition(kind).is_some()
+        || kind == crate::board_input::InputKind::Schematic
+    {
+        provenance.with_no_rule_read()
+    } else {
+        provenance
+    }
+}
+
+/// What to say, for a pass over an input that is not a board layout: a
+/// schematic. It is the sentence a pass opens with in place of "OK TO ORDER"
+/// (see [`crate::result::RunVerdict::unorderable`]) and one of the pass's
+/// conditions. `layout_text` is the input's text where the loader read a lone
+/// schematic sheet as plain text (the upload path cannot see sibling files, so
+/// it does not call it a schematic); the command line passes `None`. `None` for
+/// every input that is a board, or a fab export of one.
+pub(crate) fn unorderable_input(
+    kind: crate::board_input::InputKind,
+    layout_text: Option<&str>,
+) -> Option<String> {
+    use crate::board_input::InputKind;
+    let is_schematic = kind == InputKind::Schematic
+        || (kind == InputKind::Text
+            && layout_text.is_some_and(|text| {
+                hauksbee_extract::reader::Registry::builtin()
+                    .detect(text.as_bytes(), None)
+                    .is_some_and(|reader| reader.name() == "kicad-schematic")
+            }));
+    is_schematic.then(|| {
+        "this input is a schematic, not a board layout, so there is no board to order yet: \
+         Hauksbee checked the circuit as drawn (parts, connections and ratings against \
+         datasheets), but a schematic has no copper, spacing, placement or fabrication files, \
+         so none of those were checked and ordering cannot be judged. Run hauksbee on the \
+         board layout (.kicad_pcb) to judge ordering."
+            .to_string()
+    })
 }
 
 /// The condition a pass rests on when the input carried connectivity but no

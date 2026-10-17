@@ -95,111 +95,121 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     // element just pushed.
     let mut in_element = false;
 
+    let mut guard = XmlGuard::default();
+    let mut saw_board = false;
+    let mut saw_schematic = false;
     let mut buf = Vec::new();
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e) | Event::Empty(e)) => {
-                let attrs = xml_attrs;
-                match e.name().as_ref() {
-                    b"eagle" => saw_eagle_root = true,
-                    b"library" => {
-                        cur_library = attrs(&e).get("name").cloned().unwrap_or_default();
-                    }
-                    b"package" => {
-                        let a = attrs(&e);
-                        cur_package = a.get("name").cloned();
-                        if let Some(name) = &cur_package {
-                            packages
-                                .entry((cur_library.clone(), name.clone()))
-                                .or_default();
+        // Its own block: the event borrows `buf`, which is cleared below.
+        {
+            let event = reader.read_event_into(&mut buf);
+            if let Ok(seen) = &event {
+                guard.observe(seen)?;
+            }
+            match event {
+                Ok(Event::Start(e) | Event::Empty(e)) => {
+                    let attrs = xml_attrs;
+                    match e.name().as_ref() {
+                        b"eagle" => saw_eagle_root = true,
+                        b"board" => saw_board = true,
+                        b"schematic" => saw_schematic = true,
+                        b"library" => {
+                            cur_library = attrs(&e).get("name").cloned().unwrap_or_default();
                         }
-                    }
-                    b"pad" | b"smd" => {
-                        if let Some(pkg) = &cur_package {
+                        b"package" => {
+                            let a = attrs(&e);
+                            cur_package = a.get("name").cloned();
+                            if let Some(name) = &cur_package {
+                                packages
+                                    .entry((cur_library.clone(), name.clone()))
+                                    .or_default();
+                            }
+                        }
+                        b"pad" | b"smd" => {
+                            if let Some(pkg) = &cur_package {
+                                let a = attrs(&e);
+                                if let Some(bad) = non_finite_coord(&a) {
+                                    return Err(corrupt_coord("pad", &bad.0, &bad.1));
+                                }
+                                let (Some(name), Some(x), Some(y)) =
+                                    (a.get("name"), num(&a, "x"), num(&a, "y"))
+                                else {
+                                    continue;
+                                };
+                                packages
+                                    .entry((cur_library.clone(), pkg.clone()))
+                                    .or_default()
+                                    .push((name.clone(), x, y));
+                            }
+                        }
+                        b"element" => {
                             let a = attrs(&e);
                             if let Some(bad) = non_finite_coord(&a) {
-                                return Err(corrupt_coord("pad", &bad.0, &bad.1));
+                                return Err(corrupt_coord("element", &bad.0, &bad.1));
                             }
-                            let (Some(name), Some(x), Some(y)) =
-                                (a.get("name"), num(&a, "x"), num(&a, "y"))
-                            else {
-                                continue;
-                            };
-                            packages
-                                .entry((cur_library.clone(), pkg.clone()))
-                                .or_default()
-                                .push((name.clone(), x, y));
+                            let rot = a.get("rot").map_or("R0", String::as_str);
+                            in_element = true;
+                            elements.push(El {
+                                name: a.get("name").cloned().unwrap_or_default(),
+                                library: a.get("library").cloned().unwrap_or_default(),
+                                package: a.get("package").cloned().unwrap_or_default(),
+                                value: a.get("value").cloned().unwrap_or_default(),
+                                x: num(&a, "x").unwrap_or(0.0),
+                                y: num(&a, "y").unwrap_or(0.0),
+                                rot_deg: rot
+                                    .trim_start_matches(['M', 'S', 'R'])
+                                    .parse()
+                                    .unwrap_or(0.0),
+                                // Eagle can prefix the rotation with 'S' (spin) and
+                                // 'M' (mirror) in either order, "MR90", "SMR90".
+                                // `starts_with('M')` missed the spin-prefixed
+                                // "SMR90" form, disagreeing with drc.rs (contains).
+                                mirrored: rot.contains('M'),
+                                // Eagle marks a do-not-populate / assembly-variant
+                                // part with populate="no" on the element. Without
+                                // this every Eagle part read as populated, unlike
+                                // the KiCad readers which thread the analogous field.
+                                dnp: a
+                                    .get("populate")
+                                    .is_some_and(|p| p.eq_ignore_ascii_case("no")),
+                                properties: Vec::new(),
+                            });
                         }
-                    }
-                    b"element" => {
-                        let a = attrs(&e);
-                        if let Some(bad) = non_finite_coord(&a) {
-                            return Err(corrupt_coord("element", &bad.0, &bad.1));
-                        }
-                        let rot = a.get("rot").map_or("R0", String::as_str);
-                        in_element = true;
-                        elements.push(El {
-                            name: a.get("name").cloned().unwrap_or_default(),
-                            library: a.get("library").cloned().unwrap_or_default(),
-                            package: a.get("package").cloned().unwrap_or_default(),
-                            value: a.get("value").cloned().unwrap_or_default(),
-                            x: num(&a, "x").unwrap_or(0.0),
-                            y: num(&a, "y").unwrap_or(0.0),
-                            rot_deg: rot
-                                .trim_start_matches(['M', 'S', 'R'])
-                                .parse()
-                                .unwrap_or(0.0),
-                            // Eagle can prefix the rotation with 'S' (spin) and
-                            // 'M' (mirror) in either order, "MR90", "SMR90".
-                            // `starts_with('M')` missed the spin-prefixed
-                            // "SMR90" form, disagreeing with drc.rs (contains).
-                            mirrored: rot.contains('M'),
-                            // Eagle marks a do-not-populate / assembly-variant
-                            // part with populate="no" on the element. Without
-                            // this every Eagle part read as populated, unlike
-                            // the KiCad readers which thread the analogous field.
-                            dnp: a
-                                .get("populate")
-                                .is_some_and(|p| p.eq_ignore_ascii_case("no")),
-                            properties: Vec::new(),
-                        });
-                    }
-                    b"attribute" if in_element => {
-                        let a = attrs(&e);
-                        if let (Some(el), Some(name), Some(value)) =
-                            (elements.last_mut(), a.get("name"), a.get("value"))
-                        {
-                            el.dnp |= attribute_marks_dnp(name, value);
-                            if let Some(prop) = element_property(name, value) {
-                                el.properties.push(prop);
+                        b"attribute" if in_element => {
+                            let a = attrs(&e);
+                            if let (Some(el), Some(name), Some(value)) =
+                                (elements.last_mut(), a.get("name"), a.get("value"))
+                            {
+                                el.dnp |= attribute_marks_dnp(name, value);
+                                if let Some(prop) = element_property(name, value) {
+                                    el.properties.push(prop);
+                                }
                             }
                         }
-                    }
-                    b"signal" => {
-                        let a = attrs(&e);
-                        signals.push((a.get("name").cloned().unwrap_or_default(), Vec::new()));
-                    }
-                    b"contactref" => {
-                        let a = attrs(&e);
-                        if let (Some(sig), Some(el), Some(pad)) =
-                            (signals.last_mut(), a.get("element"), a.get("pad"))
-                        {
-                            sig.1.push((el.clone(), pad.clone()));
+                        b"signal" => {
+                            let a = attrs(&e);
+                            signals.push((a.get("name").cloned().unwrap_or_default(), Vec::new()));
                         }
+                        b"contactref" => {
+                            let a = attrs(&e);
+                            if let (Some(sig), Some(el), Some(pad)) =
+                                (signals.last_mut(), a.get("element"), a.get("pad"))
+                            {
+                                sig.1.push((el.clone(), pad.clone()));
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
+                Ok(Event::End(e)) if e.name().as_ref() == b"package" => cur_package = None,
+                Ok(Event::End(e)) if matches!(e.name().as_ref(), b"element" | b"elements") => {
+                    in_element = false;
+                }
+                Ok(Event::End(e)) if e.name().as_ref() == b"library" => cur_library.clear(),
+                Ok(Event::Eof) => break,
+                Err(err) => return Err(xml_error(&err)),
+                _ => {}
             }
-            Ok(Event::End(e)) if e.name().as_ref() == b"package" => cur_package = None,
-            Ok(Event::End(e)) if matches!(e.name().as_ref(), b"element" | b"elements") => {
-                in_element = false;
-            }
-            Ok(Event::End(e)) if e.name().as_ref() == b"library" => cur_library.clear(),
-            Ok(Event::Eof) => break,
-            Err(err) => {
-                return Err(ExtractError::Xml(err.to_string()));
-            }
-            _ => {}
         }
         buf.clear();
     }
@@ -209,6 +219,12 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
             expected: "eagle",
             found: None,
         });
+    }
+    // A file cut short parses cleanly up to the cut, so without this its nets
+    // and parts would be the first half of a board, read as the whole one.
+    guard.finish()?;
+    if saw_schematic && !saw_board {
+        return Err(eagle_schematic_alone());
     }
 
     let nets: Vec<Net> = signals
@@ -290,6 +306,133 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
         nets,
         components,
     })
+}
+
+/// Deepest element nesting an Eagle file is read at. Eagle itself writes about
+/// a dozen levels (`eagle > drawing > board > libraries > library > packages >
+/// package > smd`), so anything past this is a damaged or hostile file.
+const MAX_XML_DEPTH: usize = 64;
+
+/// Longest single attribute value an Eagle file is read with. Eagle writes
+/// values of a few hundred bytes at most; a megabyte attribute is not a board.
+const MAX_ATTR_BYTES: usize = 64 * 1024;
+
+/// Watches an Eagle XML event stream for what a streaming parse otherwise
+/// accepts without a word: nesting deep enough to exhaust a reader, an
+/// attribute too large to be a board's, an entity declaration that could pull
+/// in another file or expand without bound, and a document that ends before
+/// its root element closes.
+///
+/// Each is refused with a sentence naming the cause, instead of the file
+/// reading as a board with nothing in it ("parsed, but is empty") or, for a
+/// cut-short file, as a board with only the part that survived.
+#[derive(Default)]
+struct XmlGuard {
+    open: Vec<String>,
+}
+
+impl XmlGuard {
+    /// Account for one event, refusing the file when it breaks a limit.
+    fn observe(&mut self, event: &Event<'_>) -> Result<(), ExtractError> {
+        match event {
+            Event::Start(e) => {
+                check_attribute_sizes(e)?;
+                if self.open.len() >= MAX_XML_DEPTH {
+                    return Err(ExtractError::Corrupt(format!(
+                        "this Eagle file nests XML elements more than {MAX_XML_DEPTH} levels \
+                         deep (Eagle itself writes about a dozen), so hauksbee refused to read \
+                         it: runaway nesting is how a damaged or hostile file exhausts a \
+                         parser. Re-save the board from Eagle and retry; if you did not expect \
+                         this file, do not trust it"
+                    )));
+                }
+                self.open
+                    .push(String::from_utf8_lossy(e.name().as_ref()).into_owned());
+            }
+            Event::Empty(e) => check_attribute_sizes(e)?,
+            Event::End(_) => {
+                self.open.pop();
+            }
+            Event::DocType(d) if d.windows(b"<!ENTITY".len()).any(|w| w == b"<!ENTITY") => {
+                return Err(ExtractError::Corrupt(xml_entities_message()));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// At the end of the document: refuse it when elements are still open.
+    fn finish(&self) -> Result<(), ExtractError> {
+        self.open.last().map_or(Ok(()), |last| {
+            Err(truncated(&format!(
+                "the XML ends while {} element(s) are still open, the innermost <{last}>",
+                self.open.len()
+            )))
+        })
+    }
+}
+
+/// The refusal for an XML document that declares entities. Shared with the
+/// format sniffer, which meets the same declarations in a file whose `<eagle>`
+/// root sits past the sniff window.
+#[must_use]
+pub fn xml_entities_message() -> String {
+    "this file declares XML entities in its DOCTYPE (<!ENTITY ...>). Eagle never writes \
+     these, and an entity can pull in another file from this machine or expand into \
+     gigabytes, so hauksbee refused to read the file rather than resolve them. Re-save the \
+     board from Eagle (which drops the declaration) and retry; if you did not expect this \
+     file, do not trust it"
+        .to_string()
+}
+
+fn check_attribute_sizes(e: &quick_xml::events::BytesStart) -> Result<(), ExtractError> {
+    e.attributes()
+        .flatten()
+        .find(|a| a.value.len() > MAX_ATTR_BYTES)
+        .map_or(Ok(()), |a| {
+            Err(ExtractError::Corrupt(format!(
+                "this Eagle file has an attribute ({}=\"...\") of {} KiB, past the {} KiB \
+                 hauksbee reads (Eagle writes values of a few hundred bytes at most), so it \
+                 was refused for safety, not parsed. Re-save the board from Eagle and retry; \
+                 if you did not expect this file, do not trust it",
+                String::from_utf8_lossy(a.key.as_ref()),
+                a.value.len() / 1024,
+                MAX_ATTR_BYTES / 1024,
+            )))
+        })
+}
+
+/// The refusal for an Eagle file whose XML ends early. Reading what survives
+/// would give a board with some of its nets and parts and no sign of the rest.
+fn truncated(how: &str) -> ExtractError {
+    ExtractError::Corrupt(format!(
+        "this Eagle file is truncated: {how}. It was probably cut short by an \
+         interrupted save, copy or download, and hauksbee will not report on the part that \
+         survived as if it were the whole board. Re-save or re-copy the file from Eagle and \
+         retry"
+    ))
+}
+
+/// A quick-xml error as the user should hear it: a syntax error is the input
+/// ending inside a tag, comment or quoted value (the parser only meets these at
+/// the end of the input), which is a cut-short file; anything else keeps the
+/// parser's own wording.
+fn xml_error(err: &quick_xml::Error) -> ExtractError {
+    match err {
+        quick_xml::Error::Syntax(inner) => truncated(&format!("the XML ends mid-way ({inner})")),
+        other => ExtractError::Xml(other.to_string()),
+    }
+}
+
+/// The refusal for an Eagle schematic handed over as the board.
+fn eagle_schematic_alone() -> ExtractError {
+    ExtractError::Corrupt(format!(
+        "this is an Eagle schematic (.sch), not a board: it holds the circuit but no \
+         placement or copper, so there is nothing here to check for ordering. Pass the \
+         design's board file (.brd) instead; its .sch is read as well when it sits beside the \
+         .brd with the same name, or can be named with --schematic. See {}",
+        hauksbee_ir::docs_url("docs/ingest/EAGLE.md")
+    ))
 }
 
 /// A coordinate is only usable if it is a finite number. Rust's `f64` parser

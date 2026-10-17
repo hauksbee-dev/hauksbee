@@ -411,7 +411,57 @@ pub struct ComponentQuery {
 
 pub use crate::refdes::{is_active_ic_ref, is_tool_generated_ref};
 
+/// Longest text field a library match reads.
+///
+/// A real value, footprint or part number is a few dozen bytes; every library
+/// entry is matched against each field in full, so a megabyte-long field would
+/// cost a megabyte times every entry. Past this length nothing more can
+/// identify a part.
+pub const MAX_MATCH_FIELD_BYTES: usize = 1024;
+
+fn clamp_field(field: Option<&str>) -> Option<String> {
+    let text = field?;
+    if text.len() <= MAX_MATCH_FIELD_BYTES {
+        return None;
+    }
+    let mut end = MAX_MATCH_FIELD_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(text[..end].to_string())
+}
+
 impl ComponentQuery {
+    /// This query with every over-long text field cut to
+    /// [`MAX_MATCH_FIELD_BYTES`], or `None` when none is over it (the common
+    /// case, which clones nothing).
+    #[must_use]
+    pub fn bounded_for_matching(&self) -> Option<Self> {
+        let (lib_id, value) = (
+            clamp_field(self.lib_id.as_deref()),
+            clamp_field(self.value.as_deref()),
+        );
+        let (footprint, mpn) = (
+            clamp_field(self.footprint.as_deref()),
+            clamp_field(self.mpn.as_deref()),
+        );
+        if lib_id.is_none() && value.is_none() && footprint.is_none() && mpn.is_none() {
+            return None;
+        }
+        let mut bounded = self.clone();
+        for (slot, cut) in [
+            (&mut bounded.lib_id, lib_id),
+            (&mut bounded.value, value),
+            (&mut bounded.footprint, footprint),
+            (&mut bounded.mpn, mpn),
+        ] {
+            if cut.is_some() {
+                *slot = cut;
+            }
+        }
+        Some(bounded)
+    }
+
     /// Convenience constructor with the most common fields.
     pub fn new(
         lib_id: impl Into<Option<String>>,

@@ -64,6 +64,30 @@ pub fn is_board_code_header(text: &str) -> bool {
     head.contains("Board-as-Code") || head.contains("board version ")
 }
 
+/// The note for a file named `.board` (Board-as-Code) whose content is a
+/// different format: the extension is wrong, the content decides, and the file
+/// is read as what it is. `None` when the name is not `.board`, the content
+/// carries the Board-as-Code header, or no reader recognises the content (it is
+/// then Board-as-Code, whose compiler will say what is wrong with it).
+fn misnamed_board_code_note(file_name: &str, text: &str) -> Option<String> {
+    let named_board = Path::new(file_name).extension().and_then(|e| e.to_str()) == Some("board");
+    if !named_board || is_board_code_header(text) {
+        return None;
+    }
+    let registry = hauksbee_extract::reader::Registry::builtin();
+    let reader = registry.detect(text.as_bytes(), None)?;
+    // The IPC-D-356 reader claims a file on any line starting `317`, which a
+    // Board-as-Code source could contain; every other reader keys on a header.
+    if reader.name() == "ipc-d356" {
+        return None;
+    }
+    Some(format!(
+        "'{file_name}' has the .board extension, which means Board-as-Code, but its content \
+         is {}; it was read as that. Rename the file so its extension matches its content.",
+        hauksbee_extract::reader::format_phrase(reader.name())
+    ))
+}
+
 /// What kind of input the normalizer recognised.
 ///
 /// Call sites use this where they would otherwise keep `is_binary` / `is_gerber`
@@ -500,8 +524,18 @@ fn from_bytes_in_file_order(
     // Compile it to KiCad board text first; the emitted text then flows
     // through the untouched text path (parse, DRC, SI) as if a `.kicad_pcb`
     // was uploaded.
+    //
+    // A `.board` name does not make a file Board-as-Code when its content is a
+    // format another reader recognises: the content decides, and the note says
+    // the name was wrong.
+    let misnamed = if zip_code.is_none() {
+        misnamed_board_code_note(file_name, &text)
+    } else {
+        None
+    };
     let is_board_code = zip_code.is_some()
-        || Path::new(file_name).extension().and_then(|e| e.to_str()) == Some("board")
+        || (Path::new(file_name).extension().and_then(|e| e.to_str()) == Some("board")
+            && misnamed.is_none())
         || crate::board_input::is_board_code_header(&text);
     let text: String = if is_board_code {
         crate::boardcode::code_to_board_text(&text)
@@ -524,7 +558,7 @@ fn from_bytes_in_file_order(
             layout_text: None,
             raw: contents.to_vec(),
             kind: InputKind::Ipc2581,
-            notes: out.stats.notes(),
+            notes: out.stats.notes().into_iter().chain(misnamed).collect(),
         });
     }
     let board = ExtractedBoard::from_auto(&text)
@@ -538,7 +572,7 @@ fn from_bytes_in_file_order(
         } else {
             InputKind::Text
         },
-        notes: Vec::new(),
+        notes: misnamed.into_iter().collect(),
     })
 }
 
@@ -741,7 +775,12 @@ fn from_path_in_file_order(path: &Path) -> Result<NormalizedBoard, BoardInputErr
     // Board-as-Code (`.board`): detected by extension or the DSL header.
     // Parse the DSL, recompile it to `.kicad_pcb` text, then feed the same
     // analysis path the layout formats use.
-    let is_board_code = path.extension().and_then(|e| e.to_str()) == Some("board")
+    //
+    // A `.board` name over content another reader recognises (a KiCad board
+    // saved with the wrong extension) is read as what it is, with a note.
+    let misnamed = misnamed_board_code_note(&file_name, &text);
+    let is_board_code = (path.extension().and_then(|e| e.to_str()) == Some("board")
+        && misnamed.is_none())
         || crate::board_input::is_board_code_header(&text);
     if is_board_code {
         return board_code_input(&file_name, &text, raw, path);
@@ -753,7 +792,7 @@ fn from_path_in_file_order(path: &Path) -> Result<NormalizedBoard, BoardInputErr
     if hauksbee_extract::ipc2581::looks_like_ipc2581(&raw) {
         let out = hauksbee_extract::ipc2581::extract(&text)
             .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
-        let notes = out.stats.notes();
+        let notes = out.stats.notes().into_iter().chain(misnamed).collect();
         return Ok(normalized(
             path,
             out.board,
@@ -823,7 +862,7 @@ fn from_path_in_file_order(path: &Path) -> Result<NormalizedBoard, BoardInputErr
         Some(text),
         raw,
         InputKind::Text,
-        Vec::new(),
+        misnamed.into_iter().collect(),
     ))
 }
 

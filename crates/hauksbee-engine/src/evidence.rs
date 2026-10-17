@@ -1181,6 +1181,9 @@ impl BoardEvidence {
     /// the traversal or map fails validation against the registry.
     pub fn static_coverage_map(&self) -> Result<EvidenceMap, EvidenceError> {
         let nets: Vec<String> = self.refs_by_net.keys().cloned().collect();
+        if nets.is_empty() {
+            return Err(EvidenceError::NoNets);
+        }
         self.map_for_nets(
             format!("Static analysis covered {} extracted nets", nets.len()),
             &nets,
@@ -1218,6 +1221,9 @@ impl BoardEvidence {
         assertion: impl Into<String>,
     ) -> Result<EvidenceMap, EvidenceError> {
         let nets: Vec<String> = self.refs_by_net.keys().cloned().collect();
+        if nets.is_empty() {
+            return Err(EvidenceError::NoNets);
+        }
         self.geometry_map_for_check(check, assertion, &nets)
     }
 

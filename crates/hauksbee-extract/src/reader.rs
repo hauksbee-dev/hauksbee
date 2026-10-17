@@ -292,6 +292,26 @@ impl Default for Registry {
     }
 }
 
+/// How a user names the format a builtin reader reads.
+///
+/// `"kicad-pcb"` is "a KiCad board", for messages that say what a file
+/// actually is. An id this does not know, such as a third-party reader's, reads
+/// as "a board file in another format".
+#[must_use]
+pub fn format_phrase(reader_id: &str) -> &'static str {
+    match reader_id {
+        "kicad-pcb" => "a KiCad board",
+        "kicad-schematic" => "a KiCad schematic",
+        "kicad-netlist" => "a KiCad netlist",
+        "eagle" => "an Eagle board",
+        "ipc-d356" => "an IPC-D-356 netlist",
+        "ipc-2581" => "an IPC-2581 document",
+        "protel-ascii" | "altium" => "an Altium board",
+        "odb++" => "an ODB++ job",
+        _ => "a board file in another format",
+    }
+}
+
 /// The user-facing message for content no reader recognised.
 ///
 /// Special-cases the look-alikes users actually upload (an empty file, a Git LFS pointer
@@ -323,6 +343,13 @@ pub fn unrecognized_message(bytes: &[u8]) -> String {
                 `git lfs install && git lfs pull` in the repository, then retry \
                 with the real file"
             .to_string();
+    }
+    // An XML document whose DOCTYPE declares entities. It is refused by name
+    // here because its root element can sit past the sniff window (the
+    // declarations come first), so no XML reader claims it and the generic
+    // recital would hide that it was refused for safety.
+    if head.contains("<!ENTITY") {
+        return crate::eagle::xml_entities_message();
     }
     // A SINGLE fab file. These arrive constantly: a user drags one layer out of
     // the fab folder, or points at the drill file because it is the one with a

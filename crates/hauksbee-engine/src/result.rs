@@ -316,6 +316,14 @@ pub struct RunVerdict {
     /// to order": every surface tags it [`Self::inspect_tag`] from this one
     /// count, so the closing `VERDICT:` line and the web headline agree.
     pub inspect: usize,
+    /// Set on a pass over an input that is not a board (a schematic): what the
+    /// input is, what was checked, and what to run to judge ordering. Such a
+    /// pass is never "OK TO ORDER" or "clean", because nothing about ordering
+    /// was judged; every surface opens with
+    /// [`hauksbee_ir::vocabulary::NOT_ORDERABLE_LEAD`] and this sentence instead.
+    /// The sentence is also one of `conditions`, so the machine document
+    /// carries it too.
+    pub unorderable: Option<String>,
 }
 
 impl Default for RunVerdict {
@@ -327,6 +335,7 @@ impl Default for RunVerdict {
             partial: false,
             not_judged: None,
             inspect: 0,
+            unorderable: None,
         }
     }
 }
@@ -374,6 +383,10 @@ impl RunVerdict {
             return Self {
                 conditions,
                 inspect: self.inspect + later.inspect,
+                unorderable: self
+                    .unorderable
+                    .clone()
+                    .or_else(|| later.unorderable.clone()),
                 ..Self::default()
             };
         }
@@ -390,6 +403,7 @@ impl RunVerdict {
             partial: first.partial,
             not_judged: first.not_judged.clone(),
             inspect: 0,
+            unorderable: None,
         }
     }
 
@@ -406,6 +420,17 @@ impl RunVerdict {
                 if self.inspect == 1 { "" } else { "s" }
             )
         })
+    }
+
+    /// The pass conditions other than `sentence` (the unorderable-input
+    /// sentence, which a headline and the `VERDICT:` line lead with instead).
+    #[must_use]
+    pub fn conditions_without(&self, sentence: &str) -> Vec<&str> {
+        self.conditions
+            .iter()
+            .map(String::as_str)
+            .filter(|c| *c != sentence)
+            .collect()
     }
 
     /// The line a failing run prints once, after its failures: the lead, what
@@ -1613,6 +1638,12 @@ impl ClearanceRuleProvenance {
     /// Prominent source + unlocking-input sentence for a CLI report.
     #[must_use]
     pub fn source_notice(&self) -> String {
+        // No rule was read at all (the sweep never ran, as for fabrication files
+        // and netlists): whatever the source, nothing could be flagged, so it
+        // must not read as a default or a rule the input carries.
+        if self.no_rule_read {
+            return "CLEARANCE RULE SOURCE: none; this input carries no clearance rule Hauksbee reads, so no copper spacing was measured.".to_string();
+        }
         match self.source {
             ClearanceRuleSource::ProjectFileFound => format!(
                 "CLEARANCE RULE SOURCE: sibling .kicad_pro (report-wide value {:.3} mm).",
@@ -1627,10 +1658,6 @@ impl ClearanceRuleProvenance {
                 "CLEARANCE RULE SOURCE: TOOL DEFAULT {:.3} mm; this importer did not read design rules, so these are default rules, not your rules.",
                 self.value_mm
             ),
-            // No rule was read at all (the sweep never ran): nothing could be
-            // flagged, so it must not read as a rule the board file carries. An
-            // explicit rule, even a zero one, keeps the board-file wording below.
-            ClearanceRuleSource::BoardFile if self.no_rule_read => "CLEARANCE RULE SOURCE: none; this input carries no clearance rule Hauksbee reads, so no copper spacing was measured.".to_string(),
             ClearanceRuleSource::BoardFile => format!(
                 "CLEARANCE RULE SOURCE: clearance carried by the board file (report-wide value {:.3} mm).",
                 self.value_mm
@@ -1667,7 +1694,7 @@ impl ClearanceRuleProvenance {
     #[must_use]
     pub fn cli_notice(&self) -> String {
         let notice = self.source_notice();
-        if self.source == ClearanceRuleSource::Defaulted {
+        if self.source == ClearanceRuleSource::Defaulted && !self.no_rule_read {
             let unlock = if self.project_file_found {
                 "Repair or replace the sibling .kicad_pro with readable netclass rules and rerun to check your netclass rules."
             } else {
@@ -1683,6 +1710,9 @@ impl ClearanceRuleProvenance {
     /// sibling filesystem path.
     #[must_use]
     pub fn web_notice(&self) -> String {
+        if self.no_rule_read {
+            return self.cli_notice();
+        }
         match self.source {
             ClearanceRuleSource::Defaulted if self.project_file_found => format!(
                 "CLEARANCE RULE SOURCE: DEFAULT {:.3} mm; the uploaded .kicad_pro was present, but its netclass rules were not read; these are default rules, not your rules. Repair or replace that .kicad_pro and upload it alongside the board to check your netclass rules.",
@@ -2689,6 +2719,13 @@ pub struct JsonReport {
     /// instead. Not serialized: the gate's outcome is the verdict field.
     #[serde(skip)]
     pub descriptive_only: bool,
+    /// What the input is when it is not a board and so cannot be ordered (a
+    /// schematic), and what to run to judge ordering; see
+    /// [`RunVerdict::unorderable`]. Set with [`Self::with_unorderable_input`],
+    /// which also adds it to the verdict's conditions. Not serialized: the
+    /// condition carries it.
+    #[serde(skip)]
+    pub unorderable: Option<String>,
     /// Every explicitly supplied input and what it contributed to this run.
     /// Empty on older/internal call paths that have no inventory context.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2883,6 +2920,7 @@ impl JsonReport {
             bind_gates_verdict: false,
             surface_gate_fails: false,
             descriptive_only: false,
+            unorderable: None,
             inputs: Vec::new(),
             inventory: Vec::new(),
             assumptions: Vec::new(),
@@ -2981,6 +3019,20 @@ impl JsonReport {
     #[must_use]
     pub fn with_condition(mut self, condition: Option<String>) -> Self {
         self.verdict_conditions.extend(condition);
+        self
+    }
+
+    /// Mark the input as one that is not a board (nothing for `None`): the
+    /// sentence becomes a condition of any pass and the words a human surface
+    /// opens a pass with (see [`RunVerdict::unorderable`]).
+    #[must_use]
+    pub fn with_unorderable_input(mut self, why: Option<String>) -> Self {
+        if let Some(why) = &why {
+            if !self.verdict_conditions.contains(why) {
+                self.verdict_conditions.push(why.clone());
+            }
+        }
+        self.unorderable = why;
         self
     }
 
@@ -3361,6 +3413,11 @@ impl JsonReport {
             } else {
                 0
             },
+            // Only a pass is ever mistaken for "OK TO ORDER".
+            unorderable: self
+                .unorderable
+                .clone()
+                .filter(|_| verdict == "pass" && !partial),
         }
     }
 
@@ -4707,6 +4764,7 @@ mod tests {
             partial,
             not_judged: None,
             inspect,
+            unorderable: None,
         }
     }
 
