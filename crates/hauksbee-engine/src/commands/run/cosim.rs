@@ -54,11 +54,25 @@ pub fn run_headless(
     run_inputs: &RunInputs,
     artifacts: &RunArtifacts,
     sim: &mut SimulationContext,
+    static_outcome: Option<crate::reports::check::CheckOutcome>,
 ) -> anyhow::Result<()> {
     let observations = execute_and_collect_observations(cfg, run_inputs, sim)?;
     let evidence = assemble_evidence_and_ci_artifacts(cfg, artifacts, sim, &observations)?;
-    emit_report(cfg, run_inputs, sim, &observations, &evidence);
+    let combined = emit_report(
+        cfg,
+        run_inputs,
+        sim,
+        &observations,
+        &evidence,
+        static_outcome.as_ref(),
+    );
     emit_evidence(cfg, quiet, &evidence);
+    // A combined run owes the static check's strict exits too. They are taken
+    // first (the static pass came first), and the co-sim's gates follow, so a
+    // gating board finding is never lost behind a quiet simulation.
+    if let (Some(outcome), Some(verdict)) = (static_outcome, combined) {
+        outcome.finish(verdict.partial || verdict.verdict == "invalid");
+    }
     super::cosim_gates::enforce_gates(cfg, sim, &observations, &evidence);
     Ok(())
 }
@@ -435,7 +449,8 @@ fn emit_report(
     sim: &SimulationContext,
     observations: &RunObservations,
     evidence: &EvidenceArtifacts,
-) {
+    static_outcome: Option<&crate::reports::check::CheckOutcome>,
+) -> Option<crate::result::RunVerdict> {
     let inputs = &run_inputs.inputs;
     let engine = &sim.engine;
     let board_name = &observations.board_name;
@@ -563,7 +578,10 @@ fn emit_report(
         machine = jr;
     }
     let verdict = machine.run_verdict();
-    crate::run_manifest::note_run_verdict(verdict.verdict);
+    // A run that also printed the static check ends on the worse of the two
+    // verdicts, which is what the manifest records.
+    let combined = static_outcome.map(|stat| stat.verdict.combine(&verdict));
+    crate::run_manifest::note_run_verdict(combined.as_ref().unwrap_or(&verdict).verdict);
     if cfg.json {
         println!("{}", machine.to_json());
     } else if cfg.plain {
@@ -661,7 +679,9 @@ fn emit_report(
         if !gate_rows.is_empty() {
             print!("{}", crate::checks::boot::render_boot_gate_panel(gate_rows));
         }
-        if let Some(line) = closing_verdict_line(&verdict, &report) {
+        if let Some((combined, stat)) = combined.as_ref().zip(static_outcome) {
+            println!("\n{}", combined_closing_line(cfg, combined, stat, &report));
+        } else if let Some(line) = closing_verdict_line(&verdict, &report) {
             println!("{line}");
         }
     } else {
@@ -700,6 +720,40 @@ fn emit_report(
             );
         }
     }
+    combined
+}
+
+/// The `(serious, worth a look)` counts the closing line of a co-sim reads,
+/// from the plain report it ends.
+fn cosim_counts(report: &crate::plain::PlainReport) -> (usize, usize) {
+    let serious = report.serious_count();
+    (
+        serious,
+        (report.findings.len() - serious) + report.heads_up.len(),
+    )
+}
+
+/// The one closing line of a run that printed the static check and then
+/// co-simulated: the worse of the two verdicts, over both passes' counts, in
+/// the words `--check` alone closes on. Always printed, a pass included: the
+/// static pass's own closing line was held back for this one.
+fn combined_closing_line(
+    cfg: &RunConfig,
+    combined: &crate::result::RunVerdict,
+    stat: &crate::reports::check::CheckOutcome,
+    report: &crate::plain::PlainReport,
+) -> String {
+    let (serious, worth) = cosim_counts(report);
+    let counts = (stat.counts.0 + serious, stat.counts.1 + worth);
+    let report_only = if !cfg.strict && combined.verdict == "fail" {
+        crate::reports::check::report_only_suffix()
+    } else {
+        String::new()
+    };
+    format!(
+        "{}{report_only}",
+        crate::reports::check::verdict_line(combined, counts, stat.copper_unvalidated())
+    )
 }
 
 /// The closing `VERDICT:` line a text surface prints when the run is not a
@@ -710,11 +764,8 @@ fn closing_verdict_line(
     verdict: &crate::result::RunVerdict,
     report: &crate::plain::PlainReport,
 ) -> Option<String> {
-    (verdict.verdict != "pass").then(|| {
-        let serious = report.serious_count();
-        let worth = (report.findings.len() - serious) + report.heads_up.len();
-        crate::reports::check::verdict_line(verdict, (serious, worth), None)
-    })
+    (verdict.verdict != "pass")
+        .then(|| crate::reports::check::verdict_line(verdict, cosim_counts(report), None))
 }
 
 fn emit_evidence(cfg: &RunConfig, quiet: bool, evidence: &EvidenceArtifacts) {

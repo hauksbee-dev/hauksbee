@@ -153,6 +153,7 @@ pub fn run_selected_simulation_surface(
     run_inputs: &RunInputs,
     artifacts: &super::prepare::RunArtifacts,
     sim: &mut SimulationContext,
+    static_outcome: Option<crate::reports::check::CheckOutcome>,
 ) -> anyhow::Result<bool> {
     // --thermal: run a short co-sim, then print the steady-state junction
     // temperature per dissipating device and exit. Fix #1: a thermal table that
@@ -199,8 +200,11 @@ pub fn run_selected_simulation_surface(
         }
         return Ok(true);
     }
-    if surface == SelectedSurface::Headless {
-        super::cosim::run_headless(cfg, quiet, run_inputs, artifacts, sim)?;
+    if matches!(
+        surface,
+        SelectedSurface::Headless | SelectedSurface::CheckThenCosim
+    ) {
+        super::cosim::run_headless(cfg, quiet, run_inputs, artifacts, sim, static_outcome)?;
         return Ok(true);
     }
     Ok(false)

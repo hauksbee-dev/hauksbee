@@ -39,8 +39,125 @@ pub(crate) fn emit_with_schematic_quiet(
             verbose,
             oracle,
             quiet,
+            defer: false,
         },
         strict,
+    )
+    .map(|_| ())
+}
+
+/// [`emit_with_schematic_quiet`] for a caller that closes the run itself: the
+/// whole report prints, but its closing `VERDICT:` line and its `--strict`
+/// exits are left to the caller (see [`CheckOutcome`]), so a run that goes on
+/// to judge the board some other way can end on ONE verdict covering both.
+#[allow(clippy::fn_params_excessive_bools, reason = "independent CLI switches")]
+pub(crate) fn emit_deferred_with_schematic_quiet(
+    input: &StaticInputs,
+    mode: OutputMode,
+    strict: bool,
+    verbose: bool,
+    oracle: bool,
+    quiet: bool,
+    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
+) -> anyhow::Result<CheckOutcome> {
+    CheckReport {
+        input,
+        schematic_ties,
+    }
+    .emit(
+        &CheckDisplay::Full {
+            mode,
+            verbose,
+            oracle,
+            quiet,
+            defer: true,
+        },
+        strict,
+    )?
+    .ok_or_else(|| anyhow::anyhow!("a deferred check report always leaves its outcome"))
+}
+
+/// What a deferred `--check` pass leaves for the caller that closes the run:
+/// its machine verdict, the counts its closing line reads, and the `--strict`
+/// exits it has not yet taken.
+pub(crate) struct CheckOutcome {
+    /// The verdict the `--json` document of this pass states.
+    pub(crate) verdict: RunVerdict,
+    /// `(serious, worth a look)`, as the closing line counts them.
+    pub(crate) counts: (usize, usize),
+    /// The copper caveat for a board format whose copper is unvalidated: why,
+    /// and how many potential copper issues the copper section lists.
+    copper_unvalidated: Option<(String, usize)>,
+    strict: StrictTail,
+}
+
+impl CheckOutcome {
+    /// The copper caveat, shaped as the closing line takes it.
+    pub(crate) fn copper_unvalidated(&self) -> Option<CopperUnvalidated<'_>> {
+        self.copper_unvalidated
+            .as_ref()
+            .map(|(reason, issues)| CopperUnvalidated {
+                reason,
+                issues: *issues,
+            })
+    }
+
+    /// Take the `--strict` exits this pass owes, if any. `unvouched` is whether
+    /// the run as a whole (not just this pass) is partly judged or inconclusive.
+    pub(crate) fn finish(self, unvouched: bool) {
+        self.strict.run(&self.verdict, unvouched);
+    }
+}
+
+/// The exits a `--check` pass takes under `--strict`, held apart from the
+/// report so a caller can take them after the rest of its output.
+struct StrictTail {
+    strict: bool,
+    would_gate: bool,
+    mode: OutputMode,
+    gate_items: Vec<String>,
+    blockers: Vec<String>,
+}
+
+impl StrictTail {
+    /// Say why an exit 0 is not a pass, then exit 2 on a gating finding or 3
+    /// on a verdict the run could not give, exactly as `--check` alone does.
+    fn run(&self, verdict: &RunVerdict, unvouched: bool) {
+        super::note_unvouched_exit(self.strict, unvouched);
+        if self.strict && self.would_gate {
+            super::strict_gate_exit(self.mode, &self.gate_items);
+        }
+        // Exit 3 on the SAME rule the JSON verdict uses (run-level undermined
+        // evidence or unbound verdict-critical parts), not on any undermined map:
+        // a finding-backed badge must not exit 3 under --strict while the verdict
+        // field says pass.
+        // A partly judged run is not a pass either: exit 3, annotated as such.
+        // Every strict non-pass verdict is annotated with the verdict's own
+        // reason, so the GitHub surface is red wherever JUnit, SARIF and the
+        // exit code are, blockers or not.
+        if self.strict && verdict.verdict == "invalid" {
+            // Blockers are named in the shared INCONCLUSIVE sentence by the exit
+            // below; a partly judged run, or one with no blocker to name, says
+            // the verdict's own reason instead.
+            if verdict.partial || self.blockers.is_empty() {
+                super::ci_artifacts::github_verdict_annotation(
+                    verdict.reason.as_deref().unwrap_or_default(),
+                );
+            }
+            super::exit_invalid_for_analysis(&self.blockers);
+        }
+    }
+}
+
+/// The words after a failing verdict that still exits 0, in the glossary's
+/// terms, so a CI log reader who sees "failing" beside a green job learns why
+/// and what to add.
+pub(crate) fn report_only_suffix() -> String {
+    format!(
+        " (exit 0: report only. {})",
+        hauksbee_ir::glossary::Term::ReportOnlyExit
+            .entry()
+            .what_to_do
     )
 }
 
@@ -57,13 +174,15 @@ enum CheckDisplay {
         verbose: bool,
         oracle: bool,
         quiet: bool,
+        /// Leave the closing line and the strict exits to the caller.
+        defer: bool,
     },
     CombinedJson,
 }
 
 impl CheckReport<'_> {
     #[allow(clippy::too_many_lines, reason = "one static-suite pass, then render")]
-    fn emit(self, display: &CheckDisplay, strict: bool) -> anyhow::Result<()> {
+    fn emit(self, display: &CheckDisplay, strict: bool) -> anyhow::Result<Option<CheckOutcome>> {
         let Self {
             input,
             schematic_ties,
@@ -77,14 +196,15 @@ impl CheckReport<'_> {
             ..
         } = *input;
         let combined = matches!(display, CheckDisplay::CombinedJson);
-        let (mode, verbose, oracle, quiet) = match *display {
+        let (mode, verbose, oracle, quiet, defer) = match *display {
             CheckDisplay::Full {
                 mode,
                 verbose,
                 oracle,
                 quiet,
-            } => (mode, verbose, oracle, quiet),
-            CheckDisplay::CombinedJson => (OutputMode::Json, false, false, false),
+                defer,
+            } => (mode, verbose, oracle, quiet, defer),
+            CheckDisplay::CombinedJson => (OutputMode::Json, false, false, false, false),
         };
         let mut bound = bind_board(board, lib);
         let summary = BindSummary::from_report(&bound.report);
@@ -358,6 +478,11 @@ impl CheckReport<'_> {
                             .iter()
                             .any(|mcu| backend_is_compiled(&mcu.backend)),
                         usbc.is_some(),
+                        if defer {
+                            Followed::BySimulation
+                        } else {
+                            Followed::ByNothing
+                        },
                     )
                 );
             }
@@ -420,8 +545,26 @@ impl CheckReport<'_> {
                 }
             }
         }
+        let copper_unvalidated = drc_structured.version_warning.as_deref().map(|reason| {
+            (
+                reason.to_string(),
+                crate::plain::plain_drc_structured_with_rule_source(&drc_structured, &provenance)
+                    .potential_copper_issue_count(),
+            )
+        });
+        let outcome = CheckOutcome {
+            verdict: run_verdict,
+            counts: headline_counts,
+            copper_unvalidated,
+            strict: StrictTail {
+                strict,
+                would_gate,
+                mode,
+                gate_items: gate_items(&drc_structured, &lint, &si, usbc.as_ref()),
+                blockers,
+            },
+        };
         if !matches!(mode, OutputMode::Json) {
-            let (serious, worth_a_look) = headline_counts;
             print!(
                 "{}",
                 super::render_evidence_appendix(&evidence, quiet, verbose)
@@ -430,69 +573,31 @@ impl CheckReport<'_> {
             // One verdict line to end on (U4), matching the web/TUI verdict shape:
             // the last thing `--check` prints answers "is my board ok" without
             // scrolling back through four sections. --json is unchanged (its
-            // consumers read the structured findings).
-            // A failing verdict that still exits 0 says so on its own line, in the
-            // words the glossary gives that term, so a CI log reader who sees
-            // "failing" and a green job learns why and what to add.
-            let report_only = if !strict && would_gate {
-                format!(
-                    " (exit 0: report only. {})",
-                    hauksbee_ir::glossary::Term::ReportOnlyExit
-                        .entry()
-                        .what_to_do
-                )
-            } else {
-                String::new()
-            };
-            println!(
-                "\n{}{report_only}",
-                verdict_line(
-                    &run_verdict,
-                    (serious, worth_a_look),
-                    drc_structured
-                        .version_warning
-                        .as_deref()
-                        .map(|reason| CopperUnvalidated {
-                            reason,
-                            issues: crate::plain::plain_drc_structured_with_rule_source(
-                                &drc_structured,
-                                &provenance,
-                            )
-                            .potential_copper_issue_count(),
-                        }),
-                )
-            );
-        }
-        super::note_unvouched_exit(
-            strict,
-            run_verdict.partial || run_verdict.verdict == "invalid",
-        );
-        if strict && would_gate {
-            super::strict_gate_exit(
-                mode,
-                &gate_items(&drc_structured, &lint, &si, usbc.as_ref()),
-            );
-        }
-        // Exit 3 on the SAME rule the JSON verdict uses (run-level undermined
-        // evidence or unbound verdict-critical parts), not on any undermined map:
-        // a finding-backed badge must not exit 3 under --strict while the verdict
-        // field says pass.
-        // A partly judged run is not a pass either: exit 3, annotated as such.
-        // Every strict non-pass verdict is annotated with the verdict's own
-        // reason, so the GitHub surface is red wherever JUnit, SARIF and the
-        // exit code are, blockers or not.
-        if strict && run_verdict.verdict == "invalid" {
-            // Blockers are named in the shared INCONCLUSIVE sentence by the exit
-            // below; a partly judged run, or one with no blocker to name, says
-            // the verdict's own reason instead.
-            if run_verdict.partial || blockers.is_empty() {
-                super::ci_artifacts::github_verdict_annotation(
-                    run_verdict.reason.as_deref().unwrap_or_default(),
+            // consumers read the structured findings). A caller that closes the
+            // run itself prints its own, covering more than this pass.
+            if !defer {
+                // A failing verdict that still exits 0 says so on its own line.
+                let report_only = if !strict && would_gate {
+                    report_only_suffix()
+                } else {
+                    String::new()
+                };
+                println!(
+                    "\n{}{report_only}",
+                    verdict_line(
+                        &outcome.verdict,
+                        outcome.counts,
+                        outcome.copper_unvalidated(),
+                    )
                 );
             }
-            super::exit_invalid_for_analysis(&blockers);
         }
-        Ok(())
+        if defer {
+            return Ok(Some(outcome));
+        }
+        let unvouched = outcome.verdict.partial || outcome.verdict.verdict == "invalid";
+        outcome.finish(unvouched);
+        Ok(None)
     }
 }
 
@@ -983,18 +1088,36 @@ fn backend_is_compiled(backend: &str) -> bool {
         || (kind == Some("qemu") && cfg!(feature = "qemu"))
 }
 
+/// What, if anything, runs the board right after this static report.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Followed {
+    ByNothing,
+    BySimulation,
+}
+
 fn what_this_pass_did_not_check(
     mcu_bound: bool,
     mcu_backend_compiled: bool,
     usbc_ran: bool,
+    followed: Followed,
 ) -> String {
     let mut s = String::from("\n== What this pass did not check ==\n");
-    s.push_str(
-        "These checks read the board. They do not run it, so nothing above can \
-         see a fault that only appears while the board is powered: a rail that \
-         sags on inrush, a brownout at power-up, a part that overheats under \
-         load.\n",
-    );
+    if followed == Followed::BySimulation {
+        // The caller co-simulates the board straight after this report, so
+        // "they do not run it" would be false of the run as a whole.
+        s.push_str(
+            "These checks read the board; nothing above ran it. The simulation \
+             that follows runs it for the time you asked for, so a fault that \
+             only appears later, or under a different load, will not show.\n",
+        );
+    } else {
+        s.push_str(
+            "These checks read the board. They do not run it, so nothing above can \
+             see a fault that only appears while the board is powered: a rail that \
+             sags on inrush, a brownout at power-up, a part that overheats under \
+             load.\n",
+        );
+    }
     // The USB-C section above appears only when there is a USB-C connector to
     // classify. Its silent absence otherwise would read as "checked and clean"
     // on a board whose USB-C hauksbee never found, so say which it was.
@@ -1157,6 +1280,7 @@ pub(crate) fn emit_combined_json_with_schematic(
         schematic_ties,
     }
     .emit(&CheckDisplay::CombinedJson, strict)
+    .map(|_| ())
 }
 
 #[cfg(test)]

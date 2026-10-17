@@ -94,6 +94,22 @@ pub fn emit_selected(
         .map(|()| true);
     }
 
+    // Bare --plain with an explicit --seconds: the same combined check, but its
+    // closing verdict and strict exits wait for the co-sim that follows, so the
+    // run ends on one verdict covering both. Returns false: the run goes on.
+    if surface == SelectedSurface::CheckThenCosim {
+        artifacts.static_outcome = Some(crate::reports::check::emit_deferred_with_schematic_quiet(
+            &report_inputs,
+            mode,
+            cfg.strict,
+            cfg.verbose,
+            cfg.oracle,
+            quiet,
+            schematic_ties.as_ref(),
+        )?);
+        return Ok(false);
+    }
+
     if surface == SelectedSurface::Bind {
         return crate::reports::bind::emit_quiet(
             board,
