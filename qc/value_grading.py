@@ -146,8 +146,8 @@ GERBER_STRUCTURAL_UNLOCK = (
 )
 
 #: What the gate needs before it will call a board bench-grade on formats it
-#: cannot read. Altium's binary `.PcbDoc`, ODB++, IPC-2581 and the Board-as-Code
-#: DSL carry neither an exact placement token nor a declared-net record, so every
+#: cannot read. Altium's binary `.PcbDoc`, ODB++, and IPC-2581
+#: carry neither an exact placement token nor a declared-net record, so every
 #: number for those boards comes from the tool under test. They pass, they are
 #: enumerated, and they stop one grade short of `delivered`.
 UNANCHORED_INPUT_UNLOCK = (
@@ -418,8 +418,6 @@ PARTFUL_FORMATS = frozenset(
         "altium_pcbdoc",
         "ipc_2581",
         "odb_archive",
-        "hauksbee_board",
-        "hauksbee_board_archive",
     }
 )
 

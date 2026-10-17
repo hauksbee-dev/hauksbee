@@ -144,6 +144,5 @@ The full fixture-by-reader matrix prints to stderr under `--nocapture`.
 
 ---
 
-See [docs/ingest/BOARD_AS_CODE.md](../ingest/BOARD_AS_CODE.md) and
-[docs/ingest/SCHEMATICS.md](../ingest/SCHEMATICS.md) for what happens to an
+See [docs/ingest/SCHEMATICS.md](../ingest/SCHEMATICS.md) for what happens to an
 `ExtractedBoard` after your reader produces one.

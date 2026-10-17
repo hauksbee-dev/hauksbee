@@ -10,8 +10,7 @@
    { "vendor": "IPC-2581", "exts": [".xml"], "route": "board", "quiet": false },
    { "vendor": "IPC-D-356", "exts": [".d356"], "route": "board", "quiet": false },
    { "vendor": "ODB++ job", "exts": [".tgz", ".tar.gz", ".tar"], "route": "board", "quiet": false },
-   { "vendor": "fab archive (gerbers, ODB++ or a .board export)", "exts": [".zip"], "route": "board", "quiet": false },
-   { "vendor": "Board-as-Code", "exts": [".board"], "route": "board", "quiet": false },
+   { "vendor": "fab archive (gerbers or ODB++)", "exts": [".zip"], "route": "board", "quiet": false },
    { "vendor": "SPICE deck", "exts": [".cir", ".sp", ".net"], "route": "deck", "quiet": false },
    { "vendor": "Excellon drill", "exts": [".txt"], "route": "board", "quiet": true }
   ],

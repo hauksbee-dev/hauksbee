@@ -87,7 +87,7 @@ The JSON fields are:
 | `build` | Compile target OS/architecture and the sorted feature set (`avr`, `renode`, `qemu`, `embed-web` as applicable). |
 | `root_hint` | Names the project root that relative paths are measured from (its directory name and whether it is a git checkout or the working directory), without its location. |
 | `environment` | Only behavior-changing selectors, with values represented as SHA-256 hashes. |
-| `backends` | Each external program found when the manifest was written (`simavr`, `qemu-xtensa`, `qemu-riscv32`, `renode`, `ngspice`, `kicad-cli`, `freerouting`) with `version` and `sha256_of_binary`, from the same discovery `hauksbee doctor` uses. simavr is linked in, so it has a source commit and no binary hash. |
+| `backends` | Each external program found when the manifest was written (`simavr`, `qemu-xtensa`, `qemu-riscv32`, `renode`, `ngspice`, `kicad-cli`) with `version` and `sha256_of_binary`, from the same discovery `hauksbee doctor` uses. simavr is linked in, so it has a source commit and no binary hash. |
 | `inputs` | Sorted role/project-relative-path/kind/digest/size records; directory digests cover sorted relative paths and each file's bytes. |
 | `invocation.argv` | Ordered arguments, with a portable tool name and without the emission flag. |
 | `invocation.options` | Parsed, normalized settings including defaults, seeds (for `hauksbee-ci`, each spec's resolved ensemble seed count and mode), fidelity knobs, output modes, and DNP/solver-facing selections. |

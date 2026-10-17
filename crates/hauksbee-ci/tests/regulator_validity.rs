@@ -20,7 +20,7 @@ use hauksbee_engine::scheduler::RegulationTaint;
 use std::path::{Path, PathBuf};
 
 fn fixture_board() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/regulator.board")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/regulator.kicad_pcb")
 }
 
 /// A spec whose only variables are the bench supply on VIN and an optional `vin

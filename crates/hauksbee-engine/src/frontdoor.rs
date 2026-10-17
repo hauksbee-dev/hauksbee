@@ -906,7 +906,6 @@ fn web_import_diagnostics(norm: &crate::board_input::NormalizedBoard) -> WebImpo
         InputKind::Ipc356Archive => "fab archive with IPC-D-356 connectivity",
         InputKind::Odb => "ODB++",
         InputKind::Ipc2581 => "IPC-2581",
-        InputKind::BoardCode => "Board-as-Code",
     }
     .to_string();
 
@@ -1118,10 +1117,6 @@ fn web_import_failure(
         })
     });
     let (stage, suggested_fix) = match error {
-        BoardInputError::BoardCode(_) => (
-            "Board-as-Code compiler",
-            "Edit the exact line shown below, then rerun. If no line is shown, run `hauksbee from-code <file.board>` for the compiler's full diagnostic.",
-        ),
         BoardInputError::Zip(_) | BoardInputError::Gerber(_) => (
             "fab-package reader",
             "Re-export the package with one unambiguous layer/drill manifest, or supply the original CAD board. Do not rename ambiguous films to force a guess.",
@@ -1302,8 +1297,8 @@ fn to_json_or_failure(value: &impl Serialize) -> String {
 
 /// Run the full front-door analysis on an uploaded board file.
 ///
-/// `file_name` is used only for display and to disambiguate a `.board` (which
-/// the normalizer routes to the Board-as-Code compiler). `contents` is the
+/// `file_name` is used only for display and to pick the reader for an
+/// extension-routed format. `contents` is the
 /// file's RAW bytes: binary formats (Altium `.PcbDoc`, an OLE2 container) are
 /// sniffed and read from the bytes first, exactly like the CLI `run` path, and
 /// only a non-binary input falls back to the text sniffer over a lossy-UTF8
@@ -1869,7 +1864,7 @@ pub fn analyze_with_firmware_detailed_with_ties(
     // Normalize ONCE; the static analysis and the co-sim share the same
     // extracted board. Re-reading the ORIGINAL bytes for co-sim with only the
     // text/binary sniffers fails with "could not re-read the board" on a
-    // `.board` or gerber zip that has just produced a clean static report.
+    // gerber zip that has just produced a clean static report.
     let norm = match crate::board_input::from_bytes(file_name, contents) {
         Ok(n) => n,
         // No board to co-sim against; return the normalization error as-is.
@@ -2385,7 +2380,7 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
 ///
 /// Takes the ALREADY-extracted board from the caller's normalization pass
 /// (never re-reads the upload): every format the static analysis accepts,
-/// `.board` exports and gerber zips included, reaches co-sim identically.
+/// gerber zips included, reaches co-sim identically.
 /// The exact terminal command that runs this co-sim outside the web report,
 /// with the REAL uploaded file names, never placeholders (a `<board>`
 /// placeholder is an instruction the user cannot follow). An installed app
@@ -3250,17 +3245,19 @@ mod tests {
     const EAGLE_TIES_BRD: &[u8] =
         include_bytes!("../../hauksbee-extract/tests/fixtures/eagle_ties/declared.brd");
 
-    const BOARD_DSL: &[u8] = br#"# Board-as-Code (hauksbee board DSL v1)
-board version 20241229
-
-fn main {
-    net "A"
-    net "B"
-    comp R1 lib "Resistor_SMD:R_0402_1005Metric" val "10k" layer "F.Cu" at 0 0 rot 0 {
-        pad "1" smd rect at 0 0 size 1 1 layers [F.Cu] net "A"
-        pad "2" smd rect at 1 0 size 1 1 layers [F.Cu] net "B"
-    }
-}
+    /// A titleless one-resistor `KiCad` board.
+    const TINY_BOARD: &[u8] = br#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "A")
+  (net 2 "B")
+  (module Resistor_SMD:R_0402_1005Metric (layer F.Cu)
+    (at 0 0)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (size 1 1) (layers F.Cu) (net 1 "A"))
+    (pad 2 smd rect (at 1 0) (size 1 1) (layers F.Cu) (net 2 "B"))
+  )
+)
 "#;
 
     fn zip_of(files: &[(&str, &[u8])]) -> Vec<u8> {
@@ -3551,22 +3548,6 @@ fn main {
 
     #[test]
     fn parser_failures_carry_the_named_line_and_a_fix() {
-        let report = analyze(
-            "broken.board",
-            b"board version 1\nthis is not valid board code\n",
-        );
-        assert!(!report.ok);
-        assert!(report.import_diagnostics.is_none());
-        let failure = report
-            .import_failure
-            .expect("a parser refusal carries import guidance");
-        assert_eq!(failure.stage, "Board-as-Code compiler");
-        assert_eq!(
-            failure.excerpt.as_deref(),
-            Some("line 2: this is not valid board code")
-        );
-        assert!(!failure.suggested_fix.is_empty());
-
         assert_eq!(error_line_number("pipeline 2 failed"), None);
         assert_eq!(error_line_number("lineage 7 is invalid"), None);
         assert_eq!(error_line_number("parse failed at line: 19"), Some(19));
@@ -4189,69 +4170,30 @@ fn main {
         assert!(analyze_json("nope.txt", b"garbage").contains("\"ok\":false"));
     }
 
-    /// A `.board` upload compiles and binds (sniffed by header, not extension),
-    /// and a broken DSL fails with the compile error rather than the sniffer's.
+    /// The retired Board-as-Code text format is refused like any other
+    /// unrecognised file, by extension or by content, and the refusal lists
+    /// what is accepted instead of advertising `.board`.
     #[test]
-    fn analyze_board_as_code_compiles_and_binds() {
-        let dsl = br#"# Board-as-Code (hauksbee board DSL v1)
-board version 20241229
-
-fn main {
-    net "ANODE_NET"
-    net "CATHODE_NET"
-    comp D1 lib "Diode_SMD:D_SOD-323" val "1N4148" layer "F.Cu" at 0 0 rot 0 {
-        pad "1" smd rect at 0 0 size 1 1 layers [F.Cu] net "CATHODE_NET"
-        pad "2" smd rect at 1 0 size 1 1 layers [F.Cu] net "ANODE_NET"
-    }
-    comp R1 lib "Resistor_SMD:R_0402_1005Metric" val "10k" layer "F.Cu" at 5 0 rot 0 {
-        pad "1" smd rect at 5 0 size 1 1 layers [F.Cu] net "ANODE_NET"
-        pad "2" smd rect at 6 0 size 1 1 layers [F.Cu] net "CATHODE_NET"
-    }
-}
-"#;
-        let r = analyze("tarski.board", dsl);
-        assert!(r.ok, "a .board upload must analyze: {:?}", r.error);
-        assert_eq!(r.num_components, 2);
-        assert!(r.num_nets >= 2, "{}", r.num_nets);
-        assert!(
-            analyze("exported.txt", dsl).ok,
-            "header sniff works without the extension"
-        );
-        let r3 = analyze(
-            "broken.board",
-            b"# Board-as-Code (hauksbee board DSL v1)\nfn main { comp }",
-        );
-        assert!(!r3.ok);
-        assert!(
-            r3.error.as_deref().unwrap_or("").contains("Board-as-Code"),
-            "{:?}",
-            r3.error
-        );
+    fn a_dot_board_upload_is_refused_like_any_unrecognised_file() {
+        let dsl =
+            b"# Board-as-Code (hauksbee board DSL v1)\nboard version 20241229\n\nfn main {\n}\n";
+        for name in ["tarski.board", "exported.txt"] {
+            let r = analyze(name, dsl);
+            assert!(!r.ok, "{name} must be refused");
+            let err = r.error.unwrap_or_default();
+            assert!(err.contains(".kicad_pcb"), "{name}: {err}");
+            let listed = err.split_once("Supported:").map_or("", |(_, rest)| rest);
+            assert!(!listed.contains(".board"), "{name}: {err}");
+        }
     }
 
-    /// A zipped .board export analyzes like the bare file; with firmware it
-    /// reaches a real co-sim outcome (here the honest "no MCU" note); a zip
-    /// with neither gerbers nor a .board says what it looked for.
+    /// A junk zip says what a board zip holds.
     #[test]
-    fn analyze_zip_of_a_board_code_export_works_with_and_without_firmware() {
-        let bytes = zip_of(&[("export/tarski.board", BOARD_DSL)]);
-        let r = analyze("tarski-export.zip", &bytes);
-        assert!(r.ok, "zipped .board must analyze: {:?}", r.error);
-        assert_eq!(r.num_components, 1);
-
-        let cosim = cosim_without_reread(analyze_with_firmware(
-            "tarski-export.zip",
-            &bytes,
-            "fw.elf",
-            BOOT_GATE_FW,
-        ));
-        assert!(!cosim.ran);
-        assert!(cosim_says_no_mcu(&cosim), "{:?}", cosim.findings);
-
+    fn analyze_junk_zip_says_what_it_looked_for() {
         let r2 = analyze("junk.zip", &zip_of(&[("README.md", b"not a board")]));
         assert!(!r2.ok);
         let err = r2.error.unwrap_or_default();
-        assert!(err.contains("gerber") && err.contains(".board"), "{err}");
+        assert!(err.contains("gerber") && !err.contains(".board"), "{err}");
     }
 
     /// A real gerber archive through the web path reverse-extracts nets, keeps
@@ -4366,23 +4308,17 @@ fn main {
     }
 
     #[test]
-    fn zipped_board_export_with_firmware_reaches_cosim() {
-        // B6 regression: RE-READING the original upload bytes with only the
-        // text/binary sniffers fails co-sim with "could not re-read the board"
-        // on a zipped .board export that produced a clean static report.
-        // Normalizing once must give a REAL co-sim outcome: here
-        // the DSL board has no MCU, so the honest "no microcontroller" note.
-        let bytes = zip_of(&[("export/tarski.board", BOARD_DSL)]);
+    fn a_board_with_no_mcu_and_firmware_reaches_the_honest_no_mcu_note() {
+        // B6 regression: co-sim must run from the ALREADY-normalized board and
+        // give a REAL outcome. Here the board has no MCU, so the honest "no
+        // microcontroller" note is the reason it cannot run.
         let cosim = cosim_without_reread(analyze_with_firmware(
-            "tarski-export.zip",
-            &bytes,
+            "tiny.kicad_pcb",
+            TINY_BOARD,
             "fw.elf",
             BOOT_GATE_FW,
         ));
-        assert!(
-            !cosim.ran,
-            "the DSL board has no MCU, so the co-sim cannot run"
-        );
+        assert!(!cosim.ran, "the board has no MCU, so the co-sim cannot run");
         assert!(
             cosim_says_no_mcu(&cosim),
             "the honest no-MCU note must be the reason: {:?}",

@@ -102,8 +102,8 @@ third of its `ro` (`STRONG_RO_FRACTION`, from the one family that prints both:
 
 ## Pin-role inference rules (`pin_rules.toml`)
 
-A layout-only board source (a `.kicad_pcb`, or Board-as-Code decompiled from
-one) gives a component pads with bare *numbers* and no electrode role: a diode
+A layout-only board source (a `.kicad_pcb`)
+gives a component pads with bare *numbers* and no electrode role: a diode
 footprint has pads `1`/`2`, never `anode`/`cathode`. A netlist carries the role
 (`pinfunction "A"`/`"K"`), but a layout round-trip drops it, and a role-dependent
 binder (diode, BJT, MOSFET) can no longer bind the part.

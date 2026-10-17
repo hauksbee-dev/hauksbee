@@ -80,7 +80,7 @@ struct LiveSession {
     /// formats with no client-drawable text (Altium, gerber zips).
     board_file: Option<(String, String)>,
     /// The drawable layout behind `board_file`, when that file is source the
-    /// viewer cannot draw (a Board-as-Code `.board`). Served at
+    /// viewer cannot draw. Served at
     /// `/boards/<file name>/layout`.
     layout_file: Option<String>,
     /// Anything the session must keep alive for its whole run, e.g. the staged
@@ -199,7 +199,7 @@ impl LiveHub {
     }
 
     /// The drawable layout behind the session board `name`, when its served
-    /// board file is source (a `.board`). Backs `/boards/{name}/layout`.
+    /// board file is source. Backs `/boards/{name}/layout`.
     fn layout_file(&self, name: &str) -> Option<String> {
         self.session
             .lock()
@@ -243,7 +243,7 @@ impl Server {
     }
 
     /// [`Server::new_named`] plus the drawable layout text for a board whose
-    /// own file is source the viewer cannot draw (a Board-as-Code `.board`),
+    /// own file is source the viewer cannot draw,
     /// served at `/boards/<name>/layout`.
     #[must_use]
     pub fn new_named_with_layout(

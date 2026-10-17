@@ -1,8 +1,9 @@
 # Vendored: the kicad-forge forge-* crates
 
-This directory holds three crates that make up `kicad-forge`, the KiCad file
-layer hauksbee reads and writes boards through. They are vendored rather than
-depended on, so a fresh clone of this repo builds with no sibling checkout and
+This directory holds the two crates that remain of `kicad-forge`, the KiCad file
+layer hauksbee reads boards through (`forge-sexpr`, `forge-model`). The
+`forge-codegen` crate (the Board-as-Code compiler) was removed with that feature. They are vendored rather
+than depended on, so a fresh clone of this repo builds with no sibling checkout and
 no network access.
 
 `kicad-forge` has no public repository. Hauksbee is where it is used, and this
@@ -15,7 +16,7 @@ The workspace once declared these as path dependencies on
 `../kicad-forge/crates/*`, a sibling repo that existed only on the author's
 machine. Cargo loads every workspace member manifest during `cargo metadata`,
 so a clone without that sibling failed before any build could start, even for
-crates that never touch board-as-code. This was the number-one adoption
+crates that never touch the KiCad file layer. This was the number-one adoption
 blocker.
 
 A git dependency does not solve it either. The exact forge sources hauksbee
@@ -37,7 +38,7 @@ rather than the test or example targets. The `[[test]]` targets were removed
 from `crates/forge-model/Cargo.toml` accordingly. Nothing else was edited.
 
 External crate dependencies: only `thiserror` (crates.io), used by
-`forge-model`. The three crates otherwise depend on each other and std.
+`forge-model`. The two crates otherwise depend on each other and std.
 
 ## Re-importing from a kicad-forge checkout
 
@@ -48,7 +49,7 @@ here directly.
 2. From this repo root, re-copy the sources:
    ```sh
    SRC=<path-to-kicad-forge>
-   for c in forge-sexpr forge-model forge-codegen; do
+   for c in forge-sexpr forge-model; do
      rm -rf "vendor/kicad-forge/crates/$c/src"
      cp -R "$SRC/crates/$c/src" "vendor/kicad-forge/crates/$c/src"
      cp "$SRC/crates/$c/Cargo.toml" "vendor/kicad-forge/crates/$c/Cargo.toml"

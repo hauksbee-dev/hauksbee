@@ -6,7 +6,7 @@ use hauksbee_ci::RunConfig;
 use std::path::Path;
 
 fn exit_code(dir: &Path, name: &str, extra: &str) -> i32 {
-    let board = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/charger.board");
+    let board = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/charger.kicad_pcb");
     let spec = dir.join(format!("{name}.toml"));
     let body = format!(
         "name = \"{name}\"\nboard = {}\nduration_ms = 3\n\

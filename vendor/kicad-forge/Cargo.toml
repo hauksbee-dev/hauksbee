@@ -9,7 +9,6 @@ resolver = "2"
 members = [
     "crates/forge-sexpr",
     "crates/forge-model",
-    "crates/forge-codegen",
 ]
 
 [workspace.package]

@@ -359,8 +359,7 @@ export async function importSessionBundle(text: string): Promise<ImportOutcome> 
 /** The board file for a saved session, IF this server still has it and the
  *  bytes match the saved report's authenticated digest. The route retains
  *  every text board format accepted at intake; the SPA fallback and unknown
- *  extensions are rejected. Board-as-Code is retained as its compiled KiCad
- *  layout, and gets that extension back so it is not compiled twice. */
+ *  extensions are rejected. */
 export async function refetchServerBoard(saved: SavedSession): Promise<File | null> {
   const fileName = saved.board.fileName
   const expected = canReanalyzeSavedSession(saved) ? expectedBoardSha256(saved.report, fileName) : null
@@ -370,13 +369,9 @@ export async function refetchServerBoard(saved: SavedSession): Promise<File | nu
     if (!bytes || !(await boardBytesMatchExpected(bytes, expected))) return null
     const text = new TextDecoder().decode(bytes)
     const head = text.slice(0, 128)
-    const compiledBoard = /^\s*\(kicad_pcb\b/i.test(head)
-    const supportedTextBoard = /\.(kicad_pcb|kicad_sch|net|brd|pcbdoc|d356|board)$/i.test(fileName)
-    if ((!supportedTextBoard && !compiledBoard) || !text.trim() || /^\s*(?:<!doctype\s+html|<html\b)/i.test(head)) return null
-    const resumedName = compiledBoard && !/\.kicad_pcb$/i.test(fileName)
-      ? `${fileName.replace(/\.[^.]+$/, '')}.compiled.kicad_pcb`
-      : fileName
-    return new File([text], resumedName, { type: 'text/plain' })
+    const supportedTextBoard = /\.(kicad_pcb|kicad_sch|net|brd|pcbdoc|d356)$/i.test(fileName)
+    if (!supportedTextBoard || !text.trim() || /^\s*(?:<!doctype\s+html|<html\b)/i.test(head)) return null
+    return new File([text], fileName, { type: 'text/plain' })
   } catch {
     return null
   }

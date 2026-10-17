@@ -6,7 +6,6 @@
 //! surfaces can reach it.
 
 pub mod backend;
-pub mod boardcode;
 pub mod common;
 pub mod doctor;
 pub mod examples;

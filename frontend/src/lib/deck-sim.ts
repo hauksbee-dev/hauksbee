@@ -22,9 +22,8 @@ export interface DeckSimResponse {
 
 /** Whether these bytes are a SPICE deck for `/api/sim` rather than a board. The
  *  deck extensions are the engine's served table (lib/board-formats). Most
- *  belong to nothing else; `.net` is claimed by KiCad too, so it is sniffed the
- *  way session-store.ts sniffs board-as-code (a KiCad netlist opens an
- *  s-expression, a deck carries at least one dot-card). */
+ *  belong to nothing else; `.net` is claimed by KiCad too, so it is sniffed (a
+ *  KiCad netlist opens an s-expression, a deck carries at least one dot-card). */
 export function isSpiceDeck(fileName: string, head: string): boolean {
   if (!endsWithAny(fileName, deckExts())) return false
   if (!endsWithAny(fileName, ambiguousDeckExts())) return true

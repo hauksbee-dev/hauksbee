@@ -1,6 +1,6 @@
-# The Board-as-Code (.board) fixtures here place parts and join nets but
-# cannot carry copper, so each is a pre-layout board by construction and the
-# static check's "not routed yet" finding is expected. It is waived, not
+# The .kicad_pcb fixtures here place parts and join nets but carry no
+# copper, so each is a pre-layout board by construction and the static
+# check's "not routed yet" finding is expected. It is waived, not
 # hidden: every CI run over these boards still lists it as a waived row
 # (support::assert_placement_waived checks that).
 
@@ -8,5 +8,5 @@
 check = "lint"
 kind = "unrouted_pad"
 nets = ["GND"]
-reason = "placement-only Board-as-Code fixture: the .board form cannot carry copper, so the board is pre-layout by construction"
+reason = "placement-only fixture: parts are placed and netted but carry no copper, so the board is pre-layout by construction"
 until = "2030-01-01"

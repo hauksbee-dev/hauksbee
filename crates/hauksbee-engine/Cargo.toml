@@ -74,8 +74,6 @@ hauksbee-solve = { version = "0.1.0-beta.6", path = "../hauksbee-solve" }
 hauksbee-mcu = { version = "0.1.0-beta.6", path = "../hauksbee-mcu", default-features = false }
 hauksbee-frontdoor-api = { version = "0.1.0-beta.6", path = "../hauksbee-frontdoor-api" }
 hauksbee-server = { version = "0.1.0-beta.6", path = "../hauksbee-server", default-features = false, optional = true }
-forge-model = { workspace = true }
-forge-codegen = { workspace = true }
 forge-sexpr.workspace = true
 tempfile = { workspace = true }
 tokio = { version = "1.52.3", features = [

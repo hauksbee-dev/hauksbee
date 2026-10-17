@@ -23,7 +23,6 @@
 | AC analysis (`--ac`) | Small-signal Bode, gain crossover, phase margin | Differentiated | No |
 | Firmware co-sim (`--firmware --headless`) | Backend-dependent firmware-driven GPIO, peripheral, and simulated-rail checks | **The differentiator** | AVR: no. Supported STM32/nRF52840/RISC-V: Renode. Supported ESP32 variants: Espressif QEMU |
 | Behavioral goal assertions (`hauksbee-ci run`) | Whether the firmware makes the hardware do its job: rails, UART output, blink rate, boot timing, temperature, loop stability. The two time-based kinds are clock-verified on every Renode part and AVR; the ESP32 family is wall-paced and says so at runtime (see below) | **The differentiator** | Same as co-sim above |
-| Board-as-Code (`to-code` / `from-code` / `check-code`) | Edit-simulate loop: catch miswire, stress faults, and thermal issues in a pre-commit hook | Differentiated | Optional (co-sim in `check-code` uses whichever backend the board's MCU needs) |
 | MCP server (`hauksbee-mcp`) | The same engine exposed to coding agents as a stdio MCP server | Differentiated | Same as the analysis it runs |
 
 ---
@@ -492,7 +491,7 @@ after_ms = 50
 ```
 
 Board files: `.kicad_pcb`, `.kicad_sch`, `.brd`, `.PcbDoc`, `.net` (KiCad
-netlist), `.d356`, Board-as-Code `.board`, or gerbers.
+netlist), `.d356`, or gerbers.
 
 ### Assertion kinds
 
@@ -557,31 +556,13 @@ This is how `boot-coverage` can observe a net transitioning mid-run and how
 
 ---
 
-## Layer 5: Board-as-Code
+## The rest of the CLI
 
-Three commands form the edit-simulate loop:
+One line each:
 
-- **`hauksbee to-code <board>`**: decompile a `.kicad_pcb` into editable
-  Board-as-Code text.
-- **`hauksbee from-code <code>`**: recompile Board-as-Code back into a
-  `.kicad_pcb`.
-- **`hauksbee check-code <code> [--seconds N] [--destructive]`**: recompile,
-  bind, run the stress monitor for `--seconds` of simulated time (default 0.2 s),
-  and print a fault report. Exits non-zero if a fault is raised. Add
-  `--destructive` to let the stress monitor destroy parts (shows consequences
-  of miswire or over-stress). Add `--ambient <C>` for the thermal estimate.
-
-`check-code` drops straight into a script or pre-commit hook.
-
-The rest of the CLI surface, one line each:
-
-- **`hauksbee merge-ses <code> <ses>`**: the return half of `from-code
-  --route-dsn`: merge a FreeRouting `.ses` session back into the recompiled
-  board.
 - **`hauksbee sim <deck>`**: run a SPICE deck through the solver directly.
 - **`hauksbee watch <board|code|spec>`**: re-run the right check on every
-  file change (a `.kicad_pcb` runs `run --check`, a `.board` runs
-  `check-code`, a `.toml` runs the spec).
+  file change (a `.kicad_pcb` runs `run --check`, a `.toml` runs the spec).
 - **`hauksbee doctor`**: report which co-sim backends this build can reach
   and where each simulator was found.
 - **`hauksbee install esp-qemu`**: download Espressif's official prebuilt
@@ -605,7 +586,7 @@ over JSON-RPC without shelling out to the CLI. Documented in
 `hauksbee run` and `hauksbee-ci` accept `.kicad_pcb`, `.kicad_sch`,
 `.brd` (Eagle), `.PcbDoc` (Altium, see [`docs/ingest/ALTIUM.md`](../ingest/ALTIUM.md)),
 `.net` (KiCad netlist export), `.d356` (IPC-D-356 netlist),
-Board-as-Code `.board`, or a directory of gerbers
+or a directory of gerbers
 (reverse-extracted from copper geometry alone, see [`docs/ingest/GERBER.md`](../ingest/GERBER.md)).
 
 ---

@@ -146,13 +146,11 @@ pub(crate) const fn input_kind_name(kind: crate::board_input::InputKind) -> &'st
         InputKind::Ipc356Archive => "fab_ipc356",
         InputKind::Odb => "odbpp",
         InputKind::Ipc2581 => "ipc2581",
-        InputKind::BoardCode => "board_as_code",
     }
 }
 
 /// The bytes served for a preloaded browser session must be the same primary
-/// input bytes authenticated by the report. Board-as-Code uses compiled `KiCad`
-/// text internally, but a saved `.board` session can only resume from its DSL.
+/// input bytes authenticated by the report.
 pub(crate) fn preloaded_board_file(
     board_url: &str,
     raw: &[u8],
@@ -737,18 +735,18 @@ mod preloaded_board_file_tests {
     use crate::board_input::InputKind;
 
     #[test]
-    fn board_code_route_serves_the_authenticated_dsl_not_compiled_layout() {
-        let source = "board demo { outline rect(0mm, 0mm, 20mm, 10mm) }";
-        let compiled = "(kicad_pcb (version 20240108))";
+    fn text_route_serves_the_authenticated_source_not_the_extracted_layout() {
+        let source = "(kicad_pcb (version 20171130))";
+        let extracted = "(kicad_pcb (version 20240108))";
         let (url, served) = preloaded_board_file(
-            "/boards/demo.board",
+            "/boards/demo.kicad_pcb",
             source.as_bytes(),
-            InputKind::BoardCode,
-            compiled,
+            InputKind::Text,
+            extracted,
         );
-        assert_eq!(url, "/boards/demo.board");
+        assert_eq!(url, "/boards/demo.kicad_pcb");
         assert_eq!(served, source);
-        assert_ne!(served, compiled);
+        assert_ne!(served, extracted);
     }
 }
 

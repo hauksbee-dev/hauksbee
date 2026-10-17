@@ -14,7 +14,7 @@ through an AMS1117-3.3 with a TP4056 charger (R4 = 1.2k, i.e. 1.0 A charge).
 | Q1 | SDA has no pull-up (SCL has R1 4.7k) | net `SDA`: U1.27 + U4.2 only | extract net-lint `MissingI2cPullup` |
 | Q2 | MOSFET gate has no pull-down; floats at reset | net `MOTOR_GATE`: U1.14 (PB0) + Q1.1 only | boot advisory (`checks/boot.rs`) when firmware drives PB0 high at reset (`testdata/firmware/boot_gate_a/boot_gate.hex` does exactly that) |
 | Q3 | 0.15 mm trace on the VBAT motor feed | `VBAT` segments (4.35,14)-(4.35,21)-(5,21) and (5,21)-(11.3,22) | `--si` IPC-2221 ampacity, current cited from the TP4056 PROG resistor |
-| Q4 | DNP battery-sense jumper | `JP1` `(attr smd dnp)` between `VBAT` and `VBAT_SENSE_IN` | the run report's DNP list; `to-code` refusal |
+| Q4 | DNP battery-sense jumper | `JP1` `(attr smd dnp)` between `VBAT` and `VBAT_SENSE_IN` | the run report's DNP list |
 | Q5 | 5 V HC-SR04 module fed from +3V3 | `J2` pin 1 on `+3V3` | envelope check, only once `models/hc_sr04.toml` supplies the module's 4.5-5.5 V envelope (`--models-dir models`) |
 
 Bonus, real but not planted on purpose: the AMS1117-3.3 (1.1 V dropout) hangs

@@ -23,7 +23,6 @@ const KNOWN_BACKENDS: &[&str] = &[
     "renode",
     "ngspice",
     "kicad-cli",
-    "freerouting",
     "extract",
 ];
 

@@ -15,8 +15,8 @@ gain). Run that from a normal checkout when you want the live viewer.
 
 | Image | Tag | Contains | Unlocks |
 |-------|-----|----------|---------|
-| slim / core | `ghcr.io/hauksbee-dev/hauksbee:slim` | `hauksbee` + `hauksbee-ci`, the model db, the linked-in simavr (the AVR microcontroller emulator) | Static checks (DRC, netlint, SI, resource conflicts), board-as-code, AVR co-sim (running firmware on the emulated MCU against the live analog solve). The everyday CI image. |
-| full | `ghcr.io/hauksbee-dev/hauksbee:full` | Everything in slim, plus Renode, the Espressif QEMU fork, and freerouting (with a JRE) | STM32 / nRF52840 / RISC-V co-sim (Renode), ESP32 / ESP32-S3 / ESP32-C3 co-sim (Espressif QEMU), and production autorouting of recompiled boards (freerouting). |
+| slim / core | `ghcr.io/hauksbee-dev/hauksbee:slim` | `hauksbee` + `hauksbee-ci`, the model db, the linked-in simavr (the AVR microcontroller emulator) | Static checks (DRC, netlint, SI, resource conflicts), AVR co-sim (running firmware on the emulated MCU against the live analog solve). The everyday CI image. |
+| full | `ghcr.io/hauksbee-dev/hauksbee:full` | Everything in slim, plus Renode and the Espressif QEMU fork | STM32 / nRF52840 / RISC-V co-sim (Renode), ESP32 / ESP32-S3 / ESP32-C3 co-sim (Espressif QEMU). |
 
 A published release would use versioned tags of the form
 `:slim-<release-version>` and `:full-<release-version>`. None is published yet,
@@ -30,8 +30,8 @@ needs: static checks and built-in AVR co-simulation have no external
 dependencies. Boards are read through the vendored forge crates, not through
 KiCad.
 The full image adds the heavy external backends (Renode and the Espressif
-QEMU fork are large prebuilt toolchains, freerouting needs a JRE). Pull it
-only when you actually run STM32 / ESP32 firmware or autoroute a board.
+QEMU fork are large prebuilt toolchains). Pull it
+only when you actually run STM32 / ESP32 firmware.
 
 The full image does **not** include esp-idf or any firmware toolchain. You
 need esp-idf only to *build* ESP32 firmware. At run time the Espressif QEMU
@@ -50,7 +50,6 @@ vars. The full image sets these so everything works with no setup:
 | `HAUKSBEE_QEMU_DIR` | `/opt/qemu/bin` | Espressif QEMU (both arches) |
 | `HAUKSBEE_QEMU_XTENSA` | `/opt/qemu/bin/qemu-system-xtensa` | ESP32 / ESP32-S3 |
 | `HAUKSBEE_QEMU_RISCV32` | `/opt/qemu/bin/qemu-system-riscv32` | ESP32-C3 |
-| `FREEROUTING_JAR` | `/opt/freerouting.jar` | freerouting autorouter |
 
 ## `docker run` examples
 
@@ -110,10 +109,6 @@ ESP32 / STM32 co-sim and autorouting need the full image:
 # ESP32 boot_coverage spec (Espressif QEMU, in the full image)
 docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:full \
   hauksbee-ci run ci/esp32_boot.toml --junit results.xml
-
-# Recompile board-as-code and autoroute it (freerouting, in the full image)
-docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:full \
-  hauksbee from-code board.board --out routed.kicad_pcb --route
 ```
 
 ## Using it from the GitHub Action
@@ -177,7 +172,7 @@ dependency on a release tarball existing first. Second, simavr compiles per
 arch the same way, so the linked-in AVR backend is the one that actually ran
 on that arch. The full image then builds `FROM` the just-pushed slim manifest
 by its immutable digest (never by a concurrently mutable version tag) and
-layers the prebuilt Renode / Espressif QEMU / freerouting downloads on top,
+layers the prebuilt Renode / Espressif QEMU downloads on top,
 selecting the right per-arch asset from `TARGETARCH`. Every backend archive is
 checked against the repository-recorded SHA-256 before extraction; exact
 upstream license texts are independently hash-checked and retained under
@@ -239,7 +234,6 @@ docker run --rm hauksbee:slim hauksbee-ci --help
 # Full image: the co-sim backends resolve.
 docker run --rm hauksbee:full renode --version
 docker run --rm hauksbee:full /opt/qemu/bin/qemu-system-xtensa --version
-docker run --rm hauksbee:full java -jar /opt/freerouting.jar --help
 
 # Run a real check against a board in your checkout.
 docker run --rm -v "$PWD:/work" hauksbee:slim \

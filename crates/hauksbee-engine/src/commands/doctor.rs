@@ -1,7 +1,7 @@
 //! The `hauksbee doctor [--backends] [--json]` subcommand: probe the external
 //! programs a run can use.
 //!
-//! It checks availability (AVR, QEMU, Renode, ngspice, kicad-cli, freerouting,
+//! It checks availability (AVR, QEMU, Renode, ngspice, kicad-cli,
 //! datasheet extraction) and prints one machine-readable line per backend. It
 //! calls the engine's OWN resolvers rather than re-implementing discovery, so
 //! what `doctor` reports can never drift from what a real run would accept. The
@@ -71,7 +71,7 @@ impl Backend {
 ///
 /// For each backend this calls the exact resolver the engine uses
 /// (`hauksbee_mcu::qemu::find_qemu`, `hauksbee_mcu::renode::find_renode`, the
-/// ngspice, kicad-cli and freerouting finders), no re-implemented search logic.
+/// ngspice and kicad-cli finders), no re-implemented search logic.
 /// `find_qemu` runs the Espressif-fork check (`is_esp_fork`), so a Homebrew
 /// mainline `qemu-system-xtensa` on PATH is reported `absent` here just as the
 /// co-sim rejects it, and a fork under `~/.hauksbee-qemu-esp` or a Renode under
@@ -196,18 +196,17 @@ fn probe_backends() -> Vec<Backend> {
 }
 
 fn probe(with_extract: bool) -> Vec<Backend> {
-    let all: [fn() -> Backend; 8] = [
+    let all: [fn() -> Backend; 7] = [
         probe_avr,
         || probe_qemu(QemuKind::Xtensa),
         || probe_qemu(QemuKind::Riscv32),
         probe_renode,
         probe_ngspice,
         probe_kicad_cli,
-        probe_freerouting,
         extract_row,
     ];
     // `extract_row` is last: the manifest leaves it out.
-    let probes = if with_extract { &all[..] } else { &all[..7] };
+    let probes = if with_extract { &all[..] } else { &all[..6] };
     std::thread::scope(|scope| {
         // Every probe starts before the first join, so the handles are
         // collected on purpose.
@@ -369,45 +368,6 @@ fn probe_kicad_cli() -> Backend {
     )
 }
 
-/// freerouting, the autorouter: a jar, found the way `--route` finds it, plus
-/// a `java` to run it. The version is the jar's file stem
-/// (`freerouting-1.9.0.jar` is 1.9.0); Java is not started here.
-fn probe_freerouting() -> Backend {
-    const SUMMARY: &str = "autorouter for `hauksbee boardcode --route`";
-    let Some(jar) =
-        forge_codegen::find_freerouting_jar(&forge_codegen::FreeroutingConfig::default())
-    else {
-        return Backend::new(
-            "freerouting",
-            "absent",
-            "no freerouting jar found (optional, only for autorouting; the built-in grid \
-             router is used instead). Fix: set FREEROUTING_JAR or pass --freerouting-jar"
-                .to_string(),
-            SUMMARY,
-        );
-    };
-    let version = jar
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .and_then(parse_version);
-    let java = crate::deps::which_on_path("java").is_some();
-    Backend {
-        detail: if java {
-            jar.display().to_string()
-        } else {
-            format!("{} found, but `java` is not on PATH", jar.display())
-        },
-        path: Some(jar),
-        version,
-        ..Backend::new(
-            "freerouting",
-            if java { "ok" } else { "warn" },
-            String::new(),
-            SUMMARY,
-        )
-    }
-}
-
 /// `tool args...`'s version, asked once per binary until that file changes.
 fn version_of_tool(path: &Path, args: &[&str]) -> Option<String> {
     static VERSIONS: crate::deps::StampCache<Option<String>> = crate::deps::StampCache::new();
@@ -429,14 +389,11 @@ fn version_of_tool(path: &Path, args: &[&str]) -> Option<String> {
 
 /// The first version-looking word in `text`: `QEMU emulator version 8.2.0 (...)`
 /// gives `8.2.0`, `Renode v1.15.0.1` gives `1.15.0.1`, `** ngspice-42 : ...`
-/// gives `42`, `freerouting-1.9.0` gives `1.9.0`.
+/// gives `42`.
 fn parse_version(text: &str) -> Option<String> {
     text.split_whitespace().find_map(|word| {
         let word = word.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-        let word = word
-            .strip_prefix("ngspice-")
-            .or_else(|| word.strip_prefix("freerouting-"))
-            .unwrap_or(word);
+        let word = word.strip_prefix("ngspice-").unwrap_or(word);
         let word = word.strip_prefix('v').unwrap_or(word);
         word.starts_with(|c: char| c.is_ascii_digit())
             .then(|| word.to_string())
@@ -587,10 +544,6 @@ mod tests {
         assert_eq!(
             parse_version("******\n** ngspice-42 : Circuit level simulation program"),
             Some("42".to_string())
-        );
-        assert_eq!(
-            parse_version("freerouting-1.9.0"),
-            Some("1.9.0".to_string())
         );
         assert_eq!(parse_version("no numbers here"), None);
     }

@@ -623,7 +623,7 @@ class DiscoveryTests(ContainsTestCase):
             zip_path = base / "unsafe.zip"
             with zipfile.ZipFile(zip_path, "w") as archive:
                 archive.writestr("../escape/", b"")
-                archive.writestr("board.board", b"valid board payload")
+                archive.writestr("board.kicad_pcb", b"valid board payload")
             self.assertIsNone(unseen_boards._input_format(zip_path))
 
             tar_path = base / "unsafe.tar.gz"

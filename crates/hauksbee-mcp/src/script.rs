@@ -77,7 +77,6 @@ globalThis.hauksbee = {
     listCapabilities: () => __call("list_capabilities", {}),
     modelCoverage: (path, modelsDir) =>
         __call("model_coverage", { board_path: path, models_dir: modelsDir }),
-    boardToCode: (path) => __call("board_to_code", { board_path: path }),
     simulateDeck: (path, print, analysis, maxRows) =>
         __call("simulate_deck", { deck_path: path, print: print, analysis: analysis,
                                   max_rows: maxRows }),

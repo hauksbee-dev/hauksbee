@@ -15,7 +15,7 @@ import { mapCiJUnit, mapEngineCheck, singleError, MappedRun, Sev } from "./mappi
 import { findBinary, type BinaryName } from "./binaries";
 import { activateSpecSupport } from "./specLanguage";
 
-const BOARD_EXTS = [".board", ".kicad_pcb", ".kicad_sch", ".net", ".brd", ".d356"];
+const BOARD_EXTS = [".kicad_pcb", ".kicad_sch", ".net", ".brd", ".d356"];
 const INSTALL_HINT =
   "Install it with `cargo build --release` in the hauksbee repo and set the " +
   "setting to `target/release/<binary>`, or put the binary on PATH.";
@@ -205,10 +205,7 @@ async function checkBoard(): Promise<void> {
         result.stderr.trim() || `hauksbee exited ${result.code} with no output`
       );
     } else {
-      const boardText = uri.fsPath.endsWith(".board")
-        ? fs.readFileSync(uri.fsPath, "utf8")
-        : null;
-      mapped = mapEngineCheck(result.stdout, boardText);
+      mapped = mapEngineCheck(result.stdout);
     }
     publish(uri, mapped, "hauksbee");
   };

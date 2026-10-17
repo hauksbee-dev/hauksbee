@@ -1,6 +1,6 @@
 # Pin-role inference rules.
 #
-# Layout-only board sources (.kicad_pcb, or Board-as-Code decompiled from one)
+# Layout-only board sources (.kicad_pcb)
 # carry pads with bare NUMBERS and no electrode role (a diode footprint has pads
 # "1"/"2", not "anode"/"cathode"). A netlist carries the role via
 # `pinfunction "A"/"K"`, but a layout round-trip drops it. These rules let the

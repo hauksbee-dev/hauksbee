@@ -18,8 +18,7 @@ hauksbee-ci run <spec.toml> --json     # run the spec's assertions, JSON verdict
 ```
 
 `<board>` is any supported input: KiCad `.kicad_pcb` / `.kicad_sch`, Eagle
-`.brd`, Altium `.PcbDoc`, IPC-D-356 `.d356`, a gerber folder or zip, or
-Board-as-Code `.board` (bare or zipped). Firmware for co-sim
+`.brd`, Altium `.PcbDoc`, IPC-D-356 `.d356`, or a gerber folder or zip. Firmware for co-sim
 (`--firmware <f>` on `run`, `firmware =` in a spec) is a compiled
 `.elf`/`.hex`, a PlatformIO project directory, or a zip of either. Hauksbee
 finds the built image inside automatically, or builds it with your `pio`.
@@ -135,7 +134,6 @@ Use an absolute path for `command` if `hauksbee-mcp` is not on the client's
 | `run_checks` | `board_path`, `spec_toml`, `firmware_path?`, `schematic_path?` | the `hauksbee-ci --json` verdict: `{passed, assertions_passed, run_valid, exit_code, analog_abort, seeds, coverage, substitutions, coverage_warnings, verdict_conditions, results[]}` |
 | `list_capabilities` | none | the scope table as data: report kinds, assertion kinds, board/firmware formats, and MCU backend availability probed on this machine with the engine's own discovery (doctor-style `builtin/ok/absent/disabled`) |
 | `model_coverage` | `board_path`, `models_dir?` | the same staged per-device identity/executable/declared coverage used by CLI and browser, plus a read-only next action that says model preparation requires approval |
-| `board_to_code` | `board_path` | `{board, code}`: the editable Board-as-Code text form (text formats only) |
 | `simulate_deck` | `deck_path`, `print?`, `analysis?`, `max_rows?` | `hauksbee sim` as data: `{deck, analysis, columns, time, rows, row_count, notes}`, thinned to `max_rows` (default 2000) with a `decimated` field when it is; a deck the solver cannot answer honestly returns the refusal shape below |
 | `doctor` | none | `hauksbee doctor --json`: `{backends: [{name, status, available, detail, summary}]}`, co-sim backends plus the extraction backend |
 | `models_lint` | `file_path` | `hauksbee models lint` as data: `{file, clean, checked, findings, warnings, lines}`; the CLI exits 2 when `findings` is above 0 |

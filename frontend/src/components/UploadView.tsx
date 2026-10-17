@@ -289,7 +289,7 @@ export function UploadView({ session, onOpenLive, sessions, onResume, avrAvailab
               <div className="mt-6 text-[12px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
                 {uploadError && acceptedFormatsSentence()
                   ? `Accepted: ${acceptedFormatsSentence()}`
-                  : 'Works with board designs from KiCad, Eagle and Altium, plus manufacturing packages and Board-as-Code.'}
+                  : 'Works with board designs from KiCad, Eagle and Altium, plus manufacturing packages.'}
               </div>
             </motion.label>
           )}

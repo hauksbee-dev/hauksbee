@@ -40,10 +40,9 @@ fn run(q: Q, vcc: f64, vg: f64, load: &str, bulk: &str) -> (String, i32) {
     {
         b += &comp(r, lib, val, 40 + i * 30, pad(1, a) + &pad(2, k));
     }
-    let nets = "net \"G\"\nnet \"D\"\nnet \"GND\"\nnet \"VCC\"\nnet \"IN\"\n";
     let p = support::placement_board(
-        "q.board",
-        &format!("board version 1\nfn main {{\n{nets}{b}}}\n"),
+        "q.kicad_pcb",
+        &support::board_text(&["G", "D", "GND", "VCC", "IN"], &b),
     );
     let spec = format!(
         "name = \"{0} at {vg} V\"\nboard = {1}\nduration_ms = 5\n[[supply]]\nnet = \"VCC\"\n\

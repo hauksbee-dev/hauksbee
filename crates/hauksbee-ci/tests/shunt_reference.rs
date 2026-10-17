@@ -36,16 +36,16 @@ fn board(rs: &str, div: bool, refnet: &str, (lib, [k, f, a]): Pkg) -> String {
         let r0805 = "Resistor_SMD:R_0805_2012Metric";
         parts += &comp(r, r0805, val, 40 + i * 8, pad(1, a) + &pad(2, b));
     }
-    // An empty REF net would be a floating-net finding of the test's own making.
-    let refnet = if div { "net \"REF\"\n" } else { "" };
-    format!("board version 20171130\nfn main {{\nnet \"VIN\"\nnet \"OUT\"\nnet \"GND\"\n{refnet}{parts}}}\n")
+    // Only a pad's net is declared, so an unused REF net never becomes a
+    // floating-net finding of the test's own making.
+    support::board_text(&["VIN", "OUT", "GND"], &parts)
 }
 
 /// Run one board with one cathode-net voltage assertion, check what the report
 /// tells its reader about U1, and return whether the assertion passed
 /// numerically (INVALID is pinned inside: set on starved boards only).
 fn vka_in(case: &str, rs: &str, div: bool, refnet: &str, (min, max): (f64, f64), pkg: Pkg) -> bool {
-    let path = support::placement_board("tl431.board", &board(rs, div, refnet, pkg));
+    let path = support::placement_board("tl431.kicad_pcb", &board(rs, div, refnet, pkg));
     let r = support::run_body(
         &format!("{case}.toml"),
         &format!(

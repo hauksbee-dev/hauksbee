@@ -587,12 +587,12 @@ ${SHAPE_LINE}
 A universal PCB emulator: bind a board, bring it to life, assert it in CI.
 
 CONTENTS
-  bin/hauksbee       the CLI (run / to-code / from-code / check-code)
+  bin/hauksbee       the CLI (run / serve / sim / doctor, ...)
   bin/hauksbee-ci    the headless CI runner (TOML specs, JUnit, GH annotations)
   bin/hauksbee-mcp   the MCP server (hauksbee as structured tools over stdio)
   db/               reference model database (the binaries already embed it;
                     drop extra parts here or in ~/.hauksbee/models to extend)
-  examples/         runnable demos: board-as-code + hauksbee-ci specs + sessions
+  examples/         runnable demos: hauksbee-ci specs + sessions
   integrations/     GitHub Action, KiCad plugin, pre-commit hook
   scripts/          install.sh, doctor.sh, ci.sh
   LICENSE, NOTICE   hauksbee's Apache-2.0 source terms and attribution

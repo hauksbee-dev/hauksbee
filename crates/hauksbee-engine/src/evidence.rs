@@ -2323,7 +2323,6 @@ fn input_artifact_kind(
         }
         InputKind::Odb => (ArtifactKind::OdbPlusPlus, ArtifactRole::FabArchive),
         InputKind::Ipc2581 => (ArtifactKind::Ipc2581, ArtifactRole::FabArchive),
-        InputKind::BoardCode => (ArtifactKind::BoardCode, ArtifactRole::Layout),
         InputKind::Text => match path
             .extension()
             .and_then(|e| e.to_str())
@@ -2354,7 +2353,7 @@ fn input_contributions(kind: crate::board_input::InputKind) -> Vec<Contribution>
     }];
     if matches!(
         kind,
-        InputKind::Text | InputKind::Altium | InputKind::Gerber | InputKind::BoardCode
+        InputKind::Text | InputKind::Altium | InputKind::Gerber
     ) {
         out.push(Contribution {
             what: "copper_geometry".into(),

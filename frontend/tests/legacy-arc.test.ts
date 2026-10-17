@@ -52,10 +52,10 @@ describe('legacy KiCad 5 gr_arc', () => {
     }
   })
 
-  // A board-as-code `.board` simulates perfectly well and simply has no
+  // A netlist simulates perfectly well and simply has no
   // geometry; the canvas showed that absence as a red "Not a kicad_pcb file".
   it('reports an input with no layout as an absence, not a failure', () => {
-    expect(() => parseKicadPcb('board "regulator" {\n  part U1 ...\n}\n')).toThrow(NO_LAYOUT)
+    expect(() => parseKicadPcb('(export (version "E"))\n')).toThrow(NO_LAYOUT)
     expect(NO_LAYOUT).toBe('This file has no board layout to draw')
     expect(NO_LAYOUT_HINT).toContain('The simulation still runs')
   })

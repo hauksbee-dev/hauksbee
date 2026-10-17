@@ -1122,9 +1122,10 @@ fn compute_ac(
 /// Load and extract the board file the spec points at, via the shared
 /// board-input normalizer (`hauksbee_engine::board_input`). This is what makes
 /// a `board = "thing.kicad_sch"` spec just work, and it accepts exactly the
-/// format set every other surface does: `.kicad_pcb`, `.kicad_sch`
-/// hierarchies, `.net`, Eagle `.brd`, IPC-D-356, binary Altium `.PcbDoc`,
-/// gerber directories/zips, and Board-as-Code `.board` (bare or zipped).
+/// format set every other surface does (see
+/// `hauksbee_engine::board_input::ACCEPTED_FORMATS`): `.kicad_pcb`,
+/// `.kicad_sch` hierarchies, `.net`, Eagle `.brd`, IPC-D-356, binary Altium
+/// `.PcbDoc`, gerber directories/zips and the other fab archives.
 ///
 /// A `.kicad_sch` is loaded *by path* (not from its text) so the sheet
 /// hierarchy resolves: a schematic's sub-sheets live in sibling files, and only
@@ -1132,9 +1133,9 @@ fn compute_ac(
 /// silently drop every component on a sub-sheet, producing a partial netlist
 /// that passes vacuous checks.
 ///
-/// `.board` needs no pre-compiled layout and no `--route` step: the compiled
-/// text places footprints with net-named pads (full connectivity, no copper
-/// tracks), and everything hauksbee-ci checks is netlist-driven.
+/// A board file needs no pre-compiled layout and no `--route` step: a text that
+/// places footprints with net-named pads (full connectivity, no copper tracks)
+/// loads as it is, and everything hauksbee-ci checks is netlist-driven.
 pub(crate) fn load_board(board_path: &Path) -> Result<ExtractedBoard, SpecError> {
     load_normalized_board(board_path).map(|normalized| normalized.board)
 }
@@ -1177,7 +1178,7 @@ fn load_normalized_board(
         }
         BoardInputError::Schematic(e) => SpecError::Invalid(format!("extracting schematic: {e}")),
         BoardInputError::Extract(e) => SpecError::Invalid(format!("extracting board: {e}")),
-        // Zip / gerber / Board-as-Code failures already carry a
+        // Zip / gerber / unsupported-format failures already carry a
         // self-contained, file-naming message.
         other => SpecError::Invalid(other.to_string()),
     })
@@ -4129,28 +4130,29 @@ mod tests {
         std::env::remove_var("HAUKSBEE_MCU_DIR");
     }
 
-    const DSL: &[u8] = br#"# Board-as-Code (hauksbee board DSL v1)
-board version 20241229
-
-fn main {
-    net "A"
-    net "B"
-    comp R1 lib "Resistor_SMD:R_0402_1005Metric" val "10k" layer "F.Cu" at 0 0 rot 0 {
-        pad "1" smd rect at 0 0 size 1 1 layers [F.Cu] net "A"
-        pad "2" smd rect at 1 0 size 1 1 layers [F.Cu] net "B"
-    }
-}
+    const PLACED_BOARD: &[u8] = br#"(kicad_pcb (version 20171130) (generator "pcbnew")
+(general (thickness 1.6)) (paper "A4")
+(layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+(setup (pad_to_mask_clearance 0))
+(net 0 "")
+(net 1 "A")
+(net 2 "B")
+(footprint "Resistor_SMD:R_0402_1005Metric" (layer "F.Cu") (at 0 0 0)
+  (property "Reference" "R1") (property "Value" "10k")
+  (pad 1 smd rect (at 0 0 0) (size 0.5 0.5) (layers "F.Cu") (net 1 "A"))
+  (pad 2 smd rect (at 1 0 0) (size 0.5 0.5) (layers "F.Cu") (net 2 "B")))
+)
 "#;
 
     #[test]
-    fn load_board_accepts_board_as_code() {
-        // The compiled text carries full net connectivity, and CI is entirely
+    fn load_board_accepts_a_placed_unrouted_board() {
+        // The text carries full net connectivity, and CI is entirely
         // netlist-driven, so no routing step is needed first.
         let dir = std::env::temp_dir().join(format!("hauksbee-ci-bac-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("cell.board");
-        std::fs::write(&p, DSL).unwrap();
-        let board = load_board(&p).expect(".board must load in CI");
+        let p = dir.join("cell.kicad_pcb");
+        std::fs::write(&p, PLACED_BOARD).unwrap();
+        let board = load_board(&p).expect("a placed board must load in CI");
         assert_eq!(board.components.len(), 1);
         assert!(
             board.nets.iter().any(|n| n.name == "A") && board.nets.iter().any(|n| n.name == "B"),
@@ -4797,7 +4799,7 @@ mod ensemble_sharing_tests {
         // board differs from the base's in those values alone.
         let board = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/lm358_gain11.board"
+            "/tests/fixtures/lm358_gain11.kicad_pcb"
         );
         let text = format!(
             "board = {board:?}\nduration_ms = 1\n\

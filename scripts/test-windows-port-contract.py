@@ -62,7 +62,7 @@ class WindowsPortContract(unittest.TestCase):
         self.assertIn("frontend/tests/e2e/drag-drop-release.ts", ci)
         self.assertRegex(ci, r"target[\\/]release[\\/]hauksbee\.exe")
         self.assertIn("windows-frontdoor-evidence", ci)
-        self.assertRegex(ci, r"HB_BOARD_FILES.*starter\.board")
+        self.assertRegex(ci, r"HB_BOARD_FILES.*blinky\.kicad_pcb")
         self.assertIn('$env:HB_RELEASE_COHORT = "smoke"', ci)
 
     def test_embedded_windows_releases_explicitly_enable_serve_without_avr(self) -> None:

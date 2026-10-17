@@ -1,6 +1,6 @@
 //! Configurable pin-role inference (issue #64).
 //!
-//! A layout-only source (a `.kicad_pcb`, or Board-as-Code decompiled from one)
+//! A layout-only source (a `.kicad_pcb`)
 //! gives a diode pads `1`/`2` with no electrode role, so the role-dependent
 //! diode binder cannot tell anode from cathode and the part fails to bind. The
 //! pin-rule table recovers the role from the footprint + kind + pad count, and

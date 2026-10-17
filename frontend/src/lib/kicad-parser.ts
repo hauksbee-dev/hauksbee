@@ -288,9 +288,9 @@ function parseSegment(c: SNode[], nets: Map<string, string>): Segment | null {
 
 // ── Main parser ──────────────────────────────────────────────────────────────
 
-/** Thrown when the input is simply not a layout (a board-as-code `.board`, a
- *  netlist): an absence of geometry, not a failure, and the canvas says so
- *  neutrally rather than in red. */
+/** Thrown when the input is simply not a layout (a netlist): an absence of
+ *  geometry, not a failure, and the canvas says so neutrally rather than in
+ *  red. */
 export const NO_LAYOUT = 'This file has no board layout to draw'
 export const NO_LAYOUT_HINT = 'The simulation still runs: use the side panel to read a net under Net voltages or plot it on the Scope.'
 

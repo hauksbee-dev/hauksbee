@@ -75,8 +75,7 @@ SI, the USB-C check, gated strictly, with inline annotations:
 With no `spec`, `specs`, or `board` at all, the action detects what to run:
 exactly one Hauksbee TOML spec (a file with a top-level `board` key) in `ci/`
 or the repository root runs as a spec. With no spec, exactly one supported
-board file (`.kicad_pcb`, `.kicad_sch`, `.net`, `.brd`, `.PcbDoc`, `.d356` or
-`.board`) runs as a check. Anything ambiguous fails with a list of what was
+board file (`.kicad_pcb`, `.kicad_sch`, `.net`, `.brd`, `.PcbDoc` or `.d356`) runs as a check. Anything ambiguous fails with a list of what was
 found, rather than silently changing which gate runs.
 
 ## Inputs

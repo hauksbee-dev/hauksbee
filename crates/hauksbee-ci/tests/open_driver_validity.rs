@@ -12,9 +12,9 @@ use hauksbee_ci::report::CiResult;
 use hauksbee_engine::scheduler::open_driver_reason;
 use std::fmt::Write as _;
 
-/// Run `fixtures/open_parts.board` under voltage assertions `(net, min, max)`.
+/// Run `fixtures/open_parts.kicad_pcb` under voltage assertions `(net, min, max)`.
 fn run(name: &str, asserts: &[(&str, f64, f64)]) -> CiResult {
-    let board = support::repo_root().join("crates/hauksbee-ci/tests/fixtures/open_parts.board");
+    let board = support::repo_root().join("crates/hauksbee-ci/tests/fixtures/open_parts.kicad_pcb");
     let mut spec = format!(
         "name = \"open driver\"\nboard = {}\nduration_ms = 3\n",
         support::toml_path(&board)

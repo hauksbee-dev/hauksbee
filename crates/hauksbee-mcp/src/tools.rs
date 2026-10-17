@@ -2,7 +2,7 @@
 //!
 //! Definitions carry the name, agent-facing description and JSON Schema; the
 //! implementations cover `analyze_board`, `run_checks`, `list_capabilities`,
-//! `model_coverage`, `board_to_code`, `simulate_deck`, `doctor`, `models_lint`
+//! `model_coverage`, `simulate_deck`, `doctor`, `models_lint`
 //! and `run_script`. Everything routes
 //! through the engine's own library front door (`analyze_json`,
 //! `hauksbee_ci::run`, the doctor's backend resolvers, the CLI's `sim` and
@@ -60,7 +60,7 @@ pub fn definitions() -> Value {
     json!([
         {
             "name": "analyze_board",
-            "description": "Full physics-grounded analysis of a PCB design file (KiCad .kicad_pcb/.kicad_sch, Eagle .brd, Altium .PcbDoc, IPC-D-356 .d356, gerber zip, or Board-as-Code .board). For an Eagle .brd, a same-named sibling .sch is resolved automatically; schematic_path may explicitly name the same design's Eagle .sch. Its declared net pairs add context to matching copper findings but cannot authorize a physical location. With firmware_path it also runs a short firmware co-sim. HONESTY CONTRACT: if the firmware question cannot be answered (no MCU, any selected MCU requires an external backend, firmware load failure, analog abort, or strict-invalid timing replay) the result is {\"status\":\"invalid_for_analysis\",\"reason\":...,\"report\":...}; never treat a refusal as pass or fail. Read the complete structured co-sim contract: `timing_coverage` is a measured non-hole timing bound, `timing_refusals` contains strict-invalid replay refusals, and `fallback_windows` marks numerically second-class spans with method, fidelity note, and measured error estimate when available. Other coverage limitations and electrical faults remain in findings or their existing structured fields (`spi_framing`, `analog_valid`, `failed_windows`, substitutions). Surface every populated field alongside the verdict.",
+            "description": "Full physics-grounded analysis of a PCB design file (KiCad .kicad_pcb/.kicad_sch, Eagle .brd, Altium .PcbDoc, IPC-D-356 .d356, or gerber zip). For an Eagle .brd, a same-named sibling .sch is resolved automatically; schematic_path may explicitly name the same design's Eagle .sch. Its declared net pairs add context to matching copper findings but cannot authorize a physical location. With firmware_path it also runs a short firmware co-sim. HONESTY CONTRACT: if the firmware question cannot be answered (no MCU, any selected MCU requires an external backend, firmware load failure, analog abort, or strict-invalid timing replay) the result is {\"status\":\"invalid_for_analysis\",\"reason\":...,\"report\":...}; never treat a refusal as pass or fail. Read the complete structured co-sim contract: `timing_coverage` is a measured non-hole timing bound, `timing_refusals` contains strict-invalid replay refusals, and `fallback_windows` marks numerically second-class spans with method, fidelity note, and measured error estimate when available. Other coverage limitations and electrical faults remain in findings or their existing structured fields (`spi_framing`, `analog_valid`, `failed_windows`, substitutions). Surface every populated field alongside the verdict.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -124,20 +124,6 @@ pub fn definitions() -> Value {
                     "models_dir": {
                         "type": "string",
                         "description": "Optional uninstalled model-pack directory to include in resolution."
-                    }
-                },
-                "required": ["board_path"]
-            }
-        },
-        {
-            "name": "board_to_code",
-            "description": "Decompile a text-format board file (KiCad .kicad_pcb or Eagle .brd XML) into Board-as-Code: the editable text form a coding agent can diff, modify, and feed back to analyze_board as a .board file. Binary formats (Altium .PcbDoc) and gerber archives have no text form and return an error. Result: {board, code}.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "board_path": {
-                        "type": "string",
-                        "description": "Path to the board design file (text formats only)."
                     }
                 },
                 "required": ["board_path"]
@@ -217,7 +203,6 @@ pub fn call(name: &str, args: &Value) -> ToolResult {
         "run_checks" => ToolResult::from_body(run_checks(args)),
         "list_capabilities" => ToolResult::ok(list_capabilities()),
         "model_coverage" => ToolResult::from_body(model_coverage(args)),
-        "board_to_code" => ToolResult::from_body(board_to_code(args)),
         "simulate_deck" => ToolResult::from_body(simulate_deck(args)),
         "doctor" => ToolResult::ok(hauksbee_engine::commands::doctor::backends_json()),
         "models_lint" => ToolResult::from_body(models_lint(args)),
@@ -330,7 +315,7 @@ fn shell_display_path(path: &str) -> String {
 }
 
 /// The display name the front door sees: the file name (it drives format
-/// sniffing for `.board` and gerber zips), never the whole path.
+/// sniffing for gerber zips), never the whole path.
 fn display_name(path: &str) -> String {
     std::path::Path::new(path)
         .file_name()
@@ -510,7 +495,7 @@ fn list_capabilities() -> Value {
         "backends": backend_probes(),
         "formats": {
             "board": [".kicad_pcb", ".kicad_sch", ".brd (Eagle)", ".PcbDoc (Altium)",
-                       ".d356 (IPC-D-356)", "gerber folder or zip", ".board (Board-as-Code, bare or zipped)"],
+                       ".d356 (IPC-D-356)", "gerber folder or zip"],
             "firmware": [".elf", ".hex", "PlatformIO project directory", "zip of either"],
         },
     })
@@ -607,31 +592,6 @@ fn backend_probes() -> Vec<Value> {
     ));
 
     out
-}
-
-/// `board_to_code`: the editable Board-as-Code text form, via the engine's
-/// decompiler. Text formats only; a binary board has no text to decompile and
-/// gets a plain error saying so instead of a mangled lossy rendering.
-fn board_to_code(args: &Value) -> Result<Value, String> {
-    let board_path = req_str(args, "board_path")?;
-    let bytes = read_named("board", board_path)?;
-    // A format hauksbee recognises and deliberately does not read gets named,
-    // with the action that unlocks it. The catch-all below cannot do that: it
-    // guessed "e.g. Altium .PcbDoc" at every binary file, which is the wrong
-    // vendor for a pre-Eagle-6 board and gives its owner nothing to act on.
-    if let Some(message) =
-        hauksbee_engine::board_input::unsupported_format_refusal(&display_name(board_path), &bytes)
-    {
-        return Err(message);
-    }
-    let text = String::from_utf8(bytes).map_err(|_| {
-        "this board file is binary (e.g. Altium .PcbDoc); board_to_code needs a \
-         text format (.kicad_pcb or Eagle .brd XML)"
-            .to_string()
-    })?;
-    let code = hauksbee_engine::decompile_any_to_code(&text)
-        .map_err(|e| format!("could not decompile the board: {e}"))?;
-    Ok(json!({ "board": display_name(board_path), "code": code }))
 }
 
 /// Rows returned by `simulate_deck` unless the caller asks for another cap.

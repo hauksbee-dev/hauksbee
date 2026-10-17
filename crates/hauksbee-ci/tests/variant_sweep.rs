@@ -26,8 +26,8 @@ fn an_undetermined_variant_set_is_swept_or_refused_never_guessed() {
     let u3 = comp("U3", "Package_TO_SOT_SMD:SOT-23", "XYZ1234", 10, u3);
     let r1 = pad(1, "VOUT") + &pad(2, "GND");
     let r1 = comp("R1", "Resistor_SMD:R_0805_2012Metric", "1k", 20, r1);
-    let board = format!("board version 1\nfn main {{\n{u3}{r1}}}\n");
-    let board = support::toml_path(&support::write_tmp("xyz.board", &board));
+    let board = support::board_text(&[], &(u3 + &r1));
+    let board = support::toml_path(&support::write_tmp("xyz.kicad_pcb", &board));
     let same = "\"1\" = \"in\"\n\"2\" = \"gnd\"\n\"3\" = \"out\"";
     let other = "\"1\" = \"out\"\n\"2\" = \"gnd\"\n\"3\" = \"in\"";
     let select = "[[override]]\nref = \"U3\"\nselect = \"xyz1234A\"\n";

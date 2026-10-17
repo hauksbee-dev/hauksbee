@@ -1445,7 +1445,7 @@ fn board_file_content(text: &str) -> bool {
     head.starts_with("(kicad_pcb") || head.starts_with("(kicad_sch") || head.starts_with("(export")
 }
 
-/// The board-not-a-spec repair message (mirrors the check-code style: name
+/// The board-not-a-spec repair message (names
 /// what happened and the exact command that fixes it).
 fn board_not_spec_message(path: &Path) -> String {
     format!(

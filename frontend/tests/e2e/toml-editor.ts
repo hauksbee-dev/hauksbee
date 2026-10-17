@@ -11,7 +11,7 @@
 //   - no confirm dialog, ever.
 //
 // Usage (needs a `hauksbee serve` serving this build), with a board that has
-// /VBUS and /VIN nets (examples/board-as-code/stormduino.board):
+// /VBUS and /VIN nets (crates/hauksbee-ci/tests/fixtures/stormduino.kicad_pcb):
 //   HB_E2E_BASE=http://127.0.0.1:3917 HB_E2E_OUT=<dir> bun run tests/e2e/toml-editor.ts <port> <board>
 
 import type { Page } from 'playwright'
@@ -22,7 +22,7 @@ import { browserFlow, note, ok, openApp, settle, shotsInto, step } from './harne
 const here = dirname(fileURLToPath(import.meta.url))
 const OUT = process.env.DRIVE_OUT ?? process.env.HB_E2E_OUT ?? join(here, '../../test-results/e2e-toml-editor')
 const BASE = process.env.DRIVE_BASE ?? process.env.HB_E2E_BASE
-const BOARD = process.argv[3] ?? join(here, '../../../examples/board-as-code/stormduino.board')
+const BOARD = process.argv[3] ?? join(here, '../../../crates/hauksbee-ci/tests/fixtures/stormduino.kicad_pcb')
 const shoot = shotsInto(OUT)
 
 const EDITOR = '[data-testid="toml-editor"]'

@@ -1,7 +1,7 @@
 //! Configurable pin-role inference rules.
 //!
-//! Layout-only board sources (a `.kicad_pcb`, or Board-as-Code decompiled from
-//! one) carry pads with bare *numbers* and no electrode role: a diode footprint
+//! Layout-only board sources (a `.kicad_pcb`)
+//! carry pads with bare *numbers* and no electrode role: a diode footprint
 //! has pads `1`/`2`, never `anode`/`cathode`. A netlist *does* carry the role
 //! (`pinfunction "A"`/`"K"`), but the moment a board round-trips through a layout
 //! the role is gone, and a role-dependent binder (diode, BJT, MOSFET) can no

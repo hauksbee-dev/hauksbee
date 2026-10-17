@@ -832,8 +832,8 @@ fn project_exclusion_needs_the_same_type_items_and_position() {
 // 270 degrees with 0.3 x 1.45 mm pads on a 0.5 mm pitch is clear only when each
 // pad carries that 270. The same pads written with angle 0 stand 1.45 mm long
 // along the row and overlap their neighbours: genuine copper contact, which is
-// what the Board-as-Code compiler drew for a decompiled board before it kept
-// the footprint rotation on its pads.
+// what a converter that dropped the footprint rotation from its pads used to
+// draw for a converted board.
 // ---------------------------------------------------------------------------
 
 /// A three-pad row (nets A, B, GND) on a connector placed at `footprint_rot`,

@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const OUT = process.env.HB_E2E_OUT ?? join(here, '../../test-results/e2e-fix-first')
-const BOARDS = join(here, '../../../examples/board-as-code')
+const BOARDS = join(here, '../../../crates/hauksbee-ci/tests/fixtures')
 const shoot = shotsInto(OUT)
 
 async function load(page: Page, board: string) {
@@ -36,7 +36,7 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 }, timeout: 9
   for (const [name, viewport] of [['desktop', { width: 1280, height: 900 }], ['phone', { width: 390, height: 844 }]] as const) {
     await page.setViewportSize(viewport)
     step(`stormduino (unrouted) at ${name}`)
-    await load(page, 'stormduino.board')
+    await load(page, 'stormduino.kicad_pcb')
     ok('verdict is in the first viewport', await inFirstViewport(page, 'report-verdict'))
     ok('fix-first is in the first viewport', await inFirstViewport(page, 'fix-first'))
     const height = await page.locator('[data-testid="additional-evidence-report"]').evaluate(e => e.getBoundingClientRect().height)

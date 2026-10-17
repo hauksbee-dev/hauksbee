@@ -23,26 +23,20 @@ fn board(gate: &str) -> String {
         30,
         pad(1, "LED_DRV") + &pad(2, "LED_A"),
     );
-    let led_pads = "pad \"K\" smd rect at 1 0 size 2 1.5 layers [F.Cu F.Mask] net \"GND\"\n\
-                    pad \"A\" smd rect at 3 0 size 2 1.5 layers [F.Cu F.Mask] net \"LED_A\"\n";
+    // LED_0805 pad 1 is the cathode, pad 2 the anode.
     let d1 = comp(
         "D1",
         "LED_SMD:LED_0805_2012Metric",
         "LED_RED",
         40,
-        led_pads.to_string(),
+        pad(1, "GND") + &pad(2, "LED_A"),
     );
-    let nets = ["VCC", "GND", "READY_N", "LED_DRV", "LED_A", "NC"]
-        .map(|n| format!("net \"{n}\"\n"))
-        .concat();
-    format!(
-        "board version 20171130\nfn main {{\n{nets}{}{r1}{d1}}}\n",
-        comp("U1", sot, gate, 10, u1)
-    )
+    let parts = comp("U1", sot, gate, 10, u1) + &r1 + &d1;
+    support::board_text(&["VCC", "GND", "READY_N", "LED_DRV", "LED_A", "NC"], &parts)
 }
 
 fn run(gate: &str) -> hauksbee_ci::CiResult {
-    let path = support::write_tmp("indicator.board", &board(gate));
+    let path = support::write_tmp("indicator.kicad_pcb", &board(gate));
     support::run_body(
         &format!("indicator_{gate}.toml"),
         &format!(
@@ -71,7 +65,7 @@ fn a_stated_polarity_passes_the_inverter_and_fails_the_buffer() {
 
 #[test]
 fn init_scaffolds_one_indicator_outcome_with_the_polarity_to_confirm() {
-    let path = support::write_tmp("indicator_init.board", &board("74LVC1G17"));
+    let path = support::write_tmp("indicator_init.kicad_pcb", &board("74LVC1G17"));
     let spec = hauksbee_ci::init::render_spec_at(&path, path.parent().unwrap()).unwrap();
     assert!(
         spec.contains(

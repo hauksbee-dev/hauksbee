@@ -30,12 +30,12 @@ const chip = (sessionBoard: string, currentBoard: string) =>
 
 describe('another-session chip', () => {
   test('names a different board as another session', () => {
-    expect(chip('other.board', 'mine.board')).toContain('another session is live: other.board')
+    expect(chip('other.kicad_pcb', 'mine.kicad_pcb')).toContain('another session is live: other.kicad_pcb')
   })
 
   test('does not call a same-named session "another": it may be this board from another tab', () => {
-    const html = chip('mine.board', 'mine.board')
-    expect(html).toContain('live session not from this tab: mine.board')
+    const html = chip('mine.kicad_pcb', 'mine.kicad_pcb')
+    expect(html).toContain('live session not from this tab: mine.kicad_pcb')
     expect(html).not.toContain('another session is live')
   })
 })

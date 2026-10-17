@@ -29,7 +29,7 @@ ratings = { max_current_a = 0.5, max_voltage_v = 6.0 }
 "#;
 
 /// U1 (LM317, ADJ/OUT/IN on pads 1/2/3), R1 from OUT to ADJ, R2 from ADJ
-/// to ground and an `rl` load, in the board DSL. `r2 = None` omits R2, leaving
+/// to ground and an `rl` load, as `KiCad` text. `r2 = None` omits R2, leaving
 /// ADJ with no DC path to ground at all; `rl = None` omits the load, leaving the
 /// divider as the only draw. `grounded` fits [`GROUNDED_LDO`] instead, with its
 /// GND on pad 4.
@@ -64,7 +64,7 @@ fn board(grounded: bool, r1: f64, r2: Option<f64>, rl: Option<f64>) -> String {
         };
         parts += &comp(r, lib, &val.to_string(), 40 + i * 8, pad(1, a) + &pad(2, b));
     }
-    format!("board version 20171130\nfn main {{\nnet \"VIN\"\nnet \"VOUT\"\nnet \"GND\"\nnet \"ADJ\"\n{parts}}}\n")
+    support::board_text(&["VIN", "VOUT", "GND", "ADJ"], &parts)
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn an_adjustable_regulator_solves_its_rail_and_refuses_what_it_cannot_support() 
     ];
     for (case, (gnd, r1), r2, rl, vin, want, rail, starved) in rows {
         let board_path =
-            support::placement_board(&format!("{case}.board"), &board(gnd, r1, r2, rl));
+            support::placement_board(&format!("{case}.kicad_pcb"), &board(gnd, r1, r2, rl));
         let band = |name: &str, v: f64| {
             let (min, max) = (v - 1e-3, v + 1e-3);
             format!("[[assert]]\nkind = \"voltage\"\nname = \"{name}\"\nnet = \"VOUT\"\nmin = {min}\nmax = {max}\nafter_ms = 1.0\n")
@@ -164,7 +164,7 @@ fn an_adjustable_regulator_solves_its_rail_and_refuses_what_it_cannot_support() 
 #[test]
 fn a_measurement_is_undermined_by_the_same_evidence_a_bound_is() {
     let board_path =
-        support::placement_board("starved.board", &board(false, 240.0, Some(720.0), None));
+        support::placement_board("starved.kicad_pcb", &board(false, 240.0, Some(720.0), None));
     let spec = support::write_tmp(
         "starved-probe.toml",
         &format!(
@@ -207,10 +207,8 @@ fn an_adj_pin_with_only_a_capacitor_is_refused_not_given_a_rail() {
         u1,
     ) + &comp("C1", "Capacitor_SMD:C_0805_2012Metric", "10uF", 40, cap)
         + &comp("RL", "Resistor_SMD:R_0805_2012Metric", "500", 48, load);
-    let text = format!(
-        "board version 20171130\nfn main {{\nnet \"VIN\"\nnet \"VOUT\"\nnet \"GND\"\nnet \"ADJ\"\n{parts}}}\n"
-    );
-    let board_path = support::placement_board("adj-cap-only.board", &text);
+    let text = support::board_text(&["VIN", "VOUT", "GND", "ADJ"], &parts);
+    let board_path = support::placement_board("adj-cap-only.kicad_pcb", &text);
     let spec = support::write_tmp(
         "adj-cap-only.toml",
         &format!(

@@ -713,7 +713,10 @@ fn headless_strict_refuses_with_the_shared_regulator_and_open_driver_reasons() {
     let nets = ["SW".to_string(), "VOUT".to_string()];
     let open = hauksbee_engine::scheduler::open_driver_reason("U1", "TPS54331D", "+12V", &nets);
     let regulator = "U1 regulation of VOUT is unsupported: input VIN has no independent DC support";
-    for (fixture, reason) in [("regulator.board", regulator), ("open_parts.board", &open)] {
+    for (fixture, reason) in [
+        ("regulator.kicad_pcb", regulator),
+        ("open_parts.kicad_pcb", &open),
+    ] {
         let path = board("../hauksbee-ci/tests/fixtures").join(fixture);
         let args = ["--headless", "--seconds", "0.003", "--json", "--strict"];
         let out = run_board(&path, &args);

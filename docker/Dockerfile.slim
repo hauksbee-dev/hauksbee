@@ -3,10 +3,10 @@
 # Contains the prebuilt `hauksbee` + `hauksbee-ci` binaries (built here from
 # source, default features so simavr is linked in), the reference model db, and
 # the simavr runtime libraries. This is everything the static checks (DRC,
-# netlint, SI, resource conflicts), board-as-code, and the built-in AVR
-# co-simulation need. It deliberately does NOT carry Renode, the Espressif QEMU
-# fork, or freerouting; reach for the `full` image when you need STM32 / ESP32
-# co-sim or production autorouting. It also carries no kicad-cli (see the
+# netlint, SI, resource conflicts) and the built-in AVR
+# co-simulation need. It deliberately does NOT carry Renode or the Espressif
+# QEMU fork; reach for the `full` image when you need STM32 / ESP32 co-sim. It
+# also carries no kicad-cli (see the
 # runtime stage for why that is neither possible on this base nor needed).
 #
 # BUILD CONTEXT: the forge-* crates are vendored into this repo
@@ -169,7 +169,7 @@ FROM ${DEBIAN_BASE} AS runtime
 # the image are GPL-3.0 combined works even though hauksbee's source stays
 # Apache-2.0. The full terms travel in /usr/share/doc/hauksbee/.
 LABEL org.opencontainers.image.title="hauksbee (slim)" \
-      org.opencontainers.image.description="Universal PCB emulator: static checks, board-as-code, AVR co-sim. Prebuilt hauksbee + hauksbee-ci with simavr linked in." \
+      org.opencontainers.image.description="Universal PCB emulator: static checks, AVR co-sim. Prebuilt hauksbee + hauksbee-ci with simavr linked in." \
       org.opencontainers.image.source="https://github.com/hauksbee-dev/hauksbee" \
       org.opencontainers.image.licenses="GPL-3.0-only"
 

@@ -136,7 +136,7 @@ Every key the loader accepts, in one place. Unknown keys are rejected.
 | Key             | Type     | Default       | Meaning                                                       |
 | --------------- | -------- | ------------- | ------------------------------------------------------------- |
 | `name`          | string   | `"hauksbee-ci"`| Label shown in reports.                                       |
-| `board`         | path     | required      | Board file: `.kicad_sch` (schematic), `.kicad_pcb`, `.net`, Eagle `.brd`, IPC-D-356, Altium `.PcbDoc`, a gerber folder/zip, or Board-as-Code `.board` (bare or zipped; compiled in-process, no routing step needed). The same formats `hauksbee run` accepts. |
+| `board`         | path     | required      | Board file: `.kicad_sch` (schematic), `.kicad_pcb`, `.net`, Eagle `.brd`, IPC-D-356, Altium `.PcbDoc`, a gerber folder/zip. The same formats `hauksbee run` accepts. |
 | `bom`           | path     | none          | BOM read and fail-closed reconciled before binding through the same production reader as `hauksbee run --bom`. See [assembly inputs](#assembly-inputs-bom-placement-variant). |
 | `bom_columns`   | [string] | `[]`          | Explicit `role=Header` mappings for an ambiguous BOM, equivalent to repeatable `--bom-column`; requires `bom`. |
 | `placement`     | path     | none          | Pick-and-place file reconciled against layout identity, package, position, side and rotation before binding. |
@@ -990,7 +990,7 @@ Besides AVR, the **Renode** backend co-sims supported STM32, **nRF52840**, and
 SiFive RISC-V, and the **QEMU** backend co-sims ESP32 / ESP32-S3 / ESP32-C3 (see
 `docs/cosim/MCU.md` for the full matrix). The nRF52840 fixture boots with:
 `hauksbee run` boots the bundled
-`testdata/firmware/renode_demos/nrf52840-zephyr_shell.board` +
+`testdata/firmware/renode_demos/nrf52840-zephyr_shell.kicad_pcb` +
 `nrf52840-zephyr_shell.elf` pair to the Zephyr `uart:~$` prompt through
 Renode.
 

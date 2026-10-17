@@ -50,10 +50,7 @@ fn board(rf: Option<&str>) -> String {
         let lib = "Resistor_SMD:R_0805_2012Metric";
         parts += &comp(r, lib, val, 40 + i * 8, pad(1, a) + &pad(2, b));
     }
-    let nets = ["VCC", "GND", "OUT", "NP", "VIN", "OUT_B"]
-        .map(|n| format!("net \"{n}\"\n"))
-        .concat();
-    format!("board version 20171130\nfn main {{\n{nets}{parts}}}\n")
+    support::board_text(&["VCC", "GND", "OUT", "NP", "VIN", "OUT_B"], &parts)
 }
 
 /// Run one window of the ramp and report whether OUT held the expected level
@@ -61,7 +58,7 @@ fn board(rf: Option<&str>) -> String {
 /// exactly `[after_ms, end_ms]`; the input there is `t` volts on the way up and
 /// `10 - t` on the way down.
 fn out_is(case: &str, rf: Option<&str>, after_ms: f64, end_ms: f64, high: bool) -> bool {
-    let path = support::placement_board("schmitt.board", &board(rf));
+    let path = support::placement_board("schmitt.kicad_pcb", &board(rf));
     // The high level is WHATEVER THE BOARD MAKES IT -- the open-collector claim:
     // 4.7826 V when RF loads the pull-up, 5.000 V when it does not. A push-pull
     // stage answers its own `out_hi` both times and fails one. Low is VOL = RON
@@ -122,12 +119,12 @@ fn a_comparator_gets_its_hysteresis_and_its_levels_from_the_board() {
 /// The same discipline one level up, on an op-amp's OUTPUT SWING. An LM358
 /// saturates 1.5 V below the voltage actually on its V+ PIN and 20 mV above V-
 /// (SLOS068AB, both MAX, at this board's RL = 2 kOhm), so the gain-11 amp in
-/// `fixtures/lm358_gain11.board` delivers 4.4 V on a 12 V rail and cannot on a
+/// `fixtures/lm358_gain11.kicad_pcb` delivers 4.4 V on a 12 V rail and cannot on a
 /// 5 V one. The card used to carry the part's 32 V ABSOLUTE-MAXIMUM SUPPLY as
 /// `rail_hi` and the binder never read the supply pins, so this board answered
 /// 4.400 V from a 5 V rail -- 8.799 V when asked for 8.8 -- evidence `clean`.
 fn opamp_out(case: &str, rail: f64, vsig: f64, band: (f64, f64)) -> bool {
-    let board = support::repo("crates/hauksbee-ci/tests/fixtures/lm358_gain11.board");
+    let board = support::repo("crates/hauksbee-ci/tests/fixtures/lm358_gain11.kicad_pcb");
     let (min, max) = band;
     let r = support::run_body(
         &format!("{case}.toml"),
@@ -178,8 +175,12 @@ fn an_input_pair_above_the_common_mode_ceiling_refuses_instead_of_answering() {
     // 4.000 V, both above 5.000 - 1.500 = 3.500 V; `in_range` puts them at
     // 0.694 V and 2.500 V. Both are LM339B on a 5 V rail, 10 k pull-up on OUT.
     for (case, fixture, want) in [
-        ("both inputs above VICR", "lm339_vicr_pair_high.board", 3),
-        ("both inputs in range", "lm339_vicr_in_range.board", 0),
+        (
+            "both inputs above VICR",
+            "lm339_vicr_pair_high.kicad_pcb",
+            3,
+        ),
+        ("both inputs in range", "lm339_vicr_in_range.kicad_pcb", 0),
     ] {
         let board = support::repo(&format!("crates/hauksbee-ci/tests/fixtures/{fixture}"));
         let r = support::run_body(
@@ -234,12 +235,8 @@ fn sourced_supply_envelopes_follow_the_solved_rails() {
             60,
             j1,
         );
-    let nets = ["VP", "VN", "VCC", "GND", "OUT", "N1", "N5"].map(|n| format!("net \"{n}\"\n"));
-    let board = format!(
-        "board version 20171130\nfn main {{\n{}{parts}}}\n",
-        nets.concat()
-    );
-    let path = support::placement_board("envelopes.board", &board);
+    let board = support::board_text(&["VP", "VN", "VCC", "GND", "OUT", "N1", "N5"], &parts);
+    let path = support::placement_board("envelopes.kicad_pcb", &board);
     for (case, vp, vcc, net, want, says) in [
         ("under minimum", 5.0, 5.0, "OUT", 3, "the 10..18 V"),
         ("legal control", 12.0, 5.0, "OUT", 0, ""),
@@ -273,7 +270,7 @@ fn sourced_supply_envelopes_follow_the_solved_rails() {
 /// outcome asking for it low fails, naming the limit as the reason.
 #[test]
 fn a_failure_on_a_board_outside_a_datasheet_limit_is_a_failure_that_names_it() {
-    let board = support::repo("crates/hauksbee-ci/tests/fixtures/lm339_vicr_pair_high.board");
+    let board = support::repo("crates/hauksbee-ci/tests/fixtures/lm339_vicr_pair_high.kicad_pcb");
     let r = support::run_body(
         "vicr fail.toml",
         &format!(
@@ -339,12 +336,8 @@ fn a_rail_starved_through_its_feed_resistor_fails_naming_the_feed() {
         120,
         support::pad(1, "VDD_A") + &support::pad(2, "GND"),
     );
-    let nets = ["+5V", "VDD_A", "GND", "OUT1", "OUT2", "OUT3"].map(|n| format!("net \"{n}\"\n"));
-    let board = format!(
-        "board version 20171130\nfn main {{\n{}{parts}}}\n",
-        nets.concat()
-    );
-    let path = support::placement_board("starved_feed.board", &board);
+    let board = support::board_text(&["+5V", "VDD_A", "GND", "OUT1", "OUT2", "OUT3"], &parts);
+    let path = support::placement_board("starved_feed.kicad_pcb", &board);
     let r = support::run_body(
         "starved.toml",
         &format!(

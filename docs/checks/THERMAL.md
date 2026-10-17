@@ -22,7 +22,7 @@ Tj = Tambient + P_dissipated * theta_JA
 
 When `Tj` exceeds the device's maximum junction temperature, the monitor raises
 an **`overtemperature`** fault through the same fault channel as over-current,
-over-power, and the rest, so it surfaces in the live UI, in `check-code`, and as
+over-power, and the rest, so it surfaces in the live UI and as
 a `hauksbee-ci` assertion with no new plumbing.
 
 ## Where the numbers come from
@@ -178,7 +178,6 @@ present. When absent, the monitor applies a per-package-class default:
 quoted at. Override it:
 
 - CLI: `hauksbee run <board> --thermal --ambient 70`
-- CLI: `hauksbee check-code <code> --ambient 70`
 - CI: the top-level `ambient_c = 70` key in the spec.
 
 ## Board-level spreading: what this does and does not do
@@ -240,9 +239,6 @@ estimator by design.
   strictness) while the INCONCLUSIVE coverage caveat still prints
   (`--strict-thermal` is accepted as a quiet no-op, it named what is now the
   default). See [Exit codes](../ci/CI.md#exit-codes-the-pipeline-contract).
-- **`hauksbee check-code <code> [--ambient C]`**: the over-temperature fault
-  shows up in the fault report alongside the others. A destroyed part fails
-  the check.
 - **`hauksbee-ci`**: the `max_temp` assertion (per-device or explicit ceiling)
   and the top-level `ambient_c` key. The `no_faults` assertion also catches
   over-temperature. See [CI.md](../ci/CI.md).

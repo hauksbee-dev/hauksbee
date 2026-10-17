@@ -5,17 +5,15 @@
 //! formats can never drift between surfaces again.
 //!
 //! Normalizing per surface is how format sets drift apart: a surface that
-//! reads the file as UTF-8 text rejects a binary Altium board and a `.board`
-//! export outright, and one that re-reads the ORIGINAL bytes with only the
-//! text/binary sniffers fails co-sim with "could not re-read the board" on a
-//! `.board` or gerber zip that just produced a clean static report. One
-//! normalizer, two entry points:
+//! reads the file as UTF-8 text rejects a binary Altium board outright, and
+//! one that re-reads the ORIGINAL bytes with only the text/binary sniffers
+//! fails co-sim with "could not re-read the board" on a gerber zip that just
+//! produced a clean static report. One normalizer, two entry points:
 //!
 //! * [`from_bytes`]: the web path. A file name (display/sniff hint only) plus
 //!   the file's RAW bytes. Binary formats are sniffed from the bytes first, a
-//!   `PK\x03\x04` prefix routes through the zip classifier, Board-as-Code is
-//!   compiled to `KiCad` board text, and everything else falls through to the
-//!   text sniffer. It never invents a board name: a titleless board keeps its
+//!   `PK\x03\x04` prefix routes through the zip classifier, and everything
+//!   else falls through to the text sniffer. It never invents a board name: a titleless board keeps its
 //!   empty name here, and the web report fills `board_name` from the file
 //!   stem itself.
 //! * [`from_path`]: the CLI/CI path. Adds what only a path can give you:
@@ -37,12 +35,7 @@
 //!   presence of `matrix/matrix` under the path before the directory is assumed
 //!   to be a gerber folder;
 //! * an **ODB++ archive** is a `.zip` or a `.tgz`, containers the zip branch
-//!   would otherwise classify as gerbers or Board-as-Code, so its content sniff
-//!   runs first.
-//!
-//! This lives in `hauksbee-engine` (not `hauksbee-extract`) because
-//! Board-as-Code compilation ([`crate::boardcode::code_to_board_text`]) needs
-//! forge-codegen, which the extract crate must not depend on.
+//!   would otherwise classify as gerbers, so its content sniff runs first.
 
 // This module reads board files the user did not write, and `hauksbee serve`
 // exposes it to a browser, so a panic here is a denial of service rather than
@@ -55,38 +48,6 @@ use std::borrow::Cow;
 use std::path::Path;
 
 use hauksbee_extract::{ExtractError, ExtractedBoard};
-
-/// Whether `text` starts like a Board-as-Code file: a tiny sniff on the first
-/// 256 characters, shared by the input classifier and the watch loop.
-#[must_use]
-pub fn is_board_code_header(text: &str) -> bool {
-    let head: String = text.chars().take(256).collect();
-    head.contains("Board-as-Code") || head.contains("board version ")
-}
-
-/// The note for a file named `.board` (Board-as-Code) whose content is a
-/// different format: the extension is wrong, the content decides, and the file
-/// is read as what it is. `None` when the name is not `.board`, the content
-/// carries the Board-as-Code header, or no reader recognises the content (it is
-/// then Board-as-Code, whose compiler will say what is wrong with it).
-fn misnamed_board_code_note(file_name: &str, text: &str) -> Option<String> {
-    let named_board = Path::new(file_name).extension().and_then(|e| e.to_str()) == Some("board");
-    if !named_board || is_board_code_header(text) {
-        return None;
-    }
-    let registry = hauksbee_extract::reader::Registry::builtin();
-    let reader = registry.detect(text.as_bytes(), None)?;
-    // The IPC-D-356 reader claims a file on any line starting `317`, which a
-    // Board-as-Code source could contain; every other reader keys on a header.
-    if reader.name() == "ipc-d356" {
-        return None;
-    }
-    Some(format!(
-        "'{file_name}' has the .board extension, which means Board-as-Code, but its content \
-         is {}; it was read as that. Rename the file so its extension matches its content.",
-        hauksbee_extract::reader::format_phrase(reader.name())
-    ))
-}
 
 /// What kind of input the normalizer recognised.
 ///
@@ -116,9 +77,6 @@ pub enum InputKind {
     /// An IPC-2581 (DPMX) design-exchange document. Text, but not KiCad-parseable
     /// text, so it carries no `layout_text` either.
     Ipc2581,
-    /// A Board-as-Code `.board` source (bare or zipped), compiled to `KiCad`
-    /// board text; `layout_text` carries the COMPILED text.
-    BoardCode,
 }
 
 /// One board input, normalized: the extracted board plus everything the
@@ -129,7 +87,7 @@ pub struct NormalizedBoard {
     pub board: ExtractedBoard,
     /// The KiCad-parseable layout text for the geometry-bearing checks
     /// (DRC / SI): the input itself for a text format, the schematic source
-    /// for a `.kicad_sch`, the COMPILED `.kicad_pcb` text for Board-as-Code.
+    /// for a `.kicad_sch`.
     /// `None` for Altium (geometry lives in the raw bytes twin) and gerber
     /// (no layout file exists; the checks must say "Not checked").
     pub layout_text: Option<String>,
@@ -210,7 +168,6 @@ pub const fn input_kind_phrase(kind: InputKind) -> &'static str {
         InputKind::Ipc2581 => "an IPC-2581 document",
         InputKind::Altium => "an Altium .PcbDoc",
         InputKind::Schematic => "a schematic",
-        InputKind::BoardCode => "a Board-as-Code source",
         InputKind::Text => "this input",
     }
 }
@@ -243,14 +200,10 @@ pub enum BoardInputError {
     /// The file exists but could not be read ([`from_path`] only).
     #[error("reading '{path}': {message}")]
     Io { path: String, message: String },
-    /// Zip routing failed: not a readable archive, more than one `.board`
-    /// inside, or (web path) the gerber reverse-extraction of the archive
-    /// failed. The message already names the file and both zip forms.
+    /// Zip routing failed: not a readable archive, or (web path) the gerber
+    /// reverse-extraction of the archive failed. The message already names the file and both zip forms.
     #[error("{0}")]
     Zip(String),
-    /// Board-as-Code compilation failed; carries the compiler's error.
-    #[error("{0}")]
-    BoardCode(String),
     /// Gerber reverse-extraction from a path (directory or zip) failed.
     #[error("{0}")]
     Gerber(String),
@@ -322,8 +275,7 @@ pub const ACCEPTED_FORMATS: &[AcceptedFormat] = &[
     board_format("IPC-2581", &[".xml"]),
     board_format("IPC-D-356", &[".d356"]),
     board_format("ODB++ job", &[".tgz", ".tar.gz", ".tar"]),
-    board_format("fab archive (gerbers, ODB++ or a .board export)", &[".zip"]),
-    board_format("Board-as-Code", &[".board"]),
+    board_format("fab archive (gerbers or ODB++)", &[".zip"]),
     AcceptedFormat {
         vendor: "SPICE deck",
         exts: &[".cir", ".sp", ".net"],
@@ -374,9 +326,6 @@ impl BoardInputError {
     #[must_use]
     pub fn web_message(&self) -> String {
         match self {
-            Self::BoardCode(e) => {
-                format!("Could not compile this Board-as-Code file: {e}.")
-            }
             Self::Extract(e) => {
                 format!(
                     "Could not read this board file: {e}. Supported: {}.",
@@ -416,12 +365,12 @@ fn refuse_eagle_binary(file_name: &str, raw: &[u8]) -> Result<(), BoardInputErro
 /// The refusal for a format hauksbee RECOGNISES and deliberately does not read,
 /// when `raw` is one of them.
 ///
-/// Exposed because two surfaces read a board's text for themselves rather than
-/// through [`from_path`]: `hauksbee to-code` and the MCP `board_to_code` tool.
-/// Both decode UTF-8 directly, so without this they answered a pre-Eagle-6
-/// board with "stream did not contain valid UTF-8" and "this board file is
-/// binary (e.g. Altium .`PcbDoc`)" respectively — one meaningless, one naming the
-/// wrong vendor, and neither telling the user the one thing that would work.
+/// Exposed because some surfaces read a board's text for themselves rather
+/// than through [`from_path`]. They decode UTF-8 directly, so without this
+/// they answered a pre-Eagle-6 board with "stream did not contain valid UTF-8"
+/// or "this board file is binary (e.g. Altium .`PcbDoc`)": one meaningless, one
+/// naming the wrong vendor, and neither telling the user the one thing that
+/// would work.
 #[must_use]
 pub fn unsupported_format_refusal(file_name: &str, raw: &[u8]) -> Option<String> {
     hauksbee_extract::looks_like_eagle_binary(raw).then(|| {
@@ -435,8 +384,7 @@ pub fn unsupported_format_refusal(file_name: &str, raw: &[u8]) -> Option<String>
 /// Normalize an uploaded board from its raw bytes: the web path.
 ///
 /// The loading head behind `frontdoor::analyze`. `file_name` is
-/// a display/sniff hint only (the `.board` extension routes the compile path);
-/// `contents` is the file's RAW bytes. Binary formats (Altium `.PcbDoc`, an
+/// a display/sniff hint only; `contents` is the file's RAW bytes. Binary formats (Altium `.PcbDoc`, an
 /// OLE2 container) are sniffed from the bytes first, exactly like the CLI
 /// path; lossy-decoding before that point would corrupt a binary board before
 /// it was ever parsed. Deliberately NO file-stem name fallback here: a
@@ -446,7 +394,7 @@ pub fn unsupported_format_refusal(file_name: &str, raw: &[u8]) -> Option<String>
 /// # Errors
 ///
 /// Returns a [`BoardInputError`] when the bytes are a binary Eagle board, a
-/// zip that cannot be routed, Board-as-Code that does not compile, or content
+/// zip that cannot be routed, or content
 /// no reader recognises or can parse.
 pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, BoardInputError> {
     from_bytes_in_file_order(file_name, contents).map(NormalizedBoard::canonical)
@@ -461,8 +409,8 @@ fn from_bytes_in_file_order(
 
     // An ODB++ archive, checked before anything else because its container is a
     // zip or a gzipped tar and BOTH of those would otherwise be classified as
-    // something they are not (the zip branch below treats every zip as gerbers
-    // or Board-as-Code). Keyed on the `matrix/matrix` member, which no gerber
+    // something they are not (the zip branch below treats every zip as gerbers).
+    // Keyed on the `matrix/matrix` member, which no gerber
     // archive has.
     if hauksbee_extract::odbpp::looks_like_odbpp_archive(contents) {
         let out = hauksbee_extract::odbpp::from_odbpp_archive(contents)
@@ -490,59 +438,26 @@ fn from_bytes_in_file_order(
         });
     }
 
-    // A zip upload is a fab archive or a zipped Board-as-Code export; route it
-    // before the text sniffer (which knows neither). A `.board` export inside
-    // wins (a fab archive never carries one). Within a fab archive an
-    // IPC-D-356 netlist wins over gerber inference; only the remaining zips are
-    // reverse-extracted from copper.
-    let mut zip_code: Option<String> = None;
+    // A zip upload is a fab archive; route it before the text sniffer (which
+    // does not know zips). Within a fab archive an IPC-D-356 netlist wins over
+    // gerber inference; only the remaining zips are reverse-extracted from
+    // copper.
     if contents.starts_with(b"PK\x03\x04") {
-        if let Some(src) = zip_board_code(file_name, contents)? {
-            zip_code = Some(src);
-        } else {
-            if let Some(norm) = ipc356_from_fab_zip(file_name, contents)? {
-                return Ok(norm);
-            }
-            let out = gerber_from_zip_bytes(file_name, contents)?;
-            let notes = out.stats.coverage_notes();
-            return Ok(NormalizedBoard {
-                board: out.board,
-                layout_text: None,
-                raw: contents.to_vec(),
-                kind: InputKind::Gerber,
-                notes,
-            });
+        if let Some(norm) = ipc356_from_fab_zip(file_name, contents)? {
+            return Ok(norm);
         }
+        let out = gerber_from_zip_bytes(file_name, contents)?;
+        let notes = out.stats.coverage_notes();
+        return Ok(NormalizedBoard {
+            board: out.board,
+            layout_text: None,
+            raw: contents.to_vec(),
+            kind: InputKind::Gerber,
+            notes,
+        });
     }
 
-    let text: Cow<'_, str> = zip_code.as_ref().map_or_else(
-        || String::from_utf8_lossy(contents),
-        |src| Cow::Borrowed(src.as_str()),
-    );
-    // Board-as-Code (`hauksbee to-code` output, usually `*.board`, possibly
-    // zipped) is a DSL, not a CAD format, so the extractor cannot sniff it.
-    // Compile it to KiCad board text first; the emitted text then flows
-    // through the untouched text path (parse, DRC, SI) as if a `.kicad_pcb`
-    // was uploaded.
-    //
-    // A `.board` name does not make a file Board-as-Code when its content is a
-    // format another reader recognises: the content decides, and the note says
-    // the name was wrong.
-    let misnamed = if zip_code.is_none() {
-        misnamed_board_code_note(file_name, &text)
-    } else {
-        None
-    };
-    let is_board_code = zip_code.is_some()
-        || (Path::new(file_name).extension().and_then(|e| e.to_str()) == Some("board")
-            && misnamed.is_none())
-        || crate::board_input::is_board_code_header(&text);
-    let text: String = if is_board_code {
-        crate::boardcode::code_to_board_text(&text)
-            .map_err(|e| BoardInputError::BoardCode(e.to_string()))?
-    } else {
-        text.into_owned()
-    };
+    let text: Cow<'_, str> = String::from_utf8_lossy(contents);
     // IPC-2581 is text but not KiCad-parseable text, so it must NOT be handed to
     // the geometry-bearing checks as `layout_text`: `ExtractedBoard::drc` returns
     // an empty report for content it does not recognise, and an empty report
@@ -550,7 +465,7 @@ fn from_bytes_in_file_order(
     // board whose clearances were never examined. It goes through the reader
     // directly rather than through `from_auto` so the read's own coverage notes
     // survive.
-    if !is_board_code && hauksbee_extract::ipc2581::looks_like_ipc2581(text.as_bytes()) {
+    if hauksbee_extract::ipc2581::looks_like_ipc2581(text.as_bytes()) {
         let out = hauksbee_extract::ipc2581::extract(&text)
             .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
         return Ok(NormalizedBoard {
@@ -558,30 +473,24 @@ fn from_bytes_in_file_order(
             layout_text: None,
             raw: contents.to_vec(),
             kind: InputKind::Ipc2581,
-            notes: out.stats.notes().into_iter().chain(misnamed).collect(),
+            notes: out.stats.notes(),
         });
     }
     let board = ExtractedBoard::from_auto(&text)
         .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
     Ok(NormalizedBoard {
         board,
-        layout_text: Some(text),
+        layout_text: Some(text.into_owned()),
         raw: contents.to_vec(),
-        kind: if is_board_code {
-            InputKind::BoardCode
-        } else {
-            InputKind::Text
-        },
-        notes: misnamed.into_iter().collect(),
+        kind: InputKind::Text,
+        notes: Vec::new(),
     })
 }
 
 /// Normalize a board from a filesystem path: the CLI/CI path.
 ///
 /// The loading head behind `hauksbee run`. It shares the zip
-/// classification with the web path (so `run <x.zip>` with a `.board`
-/// export inside compiles instead of failing as gerber), and adds what only a
-/// path can give:
+/// classification with the web path, and adds what only a path can give:
 ///
 /// * gerber DIRECTORY detection (`is_dir`);
 /// * `.kicad_sch` loaded via [`ExtractedBoard::from_kicad_schematic_path`] so
@@ -731,22 +640,19 @@ fn from_path_in_file_order(path: &Path) -> Result<NormalizedBoard, BoardInputErr
         ));
     }
 
-    // A `.zip` is a fab archive or a zipped Board-as-Code export, the same two
-    // forms the web drop zone accepts. Within a fab archive, prefer its own
-    // IPC-D-356 connectivity before falling back to gerber reconstruction.
+    // A `.zip` is a fab archive, the same form the web drop zone accepts.
+    // Within it, prefer its own IPC-D-356 connectivity before falling back to
+    // gerber reconstruction.
     let is_zip = path
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
     if is_zip {
-        if let Some(src) = zip_board_code(&file_name, &raw)? {
-            return board_code_input(&file_name, &src, raw, path);
-        }
         if let Some(norm) = ipc356_from_fab_zip(&file_name, &raw)? {
             return Ok(with_name_fallback(norm, path));
         }
         let out = ExtractedBoard::from_gerber_with_stats(path).map_err(|e| {
-            // A zip that is neither a gerber set nor a .board export is often
+            // A zip that is not a gerber set is often
             // a FIRMWARE project zipped by mistake; say where firmware goes
             // instead of only rejecting.
             zip_firmware_marker(&raw).map_or_else(
@@ -772,19 +678,6 @@ fn from_path_in_file_order(path: &Path) -> Result<NormalizedBoard, BoardInputErr
     }
 
     let text = String::from_utf8_lossy(&raw).into_owned();
-    // Board-as-Code (`.board`): detected by extension or the DSL header.
-    // Parse the DSL, recompile it to `.kicad_pcb` text, then feed the same
-    // analysis path the layout formats use.
-    //
-    // A `.board` name over content another reader recognises (a KiCad board
-    // saved with the wrong extension) is read as what it is, with a note.
-    let misnamed = misnamed_board_code_note(&file_name, &text);
-    let is_board_code = (path.extension().and_then(|e| e.to_str()) == Some("board")
-        && misnamed.is_none())
-        || crate::board_input::is_board_code_header(&text);
-    if is_board_code {
-        return board_code_input(&file_name, &text, raw, path);
-    }
 
     // IPC-2581: text, but not layout text. Same reasoning as the web path — it
     // must not reach `ExtractedBoard::drc`, whose empty report for unrecognised
@@ -792,7 +685,7 @@ fn from_path_in_file_order(path: &Path) -> Result<NormalizedBoard, BoardInputErr
     if hauksbee_extract::ipc2581::looks_like_ipc2581(&raw) {
         let out = hauksbee_extract::ipc2581::extract(&text)
             .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
-        let notes = out.stats.notes().into_iter().chain(misnamed).collect();
+        let notes = out.stats.notes();
         return Ok(normalized(
             path,
             out.board,
@@ -862,14 +755,14 @@ fn from_path_in_file_order(path: &Path) -> Result<NormalizedBoard, BoardInputErr
         Some(text),
         raw,
         InputKind::Text,
-        misnamed.into_iter().collect(),
+        Vec::new(),
     ))
 }
 
 /// Board-format files directly inside `dir` (no recursion), sorted. The
 /// directory head of [`from_path`] consults this before assuming gerbers.
 fn board_files_in(dir: &Path) -> Vec<std::path::PathBuf> {
-    const BOARD_EXTS: &[&str] = &["kicad_pcb", "kicad_sch", "brd", "pcbdoc", "d356", "board"];
+    const BOARD_EXTS: &[&str] = &["kicad_pcb", "kicad_sch", "brd", "pcbdoc", "d356"];
     let mut found: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(rd) = std::fs::read_dir(dir) {
         for e in rd.flatten() {
@@ -979,7 +872,7 @@ fn gerber_job(
 }
 
 /// Fall back to the source file stem when the layout carries no title-block
-/// name (gerber, DSL, and many real boards ship no title). [`from_path`] only.
+/// name (gerber and many real boards ship no title). [`from_path`] only.
 /// One resolved input: the normalized board with the file-stem name fallback
 /// applied, so a titleless export still carries a name.
 fn normalized(
@@ -1002,29 +895,6 @@ fn normalized(
     )
 }
 
-/// Compile a Board-as-Code source (loose `.board` file or the single `.board`
-/// inside a zip) and feed the recompiled layout text through the same analysis
-/// path the native layout formats use.
-fn board_code_input(
-    file_name: &str,
-    src: &str,
-    raw: Vec<u8>,
-    path: &Path,
-) -> Result<NormalizedBoard, BoardInputError> {
-    let compiled = crate::boardcode::code_to_board_text(src)
-        .map_err(|e| BoardInputError::BoardCode(e.to_string()))?;
-    let board = ExtractedBoard::from_auto(&compiled)
-        .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
-    Ok(normalized(
-        path,
-        board,
-        Some(compiled),
-        raw,
-        InputKind::BoardCode,
-        Vec::new(),
-    ))
-}
-
 fn with_name_fallback(mut norm: NormalizedBoard, path: &Path) -> NormalizedBoard {
     if norm.board.name.trim().is_empty() {
         if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
@@ -1032,56 +902,6 @@ fn with_name_fallback(mut norm: NormalizedBoard, path: &Path) -> NormalizedBoard
         }
     }
     norm
-}
-
-/// Scan a zip for a Board-as-Code export and read it out: `Ok(Some(src))`
-/// when the archive holds exactly one `.board` (macOS resource-fork noise
-/// skipped), `Ok(None)` when it holds none (a gerber fab archive never
-/// carries one), an error when it holds several or cannot be read.
-fn zip_board_code(file_name: &str, contents: &[u8]) -> Result<Option<String>, BoardInputError> {
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(contents)).map_err(|e| {
-        BoardInputError::Zip(format!(
-            "could not open '{file_name}' as a zip archive: {e}"
-        ))
-    })?;
-    let mut code_entries: Vec<usize> = Vec::new();
-    for i in 0..archive.len() {
-        if let Ok(entry) = archive.by_index(i) {
-            let name = entry.name();
-            if name.starts_with("__MACOSX/")
-                || name.rsplit('/').next().is_some_and(|f| f.starts_with('.'))
-            {
-                continue;
-            }
-            if name.to_ascii_lowercase().ends_with(".board") {
-                code_entries.push(i);
-            }
-        }
-    }
-    if code_entries.len() > 1 {
-        return Err(BoardInputError::Zip(format!(
-            "'{file_name}' contains more than one .board file; zip (or upload) just the one you mean."
-        )));
-    }
-    let Some(&i) = code_entries.first() else {
-        return Ok(None);
-    };
-    let mut entry = archive.by_index(i).map_err(|e| {
-        BoardInputError::Zip(format!(
-            "could not read the .board inside '{file_name}': {e}"
-        ))
-    })?;
-    let src = hauksbee_extract::read_member_capped(&mut entry)
-        .and_then(|bytes| {
-            String::from_utf8(bytes)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-        })
-        .map_err(|e| {
-            BoardInputError::Zip(format!(
-                "could not read the .board inside '{file_name}': {e}"
-            ))
-        })?;
-    Ok(Some(src))
 }
 
 /// Prefer an IPC-D-356 netlist carried inside a fab ZIP over inferring the
@@ -1196,7 +1016,7 @@ fn gerber_from_zip_bytes(
             }
             BoardInputError::Zip(format!(
                 "could not read '{file_name}' as a gerber archive: {e}. A board zip should \
-             contain the gerber fab files (copper + drill), or one .board export."
+             contain the gerber fab files (copper + drill)."
             ))
         })
 }
@@ -1270,7 +1090,7 @@ fn firmware_zip_message(file_name: &str, marker: &str) -> String {
         "'{file_name}' looks like a firmware project ({marker} inside), not a board. \
          Drop it in the firmware slot next to the board file (CLI: pass it with \
          --firmware); the board zip should contain the gerber fab files \
-         (copper + drill), or one .board export."
+         (copper + drill)."
     )
 }
 
@@ -1291,17 +1111,20 @@ mod tests {
         include_bytes!("../../hauksbee-extract/tests/fixtures/exchange/boot_gate.ipc2581.xml");
     const IPC356: &[u8] = include_bytes!("../../../testdata/pic_programmer.d356");
 
-    const DSL: &[u8] = br#"# Board-as-Code (hauksbee board DSL v1)
-board version 20241229
-
-fn main {
-    net "A"
-    net "B"
-    comp R1 lib "Resistor_SMD:R_0402_1005Metric" val "10k" layer "F.Cu" at 0 0 rot 0 {
-        pad "1" smd rect at 0 0 size 1 1 layers [F.Cu] net "A"
-        pad "2" smd rect at 1 0 size 1 1 layers [F.Cu] net "B"
-    }
-}
+    /// A titleless one-resistor `KiCad` board: no title-block name for a
+    /// reader to find, so tests can see whether a name was invented.
+    const TINY: &[u8] = br#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "A")
+  (net 2 "B")
+  (module Resistor_SMD:R_0402_1005Metric (layer F.Cu)
+    (at 0 0)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (size 1 1) (layers F.Cu) (net 1 "A"))
+    (pad 2 smd rect (at 1 0) (size 1 1) (layers F.Cu) (net 2 "B"))
+  )
+)
 "#;
 
     /// The uploaded board name is a pure function of the upload name, keeps
@@ -1393,27 +1216,6 @@ fn main {
     }
 
     #[test]
-    fn zipped_board_code_compiles() {
-        let bytes = zip_of(&[("export/tarski.board", DSL)]);
-        let norm = from_bytes("tarski-export.zip", &bytes).expect("zipped .board normalizes");
-        assert_eq!(norm.kind, InputKind::BoardCode);
-        let text = norm
-            .layout_text
-            .as_deref()
-            .expect("compiled layout text present");
-        assert!(
-            text.contains("kicad_pcb"),
-            "layout_text is the COMPILED KiCad text, not the DSL: {}",
-            &text[..text.len().min(120)]
-        );
-        assert_eq!(
-            norm.board.components.len(),
-            1,
-            "R1 survives the zip + compile"
-        );
-    }
-
-    #[test]
     fn fab_zip_prefers_its_ipc356_netlist_on_bytes_and_path_routes() {
         // The copper film is intentionally insufficient to reconstruct a
         // usable board. Success therefore proves the package netlist won; it
@@ -1482,20 +1284,43 @@ fn main {
     }
 
     #[test]
-    fn bare_board_code_compiles_and_keeps_empty_name_on_bytes_path() {
+    fn a_titleless_board_keeps_its_empty_name_on_the_bytes_path() {
         // from_bytes must NOT invent a board name: the web report's board_name
         // for a titleless board is empty, and the golden parity test in
         // frontdoor.rs depends on that staying true.
-        let norm = from_bytes("tarski.board", DSL).expect(".board normalizes");
-        assert_eq!(norm.kind, InputKind::BoardCode);
+        let norm = from_bytes("tiny.kicad_pcb", TINY).expect("kicad board normalizes");
+        assert_eq!(norm.kind, InputKind::Text);
         assert!(
             norm.board.name.trim().is_empty(),
             "from_bytes must not apply the file-stem fallback: {:?}",
             norm.board.name
         );
-        // Header sniff works without the extension too.
-        let norm2 = from_bytes("exported.txt", DSL).expect("header sniff works");
-        assert_eq!(norm2.kind, InputKind::BoardCode);
+    }
+
+    /// The retired Board-as-Code text format gets the same refusal as any
+    /// other unreadable file: the accepted formats, not a special message.
+    #[test]
+    fn a_dot_board_file_is_an_unrecognised_format_like_any_other() {
+        let source = b"# Board-as-Code (hauksbee board DSL v1)
+board version 20241229
+
+fn main {
+}
+";
+        for name in ["tarski.board", "exported.txt"] {
+            let err = from_bytes(name, source).expect_err("the retired format must not load");
+            assert!(matches!(err, BoardInputError::Extract(_)), "{name}: {err}");
+            let msg = err.web_message();
+            assert!(
+                msg.contains("Supported:") && msg.contains(".kicad_pcb"),
+                "{name}: the refusal lists the accepted formats: {msg}"
+            );
+            let listed = msg.split_once("Supported:").map_or("", |(_, rest)| rest);
+            assert!(
+                !listed.contains(".board"),
+                "{name}: the retired format is no longer advertised: {msg}"
+            );
+        }
     }
 
     #[test]
@@ -1523,10 +1348,10 @@ fn main {
             ".d356",
             ".tgz",
             ".zip",
-            ".board",
         ] {
             assert!(sentence.contains(ext), "{ext} missing from: {sentence}");
         }
+        assert!(!sentence.contains(".board"), "{sentence}");
         // A SPICE deck is not a board: a board refusal must not offer it.
         assert!(!sentence.contains(".cir"), "{sentence}");
         let json = accepted_formats_json();
@@ -1557,7 +1382,7 @@ fn main {
             .expect_err("garbage must not normalize");
         let msg = err.web_message();
         assert!(
-            msg.contains("Supported:") && msg.contains(".board"),
+            msg.contains("Supported:") && msg.contains(".kicad_pcb"),
             "the web message lists the supported formats: {msg}"
         );
         assert!(
@@ -1614,51 +1439,27 @@ fn main {
     }
 
     #[test]
-    fn multi_board_zip_is_a_disambiguation_error() {
-        let bytes = zip_of(&[("a.board", DSL), ("b.board", DSL)]);
-        let err = from_bytes("two.zip", &bytes).expect_err("two .board files is ambiguous");
-        assert!(
-            err.to_string().contains("more than one .board"),
-            "the error asks the user to disambiguate: {err}"
-        );
-    }
-
-    #[test]
-    fn junk_zip_error_names_both_zip_forms() {
+    fn junk_zip_error_names_what_a_board_zip_holds() {
         let bytes = zip_of(&[("README.md", b"not a board")]);
         let err = from_bytes("junk.zip", &bytes).expect_err("junk zip fails");
         let msg = err.to_string();
         assert!(
-            msg.contains("gerber") && msg.contains(".board"),
-            "error names both zip forms: {msg}"
+            msg.contains("gerber") && !msg.contains(".board"),
+            "error names what a board zip holds: {msg}"
         );
     }
 
     #[test]
     fn from_path_applies_the_file_stem_name_fallback() {
         let dir = fresh_dir("test");
-        let p = dir.join("my_widget.board");
-        std::fs::write(&p, DSL).unwrap();
-        let norm = from_path(&p).expect(".board file normalizes from a path");
-        assert_eq!(norm.kind, InputKind::BoardCode);
+        let p = dir.join("my_widget.kicad_pcb");
+        std::fs::write(&p, TINY).unwrap();
+        let norm = from_path(&p).expect("a titleless board normalizes from a path");
+        assert_eq!(norm.kind, InputKind::Text);
         assert_eq!(
             norm.board.name, "my_widget",
             "a titleless board takes its file stem as its name on the path route"
         );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn from_path_zip_with_a_board_export_compiles_instead_of_failing_as_gerber() {
-        // Treating EVERY .zip as a gerber archive kills a zipped Board-as-Code
-        // export with a gerber error. The zip classifier routes it exactly like
-        // the web drop zone does.
-        let dir = fresh_dir("zip");
-        let p = dir.join("export.zip");
-        std::fs::write(&p, zip_of(&[("export/tarski.board", DSL)])).unwrap();
-        let norm = from_path(&p).expect("a zipped .board export must compile");
-        assert_eq!(norm.kind, InputKind::BoardCode);
-        assert_eq!(norm.board.components.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -2,7 +2,7 @@
 //! the static report paths, the --strict failure line, the resources/lint
 //! output split, sim's empty-deck refusal, the subcommand-inference guards,
 //! flag-consistency errors, --ac-node pre-validation, real net names, the
-//! --junit/--sarif artifacts, and the to-code copper disclosure. All exercise
+//! --junit/--sarif artifacts. All exercise
 //! the compiled binary, because every one of these is an exit-code or
 //! output-surface contract.
 
@@ -216,13 +216,6 @@ fn sim_invalid_probe_is_misuse_not_nonconvergence() {
 // ── subcommand-inference hazards (major 3) ──────────────────────────────────
 
 #[test]
-fn check_code_on_a_board_file_names_the_actual_fix() {
-    let b = shorted_board();
-    let out = run(&["check-code", b.to_str().unwrap()]);
-    expect_err(&out, 2, &["hauksbee run", "--check"]);
-}
-
-#[test]
 fn bare_board_path_suggests_run_check() {
     let b = shorted_board();
     let out = run(&[b.to_str().unwrap()]);
@@ -364,32 +357,6 @@ fn junit_and_sarif_artifacts_are_written_and_valid() {
 }
 
 // ── --tui without a terminal (minor 8) ──────────────────────────────────────
-
-// ── to-code (minor 18 + copper disclosure) ──────────────────────────────────
-
-#[test]
-fn to_code_on_a_directory_is_a_sentence() {
-    let dir = tmp("a-directory");
-    std::fs::create_dir_all(&dir).unwrap();
-    let out = run(&["to-code", dir.to_str().unwrap()]);
-    assert!(!out.status.success());
-    let err = stderr(&out);
-    assert!(err.contains("is a directory"), "{err}");
-    assert!(!err.contains("os error"), "{err}");
-    let _ = std::fs::remove_dir(&dir);
-}
-
-#[test]
-fn to_code_discloses_that_copper_is_not_carried() {
-    let b = shorted_board();
-    let out = run(&["to-code", b.to_str().unwrap()]);
-    assert!(out.status.success(), "{}", stderr(&out));
-    assert!(
-        stdout(&out).contains("copper"),
-        "the emitted code must disclose the copper drop in-file"
-    );
-    assert!(stderr(&out).contains("copper"), "and on stderr");
-}
 
 // ── run --version does not invent a binary name (help nit 20) ───────────────
 

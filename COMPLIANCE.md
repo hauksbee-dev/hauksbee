@@ -67,7 +67,7 @@ their ticket online on first run. Mechanics:
 **The Docker images.** The slim image is labelled GPL-3.0-only because its
 Hauksbee binaries are the default shape, statically linking libsimavr. The
 `:full` image is a collection of separately licensed components: those same
-binaries and freerouting under GPL-3.0, Espressif QEMU under GPL-2.0, and
+binaries under GPL-3.0, Espressif QEMU under GPL-2.0, and
 Renode under MIT. Its OCI label enumerates that mixed set, and exact upstream
 license texts are retained under `/usr/share/doc/hauksbee/third-party/` after
 hash verification. The exact Hauksbee tree, complete locked Cargo registry

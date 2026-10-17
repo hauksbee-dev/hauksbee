@@ -139,47 +139,14 @@ export function severityFromEngine(s: string): Sev {
 }
 
 /**
- * Locate a finding inside a `.board` source, best effort. Engine findings
- * carry no line numbers, but they do carry refs and nets, and the board DSL
- * declares those on greppable lines (`comp R9 ...`, `net "OUT"`). Returns a
- * 0-based line, or 0 (file level) when nothing matches or no source given.
- */
-export function locateInBoard(
-  boardText: string | null,
-  refs: string[],
-  nets: string[]
-): number {
-  if (!boardText) return 0;
-  const lines = boardText.split(/\r?\n/);
-  for (const ref of refs) {
-    const re = new RegExp(`^\\s*comp\\s+${escapeRe(ref)}\\b`);
-    const i = lines.findIndex((l) => re.test(l));
-    if (i >= 0) return i;
-  }
-  for (const net of nets) {
-    const needle = `net "${net}"`;
-    const i = lines.findIndex((l) => l.includes(needle));
-    if (i >= 0) return i;
-  }
-  return 0;
-}
-
-function escapeRe(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/**
  * Map `hauksbee run <board> --check --json` stdout to diagnostics.
  *
+ * Engine findings carry no source line numbers (the checked file is a binary
+ * or generated board format), so every diagnostic is file-level (line 0).
+ *
  * @param jsonText raw stdout
- * @param boardText the checked file's text when it is a `.board` DSL file
- *                  (enables ref/net line location); null for other formats,
- *                  which get file-level (line 0) diagnostics.
  */
-export function mapEngineCheck(
-  jsonText: string,
-  boardText: string | null
-): MappedRun {
+export function mapEngineCheck(jsonText: string): MappedRun {
   let report: EngineReport;
   try {
     report = JSON.parse(jsonText);
@@ -197,7 +164,7 @@ export function mapEngineCheck(
     let message = f.message;
     if (f.fix) message += `\nfix: ${f.fix}`;
     diags.push({
-      line: locateInBoard(boardText, f.refs ?? [], f.nets ?? []),
+      line: 0,
       severity: sev,
       message,
       code: `${f.check}/${f.kind}`,
@@ -211,7 +178,7 @@ export function mapEngineCheck(
     const shortSev: Sev = drc.version_warning ? "info" : "error";
     for (const s of drc.shorts ?? []) {
       diags.push({
-        line: locateInBoard(boardText, [], [s.net_a, s.net_b]),
+        line: 0,
         severity: shortSev,
         message:
           `copper short between '${s.net_a}' and '${s.net_b}' on ${s.layer}` +
@@ -222,7 +189,7 @@ export function mapEngineCheck(
     }
     for (const g of drc.violations ?? []) {
       diags.push({
-        line: locateInBoard(boardText, [], [g.net_a, g.net_b]),
+        line: 0,
         severity: "warning",
         message:
           `clearance below rule between '${g.net_a}' and '${g.net_b}' on ${g.layer}: ` +
@@ -232,7 +199,7 @@ export function mapEngineCheck(
     }
     for (const g of drc.at_limit ?? []) {
       diags.push({
-        line: locateInBoard(boardText, [], [g.net_a, g.net_b]),
+        line: 0,
         severity: "info",
         message:
           `exactly at minimum clearance (no margin) between '${g.net_a}' and '${g.net_b}' ` +

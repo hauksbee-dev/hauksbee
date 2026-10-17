@@ -90,8 +90,7 @@ The RHS `b` is decided by three rules, checked in order (`solve_at` in
    NOTE: no dedicated AC injection source: the sweep drove every independent
    source (power rails included), so this Bode is a superposition, not a
    single-input transfer function. To measure a real transfer function, name
-   the drive source VINJ/VLOOP/IINJ/ILOOP (insert one at the input/loop with
-   board-as-code: https://hauksbee-docs.eoghancollins0.workers.dev/docs/ingest/board_as_code), then re-run --ac.
+   the drive source VINJ/VLOOP/IINJ/ILOOP (insert one at the input/loop in the design), then re-run --ac.
    ```
 
 ### Complex solver

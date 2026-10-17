@@ -29,10 +29,6 @@ mod binder_gpio_promotion;
 mod binder_pin_map_merge;
 #[path = "bitbang_spi_cosim.rs"]
 mod bitbang_spi_cosim;
-#[path = "boardcode_miswire.rs"]
-mod boardcode_miswire;
-#[path = "boardcode_run.rs"]
-mod boardcode_run;
 #[path = "bom_identity.rs"]
 mod bom_identity;
 #[path = "bom_placement_cli.rs"]
@@ -43,8 +39,6 @@ mod bug_hunt_physics;
 mod bundled_sensor_catalog;
 #[path = "ci_artifacts_cosim.rs"]
 mod ci_artifacts_cosim;
-#[path = "cli_boardcode.rs"]
-mod cli_boardcode;
 #[path = "cli_doctor.rs"]
 mod cli_doctor;
 #[path = "cli_eagle_tie_contract.rs"]
@@ -53,6 +47,8 @@ mod cli_eagle_tie_contract;
 mod cli_firmware_guard;
 #[path = "cli_hostile_input_wording.rs"]
 mod cli_hostile_input_wording;
+#[path = "cli_kicad_inputs.rs"]
+mod cli_kicad_inputs;
 #[path = "cli_manifest_contract.rs"]
 mod cli_manifest_contract;
 #[path = "cli_models_cmds.rs"]
@@ -166,6 +162,8 @@ mod multi_spi_dispatch;
 mod nep_private_acceptance;
 #[path = "netlist_drc_honesty.rs"]
 mod netlist_drc_honesty;
+#[path = "netlist_edit_miswire.rs"]
+mod netlist_edit_miswire;
 #[path = "no_firmware_no_avr.rs"]
 mod no_firmware_no_avr;
 #[path = "open_load_qualifiers.rs"]

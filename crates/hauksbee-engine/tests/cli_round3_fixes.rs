@@ -2,6 +2,7 @@
 //! binary can prove (error-handler routing, exit codes, output envelopes).
 
 use crate::support::{board, expect_err, run, run_board, stderr, stdout};
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 fn blinky_board() -> PathBuf {
@@ -285,29 +286,52 @@ fn quiet_keeps_summary_but_suppresses_per_item_evidence_appendix() {
 
 // ── M6: zero-component boards refuse to pass ────────────────────────────────
 
-/// Write a Board-as-Code file whose `fn main` holds `body`; the tempdir owns it.
-fn write_board(name: &str, body: &str) -> (tempfile::TempDir, PathBuf) {
+/// One part for [`write_board`]: reference, library id, value, and its pads as
+/// (pad number, x offset, net name).
+type Part<'a> = (&'a str, &'a str, &'a str, &'a [(&'a str, f64, &'a str)]);
+
+/// Write a `KiCad` board holding `parts` (nets are numbered in first-use order);
+/// the tempdir owns it.
+fn write_board(name: &str, parts: &[Part<'_>]) -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join(name);
-    let dsl = format!(
-        "# Board-as-Code (hauksbee board DSL v1)\nboard version 20241229\n\nfn main {{\n{body}}}\n"
-    );
-    std::fs::write(&p, dsl).unwrap();
+    let mut nets: Vec<&str> = Vec::new();
+    for (_, _, _, pads) in parts {
+        for (_, _, net) in *pads {
+            if !nets.contains(net) {
+                nets.push(net);
+            }
+        }
+    }
+    let mut text =
+        String::from("(kicad_pcb (version 20171130) (host pcbnew 5.1.0)\n  (net 0 \"\")\n");
+    for (i, net) in nets.iter().enumerate() {
+        let _ = writeln!(text, "  (net {} \"{net}\")", i + 1);
+    }
+    for (reference, lib, value, pads) in parts {
+        let _ = write!(
+            text,
+            "  (module {lib} (layer F.Cu) (at 0 0)\n    (fp_text reference {reference} (at 0 0) (layer F.SilkS))\n    (fp_text value {value} (at 0 2) (layer F.Fab))\n"
+        );
+        for (pad, x, net) in *pads {
+            let id = nets.iter().position(|n| n == net).unwrap() + 1;
+            let _ = writeln!(
+                text,
+                "    (pad {pad} smd rect (at {x} 0) (size 1 1) (layers F.Cu) (net {id} \"{net}\"))"
+            );
+        }
+        text.push_str("  )\n");
+    }
+    text.push_str(")\n");
+    std::fs::write(&p, text).unwrap();
     (dir, p)
 }
 
 #[test]
 fn run_on_an_empty_board_is_invalid_for_analysis() {
-    let (_dir, p) = write_board("empty.board", "");
+    let (_dir, p) = write_board("empty.kicad_pcb", &[]);
     let out = run_board(&p, &["--check"]);
     expect_err(&out, 3, &["this board has no components"]);
-}
-
-#[test]
-fn check_code_on_an_empty_board_refuses() {
-    let (_dir, p) = write_board("empty.board", "");
-    let out = run(&["check-code", p.to_str().unwrap(), "--seconds", "0.01"]);
-    expect_err(&out, 1, &["this board has no components"]);
 }
 
 // ── M8: --probe validation ───────────────────────────────────────────────────
@@ -393,12 +417,13 @@ fn check_ends_with_a_single_verdict_line() {
 #[test]
 fn invalid_verdict_states_one_reason_on_text_and_json() {
     let (_dir, p) = write_board(
-        "mystery.board",
-        "\tnet \"A\"\n\tnet \"B\"\n\
-         \tcomp U1 lib \"Package_SO:SOIC-8\" val \"TOTALLYUNKNOWN999\" layer \"F.Cu\" at 0 0 rot 0 {\n\
-         \t\tpad \"1\" smd rect at 0 0 size 1 1 layers [F.Cu] net \"A\"\n\
-         \t\tpad \"2\" smd rect at 4 0 size 1 1 layers [F.Cu] net \"B\"\n\
-         \t}\n",
+        "mystery.kicad_pcb",
+        &[(
+            "U1",
+            "Package_SO:SOIC-8",
+            "TOTALLYUNKNOWN999",
+            &[("1", 0.0, "A"), ("2", 4.0, "B")],
+        )],
     );
     let json: serde_json::Value =
         serde_json::from_str(&stdout(&run_board(&p, &["--check", "--json"]))).expect("json");
@@ -427,12 +452,13 @@ fn invalid_verdict_states_one_reason_on_text_and_json() {
 #[test]
 fn coverage_heads_up_names_the_draft_pack_command_with_the_board_path() {
     let (_dir, p) = write_board(
-        "mystery.board",
-        "\tnet \"A\"\n\tnet \"B\"\n\
-         \tcomp U1 lib \"Package_SO:SOIC-8\" val \"TOTALLYUNKNOWN999\" layer \"F.Cu\" at 0 0 rot 0 {\n\
-         \t\tpad \"1\" smd rect at 0 0 size 1 1 layers [F.Cu] net \"A\"\n\
-         \t\tpad \"2\" smd rect at 1 0 size 1 1 layers [F.Cu] net \"B\"\n\
-         \t}\n",
+        "mystery.kicad_pcb",
+        &[(
+            "U1",
+            "Package_SO:SOIC-8",
+            "TOTALLYUNKNOWN999",
+            &[("1", 0.0, "A"), ("2", 1.0, "B")],
+        )],
     );
     let out = run_board(&p, &["--headless", "--seconds", "0.01"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
@@ -441,7 +467,7 @@ fn coverage_heads_up_names_the_draft_pack_command_with_the_board_path() {
     // review-then-approve draft-pack flow; it must still name the exact
     // runnable command including this board's real path.
     assert!(
-        so.contains("hauksbee models prepare") && so.contains("mystery.board"),
+        so.contains("hauksbee models prepare") && so.contains("mystery.kicad_pcb"),
         "the heads-up names the exact draft-pack command: {so}"
     );
 }
@@ -465,15 +491,16 @@ fn doctor_piped_output_does_not_interleave_formats() {
 
 #[test]
 fn pads_only_board_gets_the_unrouted_copper_note() {
-    // A .board with components but no routes compiles to a segment-free
+    // A board with components but no routes is a segment-free
     // layout: the canbus-stepper shape (pads only, nothing routed).
     let (_dir, p) = write_board(
-        "unrouted.board",
-        "\tnet \"A\"\n\tnet \"B\"\n\
-         \tcomp R1 lib \"Resistor_SMD:R_0402_1005Metric\" val \"10k\" layer \"F.Cu\" at 0 0 rot 0 {\n\
-         \t\tpad \"1\" smd rect at 0 0 size 1 1 layers [F.Cu] net \"A\"\n\
-         \t\tpad \"2\" smd rect at 1 0 size 1 1 layers [F.Cu] net \"B\"\n\
-         \t}\n",
+        "unrouted.kicad_pcb",
+        &[(
+            "R1",
+            "Resistor_SMD:R_0402_1005Metric",
+            "10k",
+            &[("1", 0.0, "A"), ("2", 1.0, "B")],
+        )],
     );
     for flag in ["--drc", "--check"] {
         let out = run_board(&p, &[flag]);

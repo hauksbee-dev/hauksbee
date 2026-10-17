@@ -100,9 +100,8 @@ pub(crate) fn emit_quiet(
             "NOTE: no dedicated AC injection source: the sweep drove every independent \n\
              source (power rails included), so this Bode is a superposition, not a \n\
              single-input transfer function. To measure a real transfer function, name \n\
-             the drive source VINJ/VLOOP/IINJ/ILOOP (insert one at the input/loop with \n\
-             board-as-code: {}), then re-run --ac.",
-            hauksbee_ir::docs_url("docs/ingest/BOARD_AS_CODE.md")
+             the drive source VINJ/VLOOP/IINJ/ILOOP (insert one at the input/loop in your \n\
+             design), then re-run --ac."
         );
     }
 
