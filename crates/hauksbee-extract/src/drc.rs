@@ -571,7 +571,10 @@ fn to_nm(mm: f64) -> i64 {
 /// The tie recorded for exactly this net pair, layer and location. Coordinates
 /// are compared at nanometre resolution, far below any source format's own
 /// precision but enough to absorb float round-off between the layer-specific
-/// geometry paths.
+/// geometry paths. The pair is unordered: the report names it in canonical
+/// direction (by net name), and a caller holding the same two nets the other
+/// way round (a hand-built row, an older document) is asking about the same
+/// contact.
 fn find_at<'a>(
     rows: &'a [QualifiedFinding],
     net_a: &str,
@@ -583,8 +586,8 @@ fn find_at<'a>(
     let (x_nm, y_nm) = (to_nm(x), to_nm(y));
     rows.iter()
         .find(|row| {
-            row.net_a_name == net_a
-                && row.net_b_name == net_b
+            ((row.net_a_name == net_a && row.net_b_name == net_b)
+                || (row.net_a_name == net_b && row.net_b_name == net_a))
                 && row.layer == layer
                 && row.x_nm == x_nm
                 && row.y_nm == y_nm

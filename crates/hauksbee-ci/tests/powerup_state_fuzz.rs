@@ -143,8 +143,12 @@ fn boot_state_fuzz(
 /// independently of the run, so a run that skipped a seed or a corner cannot
 /// match it.
 fn expected_members(board: &Path, seeds: u32) -> (u32, Vec<String>) {
-    let extracted = hauksbee_extract::ExtractedBoard::from_kicad_schematic_path(board)
+    let mut extracted = hauksbee_extract::ExtractedBoard::from_kicad_schematic_path(board)
         .expect("corpus schematic reads");
+    // The run reads the board through the loader, which puts the parts in
+    // canonical (natural designator) order; the open sets and the conditions
+    // that name them follow that order, so the expectation must too.
+    extracted.canonicalize();
     let lib = hauksbee_models::ModelLibrary::builtin();
     let open = hauksbee_engine::variant_sweep::open_sets(&extracted, &lib);
     let plans = vec![hauksbee_ci::tolerance::SeedPlan::default(); seeds as usize];

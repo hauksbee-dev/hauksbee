@@ -2,6 +2,7 @@
 //! deliberate violation of each geometry kind, asserting exact detection, plus
 //! a corpus sweep asserting the known-good boards report zero true shorts.
 
+use hauksbee_extract::gerber::geo::{Capsule, Shape};
 use hauksbee_extract::{ClearanceRules, ExtractedBoard, NetClassRule, ViolationKind};
 
 use crate::support::assert_short;
@@ -259,11 +260,32 @@ fn a_gap_inside_the_touching_band_is_a_short_not_a_clearance_note() {
     // Strictly POSITIVE and inside the band is the whole point. A gap of exactly
     // zero would be caught by the old `gap <= 0.0` test too, so this fixture
     // would not discriminate; a positive one under the band is the case that used
-    // to be filed as a clearance note.
+    // to be filed as a clearance note. The report rounds every length it prints
+    // to a nanometre (`hauksbee_ir::order::quantize_mm`), which is a thousand
+    // times coarser than the band, so the printed gap of such a finding is 0 and
+    // cannot show the raw measurement. The raw gap is therefore measured here
+    // with the same function the detector uses. The verdict is decided on the
+    // raw gap before anything is rounded, so rounding cannot change it.
+    let raw = hauksbee_extract::gerber::geo::shape_gap(
+        &Shape::Capsule(Capsule::new(0.0, 0.0, 1.0, 0.0, 1.5)),
+        &Shape::Capsule(Capsule::new(
+            2.0,
+            3.0,
+            5.0,
+            7.0,
+            3.324_555_320_336_741_3 / 2.0,
+        )),
+    );
     assert!(
-        f.gap_mm > 0.0 && f.gap_mm < hauksbee_extract::SHORT_TOUCH_EPS_MM,
+        raw > 0.0 && raw < hauksbee_extract::SHORT_TOUCH_EPS_MM,
         "the fixture must land strictly inside the touching band on the positive \
-         side, measured {:e}",
+         side, measured {raw:e}"
+    );
+    assert!(hauksbee_extract::is_touching(raw));
+    assert!(
+        f.gap_mm >= 0.0 && f.gap_mm < hauksbee_extract::SHORT_TOUCH_EPS_MM,
+        "the printed gap is the raw gap rounded to a nanometre, so it is 0 here; \
+         measured {:e}",
         f.gap_mm
     );
     assert_eq!(
