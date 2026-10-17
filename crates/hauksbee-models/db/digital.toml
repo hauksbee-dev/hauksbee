@@ -2311,12 +2311,14 @@ description = "AT28C256-class 32Kx8 parallel EEPROM"
 value_re = "(?i)^(AT|CAT|X)?28C256([A-Z0-9-]*)$"
 
 [models.params]
-# Guaranteed loaded DC limits at VCC=5 V ±10% (DS20006386B table 4-2).
-# VOH=2.4 V is deliberately conservative: it is the guaranteed minimum under
-# the stated load, used here as a Thevenin source level, not a claim that an
-# unloaded EEPROM output physically sits at 2.4 V.
-voh = 2.4
-vol = 0.45
+# Guaranteed loaded DC limits at VCC=5 V ±10%. Both are printed at a test load
+# (VOH at IOH = -400 uA, VOL at IOL = 2.1 mA), so they are rows: the loader turns
+# them into the unloaded level (the rail, ASSUMED: the sheet prints no light-load
+# row) behind an output resistance, instead of driving 2.4 V onto an unloaded bus.
+# Atmel AT28C256 data sheet 0006M-PEEPR-12/09, 8. DC Characteristics (p.5); the
+# 5 V +/-10% supply is 5. DC and AC Operating Range.
+voh = { min = 2.4, unit = "V", conditions = "VCC = 5 V (5V +/- 10%), IOH = -400 uA", basis = "8. DC Characteristics p.5, VOH, min column" }
+vol = { max = 0.45, unit = "V", conditions = "VCC = 5 V (5V +/- 10%), IOL = 2.1 mA", basis = "8. DC Characteristics p.5, VOL, max column" }
 vih = 2.0
 vil = 0.8
 tpd_s = 1.5e-7
@@ -2417,12 +2419,14 @@ description = "AT28C256F fast-write 32Kx8 parallel EEPROM"
 value_re = "(?i)^AT28C256F(-[A-Z0-9]+)?$"
 
 [models.params]
-# Guaranteed loaded DC limits at VCC=5 V ±10% (DS20006386B table 4-2).
-# VOH=2.4 V is deliberately conservative: it is the guaranteed minimum under
-# the stated load, used here as a Thevenin source level, not a claim that an
-# unloaded EEPROM output physically sits at 2.4 V.
-voh = 2.4
-vol = 0.45
+# Guaranteed loaded DC limits at VCC=5 V ±10%. Both are printed at a test load
+# (VOH at IOH = -400 uA, VOL at IOL = 2.1 mA), so they are rows: the loader turns
+# them into the unloaded level (the rail, ASSUMED: the sheet prints no light-load
+# row) behind an output resistance, instead of driving 2.4 V onto an unloaded bus.
+# Atmel AT28C256 data sheet 0006M-PEEPR-12/09, 8. DC Characteristics (p.5); the
+# 5 V +/-10% supply is 5. DC and AC Operating Range.
+voh = { min = 2.4, unit = "V", conditions = "VCC = 5 V (5V +/- 10%), IOH = -400 uA", basis = "8. DC Characteristics p.5, VOH, min column" }
+vol = { max = 0.45, unit = "V", conditions = "VCC = 5 V (5V +/- 10%), IOL = 2.1 mA", basis = "8. DC Characteristics p.5, VOL, max column" }
 vih = 2.0
 vil = 0.8
 tpd_s = 1.5e-7
@@ -3782,11 +3786,13 @@ value_re = "(?i)^FT231X[-_ ]?Q([A-Z0-9-]*)?$"
 [models.params]
 # Table 5.4, VCCIO = 3.3 V column. See the note above before trusting these on a
 # board with a lower I/O rail.
-voh   = 2.97     # min, at the table's IOH = 2 mA test current. The four VOH rows
-                 # in that table are DRIVE-STRENGTH settings (4/8/12/16 mA, which
-                 # the MTP selects), not load currents, so this is not a claim
-                 # that the pin holds 2.97 V into 16 mA.
-vol   = 0.4      # max, same table and same 2 mA test current
+# VOH/VOL are printed at the table's 2 mA test current (a loaded level), so they
+# are rows: the loader turns them into the light-load level behind an output
+# resistance. The four VOH rows in that table are DRIVE-STRENGTH settings
+# (4/8/12/16 mA, which the MTP selects), not load currents, so this is not a
+# claim that the pin holds 2.97 V into 16 mA.
+voh   = { min = 2.97, unit = "V", conditions = "VCCIO = 3.3 V, IOH = -2 mA (I/O drive strength 4 mA)", basis = "Table 5.4 (p.18), Voh, min column" }
+vol   = { max = 0.4, unit = "V", conditions = "VCCIO = 3.3 V, IOL = 2 mA (I/O drive strength 4 mA)", basis = "Table 5.4 (p.18), Vol, max column" }
 vih   = 2.0      # min (LVTTL)
 vil   = 0.8      # max
 supply_static_ua = 8000.0  # Table 5.3 ICC1 typ, normal operation (8.4 mA max);
@@ -3941,11 +3947,13 @@ value_re = "(?i)^FT231X[-_ ]?S([A-Z0-9-]*)?$"
 [models.params]
 # Table 5.4, VCCIO = 3.3 V column. See the note above before trusting these on a
 # board with a lower I/O rail.
-voh   = 2.97     # min, at the table's IOH = 2 mA test current. The four VOH rows
-                 # in that table are DRIVE-STRENGTH settings (4/8/12/16 mA, which
-                 # the MTP selects), not load currents, so this is not a claim
-                 # that the pin holds 2.97 V into 16 mA.
-vol   = 0.4      # max, same table and same 2 mA test current
+# VOH/VOL are printed at the table's 2 mA test current (a loaded level), so they
+# are rows: the loader turns them into the light-load level behind an output
+# resistance. The four VOH rows in that table are DRIVE-STRENGTH settings
+# (4/8/12/16 mA, which the MTP selects), not load currents, so this is not a
+# claim that the pin holds 2.97 V into 16 mA.
+voh   = { min = 2.97, unit = "V", conditions = "VCCIO = 3.3 V, IOH = -2 mA (I/O drive strength 4 mA)", basis = "Table 5.4 (p.18), Voh, min column" }
+vol   = { max = 0.4, unit = "V", conditions = "VCCIO = 3.3 V, IOL = 2 mA (I/O drive strength 4 mA)", basis = "Table 5.4 (p.18), Vol, max column" }
 vih   = 2.0      # min (LVTTL)
 vil   = 0.8      # max
 supply_static_ua = 8000.0  # Table 5.3 ICC1 typ, normal operation (8.4 mA max);
@@ -4261,12 +4269,12 @@ missing = ["usb_stack", "uart_traffic", "txd_rts_dtr_drive", "gpio_alternate_fun
 # to VDDIO. The datasheet gives them only as percentages. The product has no
 # supply-relative form for a digital card's levels: LogicLevels::from_params
 # reads voh/vol/vih/vil as absolute volts, and a param row in a rail-relative
-# unit is refused. So the volts below are those percentages evaluated at the
-# datasheet's own typical VDDIO, 1.8 V (Table 1 "Supply Voltage I/O Domain",
-# 1.2 min / 1.8 typ / 3.6 max), and the printed percentages are kept as
-# characteristic records in unit "VDDIO". On a board with a different I/O rail
-# the volts are wrong by the ratio (on the margay datalogger's 3.3 V rail they
-# would be 2.64 V and 0.66 V).
+# unit is refused. So the volts below are those percentages evaluated at a stated
+# supply (VIH/VIL at the datasheet's own typical VDDIO, 1.8 V, Table 1 "Supply
+# Voltage I/O Domain", 1.2 min / 1.8 typ / 3.6 max; VOH/VOL at the 1.62 V their
+# rows print), and the printed percentages are kept as characteristic records in
+# unit "VDDIO". VIH/VIL are wrong by the ratio on a board with a different I/O
+# rail; the output levels follow the rail (see the params note).
 #
 # MODELLED AS THE BMP280 BELOW IS: the chip-id register only (Section 5.4.1,
 # 0xD0 reads 0x60), attached when CSB resolves high (Section 6.1, I2C selected)
@@ -4285,14 +4293,15 @@ description = "Bosch BME280 humidity/pressure/temperature sensor, LGA-8 (pad map
 value_re = "(?i)^BME280([-_ ].*)?$"
 
 [models.params]
-# Table 32, evaluated at the Table 1 typical VDDIO = 1.8 V. The datasheet states
-# all four as PERCENTAGES of VDDIO and never in volts, so these are those
-# percentages times 1.8; see the note above before trusting them on a board with
-# a different I/O rail.
-voh   = 1.44     # Voh 80% VDDIO min, Ioh = 1 mA (row spec'd at VDDIO = 1.62 V;
-                 # the 1.20 V row relaxes to 60%)
-vol   = 0.36     # Vol_SDI 20% VDDIO max, Iol = 3 mA, the I2C row (the SPI SDO row
-                 # is the same 20% at 1 mA; the 1.20 V rows relax to 23%)
+# Table 32 (p.35). The datasheet states all four as PERCENTAGES of VDDIO and never
+# in volts. VOH and VOL are printed at a test current (Ioh = 1 mA, Iol = 3 mA), a
+# loaded level, so they are rows evaluated at the supply their row prints (VDDIO =
+# 1.62 V): the loader turns them into the unloaded level (the rail, ASSUMED: the
+# sheet prints no light-load row) behind an output resistance. The printed
+# percentages stay as the characteristic records below. VIH/VIL below are the
+# percentages times the Table 1 typical VDDIO = 1.8 V.
+voh   = { min = 1.296, unit = "V", conditions = "VDDIO = 1.62 V, IOH = 1 mA (SDO, SDI); 80 %VDDIO", basis = "Table 32 p.35, Voh, 80 %VDDIO min (0.8 x 1.62 V); the 1.20 V row relaxes to 60 %" }
+vol   = { max = 0.324, unit = "V", conditions = "VDDIO = 1.62 V, IOL = 3 mA (I2C, Vol_SDI); 20 %VDDIO", basis = "Table 32 p.35, Vol_SDI, 20 %VDDIO max (0.2 x 1.62 V); the SPI SDO row is the same 20 % at 1 mA, the 1.20 V rows 23 %" }
 vih   = 1.44     # Vih_si 80% VDDIO min, stated over VDDIO = 1.2 to 3.6 V
 vil   = 0.36     # Vil_si 20% VDDIO max, same range
 supply_static_ua = 3.6     # "3.6 uA @ 1 Hz humidity, pressure and temperature",
@@ -4561,6 +4570,31 @@ id = "sn74aup3g34"
 kind = "digital"
 description = "TI SN74AUP3G34 triple non-inverting buffer, VSSOP-8, 3.3V levels"
 
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74aup3g34.pdf"
+title = "TI SN74AUP3G34 Low-Power Triple Buffer Gate, SCES766C"
+locator = "Electrical Characteristics p.5 (VOH, VOL, TA = -40 C to 85 C columns)"
+sha256 = "f188afa526b904201017529cf6c363974be3a1bf580a64e12485e40d5aefcf07"
+# The light-load rows: the level the output holds with almost no load. The
+# loader reads VCC - 0.1 V from the VOH row's basis (held over the row's supply
+# range) and the VOL max, and takes the output resistance (about 88 ohm) from the
+# 4 mA rows below.
+[[models.source.characteristic]]
+parameter = "VOH"
+min = 2.9
+unit = "V"
+conditions = "VCC = 0.8 V to 3.6 V, IOH = -20 uA, TA = -40°C to 85°C"
+basis = "Electrical Characteristics p.5, VOH, IOH = -20 uA, printed VCC - 0.1 V min; 2.9 V is that limit at VCC = 3 V"
+[[models.source.characteristic]]
+parameter = "VOL"
+max = 0.1
+unit = "V"
+conditions = "VCC = 0.8 V to 3.6 V, IOL = 20 uA, TA = -40°C to 85°C"
+basis = "Electrical Characteristics p.5, VOL, IOL = 20 uA, max column"
+
 [models.match]
 # The DCU (VSSOP-8) and DQE (US8) packages, which the datasheet's logic diagram
 # names as the two its pin numbers are "for". The YFP (DSBGA) shares that numbering
@@ -4574,13 +4608,12 @@ description = "TI SN74AUP3G34 triple non-inverting buffer, VSSOP-8, 3.3V levels"
 value_re = "(?i)^SN74AUP3G34(DCU|DQE)R?$"
 
 [models.params]
-voh   = 2.55     # MIN at VCC = 3 V, IOH = -4 mA over -40 to 85 C. The 25 C-only
-                 # min is 2.6; the operating-range figure is the one to hold a
-                 # board to, and it is 50 mV lower. Not a typical: see the note
-                 # above. Unloaded the min is VCC - 0.1 V at IOH = -20 uA.
-vol   = 0.45     # max at VCC = 3 V, IOL = 4 mA over -40 to 85 C, the same column
-                 # as voh (0.44 at 25 C only; 0.1 V max at 20 uA): SCES766C
-                 # Electrical Characteristics, p.5
+# VOH/VOL are the 4 mA rows, a loaded level, so they are rows: the loader turns
+# them into the light-load level above behind an output resistance, rather than
+# driving 2.55 V onto an unloaded bus. -40 to 85 C column (the 25 C-only
+# figures are 2.6 V and 0.44 V); not a typical: see the note above.
+voh   = { min = 2.55, unit = "V", conditions = "VCC = 3 V, IOH = -4 mA, TA = -40°C to 85°C", basis = "Electrical Characteristics p.5, VOH, IOH = -4 mA, TA = -40 to 85 C column" }
+vol   = { max = 0.45, unit = "V", conditions = "VCC = 3 V, IOL = 4 mA, TA = -40°C to 85°C", basis = "Electrical Characteristics p.5, VOL, IOL = 4 mA, TA = -40 to 85 C column" }
 vih   = 2.0      # min, VCC = 3.0 to 3.6 V
 vil   = 0.9      # max, VCC = 3.0 to 3.6 V
 tpd_s = 2.4e-9   # tpd typ, VCC = 3.3 V +/- 0.3 V, CL = 5 pF (3.5 ns max at 25 C)
@@ -8140,8 +8173,11 @@ value_re = "(?i)^BMI270$"
 
 [models.params]
 # Table 1, every level a fraction of VDDIO, evaluated at VDDIO = 3.3 V.
-voh   = 2.64     # 0.8 x VDDIO min, VDDIO >= 1.62 V, IOH <= 2 mA
-vol   = 0.66     # 0.2 x VDDIO max, VDDIO >= 1.62 V, IOL <= 2 mA
+# VOH/VOL are printed at a test current (IOH, IOL <= 2 mA), a loaded level, so
+# they are rows: the loader turns them into the unloaded level (the rail, ASSUMED:
+# the sheet prints no light-load row) behind an output resistance.
+voh   = { min = 2.64, unit = "V", conditions = "VDDIO = 3.3 V (VDDIO >= 1.62 V), IOH = 2 mA, SPI", basis = "Table 1 p.11, VOH, 0.8 x VDDIO min, evaluated at VDDIO = 3.3 V; VDDIO <= 1.62 V row is IOH <= 1.5 mA" }
+vol   = { max = 0.66, unit = "V", conditions = "VDDIO = 3.3 V (VDDIO >= 1.62 V), IOL = 2 mA, SPI", basis = "Table 1 p.11, VOL, 0.2 x VDDIO max, evaluated at VDDIO = 3.3 V; VDDIO < 1.62 V row is IOL <= 1.5 mA" }
 vih   = 2.31     # 0.7 x VDDIO min, SPI and I2C
 vil   = 0.99     # 0.3 x VDDIO max, SPI and I2C
 supply_static_ua = 970.0   # Table 1 IDD typ, A+G performance mode, VDD = 1.8 V,
@@ -8593,9 +8629,13 @@ description = "Bosch BMP280 pressure sensor, LGA-8 (strap-selected I2C chip_id s
 value_re = "(?i)^BMP280$"
 
 [models.params]
-# Table 26, every level a fraction of VDDIO, evaluated at VDDIO = 3.3 V.
-voh   = 2.64     # Voh 0.8 x VDDIO min, VDDIO = 1.62 V row, ioh = 1 mA (SDO, SDI)
-vol   = 0.66     # Vol_SDI 0.2 x VDDIO max, VDDIO = 1.62 V row, iol = 3 mA (I2C)
+# Table 26 (p.31), every level a fraction of VDDIO. VIH/VIL are evaluated at
+# VDDIO = 3.3 V. VOH/VOL are printed at a test current (ioh = 1 mA, iol = 3 mA), a
+# loaded level, so they are rows at the supply their row prints (VDDIO = 1.62 V):
+# the loader turns them into the unloaded level (the rail, ASSUMED: the sheet
+# prints no light-load row) behind an output resistance.
+voh   = { min = 1.296, unit = "V", conditions = "VDDIO = 1.62 V, IOH = 1 mA (SDO, SDI); 0.8 x VDDIO", basis = "Table 26 p.31, Voh, 0.8 x VDDIO min (0.8 x 1.62 V); the 1.2 V row relaxes to 0.6 x VDDIO" }
+vol   = { max = 0.324, unit = "V", conditions = "VDDIO = 1.62 V, IOL = 3 mA (I2C, Vol_SDI); 0.2 x VDDIO", basis = "Table 26 p.31, Vol_SDI, 0.2 x VDDIO max (0.2 x 1.62 V); the 1.2 V row relaxes to 0.23 x VDDIO" }
 vih   = 2.64     # Vih_si 0.8 x VDDIO min, VDDIO = 1.2 to 3.6 V
 vil   = 0.66     # Vil_si 0.2 x VDDIO max, VDDIO = 1.2 to 3.6 V
 supply_static_ua = 24.8    # Table 12, ultra high resolution, 1 Hz forced mode, typ
@@ -8820,9 +8860,12 @@ description = "ST LIS2MDL 3-axis magnetometer, LGA-12 (CS-selected I2C WHO_AM_I 
 value_re = "(?i)^LIS2MDL(TR)?$"
 
 [models.params]
-# Table 5, evaluated at Vdd_IO = 3.3 V where the row is Vdd_IO-relative.
-voh   = 3.1      # VOH Vdd_IO - 0.2 V min, IOH = 4 mA
-vol   = 0.2      # VOL max, IOL = 4 mA (absolute)
+# Table 5 (p.10), evaluated at Vdd_IO = 3.3 V where the row is Vdd_IO-relative.
+# VOH/VOL are printed at the 4 mA maximum drive current, a loaded level, so they are
+# rows: the loader turns them into the unloaded level (the rail, ASSUMED: the sheet
+# prints no light-load row) behind an output resistance.
+voh   = { min = 3.1, unit = "V", conditions = "VDDIO = 3.3 V, IOH = 4 mA", basis = "Table 5 p.10, VOH, Vdd_IO - 0.2 V min at IOH = 4 mA, evaluated at Vdd_IO = 3.3 V" }
+vol   = { max = 0.2, unit = "V", conditions = "VDDIO = 3.3 V, IOL = 4 mA", basis = "Table 5 p.10, VOL, 0.2 V max at IOL = 4 mA (absolute)" }
 vih   = 2.31     # VIH 0.7 x Vdd_IO min
 vil   = 0.99     # VIL 0.3 x Vdd_IO max
 supply_static_ua = 1130.0  # Table 11 ceiling (see above)
@@ -10246,8 +10289,11 @@ value_re = "(?i)^PCM5122(PWR?)?$"
 # Section 7.5 DIGITAL INPUT/OUTPUT, 3.3-V LVCMOS family, at DVDD = 3.3 V.
 vih = 2.31     # 0.7 x DVDD min
 vil = 0.99     # 0.3 x DVDD max
-voh = 2.64     # 0.8 x DVDD min, IOH = -4 mA
-vol = 0.726    # 0.22 x DVDD max, IOL = 4 mA
+# VOH/VOL are printed at a test current (4 mA), a loaded level, so they are rows:
+# the loader turns them into the unloaded level (the rail, ASSUMED: the sheet prints
+# no light-load row) behind an output resistance.
+voh = { min = 2.64, unit = "V", conditions = "AVDD = CPVDD = DVDD = 3.3 V, IOH = -4 mA, 3.3-V LVCMOS family", basis = "7.5 Electrical Characteristics p.8, VOH, 0.8 x DVDD min, evaluated at DVDD = 3.3 V" }
+vol = { max = 0.726, unit = "V", conditions = "AVDD = CPVDD = DVDD = 3.3 V, IOL = 4 mA, 3.3-V LVCMOS family", basis = "7.5 Electrical Characteristics p.8, VOL, 0.22 x DVDD max, evaluated at DVDD = 3.3 V" }
 
 [models.pins]
 # Section 6.1 Pin Functions; pin numbers are the same in every mode, and the
