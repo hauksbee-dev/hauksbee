@@ -22,7 +22,7 @@ use hauksbee_extract::{
     CHECK_BEFORE_ORDERING, DNP_PULLUP_MESSAGE_MARKER, SPI_PULLUP_MESSAGE_MARKER,
 };
 
-use hauksbee_ir::units::{format_amps, format_celsius, format_volts, format_watts};
+use hauksbee_ir::units::{format_amps, format_celsius, format_gap_mm, format_volts, format_watts};
 use hauksbee_ir::vocabulary::INSPECT_BEFORE_ORDERING;
 
 use crate::stress::{FaultEvent, FaultKind};
@@ -1211,18 +1211,18 @@ pub fn plain_drc_structured_with_rule_source(
         let places = crate::result::locations(g.count);
         let what = if g.below_count == g.count {
             format!(
-                "\"{a}\" and \"{b}\" are very close but not quite touching at {places} on {} (tightest {:.3} mm, below {}).",
+                "\"{a}\" and \"{b}\" are very close but not quite touching at {places} on {} (tightest {}, below {}).",
                 friendly_layer(&g.layer),
-                g.min_gap_mm,
+                format_gap_mm(g.min_gap_mm),
                 provenance.rule_reference(g.rule_mm)
             )
         } else {
             format!(
-                "\"{a}\" and \"{b}\" are close at {places} on {}: {} below {} (tightest {:.3} mm), the rest exactly at the limit.",
+                "\"{a}\" and \"{b}\" are close at {places} on {}: {} below {} (tightest {}), the rest exactly at the limit.",
                 friendly_layer(&g.layer),
                 g.below_count,
                 provenance.rule_reference(g.rule_mm),
-                g.min_gap_mm,
+                format_gap_mm(g.min_gap_mm),
             )
         };
         let (why, fix) = if provenance.is_defaulted() {
@@ -1257,9 +1257,9 @@ fn push_at_limit_findings(
         out.push_at(
             PlainLevel::Warning,
             format!(
-                "\"{a}\" and \"{b}\" sit at minimum clearance (no margin) at {places} on {} ({:.3} mm, exactly {}).",
+                "\"{a}\" and \"{b}\" sit at minimum clearance (no margin) at {places} on {} ({}, exactly {}).",
                 friendly_layer(&g.layer),
-                g.min_gap_mm,
+                format_gap_mm(g.min_gap_mm),
                 provenance.rule_reference(g.rule_mm)
             ),
             if provenance.is_defaulted() {
@@ -1393,10 +1393,11 @@ pub(crate) fn render_drc_condensed_with_rule_source_and_unlock(
         let _ = writeln!(
             s,
             "  ...and {groups} more net pair{} like this on {} ({locs} location{}, tightest \
-             {tightest:.3} mm vs {}); pass --verbose for every instance.",
+             {} vs {}); pass --verbose for every instance.",
             if *groups == 1 { "" } else { "s" },
             friendly_layer(layer),
             if *locs == 1 { "" } else { "s" },
+            format_gap_mm(*tightest),
             provenance.rule_reference(rule),
         );
     }

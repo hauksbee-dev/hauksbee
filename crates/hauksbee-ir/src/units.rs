@@ -491,6 +491,24 @@ pub fn format_celsius_to(celsius: impl Figure, decimals: usize) -> String {
         .unwrap_or_else(|why| why.words().to_string())
 }
 
+/// A copper clearance gap in millimetres as every report prints it: three
+/// decimals (`0.153 mm`), but a gap that is above zero and too small for three
+/// decimals reads `< 0.001 mm`, never `0.000 mm`.
+///
+/// `0.000 mm` means the copper touches. A gap between the touch band
+/// (`SHORT_TOUCH_EPS_MM`, 1e-9 mm) and half a micrometre is not touching, and
+/// printing it as `0.000 mm` would read as a short that is not one (or hide a
+/// real, tiny gap). An exactly-zero or negative gap (contact or overlap) keeps
+/// its fixed-decimal figure; a non-finite value reads as words.
+#[must_use]
+pub fn format_gap_mm(gap_mm: impl Figure) -> String {
+    let gap = gap_mm.figure();
+    if gap > 0.0 && gap < 0.0005 {
+        return "< 0.001 mm".to_string();
+    }
+    try_format_fixed(gap, 3, "mm", false, false).unwrap_or_else(|why| why.words().to_string())
+}
+
 /// A percentage to `decimals` decimals (`12.5%`), never `-0%`; a non-finite
 /// value reads as words.
 #[must_use]
@@ -510,11 +528,30 @@ pub fn format_percent_signed(pct: impl Figure, decimals: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_amps, format_celsius, format_engineering, format_engineering_web, format_number,
-        format_percent, format_percent_signed, format_quantity_or, format_series, format_volts,
-        format_watts, parse_quantity, split_prefix, try_format_engineering, try_format_fixed,
-        NotFinite,
+        format_amps, format_celsius, format_engineering, format_engineering_web, format_gap_mm,
+        format_number, format_percent, format_percent_signed, format_quantity_or, format_series,
+        format_volts, format_watts, parse_quantity, split_prefix, try_format_engineering,
+        try_format_fixed, NotFinite,
     };
+
+    #[test]
+    fn gap_mm_never_prints_a_nonzero_gap_as_zero() {
+        // Touching (exactly zero) and overlap keep their fixed figure.
+        assert_eq!(format_gap_mm(0.0), "0.000 mm");
+        assert_eq!(format_gap_mm(-0.0), "0.000 mm");
+        // Anything above zero that three decimals would round to 0.000 is
+        // called out: the band between the touch epsilon (1e-9 mm) and 5e-7 mm
+        // is a real, non-touching gap.
+        for gap in [1e-12, 2e-9, 1e-8, 1e-7, 4.9e-7, 4.99e-4] {
+            assert_eq!(format_gap_mm(gap), "< 0.001 mm", "{gap}");
+        }
+        // Gaps that round to a visible figure keep three decimals.
+        assert_eq!(format_gap_mm(0.0006), "0.001 mm");
+        assert_eq!(format_gap_mm(0.127), "0.127 mm");
+        assert_eq!(format_gap_mm(0.2), "0.200 mm");
+        // Non-finite reads as words, not a number.
+        assert_eq!(format_gap_mm(f64::NAN), NotFinite::NotANumber.words());
+    }
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() <= 1e-12 * b.abs().max(1e-30)

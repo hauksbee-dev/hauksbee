@@ -130,6 +130,11 @@ pub enum PinState {
     Rd,
     /// At/above vOPEN: nothing attached.
     Open,
+    /// The CC network was never solved, so there is no voltage to classify.
+    /// This is not a pin state a source can see; it means "could not
+    /// determine" and must never be read as Open (no attach) or any other
+    /// classification.
+    Unsolved,
 }
 
 impl PinState {
@@ -171,10 +176,21 @@ pub enum Attach {
     DebugAccessory,
     /// Ra/Ra: Audio Adapter Accessory Mode. **No VBUS**; this is the `RPi` 4 fault.
     AudioAccessory,
+    /// A CC voltage was never solved, so the port state could not be
+    /// determined. Neither a pass nor a fault; no VBUS claim is made.
+    Undetermined,
 }
 
 impl Attach {
+    /// Whether the port state could not be determined (an unsolved CC network).
+    #[must_use]
+    pub const fn is_undetermined(self) -> bool {
+        matches!(self, Self::Undetermined)
+    }
+
     /// Whether a compliant source applies VBUS power in this state.
+    /// `Undetermined` is `false` here, but callers must check
+    /// [`Self::is_undetermined`] first: it is not a "VBUS withheld" claim.
     #[must_use]
     pub const fn powers(self) -> bool {
         matches!(self, Self::SinkAttached | Self::PoweredCableWithSink)
@@ -183,8 +199,9 @@ impl Attach {
     /// Map a (CC1, CC2) pin-state pair to the port state (Table 4-10).
     #[must_use]
     pub const fn from_pins(cc1: PinState, cc2: PinState) -> Self {
-        use PinState::{Open, Ra, Rd};
+        use PinState::{Open, Ra, Rd, Unsolved};
         match (cc1, cc2) {
+            (Unsolved, _) | (_, Unsolved) => Self::Undetermined,
             (Open, Open) => Self::Nothing,
             (Rd, Open) | (Open, Rd) => Self::SinkAttached,
             (Rd, Ra) | (Ra, Rd) => Self::PoweredCableWithSink,
@@ -203,6 +220,7 @@ impl Attach {
             Self::PoweredCableNoSink => "PoweredCableNoSink",
             Self::DebugAccessory => "DebugAccessory",
             Self::AudioAccessory => "AudioAccessory",
+            Self::Undetermined => "Undetermined",
         }
     }
 }
@@ -250,9 +268,11 @@ pub struct SinkTermination {
 /// The full result of attaching a source + cable to a sink and classifying.
 #[derive(Debug, Clone)]
 pub struct CcResult {
-    /// Solved CC1 voltage at the receptacle (V).
+    /// Solved CC1 voltage at the receptacle (V). `NaN` when the operating point
+    /// was not solved (see [`Self::is_solved`]); never a fabricated 0 V.
     pub cc1_v: f64,
-    /// Solved CC2 voltage at the receptacle (V).
+    /// Solved CC2 voltage at the receptacle (V). `NaN` when the operating point
+    /// was not solved.
     pub cc2_v: f64,
     pub cc1_state: PinState,
     pub cc2_state: PinState,
@@ -264,6 +284,13 @@ pub struct CcResult {
 }
 
 impl CcResult {
+    /// Whether the CC network was solved. When `false`, the pin states and
+    /// `attach` are `Unsolved` / `Undetermined`.
+    #[must_use]
+    pub const fn is_solved(&self) -> bool {
+        !self.attach.is_undetermined()
+    }
+
     /// Whether the source applies VBUS.
     #[must_use]
     pub const fn powers(&self) -> bool {
@@ -348,38 +375,42 @@ pub fn classify_attach(term: SinkTermination, rp: Rp, cable: Cable) -> CcResult 
     let mut ws = Workspace::new(&c);
     let solved = dc_operating_point(&mut ws, &c, &opts).is_ok();
 
-    let read = |node: NodeId| -> f64 {
-        if node.is_ground() {
-            0.0
+    // A node voltage only exists if the solve converged AND the node is in the
+    // solved layout; anything else is `None`, never a made-up 0 V.
+    let read = |node: NodeId| -> Option<f64> {
+        if !solved {
+            None
+        } else if node.is_ground() {
+            Some(0.0)
         } else {
-            ws.layout
-                .node(node)
-                .and_then(|i| ws.x.get(i).copied())
-                .unwrap_or(0.0)
+            ws.layout.node(node).and_then(|i| ws.x.get(i).copied())
         }
     };
 
-    let th = rp.thresholds();
-
-    let cc1_v = if solved { read(cc1_sink) } else { 0.0 };
+    let cc1 = read(cc1_sink);
     // For a passive cable the source CC2 pin is open at the sink: report vOPEN
-    // and Open state directly (it is not part of the solved network).
-    let (cc2_v, cc2_state) = match cable {
-        Cable::Passive => (th.vopen, PinState::Open),
-        Cable::EMarked { .. } => {
-            let v = if solved { read(cc2_sink) } else { 0.0 };
-            (v, PinState::classify(v, th))
-        }
+    // directly (it is not part of the solved network, so it needs no solve).
+    let cc2 = match cable {
+        Cable::Passive => Some(rp.thresholds().vopen),
+        Cable::EMarked { .. } => read(cc2_sink),
     };
-    let cc1_state = PinState::classify(cc1_v, th);
-    let attach = Attach::from_pins(cc1_state, cc2_state);
+    classify_voltages(cc1, cc2, rp)
+}
 
+/// Classify the (CC1, CC2) source-pin voltages for `rp`. A `None` voltage is a
+/// pin whose operating point was not solved: it becomes `PinState::Unsolved`
+/// and the port `Attach::Undetermined`, never a classification of 0 V.
+fn classify_voltages(cc1: Option<f64>, cc2: Option<f64>, rp: Rp) -> CcResult {
+    let th = rp.thresholds();
+    let state = |v: Option<f64>| v.map_or(PinState::Unsolved, |v| PinState::classify(v, th));
+    let cc1_state = state(cc1);
+    let cc2_state = state(cc2);
     CcResult {
-        cc1_v,
-        cc2_v,
+        cc1_v: cc1.unwrap_or(f64::NAN),
+        cc2_v: cc2.unwrap_or(f64::NAN),
         cc1_state,
         cc2_state,
-        attach,
+        attach: Attach::from_pins(cc1_state, cc2_state),
         rp,
         thresholds: th,
     }
@@ -1043,7 +1074,13 @@ pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
         shared_net: term.shared_net,
         cc1_rd_ohms,
         cc2_rd_ohms,
-        attach: emarked, // report the stricter, modern-cable case
+        // Report the stricter, modern-cable case; an unsolved case on either
+        // cable is surfaced as such rather than hidden behind the other.
+        attach: if passive.is_undetermined() {
+            passive
+        } else {
+            emarked
+        },
         powers_vbus: emarked.powers(),
         has_discrete_rd,
         level,
@@ -1088,7 +1125,16 @@ fn usbc_verdict(
 ) -> (UsbcLevel, String) {
     let powers_passive = passive.powers();
     let powers_emarked = emarked.powers();
-    if powers_passive && powers_emarked {
+    if passive.is_undetermined() || emarked.is_undetermined() {
+        // An unsolved CC network is not evidence of a fault or of health: say
+        // so, and never run the Rd / shared-net reasoning on a made-up voltage.
+        (
+            UsbcLevel::Info,
+            "The CC network could not be solved, so the USB-C attach state is not determined. \
+             No pass or fault is claimed for this receptacle."
+                .to_string(),
+        )
+    } else if powers_passive && powers_emarked {
         (
             UsbcLevel::Ok,
             format!(
@@ -1209,8 +1255,18 @@ impl UsbcReport {
             "USB-C CC compliance: [{}] {}\n  attach (default Rp, e-marked cable): {}; VBUS applied: {}\n{}",
             self.tag(),
             self.headline,
-            self.attach.as_str(),
-            if self.powers_vbus { "yes" } else { "no" },
+            if self.attach.is_undetermined() {
+                "not determined"
+            } else {
+                self.attach.as_str()
+            },
+            if self.attach.is_undetermined() {
+                "not determined"
+            } else if self.powers_vbus {
+                "yes"
+            } else {
+                "no"
+            },
             self.detail()
         )
     }
@@ -1220,6 +1276,9 @@ impl UsbcReport {
     pub fn render_plain(&self) -> String {
         let verdict = match self.level {
             UsbcLevel::Ok => "USB-C looks healthy: a charger will power this board.",
+            UsbcLevel::Info if self.attach.is_undetermined() => {
+                "USB-C: could not be determined (the CC network was not solved)."
+            }
             UsbcLevel::Info => {
                 "USB-C: nothing wrong found, but one thing is worth knowing (below)."
             }
@@ -1247,7 +1306,11 @@ impl UsbcReport {
              \"headline\":{}}}",
             self.tag().to_ascii_lowercase(),
             self.attach.as_str(),
-            self.powers_vbus,
+            if self.attach.is_undetermined() {
+                "null".to_string()
+            } else {
+                self.powers_vbus.to_string()
+            },
             self.shared_net,
             self.has_discrete_rd,
             rd(self.cc1_rd_ohms),
@@ -1288,6 +1351,81 @@ mod tests {
             pins: vec![pin_fn("A5", cc1, "CC1"), pin_fn("B5", cc2, "CC2")],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn unsolved_cc_voltage_is_undetermined_not_a_pin_state() {
+        // An operating point that never converged yields no CC voltage. It used
+        // to fall back to 0.0 V and classify as Ra (and, with an open partner,
+        // a powered cable). It must now be Unsolved / Undetermined, with no
+        // fabricated voltage.
+        let r = classify_voltages(None, None, Rp::Default);
+        assert_eq!(r.cc1_state, PinState::Unsolved);
+        assert_eq!(r.cc2_state, PinState::Unsolved);
+        assert_eq!(r.attach, Attach::Undetermined);
+        assert!(r.cc1_v.is_nan() && r.cc2_v.is_nan());
+        assert!(!r.is_solved());
+        // One unsolved pin poisons the pair: no half-classification.
+        let th = Rp::Default.thresholds();
+        let r = classify_voltages(Some(0.408), None, Rp::Default);
+        assert_eq!(r.cc1_state, PinState::Rd);
+        assert_eq!(r.cc2_state, PinState::Unsolved);
+        assert_eq!(r.attach, Attach::Undetermined);
+        // A solved pair is unaffected.
+        let r = classify_voltages(Some(0.408), Some(th.vopen), Rp::Default);
+        assert_eq!(r.attach, Attach::SinkAttached);
+        assert!(r.is_solved());
+        // Every pair with an Unsolved pin is Undetermined, none is a fault.
+        for p in [
+            PinState::Ra,
+            PinState::Rd,
+            PinState::Open,
+            PinState::Unsolved,
+        ] {
+            assert_eq!(
+                Attach::from_pins(PinState::Unsolved, p),
+                Attach::Undetermined
+            );
+            assert_eq!(
+                Attach::from_pins(p, PinState::Unsolved),
+                Attach::Undetermined
+            );
+        }
+    }
+
+    #[test]
+    fn undetermined_attach_reports_as_not_determined_never_a_verdict() {
+        use Attach::*;
+        // The verdict is Info (never Ok, never Serious), whichever Rd is present.
+        for discrete in [true, false] {
+            for shared in [true, false] {
+                let (lvl, msg) = usbc_verdict(shared, discrete, SinkAttached, Undetermined);
+                assert_eq!(lvl, UsbcLevel::Info);
+                assert!(msg.contains("not determined"), "{msg}");
+                let (lvl, _) = usbc_verdict(shared, discrete, Undetermined, Undetermined);
+                assert_eq!(lvl, UsbcLevel::Info);
+            }
+        }
+        let r = UsbcReport {
+            receptacles: Vec::new(),
+            shared_net: false,
+            cc1_rd_ohms: Some(5100.0),
+            cc2_rd_ohms: None,
+            attach: Undetermined,
+            powers_vbus: false,
+            has_discrete_rd: true,
+            level: UsbcLevel::Info,
+            headline: "not determined".to_string(),
+        };
+        let text = r.render();
+        assert!(text.contains("attach (default Rp, e-marked cable): not determined"));
+        assert!(text.contains("VBUS applied: not determined"), "{text}");
+        assert!(!text.contains("VBUS applied: no\n"), "{text}");
+        assert!(r.render_plain().contains("could not be determined"));
+        let v: serde_json::Value = serde_json::from_str(&r.to_json()).unwrap();
+        assert_eq!(v["attach"], "Undetermined");
+        assert!(v["powers_vbus"].is_null(), "no VBUS claim when unsolved");
+        assert_eq!(v["level"], "info");
     }
 
     #[test]

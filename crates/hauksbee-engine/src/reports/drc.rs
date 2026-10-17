@@ -238,8 +238,13 @@ pub(crate) fn drc_findings(
         refs: g.refs.clone(),
         actionable: !provenance.is_some_and(|p| p.is_advisory(g)),
         message: format!(
-            "clearance: {} to {} on {}, {} below the {:.3} mm rule (tightest {:.3} mm)",
-            g.net_a, g.net_b, g.layer, g.below_count, g.rule_mm, g.min_gap_mm
+            "clearance: {} to {} on {}, {} below the {:.3} mm rule (tightest {})",
+            g.net_a,
+            g.net_b,
+            g.layer,
+            g.below_count,
+            g.rule_mm,
+            hauksbee_ir::units::format_gap_mm(g.min_gap_mm)
         ),
         plain: provenance.map_or_else(|| g.plain.clone(), |p| g.label_with_rule_provenance(p)),
         fix: Some(g.fix.clone()),
