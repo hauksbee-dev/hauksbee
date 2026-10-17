@@ -292,10 +292,11 @@ impl Default for Registry {
     }
 }
 
-/// How a user names the format a builtin reader reads (`"kicad-pcb"` is "a
-/// KiCad board"), for messages that say what a file actually is. An id this
-/// does not know, such as a third-party reader's, reads as "a board file in
-/// another format".
+/// How a user names the format a builtin reader reads.
+///
+/// `"kicad-pcb"` is "a KiCad board", for messages that say what a file
+/// actually is. An id this does not know, such as a third-party reader's, reads
+/// as "a board file in another format".
 #[must_use]
 pub fn format_phrase(reader_id: &str) -> &'static str {
     match reader_id {

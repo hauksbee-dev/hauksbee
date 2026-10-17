@@ -30,10 +30,11 @@ pub const EXIT_CONTRACT: &str = "hauksbee/1";
 /// `VERDICT:` line all start from it, so the words are spelled once.
 pub const PARTLY_JUDGED_LEAD: &str = "PARTLY JUDGED (not a pass)";
 
-/// How every human surface opens the verdict on an input that is not a board
-/// and so cannot be ordered (a schematic): the checks that apply to it ran, and
-/// nothing about ordering was judged. The triage headline and the closing
-/// `VERDICT:` line both start from it, in place of "OK TO ORDER" and "clean".
+/// How every human surface opens the verdict on an input that is not a board.
+///
+/// A schematic cannot be ordered: the checks that apply to it ran, and nothing
+/// about ordering was judged. The triage headline and the closing `VERDICT:`
+/// line both start from it, in place of "OK TO ORDER" and "clean".
 pub const NOT_ORDERABLE_LEAD: &str = "CHECKED, NOT ORDERABLE";
 
 /// The closing `VERDICT:` line's tag for the same case, lower case as its

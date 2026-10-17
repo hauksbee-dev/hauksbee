@@ -411,14 +411,16 @@ pub struct ComponentQuery {
 
 pub use crate::refdes::{is_active_ic_ref, is_tool_generated_ref};
 
-/// Longest text field a library match reads. A real value, footprint or part
-/// number is a few dozen bytes; every library entry is matched against each
-/// field in full, so a megabyte-long field would cost a megabyte times every
-/// entry. Past this length nothing more can identify a part.
+/// Longest text field a library match reads.
+///
+/// A real value, footprint or part number is a few dozen bytes; every library
+/// entry is matched against each field in full, so a megabyte-long field would
+/// cost a megabyte times every entry. Past this length nothing more can
+/// identify a part.
 pub const MAX_MATCH_FIELD_BYTES: usize = 1024;
 
-fn clamp_field(field: &Option<String>) -> Option<String> {
-    let text = field.as_deref()?;
+fn clamp_field(field: Option<&str>) -> Option<String> {
+    let text = field?;
     if text.len() <= MAX_MATCH_FIELD_BYTES {
         return None;
     }
@@ -435,8 +437,14 @@ impl ComponentQuery {
     /// case, which clones nothing).
     #[must_use]
     pub fn bounded_for_matching(&self) -> Option<Self> {
-        let (lib_id, value) = (clamp_field(&self.lib_id), clamp_field(&self.value));
-        let (footprint, mpn) = (clamp_field(&self.footprint), clamp_field(&self.mpn));
+        let (lib_id, value) = (
+            clamp_field(self.lib_id.as_deref()),
+            clamp_field(self.value.as_deref()),
+        );
+        let (footprint, mpn) = (
+            clamp_field(self.footprint.as_deref()),
+            clamp_field(self.mpn.as_deref()),
+        );
         if lib_id.is_none() && value.is_none() && footprint.is_none() && mpn.is_none() {
             return None;
         }
