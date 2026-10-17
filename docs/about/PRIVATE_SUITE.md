@@ -9,7 +9,7 @@ This page makes that omitted coverage explicit.
 
 ## What is missing
 
-**95 tests: 90 in the 25 absent files below, plus 5 removed from files that
+**96 tests: 91 in the 25 absent files below, plus 5 removed from files that
 otherwise ship. Also absent: 11 engine examples and one solver example.**
 
 | Suite | Tests | What it covers |
@@ -22,7 +22,7 @@ otherwise ship. Also absent: 11 engine examples and one solver example.**
 | `tarski_595_chain` | 3 | Shift-register chain decode under firmware |
 | `tarski_revision_identity` | 2 | As-built preparation, cut selection and signal routing surviving KiCad re-annotation |
 | `tarski_stretcher_transient` | 3 | Pulse-stretcher transient against measured hardware |
-| `tarski_staged_replay` | 7 | Ordered as-built rework replay against the private board and its firmware |
+| `tarski_staged_replay` | 8 | Ordered as-built rework replay against the private board and its firmware |
 | `flagship_brownout` | 3 | The brownout CI scenario, red and repaired |
 | `tarski_outcome_search` | 2 | Outcome search on a board cell: intended outcomes violated with culprits, and the repaired cell passing |
 | `inhibitory_miswire` | 3 | A miswire found in hardware, then derived from the netlist |
