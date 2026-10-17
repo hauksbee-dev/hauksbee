@@ -1276,6 +1276,84 @@ mod tests {
         );
     }
 
+    /// Parts whose datasheet configuration leaves a primary supply pad on a net
+    /// of its own decoupling capacitor only, because the chip's own regulator
+    /// drives it: the DRV8353S `DVDD` (5 V regulator output, 1 uF), the MP2650
+    /// `VCC` (3.6 V LDO output, 10 uF), the Pro Micro module's `VCC` (the
+    /// on-board regulator's output) and the nRF52840 `VDD` in High Voltage
+    /// mode (REG0's output). Wired that way the part is silent. The faulty
+    /// control leaves every return pad open, which still fires: only the
+    /// regulator's output pad is excused, not the rest of the part's power.
+    #[test]
+    fn a_regulator_output_supply_left_on_its_capacitor_is_silent() {
+        let lib = ModelLibrary::builtin();
+        let check = |value: &str, pads: &[(&str, i64)]| {
+            let parts = vec![
+                part("U1", value, pads),
+                part("C1", "1uF", &[("1", LONE), ("2", GND)]),
+            ];
+            power_pin_lint(&board(&NETS, parts), &lib).findings
+        };
+        // (value, regulator-output pad, supply-side pads, return pads)
+        let cases: [(&str, &str, &[(&str, i64)], &[&str]); 4] = [
+            ("DRV8353S", "38", &[("3", V5), ("4", V5)], &["39", "25"]),
+            ("MP2650", "26", &[("1", V5), ("22", V5)], &["4", "19", "27"]),
+            ("ProMicro", "21", &[("24", V5)], &["3", "4", "23"]),
+            ("nRF52840", "2", &[], &["1"]),
+        ];
+        for (value, out_pad, supply_side, returns) in cases {
+            let mut pads: Vec<(&str, i64)> = supply_side.to_vec();
+            pads.push((out_pad, LONE));
+            pads.extend(returns.iter().map(|r| (*r, GND)));
+            let wired = check(value, &pads);
+            assert!(wired.is_empty(), "{value}: {wired:#?}");
+            // Faulty control: no return anywhere.
+            let mut broken: Vec<(&str, i64)> = supply_side.to_vec();
+            broken.push((out_pad, LONE));
+            broken.extend(returns.iter().map(|r| (*r, UNCON)));
+            let found = check(value, &broken);
+            assert_eq!(found.len(), 1, "{value}: {found:#?}");
+            says(&found[0], &["no return"]);
+        }
+    }
+
+    /// The RP2040's `DVDD` pads are wired to its own `VREG_VOUT` off-chip, so
+    /// that tie is a fed core supply while the I/O supply is on a rail; with the
+    /// I/O and USB supplies unpowered it fires on those, and a `DVDD` tied to
+    /// nothing still fires.
+    #[test]
+    fn an_rp2040_core_supply_tied_to_its_regulator_output_is_fed() {
+        let lib = ModelLibrary::builtin();
+        let run = |pads: &[(&str, i64)]| {
+            let parts = vec![
+                part("U1", "RP2040", pads),
+                part("C1", "1uF", &[("1", LONE), ("2", GND)]),
+            ];
+            power_pin_lint(&board(&NETS, parts), &lib).findings
+        };
+        let wired = [
+            ("1", V33),
+            ("48", V33),
+            ("44", V33),
+            ("23", LONE),
+            ("45", LONE),
+            ("50", LONE),
+            ("57", GND),
+        ];
+        let found = run(&wired);
+        assert!(found.is_empty(), "{found:#?}");
+        // DVDD tied to nothing: the regulator output pad is not on its net.
+        let untied = [("1", V33), ("48", V33), ("44", V33), ("23", LONE), ("57", GND)];
+        let found = run(&untied);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        says(&found[0], &["no supply", "pad 23 (DVDD)"]);
+        // The regulator is made from VREG_VIN and IOVDD: with those open, the
+        // tied DVDD is not a supply, and IOVDD itself is the finding.
+        let dead = [("1", UNCON), ("23", LONE), ("45", LONE), ("57", GND)];
+        let found = run(&dead);
+        assert!(!found.is_empty(), "{found:#?}");
+    }
+
     /// `VS` is an amplifier's supply; on a gate driver it is the switch node.
     #[test]
     fn vs_is_judged_as_a_supply_only_on_an_amplifier() {
