@@ -29,13 +29,15 @@ use crate::schema::{Characteristic, ComponentKind, ModelEntry, ParamValue};
 ///
 /// The light-load rows logic families print are 20 uA (HC/HCT) to 100 uA
 /// (LVC/AHC/AVC); their drive rows start at 1 mA (LVC at 1.2 V) and run to
-/// 64 mA (ABT).
-pub const HEAVY_TEST_A: f64 = 1e-3;
+/// 64 mA (ABT). TTL-compatible outputs (parallel EEPROMs, RS-485 receivers)
+/// print their one VOH row at -400 uA, a load the same way, so the line is drawn
+/// between the two at 250 uA.
+pub const HEAVY_TEST_A: f64 = 250e-6;
 
 /// A level row's test current magnitude in A (`IOH = -24 mA`, `IO = 100 uA`).
 #[must_use]
 pub fn test_current_a(row: &Characteristic) -> Option<f64> {
-    quantity(&row.conditions, r"I_?(?:OH|OL|O)", "A")
+    quantity(&row.conditions, r"(?i:I_?(?:OH|OL|O))", "A")
 }
 
 /// A level row's test supply in V (`VCC = 3 V`); `None` for a range.
@@ -43,7 +45,7 @@ fn test_supply_v(row: &Characteristic) -> Option<f64> {
     let text = &row.conditions;
     range(text)
         .is_none()
-        .then(|| quantity(text, r"V_?[A-Z]*(?:CC|DD)[A-Z]*", "V"))?
+        .then(|| quantity(text, r"[AD]?V_?[A-Z]*(?:CC|DD)[A-Z]*", "V"))?
 }
 
 /// A printed supply range (`1.65 V to 3.6 V`).
@@ -242,8 +244,16 @@ pub fn light_load_levels(entry: &mut ModelEntry) -> (Vec<Characteristic>, Vec<Mo
     (rows, records)
 }
 
-/// A `voh`/`vol` taken at a heavy test current: as a row param, or as a
-/// number equal to a cited heavy-load row's guaranteed column.
+/// Warnings for a `voh`/`vol` taken at a heavy test current.
+///
+/// That is a row param, a number equal to a cited heavy-load row's guaranteed
+/// column, or a number on a card whose cited rows for that level are ALL heavy-load
+/// ones, so the number can only have come from one of them (a rail-relative
+/// `0.8 x VDDIO min, IOH = 1 mA` row prints no column to equal).
+///
+/// A card with no `voh` is an open-drain (or input-only) part, whose `vol` is the
+/// pull-down level at its rated sink current: the level it holds under that load,
+/// not an unloaded one, so the cited-rows rule leaves it alone.
 #[must_use]
 pub fn heavy_level_warnings(entry: &ModelEntry) -> Vec<String> {
     // The cards [`light_load_levels`] repairs: an identity-only card is never driven.
@@ -257,18 +267,26 @@ pub fn heavy_level_warnings(entry: &ModelEntry) -> Vec<String> {
         return Vec::new();
     }
     let mut out = Vec::new();
+    let pushes_high = entry.params.0.contains_key("voh");
     for (name, sym) in [("voh", "VOH"), ("vol", "VOL")] {
         let heavy = |r: &Characteristic| test_current_a(r).filter(|i| *i >= HEAVY_TEST_A);
+        let rows: Vec<&Characteristic> = cited_rows(entry)
+            .iter()
+            .filter(|r| symbol(r, sym))
+            .collect();
         let current = match entry.params.0.get(name) {
             Some(ParamValue::Row(row)) => heavy(row),
             Some(value) => value.as_f64().and_then(|v| {
-                cited_rows(entry)
-                    .iter()
-                    .filter(|r| symbol(r, sym))
-                    .find_map(|r| {
-                        let x = row_value(name, r).ok()?;
-                        heavy(r).filter(|_| (x - v).abs() <= 1e-9 * v.abs().max(1.0))
-                    })
+                let equal = rows.iter().find_map(|r| {
+                    let x = row_value(name, r).ok()?;
+                    heavy(r).filter(|_| (x - v).abs() <= 1e-9 * v.abs().max(1.0))
+                });
+                let only_heavy = || {
+                    let all_heavy = rows.iter().all(|r| heavy(r).is_some());
+                    let first = rows.iter().find_map(|r| heavy(r));
+                    first.filter(|_| all_heavy && pushes_high && !entry.params.0.contains_key("ro"))
+                };
+                equal.or_else(only_heavy)
             }),
             None => None,
         };
@@ -283,6 +301,18 @@ pub fn heavy_level_warnings(entry: &ModelEntry) -> Vec<String> {
         }
     }
     out
+}
+
+/// [`heavy_level_warnings`] for the card as it binds.
+///
+/// [`light_load_levels`] has first turned every heavy row it can into the
+/// light-load level behind `ro`, so only a level the loader cannot repair (no
+/// stated supply, a bare scalar taken from a heavy row) is a finding.
+#[must_use]
+pub fn unrepaired_level_warnings(entry: &ModelEntry) -> Vec<String> {
+    let mut bound = entry.clone();
+    light_load_levels(&mut bound);
+    heavy_level_warnings(&bound)
 }
 
 #[cfg(test)]
@@ -359,5 +389,137 @@ mod tests {
 
     fn schema_level(table: &[[f64; 2]], vcc: f64) -> f64 {
         crate::schema::level_at(table, vcc)
+    }
+
+    #[test]
+    fn a_scalar_level_whose_only_cited_rows_are_heavy_is_flagged() {
+        let heavy_row = "[models.source]\ntier = \"datasheet-derived\"\n\
+            [[models.source.characteristic]]\nparameter = \"VOH\"\nunit = \"V\"\n\
+            conditions = \"VDDIO = 1.62 V, IOH = -1 mA\"\nbasis = \"0.8 VDDIO min\"\n\
+            [[models.source.characteristic]]\nparameter = \"VOL\"\nunit = \"V\"\n\
+            conditions = \"VDDIO = 1.62 V, IOL = 3 mA\"\nbasis = \"0.2 VDDIO max\"";
+        let warned = |params: &str| heavy_level_warnings(&card(params, heavy_row)).len();
+        // Neither number equals a printed column, yet each can only have come from a heavy row.
+        assert_eq!(warned("voh = 2.64\nvol = 0.66"), 2);
+        // A stated ro means the heavy row was already turned into a resistance.
+        assert_eq!(warned("voh = 2.64\nvol = 0.66\nro = 660.0"), 0);
+        // An open-drain output has no voh: its vol is the level at the rated sink current.
+        assert_eq!(warned("vol = 0.4"), 0);
+    }
+
+    /// The unloaded high level of every builtin push-pull digital card sits at its
+    /// rail, and the lint finds nothing left to say about any of them.
+    ///
+    /// Read as cards load: a row printed at a heavy test current has been turned into
+    /// the light-load level behind `ro`. The level is held to the card's
+    /// `[models.levels]` table where it has one (every point of it); else to a
+    /// supply the part runs on: the ends of its supply range and the standard rails
+    /// inside it (a scalar printed at a family's 4.5 V test supply is right there),
+    /// or, for a TTL-level part that states no range, 4.5 V and 5 V. Open-drain cards
+    /// (no `voh`) and identity-only ones, which are never driven, are exempt.
+    ///
+    /// `UNRESOLVED` lists the cards whose datasheet could not be read to re-state
+    /// the level at its true test current. It is a ratchet: a card that stops
+    /// offending must be taken off the list.
+    #[test]
+    fn every_builtin_digital_card_drives_its_rail_unloaded() {
+        const RAILS: [f64; 6] = [1.2, 1.8, 2.5, 3.3, 4.5, 5.0];
+        const WITHIN_V: f64 = 0.3;
+        const UNRESOLVED: [(&str, &str); 5] = [
+            ("bma423", "datasheet download returns 404; the 0.8 VDDIO level has no stated test current"),
+            ("cp2102n_qfn28", "manufacturer download blocked; level table not re-checked against the PDF"),
+            ("max3237e", "manufacturer download blocked; level table not re-checked against the PDF"),
+            ("bmp581", "Table 17 prints 80 % VDDIO with no test current; the drive-strength tables are images"),
+            ("lis3dh", "prints 0.9 VDDIO min with no test current"),
+        ];
+        let (mut checked, mut offenders) = (0, Vec::<(String, String)>::new());
+        for (name, src) in crate::BUILTIN_TOML_FILES {
+            let db: crate::schema::DbFile = toml::from_str(src).expect(name);
+            for mut entry in db.models {
+                let driven = matches!(
+                    entry.kind,
+                    ComponentKind::Digital | ComponentKind::ShiftRegister
+                );
+                let exempt = entry.params.get_bool("identity_only") == Some(true)
+                    || !entry.params.0.contains_key("voh");
+                if !driven || exempt {
+                    continue;
+                }
+                light_load_levels(&mut entry);
+                offenders.extend(
+                    heavy_level_warnings(&entry)
+                        .into_iter()
+                        .map(|w| (entry.id.clone(), format!("{name}: {}: lint: {w}", entry.id))),
+                );
+                checked += 1;
+                let Some(voh) = entry.params.get_f64("voh") else {
+                    offenders.push((
+                        entry.id.clone(),
+                        format!("{name}: {}: voh is not a number", entry.id),
+                    ));
+                    continue;
+                };
+                // Within `WITHIN_V` below a supply, and never above it.
+                let at =
+                    |vcc: f64, level: f64| level <= vcc + 1e-9 && vcc - level <= WITHIN_V + 1e-9;
+                if let Some(table) = entry.levels.get("voh") {
+                    for p in table.iter().filter(|p| !at(p[0], p[1])) {
+                        offenders.push((
+                            entry.id.clone(),
+                            format!(
+                                "{name}: {}: unloaded voh {} V on a {} V rail",
+                                entry.id, p[1], p[0]
+                            ),
+                        ));
+                    }
+                    continue;
+                }
+                let mut supplies: Vec<f64> = Vec::new();
+                for e in &entry.envelope {
+                    if let crate::schema::OperatingEnvelope::SupplyRange {
+                        pin, min_v, max_v, ..
+                    } = e
+                    {
+                        if pin.starts_with("vcc") || pin.starts_with("vdd") {
+                            supplies.extend([*min_v, *max_v]);
+                            supplies.extend(RAILS.iter().filter(|r| (*min_v..=*max_v).contains(r)));
+                        }
+                    }
+                }
+                if supplies.is_empty() {
+                    supplies = vec![4.5, 5.0];
+                }
+                if !supplies.iter().any(|&vcc| at(vcc, voh)) {
+                    offenders.push((
+                        entry.id.clone(),
+                        format!(
+                            "{name}: {}: unloaded voh {voh} V is not within {WITHIN_V} V of any of \
+                             its supplies {supplies:?}",
+                            entry.id
+                        ),
+                    ));
+                }
+            }
+        }
+        assert!(checked > 40, "only {checked} cards checked");
+        let stale: Vec<&str> = UNRESOLVED
+            .iter()
+            .filter(|(id, _)| !offenders.iter().any(|(o, _)| o == id))
+            .map(|(id, _)| *id)
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "no longer offending, remove from UNRESOLVED: {stale:?}"
+        );
+        let new: Vec<&str> = offenders
+            .iter()
+            .filter(|(id, _)| !UNRESOLVED.iter().any(|(u, _)| u == id))
+            .map(|(_, w)| w.as_str())
+            .collect();
+        assert!(
+            new.is_empty(),
+            "push-pull digital cards driving a loaded level unloaded:\n  {}",
+            new.join("\n  ")
+        );
     }
 }

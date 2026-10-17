@@ -1243,7 +1243,8 @@ fn digital_output_current_is_drawn_from_the_supply_pin() {
     let (sink_only, cards): (Vec<Card>, Vec<Card>) = cards
         .into_iter()
         .filter(|c| !c.logic("outputs").is_empty())
-        .partition(|c| c.param("voh").is_none());
+        // A `voh` stated as a row (min/typ/max with conditions) is still a `voh`.
+        .partition(|c| c.table.get("params").and_then(|p| p.get("voh")).is_none());
     assert!(
         sink_only
             .iter()
