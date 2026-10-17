@@ -17,8 +17,8 @@ use hauksbee_ir::{eprintln, println};
 
 /// Execute the system your design files already contain.
 ///
-/// Point `hauksbee` at a board file (`KiCad`, Eagle, Altium, IPC-2581, ODB++,
-/// IPC-D-356, or gerbers) and it extracts the circuit, binds
+/// Point `hauksbee` at a board file (`KiCad`, Eagle, Altium, EasyEDA, IPC-2581,
+/// ODB++, IPC-D-356, or gerbers) and it extracts the circuit, binds
 /// device models, runs the static checks, and can co-simulate the firmware on
 /// an emulated MCU. CI is one consumer of the engine (`hauksbee-ci`). Start
 /// with `run --report`.

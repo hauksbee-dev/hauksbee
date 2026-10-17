@@ -2287,6 +2287,7 @@ pub enum ArtifactKind {
     GerberArchive,
     OdbPlusPlus,
     Ipc2581,
+    Easyeda,
     Ipc356,
     Bom,
     Placement,

@@ -62,7 +62,7 @@ autorouting). Use immutable version/digest references, not floating tags. See
 
 ### Board evidence
 
-Native KiCad, Eagle, Altium, IPC-2581, ODB++, and schematic-only inputs become one electrical intermediate representation. Static checks, model binding, solver construction, and firmware coupling all consume that same representation rather than separate hand-translated, often idealised diagrams.
+Native KiCad, Eagle, Altium, EasyEDA, IPC-2581, ODB++, and schematic-only inputs become one electrical intermediate representation. Static checks, model binding, solver construction, and firmware coupling all consume that same representation rather than separate hand-translated, often idealised diagrams.
 
 ### Fab evidence
 
@@ -140,7 +140,7 @@ defect disappears but unrelated failures or missing coverage remain.
 ### Inputs
 
 - Native KiCad PCB and schematic files, including hierarchy and schematic-only analysis.
-- Eagle XML layouts, Altium `.PcbDoc`, IPC-D-356, IPC-2581, and ODB++ archives or directories.
+- Eagle XML layouts, Altium `.PcbDoc`, EasyEDA Standard `.json` and Pro `.epcb`/`.epro` (connectivity and counted copper; see [`docs/ingest/EASYEDA.md`](docs/ingest/EASYEDA.md)), IPC-D-356, IPC-2581, and ODB++ archives or directories.
 - Gerber/drill/fab archives, with X2, `.gbrjob`, Altium LDP/EXTREP metadata, and explicit authority/refusal handling.
 - BOM, pick-and-place, and fitted/no-fit variant inputs before model binding.
 - Firmware images and project bundles for supported MCU backends.

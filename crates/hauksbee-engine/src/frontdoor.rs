@@ -926,6 +926,7 @@ fn web_import_diagnostics(norm: &crate::board_input::NormalizedBoard) -> WebImpo
         InputKind::Ipc356Archive => "fab archive with IPC-D-356 connectivity",
         InputKind::Odb => "ODB++",
         InputKind::Ipc2581 => "IPC-2581",
+        InputKind::Easyeda => "EasyEDA",
     }
     .to_string();
 

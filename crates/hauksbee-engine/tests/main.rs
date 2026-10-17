@@ -104,6 +104,8 @@ mod dnp_processor;
 mod drive_override_is_loud;
 #[path = "eagle_web_report.rs"]
 mod eagle_web_report;
+#[path = "easyeda_inputs.rs"]
+mod easyeda_inputs;
 #[path = "esp32_qemu_cosim.rs"]
 mod esp32_qemu_cosim;
 #[path = "evidence_spine_end_to_end.rs"]

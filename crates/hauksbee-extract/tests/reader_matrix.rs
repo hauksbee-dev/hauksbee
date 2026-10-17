@@ -31,6 +31,15 @@ fn legacy_format(text: &str) -> &'static str {
     }
 }
 
+/// The reader a fixture must route to: EasyEDA boards post-date the legacy
+/// ladder, so they are named directly; everything else follows the oracle.
+fn expected_reader(path: &Path, text: &str) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("json" | "epcb") => "easyeda",
+        _ => legacy_format(text),
+    }
+}
+
 fn crate_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
@@ -81,7 +90,10 @@ fn detection_matrix_every_fixture() {
     // Fixture roots: testdata boards + netlists + d356, CI example boards,
     // frontend demo boards, and both crates' tests/fixtures dirs.
     let mut files: Vec<PathBuf> = Vec::new();
-    let roots: [(&str, &[&str]); 6] = [
+    let roots: [(&str, &[&str]); 7] = [
+        // EasyEDA boards post-date the legacy ladder, so they are expected at
+        // "easyeda" directly (see below) rather than from `legacy_format`.
+        ("tests/fixtures/easyeda", &["json", "epcb"]),
         ("../../testdata/boards", &["kicad_pcb"]),
         ("../../testdata", &["net", "d356"]),
         ("../../frontend/public/boards", &["kicad_pcb"]),
@@ -108,7 +120,7 @@ fn detection_matrix_every_fixture() {
     for p in &files {
         let bytes = std::fs::read(p).expect("read fixture");
         let text = String::from_utf8_lossy(&bytes);
-        let expected = legacy_format(&text);
+        let expected = expected_reader(p, &text);
         cases.push(Case {
             label: p
                 .strip_prefix(&cd)
@@ -196,8 +208,8 @@ fn detection_matrix_every_fixture() {
 /// only surfaces the winner).
 fn probe_all(bytes: &[u8], path: Option<&Path>) -> Vec<&'static str> {
     use hauksbee_extract::reader::{
-        AltiumReader, BoardReader, EagleReader, Ipc356Reader, KicadNetlistReader, KicadPcbReader,
-        KicadSchematicReader,
+        AltiumReader, BoardReader, EagleReader, EasyedaArchiveReader, EasyedaReader, Ipc356Reader,
+        KicadNetlistReader, KicadPcbReader, KicadSchematicReader,
     };
     let readers: Vec<(&'static str, Box<dyn BoardReader>)> = vec![
         ("altium", Box::new(AltiumReader)),
@@ -205,6 +217,8 @@ fn probe_all(bytes: &[u8], path: Option<&Path>) -> Vec<&'static str> {
         ("kicad-netlist", Box::new(KicadNetlistReader)),
         ("kicad-schematic", Box::new(KicadSchematicReader)),
         ("kicad-pcb", Box::new(KicadPcbReader)),
+        ("easyeda", Box::new(EasyedaReader)),
+        ("easyeda-archive", Box::new(EasyedaArchiveReader)),
         ("ipc-d356", Box::new(Ipc356Reader)),
     ];
     readers
@@ -224,7 +238,14 @@ fn unrecognized_error_speaks_user_words() {
     assert!(msg.contains("unrecognized"), "got: {msg}");
     // The accepted formats are described in user words, never internal
     // reader ids.
-    for phrase in ["KiCad", "Eagle", "Altium", "IPC-D-356", "gerbers"] {
+    for phrase in [
+        "KiCad",
+        "Eagle",
+        "Altium",
+        "EasyEDA",
+        "IPC-D-356",
+        "gerbers",
+    ] {
         assert!(msg.contains(phrase), "error should mention {phrase}: {msg}");
     }
     for id in reg.reader_names() {

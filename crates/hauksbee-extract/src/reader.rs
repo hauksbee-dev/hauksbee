@@ -184,6 +184,25 @@ builtin_reader!(
     read: |b, _p| ExtractedBoard::from_ipc2581(&text(b))
 );
 builtin_reader!(
+    /// EasyEDA (JLCEDA) board document, either edition: a Standard `.json`
+    /// (`head.docType` with a `shape` list) or a Pro `.epcb` (JSON Lines opening
+    /// with `["DOCTYPE", ...]`). Also claims the Pro v3 log form so it is refused
+    /// by name instead of being called unrecognized. Detected by content, never by
+    /// extension, so an arbitrary `.json` falls through.
+    EasyedaReader, "easyeda", binary: false,
+    detects: |b| crate::easyeda::looks_like_easyeda(b),
+    read: |b, _p| ExtractedBoard::from_easyeda(b)
+);
+builtin_reader!(
+    /// EasyEDA project archive: a Pro `.epro` / `.zip` holding `project.json` and
+    /// `.epcb` layouts, or a zip of Standard `.json` PCB documents. Binary, so it
+    /// is consulted before an archive is treated as gerbers; a zip of gerbers has
+    /// neither member and falls through.
+    EasyedaArchiveReader, "easyeda-archive", binary: true,
+    detects: |b| crate::easyeda::looks_like_easyeda_archive(b),
+    read: |b, _p| ExtractedBoard::from_easyeda_archive(b)
+);
+builtin_reader!(
     /// ODB++ (Siemens/Valor) design archive in its `.tgz` / `.tar` / `.zip`
     /// form, detected by the `matrix/matrix` member inside the archive, which a
     /// zip of gerbers never has. Binary, so this reader is consulted before an
@@ -218,14 +237,16 @@ pub struct Registry {
 }
 
 impl Registry {
-    /// The nine formats hauksbee reads natively.
+    /// The formats hauksbee reads natively.
     #[must_use]
     pub fn builtin() -> Self {
         Self {
             readers: vec![
                 Box::new(AltiumReader),
                 Box::new(OdbppReader),
+                Box::new(EasyedaArchiveReader),
                 Box::new(ProtelAsciiReader),
+                Box::new(EasyedaReader),
                 Box::new(Ipc2581Reader),
                 Box::new(EagleReader),
                 Box::new(KicadNetlistReader),
@@ -308,6 +329,7 @@ pub fn format_phrase(reader_id: &str) -> &'static str {
         "ipc-2581" => "an IPC-2581 document",
         "protel-ascii" | "altium" => "an Altium board",
         "odb++" => "an ODB++ job",
+        "easyeda" | "easyeda-archive" => "an EasyEDA board",
         _ => "a board file in another format",
     }
 }
@@ -374,9 +396,9 @@ pub fn unrecognized_message(bytes: &[u8]) -> String {
         );
     }
     "unrecognized board format: hauksbee reads a KiCad board, schematic or netlist, \
-     an Eagle board, an Altium .PcbDoc (binary or ASCII), an IPC-2581 document, an \
-     ODB++ job (folder, .tgz or .zip), an IPC-D-356 netlist, or a folder or zip of \
-     gerbers"
+     an Eagle board, an Altium .PcbDoc (binary or ASCII), an EasyEDA board (Standard \
+     .json or Pro .epcb/.epro), an IPC-2581 document, an ODB++ job (folder, .tgz or \
+     .zip), an IPC-D-356 netlist, or a folder or zip of gerbers"
         .to_string()
 }
 

@@ -366,6 +366,11 @@ export function UploadView({ session, onOpenLive, sessions, onResume, avrAvailab
                   <strong style={{ color: 'var(--silk)' }}>Altium</strong>; the <code className="hb-inline">.PcbDoc</code>.
                 </div>
                 <div>
+                  <strong style={{ color: 'var(--silk)' }}>EasyEDA</strong>; Standard: File → Export → EasyEDA source
+                  (the <code className="hb-inline">.json</code>). Pro: the <code className="hb-inline">.epcb</code> or
+                  the whole <code className="hb-inline">.epro</code> project.
+                </div>
+                <div>
                   <strong style={{ color: 'var(--silk)' }}>Only fab files?</strong> Zip the folder
                   with the gerbers and drill file, drop the zip. The circuit is reverse-extracted
                   from the copper itself.

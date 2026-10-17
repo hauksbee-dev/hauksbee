@@ -7,6 +7,7 @@
    { "vendor": "KiCad", "exts": [".kicad_pcb", ".kicad_sch", ".net"], "route": "board", "quiet": false },
    { "vendor": "Eagle", "exts": [".brd"], "route": "board", "quiet": false },
    { "vendor": "Altium", "exts": [".PcbDoc"], "route": "board", "quiet": false },
+   { "vendor": "EasyEDA", "exts": [".json", ".epcb", ".epro"], "route": "board", "quiet": false },
    { "vendor": "IPC-2581", "exts": [".xml"], "route": "board", "quiet": false },
    { "vendor": "IPC-D-356", "exts": [".d356"], "route": "board", "quiet": false },
    { "vendor": "ODB++ job", "exts": [".tgz", ".tar.gz", ".tar"], "route": "board", "quiet": false },

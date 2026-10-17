@@ -2354,6 +2354,7 @@ fn input_artifact_kind(
         }
         InputKind::Odb => (ArtifactKind::OdbPlusPlus, ArtifactRole::FabArchive),
         InputKind::Ipc2581 => (ArtifactKind::Ipc2581, ArtifactRole::FabArchive),
+        InputKind::Easyeda => (ArtifactKind::Easyeda, ArtifactRole::Layout),
         InputKind::Text => match path
             .extension()
             .and_then(|e| e.to_str())
@@ -2379,6 +2380,9 @@ fn input_contributions(kind: crate::board_input::InputKind) -> Vec<Contribution>
             }
             InputKind::Odb => "connectivity read from the ODB++ job's EDA data".into(),
             InputKind::Ipc2581 => "connectivity read from the IPC-2581 logical netlist".into(),
+            InputKind::Easyeda => {
+                "connectivity read from the EasyEDA board's own part and pad records".into()
+            }
             _ => "component and net incidence consumed by binding and electrical checks".into(),
         },
     }];
@@ -2485,7 +2489,10 @@ fn classify_reader_note(
         ));
         return Ok(());
     }
-    if lower.contains("board artwork") || lower.contains("nothing downstream can see") {
+    if lower.contains("board artwork")
+        || lower.contains("nothing downstream can see")
+        || lower.contains("read past as carrying nothing electrical")
+    {
         ignored.push(IgnoredInput {
             what: "reader-excluded input content".into(),
             why: note.to_string(),

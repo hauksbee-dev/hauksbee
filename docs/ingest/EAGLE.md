@@ -96,7 +96,7 @@ because for that file the list is the answer:
 
 ```
 $ hauksbee run mystery.brd --report
-error: 'mystery.brd': unrecognized board format: hauksbee reads a KiCad board, schematic or netlist, an Eagle board, an Altium .PcbDoc (binary or ASCII), an IPC-D-356 netlist, or a folder or zip of gerbers
+error: 'mystery.brd': unrecognized board format: hauksbee reads a KiCad board, schematic or netlist, an Eagle board, an Altium .PcbDoc (binary or ASCII), an EasyEDA board (Standard .json or Pro .epcb/.epro), an IPC-2581 document, an ODB++ job (folder, .tgz or .zip), an IPC-D-356 netlist, or a folder or zip of gerbers
 ```
 
 Both refusals are held to their word on real files rather than on a fixture.

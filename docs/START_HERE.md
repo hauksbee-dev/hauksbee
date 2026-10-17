@@ -101,6 +101,7 @@ main capability docs:
 | [`ingest/SCHEMATICS.md`](ingest/SCHEMATICS.md) | Schematic (`.kicad_sch`) extraction |
 | [`ingest/GERBER.md`](ingest/GERBER.md) | Gerber + pick-and-place reverse extraction |
 | [`ingest/ALTIUM.md`](ingest/ALTIUM.md) | Altium `.PcbDoc` binary ingest |
+| [`ingest/EASYEDA.md`](ingest/EASYEDA.md) | EasyEDA Standard and Pro board ingest |
 | [`models/MODELS.md`](models/MODELS.md) | Device models: built-in, SPICE, datasheet extraction |
 | [`cosim/PERIPHERALS.md`](cosim/PERIPHERALS.md) | Runtime peripherals (buttons, pots, I2C/SPI slaves) |
 | [`cosim/SIMULATORS.md`](cosim/SIMULATORS.md) | Installing the external backends (Renode, Espressif QEMU) |
