@@ -11,7 +11,7 @@
 //! token. Vendor document numbers (`ds31783`, `slos189a`, `20001826E`),
 //! version, package and hash tokens say nothing about the device and are set
 //! aside. The part number is compared after the same normalisation the layout
-//! lint uses ([`normalise_mpn`]), with its packaging and reel codes left on it:
+//! lint uses (`normalise_mpn`), with its packaging and reel codes left on it:
 //! a file name that is a prefix of the part, contains it, or shares five
 //! leading characters with it agrees, so `tps7a47.pdf` serves a TPS7A4701RGWR
 //! and `tl07x.pdf` a TL072. Digit runs of three or more figures are then
