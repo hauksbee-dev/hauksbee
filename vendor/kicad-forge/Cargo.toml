@@ -8,7 +8,6 @@
 resolver = "2"
 members = [
     "crates/forge-sexpr",
-    "crates/forge-model",
 ]
 
 [workspace.package]

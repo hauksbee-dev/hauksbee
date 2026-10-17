@@ -64,12 +64,10 @@ multiple_crate_versions = "allow"
 # has no public repository of its own, so the vendored copy is the source of
 # record. Provenance and update procedure: vendor/kicad-forge/VENDORED.md.
 #
-# To develop against a live kicad-forge checkout instead, comment out the two
-# vendored lines below and uncomment these sibling-path overrides:
+# To develop against a live kicad-forge checkout instead, comment out the
+# vendored line below and uncomment this sibling-path override:
 # forge-sexpr = { path = "../kicad-forge/crates/forge-sexpr" }
-# forge-model = { path = "../kicad-forge/crates/forge-model" }
 forge-sexpr = { version = "0.1.0", path = "vendor/kicad-forge/crates/forge-sexpr" }
-forge-model = { version = "0.1.0", path = "vendor/kicad-forge/crates/forge-model" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"

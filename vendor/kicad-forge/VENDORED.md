@@ -1,8 +1,9 @@
 # Vendored: the kicad-forge forge-* crates
 
-This directory holds the two crates that remain of `kicad-forge`, the KiCad file
-layer hauksbee reads boards through (`forge-sexpr`, `forge-model`). The
-`forge-codegen` crate (the Board-as-Code compiler) was removed with that feature. They are vendored rather
+This directory holds the one crate that remains of `kicad-forge`: `forge-sexpr`,
+the KiCad s-expression parser hauksbee reads boards through. The
+`forge-codegen` crate (the Board-as-Code compiler) was removed with that
+feature, and `forge-model` with it once nothing used it. It is vendored rather
 than depended on, so a fresh clone of this repo builds with no sibling checkout and
 no network access.
 
@@ -34,11 +35,9 @@ deterministic.
 
 Copied, per crate: `Cargo.toml` and the full `src/` tree. Not copied:
 `tests/`, `examples/`, and their fixtures, since hauksbee links the libraries
-rather than the test or example targets. The `[[test]]` targets were removed
-from `crates/forge-model/Cargo.toml` accordingly. Nothing else was edited.
+rather than the test or example targets. Nothing else was edited.
 
-External crate dependencies: only `thiserror` (crates.io), used by
-`forge-model`. The two crates otherwise depend on each other and std.
+External crate dependencies: none; `forge-sexpr` depends only on std.
 
 ## Re-importing from a kicad-forge checkout
 
@@ -49,16 +48,14 @@ here directly.
 2. From this repo root, re-copy the sources:
    ```sh
    SRC=<path-to-kicad-forge>
-   for c in forge-sexpr forge-model; do
+   for c in forge-sexpr; do
      rm -rf "vendor/kicad-forge/crates/$c/src"
      cp -R "$SRC/crates/$c/src" "vendor/kicad-forge/crates/$c/src"
      cp "$SRC/crates/$c/Cargo.toml" "vendor/kicad-forge/crates/$c/Cargo.toml"
    done
    ```
-3. Re-strip the `[[test]]` targets from `crates/forge-model/Cargo.toml`. They
-   reference `tests/` files that are not vendored.
-4. Update the commit hash above.
-5. Verify: `cargo build -p hauksbee-engine && cargo test -p hauksbee-extract`.
+3. Update the commit hash above.
+4. Verify: `cargo build -p hauksbee-engine && cargo test -p hauksbee-extract`.
 
 Re-importing overwrites any edit made here, so a change that should last needs
 to go into both places, or into this directory alone once the checkout is
