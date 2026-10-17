@@ -43,7 +43,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::error::{near_matches, SpecError};
-use hauksbee_ir::units::format_celsius_to;
+use hauksbee_ir::units::{format_amps, format_celsius_to, format_volts};
 
 // ── Declarative sensor ────────────────────────────────────────────────────────
 
@@ -2844,14 +2844,20 @@ impl Assertion {
         }
         let net = self.net.as_deref().unwrap_or_default();
         let reference = self.reference.as_deref().unwrap_or_default();
-        let bound = |unit: &str, none: &str| bound_label(self.min, self.max, unit, none);
+        let bound = |unit: &str, none: &str| {
+            bound_label(self.min, self.max, |x| format!("{x}{unit}"), none)
+        };
+        let volt_bound = |none: &str| match (self.min, self.max) {
+            (Some(lo), Some(hi)) => volt_range_label(lo, hi),
+            _ => bound_label(self.min, self.max, format_volts, none),
+        };
         match self.kind.as_str() {
             "voltage" => {
                 let when = self
                     .after_ms
                     .map(|t| format!(" after {t}ms"))
                     .unwrap_or_default();
-                format!("{net} {}{when}", bound(" V", "voltage"))
+                format!("{net} {}{when}", volt_bound("voltage"))
             }
             "uart" => match (&self.contains, &self.matches) {
                 (Some(c), _) => format!("UART contains {c:?}"),
@@ -2875,12 +2881,12 @@ impl Assertion {
             ),
             "fires" => self.target.map_or_else(
                 || format!("{reference} fires"),
-                |t| format!("{reference} fires at {t} V"),
+                |t| format!("{reference} fires at {}", format_volts(t)),
             ),
             // No bound is a measurement, not a limit of 0 A.
             "max_current" => self.amps.map_or_else(
                 || format!("I({reference})"),
-                |a| format!("I({reference}) <= {a} A"),
+                |a| format!("I({reference}) <= {}", format_amps(a)),
             ),
             "max_temp" => self.celsius.map_or_else(
                 || format!("Tj({reference}) <= device max"),
@@ -2898,19 +2904,27 @@ impl Assertion {
                 let recover = self.recover_to.zip(self.recover_within_ms);
                 let settle = self.settle_to.zip(self.settle_within_ms);
                 let parts: Vec<String> = [
-                    self.min.map(|lo| format!("min >= {lo} V")),
-                    self.max.map(|hi| format!("max <= {hi} V")),
+                    self.min.map(|lo| format!("min >= {}", format_volts(lo))),
+                    self.max.map(|hi| format!("max <= {}", format_volts(hi))),
                     self.dip_below
                         .zip(self.for_max_ms)
-                        .map(|(d, ms)| format!("dip <{d}V for <= {ms} ms")),
+                        .map(|(d, ms)| format!("dip <{} for <= {ms} ms", format_volts(d))),
                     self.dip_below.zip(recover).map(|(d, (r, ms))| {
-                        format!("recover to {r}V within {ms} ms of dipping <{d}V")
+                        format!(
+                            "recover to {} within {ms} ms of dipping <{}",
+                            format_volts(r),
+                            format_volts(d)
+                        )
                     }),
                     self.spike_above
                         .zip(self.spike_for_max_ms)
-                        .map(|(s, ms)| format!("spike >{s}V for <= {ms} ms")),
+                        .map(|(s, ms)| format!("spike >{} for <= {ms} ms", format_volts(s))),
                     self.spike_above.zip(settle).map(|(s, (settle, ms))| {
-                        format!("settle to <= {settle}V within {ms} ms of spiking >{s}V")
+                        format!(
+                            "settle to <= {} within {ms} ms of spiking >{}",
+                            format_volts(settle),
+                            format_volts(s)
+                        )
                     }),
                 ]
                 .into_iter()
@@ -2942,8 +2956,8 @@ impl Assertion {
                     Some(_) => ", reach only".to_string(),
                 };
                 format!(
-                    "{net} driven to >= {} V within {} ms of reset{hold}",
-                    self.min.unwrap_or(0.0),
+                    "{net} driven to >= {} within {} ms of reset{hold}",
+                    format_volts(self.min.unwrap_or(0.0)),
                     self.deadline_ms.unwrap_or(0.0)
                 )
             }
@@ -2962,11 +2976,26 @@ impl Assertion {
 
 /// `in [lo, hi]<unit>` / `>= lo<unit>` / `<= hi<unit>`, or `none` when the
 /// assertion carries no bound at all.
-fn bound_label(min: Option<f64>, max: Option<f64>, unit: &str, none: &str) -> String {
+/// `in [4.75, 5.25] V`: the unit stated once when both ends print with the
+/// same prefix, on each end (`in [0 V, 50 mV]`) when they differ.
+fn volt_range_label(lo: f64, hi: f64) -> String {
+    let (lo, hi) = (format_volts(lo), format_volts(hi));
+    match (lo.rsplit_once(' '), hi.rsplit_once(' ')) {
+        (Some((l, lu)), Some((h, hu))) if lu == hu => format!("in [{l}, {h}] {lu}"),
+        _ => format!("in [{lo}, {hi}]"),
+    }
+}
+
+fn bound_label(
+    min: Option<f64>,
+    max: Option<f64>,
+    show: impl Fn(f64) -> String,
+    none: &str,
+) -> String {
     match (min, max) {
-        (Some(lo), Some(hi)) => format!("in [{lo}, {hi}]{unit}"),
-        (Some(lo), None) => format!(">= {lo}{unit}"),
-        (None, Some(hi)) => format!("<= {hi}{unit}"),
+        (Some(lo), Some(hi)) => format!("in [{}, {}]", show(lo), show(hi)),
+        (Some(lo), None) => format!(">= {}", show(lo)),
+        (None, Some(hi)) => format!("<= {}", show(hi)),
         (None, None) => none.to_string(),
     }
 }

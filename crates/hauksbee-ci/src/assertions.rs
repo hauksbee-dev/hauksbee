@@ -1524,24 +1524,26 @@ fn check_rail_window(
     // recovery/settling budget).
     let mut v = Verdict::new();
     if let Some(lo) = a.min {
+        let lo_v = format_volts(lo);
         v.clause(
             win.min_v >= lo - 1e-6,
-            format!("min={} (>= {lo}V)", format_volts(win.min_v)),
-            format!("min={} < required {lo}V", format_volts(win.min_v)),
+            format!("min={} (>= {lo_v})", format_volts(win.min_v)),
+            format!("min={} < required {lo_v}", format_volts(win.min_v)),
             format!(
-                "{net} sagged to {} in the window, {} below your {lo} V floor",
+                "{net} sagged to {} in the window, {} below your {lo_v} floor",
                 format_volts(win.min_v),
                 format_volts(lo - win.min_v)
             ),
         );
     }
     if let Some(hi) = a.max {
+        let hi_v = format_volts(hi);
         v.clause(
             win.max_v <= hi + 1e-6,
-            format!("max={} (<= {hi}V)", format_volts(win.max_v)),
-            format!("max={} > allowed {hi}V", format_volts(win.max_v)),
+            format!("max={} (<= {hi_v})", format_volts(win.max_v)),
+            format!("max={} > allowed {hi_v}", format_volts(win.max_v)),
             format!(
-                "{net} rose to {} in the window, {} above your {hi} V ceiling",
+                "{net} rose to {} in the window, {} above your {hi_v} ceiling",
                 format_volts(win.max_v),
                 format_volts(win.max_v - hi)
             ),
@@ -1593,12 +1595,13 @@ fn rail_durations(
     [
         a.dip_below.zip(a.for_max_ms).map(|(d, budget)| {
             let ms = win.dip_duration_s(d) * 1000.0;
+            let d = format_volts(d);
             (
-                format!("dip<{d}V for"),
+                format!("dip<{d} for"),
                 ms,
                 budget,
                 format!(
-                    "{net} sat below {d} V for {ms:.2} ms, {:.2} ms longer than your budget",
+                    "{net} sat below {d} for {ms:.2} ms, {:.2} ms longer than your budget",
                     ms - budget
                 ),
             )
@@ -1608,25 +1611,27 @@ fn rail_durations(
             .zip(a.recover_within_ms)
             .map(|((d, r), budget)| {
                 let ms = win.recovery_s(d, r) * 1000.0;
+                let (d, r) = (format_volts(d), format_volts(r));
                 (
-                    format!("recover-to-{r}V in"),
+                    format!("recover-to-{r} in"),
                     ms,
                     budget,
                     format!(
-                        "{net} took {ms:.2} ms to climb back to {r} V after dipping below \
-                 {d} V, {:.2} ms past your recovery deadline",
+                        "{net} took {ms:.2} ms to climb back to {r} after dipping below \
+                 {d}, {:.2} ms past your recovery deadline",
                         ms - budget
                     ),
                 )
             }),
         a.spike_above.zip(a.spike_for_max_ms).map(|(sp, budget)| {
             let ms = win.spike_duration_s(sp) * 1000.0;
+            let sp = format_volts(sp);
             (
-                format!("spike>{sp}V for"),
+                format!("spike>{sp} for"),
                 ms,
                 budget,
                 format!(
-                    "{net} stayed above {sp} V for {ms:.2} ms, {:.2} ms longer than your budget",
+                    "{net} stayed above {sp} for {ms:.2} ms, {:.2} ms longer than your budget",
                     ms - budget
                 ),
             )
@@ -1636,13 +1641,14 @@ fn rail_durations(
             .zip(a.settle_within_ms)
             .map(|((sp, settle), budget)| {
                 let ms = win.settling_s(sp, settle) * 1000.0;
+                let (sp, settle) = (format_volts(sp), format_volts(settle));
                 (
-                    format!("settle-to-{settle}V in"),
+                    format!("settle-to-{settle} in"),
                     ms,
                     budget,
                     format!(
-                        "{net} took {ms:.2} ms to settle to {settle} V after spiking above \
-                 {sp} V, {:.2} ms past your settling deadline",
+                        "{net} took {ms:.2} ms to settle to {settle} after spiking above \
+                 {sp}, {:.2} ms past your settling deadline",
                         ms - budget
                     ),
                 )
@@ -1727,6 +1733,7 @@ fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
 fn boot_coverage_against_deadline(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     let net = a.net.clone().unwrap_or_default();
     let level = a.min.unwrap_or(0.0);
+    let level_v = format_volts(level);
     let deadline = a.deadline_ms.unwrap_or(0.0);
     let key = (net.clone(), level.to_bits());
 
@@ -1776,7 +1783,7 @@ fn boot_coverage_against_deadline(a: &Assertion, out: &RunOutcome) -> (bool, Str
         Some(tc) if tc > deadline + 1e-9 => (
             false,
             format!(
-                "control net '{net}' first reached {level} V at {tc:.2} ms, past the {deadline} ms boot deadline"
+                "control net '{net}' first reached {level_v} at {tc:.2} ms, past the {deadline} ms boot deadline"
             ),
         ),
         Some(tc) => {
@@ -1793,7 +1800,7 @@ fn boot_coverage_against_deadline(a: &Assertion, out: &RunOutcome) -> (bool, Str
                             return (
                                 false,
                                 format!(
-                                    "control net '{net}' reached {level} V at {tc:.2} ms but fell back below it at {td:.2} ms, before the {deadline} ms boot deadline"
+                                    "control net '{net}' reached {level_v} at {tc:.2} ms but fell back below it at {td:.2} ms, before the {deadline} ms boot deadline"
                                 ),
                             );
                         }
@@ -1807,7 +1814,7 @@ fn boot_coverage_against_deadline(a: &Assertion, out: &RunOutcome) -> (bool, Str
                             return (
                                 false,
                                 format!(
-                                    "control net '{net}' reached {level} V at {tc:.2} ms but held it only \
+                                    "control net '{net}' reached {level_v} at {tc:.2} ms but held it only \
                                      {held:.2} ms (fell back below at {td:.2} ms), shorter than the required \
                                      hold_ms = {h}"
                                 ),
@@ -1821,7 +1828,7 @@ fn boot_coverage_against_deadline(a: &Assertion, out: &RunOutcome) -> (bool, Str
                         return (
                             false,
                             format!(
-                                "control net '{net}' reached {level} V at {tc:.2} ms, but its {h} ms hold \
+                                "control net '{net}' reached {level_v} at {tc:.2} ms, but its {h} ms hold \
                                  window runs past the end of the {:.2} ms simulation, so the hold cannot \
                                  be confirmed; extend the run duration",
                                 out.sim_ms
@@ -1853,7 +1860,7 @@ fn boot_coverage_against_deadline(a: &Assertion, out: &RunOutcome) -> (bool, Str
             };
             (
                 true,
-                format!("control net '{net}' driven to >= {level} V at {tc:.2} ms (<= {deadline} ms), {hold_note}"),
+                format!("control net '{net}' driven to >= {level_v} at {tc:.2} ms (<= {deadline} ms), {hold_note}"),
             )
         }
     }
@@ -1873,6 +1880,7 @@ fn boot_coverage_against_deadline(a: &Assertion, out: &RunOutcome) -> (bool, Str
 fn boot_coverage_host_paced(a: &Assertion, out: &RunOutcome, bound: &str) -> (bool, String) {
     let net = a.net.clone().unwrap_or_default();
     let level = a.min.unwrap_or(0.0);
+    let level_v = format_volts(level);
     let key = (net.clone(), level.to_bits());
     let mcus = out.host_paced_mcus.join(", ");
     let Some(tc) = out.boot_first_cross_ms.get(&key).copied() else {
@@ -1894,11 +1902,11 @@ fn boot_coverage_host_paced(a: &Assertion, out: &RunOutcome, bound: &str) -> (bo
         );
     };
     let mut detail = format!(
-        "control net '{net}' driven to >= {level} V at ~{tc:.0} ms (approximate){}",
+        "control net '{net}' driven to >= {level_v} at ~{tc:.0} ms (approximate){}",
         host_paced_note(bound, out)
     );
     if let Some(td) = out.boot_drop_after_cross_ms.get(&key) {
-        let _ = write!(detail, "; it fell back below {level} V at ~{td:.0} ms");
+        let _ = write!(detail, "; it fell back below {level_v} at ~{td:.0} ms");
     }
     if let Some(ft) = out.first_fault_ms.filter(|ft| *ft < tc - 1e-9) {
         let _ = write!(
@@ -1932,18 +1940,25 @@ fn boot_below_threshold_msg(
     drive_direction_observable: bool,
     observed: Option<(f64, f64)>,
 ) -> String {
+    let level_v = format_volts(level);
     let range = observed
-        .map(|(lo, hi)| format!("; observed range [{lo:.3}, {hi:.3}] V"))
+        .map(|(lo, hi)| {
+            format!(
+                "; observed range [{}, {}]",
+                format_volts(lo),
+                format_volts(hi)
+            )
+        })
         .unwrap_or_default();
     if driven {
-        format!("control net '{net}' was driven but never exceeded {level} V{range}")
+        format!("control net '{net}' was driven but never exceeded {level_v}{range}")
     } else if drive_direction_observable {
         format!(
-            "control net '{net}' was never driven to >= {level} V (firmware left it Hi-Z / undefined through the whole run){range}"
+            "control net '{net}' was never driven to >= {level_v} (firmware left it Hi-Z / undefined through the whole run){range}"
         )
     } else {
         format!(
-            "control net '{net}' never reached {level} V{range}; the backend cannot report pin drive direction, so the pin may be undriven (Hi-Z / undefined) or driven LOW"
+            "control net '{net}' never reached {level_v}{range}; the backend cannot report pin drive direction, so the pin may be undriven (Hi-Z / undefined) or driven LOW"
         )
     }
 }
@@ -2105,9 +2120,10 @@ fn check_voltage(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Strin
             ("max", "<=", "> allowed", "rose to", "above your", "ceiling")
         };
         let signed = |v: f64| sign * (v - limit);
+        let limit_v = format_volts(limit);
         let why = if signed(win.last_v) <= 1e-6 {
             format!(
-                "{net} {verb} {}, {} {side} {limit} V {noun}, \
+                "{net} {verb} {}, {} {side} {limit_v} {noun}, \
                  before settling back to {}",
                 format_volts(worst),
                 format_volts(signed(worst)),
@@ -2115,15 +2131,15 @@ fn check_voltage(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Strin
             )
         } else {
             format!(
-                "{net} settled {} {side} {noun} ({} vs {label} {limit} V)",
+                "{net} settled {} {side} {noun} ({} vs {label} {limit_v})",
                 format_volts(signed(win.last_v)),
                 format_volts(win.last_v)
             )
         };
         v.clause(
             signed(worst) <= 1e-6,
-            format!("{label}={} ({cmp} {limit}V)", format_volts(worst)),
-            format!("{label}={} {breach} {limit}V", format_volts(worst)),
+            format!("{label}={} ({cmp} {limit_v})", format_volts(worst)),
+            format!("{label}={} {breach} {limit_v}", format_volts(worst)),
             why,
         );
     }
@@ -2587,18 +2603,19 @@ fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<S
             None,
         );
     };
+    let limit_s = format_amps(limit);
     if peak <= limit + 1e-9 {
         (
             true,
-            format!("I({reference}) peak {peak_s} (<= {limit}A){unit}"),
+            format!("I({reference}) peak {peak_s} (<= {limit_s}){unit}"),
             None,
         )
     } else {
         (
             false,
-            format!("I({reference}) peak {peak_s} > limit {limit}A <- FAILED HERE{unit}"),
+            format!("I({reference}) peak {peak_s} > limit {limit_s} <- FAILED HERE{unit}"),
             Some(format!(
-                "{reference} drew {peak_s} at peak, {} over your {limit} A limit",
+                "{reference} drew {peak_s} at peak, {} over your {limit_s} limit",
                 format_amps(peak - limit)
             )),
         )
@@ -3619,7 +3636,7 @@ mod tests {
         let (ok, msg, _) = check_seed(&a, &out, 1.0);
         assert!(ok, "{msg}");
         assert!(
-            msg.starts_with("EN over the whole 200 ms run: min=3.3 V (>= 3V)"),
+            msg.starts_with("EN over the whole 200 ms run: min=3.3 V (>= 3 V)"),
             "{msg}"
         );
         assert!(
@@ -3663,7 +3680,7 @@ mod tests {
         assert!(
             reason.contains("Judged after 50 ms, the level holds")
                 && reason.contains("leaves out an excursion earlier in the run")
-                && reason.contains("min=0 V < required 3V"),
+                && reason.contains("min=0 V < required 3 V"),
             "{reason}"
         );
         let r = evaluate_one(&a, std::slice::from_ref(&out), None, 1.0);
@@ -3841,7 +3858,7 @@ mod tests {
         let (ok, msg, _) = check_seed(&a, &out, 1.0);
         assert!(ok, "{msg}");
         assert!(
-            msg.starts_with("LOAD over the whole 200 ms run: min=3.3 V (>= 3V)"),
+            msg.starts_with("LOAD over the whole 200 ms run: min=3.3 V (>= 3 V)"),
             "{msg}"
         );
         let spec: Spec = toml::from_str(

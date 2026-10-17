@@ -4,7 +4,7 @@ hauksbee-ci: Olimex ESP32-EVB: WiFi burst on robust supply (transient)
   seeds: 1
 
   [PASS] 3V3 holds through WiFi burst on a robust supply
-        +3.3V window: min=3.266V (>= 3V), dip<3.1V for 0.00ms (<= 5ms) [min=3.266V max=3.306V]
+        +3.3V window: min=3.266 V (>= 3 V), dip<3.1 V for 0.00ms (<= 5ms) [min=3.266 V max=3.306 V]
   [PASS] no stress faults raised
         no stress faults
 

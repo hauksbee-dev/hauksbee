@@ -1094,7 +1094,14 @@ fn explain(
             },
             |v| format_engineering(*v, ""),
         );
-        let mut line = format!("culprit {rank}: {r} ({what}): +10% moves it {d:+.3} V");
+        // Signed, but a shift that rounds to nothing is a plain `0 V`.
+        let shift = format_volts(d);
+        let shift = if *d > 0.0 && shift != "0 V" {
+            format!("+{shift}")
+        } else {
+            shift
+        };
+        let mut line = format!("culprit {rank}: {r} ({what}): +10% moves it {shift}");
         if let Some((_, vt)) = probe.switches.values().flatten().find(|(s, _)| s == r) {
             let follows = d / (vt * (NUDGE - 1.0));
             if follows >= FOLLOWS {

@@ -4,7 +4,7 @@ hauksbee-ci: blinky power-up sanity
   seeds: 1
 
   [PASS] +5V >= 4.75 V
-        +5V: min=5.000V (>= 4.75V) [settled 5.000V]
+        +5V: min=5 V (>= 4.75 V) [settled 5 V]
   [PASS] UART contains "hauksbee-demo v1"
         UART="hauksbee-demo v1··" contains "hauksbee-demo v1"
   [PASS] D13 toggles at ~5 Hz
