@@ -41,7 +41,7 @@ fn run(q: Q, vcc: f64, vg: f64, load: &str, bulk: &str) -> (String, i32) {
         b += &comp(r, lib, val, 40 + i * 30, pad(1, a) + &pad(2, k));
     }
     let nets = "net \"G\"\nnet \"D\"\nnet \"GND\"\nnet \"VCC\"\nnet \"IN\"\n";
-    let p = support::write_tmp(
+    let p = support::placement_board(
         "q.board",
         &format!("board version 1\nfn main {{\n{nets}{b}}}\n"),
     );
@@ -54,6 +54,7 @@ fn run(q: Q, vcc: f64, vg: f64, load: &str, bulk: &str) -> (String, i32) {
         support::toml_path(&p)
     );
     let out = support::run_body(&format!("{}-{vg}.toml", q.0), &spec);
+    support::assert_placement_waived(&out);
     (out.render_human().to_lowercase(), out.exit_code())
 }
 

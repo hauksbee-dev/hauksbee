@@ -17,4 +17,7 @@
     (pad 1 thru_hole circle (at 0 0) (net 3 "VOUT"))
     (pad 2 thru_hole circle (at 2 0) (net 1 "GND"))
   )
+  (segment (start 102 100) (end 102 105) (width 0.25) (layer F.Cu) (net 3))
+  (segment (start 102 105) (end 100 105) (width 0.25) (layer F.Cu) (net 3))
+  (segment (start 100 105) (end 100 110) (width 0.25) (layer F.Cu) (net 3))
 )

@@ -899,9 +899,10 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     // fails this run too, as its own named row, so a simulation-only spec can
     // never read GREEN over a board its static check fails. Judged with the
     // run's model library and the board's waiver file, like the check.
-    match hauksbee_engine::reports::check::static_gating_findings(&spec.board_path(), &lib) {
-        Ok(findings) => {
-            results.extend(static_gate::static_check_results(&findings, outcomes.len()));
+    // A finding the board's waiver file overrules keeps its row, marked waived.
+    match hauksbee_engine::reports::check::static_gate(&spec.board_path(), &lib) {
+        Ok(gate) => {
+            results.extend(static_gate::gate_rows(&gate, outcomes.len()));
         }
         Err(e) => {
             let msg = format!(

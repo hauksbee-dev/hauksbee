@@ -88,17 +88,19 @@ fn a_board_its_static_check_fails_never_runs_green() {
 }
 
 /// Legal control: a board the static check passes gets no static row, so its
-/// run's verdict is exactly what its own assertions say.
+/// run's verdict is exactly what its own assertions say. The control is the
+/// routed `boot_gate` layout, short-free: a placement-only `.board` fixture is
+/// never check-clean, since it carries no copper.
 #[test]
 fn a_board_its_static_check_passes_adds_no_row() {
-    let board = fixture("regulator.board");
+    let board = support::example("boards/boot_gate_clean.kicad_pcb");
     let lib = ModelLibrary::builtin_with_user_dirs(&[]);
     let gating = hauksbee_engine::reports::check::static_gating_findings(&board, &lib)
         .expect("the static suite runs");
     assert!(gating.is_empty(), "the control is check-clean: {gating:?}");
     let r = support::run_body(
         "static pass.toml",
-        &no_faults_spec(&board, Some(("VIN", 5.0))),
+        &no_faults_spec(&board, Some(("+5V", 5.0))),
     );
     assert!(
         r.results.iter().all(|row| row.kind != STATIC_CHECK_KIND),
@@ -128,10 +130,10 @@ fn an_open_connector_is_a_condition_and_an_open_ic_refuses_the_verdict() {
         "the open connector is a stated condition: {:?}\n{human}",
         r.verdict_conditions
     );
+    support::assert_placement_waived(&r);
 
     let text = std::fs::read_to_string(&board).unwrap();
-    let ic = std::env::temp_dir().join(format!("open_ic_{}.board", std::process::id()));
-    std::fs::write(&ic, text.replace("comp J1 ", "comp U1 ")).unwrap();
+    let ic = support::placement_board("open_ic.board", &text.replace("comp J1 ", "comp U1 "));
     let r = support::run_body("open ic.toml", &no_faults_spec(&ic, Some(("+5V", 5.0))));
     let human = r.render_human();
     assert!(

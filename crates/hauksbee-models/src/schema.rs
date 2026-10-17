@@ -228,6 +228,12 @@ pub struct OptionalSupply {
     pub role: String,
     /// The datasheet figure, table or sentence that lets it be left open.
     pub basis: String,
+    /// The role of the on-chip regulator's input when this pin is that
+    /// regulator's output in a datasheet configuration (`CP210x` `VDD` made from
+    /// `REGIN`): while the input is fed, the pin feeds the part's other supplies
+    /// tied to it (the CP2104's `VIO` on `VDD`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regulated_from: Option<String>,
 }
 
 /// A `[models.levels]` table (two or more ascending `[vcc, volts]` points) read

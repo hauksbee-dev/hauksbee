@@ -19,10 +19,76 @@ pub fn write_tmp(name: &str, body: &str) -> PathBuf {
     p
 }
 
-/// One board-DSL pad: number `n` on net `net`, placed at x = `n` so that no two
-/// lands of a part coincide.
+/// One board-DSL pad: number `n` on net `net`, placed at x = `n` mm. Lands are
+/// 0.6 mm wide on that 1 mm pitch, so neighbouring pads of a part keep a 0.4 mm
+/// gap: the fixture's copper is physically valid, never a short the static
+/// check would rightly flag.
 pub fn pad(n: u32, net: &str) -> String {
-    format!("pad \"{n}\" smd rect at {n} 0 size 2 1.5 layers [F.Cu F.Mask] net \"{net}\"\n")
+    format!("pad \"{n}\" smd rect at {n} 0 size 0.6 1.5 layers [F.Cu F.Mask] net \"{net}\"\n")
+}
+
+/// Why a Board-as-Code fixture's "not routed" finding is waived: the `.board`
+/// form places parts and joins nets but cannot carry copper, so every such
+/// fixture is a pre-layout board by construction. The committed fixtures
+/// directory carries the same waiver in its `hauksbee-waivers.toml`.
+pub const PLACEMENT_ONLY_REASON: &str = "placement-only Board-as-Code fixture: the .board \
+     form cannot carry copper, so the board is pre-layout by construction";
+
+/// Why a hand-written layout fixture's "not routed" finding is waived: its
+/// suite judges the netlist, so the parts are placed and netted but left
+/// unrouted on purpose.
+pub const PRE_LAYOUT_REASON: &str = "pre-layout fixture: placed and netted but left \
+     unrouted on purpose, since this suite judges the netlist";
+
+/// Write a placement-only Board-as-Code board `name` with `body`, beside the
+/// waiver for its not-routed finding (see [`PLACEMENT_ONLY_REASON`]). The
+/// waived finding stays a visible row of every run; [`assert_placement_waived`]
+/// checks that.
+pub fn placement_board(name: &str, body: &str) -> PathBuf {
+    let board = write_tmp(name, body);
+    let mut nets: Vec<&str> = body
+        .split("net \"")
+        .skip(1)
+        .filter_map(|rest| rest.split('"').next())
+        .filter(|n| !n.is_empty())
+        .collect();
+    nets.sort_unstable();
+    nets.dedup();
+    write_unrouted_waiver(&board, &nets, PLACEMENT_ONLY_REASON);
+    board
+}
+
+/// Write the waiver for `board`'s not-routed finding beside it. A waiver names
+/// a net the finding must touch, and the finding lists only the nets with pads
+/// to join, so there is one waiver per net in `nets` (every net the board
+/// declares): whichever the finding lists, one matches.
+pub fn write_unrouted_waiver(board: &Path, nets: &[&str], reason: &str) {
+    let waivers: String = nets
+        .iter()
+        .map(|net| waive("lint", "unrouted_pad", net, reason, "2030-01-01"))
+        .collect();
+    std::fs::write(board.with_file_name("hauksbee-waivers.toml"), waivers).unwrap();
+}
+
+/// Assert a pre-layout board's run still shows its not-routed finding: a
+/// failed `static_check` row, marked waived with a pre-layout reason (either
+/// [`PLACEMENT_ONLY_REASON`] or [`PRE_LAYOUT_REASON`]), not dropped.
+pub fn assert_placement_waived(result: &hauksbee_ci::CiResult) {
+    use hauksbee_ir::vocabulary::STATIC_CHECK_KIND;
+    let shown = result.results.iter().any(|r| {
+        r.kind == STATIC_CHECK_KIND
+            && r.label
+                .starts_with(&format!("{STATIC_CHECK_KIND}: lint unrouted_pad"))
+            && !r.passed
+            && r.waived
+                .as_deref()
+                .is_some_and(|w| w.contains("pre-layout"))
+    });
+    assert!(
+        shown,
+        "the waived not-routed finding must stay a visible row: {:?}",
+        result.results
+    );
 }
 
 /// One board-DSL component: reference `r`, footprint `lib`, value `val`, placed
@@ -113,6 +179,40 @@ pub fn assert_green(result: &hauksbee_ci::CiResult, what: &str) {
         result.verdict_reason(),
         result.render_human()
     );
+}
+
+/// Assert a run whose own assertions all hold is RED only because the board's
+/// static check fails it, on exactly the `static_check` rows whose labels
+/// start with `expected`: every other row is GREEN, each expected finding has
+/// its failing (unwaived) row, and no other row fails.
+pub fn assert_red_only_on_static(result: &hauksbee_ci::CiResult, expected: &[&str], what: &str) {
+    use hauksbee_ir::vocabulary::STATIC_CHECK_KIND;
+    assert_eq!(result.exit_code(), 1, "{what}: {}", result.render_human());
+    for r in result
+        .results
+        .iter()
+        .filter(|r| r.kind != STATIC_CHECK_KIND)
+    {
+        assert_row_green(r, what);
+    }
+    let failing: Vec<&str> = result
+        .results
+        .iter()
+        .filter(|r| r.kind == STATIC_CHECK_KIND && !r.passed && r.waived.is_none())
+        .map(|r| r.label.as_str())
+        .collect();
+    for want in expected {
+        assert!(
+            failing.iter().any(|l| l.starts_with(want)),
+            "{what}: no failing row '{want}' in {failing:?}"
+        );
+    }
+    for label in &failing {
+        assert!(
+            expected.iter().any(|w| label.starts_with(w)),
+            "{what}: unexpected static row '{label}'"
+        );
+    }
 }
 
 /// Whether one assertion row is GREEN as a user sees it: it passed AND its

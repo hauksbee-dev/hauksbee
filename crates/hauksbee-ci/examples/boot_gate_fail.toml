@@ -2,7 +2,7 @@
 #
 #   hauksbee-ci run crates/hauksbee-ci/examples/boot_gate_fail.toml
 #
-# Identical board to boot_gate_pass.toml, but variant B firmware never configures
+# Identical board (boards/boot_gate_clean.kicad_pcb) to boot_gate_pass.toml, but variant B firmware never configures
 # PB0: the MOSFET gate is left floating (Hi-Z) for the whole run. The
 # boot_coverage assertion must FAIL, naming GATE_CTRL as the control net the
 # firmware never drove. This is the value of the check: the netlist alone cannot
@@ -10,7 +10,7 @@
 # intended; running the firmware answers it.
 
 name = "boot_coverage: MOSFET gate left floating (FAIL)"
-board = "boards/boot_gate.kicad_pcb"
+board = "boards/boot_gate_clean.kicad_pcb"
 firmware = "../../../testdata/firmware/boot_gate_b/boot_gate.hex"
 mcu = "atmega328p"
 duration_ms = 50

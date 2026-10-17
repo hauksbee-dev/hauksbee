@@ -2249,7 +2249,7 @@ gnd_pin    = "3"
 "4"  = "ud_p"      # USB D+
 "5"  = "ud_n"      # USB D-
 "6"  = "vdd"       # 3.0-3.6 V supply input, or the internal regulator's 3.3 V
-                   # output. Modelled as an input only; see the note above.
+                   # output; see optional_supplies below.
 "7"  = "regin"     # 5 V input to the on-chip regulator
 "8"  = "vbus"      # VBUS sense input
 "9"  = "rst_n"     # open-drain reset, driven by the internal POR / VDD monitor
@@ -2272,6 +2272,14 @@ gnd_pin    = "3"
 "26" = "txd"
 "27" = "dsr_n"
 "28" = "dtr_n"
+
+# VDD is an input only when the regulator is bypassed (REGIN tied to the 3 V
+# net); bus-powered it is the regulator's output with bypass capacitors only.
+# REGIN, the other supply pad, is still held to being wired.
+[[models.optional_supplies]]
+role = "vdd"
+regulated_from = "regin"
+basis = "Silicon Labs CP2102 datasheet Rev. 1.0, Table 4 (p.6): VDD pin 6 is 'Power In 3.0-3.6 V' or 'Power Out 3.3 V Voltage Regulator Output'; Section 10 (p.13): when enabled the regulator output appears on VDD, and Figure 7 (p.14, Configuration 1: USB Bus-Powered) feeds REGIN from VBUS with VDD the 3 V output; Figure 6 (p.11) decouples VDD with 0.1 uF and an optional 4.7 uF only"
 
 [models.ratings]
 max_voltage_v = 4.2       # VDD abs max; any I/O pin, VBUS or RST is -0.3 to 5.8 V
@@ -12546,6 +12554,13 @@ warning = "source-bound supply-draw model: the awake VDD supply current (17 mA t
 "22" = "dsr"
 "23" = "dtr"
 "24" = "dcd"
+
+# VDD is the on-chip regulator's output in the bus-powered configuration, so a
+# board that feeds REGIN and decouples VDD has fed it.
+[[models.optional_supplies]]
+role = "vdd"
+regulated_from = "regin"
+basis = "Silicon Labs CP2104 datasheet Rev. 1.0, Table 7 (p.7): VDD pin 6 is 'Power In, Power Supply Voltage Input' or 'Power Out, Voltage Regulator Output'; Section 9 (p.16): when enabled the regulator output appears on the VDD pin; Figure 8 (p.16, Typical Bus-Powered Connection Diagram) feeds REGIN from VBUS and gives VDD only 1-5 uF and 0.1 uF, Note 3 lets VIO tie directly to VDD"
 
 [models.ratings]
 max_voltage_v = 4.2            # Table 1: VDD or VIO with respect to GND (the 5.8 V figure is for the I/O pins)

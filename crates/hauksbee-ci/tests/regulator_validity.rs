@@ -48,11 +48,14 @@ fn spec_for(dir: &Path, volts: Option<f64>, floor: Option<f64>) -> PathBuf {
 }
 
 fn run(spec: &Path) -> CiResult {
-    hauksbee_ci::run(&RunConfig {
+    let r = hauksbee_ci::run(&RunConfig {
         spec: spec.to_path_buf(),
         ..RunConfig::default()
     })
-    .expect("run the spec")
+    .expect("run the spec");
+    // The fixture is placement-only: its waived not-routed row stays listed.
+    support::assert_placement_waived(&r);
+    r
 }
 
 /// The one refusal string, as the coverage-warning channel carries it.

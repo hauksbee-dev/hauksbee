@@ -300,6 +300,15 @@ fn own_output_feeds(model: &ModelEntry, role: &str, family: &str) -> bool {
     {
         return true;
     }
+    // An on-chip regulator's output (CP2104 `VDD` from `REGIN`) feeds the part's
+    // other supply families tied to it, never its own.
+    if model
+        .optional_supplies
+        .iter()
+        .any(|o| o.regulated_from.is_some() && o.role.eq_ignore_ascii_case(role))
+    {
+        return power_pin(role, model.kind).is_some_and(|p| p.family != family);
+    }
     let family_roles: Vec<String> = model
         .pins
         .values()
@@ -480,9 +489,29 @@ fn judge(wiring: &Wiring<'_>, ci: usize, model: &ModelEntry) -> Vec<LintFinding>
         })
         .map(|p| p.power.family.clone())
         .collect();
+    // An on-chip regulator whose input is fed: its output pin feeds what is
+    // tied to it ([`own_output_feeds`]).
+    let regulator_fed = model.optional_supplies.iter().any(|o| {
+        o.regulated_from.as_ref().is_some_and(|input| {
+            model.pins.iter().any(|(number, role)| {
+                role.eq_ignore_ascii_case(input) && {
+                    let as_supply = PowerPin {
+                        kind: PowerKind::Supply,
+                        family: input.to_ascii_lowercase(),
+                        base: false,
+                        ground: false,
+                    };
+                    matches!(
+                        wiring.pad(ci, model, number, &as_supply).0,
+                        PadState::Positive(_) | PadState::Other
+                    )
+                }
+            })
+        })
+    });
     for pad in &mut pads {
         if pad.state == PadState::Tied {
-            if fed.iter().any(|f| *f != pad.power.family) {
+            if regulator_fed || fed.iter().any(|f| *f != pad.power.family) {
                 pad.state = PadState::Other;
             } else {
                 pad.state = PadState::Open;
@@ -1187,6 +1216,64 @@ mod tests {
         let optional = "[[models.optional_supplies]]\nrole = \"uvcc\"\n\
                         basis = \"datasheet figure: UVCC not connected\"\n";
         assert!(run(&card_lib(&pins, optional), &pads).is_empty());
+    }
+
+    /// The shipped USB bridge cards, wired as their datasheets' bus-powered
+    /// figures draw them: REGIN and VBUS on the 5 V bus, VDD (the on-chip
+    /// regulator's output) on a net that holds only its decoupling capacitor,
+    /// and the CP2104's VIO tied to VDD. That is a fed part. The faulty
+    /// control leaves VIO on a net nothing feeds, which still fires: only the
+    /// regulator's own output pad is excused.
+    #[test]
+    fn a_bus_powered_bridge_feeds_its_own_vdd() {
+        let lib = ModelLibrary::builtin();
+        let bridge = |value: &str, vio: Option<i64>| {
+            let mut pads = vec![("3", GND), ("6", LONE), ("7", V5), ("8", V5)];
+            if value == "CP2104" {
+                pads = vec![("2", GND), ("6", LONE), ("7", V5), ("8", V5)];
+                pads.extend(vio.map(|n| ("5", n)));
+            }
+            let parts = vec![
+                part("U1", value, &pads),
+                part("C1", "100nF", &[("1", LONE), ("2", GND)]),
+                part("C2", "4.7uF", &[("1", LONE), ("2", GND)]),
+                part("J1", "USB_B_Micro", &[("1", V5), ("5", GND)]),
+            ];
+            power_pin_lint(&board(&NETS, parts), &lib).findings
+        };
+        assert!(
+            bridge("CP2102", None).is_empty(),
+            "{:#?}",
+            bridge("CP2102", None)
+        );
+        let tied = bridge("CP2104", Some(LONE));
+        assert!(tied.is_empty(), "{tied:#?}");
+        // Faulty control: the regulator's input is left open, so nothing makes
+        // the VDD that VIO is tied to.
+        let unfed = power_pin_lint(
+            &board(
+                &NETS,
+                vec![
+                    part(
+                        "U1",
+                        "CP2104",
+                        &[("2", GND), ("5", LONE), ("6", LONE), ("7", UNCON)],
+                    ),
+                    part("C1", "100nF", &[("1", LONE), ("2", GND)]),
+                ],
+            ),
+            &lib,
+        )
+        .findings;
+        assert_eq!(unfed.len(), 1, "{unfed:#?}");
+        assert!(unfed[0].message.contains("VIO"), "{}", unfed[0].message);
+        let open_vio = bridge("CP2104", Some(UNCON));
+        assert_eq!(open_vio.len(), 1, "{open_vio:#?}");
+        assert!(
+            open_vio[0].message.contains("VIO"),
+            "{}",
+            open_vio[0].message
+        );
     }
 
     /// `VS` is an amplifier's supply; on a gate driver it is the switch node.

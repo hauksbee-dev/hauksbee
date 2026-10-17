@@ -39,7 +39,7 @@ fn spec_firmware_zip_resolves_and_passes() {
     let bytes = w.finish().unwrap().into_inner();
     std::fs::write(dir.join("fw.zip"), bytes).unwrap();
 
-    let board = support::example("boards/boot_gate.kicad_pcb");
+    let board = support::example("boards/boot_gate_clean.kicad_pcb");
     std::fs::write(
         dir.join("spec.toml"),
         format!(
@@ -76,7 +76,7 @@ deadline_ms = 20.0
 fn spec_firmware_useless_dir_is_an_actionable_error() {
     let dir = scratch("dir");
     std::fs::create_dir_all(dir.join("not_a_project")).unwrap();
-    let board = support::example("boards/boot_gate.kicad_pcb");
+    let board = support::example("boards/boot_gate_clean.kicad_pcb");
     std::fs::write(
         dir.join("spec.toml"),
         format!(

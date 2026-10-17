@@ -46,7 +46,7 @@ fn board(r2: &str, rb: &str) -> String {
 }
 
 fn run(case: &str, r2: &str, rb: &str) -> hauksbee_ci::CiResult {
-    let path = support::write_tmp("outcome.board", &board(r2, rb));
+    let path = support::placement_board("outcome.board", &board(r2, rb));
     support::run_body(
         &format!("{case}.toml"),
         &format!(
@@ -149,7 +149,7 @@ fn a_driven_rail_reaches_the_parts_that_read_their_levels_from_it() {
         ("R3", R0805, "10k", &["CTL", "GND"]),
         ("R4", R0805, "10k", &["B", "GND"]),
     ]);
-    let path = support::write_tmp("rail.board", &board);
+    let path = support::placement_board("rail.board", &board);
     let spec = support::load_spec(
         "rail.toml",
         &format!(
@@ -198,7 +198,7 @@ fn a_pulse_must_be_high_enough_for_long_enough_at_the_input_it_drives() {
                 &["X", "GND"],
             ),
         ]);
-        let path = support::write_tmp("pulse.board", &board);
+        let path = support::placement_board("pulse.board", &board);
         support::run_body(
             "pulse.toml",
             &format!(
@@ -246,7 +246,7 @@ fn a_relation_across_conditions_names_the_pair_that_breaks_it() {
         ("R1", R0805, "820k", &["SET", "TH"]),
         ("R2", R0805, "270k", &["TH", "GND"]),
     ]);
-    let path = support::write_tmp("relation.board", &board);
+    let path = support::placement_board("relation.board", &board);
     let rows = [
         ("level up", "increases", "net = \"TH\"", None),
         ("rate down", "decreases", "ref = \"U1\"", None),
@@ -301,8 +301,14 @@ fn a_relation_across_conditions_names_the_pair_that_breaks_it() {
 fn a_board_that_meets_its_outcomes_passes_silently() {
     let r = run("outcome repaired", "68k", "47k");
     support::assert_green(&r, "board meeting its outcomes");
+    // Silent: no outcome row explains a failure. The placement-only board's
+    // waived not-routed row is listed with its fix, as every waived row is.
+    support::assert_placement_waived(&r);
     assert!(
-        r.results.iter().all(|row| row.why.is_none()),
+        r.results
+            .iter()
+            .filter(|row| row.waived.is_none())
+            .all(|row| row.why.is_none()),
         "{}",
         r.render_human()
     );

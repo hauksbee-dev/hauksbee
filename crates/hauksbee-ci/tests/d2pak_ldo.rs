@@ -29,6 +29,8 @@ fn run_at(dir: &Path, fixture: &str, volts: f64) -> (i32, bool) {
         ..RunConfig::default()
     };
     let report = hauksbee_ci::run(&cfg).expect("run the spec");
+    // Both forms are pre-layout: the waived not-routed row stays listed.
+    support::assert_placement_waived(&report);
     let text = report.render_human();
     let inferred = ["1", "2", "3"].map(|pad| text.contains(&format!("inferred-pin-role:U1/{pad}")));
     assert!(

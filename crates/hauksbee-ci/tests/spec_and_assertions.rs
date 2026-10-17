@@ -191,11 +191,10 @@ fn board_as_code_spec_runs_end_to_end() {
     // compiled text carries full net connectivity, and CI is netlist-driven,
     // so no routing step is needed). The board must bind and the voltage
     // assertion on one of its nets must actually evaluate.
-    let dir = std::env::temp_dir().join("hauksbee_ci_tests");
-    std::fs::create_dir_all(&dir).unwrap();
-    let board = dir.join("cell.board");
-    std::fs::write(
-        &board,
+    // Its two 0.5 mm lands sit 0.5 mm apart, so the static check has no short
+    // to flag, and with one pad per net there is nothing left to route.
+    let board = support::write_tmp(
+        "cell.board",
         r#"# Board-as-Code (hauksbee board DSL v1)
 board version 20241229
 
@@ -203,13 +202,12 @@ fn main {
     net "A"
     net "B"
     comp R1 lib "Resistor_SMD:R_0402_1005Metric" val "10k" layer "F.Cu" at 0 0 rot 0 {
-        pad "1" smd rect at 0 0 size 1 1 layers [F.Cu] net "A"
-        pad "2" smd rect at 1 0 size 1 1 layers [F.Cu] net "B"
+        pad "1" smd rect at 0 0 size 0.5 0.5 layers [F.Cu] net "A"
+        pad "2" smd rect at 1 0 size 0.5 0.5 layers [F.Cu] net "B"
     }
 }
 "#,
-    )
-    .unwrap();
+    );
     let p = support::write_tmp(
         "board_as_code.toml",
         &format!(
@@ -352,7 +350,7 @@ fn rc_delay_board() -> String {
 /// The RC-delay board with `supply` as its `[[supply]]` body and `asserts`
 /// appended, run for 40 ms.
 fn rc_delay_run(case: &str, supply: &str, asserts: &str) -> hauksbee_ci::CiResult {
-    let board = support::write_tmp(&format!("{case}.board"), &rc_delay_board());
+    let board = support::placement_board(&format!("{case}.board"), &rc_delay_board());
     support::run_body(
         &format!("{case}.toml"),
         &format!(
@@ -378,6 +376,7 @@ fn an_unbounded_assertion_reports_a_number_and_judges_nothing() {
         pu.detail
     );
     assert_eq!(r.exit_code(), 0, "a measurement cannot redden a run");
+    support::assert_placement_waived(&r);
 
     let human = r.render_human();
     assert!(human.contains("[MEASURED]"), "{human}");
@@ -407,13 +406,14 @@ fn an_unbounded_assertion_reports_a_number_and_judges_nothing() {
         ),
     );
     // GREEN, conditionally: the asserted net is held by the spec's own ideal
-    // source, which the pass states as a reduced-fidelity condition.
+    // source, which the pass states as a reduced-fidelity condition. The
+    // pre-layout board's waived not-routed row is counted and shown, not hidden.
+    support::assert_placement_waived(&mixed);
+    let human = mixed.render_human();
     assert!(
-        mixed
-            .render_human()
-            .contains("GREEN, conditionally - 2/2 assertions passed"),
-        "{}",
-        mixed.render_human()
+        human.contains("GREEN, conditionally - 2/3 assertions passed")
+            && human.contains("1 failure(s) waived, visible above"),
+        "{human}"
     );
 }
 
