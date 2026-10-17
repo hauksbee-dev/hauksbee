@@ -817,7 +817,8 @@ mod tests {
         SERIAL.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    const BOOT_GATE: &str = include_str!("../../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
+    const BOOT_GATE: &str =
+        include_str!("../../hauksbee-ci/examples/boards/boot_gate_clean.kicad_pcb");
 
     fn spec_fragment() -> &'static str {
         r#"name = "web check"
