@@ -1347,7 +1347,7 @@ mod tests {
         let untied = [("1", V33), ("48", V33), ("44", V33), ("23", LONE), ("57", GND)];
         let found = run(&untied);
         assert_eq!(found.len(), 1, "{found:#?}");
-        says(&found[0], &["no supply", "pad 23 (DVDD)"]);
+        says(&found[0], &["no supply", "pads 23 (DVDD), 50 (DVDD2)"]);
         // The regulator is made from VREG_VIN and IOVDD: with those open, the
         // tied DVDD is not a supply, and IOVDD itself is the finding.
         let dead = [("1", UNCON), ("23", LONE), ("45", LONE), ("57", GND)];
