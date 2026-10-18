@@ -65,7 +65,7 @@ describe('the word for a run that is neither a pass nor a fail', () => {
   })
 
   test('a session saved under the old INVALID reads as the state it was', () => {
-    const old = { term: 'invalid' as const, detail: 'partly judged, not a pass', tone: 'warn' as const }
+    const old: NonNullable<ReturnType<typeof boardVerdict>> = { term: 'invalid', detail: 'partly judged, not a pass', tone: 'warn' }
     expect(savedVerdict(old)).toEqual({ term: 'partly_judged', detail: 'not a pass', tone: 'warn' })
     const html = renderToStaticMarkup(<VerdictPill verdict={old} />)
     expect(html).toContain('PARTLY JUDGED · not a pass')
