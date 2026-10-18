@@ -215,6 +215,14 @@ function MonoInput({ testId, width, onChange, ...rest }: {
   )
 }
 
+/** The server's model notes lead with "Recommended: ..." on each backend's
+ *  default. The page recommends one setup (in the choice list), so a model's note
+ *  says what it is, not that it is recommended. */
+const modelNote = (note: string): string => {
+  const plain = note.replace(/^Recommended:\s*/i, '')
+  return plain.charAt(0).toUpperCase() + plain.slice(1)
+}
+
 /** The model picker: each pick with its note, one click to choose, plus a hint
  *  when the model in use is not on the list (it is still used as written).
  *  `hintable` is off for an OpenAI-compatible endpoint serving a non-GPT model. */
@@ -242,7 +250,8 @@ function ModelPicks({ picks, current, hintable, onPick }: {
           }}
         >
           <span style={{ fontFamily: 'var(--font-mono)', color: p.name === current ? 'var(--copper-hi)' : 'var(--silk)' }}>{p.name}</span>
-          {p.note && <span> &mdash; {p.note}</span>}
+          {p.default && <span style={{ color: 'var(--silk)' }}> (default)</span>}
+          {p.note && <span> &mdash; {modelNote(p.note)}</span>}
           {p.badge && (
             <span data-testid={`settings-model-badge-${p.name}`} style={{ color: 'var(--warn, var(--copper-hi))' }}>
               {' '}&middot; {p.badge}
@@ -257,19 +266,45 @@ function ModelPicks({ picks, current, hintable, onPick }: {
       ))}
       {!listed && hintable && picks.length > 0 && (
         <span className="text-[11px]" data-testid="settings-model-hint" style={{ color: 'var(--silk-faint)' }}>
-          {current} is not in the current list and is used as written; {(picks.find(p => p.default) ?? picks[0]).name} is recommended.
+          {current} is not in the current list and is used as written; {(picks.find(p => p.default) ?? picks[0]).name} is the default.
         </span>
       )}
     </div>
   )
 }
 
+/** What the escalation setting does, in one sentence that always agrees with the
+ *  option that is selected. `defaultLadder` is the ladder the backend uses when the
+ *  setting is blank, or null when it cannot be known (a saved ladder hides it). */
+export function escalationSummary(input: {
+  value: string
+  firstModel: string
+  defaultLadder: readonly string[] | null
+  labels?: Readonly<Record<string, string>>
+}): string {
+  const { value, firstModel, defaultLadder, labels } = input
+  const ids = escalateFromText(value)
+  const retry = (chain: readonly string[]) =>
+    `${ladderLabel(firstModel, chain, labels)}. Each step runs only when a draft from the step before it fails or doubts its pin map.`
+  if (ids !== undefined && ids.length === 0) {
+    return 'No escalation: if a draft fails it is reported as failed, not retried on another model.'
+  }
+  if (ids !== undefined) return `Ladder: ${retry(ids)}`
+  if (defaultLadder === null) return 'Default: the built-in ladder for this tool.'
+  if (defaultLadder.length === 0) {
+    return 'Default: no escalation. Pick models below to retry on a stronger one when a draft fails.'
+  }
+  return `Default ladder: ${retry(defaultLadder)}`
+}
+
 /** The escalation ladder as picks: the same one-click shape as the model picker.
  *  Order is the order picked (shown as 1, 2, ...). "Default ladder" leaves the
  *  setting blank; "Never escalate" saves it empty. The text spelling the CLI
  *  takes (`none`, comma-separated) is the stored value and the terminal line. */
-function EscalatePicks({ picks, firstModel, value, effective, onChange }: {
+function EscalatePicks({ picks, firstModel, value, effective, defaultLabel, onChange }: {
   picks: ModelChoice[]
+  /** The name of the "leave it to the default" option, which says what the default is. */
+  defaultLabel: string
   /** The model tried first; it is not an escalation target. */
   firstModel: string
   value: string
@@ -299,11 +334,11 @@ function EscalatePicks({ picks, firstModel, value, effective, onChange }: {
     <div className="mt-1 flex flex-wrap gap-1.5" data-testid="settings-escalate">
       <button type="button" data-testid="settings-escalate-default" aria-pressed={mode === 'default'}
         onClick={() => onChange('')} className="hb-press text-[11px] cursor-pointer rounded-md px-2 py-1" style={pill(mode === 'default')}>
-        Default ladder
+        {defaultLabel}
       </button>
       <button type="button" data-testid="settings-escalate-none" aria-pressed={mode === 'none'}
         onClick={() => onChange('none')} className="hb-press text-[11px] cursor-pointer rounded-md px-2 py-1" style={pill(mode === 'none')}>
-        Never escalate
+        No escalation
       </button>
       {options.map(name => {
         const at = chosen.indexOf(name)
@@ -350,19 +385,75 @@ function Segmented<T extends string>({ options, value, onChange, testIdPrefix, l
   )
 }
 
-function PresetCard({ preset, labels, availability, customCommand, active, busy, onUse }: {
+/** The sentences of a preset's summary that help someone choose. The server's
+ *  wording also carries benchmark results and baseline names; those belong in the
+ *  documentation, not in a choice list. */
+function plainSummary(summary: string): string {
+  const kept = summary.split(/(?<=[.!?])\s+/).filter(sentence => !/benchmark|baseline/i.test(sentence))
+  return (kept.length ? kept : [summary]).join(' ')
+}
+
+/** Why a backend cannot be used yet and the one thing that fixes it: an Install
+ *  button where the server can install it, the exact command where it cannot,
+ *  the sign-in command when it is installed but signed out. */
+function BackendProblem({ availability, dep, signedOut, depsApi }: {
+  availability: ExtractBackendAvailability
+  dep?: DepInfo
+  signedOut: boolean
+  depsApi: ReturnType<typeof useDeps>
+}) {
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="settings-backend-problem">
+      <div className="flex flex-wrap items-start gap-3">
+        <p className="text-[12px] flex-1 min-w-0 leading-relaxed" data-testid="settings-backend-install" style={{ color: 'var(--warn-strong)' }}>
+          <LinkedText text={signedOut ? 'Installed, but not signed in. Sign in once with the command below.' : availability.install} />
+        </p>
+        {dep && !dep.present && dep.installable && (
+          <InstallButton dep={dep} install={depsApi.install} onInstall={id => void depsApi.runInstall(id)} variant="secondary" />
+        )}
+      </div>
+      {dep && !dep.present && !dep.installable && dep.cost && (
+        <div className="text-[11px]" style={{ color: 'var(--silk-dim)' }}>
+          <span style={{ color: 'var(--silk-faint)' }}>Cost: </span>{dep.cost}
+        </div>
+      )}
+      {dep?.manual && (!dep.present || signedOut) && (
+        <div className="text-[11px]" style={{ color: 'var(--silk-dim)' }}>
+          <TerminalCommand command={dep.manual} testId="settings-backend-copy" />
+        </div>
+      )}
+      <InstallProgress id={availability.backend} install={depsApi.install} />
+    </div>
+  )
+}
+
+/** "installed" / "not installed" / "key set" / "no key set" / "not signed in". */
+function backendState(b: ExtractBackendAvailability | undefined, signedOut: boolean): string {
+  if (b?.backend === 'api') return b.available ? 'key set' : 'no key set'
+  if (signedOut) return 'installed · not signed in'
+  return b?.available ? 'installed' : 'not installed'
+}
+
+/** One way of reading datasheets, as one row: what it is, what it costs, whether
+ *  it works on this machine, and the single button that switches to it. */
+function PresetRow({ preset, tag, ladder, availability, dep, depsApi, showProblem, customCommand, active, busy, onUse }: {
   preset: ExtractPreset
-  /** Display names for the preset's backend's models, from the server. */
-  labels: Record<string, string>
+  /** "Haiku 5.5 → Sonnet 5.5": the models tried in order, when the server names them all. */
+  ladder?: string
+  /** "Recommended" / "Cheaper option": at most one row carries each. */
+  tag?: string
   customCommand?: string
   availability?: ExtractBackendAvailability
+  dep?: DepInfo
+  depsApi: ReturnType<typeof useDeps>
+  showProblem: boolean
   active: boolean
   busy: boolean
   onUse: () => void
 }) {
-  const monoLine = preset.backend === 'api'
-    ? [preset.api_base, preset.model].filter(Boolean).join(' · ')
-    : `${preset.backend} · ${preset.escalate?.length ? ladderLabel(preset.model, preset.escalate, labels) : preset.model}${preset.effort ? ` · ${preset.effort} effort` : ''}`
+  const signedOut = !!dep && dep.present && dep.sign_in === 'not_signed_in'
+  const problem = !!availability && (!availability.available || signedOut)
+  const good = !!availability?.available && !signedOut
   return (
     <div
       data-testid={`settings-preset-${preset.id}`}
@@ -372,52 +463,55 @@ function PresetCard({ preset, labels, availability, customCommand, active, busy,
         background: 'var(--surface)',
       }}
     >
-      <div className="flex items-start justify-between gap-2">
-        <span className="text-[13px] font-semibold" style={{ color: 'var(--silk)' }}>
-          {preset.label}
-          {preset.badge && (
-            <span data-testid={`settings-preset-${preset.id}-badge`} className="ml-2 text-[10px] font-bold tracking-widest uppercase" style={{ color: 'var(--warn, var(--copper-hi))' }}>
-              {preset.badge}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex flex-col gap-1">
+          <span className="text-[13px] font-semibold" style={{ color: 'var(--silk)' }}>
+            {preset.label}
+            {tag && (
+              <span data-testid={`settings-preset-${preset.id}-tag`} className="ml-2 text-[9px] font-bold tracking-widest uppercase whitespace-nowrap" style={{ color: 'var(--copper-hi)' }}>
+                {tag}
+              </span>
+            )}
+            {preset.badge && (
+              <span data-testid={`settings-preset-${preset.id}-badge`} className="ml-2 text-[10px] font-bold tracking-widest uppercase" style={{ color: 'var(--warn, var(--copper-hi))' }}>
+                {preset.badge}
+              </span>
+            )}
+          </span>
+          <span className="text-[12px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
+            {customCommand ? `Keeps custom command ${customCommand}; its configuration controls routing and charges.` : plainSummary(preset.summary)}
+          </span>
+          {ladder && (
+            <span className="text-[11px]" data-testid={`settings-preset-${preset.id}-ladder`} style={{ color: 'var(--silk-faint)' }}>
+              Tries in order: {ladder}
             </span>
           )}
-        </span>
-        {preset.recommended && availability?.available && (
-          <span className="text-[9px] font-bold tracking-widest uppercase shrink-0 whitespace-nowrap" style={{ color: 'var(--copper-hi)' }}>
-            Recommended
+          <span
+            className="text-[10px] font-bold tracking-widest uppercase self-start px-1.5 py-0.5 rounded"
+            data-testid={`settings-preset-${preset.id}-state`}
+            style={{
+              color: good ? 'var(--ok)' : signedOut ? 'var(--warn-strong)' : 'var(--silk-faint)',
+              background: good ? 'var(--ok-bg)' : 'var(--surface-2)',
+              border: `1px solid ${good ? 'var(--ok-border)' : 'var(--hairline)'}`,
+            }}
+          >
+            {backendState(availability, signedOut)}
           </span>
-        )}
-      </div>
-      <div className="text-[12px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
-        {customCommand ? `Keeps custom command ${customCommand}; its configuration controls routing and charges.` : preset.summary}
-      </div>
-      <div className="text-[11px] truncate" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
-        {monoLine}
-      </div>
-      <div className="flex items-center justify-between gap-2 mt-1">
-        <span
-          className="text-[10px] font-bold tracking-widest uppercase px-1.5 py-0.5 rounded"
-          title={availability?.available ? undefined : availability?.install}
-          style={{
-            color: availability?.available ? 'var(--ok)' : 'var(--silk-faint)',
-            background: availability?.available ? 'var(--ok-bg)' : 'var(--surface-2)',
-            border: `1px solid ${availability?.available ? 'var(--ok-border)' : 'var(--hairline)'}`,
-          }}
-        >
-          {preset.backend === 'api'
-            ? (availability?.available ? 'key set' : 'no key set')
-            : (availability?.available ? 'installed' : 'not installed')}
-        </span>
+        </div>
         <button
           type="button"
           data-testid={`settings-preset-${preset.id}-use`}
           disabled={active || busy}
           onClick={onUse}
-          className="hb-btn hb-press px-3 py-1 text-[12px]"
-          style={{ height: 26 }}
+          className="hb-btn hb-press px-3 py-1 text-[12px] shrink-0"
+          style={{ height: 28 }}
         >
           {active ? 'Active' : busy ? 'Applying ...' : 'Use'}
         </button>
       </div>
+      {problem && showProblem && availability && (
+        <BackendProblem availability={availability} dep={dep} signedOut={signedOut} depsApi={depsApi} />
+      )}
     </div>
   )
 }
@@ -451,35 +545,14 @@ function BackendRows({ backends, selected, onSelect, deps, depsApi }: {
             >
               <span aria-hidden style={{ width: 7, height: 7, borderRadius: 4, flexShrink: 0, display: 'inline-block', background: b.available ? (signedOut ? 'var(--warn)' : 'var(--ok)') : 'var(--err)' }} />
               <span className="min-w-0">{b.label}</span>
-              {active && <span className="text-[9px] font-bold tracking-widest uppercase" style={{ color: 'var(--copper-hi)' }}>Selected</span>}
               <span className="flex-1" />
               <span className="text-[10px] font-bold tracking-widest uppercase" data-testid={`settings-backend-state-${b.backend}`} style={{ color: !b.available ? 'var(--silk-faint)' : signedOut ? 'var(--warn-strong)' : 'var(--ok)' }}>
-                {b.backend === 'api'
-                  ? (b.available ? 'key set' : 'no key set')
-                  : signedOut ? 'installed · not signed in' : b.available ? 'installed' : 'not installed'}
+                {backendState(b, signedOut)}
               </span>
             </button>
             {active && problem && (
-              <div className="px-3.5 pb-3 flex flex-col gap-1.5" data-testid="settings-backend-problem">
-                <div className="flex flex-wrap items-start gap-3">
-                  <p className="text-[12px] flex-1 min-w-0 leading-relaxed" data-testid="settings-backend-install" style={{ color: 'var(--warn-strong)' }}>
-                    <LinkedText text={signedOut ? 'Installed, but not signed in. Sign in once with the command below.' : b.install} />
-                  </p>
-                  {dep && !dep.present && dep.installable && (
-                    <InstallButton dep={dep} install={depsApi.install} onInstall={id => void depsApi.runInstall(id)} />
-                  )}
-                </div>
-                {dep && !dep.present && !dep.installable && dep.cost && (
-                  <div className="text-[11px]" style={{ color: 'var(--silk-dim)' }}>
-                    <span style={{ color: 'var(--silk-faint)' }}>Cost: </span>{dep.cost}
-                  </div>
-                )}
-                {dep?.manual && (!dep.present || signedOut) && (
-                  <div className="text-[11px]" style={{ color: 'var(--silk-dim)' }}>
-                    <TerminalCommand command={dep.manual} testId="settings-backend-copy" />
-                  </div>
-                )}
-                <InstallProgress id={b.backend} install={depsApi.install} />
+              <div className="px-3.5 pb-3">
+                <BackendProblem availability={b} dep={dep} signedOut={signedOut} depsApi={depsApi} />
               </div>
             )}
           </div>
@@ -487,6 +560,46 @@ function BackendRows({ backends, selected, onSelect, deps, depsApi }: {
       })}
     </div>
   )
+}
+
+/** A disclosure heading that is a real button (keyboard and screen reader). */
+function Disclosure({ open, onToggle, testId, children }: {
+  open: boolean
+  onToggle: () => void
+  testId: string
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      onClick={onToggle}
+      aria-expanded={open}
+      className="hb-press inline-flex items-center gap-1 text-[12px] font-semibold cursor-pointer"
+      style={{ background: 'none', border: 'none', padding: 0, color: 'var(--silk-dim)' }}
+    >
+      {open ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
+      {children}
+    </button>
+  )
+}
+
+/** Which tool to steer a fresh install to. The server marks one preset per tool
+ *  `recommended`; the page names ONE of them: the first whose tool works here, in
+ *  the order the engine's own auto-detection tries them (extract_config.rs:
+ *  codex, claude-code, agy). With none installed it is codex, as in the engine. */
+const TOOL_ORDER = ['codex', 'claude-code', 'agy']
+
+/** The cheaper way to use the same tool, offered under the recommendation. */
+const CHEAPER_PRESET: Record<string, string> = { codex: 'codex-luna', 'claude-code': 'claude-code-haiku' }
+
+export function featuredPresets(data: ExtractSettings): { recommended?: ExtractPreset; cheaper?: ExtractPreset } {
+  const rank = (p: ExtractPreset) => { const i = TOOL_ORDER.indexOf(p.backend); return i < 0 ? TOOL_ORDER.length : i }
+  const ordered = data.presets.filter(p => p.recommended).sort((a, b) => rank(a) - rank(b))
+  const recommended = ordered.find(p => availabilityFor(data, p.backend)?.available) ?? ordered[0]
+  const cheaperId = recommended ? CHEAPER_PRESET[recommended.backend] : undefined
+  const cheaper = cheaperId ? data.presets.find(p => p.id === cheaperId) : undefined
+  return { recommended, cheaper }
 }
 
 // ── The view ─────────────────────────────────────────────────────────────
@@ -513,6 +626,9 @@ export function SettingsView() {
   const [draft, setDraft] = useState<Draft | null>(null)
   const [selectedBackend, setSelectedBackend] = useState<string>('claude-code')
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [changeOpen, setChangeOpen] = useState(false)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const [customOpen, setCustomOpen] = useState(false)
   const [presetBusy, setPresetBusy] = useState<string | null>(null)
   const [presetError, setPresetError] = useState<string | null>(null)
   const [saveState, setSaveState] = useState<SaveState>({ phase: 'idle' })
@@ -657,6 +773,51 @@ export function SettingsView() {
     setEscalate: setAgent('escalate'),
   }
 
+  const { recommended, cheaper } = featuredPresets(data)
+  const featured = [recommended, cheaper].filter((p): p is ExtractPreset => !!p)
+  const others = data.presets.filter(p => !featured.includes(p))
+  const currentAvailability = availabilityFor(data, data.resolved.backend)
+  const routing = currentAvailability?.sends_data_to
+  // The tool in use may itself be missing or signed out: say so on the line that names it.
+  const currentDep = deps.find(d => d.id === data.resolved.backend)
+  const currentSignedOut = !!currentDep && currentDep.present && currentDep.sign_in === 'not_signed_in'
+  const currentProblem = !!currentAvailability && (!currentAvailability.available || currentSignedOut)
+
+  const renderPreset = (preset: ExtractPreset, tag?: string) => {
+    const dep = deps.find(d => d.id === preset.backend)
+    const customCommand = resolvedBlock(data.resolved, preset.backend).command
+    const names = labelMap(data.options.models[preset.backend])
+    const chain = [preset.model, ...(preset.escalate ?? [])]
+    const ladder = preset.escalate?.length && chain.every(id => names[id]) ? ladderLabel(preset.model, preset.escalate, names) : undefined
+    const builtIn = data.keys.find(k => k.key === `${preset.backend}.command`)?.default
+    return (
+      <PresetRow
+        key={preset.id}
+        preset={preset}
+        tag={tag}
+        ladder={ladder && !preset.label.includes(ladder) ? ladder : undefined}
+        availability={availabilityFor(data, preset.backend)}
+        dep={dep}
+        depsApi={depsApi}
+        showProblem={!customOpen && preset.backend !== data.resolved.backend}
+        customCommand={customCommand === builtIn ? undefined : customCommand}
+        active={presetMatchesResolved(preset, data.resolved)}
+        busy={presetBusy === preset.id}
+        onUse={() => void applyPreset(preset.id)}
+      />
+    )
+  }
+
+  // The escalation setting: its help always describes the option that is selected.
+  const modelLabels = labelMap(data.options.models[selectedBackend])
+  const firstModel = fields.model || resolvedForSelected.model
+  const savedEscalate = data.config[agentBackend]?.escalate
+  const defaultLadder = savedEscalate === undefined ? (resolvedEscalate(data.resolved, selectedBackend) ?? []) : null
+  const defaultLabel = defaultLadder === null
+    ? 'Default'
+    : `Default (${defaultLadder.length ? ladderLabel(firstModel, defaultLadder, modelLabels) : 'no escalation'})`
+  const showActions = dirty || customOpen
+
   return (
     <div className="mt-10" data-testid="settings-view">
       <div
@@ -669,7 +830,7 @@ export function SettingsView() {
         Only used when you draft a part model from a datasheet. Board checks never use this.
       </div>
 
-      {/* ── Status strip ── */}
+      {/* ── The current choice, once ── */}
       <div
         className="rounded-xl px-4 py-3 text-[12px] flex flex-wrap items-start justify-between gap-x-6 gap-y-2"
         style={{ border: '1px solid var(--hairline)', background: 'var(--surface)', color: 'var(--silk-dim)' }}
@@ -680,18 +841,38 @@ export function SettingsView() {
             Reads datasheets with:{' '}
             <span style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)' }}>{data.summary}</span>
           </div>
-          <div className="mt-1 text-[11px]" style={{ color: 'var(--silk-faint)' }} title={data.path}>{sourceLine(data)}</div>
+          <div className="mt-1 text-[11px]" style={{ color: 'var(--silk-faint)' }} title={data.path}>
+            {sourceLine(data)}. Your datasheet is sent to: {routing ?? 'unknown'}.
+          </div>
+          {currentProblem && currentAvailability && (
+            <div className="mt-2.5">
+              <BackendProblem availability={currentAvailability} dep={currentDep} signedOut={currentSignedOut} depsApi={depsApi} />
+            </div>
+          )}
         </div>
-        <button
-          type="button"
-          data-testid="settings-test"
-          disabled={testState.phase === 'running'}
-          onClick={() => void runTest()}
-          className="hb-btn hb-press px-3.5 py-1.5 text-[12px] shrink-0"
-          style={{ height: 30 }}
-        >
-          {testState.phase === 'running' ? 'Testing ...' : 'Test backend'}
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            data-testid="settings-test"
+            disabled={testState.phase === 'running'}
+            onClick={() => void runTest()}
+            title="Sends a one-line prompt using the saved configuration."
+            className="hb-btn hb-press px-3.5 py-1.5 text-[12px]"
+            style={{ height: 30 }}
+          >
+            {testState.phase === 'running' ? 'Testing ...' : 'Test backend'}
+          </button>
+          <button
+            type="button"
+            data-testid="settings-change"
+            aria-expanded={changeOpen}
+            onClick={() => setChangeOpen(v => !v)}
+            className="hb-btn hb-press px-3.5 py-1.5 text-[12px]"
+            style={{ height: 30 }}
+          >
+            {changeOpen ? 'Close' : 'Change'}
+          </button>
+        </div>
       </div>
 
       {data.resolved.env_overrides.length > 0 && (
@@ -708,10 +889,6 @@ export function SettingsView() {
           <div className="mt-1" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }} title={data.path}>{tildeHome(data.path)}</div>
         </Callout>
       )}
-
-      <div className="mt-2.5 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
-        Tests the saved configuration with a one-line prompt. Routing and charges: {availabilityFor(data, data.resolved.backend)?.sends_data_to ?? 'unknown'}.
-      </div>
 
       {testState.phase !== 'idle' && (
         <div className="mt-2">
@@ -730,227 +907,234 @@ export function SettingsView() {
         </div>
       )}
 
-      {/* ── Quick setup ── */}
-      <div className="mt-8">
-        <div className="text-[11px] font-bold tracking-widest uppercase mb-2.5" style={{ color: 'var(--silk-faint)' }}>
-          Quick setup
-        </div>
-        {presetError && (
-          <Callout tone="err" testId="settings-preset-error" className="mb-2.5">{presetError}</Callout>
-        )}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {data.presets.map(preset => (
-            <PresetCard
-              key={preset.id}
-              preset={preset}
-              labels={labelMap(data.options.models[preset.backend])}
-              availability={data.backends.find(b => b.backend === preset.backend)}
-              customCommand={resolvedBlock(data.resolved, preset.backend).command === data.keys.find(k => k.key === `${preset.backend}.command`)?.default
-                ? undefined : resolvedBlock(data.resolved, preset.backend).command}
-              active={presetMatchesResolved(preset, data.resolved)}
-              busy={presetBusy === preset.id}
-              onUse={() => void applyPreset(preset.id)}
-            />
-          ))}
-        </div>
-      </div>
-
-      {/* ── Backend ── */}
-      <div className="mt-8">
-        <div className="text-[11px] font-bold tracking-widest uppercase mb-2.5" style={{ color: 'var(--silk-faint)' }}>
-          Backend
-        </div>
-        <BackendRows
-          backends={data.backends}
-          selected={selectedBackend}
-          onSelect={id => { setSelectedBackend(id); setDraft(d => d && { ...d, backend: id }) }}
-          deps={deps}
-          depsApi={depsApi}
-        />
-        <div className="mt-1.5 text-[11px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
-          Saved routing (save edits to update): {availability?.sends_data_to ?? 'unknown'}
-        </div>
-      </div>
-
-      {/* ── Per-backend fields ── */}
-      <div className="mt-5 rounded-xl px-4 py-3.5" style={{ border: '1px solid var(--hairline)', background: 'var(--surface)' }}>
-        {selectedBackend === 'api' ? (
-          <div className="flex flex-wrap gap-3.5">
-            <Field label="Base URL" hint={`blank = ${data.resolved.api.base_url}`}>
-              <MonoInput testId="settings-base-url" width="20rem" value={draft.api.base_url}
-                placeholder={data.resolved.api.base_url} onChange={v => setDraft(d => d && { ...d, api: { ...d.api, base_url: v } })} />
-            </Field>
-            <Field label="Model" hint={`blank = ${data.resolved.api.model}`}>
-              <MonoInput testId="settings-model" width="17rem" list="settings-model-options" value={draft.api.model}
-                placeholder={data.resolved.api.model} onChange={setApiModel} />
-              <ModelPicks picks={data.options.models.api ?? []} current={draft.api.model || data.resolved.api.model}
-                hintable={hintsApply(data, 'api', draft.api.model || data.resolved.api.model)} onPick={setApiModel} />
-            </Field>
-            <Field
-              label="API key variable"
-              hint={
-                <>
-                  The NAME of an environment variable, never the key. It is read when an extraction runs.
-                  {' '}{availability?.detail}
-                </>
-              }
-            >
-              <MonoInput testId="settings-api-key-env" width="14rem" value={draft.api.api_key_env}
-                placeholder={data.resolved.api.api_key_env} onChange={v => setDraft(d => d && { ...d, api: { ...d.api, api_key_env: v } })} />
-            </Field>
-            <datalist id="settings-model-options">
-              {(data.options.models.api ?? []).map(m => <option key={m.name} value={m.name} label={m.note} />)}
-            </datalist>
+      {/* ── The one place to choose: a recommended setup, a cheaper one, the rest, or custom ── */}
+      {changeOpen && (
+        <div className="mt-6" data-testid="settings-choose">
+          {presetError && (
+            <Callout tone="err" testId="settings-preset-error" className="mb-2.5">{presetError}</Callout>
+          )}
+          <div className="flex flex-col gap-3">
+            {recommended && renderPreset(recommended, 'Recommended')}
+            {cheaper && renderPreset(cheaper, 'Cheaper option')}
           </div>
-        ) : (
-          <div className="flex flex-col gap-3.5">
-            <div className="flex flex-wrap gap-3.5 items-end">
-              <Field label="Model" hint={`blank = ${resolvedForSelected.model}`}>
-                <MonoInput testId="settings-model" width="17rem" list="settings-model-options" value={fields.model}
-                  placeholder={resolvedForSelected.model} onChange={fields.setModel} />
-                <datalist id="settings-model-options">
-                  {(data.options.models[selectedBackend] ?? []).map(m => <option key={m.name} value={m.name} label={m.note} />)}
-                </datalist>
-                <ModelPicks picks={data.options.models[selectedBackend] ?? []}
-                  current={fields.model || resolvedForSelected.model} hintable onPick={fields.setModel} />
-              </Field>
-              <Field label="Effort" hint={`blank = ${resolvedForSelected.effort}`}>
-                <Segmented
-                  testIdPrefix="settings-effort"
-                  options={['', ...(data.options.efforts[selectedBackend] ?? [])]}
-                  value={fields.effort}
-                  onChange={v => fields.setEffort(v)}
-                />
-              </Field>
+
+          {others.length > 0 && (
+            <div className="mt-4">
+              <Disclosure open={moreOpen} onToggle={() => setMoreOpen(v => !v)} testId="settings-more-toggle">
+                More setups ({others.length})
+              </Disclosure>
+              {moreOpen && (
+                <div className="mt-2.5 grid grid-cols-1 gap-3" data-testid="settings-more">
+                  {others.map(p => renderPreset(p))}
+                </div>
+              )}
             </div>
-            <Field
-              label="Escalate to"
-              hint={
-                <>
-                  Models tried in order when a tier fails; click to add or remove, in order.{' '}
-                  <span data-testid="settings-escalate-effective">
-                    In effect: {resolvedEscalate(data.resolved, selectedBackend)?.length
-                      ? ladderLabel(resolvedForSelected.model, resolvedEscalate(data.resolved, selectedBackend), labelMap(data.options.models[selectedBackend]))
-                      : 'no escalation'}.
-                  </span>
-                </>
-              }
-            >
-              <EscalatePicks
-                picks={data.options.models[selectedBackend] ?? []}
-                firstModel={fields.model || resolvedForSelected.model}
-                value={fields.escalate}
-                effective={resolvedEscalate(data.resolved, selectedBackend) ?? []}
-                onChange={fields.setEscalate}
-              />
-            </Field>
+          )}
+
+          <div className="mt-4">
+            <Disclosure open={customOpen} onToggle={() => setCustomOpen(v => !v)} testId="settings-custom-toggle">
+              Custom: tool, model, effort and escalation
+            </Disclosure>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* ── Advanced ── */}
-        <button
-          type="button"
-          data-testid="settings-advanced-toggle"
-          onClick={() => setAdvancedOpen(v => !v)}
-          className="hb-press mt-3.5 inline-flex items-center gap-1 text-[11px] font-semibold cursor-pointer"
-          style={{ background: 'none', border: 'none', padding: 0, color: 'var(--silk-faint)' }}
-          aria-expanded={advancedOpen}
-        >
-          {advancedOpen ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
-          Advanced
-        </button>
+      {/* ── Custom ── */}
+      {changeOpen && customOpen && (
+        <div className="mt-3" data-testid="settings-custom">
+          <BackendRows
+            backends={data.backends}
+            selected={selectedBackend}
+            onSelect={id => { setSelectedBackend(id); setDraft(d => d && { ...d, backend: id }) }}
+            deps={deps}
+            depsApi={depsApi}
+          />
+          {selectedBackend !== data.resolved.backend && (
+            <div className="mt-1.5 text-[11px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
+              This tool sends your datasheet to: {availability?.sends_data_to ?? 'unknown'}.
+            </div>
+          )}
 
-        {advancedOpen && (
-          <div className="mt-3 flex flex-wrap gap-3.5 items-end">
-            {selectedBackend !== 'api' && (
-              <Field label="Executable" hint="Optional CLI-compatible wrapper. Its configuration controls routing and charges.">
-                <MonoInput testId="settings-command" width="20rem" value={fields.command}
-                  placeholder="Default executable" onChange={fields.setCommand} />
-              </Field>
-            )}
-            {selectedBackend === 'codex' && (
-              <Field label="Profile" hint="A named codex profile, if you use one.">
-                <MonoInput testId="settings-profile" width="14rem" value={fields.profile}
-                  placeholder={data.resolved.codex.profile ?? ''} onChange={fields.setProfile} />
-              </Field>
-            )}
-            {selectedBackend !== 'api' && (
-              <Field label="Permission mode" hint={`blank = ${fields.permission || resolvedPermission(data.resolved, selectedBackend)}`}>
-                <select
-                  data-testid="settings-permission-mode"
-                  className="hb-input text-[12px] block w-full"
-                  style={{ height: 30, maxWidth: '14rem' }}
-                  value={fields.permission}
-                  onChange={e => fields.setPermission(e.target.value)}
+          {/* ── Per-backend fields ── */}
+          <div className="mt-4 rounded-xl px-4 py-3.5" style={{ border: '1px solid var(--hairline)', background: 'var(--surface)' }}>
+            {selectedBackend === 'api' ? (
+              <div className="flex flex-wrap gap-3.5">
+                <Field label="Base URL" hint={`Leave empty to use ${data.resolved.api.base_url}.`}>
+                  <MonoInput testId="settings-base-url" width="20rem" value={draft.api.base_url}
+                    placeholder={data.resolved.api.base_url} onChange={v => setDraft(d => d && { ...d, api: { ...d.api, base_url: v } })} />
+                </Field>
+                <Field label="Model" hint={`Leave empty to use ${data.resolved.api.model}.`}>
+                  <MonoInput testId="settings-model" width="17rem" list="settings-model-options" value={draft.api.model}
+                    placeholder={data.resolved.api.model} onChange={setApiModel} />
+                  <ModelPicks picks={data.options.models.api ?? []} current={draft.api.model || data.resolved.api.model}
+                    hintable={hintsApply(data, 'api', draft.api.model || data.resolved.api.model)} onPick={setApiModel} />
+                </Field>
+                <Field
+                  label="API key variable"
+                  hint={
+                    <>
+                      The NAME of an environment variable, never the key. It is read when an extraction runs.
+                      {' '}{availability?.detail}
+                    </>
+                  }
                 >
-                  <option value="">default</option>
-                  {(data.options.permission_modes[selectedBackend] ?? []).map(m => <option key={m} value={m}>{m}</option>)}
-                </select>
-              </Field>
+                  <MonoInput testId="settings-api-key-env" width="14rem" value={draft.api.api_key_env}
+                    placeholder={data.resolved.api.api_key_env} onChange={v => setDraft(d => d && { ...d, api: { ...d.api, api_key_env: v } })} />
+                </Field>
+                <datalist id="settings-model-options">
+                  {(data.options.models.api ?? []).map(m => <option key={m.name} value={m.name} label={m.note} />)}
+                </datalist>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-3.5">
+                <div className="flex flex-wrap gap-3.5 items-end">
+                  <Field label="Model" hint={`Leave empty to use ${resolvedForSelected.model}.`}>
+                    <MonoInput testId="settings-model" width="17rem" list="settings-model-options" value={fields.model}
+                      placeholder={resolvedForSelected.model} onChange={fields.setModel} />
+                    <datalist id="settings-model-options">
+                      {(data.options.models[selectedBackend] ?? []).map(m => <option key={m.name} value={m.name} label={m.note} />)}
+                    </datalist>
+                    <ModelPicks picks={data.options.models[selectedBackend] ?? []}
+                      current={firstModel} hintable onPick={fields.setModel} />
+                  </Field>
+                  <Field label="Effort">
+                    <Segmented
+                      testIdPrefix="settings-effort"
+                      options={['', ...(data.options.efforts[selectedBackend] ?? [])]}
+                      value={fields.effort}
+                      labels={{ '': `Default (${resolvedForSelected.effort})` }}
+                      onChange={v => fields.setEffort(v)}
+                    />
+                  </Field>
+                </div>
+                <Field
+                  label="Escalate to"
+                  hint={
+                    <span data-testid="settings-escalate-effective">
+                      {escalationSummary({ value: fields.escalate, firstModel, defaultLadder, labels: modelLabels })}
+                    </span>
+                  }
+                >
+                  <EscalatePicks
+                    picks={data.options.models[selectedBackend] ?? []}
+                    firstModel={firstModel}
+                    value={fields.escalate}
+                    effective={resolvedEscalate(data.resolved, selectedBackend) ?? []}
+                    defaultLabel={defaultLabel}
+                    onChange={fields.setEscalate}
+                  />
+                </Field>
+              </div>
             )}
-            {selectedBackend !== 'api' && (
-              <Field label="Extra arguments" hint="Space-separated, passed through to the backend's own CLI.">
-                <MonoInput testId="settings-extra-args" width="20rem" value={fields.extraArgs}
-                  onChange={fields.setExtraArgs} />
-              </Field>
-            )}
-            <Field label="Retries" hint={`blank = ${data.resolved.retries}`}>
-              <input
-                data-testid="settings-retries"
-                type="number"
-                min={0}
-                max={10}
-                className="hb-input text-[12px] block w-full tnum"
-                style={{ height: 30, maxWidth: '6rem' }}
-                value={draft.retries}
-                placeholder={String(data.resolved.retries)}
-                onChange={e => setDraft(d => d && { ...d, retries: e.target.value })}
-              />
-            </Field>
-            <Field label="Timeout (seconds)" hint={`blank = ${data.resolved.timeout_secs}`}>
-              <input
-                data-testid="settings-timeout"
-                type="number"
-                min={30}
-                max={7200}
-                className="hb-input text-[12px] block w-full tnum"
-                style={{ height: 30, maxWidth: '7rem' }}
-                value={draft.timeout_secs}
-                placeholder={String(data.resolved.timeout_secs)}
-                onChange={e => setDraft(d => d && { ...d, timeout_secs: e.target.value })}
-              />
-            </Field>
-          </div>
-        )}
-      </div>
 
-      {/* ── Actions ── */}
-      <div className="mt-4 flex flex-wrap items-center gap-2.5">
-        <button
-          type="button"
-          data-testid="settings-save"
-          disabled={!dirty || saveState.phase === 'saving'}
-          onClick={() => void save()}
-          className="hb-btn-primary hb-press px-3.5 py-1.5 text-[12px]"
-          style={{ height: 30 }}
-        >
-          {saveState.phase === 'saving' ? 'Saving ...' : 'Save'}
-        </button>
-        <button
-          type="button"
-          data-testid="settings-discard"
-          disabled={!dirty}
-          onClick={discard}
-          className="hb-btn hb-press px-3 py-1.5 text-[12px]"
-          style={{ height: 30 }}
-        >
-          Discard changes
-        </button>
-        <span className="flex-1" />
-        <span className="text-[11px] truncate max-w-full" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }} title={data.path}>
-          {tildeHome(data.path)}
-        </span>
-      </div>
+            {/* ── Advanced ── */}
+            <button
+              type="button"
+              data-testid="settings-advanced-toggle"
+              onClick={() => setAdvancedOpen(v => !v)}
+              className="hb-press mt-3.5 inline-flex items-center gap-1 text-[11px] font-semibold cursor-pointer"
+              style={{ background: 'none', border: 'none', padding: 0, color: 'var(--silk-faint)' }}
+              aria-expanded={advancedOpen}
+            >
+              {advancedOpen ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
+              Advanced
+            </button>
+
+            {advancedOpen && (
+              <div className="mt-3 flex flex-wrap gap-3.5 items-end">
+                {selectedBackend !== 'api' && (
+                  <Field label="Executable" hint="Optional CLI-compatible wrapper. Its configuration controls routing and charges.">
+                    <MonoInput testId="settings-command" width="20rem" value={fields.command}
+                      placeholder="Default executable" onChange={fields.setCommand} />
+                  </Field>
+                )}
+                {selectedBackend === 'codex' && (
+                  <Field label="Profile" hint="A named codex profile, if you use one.">
+                    <MonoInput testId="settings-profile" width="14rem" value={fields.profile}
+                      placeholder={data.resolved.codex.profile ?? ''} onChange={fields.setProfile} />
+                  </Field>
+                )}
+                {selectedBackend !== 'api' && (
+                  <Field label="Permission mode" hint={`Default: ${resolvedPermission(data.resolved, selectedBackend)}.`}>
+                    <select
+                      data-testid="settings-permission-mode"
+                      className="hb-input text-[12px] block w-full"
+                      style={{ height: 30, maxWidth: '14rem' }}
+                      value={fields.permission}
+                      onChange={e => fields.setPermission(e.target.value)}
+                    >
+                      <option value="">default</option>
+                      {(data.options.permission_modes[selectedBackend] ?? []).map(m => <option key={m} value={m}>{m}</option>)}
+                    </select>
+                  </Field>
+                )}
+                {selectedBackend !== 'api' && (
+                  <Field label="Extra arguments" hint="Space-separated, passed through to the backend's own CLI.">
+                    <MonoInput testId="settings-extra-args" width="20rem" value={fields.extraArgs}
+                      onChange={fields.setExtraArgs} />
+                  </Field>
+                )}
+                <Field label="Retries" hint={`Leave empty for ${data.resolved.retries}.`}>
+                  <input
+                    data-testid="settings-retries"
+                    type="number"
+                    min={0}
+                    max={10}
+                    className="hb-input text-[12px] block w-full tnum"
+                    style={{ height: 30, maxWidth: '6rem' }}
+                    value={draft.retries}
+                    placeholder={String(data.resolved.retries)}
+                    onChange={e => setDraft(d => d && { ...d, retries: e.target.value })}
+                  />
+                </Field>
+                <Field label="Timeout (seconds)" hint={`Leave empty for ${data.resolved.timeout_secs}.`}>
+                  <input
+                    data-testid="settings-timeout"
+                    type="number"
+                    min={30}
+                    max={7200}
+                    className="hb-input text-[12px] block w-full tnum"
+                    style={{ height: 30, maxWidth: '7rem' }}
+                    value={draft.timeout_secs}
+                    placeholder={String(data.resolved.timeout_secs)}
+                    onChange={e => setDraft(d => d && { ...d, timeout_secs: e.target.value })}
+                  />
+                </Field>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Save: the page's one primary button, enabled only when there is something to save ── */}
+      {showActions && (
+        <div className="mt-4 flex flex-wrap items-center gap-2.5" data-testid="settings-actions">
+          <button
+            type="button"
+            data-testid="settings-save"
+            disabled={!dirty || saveState.phase === 'saving'}
+            onClick={() => void save()}
+            className={`${dirty ? 'hb-btn-primary' : 'hb-btn'} hb-press px-3.5 py-1.5 text-[12px]`}
+            style={{ height: 30, ...(dirty ? {} : { opacity: 0.6 }) }}
+          >
+            {saveState.phase === 'saving' ? 'Saving ...' : dirty ? 'Save changes' : 'No changes to save'}
+          </button>
+          <button
+            type="button"
+            data-testid="settings-discard"
+            disabled={!dirty}
+            onClick={discard}
+            className="hb-btn hb-press px-3 py-1.5 text-[12px]"
+            style={{ height: 30, opacity: dirty ? 1 : 0.6 }}
+          >
+            Discard changes
+          </button>
+          <span className="flex-1" />
+          <span className="text-[11px] truncate max-w-full" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }} title={data.path}>
+            {tildeHome(data.path)}
+          </span>
+        </div>
+      )}
 
       {saveState.phase === 'saved' && (
         <Callout tone="ok" testId="settings-saved" live className="mt-2.5 py-2 text-[12px]">
@@ -963,9 +1147,11 @@ export function SettingsView() {
         </Callout>
       )}
 
-      <div className="mt-3 text-[11px]" style={{ color: 'var(--silk-faint)' }} data-testid="settings-terminal">
-        <TerminalCommand command={terminalCommand} testId="settings-terminal-copy" />
-      </div>
+      {changeOpen && customOpen && (
+        <div className="mt-3 text-[11px]" style={{ color: 'var(--silk-faint)' }} data-testid="settings-terminal">
+          <TerminalCommand command={terminalCommand} testId="settings-terminal-copy" />
+        </div>
+      )}
     </div>
   )
 }

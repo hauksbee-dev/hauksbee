@@ -8,10 +8,14 @@ import { BusyLine, Callout, LogWell } from './ui'
 /** Beside the description where the row is wide enough, on its own line below
  *  it when it is not. Held to one line at every width, the button and its cost
  *  caption ran 5px off a 320px viewport and the caption took the click. */
-export function InstallButton({ dep, install, onInstall }: {
+export function InstallButton({ dep, install, onInstall, variant = 'primary', cost }: {
   dep: DepInfo
   install: InstallState
   onInstall: (id: string) => void
+  /** The page's one main action is `primary`; every other install is `secondary`. */
+  variant?: 'primary' | 'secondary'
+  /** The size/cost caption; defaults to the server's wording. */
+  cost?: string
 }) {
   const busyId = install.phase === 'running' ? install.id : null
   return (
@@ -21,14 +25,13 @@ export function InstallButton({ dep, install, onInstall }: {
         data-testid={`dep-install-${dep.id}`}
         disabled={busyId !== null}
         onClick={() => onInstall(dep.id)}
-        className="rounded-lg px-3.5 py-1.5 text-[12px] font-semibold cursor-pointer transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-        style={{ background: 'linear-gradient(180deg, var(--copper-hi), var(--copper))', color: 'var(--on-copper)' }}
+        className={`${variant === 'primary' ? 'hb-btn-primary' : 'hb-btn'} hb-press px-3.5 py-1.5 text-[12px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed`}
       >
         {busyId === dep.id ? 'Installing ...' : 'Install'}
       </button>
-      {dep.cost && (
+      {(cost ?? dep.cost) && (
         <span className="text-[10px] text-right max-w-full" style={{ color: 'var(--silk-faint)', maxWidth: '14rem' }}>
-          {dep.cost}
+          {cost ?? dep.cost}
         </span>
       )}
     </div>
