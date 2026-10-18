@@ -889,6 +889,9 @@ export interface CheckResult {
   /** The check carried no bound, so it reports a value and judges nothing. */
   measured?: boolean
   detail: string
+  /** What to do about a failed result, when the engine says (the board's own
+   *  static check always does). */
+  why?: string
   evidence?: EvidenceMap
 }
 

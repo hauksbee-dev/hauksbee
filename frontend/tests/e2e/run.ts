@@ -18,6 +18,7 @@ export const E2E_FLOWS = [
   'sessions-export.ts',
   'settings-extract.ts',
   'verdict-conditions.ts',
+  'verdict-header.ts',
 ] as const
 
 async function main(): Promise<void> {

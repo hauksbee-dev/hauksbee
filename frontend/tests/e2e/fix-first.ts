@@ -42,7 +42,7 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 }, timeout: 9
     const height = await page.locator('[data-testid="additional-evidence-report"]').evaluate(e => e.getBoundingClientRect().height)
     ok('additional evidence is collapsed', height < 80, String(height))
     const verdict = await page.locator('[data-testid="report-verdict"]').innerText()
-    ok('the verdict frames the state and does not count it as an issue', /^Not routed yet: circuit checks found \d+ issues?, none serious\./.test(verdict), verdict.slice(0, 120))
+    ok('the verdict frames the state and counts it as the serious finding it is listed as', /Not routed yet\s+(\d+ issues? found, [1-9]\d* serious, including the missing routing|the board cannot be ordered as is)/.test(verdict.replace(/\s+/g, ' ')), verdict.slice(0, 160))
     ok('the verdict does not repeat the finding', !verdict.includes('pad group'), verdict)
     const item = await page.locator('[data-testid="fix-first-item"]').first().innerText()
     ok('fix-first says what to do, in board-level words', item.startsWith('Route the board') && item.includes('Route all the nets') && !item.includes('netlist'), item)

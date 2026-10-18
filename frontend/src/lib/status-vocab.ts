@@ -66,9 +66,13 @@ export function boardVerdict(report: WebReport): { term: StatusTerm; detail: str
   const conditional = report.verdict === 'pass' && (report.verdict_conditions ?? []).some(c => c.trim() !== '')
   let board: { term: StatusTerm; detail: string; tone?: ChipTone }
   if (tone === 'error') {
-    board = report.serious > 0
-      ? { term: 'fail', detail: `${report.serious} serious` }
-      : report.fix_first?.notice ? { term: 'not_checked', detail: 'not routed yet' } : { term: 'fail', detail: 'analysis failed' }
+    // The not-routed state is itself one of the counted serious findings, so a
+    // board with no other serious finding says what that one is.
+    board = report.fix_first?.notice && report.serious <= 1
+      ? { term: 'fail', detail: 'not routed yet' }
+      : report.serious > 0
+        ? { term: 'fail', detail: `${report.serious} serious` }
+        : { term: 'fail', detail: 'analysis failed' }
   } else if (tone === 'warning') {
     // An undermined run-level claim is what the body headline leads with.
     board = report.partly_judged

@@ -1,0 +1,1294 @@
+{
+ "bind": {
+  "active_path_unresolved": [
+   "Q1",
+   "U4"
+  ],
+  "critical_parts_bound": "4/5",
+  "open_parts": [
+   {
+    "active_ic": false,
+    "bound": false,
+    "consequence": "Q1 defaults to OPEN; nets through it are isolated in simulation",
+    "reason": "no model",
+    "reference": "Q1",
+    "value": "BS250"
+   },
+   {
+    "active_ic": true,
+    "bound": false,
+    "consequence": "U4 is an active IC left OPEN; analog/AC/thermal results on its nets are NOT trustworthy",
+    "reason": "identity matched model 'ch340c' but behavior is unavailable: CH340C identity, SOP-16 pin map, 3.3/5 V logic levels, supply range and ratings are sourced; the USB device and UART are not modeled (TXD, RTS#, DTR# and OUT# are undriven), so the part stays OPEN",
+    "reference": "U4",
+    "value": "CH340C"
+   }
+  ],
+  "open_selections": [
+   {
+    "corners": true,
+    "determined": null,
+    "family": "led_generic",
+    "members": [
+     {
+      "basis": "ASSUMED high-Vf corner: 3.5 V max at 20 mA, Wurth WL-SMCW 150060BS75000/150060GS75000",
+      "id": "led_generic_corner_high_vf",
+      "reason": "nothing names it",
+      "selector": "",
+      "verdict": "U"
+     },
+     {
+      "basis": "ASSUMED low-Vf corner: 1.9 V typ at 20 mA, Wurth WL-SMCW 150060SS75000",
+      "id": "led_generic_corner_low_vf",
+      "reason": "nothing names it",
+      "selector": "",
+      "verdict": "U"
+     }
+    ],
+    "same_pinout": true,
+    "swept": null,
+    "value": "LED",
+    "via": "board",
+    "widened": [],
+    "reference": "D2"
+   },
+   {
+    "corners": true,
+    "determined": null,
+    "family": "led_generic",
+    "members": [
+     {
+      "basis": "ASSUMED high-Vf corner: 3.5 V max at 20 mA, Wurth WL-SMCW 150060BS75000/150060GS75000",
+      "id": "led_generic_corner_high_vf",
+      "reason": "nothing names it",
+      "selector": "",
+      "verdict": "U"
+     },
+     {
+      "basis": "ASSUMED low-Vf corner: 1.9 V typ at 20 mA, Wurth WL-SMCW 150060SS75000",
+      "id": "led_generic_corner_low_vf",
+      "reason": "nothing names it",
+      "selector": "",
+      "verdict": "U"
+     }
+    ],
+    "same_pinout": true,
+    "swept": null,
+    "value": "LED",
+    "via": "board",
+    "widened": [],
+    "reference": "D3"
+   },
+   {
+    "corners": true,
+    "determined": null,
+    "family": "led_generic",
+    "members": [
+     {
+      "basis": "ASSUMED high-Vf corner: 3.5 V max at 20 mA, Wurth WL-SMCW 150060BS75000/150060GS75000",
+      "id": "led_generic_corner_high_vf",
+      "reason": "nothing names it",
+      "selector": "",
+      "verdict": "U"
+     },
+     {
+      "basis": "ASSUMED low-Vf corner: 1.9 V typ at 20 mA, Wurth WL-SMCW 150060SS75000",
+      "id": "led_generic_corner_low_vf",
+      "reason": "nothing names it",
+      "selector": "",
+      "verdict": "U"
+     }
+    ],
+    "same_pinout": true,
+    "swept": null,
+    "value": "LED",
+    "via": "board",
+    "widened": [],
+    "reference": "D4"
+   },
+   {
+    "corners": true,
+    "determined": null,
+    "family": "led_generic",
+    "members": [
+     {
+      "basis": "ASSUMED high-Vf corner: 3.5 V max at 20 mA, Wurth WL-SMCW 150060BS75000/150060GS75000",
+      "id": "led_generic_corner_high_vf",
+      "reason": "nothing names it",
+      "selector": "",
+      "verdict": "U"
+     },
+     {
+      "basis": "ASSUMED low-Vf corner: 1.9 V typ at 20 mA, Wurth WL-SMCW 150060SS75000",
+      "id": "led_generic_corner_low_vf",
+      "reason": "nothing names it",
+      "selector": "",
+      "verdict": "U"
+     }
+    ],
+    "same_pinout": true,
+    "swept": null,
+    "value": "LED",
+    "via": "board",
+    "widened": [],
+    "reference": "D5"
+   }
+  ]
+ },
+ "board_name": "board",
+ "clearance_rule_source": {
+  "project_file_found": false,
+  "source": "defaulted",
+  "value_mm": 0.2
+ },
+ "component_assertions": {
+  "C1": [
+   "max_temp"
+  ],
+  "C10": [
+   "max_temp"
+  ],
+  "C11": [
+   "max_temp"
+  ],
+  "C12": [
+   "max_temp"
+  ],
+  "C13": [
+   "max_temp"
+  ],
+  "C3": [
+   "max_temp"
+  ],
+  "C4": [
+   "max_temp"
+  ],
+  "C6": [
+   "max_temp"
+  ],
+  "C7": [
+   "max_temp"
+  ],
+  "C8": [
+   "max_temp"
+  ],
+  "C9": [
+   "max_temp"
+  ],
+  "D1": [
+   "max_current",
+   "max_temp"
+  ],
+  "D2": [
+   "max_current",
+   "max_temp"
+  ],
+  "D3": [
+   "max_current",
+   "max_temp"
+  ],
+  "D4": [
+   "max_current",
+   "max_temp"
+  ],
+  "D5": [
+   "max_current",
+   "max_temp"
+  ],
+  "R1": [
+   "max_current",
+   "max_temp"
+  ],
+  "R10": [
+   "max_current",
+   "max_temp"
+  ],
+  "R2": [
+   "max_current",
+   "max_temp"
+  ],
+  "R3": [
+   "max_current",
+   "max_temp"
+  ],
+  "R4": [
+   "max_current",
+   "max_temp"
+  ],
+  "R5": [
+   "max_current",
+   "max_temp"
+  ],
+  "R6": [
+   "max_current",
+   "max_temp"
+  ],
+  "R7": [
+   "max_current",
+   "max_temp"
+  ],
+  "R8": [
+   "max_current",
+   "max_temp"
+  ],
+  "R9": [
+   "max_current",
+   "max_temp"
+  ],
+  "U2": [
+   "max_temp"
+  ],
+  "U3": [
+   "max_temp"
+  ]
+ },
+ "component_kinds": {
+  "C1": "passive",
+  "C10": "passive",
+  "C11": "passive",
+  "C12": "passive",
+  "C13": "passive",
+  "C3": "passive",
+  "C4": "passive",
+  "C6": "passive",
+  "C7": "passive",
+  "C8": "passive",
+  "C9": "passive",
+  "D1": "diode",
+  "D2": "diode",
+  "D3": "diode",
+  "D4": "diode",
+  "D5": "diode",
+  "J1": "ignore",
+  "J2": "ignore",
+  "J3": "ignore",
+  "J4": "ignore",
+  "J5": "ignore",
+  "J6": "ignore",
+  "J7": "ignore",
+  "J8": "ignore",
+  "J9": "ignore",
+  "R1": "passive",
+  "R10": "passive",
+  "R2": "passive",
+  "R3": "passive",
+  "R4": "passive",
+  "R5": "passive",
+  "R6": "passive",
+  "R7": "passive",
+  "R8": "passive",
+  "R9": "passive",
+  "SW1": "ignore",
+  "U1": "opamp",
+  "U2": "vreg",
+  "U3": "vreg",
+  "U4": "digital",
+  "U5": "mcu",
+  "Y1": "passive"
+ },
+ "component_ratings": {
+  "C1": {
+   "max_voltage_v": 6.3
+  },
+  "C10": {
+   "max_voltage_v": 6.3
+  },
+  "C11": {
+   "max_voltage_v": 6.3
+  },
+  "C12": {
+   "max_voltage_v": 6.3
+  },
+  "C13": {
+   "max_voltage_v": 6.3
+  },
+  "C3": {
+   "max_voltage_v": 6.3
+  },
+  "C4": {
+   "max_voltage_v": 6.3
+  },
+  "C6": {
+   "max_voltage_v": 6.3
+  },
+  "C7": {
+   "max_voltage_v": 6.3
+  },
+  "C8": {
+   "max_voltage_v": 6.3
+  },
+  "C9": {
+   "max_voltage_v": 6.3
+  },
+  "D1": {
+   "max_current_a": 0.2,
+   "max_voltage_v": 20
+  },
+  "D2": {
+   "max_current_a": 0.025,
+   "max_voltage_v": 5
+  },
+  "D3": {
+   "max_current_a": 0.025,
+   "max_voltage_v": 5
+  },
+  "D4": {
+   "max_current_a": 0.025,
+   "max_voltage_v": 5
+  },
+  "D5": {
+   "max_current_a": 0.025,
+   "max_voltage_v": 5
+  },
+  "U2": {
+   "max_current_a": 1,
+   "max_voltage_v": 15
+  },
+  "U3": {
+   "max_current_a": 1,
+   "max_voltage_v": 15
+  }
+ },
+ "error": null,
+ "file_name": "board",
+ "fix_first": {
+  "items": [
+   {
+    "fix": "Route all the nets, pour and refill the zones, then run the layout editor's DRC until it reports no unconnected items.",
+    "similar": 0,
+    "what": "Route the board",
+    "why": "No track, via or copper pour joins any of the placed pads yet, so a board made from these files would connect nothing. The circuit checks ran on the netlist; the copper checks wait until it is routed."
+   }
+  ],
+  "more": 0,
+  "notice": "Circuit, model and firmware checks ran on the netlist; copper checks (shorts, spacing) wait until the board is routed."
+ },
+ "headline": "Not routed yet: 12 issues found, 1 serious, including the missing routing.",
+ "import_diagnostics": {
+  "format": "text board / netlist",
+  "missing_or_refused": 0,
+  "objects": [
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "C1",
+    "nets": [
+     "/VIN",
+     "GND"
+    ],
+    "x": 125.857,
+    "y": 88.011
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "C10",
+    "nets": [
+     "+5V",
+     "GND"
+    ],
+    "x": 137.414,
+    "y": 73.406
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "C11",
+    "nets": [
+     "GND",
+     "Net-(C11-Pad2)"
+    ],
+    "x": 153.924,
+    "y": 68.8975
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "C12",
+    "nets": [
+     "GND",
+     "Net-(C12-Pad1)"
+    ],
+    "x": 150.1775,
+    "y": 68.8975
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "C13",
+    "nets": [
+     "/AREF",
+     "GND"
+    ],
+    "x": 137.668,
+    "y": 81.788
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "C2",
+    "nets": [
+     "+5V",
+     "GND"
+    ],
+    "x": 134.112,
+    "y": 88.011
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "C2@conflict-2",
+    "nets": [
+     "+5V",
+     "GND"
+    ],
+    "x": 123.444,
+    "y": 76.1365
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "C3",
+    "nets": [
+     "+3V3",
+     "GND"
+    ],
+    "x": 127,
+    "y": 53.848
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "C4",
+    "nets": [
+     "+5V",
+     "GND"
+    ],
+    "x": 130.5052,
+    "y": 81.8896
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "C6",
+    "nets": [
+     "+3V3",
+     "GND"
+    ],
+    "x": 122.428,
+    "y": 70.1675
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "C7",
+    "nets": [
+     "+5V",
+     "GND"
+    ],
+    "x": 123.444,
+    "y": 74.041
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "C8",
+    "nets": [
+     "/DTR",
+     "Net-(C8-Pad2)"
+    ],
+    "x": 133.1722,
+    "y": 65.75806
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "C9",
+    "nets": [
+     "+3V3",
+     "GND"
+    ],
+    "x": 124.46,
+    "y": 70.1675
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "D1",
+    "nets": [
+     "/VIN",
+     "Net-(D1-Pad1)"
+    ],
+    "x": 129.8448,
+    "y": 96.1898
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "D2",
+    "nets": [
+     "GND",
+     "Net-(D2-Pad2)"
+    ],
+    "x": 137.4775,
+    "y": 69.0245
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "D3",
+    "nets": [
+     "/D1",
+     "Net-(D3-Pad2)"
+    ],
+    "x": 137.4775,
+    "y": 57.9755
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "D4",
+    "nets": [
+     "/D0",
+     "Net-(D4-Pad2)"
+    ],
+    "x": 137.4775,
+    "y": 55.753
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "D5",
+    "nets": [
+     "GND",
+     "Net-(D5-Pad2)"
+    ],
+    "x": 137.4775,
+    "y": 64.389
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "F1",
+    "nets": [
+     "/VBUS",
+     "Net-(F1-Pad2)"
+    ],
+    "x": 112.4458,
+    "y": 68.6308
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "J1",
+    "nets": [
+     "GND",
+     "Net-(D1-Pad1)"
+    ],
+    "x": 119.4816,
+    "y": 91.3638
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "J2",
+    "nets": [
+     "GND",
+     "Net-(F1-Pad2)",
+     "Net-(J2-PadA5)",
+     "Net-(J2-PadA6)",
+     "Net-(J2-PadA7)",
+     "Net-(J2-PadA8)",
+     "Net-(J2-PadB5)",
+     "Net-(J2-PadB8)",
+     "Net-(J2-PadS1)"
+    ],
+    "x": 113.8555,
+    "y": 59.817
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "J3",
+    "nets": [
+     "+5V",
+     "/D11",
+     "/D12",
+     "/D13",
+     "/DTR",
+     "GND"
+    ],
+    "x": 173.0375,
+    "y": 69.088
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "J4",
+    "nets": [
+     "/A0",
+     "/A1",
+     "/A2",
+     "/A3",
+     "/A4",
+     "/A5"
+    ],
+    "x": 160.528,
+    "y": 96.266
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "J5",
+    "nets": [
+     "+3V3",
+     "+5V",
+     "/DTR",
+     "/VIN",
+     "GND",
+     "Net-(J5-Pad1)"
+    ],
+    "x": 137.668,
+    "y": 96.266
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "J6",
+    "nets": [
+     "/A4",
+     "/A5",
+     "/AREF",
+     "/D10",
+     "/D11",
+     "/D12",
+     "/D13",
+     "/D8",
+     "/D9",
+     "GND"
+    ],
+    "x": 151.384,
+    "y": 48.006
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "J7",
+    "nets": [
+     "/D0",
+     "/D1",
+     "/D2",
+     "/D3",
+     "/D4",
+     "/D5",
+     "/D6",
+     "/D7"
+    ],
+    "x": 173.228,
+    "y": 48.006
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "J8",
+    "nets": [
+     "/D0",
+     "/D1",
+     "/VBUS",
+     "GND"
+    ],
+    "x": 133.7945,
+    "y": 60.706
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "J9",
+    "nets": [
+     "/CTS",
+     "/DCD",
+     "/DSR",
+     "/R232",
+     "/RI",
+     "/RTS"
+    ],
+    "x": 122.05208,
+    "y": 65.02654
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "Q1",
+    "nets": [
+     "+5V",
+     "/VBUS",
+     "Net-(Q1-Pad2)"
+    ],
+    "x": 117.475,
+    "y": 68.453
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "R1",
+    "nets": [
+     "/VIN",
+     "Net-(R1-Pad2)"
+    ],
+    "x": 123.444,
+    "y": 80.5815
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "R10",
+    "nets": [
+     "Net-(C11-Pad2)",
+     "Net-(C12-Pad1)"
+    ],
+    "x": 151.1554,
+    "y": 77.0636
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "R2",
+    "nets": [
+     "GND",
+     "Net-(R1-Pad2)"
+    ],
+    "x": 123.444,
+    "y": 78.5495
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "R3",
+    "nets": [
+     "/D0",
+     "Net-(R3-Pad2)"
+    ],
+    "x": 131.191,
+    "y": 53.848
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "R4",
+    "nets": [
+     "/D1",
+     "Net-(R4-Pad2)"
+    ],
+    "x": 129.159,
+    "y": 53.848
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "R5",
+    "nets": [
+     "Net-(D2-Pad2)",
+     "Net-(R5-Pad1)"
+    ],
+    "x": 137.429,
+    "y": 71.0565
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "R6",
+    "nets": [
+     "+5V",
+     "Net-(D3-Pad2)"
+    ],
+    "x": 140.6525,
+    "y": 61.4045
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "R7",
+    "nets": [
+     "+5V",
+     "Net-(D4-Pad2)"
+    ],
+    "x": 142.8115,
+    "y": 61.4045
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "R8",
+    "nets": [
+     "+5V",
+     "Net-(D5-Pad2)"
+    ],
+    "x": 137.4775,
+    "y": 66.4845
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "R9",
+    "nets": [
+     "+5V",
+     "/DTR"
+    ],
+    "x": 172.8216,
+    "y": 66.04
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "SW1",
+    "nets": [
+     "/DTR",
+     "GND"
+    ],
+    "x": 115.316,
+    "y": 49.784
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "U1",
+    "nets": [
+     "+3V3",
+     "+5V",
+     "/D13",
+     "GND",
+     "Net-(Q1-Pad2)",
+     "Net-(R1-Pad2)",
+     "Net-(R5-Pad1)"
+    ],
+    "x": 130.81,
+    "y": 77.851
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "U2",
+    "nets": [
+     "+5V",
+     "/VIN",
+     "GND"
+    ],
+    "x": 114.8715,
+    "y": 82.7405
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "U3",
+    "nets": [
+     "+3V3",
+     "+5V",
+     "GND"
+    ],
+    "x": 114.8715,
+    "y": 75.1205
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "U4",
+    "nets": [
+     "+3V3",
+     "/CTS",
+     "/DCD",
+     "/DSR",
+     "/R232",
+     "/RI",
+     "/RTS",
+     "/VBUS",
+     "GND",
+     "Net-(C8-Pad2)",
+     "Net-(J2-PadA6)",
+     "Net-(J2-PadA7)",
+     "Net-(R3-Pad2)",
+     "Net-(R4-Pad2)",
+     "Net-(U4-Pad7)",
+     "Net-(U4-Pad8)"
+    ],
+    "x": 127.381,
+    "y": 59.69
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "U5",
+    "nets": [
+     "+5V",
+     "/A0",
+     "/A1",
+     "/A2",
+     "/A3",
+     "/A4",
+     "/A5",
+     "/AREF",
+     "/D0",
+     "/D1",
+     "/D10",
+     "/D11",
+     "/D12",
+     "/D13",
+     "/D2",
+     "/D3",
+     "/D4",
+     "/D5",
+     "/D6",
+     "/D7",
+     "/D8",
+     "/D9",
+     "/DTR",
+     "GND",
+     "Net-(C11-Pad2)",
+     "Net-(C12-Pad1)"
+    ],
+    "x": 173.228,
+    "y": 80.01
+   },
+   {
+    "confidence": "high",
+    "explanation": "Reference, value, pins and board location were recovered from the input.",
+    "status": "recovered",
+    "id": "Y1",
+    "nets": [
+     "Net-(C11-Pad2)",
+     "Net-(C12-Pad1)"
+    ],
+    "x": 153.797,
+    "y": 73.3425
+   }
+  ],
+  "partial": 0,
+  "recovered": 46,
+  "unplaced": 0
+ },
+ "judgement_scope": {
+  "electrical_dependent": [
+   "+3V3",
+   "+5V",
+   "/A0",
+   "/A1",
+   "/A2",
+   "/A3",
+   "/A4",
+   "/A5",
+   "/AREF",
+   "/CTS",
+   "/D0",
+   "/D1",
+   "/D10",
+   "/D11",
+   "/D12",
+   "/D13",
+   "/D2",
+   "/D3",
+   "/D4",
+   "/D5",
+   "/D6",
+   "/D7",
+   "/D8",
+   "/D9",
+   "/DCD",
+   "/DSR",
+   "/DTR",
+   "/R232",
+   "/RI",
+   "/RTS",
+   "/VBUS",
+   "/VIN",
+   "GND",
+   "Net-(C11-Pad2)",
+   "Net-(C12-Pad1)",
+   "Net-(C8-Pad2)",
+   "Net-(D1-Pad1)",
+   "Net-(D2-Pad2)",
+   "Net-(D3-Pad2)",
+   "Net-(D4-Pad2)",
+   "Net-(D5-Pad2)",
+   "Net-(F1-Pad2)",
+   "Net-(J2-PadA6)",
+   "Net-(J2-PadA7)",
+   "Net-(J5-Pad1)",
+   "Net-(Q1-Pad2)",
+   "Net-(R1-Pad2)",
+   "Net-(R3-Pad2)",
+   "Net-(R4-Pad2)",
+   "Net-(R5-Pad1)",
+   "Net-(U4-Pad7)",
+   "Net-(U4-Pad8)"
+  ],
+  "nets": 57,
+  "open_parts": [
+   "Q1",
+   "U4"
+  ],
+  "wiring_dependent": [
+   "+3V3",
+   "+5V",
+   "/CTS",
+   "/DCD",
+   "/DSR",
+   "/R232",
+   "/RI",
+   "/RTS",
+   "/VBUS",
+   "GND",
+   "Net-(C8-Pad2)",
+   "Net-(J2-PadA6)",
+   "Net-(J2-PadA7)",
+   "Net-(Q1-Pad2)",
+   "Net-(R3-Pad2)",
+   "Net-(R4-Pad2)",
+   "Net-(U4-Pad7)",
+   "Net-(U4-Pad8)"
+  ]
+ },
+ "nets": [
+  "+3V3",
+  "+5V",
+  "/A0",
+  "/A1",
+  "/A2",
+  "/A3",
+  "/A4",
+  "/A5",
+  "/AREF",
+  "/CTS",
+  "/D0",
+  "/D1",
+  "/D10",
+  "/D11",
+  "/D12",
+  "/D13",
+  "/D2",
+  "/D3",
+  "/D4",
+  "/D5",
+  "/D6",
+  "/D7",
+  "/D8",
+  "/D9",
+  "/DCD",
+  "/DSR",
+  "/DTR",
+  "/R232",
+  "/RI",
+  "/RTS",
+  "/VBUS",
+  "/VIN",
+  "GND",
+  "Net-(C11-Pad2)",
+  "Net-(C12-Pad1)",
+  "Net-(C8-Pad2)",
+  "Net-(D1-Pad1)",
+  "Net-(D2-Pad2)",
+  "Net-(D3-Pad2)",
+  "Net-(D4-Pad2)",
+  "Net-(D5-Pad2)",
+  "Net-(F1-Pad2)",
+  "Net-(J2-PadA5)",
+  "Net-(J2-PadA6)",
+  "Net-(J2-PadA7)",
+  "Net-(J2-PadA8)",
+  "Net-(J2-PadB5)",
+  "Net-(J2-PadB8)",
+  "Net-(J2-PadS1)",
+  "Net-(J5-Pad1)",
+  "Net-(Q1-Pad2)",
+  "Net-(R1-Pad2)",
+  "Net-(R3-Pad2)",
+  "Net-(R4-Pad2)",
+  "Net-(R5-Pad1)",
+  "Net-(U4-Pad7)",
+  "Net-(U4-Pad8)"
+ ],
+ "notes": [
+  {
+   "kind": "coverage",
+   "message": "Indicators: indicator meaning and signal polarity versus intent: not checked for 2 on U5 outputs (D3, D4). These are electrically fine either way round, and no stated outcome says which level should light them; `hauksbee-ci init` scaffolds one to confirm."
+  },
+  {
+   "kind": "bind_role",
+   "message": "Current-carrying / active part(s) left open on the live circuit: Q1, U4. Analog/AC/thermal results on their nets are NOT trustworthy."
+  }
+ ],
+ "num_components": 46,
+ "num_nets": 57,
+ "ok": true,
+ "sections": [
+  {
+   "findings": [],
+   "title": "Copper spacing (DRC; DEFAULT rules, not your rules)",
+   "verdict": "CLEARANCE RULE SOURCE: DEFAULT 0.200 mm; this upload did not include a .kicad_pro, so your netclass rules were not read; these are default rules, not your rules. Upload the matching .kicad_pro alongside the board to check your netclass rules. Looks healthy: no copper spacing (drc) problems found."
+  },
+  {
+   "findings": [
+    {
+     "fix": "Make the reference/value and footprint agree: use a resistor footprint for R parts, a capacitor footprint for C parts, and regenerate the BOM from the corrected design.",
+     "level": "note",
+     "what": "R1 is a R designator on a C chip land 'Capacitor_SMD:C_0805_2012Metric'. Same 0805 chip size, so the part fits; the land is the generic capacitor variant. Rename the footprint to the resistor land if the BOM tooling keys on it",
+     "why": "The reference designator tells the BOM and assembly process what kind of part this is, while the footprint points at a different passive family. The board may route electrically, but the assembly house can load the wrong bin or stop for clarification."
+    },
+    {
+     "fix": "Make the reference/value and footprint agree: use a resistor footprint for R parts, a capacitor footprint for C parts, and regenerate the BOM from the corrected design.",
+     "level": "note",
+     "what": "R2 is a R designator on a C chip land 'Capacitor_SMD:C_0805_2012Metric'. Same 0805 chip size, so the part fits; the land is the generic capacitor variant. Rename the footprint to the resistor land if the BOM tooling keys on it",
+     "why": "The reference designator tells the BOM and assembly process what kind of part this is, while the footprint points at a different passive family. The board may route electrically, but the assembly house can load the wrong bin or stop for clarification."
+    },
+    {
+     "fix": "Make the reference/value and footprint agree: use a resistor footprint for R parts, a capacitor footprint for C parts, and regenerate the BOM from the corrected design.",
+     "level": "note",
+     "what": "R3 is a R designator on a C chip land 'Capacitor_SMD:C_0805_2012Metric'. Same 0805 chip size, so the part fits; the land is the generic capacitor variant. Rename the footprint to the resistor land if the BOM tooling keys on it",
+     "why": "The reference designator tells the BOM and assembly process what kind of part this is, while the footprint points at a different passive family. The board may route electrically, but the assembly house can load the wrong bin or stop for clarification."
+    },
+    {
+     "fix": "Make the reference/value and footprint agree: use a resistor footprint for R parts, a capacitor footprint for C parts, and regenerate the BOM from the corrected design.",
+     "level": "note",
+     "what": "R4 is a R designator on a C chip land 'Capacitor_SMD:C_0805_2012Metric'. Same 0805 chip size, so the part fits; the land is the generic capacitor variant. Rename the footprint to the resistor land if the BOM tooling keys on it",
+     "why": "The reference designator tells the BOM and assembly process what kind of part this is, while the footprint points at a different passive family. The board may route electrically, but the assembly house can load the wrong bin or stop for clarification."
+    },
+    {
+     "fix": "Make the reference/value and footprint agree: use a resistor footprint for R parts, a capacitor footprint for C parts, and regenerate the BOM from the corrected design.",
+     "level": "note",
+     "what": "R5 is a R designator on a C chip land 'Capacitor_SMD:C_0805_2012Metric'. Same 0805 chip size, so the part fits; the land is the generic capacitor variant. Rename the footprint to the resistor land if the BOM tooling keys on it",
+     "why": "The reference designator tells the BOM and assembly process what kind of part this is, while the footprint points at a different passive family. The board may route electrically, but the assembly house can load the wrong bin or stop for clarification."
+    },
+    {
+     "fix": "Make the reference/value and footprint agree: use a resistor footprint for R parts, a capacitor footprint for C parts, and regenerate the BOM from the corrected design.",
+     "level": "note",
+     "what": "R6 is a R designator on a C chip land 'Capacitor_SMD:C_0805_2012Metric'. Same 0805 chip size, so the part fits; the land is the generic capacitor variant. Rename the footprint to the resistor land if the BOM tooling keys on it",
+     "why": "The reference designator tells the BOM and assembly process what kind of part this is, while the footprint points at a different passive family. The board may route electrically, but the assembly house can load the wrong bin or stop for clarification."
+    },
+    {
+     "fix": "Make the reference/value and footprint agree: use a resistor footprint for R parts, a capacitor footprint for C parts, and regenerate the BOM from the corrected design.",
+     "level": "note",
+     "what": "R7 is a R designator on a C chip land 'Capacitor_SMD:C_0805_2012Metric'. Same 0805 chip size, so the part fits; the land is the generic capacitor variant. Rename the footprint to the resistor land if the BOM tooling keys on it",
+     "why": "The reference designator tells the BOM and assembly process what kind of part this is, while the footprint points at a different passive family. The board may route electrically, but the assembly house can load the wrong bin or stop for clarification."
+    },
+    {
+     "fix": "Make the reference/value and footprint agree: use a resistor footprint for R parts, a capacitor footprint for C parts, and regenerate the BOM from the corrected design.",
+     "level": "note",
+     "what": "R8 is a R designator on a C chip land 'Capacitor_SMD:C_0805_2012Metric'. Same 0805 chip size, so the part fits; the land is the generic capacitor variant. Rename the footprint to the resistor land if the BOM tooling keys on it",
+     "why": "The reference designator tells the BOM and assembly process what kind of part this is, while the footprint points at a different passive family. The board may route electrically, but the assembly house can load the wrong bin or stop for clarification."
+    },
+    {
+     "fix": "Make the reference/value and footprint agree: use a resistor footprint for R parts, a capacitor footprint for C parts, and regenerate the BOM from the corrected design.",
+     "level": "note",
+     "what": "R9 is a R designator on a C chip land 'Capacitor_SMD:C_0805_2012Metric'. Same 0805 chip size, so the part fits; the land is the generic capacitor variant. Rename the footprint to the resistor land if the BOM tooling keys on it",
+     "why": "The reference designator tells the BOM and assembly process what kind of part this is, while the footprint points at a different passive family. The board may route electrically, but the assembly house can load the wrong bin or stop for clarification."
+    },
+    {
+     "fix": "Make the reference/value and footprint agree: use a resistor footprint for R parts, a capacitor footprint for C parts, and regenerate the BOM from the corrected design.",
+     "level": "note",
+     "what": "R10 is a R designator on a C chip land 'Capacitor_SMD:C_0805_2012Metric'. Same 0805 chip size, so the part fits; the land is the generic capacitor variant. Rename the footprint to the resistor land if the BOM tooling keys on it",
+     "why": "The reference designator tells the BOM and assembly process what kind of part this is, while the footprint points at a different passive family. The board may route electrically, but the assembly house can load the wrong bin or stop for clarification."
+    },
+    {
+     "fix": "If the regulator rings at load steps, add 11.8 µF directly from '+3V3' to ground at the regulator.",
+     "level": "note",
+     "what": "A sourced operating condition is violated on U3, C3, C6 and C9 at net \"+3V3\". U3 (AMS1117-3.3) output '+3V3' has 10.2 µF from output to ground (C3 100 nF, C6 10 µF, C9 100 nF), below the 22 µF card 'ams1117_3v3' records as the datasheet's recommendation for loop stability (a recommended value, not a stated minimum, so this is a note, not a fault). The datasheet's 22 µF is solid tantalum: stability depends on the capacitor's type and ESR, which the board does not record. Remedy: If the regulator rings at load steps, add 11.8 µF directly from '+3V3' to ground at the regulator.",
+     "why": "The model card quotes the part's recommended operating table and compares it with the full rail range the board can present. A nominal point inside the table is not enough when a battery or regulator tolerance crosses a published bound."
+    },
+    {
+     "fix": "Route all the nets, pour and refill the zones, then run the layout editor's DRC until it reports no unconnected items.",
+     "level": "serious",
+     "what": "the board is not routed yet, so it cannot be ordered as is: no copper joins its 129 pad group(s)",
+     "why": "No track, via or copper pour joins any of the placed pads yet, so a board made from these files would connect nothing. The circuit checks ran on the netlist; the copper checks wait until it is routed."
+    }
+   ],
+   "title": "Connectivity & wiring",
+   "verdict": "12 issues found, 1 serious."
+  },
+  {
+   "findings": [],
+   "title": "Signal integrity",
+   "verdict": "INCONCLUSIVE: 2 current-carrying / active part(s) have no model (Q1, U4), so a clean result here is not a clean bill. Draft models from their datasheets (`hauksbee models extract --unmodelled <board>`, or the Extend button in `hauksbee serve`), scaffold one by hand (`hauksbee models new`, then --models-dir), or supply BOM identity (--bom) to make this verdict conclusive."
+  },
+  {
+   "findings": [],
+   "heads_up": [
+    {
+     "what": "No discrete CC pulldown (Rd) is visible on the receptacle. If a USB-C PD controller / sink IC (e.g. STUSB4500, FUSB302, CYPD) provides Rd internally this is correct: hauksbee cannot see termination inside an IC, so it cannot confirm it from copper.",
+     "why": "  J2: CC1 Rd=none, CC2 Rd=none\n"
+    }
+   ],
+   "title": "USB-C CC compliance",
+   "verdict": "No usb-c cc compliance failures, but 1 thing worth a look (see below)."
+  }
+ ],
+ "serious": 1,
+ "supplies": [
+  {
+   "net": "/VBUS",
+   "volts": 5
+  }
+ ],
+ "total": 12,
+ "triage": {
+  "checked_ok": [],
+  "do_not_order": [
+   {
+    "id": "lint",
+    "kind": "unrouted_pad",
+    "statement": "the board is not routed yet, so it cannot be ordered as is: no copper joins its 129 pad group(s)"
+   }
+  ],
+  "inspect": [
+   {
+    "id": "usb_c",
+    "kind": "cc_compliance",
+    "statement": "USB-C CC: No discrete CC pulldown (Rd) is visible on the receptacle. If a USB-C PD controller / sink IC (e.g. STUSB4500, FUSB302, CYPD) provides Rd internally this is correct: hauksbee cannot see termination inside an IC, so it cannot confirm it from copper."
+   }
+  ],
+  "not_covered": "5 parts lack an executable simulation model; model-dependent firmware/analog/AC/thermal claims involving those parts are not covered (run --report for the bind table). Copper geometry and datasheet decode rules do not require a simulation model. Clearance findings use DEFAULT rules, not your rules, because no usable .kicad_pro netclass rules were read. Indicators: indicator meaning and signal polarity versus intent: not checked for 2 on U5 outputs (D3, D4). These are electrically fine either way round, and no stated outcome says which level should light them; `hauksbee-ci init` scaffolds one to confirm."
+ },
+ "verdict": "fail",
+ "verdict_reason": "the board must be routed before it can be ordered."
+}

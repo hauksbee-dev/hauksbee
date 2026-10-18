@@ -1579,12 +1579,13 @@ fn analyze_normalized_with_context(
         .map(|s| s.findings.iter().filter(|f| f.level == "serious").count())
         .sum();
     let total: usize = sections.iter().map(|s| s.findings.len()).sum();
-    // An unrouted board holds its copper findings back and the not-routed state
-    // is not a defect, so neither counts as an issue.
+    // An unrouted board holds its copper findings back (listed apart, labelled
+    // held back), so those do not count. The not-routed state is listed and
+    // tagged serious, so it DOES count: every number on the page is this one.
     hauksbee_ir::progress::begin(hauksbee_ir::progress::Stage::Report, 0);
     let fix_first = crate::plain::fix_first(&drc_plain, &lint_plain, usbc.as_ref(), &si_plain);
     let (total, serious) = if fix_first.notice.is_some() {
-        crate::plain::without_pre_layout(&drc_plain, &lint_plain, total, serious)
+        crate::plain::without_held_copper(&drc_plain, total, serious)
     } else {
         (total, serious)
     };
@@ -4208,9 +4209,32 @@ mod tests {
         let r = analyze("boot_gate.kicad_pcb", SHORTED);
         assert!(r.fix_first.notice.is_some());
         assert_eq!(r.fix_first.copper_held, 2, "the two copper shorts");
+        // The held copper shorts are not counted; the not-routed state is
+        // listed as serious, so it is. The counters, the headline and the
+        // section verdicts all quote that one number.
+        let listed_serious: usize = r
+            .sections
+            .iter()
+            .filter(|s| !s.title.starts_with("Copper spacing"))
+            .map(|s| s.findings.iter().filter(|f| f.level == "serious").count())
+            .sum();
+        assert!(
+            r.serious >= 1,
+            "the unrouted state is a counted serious finding"
+        );
         assert_eq!(
-            r.serious, 0,
-            "neither the shorts nor the unrouted state count"
+            r.serious, listed_serious,
+            "counter == serious findings listed"
+        );
+        let listed: usize = r
+            .sections
+            .iter()
+            .filter(|s| !s.title.starts_with("Copper spacing"))
+            .map(|s| s.findings.len())
+            .sum();
+        assert_eq!(
+            r.total, listed,
+            "counter == findings listed outside the held copper"
         );
         assert!(r.headline.starts_with("Not routed yet: "), "{}", r.headline);
         assert!(
@@ -4224,6 +4248,64 @@ mod tests {
             r.verdict == "fail",
             "an unrouted board never reads as ready"
         );
+    }
+
+    /// The pre-layout board whose counters used to read "0 serious" beside a
+    /// finding tagged SERIOUS: the counters, the headline and each section's
+    /// verdict line quote the findings actually listed, never a private tally.
+    #[test]
+    fn every_count_on_the_report_derives_from_the_listed_findings() {
+        const UNROUTED: &[u8] =
+            include_bytes!("../../../testdata/boards/stm32_adc_divider_demo.kicad_pcb");
+        for (name, bytes) in [
+            ("stm32.kicad_pcb", UNROUTED),
+            ("boot_gate.kicad_pcb", SHORTED),
+        ] {
+            let r = analyze(name, bytes);
+            let counted = |s: &&WebSection| {
+                !s.title.starts_with("Copper spacing") || r.fix_first.notice.is_none()
+            };
+            let listed: usize = r
+                .sections
+                .iter()
+                .filter(counted)
+                .map(|s| s.findings.len())
+                .sum();
+            let listed_serious: usize = r
+                .sections
+                .iter()
+                .filter(counted)
+                .map(|s| s.findings.iter().filter(|f| f.level == "serious").count())
+                .sum();
+            assert_eq!(
+                (r.total, r.serious),
+                (listed, listed_serious),
+                "{name}: counters"
+            );
+            assert!(r.serious > 0, "{name}: a serious finding is listed");
+            assert!(
+                !r.headline.contains("none serious") && !r.headline.contains("no problems"),
+                "{name}: the headline denies a listed serious finding: {}",
+                r.headline
+            );
+            for s in r.sections.iter().filter(counted) {
+                let n = s.findings.len();
+                let serious = s.findings.iter().filter(|f| f.level == "serious").count();
+                if n > 0 && s.verdict.contains(" found,") {
+                    let expect = if serious == 0 {
+                        "none serious".to_string()
+                    } else {
+                        format!("{serious} serious")
+                    };
+                    assert!(
+                        s.verdict.contains(&format!("{n} issue")) && s.verdict.contains(&expect),
+                        "{name}: section '{}' says '{}' over {n} findings ({serious} serious)",
+                        s.title,
+                        s.verdict
+                    );
+                }
+            }
+        }
     }
 
     #[test]
