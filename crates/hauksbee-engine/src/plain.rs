@@ -993,7 +993,21 @@ pub(crate) fn order_triage_with_rule_source(
     // The structured/plain order is shorts, stale-fill notes, below-rule
     // violations, then at-limit observations. Only actual below-rule groups
     // belong on the order screen; no-margin observations remain in the detail
-    // below, and a stale fill is a refill reminder, not an order blocker.
+    // below, and a stale fill is not an order blocker (it never gates and is
+    // no short). It is still an item to inspect: gerbers are plotted from the
+    // stored fill, so ordering without refilling sends the fab the old pour. A
+    // board whose only finding is a stale fill therefore reads "inspect before
+    // ordering", never a clean OK TO ORDER.
+    triage.inspect.extend(
+        drc_plain
+            .findings
+            .iter()
+            .skip(drc.shorts.len())
+            .take(drc.stale_fills.len())
+            .map(|finding| {
+                TriageEntry::new("drc", "stale_fill", finding.what.clone(), finding.loc_mm)
+            }),
+    );
     let below_rule = drc_plain
         .findings
         .iter()
@@ -1337,8 +1351,8 @@ pub fn plain_drc_structured_with_rule_source(
         );
     }
 
-    // A track or via inside another net's stored zone fill: the fill is out of
-    // date, the copper is not shorted. One action, and it never gates.
+    // A track, via or pad inside another net's stored zone fill: the fill is
+    // out of date, the copper is not shorted. One action, and it never gates.
     for sf in &st.stale_fills {
         let a = net_label(&sf.zone_net);
         let b = net_label(&sf.copper_net);
@@ -1347,7 +1361,7 @@ pub fn plain_drc_structured_with_rule_source(
             PlainLevel::Warning,
             format!("{}.", hauksbee_ir::vocabulary::sentence_case(&sf.plain)),
             format!(
-                "The saved copper pour for \"{a}\" was filled before the {} for \"{b}\" was routed or moved, so it still covers that copper, at {places} on {}. Nothing is shorted today: KiCad's own check reports the same spots as clearance violations, and refilling the zones cuts the pour back by its clearance. Until it is refilled, the spacing and short results around these spots reflect the old pour.",
+                "The saved copper pour for \"{a}\" was filled before the {} for \"{b}\" was routed, placed or moved, so it still covers that copper, at {places} on {}. Nothing is shorted today: KiCad's own check reports the same spots as clearance violations, and refilling the zones cuts the pour back by its clearance. Until it is refilled, the spacing and short results around these spots reflect the old pour.",
                 sf.copper_kind,
                 friendly_layer(&sf.layer),
             ),
@@ -2751,6 +2765,75 @@ mod tests {
         assert!(clearance_report(1, 0)
             .default_rule_flood_note(&defaulted)
             .is_some());
+    }
+
+    /// Gerbers are plotted from the stored fill, so a board whose only finding
+    /// is an out-of-date fill is not "OK TO ORDER": it is an item to inspect
+    /// (refill, re-run). It is still no short and not a do-not-order item.
+    #[test]
+    fn a_board_whose_only_finding_is_a_stale_fill_reads_inspect_not_clean() {
+        for copper_kind in ["track", "via", "pad"] {
+            let mut drc = clearance_report(0, 0);
+            drc.stale_fills.push(crate::result::DrcStaleFill {
+                zone_net: "GND".into(),
+                copper_net: "SDA".into(),
+                copper_kind: copper_kind.into(),
+                layer: "F.Cu".into(),
+                count: 2,
+                loc_mm: [5.0, 6.0],
+                plain: hauksbee_ir::vocabulary::stale_zone_fill("GND", "SDA", copper_kind),
+                fix: "refill all zones".into(),
+            });
+            let provenance = crate::result::ClearanceRuleProvenance::project_file(0.2);
+            let triage = order_triage_with_rule_source(
+                &drc,
+                &provenance,
+                &NetLintReport::default(),
+                &SiReport::default(),
+                None,
+                true,
+                0,
+                true,
+            );
+            assert!(triage.do_not_order.is_empty(), "{copper_kind}: {triage:#?}");
+            assert_eq!(triage.inspect.len(), 1, "{copper_kind}: {triage:#?}");
+            let said = &triage.inspect[0];
+            assert_eq!(
+                (said.id.as_str(), said.kind.as_str()),
+                ("drc", "stale_fill")
+            );
+            assert!(
+                said.statement
+                    .contains("refill zones (B) in KiCad and re-run")
+                    && said.statement.contains(copper_kind),
+                "{copper_kind}: {}",
+                said.statement
+            );
+            assert_eq!(
+                drc.shorts.len(),
+                0,
+                "{copper_kind}: a stale fill is no short"
+            );
+
+            // The verdict carries the triage's inspect count: a pass with the
+            // inspect tag, and a headline that lists the item, never a clean
+            // OK TO ORDER.
+            let verdict = crate::result::RunVerdict {
+                inspect: triage.inspect.len(),
+                ..crate::result::RunVerdict::default()
+            };
+            assert!(verdict.is_pass(), "it does not gate");
+            assert_eq!(
+                verdict.inspect_tag().as_deref(),
+                Some("inspect before ordering (1 item)")
+            );
+            let rendered = triage.render(&verdict);
+            assert!(
+                rendered.contains(&format!("{INSPECT_BEFORE_ORDERING}:\n  - ")),
+                "{rendered}"
+            );
+            assert!(!rendered.contains("OK TO ORDER"), "{rendered}");
+        }
     }
 
     #[test]

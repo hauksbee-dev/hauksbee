@@ -679,15 +679,15 @@ fn oracle_cross_check(board: &Path, report: &hauksbee_extract::DrcReport) -> Ora
     let (shorts, clear) = (report.short_count(), report.clearance_violations().count());
     let stale = report.stale_fills().count();
     let verdict = if shorts == 0 && stale > 0 {
-        // KiCad words a track inside a stale fill as a clearance violation at 0,
-        // which the touching-copper count above includes.
+        // KiCad words a track, via or pad inside a stale fill as a clearance
+        // violation at 0, which the touching-copper count above includes.
         if confirmed > 0 {
             format!(
-                "agree: KiCad also flags the {stale} track(s) inside a stale zone fill, as clearance violations at 0 mm; refill zones, not a short"
+                "agree: KiCad also flags the {stale} item(s) inside a stale zone fill, as clearance violations at 0 mm; refill zones, not a short"
             )
         } else {
             format!(
-                "hauksbee finds {stale} track(s) inside a stale zone fill that the oracle does not flag; investigate"
+                "hauksbee finds {stale} item(s) inside a stale zone fill that the oracle does not flag; investigate"
             )
         }
     } else if shorts == 0 && confirmed == 0 {

@@ -149,7 +149,7 @@ pub fn check_run_stopped(doing: Option<(&str, u32)>, elapsed_s: u64) -> String {
 /// The copper is not shorted: the fill was computed before the track was
 /// routed or moved, and a refill carves the zone's clearance around it. `KiCad`
 /// itself reports the same place as a clearance violation, never a short.
-/// `copper` is the kind of copper ("track" or "via"); `B` is `KiCad`'s key for
+/// `copper` is the kind of copper ("track", "via" or "pad"); `B` is `KiCad`'s key for
 /// "Fill all zones".
 #[must_use]
 pub fn stale_zone_fill(zone_net: &str, copper_net: &str, copper: &str) -> String {

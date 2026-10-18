@@ -34,11 +34,11 @@
 //!   - `0 < gap < clearance` → they do not touch but sit closer than the
 //!     design rule allows: a **clearance violation**
 //!     ([`ViolationKind::Clearance`]), a near-short risk, lower severity.
-//!   - A track or arc of one net inside the *stored* fill of another
-//!     net's zone is not a short but an out-of-date fill
+//!   - A track, arc, via or pad of one net inside the *stored* fill of
+//!     another net's zone is not a short but an out-of-date fill
 //!     ([`ViolationKind::StaleFill`]): a refill carves the clearance around
-//!     it. `KiCad` itself reports these as clearance violations, never as
-//!     shorting items.
+//!     it. `KiCad` itself reports these as clearance violations (actual
+//!     0.0000 mm), never as shorting items.
 //!
 //! Clearance is read from the board's design rules when present, else a sane
 //! default ([`DEFAULT_CLEARANCE_MM`]).
@@ -472,12 +472,12 @@ pub enum ViolationKind {
     /// Copper from two nets is closer than the design clearance but not
     /// touching: a near-short manufacturing risk.
     Clearance,
-    /// A track or arc of one net lies inside the stored fill of another
-    /// net's zone: the fill was computed before the track was routed or moved,
-    /// and refilling carves the track out by the zone's clearance. The copper
-    /// is not shorted, the fill is stale. `KiCad` reports the same place as a
-    /// clearance violation (actual 0), never as a shorting item. Vias are not
-    /// included: a via inside a stored fill stays a short.
+    /// A track, arc, via or pad of one net lies inside the stored fill of
+    /// another net's zone: the fill was computed before that copper was routed
+    /// or moved, and refilling carves it out by the zone's clearance. The
+    /// copper is not shorted, the fill is stale. `KiCad` reports the same place
+    /// as a clearance violation (actual 0), never as a shorting item. Copper of
+    /// two nets that touch with no stored fill involved stays a short.
     StaleFill,
 }
 
@@ -936,7 +936,7 @@ impl DrcReport {
             .filter(|f| f.kind == ViolationKind::Short)
     }
 
-    /// Only the stale-fill findings: a track or arc inside another net's
+    /// Only the stale-fill findings: copper inside another net's
     /// stored zone fill, which a refill clears.
     pub fn stale_fills(&self) -> impl Iterator<Item = &DrcFinding> {
         self.findings
@@ -3065,12 +3065,18 @@ fn sweep_buckets(
                 // tolerance below the rule; a gap sitting at (or a few microns
                 // under) the rule is routing-to-rule, not a defect, and is
                 // dropped to kill the boundary-note noise.
-                // A track or arc inside another net's stored fill is a fill
-                // computed before the track was routed: see `ViolationKind::StaleFill`.
+                // Copper inside another net's stored fill is a fill computed
+                // before that copper was routed or placed: see
+                // `ViolationKind::StaleFill`. (A Zone<->Pad overlap never gets
+                // here: it is suppressed above as an antipad carve, and a pad
+                // inside the fill is judged by the containment pass below.)
                 let in_stale_fill = |zone: &Primitive, other: &Primitive| {
                     zone.kind == ItemKind::Zone
                         && zone.stored_fill
-                        && matches!(other.kind, ItemKind::Track | ItemKind::Arc)
+                        && matches!(
+                            other.kind,
+                            ItemKind::Track | ItemKind::Arc | ItemKind::Via | ItemKind::Pad
+                        )
                 };
                 let kind = if is_touching(gap) {
                     if in_stale_fill(p, q) || in_stale_fill(q, p) {
@@ -3126,7 +3132,10 @@ fn sweep_buckets(
                     }
                     if point_in_polygon(rx, ry, &z.pts) {
                         // `z.filled` is established above: the stored fill, not the outline.
-                        let stale = matches!(p.kind, ItemKind::Track | ItemKind::Arc);
+                        let stale = matches!(
+                            p.kind,
+                            ItemKind::Track | ItemKind::Arc | ItemKind::Via | ItemKind::Pad
+                        );
                         record(
                             if stale {
                                 ViolationKind::StaleFill

@@ -2147,17 +2147,17 @@ impl DrcStructured {
                 }
                 ViolationKind::StaleFill => {
                     // The zone is whichever item is the pour; the other is the
-                    // track that lies inside its stored fill.
+                    // track, via or pad that lies inside its stored fill.
                     let (zone_net, copper_net, copper) =
                         if f.item_a.kind == hauksbee_extract::ItemKind::Zone {
                             (&f.net_a_name, &f.net_b_name, &f.item_b)
                         } else {
                             (&f.net_b_name, &f.net_a_name, &f.item_a)
                         };
-                    let copper_kind = if copper.kind == hauksbee_extract::ItemKind::Via {
-                        "via"
-                    } else {
-                        "track"
+                    let copper_kind = match copper.kind {
+                        hauksbee_extract::ItemKind::Via => "via",
+                        hauksbee_extract::ItemKind::Pad => "pad",
+                        _ => "track",
                     };
                     let e = stale
                         .entry((
@@ -4895,12 +4895,23 @@ mod tests {
     }
 
     #[test]
-    fn a_stale_fill_on_a_via_names_the_via() {
-        let mut f = stale("GND", "A");
-        f.item_b.kind = hauksbee_extract::ItemKind::Via;
-        let st = DrcStructured::from_report(&drc_report(vec![f]));
-        assert_eq!(st.stale_fills[0].copper_kind, "via");
-        assert!(st.stale_fills[0].plain.contains("a A via lies inside"));
+    fn a_stale_fill_on_a_via_or_pad_names_it() {
+        for (kind, word) in [
+            (hauksbee_extract::ItemKind::Via, "via"),
+            (hauksbee_extract::ItemKind::Pad, "pad"),
+        ] {
+            let mut f = stale("GND", "A");
+            f.item_b.kind = kind;
+            let st = DrcStructured::from_report(&drc_report(vec![f]));
+            assert!(st.shorts.is_empty(), "{word}: never a short");
+            assert_eq!(st.stale_fills[0].copper_kind, word);
+            assert!(
+                st.stale_fills[0]
+                    .plain
+                    .contains(&format!("a A {word} lies inside")),
+                "{word}"
+            );
+        }
     }
 
     #[test]

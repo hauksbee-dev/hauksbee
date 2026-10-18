@@ -62,7 +62,8 @@ const PAD_PAD: &str = r#"
     (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 2))
   )
 "#;
-// A via dropped inside a filled GND pour: the containment short.
+// A via dropped inside a stored GND pour: the fill is stale, not a short (see
+// `a_via_inside_a_stored_fill_is_a_stale_fill_not_a_short`).
 const VIA_ZONE: &str = r#"
   (via (at 5 5) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1))
   (zone (net 3) (net_name "GND") (layer "B.Cu")
@@ -70,6 +71,14 @@ const VIA_ZONE: &str = r#"
     (filled_polygon (layer "B.Cu")
       (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10))
     )
+  )
+"#;
+// A via sitting on a pad of another net, with no zone anywhere.
+const VIA_PAD: &str = r#"
+  (via (at 5 0) (size 1.0) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1))
+  (footprint "lib:fp" (layer "F.Cu") (at 5 0)
+    (property "Reference" "U1" (at 0 0))
+    (pad "1" smd rect (at 0 0) (size 1.5 1.5) (layers "F.Cu") (net 2))
   )
 "#;
 // A via spans both layers, so a single-layer track of another net hits it.
@@ -128,7 +137,7 @@ const OVERLAPS: &[Overlap] = &[
     ("segment/segment", false, SEGMENT_SEGMENT, ("A", "B"), Some("F.Cu"), None),
     ("segment/pad", false, SEGMENT_PAD, ("A", "B"), None, Some("U1")),
     ("pad/pad", false, PAD_PAD, ("A", "B"), None, None),
-    ("via/zone", false, VIA_ZONE, ("A", "GND"), Some("B.Cu"), None),
+    ("via/pad, no zone", false, VIA_PAD, ("A", "B"), None, Some("U1")),
     ("via/segment", false, VIA_SEGMENT, ("A", "B"), None, None),
     ("through via/inner track", true, THROUGH_VIA_INNER_TRACK, ("A", "B"), Some("In1.Cu"), None),
     ("blind via/inner track", true, BLIND_VIA_INNER_TRACK, ("A", "B"), None, None),
@@ -1119,4 +1128,94 @@ fn a_track_over_a_pad_of_another_net_with_no_zone_is_still_a_short() {
     let report = drc(SEGMENT_PAD);
     assert!(report.shorts().next().is_some());
     assert_eq!(report.stale_fills().count(), 0);
+}
+
+const VIA_IN_THE_POUR: &str =
+    r#"  (via (at 10 10) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1))"#;
+const PAD_IN_THE_POUR: &str = r#"
+  (footprint "lib:fp" (layer "F.Cu") (at 10 10)
+    (property "Reference" "U1" (at 0 0))
+    (pad "1" smd rect (at 0 0) (size 1.5 1.5) (layers "F.Cu") (net 1))
+  )
+"#;
+
+/// The kicad-cli 10.0.6 oracle on the same arrangements (`pcb drc --format json
+/// --severity-all`, a 16 mm GND-equivalent pour with a stored fill and zone
+/// clearance 0.3 mm, a net-A copper item inside it):
+///   - a pad inside the stored fill: `clearance` error "zone clearance 0.3000
+///     mm; actual 0.0000 mm" (Pad [A] vs Zone [B]); with `connect_pads
+///     (clearance 0)` the same error at the 0.2 mm board rule; no shorting item.
+///   - a via that is connected to its own net (here a net-A track ends on it):
+///     the same `clearance` error "actual 0.0000 mm" (Via [A] vs Zone [B]),
+///     plus a `hole_clearance`; no shorting item.
+///   - a lone via with nothing of its own net on it is re-netted by KiCad to the
+///     pour it sits in and reported only as `via_dangling`; hauksbee still names
+///     the declared nets, so it is the same refill reminder.
+#[test]
+fn a_via_inside_a_stored_fill_is_a_stale_fill_not_a_short() {
+    for (name, items, layer) in [
+        (
+            "via in the pour",
+            format!(
+                "{}{VIA_IN_THE_POUR}",
+                stored_pour("(connect_pads (clearance 0.3))")
+            ),
+            "F.Cu",
+        ),
+        ("via in a B.Cu pour", VIA_ZONE.to_string(), "B.Cu"),
+    ] {
+        let report = drc(&items);
+        assert_eq!(report.shorts().count(), 0, "{name}: not a short");
+        let stale: Vec<_> = report.stale_fills().collect();
+        assert!(!stale.is_empty(), "{name}: the fill is out of date");
+        assert!(
+            stale.iter().all(|f| f.kind == ViolationKind::StaleFill
+                && f.layer == layer
+                && [&f.item_a, &f.item_b]
+                    .iter()
+                    .any(|i| i.kind == hauksbee_extract::ItemKind::Via)
+                && (f.net_a_name == "GND" || f.net_b_name == "GND")
+                && (f.net_a_name == "A" || f.net_b_name == "A")),
+            "{name}: {stale:?}"
+        );
+    }
+}
+
+#[test]
+fn a_pad_inside_a_stored_fill_is_a_stale_fill_not_a_short() {
+    for connect in ["(connect_pads (clearance 0.3))", ""] {
+        let report = drc(&format!("{}{PAD_IN_THE_POUR}", stored_pour(connect)));
+        assert_eq!(report.shorts().count(), 0, "{connect:?}: not a short");
+        let stale: Vec<_> = report.stale_fills().collect();
+        assert!(!stale.is_empty(), "{connect:?}: the fill is out of date");
+        assert!(
+            stale.iter().all(|f| [&f.item_a, &f.item_b]
+                .iter()
+                .any(|i| { i.kind == hauksbee_extract::ItemKind::Pad && i.owner == "U1" })
+                && (f.net_a_name == "GND" || f.net_b_name == "GND")),
+            "{connect:?}: {stale:?}"
+        );
+    }
+}
+
+#[test]
+fn a_via_on_a_pad_or_track_of_another_net_with_no_zone_is_still_a_short() {
+    for (name, items) in [("via on a pad", VIA_PAD), ("via on a track", VIA_SEGMENT)] {
+        let report = drc(items);
+        assert_eq!(report.short_count(), 1, "{name}");
+        assert_short(&report, "A", "B");
+        assert_eq!(report.stale_fills().count(), 0, "{name}");
+    }
+}
+
+#[test]
+fn an_outline_only_zone_leaves_a_via_or_pad_inside_it_unreported() {
+    let outline = r#"
+  (zone (net 3) (net_name "GND") (layer "F.Cu")
+    (polygon (pts (xy 0 0) (xy 20 0) (xy 20 20) (xy 0 20))))
+"#;
+    for copper in [VIA_IN_THE_POUR, PAD_IN_THE_POUR] {
+        let report = drc(&format!("{outline}{copper}"));
+        assert_eq!(report.stale_fills().count(), 0, "{copper}");
+    }
 }
