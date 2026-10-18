@@ -122,7 +122,7 @@ describe('offers', () => {
   test('a part says what is measured, lists its best nets, and leaves ground out', () => {
     const offers = offersForPart('U1', ['GND', '/SENSE', '/+3V3', '/LED_OUT', '/SDA'], ctx())
     expect(offers.length).toBeGreaterThanOrEqual(3)
-    expect(offers.find(o => o.kind === 'max_current')?.text).toBe('Keep the current through U1 under … A')
+    expect(offers.find(o => o.kind === 'max_current')?.text).toBe('Set a current limit for U1')
     const nets = offers.filter(o => o.kind === 'voltage').map(o => o.net)
     expect(nets).toEqual(['/+3V3', '/LED_OUT', '/SDA'])
     expect(offers.map(o => o.text).join(' ')).not.toContain('GND')

@@ -246,7 +246,7 @@ export function ShellChips({
   const faultDetail = `${sim.faults} part${sim.faults === 1 ? '' : 's'} faulted`
   const simPart = (): Part => sim.faults > 0
     ? { key: 'sim', tone: 'err', term: 'fail', detail: faultDetail, view: 'sim' }
-    : { key: 'sim', tone: sim.running ? 'ok' : 'quiet', detail: sim.running ? 'sim running' : 'sim paused', view: 'sim', pulse: sim.running }
+    : { key: 'sim', tone: sim.running ? 'ok' : 'quiet', detail: sim.running ? 'sim running' : sim.runState === 'ready' ? 'sim ready' : 'sim paused', view: 'sim', pulse: sim.running }
 
   if (view === 'sim') {
     // The Live Sim view describes THE SESSION's board only: the analyzed board's

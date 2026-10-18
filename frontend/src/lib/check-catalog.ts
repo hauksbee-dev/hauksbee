@@ -219,10 +219,14 @@ export interface Offer {
 const speak = (template: string, net?: string, ref?: string) =>
   template.replace('{net}', net ? displayNet(net) : 'this net').replace('{ref}', ref ?? 'this part').replace(/\.\.\./g, '…')
 
-/** Part offers say what is measured, not just the part's name. */
+/** Part offers say what is measured, not just the part's name. They are
+ *  ACTIONS ("Set a temperature limit for U3"): the engine's own wording ends
+ *  in a literal "... C" placeholder, which read as a sentence cut short. The
+ *  number is the user's to give (a rating is never guessed), and the check
+ *  editor that opens asks for it. */
 const PART_WORDS: Record<string, string> = {
-  max_current: 'Keep the current through {ref} under ... A',
-  max_temp: 'Keep {ref} under ... C',
+  max_current: 'Set a current limit for {ref}',
+  max_temp: 'Set a temperature limit for {ref}',
 }
 
 export function blockedBy(entry: CatalogKind, spec: SpecFacts, kinds: readonly CatalogKind[]): Blocked | undefined {

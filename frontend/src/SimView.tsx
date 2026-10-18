@@ -25,7 +25,7 @@ import { vocabulary, type ResultEntity } from './lib/result-links'
 import { McuChips } from './components/sim/McuChips'
 import { SimStatusBar } from './components/sim/StatusBar'
 import { LiveNetCard } from './components/sim/LiveNetCard'
-import { deriveRunState } from './components/sim/run-state'
+import { deriveRunState, type RunState } from './components/sim/run-state'
 import {
   BoardPlaceholder, ForeignSessionBanner, ServerErrorBanner, ShortsBanner,
 } from './components/sim/Banners'
@@ -50,6 +50,10 @@ export interface SimShellStatus {
   /** Board name from the session's BoardInfo frame; null while disconnected. */
   sessionBoard: string | null
   connected: boolean
+  /** ready (never played) / paused / running / offline, from the one run-state
+   *  derivation, so the header chip cannot say "paused" over a sim that has not
+   *  run yet while the transport says it is ready. */
+  runState?: RunState
 }
 
 // The live-sim view: transport row, the board and its scope as the one
@@ -304,14 +308,15 @@ export default function SimView({
   const lastReported = useRef<SimShellStatus | null>(null)
   useEffect(() => {
     if (!onStatus) return
-    const cur: SimShellStatus = { running, faults: faultCount, sessionBoard, connected }
+    const cur: SimShellStatus = { running, faults: faultCount, sessionBoard, connected, runState }
     const prev = lastReported.current
     if (!prev || prev.running !== cur.running || prev.faults !== cur.faults
-      || prev.sessionBoard !== cur.sessionBoard || prev.connected !== cur.connected) {
+      || prev.sessionBoard !== cur.sessionBoard || prev.connected !== cur.connected
+      || prev.runState !== cur.runState) {
       lastReported.current = cur
       onStatus(cur)
     }
-  }, [running, faultCount, sessionBoard, connected, onStatus])
+  }, [running, faultCount, sessionBoard, connected, runState, onStatus])
 
   // Keyboard shortcuts. While an input has focus they are suppressed (typing
   // must win); inputFocused drives the hint bar affordance below.
@@ -454,15 +459,22 @@ export default function SimView({
   )
 
   const selection = !!(selectedFp || selectedNet)
+  // A phone's lower area scrolls; a new selection's card is at its top, so a
+  // scroll position left over from the last card must not hide it.
+  const lowerRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (selection) lowerRef.current?.scrollTo({ top: 0 })
+  }, [selection, selectedFp, selectedNet])
   // On a wide screen the card lives in the dock, so a selection opens it. A
   // phone keeps the board in view instead and shows the card as a sheet.
   useEffect(() => {
     if (selection && !narrow && !boardFullscreen) setRailOpen(true)
   }, [selection, narrow, boardFullscreen])
-  const staticCard = (
+  const staticCardFor = (embedded: boolean) => (
     <SelectionCard
       net={selectedFp ? null : selectedNet}
       docked={!boardFullscreen}
+      embedded={embedded}
       // What the net actually is, not just a number: driven, moving, or
       // unobservable on this backend (see lib/net-state.ts).
       reading={selectedNet && !selectedFp ? readNet(frame, selectedNet, netEnvelopes) : undefined}
@@ -478,6 +490,7 @@ export default function SimView({
       onPickNet={net => { setSelectedFp(null); setSelectedNet(net) }}
     />
   )
+  const staticCard = staticCardFor(false)
   // In the LIVE view a click on a net asks "what is it doing right now?", so the
   // answer is its value, how it moves and a trace. The static check card (the
   // report's suggested assertions, which read as nonsense on a supply rail) is
@@ -493,7 +506,7 @@ export default function SimView({
       onProbe={() => addProbe(selectedNet)}
       onUnprobe={() => removeProbe(selectedNet)}
       onClose={() => { setSelectedFp(null); setSelectedNet(null) }}
-      checks={onQueue ? staticCard : undefined}
+      checks={onQueue ? staticCardFor(true) : undefined}
     />
   ) : staticCard
 
@@ -573,6 +586,7 @@ export default function SimView({
           // is for the live sim, which has none.
           history={replay ? undefined : history}
           tools={tools}
+          toolsAlert={faultCount > 0 ? `${faultCount} faulted` : null}
         />
 
         {sessionMatchesCurrent === false && sessionBoard && (
@@ -590,7 +604,7 @@ export default function SimView({
               phone the open dock takes the screen instead of squeezing both. */}
           <div className={`flex-1 min-w-0 flex flex-col overflow-hidden${railOpen ? ' max-sm:hidden' : ''}`}>
             <div
-              className="flex-1 relative min-w-0 min-h-0 overflow-hidden"
+              className="flex-1 relative min-w-0 min-h-0 max-sm:min-h-[200px] overflow-hidden"
               style={boardFullscreen
                 ? { position: 'fixed', inset: 0, zIndex: 60, background: 'var(--instrument)' }
                 : undefined}
@@ -644,8 +658,16 @@ export default function SimView({
               )}
             </div>
 
+            {/* Phone: everything under the board is ONE scroll area, in reading
+                order: the selected card, then the scope, then the dock opener.
+                Each used to have its own cap (the card 45 %, the scope fixed),
+                so a card with its checks open scrolled inside a sliver of the
+                screen and its last button sat clipped at the scope's edge.
+                On a wide screen the wrapper vanishes (`contents`) and the
+                children lay out exactly as before. */}
+            <div ref={lowerRef} data-testid="sim-lower" className="max-sm:shrink-0 max-sm:flex max-sm:flex-col max-sm:min-h-0 max-sm:max-h-[58%] max-sm:overflow-y-auto sm:contents">
             {narrow && !railOpen && !boardFullscreen && selection && (
-              <div data-testid="selection-dock" className="shrink-0 overflow-y-auto p-2 max-h-[45%]"
+              <div data-testid="selection-dock" className="shrink-0 p-2"
                 style={{ borderTop: '1px solid var(--hairline)', background: 'var(--canvas)' }}>
                 {card}
               </div>
@@ -685,6 +707,7 @@ export default function SimView({
                 </span>
               </button>
             )}
+            </div>
           </div>
 
           <button
