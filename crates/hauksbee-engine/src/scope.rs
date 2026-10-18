@@ -339,16 +339,15 @@ impl JudgementScope {
     pub fn wiring_note(&self) -> Option<String> {
         let judged = self.wiring_judged();
         (judged > 0 && self.electrical_judged() == 0).then(|| {
-            let (parts, does) = match self.open_parts.as_slice() {
-                [one] => (one.clone(), "does"),
-                many => (crate::result::refs_summary(many), "do"),
+            let (parts, reaches) = match self.open_parts.as_slice() {
+                [one] => (one.clone(), "reaches"),
+                many => (crate::result::refs_summary(many), "reach"),
             };
             format!(
-                "For information only, not a pass: the wiring and value checks on the {judged} \
-                 of {} net(s) {parts} {does} not connect to found nothing that fails, but {} can \
-                 reach every net through the circuit, so no electrical check could be judged.",
+                "For information only, not a pass: the wiring and value checks found nothing that \
+                 fails on the {judged} of {} net(s) not wired to {parts}. No electrical check could \
+                 be judged, because {parts} {reaches} every net through the circuit.",
                 self.nets,
-                self.pronoun(),
             )
         })
     }
@@ -723,7 +722,7 @@ mod tests {
         let note = s.wiring_note().expect("four wiring checks came out clean");
         assert!(
             note.starts_with("For information only, not a pass")
-                && note.contains("4 of 6 net(s) U3 does not connect to"),
+                && note.contains("4 of 6 net(s) not wired to U3"),
             "{note}"
         );
     }

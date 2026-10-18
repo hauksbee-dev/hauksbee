@@ -700,8 +700,9 @@ fn check_closing_verdict_is_inconclusive_not_clean() {
     // judged; the one clean wiring check is information, not a pass.
     assert!(
         text.contains(
-            "For information only, not a pass: the wiring and value checks on the 1 of 4 \
-             net(s) Q1 does not connect to found nothing that fails"
+            "For information only, not a pass: the wiring and value checks found nothing that \
+             fails on the 1 of 4 net(s) not wired to Q1. No electrical check could be judged, \
+             because Q1 reaches every net through the circuit."
         ),
         "the clean wiring check is reported as information:\n{text}"
     );
