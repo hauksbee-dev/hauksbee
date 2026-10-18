@@ -934,6 +934,10 @@ pub struct Vocabulary {
     /// [`crate::glossary::all`], by reference: the glossary stays the one
     /// place its terms are explained.
     pub glossary: Vec<TermEntry>,
+    /// [`crate::labels::label_table`]: plain-English words for the internal ids
+    /// (capabilities, coverage stages, model tiers, emulator backends and the
+    /// words above) that reach a human surface.
+    pub labels: crate::labels::LabelTable,
 }
 
 /// `explain verdicts`: every state, in display order.
@@ -1032,6 +1036,7 @@ pub fn vocabulary() -> Vocabulary {
         exit_codes: exit_codes(),
         checks: checks(),
         glossary: crate::glossary::all(),
+        labels: crate::labels::label_table(),
     }
 }
 

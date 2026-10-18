@@ -625,7 +625,7 @@ fn assertion_timing_refusals(
     let mut poll_backends: Vec<String> = coverage
         .iter()
         .filter(|c| !c.cycle_exact && c.backend != hauksbee_engine::scheduler::CHUNK_SAMPLED_LOGIC)
-        .map(|c| format!("{} ({})", c.mcu_ref, c.backend))
+        .map(|c| format!("{}: {}", c.mcu_ref, hauksbee_ir::labels::label_for(&c.backend)))
         .collect();
     poll_backends.sort();
     poll_backends.dedup();
@@ -1741,7 +1741,11 @@ fn production_assumptions(
                 AssumptionSource::Scheduler,
                 Subject::new(
                     &format!("firmware/{}", e.mcu_ref),
-                    &format!("the firmware on {} ({})", e.mcu_ref, e.backend),
+                    &format!(
+                        "the firmware on {}: {}",
+                        e.mcu_ref,
+                        hauksbee_ir::labels::label_for(&e.backend)
+                    ),
                 ),
                 Scope::Check {
                     check: "ci".into(),

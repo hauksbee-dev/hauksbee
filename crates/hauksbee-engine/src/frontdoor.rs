@@ -2563,7 +2563,7 @@ fn run_web_cosim_with_bound(
     if !external_mcus.is_empty() {
         let selected = external_mcus
             .iter()
-            .map(|m| format!("{} ({})", m.reference, m.backend))
+            .map(|m| format!("{}: {}", m.reference, hauksbee_ir::labels::label_for(&m.backend)))
             .collect::<Vec<_>>()
             .join(", ");
         let mut section = cosim_unavailable(format!(

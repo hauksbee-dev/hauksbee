@@ -10,6 +10,8 @@ mod compat_drift;
 mod evidence_release_contract;
 #[path = "evidence_surface.rs"]
 mod evidence_surface;
+#[path = "labels_drift.rs"]
+mod labels_drift;
 #[path = "mos_classification.rs"]
 mod mos_classification;
 #[path = "node_interning.rs"]
