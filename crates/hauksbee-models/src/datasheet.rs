@@ -1765,6 +1765,12 @@ fn with_key_sections(
     if keys.is_empty() {
         return selected;
     }
+    // Each section's first page before any section's second, so a late
+    // section (thermal data, ordering codes) is not crowded out by an early
+    // one split over several contents entries.
+    let mut seen = std::collections::HashSet::new();
+    let (firsts, repeats): (Vec<_>, Vec<_>) = keys.into_iter().partition(|&(_, label)| seen.insert(label));
+    let keys = firsts.into_iter().chain(repeats);
     let mut chosen: std::collections::BTreeMap<usize, SelectedPage> = std::collections::BTreeMap::new();
     let mut rest = Vec::new();
     for page in selected {
@@ -6015,6 +6021,18 @@ mod tests {
                 .join("\u{000c}"),
             "first\u{000c}\u{000c}third"
         );
+    }
+
+    /// A pin table split over many contents entries must not crowd the thermal
+    /// section out of a tight page budget: each section's first page comes first.
+    #[test]
+    fn every_key_section_gets_a_page_before_any_gets_a_second() {
+        let entry = |title: &str, pdf| crate::ds_toolkit::TocEntry { title: title.into(), printed: pdf, pdf };
+        let mut toc: Vec<_> = (10..16).map(|p| entry("Pin definitions (continued)", p)).collect();
+        toc.push(entry("Thermal characteristics", 90));
+        let first = SelectedPage::new(1, vec![], vec![], usize::MAX);
+        let picked: Vec<usize> = with_key_sections(vec![first], &toc, 4).iter().map(|p| p.number).collect();
+        assert_eq!(picked, [1, 10, 11, 90]);
     }
 
     #[test]
