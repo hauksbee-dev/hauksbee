@@ -207,6 +207,11 @@ impl QemuProcess {
     ///     memory reads/writes (GPIO mailbox) and run/stop stepping.
     ///   - `-serial tcp:127.0.0.1:<uart_port>,server,nowait`: UART0 as a raw
     ///     socket, bridged the same way the Renode backend bridges its UART.
+    ///   - `nodelay=on` on both sockets: QEMU's replies otherwise go through
+    ///     Nagle, and on Linux each held reply waits out the client's 40 ms
+    ///     delayed ACK, so every cont/stop round trip took ~40 ms and a 100 µs
+    ///     step credited ~40 ms of guest time. The client side already sets
+    ///     `TCP_NODELAY` (`connect_loopback`); this is QEMU's side.
     ///   - the main timer-group watchdog disabled (`-global ... wdt_disable`) so
     ///     a paused guest is not reset out from under us.
     ///
@@ -236,9 +241,9 @@ impl QemuProcess {
         cmd.args(["-nographic", "-S", "-machine", machine, "-drive"])
             .arg(format!("file={flash},if=mtd,format=raw,snapshot=on"))
             .arg("-qmp")
-            .arg(format!("tcp:127.0.0.1:{qmp_port},server,nowait"))
+            .arg(format!("tcp:127.0.0.1:{qmp_port},server,nowait,nodelay=on"))
             .arg("-serial")
-            .arg(format!("tcp:127.0.0.1:{uart_port},server,nowait"))
+            .arg(format!("tcp:127.0.0.1:{uart_port},server,nowait,nodelay=on"))
             .arg("-global")
             .arg(format!(
                 "driver=timer.{machine}.timg,property=wdt_disable,value=true"
