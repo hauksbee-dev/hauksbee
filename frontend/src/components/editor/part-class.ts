@@ -1,3 +1,5 @@
+import { labelFor } from '../../lib/labels'
+
 // What kind of part is this, from what the board says about it?
 //
 // The model authoring form opens with a kind already chosen when the board's
@@ -26,17 +28,11 @@ export const KIND_CHOICES: [id: string, what: string][] = [
   ['shift_register', 'shift register'], ['mcu', 'microcontroller'], ['connector', 'connector'],
 ]
 
-const KIND_LABELS = new Map<string, string>([
-  ...KIND_CHOICES,
-  ['charger', 'battery charger'], ['pmic', 'power-management IC'], ['balancer', 'cell balancer or monitor'],
-  ['i2c_sensor', 'I2C sensor'], ['spi_sensor', 'SPI sensor'], ['register_map', 'register-map device'],
-  ['ignore', 'part left out on purpose'],
-])
-
-/** A kind id in plain words, for any surface outside the TOML view. An id the
- *  table does not know is shown with its underscores opened up, not raw. */
+/** A kind id in plain words, for any surface outside the TOML view. The words
+ *  come from the shared label table (lib/labels.ts); an id the table does not
+ *  know is humanised, never shown raw. */
 export function kindLabel(id: string): string {
-  return KIND_LABELS.get(id) ?? id.replace(/_/g, ' ')
+  return labelFor(id)
 }
 
 /** The one-word class of a part for sentences ("a MOSFET", "a regulator"). */
