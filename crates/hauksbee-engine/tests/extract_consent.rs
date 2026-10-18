@@ -125,11 +125,16 @@ fn unmodelled_batch_lists_each_part_and_its_datasheet_then_asks_once() {
     let dir = tempfile::tempdir().unwrap();
     let board = unmodelled_board(dir.path());
     let out = dir.path().join("drafts");
+    let config = dir.path().join("extract.toml");
+    std::fs::write(&config, "").unwrap();
+    // The API backend cannot search the web, so the part with no link is named
+    // with the hint; a backend that can search would look for it after consent.
     let run = Command::new(hauksbee())
-        .args(["models", "extract", "--unmodelled"])
+        .args(["models", "extract", "--backend", "api", "--unmodelled"])
         .arg(&board)
         .arg("--out-dir")
         .arg(&out)
+        .env("HAUKSBEE_EXTRACT_CONFIG", &config)
         .stdin(Stdio::null())
         .output()
         .expect("run hauksbee");
@@ -139,7 +144,9 @@ fn unmodelled_batch_lists_each_part_and_its_datasheet_then_asks_once() {
     );
     assert!(so.contains("XOPAMP1-TR") && so.contains("stub.pdf"), "{so}");
     assert!(
-        so.contains("no datasheet for XNOSHEET7") && so.contains("--datasheet 'XNOSHEET7="),
+        so.contains("no datasheet for XNOSHEET7")
+            && so.contains("--datasheet 'XNOSHEET7=")
+            && so.contains("agent backend that can search the web"),
         "{so}"
     );
     assert!(
@@ -163,6 +170,14 @@ fn unmodelled_batch_drafts_a_card_the_next_run_binds() {
         String::from_utf8_lossy(&run.stderr)
     );
     assert!(run.status.success(), "{all}");
+    // U2 names no datasheet, so the (fake) agent backend was asked to search for
+    // it; its reply holds no link, so the part is skipped, not failed.
+    assert!(
+        all.contains("XNOSHEET7: the board gives no datasheet; searching the web")
+            && all.contains("skipped XNOSHEET7: the web search found no usable datasheet")
+            && all.contains("Batch: 1 drafted, 1 skipped"),
+        "{all}"
+    );
     assert!(
         !all.contains("no model cards"),
         "an empty --out-dir is no models dir yet:\n{all}"
@@ -396,4 +411,58 @@ fn a_discrete_mosfet_the_verdict_counts_is_offered_for_extraction() {
         so.contains("The check verdict counts 1 key part(s) with no usable model: 1 offered above"),
         "{so}"
     );
+}
+
+/// A part whose card is already in the target library is reported with the
+/// card's own reason when it is an identity-only abstention, nothing is sent for
+/// it, and it is not a failure (exit 0).
+#[cfg(unix)]
+#[test]
+fn an_identity_only_card_already_in_the_library_is_reported_not_failed() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = unmodelled_board(dir.path());
+    let out = dir.path().join("drafts");
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(
+        out.join("XOPAMP1-TR.toml"),
+        "[[models]]\nid = \"xopamp1\"\nkind = \"digital\"\n[models.params]\n\
+         identity_only = true\nwarning = \"Pin 3 function is not stated.\"\n\
+         unlocked_by = \"state pin 3\"\n",
+    )
+    .unwrap();
+    let config = dir.path().join("extract.toml");
+    std::fs::write(&config, "").unwrap();
+    let run = Command::new(hauksbee())
+        .args([
+            "models",
+            "extract",
+            "--backend",
+            "api",
+            "--yes",
+            "--unmodelled",
+        ])
+        .arg(&board)
+        .arg("--out-dir")
+        .arg(&out)
+        .env("HAUKSBEE_EXTRACT_CONFIG", &config)
+        .stdin(Stdio::null())
+        .output()
+        .expect("run hauksbee");
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        all.contains(
+            "XOPAMP1-TR: has a card that cannot simulate it yet (identity-only): Pin 3 function is not stated; unlocked by: state pin 3; open it in the model editor or re-extract with --force"
+        ),
+        "{all}"
+    );
+    assert!(
+        all.contains("Batch: 0 drafted, 1 already had a card")
+            && !all.contains("extractions failed"),
+        "{all}"
+    );
+    assert!(run.status.success(), "a kept card is not a failure:\n{all}");
 }
