@@ -135,13 +135,22 @@ pub struct BoardEvidence {
 /// Name-keyed indexes over a [`BoardEvidence`]'s incidence. Mapping a run's
 /// findings once rescanned every net per finding, which made a board with
 /// thousands of parts and findings quadratic.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 struct SubjectLookup {
     /// Every net by each name a part on it answers to: its subject and its
     /// display reference (a reference names a part by either).
     nets_by_name: HashMap<String, BTreeSet<String>>,
     /// Each net to the index of the supply group holding it.
     group_of: HashMap<String, usize>,
+}
+
+/// The index is derived from fields `BoardEvidence` already prints, and its
+/// hash maps iterate in a per-process order, so printing it would add nothing
+/// and make two equal evidences print differently.
+impl std::fmt::Debug for SubjectLookup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SubjectLookup").finish_non_exhaustive()
+    }
 }
 
 impl SubjectLookup {
