@@ -1,5 +1,6 @@
 import { CloseIcon } from './Icons'
 import { displayNet } from '../lib/net-name'
+import { explainFor, labelFor } from '../lib/labels'
 import { netReadoutText, type NetReading } from '../lib/net-state'
 import type { ModelCoverageComponent, BoardRequest, WebOpenSelection } from '../types/report'
 import { Callout } from './ui'
@@ -42,19 +43,23 @@ export function VariantPicker({ selection: s, onQueue, refs = [s.reference] }: {
       value=""
       onChange={e => refs.forEach(ref => onQueue({ type: 'select', ref, select: e.target.value }))}
     >
-      <option value="" disabled>Pick the fitted {s.family} variant{refs.length > 1 ? ` for all ${refs.length}` : ''}…</option>
+      <option value="" disabled>Pick the fitted {memberName(s.family)} variant{refs.length > 1 ? ` for all ${refs.length}` : ''}…</option>
       {s.members.map(m => (
         <option key={m.id} value={m.id} disabled={m.verdict === 'C'}>
-          {m.id}: {m.selector || 'no orderable codes'} · {m.basis}{m.verdict === 'C' ? ` (ruled out: ${m.reason})` : ''}
+          {memberName(m.id)}: {m.selector || 'no orderable codes'} · {m.basis}{m.verdict === 'C' ? ` (ruled out: ${m.reason})` : ''}
         </option>
       ))}
     </select>
   )
 }
 
+/** A variant as a reader names it: a part number stays as written, an internal
+ *  family id (`led_generic_corner_high_vf`) goes through the label table. */
+const memberName = (id: string) => (id.includes('_') ? labelFor(id) : id)
+
 /** Stand-in wording, shared by the banner and the card. */
 const selectionState = (s: WebOpenSelection) => s.same_pinout
-  ? `simulated as ${s.members.find(m => m.verdict !== 'C')?.id ?? '?'}; CI checks every variant`
+  ? `simulated as ${memberName(s.members.find(m => m.verdict !== 'C')?.id ?? '?')}; CI checks every variant`
   : 'selection required: left open until you pick one'
 
 /** Parts that share a family, stand-in state and candidate list are one
@@ -104,15 +109,69 @@ export function OpenSelectionsBanner({ selections, onQueue }: {
   )
 }
 
+/** A short list of plain labels (capability ids through the label table), the
+ *  first few inline with their one-line explanation as a tooltip and the rest one
+ *  click away. Never prints a raw id. */
+function PlainList({ ids, testId, limit = 3 }: { ids: readonly string[]; testId?: string; limit?: number }) {
+  const shown = ids.slice(0, limit)
+  const rest = ids.slice(limit)
+  const item = (id: string) => (
+    <span key={id} title={explainFor(id)} style={explainFor(id) ? { textDecoration: 'underline dotted', textDecorationColor: 'var(--rule)', cursor: 'help' } : undefined}>
+      {labelFor(id)}
+    </span>
+  )
+  return (
+    <span data-testid={testId}>
+      {shown.map((id, i) => <span key={id}>{i > 0 && ', '}{item(id)}</span>)}
+      {rest.length > 0 && (
+        <details className="inline">
+          <summary className="inline cursor-pointer" style={{ color: 'var(--silk-faint)' }}> and {rest.length} more</summary>
+          <span> {rest.map((id, i) => <span key={id}>{i > 0 && ', '}{item(id)}</span>)}</span>
+        </details>
+      )}
+    </span>
+  )
+}
+
+/** "gap" or "gaps": the count of things a model still does not cover. */
+const gaps = (n: number) => `${n} ${n === 1 ? 'gap' : 'gaps'}`
+
+/** Scroll the report to where it names `name` (a part or a net), and flash it.
+ *  The report's findings, conditions and coverage rows carry the same result
+ *  links as everything else (`data-testid="result-link"`), so the card needs no
+ *  copy of the findings: it points at them. */
+function mentionsOf(name: string): HTMLElement[] {
+  if (typeof document === 'undefined') return []
+  const report = document.querySelector('[data-testid="report"]')
+  if (!report) return []
+  const escaped = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(name) : name.replace(/"/g, '\\"')
+  return [...report.querySelectorAll<HTMLElement>(`[data-testid="result-link"][data-name="${escaped}"]`)]
+    .filter(el => !el.closest('[data-testid="selection-card"]'))
+}
+
+function showMention(name: string) {
+  const el = mentionsOf(name)[0]
+  if (!el) return
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  const before = el.style.outline
+  el.style.outline = '2px solid var(--copper-hi)'
+  window.setTimeout(() => { el.style.outline = before }, 1600)
+}
+
 export function SelectionCard({
   net, liveVolts, reading, component, boundKind, modelCoverage, netModels = [], assertionCapabilities = [],
   onQueue, openOffer = null, peripheralMode = 'scenario', onAddProbe, onAuthorModel, onClose, onPickNet, openSelection, docked = false,
+  liveSim,
 }: {
   /** In a dock (a rail or a block under the map) rather than floating over it:
    *  fills the dock's width and may grow taller. */
   docked?: boolean
   /** The selected part's open variant selection, when the board leaves one. */
   openSelection?: WebOpenSelection
+  /** Force the live-simulation card (a net shows its live value and trace, not
+   *  the static check card). Left out, it is inferred from what the live view
+   *  already passes: a probe handler, a reading, or live-and-scenario mode. */
+  liveSim?: boolean
 
   /** Selected net, when the click landed on copper. */
   net: string | null
@@ -155,8 +214,34 @@ export function SelectionCard({
 }) {
   if (!net && !component) return null
 
+  const live = liveSim ?? (!!onAddProbe || reading !== undefined || peripheralMode === 'live-and-scenario')
   const needsRegisterMapWork = modelCoverage?.missing?.some(item => /i2c|spi|register|bus/i.test(item)) ?? false
   const modelOwnsRegisterMap = modelCoverage?.implements?.some(item => /register[_-]map/i.test(item)) ?? false
+  const subject = net ?? component?.ref ?? ''
+  const hasMention = mentionsOf(subject).length > 0
+  // The one primary action of a part card is the model, when it has a gap and
+  // the model flow is reachable; otherwise the first check is.
+  const modelPrimary = !!(component && modelCoverage?.actionable_behavior_gap && !modelCoverage.rename_fix && onAuthorModel)
+  const noModel = !!component && (modelCoverage ? modelCoverage.stage === 'unresolved' : !boundKind)
+  const measuredNow = reading?.kind === 'measured'
+  const readingNote = reading?.kind === 'unsupported'
+    ? 'This net is held by a regulator whose input headroom was never established; the number is that ideal source’s setpoint, not a simulated value.'
+    : reading?.kind === 'unobserved'
+      ? 'This backend cannot see whether the MCU drives this pin; the level is the passive network idling, not a measurement.'
+      : reading?.kind === 'measured' && reading.moving
+        ? 'The net moved over the observed span; this is its excursion, not one sampled instant.'
+        : undefined
+
+  const findingsButton = hasMention && (
+    <button
+      type="button"
+      data-testid="selection-related-findings"
+      onClick={() => showMention(subject)}
+      className="hb-btn hb-press px-2.5 py-1.5 text-[12px] text-left"
+    >
+      Show findings that name {displayNet(subject)}
+    </button>
+  )
 
   return (
     // maxHeight 100% + an internal scroll: the card is anchored inside a strip
@@ -166,15 +251,18 @@ export function SelectionCard({
     // stay pinned to the top of the card, always reachable.
     <div
       data-testid="selection-card"
+      data-mode={net && live ? 'live-net' : net ? 'net' : 'part'}
       className="hb-card flex flex-col"
       style={docked
-        ? { width: '100%', maxHeight: 'min(78vh, 720px)', boxShadow: 'var(--shadow-card)' }
+        // Same height as the map beside it, so the dock never leaves a hole
+        // under the map or runs past it.
+        ? { width: '100%', maxHeight: 'clamp(420px, 52vh, 620px)', boxShadow: 'var(--shadow-card)' }
         : { minWidth: 230, maxWidth: 320, maxHeight: '100%', boxShadow: 'var(--shadow-pop)' }}
     >
       <div className="shrink-0 flex flex-col gap-2 px-3 pt-3 pb-2">
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-bold tracking-[0.14em]" style={{ color: 'var(--silk-faint)' }}>
-            {net ? 'NET' : 'COMPONENT'}
+            {net ? (live ? 'NET · LIVE' : 'NET') : 'PART'}
           </span>
           <button
             type="button"
@@ -191,144 +279,148 @@ export function SelectionCard({
         </div>
 
         {net ? (
-          <div className="flex items-baseline gap-2">
-            <span className="text-[14px] font-bold" style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>
-              {displayNet(net)}
-            </span>
-            {reading
-              ? reading.kind !== 'absent' && (
-                <span
-                  className="text-[12px] tnum shrink-0"
-                  data-testid="selection-reading"
-                  title={reading.kind === 'unsupported'
-                    ? 'This net is held by a regulator whose input headroom was never established; the number is that ideal source’s setpoint, not a simulated value.'
-                    : reading.kind === 'unobserved'
-                      ? 'This backend cannot see whether the MCU drives this pin; the level is the passive network idling, not a measurement.'
-                      : reading.moving
-                        ? 'The net moved over the observed span; this is its excursion, not one sampled instant.'
-                        : undefined}
-                  style={{
-                    color: reading.kind === 'measured' ? 'var(--copper)' : 'var(--silk-faint)',
-                    fontFamily: 'var(--font-mono)',
-                    fontStyle: reading.kind === 'measured' ? undefined : 'italic',
-                  }}
-                >
-                  {netReadoutText(reading)}
-                </span>
-              )
-              : liveVolts !== undefined && (
-                <span className="text-[12px] tnum shrink-0" style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}>
-                  {liveVolts.toFixed(3)} V
-                </span>
-              )}
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-baseline gap-2">
+              <span className="text-[14px] font-bold" style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>
+                {displayNet(net)}
+              </span>
+              {reading
+                ? reading.kind !== 'absent' && (
+                  <span
+                    className={live ? 'text-[15px] tnum shrink-0 font-semibold' : 'text-[12px] tnum shrink-0'}
+                    data-testid="selection-reading"
+                    title={readingNote}
+                    style={{
+                      color: measuredNow ? 'var(--copper)' : 'var(--silk-faint)',
+                      fontFamily: 'var(--font-mono)',
+                      fontStyle: measuredNow ? undefined : 'italic',
+                    }}
+                  >
+                    {netReadoutText(reading)}
+                  </span>
+                )
+                : liveVolts !== undefined && (
+                  <span className="text-[12px] tnum shrink-0" style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}>
+                    {liveVolts.toFixed(3)} V
+                  </span>
+                )}
+            </div>
+            {live && reading && (
+              <span className="text-[11px]" data-testid="selection-reading-note" style={{ color: 'var(--silk-dim)' }}>
+                {reading.kind === 'measured'
+                  ? reading.moving ? 'Swinging between these levels while the sim runs.' : 'Right now, from the running simulation.'
+                  : readingNote ?? 'No value for this net in the current frame.'}
+              </span>
+            )}
           </div>
         ) : component ? (
-          <div className="flex items-baseline gap-2">
-            <span className="text-[17px] font-bold" style={{ color: 'var(--silk)' }}>{component.ref}</span>
-            {component.value && <span className="text-[13px]" style={{ color: 'var(--silk-dim)' }}>{component.value}</span>}
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-baseline gap-2">
+              <span className="text-[17px] font-bold" style={{ color: 'var(--silk)' }}>{component.ref}</span>
+              {component.value && <span className="text-[13px]" style={{ color: 'var(--silk-dim)' }}>{component.value}</span>}
+            </div>
+            {boundKind && (
+              <span className="text-[11px]" data-testid="selection-kind" style={{ color: 'var(--silk-dim)' }}>
+                {labelFor(boundKind)}
+              </span>
+            )}
           </div>
         ) : null}
       </div>
 
       <div
         data-testid="selection-card-body"
-        className="flex flex-col gap-2 overflow-y-auto px-3 pb-3"
+        className="flex flex-col gap-2.5 overflow-y-auto px-3 pb-3"
         style={{ minHeight: 0 }}
       >
       {component ? (
         <>
-          <div className="text-[11px]" data-testid="selection-model" style={{ color: 'var(--silk-dim)' }}>
-            {boundKind
-              ? <>bound model: <span style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}>{boundKind}</span></>
-              : 'no bound model (this part is open on the live circuit)'}
-          </div>
-          {modelCoverage && (
-            <div
-              data-testid="selection-model-coverage"
-              className="rounded-md px-2.5 py-2 text-[10px] leading-relaxed"
-              style={{
-                border: `1px solid ${modelCoverage.actionable_behavior_gap ? 'var(--warn-border)' : 'var(--ok-border)'}`,
-                background: modelCoverage.actionable_behavior_gap ? 'var(--warn-bg)' : 'var(--ok-bg)',
-                color: 'var(--silk-dim)',
-              }}
-            >
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <b style={{ color: modelCoverage.actionable_behavior_gap ? 'var(--warn-strong)' : 'var(--ok)' }}>
-                  {modelCoverage.stage.replaceAll('_', ' ')}
-                </b>
-                {modelCoverage.model_id && (
-                  <code style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)' }}>{modelCoverage.model_id}</code>
-                )}
-                <span>{modelCoverage.source.validation}</span>
-              </div>
-              {(modelCoverage.implements?.length ?? 0) > 0 && (
-                <div className="mt-1">
-                  <b>Runs:</b> {modelCoverage.implements!.join(', ')}
+          <div
+            data-testid="selection-model-coverage"
+            className="rounded-md px-2.5 py-2 text-[11px] leading-relaxed"
+            style={{
+              border: `1px solid ${noModel || modelCoverage?.actionable_behavior_gap ? 'var(--warn-border)' : 'var(--ok-border)'}`,
+              background: noModel || modelCoverage?.actionable_behavior_gap ? 'var(--warn-bg)' : 'var(--ok-bg)',
+              color: 'var(--silk-dim)',
+            }}
+          >
+            {modelCoverage ? (
+              <>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5" data-testid="selection-model">
+                  <b
+                    title={explainFor(modelCoverage.stage)}
+                    style={{ color: noModel || modelCoverage.actionable_behavior_gap ? 'var(--warn-strong)' : 'var(--ok)' }}
+                  >
+                    {labelFor(modelCoverage.stage)}
+                  </b>
+                  {(modelCoverage.missing?.length ?? 0) > 0 && <span>· {gaps(modelCoverage.missing!.length)}</span>}
                 </div>
-              )}
-              {(modelCoverage.missing?.length ?? 0) > 0 && (
-                <div className="mt-1" data-testid="selection-model-missing">
-                  <b>Still missing:</b> {modelCoverage.missing!.join(', ')}
-                </div>
-              )}
-              {(modelCoverage.references?.length ?? 0) > 0 && (() => {
-                const reference = modelCoverage.references![0]
-                const safeUrl = /^https?:\/\//i.test(reference.url) ? reference.url : null
-                return (
-                  <div className="mt-1">
-                    Source: {safeUrl ? (
-                      <a href={safeUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--copper-hi)' }}>
-                        {reference.title}
-                      </a>
-                    ) : reference.title}
-                    {reference.sha256 ? ' · hash pinned' : ' · hash not pinned'}
+                {!noModel && (
+                  <div className="mt-0.5" data-testid="selection-model-source">
+                    {[labelFor(modelCoverage.source.tier), labelFor(modelCoverage.source.validation)].filter(Boolean).join(' · ')}
                   </div>
-                )
-              })()}
-            </div>
-          )}
+                )}
+                {noModel && (
+                  <div className="mt-0.5">{explainFor('open_part') ?? 'Left out of the simulated circuit.'}</div>
+                )}
+                {(modelCoverage.implements?.length ?? 0) > 0 && (
+                  <div className="mt-1">
+                    <b>Covers:</b> <PlainList ids={modelCoverage.implements!} />
+                  </div>
+                )}
+                {(modelCoverage.missing?.length ?? 0) > 0 && (
+                  <div className="mt-1">
+                    <b>Not yet covered:</b> <PlainList ids={modelCoverage.missing!} testId="selection-model-missing" />
+                  </div>
+                )}
+              </>
+            ) : (
+              <span data-testid="selection-model">
+                {boundKind
+                  ? <><b style={{ color: 'var(--ok)' }}>Modelled</b>{' · '}{labelFor(boundKind)}</>
+                  : <><b style={{ color: 'var(--warn-strong)' }}>No model</b>{' · left out of the simulated circuit'}</>}
+              </span>
+            )}
+          </div>
+
           {openSelection && (
             <div className="flex flex-col gap-1 text-[11px]" data-testid="selection-variant" style={{ color: 'var(--warn-strong)' }}>
               {selectionState(openSelection)}
               {onQueue && <VariantPicker selection={openSelection} onQueue={onQueue} />}
             </div>
           )}
-          {component.lib_id && (
-            <div className="text-[10px]" style={{ color: 'var(--silk-faint)', wordBreak: 'break-all' }}>
-              {component.lib_id}
-            </div>
+
+          {modelPrimary && (
+            <button
+              type="button"
+              data-testid="selection-author-model"
+              onClick={() => onAuthorModel!(modelCoverage!)}
+              className="hb-btn-primary hb-press px-2.5 py-1.5 text-[12px] text-left"
+            >
+              {noModel ? `Give ${component.ref} a model` : `Extend ${component.ref}'s model`}
+            </button>
           )}
-          {component.padNets && component.padNets.length > 0 && (
-            // Every net, not the first eight: the card scrolls, so "+44 more"
-            // with no way to reach them was a dead end.
-            <div className="text-[11px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
-              on {component.padNets.length} {component.padNets.length === 1 ? 'net' : 'nets'}:{' '}
-              {component.padNets.map((n, i) => (
-                <span key={n}>
-                  {i > 0 && ', '}
-                  {onPickNet ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onPickNet(n)
-                        // The card is rebuilt for the net: keep the keyboard in it.
-                        window.setTimeout(() => document.querySelector<HTMLElement>('[data-testid="check-this"]')?.focus(), 60)
-                      }}
-                      className="hb-press cursor-pointer"
-                      style={{
-                        background: 'none', border: 'none', padding: 0,
-                        color: 'var(--silk-dim)', fontFamily: 'var(--font-mono)', fontSize: 11,
-                        textDecoration: 'underline', textDecorationColor: 'var(--rule)',
-                        textAlign: 'left', wordBreak: 'break-all',
-                      }}
-                    >
-                      {displayNet(n)}
-                    </button>
-                  ) : (
-                    <span style={{ fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>{displayNet(n)}</span>
-                  )}
-                </span>
-              ))}
+
+          {onQueue && needsRegisterMapWork && !modelOwnsRegisterMap && (
+            <button
+              type="button"
+              data-testid="selection-add-sensor"
+              onClick={() => onQueue({ type: 'sensor', id: component.ref, ref: component.ref, modelId: modelCoverage?.model_id })}
+              className="hb-btn hb-press px-2.5 py-1.5 text-[12px] text-left"
+            >
+              Simulate its registers with a behavior builder
+            </button>
+          )}
+
+          {needsRegisterMapWork && modelOwnsRegisterMap && (
+            <div
+              data-testid="selection-register-map-owned"
+              className="rounded-md px-2.5 py-2 text-[11px] leading-relaxed"
+              style={{ color: 'var(--silk-dim)', border: '1px solid var(--hairline)', background: 'var(--surface-2)' }}
+            >
+              This part already auto-attaches model-owned register behavior. Extend
+              its model to add the missing registers; adding a second device at the
+              same address would not represent this board.
             </div>
           )}
         </>
@@ -337,28 +429,26 @@ export function SelectionCard({
       {net && netModels.length > 0 && (
         <div
           data-testid="selection-net-models"
-          className="rounded-md px-2.5 py-2 text-[10px] leading-relaxed"
+          className="rounded-md px-2.5 py-2 text-[11px] leading-relaxed"
           style={{ border: '1px solid var(--hairline)', background: 'var(--surface-2)', color: 'var(--silk-dim)' }}
         >
-          <b style={{ color: 'var(--silk)' }}>Devices on this trace</b>
-          {netModels.map(model => (
-            <div key={model.reference} className="mt-1">
-              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--copper-hi)' }}>{model.reference}</span>{' '}
-              · {model.stage.replaceAll('_', ' ')}
-              {(model.missing?.length ?? 0) > 0 ? ` · missing ${model.missing!.join(', ')}` : ''}
+          <b style={{ color: 'var(--silk)' }}>
+            {netModels.length === 1 ? '1 device on this net' : `${netModels.length} devices on this net`}
+          </b>
+          {netModels.slice(0, live ? 3 : 6).map(model => (
+            <div key={model.reference} className="mt-0.5">
+              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--silk)' }}>{model.reference}</span>{' '}
+              · {labelFor(model.stage)}
+              {(model.missing?.length ?? 0) > 0 && <> · {gaps(model.missing!.length)}</>}
             </div>
           ))}
+          {netModels.length > (live ? 3 : 6) && (
+            <div className="mt-0.5" style={{ color: 'var(--silk-faint)' }}>and {netModels.length - (live ? 3 : 6)} more</div>
+          )}
         </div>
       )}
 
-      {onQueue && (
-        <CheckThis
-          net={net} component={component} boundKind={boundKind} capabilities={assertionCapabilities}
-          live={reading ? (reading.kind === 'measured' ? reading.volts : null) : liveVolts ?? null}
-          padNet={component?.padNet} onQueue={onQueue} openOffer={openOffer}
-        />
-      )}
-
+      {/* A live net's one primary action is the probe; a static net's is its first check. */}
       {net && onAddProbe && (
         <button
           type="button"
@@ -366,80 +456,114 @@ export function SelectionCard({
           onClick={() => onAddProbe(net)}
           className="hb-btn-primary hb-press px-2.5 py-1.5 text-[12px] text-left"
         >
-          + Watch this trace live
+          Show {displayNet(net)} on the scope
         </button>
+      )}
+
+      {onQueue && (
+        <CheckThis
+          net={net} component={component} boundKind={boundKind} capabilities={assertionCapabilities}
+          live={reading ? (reading.kind === 'measured' ? reading.volts : null) : liveVolts ?? null}
+          padNet={component?.padNet} onQueue={onQueue} openOffer={openOffer}
+          heading={net ? 'Check this net' : 'Check this part'}
+          max={3} hideBlocked={live} primaryFirst={!live && !modelPrimary && !(net && onAddProbe)}
+        />
       )}
 
       {net && onQueue && (
-        <div className="flex flex-col gap-1.5">
-          <button
-            type="button"
-            data-testid="selection-add-stimulus"
-            onClick={() => onQueue({ type: 'peripheral', kind: 'stimulus', net })}
-            className="hb-chip hb-press px-2.5 py-1.5 text-[12px] text-left"
-          >
-            {peripheralMode === 'live-and-scenario'
-              ? '+ Drive this trace now and save the interaction'
-              : '+ Drive this trace in a co-sim scenario'}
-          </button>
-          <button
-            type="button"
-            data-testid="selection-add-button"
-            onClick={() => onQueue({ type: 'peripheral', kind: 'pushbutton', net })}
-            className="hb-chip hb-press px-2.5 py-1.5 text-[12px] text-left"
-          >
-            {peripheralMode === 'live-and-scenario'
-              ? '+ Attach a pushbutton now and save it'
-              : '+ Attach a pushbutton to this trace'}
-          </button>
+        <details data-testid="selection-drive" className="flex flex-col gap-1.5">
+          <summary className="cursor-pointer text-[12px]" style={{ color: 'var(--silk-dim)' }}>
+            {live ? 'Drive it now' : 'Drive it'}
+          </summary>
+          <div className="mt-1.5 flex flex-col gap-1.5">
+            <button
+              type="button"
+              data-testid="selection-add-stimulus"
+              onClick={() => onQueue({ type: 'peripheral', kind: 'stimulus', net })}
+              className="hb-btn hb-press px-2.5 py-1.5 text-[12px] text-left"
+            >
+              {live ? 'Apply a signal now and save it as a test' : 'Apply a signal to this net in a test'}
+            </button>
+            <button
+              type="button"
+              data-testid="selection-add-button"
+              onClick={() => onQueue({ type: 'peripheral', kind: 'pushbutton', net })}
+              className="hb-btn hb-press px-2.5 py-1.5 text-[12px] text-left"
+            >
+              {live ? 'Attach a pushbutton now and save it' : 'Attach a pushbutton to this net'}
+            </button>
+            <button
+              type="button"
+              data-testid="selection-add-supply"
+              onClick={() => onQueue({ type: 'supply', net, volts: 3.3 })}
+              className="hb-btn hb-press px-2.5 py-1.5 text-[12px] text-left"
+            >
+              {live ? 'Power this net at 3.3 V now and save the supply' : 'Power this net at 3.3 V in a test'}
+            </button>
+          </div>
+        </details>
+      )}
+
+      {findingsButton}
+
+      {component && (component.padNets?.length ?? 0) > 0 && (
+        // Every net, not the first eight: the card scrolls, so "+44 more"
+        // with no way to reach them was a dead end.
+        <div className="text-[11px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
+          on {component.padNets!.length} {component.padNets!.length === 1 ? 'net' : 'nets'}:{' '}
+          {component.padNets!.map((n, i) => (
+            <span key={n}>
+              {i > 0 && ', '}
+              {onPickNet ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onPickNet(n)
+                    // The card is rebuilt for the net: keep the keyboard in it.
+                    window.setTimeout(() => document.querySelector<HTMLElement>('[data-testid="check-this"]')?.focus(), 60)
+                  }}
+                  className="hb-press cursor-pointer"
+                  style={{
+                    background: 'none', border: 'none', padding: 0,
+                    color: 'var(--silk-dim)', fontFamily: 'var(--font-mono)', fontSize: 11,
+                    textDecoration: 'underline', textDecorationColor: 'var(--rule)',
+                    textAlign: 'left', wordBreak: 'break-all',
+                  }}
+                >
+                  {displayNet(n)}
+                </button>
+              ) : (
+                <span style={{ fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>{displayNet(n)}</span>
+              )}
+            </span>
+          ))}
         </div>
       )}
 
-      {net && onQueue && (
-        <button
-          type="button"
-          data-testid="selection-add-supply"
-          onClick={() => onQueue({ type: 'supply', net, volts: 3.3 })}
-          className="hb-chip hb-press px-2.5 py-1.5 text-[12px] text-left"
-        >
-          {peripheralMode === 'live-and-scenario'
-            ? '+ Power this trace now at 3.3 V and save the supply'
-            : '+ Use this trace as a 3.3 V scenario supply'}
-        </button>
-      )}
-
-      {component && modelCoverage?.actionable_behavior_gap && !modelCoverage.rename_fix && onAuthorModel && (
-        <button
-          type="button"
-          data-testid="selection-author-model"
-          onClick={() => onAuthorModel(modelCoverage)}
-          className="hb-btn-primary hb-press px-2.5 py-1.5 text-[12px] text-left"
-        >
-          Extend {component.ref}'s model
-        </button>
-      )}
-
-      {component && onQueue && needsRegisterMapWork && !modelOwnsRegisterMap && (
-        <button
-          type="button"
-          data-testid="selection-add-sensor"
-          onClick={() => onQueue({ type: 'sensor', id: component.ref, ref: component.ref, modelId: modelCoverage?.model_id })}
-          className="hb-chip hb-press px-2.5 py-1.5 text-[12px] text-left"
-        >
-          + Open its register-map behavior builder
-        </button>
-      )}
-
-      {component && needsRegisterMapWork && modelOwnsRegisterMap && (
-        <div
-          data-testid="selection-register-map-owned"
-          className="rounded-md px-2.5 py-2 text-[10px] leading-relaxed"
-          style={{ color: 'var(--silk-dim)', border: '1px solid var(--hairline)', background: 'var(--surface-2)' }}
-        >
-          This part already auto-attaches model-owned register behavior. Extend
-          its model to add the missing registers; adding a second device at the
-          same address would not represent this board.
-        </div>
+      {component && (component.lib_id || modelCoverage?.model_id || (modelCoverage?.references?.length ?? 0) > 0) && (
+        <details data-testid="selection-technical" className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+          <summary className="cursor-pointer">Technical details</summary>
+          <dl className="mt-1 flex flex-col gap-0.5" style={{ wordBreak: 'break-all' }}>
+            {modelCoverage?.model_id && <div>Model: <code style={{ fontFamily: 'var(--font-mono)' }}>{modelCoverage.model_id}</code></div>}
+            {modelCoverage?.footprint && <div>Footprint: <code style={{ fontFamily: 'var(--font-mono)' }}>{modelCoverage.footprint}</code></div>}
+            {component.lib_id && <div>Library part: <code style={{ fontFamily: 'var(--font-mono)' }}>{component.lib_id}</code></div>}
+            {modelCoverage?.layer && <div>Model from: {labelFor(modelCoverage.layer)}</div>}
+            {(modelCoverage?.references?.length ?? 0) > 0 && (() => {
+              const reference = modelCoverage!.references![0]
+              const safeUrl = /^https?:\/\//i.test(reference.url) ? reference.url : null
+              return (
+                <div>
+                  Source: {safeUrl ? (
+                    <a href={safeUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--copper-hi)' }}>
+                      {reference.title}
+                    </a>
+                  ) : reference.title}
+                  {reference.sha256 ? ' · hash pinned' : ' · hash not pinned'}
+                </div>
+              )
+            })()}
+          </dl>
+        </details>
       )}
 
       </div>

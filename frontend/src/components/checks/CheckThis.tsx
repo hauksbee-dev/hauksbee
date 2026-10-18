@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { CatalogFields } from '../ConstraintEditor'
 import {
-  badNumbers, countAsserts, measureAs, measureOn, missingRequired, offersForNet, offersForPart,
+  badNumbers, countAsserts, looksLikeSupply, measureAs, measureOn, missingRequired, offersForNet, offersForPart,
   prefill, questionBlock, requestFor, specFacts, useCatalog, useCheckHost, wouldFail,
   type CatalogKind, type CheckHost, type Draft, type MeasureResult, type Offer, type Reading,
 } from '../../lib/check-catalog'
@@ -20,6 +20,12 @@ const UNITS: Record<string, string> = {
   voltage: 'V', rail_window: 'V', boot_coverage: 'V', toggle: 'Hz', max_current: 'A',
   pulse_width: 'ms', phase_margin: '°', ac_gain: 'dB',
 }
+
+/** Checks that read as nonsense on a supply rail: a rail does not "toggle at
+ *  … Hz", have a pulse width, get driven to a level by firmware at reset, or
+ *  have a loop gain. Dropped from the suggestions for a rail; the Checks view
+ *  can still author any of them. */
+const NOT_FOR_RAILS = new Set(['toggle', 'pulse_width', 'boot_coverage', 'phase_margin', 'ac_gain'])
 
 const offerKey = (o: Offer) => `${o.kind}|${o.net ?? ''}|${o.ref ?? ''}`
 
@@ -225,10 +231,11 @@ function BlockedOffer({ offer, onFix }: { offer: Offer; onFix: () => void }) {
     >
       <div>{offer.text}</div>
       <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px]">
-        <span data-testid="blocked-reason">{blocked.reason}</span>
+        <span data-testid="blocked-reason">{blocked.reason.replace(/`/g, '')}</span>
         {blocked.fix && (
-          <button type="button" data-testid="needs_fix" className="hb-chip hb-press px-2 py-0.5 text-[11px]" onClick={onFix}>
-            {blocked.fix.label}
+          <button type="button" data-testid="needs_fix" className="hb-btn hb-press px-2 py-0.5 text-[11px]" onClick={onFix}>
+            {/* The catalogue's label can be TOML syntax ("Add [ac]"); a reader gets a plain verb. */}
+            {/[[\]=]/.test(blocked.fix.label) ? 'Set it up' : blocked.fix.label}
           </button>
         )}
       </div>
@@ -240,7 +247,10 @@ function BlockedOffer({ offer, onFix }: { offer: Offer; onFix: () => void }) {
  * The checks for the current selection. Renders nothing until the catalogue has
  * loaded (a server without one has no offers to make).
  */
-export function CheckThis({ net, component, boundKind, capabilities, live, padNet, onQueue, openOffer }: {
+export function CheckThis({
+  net, component, boundKind, capabilities, live, padNet, onQueue, openOffer,
+  heading = 'Check this', max, hideBlocked = false, primaryFirst = false,
+}: {
   net: string | null
   component: { ref: string; padNets?: string[] } | null
   boundKind?: string | null
@@ -251,11 +261,21 @@ export function CheckThis({ net, component, boundKind, capabilities, live, padNe
   onQueue?: (request: BoardRequest) => void
   /** Open the offer of this kind once (a new `seq` asks again); how the result panel's "Add as check" lands here. */
   openOffer?: { kind: string; seq: number } | null
+  /** The section's title. */
+  heading?: string
+  /** Suggestions shown up front; the rest sit under "More checks". Absent: all. */
+  max?: number
+  /** Leave out checks that cannot run yet (a live view has no use for "load
+   *  firmware first" tiles). */
+  hideBlocked?: boolean
+  /** Give the first available suggestion the one primary-button look. */
+  primaryFirst?: boolean
 }) {
   const host = useCheckHost()
   const kinds = useCatalog()
   const [open, setOpen] = useState<string | null>(null)
   const [added, setAdded] = useState(0)
+  const [more, setMore] = useState(false)
   const buttons = useRef(new Map<string, HTMLButtonElement | null>())
   const adder = useAdder(host, onQueue)
   const offers = useMemo(() => {
@@ -264,7 +284,10 @@ export function CheckThis({ net, component, boundKind, capabilities, live, padNe
       kinds, spec: { toml: host?.specToml ?? '', hasFirmware: !!host?.firmware && /^\s*firmware\s*=/m.test(host?.specToml ?? '') },
       supplyNets: new Set((host?.supplies ?? []).map(s => s.net)), capabilities, boundKind: boundKind ?? null,
     }
-    if (net) return offersForNet(net, ctx)
+    if (net) {
+      const rail = ctx.supplyNets.has(net) || looksLikeSupply(net)
+      return offersForNet(net, ctx).filter(o => !(rail && NOT_FOR_RAILS.has(o.kind)))
+    }
     if (component) return offersForPart(component.ref, component.padNets ?? [], ctx, 3, padNet ?? undefined)
     return []
   }, [kinds, host?.specToml, host?.firmware, host?.supplies, capabilities, boundKind, net, component, padNet])
@@ -280,7 +303,11 @@ export function CheckThis({ net, component, boundKind, capabilities, live, padNe
     if (hit) setOpen(offerKey(hit))
   }, [openOffer, offers])
 
-  if (!kinds || offers.length === 0) return null
+  const available = hideBlocked ? offers.filter(o => !o.blocked) : offers
+  const front = max === undefined ? available : available.filter(o => !o.blocked).slice(0, max)
+  const rest = available.filter(o => !front.includes(o))
+  const restHoldsOpen = rest.some(o => offerKey(o) === open)
+  if (!kinds || available.length === 0) return null
   const fix = (offer: Offer) => {
     const f = offer.blocked?.fix
     if (!f) return
@@ -288,42 +315,56 @@ export function CheckThis({ net, component, boundKind, capabilities, live, padNe
     else if (f.toml) adder({ type: 'assert', kind: offer.blocked!.need!.need, toml: f.toml }, false)
   }
 
+  const row = (offer: Offer, primary: boolean) => {
+    const key = offerKey(offer)
+    if (offer.blocked) return <BlockedOffer key={key} offer={offer} onFix={() => fix(offer)} />
+    const isOpen = open === key
+    return (
+      <div key={key} className="flex flex-col gap-1.5">
+        <button
+          type="button"
+          ref={el => { buttons.current.set(key, el) }}
+          data-testid={`offer-${offer.kind}`} data-net={offer.net} data-ref={offer.ref}
+          aria-expanded={isOpen}
+          className={`${primary ? 'hb-btn-primary' : 'hb-btn'} hb-press px-2.5 py-1.5 text-[12px] text-left`}
+          onClick={() => setOpen(isOpen ? null : key)}
+        >
+          {isOpen ? '▾ ' : '+ '}{offer.text}
+        </button>
+        {isOpen && (
+          <OfferEditor
+            offer={offer} host={host} defaultNets={host?.nets}
+            live={offer.net === net ? live : null}
+            onCollapse={() => { setOpen(null); requestAnimationFrame(() => buttons.current.get(key)?.focus()) }}
+            onAdd={(request, run) => {
+              adder(request, run, offer.kind)
+              addedThisSession += 1
+              setAdded(addedThisSession)
+              setOpen(null)
+              requestAnimationFrame(() => buttons.current.get(key)?.focus())
+            }}
+          />
+        )}
+      </div>
+    )
+  }
+
   return (
     <div data-testid="check-this" tabIndex={-1} className="flex flex-col gap-1.5 outline-none">
-      <div className="text-[10px] font-bold tracking-[0.14em]" style={{ color: 'var(--silk-faint)' }}>CHECK THIS</div>
-      {offers.map(offer => {
-        const key = offerKey(offer)
-        if (offer.blocked) return <BlockedOffer key={key} offer={offer} onFix={() => fix(offer)} />
-        const isOpen = open === key
-        return (
-          <div key={key} className="flex flex-col gap-1.5">
-            <button
-              type="button"
-              ref={el => { buttons.current.set(key, el) }}
-              data-testid={`offer-${offer.kind}`} data-net={offer.net} data-ref={offer.ref}
-              aria-expanded={isOpen}
-              className="hb-chip hb-press px-2.5 py-1.5 text-[12px] text-left"
-              onClick={() => setOpen(isOpen ? null : key)}
-            >
-              {isOpen ? '▾ ' : '+ '}{offer.text}
-            </button>
-            {isOpen && (
-              <OfferEditor
-                offer={offer} host={host} defaultNets={host?.nets}
-                live={offer.net === net ? live : null}
-                onCollapse={() => { setOpen(null); requestAnimationFrame(() => buttons.current.get(key)?.focus()) }}
-                onAdd={(request, run) => {
-                  adder(request, run, offer.kind)
-                  addedThisSession += 1
-                  setAdded(addedThisSession)
-                  setOpen(null)
-                  requestAnimationFrame(() => buttons.current.get(key)?.focus())
-                }}
-              />
-            )}
-          </div>
-        )
-      })}
+      <div className="text-[10px] font-bold tracking-[0.14em] uppercase" style={{ color: 'var(--silk-faint)' }}>{heading}</div>
+      {front.map((offer, i) => row(offer, primaryFirst && i === 0 && !offer.blocked))}
+      {rest.length > 0 && (
+        <details
+          data-testid="check-this-more" open={more || restHoldsOpen}
+          onToggle={event => setMore(event.currentTarget.open)}
+          className="flex flex-col gap-1.5"
+        >
+          <summary className="cursor-pointer text-[11px]" style={{ color: 'var(--silk-dim)' }}>
+            More checks ({rest.length})
+          </summary>
+          <div className="mt-1.5 flex flex-col gap-1.5">{rest.map(offer => row(offer, false))}</div>
+        </details>
+      )}
       {added > 0 && (
         <div data-testid="added-toast" role="status" className="text-[11px]" style={{ color: 'var(--ok)' }}>
           Added to Checks ({added}){' '}

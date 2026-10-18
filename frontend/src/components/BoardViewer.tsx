@@ -1,3 +1,4 @@
+import { LABEL_ENTRIES } from '../lib/labels'
 import { useEffect, useEffectEvent, useRef, useState, useCallback, useMemo } from 'react'
 import { NO_LAYOUT, NO_LAYOUT_HINT, parseKicadPcb } from '../lib/kicad-parser'
 import type { ParsedBoard } from '../lib/kicad-parser'
@@ -86,6 +87,23 @@ interface BoardViewerProps {
   resultOverlay?: ResultOverlay | null
 }
 
+/** Framing a part or net never goes closer than this multiple of fit (400%):
+ *  a part that fills the map has lost the board around it. */
+const FRAME_MAX_ZOOM = 4
+/** A net comes along when framing its part only if its copper spans at most
+ *  this fraction of the board. */
+const FRAME_NET_REACH = 0.35
+
+/** A marker's label with any coverage stage written as its id's words
+ *  ("executable scope unspecified") put through the label table, so the map
+ *  never prints an engine stage name. */
+const STAGE_WORDS: ReadonlyArray<[string, string]> = LABEL_ENTRIES
+  .filter(e => e.group === 'coverage_stage')
+  .map(e => [e.id.replaceAll('_', ' '), e.label] as [string, string])
+function plainMarkerLabel(label: string | undefined): string | undefined {
+  return label && STAGE_WORDS.reduce((text, [raw, plain]) => text.replaceAll(raw, plain), label)
+}
+
 const PARTICLE_COUNT = 4
 const PARTICLE_SPEED = 0.3 // t units per second
 
@@ -147,6 +165,10 @@ export function BoardViewer({
   // only allowed while this is false: a camera the user set is theirs, but a
   // camera nobody touched must never present a stale zoom pinned top-left.
   const userMovedCamera = useRef(false)
+  // When the camera was last framed on a part/finding. Opening the selection
+  // card narrows the map in the same beat, which shrinks fit and would leave
+  // the close-up past its cap relative to the new fit.
+  const framedAt = useRef(0)
 
   // Static board cache: the full board drawn at a fixed camera, blitted with a
   // cheap transform every animation frame. Re-rendered when the camera settles
@@ -272,6 +294,7 @@ export function BoardViewer({
       const overlay = overlayRef.current
       if (!canvas || !overlay) return
       const { width, height } = container.getBoundingClientRect()
+      const [oldW, oldH] = [canvas.width, canvas.height]
       canvas.width = width
       canvas.height = height
       overlay.width = width
@@ -294,6 +317,14 @@ export function BoardViewer({
         const relativeDiff = Math.abs(c.scale - fit) / fit
         if (!userMovedCamera.current || relativeDiff < refitThreshold) {
           setCamera(makeCamera(b.width, b.height, b.cx, b.cy, width, height))
+          zoomTarget.current = null
+        } else if (performance.now() - framedAt.current < 1500 && c.scale > fit * FRAME_MAX_ZOOM) {
+          // Just framed, and the map narrowed under it: keep the same centre
+          // at the capped zoom instead of an over-close view of the part.
+          const k = (fit * FRAME_MAX_ZOOM) / c.scale
+          const cx = (oldW / 2 - c.panX) / c.scale
+          const cy = (oldH / 2 - c.panY) / c.scale
+          setCamera({ scale: c.scale * k, panX: width / 2 - cx * c.scale * k, panY: height / 2 - cy * c.scale * k })
           zoomTarget.current = null
         }
       }
@@ -332,15 +363,31 @@ export function BoardViewer({
   // and the nets' copper with a margin, never closer than the focus close-up.
   useEffect(() => {
     if (!frameTarget || !board || !canvasRef.current) return
-    const box = extentOf(board, frameTarget.refs, frameTarget.nets)
+    // A part is framed with its own neighbourhood: the short nets on its pads
+    // come along (so you see what it connects to), a rail or ground that crosses
+    // the board does not (it would be a fit-to-board).
+    const near: string[] = []
+    if (frameTarget.nets.length === 0) {
+      const reach = Math.max(board.bounds.width, board.bounds.height) * FRAME_NET_REACH
+      for (const fp of board.footprints) {
+        if (!frameTarget.refs.includes(fp.ref)) continue
+        for (const pad of fp.pads) {
+          if (!pad.netName || near.includes(pad.netName)) continue
+          const e = extentOf(board, [], [pad.netName])
+          if (e && Math.max(e.x2 - e.x1, e.y2 - e.y1) <= reach) near.push(pad.netName)
+        }
+      }
+    }
+    const box = extentOf(board, frameTarget.refs, [...frameTarget.nets, ...near])
     if (!box) return
     const { width: cw, height: ch } = canvasRef.current.getBoundingClientRect()
     if (cw < 2 || ch < 2) return
     const margin = 6
     const w = Math.max(box.x2 - box.x1, 1) + margin * 2
     const h = Math.max(box.y2 - box.y1, 1) + margin * 2
-    const scale = Math.min(maxScaleFor(fitScaleRef.current), fitScaleRef.current * 5, Math.min(cw / w, ch / h))
+    const scale = Math.min(maxScaleFor(fitScaleRef.current), fitScaleRef.current * FRAME_MAX_ZOOM, Math.min(cw / w, ch / h))
     userMovedCamera.current = true
+    framedAt.current = performance.now()
     zoomTarget.current = null
     setCamera({
       scale,
@@ -354,15 +401,16 @@ export function BoardViewer({
   // focused framing must not be clobbered by an auto-refit).
   useEffect(() => {
     if (!focusPoint || !board || !canvasRef.current) {
-      markerRef.current = focusPoint ?? null
+      markerRef.current = focusPoint ? { ...focusPoint, label: plainMarkerLabel(focusPoint.label) } : null
       return
     }
-    markerRef.current = { x: focusPoint.x, y: focusPoint.y, label: focusPoint.label }
+    markerRef.current = { x: focusPoint.x, y: focusPoint.y, label: plainMarkerLabel(focusPoint.label) }
     const canvas = canvasRef.current
     const { width: cw, height: ch } = canvas.getBoundingClientRect()
     if (cw < 2 || ch < 2) return
-    const scale = Math.min(maxScaleFor(fitScaleRef.current), Math.max(fitScaleRef.current * 5, camRef.current.scale))
+    const scale = Math.min(maxScaleFor(fitScaleRef.current), Math.max(fitScaleRef.current * FRAME_MAX_ZOOM, camRef.current.scale))
     userMovedCamera.current = true
+    framedAt.current = performance.now()
     zoomTarget.current = null
     setCamera({
       scale,

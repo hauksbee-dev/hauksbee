@@ -29,4 +29,15 @@ describe('variant selection overrides', () => {
     const same = renderToStaticMarkup(<OpenSelectionsBanner selections={[selection(true)]} />)
     expect(same).toContain('simulated as xyz1234a; CI checks every variant')
   })
+
+  test('an internal family id is shown in words, a part number as written', () => {
+    const sel: WebOpenSelection = {
+      reference: 'D1', value: 'LED', family: 'led_generic', determined: null, via: 'board', same_pinout: true,
+      members: [{ id: 'led_generic_corner_high_vf', selector: '', basis: 'p. 1', verdict: 'U', reason: '' }],
+    }
+    const html = renderToStaticMarkup(<OpenSelectionsBanner selections={[sel]} onQueue={() => {}} />)
+    // The id stays as the option's value (the contract); no reader-facing text shows it.
+    expect(html.replace(/value="[^"]*"/g, '')).not.toContain('led_generic')
+    expect(html).toContain('simulated as LED generic corner high Vf')
+  })
 })
