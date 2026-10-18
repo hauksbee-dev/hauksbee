@@ -13,7 +13,7 @@ import { labelFor } from './labels'
 import type {
   CheckResult, ErrorBudget, ErrorBudgetWindow, EvidenceAssumption, EvidenceMap, FixFirst, JsonNote, ModelCoverageComponent,
   ModelCoverageSnapshot, ModelGroup, ModelOnPath, RefusalContract, RunResponse, WebCosimSection, WebFallbackWindow, WebFinding,
-  WebGpioNet, WebHeadsUp, WebImportObject, WebReport, WebSection, WebTimingCoverage,
+  WebAction, WebGpioNet, WebHeadsUp, WebImportObject, WebReport, WebSection, WebTimingCoverage,
 } from '../types/report'
 import {
   NOT_ROUTED_MESSAGE_PREFIX, STATIC_CHECK_FAILS_LEAD, STATIC_CHECK_KIND, STATIC_CHECK_NOT_JUDGED_LEAD,
@@ -49,10 +49,12 @@ export interface SectionView {
   verdict: string
   groups: FindingGroup[]
   headsUp: WebHeadsUp[]
+  /** The engine's buttons for this section (see `lib/web-actions`). */
+  actions: WebAction[]
 }
 
 const sectionView = (s: WebSection): SectionView =>
-  ({ title: s.title, verdict: s.verdict, groups: groupFindings(s.findings), headsUp: s.heads_up ?? [] })
+  ({ title: s.title, verdict: s.verdict, groups: groupFindings(s.findings), headsUp: s.heads_up ?? [], actions: s.actions ?? [] })
 
 // ── Refusal contract (C5.3) ──────────────────────────────────────────────────
 
@@ -504,7 +506,8 @@ export function reportView(r: WebReport): ReportView {
   const copper = (notice && sections.find(s => s.title.startsWith('Copper spacing'))) || null
   // An unrouted board's headline already says so and its fix-first item says
   // what to do, so the routing-only reason would be a third telling.
-  const reason = notice && r.verdict_reason?.startsWith('the board must be routed') ? null : (r.verdict_reason ?? null)
+  const why = r.verdict_why ?? r.verdict_reason
+  const reason = notice && why?.startsWith('the board must be routed') ? null : (why ?? null)
   return {
     tone: reportVerdictTone(r),
     palette: reportVerdictPalette(r),
@@ -760,7 +763,7 @@ function explainVerdict(term: 'invalid' | 'fail', reason: string | undefined, re
  *  its judged scope, and an unrouted one is explained by its headline and
  *  fix-first: none of those needs a panel. */
 export const explainReport = (r: WebReport): VerdictExplanation | null =>
-  r.verdict === 'invalid' && !r.partly_judged && !r.fix_first?.notice ? explainVerdict('invalid', r.verdict_reason, r.refusal) : null
+  r.verdict === 'invalid' && !r.partly_judged && !r.fix_first?.notice ? explainVerdict('invalid', r.verdict_why ?? r.verdict_reason, r.refusal) : null
 
 /** The same for a checks run (a clean or measured-only run has nothing to explain). */
 export function explainRun(result: RunResponse, overall: Overall, conditional: boolean): VerdictExplanation | null {

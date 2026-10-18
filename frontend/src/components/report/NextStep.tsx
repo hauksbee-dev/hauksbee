@@ -4,6 +4,8 @@ import type { ReportView } from '../../lib/report-view'
 import { displayNet } from '../../lib/net-name'
 import { DropBoardAgain } from '../UploadFailure'
 import type { LocateFn } from './Findings'
+import { runnableActions, type ActionHost, type RunnableAction } from '../../lib/web-actions'
+import { ActionButtons } from './ActionButtons'
 
 /** One observation from the co-sim, offered as a check. Every field comes from
  *  the report; the only derived numbers (a rate, a rail floor, a run length)
@@ -99,6 +101,25 @@ export function nextKind(r: WebReport, v: Pick<ReportView, 'fixFirst' | 'unmodel
 /** The key parts a model would let the run judge. */
 const modelRefs = (v: Pick<ReportView, 'unmodelled'>) => v.unmodelled.key
 
+/** The kinds whose card offers the engine's `next_actions`: the others (routing,
+ *  CI, a co-sim's own suggestions) have one dedicated step. */
+const OFFERS_ACTIONS: readonly NextKind[] = ['fix-first', 'fix', 'model', 'checks']
+
+/** What each kind's own buttons already are, so the engine's matching action is
+ *  not a second button for the same step. */
+const OWN_STEPS: Partial<Record<NextKind, readonly string[]>> = { checks: ['start_checks', 'add_firmware'] }
+
+/** The engine's next steps this app can run, as the buttons of the card's one
+ *  Next step. An id the host has no handler for is left out, not shown dead. */
+export function nextStepActions(r: WebReport, kind: NextKind, host: ActionHost): RunnableAction[] {
+  if (!OFFERS_ACTIONS.includes(kind)) return []
+  const own = OWN_STEPS[kind] ?? []
+  return runnableActions(r.next_actions, host).filter(a => !own.includes(a.id))
+}
+
+/** Buttons shown at once; the rest sit behind "More steps". */
+const SHOWN = 3
+
 const Lead = ({ children }: { children: React.ReactNode }) => (
   <div className="text-[11px] font-bold tracking-widest uppercase mb-0.5" style={{ color: 'var(--copper-hi)' }}>{children}</div>
 )
@@ -109,7 +130,7 @@ const Buttons = ({ children }: { children: React.ReactNode }) => (
 /** The card's one Next step: one sentence for the board's state and, where
  *  the app can do it, the one button that does it. */
 export function NextStep({
-  report, view, firmwareName, checks, specFile, onQueue, onOpenChecks, onOpenEvidence, onGiveModel, onLocate, quiet = false,
+  report, view, firmwareName, checks, specFile, onQueue, onOpenChecks, host, onLocate, quiet = false,
 }: {
   report: WebReport
   view: Pick<ReportView, 'fixFirst' | 'unmodelled'>
@@ -118,10 +139,9 @@ export function NextStep({
   specFile: string | null
   onQueue: (request: BoardRequest) => void
   onOpenChecks: () => void
-  /** Opens the evidence slots (firmware, BOM, models); absent when restored. */
-  onOpenEvidence?: () => void
-  /** Opens the model flow for a part; absent when restored. */
-  onGiveModel?: (ref: string) => void
+  /** What the engine's `next_actions` can do here (open the model flow, the
+   *  evidence slots, a check, the board). */
+  host: ActionHost
   onLocate?: LocateFn
   /** Another surface on screen holds the one primary button (an open
    *  inspector card), so this step's buttons are all secondary. */
@@ -130,6 +150,21 @@ export function NextStep({
   const PRIMARY = quiet ? 'hb-btn' : 'hb-btn-primary'
   const [added, setAdded] = useState<ReadonlySet<string>>(new Set())
   const kind = nextKind(report, view, { firmwareName, checks })
+  const actions = nextStepActions(report, kind, host)
+  const moreSteps = actions.slice(SHOWN)
+  // The engine's steps follow the card's own: primary only where the card has no
+  // button of its own (the model step, where they ARE the step).
+  const stepButtons = (primary: boolean) => (
+    <>
+      <ActionButtons actions={actions.slice(0, SHOWN)} size="step" primary={primary && !quiet} />
+      {moreSteps.length > 0 && (
+        <details data-testid="more-steps" className="w-full text-[12px]">
+          <summary className="cursor-pointer" style={{ color: 'var(--silk-faint)' }}>{moreSteps.length} more {moreSteps.length === 1 ? 'step' : 'steps'}</summary>
+          <div className="mt-1.5 flex flex-wrap gap-2"><ActionButtons actions={moreSteps} size="step" /></div>
+        </details>
+      )}
+    </>
+  )
   const add = (s: Suggestion) => {
     onQueue(s.request)
     setAdded(prev => new Set(prev).add(s.key))
@@ -182,15 +217,18 @@ export function NextStep({
           Fix this first: <span data-testid="fix-first-item" className="font-semibold" style={{ color: 'var(--silk)' }}>{first.what}</span>
           {first.fix && <> {first.fix}</>}
           {rest > 0 && <> Then the {rest === 1 ? 'other serious finding' : `other ${rest} serious findings`} beside the board.</>}
-          {onLocate && first.x !== undefined && first.y !== undefined && (
+          {((onLocate && first.x !== undefined && first.y !== undefined) || actions.length > 0) && (
             <Buttons>
-              <button
-                type="button" data-testid="finding-locate"
-                onClick={() => onLocate(first.x!, first.y!, first.what)}
-                className="hb-btn hb-press px-3 py-1.5 text-[12px]"
-              >
-                Show it on the board
-              </button>
+              {onLocate && first.x !== undefined && first.y !== undefined && (
+                <button
+                  type="button" data-testid="finding-locate"
+                  onClick={() => onLocate(first.x!, first.y!, first.what)}
+                  className="hb-btn hb-press px-3 py-1.5 text-[12px]"
+                >
+                  Show it on the board
+                </button>
+              )}
+              {stepButtons(false)}
             </Buttons>
           )}
         </div>
@@ -198,25 +236,19 @@ export function NextStep({
       break
     }
     case 'fix':
-      body = <><Lead>Next step</Lead>Fix the serious {report.serious === 1 ? 'finding' : 'findings'} beside the board, then drop it here again.</>
+      body = (
+        <>
+          <Lead>Next step</Lead>Fix the serious {report.serious === 1 ? 'finding' : 'findings'} beside the board, then drop it here again.
+          {actions.length > 0 && <Buttons>{stepButtons(false)}</Buttons>}
+        </>
+      )
       break
     case 'model': {
       const refs = modelRefs(view)
       body = (
         <>
           <Lead>Next step</Lead>Give {refs.join(', ')} {refs.length === 1 ? 'a model' : 'models'} so the rest of the board can be judged.
-          {onGiveModel && (
-            <Buttons>
-              {refs.slice(0, 3).map((ref, i) => (
-                <button
-                  key={ref} type="button" data-testid={`result-give-model-${ref}`} onClick={() => onGiveModel(ref)}
-                  className={`${i === 0 ? PRIMARY : 'hb-btn'} hb-press px-3 py-1.5 text-[12px]`}
-                >
-                  Give {ref} a model
-                </button>
-              ))}
-            </Buttons>
-          )}
+          {actions.length > 0 && <Buttons>{stepButtons(true)}</Buttons>}
         </>
       )
       break
@@ -257,11 +289,12 @@ export function NextStep({
           prove powered behaviour, brownout, overheating or firmware timing.
           <Buttons>
             {checksButton(true)}
-            {onOpenEvidence && (
-              <button type="button" data-testid="open-evidence-next" onClick={onOpenEvidence} className="hb-btn hb-press px-3 py-1.5 text-[12px]">
+            {host.openEvidence && (
+              <button type="button" data-testid="open-evidence-next" onClick={host.openEvidence} className="hb-btn hb-press px-3 py-1.5 text-[12px]">
                 Add firmware
               </button>
             )}
+            {stepButtons(false)}
           </Buttons>
         </>
       )

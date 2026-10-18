@@ -77,7 +77,7 @@ describe('one primary button while the inspector is open', () => {
   const step = (quiet: boolean) => renderToStaticMarkup(
     <NextStep
       report={unrouted} view={reportView(unrouted)} firmwareName={null} checks={null} specFile={null}
-      onQueue={() => {}} onOpenChecks={() => {}} quiet={quiet}
+      onQueue={() => {}} onOpenChecks={() => {}} host={{}} quiet={quiet}
     />,
   )
   test('the routed-board button is primary on its own and secondary beside an open card', () => {
@@ -86,9 +86,14 @@ describe('one primary button while the inspector is open', () => {
     expect(step(true)).toContain('Drop the routed board')
   })
   test('so is the model button of a partly judged board', () => {
+    // The button is the engine's typed action (the fixture predates `next_actions`).
+    const withActions: WebReport = {
+      ...partly,
+      next_actions: [{ id: 'model_parts', label: 'Give Q1 a model', args: { refs: ['Q1'] } }],
+    }
     const html = renderToStaticMarkup(
-      <NextStep report={partly} view={reportView(partly)} firmwareName={null} checks={null} specFile={null}
-        onQueue={() => {}} onOpenChecks={() => {}} onGiveModel={() => {}} quiet />,
+      <NextStep report={withActions} view={reportView(withActions)} firmwareName={null} checks={null} specFile={null}
+        onQueue={() => {}} onOpenChecks={() => {}} host={{ giveModel: () => {} }} quiet />,
     )
     expect(html).toContain('Give Q1 a model')
     expect(html).not.toContain('hb-btn-primary')

@@ -131,14 +131,21 @@ const SHOWN = 6
 
 /** A list of chips, the first few shown and the rest one click away; the whole
  *  list is in the "more" button's tooltip. */
-export function ChipList({ entities, testId }: { entities: ResultEntity[]; testId?: string }) {
+export function ChipList({ entities, testId, joined = false }: { entities: ResultEntity[]; testId?: string; joined?: boolean }) {
   const [all, setAll] = useState(false)
   const more = entities.length - SHOWN
   const shown = all ? entities : entities.slice(0, SHOWN)
+  const hidden = more > 0 && !all
+  // In a sentence the chips read as a list: "Q1, U4 and U5", or "Q1, U4 and 3 more".
+  const between = (i: number) => {
+    if (!joined || i === 0) return ''
+    return i === shown.length - 1 && !hidden ? ' and ' : ', '
+  }
   return (
     <span data-testid={testId}>
-      {shown.map(e => <EntityChip key={`${e.kind}:${nameOf(e)}`} entity={e} />)}
-      {more > 0 && !all && (
+      {shown.map((e, i) => (
+        <span key={`${e.kind}:${nameOf(e)}`}>{between(i)}<EntityChip entity={e} /></span>
+      ))}      {more > 0 && !all && (
         <button
           type="button"
           data-testid="result-links-more"
