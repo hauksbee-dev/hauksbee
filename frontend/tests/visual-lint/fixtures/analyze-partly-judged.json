@@ -14,7 +14,7 @@
   "do_not_order": [],
   "inspect": [],
   "checked_ok": [],
-  "not_covered": "1 part lacks an executable simulation model; model-dependent firmware/analog/AC/thermal claims involving those parts are not covered. Copper geometry and datasheet decode rules do not require a simulation model. Clearance findings use DEFAULT rules, not your rules, because no usable .kicad_pro netclass rules were read."
+  "not_covered": "1 part lacks an executable simulation model; model-dependent firmware/analog/AC/thermal claims involving those parts are not covered (run --report for the bind table). Copper geometry and datasheet decode rules do not require a simulation model. Clearance findings use DEFAULT rules, not your rules, because no usable .kicad_pro netclass rules were read."
  },
  "headline": "Partly judged, not a pass: nothing found blocks ordering among the checks this run could judge, but parts with no usable model leave the rest unjudged; see the reason below.",
  "serious": 0,
@@ -23,16 +23,45 @@
   {
    "title": "Copper spacing (DRC; DEFAULT rules, not your rules)",
    "verdict": "CLEARANCE RULE SOURCE: DEFAULT 0.200 mm; this upload did not include a .kicad_pro, so your netclass rules were not read; these are default rules, not your rules. Upload the matching .kicad_pro alongside the board to check your netclass rules. Looks healthy: no copper spacing (drc) problems found.",
-   "findings": []
+   "findings": [],
+   "actions": [
+    {
+     "id": "add_project_rules",
+     "label": "Add the .kicad_pro file",
+     "args": {
+      "file": ".kicad_pro"
+     }
+    }
+   ]
   },
   {
    "title": "Connectivity & wiring",
-   "verdict": "INCONCLUSIVE: 1 current-carrying / active part(s) have no model (Q1), so a clean result here is not a clean bill. Draft models from their datasheets (`hauksbee models extract --unmodelled <board>`, or the Extend button in `hauksbee serve`), scaffold one by hand (`hauksbee models new`, then --models-dir), or supply BOM identity (--bom) to make this verdict conclusive.",
-   "findings": []
+   "verdict": "INCONCLUSIVE: 1 current-carrying or active part has no model (Q1), so a clean result here is not a clean bill.",
+   "findings": [],
+   "actions": [
+    {
+     "id": "model_parts",
+     "label": "Give Q1 a model",
+     "args": {
+      "refs": [
+       "Q1"
+      ]
+     }
+    },
+    {
+     "id": "extract_unmodelled",
+     "label": "Draft a model for Q1 from its datasheet",
+     "args": {
+      "refs": [
+       "Q1"
+      ]
+     }
+    }
+   ]
   },
   {
    "title": "Signal integrity",
-   "verdict": "INCONCLUSIVE: 1 current-carrying / active part(s) have no model (Q1), so a clean result here is not a clean bill. Draft models from their datasheets (`hauksbee models extract --unmodelled <board>`, or the Extend button in `hauksbee serve`), scaffold one by hand (`hauksbee models new`, then --models-dir), or supply BOM identity (--bom) to make this verdict conclusive.",
+   "verdict": "INCONCLUSIVE: the key parts named in the section above have no model, so this is not a clean bill either.",
    "findings": []
   }
  ],
@@ -40,30 +69,30 @@
   {
    "reference": "Q1",
    "value": "XFET9999",
-   "x": 110,
-   "y": 100,
-   "rot": 0
+   "x": 110.0,
+   "y": 100.0,
+   "rot": 0.0
   },
   {
    "reference": "R1",
    "value": "1k",
-   "x": 130,
-   "y": 100,
-   "rot": 0
+   "x": 130.0,
+   "y": 100.0,
+   "rot": 0.0
   },
   {
    "reference": "R2",
    "value": "10k",
-   "x": 110,
-   "y": 115,
-   "rot": 0
+   "x": 110.0,
+   "y": 115.0,
+   "rot": 0.0
   },
   {
    "reference": "R3",
    "value": "10k",
-   "x": 130,
-   "y": 115,
-   "rot": 0
+   "x": 130.0,
+   "y": 115.0,
+   "rot": 0.0
   }
  ],
  "import_diagnostics": {
@@ -77,8 +106,8 @@
     "id": "Q1",
     "status": "recovered",
     "confidence": "high",
-    "x": 110,
-    "y": 100,
+    "x": 110.0,
+    "y": 100.0,
     "explanation": "Reference, value, pins and board location were recovered from the input.",
     "nets": [
      "GATE_CTRL",
@@ -90,8 +119,8 @@
     "id": "R1",
     "status": "recovered",
     "confidence": "high",
-    "x": 130,
-    "y": 100,
+    "x": 130.0,
+    "y": 100.0,
     "explanation": "Reference, value, pins and board location were recovered from the input.",
     "nets": [
      "+5V",
@@ -102,8 +131,8 @@
     "id": "R2",
     "status": "recovered",
     "confidence": "high",
-    "x": 110,
-    "y": 115,
+    "x": 110.0,
+    "y": 115.0,
     "explanation": "Reference, value, pins and board location were recovered from the input.",
     "nets": [
      "GATE_CTRL",
@@ -114,8 +143,8 @@
     "id": "R3",
     "status": "recovered",
     "confidence": "high",
-    "x": 130,
-    "y": 115,
+    "x": 130.0,
+    "y": 115.0,
     "explanation": "Reference, value, pins and board location were recovered from the input.",
     "nets": [
      "GND",
@@ -191,8 +220,8 @@
       "kind": "",
       "net": "GATE_CTRL",
       "position_mm": [
-       110,
-       100
+       110.0,
+       100.0
       ]
      },
      {
@@ -201,8 +230,8 @@
       "kind": "",
       "net": "LOAD_DRAIN",
       "position_mm": [
-       111,
-       100
+       111.0,
+       100.0
       ]
      },
      {
@@ -211,8 +240,8 @@
       "kind": "",
       "net": "GND",
       "position_mm": [
-       112,
-       100
+       112.0,
+       100.0
       ]
      }
     ]
@@ -388,6 +417,18 @@
    "label": "Report only",
    "short": "This command reports problems but still exits 0, so a script or CI job will not fail on them.",
    "what_to_do": "Add --strict to make serious findings fail the build."
+  },
+  {
+   "term": "mcu_halted",
+   "label": "Halted",
+   "short": "The emulated microcontroller is not executing firmware right now: the simulation is paused, the firmware has stopped (a fault, a sleep it never wakes from, or the end of main), or its supply is below the operating range.",
+   "what_to_do": "Press play; if it stays halted while the sim runs, check the MCU's supply rail and the serial output for a crash message."
+  },
+  {
+   "term": "uart_activity",
+   "label": "UART traffic",
+   "short": "The microcontroller sent or received bytes on its serial port (UART) in the last two seconds of real time; the console shows what it printed.",
+   "what_to_do": "Open the Serial tab to read the output or type input to the firmware."
   }
  ],
  "evidence": [
@@ -531,10 +572,38 @@
  "supplies": [
   {
    "net": "+5V",
-   "volts": 5
+   "volts": 5.0
   }
  ],
- "verdict_reason": "PARTLY JUDGED (not a pass): nothing found blocks ordering among the checks this run could judge. Q1 has no usable model, so the checks it could change are not judged: wiring and value checks on the 3 net(s) it connects to (GATE_CTRL, GND, LOAD_DRAIN), and electrical checks (levels, ratings, rails) on the 4 of 5 net(s) it can reach through the circuit (+5V, GATE_CTRL, GND, LOAD_DRAIN). The other 3 of 10 net checks were judged. Draft the model(s) with `hauksbee models extract --unmodelled <board>` to judge the rest.",
+ "verdict_reason": "PARTLY JUDGED (not a pass): nothing found blocks ordering among the checks this run could judge. Q1 has no usable model, so the checks it could change are not judged: wiring and value checks on the 3 net(s) it connects to (GATE_CTRL, GND, LOAD_DRAIN), and electrical checks (levels, ratings, rails) on the 4 of 5 net(s) it can reach through the circuit (+5V, GATE_CTRL, GND, LOAD_DRAIN). The other 3 of 10 net checks were judged. That assumes it draws no more than the source of +5V can supply; the rest of what that rail feeds was judged on that condition. Draft the model(s) with `hauksbee models extract --unmodelled <board>` to judge the rest.",
+ "verdict_why": "PARTLY JUDGED (not a pass): nothing found blocks ordering among the checks this run could judge. Q1 has no usable model, so the checks it could change are not judged: wiring and value checks on the 3 net(s) it connects to (GATE_CTRL, GND, LOAD_DRAIN), and electrical checks (levels, ratings, rails) on the 4 of 5 net(s) it can reach through the circuit (+5V, GATE_CTRL, GND, LOAD_DRAIN). The other 3 of 10 net checks were judged. That assumes it draws no more than the source of +5V can supply; the rest of what that rail feeds was judged on that condition. Add a model for each open part to judge the rest.",
+ "next_actions": [
+  {
+   "id": "model_parts",
+   "label": "Give Q1 a model",
+   "args": {
+    "refs": [
+     "Q1"
+    ]
+   }
+  },
+  {
+   "id": "extract_unmodelled",
+   "label": "Draft a model for Q1 from its datasheet",
+   "args": {
+    "refs": [
+     "Q1"
+    ]
+   }
+  },
+  {
+   "id": "add_project_rules",
+   "label": "Add the .kicad_pro file",
+   "args": {
+    "file": ".kicad_pro"
+   }
+  }
+ ],
  "verdict": "invalid",
  "partly_judged": true,
  "judgement_scope": {
@@ -553,5 +622,101 @@
    "GND",
    "LOAD_DRAIN"
   ]
+ },
+ "check_report": {
+  "actionable_count": 0,
+  "assumptions": [
+   {
+    "because": "No model.",
+    "consequence": "Nets through Q1 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
+    "id": "open-part:Q1",
+    "kind": "open_part",
+    "remedy": {
+     "reference": "Q1",
+     "type": "add_model"
+    },
+    "replacement": "Add a model for Q1 (draft one from its datasheet with `hauksbee models extract`, or the web UI's Extend button), or mark it DNP if the board does not fit it.",
+    "scope": {
+     "type": "subjects",
+     "value": [
+      {
+       "id": "Q1",
+       "kind": "part"
+      }
+     ]
+    },
+    "source": "binder",
+    "statement": "Q1 (XFET9999) is treated as an open circuit.",
+    "term": "open_part"
+   }
+  ],
+  "bind": {
+   "active_path_unresolved": [
+    {
+     "active_ic": false,
+     "consequence": "Q1 defaults to OPEN; nets through it are isolated in simulation",
+     "reason": "no model",
+     "reference": "Q1",
+     "value": "XFET9999"
+    }
+   ],
+   "critical_parts_bound": "0/0",
+   "critical_parts_bound_n": 0,
+   "critical_parts_total": 0,
+   "mcu_bound": false,
+   "non_ignored": 5,
+   "resolved": 4,
+   "unresolved": 1
+  },
+  "board": "",
+  "drc": {
+   "at_limit": [],
+   "clearance_rule_mm": 0.2,
+   "primitive_count": 26,
+   "shorts": [],
+   "violations": []
+  },
+  "findings": [],
+  "inventory": [
+   {
+    "contributed": [
+     {
+      "detail": "component and net incidence consumed by binding and electrical checks",
+      "what": "connectivity"
+     },
+     {
+      "detail": "layout geometry consumed by geometry-bearing checks",
+      "what": "copper_geometry"
+     }
+    ],
+    "kind": "ki_cad_pcb",
+    "path": "verdict_fet_partial.kicad_pcb",
+    "role": "layout",
+    "sha256": "ed23596a2fbf442d1b1ef5b819ad85a3ff016f355d41e0c00d6ddc28ea31e88f"
+   }
+  ],
+  "judgement_scope": {
+   "electrical_dependent": [
+    "+5V",
+    "GATE_CTRL",
+    "GND",
+    "LOAD_DRAIN"
+   ],
+   "nets": 5,
+   "open_parts": [
+    "Q1"
+   ],
+   "wiring_dependent": [
+    "GATE_CTRL",
+    "GND",
+    "LOAD_DRAIN"
+   ]
+  },
+  "ok": false,
+  "partly_judged": true,
+  "schema_version": 3,
+  "serious_count": 0,
+  "verdict": "invalid",
+  "verdict_reason": "PARTLY JUDGED (not a pass): nothing found blocks ordering among the checks this run could judge. Q1 has no usable model, so the checks it could change are not judged: wiring and value checks on the 3 net(s) it connects to (GATE_CTRL, GND, LOAD_DRAIN), and electrical checks (levels, ratings, rails) on the 4 of 5 net(s) it can reach through the circuit (+5V, GATE_CTRL, GND, LOAD_DRAIN). The other 3 of 10 net checks were judged. That assumes it draws no more than the source of +5V can supply; the rest of what that rail feeds was judged on that condition. Draft the model(s) with `hauksbee models extract --unmodelled <board>` to judge the rest."
  }
 }

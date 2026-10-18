@@ -179,9 +179,14 @@ await browserFlow(flow, async (page, { base, browser }) => {
   // The card's one verdict and the Markdown name the same status term.
   const shownVerdict = await page.locator('[data-testid="report-verdict"]').getAttribute('data-verdict') ?? ''
   const shownWord = (await page.locator('[data-testid="result-verdict-word"]').textContent() ?? '').trim()
+  // The Markdown says the verdict in the CLI's words (`VERDICT: inconclusive`),
+  // never the raw engine id the panel keeps in data-verdict.
+  const mdVerdictLine = mdText.split('\n').find(l => l.includes('VERDICT')) ?? ''
   ok('the Markdown summary carries the verdict the panel shows',
-    mdPath.endsWith('.md') && shownWord !== '' && mdText.includes(`(\`${shownVerdict}\`)`),
-    `${shownWord} (${shownVerdict}) / ${mdText.split('\n').find(l => l.includes('VERDICT')) ?? ''}`)
+    mdPath.endsWith('.md') && shownWord !== ''
+      && mdVerdictLine.toLowerCase().startsWith(`**verdict: ${shownWord.toLowerCase()}`)
+      && !mdText.includes(`\`${shownVerdict}\``),
+    `${shownWord} (${shownVerdict}) / ${mdVerdictLine}`)
 
   // ── 3. The exported HTML is self-contained ──────────────────────────────
   step('the exported HTML renders standalone, off a file:// URL, with no network')
