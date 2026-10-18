@@ -848,7 +848,8 @@ impl WebReport {
         let mut out = crate::web_actions::model_actions(open);
         for action in crate::web_actions::from_remedies(&self.assumptions) {
             // The grouped AddModel remedy repeats the open-part button.
-            if action.id == hauksbee_frontdoor_api::actions::ActionId::ModelParts && !out.is_empty() {
+            if action.id == hauksbee_frontdoor_api::actions::ActionId::ModelParts && !out.is_empty()
+            {
                 continue;
             }
             push_unique(&mut out, action);
@@ -1575,7 +1576,10 @@ fn analyze_normalized_with_context(
         .is_some_and(crate::result::ClearanceRuleProvenance::wants_project_rules)
         && !is_gerber
     {
-        push_unique(&mut sections[0].actions, WebAction::add_project_rules(".kicad_pro"));
+        push_unique(
+            &mut sections[0].actions,
+            WebAction::add_project_rules(".kicad_pro"),
+        );
     }
 
     // USB-C CC compliance: the CLI text/plain/json surfaces all carry this
@@ -3740,19 +3744,29 @@ mod tests {
             });
             serde_json::from_str(&json).expect("report JSON")
         };
-        let cut = refuse("cut.kicad_pcb", b"(kicad_pcb (version 20240108)\n  (footprint \"R\"");
+        let cut = refuse(
+            "cut.kicad_pcb",
+            b"(kicad_pcb (version 20240108)\n  (footprint \"R\"",
+        );
         assert_eq!(cut["ok"], false);
         let failure = &cut["import_failure"];
         assert_eq!(failure["kind"], "truncated", "{cut}");
         assert_eq!(failure["file"], "cut.kicad_pcb");
         assert_eq!(failure["line"], 2);
-        assert!(failure["suggested_fix"].as_str().is_some_and(|s| !s.is_empty()));
-        assert!(failure["supported_formats"].as_array().is_some_and(|l| !l.is_empty()));
+        assert!(failure["suggested_fix"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty()));
+        assert!(failure["supported_formats"]
+            .as_array()
+            .is_some_and(|l| !l.is_empty()));
 
         let wrong = refuse("notes.kicad_pcb", b"hello, not a board");
         assert_eq!(wrong["import_failure"]["kind"], "wrong_content", "{wrong}");
         let odd = refuse("design.xyz", b"hello, not a board");
-        assert_eq!(odd["import_failure"]["kind"], "unsupported_extension", "{odd}");
+        assert_eq!(
+            odd["import_failure"]["kind"], "unsupported_extension",
+            "{odd}"
+        );
     }
 
     #[cfg(feature = "avr")]
@@ -4596,7 +4610,10 @@ mod tests {
         // same sentence without its `next:` clause.
         let reason = value["verdict_reason"].as_str().unwrap();
         let why = value["verdict_why"].as_str().expect("verdict_why");
-        assert!(reason.contains("; next: ") && !why.contains("next:"), "{why}");
+        assert!(
+            reason.contains("; next: ") && !why.contains("next:"),
+            "{why}"
+        );
         assert!(why.starts_with("3 blocking problem(s), first: "), "{why}");
         // The board ran on default clearance rules (no .kicad_pro was sent), so
         // the typed provenance asks for the file: once on the report, once on
@@ -4604,7 +4621,11 @@ mod tests {
         let ids = |actions: &serde_json::Value| -> Vec<String> {
             actions
                 .as_array()
-                .map(|a| a.iter().map(|x| x["id"].as_str().unwrap().to_string()).collect())
+                .map(|a| {
+                    a.iter()
+                        .map(|x| x["id"].as_str().unwrap().to_string())
+                        .collect()
+                })
                 .unwrap_or_default()
         };
         assert_eq!(ids(&value["next_actions"]), ["add_project_rules"]);

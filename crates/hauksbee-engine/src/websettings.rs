@@ -84,10 +84,9 @@ fn build_payload(
     );
     // The one preset a fresh install is steered to, chosen by the same rule as
     // `hauksbee models backend setup`.
-    let default_preset = extract_config::default_preset(|b| {
-        backends.iter().any(|s| s.backend == b && s.available)
-    })
-    .id;
+    let default_preset =
+        extract_config::default_preset(|b| backends.iter().any(|s| s.backend == b && s.available))
+            .id;
 
     let mut value = serde_json::json!({
         "path": path.display().to_string(),
@@ -234,7 +233,10 @@ mod tests {
         // same function the CLI wizard uses.
         let default = value["default_preset"].as_str().expect("default_preset");
         let presets = value["presets"].as_array().unwrap();
-        let chosen = presets.iter().find(|p| p["id"] == default).expect("a known preset");
+        let chosen = presets
+            .iter()
+            .find(|p| p["id"] == default)
+            .expect("a known preset");
         assert_eq!(chosen["recommended"], true, "{chosen}");
         // The cheaper option is flagged on the preset, one per tool.
         let cheaper: Vec<_> = presets
@@ -246,8 +248,14 @@ mod tests {
         // Every agent picker has a label per model and exactly one default.
         for backend in ["codex", "claude-code", "agy"] {
             let models = value["options"]["models"][backend].as_array().unwrap();
-            assert!(models.iter().all(|m| m["label"].as_str().is_some_and(|l| !l.is_empty())));
-            assert_eq!(models.iter().filter(|m| m["default"] == true).count(), 1, "{backend}");
+            assert!(models
+                .iter()
+                .all(|m| m["label"].as_str().is_some_and(|l| !l.is_empty())));
+            assert_eq!(
+                models.iter().filter(|m| m["default"] == true).count(),
+                1,
+                "{backend}"
+            );
         }
     }
 

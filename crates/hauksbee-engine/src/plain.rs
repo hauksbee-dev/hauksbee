@@ -784,7 +784,9 @@ impl OrderTriage {
                 .take_while(|candidate| candidate.id == entry.id && candidate.kind == entry.kind)
                 .count();
             let class = match (heading, entry.id.as_str(), entry.kind.as_str()) {
-                ("DO NOT ORDER", "drc", "short") => Some("copper shorts confirmed by KiCad's own check"),
+                ("DO NOT ORDER", "drc", "short") => {
+                    Some("copper shorts confirmed by KiCad's own check")
+                }
                 (INSPECT_BEFORE_ORDERING, "drc", "short") => {
                     Some("tool-only potential copper shorts with coordinates")
                 }

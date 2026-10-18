@@ -32,8 +32,12 @@ pub fn model_actions(refs: &[String]) -> Vec<WebAction> {
 #[must_use]
 pub fn from_remedy(remedy: &Remedy) -> Option<WebAction> {
     match remedy {
-        Remedy::AddSupply { net, volts_hint } => Some(WebAction::add_supply(Some(net), *volts_hint)),
-        Remedy::AddModel { reference } => Some(WebAction::model_parts(std::slice::from_ref(reference))),
+        Remedy::AddSupply { net, volts_hint } => {
+            Some(WebAction::add_supply(Some(net), *volts_hint))
+        }
+        Remedy::AddModel { reference } => {
+            Some(WebAction::model_parts(std::slice::from_ref(reference)))
+        }
         Remedy::SetPartNumber { reference } => {
             Some(WebAction::set_part_number(std::slice::from_ref(reference)))
         }
@@ -42,9 +46,10 @@ pub fn from_remedy(remedy: &Remedy) -> Option<WebAction> {
         }
         Remedy::AddFirmware => Some(WebAction::add_firmware()),
         Remedy::AddBom => Some(WebAction::add_bom()),
-        Remedy::InstallBackend { id } => {
-            Some(WebAction::install_backend(id, &hauksbee_ir::labels::label_for(id)))
-        }
+        Remedy::InstallBackend { id } => Some(WebAction::install_backend(
+            id,
+            &hauksbee_ir::labels::label_for(id),
+        )),
         Remedy::ProvideProjectRules { file } => Some(WebAction::add_project_rules(file)),
         // Renaming a duplicate designator happens in the design tool; there is
         // no in-app step, so the assumption's own sentence stays the guidance.
@@ -123,7 +128,10 @@ mod tests {
     #[test]
     fn open_parts_get_a_model_button_and_a_draft_button() {
         let actions = model_actions(&refs(&["U1", "Q2"]));
-        let ids: Vec<_> = actions.iter().map(|a| serde_json::to_value(a.id).unwrap()).collect();
+        let ids: Vec<_> = actions
+            .iter()
+            .map(|a| serde_json::to_value(a.id).unwrap())
+            .collect();
         assert_eq!(ids, ["model_parts", "extract_unmodelled"]);
         assert!(model_actions(&[]).is_empty());
     }
@@ -148,7 +156,10 @@ mod tests {
         })
         .unwrap();
         assert_eq!(rules.label, "Add the .kicad_pro file");
-        let backend = from_remedy(&Remedy::InstallBackend { id: "ngspice".into() }).unwrap();
+        let backend = from_remedy(&Remedy::InstallBackend {
+            id: "ngspice".into(),
+        })
+        .unwrap();
         assert_eq!(backend.args.backend.as_deref(), Some("ngspice"));
     }
 
@@ -160,13 +171,15 @@ mod tests {
             ),
             "2 key parts have no usable model (U1, U2), so the checks cannot vouch for this board."
         );
-        let with_tail = format!(
-            "1 blocking problem(s), first: a; next: fix a.{NOT_JUDGED_JOINER}U1 is open."
-        );
+        let with_tail =
+            format!("1 blocking problem(s), first: a; next: fix a.{NOT_JUDGED_JOINER}U1 is open.");
         assert_eq!(
             reason_without_next(&with_tail),
             format!("1 blocking problem(s), first: a.{NOT_JUDGED_JOINER}U1 is open.")
         );
-        assert_eq!(reason_without_next("PARTLY JUDGED: x."), "PARTLY JUDGED: x.");
+        assert_eq!(
+            reason_without_next("PARTLY JUDGED: x."),
+            "PARTLY JUDGED: x."
+        );
     }
 }

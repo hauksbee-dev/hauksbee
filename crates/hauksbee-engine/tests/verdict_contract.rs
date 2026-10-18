@@ -670,9 +670,14 @@ fn web_front_door_refuses_a_clean_bill_over_an_unbound_fet() {
         .filter(|s| s.verdict.starts_with("INCONCLUSIVE") && s.verdict.contains("Q1"))
         .count();
     assert_eq!(
-        naming_q1, 1,
+        naming_q1,
+        1,
         "the unbound part is named in exactly one section: {:?}",
-        report.sections.iter().map(|s| &s.verdict).collect::<Vec<_>>()
+        report
+            .sections
+            .iter()
+            .map(|s| &s.verdict)
+            .collect::<Vec<_>>()
     );
     assert!(
         report

@@ -1645,15 +1645,16 @@ mod tests {
     #[test]
     fn presets_follow_the_tool_order_and_default_preset_agrees_with_auto_detection() {
         // The list is grouped by tool in TOOL_ORDER, API presets last.
-        let tools: Vec<Backend> = presets()
-            .iter()
-            .map(|p| p.backend)
-            .fold(Vec::new(), |mut seen, b| {
-                if seen.last() != Some(&b) {
-                    seen.push(b);
-                }
-                seen
-            });
+        let tools: Vec<Backend> =
+            presets()
+                .iter()
+                .map(|p| p.backend)
+                .fold(Vec::new(), |mut seen, b| {
+                    if seen.last() != Some(&b) {
+                        seen.push(b);
+                    }
+                    seen
+                });
         assert_eq!(tools[..3], TOOL_ORDER);
         for (installed, expected) in [
             (&["codex", "claude", "agy"][..], "codex"),
@@ -1671,11 +1672,17 @@ mod tests {
                 host.find(name).is_some()
             });
             assert_eq!(chosen.id, expected);
-            assert_eq!(chosen.backend, resolved.backend, "the preset and the auto-detected backend agree");
+            assert_eq!(
+                chosen.backend, resolved.backend,
+                "the preset and the auto-detected backend agree"
+            );
         }
         // At most one cheaper preset per tool, and never the recommended one.
         for tool in TOOL_ORDER {
-            let cheaper = presets().iter().filter(|p| p.backend == tool && p.cheaper).count();
+            let cheaper = presets()
+                .iter()
+                .filter(|p| p.backend == tool && p.cheaper)
+                .count();
             assert!(cheaper <= 1, "{tool:?}");
         }
         assert!(presets().iter().all(|p| !(p.cheaper && p.recommended)));

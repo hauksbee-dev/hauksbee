@@ -178,7 +178,10 @@ impl WebAction {
     pub fn add_supply(net: Option<&str>, volts: Option<f64>) -> Self {
         Self::new(
             ActionId::AddSupply,
-            net.map_or_else(|| "Add a supply".to_string(), |n| format!("Add a supply on {n}")),
+            net.map_or_else(
+                || "Add a supply".to_string(),
+                |n| format!("Add a supply on {n}"),
+            ),
             ActionArgs {
                 net: net.map(str::to_string),
                 volts,
@@ -299,7 +302,10 @@ impl WebAction {
 
 /// Append `action` unless one with the same id and arguments is already there.
 pub fn push_unique(list: &mut Vec<WebAction>, action: WebAction) {
-    if !list.iter().any(|a| a.id == action.id && a.args == action.args) {
+    if !list
+        .iter()
+        .any(|a| a.id == action.id && a.args == action.args)
+    {
         list.push(action);
     }
 }
@@ -314,7 +320,10 @@ mod tests {
 
     #[test]
     fn labels_name_a_few_parts_and_count_the_rest() {
-        assert_eq!(WebAction::model_parts(&refs(&["U1"])).label, "Give U1 a model");
+        assert_eq!(
+            WebAction::model_parts(&refs(&["U1"])).label,
+            "Give U1 a model"
+        );
         assert_eq!(
             WebAction::model_parts(&refs(&["U1", "U2"])).label,
             "Give U1 and U2 a model"

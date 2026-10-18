@@ -118,7 +118,11 @@ fn quoted(name: &str) -> String {
 
 /// The extension, lower case with the dot (`.tar.gz` counts as one).
 fn extension_of(file: &str) -> String {
-    let leaf = file.rsplit(['/', '\\']).next().unwrap_or(file).to_lowercase();
+    let leaf = file
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(file)
+        .to_lowercase();
     if leaf.ends_with(".tar.gz") {
         return ".tar.gz".to_string();
     }
