@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { WebReport } from '../types/report'
 import { boardVerdict, TONE_RANK, TONE_STYLE, useStatusLabel } from '../lib/status-vocab'
@@ -31,6 +31,33 @@ interface Chip {
   title?: string
 }
 
+/** Hover intent: a tooltip opens for a pointer that MOVED onto the chip, not
+ *  for one the chip appeared (or reflowed) under. A button disappearing beside
+ *  the chip makes the browser report an "enter" for a pointer that never moved;
+ *  waiting for real movement inside the chip (and a short beat after it) keeps
+ *  the tooltip from popping open by itself. */
+export function createHoverIntent({ onOpen, delayMs = 140, minMovePx = 3 }: {
+  onOpen: () => void
+  delayMs?: number
+  minMovePx?: number
+}) {
+  let entry: { x: number; y: number } | null = null
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return {
+    enter(x: number, y: number) { entry = { x, y } },
+    move(x: number, y: number) {
+      if (!entry || timer !== undefined) return
+      if (Math.hypot(x - entry.x, y - entry.y) < minMovePx) return
+      timer = setTimeout(() => { timer = undefined; onOpen() }, delayMs)
+    },
+    leave() {
+      entry = null
+      clearTimeout(timer)
+      timer = undefined
+    },
+  }
+}
+
 /** The chip's explanation and actions. Portalled and fixed-positioned: the
  *  chip row scrolls horizontally, which would clip an absolutely positioned
  *  child. Stays open while the pointer or focus is on the chip or the popover. */
@@ -48,7 +75,8 @@ function ExplainedChip({ chip }: { chip: Chip }) {
     clearTimeout(closeTimer.current)
     closeTimer.current = setTimeout(() => setPos(null), 150)
   }, [])
-  useEffect(() => () => clearTimeout(closeTimer.current), [])
+  const intent = useMemo(() => createHoverIntent({ onOpen: open }), [open])
+  useEffect(() => () => { clearTimeout(closeTimer.current); intent.leave() }, [intent])
   useEffect(() => {
     if (!pos) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPos(null) }
@@ -61,8 +89,9 @@ function ExplainedChip({ chip }: { chip: Chip }) {
         ref={anchor}
         className="inline-flex min-w-0 max-w-full"
         aria-describedby={pos ? id : undefined}
-        onMouseEnter={open}
-        onMouseLeave={close}
+        onMouseEnter={e => intent.enter(e.clientX, e.clientY)}
+        onMouseMove={e => intent.move(e.clientX, e.clientY)}
+        onMouseLeave={() => { intent.leave(); close() }}
         onFocus={open}
         onBlur={close}
       >

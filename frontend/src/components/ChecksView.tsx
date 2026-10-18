@@ -743,6 +743,9 @@ export function ChecksView({
   const result = run?.response ?? null
   const results = useMemo(() => (result?.ok ? result.results ?? [] : []), [result])
 
+  // The verdict the band above the rows states (it offers the modelling action
+  // when that verdict is "not judged", so the rows do not repeat it).
+  const bandVerdict = run?.response.ok ? runView(run.response, run.toml).verdict : null
   // Row -> result: results come back in [[assert]] order, and a row's id is
   // its [[assert]] position, so a kept-as-written assertion between two rows
   // never shifts the mapping. Grouping in the display reorders only what is shown.
@@ -898,6 +901,7 @@ export function ChecksView({
           validation={validation}
           stale={stale}
           resultForRow={resultForRow}
+          bandOffersModelling={bandVerdict === 'invalid'}
           assumptions={run?.response.assumptions ?? []}
           inventory={run?.response.inventory ?? []}
           onAdd={addCheck}

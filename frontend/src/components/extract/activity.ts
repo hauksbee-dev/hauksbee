@@ -166,15 +166,26 @@ function planFrom(v: Record<string, unknown>): PlanUsage {
   return { available: v.available === true, ...(week ? { week } : {}), ...(session ? { session } : {}) }
 }
 
+/** What a passing validation means, in the words the panel shows. */
+export const VALIDATOR_OK = 'values are consistent'
+
+/** "Attempt 2 of 3 (stronger model)": the extraction runs on a ladder of models
+ *  and moves up it when a rung's output fails its checks, so every attempt after
+ *  the first is on a stronger model. `capitalised` false for mid-sentence use. */
+export function attemptWords(attempt: number, of: number, capitalised = true): string {
+  const text = `attempt ${attempt} of ${of}${attempt > 1 ? ' (stronger model)' : ''}`
+  return capitalised ? text[0].toUpperCase() + text.slice(1) : text
+}
+
 /** One feed line per event. Every field is read defensively: the server is
  *  newer or older than this page often enough that a missing one must not throw. */
 export function describeEvent(e: ActivityEvent): string {
   const v = e as unknown as Record<string, unknown>
   switch (e.kind) {
     case 'tier':
-      return `tier ${num(v.tier)} of ${num(v.tiers)}: ${str(v.model)} (${str(v.harness, 'single')})`
+      return `starting ${attemptWords(num(v.tier), num(v.tiers), false)} with ${str(v.model)}`
     case 'stage':
-      return `stage ${str(v.stage)}, attempt ${num(v.attempt, 1)} of ${num(v.attempts, 1)}`
+      return `step ${str(v.stage)}, try ${num(v.attempt, 1)} of ${num(v.attempts, 1)}`
     case 'read':
       return `read ${str(v.path)}${typeof v.page === 'number' ? ` (page ${v.page})` : ''}`
     case 'tool':
@@ -188,11 +199,11 @@ export function describeEvent(e: ActivityEvent): string {
     case 'plan':
       return planLine(planFrom(v))
     case 'validator':
-      return v.ok ? 'validator: ok' : `validator: ${str(v.error, 'failed')}`
+      return v.ok ? `checked: ${VALIDATOR_OK}` : `checked: problem found, ${str(v.error, 'no detail')}`
     case 'escalate':
-      return `escalate ${str(v.from)} -> ${str(v.to)}: ${str(v.reason)}`
+      return `moving to a stronger model, ${str(v.from)} -> ${str(v.to)}: ${str(v.reason)}`
     case 'final':
-      return `done on tier ${num(v.tier)} of ${num(v.tiers)} (${str(v.model)}), confidence ${str(v.confidence, 'unknown')}`
+      return `done on ${attemptWords(num(v.tier), num(v.tiers), false)} (${str(v.model)}), confidence ${str(v.confidence, 'unknown')}`
     case 'note':
       return str(v.text)
   }
