@@ -266,6 +266,30 @@ fn theta_findings(entry: &ModelEntry, facts: &Facts, pages: &[String]) -> Vec<Fi
             Some((c.package.as_deref()?, v))
         })
         .collect();
+    let mut loose: Vec<f64> = entry
+        .source
+        .iter()
+        .flat_map(|s| &s.characteristic)
+        .filter(|c| c.rating.as_deref() == Some("theta_ja_c_per_w") && c.package.is_none())
+        .filter_map(|c| crate::derating::rating_value("theta_ja_c_per_w", c))
+        .collect();
+    loose.sort_by(f64::total_cmp);
+    loose.dedup_by(|a, b| close(*a, *b));
+    if loose.len() >= 2 {
+        let values: Vec<String> = loose.iter().map(ToString::to_string).collect();
+        out.push(Finding {
+            severity: Severity::Warn,
+            check: "scope",
+            message: format!(
+                "{} θJA rows ({}) are tagged rating = \"theta_ja_c_per_w\" but name no package, \
+                 so the harness reads the least favourable ({}) for every package: give each \
+                 row package = ... (the package it is printed for)",
+                loose.len(),
+                values.join(", "),
+                loose.last().copied().unwrap_or_default()
+            ),
+        });
+    }
     if !tagged.is_empty() {
         for (package, v) in tagged {
             let (own, other): (Vec<&ThermalRow>, Vec<&ThermalRow>) =
@@ -808,6 +832,29 @@ theta_ja_c_per_w = 307.6
             found
                 .iter()
                 .any(|f| f.severity == Severity::Error && f.message.contains("DCK (SC70)")),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn theta_rows_that_name_no_package_are_flagged_when_they_differ() {
+        let mut rows = String::new();
+        for v in [307.6, 235.9, 321.3] {
+            let _ = write!(
+                rows,
+                "[[models.source.characteristic]]\nparameter = \"RθJA\"\nrating = \"theta_ja_c_per_w\"\n\
+                 max = {v}\nunit = \"°C/W\"\nconditions = \"c\"\nbasis = \"b\"\n"
+            );
+        }
+        let card = entry(&format!(
+            "{}\n[models.source]\ntier = \"datasheet-derived\"\nvalidation = \"physical-bounds-only\"\n{rows}",
+            LDO.replace("307.6", "235.9")
+        ));
+        let found = entry_findings(&card, &facts());
+        assert!(
+            found
+                .iter()
+                .any(|f| f.message.contains("name no package") && f.message.contains("321.3")),
             "{found:?}"
         );
     }

@@ -579,6 +579,7 @@ pub fn findings(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
             }
         }
     }
+    out.extend(boot_straps(entry, facts));
     out.extend(crate::card_scope::entry_findings(entry, facts));
     out.extend(crate::card_provenance::findings(
         entry,
@@ -698,10 +699,57 @@ pub fn role_agrees(role: &str, printed: &str, kind: ComponentKind) -> bool {
     })
 }
 
-/// Remedy 2: the pad map against the datasheet's column for this package.
-fn pins(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
-    if facts.pin_columns.is_empty() || entry.pins.is_empty() {
+/// Every pad the pin table names for a boot-select pin (`PB2/BOOT1`, `BOOT0`)
+/// has a `[[models.straps]]` row: one strap row for `BOOT0` leaves the other
+/// pin of the boot-mode table unmodelled.
+fn boot_straps(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
+    static BOOT_PIN: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"(?i)\bn?BOOT\d\b|/n?BOOT\d").expect("re"));
+    if entry.straps.is_empty() {
         return Vec::new();
+    }
+    let Some(col) = board_column(entry, facts) else {
+        return Vec::new();
+    };
+    let strapped = |role: &str| {
+        entry
+            .straps
+            .iter()
+            .any(|s| s.role.eq_ignore_ascii_case(role))
+    };
+    let missing: Vec<String> = entry
+        .pins
+        .iter()
+        .filter_map(|(pad, role)| {
+            let (printed, _) = col.pads.get(pad)?;
+            (BOOT_PIN.is_match(printed) && !strapped(role))
+                .then(|| format!("pad {pad} '{printed}' (role '{role}')"))
+        })
+        .collect();
+    if missing.is_empty() {
+        return Vec::new();
+    }
+    let hint = if facts.companions.is_empty() {
+        "the boot-mode table"
+    } else {
+        "the boot-mode table (a companion document holds it: `ds find 'boot configuration'`, then `ds page N --doc DOC`)"
+    };
+    vec![Finding {
+        severity: Severity::Warn,
+        check: "coverage",
+        message: format!(
+            "the pin table names {} for boot selection but the card has no [[models.straps]] row \
+             for it: add one (role, level, only_with) from {hint}, or an `unknown` record naming \
+             the pin saying why",
+            missing.join(", ")
+        ),
+    }]
+}
+
+/// The pin-table column for the package the board (or, failing that, the card) is for.
+fn board_column<'a>(entry: &ModelEntry, facts: &'a Facts) -> Option<&'a Column> {
+    if facts.pin_columns.is_empty() || entry.pins.is_empty() {
+        return None;
     }
     let card_max = entry
         .pins
@@ -721,7 +769,20 @@ fn pins(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
                 .and_then(|s| s.pinout.first().map(|p| p.package.clone()))
         });
     let pads = facts.board.as_ref().and_then(Board::pad_count).or(card_max);
-    let Ok(col) = pin_table::choose(&facts.pin_columns, package.as_deref(), pads) else {
+    pin_table::choose(&facts.pin_columns, package.as_deref(), pads).ok()
+}
+
+/// Remedy 2: the pad map against the datasheet's column for this package.
+fn pins(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
+    if facts.pin_columns.is_empty() || entry.pins.is_empty() {
+        return Vec::new();
+    }
+    let card_max = entry
+        .pins
+        .keys()
+        .filter_map(|p| p.parse::<usize>().ok())
+        .max();
+    let Some(col) = board_column(entry, facts) else {
         return Vec::new();
     };
     let mut wrong = Vec::new();
@@ -892,6 +953,37 @@ value_re = "(?i)^TLV70033$"
         assert!(findings(&card, &blind)
             .iter()
             .all(|f| f.check != "coverage"));
+    }
+
+    #[test]
+    fn a_boot_select_pad_without_a_strap_row_is_reported() {
+        let card = entry(
+            "[[models]]\nid = \"mcu\"\nkind = \"mcu\"\n[models.pins]\n37 = \"pb2\"\n94 = \"boot0\"\n100 = \"vdd\"\n\
+             [[models.straps]]\nrole = \"boot0\"\nlevel = \"low\"\nboot_select = true\n",
+        );
+        let mut col = Column {
+            label: "LQFP100".into(),
+            ..Column::default()
+        };
+        col.pads.insert("37".into(), ("PB2/BOOT1".into(), 52));
+        col.pads.insert("94".into(), ("BOOT0".into(), 60));
+        col.pads.insert("100".into(), ("VDD".into(), 61));
+        let facts = Facts {
+            part: "STM32F407VET6".into(),
+            pin_columns: vec![col],
+            ..Facts::default()
+        };
+        let found = boot_straps(&card, &facts);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("pad 37 'PB2/BOOT1'"), "{found:?}");
+        assert!(!found[0].message.contains("pad 94"), "{found:?}");
+        // With both straps present there is nothing to say.
+        let both = entry(
+            "[[models]]\nid = \"mcu\"\nkind = \"mcu\"\n[models.pins]\n37 = \"pb2\"\n94 = \"boot0\"\n100 = \"vdd\"\n\
+             [[models.straps]]\nrole = \"boot0\"\nlevel = \"low\"\nboot_select = true\n\
+             [[models.straps]]\nrole = \"pb2\"\nlevel = \"low\"\nboot_select = false\n",
+        );
+        assert!(boot_straps(&both, &facts).is_empty());
     }
 
     #[test]
