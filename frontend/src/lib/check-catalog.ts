@@ -3,7 +3,8 @@ import { getJson, isAbort, postForm } from './api'
 import { buildCheckUpload, type SupplementalDesignFiles } from './board-upload'
 import { displayNet } from './net-name'
 import { tomlString } from './check-spec'
-import type { BoardRequest, ComponentRatings } from '../types/report'
+import type { ActionId, BoardRequest, ComponentRatings } from '../types/report'
+import { CATALOG_BLOCK } from './web-actions'
 
 // The assertion catalogue as the click-to-assert UI reads it (`GET /api/ci/catalog`,
 // version 2): the selection card's offers, the in-place editor's fields and
@@ -32,7 +33,12 @@ export interface CatalogField {
   default_from: DefaultFrom | null
 }
 
-export interface Prerequisite { need: string; label: string; fix: string }
+/** What the engine says to do about a missing prerequisite: one id from its
+ *  closed action set and the words for the button. Null when the app has no step
+ *  for it (a captured trace); absent on an older server. */
+export interface PrerequisiteAction { id: ActionId; label: string }
+
+export interface Prerequisite { need: string; label: string; fix: string; action?: PrerequisiteAction | null }
 
 export interface CatalogKind {
   kind: string
@@ -184,21 +190,24 @@ export function needMet(need: string, spec: SpecFacts): boolean {
   }
 }
 
-/** Which catalogue example holds the minimal block that satisfies a prerequisite. */
-const NEED_SOURCE: Record<string, string> = {
-  ac: 'ac_gain', scenario: 'rail_window', search: 'increases', supply: 'protection_trip', peripheral: 'peripheral',
-}
+/** Prerequisites the engine sends no action for, though the app can still add the
+ *  block (the catalogue kind whose example holds it). The others are read from
+ *  the prerequisite's `action`. */
+const NO_ACTION_SOURCE: Record<string, string> = { search: 'increases', peripheral: 'peripheral' }
 
 export interface Fix { label: string; toml?: string; pickFirmware?: boolean }
 
-/** The one-click fix for an unmet prerequisite: a minimal block lifted from the
- *  catalogue's own example, or the firmware picker. A captured trace has no fix. */
+/** The one-click fix for an unmet prerequisite, from the action the engine named:
+ *  the firmware picker, or a minimal block lifted from the catalogue's own
+ *  example. A captured trace has no fix. */
 export function fixFor(need: Prerequisite, kinds: readonly CatalogKind[]): Fix | null {
-  if (need.need === 'firmware') return { label: 'Add firmware', pickFirmware: true }
-  const source = kinds.find(k => k.kind === NEED_SOURCE[need.need])
+  const action = need.action
+  if (action?.id === 'add_firmware') return { label: action.label, pickFirmware: true }
+  const kind = action ? CATALOG_BLOCK[action.id] : NO_ACTION_SOURCE[need.need]
+  const source = kind ? kinds.find(k => k.kind === kind) : undefined
   if (!source) return null
   const blocks = source.example.trim().split(/\n\s*\n/).filter(b => !b.trim().startsWith('[[assert]]'))
-  return blocks.length ? { label: `Add ${need.label}`, toml: `${blocks.join('\n\n')}\n` } : null
+  return blocks.length ? { label: action?.label ?? `Add ${need.label}`, toml: `${blocks.join('\n\n')}\n` } : null
 }
 
 // ── Offers ──────────────────────────────────────────────────────────────

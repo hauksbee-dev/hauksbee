@@ -469,6 +469,7 @@ function Shell({ boot }: { boot: Boot }) {
                 checks={checksSummary}
                 sessionName={sessions.current?.name ?? null}
                 onOpenSettings={() => navigate('settings')}
+                onOpenEnvironment={() => navigate('env')}
               />
             ) : (
               <UploadView

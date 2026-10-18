@@ -3,6 +3,8 @@ import type { FixFirst, WebHeadsUp } from '../../types/report'
 import type { FindingEntry, FindingGroup, SectionStatus, SectionView, UnmodelledParts } from '../../lib/report-view'
 import { LEVEL_WORD, plural, unmodelledTail } from '../../lib/report-view'
 import { entitiesIn } from '../../lib/result-links'
+import type { RunnableAction } from '../../lib/web-actions'
+import { ActionButtons } from './ActionButtons'
 import { AddCheck, ChipList, Linked, partsOf, ResultLinkContext, RowAction, ShowOnBoard } from './ResultLinks'
 
 // A report section and the cards in it. One card shape serves every kind of
@@ -259,7 +261,12 @@ function PartAction({ parts, openRefs }: { parts: string[]; openRefs: ReadonlySe
   )
 }
 
-function FindingItem({ entry: e, openRefs }: { entry: FindingEntry; openRefs: ReadonlySet<string> }) {
+function FindingItem({ entry: e, openRefs, actions }: {
+  entry: FindingEntry
+  openRefs: ReadonlySet<string>
+  /** The engine's buttons for the section this card opens, when it is the first of it. */
+  actions: readonly RunnableAction[]
+}) {
   const { vocab, shownKey, onOpenChecks } = useContext(ResultLinkContext)
   const named = vocab ? entitiesIn(e.text, vocab) : []
   const parts = named.flatMap(n => (n.kind === 'part' ? [n.ref] : []))
@@ -319,6 +326,7 @@ function FindingItem({ entry: e, openRefs }: { entry: FindingEntry; openRefs: Re
         {e.wantsCheck && onOpenChecks
           ? <RowAction testId="finding-open-checks" onClick={onOpenChecks}>Say what it should do</RowAction>
           : <AddCheck entities={named} />}
+        <ActionButtons actions={actions} size="row" />
       </div>
     </li>
   )
@@ -342,7 +350,7 @@ export function OpenPartsCard({ parts, onList }: { parts: UnmodelledParts; onLis
         <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>Models</span>
       </div>
       <div data-testid="open-parts-sentence" className="mt-1 text-[13px] font-semibold leading-snug" style={{ color: 'var(--silk)' }}>
-        {parts.key.length > 0 && <><ChipList entities={partsOf(parts.key)} />{' '}</>}
+        {parts.key.length > 0 && <><ChipList entities={partsOf(parts.key)} joined />{' '}</>}
         {unmodelledTail(parts)}
       </div>
       {parts.key.length > 0 && (
@@ -381,7 +389,7 @@ function InconclusiveRow({ sections }: { sections: SectionStatus['inconclusive']
       <b style={{ fontWeight: 600, color: 'var(--warn-strong)' }}>Not fully checked: </b>
       {sections.map(s => s.title).join(', ')}.
       {parts.length > 0 && (
-        <> Without a model for <ChipList entities={partsOf(parts)} />, a clean result there is not a clean bill.</>
+        <> Without a model for <ChipList entities={partsOf(parts)} joined />, a clean result there is not a clean bill.</>
       )}
     </div>
   )
@@ -409,9 +417,13 @@ function ClearLine({ sections }: { sections: SectionStatus['clear'] }) {
  *  it opens on an engine id (that reads through the label table instead). */
 const sentenceCase = (t: string) => /^[a-z][a-z0-9]*_/.test(t) ? t : t.charAt(0).toUpperCase() + t.slice(1)
 
-export function FindingsList({ entries, status, openParts, openRefs, preLayout, onListParts, onLocate }: {
+export function FindingsList({ entries, status, openParts, openRefs, preLayout, sectionActions = {}, onListParts, onLocate }: {
   entries: FindingEntry[]
   status: SectionStatus
+  /** The engine's buttons by section name (a section's name without its parenthetical),
+   *  already limited to what this app can run and not already on the Next step.
+   *  Each is offered once, on the section's first card. */
+  sectionActions?: Readonly<Record<string, readonly RunnableAction[]>>
   /** The parts with no usable model, when this list is where they are stated. */
   openParts: UnmodelledParts | null
   /** Parts with no model, for "Give X a model" rather than "Open X". */
@@ -422,6 +434,11 @@ export function FindingsList({ entries, status, openParts, openRefs, preLayout, 
   onLocate?: LocateFn
 }) {
   const shown = entries.length + (openParts ? 1 : 0)
+  // The order the cards render in; a section's buttons go on its first card.
+  const ordered = [...entries.filter(e => e.level === 'serious'), ...entries.filter(e => e.level !== 'serious')]
+  const firstOfSection = new Map<string, string>()
+  for (const e of ordered) if (!firstOfSection.has(e.section)) firstOfSection.set(e.section, e.key)
+  const actionsFor = (e: FindingEntry) => (firstOfSection.get(e.section) === e.key ? sectionActions[e.section] ?? [] : [])
   // The cards below, counted by level, so the count is the list's own.
   // Every place counts, so a card "found in 10 places" adds ten, as the
   // engine's own "12 issues found" does.
@@ -443,9 +460,9 @@ export function FindingsList({ entries, status, openParts, openRefs, preLayout, 
       {shown > 0 && (
         <ul className="list-none p-0 m-0 flex flex-col gap-2" data-testid="result-findings">
           {/* Serious first, then the parts with no model (a warning), then the rest. */}
-          {entries.filter(e => e.level === 'serious').map(e => <FindingItem key={e.key} entry={e} openRefs={openRefs} />)}
+          {ordered.filter(e => e.level === 'serious').map(e => <FindingItem key={e.key} entry={e} openRefs={openRefs} actions={actionsFor(e)} />)}
           {openParts && <OpenPartsCard parts={openParts} onList={onListParts} />}
-          {entries.filter(e => e.level !== 'serious').map(e => <FindingItem key={e.key} entry={e} openRefs={openRefs} />)}
+          {ordered.filter(e => e.level !== 'serious').map(e => <FindingItem key={e.key} entry={e} openRefs={openRefs} actions={actionsFor(e)} />)}
         </ul>
       )}
       <InconclusiveRow sections={status.inconclusive} />

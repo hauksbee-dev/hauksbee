@@ -31,22 +31,22 @@ const CATALOG: CatalogKind[] = [
   kind('rail_window', ['net'], { net: '{net} stays inside a window' }, [
     NET, f('scenario', { type: 'string', required: true }),
     f('min', { required: true, default_from: { source: 'measured', pct: -5 } }),
-  ], [{ need: 'scenario', label: 'a scenario', fix: 'Add a [[scenario]] to the spec.' }],
+  ], [{ need: 'scenario', label: 'a scenario', fix: 'Add a [[scenario]] to the spec.', action: { id: 'add_scenario', label: 'Add a load-step test' } }],
   '[[scenario]]\nid = "boot"\n\n[[assert]]\nkind = "rail_window"\n'),
   kind('logic_level', ['net'], { net: '{net} reaches a valid logic level' }, [NET]),
   kind('toggle', ['net'], { net: '{net} blinks' }, [
     NET, f('freq_hz', { required: true, default_from: { source: 'measured', pct: 0 } }),
-  ], [{ need: 'firmware', label: 'firmware', fix: 'Attach firmware.' }]),
+  ], [{ need: 'firmware', label: 'firmware', fix: 'Attach firmware.', action: { id: 'add_firmware', label: 'Add firmware' } }]),
   kind('boot_coverage', ['net'], { net: 'Firmware drives {net} in time' }, [
     NET, f('min', { required: true, default_from: { source: 'measured', pct: -10 } }), f('deadline_ms', { required: true }),
-  ], [{ need: 'firmware', label: 'firmware', fix: 'Attach firmware.' }]),
+  ], [{ need: 'firmware', label: 'firmware', fix: 'Attach firmware.', action: { id: 'add_firmware', label: 'Add firmware' } }]),
   kind('protection_trip', ['net'], { net: 'The cutoff on {net} trips' }, [
     f('supply_net', { type: 'string', required: true }), f('expect_trip', { type: 'boolean', required: true }),
-  ], [{ need: 'supply', label: 'a battery supply', fix: 'Declare a battery [[supply]].' }]),
+  ], [{ need: 'supply', label: 'a battery supply', fix: 'Declare a battery [[supply]].', action: { id: 'add_supply', label: 'Add a supply' } }]),
   kind('hwtrace', ['net'], { net: 'trace' }, [f('trace', { type: 'string', required: true })],
     [{ need: 'trace', label: 'a captured trace', fix: 'Capture a trace.' }]),
   kind('ac_gain', ['net'], { net: 'Gain at {net}' }, [NET, f('min', { required: true, help: 'lowest gain (or max)' })],
-    [{ need: 'ac', label: 'an [ac] block', fix: 'Add [ac].' }], '[ac]\nsource = "VIN"\n\n[[assert]]\nkind = "ac_gain"\n'),
+    [{ need: 'ac', label: 'an [ac] block', fix: 'Add [ac].', action: { id: 'add_ac_sweep', label: 'Add a frequency sweep' } }], '[ac]\nsource = "VIN"\n\n[[assert]]\nkind = "ac_gain"\n'),
   kind('max_current', ['part'], { part: 'Keep {ref} under ... A' }, [
     REF, f('amps', {
       required: true,
@@ -111,7 +111,7 @@ describe('offers', () => {
     const blocked = offersForNet('/D13', ctx()).find(o => o.kind === 'toggle')!.blocked!
     expect(blocked.fix?.pickFirmware).toBe(true)
     expect(fixFor({ need: 'trace', label: 'a trace', fix: '' }, CATALOG)).toBeNull()
-    expect(fixFor({ need: 'ac', label: 'an [ac] block', fix: '' }, CATALOG)?.toml).toBe('[ac]\nsource = "VIN"\n')
+    expect(fixFor({ need: 'ac', label: 'an [ac] block', fix: '', action: { id: 'add_ac_sweep', label: 'Add a frequency sweep' } }, CATALOG)?.toml).toBe('[ac]\nsource = "VIN"\n')
   })
 
   test('a protection cutoff is offered on supplies only', () => {

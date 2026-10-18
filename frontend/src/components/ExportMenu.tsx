@@ -202,7 +202,7 @@ export function ExportMenu({
   }
 
   return (
-    <div ref={wrap} className="relative inline-block max-w-full" data-testid="export">
+    <div ref={wrap} className="inline-flex flex-wrap items-center gap-2 max-w-full" data-testid="export">
       <button
         type="button"
         data-testid="export-open"
@@ -290,11 +290,12 @@ export function ExportMenu({
           data-testid="export-done"
           role="status"
           aria-live="polite"
-          className="absolute left-0 z-20 px-2.5 py-1.5 rounded-lg text-[11px]"
+          /* In the row beside the button, never hung below it: the card under the
+             action bar (FINDINGS) is what a floating toast used to cover. */
+          className="px-2.5 py-1.5 rounded-lg text-[11px] min-w-0"
           style={{
-            top: 'calc(100% + 6px)', width: 'max-content', maxWidth: 'min(420px, 80vw)',
+            maxWidth: 'min(420px, 100%)', overflowWrap: 'anywhere',
             background: 'var(--ok-bg)', border: '1px solid var(--ok-border)', color: 'var(--ok)',
-            boxShadow: 'var(--shadow-pop)',
           }}
         >
           {done}

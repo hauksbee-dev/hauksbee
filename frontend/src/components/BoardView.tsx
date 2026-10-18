@@ -1,7 +1,7 @@
 import { loadPercent } from './LoadBar'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BoardRequest, ModelCoverageComponent, WebOpenPart } from '../types/report'
-import { coverageFor, explainReport, findingEntries, modelsOnNet, padNetsOf, plural, reportView, sectionStatus, stageWords, unmodelledHome } from '../lib/report-view'
+import { coverageFor, explainReport, findingEntries, modelsOnNet, padNetsOf, plural, reportView, sectionName, sectionStatus, stageWords, unmodelledHome } from '../lib/report-view'
 import type { BoardSession } from '../hooks/useBoardSession'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './BoardViewer'
 import { OpenSelectionsBanner, SelectionCard } from './SelectionCard'
@@ -16,7 +16,9 @@ import { FindingsList } from './report/Findings'
 import { centerInScroller } from '../lib/scroll'
 import { EvidencePanel, ImportDiagnosticsPanel, ModelCoveragePanel, ReportPanel } from './report/Panels'
 import { CosimBlock } from './report/CosimBlock'
-import { NextStep } from './report/NextStep'
+import { NextStep, nextKind, nextStepActions } from './report/NextStep'
+import { runnableActions, withoutShown, type ActionHost } from '../lib/web-actions'
+import { requestModelTab } from './WritePart'
 import { ResultPanel } from './report/ResultPanel'
 import { ResultLinkContext } from './report/ResultLinks'
 import type { ResultLinkHandlers } from './report/ResultLinks'
@@ -32,7 +34,7 @@ import { BoardMap } from './report/BoardMap'
 // panels, the co-sim block and the fallback dot map live in ./report.
 
 export function BoardView({
-  session, onQueue, onOpenChecks,
+  session, onQueue, onOpenChecks, onOpenEnvironment,
   onDriveLive, simMounted, engineVersion, spec, checks, sessionName, onOpenSettings,
 }: {
   session: BoardSession
@@ -50,6 +52,8 @@ export function BoardView({
   /** Opens the Settings view, from the datasheet extraction panel's "Change in
    *  Settings" link once a backend is configured there. */
   onOpenSettings?: () => void
+  /** Opens the Environment page, where a missing simulator is installed. */
+  onOpenEnvironment?: () => void
 }) {
   const r = session.report!
   // A part with variant cards waiting on a pick is the picker's to settle, not
@@ -171,7 +175,7 @@ export function BoardView({
       if (entity.kind === 'net') return { kind: 'voltage', net: entity.net, label: `net ${entity.net} must sit at a voltage` }
       const caps = r.component_assertions?.[entity.ref] ?? []
       if (caps.includes('max_current')) return { kind: 'max_current', ref: entity.ref, label: `${entity.ref} must stay under a current` }
-      if (caps.includes('max_temp')) return { kind: 'max_temp', ref: entity.ref, label: `${entity.ref} must stay cool` }
+      if (caps.includes('max_temp')) return { kind: 'max_temp', ref: entity.ref, label: `${entity.ref} must stay under a temperature` }
       return null
     },
     onAddCheck: offer => {
@@ -217,6 +221,30 @@ export function BoardView({
   const entries = useMemo(() => findingEntries(v), [v])
   const status = useMemo(() => sectionStatus(v), [v])
   const moreRef = useRef<HTMLDivElement>(null)
+  const openEvidence = useCallback(() => {
+    setEvidenceOpen(true)
+    requestAnimationFrame(() => centerInScroller(moreRef.current))
+  }, [])
+  const canShow = !!boardUrl
+  // What the engine's typed actions (next steps, a section's buttons) can do here.
+  // A saved session has no files behind it, so it cannot open the model flow or
+  // the evidence slots.
+  const actionHost = useMemo<ActionHost>(() => ({
+    giveModel: restoredFrom ? undefined : (ref, tab) => {
+      if (tab) requestModelTab(tab)
+      resultLinks.onGiveModel?.(ref)
+    },
+    openEvidence: restoredFrom ? undefined : openEvidence,
+    openChecks: onOpenChecks,
+    queue: onQueue,
+    show: canShow
+      ? ({ refs, net, at, label }) => {
+          const entities: ResultEntity[] = [...refs.map(ref => ({ kind: 'part' as const, ref })), ...(net ? [{ kind: 'net' as const, net }] : [])]
+          resultLinks.onShow?.(entities, at ? { ...at, label } : null, `action:${refs.join(',')}:${net ?? ''}:${at?.x ?? ''},${at?.y ?? ''}`)
+        }
+      : undefined,
+    openEnvironment: onOpenEnvironment,
+  }), [restoredFrom, openEvidence, onOpenChecks, onQueue, canShow, resultLinks, onOpenEnvironment])
 
   if (!r.ok) return <UploadFailure report={r} session={session} />
 
@@ -308,10 +336,12 @@ export function BoardView({
   const firmwareName = firmwareFile?.name ?? restoredFrom?.firmwareName ?? null
   const hasMap = !!boardUrl || r.components?.length > 0
   const openRefs = new Set(overlay.openRefs)
-  const openEvidence = () => {
-    setEvidenceOpen(true)
-    requestAnimationFrame(() => centerInScroller(moreRef.current))
-  }
+  // The engine's next steps this app can run; a section's buttons skip any the
+  // Next step already has, so one step is one button.
+  const nextOffered = restoredFrom ? [] : nextStepActions(r, nextKind(r, v, { firmwareName: firmwareFile?.name ?? null, checks }), actionHost)
+  const sectionActions = Object.fromEntries(v.sections
+    .map(s => [sectionName(s.title), runnableActions(withoutShown(s.actions, nextOffered), actionHost)] as const)
+    .filter(([, list]) => list.length > 0))
 
   // The legend of what the result draws on the board, with its on/off switch.
   const legend = boardUrl && overlayHasContent(overlay) && (
@@ -506,8 +536,7 @@ export function BoardView({
                         specFile={spec?.fileName ?? null}
                         onQueue={onQueue}
                         onOpenChecks={onOpenChecks}
-                        onOpenEvidence={openEvidence}
-                        onGiveModel={resultLinks.onGiveModel}
+                        host={actionHost}
                         onLocate={boardUrl ? locate : undefined}
                         quiet={!!(selectedNet || selectedComponent)}
                       />
@@ -565,6 +594,7 @@ export function BoardView({
                     openParts={unmodelledHome(r, v.unmodelled) === 'findings' ? v.unmodelled : null}
                     openRefs={openRefs}
                     preLayout={v.preLayout}
+                    sectionActions={sectionActions}
                     onListParts={showGuessed}
                     onLocate={boardUrl ? locate : undefined}
                   />

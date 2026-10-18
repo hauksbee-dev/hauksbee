@@ -153,7 +153,7 @@ export function PartlyJudged({ scope, unmodelled, onList }: {
             )}
           >
             <span data-testid="open-parts-sentence">
-              {parts.key.length > 0 && <><ChipList entities={partsOf(parts.key)} />{' '}</>}
+              {parts.key.length > 0 && <><ChipList entities={partsOf(parts.key)} joined />{' '}</>}
               {unmodelledTail(parts)}.
             </span>
           </ResultRow>
