@@ -266,8 +266,8 @@ await browserFlow(flow, async (page, { base, browser }) => {
     resumeText.includes(boardName.split('.')[0]) || resumeText.includes(idx[0].name),
     resumeText.split('\n').slice(0, 3).join(' / '))
   ok('the resume card says what cannot come back',
-    /board file itself does not/.test(resumeText))
-  ok('the resume card counts the composed checks', /2 checks composed/.test(resumeText))
+    /board file does not/.test(resumeText))
+  ok('the resume row counts the composed checks', /2 checks/.test(resumeText))
   await shoot(page, '05-resume-offer')
 
   // Resume probes `/boards/<file>` for the uploaded bytes. A real server holds

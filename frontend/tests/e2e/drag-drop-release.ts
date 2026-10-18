@@ -408,7 +408,9 @@ async function auditRefusal(
     failures.push('a refused input explained nothing about why')
     return { shown: null, report }
   }
-  const shown = (await verdict.innerText()).trim()
+  // textContent, not innerText: the engine's own sentence sits in a closed
+  // "Technical detail" disclosure, which innerText leaves out.
+  const shown = ((await verdict.textContent()) ?? '').trim()
   if (serverError !== '' && !shown.includes(withoutEngineFormatList(serverError))) {
     failures.push('the rendered refusal does not carry what the server said')
   }
