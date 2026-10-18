@@ -49,6 +49,7 @@ macro_rules! standard_condition {
 }
 
 pub mod behavioral;
+pub mod card_coverage;
 mod check;
 pub mod chip_size;
 mod conventions;
@@ -56,12 +57,14 @@ pub mod datasheet;
 pub mod datasheet_discovery;
 pub mod datasheet_fetch;
 pub mod derating;
+pub mod ds_toolkit;
 pub mod extract_config;
 pub mod extract_examples;
 pub mod extract_harness;
 pub mod extract_messages;
 pub mod extract_output;
 pub mod extract_plan;
+pub mod extract_trace;
 pub mod extract_progress;
 pub mod extract_usage;
 pub mod logic_spec;
@@ -74,6 +77,7 @@ pub mod package;
 pub mod param_names;
 pub mod pin_roles;
 pub mod pin_rules;
+pub mod pin_table;
 mod plausibility;
 pub mod profile;
 pub mod ranges;
@@ -936,6 +940,19 @@ impl ModelLibrary {
             .map(str::to_string)
             .collect();
         parts.into_iter().collect()
+    }
+
+    /// Every simulator backend an MCU card names (`renode:stm32f4`,
+    /// `simavr:atmega328p`), sorted and unique: the cores a drafted MCU card
+    /// can name.
+    #[must_use]
+    pub fn mcu_backends(&self) -> Vec<String> {
+        let set: std::collections::BTreeSet<String> = self
+            .mcu_cards()
+            .filter_map(|e| e.params.get_str("backend"))
+            .map(str::to_string)
+            .collect();
+        set.into_iter().collect()
     }
 
     /// Drop every remembered resolution: the entries they were answered from
