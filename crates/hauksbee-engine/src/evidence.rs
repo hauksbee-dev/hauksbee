@@ -126,6 +126,48 @@ pub struct BoardEvidence {
     /// What a pass on this board rests on beyond the checks themselves: each
     /// class-only part whose assumed corners were swept, in words.
     conditions: Vec<String>,
+    /// Lookups derived once from `refs_by_net`, `display_ref_by_subject` and
+    /// `supply_groups` (fixed after construction), so mapping one finding
+    /// costs its own scope, not a scan of the whole board.
+    lookup: SubjectLookup,
+}
+
+/// Name-keyed indexes over a [`BoardEvidence`]'s incidence. Mapping a run's
+/// findings once rescanned every net per finding, which made a board with
+/// thousands of parts and findings quadratic.
+#[derive(Debug, Clone, Default)]
+struct SubjectLookup {
+    /// Every net by each name a part on it answers to: its subject and its
+    /// display reference (a reference names a part by either).
+    nets_by_name: HashMap<String, BTreeSet<String>>,
+    /// Each net to the index of the supply group holding it.
+    group_of: HashMap<String, usize>,
+}
+
+impl SubjectLookup {
+    fn new(
+        refs_by_net: &BTreeMap<String, Vec<String>>,
+        display_ref_by_subject: &BTreeMap<String, String>,
+        supply_groups: &[SupplyGroup],
+    ) -> Self {
+        let mut nets_by_name: HashMap<String, BTreeSet<String>> = HashMap::new();
+        for (net, refs) in refs_by_net {
+            for subject in refs {
+                nets_by_name.entry(subject.clone()).or_default().insert(net.clone());
+                if let Some(display) = display_ref_by_subject.get(subject) {
+                    nets_by_name.entry(display.clone()).or_default().insert(net.clone());
+                }
+            }
+        }
+        // Later groups win a shared net, as the per-call map collected them.
+        let group_of = (supply_groups.iter().enumerate())
+            .flat_map(|(i, g)| g.nets.iter().map(move |n| (n.clone(), i)))
+            .collect();
+        Self {
+            nets_by_name,
+            group_of,
+        }
+    }
 }
 
 fn provenance_display_reference(reference: &str) -> String {
@@ -743,6 +785,7 @@ impl BoardEvidence {
             .map(|(subject, component)| (subject.clone(), component.reference.clone()))
             .collect();
         let refs_by_net = owned.iter().cloned().collect();
+        let lookup = SubjectLookup::new(&refs_by_net, &display_ref_by_subject, &report.supply_groups);
         Ok(Self {
             registry: registry.clone(),
             index,
@@ -764,6 +807,7 @@ impl BoardEvidence {
             supply_groups: report.supply_groups.clone(),
             supply_taps: supply_taps(board, &net_names),
             conditions,
+            lookup,
         })
     }
 
@@ -1192,15 +1236,6 @@ impl BoardEvidence {
             .any(|map| map.status() != EvidenceStatus::Clean)
     }
 
-    fn subject_matches_reference(&self, subject: &str, reference: &str) -> bool {
-        subject == reference
-            || self
-                .display_ref_by_subject
-                .get(subject)
-                .map_or(subject, String::as_str)
-                == reference
-    }
-
     /// A real report-coverage assertion for an otherwise finding-free static
     /// analysis. This is not a synthetic pass result: it states exactly which
     /// extracted nets the front door inspected and therefore carries any
@@ -1270,15 +1305,14 @@ impl BoardEvidence {
         findings: &[crate::result::JsonFinding],
     ) -> Result<Vec<EvidenceMap>, EvidenceError> {
         let mut maps = Vec::new();
-        // Indexed once on first use: a scan of every net per finding was
+        // Indexed once at construction: a scan of every net per finding was
         // quadratic on a large board with many part-scoped findings.
-        let mut by_name: Option<HashMap<&str, BTreeSet<&String>>> = None;
+        let by_name = &self.lookup.nets_by_name;
         for finding in findings {
             let mut nets: BTreeSet<String> = finding.nets.iter().cloned().collect();
             if nets.is_empty() {
-                let by_name = by_name.get_or_insert_with(|| self.nets_by_subject_name());
                 let named = finding.refs.iter().filter_map(|r| by_name.get(r.as_str()));
-                nets = named.flatten().map(|net| (*net).clone()).collect();
+                nets = named.flatten().cloned().collect();
             }
             if nets.is_empty() {
                 continue;
@@ -1481,22 +1515,6 @@ impl BoardEvidence {
         Ok(map)
     }
 
-    /// Every net by each name a part on it answers to: its subject and its
-    /// display reference, the two [`Self::subject_matches_reference`] accepts.
-    fn nets_by_subject_name(&self) -> HashMap<&str, BTreeSet<&String>> {
-        let mut by_name: HashMap<&str, BTreeSet<&String>> = HashMap::new();
-        for (net, refs) in &self.refs_by_net {
-            for subject in refs {
-                let display = self.display_ref_by_subject.get(subject.as_str());
-                by_name.entry(subject.as_str()).or_default().insert(net);
-                if let Some(display) = display {
-                    by_name.entry(display.as_str()).or_default().insert(net);
-                }
-            }
-        }
-        by_name
-    }
-
     /// The explicit `nets` plus every net a subject `reference` touches, less
     /// ground, plus that part's supply chain ([`Self::supply_chain`]). Ground is
     /// the reference node every part shares, so reaching through it would put
@@ -1506,18 +1524,14 @@ impl BoardEvidence {
     /// that powers it.
     fn nets_for_subjects(&self, nets: &[String], references: &[String]) -> BTreeSet<String> {
         let mut scoped_nets: BTreeSet<String> = nets.iter().cloned().collect();
-        let mut part_nets = BTreeSet::new();
-        for (net, refs) in &self.refs_by_net {
-            if crate::is_ground(net) {
-                continue;
-            }
-            if references.iter().any(|reference| {
-                refs.iter()
-                    .any(|subject| self.subject_matches_reference(subject, reference))
-            }) {
-                part_nets.insert(net.clone());
-            }
-        }
+        // A net is a part net when a part on it answers to a reference, by
+        // its subject or its display name: the names `nets_by_name` holds.
+        let part_nets: BTreeSet<String> = (references.iter())
+            .filter_map(|reference| self.lookup.nets_by_name.get(reference.as_str()))
+            .flatten()
+            .filter(|net| !crate::is_ground(net))
+            .cloned()
+            .collect();
         scoped_nets.extend(self.supply_chain(&part_nets));
         scoped_nets.extend(part_nets);
         scoped_nets
@@ -1534,9 +1548,7 @@ impl BoardEvidence {
     /// reaches through it, and nothing downstream of another regulator on the
     /// chain is included.
     fn supply_chain(&self, nets: &BTreeSet<String>) -> BTreeSet<String> {
-        let group_of: HashMap<&str, usize> = (self.supply_groups.iter().enumerate())
-            .flat_map(|(i, g)| g.nets.iter().map(move |n| (n.as_str(), i)))
-            .collect();
+        let group_of = &self.lookup.group_of;
         let mut queue: Vec<usize> = (nets.iter())
             .filter_map(|n| group_of.get(n.as_str()).copied())
             .collect();
@@ -1554,8 +1566,8 @@ impl BoardEvidence {
                 queue.extend(group_of.get(input.as_str()));
             }
         }
-        let by_name = self.nets_by_subject_name();
-        let controls = parts.iter().filter_map(|part| by_name.get(part)).flatten();
+        let by_name = &self.lookup.nets_by_name;
+        let controls = parts.iter().filter_map(|part| by_name.get(*part)).flatten();
         let taps = rails
             .iter()
             .filter_map(|rail| self.supply_taps.get(*rail))

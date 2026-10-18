@@ -62,6 +62,37 @@ impl SparseMatrix {
         }
     }
 
+    /// [`Self::touch`] every `(row, col)` with `col` in `slots[row]`, in any
+    /// order and with repeats: the same pattern, built by one sort and merge
+    /// per row instead of a sorted insertion per slot. Existing entries keep
+    /// their values.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `slots` has more rows than the matrix.
+    pub fn touch_all(&mut self, slots: Vec<Vec<usize>>) {
+        assert!(slots.len() <= self.n, "touch_all: more slot rows than the matrix has");
+        for (row, mut cols) in slots.into_iter().enumerate() {
+            if cols.is_empty() {
+                continue;
+            }
+            cols.sort_unstable();
+            cols.dedup();
+            let old = std::mem::take(&mut self.rows[row]);
+            let mut merged = Vec::with_capacity(old.len() + cols.len());
+            let mut new = cols.into_iter().peekable();
+            for (c, v) in old {
+                while let Some(n) = new.next_if(|&n| n < c) {
+                    merged.push((n, 0.0));
+                }
+                new.next_if_eq(&c);
+                merged.push((c, v));
+            }
+            merged.extend(new.map(|n| (n, 0.0)));
+            self.rows[row] = merged;
+        }
+    }
+
     /// Resolve `(row, col)` to a stable `(row, position)` handle into the frozen
     /// pattern, or `None` if no slot exists. Used by the compiled stamp plan to
     /// write entries without a per-write binary search in the hot loop.
@@ -1287,6 +1318,36 @@ fn min_degree_order_reference(adj: &[Vec<usize>], n: usize) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn touch_all_builds_the_pattern_touch_builds() {
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = |k: usize| {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            usize::try_from(seed >> 33).expect("31 bits fit") % k
+        };
+        for _ in 0..200 {
+            let n = 1 + next(40);
+            let (mut one, mut all) = (SparseMatrix::new(n), SparseMatrix::new(n));
+            // Some entries exist (with values) before the batch, as when a
+            // caller reserves into a matrix that already holds stamps.
+            for _ in 0..next(10) {
+                let (r, c, v) = (next(n), next(n), 1.0 + f64::from(u32::try_from(next(9)).unwrap()));
+                one.add(r, c, v);
+                all.add(r, c, v);
+            }
+            let mut slots = vec![Vec::new(); n];
+            for _ in 0..next(200) {
+                let (r, c) = (next(n), next(n));
+                one.touch(r, c);
+                slots[r].push(c);
+            }
+            all.touch_all(slots);
+            for r in 0..n {
+                assert_eq!(one.row(r), all.row(r), "row {r}");
+            }
+        }
+    }
 
     #[test]
     fn fast_min_degree_order_matches_the_quadratic_scan() {

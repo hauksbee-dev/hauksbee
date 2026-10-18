@@ -23,7 +23,8 @@
 //! reproducible given the same firmware and board.
 
 use hauksbee_ir::eprintln;
-use std::collections::HashMap;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -3921,23 +3922,32 @@ impl Scheduler {
                 .iter()
                 .filter_map(hauksbee_bind::BehavioralDevice::converter_out_node),
         );
+        // Indexed once per call: the search below restarts after every taint
+        // it adds, and a linear name lookup per pin per pass made this
+        // start-up step superlinear in the board's parts and nets.
+        let rails: HashSet<NodeId> = rails.into_iter().collect();
+        let names = self.node_name_index();
+        let mut tainted_nets: HashSet<String> =
+            (self.regulation.iter()).flat_map(|t| t.nets.iter().cloned()).collect();
+        let mut taken: HashSet<String> =
+            (self.regulation.iter()).map(|t| t.refs[0].clone()).collect();
         loop {
-            let tainted = |n: NodeId| {
-                let name = self.net_name_of(n.0);
-                self.regulation.iter().any(|t| t.nets.contains(&name))
-            };
+            let tainted = |n: NodeId| tainted_nets.contains(&*names.name(n.0));
             let powered = |n: NodeId| !n.is_ground() && (rails.contains(&n) || tainted(n));
             let found = self.open_parts.iter().find_map(|part| {
-                let fresh = !self.regulation.iter().any(|t| t.refs[0] == part.reference);
+                let fresh = !taken.contains(&part.reference);
                 let (from, nodes) = fresh.then(|| walk.open_driver(part, &powered))??;
-                Some((part.clone(), self.net_name_of(from.0), nodes))
+                Some((part.clone(), names.name(from.0).into_owned(), nodes))
             });
             let Some((part, from, nodes)) = found else {
                 return;
             };
             let (r, v) = (&part.reference, &part.value);
             let reason = |nets: &[String]| regulation::open_driver_reason(r, v, &from, nets);
-            self.push_taint(part.reference.clone(), nodes, reason);
+            self.push_taint_named(&names, part.reference.clone(), nodes, reason);
+            let added = self.regulation.last().expect("push_taint_named pushes one taint");
+            tainted_nets.extend(added.nets.iter().cloned());
+            taken.insert(added.refs[0].clone());
         }
     }
 
@@ -3963,6 +3973,18 @@ impl Scheduler {
     fn push_taint(
         &mut self,
         reference: String,
+        nodes: Vec<NodeId>,
+        reason: impl FnOnce(&[String]) -> String,
+    ) {
+        let names = self.node_name_index();
+        self.push_taint_named(&names, reference, nodes, reason);
+    }
+
+    /// [`Self::push_taint`] with the node names already indexed.
+    fn push_taint_named(
+        &mut self,
+        names: &NodeNames,
+        reference: String,
         mut nodes: Vec<NodeId>,
         reason: impl FnOnce(&[String]) -> String,
     ) {
@@ -3975,7 +3997,7 @@ impl Scheduler {
                 nodes.extend(m.binding.gpio_drivers.values().map(|d| d.net));
             }
         }
-        let mut nets: Vec<String> = nodes.iter().map(|n| self.net_name_of(n.0)).collect();
+        let mut nets: Vec<String> = nodes.iter().map(|n| names.name(n.0).into_owned()).collect();
         nets.sort();
         nets.dedup();
         self.regulation.push(RegulationTaint {
@@ -6058,6 +6080,16 @@ impl Scheduler {
     pub fn net_range(&self, net: &str) -> Option<(f64, f64)> {
         let st = self.stats.get(net)?;
         (st.powered_min_v <= st.max_v).then_some((st.powered_min_v, st.max_v))
+    }
+
+    /// Every named node's net name, the same one [`Self::net_name_for`] finds
+    /// (the first in `net_nodes` order), for callers that look up many nodes.
+    fn node_name_index(&self) -> NodeNames {
+        let mut by_node: HashMap<u32, String> = HashMap::with_capacity(self.net_nodes.len());
+        for (name, node) in &self.net_nodes {
+            by_node.entry(node.0).or_insert_with(|| name.clone());
+        }
+        NodeNames(by_node)
     }
 
     /// The name of the net on `node`, or `"node N"` for an unnamed one.
@@ -8310,6 +8342,19 @@ fn adc_channel_promoted(binding: &McuBinding, ch: u8) -> bool {
         .get(&ch)
         .and_then(|pb| binding.gpio_drivers.get(pb))
         .is_some_and(|d| d.enabled)
+}
+
+/// Net names by node, indexed once (see `Scheduler::node_name_index`).
+struct NodeNames(HashMap<u32, String>);
+
+impl NodeNames {
+    /// The name of the net on `node`, or `"node N"` for an unnamed one: what
+    /// `Scheduler::net_name_of` answers.
+    fn name(&self, node: u32) -> Cow<'_, str> {
+        self.0
+            .get(&node)
+            .map_or_else(|| Cow::Owned(format!("node {node}")), |n| Cow::Borrowed(n.as_str()))
+    }
 }
 
 #[cfg(test)]
