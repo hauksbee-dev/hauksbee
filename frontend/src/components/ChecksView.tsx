@@ -11,7 +11,7 @@ import { api, errorText, type LoadProgress } from '../lib/api'
 import {
   assertToml, buildToml, componentCapabilityIssues, CONSTRAINT_KEYS, emptyCheck, emptyPeripheral,
   emptySensor, normalizeSavedCheck, overrideToml, peripheralIssues, peripheralToml, railPolarity, rowIssues,
-  sensorIssues, sensorToml, scaffoldRows, supplyKvs, supplyToml, USB_PROFILES,
+  sensorIssues, sensorToml, scaffoldRows, supplyKvs, supplyToml, SUPPLY_KINDS, USB_PROFILES,
 } from '../lib/check-spec'
 import type { CheckRow, OverrideRow, PeripheralRow, RowIssue, SensorRow, SupplyRow } from '../lib/check-spec'
 import {
@@ -22,6 +22,7 @@ import { applyOps, readCst } from '../lib/toml-cst'
 import type { PatchOp } from '../lib/toml-cst'
 import { assertRowCount, coverageFor, runMarkdown, runView } from '../lib/report-view'
 import { downloadText } from '../lib/report-export'
+import { labelFor } from '../lib/labels'
 import { useCatalog } from '../lib/check-catalog'
 import { STATIC_CHECK_KIND, statusOf, type RunStatus } from '../lib/status-vocab'
 import { ToBoard } from './checks/ChecksLinks'
@@ -975,9 +976,7 @@ export function ChecksView({
                   value={s.kind ?? 'ideal'}
                   onChange={e => patch({ kind: e.target.value as SupplyRow['kind'] })}
                 >
-                  <option value="ideal">Ideal source</option>
-                  <option value="bench">Bench supply</option>
-                  <option value="usb">USB port</option>
+                  {SUPPLY_KINDS.map(kind => <option key={kind} value={kind}>{labelFor(kind)}</option>)}
                 </select>
                 {s.kind === 'usb' ? (
                   <select
@@ -986,7 +985,7 @@ export function ChecksView({
                     value={s.usb ?? USB_PROFILES[1]}
                     onChange={e => patch({ usb: e.target.value })}
                   >
-                    {USB_PROFILES.map(p => <option key={p} value={p}>{p}</option>)}
+                    {USB_PROFILES.map(p => <option key={p} value={p}>{labelFor(p)}</option>)}
                   </select>
                 ) : (
                   <Field label="volts" suffix="V" testId="supply-volts" value={s.volts} width={70} onChange={volts => patch({ volts })} />

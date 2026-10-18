@@ -190,10 +190,11 @@ impl Term {
                 "Results that need the rest are not evidence; extend the model to cover them.",
             ),
             Self::ScopeUnspecified => (
-                "Scope not stated",
-                "The part simulates, but its model does not say which behaviours it covers, so \
+                "Coverage not listed",
+                "The part simulates, but its model does not list which behaviours it covers, so \
                  Hauksbee cannot tell which results it vouches for.",
-                "List what the model covers in its card.",
+                "Add the behaviours the model covers to its coverage list (open it in the model \
+                 editor), so the results it supports can count.",
             ),
             Self::ReportOnlyExit => (
                 "Report only",
@@ -269,6 +270,17 @@ mod tests {
         let json = serde_json::to_value(g[0]).unwrap();
         assert_eq!(json["term"], "invalid");
         assert_eq!(json["label"], "PARTLY JUDGED / INCONCLUSIVE");
+    }
+
+    /// The coverage stage a model reaches when it simulates but lists nothing
+    /// it covers reads as plain words, not as the jargon "scope".
+    #[test]
+    fn the_unlisted_coverage_term_says_what_to_do_in_plain_words() {
+        let e = Term::ScopeUnspecified.entry();
+        assert_eq!(e.label, "Coverage not listed");
+        assert!(!e.label.to_lowercase().contains("scope"), "{:?}", e.label);
+        assert!(e.short.contains("does not list which behaviours it covers"));
+        assert!(e.what_to_do.contains("coverage list"), "{:?}", e.what_to_do);
     }
 
     /// The `invalid` term is the refusal a run states as a verdict, so its

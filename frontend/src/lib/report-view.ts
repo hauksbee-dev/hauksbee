@@ -150,7 +150,7 @@ export function summarizeErrorBudget(budget: ErrorBudget): string[] {
       : 'Residual: unmeasured by this solver path',
   ]
   const methods = [...new Set((budget.methods ?? []).map(entry => entry.method))]
-  if (methods.length > 0) rows.push(`Methods: ${methods.join(', ')}`)
+  if (methods.length > 0) rows.push(`Methods: ${methods.map(labelFor).join(', ')}`)
   if (budget.failed_windows?.length) rows.push(`Invalid result spans: ${budget.failed_windows.map(span).join(', ')}`)
   if (budget.event_time_error_s !== undefined) {
     rows.push(`Event timing error: ≤${ms(budget.event_time_error_s)} ms (chunk quantization)`)
@@ -177,7 +177,7 @@ export function fallbackWindowLine(window: WebFallbackWindow): string {
   const jump = window.state_jump_v == null
     ? ''
     : `; carried state discarded, ${window.state_jump_v.toFixed(3)} V jump at the window start`
-  return `${ms(window.start_s)}-${ms(window.end_s)} ms: ${window.method}; ${estimate}${jump}; ${window.fidelity_note}.`
+  return `${ms(window.start_s)}-${ms(window.end_s)} ms: ${labelFor(window.method)}; ${estimate}${jump}; ${window.fidelity_note}.`
 }
 
 /** The timing refusals the refusal contract does not already carry: the

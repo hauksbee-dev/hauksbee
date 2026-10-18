@@ -1913,7 +1913,7 @@
       "description": "One glossary row: a term's display label, what it means, and what to do.",
       "properties": {
         "label": {
-          "description": "How the term is displayed, e.g. `INVALID`.",
+          "description": "How the term is displayed, e.g. `Open part`.",
           "type": "string"
         },
         "short": {

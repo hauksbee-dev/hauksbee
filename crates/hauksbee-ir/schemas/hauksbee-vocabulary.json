@@ -296,7 +296,7 @@
     },
     {
       "term": "invalid",
-      "label": "INVALID",
+      "label": "PARTLY JUDGED / INCONCLUSIVE",
       "short": "Hauksbee refused to give this a pass or fail, because something it rests on was not simulated (an open part, an unpowered regulator, firmware that never ran). It is not a failure of your board.",
       "what_to_do": "Close the named gap and rerun."
     },
@@ -398,9 +398,9 @@
     },
     {
       "term": "scope_unspecified",
-      "label": "Scope not stated",
-      "short": "The part simulates, but its model does not say which behaviours it covers, so Hauksbee cannot tell which results it vouches for.",
-      "what_to_do": "List what the model covers in its card."
+      "label": "Coverage not listed",
+      "short": "The part simulates, but its model does not list which behaviours it covers, so Hauksbee cannot tell which results it vouches for.",
+      "what_to_do": "Add the behaviours the model covers to its coverage list (open it in the model editor), so the results it supports can count."
     },
     {
       "term": "report_only_exit",
@@ -870,8 +870,8 @@
       {
         "id": "executable_scope_unspecified",
         "group": "coverage_stage",
-        "label": "Scope not stated",
-        "explain": "The part simulates, but its model does not say which behaviours it covers, so Hauksbee cannot tell which results it vouches for."
+        "label": "Coverage not listed",
+        "explain": "The part simulates, but its model does not list which behaviours it covers, so Hauksbee cannot tell which results it vouches for."
       },
       {
         "id": "executable_partial",
@@ -1178,6 +1178,143 @@
         "explain": "A battery cell balancer."
       },
       {
+        "id": "trap",
+        "group": "solver_method",
+        "label": "Trapezoidal",
+        "explain": "The default: accurate for almost every board."
+      },
+      {
+        "id": "trapezoidal",
+        "group": "solver_method",
+        "label": "Trapezoidal",
+        "explain": "The default: accurate for almost every board."
+      },
+      {
+        "id": "gear2",
+        "group": "solver_method",
+        "label": "Gear 2",
+        "explain": "Damps numerical ringing, so a switching circuit that rings only in the simulation settles."
+      },
+      {
+        "id": "backward-euler",
+        "group": "solver_method",
+        "label": "Backward Euler",
+        "explain": "A heavily damped fallback step, used where the default step would not converge."
+      },
+      {
+        "id": "reduced-step",
+        "group": "solver_method",
+        "label": "Smaller steps",
+        "explain": "The default method re-run with smaller time steps where the run was struggling."
+      },
+      {
+        "id": "cold-start-backward-euler",
+        "group": "solver_method",
+        "label": "Restarted from rest (Backward Euler)",
+        "explain": "The window was restarted from a settled state, so state carried in from before it was discarded."
+      },
+      {
+        "id": "subdivided-backward-euler",
+        "group": "solver_method",
+        "label": "Subdivided steps (Backward Euler)",
+        "explain": "The window was split into many small steps of the damped fallback method."
+      },
+      {
+        "id": "ideal",
+        "group": "supply_kind",
+        "label": "Ideal source",
+        "explain": "A perfect voltage source: the rail holds its level whatever the board pulls."
+      },
+      {
+        "id": "bench",
+        "group": "supply_kind",
+        "label": "Bench supply",
+        "explain": "A constant voltage that folds back when the board pulls more than its current limit."
+      },
+      {
+        "id": "wall",
+        "group": "supply_kind",
+        "label": "Wall adapter",
+        "explain": "A nominal voltage behind some output resistance, with ripple."
+      },
+      {
+        "id": "usb",
+        "group": "supply_kind",
+        "label": "USB port",
+        "explain": "A USB source that sags under load and cuts out at the port's current limit."
+      },
+      {
+        "id": "battery",
+        "group": "supply_kind",
+        "label": "Battery",
+        "explain": "A battery pack that drains as the board draws from it."
+      },
+      {
+        "id": "5v0.5a",
+        "group": "usb_profile",
+        "label": "5 V, 0.5 A"
+      },
+      {
+        "id": "5v1.5a",
+        "group": "usb_profile",
+        "label": "5 V, 1.5 A"
+      },
+      {
+        "id": "5v3a",
+        "group": "usb_profile",
+        "label": "5 V, 3 A"
+      },
+      {
+        "id": "v5_0_5a",
+        "group": "usb_profile",
+        "label": "5 V, 0.5 A"
+      },
+      {
+        "id": "v5_1_5a",
+        "group": "usb_profile",
+        "label": "5 V, 1.5 A"
+      },
+      {
+        "id": "v5_3a",
+        "group": "usb_profile",
+        "label": "5 V, 3 A"
+      },
+      {
+        "id": "li_ion",
+        "group": "battery_chemistry",
+        "label": "Li-ion"
+      },
+      {
+        "id": "li-ion",
+        "group": "battery_chemistry",
+        "label": "Li-ion"
+      },
+      {
+        "id": "alkaline",
+        "group": "battery_chemistry",
+        "label": "Alkaline"
+      },
+      {
+        "id": "ni_mh",
+        "group": "battery_chemistry",
+        "label": "NiMH"
+      },
+      {
+        "id": "nimh",
+        "group": "battery_chemistry",
+        "label": "NiMH"
+      },
+      {
+        "id": "li_fe_po4",
+        "group": "battery_chemistry",
+        "label": "LiFePO4"
+      },
+      {
+        "id": "lifepo4",
+        "group": "battery_chemistry",
+        "label": "LiFePO4"
+      },
+      {
         "id": "exact",
         "group": "match_confidence",
         "label": "Exact match",
@@ -1342,7 +1479,7 @@
       {
         "id": "invalid",
         "group": "term",
-        "label": "INVALID",
+        "label": "PARTLY JUDGED / INCONCLUSIVE",
         "explain": "Hauksbee refused to give this a pass or fail, because something it rests on was not simulated (an open part, an unpowered regulator, firmware that never ran). It is not a failure of your board."
       },
       {
@@ -1432,8 +1569,8 @@
       {
         "id": "scope_unspecified",
         "group": "term",
-        "label": "Scope not stated",
-        "explain": "The part simulates, but its model does not say which behaviours it covers, so Hauksbee cannot tell which results it vouches for."
+        "label": "Coverage not listed",
+        "explain": "The part simulates, but its model does not list which behaviours it covers, so Hauksbee cannot tell which results it vouches for."
       },
       {
         "id": "report_only_exit",

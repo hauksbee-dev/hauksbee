@@ -2,6 +2,7 @@ import { parse as parseToml } from 'smol-toml'
 import type { ChemistryWire, PowerSupplyWire, UsbSpecWire } from '../../types/protocol'
 import type { WebReport } from '../../types/report'
 import { machineFindings } from '../../lib/result-links'
+import { labelFor } from '../../lib/labels'
 
 // What Live Sim takes over from the analysis on screen, so it continues that
 // analysis instead of starting cold: the checks spec's supplies and duration,
@@ -115,15 +116,17 @@ export function seedFrom(report: WebReport | null | undefined, specToml: string 
   }
 }
 
-/** A supply in a few words: "bench 5 V, 2 A limit". */
+/** A supply in a few words: "Bench supply, 5 V, 2 A limit". The kind, USB
+ *  profile and chemistry words come from the label table, so the spec's
+ *  spellings (`bench`, `v5_1_5a`, `li_ion`) never reach a reader. */
 export function supplyLabel(w: PowerSupplyWire | undefined): string {
   if (!w) return 'not set'
   switch (w.kind) {
-    case 'ideal': return `ideal ${w.volts} V`
-    case 'bench': return `bench ${w.volts} V, ${w.current_limit_a} A limit`
-    case 'wall': return `wall ${w.volts} V, ${w.ripple_vpp} Vpp ripple`
-    case 'usb': return `USB ${w.spec.replace(/^v5_/, '5 V ').replace('_', '.').replace(/a$/, ' A')}`
-    case 'battery': return `battery ${w.cells}x ${w.chemistry}, ${w.capacity_mah} mAh`
+    case 'ideal': return `${labelFor(w.kind)}, ${w.volts} V`
+    case 'bench': return `${labelFor(w.kind)}, ${w.volts} V, ${w.current_limit_a} A limit`
+    case 'wall': return `${labelFor(w.kind)}, ${w.volts} V, ${w.ripple_vpp} Vpp ripple`
+    case 'usb': return `${labelFor(w.kind)}, ${labelFor(w.spec)}`
+    case 'battery': return `${labelFor(w.kind)}, ${w.cells}x ${labelFor(w.chemistry)}, ${w.capacity_mah} mAh`
   }
 }
 

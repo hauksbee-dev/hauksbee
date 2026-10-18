@@ -19,6 +19,9 @@ export interface SupplyRow {
 
 export const USB_PROFILES = ['5v0.5a', '5v1.5a', '5v3a']
 
+/** The source kinds a checks spec can declare; `labelFor` has the words for each. */
+export const SUPPLY_KINDS = ['ideal', 'bench', 'usb'] as const
+
 /** Builder rows for the supplies `hauksbee-ci init` declares. */
 export function scaffoldRows(supplies: ScaffoldSupply[]): SupplyRow[] {
   return supplies.map(s => ({

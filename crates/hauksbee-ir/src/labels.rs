@@ -62,6 +62,14 @@ pub const GROUP_TERM: &str = "term";
 pub const GROUP_BACKEND: &str = "backend";
 /// The `group` of a model kind (what a part was bound as).
 pub const GROUP_MODEL_KIND: &str = "model_kind";
+/// The `group` of a solver integration method (`trap`, `gear2`, ...).
+pub const GROUP_SOLVER_METHOD: &str = "solver_method";
+/// The `group` of a power supply kind (`bench`, `usb`, ...).
+pub const GROUP_SUPPLY_KIND: &str = "supply_kind";
+/// The `group` of a USB supply profile (`5v1.5a`).
+pub const GROUP_USB_PROFILE: &str = "usb_profile";
+/// The `group` of a battery chemistry.
+pub const GROUP_BATTERY_CHEMISTRY: &str = "battery_chemistry";
 
 /// One row: an id, its short label and, optionally, a one-line explanation
 /// for a tooltip.
@@ -401,6 +409,52 @@ const MATCH_CONFIDENCE: &[(MatchConfidence, &str, &str)] = &[
     ),
 ];
 
+/// Solver integration methods. The wire names the app sends (`trap`, `gear2`)
+/// and the names the solver reports for each window of a run
+/// (`IntegrationMethod`, kebab-case) are both listed, so neither reaches a
+/// reader raw. `(id, label, one-line explanation)`.
+const SOLVER_METHODS: &[(&str, &str, &str)] = &[
+    ("trap", "Trapezoidal", "The default: accurate for almost every board."),
+    ("trapezoidal", "Trapezoidal", "The default: accurate for almost every board."),
+    ("gear2", "Gear 2", "Damps numerical ringing, so a switching circuit that rings only in the simulation settles."),
+    ("backward-euler", "Backward Euler", "A heavily damped fallback step, used where the default step would not converge."),
+    ("reduced-step", "Smaller steps", "The default method re-run with smaller time steps where the run was struggling."),
+    ("cold-start-backward-euler", "Restarted from rest (Backward Euler)", "The window was restarted from a settled state, so state carried in from before it was discarded."),
+    ("subdivided-backward-euler", "Subdivided steps (Backward Euler)", "The window was split into many small steps of the damped fallback method."),
+];
+
+/// Power supply kinds, as the checks spec and the live supply panel spell
+/// them. `(id, label, one-line explanation)`.
+const SUPPLY_KINDS: &[(&str, &str, &str)] = &[
+    ("ideal", "Ideal source", "A perfect voltage source: the rail holds its level whatever the board pulls."),
+    ("bench", "Bench supply", "A constant voltage that folds back when the board pulls more than its current limit."),
+    ("wall", "Wall adapter", "A nominal voltage behind some output resistance, with ripple."),
+    ("usb", "USB port", "A USB source that sags under load and cuts out at the port's current limit."),
+    ("battery", "Battery", "A battery pack that drains as the board draws from it."),
+];
+
+/// USB supply profiles, as the spec spells them (`5v1.5a`) and as the wire
+/// mirror does (`v5_1_5a`). `(id, label)`.
+const USB_PROFILES: &[(&str, &str)] = &[
+    ("5v0.5a", "5 V, 0.5 A"),
+    ("5v1.5a", "5 V, 1.5 A"),
+    ("5v3a", "5 V, 3 A"),
+    ("v5_0_5a", "5 V, 0.5 A"),
+    ("v5_1_5a", "5 V, 1.5 A"),
+    ("v5_3a", "5 V, 3 A"),
+];
+
+/// Battery chemistries, as the spec and the wire spell them. `(id, label)`.
+const BATTERY_CHEMISTRIES: &[(&str, &str)] = &[
+    ("li_ion", "Li-ion"),
+    ("li-ion", "Li-ion"),
+    ("alkaline", "Alkaline"),
+    ("ni_mh", "NiMH"),
+    ("nimh", "NiMH"),
+    ("li_fe_po4", "LiFePO4"),
+    ("lifepo4", "LiFePO4"),
+];
+
 /// Emulator backend kinds: the part of `simavr:atmega328p` before the colon.
 const BACKEND_KINDS: &[(&str, &str)] = &[
     ("simavr", "simavr"),
@@ -697,6 +751,18 @@ fn raw_entries() -> Vec<Label> {
             out.push(row(&compact, GROUP_MODEL_KIND, label, Some(explain)));
         }
     }
+    for &(id, label, explain) in SOLVER_METHODS {
+        out.push(row(id, GROUP_SOLVER_METHOD, label, Some(explain)));
+    }
+    for &(id, label, explain) in SUPPLY_KINDS {
+        out.push(row(id, GROUP_SUPPLY_KIND, label, Some(explain)));
+    }
+    for &(id, label) in USB_PROFILES {
+        out.push(row(id, GROUP_USB_PROFILE, label, None));
+    }
+    for &(id, label) in BATTERY_CHEMISTRIES {
+        out.push(row(id, GROUP_BATTERY_CHEMISTRY, label, None));
+    }
     for &(c, label, explain) in MATCH_CONFIDENCE {
         let id = serde_json::to_value(c)
             .ok()
@@ -973,6 +1039,51 @@ mod tests {
             Term::ScopeUnspecified.entry().label
         );
         assert_eq!(label_for("unresolved"), Term::OpenPart.entry().label);
+    }
+
+    /// Solver methods, supply kinds and USB profiles never reach a reader as
+    /// the id the engine or the spec writes.
+    #[test]
+    fn solver_methods_and_supply_kinds_have_plain_words() {
+        for (id, want) in [
+            ("trap", "Trapezoidal"),
+            ("trapezoidal", "Trapezoidal"),
+            ("gear2", "Gear 2"),
+            ("backward-euler", "Backward Euler"),
+            ("reduced-step", "Smaller steps"),
+            ("ideal", "Ideal source"),
+            ("bench", "Bench supply"),
+            ("wall", "Wall adapter"),
+            ("usb", "USB port"),
+            ("battery", "Battery"),
+            ("5v1.5a", "5 V, 1.5 A"),
+            ("v5_0_5a", "5 V, 0.5 A"),
+            ("li_ion", "Li-ion"),
+            ("ni_mh", "NiMH"),
+        ] {
+            assert_eq!(label_for(id), want, "{id}");
+        }
+        // Every method the solver can report has a row of its own, so the
+        // fallback humaniser never has to guess.
+        for method in [
+            "trapezoidal",
+            "gear2",
+            "backward-euler",
+            "reduced-step",
+            "cold-start-backward-euler",
+            "subdivided-backward-euler",
+        ] {
+            let row = entries().into_iter().find(|e| e.id == method);
+            assert_eq!(row.map(|e| e.group), Some(GROUP_SOLVER_METHOD), "{method}");
+        }
+        for id in ["trap", "gear2", "bench", "usb"] {
+            assert!(explain_for(id).is_some(), "{id} has no tooltip");
+        }
+        // The rows do not shadow an id another group already owns.
+        let dropped = dropped_duplicates();
+        for id in ["trap", "ideal", "bench", "wall", "usb", "battery"] {
+            assert!(!dropped.iter().any(|d| d == id), "{id} is already taken");
+        }
     }
 
     #[test]
