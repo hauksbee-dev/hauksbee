@@ -159,6 +159,7 @@ export function SpecPane({
         preparing={preparing} progress={progress} onCancel={onCancel}
         validationCount={validationCount} reportSerious={reportSerious}
         detailsOpen={detailsOpen} onToggleDetails={() => setDetailsOpen(open => !open)} onJump={onJump}
+        specFileName={specFileName}
       />
 
       {/* Every counted result is visible here: the ones no row owns get a card. */}
@@ -170,7 +171,7 @@ export function SpecPane({
         <div data-testid="run-details" className="hb-card view-enter mt-2 px-3 pb-3">
           <RunResults
             result={result} runKey={runKey} stale={stale} rawMode={showAllResults} reportSerious={reportSerious}
-            remedyActions={remedyActions} remedyEditor={remedyEditor}
+            remedyActions={remedyActions} remedyEditor={remedyEditor} specFileName={specFileName}
           />
         </div>
       )}

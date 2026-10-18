@@ -1042,6 +1042,27 @@ mod check_run_stopped_tests {
         assert!(said.starts_with("The check run was stopped after 90 seconds because"));
         assert!(said.contains("hauksbee-ci run"));
     }
+
+    /// The page swaps the spec placeholder for the downloaded file's name. The
+    /// placeholder lives here (the engine's words) and in the page's
+    /// `SPEC_FILE_PLACEHOLDER`; this holds the two equal.
+    #[test]
+    fn the_page_replaces_the_same_spec_placeholder_the_terminal_command_names() {
+        assert!(
+            CHECK_RUN_CLI_COMMAND.ends_with("<spec.toml>"),
+            "{CHECK_RUN_CLI_COMMAND}"
+        );
+        assert!(CHECK_RUN_STOPPED_NEXT_STEP.contains("<spec.toml>"));
+        let page = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../frontend/src/lib/ci-workflow.ts"
+        ))
+        .expect("the page's ci-workflow.ts is readable from the crate");
+        assert!(
+            page.contains("'<spec.toml>'"),
+            "frontend/src/lib/ci-workflow.ts must define SPEC_FILE_PLACEHOLDER as '<spec.toml>'"
+        );
+    }
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@ import type { RunResponse } from '../../types/report'
 import type { LoadProgress } from '../../lib/api'
 import { LoadBar } from '../LoadBar'
 import { overallVerdict, type Overall } from '../../lib/report-view'
+import { namedSpecIn } from '../../lib/ci-workflow'
 
 // The one-line state of the last run, above whichever surface is active. It says
 // the verdict and how many checks landed where; each count jumps to the first
@@ -33,9 +34,11 @@ const COUNT_WORDS: Record<RunStatus, string> = {
 }
 
 export function RunStrip({
-  result, stale, running, preparing, progress, onCancel, canRun, validationCount, reportSerious, detailsOpen, onToggleDetails, onJump,
+  result, stale, running, preparing, progress, onCancel, canRun, validationCount, reportSerious, detailsOpen, onToggleDetails, onJump, specFileName,
 }: {
   result: RunResponse | null
+  /** The spec file the page downloads; named in an engine message's placeholder. */
+  specFileName: string
   stale: boolean
   running: boolean
   /** The starter supplies are still being worked out: a run waits for them. */
@@ -69,7 +72,7 @@ export function RunStrip({
   else if (preparing) line = 'Preparing the checks for this board…'
   else if (result && result.ok === false) {
     tone = TONE.failed
-    line = result.error
+    line = namedSpecIn(result.error, specFileName)
   } else if (overall) {
     tone = TONE[uncovered ? 'invalid' : overall]
     line = uncovered
