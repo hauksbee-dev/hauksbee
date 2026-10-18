@@ -153,6 +153,26 @@ fn every_mcu_capability_id_has_a_row() {
     );
 }
 
+/// Every generic MOSFET stand-in the card file declares (the family and its
+/// corners) has a row: the binder names them in sentences about assumed
+/// corners, and a reader never sees the raw id.
+#[test]
+fn every_generic_mosfet_model_has_a_row() {
+    let ids: BTreeSet<String> = read("crates/hauksbee-models/db/mosfet.toml")
+        .lines()
+        .filter_map(|l| l.strip_prefix("id = \""))
+        .filter_map(|l| l.strip_suffix('"'))
+        .filter(|id| id.starts_with("generic_") && id.contains("mos_") && !id.ends_with("_pkg"))
+        .map(str::to_string)
+        .collect();
+    assert!(ids.len() >= 12, "found only {} generic MOSFET ids", ids.len());
+    let missing: Vec<&String> = ids
+        .iter()
+        .filter(|id| entries().iter().all(|e| &e.id != *id))
+        .collect();
+    assert!(missing.is_empty(), "generic MOSFET ids in db/mosfet.toml with no row: {missing:?}");
+}
+
 /// No row describes a capability no card declares (a renamed id must not leave
 /// its words behind), and the cards declare no id that humanises badly.
 #[test]

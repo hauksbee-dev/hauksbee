@@ -11,6 +11,7 @@
 
 import type { CheckReportFinding, CheckReportJson, WebReport } from '../types/report'
 import { entitiesIn, vocabulary } from './result-links'
+import { boardNames, withLabels } from './plain-ids'
 import { plural, reportView, unjudgedGroups, unmodelledSentence } from './report-view'
 
 export const REBUILT_NOTE =
@@ -113,16 +114,20 @@ export function reportMarkdown({ report: r, boardLabel, firmwareName, engineVers
   const v = reportView(r)
   const board = boardLabel ?? r.file_name
   const tag = verdictTag(r)
+  const keep = boardNames(r)
+  // Engine prose, with any engine id inside it said in words (the Markdown has
+  // no tooltip to keep the id in), then escaped.
+  const say = (s: string) => md(withLabels(s, keep))
   const lines: string[] = []
   lines.push(`## Hauksbee board result: ${md(v.title)}`, '')
-  lines.push(`**VERDICT: ${tag}** (\`${r.verdict ?? 'unknown'}\`) · ${plural(r.serious, 'serious finding')} · ${plural(r.total, 'finding')} in all`, '')
-  lines.push(`> ${md(v.headline)}`, '')
-  if (r.verdict_reason) lines.push(`**Reason:** ${md(r.verdict_reason)}`, '')
+  lines.push(`**VERDICT: ${tag}** · ${plural(r.serious, 'serious finding')} · ${plural(r.total, 'finding')} in all`, '')
+  lines.push(`> ${say(v.headline)}`, '')
+  if (r.verdict_reason) lines.push(`**Reason:** ${say(r.verdict_reason)}`, '')
   const scope = v.partlyJudged
   if (scope) {
     lines.push('### Judged scope (not a pass: partly judged)', '')
     if (scope.total > 0) lines.push(`- Judged: ${scope.judged} of ${scope.total} net checks`)
-    if (v.unmodelled.all.length) lines.push(`- ${md(unmodelledSentence(v.unmodelled))}.`)
+    if (v.unmodelled.all.length) lines.push(`- ${say(unmodelledSentence(v.unmodelled))}.`)
     const unjudged = unjudgedGroups(scope)
     const unjudgedCount = unjudged.reduce((n, g) => n + g.nets.length, 0)
     if (unjudgedCount) {
@@ -134,7 +139,7 @@ export function reportMarkdown({ report: r, boardLabel, firmwareName, engineVers
   }
   if (v.conditions.length) {
     lines.push(v.conditions.length === 1 ? '### Condition this pass rests on' : '### Conditions this pass rests on', '')
-    for (const c of v.conditions) lines.push(`- ${md(c)}`)
+    for (const c of v.conditions) lines.push(`- ${say(c)}`)
     lines.push('')
   }
   const findings = v.sections.flatMap(s => s.groups.flatMap(g => g.items.map(item => ({ section: s.title, level: g.level, what: item.what, fix: g.fix }))))
@@ -146,7 +151,7 @@ export function reportMarkdown({ report: r, boardLabel, firmwareName, engineVers
     lines.push('| Severity | Where | What | Fix |', '| --- | --- | --- | --- |')
     for (const f of findings) {
       const section = f.section.replace(/\s*\(.*\)$/, '')
-      lines.push(`| ${f.level} | ${md(section)} | ${md(f.what)} | ${md(f.fix || '')} |`)
+      lines.push(`| ${f.level} | ${md(section)} | ${say(f.what)} | ${say(f.fix || '')} |`)
     }
   }
   lines.push('')

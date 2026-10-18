@@ -12,7 +12,7 @@ import { ShellChips } from '../src/components/ShellChips'
 import { PartlyJudged, VerdictConditions } from '../src/components/report/VerdictConditions'
 import { buildReportHtml } from '../src/lib/report-export'
 import { boardVerdict } from '../src/lib/status-vocab'
-import { labelFor } from '../src/lib/labels'
+import { explainFor, labelFor } from '../src/lib/labels'
 import { ResultPanel } from '../src/components/report/ResultPanel'
 import { explainReport, reportView, unjudgedGroups } from '../src/lib/report-view'
 import type { WebReport } from '../src/types/report'
@@ -37,7 +37,8 @@ const chipNames = (html: string) => [...html.matchAll(/data-testid="result-link"
 const CONDITION = 'Q1 passes across assumed corners (generic_pmos_sot_corner_high_vth, generic_pmos_sot_corner_low_vth); put the MPN on Q1 to remove this assumption.'
 
 /** The sentence as the card shows it: the engine's model ids read as their
- *  labels (labels.ts), each id kept in its tooltip. */
+ *  labels (labels.ts), each with its explanation in the tooltip. The report
+ *  exports say the same words, with no tooltip. */
 const textOf = (html: string) => html.replace(/<[^>]+>/g, '')
 const CORNERS = ['generic_pmos_sot_corner_high_vth', 'generic_pmos_sot_corner_low_vth']
 const SHOWN = CORNERS.reduce((s, id) => s.replace(id, labelFor(id)), CONDITION)
@@ -70,7 +71,10 @@ describe('verdict conditions', () => {
     expect(html).toContain('data-testid="report-verdict-conditions"')
     expect(html.match(/data-testid="report-verdict-condition"/g)).toHaveLength(2)
     expect(textOf(html)).toContain(SHOWN)
-    for (const id of CORNERS) expect(html).toContain(`title="${id}"`)
+    for (const id of CORNERS) {
+      expect(html).toContain(`title="${explainFor(id)}"`)
+      expect(html).not.toContain(id)
+    }
     expect(html).toContain('U2 passes across assumed corners')
     expect(html).toContain('Conditions this pass rests on')
     // Quiet, not a failure: the note accent, never the error palette.
@@ -113,8 +117,10 @@ describe('verdict conditions', () => {
 
   test('the exported report lists the conditions and a clean one lists none', () => {
     const html = buildReportHtml(exportInput(conditional))
-    expect(html).toContain(CONDITION)
-    expect(html.split(CONDITION)).toHaveLength(2)
+    expect(html).toContain(SHOWN)
+    expect(html.split(SHOWN)).toHaveLength(2)
+    // The model ids are said in words; the file never prints the raw id.
+    for (const id of CORNERS) expect(html).not.toContain(id)
     expect(buildReportHtml(exportInput(unconditional))).not.toContain('assumed corners')
   })
 })

@@ -10,6 +10,7 @@
 import { createContext, useContext, useState } from 'react'
 import { explainFor, labelFor } from '../../lib/labels'
 import { linkify } from '../../lib/result-links'
+import { RAW_ID, isLabelledId } from '../../lib/plain-ids'
 import type { ResultEntity, Vocabulary } from '../../lib/result-links'
 
 export interface ResultLinkHandlers {
@@ -125,18 +126,15 @@ export function Linked({ text }: { text: string }) {
   )
 }
 
-/** An engine id in a sentence (a model card, a capability: lower-case words
- *  joined by underscores), never a part or a net name, nor part of a file
- *  name, a path or inline code. */
-const RAW_ID = /(?<![\w./`-])[a-z][a-z0-9]*(?:_[a-z0-9]+)+(?![\w./`-])/g
-
-/** Text with any raw engine id shown as its label from the shared table
- *  (labels.ts), the id itself kept in the tooltip. */
+/** Text with any engine id that has words of its own shown as its label from
+ *  the shared table (labels.ts), the id itself kept in the tooltip. The rule
+ *  for which ids qualify (`isLabelledId`) is the one the report exports use. */
 function Plain({ text }: { text: string }) {
   const out: React.ReactNode[] = []
   let last = 0
   for (const m of text.matchAll(RAW_ID)) {
     const at = m.index ?? 0
+    if (!isLabelledId(m[0])) continue
     if (at > last) out.push(text.slice(last, at))
     out.push(
       <span key={at} data-testid="raw-id" title={explainFor(m[0]) ?? m[0]} style={{ textDecoration: 'underline dotted', textUnderlineOffset: 3 }}>

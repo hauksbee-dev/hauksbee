@@ -32,7 +32,7 @@ use std::sync::OnceLock;
 
 use serde::Serialize;
 
-use crate::evidence::{MatchConfidence, ModelLayer, ModelSourceTier, ModelValidation};
+use crate::evidence::{ArtifactKind, MatchConfidence, ModelLayer, ModelSourceTier, ModelValidation};
 use crate::glossary::Term;
 use crate::vocabulary::{Check, EvidenceGrade, Severity, VerdictState, BLOCKING};
 
@@ -66,6 +66,10 @@ pub const GROUP_MODEL_KIND: &str = "model_kind";
 pub const GROUP_SOLVER_METHOD: &str = "solver_method";
 /// The `group` of a power supply kind (`bench`, `usb`, ...).
 pub const GROUP_SUPPLY_KIND: &str = "supply_kind";
+/// The `group` of a generic fallback model (a class stand-in, not a part).
+pub const GROUP_GENERIC_MODEL: &str = "generic_model";
+/// The `group` of an input file format (`ki_cad_pcb`).
+pub const GROUP_ARTIFACT_KIND: &str = "artifact_kind";
 /// The `group` of a USB supply profile (`5v1.5a`).
 pub const GROUP_USB_PROFILE: &str = "usb_profile";
 /// The `group` of a battery chemistry.
@@ -455,6 +459,77 @@ const BATTERY_CHEMISTRIES: &[(&str, &str)] = &[
     ("lifepo4", "LiFePO4"),
 ];
 
+/// The input formats a report's inventory lists, as the engine writes them
+/// (`ArtifactKind`, `snake_case`). `(kind, label)`.
+const ARTIFACT_KINDS: &[(ArtifactKind, &str)] = &[
+    (ArtifactKind::KiCadPcb, "KiCad board"),
+    (ArtifactKind::KiCadSchematic, "KiCad schematic"),
+    (ArtifactKind::KiCadNetlist, "KiCad netlist"),
+    (ArtifactKind::EagleBoard, "Eagle board"),
+    (ArtifactKind::AltiumPcbDoc, "Altium board"),
+    (ArtifactKind::GerberArchive, "Gerber files"),
+    (ArtifactKind::OdbPlusPlus, "ODB++ archive"),
+    (ArtifactKind::Ipc2581, "IPC-2581 file"),
+    (ArtifactKind::Easyeda, "EasyEDA project"),
+    (ArtifactKind::Ipc356, "IPC-356 netlist"),
+    (ArtifactKind::Bom, "Bill of materials"),
+    (ArtifactKind::Placement, "Placement file"),
+    (ArtifactKind::Elf, "Firmware (ELF)"),
+    (ArtifactKind::IntelHex, "Firmware (Intel HEX)"),
+    (ArtifactKind::Toml, "Settings file"),
+];
+
+/// The generic MOSFET stand-ins the binder uses when a board names only a
+/// transistor class: the family per package class and its two corners.
+/// `(id stem, words)`: the package classes of `db/mosfet.toml`.
+const GENERIC_MOSFET_CLASSES: &[(&str, &str)] = &[
+    ("sot", "small-signal"),
+    ("power", "power"),
+    ("class", "other-package"),
+];
+
+/// `(id letter, words)` for the two channel polarities.
+const GENERIC_MOSFET_CHANNELS: &[(&str, &str)] = &[("n", "N-channel"), ("p", "P-channel")];
+
+/// The label rows for the generic MOSFET family and corner models: the ids a
+/// sentence like "Q1 passes across assumed corners (...)" names, in words.
+fn generic_mosfet_rows() -> Vec<Label> {
+    let mut out = Vec::new();
+    for &(letter, channel) in GENERIC_MOSFET_CHANNELS {
+        for &(class, class_words) in GENERIC_MOSFET_CLASSES {
+            let family = format!("generic_{letter}mos_{class}");
+            let name = format!("Generic {class_words} {channel} MOSFET");
+            let packages = if class == "class" {
+                "a package this library does not recognise"
+            } else {
+                "that package class"
+            };
+            out.push(row(
+                &family,
+                GROUP_GENERIC_MODEL,
+                &name,
+                Some(&format!(
+                    "A stand-in for any {class_words} {channel} MOSFET in {packages}, used when the board names no part number."
+                )),
+            ));
+            for (corner, corner_words, why) in [
+                ("high_vth", "high-threshold", "the weak end: highest threshold, weakest channel"),
+                ("low_vth", "low-threshold", "the strong end: lowest threshold, strongest channel"),
+            ] {
+                out.push(row(
+                    &format!("{family}_corner_{corner}"),
+                    GROUP_GENERIC_MODEL,
+                    &format!("{name} at its {corner_words} corner"),
+                    Some(&format!(
+                        "An assumed corner of the {name}, {why}. Results are checked at both corners because no part number says which is fitted."
+                    )),
+                ));
+            }
+        }
+    }
+    out
+}
+
 /// Emulator backend kinds: the part of `simavr:atmega328p` before the colon.
 const BACKEND_KINDS: &[(&str, &str)] = &[
     ("simavr", "simavr"),
@@ -762,6 +837,14 @@ fn raw_entries() -> Vec<Label> {
     }
     for &(id, label) in BATTERY_CHEMISTRIES {
         out.push(row(id, GROUP_BATTERY_CHEMISTRY, label, None));
+    }
+    out.extend(generic_mosfet_rows());
+    for &(kind, label) in ARTIFACT_KINDS {
+        let id = serde_json::to_value(kind)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        out.push(row(&id, GROUP_ARTIFACT_KIND, label, None));
     }
     for &(c, label, explain) in MATCH_CONFIDENCE {
         let id = serde_json::to_value(c)
@@ -1084,6 +1167,36 @@ mod tests {
         for id in ["trap", "ideal", "bench", "wall", "usb", "battery"] {
             assert!(!dropped.iter().any(|d| d == id), "{id} is already taken");
         }
+    }
+
+    #[test]
+    fn generic_mosfet_models_read_as_what_they_stand_in_for() {
+        assert_eq!(
+            label_for("generic_pmos_sot_corner_high_vth"),
+            "Generic small-signal P-channel MOSFET at its high-threshold corner"
+        );
+        assert_eq!(
+            label_for("generic_nmos_power_corner_low_vth"),
+            "Generic power N-channel MOSFET at its low-threshold corner"
+        );
+        assert_eq!(label_for("generic_nmos_class"), "Generic other-package N-channel MOSFET");
+        // No comma inside a label, so a list of them in a sentence stays a list.
+        for e in entries().iter().filter(|e| e.group == GROUP_GENERIC_MODEL) {
+            assert!(!e.label.contains(','), "{:?}", e.label);
+            assert!(e.explain.is_some(), "{} has no tooltip", e.id);
+        }
+    }
+
+    #[test]
+    fn input_formats_have_plain_words_and_assumption_kinds_use_the_glossary() {
+        assert_eq!(label_for("ki_cad_pcb"), "KiCad board");
+        assert_eq!(label_for("gerber_archive"), "Gerber files");
+        // An assumption kind is a glossary term of the same id, so the table
+        // has one word for it, not two.
+        assert_eq!(label_for("open_part"), Term::OpenPart.entry().label);
+        assert_eq!(label_for("reduced_fidelity"), "Reduced fidelity");
+        assert_eq!(label_for("waived"), "Waived");
+        assert_eq!(label_for("not_checked"), "Not checked");
     }
 
     #[test]

@@ -14,6 +14,8 @@
 // module cannot drift from index.css the way a second copy of the tokens would.
 
 import type { WebReport } from '../types/report'
+import { labelFor } from './labels'
+import { boardNames, withLabels } from './plain-ids'
 import { plural, reportTerms, reportView } from './report-view'
 import type { CosimView, FindingGroup, ReportView, SectionView } from './report-view'
 
@@ -106,6 +108,17 @@ function resolveTokens(): Record<string, string> {
   return out
 }
 
+/** The names this report's board uses (nets, parts, file), which the prose
+ *  helper `say` must never rewrite. Set once per export, synchronously. */
+let boardNameSet: ReadonlySet<string> = new Set()
+
+/** Engine prose for the exported page: an engine id inside a sentence (a stand-in
+ *  model, a coverage stage) reads as its words, as it does in the app, then
+ *  escaped. The file has no tooltip to keep the id in, so the id is not shown. */
+function say(s: unknown): string {
+  return esc(withLabels(String(s ?? ''), boardNameSet))
+}
+
 /** Escape for HTML text and attribute content. Every string that reaches the
  *  exported file goes through this: findings carry net names and datasheet
  *  quotes, a spec carries whatever the user typed, and one unescaped `<` turns
@@ -132,8 +145,8 @@ function card(accent: string, tagColor: string, tag: string, body: string, why?:
   return `<div class="card" style="border-left-color:${accent}">
     <span class="tag" style="color:${tagColor}">${tag}</span>
     ${body}
-    ${why ? `<div class="gloss"><b>Why it matters:</b> ${esc(why)}</div>` : ''}
-    ${fix ? `<div class="gloss"><b>What to do:</b> ${esc(fix)}</div>` : ''}
+    ${why ? `<div class="gloss"><b>Why it matters:</b> ${say(why)}</div>` : ''}
+    ${fix ? `<div class="gloss"><b>What to do:</b> ${say(fix)}</div>` : ''}
   </div>`
 }
 
@@ -148,14 +161,14 @@ function findingCard(g: FindingGroup, listItems: boolean): string {
     n > 1
       ? listItems
         ? `<div class="what">${n} similar findings, same cause, listed once below.</div>
-         <ul>${g.items.map(i => `<li>${esc(i.what)}</li>`).join('')}</ul>`
-        : `<div class="what">${g.items.map(i => esc(i.what)).join('; ')}</div>`
-      : `<div class="what">${esc(g.items[0].what)}</div>`,
+         <ul>${g.items.map(i => `<li>${say(i.what)}</li>`).join('')}</ul>`
+        : `<div class="what">${g.items.map(i => say(i.what)).join('; ')}</div>`
+      : `<div class="what">${say(g.items[0].what)}</div>`,
     g.why, g.fix,
   )
 }
 
-const lines = (rows: string[]) => rows.map(line => `<div>${esc(line)}</div>`).join('')
+const lines = (rows: string[]) => rows.map(line => `<div>${say(line)}</div>`).join('')
 
 /** A horizontally scrollable table, or nothing when there are no rows. */
 function table(headers: string[], rows: string): string {
@@ -177,11 +190,11 @@ function stamp(ms: number | null): string {
 
 function sectionHtml(s: SectionView): string {
   const headsUp = s.headsUp.map(h => card(
-    'var(--copper)', 'var(--copper)', 'Heads up', `<div class="what">${esc(h.what)}</div>`, h.why, h.fix,
+    'var(--copper)', 'var(--copper)', 'Heads up', `<div class="what">${say(h.what)}</div>`, h.why, h.fix,
   )).join('')
   return `<section>
     <h2>${esc(s.title)}</h2>
-    <p class="verdict-line">${esc(s.verdict)}</p>
+    <p class="verdict-line">${say(s.verdict)}</p>
     ${s.groups.map(g => findingCard(g, true)).join('')}${headsUp}
   </section>`
 }
@@ -196,10 +209,10 @@ function bindHtml(report: WebReport, unresolved: string[]): string {
   const rows = parts.map(p => `<tr>
       <td class="mono nw">${esc(p.reference)}</td>
       <td class="mono col-val">${esc(p.value)}</td>
-      <td class="col-text">${esc(p.reason)}</td>
+      <td class="col-text">${say(p.reason)}</td>
       <td class="nw">${p.active_ic ? 'active IC' : 'passive'}</td>
       <td class="nw">${p.bound ? 'bound, left open' : 'no model'}</td>
-      <td class="col-text">${esc(p.consequence)}</td>
+      <td class="col-text">${say(p.consequence)}</td>
     </tr>`).join('')
   return `<section>
     <h2>Model binding</h2>
@@ -219,24 +232,29 @@ function bindHtml(report: WebReport, unresolved: string[]): string {
  * every non-clean assertion, and the canonical four-sentence assumption chain. */
 function evidenceHtml({ has, maps, summary, caveated, assumptions, inventory }: ReportView['evidence']): string {
   if (!has) return ''
+  // An assertion rests on assumptions by id; the page says each one in words.
+  const statementOf = new Map(assumptions.map(a => [a.id, a.statement]))
+  const restsOn = (ids: readonly string[] | undefined) => (ids ?? []).length === 0
+    ? 'none'
+    : `<ul>${(ids ?? []).map(id => `<li>${say(statementOf.get(id) ?? labelFor(id.split(':')[0].replace(/-/g, '_')))}</li>`).join('')}</ul>`
   const rows = caveated.map(map => `<tr>
-      <td>${esc(map.assertion)}</td>
-      <td class="mono">${esc(map.status)}</td>
-      <td class="mono">${esc((map.assumptions ?? []).join(', ') || 'none')}</td>
+      <td>${say(map.assertion)}</td>
+      <td>${esc(labelFor(map.status))}</td>
+      <td>${restsOn(map.assumptions)}</td>
     </tr>`).join('')
   const cards = assumptions.map(assumption => `<div class="card" style="border-left-color:${
     assumption.kind === 'open_part' || assumption.kind === 'operating_limit_violated' ? 'var(--warn)' : 'var(--note-accent)'
   }">
-      <span class="tag mono" style="color:var(--warn-strong)">${esc(assumption.id)}</span>
-      <div class="what">${esc(assumption.statement)}</div>
-      <div class="gloss"><b>Why:</b> ${esc(assumption.because)}</div>
-      <div class="gloss"><b>Effect:</b> ${esc(assumption.consequence)}</div>
-      <div class="gloss"><b>What closes it:</b> ${esc(assumption.replacement)}</div>
+      <span class="tag" style="color:var(--warn-strong)">${esc(labelFor(assumption.kind))}</span>
+      <div class="what">${say(assumption.statement)}</div>
+      <div class="gloss"><b>Why:</b> ${say(assumption.because)}</div>
+      <div class="gloss"><b>Effect:</b> ${say(assumption.consequence)}</div>
+      <div class="gloss"><b>What closes it:</b> ${say(assumption.replacement)}</div>
     </div>`).join('')
 
   const artifacts = inventory.map(artifact => `<tr>
       <td>${esc(artifact.path)}</td>
-      <td class="mono">${esc(artifact.kind)}</td>
+      <td>${esc(labelFor(artifact.kind))}</td>
       <td class="mono">${esc(artifact.sha256 ? `sha256:${artifact.sha256}` : 'digest unavailable')}</td>
     </tr>`).join('')
 
@@ -263,7 +281,7 @@ function importDiagnosticsHtml(report: WebReport): string {
       <h2>Import stopped at ${esc(failure.stage)}</h2>
       ${failure.excerpt ? `<pre>${esc(failure.excerpt)}</pre>` : ''}
       <div class="card" style="border-left-color:var(--warn)">
-        <div class="gloss"><b>Suggested fix:</b> ${esc(failure.suggested_fix)}</div>
+        <div class="gloss"><b>Suggested fix:</b> ${say(failure.suggested_fix)}</div>
       </div>
     </section>`
   }
@@ -273,15 +291,15 @@ function importDiagnosticsHtml(report: WebReport): string {
   const issues = diagnostics.issues ?? []
   const issueCards = issues.map(issue => card(
     'var(--warn)', 'var(--warn-strong)', esc(issue.title),
-    `<div class="what">${esc(issue.explanation)}</div>
-     <div class="gloss"><b>What fixes it:</b> ${esc(issue.suggested_fix)}</div>
+    `<div class="what">${say(issue.explanation)}</div>
+     <div class="gloss"><b>What fixes it:</b> ${say(issue.suggested_fix)}</div>
      ${issue.net ? `<div class="gloss"><b>Named net:</b> <span class="mono">${esc(issue.net)}</span></div>` : ''}`,
   )).join('')
   const objects = diagnostics.objects.map(object => `<tr>
       <td class="mono">${esc(object.id)}</td>
       <td>${esc(object.status)}</td>
       <td>${esc(object.confidence)}</td>
-      <td>${esc(object.explanation)}</td>
+      <td>${say(object.explanation)}</td>
       <td>${object.x !== undefined && object.y !== undefined
         ? `<span class="mono">${esc(object.x)}, ${esc(object.y)} mm</span>`
         : 'not placeable; no coordinate was supplied'}</td>
@@ -337,7 +355,7 @@ function glossaryHtml(report: WebReport, terms: string[]): string {
     <h2>Glossary</h2>
     ${rows.map(row => `<div class="card" id="term-${esc(row.term)}">
       <span class="tag" style="color:var(--copper)">${esc(row.label)}</span>
-      <div>${esc(row.short)} <b>What to do:</b> ${esc(row.what_to_do)}</div>
+      <div>${say(row.short)} <b>What to do:</b> ${say(row.what_to_do)}</div>
     </div>`).join('\n    ')}
   </section>`
 }
@@ -359,6 +377,7 @@ function refusalHtml(rows: [string, string][] | null): string {
  *  styles are inline, there is no script, and no image is referenced. */
 export function buildReportHtml(input: ReportExportInput): string {
   const { report: r, spec, checks } = input
+  boardNameSet = boardNames(r)
   const v = reportView(r)
   const t = resolveTokens()
   const light = (t.canvas || '').toLowerCase().startsWith('#f')
@@ -503,9 +522,9 @@ footer code{font-family:var(--font-mono)}
   <p class="wordmark">HAUKSBEE</p>
   <h1>${esc(v.title)}</h1>
   <div class="verdict">
-    ${esc(v.headline)}
-    ${v.reason ? `<div class="counts">${esc(v.reason)}</div>` : ''}
-    ${v.conditions.map(c => `<div class="counts">${esc(c)}</div>`).join('')}
+    ${say(v.headline)}
+    ${v.reason ? `<div class="counts">${say(v.reason)}</div>` : ''}
+    ${v.conditions.map(c => `<div class="counts">${say(c)}</div>`).join('')}
     <div class="counts">
       ${r.serious} serious &middot; ${plural(r.total, 'finding')} total
       ${checksLine ? `&middot; checks: ${esc(checksLine)}` : ''}
@@ -518,7 +537,7 @@ footer code{font-family:var(--font-mono)}
 
 ${refusalHtml(v.refusalRows)}
 
-${v.notes.map(n => `<div class="note-row"><b>Note:</b> ${esc(n.message)}</div>`).join('\n')}
+${v.notes.map(n => `<div class="note-row"><b>Note:</b> ${say(n.message)}</div>`).join('\n')}
 
 ${bindHtml(r, v.unresolved)}
 
