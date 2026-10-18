@@ -87,6 +87,27 @@ pub fn fitted_from_dnp_policy(c: &crate::Component) -> bool {
     c.properties.iter().any(|(key, _)| key == DNP_FITTED_KEY)
 }
 
+/// The phrase every "schematic says DNP, layout does not" note carries, so a
+/// consumer can recognise the note without parsing the references.
+pub const SCHEMATIC_ONLY_DNP_MARKER: &str = "DNP in the schematic but fitted on the PCB";
+
+/// The note for parts the sibling schematic marks DNP while their layout
+/// footprint does not: treated as not fitted, with the fix. `None` for an empty
+/// list. One note names every such part.
+#[must_use]
+pub fn schematic_only_dnp_note(references: &[String]) -> Option<String> {
+    let (first, rest) = references.split_first()?;
+    let (subject, verb) = if rest.is_empty() {
+        (first.clone(), "is")
+    } else {
+        (references.join(", "), "are")
+    };
+    Some(format!(
+        "{subject} {verb} {SCHEMATIC_ONLY_DNP_MARKER}; treated as not fitted. \
+         Update PCB from schematic to sync"
+    ))
+}
+
 /// Property key set by the KiCad readers on a part the source excludes from the
 /// BOM (`(in_bom no)` / `(attr exclude_from_bom)`).
 pub const EXCLUDED_FROM_BOM_KEY: &str = "hauksbee.excluded_from_bom";

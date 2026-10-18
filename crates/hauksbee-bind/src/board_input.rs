@@ -835,8 +835,13 @@ fn from_path_in_file_order(path: &Path) -> Result<NormalizedBoard, BoardInputErr
             },
         )
     })?;
+    let mut notes = Vec::new();
     match ext_lower.as_str() {
-        "kicad_pcb" => board.adopt_schematic_pin_names(&path.with_extension("kicad_sch")),
+        "kicad_pcb" => {
+            let sch = path.with_extension("kicad_sch");
+            board.adopt_schematic_pin_names(&sch);
+            notes.extend(board.adopt_schematic_dnp(&sch));
+        }
         "brd" => board.adopt_schematic_pin_names(&path.with_extension("sch")),
         _ => {}
     }
@@ -846,7 +851,7 @@ fn from_path_in_file_order(path: &Path) -> Result<NormalizedBoard, BoardInputErr
         Some(text),
         raw,
         InputKind::Text,
-        Vec::new(),
+        notes,
     ))
 }
 

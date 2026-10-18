@@ -626,6 +626,16 @@ impl BoardEvidence {
                 assumptions.push(unread);
                 continue;
             }
+            // The schematic marks a part DNP and its footprint does not: the
+            // part is treated as not fitted, which is an accounted decision,
+            // not a caveat.
+            if normalized.contains(hauksbee_extract::dnp::SCHEMATIC_ONLY_DNP_MARKER) {
+                reader_contributions.push(Contribution {
+                    what: "do-not-populate".into(),
+                    detail: normalized.to_string(),
+                });
+                continue;
+            }
             classify_reader_note(
                 normalized,
                 &component_subjects,

@@ -1778,6 +1778,17 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "Every rail is solved as an ideal source unless a supply is declared, so it holds its level whatever the board pulls. Here the resting state pulls more current than a bench supply, USB port or module pin gives: the real rail sags first, and each part carries only its share. Held to what the supply can give, the parts named are within their ratings, so they are not reported as overstressed. A draw this large usually means a model or binding is wrong (a switch's resting state, a pin map, a part that is not fitted); if the real board does pull it, the board crowbars its rail.".to_string(),
                 "Declare the real supply with its current limit, then trace the path into the first part named against its datasheet.".to_string(),
             ),
+            // A part straight across a source with nothing limiting its
+            // current: the simulated figure is the ideal source's, so none is
+            // shown, but a missing series resistor or a part fitted the wrong
+            // way is a real flaw the board must not pass clean over.
+            LintCheck::DcOverstress
+                if f.message.contains(hauksbee_bind::stress::UNBOUNDED_MARKER) =>
+            (
+                f.message.clone(),
+                "Every rail is solved as an ideal source, so a part wired straight across one with nothing in series draws a current with no upper bound, and the simulation cannot print a believable figure for it. That is a real flaw when the part is fitted the wrong way round or has no series resistor (an LED with no resistor, a diode across a rail), and a modelling error when the part's model or value is wrong.".to_string(),
+                "Check the part's orientation against its datasheet and the schematic. If it is meant to carry current from this rail, add a series resistor sized for the current it should draw; if its model or value is wrong, correct it. Then re-check.".to_string(),
+            ),
             LintCheck::DcOverstress => (
                 format!("A part is pushed past its datasheet rating as soon as the board powers up. {}", f.message),
                 "This is the board's resting state, solved from the design: every part with a datasheet rating was held to it there. A part over its current, power or temperature rating in that state is overstressed the whole time the board is on; a transistor base or diode driven from a supply or logic output through too little resistance is the usual cause.".to_string(),
@@ -2823,6 +2834,69 @@ mod tests {
         };
         assert!(crate::result::lint_findings_json(&moved)[0].gates());
         assert_eq!(triage(&moved).do_not_order.len(), 1);
+    }
+
+    /// A board whose only finding is a part straight across a source with
+    /// nothing limiting its current is never a clean pass: the finding is a
+    /// warning (not serious), the plain verdict names an issue worth a look,
+    /// and the order triage lists it to inspect, so the verdict is "pass with
+    /// items to inspect" and (with `--strict`, which fails on lint warnings)
+    /// a fail.
+    #[test]
+    fn an_unbounded_overstress_alone_is_not_a_clean_pass() {
+        let lint = NetLintReport {
+            findings: vec![LintFinding {
+                check: LintCheck::DcOverstress,
+                severity: Severity::Medium,
+                message: hauksbee_bind::stress::unbounded_note("D1", Some("+5V")),
+                refs: vec!["D1".into()],
+                nets: Vec::new(),
+            }],
+        };
+        let json = crate::result::lint_findings_json(&lint);
+        assert_eq!(json[0].severity, "warning");
+        assert!(json[0].gates() && json[0].actionable, "{json:?}");
+        let plain = plain_netlint(&lint);
+        assert_eq!(plain.findings[0].level, PlainLevel::Warning);
+        assert_eq!(plain.serious_count(), 0);
+        let verdict = plain.verdict();
+        assert!(
+            verdict.contains("none serious (worth a look)") && !verdict.contains("healthy"),
+            "{verdict}"
+        );
+        assert!(
+            plain.findings[0].why.contains("fitted the wrong way round")
+                && !plain.findings[0].why.contains("pushed past"),
+            "{:?}",
+            plain.findings[0]
+        );
+        let drc = crate::result::DrcStructured {
+            clearance_rule_mm: 0.2,
+            primitive_count: 0,
+            shorts: Vec::new(),
+            violations: Vec::new(),
+            at_limit: Vec::new(),
+            version_warning: None,
+            suppression_note: None,
+        };
+        let provenance = crate::result::ClearanceRuleProvenance::defaulted(0.2, false);
+        let t = order_triage_with_rule_source(
+            &drc,
+            &provenance,
+            &lint,
+            &SiReport::default(),
+            None,
+            true,
+            0,
+            true,
+        );
+        assert!(t.do_not_order.is_empty(), "{t:#?}");
+        assert_eq!(t.inspect.len(), 1, "{t:#?}");
+        assert!(t.inspect[0]
+            .statement
+            .contains("D1 sits directly across +5V"));
+        let rendered = t.render(&crate::result::RunVerdict::default());
+        assert!(!rendered.contains("OK TO ORDER"), "{rendered}");
     }
 
     fn found(level: PlainLevel, what: &str, fix: &str) -> PlainFinding {

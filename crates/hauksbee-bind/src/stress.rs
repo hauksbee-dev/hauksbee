@@ -247,6 +247,51 @@ pub fn is_far_past_rating(kind: FaultKind, value: f64, limit: f64) -> bool {
     }
 }
 
+/// Junction temperature (C) past which a computed figure is unbounded.
+///
+/// No package survives to reach it, so it is the model's arithmetic (a linear
+/// estimate on power the idealised circuit sets), not a measurement.
+pub const UNBOUNDED_TEMP_C: f64 = 500.0;
+
+/// Whether a finite stress figure is physically unbounded.
+///
+/// It is so far past anything the part, or any real source behind it, could
+/// give that it is the circuit's idealisation (a diode or a short straight
+/// across an ideal source) and not a measurement. Hundreds of amps, kilowatts
+/// on a small part, a junction past [`UNBOUNDED_TEMP_C`], or
+/// [`is_far_past_rating`] its own limit.
+///
+/// Such a figure is no basis for a gating claim on its own: the surfaces say
+/// the current is unbounded and ask for the part's orientation and model to be
+/// checked ([`unbounded_note`]), and never print the number. A non-finite
+/// value is no result at all and is not this.
+#[must_use]
+pub fn is_unbounded(kind: FaultKind, value: f64, limit: f64) -> bool {
+    value.is_finite()
+        && (is_far_past_rating(kind, value, limit)
+            || (kind == FaultKind::Overtemperature && value > UNBOUNDED_TEMP_C))
+}
+
+/// What the unbounded note says the part has: the phrase the surfaces key on.
+pub const UNBOUNDED_MARKER: &str = "with nothing limiting its current";
+
+/// The warning for a part whose stress is [`is_unbounded`].
+///
+/// It sits straight across a source with nothing limiting its current, which
+/// is either a real flaw (fitted the wrong way, no series resistor) or a wrong
+/// model, and the simulation cannot say which. The figure is the ideal
+/// source's, so it is never printed. `rail` names the source the current
+/// flows from, when known.
+#[must_use]
+pub fn unbounded_note(part: &str, rail: Option<&str>) -> String {
+    let rail = rail.unwrap_or("its supply");
+    format!(
+        "{part} sits directly across {rail} {UNBOUNDED_MARKER}: either it is fitted the wrong \
+         way, it needs a series resistor, or its model is wrong. The simulated current is \
+         unbounded, so no figure is shown."
+    )
+}
+
 /// Whether a stress passing a stand-in card's limit is a fault after all.
 ///
 /// A stand-in's limit says nothing exact about the part, so passing it is a
@@ -408,6 +453,12 @@ impl FaultEvent {
     #[must_use]
     pub fn is_far_past_rating(&self) -> bool {
         is_far_past_rating(self.kind, self.value, self.limit)
+    }
+
+    /// Whether this fault's figure is physically unbounded ([`is_unbounded`]).
+    #[must_use]
+    pub fn is_unbounded(&self) -> bool {
+        is_unbounded(self.kind, self.value, self.limit)
     }
 }
 

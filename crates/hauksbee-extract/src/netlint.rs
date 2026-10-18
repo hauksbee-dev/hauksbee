@@ -1327,6 +1327,77 @@ fn present_refs(mem: &[(&Component, &Pin)]) -> Vec<String> {
     refs
 }
 
+/// A DNP part that still marks the far end of a bus: a plug-in module socket
+/// (by pad geometry) or a connector / header. Test points, mounting holes and
+/// switches carry no bus end, and a DNP resistor or IC is simply absent.
+fn is_dnp_bus_end(c: &Component) -> bool {
+    if is_module_socket(c) {
+        return true;
+    }
+    let r = c.reference.to_ascii_uppercase();
+    is_connector_like(c) && !is_test_point_or_hole(c) && !r.starts_with("SW")
+}
+
+/// What the members of a bus say about where it ends.
+struct BusEnds {
+    via_module_socket: bool,
+    exits_to_connector: bool,
+    /// The socket or header that ends the bus is marked DNP.
+    via_dnp_end: bool,
+    active_devices: usize,
+}
+
+/// The severity and wording for a bus with no pull-up, or `None` when the
+/// topology is too ambiguous to judge.
+///
+/// Two regimes:
+///  - The bus exits to a header / connector with no on-board pull. This is
+///    the *intentional* "pull-ups live on the attached module" pattern
+///    (every Arduino/Feather breaks I2C out to pins this way). Low / known.
+///  - The bus is entirely on-board (a master and at least one on-board
+///    peripheral) yet has no pull-up anywhere. This is the higher-
+///    confidence "genuinely missing" case. Medium.
+///
+/// The regime is decided BEFORE the DNP variant so the DNP arm can only fire
+/// where the absent-part case would, at the same severity: a topology too
+/// ambiguous to judge stays unjudged whether or not the pull-up that isn't
+/// fitted happens to exist in the layout, and a simulation-policy flag must
+/// not decide whether CI gates. A socket or header marked DNP keeps the regime
+/// of its fitted twin (the DNP flag is the fab's build instruction, not a
+/// design change), so the note stays Low rather than escalating, and says so.
+const fn pullup_regime(ends: &BusEnds) -> Option<(Severity, &'static str)> {
+    let dnp = ends.via_dnp_end;
+    if ends.via_module_socket {
+        Some((
+            Severity::Low,
+            if dnp {
+                "bus reaches a plug-in module socket marked DNP (the module is fitted \
+                 later); assumed pulled up on the module, which this file does not show"
+            } else {
+                "bus reaches a plug-in module socket; assumed pulled up on the module, \
+                 which this file does not show"
+            },
+        ))
+    } else if ends.exits_to_connector {
+        Some((
+            Severity::Low,
+            if dnp {
+                "bus breaks out to a header marked DNP; pull-ups conventionally on the \
+                 attached module"
+            } else {
+                "bus breaks out to a header; pull-ups conventionally on the attached module"
+            },
+        ))
+    } else if ends.active_devices >= 2 {
+        Some((
+            Severity::Medium,
+            "on-board master and peripheral, no pull-up present",
+        ))
+    } else {
+        None
+    }
+}
+
 fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
     for net in &board.nets {
         if net.id == 0 || is_unconnected_net(&net.name) {
@@ -1351,12 +1422,24 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
         let mut active_refs: std::collections::HashSet<&str> = std::collections::HashSet::new();
         let mut exits_to_connector = false;
         let mut via_module_socket = false;
+        let mut via_dnp_end = false;
 
         for (c, _p) in &mem {
             // Only assembled, identity-trusted parts count: an absent device
-            // must not inflate the bus.
-            if !AssemblyState::of(c).is_present() {
-                continue;
+            // must not inflate the bus. A socket or header marked DNP is the
+            // exception: it stands for the module or cable that mates with it
+            // later, so it is still the bus's far end.
+            match AssemblyState::of(c) {
+                AssemblyState::Present(_) => {}
+                AssemblyState::DnpAbsent(_) => {
+                    if is_dnp_bus_end(c) {
+                        exits_to_connector = true;
+                        via_module_socket |= is_module_socket(c);
+                        via_dnp_end = true;
+                    }
+                    continue;
+                }
+                AssemblyState::IdentityUnknown(_) => continue,
             }
             // A level translator with integrated pull-ups (NTS010x / TXS010x /
             // PCA9517-class auto-direction parts) supplies the bus
@@ -1392,35 +1475,12 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
         }
         let active_devices = active_refs.len();
 
-        // Two regimes:
-        //  - The bus exits to a header / connector with no on-board pull. This is
-        //    the *intentional* "pull-ups live on the attached module" pattern
-        //    (every Arduino/Feather breaks I2C out to pins this way). Low / known.
-        //  - The bus is entirely on-board (a master and at least one on-board
-        //    peripheral) yet has no pull-up anywhere. This is the higher-
-        //    confidence "genuinely missing" case. Medium.
-        // The regime is decided BEFORE the DNP variant so the DNP arm can
-        // only fire where the absent-part case would, at the same severity: a
-        // topology too ambiguous to judge stays unjudged whether or not the
-        // pull-up that isn't fitted happens to exist in the layout, and a
-        // simulation-policy flag must not decide whether CI gates.
-        let (sev, note) = if via_module_socket {
-            (
-                Severity::Low,
-                "bus reaches a plug-in module socket; assumed pulled up on the module, \
-                 which this file does not show",
-            )
-        } else if exits_to_connector {
-            (
-                Severity::Low,
-                "bus breaks out to a header; pull-ups conventionally on the attached module",
-            )
-        } else if active_devices >= 2 {
-            (
-                Severity::Medium,
-                "on-board master and peripheral, no pull-up present",
-            )
-        } else {
+        let Some((sev, note)) = pullup_regime(&BusEnds {
+            via_module_socket,
+            exits_to_connector,
+            via_dnp_end,
+            active_devices,
+        }) else {
             // A single on-board device with no header and no pull: ambiguous,
             // skip rather than risk a false positive.
             continue;
@@ -2823,6 +2883,149 @@ mod i2c_pullup_source_tests {
         assert_eq!(
             i2c_findings(&with_host(placed("U1", &bga))),
             vec![Severity::Medium]
+        );
+    }
+
+    // ---- A DNP footprint that stands for a mated module (repro spec 1) ----
+
+    /// A peripheral on SDA and SCL, plus `far_end` joining the same two nets
+    /// through its pads 1 and 2, plus `extra` parts.
+    fn two_wire(mut far_end: Component, extra: Vec<Component>) -> ExtractedBoard {
+        far_end.pins[0].net = Some(1);
+        far_end.pins[1].net = Some(2);
+        let mut parts = vec![
+            part(
+                "U2",
+                "PERIPHERAL",
+                "",
+                "SOIC-8",
+                vec![named("1", 1, "SDA"), named("2", 2, "SCL")],
+            ),
+            far_end,
+        ];
+        parts.extend(extra);
+        board(&[(1, "SDA"), (2, "SCL"), (3, "+3V3")], parts)
+    }
+
+    fn pullups() -> Vec<Component> {
+        ["R1", "R2"]
+            .iter()
+            .zip([1, 2])
+            .map(|(r, net)| {
+                part(
+                    r,
+                    "4.7k",
+                    "",
+                    "R_0603",
+                    vec![pin("1", Some(3)), pin("2", Some(net))],
+                )
+            })
+            .collect()
+    }
+
+    fn socket(dnp: bool) -> Component {
+        let mut c = placed("U1", &two_row_socket_points());
+        c.dnp = dnp;
+        c
+    }
+
+    fn header(dnp: bool) -> Component {
+        let mut c = part(
+            "J1",
+            "Conn_01x04",
+            "Connector:PinHeader",
+            "PinHeader_1x04_P2.54mm",
+            vec![
+                pin("1", None),
+                pin("2", None),
+                pin("3", None),
+                pin("4", None),
+            ],
+        );
+        c.dnp = dnp;
+        c
+    }
+
+    /// (a) the module socket is fitted: the Low "assumed pulled up" note, on
+    /// both lines.
+    #[test]
+    fn fitted_module_socket_is_a_low_note() {
+        let found = i2c_findings(&two_wire(socket(false), Vec::new()));
+        assert_eq!(found, vec![Severity::Low, Severity::Low]);
+    }
+
+    /// (b) the same socket marked DNP (the fab does not solder the module) is
+    /// still the bus's far end: same Low note, never silent, never escalated by
+    /// the build flag, and the message says the socket is DNP.
+    #[test]
+    fn dnp_module_socket_still_counts_as_a_bus_end() {
+        let board = two_wire(socket(true), Vec::new());
+        let report = board.net_lint();
+        let found: Vec<_> = report.of_check(LintCheck::MissingI2cPullup).collect();
+        assert_eq!(found.len(), 2, "SDA and SCL");
+        for f in found {
+            assert_eq!(f.severity, Severity::Low);
+            assert!(f.message.contains("module socket"), "{}", f.message);
+            assert!(f.message.contains("DNP"), "{}", f.message);
+            assert!(f.refs.contains(&"U1".to_string()), "{:?}", f.refs);
+        }
+    }
+
+    /// (c) DNP socket plus pull-ups on the bus: nothing to report.
+    #[test]
+    fn dnp_module_socket_with_pullups_is_quiet() {
+        assert_eq!(
+            i2c_findings(&two_wire(socket(true), pullups())),
+            Vec::<Severity>::new()
+        );
+    }
+
+    /// (d) a plain DNP header instead of the big socket: the header regime,
+    /// Low, and visible.
+    #[test]
+    fn dnp_header_counts_as_a_bus_end() {
+        let board = two_wire(header(true), Vec::new());
+        let report = board.net_lint();
+        let found: Vec<_> = report.of_check(LintCheck::MissingI2cPullup).collect();
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().all(|f| f.severity == Severity::Low));
+        assert!(found[0].message.contains("header marked DNP"));
+        // Fitted, the same header gives the unmarked Low note.
+        assert_eq!(
+            i2c_findings(&two_wire(header(false), Vec::new())),
+            vec![Severity::Low, Severity::Low]
+        );
+    }
+
+    /// A DNP part with no bus role stays out of the count: a DNP peripheral IC
+    /// or test point beside a single live device does not make a second end,
+    /// and a DNP socket does not turn a two-device bus into anything else.
+    #[test]
+    fn dnp_part_without_a_bus_role_stays_out_of_the_count() {
+        let mut ic = part(
+            "U3",
+            "SPARE",
+            "",
+            "SOIC-8",
+            vec![named("1", 1, "SDA"), named("2", 2, "SCL")],
+        );
+        ic.dnp = true;
+        assert_eq!(
+            i2c_findings(&two_wire(ic, Vec::new())),
+            Vec::<Severity>::new(),
+            "one live device plus a DNP IC is an ambiguous bus, not a missing pull-up"
+        );
+        let mut tp = part(
+            "TP1",
+            "TestPoint",
+            "TestPoint:TestPoint_Pad",
+            "TestPoint_Pad_D1.0mm",
+            vec![pin("1", None), pin("2", None)],
+        );
+        tp.dnp = true;
+        assert_eq!(
+            i2c_findings(&two_wire(tp, Vec::new())),
+            Vec::<Severity>::new()
         );
     }
 }
