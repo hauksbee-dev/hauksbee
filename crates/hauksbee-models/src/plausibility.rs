@@ -96,8 +96,9 @@ pub fn prompt_guide() -> String {
         .map(|r| format!("   - {}: {}", r.id, r.guide))
         .collect();
     format!(
-        "   VALUE PLAUSIBILITY (the validator refuses a draft breaking one):\n{}",
-        lines.join("\n")
+        "   VALUE PLAUSIBILITY (the validator refuses a draft breaking one):\n{}\n{}",
+        lines.join("\n"),
+        crate::ranges::prompt_guide()
     )
 }
 

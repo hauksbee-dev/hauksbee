@@ -176,6 +176,31 @@ fn unvalued_note(
     }
 }
 
+/// The note for a card whose output-capacitor value is outside its physical range:
+/// the requirement is not judged, and the card is named as the thing to fix.
+fn suspect_card_note(
+    comp: &Component,
+    model_id: &str,
+    out_name: &str,
+    slip: &hauksbee_models::ranges::Implausible,
+) -> LintFinding {
+    LintFinding {
+        check: LintCheck::OperatingEnvelope,
+        severity: Severity::Low,
+        message: format!(
+            "{} ({}) output '{out_name}': the output-capacitance check{ABSTENTION_MARKER} against \
+             card '{model_id}', because the card's value is outside its physical range and is \
+             not trusted: {}. {REMEDY_MARKER}Correct the card from its datasheet (or re-extract \
+             it); the board is not judged against this value.",
+            comp.reference,
+            comp.value.trim(),
+            slip.message(),
+        ),
+        refs: vec![comp.reference.clone()],
+        nets: vec![out_name.to_string()],
+    }
+}
+
 /// One finding per fitted linear regulator whose card states an output
 /// capacitance and whose output carries less than that from output to ground.
 #[must_use]
@@ -193,9 +218,20 @@ pub fn regulator_cout_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLin
         if model.kind != ComponentKind::Vreg || model.behavioral.converter.is_some() {
             continue;
         }
-        let Some(spec) = CoutSpec::of(&model) else {
+        // A card value outside its physical range (`cout_min_f = 1.0` for 1 uF) is a
+        // unit slip, never a requirement: the check reads the card without it and
+        // says the card is suspect, rather than demanding a million microfarads.
+        let suspect = hauksbee_models::ranges::quarantine(&model);
+        let model = suspect.as_ref().map_or(model, |q| q.model.clone());
+        let cout_slip = suspect.as_ref().and_then(|q| {
+            q.found
+                .iter()
+                .find(|f| f.param && f.key.starts_with("cout_"))
+        });
+        let spec = CoutSpec::of(&model);
+        if spec.is_none() && cout_slip.is_none() {
             continue;
-        };
+        }
         // A card the binder refuses for this footprint names the wrong pads
         // as output and ground; the binder's package-mismatch note covers it.
         if !super::card_fits(board, comp, &model) {
@@ -211,6 +247,12 @@ pub fn regulator_cout_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLin
         if is_ground(&out_net.name) || gnd == Some(out) {
             continue;
         }
+        if let Some(slip) = cout_slip {
+            report
+                .findings
+                .push(suspect_card_note(comp, &model.id, &out_net.name, slip));
+        }
+        let Some(spec) = spec else { continue };
         let across = caps_across_output(board, out, gnd);
         let caps: Vec<(&Component, f64)> = across
             .iter()

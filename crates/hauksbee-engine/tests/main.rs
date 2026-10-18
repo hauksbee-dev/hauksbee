@@ -37,6 +37,8 @@ mod bom_placement_cli;
 mod bug_hunt_physics;
 #[path = "bundled_sensor_catalog.rs"]
 mod bundled_sensor_catalog;
+#[path = "card_physical_ranges.rs"]
+mod card_physical_ranges;
 #[path = "ci_artifacts_cosim.rs"]
 mod ci_artifacts_cosim;
 #[path = "cli_doctor.rs"]
