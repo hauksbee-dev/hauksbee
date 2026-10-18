@@ -2,8 +2,8 @@ import { useContext, useMemo } from 'react'
 import type { ArtifactProvenance, CheckResult, EvidenceAssumption } from '../../types/report'
 import { assumptionsForEvidence, evidenceStatusTerm, modelProvenanceLines, plural } from '../../lib/report-view'
 import type { ResultEntity } from '../../lib/result-links'
-import { EntityChip, ResultLinkContext } from '../report/ResultLinks'
-import { causeGroups, openPartCount, showOpenParts, withoutIds } from './Remedies'
+import { ChipList, EntityChip, ResultLinkContext } from '../report/ResultLinks'
+import { causeGroups, showOpenParts, withoutIds } from './Remedies'
 import { summarizeErrorBudget } from '../../lib/report-view'
 import { VerdictBadge } from '../../motion'
 import { Term } from '../ui'
@@ -14,8 +14,10 @@ import { Term } from '../ui'
 /** One labelled builder input. `width` is what the value wants; on a narrow
  *  column it is a ceiling and the field takes what is left rather than pushing
  *  the row off the card. */
-export function Field({ label, value, onChange, width = 90, placeholder, invalid, list, testId }: {
+export function Field({ label, value, onChange, width = 90, placeholder, invalid, list, testId, suffix }: {
   label: string
+  /** The unit, after the input ("V", "ms"). */
+  suffix?: string
   value: string
   onChange: (v: string) => void
   width?: number
@@ -47,7 +49,38 @@ export function Field({ label, value, onChange, width = 90, placeholder, invalid
         placeholder={placeholder}
         onChange={e => onChange(e.target.value)}
       />
+      {suffix && <span style={{ color: 'var(--silk-dim)' }}>{suffix}</span>}
     </label>
+  )
+}
+
+/** A net, picked from the board's own nets (the browser completes from the
+ *  page's shared list as you type) and flagged when it names no net on it. */
+export function NetField({ value, nets, onChange, ariaLabel, width = 180, testId }: {
+  value: string
+  nets: readonly string[]
+  onChange: (net: string) => void
+  ariaLabel: string
+  width?: number
+  testId?: string
+}) {
+  const v = value.trim()
+  const unknown = v !== '' && nets.length > 0 && !nets.includes(v)
+  return (
+    <span className="inline-flex flex-col flex-1" style={{ maxWidth: width, minWidth: 120 }}>
+      <input
+        className="hb-input min-w-0 w-full"
+        list="net-options"
+        aria-label={ariaLabel}
+        aria-invalid={unknown || undefined}
+        data-testid={testId}
+        value={value}
+        placeholder="pick a net"
+        onChange={e => onChange(e.target.value)}
+        style={unknown ? { borderColor: 'var(--warn)' } : undefined}
+      />
+      {unknown && <span className="text-[11px] mt-0.5" data-testid="net-unknown" style={{ color: 'var(--warn-strong)' }}>Not a net on this board</span>}
+    </span>
   )
 }
 
@@ -161,6 +194,28 @@ export function MeasureBar({ measure, ok }: { measure: Measure; ok: boolean }) {
   )
 }
 
+/** A result's detail without the verdict word the engine leads it with
+ *  (`FAIL: `, `INVALID evidence: `): the row's chip already says it. */
+export const plainDetail = (detail: string): string => {
+  const rest = detail.replace(/^(?:FAIL|INVALID|MEASURED|PASS)(?: evidence)?:\s*/, '')
+  return rest ? rest[0].toUpperCase() + rest.slice(1) : rest
+}
+
+/** What keeps a check from a verdict, read off the assumptions it rests on:
+ *  the parts the simulation leaves open (the usual first-run cause), and how
+ *  many other kinds of assumption it rests on. */
+function blockersOf(linked: readonly EvidenceAssumption[], registry: readonly EvidenceAssumption[], wholeBoard: boolean) {
+  const own = causeGroups(linked)
+  const openOwn = own.find(g => g.kind === 'open_part')?.parts ?? []
+  // A whole-board check waits on every open part, even one its evidence map
+  // does not list by name: the same count the verdict band and the Board give.
+  const open = wholeBoard
+    ? [...new Set([...openOwn, ...(causeGroups(registry).find(g => g.kind === 'open_part')?.parts ?? [])])]
+    : openOwn
+  const others = own.filter(g => g.kind !== 'open_part' && g.parts.length + g.nets.length > 0)
+  return { open, others }
+}
+
 /** The part or net a check's detail is about, for its "show on board" chip. */
 function subjectOf(detail: string): ResultEntity | null {
   const part = /\b(?:I|Tj)\(([A-Za-z]+\d+[A-Za-z0-9]*)\)/.exec(detail)
@@ -191,17 +246,20 @@ export function AssertionEvidence({ result, assumptions, inventory, repeats, sta
   const subject = useMemo(() => subjectOf(result.detail), [result.detail])
   const linked = map ? assumptionsForEvidence(map, assumptions) : []
   const artifacts = (map?.artifacts ?? []).flatMap(index => inventory[index] ? [inventory[index]] : [])
-  const open = openPartCount(causeGroups(assumptions))
-  const why = !result.invalid ? null
-    : result.kind === 'no_faults' && open > 0
-      ? `this whole-board check is judged once every part has a model, so it waits on the ${plural(open, 'open part')}. That is expected on a first run.`
-      : linked[0] ? withoutIds(linked[0].statement) : null
+  const blockers = result.invalid ? blockersOf(linked, assumptions, result.kind === 'no_faults') : null
+  const open = blockers?.open ?? []
+  const why = !blockers ? null
+    : open.length > 0
+      ? result.kind === 'no_faults'
+        ? `this whole-board check needs a model for every part, and ${open.length === 1 ? '1 part has' : `${open.length} parts have`} none yet (expected on a first run):`
+        : `it runs through ${open.length === 1 ? 'a part' : `${open.length} parts`} with no model yet:`
+      : linked[0] ? withoutIds(linked[0].statement) : 'the evidence rests on an assumption the run could not resolve.'
   const status = map?.status ?? 'clean'
   const details = linked.length > 0 || artifacts.length > 0 || !!map?.error_budget || modelProvenanceLines(map).length > 0
   const showSubject = !!subject && !!onGo
   const glance = part !== 'details'
   const unfold = part !== 'glance'
-  const note = part === 'glance' && measures.length === 0 && !why ? result.detail : ''
+  const note = part === 'glance' && measures.length === 0 && !why ? plainDetail(result.detail) : ''
   if (!(glance && (measures.length > 0 || showSubject || why || note)) && !(unfold && details)) return null
   const evidence = <>
     {linked.map(a => (
@@ -240,12 +298,18 @@ export function AssertionEvidence({ result, assumptions, inventory, repeats, sta
         </div>
       )}
       {glance && why && (
-        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1" data-testid="not-judged" style={{ color: 'var(--warn-strong)' }}>
-          <span>Not judged: {why}</span>
-          {open > 0 && (
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1" data-testid="not-judged" style={{ color: 'var(--silk-dim)' }}>
+          <span><span className="font-semibold" style={{ color: 'var(--warn-strong)' }}>Not judged:</span> {why}</span>
+          {open.length > 0 && <ChipList entities={open.map(ref => ({ kind: 'part' as const, ref }))} testId="not-judged-parts" />}
+          {open.length > 0 && (
             <button type="button" className="hb-chip hb-press px-2 text-[12px]" style={{ height: 24 }} data-testid="not-judged-open" onClick={showOpenParts}>
-              Fix what blocks it
+              Model {open.length === 1 ? 'it' : 'them'}
             </button>
+          )}
+          {(blockers?.others.length ?? 0) > 0 && (
+            <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+              It also rests on assumptions about {plural(blockers!.others.reduce((n, g) => n + g.parts.length + g.nets.length, 0), 'other part')}; Why lists them.
+            </span>
           )}
         </div>
       )}

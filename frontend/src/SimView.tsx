@@ -96,9 +96,13 @@ export default function SimView({
   engineVersion?: string | null
 } = {}) {
   const {
-    connected, boardInfo, frame: liveFrame, status, send, replay, backlog,
+    connected, boardInfo, frame: liveFrame, status: rawStatus, send, replay, backlog,
     serverError, actionResults = [],
   } = useSimulation()
+  // One run state, from the same stream as the clock: while sim time advances
+  // the sim IS running, whatever a lagging `running` flag last said, so the
+  // transport, the dock and the header chip never say "paused" while T moves.
+  const status = useAdvancingStatus(rawStatus)
   const session = useSimSession({ liveFrame, boardInfo, backlog, send })
   const {
     frame, frames, history, faultLog, activeFaultRefs, faultCount, clearFaults,
@@ -685,5 +689,32 @@ export default function SimView({
         />
       </div>
     </ResultLinkContext.Provider>
+  )
+}
+
+/** The session status with `running` true while `sim_time` is advancing (a
+ *  rise within the last 1.5 s), as well as whenever the engine says so. */
+function useAdvancingStatus<S extends { running: boolean; sim_time: number }>(status: S | null): S | null {
+  const simTime = status?.sim_time ?? 0
+  const last = useRef(simTime)
+  const [advancing, setAdvancing] = useState(false)
+  useEffect(() => {
+    const rose = simTime > last.current
+    last.current = simTime
+    if (!rose) return
+    setAdvancing(true)
+    const timer = window.setTimeout(() => setAdvancing(false), 1500)
+    return () => window.clearTimeout(timer)
+  }, [simTime])
+  // The engine saying it stopped (running true -> false) ends it at once.
+  const wasRunning = useRef(status?.running ?? false)
+  useEffect(() => {
+    const now = status?.running ?? false
+    if (wasRunning.current && !now) setAdvancing(false)
+    wasRunning.current = now
+  }, [status?.running])
+  return useMemo(
+    () => (status && advancing && !status.running ? { ...status, running: true } : status),
+    [status, advancing],
   )
 }

@@ -10,12 +10,13 @@ import { PlusIcon } from '../Icons'
 import { AssertionEvidence, ResultChip } from './pieces'
 import { ConstraintEditor } from '../ConstraintEditor'
 
-/** The assertions, grouped by kind. The groups stagger in once on mount (a
- *  restored board's saved spec arriving), which is the only time this list is
- *  new to the reader. */
+/** The checks: ONE card, first on the page, with the kinds as subheads only
+ *  when there is more than one, and the way to add a check at its foot. */
 export function AssertionGroups({
-  checks, validation, stale, resultForRow, assumptions, inventory, onAdd, onUpdate, onRemove,
+  checks, validation, stale, resultForRow, assumptions, inventory, onAdd, onUpdate, onRemove, footer,
 }: {
+  /** Under the rows: the empty state and the Add a check menu. */
+  footer?: React.ReactNode
   checks: CheckRow[]
   validation: Map<number, RowIssue[]>
   stale: boolean
@@ -48,35 +49,35 @@ export function AssertionGroups({
   const displayRows = grouped.flatMap(group => group.rows)
   const repeats = repeatedAssumptions(displayRows.map(row => resultForRow(row.id)))
 
+  const many = grouped.length > 1
   return (
-    <>
+    <section className="hb-card px-4 py-3.5 mb-4" data-testid="checks-card">
+      <h2 className="text-[11px] font-bold tracking-widest uppercase inline-flex items-center gap-2 mb-1" style={{ margin: 0, color: 'var(--silk-faint)' }}>
+        Checks
+        {displayRows.length > 0 && (
+          <span className="tnum text-[10px] px-1.5 rounded-full" style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)', color: 'var(--silk-dim)' }}>
+            {displayRows.length}
+          </span>
+        )}
+      </h2>
       {grouped.map(({ group, kinds, rows }, gi) => (
         <StaggerItem key={group} index={gi}>
-          <section className="hb-card px-4 py-3.5 mb-4" data-testid={`check-group-${group}`}>
-            <div className="flex items-center justify-between mb-2">
-              <h2
-                className="text-[11px] font-bold tracking-widest uppercase inline-flex items-center gap-2"
-                style={{ margin: 0, color: 'var(--silk-faint)' }}
-              >
-                {group}
-                <span
-                  className="tnum text-[10px] px-1.5 rounded-full"
-                  style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)', color: 'var(--silk-dim)' }}
+          <div data-testid={`check-group-${group}`} className={many ? 'mt-2' : ''}>
+            {many && (
+              <div className="flex items-center justify-between pt-1.5" style={{ borderTop: gi > 0 ? '1px solid var(--hairline)' : undefined }}>
+                <h3 className="text-[12px] font-semibold" style={{ margin: 0, color: 'var(--silk-dim)' }}>{group}</h3>
+                {/* Another of this group's first kind (the common case); the
+                    menu at the foot covers everything. */}
+                <button
+                  type="button"
+                  onClick={() => onAdd(kinds[0])}
+                  className="hb-press text-[11px] cursor-pointer inline-flex items-center gap-1"
+                  style={{ color: 'var(--copper)', background: 'none', border: 'none' }}
                 >
-                  {rows.length}
-                </span>
-              </h2>
-              {/* Add another of this group's first kind (the common case); the
-                  global menu below covers everything. */}
-              <button
-                type="button"
-                onClick={() => onAdd(kinds[0])}
-                className="hb-press text-[11px] cursor-pointer inline-flex items-center gap-1"
-                style={{ color: 'var(--copper)', background: 'none', border: 'none' }}
-              >
-                <PlusIcon size={11} /> add
-              </button>
-            </div>
+                  <PlusIcon size={11} /> add
+                </button>
+              </div>
+            )}
 
             {/* Rows appear and disappear as the reader composes the spec.
                 Without presence, a removed row vanishes between frames and the
@@ -113,9 +114,6 @@ export function AssertionGroups({
                             wraps rather than truncating: on a phone column the
                             kind chip and the verdict leave it about 24px. */}
                         <span>{titleOf(checkKind(c.kind)?.kind ?? c.kind)}</span>
-                        <code className="text-[10px] shrink-0" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
-                          {c.kind}
-                        </code>
                         {rowResult && <ResultChip result={rowResult} stale={stale} />}
                       </div>
                       <div className="flex items-center gap-3 shrink-0">
@@ -182,10 +180,11 @@ export function AssertionGroups({
                 )
               })}
             </AnimatePresence>
-          </section>
+          </div>
         </StaggerItem>
       ))}
-    </>
+      {footer && <div className="mt-2">{footer}</div>}
+    </section>
   )
 }
 

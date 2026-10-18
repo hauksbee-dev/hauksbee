@@ -61,6 +61,8 @@ function session(report: WebReport): BoardSession {
     selectedComponent: null,
     setSelectedNet: noop,
     setSelectedComponent: noop,
+    highlightNets: null,
+    setHighlightNets: noop,
     handleBoard: noop,
     handleFirmware: noop,
     handleSchematic: noop,

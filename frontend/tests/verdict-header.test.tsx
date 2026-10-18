@@ -3,7 +3,9 @@
 //   1. the key-parts ring clipped a four-digit count to "000/500";
 //   2. the card said "0 serious" and "none serious" beside a finding tagged
 //      SERIOUS, and the section below said "1 serious";
-//   3. the Checks strip counted "1 failed" for a check no row showed.
+//   3. the Checks strip counted "1 failed" for a check no row showed. The
+//      redesigned page reads the not-routed finding as layout readiness: a
+//      calm note with the nets it names, never a count with nothing behind it.
 // The unrouted fixtures are real engine output (stormduino, from `hauksbee
 // serve`): one serious finding (the board is not routed) among twelve.
 
@@ -11,10 +13,9 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ResultPanel } from '../src/components/report/ResultPanel'
-import { BoardGate } from '../src/components/checks/BoardGate'
-import { RunStrip } from '../src/components/checks/RunStrip'
+import { VerdictBand } from '../src/components/checks/VerdictBand'
 import { RING_FRACTION_MAX } from '../src/lib/gauge'
-import { assertRowCount, reportView, resultsWithoutRows } from '../src/lib/report-view'
+import { assertRowCount, readStaticFinding, reportView, resultsWithoutRows, runMarkdown, runView } from '../src/lib/report-view'
 import { boardVerdict } from '../src/lib/status-vocab'
 import type { RunResponse, WebReport } from '../src/types/report'
 
@@ -134,39 +135,63 @@ describe('the Checks page shows every failure it counts', () => {
     expect(resultsWithoutRows(results, `${spec}\n[[assert]]\nkind = "x"\n`)).toEqual([])
   })
 
-  test('the failed result is listed with its reason and its fix, not only behind Details', () => {
-    const html = renderToStaticMarkup(<BoardGate results={resultsWithoutRows(results, spec)} stale={false} />)
-    expect(html).toContain('data-testid="board-gate"')
-    expect(html).toContain('FAIL')
-    expect(html).toContain('the board is not routed yet')
-    expect(html).toContain('Fix: ')
-    expect(html).toContain('Route all the nets')
-    // Nothing to say, nothing drawn.
-    expect(renderToStaticMarkup(<BoardGate results={[]} stale={false} />)).toBe('')
+  const band = (spec_: string) => renderToStaticMarkup(
+    <VerdictBand
+      result={gateRun} runKey="k" stale={false} running={false} canRun onRun={() => {}} validationCount={0}
+      reportSerious={0} onJump={() => {}} specFileName="spec.toml" specToml={spec_} rawMode={false}
+      preLayoutNotice={null} exportMenu={null}
+    />,
+  )
+
+  test('the not-routed finding is layout readiness, not a failure of these checks', () => {
+    const v = runView(gateRun, spec)
+    expect(v.rows).toEqual([results[0]])
+    expect(v.layout).toBe(results[1])
+    expect(v.boardFindings).toEqual([])
+    // The page's verdict is the spec's own check: not judged, not failed.
+    expect(v.verdict).toBe('invalid')
+    // The CLI's verdict over the same run is unchanged: the run still fails.
+    expect(gateRun.passed).toBe(false)
   })
 
-  test('a failure on dozens of nets prints a short label and keeps every name behind Show all', () => {
-    const gate = resultsWithoutRows(results, spec)[0]
-    const names = gate.all_subjects ?? []
-    expect(names.length).toBeGreaterThan(40)
-    expect(gate.label.length).toBeLessThan(120)
-    expect(gate.label).toContain(`and ${names.length - 6} more`)
-    const html = renderToStaticMarkup(<BoardGate results={[gate]} stale={false} />)
-    expect(html).toContain(`Show all ${names.length}`)
-    // The label stays short; the expander holds the names the label counts.
-    for (const name of names) expect(html).toContain(name.replace(/&/g, '&amp;'))
-    // A result whose label names everything has no expander.
-    const short = { ...gate, label: 'static_check: lint x on U1', all_subjects: undefined }
-    expect(renderToStaticMarkup(<BoardGate results={[short]} stale={false} />)).not.toContain('Show all')
+  test('the static finding reads back as plain words, every net it names, and its fix', () => {
+    const f = readStaticFinding(results[1])!
+    expect(f.plain.startsWith('the board is not routed yet')).toBe(true)
+    expect(f.plain).not.toContain('static check')
+    expect(f.severity).toBe('serious')
+    expect(f.subjects).toEqual(results[1].all_subjects ?? [])
+    expect(f.fix).toContain('Route all the nets')
+    expect(readStaticFinding(results[0])).toBeNull()
   })
 
-  test('the strip counts the same failure the card lists', () => {
-    const strip = renderToStaticMarkup(
-      <RunStrip
-        result={gateRun} stale={false} running={false} canRun validationCount={0} reportSerious={0}
-        detailsOpen={false} onToggleDetails={() => {}} onJump={() => {}} specFileName="spec.toml"
-      />,
-    )
-    expect(strip).toMatch(/data-testid="run-count-fail"[^>]*>1 failed/)
+  test('the band says the layout is not routed, calmly, with what CI will do', () => {
+    const html = band(spec)
+    expect(html).toContain('data-testid="layout-note"')
+    expect(html).toContain('The board is not routed yet')
+    expect(html).toContain('A CI run of this spec also fails until the board is routed.')
+    expect(html).toContain('How to finish the layout')
+    // No failure is counted that the page does not show.
+    expect(html).not.toContain('data-testid="run-count-fail"')
+    expect(html).not.toContain('data-testid="board-gate"')
+    // No internal ids or engine leads on the page.
+    expect(html).not.toContain('static_check')
+    expect(html).not.toContain('hauksbee check')
+  })
+
+  test('a board finding that is not layout still fails the page verdict and is listed', () => {
+    const short = { ...results[1], detail: results[1].detail.replace(/the board is not routed yet[^]*$/, 'two nets are shorted: +5V and GND'), all_subjects: ['+5V', 'GND'] }
+    const run = { ...gateRun, results: [results[0], short] }
+    const v = runView(run, spec)
+    expect(v.layout).toBeNull()
+    expect(v.boardFindings).toEqual([short])
+    expect(v.verdict).toBe('failed')
+  })
+
+  test('the Markdown export carries the verdict, each check and the layout line', () => {
+    const md = runMarkdown({ result: gateRun, specToml: spec, specFileName: 'spec.toml', boardLabel: 'stormduino', title: r => r.kind })
+    expect(md).toContain('**Verdict: INVALID**')
+    expect(md).toContain('| INVALID | no_faults |')
+    expect(md).toContain('**Layout:** the board is not routed yet')
+    expect(md).toContain('Reproduce: `hauksbee-ci run ci/spec.toml`')
   })
 })

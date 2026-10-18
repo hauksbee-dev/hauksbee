@@ -14,6 +14,9 @@ import type {
   ModelCoverageSnapshot, ModelGroup, ModelOnPath, RefusalContract, RunResponse, WebCosimSection, WebFallbackWindow, WebFinding,
   WebGpioNet, WebHeadsUp, WebImportObject, WebReport, WebSection, WebTimingCoverage,
 } from '../types/report'
+import {
+  NOT_ROUTED_MESSAGE_PREFIX, STATIC_CHECK_FAILS_LEAD, STATIC_CHECK_KIND, STATIC_CHECK_NOT_JUDGED_LEAD,
+} from './status-vocab'
 
 // ── Findings ─────────────────────────────────────────────────────────────────
 
@@ -581,10 +584,116 @@ export const resultsWithoutRows = <T,>(results: readonly T[], specToml: string):
 /** The run's one-word verdict, from the per-assertion results when there are
  *  any and from the runner's own exit otherwise. */
 export function overallVerdict(result: RunResponse): Overall {
-  const results = result.results ?? []
-  if (results.length === 0) return result.passed ? 'passed' : 'failed'
+  return verdictOf(result.results ?? [], !!result.passed)
+}
+
+/** The one-word verdict of a set of results (`passed` when there are none and
+ *  the runner itself passed). */
+export function verdictOf(results: readonly CheckResult[], runnerPassed: boolean): Overall {
+  if (results.length === 0) return runnerPassed ? 'passed' : 'failed'
   if (results.some(x => !x.invalid && !x.passed)) return 'failed'
   if (results.some(x => x.invalid)) return 'invalid'
   // Nothing judged is not a pass: the CLI headlines such a run MEASURED.
   return results.every(x => x.measured) ? 'measured' : 'passed'
+}
+
+// ── A checks run, read for the Checks page ──────────────────────────────────
+
+/** A row the board's own static check added to a run, read back into its parts:
+ *  the engine's plain sentence without the lead every such row repeats. */
+export interface StaticFinding {
+  /** The finding in plain words ("the board is not routed yet, so ..."). */
+  plain: string
+  severity: string
+  /** Every part and net the finding names. */
+  subjects: string[]
+  /** What to do, from the finding's own fix. */
+  fix: string | null
+  /** The as-built variant: the rework could not be applied, so not judged. */
+  notJudged: boolean
+}
+
+/** Read a static-check row; null for any other result. */
+export function readStaticFinding(r: CheckResult): StaticFinding | null {
+  if (r.kind !== STATIC_CHECK_KIND) return null
+  let rest = r.detail
+  const notJudged = rest.startsWith(STATIC_CHECK_NOT_JUDGED_LEAD)
+  if (rest.startsWith(STATIC_CHECK_FAILS_LEAD)) rest = rest.slice(STATIC_CHECK_FAILS_LEAD.length)
+  else if (notJudged) rest = rest.slice(STATIC_CHECK_NOT_JUDGED_LEAD.length).replace(/^\s*\([^)]*\)/, '')
+  rest = rest.replace(/^:\s*/, '')
+  const sev = /^\[([a-z]+)\]\s*/.exec(rest)
+  const plain = sev ? rest.slice(sev[0].length) : rest
+  // The label names the first few subjects ("on A, B and 43 more"); the full
+  // list rides in `all_subjects` whenever the label shortened it.
+  const on = / on (.+?)(?: #\d+)?$/.exec(r.label)
+  const subjects = r.all_subjects?.length
+    ? r.all_subjects
+    : on ? on[1].split(', ').filter(s => !/^\S+ and \d+ more$/.test(s)) : []
+  return { plain, severity: sev?.[1] ?? '', subjects, fix: r.why ?? null, notJudged }
+}
+
+/** The engine's own pre-layout state: no copper on a board with placed pads.
+ *  Layout readiness, not a defect in the circuit the checks judge. */
+export const isLayoutReadiness = (r: CheckResult): boolean =>
+  readStaticFinding(r)?.plain.startsWith(NOT_ROUTED_MESSAGE_PREFIX) ?? false
+
+/** A run split the way the Checks page shows it. */
+export interface RunView {
+  /** The results of the spec's own `[[assert]]` rows, in row order. */
+  rows: CheckResult[]
+  /** Findings of the board's own check that fail the run (a short, a pin
+   *  conflict): judged, failing, shown once beside the verdict. */
+  boardFindings: CheckResult[]
+  /** The not-routed state, when the run carried it: layout readiness, shown as
+   *  a note. It still fails a CI run of the same spec, and the note says so. */
+  layout: CheckResult | null
+  /** Everything the page judges: the rows plus the board findings. */
+  judged: CheckResult[]
+  verdict: Overall
+}
+
+export function runView(result: RunResponse, specToml: string): RunView {
+  const results = result.ok ? result.results ?? [] : []
+  const count = assertRowCount(specToml)
+  const rows = results.slice(0, count)
+  const added = results.slice(count)
+  const layout = added.find(isLayoutReadiness) ?? null
+  const boardFindings = added.filter(r => r !== layout)
+  const judged = [...rows, ...boardFindings]
+  return { rows, boardFindings, layout, judged, verdict: verdictOf(judged, !!result.passed) }
+}
+
+/** The run as Markdown: the verdict, every check with its status, and the
+ *  command that reproduces it. For a ticket, a review or a lab notebook. */
+export function runMarkdown({ result, specToml, specFileName, boardLabel, title }: {
+  result: RunResponse
+  specToml: string
+  specFileName: string
+  boardLabel: string
+  /** A check's display title, from the catalogue. */
+  title: (r: CheckResult) => string
+}): string {
+  const v = runView(result, specToml)
+  const word = { passed: 'PASS', measured: 'MEASURED', invalid: 'INVALID', failed: 'FAIL' }[v.verdict]
+  const lines = [
+    `# Checks: ${boardLabel}`,
+    '',
+    `**Verdict: ${word}** (${v.judged.length} ${v.judged.length === 1 ? 'check' : 'checks'})`,
+    '',
+    '| Status | Check | Detail |',
+    '| --- | --- | --- |',
+    ...v.judged.map(r => {
+      const status = r.invalid ? 'INVALID' : r.measured ? 'MEASURED' : r.passed ? 'PASS' : 'FAIL'
+      const detail = (readStaticFinding(r)?.plain ?? r.detail).replace(/\|/g, '\\|').replace(/\s+/g, ' ')
+      return `| ${status} | ${title(r).replace(/\|/g, '\\|')} | ${detail} |`
+    }),
+  ]
+  if (v.layout) {
+    const f = readStaticFinding(v.layout)
+    lines.push('', `**Layout:** ${f?.plain ?? v.layout.detail}. A CI run of this spec fails until the board is routed.`)
+  }
+  const conditions = (result.verdict_conditions ?? []).filter(c => c.trim())
+  if (conditions.length) lines.push('', '**Rests on:**', ...conditions.map(c => `- ${c}`))
+  lines.push('', `Reproduce: \`hauksbee-ci run ci/${specFileName}\``, '')
+  return lines.join('\n')
 }

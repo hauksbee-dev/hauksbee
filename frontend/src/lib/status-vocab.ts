@@ -57,6 +57,51 @@ export const TONE_STYLE: Record<ChipTone, React.CSSProperties> = {
 /** Severity order used to pick the one chip a header shows. */
 export const TONE_RANK: Record<ChipTone, number> = { err: 3, warn: 2, ok: 1, quiet: 0 }
 
+// ── A checks run's words ─────────────────────────────────────────────────────
+//
+// The engine's own strings the Checks page reads a run with. Each mirrors one
+// Rust constant byte for byte (tests/checks-vocab.test.ts reads the Rust source
+// and fails on any drift), so the page never forks the engine's wording.
+
+/** `hauksbee_ir::vocabulary::STATIC_CHECK_KIND`: the assertion kind a CI run
+ *  reports the board's own static-check findings under. */
+export const STATIC_CHECK_KIND = 'static_check'
+
+/** `hauksbee_ir::vocabulary::STATIC_CHECK_FAILS_LEAD`: how such a row's detail opens. */
+export const STATIC_CHECK_FAILS_LEAD =
+  "FAIL: the board's own static check (hauksbee check) fails on this finding, so this run cannot pass"
+
+/** `hauksbee_ir::vocabulary::STATIC_CHECK_NOT_JUDGED_LEAD`: the as-built variant. */
+export const STATIC_CHECK_NOT_JUDGED_LEAD =
+  "NOT JUDGED on the as-built board: the board's own static check (hauksbee check) fails the design on this finding, and the rework of these parts could not be applied to the static board"
+
+/** `hauksbee_extract::NOT_ROUTED_MESSAGE_PREFIX`: the finding the engine keys its
+ *  pre-layout ("not routed yet") state off. The board report's `fix_first.notice`
+ *  is set from the same prefix, so the Board view and this page agree. */
+export const NOT_ROUTED_MESSAGE_PREFIX = 'the board is not routed yet'
+
+/** One check's status on a run. */
+export type RunStatus = 'pass' | 'fail' | 'invalid' | 'measured'
+
+export const statusOf = (r: { invalid?: boolean; measured?: boolean; passed?: boolean }): RunStatus =>
+  r.invalid ? 'invalid' : r.measured ? 'measured' : r.passed ? 'pass' : 'fail'
+
+/** The glossary term each status is (the chip word comes from the glossary). */
+export const STATUS_TERM: Record<RunStatus, StatusTerm | null> = {
+  pass: 'pass', fail: 'fail', invalid: 'invalid', measured: null,
+}
+
+/** How a count of each status reads in a sentence ("2 failed"). The CLI's own
+ *  summary line uses the same words. */
+export const STATUS_COUNT_WORDS: Record<RunStatus, string> = {
+  pass: 'passed', fail: 'failed', invalid: 'not judged', measured: 'measured only',
+}
+
+/** Tone of each status. */
+export const STATUS_TONE: Record<RunStatus, ChipTone> = {
+  pass: 'ok', fail: 'err', invalid: 'warn', measured: 'quiet',
+}
+
 /** The board verdict of an analyzed report as a glossary term, a short detail
  *  and a tone: the one derivation behind the header chip and a saved session's
  *  verdict. `null` when the run did not produce a report. */
@@ -84,8 +129,9 @@ export function boardVerdict(report: WebReport): { term: StatusTerm; detail: str
           // Findings without conditions are qualifications on a pass, not a conditional pass.
           : { term: 'pass', detail: report.total > 0 ? plural(report.total, 'finding') : 'analysis qualified', tone: 'warn' }
   } else {
-    // A pass that rests on conditions is never the plain PASS.
-    board = conditional ? { term: 'conditional_pass', detail: 'rests on conditions' } : { term: 'pass', detail: '' }
+    // A pass that rests on conditions is never the plain PASS; its colour is
+    // the verdict card's (green), so the chip never disagrees with the card.
+    board = conditional ? { term: 'conditional_pass', detail: 'rests on conditions', tone: 'ok' } : { term: 'pass', detail: '' }
   }
   return { ...board, tone: board.tone ?? TERM_TONE[board.term] }
 }

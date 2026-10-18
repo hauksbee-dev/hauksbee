@@ -1,23 +1,22 @@
 import { lazy, Suspense, useState } from 'react'
 import { downloadText } from '../../lib/report-export'
 import type { LoadProgress } from '../../lib/api'
-import { RunResults } from './RunResults'
-import { RunStrip, type RunStatus } from './RunStrip'
-import { BoardGate } from './BoardGate'
-import type { CheckResult, RunResponse } from '../../types/report'
+import { VerdictBand } from './VerdictBand'
+import { ChecksExport } from './ChecksExport'
+import type { RunStatus } from '../../lib/status-vocab'
+import type { RunResponse } from '../../types/report'
 import type { RemedyActions } from './Remedies'
 import type { GutterResult } from '../editor/TomlEditor'
 
 // The editor loads on first use, never in the app's first paint.
 const TomlEditor = lazy(() => import('../editor/TomlEditor'))
 
-// The Checks page frame: ONE toolbar (mode, Run, Download, CI), one run-summary
-// strip, and ONE working surface, the builder or the spec TOML, chosen by the
-// mode switch. Both edit the same text. A run's issues are read inside the
-// active surface (gutter marks and lint squiggles in the TOML, a tag on each
-// builder row); the strip only counts them and jumps. The details drawer is the
-// single slot for the run's full account (remedies, evidence).
-// The Download button writes the path lines shown above the editor followed by
+// The Checks page frame: ONE verdict band (the verdict, what to do, Run, and
+// the Export menu), then ONE working surface, the builder or the spec TOML,
+// chosen by the mode switch. Both edit the same text. A run's issues are read
+// inside the active surface (gutter marks and lint squiggles in the TOML, a tag
+// on each builder row); the band only states the verdict, counts and jumps.
+// The spec download writes the path lines shown above the editor followed by
 // the editor's text, byte for byte.
 
 export type SpecMode = 'builder' | 'toml'
@@ -26,7 +25,7 @@ export function SpecPane({
   mode, onModeChange, builder, firmwareChoice,
   specText, specStem, specFileName, bodyText, onBodyChange, pathLines, select, nets, refs, gutter, onGutterClick,
   showAllResults, stale, running, canRun, preparing, progress, onCancel, pulseRun, remedyActions, remedyEditor, onRun, onJump,
-  validationCount, result, runKey, workflowYml, workflowPinned, reportSerious, gateResults,
+  validationCount, result, runKey, workflowYml, workflowPinned, reportSerious, preLayoutNotice, onMarkdown,
 }: {
   mode: SpecMode
   onModeChange: (mode: SpecMode) => void
@@ -79,11 +78,12 @@ export function SpecPane({
   workflowPinned: boolean
   /** Serious findings on the board's own report, carried into the verdict. */
   reportSerious: number
-  /** Results of the run that no spec row owns (the board's own check). */
-  gateResults: readonly CheckResult[]
+  /** The board report's not-routed notice, for the band before a run. */
+  preLayoutNotice: string | null
+  /** Download the landed run as Markdown. */
+  onMarkdown?: () => void
 }) {
   const [ciOpen, setCiOpen] = useState(false)
-  const [detailsOpen, setDetailsOpen] = useState(false)
   const download = (name: string, contents: string) =>
     downloadText(name, contents, 'text/plain;charset=utf-8')
 
@@ -108,75 +108,24 @@ export function SpecPane({
 
   return (
     <div className="min-w-0" data-testid="spec-pane" data-mode={mode}>
-      {/* The one toolbar: mode, then the actions. */}
-      <div className="pb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
-        <div role="tablist" aria-label="How to edit the checks" className="inline-flex items-center gap-0.5 p-0.5 rounded-lg" style={{ border: '1px solid var(--hairline)', background: 'var(--surface-2)' }}>
-          {modeButton('builder', 'Builder')}
-          {modeButton('toml', 'TOML')}
-        </div>
-        <span
-          className="text-[11px] inline-flex items-center gap-1.5 min-w-0"
-          style={{ color: 'var(--silk-faint)' }}
-          title={stale
-            ? 'The spec changed since the last run'
-            : 'The assertions that run, and the file the download writes'}
-        >
-          <span style={{ width: 7, height: 7, borderRadius: 4, display: 'inline-block', flexShrink: 0, background: stale ? 'var(--warn)' : 'var(--ok)' }} />
-          <span className="truncate">{specFileName}</span>
-        </span>
-        <div className="sm:ml-auto flex flex-wrap items-center gap-2 min-w-0 max-w-full">
-          <button
-            type="button"
-            data-testid="run-checks"
-            disabled={!canRun || running || preparing}
-            onClick={onRun}
-            className={`hb-btn-primary hb-press px-4 py-1.5 text-[13px] inline-flex items-center gap-2${pulseRun && !running ? ' run-nudge' : ''}`}
-          >
-            {running && <span className="slot-spin" style={{ borderTopColor: 'var(--on-copper)' }} />}
-            {running ? 'Running…' : preparing ? 'Preparing…' : pulseRun ? 'Run the checks again' : 'Run these checks now'}
-          </button>
-          <button
-            type="button"
-            className="hb-btn hb-press px-3 py-1.5 text-[13px] max-w-full"
-            style={{ whiteSpace: 'normal', overflowWrap: 'anywhere', textAlign: 'left' }}
-            onClick={() => download(specFileName, specText)}
-          >
-            Download {specStem}.toml
-          </button>
-          <button
-            type="button"
-            className="hb-btn hb-press px-3 py-1.5 text-[13px]"
-            aria-expanded={ciOpen}
-            onClick={() => setCiOpen(open => !open)}
-          >
-            {ciOpen ? 'Hide GitHub CI setup' : 'Set up GitHub CI'}
-          </button>
-        </div>
-      </div>
-
-      <RunStrip
-        result={result} stale={stale} running={running} canRun={canRun}
-        preparing={preparing} progress={progress} onCancel={onCancel}
-        validationCount={validationCount} reportSerious={reportSerious}
-        detailsOpen={detailsOpen} onToggleDetails={() => setDetailsOpen(open => !open)} onJump={onJump}
-        specFileName={specFileName}
-      />
-
-      {/* Every counted result is visible here: the ones no row owns get a card. */}
-      <BoardGate results={gateResults} stale={stale} />
-
-      {/* The run's full account behind one click: the single slot for the
-          remedies and the evidence. */}
-      {result && detailsOpen && (
-        <div data-testid="run-details" className="hb-card view-enter mt-2 px-3 pb-3">
-          <RunResults
-            result={result} runKey={runKey} stale={stale} rawMode={showAllResults} reportSerious={reportSerious}
-            remedyActions={remedyActions} remedyEditor={remedyEditor} specFileName={specFileName}
+      <VerdictBand
+        result={result} runKey={runKey} stale={stale} running={running} preparing={preparing}
+        progress={progress} onCancel={onCancel} canRun={canRun} onRun={onRun} pulseRun={pulseRun}
+        validationCount={validationCount} reportSerious={reportSerious} onJump={onJump}
+        specFileName={specFileName} specToml={runKey ?? ''} rawMode={showAllResults}
+        preLayoutNotice={preLayoutNotice} remedyActions={remedyActions} remedyEditor={remedyEditor}
+        exportMenu={
+          <ChecksExport
+            specFileName={specFileName}
+            onDownloadSpec={() => download(specFileName, specText)}
+            cliCommand={`hauksbee-ci run ci/${specFileName}`}
+            onSetUpCi={() => setCiOpen(open => !open)}
+            ciOpen={ciOpen}
+            exportId={result?.ok && !stale ? result.export_id : null}
+            onMarkdown={result?.ok ? onMarkdown : undefined}
           />
-        </div>
-      )}
-      {/* A model editor a remedy opened must be reachable even when the drawer is shut. */}
-      {result && !detailsOpen && remedyEditor}
+        }
+      />
 
       {/* GitHub CI setup: the two files and where they go. */}
       {ciOpen && (
@@ -187,7 +136,7 @@ export function SpecPane({
             this spec in <code className="hb-inline">ci/</code>.
           </div>
           <div className="text-[12px] mb-1" style={{ color: 'var(--silk-dim)' }}>
-            1. <code className="hb-inline break-all">ci/{specStem}.toml</code>; the Download button above produces it
+            1. <code className="hb-inline break-all">ci/{specStem}.toml</code>; Export, then Download {specFileName}, produces it
             (paths already relative to that layout).
           </div>
           {/* break-all: the workflow path outgrows the sticky card at
@@ -228,9 +177,25 @@ export function SpecPane({
         </div>
       )}
 
-      {firmwareChoice && <div className="mt-3">{firmwareChoice}</div>}
+      {/* How to edit: the builder or the TOML, one surface at a time. */}
+      <div className="mt-5 mb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div role="tablist" aria-label="How to edit the checks" className="inline-flex items-center gap-0.5 p-0.5 rounded-lg" style={{ border: '1px solid var(--hairline)', background: 'var(--surface-2)' }}>
+          {modeButton('builder', 'Builder')}
+          {modeButton('toml', 'TOML')}
+        </div>
+        <span
+          className="text-[11px] inline-flex items-center gap-1.5 min-w-0"
+          style={{ color: 'var(--silk-faint)' }}
+          title={stale ? 'The spec changed since the last run' : 'The spec matches the last run'}
+        >
+          <span style={{ width: 7, height: 7, borderRadius: 4, display: 'inline-block', flexShrink: 0, background: stale ? 'var(--warn)' : 'var(--ok)' }} />
+          <span className="truncate">{specFileName}{stale ? ', changed since the last run' : ''}</span>
+        </span>
+      </div>
 
-      <div className="mt-3">
+      {firmwareChoice && <div className="mb-3">{firmwareChoice}</div>}
+
+      <div>
         {mode === 'builder' ? builder : (
           <div className="hb-card overflow-hidden">
             {pathLines && (
@@ -268,12 +233,15 @@ export function SpecPane({
         )}
       </div>
 
-      {/* The exact bytes the Download button writes, whole. */}
-      <details className="mt-2 text-[12px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
+      {/* The exact bytes the spec download writes, whole. The TOML mode is the
+          file itself, so this only rides under the builder. */}
+      {mode === 'builder' && <details className="mt-2 text-[12px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
         <summary className="cursor-pointer">
-          The file as downloaded. Running from here uses the design inputs already uploaded
-          in this session, so the path lines are for the checked-in copy.
+          See the spec file this builds
         </summary>
+        <div className="mt-1">
+          A run here uses the files uploaded in this session; the path lines are for the checked-in copy.
+        </div>
         <pre
           data-testid="spec-preview"
           className="hb-code mt-1.5 p-3 overflow-auto text-[11px] leading-relaxed"
@@ -281,7 +249,7 @@ export function SpecPane({
         >
           {specText}
         </pre>
-      </details>
+      </details>}
     </div>
   )
 }

@@ -8,6 +8,10 @@ import { ResultLinkContext, type ResultLinkHandlers } from '../report/ResultLink
 /** Switch to the Board view, when the Checks page is mounted beside one. */
 export const ShowBoardContext = createContext<(() => void) | null>(null)
 
+/** Light a set of nets together on the Board view and go there (the unrouted
+ *  nets of a not-yet-routed board), when the Checks page sits beside one. */
+export const ShowNetsContext = createContext<((nets: string[], label: string) => void) | null>(null)
+
 /** Words that point at the board ("click a trace on the board") as a button
  *  that goes there, or as plain words where there is no board to go to. */
 export function ToBoard({ children }: { children: React.ReactNode }) {
@@ -29,12 +33,14 @@ export function ToBoard({ children }: { children: React.ReactNode }) {
 /** The Checks page's reach into the board: a part or net chip on a check row
  *  goes to the Board view with that part or net selected (its card open), the
  *  same selection a click on the canvas makes. */
-export function ChecksLinks({ report, onShow, selectNet, selectComponent, children }: {
+export function ChecksLinks({ report, onShow, selectNet, selectComponent, showNets, children }: {
   report: WebReport
   /** Switch to the Board view. */
   onShow: () => void
   selectNet: (net: string | null) => void
   selectComponent: (c: SelectedComponent | null) => void
+  /** Light these nets on the board, labelled, and switch to it. */
+  showNets?: (nets: string[], label: string) => void
   children: React.ReactNode
 }) {
   const links = useMemo<ResultLinkHandlers>(() => ({
@@ -60,7 +66,9 @@ export function ChecksLinks({ report, onShow, selectNet, selectComponent, childr
   }), [report, onShow, selectNet, selectComponent])
   return (
     <ShowBoardContext.Provider value={onShow}>
-      <ResultLinkContext.Provider value={links}>{children}</ResultLinkContext.Provider>
+      <ShowNetsContext.Provider value={showNets ?? null}>
+        <ResultLinkContext.Provider value={links}>{children}</ResultLinkContext.Provider>
+      </ShowNetsContext.Provider>
     </ShowBoardContext.Provider>
   )
 }

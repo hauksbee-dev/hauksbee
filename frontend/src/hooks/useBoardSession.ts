@@ -53,6 +53,9 @@ interface RestoredFrom {
   sessionName: string
 }
 
+/** Nets shown together on the board at another view's request. */
+export interface HighlightNets { nets: string[]; label: string; seq: number }
+
 export interface BoardSession {
   report: WebReport | null
   /** In-progress upload; while set, further uploads are blocked. */
@@ -99,6 +102,10 @@ export interface BoardSession {
   selectedComponent: SelectedComponent | null
   setSelectedNet: (net: string | null) => void
   setSelectedComponent: (c: SelectedComponent | null) => void
+  /** A set of nets another view asked the board to show together (the Checks
+   *  page's "show the unrouted nets"), with the words the board labels it by. */
+  highlightNets: HighlightNets | null
+  setHighlightNets: (h: { nets: string[]; label: string } | null) => void
   handleBoard: (f: File) => void
   handleFirmware: (f: File) => void
   handleSchematic: (f: File) => void
@@ -165,6 +172,9 @@ export function useBoardSession(opts: {
   const [boardUrl, setBoardUrl] = useState<string | null>(null)
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
   const [selectedComponent, setSelectedComponentRaw] = useState<SelectedComponent | null>(null)
+  const [highlightNets, setHighlightNetsRaw] = useState<HighlightNets | null>(null)
+  const setHighlightNets = useCallback((h: { nets: string[]; label: string } | null) =>
+    setHighlightNetsRaw(prev => (h ? { ...h, seq: (prev?.seq ?? 0) + 1 } : null)), [])
   const [runEpoch, setRunEpoch] = useState(0)
   const [restoredFrom, setRestoredFrom] = useState<RestoredFrom | null>(null)
 
@@ -243,6 +253,7 @@ export function useBoardSession(opts: {
     setUploadNotice(null)
     setSelectedNet(null)
     setSelectedComponentRaw(null)
+    setHighlightNetsRaw(null)
     setLaunch({ phase: 'idle' })
     // A real run replaces a restored report, and with it the "this came from
     // storage" caveat: the surfaces would otherwise keep telling the user to
@@ -357,6 +368,7 @@ export function useBoardSession(opts: {
       clearSupplemental()
       setSelectedNet(null)
       setSelectedComponentRaw(null)
+      setHighlightNetsRaw(null)
       void analyze(f, null, null)
     } else {
       void analyze(f, firmwareFile, schematicFile)
@@ -468,6 +480,7 @@ export function useBoardSession(opts: {
     clearSupplemental()
     setSelectedNet(null)
     setSelectedComponentRaw(null)
+    setHighlightNetsRaw(null)
     setBusy({
       board: sample.board.split('/').pop() ?? 'sample',
       firmware: sample.firmware?.split('/').pop() ?? null,
@@ -624,6 +637,8 @@ export function useBoardSession(opts: {
     selectedComponent,
     setSelectedNet: selectNet,
     setSelectedComponent: selectComponent,
+    highlightNets,
+    setHighlightNets,
     handleBoard,
     handleFirmware,
     handleSchematic: file => restage({ schematic: file }),

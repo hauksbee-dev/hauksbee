@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { blockingCauses, causeGroups, openPartCount, OpenPartsSheet, withoutIds } from '../src/components/checks/Remedies'
 import type { RemedyActions } from '../src/components/checks/Remedies'
 import { RunResults } from '../src/components/checks/RunResults'
+import { VerdictBand } from '../src/components/checks/VerdictBand'
 import { AssertionEvidence, parseMeasures } from '../src/components/checks/pieces'
 import { identityScaffold, tomlIssues } from '../src/components/WritePart'
 import { buildToml, scaffoldRows, supplyToml } from '../src/lib/check-spec'
@@ -88,22 +89,30 @@ describe('what blocks judgement', () => {
 describe('an unjudged run', () => {
   const run = invalidRun(registry, ['open-part:Q1'])
   const html = renderToStaticMarkup(
-    <RunResults result={run} runKey="k" stale={false} rawMode={false} reportSerious={0} remedyActions={actions} specFileName="spec.toml" />,
+    <VerdictBand
+      result={run} runKey="k" stale={false} running={false} canRun onRun={() => {}} validationCount={0}
+      reportSerious={0} onJump={() => {}} specFileName="spec.toml" specToml={'[[assert]]\nkind = "no_faults"\n'}
+      rawMode={false} preLayoutNotice={null} remedyActions={actions} exportMenu={<span data-testid="export-slot" />}
+    />,
   )
 
-  test('says it was not judged and opens what blocks it from one chip with the backend count', () => {
-    expect(html).toContain('NOT JUDGED')
+  test('says once that it was not judged, and the one thing to do, with the backend count', () => {
+    expect(html).toContain('data-testid="run-tag"')
+    expect(html).toContain('Not judged yet: 1 check waits on models for 2 parts.')
     expect(html).toContain('data-testid="open-parts-entry"')
-    expect(html).toContain('2 open parts block judgement')
+    expect(html).toContain('Model the 2 open parts')
   })
 
-  test('offers the CLI writers\' files for export', () => {
-    expect(html).toContain('data-testid="run-export-open"')
+  test('sits Run and the export menu beside the verdict', () => {
+    expect(html).toContain('data-testid="run-checks"')
+    expect(html).toContain('data-testid="export-slot"')
   })
 
-  test('keeps the engine sentence one click away', () => {
-    expect(html).toMatch(/<details[^>]*data-testid="explain-verdict"/)
-    expect(html).toContain('Q1 has no model.')
+  test('keeps the engine sentence one click away, in Details', () => {
+    expect(html).toContain('data-testid="run-details-toggle"')
+    const details = renderToStaticMarkup(<RunResults result={run} overall="invalid" stale={false} rawMode={false} />)
+    expect(details).toMatch(/<details[^>]*data-testid="explain-verdict"/)
+    expect(details).toContain('Q1 has no model.')
   })
 
   test('the first-run whole-board check explains why it waits, on its row', () => {
@@ -111,8 +120,13 @@ describe('an unjudged run', () => {
       <AssertionEvidence result={run.results![0]} assumptions={registry} inventory={[]} repeats={new Set()} stale={false} />,
     )
     expect(row).toContain('data-testid="not-judged"')
-    expect(row).toContain('waits on the 2 open parts')
+    expect(row).toContain('2 parts have none yet')
+    // The parts are named, each one a link to the board, with the fix beside them.
+    expect(row).toContain('data-testid="not-judged-parts"')
+    expect(row).toContain('Q1')
     expect(row).toContain('data-testid="not-judged-open"')
+    // The engine's verdict sentence is not shown raw on the row.
+    expect(row).not.toContain('INVALID evidence')
   })
 })
 

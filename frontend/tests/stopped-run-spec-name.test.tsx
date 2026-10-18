@@ -1,12 +1,12 @@
 // A browser check run stopped at its ceiling says which terminal command to run.
 // The engine writes the spec placeholder (see hauksbee_ir::vocabulary); the page
-// must show the file the person downloaded in its place, in both the run strip
-// and the details drawer.
+// must show the file the person downloaded in its place, in the verdict band
+// (the one place the Checks page states a run's outcome).
 
 import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { RunResults } from '../src/components/checks/RunResults'
-import { RunStrip } from '../src/components/checks/RunStrip'
+import { VerdictBand } from '../src/components/checks/VerdictBand'
 import { namedSpecIn, SPEC_FILE_PLACEHOLDER } from '../src/lib/ci-workflow'
 import type { RunResponse } from '../src/types/report'
 
@@ -18,9 +18,10 @@ const STOPPED = 'The check run was stopped after 10 minutes while "Simulating" (
 const stopped: RunResponse = { ok: false, error: STOPPED }
 
 const strip = (result: RunResponse | null) => renderToStaticMarkup(
-  <RunStrip
-    result={result} stale={false} running={false} canRun validationCount={0} reportSerious={0}
-    detailsOpen={false} onToggleDetails={() => {}} onJump={() => {}} specFileName="chain2500.toml"
+  <VerdictBand
+    result={result} runKey="k" stale={false} running={false} canRun onRun={() => {}} validationCount={0}
+    reportSerious={0} onJump={() => {}} specFileName="chain2500.toml" specToml="" rawMode={false}
+    preLayoutNotice={null} exportMenu={null}
   />,
 )
 
@@ -37,21 +38,15 @@ describe('a stopped check run names the downloaded spec', () => {
     expect(namedSpecIn(undefined, 'chain2500.toml')).toBeUndefined()
   })
 
-  test('the run strip shows the real file name, not the placeholder', () => {
+  test('the verdict band shows the real file name, not the placeholder', () => {
     const html = strip(stopped)
     expect(html).toContain('hauksbee-ci run chain2500.toml')
     expect(html).not.toContain('spec.toml&gt;')
     expect(html).not.toContain(SPEC_FILE_PLACEHOLDER)
   })
 
-  test('the details drawer shows the real file name too', () => {
-    const html = renderToStaticMarkup(
-      <RunResults
-        result={stopped} runKey="k" stale={false} rawMode={false} reportSerious={0}
-        specFileName="chain2500.toml"
-      />,
-    )
-    expect(html).toContain('hauksbee-ci run chain2500.toml')
-    expect(html).not.toContain('spec.toml&gt;')
+  test('the details drawer does not repeat the message the band already shows', () => {
+    const html = renderToStaticMarkup(<RunResults result={stopped} overall="failed" stale={false} rawMode={false} />)
+    expect(html).toBe('')
   })
 })

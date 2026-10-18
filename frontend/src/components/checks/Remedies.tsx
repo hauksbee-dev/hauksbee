@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { EvidenceAssumption, Remedy, RunResponse } from '../../types/report'
 import { assumptionPart, plural } from '../../lib/report-view'
 import { useTermEntry } from '../ui'
@@ -82,6 +82,14 @@ const OPEN_EVENT = 'hb:open-parts'
  *  "Not judged" line). */
 export const showOpenParts = () => window.dispatchEvent(new Event(OPEN_EVENT))
 
+/** Call `onOpen` whenever something on the page asks for the sheet. */
+export function useOpenPartsRequest(onOpen: () => void) {
+  useEffect(() => {
+    window.addEventListener(OPEN_EVENT, onOpen)
+    return () => window.removeEventListener(OPEN_EVENT, onOpen)
+  }, [onOpen])
+}
+
 /** The single entry point: a chip with the count that opens the sheet. */
 export function OpenPartsEntry({ groups, blocking, onOpen }: { groups: CauseGroup[]; blocking: boolean; onOpen: () => void }) {
   if (groups.length === 0) return null
@@ -96,7 +104,7 @@ export function OpenPartsEntry({ groups, blocking, onOpen }: { groups: CauseGrou
       className="hb-chip hb-press inline-flex items-center gap-1.5 px-2.5 py-1 text-[12px] text-left max-w-full"
       style={{ minHeight: 30, color: blocking ? 'var(--warn-strong)' : undefined }}
     >
-      {what}{blocking ? ' block judgement' : ' qualify this run'}
+      {blocking ? (open > 0 ? `Model the ${what}` : `Resolve ${what}`) : `${what} qualify this run`}
     </button>
   )
 }
@@ -255,11 +263,7 @@ export function OpenParts({ result, blocking, actions, editor }: {
 }) {
   const groups = useMemo(() => blockingCauses(result), [result])
   const [open, setOpen] = useState(false)
-  useEffect(() => {
-    const show = () => setOpen(true)
-    window.addEventListener(OPEN_EVENT, show)
-    return () => window.removeEventListener(OPEN_EVENT, show)
-  }, [])
+  useOpenPartsRequest(useCallback(() => setOpen(true), []))
   if (!actions) return null
   return (
     <>

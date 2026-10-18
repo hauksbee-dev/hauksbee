@@ -175,7 +175,19 @@ export function BoardView({
     }
   }, [r, restoredFrom, author, showGuessed, setSelectedNet, setSelectedComponent])
   const pointedRefs = useMemo(() => (pointed?.kind === 'part' ? [pointed.ref] : []), [pointed])
-  const pointedNets = useMemo(() => (pointed?.kind === 'net' ? [pointed.net] : []), [pointed])
+  // A set of nets another view asked to see together (the Checks page's
+  // "show the unrouted nets"): lit with the pointed net, framed once per ask.
+  const highlight = session.highlightNets
+  const pointedNets = useMemo(
+    () => [...(pointed?.kind === 'net' ? [pointed.net] : []), ...(highlight?.nets ?? [])],
+    [pointed, highlight],
+  )
+  useEffect(() => {
+    if (!highlight) return
+    frameSeq.current += 1
+    setFrameTarget({ refs: [], nets: highlight.nets, seq: frameSeq.current })
+    requestAnimationFrame(() => centerInScroller(mapRef.current))
+  }, [highlight])
 
   if (!r.ok) return <UploadFailure report={r} session={session} />
 
@@ -455,6 +467,23 @@ export function BoardView({
                 only the full-screen map, which has no room to spare, floats it. */}
             <div className="flex flex-col gap-3 min-[1100px]:flex-row min-[1100px]:items-start">
             <div className="min-w-0 flex-1 w-full">
+            {highlight && (
+              <div
+                data-testid="board-highlight"
+                className="flex items-center gap-2 mb-2 px-3 py-1.5 rounded-lg text-[12px]"
+                style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)', color: 'var(--silk)' }}
+              >
+                <span className="min-w-0 flex-1">Lit on the board: {highlight.label}</span>
+                <button
+                  type="button"
+                  data-testid="board-highlight-clear"
+                  className="hb-btn hb-press"
+                  onClick={() => session.setHighlightNets(null)}
+                >
+                  Clear
+                </button>
+              </div>
+            )}
             <div
               ref={mapRef}
               className={mapFullscreen ? 'overflow-hidden' : 'rounded-xl overflow-hidden'}

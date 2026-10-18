@@ -228,6 +228,13 @@ function Shell({ boot }: { boot: Boot }) {
   }, [deck, driveLive, openLiveSession, reportOk, serverLiveActive, session.liveMode, simMounted])
 
   const showBoard = useCallback(() => setView('board'), [])
+  const { setSelectedNet, setSelectedComponent, setHighlightNets } = session
+  const showNets = useCallback((nets: string[], label: string) => {
+    setSelectedNet(null)
+    setSelectedComponent(null)
+    setHighlightNets({ nets, label })
+    setView('board')
+  }, [setSelectedNet, setSelectedComponent, setHighlightNets])
 
   const analyzeAnother = useCallback(() => {
     session.resetFlow()
@@ -353,7 +360,7 @@ function Shell({ boot }: { boot: Boot }) {
                 so it keeps its width and the board name (which has a tooltip
                 and a natural ellipsis point) gives ground first. */}
             <h1 className="text-[15px] font-semibold shrink-0" style={{ margin: 0, color: 'var(--silk)' }}>
-              {view === 'sim' && deck ? 'Circuit sim' : VIEW_TITLES[view]}
+              {view === 'sim' && deck ? 'Circuit sim' : view === 'board' && !reportOk ? 'Open a board' : VIEW_TITLES[view]}
             </h1>
             {headerBoard && (
               <span
@@ -419,11 +426,13 @@ function Shell({ boot }: { boot: Boot }) {
               onClick={driveLive}
               disabled={session.launch.phase === 'launching'}
               title={liveLabel}
-              className="hb-btn-primary hb-press inline-flex items-center justify-center gap-2 px-2.5 sm:px-3.5 text-[12px] whitespace-nowrap shrink-0"
+              // Secondary everywhere: each view's own next step (the Board
+              // card's, Checks' Run) is the one filled button on screen.
+              className={`hb-btn hb-press inline-flex items-center justify-center gap-2 px-2.5 sm:px-3.5 text-[12px] whitespace-nowrap shrink-0`}
               style={{ height: 32 }}
             >
               {session.launch.phase === 'launching'
-                ? <span className="slot-spin" style={{ borderTopColor: 'var(--on-copper)' }} />
+                ? <span className="slot-spin" style={{ borderTopColor: 'var(--copper)' }} />
                 : <PlayIcon size={12} />}
               <span className="max-sm:sr-only">{liveLabel}</span>
             </button>
@@ -474,7 +483,7 @@ function Shell({ boot }: { boot: Boot }) {
 
           {reportOk && report && (
             <div style={{ display: view === 'checks' ? 'block' : 'none', height: '100%' }}>
-              <ChecksLinks report={report} onShow={showBoard} selectNet={session.setSelectedNet} selectComponent={session.setSelectedComponent}>
+              <ChecksLinks report={report} onShow={showBoard} selectNet={session.setSelectedNet} selectComponent={session.setSelectedComponent} showNets={showNets}>
               <Suspense fallback={null}>
               <ChecksView
                 // Remount per board (the key doubles as the localStorage key):
