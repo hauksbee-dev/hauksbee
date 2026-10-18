@@ -134,7 +134,8 @@
       "badge": "below Luna baseline",
       "escalate": [
         "claude-sonnet-5-5"
-      ]
+      ],
+      "cheaper": true
     },
     {
       "id": "claude-code-sonnet",
@@ -205,7 +206,8 @@
       "recommended": false,
       "escalate": [
         "gpt-6.1-sol"
-      ]
+      ],
+      "cheaper": true
     },
     {
       "id": "openai",
@@ -307,36 +309,46 @@
         },
         {
           "name": "claude-fable-5-1",
+          "label": "Fable 5.1",
           "note": ""
         }
       ],
       "agy": [
         {
           "name": "gemini-3.8-flash",
-          "note": "Recommended: fast and accurate"
+          "label": "Gemini 3.8 Flash",
+          "note": "Recommended: fast and accurate",
+          "default": true
         },
         {
           "name": "gemini-3.1-pro",
+          "label": "Gemini 3.1 Pro",
           "note": "Slower, stronger tier for dense datasheets"
         }
       ],
       "codex": [
         {
           "name": "gpt-6.1-sol",
-          "note": "Recommended: most accurate"
+          "label": "GPT-6.1 Sol",
+          "note": "Recommended: most accurate",
+          "default": true
         },
         {
           "name": "gpt-6-luna",
+          "label": "GPT-6 Luna",
           "note": "Very good for most circuit extraction, and much cheaper"
         }
       ],
       "api": [
         {
           "name": "gpt-6.1-sol",
-          "note": "Recommended: most accurate"
+          "label": "GPT-6.1 Sol",
+          "note": "Recommended: most accurate",
+          "default": true
         },
         {
           "name": "gpt-6-luna",
+          "label": "GPT-6 Luna",
           "note": "Very good for most circuit extraction, and much cheaper"
         }
       ]
@@ -439,5 +451,6 @@
       "default": "OPENAI_API_KEY"
     }
   ],
-  "consent_notice": "This sends the datasheet to an LLM backend: whichever is configured for extraction (Claude Code, Antigravity, Codex, or an OpenAI-compatible API; `hauksbee models backend show` or the Settings page says which). The API gets the extracted text. An agent CLI runs a model with a shell on a scratch copy of the PDF, its text and page images, and whatever it reads can reach that vendor: hauksbee keeps Codex (workspace-write) and Claude Code out of your home and temporary directories and off the web, but Antigravity, or Codex in another sandbox mode, can read anything your account can. Nothing is sent until you ask for it. The result is a draft for you to check, not a measurement: a model it writes carries provenance \"datasheet-extracted\"."
+  "consent_notice": "This sends the datasheet to an LLM backend: whichever is configured for extraction (Claude Code, Antigravity, Codex, or an OpenAI-compatible API; `hauksbee models backend show` or the Settings page says which). The API gets the extracted text. An agent CLI runs a model with a shell on a scratch copy of the PDF, its text and page images, and whatever it reads can reach that vendor: hauksbee keeps Codex (workspace-write) and Claude Code out of your home and temporary directories and off the web, but Antigravity, or Codex in another sandbox mode, can read anything your account can. Nothing is sent until you ask for it. The result is a draft for you to check, not a measurement: a model it writes carries provenance \"datasheet-extracted\".",
+  "default_preset": "claude-code"
 }
