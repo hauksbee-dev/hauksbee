@@ -233,6 +233,7 @@ function ModelPicks({ picks, current, hintable, onPick }: {
   onPick: (name: string) => void
 }) {
   const listed = picks.some(p => p.name === current)
+  const defaultPick = picks.find(p => p.default) ?? picks[0]
   return (
     <div className="mt-2 flex flex-col gap-1" data-testid="settings-model-picks">
       {picks.map(p => (
@@ -266,7 +267,7 @@ function ModelPicks({ picks, current, hintable, onPick }: {
       ))}
       {!listed && hintable && picks.length > 0 && (
         <span className="text-[11px]" data-testid="settings-model-hint" style={{ color: 'var(--silk-faint)' }}>
-          {current} is not in the current list and is used as written; {(picks.find(p => p.default) ?? picks[0]).name} is the default.
+          {current} is not in the current list and is used as written; {defaultPick.label ?? defaultPick.name} is the default.
         </span>
       )}
     </div>
@@ -584,21 +585,14 @@ function Disclosure({ open, onToggle, testId, children }: {
   )
 }
 
-/** Which tool to steer a fresh install to. The server marks one preset per tool
- *  `recommended`; the page names ONE of them: the first whose tool works here, in
- *  the order the engine's own auto-detection tries them (extract_config.rs:
- *  codex, claude-code, agy). With none installed it is codex, as in the engine. */
-const TOOL_ORDER = ['codex', 'claude-code', 'agy']
-
-/** The cheaper way to use the same tool, offered under the recommendation. */
-const CHEAPER_PRESET: Record<string, string> = { codex: 'codex-luna', 'claude-code': 'claude-code-haiku' }
-
+/** The setup the page names, and the cheaper way to use the same tool. Both are
+ *  the engine's call: `default_preset` is the preset a fresh install is steered
+ *  to (the rule `hauksbee models backend setup` uses) and a preset's `cheaper`
+ *  flag marks the cheaper option for its tool. An older server sends neither, so
+ *  the first preset it marks `recommended` stands in and no cheaper one is shown. */
 export function featuredPresets(data: ExtractSettings): { recommended?: ExtractPreset; cheaper?: ExtractPreset } {
-  const rank = (p: ExtractPreset) => { const i = TOOL_ORDER.indexOf(p.backend); return i < 0 ? TOOL_ORDER.length : i }
-  const ordered = data.presets.filter(p => p.recommended).sort((a, b) => rank(a) - rank(b))
-  const recommended = ordered.find(p => availabilityFor(data, p.backend)?.available) ?? ordered[0]
-  const cheaperId = recommended ? CHEAPER_PRESET[recommended.backend] : undefined
-  const cheaper = cheaperId ? data.presets.find(p => p.id === cheaperId) : undefined
+  const recommended = data.presets.find(p => p.id === data.default_preset) ?? data.presets.find(p => p.recommended)
+  const cheaper = recommended ? data.presets.find(p => p.cheaper && p.backend === recommended.backend) : undefined
   return { recommended, cheaper }
 }
 

@@ -949,8 +949,7 @@ export interface DepInfo {
   path: string | null
   version: string | null
   unlocks: string
-  /** What is missing without it, in plain words (engine text; `DepsPanel`'s
-   *  `DEP_PLAIN` stopgap can drop its copy and read this). Absent on an older server. */
+  /** What is missing without it, in plain words (engine text). Absent on an older server. */
   without?: string
   installable: boolean
   cost: string

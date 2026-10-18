@@ -7,43 +7,46 @@ import { escalationSummary, featuredPresets } from '../src/components/SettingsVi
 import { costForOs } from '../src/components/DepsPanel'
 import type { ExtractBackendAvailability, ExtractPreset, ExtractSettings } from '../src/types/report'
 
-const preset = (id: string, backend: string, recommended: boolean): ExtractPreset => ({
-  id, label: id, summary: '', backend, model: 'm', effort: 'high', api_base: '', api_key_env: '', recommended,
+const preset = (id: string, backend: string, recommended: boolean, cheaper = false): ExtractPreset => ({
+  id, label: id, summary: '', backend, model: 'm', effort: 'high', api_base: '', api_key_env: '', recommended, cheaper,
 })
 const avail = (backend: string, available: boolean): ExtractBackendAvailability => ({
   id: backend, label: backend, backend, available, detail: '', install: '', sends_data_to: '',
 })
-const settings = (installed: string[]): ExtractSettings => ({
+// The engine decides which preset a fresh install is steered to and which preset
+// is the cheaper way to use a tool; the page only reads those two facts.
+const settings = (installed: string[], defaultPreset?: string): ExtractSettings => ({
   presets: [
     preset('claude-code', 'claude-code', true),
-    preset('claude-code-haiku', 'claude-code', false),
+    preset('claude-code-haiku', 'claude-code', false, true),
     preset('agy', 'agy', true),
     preset('codex', 'codex', true),
-    preset('codex-luna', 'codex', false),
+    preset('codex-luna', 'codex', false, true),
     preset('openai', 'api', false),
   ],
+  default_preset: defaultPreset,
   backends: ['claude-code', 'agy', 'codex', 'api'].map(b => avail(b, installed.includes(b))),
 }) as unknown as ExtractSettings
 
 describe('one recommended setup', () => {
-  test('with every tool installed it is the product default, Codex, with Luna as the cheaper option', () => {
-    const { recommended, cheaper } = featuredPresets(settings(['claude-code', 'agy', 'codex']))
+  test('it is the preset the engine steers a fresh install to, with that tool\'s cheaper option', () => {
+    const { recommended, cheaper } = featuredPresets(settings(['claude-code', 'agy', 'codex'], 'codex'))
     expect(recommended?.id).toBe('codex')
     expect(cheaper?.id).toBe('codex-luna')
   })
 
-  test('it follows the tool that is installed, with that tool\'s cheaper option', () => {
-    const { recommended, cheaper } = featuredPresets(settings(['claude-code']))
+  test('it follows the engine when it picks another tool, with that tool\'s cheaper option', () => {
+    const { recommended, cheaper } = featuredPresets(settings(['claude-code'], 'claude-code'))
     expect(recommended?.id).toBe('claude-code')
     expect(cheaper?.id).toBe('claude-code-haiku')
   })
 
-  test('with nothing installed it is Codex, as the engine\'s own detection falls back', () => {
-    expect(featuredPresets(settings([])).recommended?.id).toBe('codex')
+  test('an older server with no default_preset gets the first preset it marks recommended, in its own order', () => {
+    expect(featuredPresets(settings([])).recommended?.id).toBe('claude-code')
   })
 
   test('a tool with no cheaper preset offers none', () => {
-    expect(featuredPresets(settings(['agy'])).cheaper).toBeUndefined()
+    expect(featuredPresets(settings(['agy'], 'agy')).cheaper).toBeUndefined()
   })
 })
 
