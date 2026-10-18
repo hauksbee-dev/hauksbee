@@ -267,9 +267,7 @@ pub fn prepare_run_inputs(
     // none; those checks get the bytes twin or an honest "not checked").
     let norm = crate::board_input::from_path(&cfg.board)?;
     hauksbee_ir::progress::learned(norm.board.components.len(), norm.board.nets.len());
-    if norm.layout_text.is_none() {
-        hauksbee_ir::progress::learned_copper(0);
-    }
+    hauksbee_ir::progress::learned_layout(norm.layout_text.as_deref());
     hauksbee_ir::progress::begin(hauksbee_ir::progress::Stage::Models, 0);
     let input_kind = norm.kind;
     let input_notes = norm.notes.clone();

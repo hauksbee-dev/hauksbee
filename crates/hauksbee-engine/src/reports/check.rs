@@ -211,16 +211,19 @@ impl CheckReport<'_> {
         let summary = BindSummary::from_report(&bound.report);
         // The lint judges the board at every assumed corner of a class-only
         // part; the evidence then says the result holds across them.
-        hauksbee_ir::progress::begin(
-            hauksbee_ir::progress::Stage::Nets,
-            hauksbee_ir::progress::LINT_UNITS,
-        );
+        hauksbee_ir::progress::begin_lint();
         let (mut lint, corner_plan) = crate::checks::engine_lint_swept(board, lib);
         if let Some(plan) = &corner_plan {
             plan.mark(&mut bound.report);
         }
+        // The layout checks run here, still part of the nets stage, as they do
+        // on the web path: the bar counts them with the lint, not with the
+        // copper sweep that follows. They read the layout text alone, so the
+        // findings are the same wherever they are gathered.
+        lint.findings
+            .extend(crate::checks::layout_lint(board, input.geo_text(), Some(board_path)).findings);
         let evidence = input.evidence(&bound.report)?;
-        hauksbee_ir::progress::begin(hauksbee_ir::progress::Stage::Copper, 0);
+        hauksbee_ir::progress::begin_copper();
         let (clearance_input, mut drc) = input.drc()?;
         let evidence = evidence.with_custom_rules_coverage(
             clearance_input
@@ -234,13 +237,11 @@ impl CheckReport<'_> {
         let qualification = schematic_ties.map(|ties| ties.qualify(&drc));
         let evidence =
             super::with_schematic_evidence(evidence, schematic_ties, qualification.as_ref())?;
-        lint.findings
-            .extend(crate::checks::layout_lint(board, input.geo_text(), Some(board_path)).findings);
         // Route through the single SI chokepoint so this aggregate surface carries
         // the same trace-ampacity + input-cap-ripple findings as the dedicated
         // `--si` report (the bare `si_checks` omitted them, giving `--check` a false
         // "looks healthy" over an under-width power trace).
-        hauksbee_ir::progress::begin(hauksbee_ir::progress::Stage::Signals, 0);
+        hauksbee_ir::progress::begin_untracked(hauksbee_ir::progress::Stage::Signals);
         let mut si = crate::checks::engine_si(board, lib, input.geo_text());
         // USB-C CC compliance, only when the board has a USB-C receptacle.
         let usbc = crate::usb_c_report(board);
