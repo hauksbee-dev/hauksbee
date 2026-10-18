@@ -539,7 +539,7 @@ struct ModelsExtractArgs {
     #[arg(long, value_name = "TEXT")]
     value: Option<String>,
     /// Keep no trace of the agent's prompt and event stream (default: kept
-    /// under <out-dir>/trace/, the last 10 runs).
+    /// under `<out-dir>/trace/`, the last 10 runs).
     #[arg(long)]
     no_trace: bool,
 }

@@ -398,7 +398,12 @@ pub fn prepare_files(pdf: &Path, into: &Path) -> Result<(Vec<usize>, Vec<usize>)
         let found = PAGE_TOPICS.iter().filter(|t| topic_score(text, t.2) > 0);
         found.map(|t| t.0).collect()
     };
-    harness::write_pages(into, pages.iter().map(|p| (p.number, p.text.as_str(), topics(&p.text))));
+    harness::write_pages(
+        into,
+        pages
+            .iter()
+            .map(|p| (p.number, p.text.as_str(), topics(&p.text))),
+    );
     let numbers = |v: Vec<SelectedPage>| v.into_iter().map(|p| p.number).collect();
     Ok((numbers(before), numbers(now)))
 }
@@ -1769,9 +1774,11 @@ fn with_key_sections(
     // section (thermal data, ordering codes) is not crowded out by an early
     // one split over several contents entries.
     let mut seen = std::collections::HashSet::new();
-    let (firsts, repeats): (Vec<_>, Vec<_>) = keys.into_iter().partition(|&(_, label)| seen.insert(label));
+    let (firsts, repeats): (Vec<_>, Vec<_>) =
+        keys.into_iter().partition(|&(_, label)| seen.insert(label));
     let keys = firsts.into_iter().chain(repeats);
-    let mut chosen: std::collections::BTreeMap<usize, SelectedPage> = std::collections::BTreeMap::new();
+    let mut chosen: std::collections::BTreeMap<usize, SelectedPage> =
+        std::collections::BTreeMap::new();
     let mut rest = Vec::new();
     for page in selected {
         if page.number == 1 {
@@ -4852,7 +4859,11 @@ fn agent_path(ws: &Workspace) -> Result<std::ffi::OsString> {
     std::fs::write(&ds, body)?;
     std::fs::write(
         bin.join("ds.cmd"),
-        format!("@\"{}\" models ds --dir \"{}\" %*", checker.display(), ws.path().display()),
+        format!(
+            "@\"{}\" models ds --dir \"{}\" %*",
+            checker.display(),
+            ws.path().display()
+        ),
     )?;
     #[cfg(unix)]
     std::fs::set_permissions(&ds, std::os::unix::fs::PermissionsExt::from_mode(0o755))?;
@@ -5065,7 +5076,13 @@ pub(crate) fn run_agent_with(
 
 /// Keep this call's argv, prompt and event stream in the run's trace, when
 /// it keeps one; a failed call's error becomes its one event.
-fn record_trace(ws: &Workspace, exe: &Path, cmd: &Command, stdin_text: &str, stdout: &Result<String>) {
+fn record_trace(
+    ws: &Workspace,
+    exe: &Path,
+    cmd: &Command,
+    stdin_text: &str,
+    stdout: &Result<String>,
+) {
     let Some(trace) = &ws.trace else {
         return;
     };
@@ -6027,11 +6044,20 @@ mod tests {
     /// section out of a tight page budget: each section's first page comes first.
     #[test]
     fn every_key_section_gets_a_page_before_any_gets_a_second() {
-        let entry = |title: &str, pdf| crate::ds_toolkit::TocEntry { title: title.into(), printed: pdf, pdf };
-        let mut toc: Vec<_> = (10..16).map(|p| entry("Pin definitions (continued)", p)).collect();
+        let entry = |title: &str, pdf| crate::ds_toolkit::TocEntry {
+            title: title.into(),
+            printed: pdf,
+            pdf,
+        };
+        let mut toc: Vec<_> = (10..16)
+            .map(|p| entry("Pin definitions (continued)", p))
+            .collect();
         toc.push(entry("Thermal characteristics", 90));
         let first = SelectedPage::new(1, vec![], vec![], usize::MAX);
-        let picked: Vec<usize> = with_key_sections(vec![first], &toc, 4).iter().map(|p| p.number).collect();
+        let picked: Vec<usize> = with_key_sections(vec![first], &toc, 4)
+            .iter()
+            .map(|p| p.number)
+            .collect();
         assert_eq!(picked, [1, 10, 11, 90]);
     }
 

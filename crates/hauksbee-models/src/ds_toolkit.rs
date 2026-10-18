@@ -142,13 +142,31 @@ const KEY_SECTIONS: &[(&str, &str)] = &[
         "pin table",
         r"(?i)pin(out)?( and ball)? (definitions|functions|descriptions?|assignments?)|terminal functions|ball definitions|pin configuration",
     ),
-    ("absolute maximum ratings", r"(?i)^((table )?\d+(\.\d+)*\.? )?(voltage )?absolute maximum|limiting values"),
-    ("operating conditions", r"(?i)(general|recommended) operating conditions"),
-    ("thermal", r"(?i)thermal (information|characteristics)|package thermal"),
+    (
+        "absolute maximum ratings",
+        r"(?i)^((table )?\d+(\.\d+)*\.? )?(voltage )?absolute maximum|limiting values",
+    ),
+    (
+        "operating conditions",
+        r"(?i)(general|recommended) operating conditions",
+    ),
+    (
+        "thermal",
+        r"(?i)thermal (information|characteristics)|package thermal",
+    ),
     ("boot configuration", r"(?i)\bboot (mode|configuration|pin)"),
-    ("power supply scheme", r"(?i)power supply (scheme|recommendations)|embedded regulator|vcap"),
-    ("electrical characteristics", r"(?i)^(\d+(\.\d+)* )?electrical characteristics|i/o static characteristics"),
-    ("ordering information", r"(?i)ordering information|part numbering"),
+    (
+        "power supply scheme",
+        r"(?i)power supply (scheme|recommendations)|embedded regulator|vcap",
+    ),
+    (
+        "electrical characteristics",
+        r"(?i)^(\d+(\.\d+)* )?electrical characteristics|i/o static characteristics",
+    ),
+    (
+        "ordering information",
+        r"(?i)ordering information|part numbering",
+    ),
 ];
 
 /// The PDF pages the key sections start on, with their labels, in page order.
@@ -180,12 +198,21 @@ pub fn toc_markdown(toc: &[TocEntry]) -> String {
     }
     out.push_str("## Key sections for a card\n\n");
     for (page, label) in key_pages(toc) {
-        let title = toc.iter().find(|e| e.pdf == page).map_or("", |e| e.title.as_str());
+        let title = toc
+            .iter()
+            .find(|e| e.pdf == page)
+            .map_or("", |e| e.title.as_str());
         let _ = writeln!(out, "- {label}: PDF page {page} ({title})");
     }
     out.push_str("\n## Every entry\n\n| PDF page | printed | title |\n|---|---|---|\n");
     for e in toc {
-        let _ = writeln!(out, "| {} | {} | {} |", e.pdf, e.printed, e.title.replace('|', "/"));
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} |",
+            e.pdf,
+            e.printed,
+            e.title.replace('|', "/")
+        );
     }
     out
 }
@@ -265,7 +292,11 @@ fn page_texts(dir: &Path) -> Vec<String> {
         .flatten()
         .filter_map(|e| {
             let name = e.file_name().into_string().ok()?;
-            let n = name.strip_prefix("page-")?.strip_suffix(".txt")?.parse().ok()?;
+            let n = name
+                .strip_prefix("page-")?
+                .strip_suffix(".txt")?
+                .parse()
+                .ok()?;
             Some((n, e.path()))
         })
         .collect();
@@ -314,9 +345,8 @@ fn kind_of(name: &str) -> Option<crate::schema::ComponentKind> {
 fn checklist(dir: &Path, facts: &Facts) -> Option<String> {
     let kind_name = part_field(dir, "kind")?;
     let base = kind_name.split(['/', ' ']).next().unwrap_or(&kind_name);
-    let kind = kind_of(base).or_else(|| {
-        crate::datasheet::base_kind_name(base).and_then(kind_of)
-    })?;
+    let kind =
+        kind_of(base).or_else(|| crate::datasheet::base_kind_name(base).and_then(kind_of))?;
     let roles: Vec<String> = chosen_column(facts, None, None)
         .ok()
         .map(|c| {
@@ -341,8 +371,15 @@ fn chosen_column<'a>(
     pads: Option<usize>,
 ) -> Result<&'a Column, String> {
     // An explicit --package or --pads asks about that column, not the board's.
-    let board = facts.board.as_ref().filter(|_| package.is_none() && pads.is_none());
-    let package = package.or_else(|| board.map(|b| b.footprint.as_str()).filter(|f| !f.is_empty()));
+    let board = facts
+        .board
+        .as_ref()
+        .filter(|_| package.is_none() && pads.is_none());
+    let package = package.or_else(|| {
+        board
+            .map(|b| b.footprint.as_str())
+            .filter(|f| !f.is_empty())
+    });
     let pads = pads.or_else(|| board.and_then(Board::pad_count));
     if package.is_none() && pads.is_none() && facts.pin_columns.len() > 1 {
         return Err(format!(
@@ -379,7 +416,9 @@ pub fn main(dir: &Path, args: &[String]) -> Result<String> {
             .cloned()
     };
     match cmd.as_str() {
-        "toc" => Ok(read(dir, TOC_FILE).unwrap_or_else(|| toc_markdown(&parse_toc(&page_texts(dir))))),
+        "toc" => {
+            Ok(read(dir, TOC_FILE).unwrap_or_else(|| toc_markdown(&parse_toc(&page_texts(dir)))))
+        }
         "find" => find(dir, rest),
         "page" => page(dir, rest),
         "pins" => {
@@ -415,7 +454,9 @@ pub fn main(dir: &Path, args: &[String]) -> Result<String> {
             .or_else(|| checklist(dir, &facts_from_dir(dir)))
             .unwrap_or_else(|| "No kind recorded for this sandbox (part.md).".to_string())),
         "check" => {
-            let file = rest.first().map_or_else(|| dir.join("model.toml"), |f| dir.join(f));
+            let file = rest
+                .first()
+                .map_or_else(|| dir.join("model.toml"), |f| dir.join(f));
             let raw = std::fs::read_to_string(&file)
                 .with_context(|| format!("reading {}", file.display()))?;
             let part = part_field(dir, "part").unwrap_or_default();
@@ -435,20 +476,25 @@ pub fn main(dir: &Path, args: &[String]) -> Result<String> {
         // Not on the agent's list: builds a sandbox's files outside a run, to
         // replay saved drafts and score page selection.
         "prepare" => {
-            let pdf = rest.first().context("usage: ds prepare <pdf> [--part P] [--kind K] [--footprint F] [--value V]")?;
+            let pdf = rest.first().context(
+                "usage: ds prepare <pdf> [--part P] [--kind K] [--footprint F] [--value V]",
+            )?;
             let (before, now) = crate::datasheet::prepare_files(Path::new(pdf), dir)?;
-            let board = (flag("--footprint").is_some() || flag("--value").is_some()).then(|| Board {
-                footprint: flag("--footprint").unwrap_or_default(),
-                value: flag("--value").unwrap_or_default(),
-                ..Board::default()
-            });
+            let board =
+                (flag("--footprint").is_some() || flag("--value").is_some()).then(|| Board {
+                    footprint: flag("--footprint").unwrap_or_default(),
+                    value: flag("--value").unwrap_or_default(),
+                    ..Board::default()
+                });
             write_run_files(
                 dir,
                 &flag("--part").unwrap_or_default(),
                 &flag("--kind").unwrap_or_default(),
                 board.as_ref(),
             );
-            Ok(format!("selected before: {before:?}\nselected now: {now:?}"))
+            Ok(format!(
+                "selected before: {before:?}\nselected now: {now:?}"
+            ))
         }
         "help" | "--help" | "-h" => Ok(USAGE.to_string()),
         other => bail!("unknown ds command '{other}'\n{USAGE}"),
@@ -493,7 +539,16 @@ fn page(dir: &Path, rest: &[String]) -> Result<String> {
     if rest.iter().any(|a| a == "--render") && !png.is_file() {
         let stem = dir.join(format!("page-{n:03}"));
         let _ = std::process::Command::new("pdftoppm")
-            .args(["-png", "-singlefile", "-r", "110", "-f", &n.to_string(), "-l", &n.to_string()])
+            .args([
+                "-png",
+                "-singlefile",
+                "-r",
+                "110",
+                "-f",
+                &n.to_string(),
+                "-l",
+                &n.to_string(),
+            ])
             .arg(dir.join("datasheet.pdf"))
             .arg(&stem)
             .status();
@@ -539,8 +594,16 @@ mod tests {
     fn helpers_read_the_sandbox() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("pages")).unwrap();
-        std::fs::write(dir.path().join("pages/page-001.txt"), "VIN range 2.0 to 5.5 V").unwrap();
-        std::fs::write(dir.path().join("pages/page-002.txt"), "EN pin must not float").unwrap();
+        std::fs::write(
+            dir.path().join("pages/page-001.txt"),
+            "VIN range 2.0 to 5.5 V",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("pages/page-002.txt"),
+            "EN pin must not float",
+        )
+        .unwrap();
         let board = Board {
             refdes: "U1".into(),
             value: "TLV70033".into(),
@@ -554,7 +617,13 @@ mod tests {
         )
         .unwrap();
         write_run_files(dir.path(), "TLV70033", "vreg", Some(&board));
-        let run = |a: &[&str]| main(dir.path(), &a.iter().map(ToString::to_string).collect::<Vec<_>>()).unwrap();
+        let run = |a: &[&str]| {
+            main(
+                dir.path(),
+                &a.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            )
+            .unwrap()
+        };
         assert!(run(&["find", "must not"]).contains("p.2: EN pin must not float"));
         assert!(run(&["page", "1"]).contains("=== PDF page 1 ==="));
         assert!(run(&["board"]).contains("footprint: SOT-23-5"));

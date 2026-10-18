@@ -37,7 +37,10 @@ impl Trace {
     /// fails the extraction.
     pub fn record(&self, argv: &[String], prompt: &str, events: &str) {
         let n = self.calls.fetch_add(1, Ordering::Relaxed) + 1;
-        let _ = std::fs::write(self.dir.join(format!("call-{n}.argv")), argv.join("\n") + "\n");
+        let _ = std::fs::write(
+            self.dir.join(format!("call-{n}.argv")),
+            argv.join("\n") + "\n",
+        );
         let _ = std::fs::write(self.dir.join(format!("call-{n}.prompt.md")), prompt);
         let _ = std::fs::write(self.dir.join(format!("call-{n}.events.jsonl")), events);
     }
@@ -143,16 +146,25 @@ mod tests {
         let out = tempfile::tempdir().unwrap();
         for i in 0..(KEEP_RUNS + 3) {
             let t = begin(Some(out.path()), &format!("P{i}"), true).unwrap();
-            t.record(&["codex".into(), "exec".into()], "prompt", "{\"type\":\"x\"}\n");
+            t.record(
+                &["codex".into(), "exec".into()],
+                "prompt",
+                "{\"type\":\"x\"}\n",
+            );
             // Distinct modification times on coarse filesystems.
             std::thread::sleep(std::time::Duration::from_millis(15));
         }
-        let runs: Vec<_> = std::fs::read_dir(out.path().join("trace")).unwrap().collect();
+        let runs: Vec<_> = std::fs::read_dir(out.path().join("trace"))
+            .unwrap()
+            .collect();
         assert_eq!(runs.len(), KEEP_RUNS);
         let t = begin(Some(out.path()), "Q", true).unwrap();
         t.record(&["claude".into()], "p", "e");
         t.record(&["claude".into()], "p2", "e2");
-        assert_eq!(std::fs::read_to_string(t.dir().join("call-2.prompt.md")).unwrap(), "p2");
+        assert_eq!(
+            std::fs::read_to_string(t.dir().join("call-2.prompt.md")).unwrap(),
+            "p2"
+        );
         assert!(t.dir().join("call-1.events.jsonl").is_file());
         assert!(begin(Some(out.path()), "Q", false).is_none());
     }

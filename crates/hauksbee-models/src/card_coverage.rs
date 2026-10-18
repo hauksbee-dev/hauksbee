@@ -74,7 +74,8 @@ impl Board {
             self.refdes,
             self.value,
             self.footprint,
-            self.pad_count().map_or_else(|| "unknown".into(), |n| n.to_string())
+            self.pad_count()
+                .map_or_else(|| "unknown".into(), |n| n.to_string())
         );
         if !self.pads.is_empty() {
             out.push_str("\n| pad | net |\n|---|---|\n");
@@ -98,7 +99,11 @@ impl Board {
                     _ => {}
                 }
             } else if let Some(row) = line.strip_prefix("| ") {
-                let cells: Vec<&str> = row.trim_end_matches('|').split('|').map(str::trim).collect();
+                let cells: Vec<&str> = row
+                    .trim_end_matches('|')
+                    .split('|')
+                    .map(str::trim)
+                    .collect();
                 if let [pad, net] = cells[..] {
                     if pad != "pad" && !pad.starts_with("--") {
                         b.pads.push((pad.into(), net.into()));
@@ -143,7 +148,12 @@ pub fn with_facts<T>(facts: Facts, f: impl FnOnce() -> T) -> T {
 /// outside such a run.
 #[must_use]
 pub fn current_findings(entry: &ModelEntry) -> Vec<Finding> {
-    FACTS.with(|c| c.borrow().as_ref().map(|f| findings(entry, f)).unwrap_or_default())
+    FACTS.with(|c| {
+        c.borrow()
+            .as_ref()
+            .map(|f| findings(entry, f))
+            .unwrap_or_default()
+    })
 }
 
 /// The spellings a board library or BOM gives an orderable part besides its full code.
@@ -194,8 +204,10 @@ const LOOK_THERMAL: &str = "Thermal information / package characteristics";
 
 fn is_output_role(role: &str) -> bool {
     let r = role.to_ascii_lowercase();
-    matches!(r.as_str(), "out" | "vout" | "sw" | "lx" | "fb" | "bst" | "boot")
-        || r.starts_with("vcap")
+    matches!(
+        r.as_str(),
+        "out" | "vout" | "sw" | "lx" | "fb" | "bst" | "boot"
+    ) || r.starts_with("vcap")
         || r.starts_with("vout")
 }
 
@@ -227,15 +239,16 @@ fn supply_roles(entry: &ModelEntry) -> Vec<String> {
 #[must_use]
 pub fn needs(entry: &ModelEntry, text: &str, columns: &[Column]) -> Vec<Need> {
     let mut out = Vec::new();
-    let pinouts_differ = columns
-        .iter()
-        .any(|a| columns.iter().any(|b| b.max_pad() == a.max_pad() && !pin_table::same_map(a, b)))
-        || {
-            let mut counts: Vec<usize> = columns.iter().map(Column::max_pad).collect();
-            counts.sort_unstable();
-            counts.dedup();
-            counts.len() > 1
-        };
+    let pinouts_differ = columns.iter().any(|a| {
+        columns
+            .iter()
+            .any(|b| b.max_pad() == a.max_pad() && !pin_table::same_map(a, b))
+    }) || {
+        let mut counts: Vec<usize> = columns.iter().map(Column::max_pad).collect();
+        counts.sort_unstable();
+        counts.dedup();
+        counts.len() > 1
+    };
     if pinouts_differ {
         out.push(Need {
             key: "footprint_re".into(),
@@ -265,7 +278,10 @@ pub fn needs(entry: &ModelEntry, text: &str, columns: &[Column]) -> Vec<Need> {
             look: LOOK_ABS,
         });
     }
-    if !matches!(entry.kind, ComponentKind::Passive | ComponentKind::Connector | ComponentKind::Ignore) {
+    if !matches!(
+        entry.kind,
+        ComponentKind::Passive | ComponentKind::Connector | ComponentKind::Ignore
+    ) {
         out.push(Need {
             key: "theta_ja".into(),
             ask: "[models.ratings] theta_ja_c_per_w for this package".into(),
@@ -411,10 +427,14 @@ fn recorded(entry: &ModelEntry, need: &Need) -> bool {
 
 /// The card carries the field `need` asks for.
 fn has_field(entry: &ModelEntry, need: &Need) -> bool {
-    let ranges = || entry.envelope.iter().filter_map(|e| match e {
-        OperatingEnvelope::SupplyRange { pin, abs_max_v, .. } => Some((pin.to_ascii_lowercase(), *abs_max_v)),
-        _ => None,
-    });
+    let ranges = || {
+        entry.envelope.iter().filter_map(|e| match e {
+            OperatingEnvelope::SupplyRange { pin, abs_max_v, .. } => {
+                Some((pin.to_ascii_lowercase(), *abs_max_v))
+            }
+            _ => None,
+        })
+    };
     match need.key.split_once(':').unwrap_or((need.key.as_str(), "")) {
         ("supply_range", role) => ranges().any(|(p, _)| p == role),
         ("abs_max_v", _) => entry.ratings.max_voltage_v.is_some() || ranges().any(|(_, a)| a.is_some()),
@@ -448,7 +468,9 @@ fn has_field(entry: &ModelEntry, need: &Need) -> bool {
 /// a drafter most often records as absent without looking.
 fn evidence(key: &str) -> Option<&'static str> {
     Some(match key {
-        "theta_ja" => r"(?i)(θ|Θ|theta|R\s*θ|R\s*th)\s*_?\s*JA\b|junction[- ]to[- ]ambient|junction-ambient",
+        "theta_ja" => {
+            r"(?i)(θ|Θ|theta|R\s*θ|R\s*th)\s*_?\s*JA\b|junction[- ]to[- ]ambient|junction-ambient"
+        }
         "abs_max_v" => r"(?i)absolute\s+maximum\s+ratings",
         "internal_clock" => r"(?i)internal\s+(rc\s+)?oscillator|internal\s+clock|\bRC\s+oscillator",
         "i_shdn_a" => r"(?i)shutdown\s+(supply\s+)?current|\bI\s*_?\s*(SHDN|SD)\b",
@@ -647,7 +669,11 @@ fn pins(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
     let n = wrong.len();
     wrong.truncate(12);
     vec![Finding {
-        severity: if sure && n >= 2 { Severity::Error } else { Severity::Warn },
+        severity: if sure && n >= 2 {
+            Severity::Error
+        } else {
+            Severity::Warn
+        },
         check: "pins",
         message: format!(
             "{n} pad(s) disagree with the datasheet's {} column (`ds pins --package {}` prints \
@@ -663,7 +689,12 @@ fn pins(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
 /// The checklist `ds checklist` prints for a kind before any draft exists:
 /// the needs of a card with the usual roles of that kind.
 #[must_use]
-pub fn checklist_text(kind: ComponentKind, roles: &[&str], text: &str, columns: &[Column]) -> String {
+pub fn checklist_text(
+    kind: ComponentKind,
+    roles: &[&str],
+    text: &str,
+    columns: &[Column],
+) -> String {
     let mut entry = ModelEntry {
         kind,
         ..ModelEntry::default()
@@ -677,7 +708,11 @@ pub fn checklist_text(kind: ComponentKind, roles: &[&str], text: &str, columns: 
         kind_name(kind)
     );
     for need in needs(&entry, text, columns) {
-        let _ = writeln!(out, "- {}: {}  (look under: {})", need.key, need.ask, need.look);
+        let _ = writeln!(
+            out,
+            "- {}: {}  (look under: {})",
+            need.key, need.ask, need.look
+        );
     }
     out.push_str(
         "- pins: every pad from the pin-table column of THIS package (`ds pins`)\n\
@@ -738,7 +773,13 @@ value_re = "(?i)^TLV70033$"
             label: "SOT".into(),
             ..Column::default()
         };
-        for (p, n) in [("1", "IN"), ("2", "GND"), ("3", "EN"), ("4", "NC"), ("5", "OUT")] {
+        for (p, n) in [
+            ("1", "IN"),
+            ("2", "GND"),
+            ("3", "EN"),
+            ("4", "NC"),
+            ("5", "OUT"),
+        ] {
             col.pads.insert(p.into(), (n.into(), 4));
         }
         let facts = Facts {
@@ -761,7 +802,10 @@ value_re = "(?i)^TLV70033$"
                 .join("\n")
         };
         assert!(text("binding").contains("TLV70033DDCR"), "{found:?}");
-        assert!(text("pins").contains("pad 3: card 'out', table 'EN'"), "{found:?}");
+        assert!(
+            text("pins").contains("pad 3: card 'out', table 'EN'"),
+            "{found:?}"
+        );
         let cov = text("coverage");
         assert!(cov.contains("supply_range:in"), "{cov}");
         assert!(cov.contains("supply_outputs:out"), "{cov}");
@@ -772,7 +816,9 @@ value_re = "(?i)^TLV70033$"
             pages: Vec::new(),
             ..facts
         };
-        assert!(findings(&card, &blind).iter().all(|f| f.check != "coverage"));
+        assert!(findings(&card, &blind)
+            .iter()
+            .all(|f| f.check != "coverage"));
     }
 
     #[test]
@@ -792,8 +838,10 @@ value_re = "(?i)^TLV70033$"
         };
         let found = findings(&card, &facts);
         assert!(
-            found.iter().any(|f| f.message.starts_with("theta_ja is recorded")
-                && f.message.contains("PDF page 2")),
+            found
+                .iter()
+                .any(|f| f.message.starts_with("theta_ja is recorded")
+                    && f.message.contains("PDF page 2")),
             "{found:?}"
         );
     }
@@ -808,7 +856,8 @@ value_re = "(?i)^TLV70033$"
         assert!(
             found
                 .iter()
-                .any(|f| f.severity == Severity::Error && f.message.contains("output the part drives")),
+                .any(|f| f.severity == Severity::Error
+                    && f.message.contains("output the part drives")),
             "{found:?}"
         );
         assert!(!found.iter().any(|f| f.message.starts_with("theta_ja")));

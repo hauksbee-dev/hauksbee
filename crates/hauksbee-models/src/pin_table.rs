@@ -187,9 +187,10 @@ pub fn package_of(label: &str) -> Option<(&'static str, Option<usize>)> {
         return None;
     }
     // SC70, SOT23 and TO220 name an outline, not a count.
-    let count = rest.parse::<usize>().ok().filter(|_| {
-        !(matches!(*family, "SC70" | "TO") || (*family == "SOT" && rest.len() >= 2))
-    });
+    let count = rest
+        .parse::<usize>()
+        .ok()
+        .filter(|_| !(matches!(*family, "SC70" | "TO") || (*family == "SOT" && rest.len() >= 2)));
     Some((family, count))
 }
 
@@ -208,8 +209,27 @@ fn is_name_header(s: &str) -> bool {
 fn is_type_cell(s: &str) -> bool {
     matches!(
         s,
-        "I" | "O" | "I/O" | "IO" | "S" | "P" | "G" | "FT" | "FTf" | "TTa" | "TC" | "B" | "RST" | "-"
-            | "—" | "–" | "A" | "AI" | "AO" | "PWR" | "GND" | "NC"
+        "I" | "O"
+            | "I/O"
+            | "IO"
+            | "S"
+            | "P"
+            | "G"
+            | "FT"
+            | "FTf"
+            | "TTa"
+            | "TC"
+            | "B"
+            | "RST"
+            | "-"
+            | "—"
+            | "–"
+            | "A"
+            | "AI"
+            | "AO"
+            | "PWR"
+            | "GND"
+            | "NC"
     ) && s != "GND"
         && s != "NC"
 }
@@ -265,7 +285,8 @@ pub fn columns(pages: &[Vec<Word>]) -> Vec<Column> {
             for (pad, name) in rows {
                 match col.pads.get(&pad) {
                     Some((had, _)) if norm(had) != norm(&name) => {
-                        col.conflicts.push(format!("pad {pad}: '{had}' or '{name}'"));
+                        col.conflicts
+                            .push(format!("pad {pad}: '{had}' or '{name}'"));
                     }
                     Some(_) => {}
                     None => {
@@ -504,8 +525,12 @@ fn name_at(words: &[Word], band: (f64, f64), (lo, hi): (f64, f64)) -> String {
 #[must_use]
 pub fn norm(s: &str) -> String {
     let s = s.trim().to_ascii_lowercase();
-    let s = s.strip_suffix('+').map_or_else(|| s.clone(), |b| format!("{b}plus"));
-    let s = s.strip_suffix('-').map_or_else(|| s.clone(), |b| format!("{b}minus"));
+    let s = s
+        .strip_suffix('+')
+        .map_or_else(|| s.clone(), |b| format!("{b}plus"));
+    let s = s
+        .strip_suffix('-')
+        .map_or_else(|| s.clone(), |b| format!("{b}minus"));
     s.chars().filter(char::is_ascii_alphanumeric).collect()
 }
 
@@ -691,7 +716,10 @@ mod tests {
             w(100.0, 150.0, 120.0, "LQFP100"),
             w(125.0, 150.0, 145.0, "LQFP144"),
         ];
-        for ((n100, n144, name), i) in [("98", "141", "PE1"), ("99", "142", "VSS")].iter().zip(0u32..) {
+        for ((n100, n144, name), i) in [("98", "141", "PE1"), ("99", "142", "VSS")]
+            .iter()
+            .zip(0u32..)
+        {
             let y = 30.0f64.mul_add(f64::from(i), 200.0);
             v.push(w(107.0, y, 113.0, n100));
             v.push(w(131.0, y, 139.0, n144));
@@ -744,7 +772,10 @@ mod tests {
         };
         let mut p1 = head(100.0);
         // Pin-like names: a lone "A" or "G" reads as a type cell, not a name.
-        for (name, i) in ["VDD", "PA1", "PA2", "PA3", "PA4", "PA5", "PA6"].iter().zip(0u32..) {
+        for (name, i) in ["VDD", "PA1", "PA2", "PA3", "PA4", "PA5", "PA6"]
+            .iter()
+            .zip(0u32..)
+        {
             let y = 20.0f64.mul_add(f64::from(i), 130.0);
             let pad = (i + 1).to_string();
             p1.push(w(66.0, y, 82.0, name));
@@ -761,7 +792,11 @@ mod tests {
 
     #[test]
     fn footprints_and_headers_name_a_package() {
-        assert_eq!(package_of("SOT"), Some(("SOT", None)), "SOT, not SO and a T");
+        assert_eq!(
+            package_of("SOT"),
+            Some(("SOT", None)),
+            "SOT, not SO and a T"
+        );
         assert_eq!(package_of("to"), None, "the English word");
         assert_eq!(package_of("TO220"), Some(("TO", None)));
         assert_eq!(package_of("LQFP64"), Some(("LQFP", Some(64))));
