@@ -212,21 +212,69 @@ const COVERAGE_STAGES: &[(&str, Option<Term>, &str, &str)] = &[
 ];
 
 const MODEL_TIERS: &[(ModelSourceTier, &str, &str)] = &[
-    (ModelSourceTier::Open, "No model", "The part is left out of the circuit."),
-    (ModelSourceTier::EstimatedFallback, "Estimated stand-in", "A generic estimate stood in because no model matched the part."),
-    (ModelSourceTier::IntervalModel, "Interval model", "A model with stated minimum and maximum bounds, not one exact behaviour."),
-    (ModelSourceTier::DatasheetDerived, "Derived from the datasheet", "Built from the part's datasheet figures, not from the vendor's own model."),
-    (ModelSourceTier::CuratedLibrary, "Curated library model", "A model from the built-in library, reviewed against the datasheet."),
-    (ModelSourceTier::CuratedPack, "Curated pack model", "A model from an installed model pack, reviewed against the datasheet."),
-    (ModelSourceTier::VendorSpice, "Vendor SPICE model", "The manufacturer's own SPICE model."),
-    (ModelSourceTier::UserModel, "Your model", "A model you supplied for this part; it overrides the others."),
+    (
+        ModelSourceTier::Open,
+        "No model",
+        "The part is left out of the circuit.",
+    ),
+    (
+        ModelSourceTier::EstimatedFallback,
+        "Estimated stand-in",
+        "A generic estimate stood in because no model matched the part.",
+    ),
+    (
+        ModelSourceTier::IntervalModel,
+        "Interval model",
+        "A model with stated minimum and maximum bounds, not one exact behaviour.",
+    ),
+    (
+        ModelSourceTier::DatasheetDerived,
+        "Derived from the datasheet",
+        "Built from the part's datasheet figures, not from the vendor's own model.",
+    ),
+    (
+        ModelSourceTier::CuratedLibrary,
+        "Curated library model",
+        "A model from the built-in library, reviewed against the datasheet.",
+    ),
+    (
+        ModelSourceTier::CuratedPack,
+        "Curated pack model",
+        "A model from an installed model pack, reviewed against the datasheet.",
+    ),
+    (
+        ModelSourceTier::VendorSpice,
+        "Vendor SPICE model",
+        "The manufacturer's own SPICE model.",
+    ),
+    (
+        ModelSourceTier::UserModel,
+        "Your model",
+        "A model you supplied for this part; it overrides the others.",
+    ),
 ];
 
 const MODEL_VALIDATION: &[(ModelValidation, &str, &str)] = &[
-    (ModelValidation::Unvalidated, "Not validated", "Nothing has checked the model against the real part."),
-    (ModelValidation::PhysicalBoundsOnly, "Range-checked only", "Its values are checked to be physically possible, not compared with the part's curves."),
-    (ModelValidation::DatasheetCurves, "Checked against datasheet curves", "Compared with the curves the datasheet publishes."),
-    (ModelValidation::VendorQualified, "Vendor-qualified", "Qualified by the manufacturer."),
+    (
+        ModelValidation::Unvalidated,
+        "Not validated",
+        "Nothing has checked the model against the real part.",
+    ),
+    (
+        ModelValidation::PhysicalBoundsOnly,
+        "Range-checked only",
+        "Its values are checked to be physically possible, not compared with the part's curves.",
+    ),
+    (
+        ModelValidation::DatasheetCurves,
+        "Checked against datasheet curves",
+        "Compared with the curves the datasheet publishes.",
+    ),
+    (
+        ModelValidation::VendorQualified,
+        "Vendor-qualified",
+        "Qualified by the manufacturer.",
+    ),
 ];
 
 const MODEL_LAYERS: &[(ModelLayer, &str)] = &[
@@ -245,36 +293,112 @@ const MODEL_LAYERS: &[(ModelLayer, &str)] = &[
 /// equal by a drift test); the last five are the families the extractor also
 /// writes cards for. `(id, label, one-line explanation)`.
 const MODEL_KINDS: &[(&str, &str, &str)] = &[
-    ("passive", "Passive", "A resistor, capacitor, inductor, ferrite or crystal."),
-    ("diode", "Diode", "A rectifier, Schottky, Zener, TVS or LED."),
-    ("bjt_npn", "NPN transistor", "A discrete bipolar transistor, NPN."),
-    ("bjt_pnp", "PNP transistor", "A discrete bipolar transistor, PNP."),
+    (
+        "passive",
+        "Passive",
+        "A resistor, capacitor, inductor, ferrite or crystal.",
+    ),
+    (
+        "diode",
+        "Diode",
+        "A rectifier, Schottky, Zener, TVS or LED.",
+    ),
+    (
+        "bjt_npn",
+        "NPN transistor",
+        "A discrete bipolar transistor, NPN.",
+    ),
+    (
+        "bjt_pnp",
+        "PNP transistor",
+        "A discrete bipolar transistor, PNP.",
+    ),
     ("nmos", "N-channel MOSFET", "A discrete MOSFET, N-channel."),
     ("pmos", "P-channel MOSFET", "A discrete MOSFET, P-channel."),
-    ("vreg", "Voltage regulator", "A linear or switching regulator, reference or other part whose job is a rail."),
+    (
+        "vreg",
+        "Voltage regulator",
+        "A linear or switching regulator, reference or other part whose job is a rail.",
+    ),
     ("opamp", "Op-amp", "An amplifier with an analog output."),
-    ("comparator", "Comparator", "A comparator or supervisor with a two-level output."),
+    (
+        "comparator",
+        "Comparator",
+        "A comparator or supervisor with a two-level output.",
+    ),
     ("timer", "Timer", "A 555-class precision timer."),
-    ("analog_switch", "Analog switch", "An analog switch, multiplexer or load switch."),
-    ("digital", "Logic or driver IC", "Logic, a buffer, a level shifter, or a driver steered by logic inputs."),
+    (
+        "analog_switch",
+        "Analog switch",
+        "An analog switch, multiplexer or load switch.",
+    ),
+    (
+        "digital",
+        "Logic or driver IC",
+        "Logic, a buffer, a level shifter, or a driver steered by logic inputs.",
+    ),
     ("dac", "DAC", "A digital-to-analog converter."),
     ("adc", "ADC", "An analog-to-digital converter."),
-    ("shift_register", "Shift register", "A shift or storage register."),
-    ("mcu", "Microcontroller", "A programmable microcontroller; its firmware runs in an emulator."),
-    ("connector", "Connector", "A connector, header or test point; only pin continuity is modelled."),
-    ("ignore", "Left out", "A part with no electrical effect: a mounting hole, logo or fiducial."),
-    ("i2c_sensor", "I2C sensor", "A register-map sensor or peripheral on an I2C bus."),
-    ("spi_sensor", "SPI sensor", "A register-map sensor or peripheral on an SPI bus."),
+    (
+        "shift_register",
+        "Shift register",
+        "A shift or storage register.",
+    ),
+    (
+        "mcu",
+        "Microcontroller",
+        "A programmable microcontroller; its firmware runs in an emulator.",
+    ),
+    (
+        "connector",
+        "Connector",
+        "A connector, header or test point; only pin continuity is modelled.",
+    ),
+    (
+        "ignore",
+        "Left out",
+        "A part with no electrical effect: a mounting hole, logo or fiducial.",
+    ),
+    (
+        "i2c_sensor",
+        "I2C sensor",
+        "A register-map sensor or peripheral on an I2C bus.",
+    ),
+    (
+        "spi_sensor",
+        "SPI sensor",
+        "A register-map sensor or peripheral on an SPI bus.",
+    ),
     ("charger", "Battery charger", "A battery charger."),
-    ("pmic", "Power-management IC", "A multi-rail power-management IC."),
+    (
+        "pmic",
+        "Power-management IC",
+        "A multi-rail power-management IC.",
+    ),
     ("balancer", "Cell balancer", "A battery cell balancer."),
 ];
 
 const MATCH_CONFIDENCE: &[(MatchConfidence, &str, &str)] = &[
-    (MatchConfidence::Exact, "Exact match", "The part number matches the model exactly."),
-    (MatchConfidence::High, "Close match", "The part number matches a model for the same device."),
-    (MatchConfidence::Heuristic, "Probable match", "Chosen from the part's name and pins; check it."),
-    (MatchConfidence::Guessed, "Guess", "No reliable match; the model is a guess."),
+    (
+        MatchConfidence::Exact,
+        "Exact match",
+        "The part number matches the model exactly.",
+    ),
+    (
+        MatchConfidence::High,
+        "Close match",
+        "The part number matches a model for the same device.",
+    ),
+    (
+        MatchConfidence::Heuristic,
+        "Probable match",
+        "Chosen from the part's name and pins; check it.",
+    ),
+    (
+        MatchConfidence::Guessed,
+        "Guess",
+        "No reliable match; the model is a guess.",
+    ),
 ];
 
 /// Emulator backend kinds: the part of `simavr:atmega328p` before the colon.
@@ -550,7 +674,12 @@ fn raw_entries() -> Vec<Label> {
         out.push(row(tier.as_str(), GROUP_MODEL_TIER, label, Some(explain)));
     }
     for &(v, label, explain) in MODEL_VALIDATION {
-        out.push(row(v.as_str(), GROUP_MODEL_VALIDATION, label, Some(explain)));
+        out.push(row(
+            v.as_str(),
+            GROUP_MODEL_VALIDATION,
+            label,
+            Some(explain),
+        ));
     }
     for &(layer, label) in MODEL_LAYERS {
         let id = serde_json::to_value(layer)
@@ -576,14 +705,29 @@ fn raw_entries() -> Vec<Label> {
         out.push(row(&id, GROUP_MATCH_CONFIDENCE, label, Some(explain)));
     }
     for s in Severity::ALL {
-        out.push(row(s.as_str(), GROUP_SEVERITY, s.label(), Some(s.meaning())));
+        out.push(row(
+            s.as_str(),
+            GROUP_SEVERITY,
+            s.label(),
+            Some(s.meaning()),
+        ));
     }
-    out.push(row(BLOCKING.id, GROUP_SEVERITY, BLOCKING.label, Some(BLOCKING.meaning)));
+    out.push(row(
+        BLOCKING.id,
+        GROUP_SEVERITY,
+        BLOCKING.label,
+        Some(BLOCKING.meaning),
+    ));
     for s in VerdictState::ALL {
         out.push(row(s.as_str(), GROUP_VERDICT, s.label(), Some(s.meaning())));
     }
     for g in EvidenceGrade::ALL {
-        out.push(row(g.as_str(), GROUP_EVIDENCE_GRADE, g.label(), Some(g.meaning())));
+        out.push(row(
+            g.as_str(),
+            GROUP_EVIDENCE_GRADE,
+            g.label(),
+            Some(g.meaning()),
+        ));
     }
     for c in Check::ALL {
         out.push(row(c.as_str(), GROUP_CHECK, c.label(), Some(c.meaning())));
@@ -698,7 +842,8 @@ pub fn labels_for<S: AsRef<str>>(ids: &[S]) -> String {
 // ── The generated frontend module ───────────────────────────────────
 
 /// Opens the generated region of `frontend/src/lib/labels.ts`.
-pub const TS_BEGIN: &str = "// BEGIN GENERATED (crates/hauksbee-ir/src/labels.rs; do not hand-edit)";
+pub const TS_BEGIN: &str =
+    "// BEGIN GENERATED (crates/hauksbee-ir/src/labels.rs; do not hand-edit)";
 /// Closes the generated region of `frontend/src/lib/labels.ts`.
 pub const TS_END: &str = "// END GENERATED";
 
@@ -760,7 +905,9 @@ pub fn typescript() -> String {
         let _ = writeln!(out, "  {}: {},", ts_str(k), ts_str(v));
     }
     out.push_str("}\n\n");
-    out.push_str("/** The part of an emulator backend id before the colon, as shown after the chip. */\n");
+    out.push_str(
+        "/** The part of an emulator backend id before the colon, as shown after the chip. */\n",
+    );
     out.push_str("export const BACKEND_KINDS: Readonly<Record<string, string>> = {\n");
     for k in &table.backend_kinds {
         let _ = writeln!(out, "  {}: {},", ts_str(k.kind), ts_str(k.label));
@@ -776,11 +923,17 @@ mod tests {
 
     #[test]
     fn humanise_reads_like_a_sentence() {
-        assert_eq!(humanise("board_crystal_frequency_binding"), "Board crystal frequency binding");
+        assert_eq!(
+            humanise("board_crystal_frequency_binding"),
+            "Board crystal frequency binding"
+        );
         assert_eq!(humanise("spi_dual_quad_io"), "SPI dual quad I/O");
         assert_eq!(humanise("adc_injection"), "ADC injection");
         assert_eq!(humanise("i2c0_uart1_bridge"), "I2C0 UART1 bridge");
-        assert_eq!(humanise("logic_levels_at_3v3_vddio"), "Logic levels at 3V3 VDDIO");
+        assert_eq!(
+            humanise("logic_levels_at_3v3_vddio"),
+            "Logic levels at 3V3 VDDIO"
+        );
         assert_eq!(humanise("some-kebab-id"), "Some kebab ID");
         assert_eq!(humanise("UPPER_CASE_ID"), "Upper case ID");
         assert_eq!(humanise(""), "");
@@ -792,7 +945,11 @@ mod tests {
         for (k, v) in ACRONYMS {
             assert!(seen.insert(*k), "{k} is listed twice");
             assert_eq!(*k, k.to_lowercase(), "{k}");
-            assert_eq!(k.to_lowercase(), v.to_lowercase().replace('/', ""), "{k} -> {v}");
+            assert_eq!(
+                k.to_lowercase(),
+                v.to_lowercase().replace('/', ""),
+                "{k} -> {v}"
+            );
         }
     }
 
@@ -807,14 +964,23 @@ mod tests {
     #[test]
     fn a_stage_uses_the_glossary_words() {
         assert_eq!(label_for("identity_only"), Term::IdentityOnly.entry().label);
-        assert_eq!(label_for("executable_partial"), Term::ExecutablePartial.entry().label);
-        assert_eq!(label_for("executable_scope_unspecified"), Term::ScopeUnspecified.entry().label);
+        assert_eq!(
+            label_for("executable_partial"),
+            Term::ExecutablePartial.entry().label
+        );
+        assert_eq!(
+            label_for("executable_scope_unspecified"),
+            Term::ScopeUnspecified.entry().label
+        );
         assert_eq!(label_for("unresolved"), Term::OpenPart.entry().label);
     }
 
     #[test]
     fn labels_for_joins_or_dashes() {
         assert_eq!(labels_for::<&str>(&[]), "-");
-        assert_eq!(labels_for(&["adc_injection", "uart"]), "ADC input injection, UART");
+        assert_eq!(
+            labels_for(&["adc_injection", "uart"]),
+            "ADC input injection, UART"
+        );
     }
 }

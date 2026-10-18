@@ -22,7 +22,9 @@ use hauksbee_ir::labels::{
 const REGEN: &str = "UPDATE_RUN_RECORD_SCHEMA=1 cargo test -p hauksbee-ir --test it drift";
 
 fn repo(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").join(rel)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(rel)
 }
 
 fn read(rel: &str) -> String {
@@ -69,13 +71,26 @@ fn every_id_has_one_row_and_plain_words() {
     for e in &all {
         assert!(seen.insert(&e.id), "{} appears twice", e.id);
         assert!(!e.label.trim().is_empty(), "{} has no label", e.id);
-        assert!(!e.label.contains('_'), "{}: label {:?} shows an underscore", e.id, e.label);
+        assert!(
+            !e.label.contains('_'),
+            "{}: label {:?} shows an underscore",
+            e.id,
+            e.label
+        );
         if e.id.contains('_') || e.id.contains(':') {
             assert_ne!(e.label, e.id, "{}: the label is the raw id", e.id);
         }
         if let Some(x) = &e.explain {
-            assert!(x.ends_with('.'), "{}: explanation {x:?} is not a sentence", e.id);
-            assert!(!x.contains('_'), "{}: explanation {x:?} shows an underscore", e.id);
+            assert!(
+                x.ends_with('.'),
+                "{}: explanation {x:?} is not a sentence",
+                e.id
+            );
+            assert!(
+                !x.contains('_'),
+                "{}: explanation {x:?} shows an underscore",
+                e.id
+            );
         }
     }
     // The documented overlaps: `pass` and `fail` are a verdict word and a
@@ -146,19 +161,33 @@ fn capability_rows_match_the_cards() {
     for file in std::fs::read_dir(repo("crates/hauksbee-models/db"))
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|n| std::path::Path::new(n).extension().is_some_and(|x| x == "toml"))
+        .filter(|n| {
+            std::path::Path::new(n)
+                .extension()
+                .is_some_and(|x| x == "toml")
+        })
     {
         declared.extend(card_capabilities(&file));
     }
-    assert!(declared.len() > 500, "found only {} ids in the cards", declared.len());
+    assert!(
+        declared.len() > 500,
+        "found only {} ids in the cards",
+        declared.len()
+    );
     for e in entries().iter().filter(|e| e.group == GROUP_CAPABILITY) {
-        assert!(declared.contains(&e.id), "{} is in labels.rs but in no model card", e.id);
+        assert!(
+            declared.contains(&e.id),
+            "{} is in labels.rs but in no model card",
+            e.id
+        );
     }
     for id in &declared {
         let said = label_for(id);
         assert!(!said.contains('_') && !said.is_empty(), "{id} -> {said:?}");
         assert!(
-            said.chars().next().is_some_and(|c| c.is_uppercase() || c.is_ascii_digit()),
+            said.chars()
+                .next()
+                .is_some_and(|c| c.is_uppercase() || c.is_ascii_digit()),
             "{id} -> {said:?} does not start like a sentence"
         );
     }
@@ -192,7 +221,10 @@ fn coverage_stage_rows_are_the_engines_variants() {
     assert_eq!(variants.len(), 6, "{variants:?}");
     for id in &variants {
         let row = entries().into_iter().find(|e| &e.id == id);
-        assert!(row.is_some_and(|e| e.group == labels::GROUP_COVERAGE_STAGE), "{id}");
+        assert!(
+            row.is_some_and(|e| e.group == labels::GROUP_COVERAGE_STAGE),
+            "{id}"
+        );
     }
 }
 
@@ -217,7 +249,10 @@ fn backend_rows_cover_the_cards_and_soc_descriptors() {
             }
         }
     }
-    ids.retain(|id| id.split_once(':').is_some_and(|(_, p)| !p.is_empty() && !p.contains('.')));
+    ids.retain(|id| {
+        id.split_once(':')
+            .is_some_and(|(_, p)| !p.is_empty() && !p.contains('.'))
+    });
     assert!(ids.len() > 15, "{ids:?}");
     for id in &ids {
         let row = entries().into_iter().find(|e| &e.id == id);

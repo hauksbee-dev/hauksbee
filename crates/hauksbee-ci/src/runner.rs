@@ -625,7 +625,13 @@ fn assertion_timing_refusals(
     let mut poll_backends: Vec<String> = coverage
         .iter()
         .filter(|c| !c.cycle_exact && c.backend != hauksbee_engine::scheduler::CHUNK_SAMPLED_LOGIC)
-        .map(|c| format!("{}: {}", c.mcu_ref, hauksbee_ir::labels::label_for(&c.backend)))
+        .map(|c| {
+            format!(
+                "{}: {}",
+                c.mcu_ref,
+                hauksbee_ir::labels::label_for(&c.backend)
+            )
+        })
         .collect();
     poll_backends.sort();
     poll_backends.dedup();
