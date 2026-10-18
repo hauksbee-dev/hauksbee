@@ -105,15 +105,82 @@ fn counts_recognised_but_unimplemented_constraints() {
 }
 
 #[test]
-fn unknown_constraint_type_fails_closed() {
-    let error = parse_kicad_dru(
+fn unknown_constraint_type_is_a_rule_not_understood_not_a_failed_import() {
+    let parsed = parse_kicad_dru(
         r#"(version 1)
         (rule "future grammar" (constraint copper_magic (min 0.1mm)))"#,
     )
-    .expect_err("an unknown constraint cannot be silently dropped");
-    assert!(error
-        .to_string()
-        .contains("unknown constraint type copper_magic"));
+    .expect("an unknown constraint must not fail the file");
+    assert!(parsed.rules.is_empty(), "an unread rule is never applied");
+    assert_eq!(parsed.not_understood.len(), 1, "never silently dropped");
+    let skipped = &parsed.not_understood[0];
+    assert_eq!(skipped.name.as_deref(), Some("future grammar"));
+    assert_eq!(skipped.line_number, 2);
+    assert!(
+        skipped.why.contains("unknown constraint type copper_magic"),
+        "{}",
+        skipped.why
+    );
+}
+
+#[test]
+fn unsupported_syntax_skips_only_the_rules_it_touches() {
+    let parsed = parse_kicad_dru(
+        "(version 1)\n\
+         (rule \"keep\" (constraint clearance (min 0.2mm)))\n\
+         (rule \"no constraint\" (condition \"A.Type == 'via'\"))\n\
+         (rule \"new field\" (flavour spicy) (constraint clearance (min 0.3mm)))\n\
+         (assign_component_class \"x\" (condition \"A.Reference == 'U1'\"))\n\
+         (rule \"bad number\" (constraint clearance (min nonsense)))\n\
+         (rule \"also keep\" (constraint hole_to_hole (min 0.5mm)))\n",
+    )
+    .expect("unsupported syntax must not fail the import");
+    let kept: Vec<&str> = parsed.rules.iter().map(|rule| rule.name.as_str()).collect();
+    assert_eq!(kept, ["keep", "also keep"]);
+    assert_eq!(parsed.global_clearance_mm(), Some(0.2));
+    let skipped: Vec<(Option<&str>, usize)> = parsed
+        .not_understood
+        .iter()
+        .map(|rule| (rule.name.as_deref(), rule.line_number))
+        .collect();
+    assert_eq!(
+        skipped,
+        [
+            (Some("no constraint"), 3),
+            (Some("new field"), 4),
+            (None, 5),
+            (Some("bad number"), 6),
+        ]
+    );
+    assert!(
+        parsed.not_understood[2]
+            .why
+            .contains("assign_component_class"),
+        "{}",
+        parsed.not_understood[2].why
+    );
+}
+
+#[test]
+fn common_documented_constructs_are_read_not_skipped() {
+    let parsed = parse_kicad_dru(
+        "(version 1)\n\
+         (rule unquoted_name (constraint clearance (min 0.2mm)))\n\
+         (rule \"old spellings\" (constraint mechanical_clearance (min 0.1mm)))\n\
+         (rule \"hole\" (constraint hole (min 0.3mm)))\n\
+         (rule \"timing\" (constraint length (max 10ps)))\n\
+         (rule \"dangling\" (constraint via_dangling))\n\
+         (rule \"mask\" (constraint solder_mask_sliver (min 0.1mm)))\n\
+         (rule \"layers\" (layer \"outer\") (severity warning) (constraint disallow track via))",
+    )
+    .expect("documented constructs parse");
+    assert!(
+        parsed.not_understood.is_empty(),
+        "{:?}",
+        parsed.not_understood
+    );
+    assert_eq!(parsed.rules.len(), 7);
+    assert!(!parsed.has_bare_values());
 }
 
 #[test]
@@ -195,8 +262,17 @@ fn valid_kicad_constraints_without_a_check_are_recognised_not_rejected() {
 }
 
 #[test]
-fn malformed_rule_error_names_its_line() {
-    let error = parse_kicad_dru("(version 1)\n\n(rule \"ok\" (constraint clearance (min 0.1mm)))\n(rule \"bad\" (constraint clearance (min nonsense)))")
-        .expect_err("a non-numeric distance must fail");
-    assert!(error.to_string().contains("line 4"), "{error}");
+fn malformed_rule_is_named_with_its_line_and_the_rest_is_kept() {
+    let parsed = parse_kicad_dru("(version 1)\n\n(rule \"ok\" (constraint clearance (min 0.1mm)))\n(rule \"bad\" (constraint clearance (min nonsense)))")
+        .expect("a non-numeric distance skips that rule only");
+    assert_eq!(parsed.rules.len(), 1);
+    assert_eq!(parsed.rules[0].name, "ok");
+    assert_eq!(parsed.not_understood.len(), 1);
+    assert_eq!(parsed.not_understood[0].name.as_deref(), Some("bad"));
+    assert_eq!(parsed.not_understood[0].line_number, 4);
+    assert!(
+        parsed.not_understood[0].why.contains("nonsense"),
+        "{}",
+        parsed.not_understood[0].why
+    );
 }

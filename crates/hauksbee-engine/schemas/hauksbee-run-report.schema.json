@@ -1108,6 +1108,29 @@
       ],
       "type": "object"
     },
+    "CustomRuleNotUnderstood": {
+      "properties": {
+        "line_number": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "why": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "line_number",
+        "why"
+      ],
+      "type": "object"
+    },
     "CustomRuleScopeOmission": {
       "properties": {
         "bare_value_constraint_types": {
@@ -1166,11 +1189,23 @@
           },
           "type": "array"
         },
+        "not_understood_rules": {
+          "items": {
+            "$ref": "#/definitions/CustomRuleNotUnderstood"
+          },
+          "type": "array"
+        },
         "unevaluated_rules": {
           "items": {
             "$ref": "#/definitions/CustomRuleScopeOmission"
           },
           "type": "array"
+        },
+        "unreadable_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "unsupported_constraint_counts": {
           "additionalProperties": {
@@ -1316,6 +1351,53 @@
       ],
       "type": "object"
     },
+    "DrcStaleFill": {
+      "properties": {
+        "copper_kind": {
+          "type": "string"
+        },
+        "copper_net": {
+          "type": "string"
+        },
+        "count": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fix": {
+          "type": "string"
+        },
+        "layer": {
+          "type": "string"
+        },
+        "loc_mm": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "plain": {
+          "type": "string"
+        },
+        "zone_net": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "zone_net",
+        "copper_net",
+        "copper_kind",
+        "layer",
+        "count",
+        "loc_mm",
+        "plain",
+        "fix"
+      ],
+      "type": "object"
+    },
     "DrcStructured": {
       "description": "The DRC report, restructured into honest buckets: real shorts kept verbatim,\nclearance findings grouped, and `gap == rule` separated from `gap < rule`.",
       "properties": {
@@ -1338,6 +1420,12 @@
         "shorts": {
           "items": {
             "$ref": "#/definitions/DrcShort"
+          },
+          "type": "array"
+        },
+        "stale_fills": {
+          "items": {
+            "$ref": "#/definitions/DrcStaleFill"
           },
           "type": "array"
         },

@@ -1284,6 +1284,15 @@ pub struct CustomRuleScopeOmission {
     pub bare_value_constraint_types: Vec<String>,
 }
 
+// A custom rule the reader could not interpret. It was not applied.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+pub struct CustomRuleNotUnderstood {
+    pub line_number: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub why: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct CustomRulesCoverage {
     pub file_name: String,
@@ -1292,6 +1301,12 @@ pub struct CustomRulesCoverage {
     pub file_inactive_due_to_bare_values: bool,
     pub unevaluated_rules: Vec<CustomRuleScopeOmission>,
     pub not_covered_rules: Vec<CustomRuleScopeOmission>,
+    // Rules the reader could not interpret; each was left unchecked.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_understood_rules: Vec<CustomRuleNotUnderstood>,
+    // Set when the file as a whole could not be read, so none of it was checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreadable_reason: Option<String>,
     pub unsupported_constraint_counts: BTreeMap<String, usize>,
 }
 
@@ -1325,27 +1340,61 @@ impl CustomRulesCoverage {
             })
             .map(describe)
             .collect();
+        let not_understood_rules = parsed
+            .not_understood
+            .iter()
+            .map(|skipped| CustomRuleNotUnderstood {
+                line_number: skipped.line_number,
+                name: skipped.name.clone(),
+                why: skipped.why.clone(),
+            })
+            .collect();
         Self {
             file_name,
             file_inactive_due_to_bare_values: parsed.has_bare_values(),
             unevaluated_rules,
             not_covered_rules,
+            not_understood_rules,
+            unreadable_reason: None,
             unsupported_constraint_counts: parsed.unsupported_constraint_counts.clone(),
+        }
+    }
+
+    /// Coverage for a rules file that could not be read as a whole (broken
+    /// syntax, an unsupported version): none of its rules were checked, but the
+    /// run goes on with the project's own rules.
+    #[must_use]
+    pub const fn unreadable(file_name: String, why: String) -> Self {
+        Self {
+            file_name,
+            file_inactive_due_to_bare_values: false,
+            unevaluated_rules: Vec::new(),
+            not_covered_rules: Vec::new(),
+            not_understood_rules: Vec::new(),
+            unreadable_reason: Some(why),
+            unsupported_constraint_counts: BTreeMap::new(),
         }
     }
 
     #[must_use]
     pub fn qualifies_clearance_findings(&self) -> bool {
-        !self.file_inactive_due_to_bare_values
-            && self.unevaluated_rules.iter().any(|rule| {
-                rule.bare_value_constraint_types.is_empty()
-                    && rule.constraint_types.iter().any(|kind| kind == "clearance")
-            })
+        // A rule that could not be read might have been a clearance rule.
+        self.unreadable_reason.is_some()
+            || !self.not_understood_rules.is_empty()
+            || (!self.file_inactive_due_to_bare_values
+                && self.unevaluated_rules.iter().any(|rule| {
+                    rule.bare_value_constraint_types.is_empty()
+                        && rule.constraint_types.iter().any(|kind| kind == "clearance")
+                }))
     }
 
     #[must_use]
+    #[allow(clippy::too_many_lines, reason = "one sentence per coverage state")]
     pub fn unevaluated_notice(&self) -> Option<String> {
-        if self.unevaluated_rules.is_empty() {
+        if self.unevaluated_rules.is_empty()
+            && self.not_understood_rules.is_empty()
+            && self.unreadable_reason.is_none()
+        {
             return None;
         }
         let bare_rules = self
@@ -1359,6 +1408,34 @@ impl CustomRulesCoverage {
             .filter(|rule| rule.bare_value_constraint_types.is_empty())
             .collect::<Vec<_>>();
         let mut notice = String::new();
+
+        if let Some(why) = &self.unreadable_reason {
+            let _ = writeln!(
+                notice,
+                "CUSTOM RULES NOT EVALUATED: custom DRC rules file not understood; none of its rules were checked ({}: {why}).",
+                self.file_name,
+            );
+        }
+        if !self.not_understood_rules.is_empty() {
+            let count = self.not_understood_rules.len();
+            let _ = writeln!(
+                notice,
+                "CUSTOM RULES NOT EVALUATED: {count} rule{} in {} could not be read:",
+                if count == 1 { "" } else { "s" },
+                self.file_name,
+            );
+            for rule in &self.not_understood_rules {
+                let name = rule
+                    .name
+                    .as_ref()
+                    .map_or_else(String::new, |name| format!("{name:?} "));
+                let _ = writeln!(
+                    notice,
+                    "  {name}(line {}): custom DRC rule not understood; that rule was not checked ({}).",
+                    rule.line_number, rule.why,
+                );
+            }
+        }
 
         if !bare_rules.is_empty() {
             if self.file_inactive_due_to_bare_values {
@@ -1898,6 +1975,24 @@ impl DrcGroup {
     }
 }
 
+// A track of one net inside another net's stored zone fill, grouped by
+// net pair and layer. Not a short: the fill is out of date and a refill clears
+// it, which is the only action. Never gates.
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+pub struct DrcStaleFill {
+    pub zone_net: String,
+    pub copper_net: String,
+    pub copper_kind: String,
+    pub layer: String,
+    pub count: usize,
+    pub loc_mm: [f64; 2],
+    pub plain: String,
+    pub fix: String,
+}
+
+/// (zone net, copper net, copper kind, layer): what one stale-fill group shares.
+type StaleKey = (String, String, String, String);
+
 /// The DRC report, restructured into honest buckets: real shorts kept verbatim,
 /// clearance findings grouped, and `gap == rule` separated from `gap < rule`.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
@@ -1905,6 +2000,10 @@ pub struct DrcStructured {
     pub clearance_rule_mm: f64,
     pub primitive_count: usize,
     pub shorts: Vec<DrcShort>,
+    // Tracks and vias inside another net's out-of-date zone fill; refilling
+    // the zones clears them. Reported beside the shorts, never as one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stale_fills: Vec<DrcStaleFill>,
     /// Grouped clearance violations that are genuinely BELOW the rule.
     pub violations: Vec<DrcGroup>,
     /// Grouped findings that sit exactly AT the rule (no margin, not below).
@@ -1960,6 +2059,7 @@ impl DrcStructured {
         };
         let mut shorts = Vec::new();
         let mut groups: BTreeMap<(String, String, String), Group> = BTreeMap::new();
+        let mut stale: BTreeMap<StaleKey, (usize, [f64; 2])> = BTreeMap::new();
 
         // On an unvalidated board format (KiCad 10+) the shorts may be phantom, so
         // they carry "note" severity, not "serious", every structured consumer
@@ -2045,6 +2145,30 @@ impl DrcStructured {
                         refs: owners(f).into_iter().collect(),
                     });
                 }
+                ViolationKind::StaleFill => {
+                    // The zone is whichever item is the pour; the other is the
+                    // track that lies inside its stored fill.
+                    let (zone_net, copper_net, copper) =
+                        if f.item_a.kind == hauksbee_extract::ItemKind::Zone {
+                            (&f.net_a_name, &f.net_b_name, &f.item_b)
+                        } else {
+                            (&f.net_b_name, &f.net_a_name, &f.item_a)
+                        };
+                    let copper_kind = if copper.kind == hauksbee_extract::ItemKind::Via {
+                        "via"
+                    } else {
+                        "track"
+                    };
+                    let e = stale
+                        .entry((
+                            zone_net.clone(),
+                            copper_net.clone(),
+                            copper_kind.to_string(),
+                            f.layer.clone(),
+                        ))
+                        .or_insert((0, [f.x, f.y]));
+                    e.0 += 1;
+                }
                 ViolationKind::Clearance => {
                     // A finding is "below" the rule when its gap is under it;
                     // "at limit" when gap == rule. The 1e-4 mm (100 nm) tolerance
@@ -2121,10 +2245,33 @@ impl DrcStructured {
             }
         }
 
+        let stale_fills = stale
+            .into_iter()
+            .map(
+                |((zone_net, copper_net, copper_kind, layer), (count, loc_mm))| DrcStaleFill {
+                    plain: hauksbee_ir::vocabulary::stale_zone_fill(
+                        &zone_net,
+                        &copper_net,
+                        &copper_kind,
+                    ),
+                    fix: "refill all zones (Edit > Fill All Zones, key B) in KiCad, save the \
+                          board and re-run; the stored fill was computed before this copper \
+                          was routed or moved"
+                        .to_string(),
+                    zone_net,
+                    copper_net,
+                    copper_kind,
+                    layer,
+                    count,
+                    loc_mm,
+                },
+            )
+            .collect();
         Self {
             clearance_rule_mm: report.clearance_mm,
             primitive_count: report.primitive_count,
             shorts,
+            stale_fills,
             violations,
             at_limit,
             version_warning: report.version_warning.clone(),
@@ -2259,7 +2406,11 @@ impl DrcStructured {
         if let Some(n) = &self.suppression_note {
             let _ = writeln!(s, "\nNOT CHECKED: {n}");
         }
-        if self.shorts.is_empty() && self.violations.is_empty() && self.at_limit.is_empty() {
+        if self.shorts.is_empty()
+            && self.stale_fills.is_empty()
+            && self.violations.is_empty()
+            && self.at_limit.is_empty()
+        {
             let _ = writeln!(s, "no shorts or clearance violations.");
             return s;
         }
@@ -2290,6 +2441,16 @@ impl DrcStructured {
                     sh.oracle_agreement()
                         .map(|agreement| format!("; {agreement}"))
                         .unwrap_or_default()
+                );
+            }
+        }
+        if !self.stale_fills.is_empty() {
+            let _ = writeln!(s, "\nOUT-OF-DATE ZONE FILL ({}):", self.stale_fills.len());
+            for sf in &self.stale_fills {
+                let _ = writeln!(
+                    s,
+                    "  [WARNING] {} on {} at {} place(s), first at x={:.1}, y={:.1}",
+                    sf.plain, sf.layer, sf.count, sf.loc_mm[0], sf.loc_mm[1],
                 );
             }
         }
@@ -4128,6 +4289,7 @@ mod tests {
             let st = DrcStructured {
                 clearance_rule_mm: 0.2,
                 primitive_count: 20,
+                stale_fills: Vec::new(),
                 shorts: Vec::new(),
                 violations: vec![group],
                 at_limit: Vec::new(),
@@ -4178,6 +4340,7 @@ mod tests {
             let st = DrcStructured {
                 clearance_rule_mm: 0.2,
                 primitive_count: 20,
+                stale_fills: Vec::new(),
                 shorts: Vec::new(),
                 violations: vec![group],
                 at_limit: Vec::new(),
@@ -4672,6 +4835,72 @@ mod tests {
             label.contains("2 below") && label.contains("3 at the limit"),
             "{label}"
         );
+    }
+
+    /// A GND pour (stored fill) with a net-A track inside it, as the extractor
+    /// reports it.
+    fn stale(zone_net: &str, copper_net: &str) -> DrcFinding {
+        let mut f = super::test_finding(
+            ViolationKind::StaleFill,
+            (zone_net, copper_net),
+            (10.0, 20.0),
+            (0.0, 0.2),
+        );
+        f.item_a.kind = hauksbee_extract::ItemKind::Zone;
+        f
+    }
+
+    #[test]
+    fn a_track_in_a_stored_fill_is_one_non_gating_refill_warning_not_a_short() {
+        let mut report = drc_report(Vec::new());
+        for _ in 0..3 {
+            report.findings.push(stale("GND", "A"));
+        }
+        let st = DrcStructured::from_report(&report);
+        assert!(st.shorts.is_empty(), "never a short");
+        assert!(st.violations.is_empty() && st.at_limit.is_empty());
+        assert_eq!(st.stale_fills.len(), 1, "grouped by net pair and layer");
+        let sf = &st.stale_fills[0];
+        assert_eq!((sf.zone_net.as_str(), sf.copper_net.as_str()), ("GND", "A"));
+        assert_eq!((sf.count, sf.copper_kind.as_str()), (3, "track"));
+        assert_eq!(
+            sf.plain,
+            "zone fill is out of date (a A track lies inside the stored GND fill); \
+             refill zones (B) in KiCad and re-run"
+        );
+
+        // Plain report: a warning that names the refill, not a serious finding.
+        let plain = crate::plain::plain_drc_structured(&st);
+        assert_eq!(plain.findings.len(), 1);
+        assert_eq!(plain.findings[0].level, crate::plain::PlainLevel::Warning);
+        assert!(plain.findings[0].what.contains("out of date"), "{plain:?}");
+        assert!(plain.findings[0].fix.contains("refill"));
+
+        // `--json`: a warning finding that does not gate.
+        let json = crate::reports::drc::drc_findings(&st, None);
+        assert_eq!(json.len(), 1);
+        assert_eq!(
+            (json[0].kind.as_str(), json[0].severity.as_str()),
+            ("stale_fill", "warning")
+        );
+        assert!(!json[0].gates());
+        let text = st
+            .render_with_clearance_rule_provenance(&ClearanceRuleProvenance::defaulted(0.2, false));
+        assert!(text.contains("OUT-OF-DATE ZONE FILL"), "{text}");
+
+        // The same pair as a real short stays serious and gating.
+        let st = DrcStructured::from_report(&drc_report(vec![short("GND", "A")]));
+        assert!(st.stale_fills.is_empty());
+        assert_eq!(st.shorts[0].severity, "serious");
+    }
+
+    #[test]
+    fn a_stale_fill_on_a_via_names_the_via() {
+        let mut f = stale("GND", "A");
+        f.item_b.kind = hauksbee_extract::ItemKind::Via;
+        let st = DrcStructured::from_report(&drc_report(vec![f]));
+        assert_eq!(st.stale_fills[0].copper_kind, "via");
+        assert!(st.stale_fills[0].plain.contains("a A via lies inside"));
     }
 
     #[test]

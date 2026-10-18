@@ -59,7 +59,7 @@ pub mod ipc2581;
 mod ipc356;
 pub mod kicad_dru;
 mod layout_lint;
-pub use layout_lint::{NOT_ROUTED_FIX, NOT_ROUTED_MESSAGE_PREFIX};
+pub use layout_lint::{NOT_ROUTED_FIX, NOT_ROUTED_MESSAGE_PREFIX, PANEL_COPIES_MESSAGE_PREFIX};
 mod netlint;
 mod netlist;
 pub mod netname;
@@ -94,7 +94,7 @@ pub use eagle_sch::{
 };
 pub use kicad_dru::{
     parse_kicad_dru, KicadDruConstraint, KicadDruConstraintKind, KicadDruError, KicadDruRule,
-    KicadDruRules,
+    KicadDruRules, KicadDruSkippedRule,
 };
 pub use netlint::{
     control_role, is_capacitor, is_connector_like, is_ground, is_led, is_led_identity,

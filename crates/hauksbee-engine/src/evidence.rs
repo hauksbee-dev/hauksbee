@@ -1144,8 +1144,36 @@ impl BoardEvidence {
                     ),
                     "evaluate the rule in KiCad's DRC, or add an equivalent supported unconditional rule and rerun",
                 )
-            })
-            .collect::<Vec<_>>();
+            });
+        // A rule the reader could not interpret may have been a clearance rule.
+        let unread = coverage
+            .not_understood_rules
+            .iter()
+            .map(|rule| {
+                let line = rule.line_number;
+                let key = format!(
+                    "custom-rules/{}/not-understood/line-{line}",
+                    coverage.file_name
+                );
+                let text = rule.name.as_ref().map_or_else(
+                    || format!("custom DRC rule on line {line}"),
+                    |name| format!("custom DRC rule {name:?}"),
+                );
+                Assumption::reduced_fidelity(
+                    AssumptionSource::Check,
+                    Subject::new(&key, &text),
+                    Scope::Check {
+                        check: "drc".into(),
+                        kind: Some("clearance".into()),
+                    },
+                    &format!(
+                        "hauksbee could not understand it in {} ({})",
+                        coverage.file_name, rule.why
+                    ),
+                    "evaluate the rule in KiCad's DRC, or rewrite it in syntax hauksbee reads and rerun",
+                )
+            });
+        let assumptions = assumptions.chain(unread).collect::<Vec<_>>();
         self.with_assumptions(assumptions)
     }
 
@@ -2902,6 +2930,7 @@ mod tests {
         DrcStructured {
             clearance_rule_mm: 0.2,
             primitive_count: 2,
+            stale_fills: Vec::new(),
             shorts: Vec::new(),
             violations: vec![DrcGroup {
                 net_a: "A".into(),

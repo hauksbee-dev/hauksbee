@@ -1,7 +1,10 @@
 //! Reader for the KiCad custom design-rules format, `.kicad_dru`.
 //!
 //! This module intentionally reads only the rule fields and constraint types
-//! that can change a Hauksbee report. Unknown grammar fails closed. Known
+//! that can change a Hauksbee report. A rule it cannot interpret is never
+//! applied and never silently dropped: it is kept in
+//! [`KicadDruRules::not_understood`] with its name and line so the report can
+//! say that rule was not checked, and the rest of the file is still read. Known
 //! constraint types for checks Hauksbee does not implement are counted so the
 //! engine can disclose them instead of treating their absence as coverage.
 //!
@@ -48,7 +51,13 @@ const KNOWN_DISTANCE_CONSTRAINTS: &[&str] = &[
     "thermal_relief_gap",
     "thermal_spoke_width",
     "solder_mask_expansion",
+    "solder_mask_sliver",
     "solder_paste_abs_margin",
+    // Older spellings KiCad still accepts for `physical_clearance`,
+    // `physical_hole_clearance` and `hole_size`.
+    "mechanical_clearance",
+    "mechanical_hole_clearance",
+    "hole",
 ];
 
 /// Valid KiCad constraints whose arguments are not distances: keywords, counts,
@@ -64,6 +73,7 @@ const KNOWN_NON_DISTANCE_CONSTRAINTS: &[&str] = &[
     "min_resolved_spokes",
     "solder_paste_rel_margin",
     "bridged_mask",
+    "via_dangling",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,11 +156,25 @@ impl KicadDruRule {
     }
 }
 
+/// A rule (or other top-level form) the reader could not interpret. It is not
+/// applied; the report names it so the user knows that rule was not checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KicadDruSkippedRule {
+    /// The rule's name, when it could be read.
+    pub name: Option<String>,
+    /// One-based line of the rule's opening form.
+    pub line_number: usize,
+    /// What the reader could not understand, as a short phrase.
+    pub why: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct KicadDruRules {
     pub version: u64,
     pub rules: Vec<KicadDruRule>,
     pub unsupported_constraint_counts: BTreeMap<String, usize>,
+    /// Rules the reader could not interpret, in file order.
+    pub not_understood: Vec<KicadDruSkippedRule>,
 }
 
 impl KicadDruRules {
@@ -192,11 +216,24 @@ pub enum KicadDruError {
     Malformed(String),
 }
 
+impl KicadDruError {
+    /// The error without its category prefix, as a short phrase.
+    fn reason(&self) -> String {
+        match self {
+            Self::Parse(why) | Self::Malformed(why) => why.clone(),
+            Self::UnsupportedVersion(version) => format!("unsupported version {version}"),
+        }
+    }
+}
+
 /// Parse a KiCad custom design-rules file (`.kicad_dru`).
 ///
+/// A rule this reader cannot interpret does not fail the file: it is listed in
+/// [`KicadDruRules::not_understood`] and the other rules are still read.
+///
 /// # Errors
-/// A [`KicadDruError`] when the text does not parse, declares an unsupported
-/// version, or holds a rule this reader cannot interpret.
+/// A [`KicadDruError`] when the file as a whole is unusable: the text does not
+/// parse as s-expressions, declares an unsupported version, or has no version.
 pub fn parse_kicad_dru(text: &str) -> Result<KicadDruRules, KicadDruError> {
     let stripped = strip_line_comments(text)?;
     let wrapped = format!("(kicad_dru {stripped}\n)");
@@ -210,7 +247,9 @@ pub fn parse_kicad_dru(text: &str) -> Result<KicadDruRules, KicadDruError> {
     let mut version = None;
     let mut rules = Vec::new();
     let mut unsupported_constraint_counts = BTreeMap::new();
+    let mut not_understood = Vec::new();
     for item in root.lists() {
+        let line_number = original_line_number(&document, item).unwrap_or(1);
         match item.name() {
             Some("version") => {
                 if version.is_some() {
@@ -227,28 +266,31 @@ pub fn parse_kicad_dru(text: &str) -> Result<KicadDruRules, KicadDruError> {
                 version = Some(value);
             }
             Some("rule") => {
-                let line_number = original_line_number(&document, item)?;
-                rules.push(
-                    parse_rule(item, line_number, &mut unsupported_constraint_counts).map_err(
-                        |error| match error {
-                            KicadDruError::Malformed(why) => {
-                                KicadDruError::Malformed(format!("line {line_number}: {why}"))
-                            }
-                            other => other,
-                        },
-                    )?,
-                );
+                let mut counts = BTreeMap::new();
+                match parse_rule(item, line_number, &mut counts) {
+                    Ok(rule) => {
+                        for (kind, count) in counts {
+                            *unsupported_constraint_counts.entry(kind).or_default() += count;
+                        }
+                        rules.push(rule);
+                    }
+                    Err(error) => not_understood.push(KicadDruSkippedRule {
+                        name: item.arg_value(0).filter(|name| !name.trim().is_empty()),
+                        line_number,
+                        why: error.reason(),
+                    }),
+                }
             }
-            Some(name) => {
-                return Err(KicadDruError::Malformed(format!(
-                    "unknown top-level form {name}"
-                )));
-            }
-            None => {
-                return Err(KicadDruError::Malformed(
-                    "top-level form has no keyword".into(),
-                ));
-            }
+            Some(name) => not_understood.push(KicadDruSkippedRule {
+                name: None,
+                line_number,
+                why: format!("unknown top-level form {name}"),
+            }),
+            None => not_understood.push(KicadDruSkippedRule {
+                name: None,
+                line_number,
+                why: "top-level form has no keyword".into(),
+            }),
         }
     }
     let version =
@@ -257,6 +299,7 @@ pub fn parse_kicad_dru(text: &str) -> Result<KicadDruRules, KicadDruError> {
         version,
         rules,
         unsupported_constraint_counts,
+        not_understood,
     })
 }
 
@@ -268,11 +311,6 @@ fn parse_rule(
     let name_token = rule
         .arg(0)
         .ok_or_else(|| KicadDruError::Malformed("rule is missing its name".into()))?;
-    if !name_token.is_string() {
-        return Err(KicadDruError::Malformed(
-            "rule name must be a quoted string".into(),
-        ));
-    }
     let name = name_token.value();
     if name.trim().is_empty() {
         return Err(KicadDruError::Malformed("rule name is empty".into()));
@@ -382,7 +420,12 @@ fn parse_constraint(constraint: &List) -> Result<KicadDruConstraint, KicadDruErr
             )));
         }
         let value = one_argument(bound, bound.name().unwrap_or("bound"))?;
-        if distances {
+        // `length` bounds may also be times (`10ps`), which are not distances.
+        let is_time = kind_name == "length"
+            && ["ps", "ns", "us", "ms"]
+                .iter()
+                .any(|unit| value.ends_with(unit));
+        if distances && !is_time {
             let distance = parse_distance(&value)?;
             *target = Some(distance.millimetres);
             has_bare_value |= !distance.has_explicit_unit;

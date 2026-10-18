@@ -143,6 +143,21 @@ pub fn check_run_stopped(doing: Option<(&str, u32)>, elapsed_s: u64) -> String {
     )
 }
 
+/// What every surface says about a track or via of one net that lies inside
+/// another net's stored zone fill.
+///
+/// The copper is not shorted: the fill was computed before the track was
+/// routed or moved, and a refill carves the zone's clearance around it. `KiCad`
+/// itself reports the same place as a clearance violation, never a short.
+/// `copper` is the kind of copper ("track" or "via"); `B` is `KiCad`'s key for
+/// "Fill all zones".
+#[must_use]
+pub fn stale_zone_fill(zone_net: &str, copper_net: &str, copper: &str) -> String {
+    format!(
+        "zone fill is out of date (a {copper_net} {copper} lies inside the stored {zone_net} fill); refill zones (B) in KiCad and re-run"
+    )
+}
+
 /// How many part or net names a one-line message names before it counts the rest.
 pub const NAMES_SHOWN: usize = 6;
 
@@ -1125,6 +1140,16 @@ mod names_summary_tests {
     fn a_long_list_names_the_first_few_and_counts_the_rest() {
         let many: Vec<String> = (1..=50).map(|i| format!("N{i}")).collect();
         assert_eq!(names_summary(&many), "N1, N2, N3, N4, N5, N6 and 44 more");
+    }
+
+    #[test]
+    fn a_stale_fill_names_both_nets_and_the_refill_key() {
+        let said = stale_zone_fill("GND", "A", "track");
+        assert_eq!(
+            said,
+            "zone fill is out of date (a A track lies inside the stored GND fill); \
+             refill zones (B) in KiCad and re-run"
+        );
     }
 }
 

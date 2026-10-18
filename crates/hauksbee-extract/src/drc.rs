@@ -34,6 +34,11 @@
 //!   - `0 < gap < clearance` → they do not touch but sit closer than the
 //!     design rule allows: a **clearance violation**
 //!     ([`ViolationKind::Clearance`]), a near-short risk, lower severity.
+//!   - A track or arc of one net inside the *stored* fill of another
+//!     net's zone is not a short but an out-of-date fill
+//!     ([`ViolationKind::StaleFill`]): a refill carves the clearance around
+//!     it. `KiCad` itself reports these as clearance violations, never as
+//!     shorting items.
 //!
 //! Clearance is read from the board's design rules when present, else a sane
 //! default ([`DEFAULT_CLEARANCE_MM`]).
@@ -467,6 +472,13 @@ pub enum ViolationKind {
     /// Copper from two nets is closer than the design clearance but not
     /// touching: a near-short manufacturing risk.
     Clearance,
+    /// A track or arc of one net lies inside the stored fill of another
+    /// net's zone: the fill was computed before the track was routed or moved,
+    /// and refilling carves the track out by the zone's clearance. The copper
+    /// is not shorted, the fill is stale. `KiCad` reports the same place as a
+    /// clearance violation (actual 0), never as a shorting item. Vias are not
+    /// included: a via inside a stored fill stays a short.
+    StaleFill,
 }
 
 impl ViolationKind {
@@ -475,6 +487,17 @@ impl ViolationKind {
         match self {
             Self::Short => "short",
             Self::Clearance => "clearance",
+            Self::StaleFill => "stale_fill",
+        }
+    }
+
+    /// Report order: a short outranks a stale fill, which outranks a plain
+    /// clearance violation.
+    const fn rank(self) -> u8 {
+        match self {
+            Self::Short => 0,
+            Self::StaleFill => 1,
+            Self::Clearance => 2,
         }
     }
 }
@@ -708,8 +731,9 @@ fn item_key(item: &Item) -> (&'static str, &str, &str) {
 /// beats a larger one, and the location and items settle a tie, so the choice
 /// is a function of the two findings and never of the order they were met in.
 fn worse(a: &DrcFinding, b: &DrcFinding) -> std::cmp::Ordering {
-    (a.kind == ViolationKind::Clearance)
-        .cmp(&(b.kind == ViolationKind::Clearance))
+    a.kind
+        .rank()
+        .cmp(&b.kind.rank())
         .then_with(|| a.gap_mm.total_cmp(&b.gap_mm))
         .then_with(|| a.x.total_cmp(&b.x))
         .then_with(|| a.y.total_cmp(&b.y))
@@ -722,8 +746,9 @@ fn worse(a: &DrcFinding, b: &DrcFinding) -> std::cmp::Ordering {
 /// list the same findings in the same order whatever order the file used.
 fn sort_findings(findings: &mut [DrcFinding]) {
     findings.sort_by(|a, b| {
-        (a.kind == ViolationKind::Clearance)
-            .cmp(&(b.kind == ViolationKind::Clearance))
+        a.kind
+            .rank()
+            .cmp(&b.kind.rank())
             .then_with(|| a.net_a_name.cmp(&b.net_a_name))
             .then_with(|| a.net_b_name.cmp(&b.net_b_name))
             .then_with(|| a.net_a.cmp(&b.net_a))
@@ -839,7 +864,8 @@ impl KicadExclusion {
     fn matches(&self, finding: &DrcFinding) -> bool {
         let kind = match finding.kind {
             ViolationKind::Short => "shorting_items",
-            ViolationKind::Clearance => "clearance",
+            // KiCad's own name for a track sitting in a stale zone fill.
+            ViolationKind::Clearance | ViolationKind::StaleFill => "clearance",
         };
         let mut uuids = vec![finding.item_a.uuid.clone(), finding.item_b.uuid.clone()];
         uuids.sort();
@@ -908,6 +934,14 @@ impl DrcReport {
         self.findings
             .iter()
             .filter(|f| f.kind == ViolationKind::Short)
+    }
+
+    /// Only the stale-fill findings: a track or arc inside another net's
+    /// stored zone fill, which a refill clears.
+    pub fn stale_fills(&self) -> impl Iterator<Item = &DrcFinding> {
+        self.findings
+            .iter()
+            .filter(|f| f.kind == ViolationKind::StaleFill)
     }
 
     /// Only the clearance (near-short) violations.
@@ -1076,6 +1110,10 @@ struct Primitive {
     /// The board item (pad, track, via, fill polygon) this shape belongs to,
     /// an index into [`LayerBuckets::items`]; 0 where items are not tracked.
     item: usize,
+    /// A boundary edge of a stored zone fill: a refill would carve other nets'
+    /// tracks out of it by the zone's clearance (the board rule when it names
+    /// none, which `KiCad` also applies to an explicit zero).
+    stored_fill: bool,
 }
 
 impl Primitive {
@@ -1206,12 +1244,18 @@ struct LayerBuckets {
     zones: HashMap<String, Vec<ZonePoly>>,
     /// One entry per board item, for copper connectivity (KiCad path only).
     items: Vec<connectivity::ItemMeta>,
+    /// Ordinal of the footprint whose pads are being collected. A designator
+    /// is not an identity (a panel repeats them), so pad items carry this.
+    footprint: usize,
+    /// Through-hole pad layers settled once every track and via is known.
+    deferred: Vec<DeferredPadLayer>,
 }
 
 impl LayerBuckets {
     /// Start a new board item: every shape pushed until the next call belongs
     /// to it, on whichever layers it lands.
-    fn begin_item(&mut self, meta: connectivity::ItemMeta) {
+    fn begin_item(&mut self, mut meta: connectivity::ItemMeta) {
+        meta.footprint = self.footprint;
         self.items.push(meta);
     }
 
@@ -1261,11 +1305,10 @@ impl LayerBuckets {
             let mut j = n - 1;
             for i in 0..n {
                 let cap = Capsule::new(pts[j].0, pts[j].1, pts[i].0, pts[i].1, 0.0);
-                self.push(
-                    layer,
-                    make_prim(Shape::Capsule(cap), net, ItemKind::Zone, String::new())
-                        .with_uuid(uuid.to_string()),
-                );
+                let mut edge = make_prim(Shape::Capsule(cap), net, ItemKind::Zone, String::new())
+                    .with_uuid(uuid.to_string());
+                edge.stored_fill = filled;
+                self.push(layer, edge);
                 j = i;
             }
         }
@@ -1309,6 +1352,7 @@ fn make_prim(shape: Shape, net: i64, kind: ItemKind, owner: String) -> Primitive
         bounds,
         idx: 0,
         item: 0,
+        stored_fill: false,
     }
 }
 
@@ -1584,7 +1628,12 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
     }
 
     // ── Pads (inside footprints) ────────────────────────────────────────────
-    for fp in root.find_all("footprint").chain(root.find_all("module")) {
+    for (ordinal, fp) in root
+        .find_all("footprint")
+        .chain(root.find_all("module"))
+        .enumerate()
+    {
+        buckets.footprint = ordinal;
         let owner = footprint_reference(fp);
         let (fx, fy, frot) = at_of(fp);
         let rot_rad = frot.to_radians();
@@ -1605,10 +1654,15 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
         }
     }
 
+    settle_unused_pad_layers(&mut buckets);
     buckets
 }
 
 /// One pad → a primitive on each copper layer it touches.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pad's shapes, layers and barrel in one place"
+)]
 fn collect_pad(
     pad: &List,
     net: i64,
@@ -1677,82 +1731,256 @@ fn collect_pad(
         },
     );
 
-    let shapes: Vec<Shape> = match shape_tok.as_str() {
-        "circle" => vec![{
-            // Through outline_to_world so a drill offset displaces the disc too.
-            let c = outline_to_world(0.0, 0.0);
-            Shape::Capsule(Capsule::new(c.0, c.1, c.0, c.1, sx.max(sy) / 2.0))
-        }],
-        "oval" => vec![{
-            // A stadium: a capsule whose segment runs along the longer axis,
-            // radius = half the shorter dimension.
-            let (long, short, along_x) = if sx >= sy {
-                (sx, sy, true)
-            } else {
-                (sy, sx, false)
-            };
-            let half = (long - short).max(0.0) / 2.0;
-            let (a, b) = if along_x {
-                (outline_to_world(-half, 0.0), outline_to_world(half, 0.0))
-            } else {
-                (outline_to_world(0.0, -half), outline_to_world(0.0, half))
-            };
-            Shape::Capsule(Capsule::new(a.0, a.1, b.0, b.1, short / 2.0))
-        }],
-        // Trapezoid: `(rect_delta dx dy)` skews the rectangle. KiCad's
-        // outline (legacy `PAD::BuildPadPolygon`): `size` is the average of
-        // the two parallel edges and the delta is the full difference, so the
-        // wide edge extends BEYOND the size box, so a bounding rectangle both
-        // understates the wide edge and overstates the narrow one.
-        "trapezoid" => vec![trapezoid_polygon(pad, sx, sy, &outline_to_world)],
-        // Custom pad: the copper is the anchor pad shape UNION every drawn
-        // primitive.
-        "custom" => custom_pad_shapes(pad, sx, sy, &outline_to_world),
-        // rect, roundrect and anything else: a rectangle. For roundrect we
-        // keep a corner radius as inflation so the rounded copper is not
-        // overstated.
-        _ => vec![{
-            let min_side = sx.min(sy);
-            let rr = if shape_tok == "roundrect" {
-                let ratio = pad.find_f64("roundrect_rratio").unwrap_or(0.0);
-                ratio * min_side
-            } else {
-                0.0
-            };
-            // KiCad stores chamfered pads as roundrect with `(chamfer_ratio N)`
-            // + `(chamfer <corners...>)`: each named corner gets a straight
-            // 45-degree cut of size ratio * min(w, h), while the un-named
-            // corners keep the roundrect radius. Treating such a pad as a full
-            // rectangle manufactures false shorts against copper legitimately
-            // routed through the notch.
-            let chamfered = chamfered_corners(pad);
-            let ch = if chamfered.iter().any(|&c| c) {
-                (pad.find_f64("chamfer_ratio").unwrap_or(0.0) * min_side).max(0.0)
-            } else {
-                0.0
-            };
-            if ch > 0.0 {
-                chamfered_rect_polygon(sx, sy, rr, ch, chamfered, &outline_to_world)
-            } else {
-                // Inset the rectangle by the corner radius and carry `r` so the
-                // rounded outline is represented as inset-poly + radius.
-                rect_polygon(
-                    2.0f64.mul_add(-rr, sx).max(0.0),
-                    2.0f64.mul_add(-rr, sy).max(0.0),
-                    &outline_to_world,
-                    rr,
-                )
-            }
-        }],
+    // The copper outline of one padstack layer, read from `src`: the pad
+    // itself for the front layer, or a KiCad 10 `(padstack (layer ...))` entry.
+    let build_shapes = |src: &List, shape_tok: &str, sx: f64, sy: f64| -> Vec<Shape> {
+        match shape_tok {
+            "circle" => vec![{
+                // Through outline_to_world so a drill offset displaces the disc too.
+                let c = outline_to_world(0.0, 0.0);
+                Shape::Capsule(Capsule::new(c.0, c.1, c.0, c.1, sx.max(sy) / 2.0))
+            }],
+            "oval" => vec![{
+                // A stadium: a capsule whose segment runs along the longer axis,
+                // radius = half the shorter dimension.
+                let (long, short, along_x) = if sx >= sy {
+                    (sx, sy, true)
+                } else {
+                    (sy, sx, false)
+                };
+                let half = (long - short).max(0.0) / 2.0;
+                let (a, b) = if along_x {
+                    (outline_to_world(-half, 0.0), outline_to_world(half, 0.0))
+                } else {
+                    (outline_to_world(0.0, -half), outline_to_world(0.0, half))
+                };
+                Shape::Capsule(Capsule::new(a.0, a.1, b.0, b.1, short / 2.0))
+            }],
+            // Trapezoid: `(rect_delta dx dy)` skews the rectangle. KiCad's
+            // outline (legacy `PAD::BuildPadPolygon`): `size` is the average of
+            // the two parallel edges and the delta is the full difference, so the
+            // wide edge extends BEYOND the size box, so a bounding rectangle both
+            // understates the wide edge and overstates the narrow one.
+            "trapezoid" => vec![trapezoid_polygon(src, sx, sy, &outline_to_world)],
+            // Custom pad: the copper is the anchor pad shape UNION every drawn
+            // primitive.
+            "custom" => custom_pad_shapes(pad, sx, sy, &outline_to_world),
+            // rect, roundrect and anything else: a rectangle. For roundrect we
+            // keep a corner radius as inflation so the rounded copper is not
+            // overstated.
+            _ => vec![{
+                let min_side = sx.min(sy);
+                let rr = if shape_tok == "roundrect" {
+                    let ratio = src.find_f64("roundrect_rratio").unwrap_or(0.0);
+                    ratio * min_side
+                } else {
+                    0.0
+                };
+                // KiCad stores chamfered pads as roundrect with `(chamfer_ratio N)`
+                // + `(chamfer <corners...>)`: each named corner gets a straight
+                // 45-degree cut of size ratio * min(w, h), while the un-named
+                // corners keep the roundrect radius. Treating such a pad as a full
+                // rectangle manufactures false shorts against copper legitimately
+                // routed through the notch.
+                let chamfered = chamfered_corners(src);
+                let ch = if chamfered.iter().any(|&c| c) {
+                    (src.find_f64("chamfer_ratio").unwrap_or(0.0) * min_side).max(0.0)
+                } else {
+                    0.0
+                };
+                if ch > 0.0 {
+                    chamfered_rect_polygon(sx, sy, rr, ch, chamfered, &outline_to_world)
+                } else {
+                    // Inset the rectangle by the corner radius and carry `r` so the
+                    // rounded outline is represented as inset-poly + radius.
+                    rect_polygon(
+                        2.0f64.mul_add(-rr, sx).max(0.0),
+                        2.0f64.mul_add(-rr, sy).max(0.0),
+                        &outline_to_world,
+                        rr,
+                    )
+                }
+            }],
+        }
     };
+    let front_shapes = build_shapes(pad, &shape_tok, sx, sy);
+
+    // KiCad 10 padstacks give a pad a different outline on the inner layers
+    // (`front_inner_back`: one "Inner" entry and a "B.Cu" entry) or on any
+    // named layer (`custom`). The front layer is the pad itself.
+    let mut stack_shapes: HashMap<String, Vec<Shape>> = HashMap::new();
+    for entry in pad
+        .find("padstack")
+        .into_iter()
+        .flat_map(List::lists)
+        .filter(|e| e.name() == Some("layer"))
+    {
+        let (Some(name), Some(tok)) = (entry.arg_value(0), entry.find_value("shape")) else {
+            continue;
+        };
+        let (esx, esy) = entry.find("size").map_or((sx, sy), |s| {
+            (s.arg_f64(0).unwrap_or(sx), s.arg_f64(1).unwrap_or(sy))
+        });
+        // A custom outline on one layer is drawn from the pad's primitives.
+        let drawn = build_shapes(entry, &tok, esx, esy);
+        let targets: Vec<String> = if name == "Inner" {
+            let n = copper_layers.len();
+            copper_layers[1.min(n)..n.saturating_sub(1).max(1.min(n))].to_vec()
+        } else {
+            vec![name]
+        };
+        for layer in targets {
+            stack_shapes.insert(layer, drawn.clone());
+        }
+    }
+
+    // `KiCad` flashes a plated through-hole pad on a layer only when
+    // something connects there, if the pad says `(remove_unused_layers)`:
+    // the end layers stay when `(keep_end_layers)`, and so does any layer a
+    // zone is forced onto by `(zone_layer_connections)`. Elsewhere the
+    // plated barrel is all that is left, and it is the barrel the fill keeps
+    // its clearance from. Whether a track or via connects is known only once
+    // all of them are collected, so those layers are settled afterwards.
+    let flag_on = |name: &str| {
+        pad.find(name)
+            .is_some_and(|n| n.arg_value(0).is_none_or(|v| v != "no"))
+    };
+    let removable =
+        pad.arg_value(1).as_deref() == Some("thru_hole") && flag_on("remove_unused_layers");
+    let keep_ends = flag_on("keep_end_layers");
+    let forced: Vec<String> = pad
+        .find("zone_layer_connections")
+        .map(|l| (0..).map_while(|i| l.arg_value(i)).collect())
+        .unwrap_or_default();
+    let outer = [copper_layers.first(), copper_layers.last()];
+    let barrel = removable
+        .then(|| pad_barrel(pad, &outline_to_world))
+        .flatten();
 
     for layer in &layers {
-        for shape in &shapes {
+        let shapes = stack_shapes.get(layer).unwrap_or(&front_shapes);
+        let settled_later =
+            removable && !(keep_ends && outer.contains(&Some(layer))) && !forced.contains(layer);
+        if settled_later {
+            buckets.deferred.push(DeferredPadLayer {
+                item: buckets.current_item(),
+                layer: layer.clone(),
+                net,
+                owner: owner.to_string(),
+                uuid: uuid_of(pad),
+                shapes: shapes.clone(),
+                barrel: barrel.clone(),
+            });
+            continue;
+        }
+        for shape in shapes {
             buckets.push(
                 layer,
                 make_prim(shape.clone(), net, ItemKind::Pad, owner.to_string())
                     .with_uuid(uuid_of(pad)),
             );
+        }
+    }
+}
+
+/// The plated barrel of a through-hole pad: its drill, round or oblong.
+fn pad_barrel(pad: &List, to_world: &dyn Fn(f64, f64) -> (f64, f64)) -> Option<Shape> {
+    let drill = pad.find("drill")?;
+    let oval = drill.arg_value(0).as_deref() == Some("oval");
+    let first = usize::from(oval);
+    let w = drill.arg_f64(first)?;
+    let h = if oval { drill.arg_f64(first + 1)? } else { w };
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let (long, short, along_x) = if w >= h { (w, h, true) } else { (h, w, false) };
+    let half = (long - short) / 2.0;
+    let (a, b) = if along_x {
+        (to_world(-half, 0.0), to_world(half, 0.0))
+    } else {
+        (to_world(0.0, -half), to_world(0.0, half))
+    };
+    Some(Shape::Capsule(Capsule::new(
+        a.0,
+        a.1,
+        b.0,
+        b.1,
+        short / 2.0,
+    )))
+}
+
+/// A through-hole pad's copper on a layer where `KiCad` flashes it only if a
+/// track or via connects to the pad there.
+struct DeferredPadLayer {
+    item: usize,
+    layer: String,
+    net: i64,
+    owner: String,
+    uuid: String,
+    /// The pad's outline on this layer, were it flashed.
+    shapes: Vec<Shape>,
+    /// The drilled barrel, which is all there is when the pad is not flashed.
+    barrel: Option<Shape>,
+}
+
+/// Settle the deferred pad layers: the full pad where a same-net track or via
+/// touches it on that layer, else the bare barrel. Run once every track and
+/// via is in the buckets.
+fn settle_unused_pad_layers(buckets: &mut LayerBuckets) {
+    use crate::gerber::geo::BoundsLeaf;
+    /// Copper closer than this (mm) is touching; absorbs coordinate rounding.
+    const TOUCH_MM: f64 = 1e-3;
+    let deferred = std::mem::take(&mut buckets.deferred);
+    let mut trees: HashMap<String, RTree<BoundsLeaf>> = HashMap::new();
+    let mut settled: Vec<(DeferredPadLayer, bool)> = Vec::with_capacity(deferred.len());
+    for d in deferred {
+        let prims = buckets
+            .by_layer
+            .get(&d.layer)
+            .map_or(&[][..], Vec::as_slice);
+        let tree = trees.entry(d.layer.clone()).or_insert_with(|| {
+            RTree::bulk_load(
+                prims
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| {
+                        matches!(p.kind, ItemKind::Track | ItemKind::Arc | ItemKind::Via)
+                    })
+                    .map(|(idx, p)| BoundsLeaf {
+                        bounds: p.bounds,
+                        idx,
+                    })
+                    .collect(),
+            )
+        });
+        let used = d.shapes.iter().any(|shape| {
+            let b = shape.bounds();
+            let window = AABB::from_corners(
+                [b[0] - TOUCH_MM, b[1] - TOUCH_MM],
+                [b[2] + TOUCH_MM, b[3] + TOUCH_MM],
+            );
+            tree.locate_in_envelope_intersecting(window).any(|leaf| {
+                let p = &prims[leaf.idx];
+                p.net == d.net && shape_gap_at(shape, &p.shape).0 <= TOUCH_MM
+            })
+        });
+        settled.push((d, used));
+    }
+    for (d, used) in settled {
+        let shapes = if used {
+            d.shapes
+        } else {
+            d.barrel.into_iter().collect()
+        };
+        for shape in shapes {
+            let mut prim =
+                make_prim(shape, d.net, ItemKind::Pad, d.owner.clone()).with_uuid(d.uuid.clone());
+            prim.item = d.item;
+            buckets
+                .by_layer
+                .entry(d.layer.clone())
+                .or_default()
+                .push(prim);
         }
     }
 }
@@ -2837,8 +3065,19 @@ fn sweep_buckets(
                 // tolerance below the rule; a gap sitting at (or a few microns
                 // under) the rule is routing-to-rule, not a defect, and is
                 // dropped to kill the boundary-note noise.
+                // A track or arc inside another net's stored fill is a fill
+                // computed before the track was routed: see `ViolationKind::StaleFill`.
+                let in_stale_fill = |zone: &Primitive, other: &Primitive| {
+                    zone.kind == ItemKind::Zone
+                        && zone.stored_fill
+                        && matches!(other.kind, ItemKind::Track | ItemKind::Arc)
+                };
                 let kind = if is_touching(gap) {
-                    ViolationKind::Short
+                    if in_stale_fill(p, q) || in_stale_fill(q, p) {
+                        ViolationKind::StaleFill
+                    } else {
+                        ViolationKind::Short
+                    }
                 } else if gap < clearance - CLEARANCE_TOLERANCE_MM {
                     ViolationKind::Clearance
                 } else {
@@ -2886,8 +3125,14 @@ fn sweep_buckets(
                         continue;
                     }
                     if point_in_polygon(rx, ry, &z.pts) {
+                        // `z.filled` is established above: the stored fill, not the outline.
+                        let stale = matches!(p.kind, ItemKind::Track | ItemKind::Arc);
                         record(
-                            ViolationKind::Short,
+                            if stale {
+                                ViolationKind::StaleFill
+                            } else {
+                                ViolationKind::Short
+                            },
                             p.net,
                             z.net,
                             p.item(),

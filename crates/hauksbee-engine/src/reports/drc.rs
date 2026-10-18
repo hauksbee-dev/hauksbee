@@ -251,7 +251,21 @@ pub(crate) fn drc_findings(
         plain: provenance.map_or_else(|| g.plain.clone(), |p| g.label_with_rule_provenance(p)),
         fix: Some(g.fix.clone()),
     });
-    shorts.chain(groups).collect()
+    // A stale fill is a warning: the action is a refill, and it never gates.
+    let stale = drc.stale_fills.iter().map(|sf| crate::result::JsonFinding {
+        check: "drc".into(),
+        kind: "stale_fill".into(),
+        severity: "warning".into(),
+        nets: vec![sf.zone_net.clone(), sf.copper_net.clone()],
+        location_mm: Some(sf.loc_mm),
+        layer: Some(sf.layer.clone()),
+        refs: Vec::new(),
+        actionable: true,
+        message: sf.plain.clone(),
+        plain: sf.plain.clone(),
+        fix: Some(sf.fix.clone()),
+    });
+    shorts.chain(stale).chain(groups).collect()
 }
 
 /// The condition a pass rests on when copper spacing was judged against a
@@ -663,7 +677,20 @@ fn oracle_cross_check(board: &Path, report: &hauksbee_extract::DrcReport) -> Ora
             .count()
     });
     let (shorts, clear) = (report.short_count(), report.clearance_violations().count());
-    let verdict = if shorts == 0 && confirmed == 0 {
+    let stale = report.stale_fills().count();
+    let verdict = if shorts == 0 && stale > 0 {
+        // KiCad words a track inside a stale fill as a clearance violation at 0,
+        // which the touching-copper count above includes.
+        if confirmed > 0 {
+            format!(
+                "agree: KiCad also flags the {stale} track(s) inside a stale zone fill, as clearance violations at 0 mm; refill zones, not a short"
+            )
+        } else {
+            format!(
+                "hauksbee finds {stale} track(s) inside a stale zone fill that the oracle does not flag; investigate"
+            )
+        }
+    } else if shorts == 0 && confirmed == 0 {
         "agree: neither finds touching copper".to_string()
     } else if shorts > 0 && confirmed == 0 {
         format!("hauksbee finds {shorts} short(s) the oracle does not; likely false positives, investigate")
@@ -676,11 +703,16 @@ fn oracle_cross_check(board: &Path, report: &hauksbee_extract::DrcReport) -> Ora
     } else {
         format!("agree: both find touching copper ({shorts} hauksbee / {confirmed} oracle; counts differ by decomposition)")
     };
+    let stale_text = if stale > 0 {
+        format!(", {stale} stale zone fill(s)")
+    } else {
+        String::new()
+    };
     OracleCrossCheck {
         summary: format!(
             "\noracle (kicad-cli {ver}): {confirmed} touching-copper violation(s), {nviol} total DRC \
          violation(s), {nunconn} unconnected.\n\
-         hauksbee: {shorts} short(s), {clear} clearance. -> {verdict}.\n"
+         hauksbee: {shorts} short(s), {clear} clearance{stale_text}. -> {verdict}.\n"
         ),
         version: Some(ver),
         confirmed_pairs: oracle_confirmed_pairs(&v),
@@ -723,6 +755,7 @@ mod tests {
         let drc = DrcStructured {
             clearance_rule_mm: 0.2,
             primitive_count: 20,
+            stale_fills: Vec::new(),
             shorts: Vec::new(),
             violations: Vec::new(),
             at_limit: Vec::new(),

@@ -183,8 +183,10 @@ impl KicadClearanceInput {
     ///
     /// # Errors
     ///
-    /// Returns an error if a sibling `.kicad_dru` exists but cannot be read or
-    /// parsed. A missing or unusable `.kicad_pro` is not an error.
+    /// Returns an error if a sibling `.kicad_dru` exists but cannot be read from
+    /// disk. A `.kicad_dru` (or one of its rules) the reader cannot interpret is
+    /// not an error: it is disclosed as not checked. A missing or unusable
+    /// `.kicad_pro` is not an error either.
     pub fn load(board_path: &Path, board: &ExtractedBoard) -> anyhow::Result<Self> {
         let mut rules = kicad_pro_clearance_rules(board_path, board);
         let project_rules_read = rules.is_some();
@@ -194,25 +196,33 @@ impl KicadClearanceInput {
             let text = std::fs::read_to_string(&custom_path).with_context(|| {
                 format!("failed to read custom rules file {}", custom_path.display())
             })?;
-            let parsed = hauksbee_extract::parse_kicad_dru(&text).map_err(|error| {
-                anyhow::anyhow!(
-                    "failed to parse custom rules file {}: {error}",
-                    custom_path.display()
-                )
-            })?;
             let file_name = custom_path
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("sibling .kicad_dru")
                 .to_string();
-            let coverage = crate::result::CustomRulesCoverage::from_parsed(file_name, &parsed);
-            let global = parsed.global_clearance_mm();
-            if let Some(clearance_mm) = global {
-                rules
-                    .get_or_insert_with(hauksbee_extract::ClearanceRules::default)
-                    .apply_global_clearance_override(clearance_mm);
+            // A file or rule this reader cannot interpret never stops the run:
+            // it is disclosed as a rule that was not checked.
+            match hauksbee_extract::parse_kicad_dru(&text) {
+                Ok(parsed) => {
+                    let coverage =
+                        crate::result::CustomRulesCoverage::from_parsed(file_name, &parsed);
+                    let global = parsed.global_clearance_mm();
+                    if let Some(clearance_mm) = global {
+                        rules
+                            .get_or_insert_with(hauksbee_extract::ClearanceRules::default)
+                            .apply_global_clearance_override(clearance_mm);
+                    }
+                    (global, Some(coverage))
+                }
+                Err(error) => (
+                    None,
+                    Some(crate::result::CustomRulesCoverage::unreadable(
+                        file_name,
+                        error.to_string(),
+                    )),
+                ),
             }
-            (global, Some(coverage))
         } else {
             (None, None)
         };
@@ -684,7 +694,7 @@ mod tests {
     }
 
     #[test]
-    fn custom_rules_load_fail_closed_and_override_project_in_both_directions() {
+    fn custom_rules_load_degrades_and_override_project_in_both_directions() {
         let dir = tempfile::tempdir().unwrap();
         let board_path = dir.path().join("board.kicad_pcb");
         let board = hauksbee_extract::ExtractedBoard::from_kicad_pcb(include_str!(
@@ -701,15 +711,25 @@ mod tests {
             "(version 1) (rule \"broken\"",
         )
         .unwrap();
-        let error = super::KicadClearanceInput::load(&board_path, &board)
-            .expect_err("a malformed sibling must stop the run");
         let clearance_bits = |input: &super::KicadClearanceInput| {
             let rules = input.rules.as_ref().unwrap();
             rules.effective_clearance("A", "B").to_bits()
         };
-        assert!(error
-            .to_string()
-            .contains("failed to parse custom rules file"));
+        // A file that cannot be read as a whole no longer stops the run: the
+        // project's netclass rule stays in force and the report says the
+        // custom rules were not checked.
+        let unreadable = super::KicadClearanceInput::load(&board_path, &board)
+            .expect("a custom rules file the reader cannot parse must not fail the import");
+        assert_eq!(clearance_bits(&unreadable), 0.2_f64.to_bits());
+        let notice = unreadable
+            .custom_coverage()
+            .and_then(crate::result::CustomRulesCoverage::unevaluated_notice)
+            .expect("the unreadable file is disclosed");
+        assert!(notice.contains("board.kicad_dru"), "{notice}");
+        assert!(
+            notice.contains("none of its rules were checked"),
+            "{notice}"
+        );
 
         std::fs::write(
             board_path.with_extension("kicad_dru"),
@@ -867,11 +887,27 @@ mod tests {
             "(version 1)\n(rule \"ok\" (constraint clearance (min 0.1mm)))\n(rule \"bad\" (constraint copper_magic (min 1mm)))",
         )
         .unwrap();
-        let error = super::KicadClearanceInput::load(&board_path, &board).unwrap_err();
-        let message = error.to_string();
-        assert!(message.contains("board.kicad_dru"), "{message}");
-        assert!(message.contains("line 3"), "{message}");
-        assert!(message.contains("copper_magic"), "{message}");
+        // A rule the reader cannot understand degrades to a note naming the rule
+        // and line; the readable rule before it still applies.
+        let input = super::KicadClearanceInput::load(&board_path, &board)
+            .expect("an unsupported rule must not fail the import");
+        let rules = input.rules.as_ref().expect("the readable rule applies");
+        assert!((rules.effective_clearance("A", "B") - 0.1).abs() < 1e-12);
+        let notice = input
+            .custom_coverage()
+            .and_then(crate::result::CustomRulesCoverage::unevaluated_notice)
+            .expect("the unreadable rule is disclosed");
+        assert!(notice.contains("\"bad\""), "{notice}");
+        assert!(notice.contains("line 3"), "{notice}");
+        assert!(
+            notice.contains("custom DRC rule not understood; that rule was not checked"),
+            "{notice}"
+        );
+        assert!(notice.contains("copper_magic"), "{notice}");
+        assert!(input
+            .custom_coverage()
+            .unwrap()
+            .qualifies_clearance_findings());
     }
 
     #[test]
