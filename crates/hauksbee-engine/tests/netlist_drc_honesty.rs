@@ -16,6 +16,7 @@ const fn empty_drc() -> DrcStructured {
     DrcStructured {
         clearance_rule_mm: 0.0,
         primitive_count: 0,
+        stale_fills: Vec::new(),
         shorts: Vec::new(),
         violations: Vec::new(),
         at_limit: Vec::new(),

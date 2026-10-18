@@ -1073,7 +1073,8 @@ pub(crate) fn waive_drc(
             check: "drc".to_string(),
             kind: match f.kind {
                 hauksbee_extract::ViolationKind::Short => "short",
-                hauksbee_extract::ViolationKind::Clearance => "clearance",
+                hauksbee_extract::ViolationKind::Clearance
+                | hauksbee_extract::ViolationKind::StaleFill => "clearance",
             }
             .to_string(),
             subject: format!(
@@ -1087,7 +1088,8 @@ pub(crate) fn waive_drc(
     let (kept, waived) = waivers.partition("drc", std::mem::take(&mut report.findings), |f| {
         let kind = match f.kind {
             hauksbee_extract::ViolationKind::Short => "short",
-            hauksbee_extract::ViolationKind::Clearance => "clearance-not-waivable",
+            hauksbee_extract::ViolationKind::Clearance
+            | hauksbee_extract::ViolationKind::StaleFill => "clearance-not-waivable",
         };
         (
             kind.to_string(),

@@ -18,6 +18,13 @@ pub const NOT_ROUTED_MESSAGE_PREFIX: &str = "the board is not routed yet";
 /// routed board).
 pub const NOT_ROUTED_FIX: &str = "Route all the nets, pour and refill the zones, then run the layout editor's DRC until it reports no unconnected items.";
 
+/// What the note for a panel of repeated copies begins with.
+///
+/// The copies share designators and net names, so `KiCad` joins the same-named
+/// nets across them and draws the ratsnest between copies; this tool judges
+/// each copy alone and says so in one note.
+pub const PANEL_COPIES_MESSAGE_PREFIX: &str = "panel of repeated copies";
+
 /// Island findings itemised before the rest are summarised in one line.
 const MAX_ISLANDS: usize = 20;
 
@@ -153,6 +160,19 @@ fn copper_islands(text: &str, out: &mut Vec<LintFinding>) {
             ),
             Vec::new(),
             nets,
+        ));
+    }
+    if let Some(panel) = &conn.panel {
+        out.push(finding(
+            Severity::Low,
+            format!(
+                "{PANEL_COPIES_MESSAGE_PREFIX}: this board repeats one circuit in {} copies with the same designators and net names, and the copies are not joined to each other. {} net(s) ({}) are one same-named net across the copies, which KiCad shows as unconnected items between copies. Each copy was checked for open connections on its own",
+                panel.copies,
+                panel.split_nets.len(),
+                sample_list(&panel.split_nets)
+            ),
+            Vec::new(),
+            panel.split_nets.clone(),
         ));
     }
     if !conn.unfilled_zone_nets.is_empty() {

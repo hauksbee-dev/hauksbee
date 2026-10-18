@@ -162,6 +162,7 @@ fn drc_short_evidence_is_geometry_causal_and_cites_the_layout_artifact() {
     let drc = DrcStructured {
         clearance_rule_mm: 0.2,
         primitive_count: 2,
+        stale_fills: Vec::new(),
         shorts: vec![DrcShort {
             net_a: "3V3".into(),
             net_b: "GND".into(),
@@ -231,6 +232,7 @@ fn schematic_provenance_is_causal_only_to_the_declared_contact() {
     let drc = DrcStructured {
         clearance_rule_mm: 0.2,
         primitive_count: 4,
+        stale_fills: Vec::new(),
         shorts: vec![
             short("GND and AGND are joined", "GND", "AGND", [5.0, 0.0]),
             short("VBUS shorts GND", "VBUS", "GND", [1.0, 2.0]),

@@ -97,7 +97,7 @@ and failure parse the same way:
 | `verdict` | string | `"pass"` \| `"fail"` \| `"invalid"` (see below) |
 | `partly_judged` | bool | present (`true`) only on a PARTLY JUDGED run: `verdict` `invalid`, see `judgement_scope` below |
 | `serious_count` | int | number of `serious` findings (DRC shorts, a destroyed part in co-sim, high-severity lint/SI). A co-sim fault that did not destroy the part grades `warning` and is counted by its surface's gate instead, see `verdict` below |
-| `actionable_count` | int | findings a user can act on (serious + warnings + clearance groups) |
+| `actionable_count` | int | findings a user can act on (serious + warnings + clearance groups + one per out-of-date zone fill in `drc.stale_fills`) |
 
 `verdict` is `"fail"` when `serious_count > 0`, or when the emitting surface's
 own `--strict` gate fails on a finding the `serious` severity does not carry

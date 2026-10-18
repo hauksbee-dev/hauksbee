@@ -940,6 +940,7 @@ impl OrderTriage {
 /// - explicit abstentions (`UncheckedMcu`, USB-C `Info`, or a nominal USB-C
 ///   result undermined by a model gap on its own CC nets) go to inspect;
 /// - only an unqualified USB-C `Ok` is emitted as a positive result.
+#[allow(clippy::too_many_lines, reason = "one pass per finding family")]
 pub(crate) fn order_triage_with_rule_source(
     drc: &crate::result::DrcStructured,
     clearance_rule_source: &crate::result::ClearanceRuleProvenance,
@@ -989,10 +990,28 @@ pub(crate) fn order_triage_with_rule_source(
                 .push(entry(format!("{}{evidence}", finding.what)));
         }
     }
-    // The structured/plain order is shorts, below-rule violations, then
-    // at-limit observations. Only actual below-rule groups belong on the order
-    // screen; no-margin observations remain in the detail below.
-    let below_rule = drc_plain.findings.iter().skip(drc.shorts.len());
+    // The structured/plain order is shorts, stale-fill notes, below-rule
+    // violations, then at-limit observations. Only actual below-rule groups
+    // belong on the order screen; no-margin observations remain in the detail
+    // below, and a stale fill is not an order blocker (it never gates and is
+    // no short). It is still an item to inspect: gerbers are plotted from the
+    // stored fill, so ordering without refilling sends the fab the old pour. A
+    // board whose only finding is a stale fill therefore reads "inspect before
+    // ordering", never a clean OK TO ORDER.
+    triage.inspect.extend(
+        drc_plain
+            .findings
+            .iter()
+            .skip(drc.shorts.len())
+            .take(drc.stale_fills.len())
+            .map(|finding| {
+                TriageEntry::new("drc", "stale_fill", finding.what.clone(), finding.loc_mm)
+            }),
+    );
+    let below_rule = drc_plain
+        .findings
+        .iter()
+        .skip(drc.shorts.len() + drc.stale_fills.len());
     triage.inspect.extend(
         below_rule.take(drc.violations.len()).map(|finding| {
             TriageEntry::new("drc", "clearance", finding.what.clone(), finding.loc_mm)
@@ -1332,6 +1351,25 @@ pub fn plain_drc_structured_with_rule_source(
         );
     }
 
+    // A track, via or pad inside another net's stored zone fill: the fill is
+    // out of date, the copper is not shorted. One action, and it never gates.
+    for sf in &st.stale_fills {
+        let a = net_label(&sf.zone_net);
+        let b = net_label(&sf.copper_net);
+        let places = crate::result::locations(sf.count);
+        out.push_at(
+            PlainLevel::Warning,
+            format!("{}.", hauksbee_ir::vocabulary::sentence_case(&sf.plain)),
+            format!(
+                "The saved copper pour for \"{a}\" was filled before the {} for \"{b}\" was routed, placed or moved, so it still covers that copper, at {places} on {}. Nothing is shorted today: KiCad's own check reports the same spots as clearance violations, and refilling the zones cuts the pour back by its clearance. Until it is refilled, the spacing and short results around these spots reflect the old pour.",
+                sf.copper_kind,
+                friendly_layer(&sf.layer),
+            ),
+            sf.fix.clone(),
+            sf.loc_mm,
+        );
+    }
+
     // Genuinely below-rule clearance groups (gap < rule).
     for g in &st.violations {
         let a = net_label(&g.net_a);
@@ -1430,6 +1468,10 @@ pub fn render_drc_condensed_with_rule_source(
 #[allow(clippy::cast_possible_truncation, reason = "whole-um grouping key")]
 #[allow(clippy::cast_sign_loss, reason = "clearance rules are positive")]
 #[allow(clippy::cast_precision_loss, reason = "um keys are far below 2^52")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "verdict, full findings, then the aggregates"
+)]
 pub(crate) fn render_drc_condensed_with_rule_source_and_unlock(
     st: &crate::result::DrcStructured,
     provenance: &crate::result::ClearanceRuleProvenance,
@@ -1445,10 +1487,15 @@ pub(crate) fn render_drc_condensed_with_rule_source_and_unlock(
     let pr = plain_drc_structured_with_rule_source(st, provenance);
     let summary = format!(
         "Summary: {} short(s), {} net pair(s) below the clearance rule, {} at minimum \
-         clearance (no margin).",
+         clearance (no margin){}.",
         st.shorts.len(),
         st.violations.len(),
-        st.at_limit.len()
+        st.at_limit.len(),
+        if st.stale_fills.is_empty() {
+            String::new()
+        } else {
+            format!(", {} out-of-date zone fill(s)", st.stale_fills.len())
+        }
     );
     let mut lead = format!(
         "{}\n",
@@ -1471,7 +1518,7 @@ pub(crate) fn render_drc_condensed_with_rule_source_and_unlock(
         // report, with the trailing summary count appended.
         let mut s = lead;
         s.push_str(&pr.render());
-        if warning_groups + st.shorts.len() > 0 {
+        if warning_groups + st.shorts.len() + st.stale_fills.len() > 0 {
             let _ = writeln!(s, "{summary}");
         }
         return s;
@@ -1484,10 +1531,17 @@ pub(crate) fn render_drc_condensed_with_rule_source_and_unlock(
     let _ = writeln!(s);
     let mut shown = 0usize;
     let mut idx = 0usize;
+    // Stale-fill notes lead the Warning findings and always print in full: each
+    // names a refill, and there is one per net pair, not one per location.
+    let mut stale_left = st.stale_fills.len();
     for f in pr.sorted() {
         // Shorts always print in full (Serious, or Note when downgraded on an
         // unvalidated format); only the Warning-level clearance groups condense.
         let full = match f.level {
+            PlainLevel::Warning if stale_left > 0 => {
+                stale_left -= 1;
+                true
+            }
             PlainLevel::Warning => {
                 shown += 1;
                 shown <= FULL
@@ -1621,6 +1675,16 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "The pin names and pin types on this connection say what each pin does (transmit, fault flag, gate/source/drain). Wired the way they are, those roles do not work together, even though every wire connects.".to_string(),
                 "Rewire the pins the way the finding above describes, then re-check against each part's datasheet.".to_string(),
             ),
+            LintCheck::UnroutedPad
+                if f.message
+                    .starts_with(hauksbee_extract::PANEL_COPIES_MESSAGE_PREFIX) =>
+            {
+                (
+                    f.message.clone(),
+                    "A panel repeats one board several times with the same designators and net names, so the layout editor treats each name as one net across all the copies and draws unconnected lines between them. Those lines are the panel itself, not a missing route; open connections inside a single copy are reported separately.".to_string(),
+                    "Nothing to route for the copies being separate. If the copies should share a net (a panel-wide ground), join them with copper; otherwise no action.".to_string(),
+                )
+            }
             LintCheck::UnroutedPad if f.severity == Severity::Low => (
                 f.message.clone(),
                 "This is a note about the state of the layout file (zones never filled, or leftover copper), not a connection a finished route left open.".to_string(),
@@ -2669,6 +2733,7 @@ mod tests {
         crate::result::DrcStructured {
             clearance_rule_mm: 0.2,
             primitive_count: 20,
+            stale_fills: Vec::new(),
             shorts: (0..shorts)
                 .map(|i| structured_short(&format!("SHORT_{i}"), "serious", f64::from(i)))
                 .collect(),
@@ -2713,6 +2778,75 @@ mod tests {
             .is_some());
     }
 
+    /// Gerbers are plotted from the stored fill, so a board whose only finding
+    /// is an out-of-date fill is not "OK TO ORDER": it is an item to inspect
+    /// (refill, re-run). It is still no short and not a do-not-order item.
+    #[test]
+    fn a_board_whose_only_finding_is_a_stale_fill_reads_inspect_not_clean() {
+        for copper_kind in ["track", "via", "pad"] {
+            let mut drc = clearance_report(0, 0);
+            drc.stale_fills.push(crate::result::DrcStaleFill {
+                zone_net: "GND".into(),
+                copper_net: "SDA".into(),
+                copper_kind: copper_kind.into(),
+                layer: "F.Cu".into(),
+                count: 2,
+                loc_mm: [5.0, 6.0],
+                plain: hauksbee_ir::vocabulary::stale_zone_fill("GND", "SDA", copper_kind),
+                fix: "refill all zones".into(),
+            });
+            let provenance = crate::result::ClearanceRuleProvenance::project_file(0.2);
+            let triage = order_triage_with_rule_source(
+                &drc,
+                &provenance,
+                &NetLintReport::default(),
+                &SiReport::default(),
+                None,
+                true,
+                0,
+                true,
+            );
+            assert!(triage.do_not_order.is_empty(), "{copper_kind}: {triage:#?}");
+            assert_eq!(triage.inspect.len(), 1, "{copper_kind}: {triage:#?}");
+            let said = &triage.inspect[0];
+            assert_eq!(
+                (said.id.as_str(), said.kind.as_str()),
+                ("drc", "stale_fill")
+            );
+            assert!(
+                said.statement
+                    .contains("refill zones (B) in KiCad and re-run")
+                    && said.statement.contains(copper_kind),
+                "{copper_kind}: {}",
+                said.statement
+            );
+            assert_eq!(
+                drc.shorts.len(),
+                0,
+                "{copper_kind}: a stale fill is no short"
+            );
+
+            // The verdict carries the triage's inspect count: a pass with the
+            // inspect tag, and a headline that lists the item, never a clean
+            // OK TO ORDER.
+            let verdict = crate::result::RunVerdict {
+                inspect: triage.inspect.len(),
+                ..crate::result::RunVerdict::default()
+            };
+            assert!(verdict.is_pass(), "it does not gate");
+            assert_eq!(
+                verdict.inspect_tag().as_deref(),
+                Some("inspect before ordering (1 item)")
+            );
+            let rendered = triage.render(&verdict);
+            assert!(
+                rendered.contains(&format!("{INSPECT_BEFORE_ORDERING}:\n  - ")),
+                "{rendered}"
+            );
+            assert!(!rendered.contains("OK TO ORDER"), "{rendered}");
+        }
+    }
+
     #[test]
     fn order_triage_buckets_confirmed_short_ratings_unconfirmed_short_and_clean_usb() {
         let mut confirmed = structured_short("+3V3", "serious", 1.0);
@@ -2720,6 +2854,7 @@ mod tests {
         let drc = crate::result::DrcStructured {
             clearance_rule_mm: 0.2,
             primitive_count: 6,
+            stale_fills: Vec::new(),
             shorts: vec![confirmed, structured_short("PYRO4_FIRE", "note", 3.0)],
             violations: Vec::new(),
             at_limit: Vec::new(),
@@ -2805,6 +2940,7 @@ mod tests {
         let drc = crate::result::DrcStructured {
             clearance_rule_mm: 0.2,
             primitive_count: 0,
+            stale_fills: Vec::new(),
             shorts: Vec::new(),
             violations: Vec::new(),
             at_limit: Vec::new(),

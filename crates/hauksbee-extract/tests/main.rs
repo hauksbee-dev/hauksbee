@@ -72,6 +72,8 @@ mod netlint;
 mod netlist_code_missing;
 #[path = "netlist_dnp.rs"]
 mod netlist_dnp;
+#[path = "panel_layout_lint.rs"]
+mod panel_layout_lint;
 #[path = "placeholder_lint_corpus.rs"]
 mod placeholder_lint_corpus;
 #[path = "reader_matrix.rs"]
