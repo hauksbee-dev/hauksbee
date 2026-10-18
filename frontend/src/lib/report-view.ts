@@ -9,6 +9,7 @@
 // (lib/report-export.ts), the shell chips and the selection cards all read the
 // same `ReportView`, so they cannot disagree.
 
+import { labelFor } from './labels'
 import type {
   CheckResult, ErrorBudget, ErrorBudgetWindow, EvidenceAssumption, EvidenceMap, FixFirst, JsonNote, ModelCoverageComponent,
   ModelCoverageSnapshot, ModelGroup, ModelOnPath, RefusalContract, RunResponse, WebCosimSection, WebFallbackWindow, WebFinding,
@@ -650,7 +651,8 @@ export const padNetsOf = (component: ModelCoverageComponent): string[] =>
   [...new Set(component.pins.flatMap(pin => pin.net ? [pin.net] : []))]
 
 /** A coverage stage as words. */
-export const stageWords = (stage: string) => stage.replaceAll('_', ' ')
+/** A coverage stage in the shared label table's words (labels.ts). */
+export const stageWords = (stage: string) => labelFor(stage)
 
 const STAGE_TERMS: Record<string, string> = {
   unresolved: 'open_part', identity_only: 'identity_only', executable_partial: 'executable_partial',

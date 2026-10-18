@@ -12,6 +12,7 @@ import { ShellChips } from '../src/components/ShellChips'
 import { PartlyJudged, VerdictConditions } from '../src/components/report/VerdictConditions'
 import { buildReportHtml } from '../src/lib/report-export'
 import { boardVerdict } from '../src/lib/status-vocab'
+import { labelFor } from '../src/lib/labels'
 import { ResultPanel } from '../src/components/report/ResultPanel'
 import { explainReport, reportView, unjudgedGroups } from '../src/lib/report-view'
 import type { WebReport } from '../src/types/report'
@@ -34,6 +35,12 @@ const resultCard = () => {
 const chipNames = (html: string) => [...html.matchAll(/data-testid="result-link"[^>]*data-name="([^"]+)"/g)].map(m => m[1])
 
 const CONDITION = 'Q1 passes across assumed corners (generic_pmos_sot_corner_high_vth, generic_pmos_sot_corner_low_vth); put the MPN on Q1 to remove this assumption.'
+
+/** The sentence as the card shows it: the engine's model ids read as their
+ *  labels (labels.ts), each id kept in its tooltip. */
+const textOf = (html: string) => html.replace(/<[^>]+>/g, '')
+const CORNERS = ['generic_pmos_sot_corner_high_vth', 'generic_pmos_sot_corner_low_vth']
+const SHOWN = CORNERS.reduce((s, id) => s.replace(id, labelFor(id)), CONDITION)
 
 const exportInput = (report: WebReport) => ({
   report,
@@ -62,7 +69,8 @@ describe('verdict conditions', () => {
     const html = renderToStaticMarkup(<VerdictConditions conditions={two} />)
     expect(html).toContain('data-testid="report-verdict-conditions"')
     expect(html.match(/data-testid="report-verdict-condition"/g)).toHaveLength(2)
-    expect(html).toContain(CONDITION)
+    expect(textOf(html)).toContain(SHOWN)
+    for (const id of CORNERS) expect(html).toContain(`title="${id}"`)
     expect(html).toContain('U2 passes across assumed corners')
     expect(html).toContain('Conditions this pass rests on')
     // Quiet, not a failure: the note accent, never the error palette.
@@ -78,7 +86,7 @@ describe('verdict conditions', () => {
     )
     expect(view.tone).not.toBe('error')
     const html = renderToStaticMarkup(<VerdictConditions conditions={view.conditions} />)
-    expect(html.split(CONDITION)).toHaveLength(2)
+    expect(textOf(html).split(SHOWN)).toHaveLength(2)
   })
 
   test('an unconditional or failing report shows nothing extra', () => {
