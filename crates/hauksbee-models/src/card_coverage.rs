@@ -130,7 +130,10 @@ pub struct Facts {
 }
 
 impl Facts {
-    /// Every page the run holds, the datasheet's and the companions'.
+    /// Every page a number may be read from: the datasheet's, and the
+    /// companions' pages that are about what they were fetched for (a whole
+    /// reference manual prints nearly every small number somewhere, so its
+    /// other pages would vouch for anything).
     #[must_use]
     pub fn workspace_pages(&self) -> Vec<&str> {
         self.pages
@@ -139,7 +142,8 @@ impl Facts {
             .chain(
                 self.companions
                     .iter()
-                    .flat_map(|(_, pages)| pages.iter().map(String::as_str)),
+                    .flat_map(|(_, pages)| pages.iter().map(String::as_str))
+                    .filter(|p| crate::companion_docs::on_topic(p)),
             )
             .collect()
     }
@@ -604,6 +608,7 @@ pub fn reply_findings(entries: &[ModelEntry], facts: &Facts) -> Vec<Finding> {
         out.extend(more);
     }
     out.extend(crate::card_scope::package_coverage(entries, facts));
+    out.extend(crate::card_scope::theta_coverage(entries, facts));
     out
 }
 

@@ -191,16 +191,32 @@ fn squash(s: &str) -> String {
         .collect()
 }
 
-/// The package a card is bound for: the board's footprint, else what the card
-/// itself says its pins are read for.
-fn bound_package(entry: &ModelEntry, facts: &Facts) -> Option<String> {
-    facts
+/// The package a card is bound for: its own declaration, else the board's
+/// footprint when the card binds it, else the thermal row its `footprint_re`
+/// names (a card for another package of the part), else its first pin map.
+fn bound_package(entry: &ModelEntry, facts: &Facts, rows: &[ThermalRow]) -> Option<String> {
+    let board = facts
         .board
         .as_ref()
         .map(|b| b.footprint.clone())
-        .filter(|f| !f.is_empty())
-        .or_else(|| entry.variant.as_ref().and_then(|v| v.package.clone()))
+        .filter(|f| !f.is_empty());
+    let pattern = entry
+        .r#match
+        .footprint_re
+        .as_deref()
+        .and_then(|p| Regex::new(&format!("(?i){p}")).ok());
+    entry
+        .variant
+        .as_ref()
+        .and_then(|v| v.package.clone())
         .or_else(|| entry.pin_package.clone())
+        .or_else(|| match (&pattern, &board) {
+            (Some(re), Some(b)) if !re.is_match(b) => rows
+                .iter()
+                .find(|r| re.is_match(&r.label))
+                .map(|r| r.label.clone()),
+            (_, b) => b.clone(),
+        })
         .or_else(|| {
             entry
                 .source
@@ -237,7 +253,10 @@ fn theta_findings(entry: &ModelEntry, facts: &Facts, pages: &[String]) -> Vec<Fi
     if rows.is_empty() {
         return out;
     }
-    if let (Some(bound), Some(v)) = (bound_package(entry, facts), entry.ratings.theta_ja_c_per_w) {
+    if let (Some(bound), Some(v)) = (
+        bound_package(entry, facts, &rows),
+        entry.ratings.theta_ja_c_per_w,
+    ) {
         let pads = facts
             .board
             .as_ref()
@@ -277,41 +296,61 @@ fn theta_findings(entry: &ModelEntry, facts: &Facts, pages: &[String]) -> Vec<Fi
             }
         }
     }
-    let have: Vec<&str> = entry.source.as_ref().map_or_else(Vec::new, |s| {
-        s.characteristic
-            .iter()
-            .filter(|c| c.rating.as_deref() == Some("theta_ja_c_per_w"))
-            .filter_map(|c| c.package.as_deref())
-            .collect()
-    });
+    out
+}
+
+/// Reply-level: every package the thermal table lists has a `θJA` in the reply.
+///
+/// A package is covered by a `[[models.source.characteristic]]` row naming it,
+/// or by the `ratings.theta_ja_c_per_w` of the entry that is for that package.
+#[must_use]
+pub fn theta_coverage(entries: &[ModelEntry], facts: &Facts) -> Vec<Finding> {
+    let rows = thermal_rows(&facts.pages);
     let mut labels: Vec<&ThermalRow> = Vec::new();
     for r in &rows {
         if !labels.iter().any(|l| l.label == r.label) {
             labels.push(r);
         }
     }
-    if labels.len() >= 2 {
-        let missing: Vec<String> = labels
-            .iter()
-            .filter(|r| !have.iter().any(|p| covers(p, r)))
-            .map(|r| format!("{} {} °C/W", r.label, r.theta))
-            .collect();
-        if !missing.is_empty() {
-            out.push(Finding {
-                severity: Severity::Warn,
-                check: "scope",
-                message: format!(
-                    "the thermal table prints θJA for {} packages but the card has no \
-                     [[models.source.characteristic]] row (rating = \"theta_ja_c_per_w\", \
-                     package = ...) for: {}. Add one row per package so the board's package \
-                     selects its own",
-                    labels.len(),
-                    missing.join("; ")
-                ),
-            });
-        }
+    if labels.len() < 2 {
+        return Vec::new();
     }
-    out
+    let missing: Vec<String> = labels
+        .iter()
+        .filter(|r| !entries.iter().any(|e| theta_covers(e, facts, &rows, r)))
+        .map(|r| format!("{} {} °C/W", r.label, r.theta))
+        .collect();
+    if missing.is_empty() {
+        return Vec::new();
+    }
+    vec![Finding {
+        severity: Severity::Warn,
+        check: "scope",
+        message: format!(
+            "the thermal table prints θJA for {} packages but the card has no \
+             [[models.source.characteristic]] row (rating = \"theta_ja_c_per_w\", \
+             package = ...) for: {}. Add one row per package so the board's package selects \
+             its own",
+            labels.len(),
+            missing.join("; ")
+        ),
+    }]
+}
+
+/// Whether `entry` carries the `θJA` of the package `row` is printed for.
+fn theta_covers(entry: &ModelEntry, facts: &Facts, rows: &[ThermalRow], row: &ThermalRow) -> bool {
+    let by_row = entry.source.as_ref().is_some_and(|s| {
+        s.characteristic
+            .iter()
+            .filter(|c| c.rating.as_deref() == Some("theta_ja_c_per_w"))
+            .filter_map(|c| c.package.as_deref())
+            .any(|p| covers(p, row))
+    });
+    by_row
+        || entry.ratings.theta_ja_c_per_w.is_some_and(|v| {
+            close(v, row.theta)
+                && bound_package(entry, facts, rows).is_some_and(|b| row_fits(row, &b, None))
+        })
 }
 
 /// Whether a row's `package` names the package a thermal row is printed for.
@@ -380,7 +419,7 @@ fn anchor_findings(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
 /// The package family and pad count the card is read for.
 fn family_label(entry: &ModelEntry, facts: &Facts) -> Option<(&'static str, usize)> {
     let mut names: Vec<String> = Vec::new();
-    names.extend(bound_package(entry, facts));
+    names.extend(bound_package(entry, facts, &[]));
     names.extend(entry.pin_package.clone());
     names.iter().find_map(|n| {
         let spelled = n
@@ -637,7 +676,38 @@ theta_ja_c_per_w = 307.6
         let right = entry(&LDO.replace("307.6", "235.9"));
         let found = entry_findings(&right, &facts());
         assert!(found.iter().all(|f| f.severity != Severity::Error));
-        assert!(found.iter().any(|f| f.message.contains("DSE [WSON] 321.3")));
+        let more = theta_coverage(&[right], &facts());
+        assert!(
+            more.iter().any(|f| f.message.contains("DSE [WSON] 321.3")),
+            "{more:?}"
+        );
+        assert!(!more[0].message.contains("DDC [SOT]"), "{more:?}");
+    }
+
+    #[test]
+    fn one_card_per_package_covers_the_thermal_table_by_each_cards_own_value() {
+        let make = |id: &str, re: &str, theta: &str| {
+            entry(&format!(
+                "[[models]]\nid = \"{id}\"\nkind = \"vreg\"\n[models.match]\nvalue_re = \"X\"\n\
+                 footprint_re = \"{re}\"\n[models.ratings]\ntheta_ja_c_per_w = {theta}\n"
+            ))
+        };
+        let cards = [
+            make("dck", "(?i)SC-?70|DCK", "307.6"),
+            make("ddc", "(?i)SOT-?23|DDC", "235.9"),
+            make("dse", "(?i)WSON|DSE", "321.3"),
+        ];
+        assert!(theta_coverage(&cards, &facts()).is_empty());
+        for c in &cards {
+            assert!(entry_findings(c, &facts()).is_empty(), "{}", c.id);
+        }
+        // The same set with the DCK card carrying the SOT value is wrong for DCK.
+        let wrong = make("dck", "(?i)SC-?70|DCK", "235.9");
+        let found = entry_findings(&wrong, &facts());
+        assert!(
+            found.iter().any(|f| f.message.contains("235.9")),
+            "{found:?}"
+        );
     }
 
     #[test]
@@ -659,6 +729,7 @@ theta_ja_c_per_w = 307.6
             LDO.replace("307.6", "235.9")
         ));
         assert!(entry_findings(&card, &facts()).is_empty());
+        assert!(theta_coverage(&[card], &facts()).is_empty());
     }
 
     #[test]

@@ -129,7 +129,9 @@ pub fn deferrals<S: AsRef<str>>(pages: &[S], needs: &[Need]) -> Vec<Deferral> {
         }
         let about = Regex::new(topic.about).expect("about pattern");
         let mut near: Option<Deferral> = None;
+        // A manual named by its identifier (`RM0090`) is better than one named by title.
         let mut manual: Option<Deferral> = None;
+        let mut titled: Option<Deferral> = None;
         for (pi, page) in pages.iter().enumerate() {
             let lines: Vec<&str> = page.as_ref().lines().collect();
             // A contents page names sections, not documents.
@@ -159,13 +161,13 @@ pub fn deferrals<S: AsRef<str>>(pages: &[S], needs: &[Need]) -> Vec<Deferral> {
                             page: pi + 1,
                         });
                     }
-                } else if topic.manual_ok && manual.is_none() && DEFER.is_match(&window) {
+                } else if topic.manual_ok && titled.is_none() && DEFER.is_match(&window) {
                     if let Some(title) = MANUAL.find(line) {
                         let title = one_line(title.as_str());
                         if title.to_ascii_lowercase().contains("reference manual")
                             && title.split_whitespace().count() >= 3
                         {
-                            manual = Some(Deferral {
+                            titled = Some(Deferral {
                                 need: topic.key.into(),
                                 doc: title,
                                 phrase: one_line(line),
@@ -176,7 +178,7 @@ pub fn deferrals<S: AsRef<str>>(pages: &[S], needs: &[Need]) -> Vec<Deferral> {
                 }
             }
         }
-        if let Some(d) = near.or(manual) {
+        if let Some(d) = near.or(manual).or(titled) {
             if !out.iter().any(|o| o.doc == d.doc) {
                 out.push(d);
             }
@@ -366,6 +368,20 @@ pub fn fetch(
         d.doc,
         failures.join("; ")
     ))
+}
+
+static ABOUT: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    TOPICS
+        .iter()
+        .map(|t| Regex::new(t.about).expect("about pattern"))
+        .collect()
+});
+
+/// Whether a companion page is about one of the groups a datasheet defers
+/// (at least three mentions): only such pages vouch for a card's numbers.
+#[must_use]
+pub fn on_topic(page: &str) -> bool {
+    !page.contains(".....") && ABOUT.iter().any(|re| re.find_iter(page).count() >= 3)
 }
 
 /// The pages of `c` most about the group it was fetched for: the pages
@@ -577,6 +593,17 @@ mod tests {
         assert_eq!(d[0].doc, "RM0090");
         assert_eq!(d[0].need, "straps");
         assert_eq!(d[0].page, 2);
+    }
+
+    #[test]
+    fn only_pages_about_the_deferred_group_vouch_for_numbers() {
+        assert!(on_topic(
+            "Boot configuration\n BOOT0 BOOT1 select the boot mode\n boot from flash"
+        ));
+        assert!(!on_topic(
+            "Table of registers 0x4000 0000 reset value 0x0000"
+        ));
+        assert!(!on_topic("Boot ..... 12\n boot ..... 13\n boot ..... 14"));
     }
 
     #[test]
