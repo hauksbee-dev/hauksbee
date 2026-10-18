@@ -32,8 +32,11 @@ describe('chips inside a sentence', () => {
   })
 
   test('no whitespace sits between a chip and the punctuation that follows it', () => {
-    expect(markup).toMatch(/<\/button><span>, driven by <\/span>/)
-    expect(markup).toMatch(/<\/button><span>\)\.<\/span>/)
+    // The chip and its closing mark share one unbreakable span, so a line never
+    // starts with a stray comma, and no whitespace sits between them.
+    expect(markup).toMatch(/<\/button>,<\/span><span> driven by <\/span>/)
+    expect(markup).toMatch(/<span data-testid="chip-with-punct" style="white-space:nowrap"><button/)
+    expect(markup).toMatch(/<\/button>\)\.<\/span><span><\/span>$/)
   })
 
   test('a chip against closing punctuation has no space on that side', () => {

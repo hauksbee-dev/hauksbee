@@ -53,7 +53,7 @@ export const ResultLinkContext = createContext<ResultLinkHandlers>({ vocab: null
 const nameOf = (e: ResultEntity) => (e.kind === 'part' ? e.ref : e.net)
 
 /** Punctuation that closes a clause: a chip it follows sits flush against it. */
-const CLOSING_PUNCTUATION = /^[,.;:)\]!?]/
+const CLOSING_RUN = /^[,.;:)\]!?]+/
 
 /** A part or a net as a chip: a small glyph for which it is, then its name.
  *  `tightBefore` / `tightAfter` say the chip sits against an opening bracket or
@@ -110,17 +110,27 @@ export function Linked({ text }: { text: string }) {
   return (
     <>
       {segments.map((seg, i) => {
-        if (typeof seg === 'string') return <Plain key={i} text={seg} />
         const before = segments[i - 1]
         const after = segments[i + 1]
-        return (
+        const closing = typeof after === 'string' ? CLOSING_RUN.exec(after)?.[0] : undefined
+        if (typeof seg === 'string') {
+          // The closing mark after a chip was drawn with the chip (below).
+          const drawn = typeof before === 'object' ? CLOSING_RUN.exec(seg)?.[0] : undefined
+          return <Plain key={i} text={drawn ? seg.slice(drawn.length) : seg} />
+        }
+        const chip = (
           <EntityChip
             key={i}
             entity={seg}
             tightBefore={typeof before === 'string' && before.endsWith('(')}
-            tightAfter={typeof after === 'string' && CLOSING_PUNCTUATION.test(after)}
+            tightAfter={closing !== undefined}
           />
         )
+        // A chip and the closing mark right after it are one unbreakable unit,
+        // so a line never starts with a stray comma.
+        return closing
+          ? <span key={i} data-testid="chip-with-punct" style={{ whiteSpace: 'nowrap' }}>{chip}{closing}</span>
+          : chip
       })}
     </>
   )

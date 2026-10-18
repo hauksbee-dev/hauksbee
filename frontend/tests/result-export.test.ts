@@ -117,6 +117,17 @@ describe('the Markdown summary', () => {
     expect(text).toContain('analyzed 2026-10-15T09:00:00Z')
   })
 
+  test('the reason is the web wording, with no terminal command in it', () => {
+    const withWhy = {
+      ...partly,
+      verdict_reason: 'Not judged. Draft the model(s) with `hauksbee models extract --unmodelled <board>` to judge the rest.',
+      verdict_why: 'Not judged. Draft the missing models in the app to judge the rest.',
+    }
+    const text = plain(md(withWhy))
+    expect(text).toContain('**Reason:** Not judged. Draft the missing models in the app to judge the rest.')
+    expect(text).not.toContain('hauksbee models extract')
+  })
+
   test('a partly judged run: not a pass, its scope and what to do', () => {
     const text = plain(md(partly))
     const scope = reportView(partly).partlyJudged!

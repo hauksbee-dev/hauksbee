@@ -122,7 +122,8 @@ export function reportMarkdown({ report: r, boardLabel, firmwareName, engineVers
   lines.push(`## Hauksbee board result: ${md(v.title)}`, '')
   lines.push(`**VERDICT: ${tag}** · ${plural(r.serious, 'serious finding')} · ${plural(r.total, 'finding')} in all`, '')
   lines.push(`> ${say(v.headline)}`, '')
-  if (r.verdict_reason) lines.push(`**Reason:** ${say(r.verdict_reason)}`, '')
+  const reason = r.verdict_why ?? r.verdict_reason
+  if (reason) lines.push(`**Reason:** ${say(reason)}`, '')
   const scope = v.partlyJudged
   if (scope) {
     lines.push('### Judged scope (not a pass: partly judged)', '')
