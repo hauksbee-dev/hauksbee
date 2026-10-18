@@ -272,14 +272,23 @@ pub fn is_unbounded(kind: FaultKind, value: f64, limit: f64) -> bool {
             || (kind == FaultKind::Overtemperature && value > UNBOUNDED_TEMP_C))
 }
 
-/// The plain note for a part whose stress is [`is_unbounded`]: nothing in the
-/// simulation limits it, so what it shows is the idealised source, not a
-/// measured overstress.
+/// What the unbounded note says the part has: the phrase the surfaces key on.
+pub const UNBOUNDED_MARKER: &str = "with nothing limiting its current";
+
+/// The warning for a part whose stress is [`is_unbounded`].
+///
+/// It sits straight across a source with nothing limiting its current, which
+/// is either a real flaw (fitted the wrong way, no series resistor) or a wrong
+/// model, and the simulation cannot say which. The figure is the ideal
+/// source's, so it is never printed. `rail` names the source the current
+/// flows from, when known.
 #[must_use]
-pub fn unbounded_note(part: &str) -> String {
+pub fn unbounded_note(part: &str, rail: Option<&str>) -> String {
+    let rail = rail.unwrap_or("its supply");
     format!(
-        "the simulation shows an unbounded current through {part}: it sits directly across a \
-         source; check its orientation and its model"
+        "{part} sits directly across {rail} {UNBOUNDED_MARKER}: either it is fitted the wrong \
+         way, it needs a series resistor, or its model is wrong. The simulated current is \
+         unbounded, so no figure is shown."
     )
 }
 
