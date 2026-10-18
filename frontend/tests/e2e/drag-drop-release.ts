@@ -609,24 +609,38 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
     // The toast auto-hides after 4 s, so observe it before the slow independent analysis.
     const confirmation = page.locator('[data-testid="export-done"]')
     await confirmation.waitFor({ state: 'visible' })
-    // Export feedback must remain readable without obscuring the next report
-    // section. This caught an absolute-positioned toast overlapping the first
-    // line of the "Parts with no model" panel on a real 1440 x 900 journey.
-    const nextSection = page.locator('[data-testid="datasheet-extract"]')
-    if (await nextSection.count() === 1) {
-      const [confirmationBox, sectionBox] = await Promise.all([
-        confirmation.boundingBox(),
-        nextSection.boundingBox(),
-      ])
-      if (!confirmationBox || !sectionBox) {
-        failures.push('could not measure export confirmation layout')
-      } else {
-        const overlaps = confirmationBox.x < sectionBox.x + sectionBox.width
-          && confirmationBox.x + confirmationBox.width > sectionBox.x
-          && confirmationBox.y < sectionBox.y + sectionBox.height
-          && confirmationBox.y + confirmationBox.height > sectionBox.y
-        if (overlaps) failures.push('export confirmation overlaps the next report section')
+    // Export feedback must stay readable and must not cover the report below the
+    // verdict card. It used to hang from the button as an absolute-positioned
+    // toast over the FINDINGS heading; the old check measured only the
+    // "Parts with no model" panel, which sits elsewhere, so it passed. This asks
+    // the browser what is stacked under the confirmation at a grid of points:
+    // anything with text that is not the confirmation or one of its ancestors is
+    // content the confirmation covers, whichever section it belongs to.
+    const covered = await confirmation.evaluate(el => {
+      const r = el.getBoundingClientRect()
+      const hit = new Set<string>()
+      for (let i = 0; i <= 4; i++) {
+        for (let j = 0; j <= 2; j++) {
+          const x = r.left + 1 + (r.width - 2) * (i / 4)
+          const y = r.top + 1 + (r.height - 2) * (j / 2)
+          for (const under of document.elementsFromPoint(x, y)) {
+            if (el.contains(under) || under.contains(el)) continue
+            if ((under.textContent ?? '').trim() === '') continue
+            hit.add(`${under.tagName.toLowerCase()}${under.getAttribute('data-testid') ? `[${under.getAttribute('data-testid')}]` : ''}: ${(under.textContent ?? '').trim().slice(0, 30)}`)
+          }
+        }
       }
+      return [...hit]
+    })
+    if (covered.length > 0) failures.push(`export confirmation covers report content (${covered.join('; ')})`)
+    const [confirmationBox, cardBox] = await Promise.all([
+      confirmation.boundingBox(),
+      page.locator('[data-testid="report-verdict"]').boundingBox(),
+    ])
+    if (!confirmationBox || !cardBox) {
+      failures.push('could not measure export confirmation layout')
+    } else if (confirmationBox.y + confirmationBox.height > cardBox.y + cardBox.height + 0.5) {
+      failures.push('export confirmation hangs below the verdict card')
     }
     const exportedReport = await Bun.file(exportPath).json() as WebReport
     const independentReport = await independentAnalysis(path, plan)

@@ -239,7 +239,7 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
   ok('choosing Luna fills the model field', await page.locator('[data-testid="settings-model"]').inputValue() === 'gpt-6-luna')
   await page.locator('[data-testid="settings-model"]').fill('gpt-5.6-sol')
   ok('an older name typed in is accepted and gets a hint, not a refusal',
-    (await page.locator('[data-testid="settings-model-hint"]').innerText()).includes('gpt-6.1-sol is the default'))
+    /GPT-6\.1 Sol is the default/.test(await page.locator('[data-testid="settings-model-hint"]').innerText()))
   await shoot(page, '05a-model-picker')
   await page.locator('[data-testid="settings-model"]').fill('')
   const permission = page.locator('[data-testid="settings-permission-mode"]')
