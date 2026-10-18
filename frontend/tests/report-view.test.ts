@@ -154,7 +154,7 @@ describe('summarizeErrorBudget', () => {
     const rows = summarizeErrorBudget(budget)
     expect(rows).toContain('Tolerance: rel 0.001 · V 0.000001 V · I 1e-12 A · Q 1e-14 C')
     expect(rows).toContain('Residual: 2.5e-10 A at VCC')
-    expect(rows).toContain('Methods: trapezoidal, backward-euler')
+    expect(rows).toContain('Methods: Trapezoidal, Backward Euler')
     expect(rows).toContain('Invalid result spans: 8.000–9.000 ms')
     expect(rows).toContain('Event timing error: ≤1.000 ms (chunk quantization)')
     expect(rows.join(' ')).not.toMatch(/accuracy|%/i)
@@ -182,7 +182,7 @@ test('a cold-start fallback window states the jump from the carried state', () =
   }
   expect(fallbackWindowLine(window)).not.toContain('jump')
   expect(fallbackWindowLine({ ...window, state_jump_v: 1.25 })).toBe(
-    '1.000-2.000 ms: cold-start-backward-euler; 0.012 V measured chunk-end error estimate; '
+    '1.000-2.000 ms: Restarted from rest (Backward Euler); 0.012 V measured chunk-end error estimate; '
     + 'carried state discarded, 1.250 V jump at the window start; restarted from a fresh operating point.',
   )
 })

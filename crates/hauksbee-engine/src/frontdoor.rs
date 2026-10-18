@@ -897,7 +897,7 @@ fn verdict_headline(verdict: &crate::result::RunVerdict, current: &str, serious:
              unjudged; see the reason below."
             .to_string(),
         "invalid" if inconclusive.contains(&current) => current.to_string(),
-        "invalid" => "Not conclusive: nothing found blocks ordering, but this run cannot vouch for the board; see the reason below.".to_string(),
+        "invalid" => "Inconclusive, not a pass: nothing found blocks ordering, but this run cannot vouch for the board; see the reason below.".to_string(),
         _ if verdict.unorderable.is_some() => {
             // A schematic has no board to order: say what was judged instead.
             let why = verdict.unorderable.as_deref().unwrap_or_default();
@@ -4103,7 +4103,7 @@ mod tests {
         let refused = web(Vec::new(), false, &[], refusal());
         assert_eq!(refused.verdict, "invalid");
         assert!(
-            refused.headline.starts_with("Not conclusive: "),
+            refused.headline.starts_with("Inconclusive, not a pass: "),
             "{}",
             refused.headline
         );

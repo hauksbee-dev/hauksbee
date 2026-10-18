@@ -386,13 +386,10 @@ function Segmented<T extends string>({ options, value, onChange, testIdPrefix, l
   )
 }
 
-/** The sentences of a preset's summary that help someone choose. The server's
- *  wording also carries benchmark results and baseline names; those belong in the
- *  documentation, not in a choice list. */
-function plainSummary(summary: string): string {
-  const kept = summary.split(/(?<=[.!?])\s+/).filter(sentence => !/benchmark|baseline/i.test(sentence))
-  return (kept.length ? kept : [summary]).join(' ')
-}
+/** What a preset row says about itself: the engine's web wording, which has no
+ *  terminal command and no benchmark talk (the CLI's `summary` keeps its own).
+ *  A server older than `web_summary` sends only `summary`. */
+const presetText = (preset: ExtractPreset): string => preset.web_summary ?? preset.summary
 
 /** Why a backend cannot be used yet and the one thing that fixes it: an Install
  *  button where the server can install it, the exact command where it cannot,
@@ -480,7 +477,7 @@ function PresetRow({ preset, tag, ladder, availability, dep, depsApi, showProble
             )}
           </span>
           <span className="text-[12px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
-            {customCommand ? `Keeps custom command ${customCommand}; its configuration controls routing and charges.` : plainSummary(preset.summary)}
+            {customCommand ? `Keeps custom command ${customCommand}; its configuration controls routing and charges.` : presetText(preset)}
           </span>
           {ladder && (
             <span className="text-[11px]" data-testid={`settings-preset-${preset.id}-ladder`} style={{ color: 'var(--silk-faint)' }}>

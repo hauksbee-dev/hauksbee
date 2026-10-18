@@ -1,6 +1,6 @@
 import {
   assertKeys, assertKvs, CHECK_KEYS, checkKind, emptyCheck, emptyPeripheral, emptySensor, eventsToml, inputsToml,
-  lines, numOr, overrideKvs, peripheralKvs, sensorKvs, supplyKvs, tomlString,
+  lines, numOr, overrideKvs, peripheralKvs, sensorKvs, SUPPLY_KINDS, supplyKvs, tomlString,
 } from './check-spec'
 import type {
   BuilderState, CheckRow, ConstraintDraft, Kv, OverrideRow, PeripheralRow, SensorRow, SupplyRow,
@@ -66,7 +66,7 @@ const tableOf = (entries: CstEntry[]): Table | null => {
 
 function supplyRow(s: Table): SupplyRow | null {
   if (Object.keys(s).some(k => !SUPPLY_FIELDS.has(k))) return null
-  if (s.kind && !['ideal', 'bench', 'usb'].includes(String(s.kind))) return null
+  if (s.kind && !(SUPPLY_KINDS as readonly string[]).includes(String(s.kind))) return null
   return {
     net: String(s.net ?? ''),
     volts: String(s.volts ?? ''),

@@ -10,6 +10,7 @@
 import { createContext, useContext, useState } from 'react'
 import { explainFor, labelFor } from '../../lib/labels'
 import { linkify } from '../../lib/result-links'
+import { RAW_ID, isLabelledId } from '../../lib/plain-ids'
 import type { ResultEntity, Vocabulary } from '../../lib/result-links'
 
 export interface ResultLinkHandlers {
@@ -51,8 +52,14 @@ export const ResultLinkContext = createContext<ResultLinkHandlers>({ vocab: null
 
 const nameOf = (e: ResultEntity) => (e.kind === 'part' ? e.ref : e.net)
 
-/** A part or a net as a chip: a small glyph for which it is, then its name. */
-export function EntityChip({ entity }: { entity: ResultEntity }) {
+/** Punctuation that closes a clause: a chip it follows sits flush against it. */
+const CLOSING_RUN = /^[,.;:)\]!?]+/
+
+/** A part or a net as a chip: a small glyph for which it is, then its name.
+ *  `tightBefore` / `tightAfter` say the chip sits against an opening bracket or
+ *  closing punctuation in the sentence, so its padding on that side shrinks and
+ *  the text reads "(from D13, driven by U1)", not "(from D13 , driven by U1 )". */
+export function EntityChip({ entity, tightBefore = false, tightAfter = false }: { entity: ResultEntity; tightBefore?: boolean; tightAfter?: boolean }) {
   const { onPoint, onGo } = useContext(ResultLinkContext)
   const name = nameOf(entity)
   const part = entity.kind === 'part'
@@ -62,14 +69,19 @@ export function EntityChip({ entity }: { entity: ResultEntity }) {
       data-testid="result-link"
       data-kind={entity.kind}
       data-name={name}
+      data-tight={tightBefore || tightAfter ? [tightBefore && 'before', tightAfter && 'after'].filter(Boolean).join(' ') : undefined}
       title={onGo ? `${part ? 'Part' : 'Net'} ${name}: show it on the board` : undefined}
       onMouseEnter={() => onPoint?.(entity)}
       onMouseLeave={() => onPoint?.(null)}
       onFocus={() => onPoint?.(entity)}
       onBlur={() => onPoint?.(null)}
       onClick={() => onGo?.(entity)}
-      className="hb-press result-chip inline-flex items-center gap-1 align-baseline rounded-md px-1.5 mx-px"
+      className="hb-press result-chip inline-flex items-center gap-1 align-baseline rounded-md"
       style={{
+        paddingLeft: tightBefore ? 3 : 6,
+        paddingRight: tightAfter ? 3 : 6,
+        marginLeft: tightBefore ? 0 : 1,
+        marginRight: tightAfter ? 0 : 1,
         fontFamily: 'var(--font-mono)',
         fontSize: '0.9em',
         lineHeight: 1.45,
@@ -94,26 +106,45 @@ export function EntityChip({ entity }: { entity: ResultEntity }) {
 export function Linked({ text }: { text: string }) {
   const { vocab } = useContext(ResultLinkContext)
   if (!vocab) return <Plain text={text} />
+  const segments = linkify(text, vocab)
   return (
     <>
-      {linkify(text, vocab).map((seg, i) =>
-        typeof seg === 'string' ? <Plain key={i} text={seg} /> : <EntityChip key={i} entity={seg} />)}
+      {segments.map((seg, i) => {
+        const before = segments[i - 1]
+        const after = segments[i + 1]
+        const closing = typeof after === 'string' ? CLOSING_RUN.exec(after)?.[0] : undefined
+        if (typeof seg === 'string') {
+          // The closing mark after a chip was drawn with the chip (below).
+          const drawn = typeof before === 'object' ? CLOSING_RUN.exec(seg)?.[0] : undefined
+          return <Plain key={i} text={drawn ? seg.slice(drawn.length) : seg} />
+        }
+        const chip = (
+          <EntityChip
+            key={i}
+            entity={seg}
+            tightBefore={typeof before === 'string' && before.endsWith('(')}
+            tightAfter={closing !== undefined}
+          />
+        )
+        // A chip and the closing mark right after it are one unbreakable unit,
+        // so a line never starts with a stray comma.
+        return closing
+          ? <span key={i} data-testid="chip-with-punct" style={{ whiteSpace: 'nowrap' }}>{chip}{closing}</span>
+          : chip
+      })}
     </>
   )
 }
 
-/** An engine id in a sentence (a model card, a capability: lower-case words
- *  joined by underscores), never a part or a net name, nor part of a file
- *  name, a path or inline code. */
-const RAW_ID = /(?<![\w./`-])[a-z][a-z0-9]*(?:_[a-z0-9]+)+(?![\w./`-])/g
-
-/** Text with any raw engine id shown as its label from the shared table
- *  (labels.ts), the id itself kept in the tooltip. */
+/** Text with any engine id that has words of its own shown as its label from
+ *  the shared table (labels.ts), the id itself kept in the tooltip. The rule
+ *  for which ids qualify (`isLabelledId`) is the one the report exports use. */
 function Plain({ text }: { text: string }) {
   const out: React.ReactNode[] = []
   let last = 0
   for (const m of text.matchAll(RAW_ID)) {
     const at = m.index ?? 0
+    if (!isLabelledId(m[0])) continue
     if (at > last) out.push(text.slice(last, at))
     out.push(
       <span key={at} data-testid="raw-id" title={explainFor(m[0]) ?? m[0]} style={{ textDecoration: 'underline dotted', textUnderlineOffset: 3 }}>

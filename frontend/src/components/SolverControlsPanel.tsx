@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { SolverControls, ClientMessage } from '../types/protocol'
 import { Switch } from './ui'
+import { labelFor } from '../lib/labels'
 
 // The "Conditions" tab of the live dock: what a user can reasonably change about
 // the circuit's surroundings (temperature, whether parts sit exactly on their
@@ -81,8 +82,8 @@ function Slider({ label, aria, readout, min, max, step, ends, value, onChange, d
 }
 
 const METHODS: { id: SolverControls['integration']; label: string; blurb: string }[] = [
-  { id: 'trap', label: 'Trapezoidal', blurb: 'The default: accurate for almost every board.' },
-  { id: 'gear2', label: 'Gear 2', blurb: 'Damps numerical ringing. Try it if a switching circuit rings in the sim but not on the bench.' },
+  { id: 'trap', label: labelFor('trap'), blurb: 'The default: accurate for almost every board.' },
+  { id: 'gear2', label: labelFor('gear2'), blurb: 'Damps numerical ringing. Try it if a switching circuit rings in the sim but not on the bench.' },
 ]
 
 export function SolverControlsPanel({ controls, send }: SolverControlsPanelProps) {

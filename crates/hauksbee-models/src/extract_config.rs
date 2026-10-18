@@ -905,8 +905,13 @@ const FILE_HEADER: &str = "\
 pub struct Preset {
     pub id: &'static str,
     pub label: &'static str,
-    /// One line on what it costs / needs.
+    /// One line on what it costs / needs, in the terminal's words (it may name
+    /// the command that signs the tool in).
     pub summary: &'static str,
+    /// The same line for the web app: plain sentences, no terminal command and
+    /// no benchmark talk. The app already has the sign-in command in the
+    /// Environment page's own row (`login_command`), shown where it is needed.
+    pub web_summary: &'static str,
     pub backend: Backend,
     pub model: &'static str,
     pub effort: &'static str,
@@ -959,6 +964,7 @@ const fn agent_preset(
         id,
         label,
         summary,
+        web_summary: summary,
         backend,
         model,
         effort,
@@ -982,6 +988,7 @@ const fn api_preset(
         id,
         label,
         summary,
+        web_summary: summary,
         backend: Backend::Api,
         model,
         effort: "",
@@ -999,15 +1006,18 @@ pub fn presets() -> &'static [Preset] {
 }
 
 static PRESETS: [Preset; 11] = [
-    agent_preset(
-        "codex",
-        "Codex · gpt-6.1-sol, high effort",
-        "OpenAI's agent CLI. Signs in with your ChatGPT account (`codex login`).",
-        Backend::Codex,
-        DEFAULT_CODEX_MODEL,
-        DEFAULT_CODEX_EFFORT,
-        true,
-    ),
+    Preset {
+        web_summary: "OpenAI's agent CLI. Signs in with your ChatGPT account.",
+        ..agent_preset(
+            "codex",
+            "Codex · gpt-6.1-sol, high effort",
+            "OpenAI's agent CLI. Signs in with your ChatGPT account (`codex login`).",
+            Backend::Codex,
+            DEFAULT_CODEX_MODEL,
+            DEFAULT_CODEX_EFFORT,
+            true,
+        )
+    },
     Preset {
         cheaper: true,
         escalate: &["gpt-6.1-sol"],
@@ -1023,6 +1033,7 @@ static PRESETS: [Preset; 11] = [
     },
     Preset {
         escalate: AGENTS[0].escalate,
+        web_summary: "Balanced: Sonnet first; Opus only when a draft fails or doubts its pin map. Signs in with your Claude account.",
         ..agent_preset(
             "claude-code",
             "Claude Code · Sonnet 5.5 → Opus 5.5, high effort",
@@ -1040,6 +1051,7 @@ static PRESETS: [Preset; 11] = [
     Preset {
         cheaper: true,
         escalate: &["claude-sonnet-5-5"],
+        web_summary: "Cheapest: short Haiku stages kept under 100k tokens; Sonnet only when a draft fails or doubts its pin map.",
         ..agent_preset(
             "claude-code-haiku",
             "Claude Code · Haiku 5.5 → Sonnet on failure, high effort",
@@ -1640,6 +1652,35 @@ mod tests {
         assert_eq!(load_in(&host).unwrap().config.backend, Some(Backend::Agy));
         let home = FakeHost::new(&[("HOME", dir.path().to_str().unwrap())], &[]);
         assert!(!load_in(&home).unwrap().exists); // the default path may be absent
+    }
+
+    #[test]
+    fn the_web_summary_of_every_preset_is_plain_sentences_with_no_command() {
+        for p in presets() {
+            let web = p.web_summary;
+            assert!(!web.trim().is_empty(), "{}", p.id);
+            assert!(
+                !web.contains('`'),
+                "{}: a terminal command in {web:?}",
+                p.id
+            );
+            for jargon in ["benchmark", "baseline", "login"] {
+                assert!(
+                    !web.to_lowercase().contains(jargon),
+                    "{}: {jargon:?} in {web:?}",
+                    p.id
+                );
+            }
+        }
+        let codex = presets().iter().find(|p| p.id == "codex").unwrap();
+        // The terminal keeps its command; the web gets the same sentence without it.
+        assert!(codex.summary.contains("`codex login`"));
+        assert_eq!(
+            codex.web_summary,
+            "OpenAI's agent CLI. Signs in with your ChatGPT account."
+        );
+        let served = serde_json::to_value(codex).unwrap();
+        assert_eq!(served["web_summary"], codex.web_summary);
     }
 
     #[test]

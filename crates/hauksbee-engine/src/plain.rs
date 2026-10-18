@@ -845,8 +845,9 @@ impl OrderTriage {
             ),
             "fail" => format!("NOT OK TO ORDER: this run failed. {reason}"),
             _ => format!(
-                "NOT CONCLUSIVE: nothing listed below blocks ordering, but the run cannot vouch \
-                 for this board. {reason}"
+                "{}: nothing listed below blocks ordering, but the run cannot vouch \
+                 for this board. {reason}",
+                hauksbee_ir::vocabulary::INCONCLUSIVE_LEAD
             ),
         }
     }

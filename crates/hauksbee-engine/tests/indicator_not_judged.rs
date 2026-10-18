@@ -256,7 +256,7 @@ fn a_firmware_driven_indicator_adds_no_condition() {
     let conditions = v["verdict_conditions"].as_array().expect("conditions");
     assert!(
         conditions.iter().all(|c| c.as_str().is_some_and(|c| c
-            .starts_with("copper spacing was judged against a DEFAULT")
+            .starts_with("Copper spacing was judged against a DEFAULT")
             || c.starts_with("Rails "))),
         "{v:#}"
     );

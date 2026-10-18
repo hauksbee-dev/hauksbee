@@ -134,7 +134,7 @@ function PlainList({ ids, testId, limit = 3 }: { ids: readonly string[]; testId?
 }
 
 /** Coverage stages whose label alone does not tell a reader what the part's
- *  results are worth ("Scope not stated"): the card prints the label table's
+ *  results are worth ("Coverage not listed"): the card prints the label table's
  *  explanation under the headline. */
 const PLAIN_STAGES: ReadonlySet<string> = new Set(['executable_scope_unspecified', 'identity_only'])
 

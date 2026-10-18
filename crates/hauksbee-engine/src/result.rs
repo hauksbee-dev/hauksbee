@@ -3376,6 +3376,7 @@ impl JsonReport {
             crate::verdict_conditions::derived(&findings, &self.assumptions, model_dependent);
         let mut seen = std::collections::HashSet::new();
         (self.verdict_conditions.iter().cloned().chain(derived))
+            .map(|c| hauksbee_ir::vocabulary::sentence_case(&c))
             .filter(|c| seen.insert(c.clone()))
             .collect()
     }
@@ -4773,6 +4774,26 @@ mod tests {
         assert_eq!(
             json[0].fix.as_deref(),
             lint_fix_hint(LintCheck::OperatingEnvelope, Severity::High)
+        );
+    }
+
+    /// Every surface lists the pass conditions one under another and joins
+    /// them into the headline, so each starts like a sentence whatever the
+    /// source worded it as.
+    #[test]
+    fn pass_conditions_start_with_a_capital_letter() {
+        let mut jr = JsonReport::new("b", summary_with(Vec::new(), Vec::new()));
+        jr.verdict_conditions = vec![
+            "copper spacing was judged against a DEFAULT 0.200 mm clearance.".to_string(),
+            "Rails held at their named voltage.".to_string(),
+            "copper spacing was judged against a DEFAULT 0.200 mm clearance.".to_string(),
+        ];
+        assert_eq!(
+            jr.pass_conditions(),
+            [
+                "Copper spacing was judged against a DEFAULT 0.200 mm clearance.",
+                "Rails held at their named voltage.",
+            ]
         );
     }
 

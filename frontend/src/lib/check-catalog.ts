@@ -226,17 +226,7 @@ export interface Offer {
 }
 
 const speak = (template: string, net?: string, ref?: string) =>
-  template.replace('{net}', net ? displayNet(net) : 'this net').replace('{ref}', ref ?? 'this part').replace(/\.\.\./g, '…')
-
-/** Part offers say what is measured, not just the part's name. They are
- *  ACTIONS ("Set a temperature limit for U3"): the engine's own wording ends
- *  in a literal "... C" placeholder, which read as a sentence cut short. The
- *  number is the user's to give (a rating is never guessed), and the check
- *  editor that opens asks for it. */
-const PART_WORDS: Record<string, string> = {
-  max_current: 'Set a current limit for {ref}',
-  max_temp: 'Set a temperature limit for {ref}',
-}
+  template.replace('{net}', net ? displayNet(net) : 'this net').replace('{ref}', ref ?? 'this part')
 
 export function blockedBy(entry: CatalogKind, spec: SpecFacts, kinds: readonly CatalogKind[]): Blocked | undefined {
   const need = entry.prerequisites.find(p => !needMet(p.need, spec))
@@ -277,7 +267,7 @@ export function offersForPart(
   const partKinds = ctx.kinds.filter(e => e.targets.includes('part')).filter(e =>
     !['fires', 'increases', 'decreases'].includes(e.kind) || (ctx.boundKind !== null && COMPARATORS.has(ctx.boundKind)))
   const own: Offer[] = partKinds.map(entry => {
-    const words = PART_WORDS[entry.kind] ?? entry.offer.part ?? entry.title
+    const words = entry.offer.part ?? entry.title
     const unmeasurable = (entry.kind === 'max_current' || entry.kind === 'max_temp') && !ctx.capabilities.includes(entry.kind)
     return {
       kind: entry.kind, entry, ref, text: speak(words, undefined, ref),

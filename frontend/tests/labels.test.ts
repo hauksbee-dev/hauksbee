@@ -70,7 +70,7 @@ describe('labelFor', () => {
     expect(labelFor('usb_device_controller')).toBe('USB device controller')
     expect(labelFor('silicon_power_current_profile')).toBe('Supply current by state')
     expect(labelFor('silicon_timing_and_errata')).toBe('Silicon timing and errata')
-    expect(labelFor('executable_scope_unspecified')).toBe('Scope not stated')
+    expect(labelFor('executable_scope_unspecified')).toBe('Coverage not listed')
     expect(labelFor('executable_partial')).toBe('Partly modelled')
     expect(labelFor('identity_only')).toBe('Identity only')
     expect(labelFor('datasheet-curves')).toBe('Checked against datasheet curves')
@@ -80,6 +80,20 @@ describe('labelFor', () => {
     expect(labelFor('bjt_npn')).toBe('NPN transistor')
     expect(labelFor('bjtnpn')).toBe('NPN transistor')
     expect(labelFor('analogswitch')).toBe('Analog switch')
+  })
+
+  test('solver methods, supply kinds and USB profiles are never shown as their ids', () => {
+    expect(labelFor('trap')).toBe('Trapezoidal')
+    expect(labelFor('trapezoidal')).toBe('Trapezoidal')
+    expect(labelFor('gear2')).toBe('Gear 2')
+    expect(labelFor('subdivided-backward-euler')).toBe('Subdivided steps (Backward Euler)')
+    expect(labelFor('bench')).toBe('Bench supply')
+    expect(labelFor('usb')).toBe('USB port')
+    expect(labelFor('battery')).toBe('Battery')
+    expect(labelFor('5v1.5a')).toBe('5 V, 1.5 A')
+    expect(labelFor('v5_3a')).toBe('5 V, 3 A')
+    expect(labelFor('li_ion')).toBe('Li-ion')
+    expect(explainFor('gear2')).toMatch(/ringing/)
   })
 
   test('explains a known id in one sentence, and an unknown one not at all', () => {

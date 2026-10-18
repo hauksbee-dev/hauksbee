@@ -277,7 +277,7 @@
   },
   {
    "term": "invalid",
-   "label": "INVALID",
+   "label": "PARTLY JUDGED / INCONCLUSIVE",
    "short": "Hauksbee refused to give this a pass or fail, because something it rests on was not simulated (an open part, an unpowered regulator, firmware that never ran). It is not a failure of your board.",
    "what_to_do": "Close the named gap and rerun."
   },
@@ -379,9 +379,9 @@
   },
   {
    "term": "scope_unspecified",
-   "label": "Scope not stated",
-   "short": "The part simulates, but its model does not say which behaviours it covers, so Hauksbee cannot tell which results it vouches for.",
-   "what_to_do": "List what the model covers in its card."
+   "label": "Coverage not listed",
+   "short": "The part simulates, but its model does not list which behaviours it covers, so Hauksbee cannot tell which results it vouches for.",
+   "what_to_do": "Add the behaviours the model covers to its coverage list (open it in the model editor), so the results it supports can count."
   },
   {
    "term": "report_only_exit",

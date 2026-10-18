@@ -989,6 +989,21 @@ fn the_web_report_of_a_partly_judged_board_names_its_scope() {
         report.verdict_reason,
         cli["verdict_reason"].as_str().map(str::to_string)
     );
+    // The CLI sentence ends on the command that drafts the models; the web
+    // card says the same step in plain words, with no terminal command.
+    let cli_reason = report.verdict_reason.as_deref().expect("a reason");
+    assert!(
+        cli_reason.contains("`hauksbee models extract"),
+        "{cli_reason}"
+    );
+    let why = report.verdict_why.as_deref().expect("a web reason");
+    assert!(
+        why.starts_with("PARTLY JUDGED (not a pass): ")
+            && !why.contains('`')
+            && !why.contains("hauksbee models")
+            && why.ends_with("Add a model for each open part to judge the rest."),
+        "{why}"
+    );
 }
 
 #[test]

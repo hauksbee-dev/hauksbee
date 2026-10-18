@@ -32,7 +32,9 @@ use std::sync::OnceLock;
 
 use serde::Serialize;
 
-use crate::evidence::{MatchConfidence, ModelLayer, ModelSourceTier, ModelValidation};
+use crate::evidence::{
+    ArtifactKind, MatchConfidence, ModelLayer, ModelSourceTier, ModelValidation,
+};
 use crate::glossary::Term;
 use crate::vocabulary::{Check, EvidenceGrade, Severity, VerdictState, BLOCKING};
 
@@ -62,6 +64,18 @@ pub const GROUP_TERM: &str = "term";
 pub const GROUP_BACKEND: &str = "backend";
 /// The `group` of a model kind (what a part was bound as).
 pub const GROUP_MODEL_KIND: &str = "model_kind";
+/// The `group` of a solver integration method (`trap`, `gear2`, ...).
+pub const GROUP_SOLVER_METHOD: &str = "solver_method";
+/// The `group` of a power supply kind (`bench`, `usb`, ...).
+pub const GROUP_SUPPLY_KIND: &str = "supply_kind";
+/// The `group` of a generic fallback model (a class stand-in, not a part).
+pub const GROUP_GENERIC_MODEL: &str = "generic_model";
+/// The `group` of an input file format (`ki_cad_pcb`).
+pub const GROUP_ARTIFACT_KIND: &str = "artifact_kind";
+/// The `group` of a USB supply profile (`5v1.5a`).
+pub const GROUP_USB_PROFILE: &str = "usb_profile";
+/// The `group` of a battery chemistry.
+pub const GROUP_BATTERY_CHEMISTRY: &str = "battery_chemistry";
 
 /// One row: an id, its short label and, optionally, a one-line explanation
 /// for a tooltip.
@@ -401,6 +415,151 @@ const MATCH_CONFIDENCE: &[(MatchConfidence, &str, &str)] = &[
     ),
 ];
 
+/// Solver integration methods. The wire names the app sends (`trap`, `gear2`)
+/// and the names the solver reports for each window of a run
+/// (`IntegrationMethod`, kebab-case) are both listed, so neither reaches a
+/// reader raw. `(id, label, one-line explanation)`.
+const SOLVER_METHODS: &[(&str, &str, &str)] = &[
+    ("trap", "Trapezoidal", "The default: accurate for almost every board."),
+    ("trapezoidal", "Trapezoidal", "The default: accurate for almost every board."),
+    ("gear2", "Gear 2", "Damps numerical ringing, so a switching circuit that rings only in the simulation settles."),
+    ("backward-euler", "Backward Euler", "A heavily damped fallback step, used where the default step would not converge."),
+    ("reduced-step", "Smaller steps", "The default method re-run with smaller time steps where the run was struggling."),
+    ("cold-start-backward-euler", "Restarted from rest (Backward Euler)", "The window was restarted from a settled state, so state carried in from before it was discarded."),
+    ("subdivided-backward-euler", "Subdivided steps (Backward Euler)", "The window was split into many small steps of the damped fallback method."),
+];
+
+/// Power supply kinds, as the checks spec and the live supply panel spell
+/// them. `(id, label, one-line explanation)`.
+const SUPPLY_KINDS: &[(&str, &str, &str)] = &[
+    (
+        "ideal",
+        "Ideal source",
+        "A perfect voltage source: the rail holds its level whatever the board pulls.",
+    ),
+    (
+        "bench",
+        "Bench supply",
+        "A constant voltage that folds back when the board pulls more than its current limit.",
+    ),
+    (
+        "wall",
+        "Wall adapter",
+        "A nominal voltage behind some output resistance, with ripple.",
+    ),
+    (
+        "usb",
+        "USB port",
+        "A USB source that sags under load and cuts out at the port's current limit.",
+    ),
+    (
+        "battery",
+        "Battery",
+        "A battery pack that drains as the board draws from it.",
+    ),
+];
+
+/// USB supply profiles, as the spec spells them (`5v1.5a`) and as the wire
+/// mirror does (`v5_1_5a`). `(id, label)`.
+const USB_PROFILES: &[(&str, &str)] = &[
+    ("5v0.5a", "5 V, 0.5 A"),
+    ("5v1.5a", "5 V, 1.5 A"),
+    ("5v3a", "5 V, 3 A"),
+    ("v5_0_5a", "5 V, 0.5 A"),
+    ("v5_1_5a", "5 V, 1.5 A"),
+    ("v5_3a", "5 V, 3 A"),
+];
+
+/// Battery chemistries, as the spec and the wire spell them. `(id, label)`.
+const BATTERY_CHEMISTRIES: &[(&str, &str)] = &[
+    ("li_ion", "Li-ion"),
+    ("li-ion", "Li-ion"),
+    ("alkaline", "Alkaline"),
+    ("ni_mh", "NiMH"),
+    ("nimh", "NiMH"),
+    ("li_fe_po4", "LiFePO4"),
+    ("lifepo4", "LiFePO4"),
+];
+
+/// The input formats a report's inventory lists, as the engine writes them
+/// (`ArtifactKind`, `snake_case`). `(kind, label)`.
+const ARTIFACT_KINDS: &[(ArtifactKind, &str)] = &[
+    (ArtifactKind::KiCadPcb, "KiCad board"),
+    (ArtifactKind::KiCadSchematic, "KiCad schematic"),
+    (ArtifactKind::KiCadNetlist, "KiCad netlist"),
+    (ArtifactKind::EagleBoard, "Eagle board"),
+    (ArtifactKind::AltiumPcbDoc, "Altium board"),
+    (ArtifactKind::GerberArchive, "Gerber files"),
+    (ArtifactKind::OdbPlusPlus, "ODB++ archive"),
+    (ArtifactKind::Ipc2581, "IPC-2581 file"),
+    (ArtifactKind::Easyeda, "EasyEDA project"),
+    (ArtifactKind::Ipc356, "IPC-356 netlist"),
+    (ArtifactKind::Bom, "Bill of materials"),
+    (ArtifactKind::Placement, "Placement file"),
+    (ArtifactKind::Elf, "Firmware (ELF)"),
+    (ArtifactKind::IntelHex, "Firmware (Intel HEX)"),
+    (ArtifactKind::Toml, "Settings file"),
+];
+
+/// The generic MOSFET stand-ins the binder uses when a board names only a
+/// transistor class: the family per package class and its two corners.
+/// `(id stem, words)`: the package classes of `db/mosfet.toml`.
+const GENERIC_MOSFET_CLASSES: &[(&str, &str)] = &[
+    ("sot", "small-signal"),
+    ("power", "power"),
+    ("class", "other-package"),
+];
+
+/// `(id letter, words)` for the two channel polarities.
+const GENERIC_MOSFET_CHANNELS: &[(&str, &str)] = &[("n", "N-channel"), ("p", "P-channel")];
+
+/// The label rows for the generic MOSFET family and corner models: the ids a
+/// sentence like "Q1 passes across assumed corners (...)" names, in words.
+fn generic_mosfet_rows() -> Vec<Label> {
+    let mut out = Vec::new();
+    for &(letter, channel) in GENERIC_MOSFET_CHANNELS {
+        for &(class, class_words) in GENERIC_MOSFET_CLASSES {
+            let family = format!("generic_{letter}mos_{class}");
+            let name = format!("Generic {class_words} {channel} MOSFET");
+            let packages = if class == "class" {
+                "a package this library does not recognise"
+            } else {
+                "that package class"
+            };
+            out.push(row(
+                &family,
+                GROUP_GENERIC_MODEL,
+                &name,
+                Some(&format!(
+                    "A stand-in for any {class_words} {channel} MOSFET in {packages}, used when the board names no part number."
+                )),
+            ));
+            for (corner, corner_words, why) in [
+                (
+                    "high_vth",
+                    "high-threshold",
+                    "the weak end: highest threshold, weakest channel",
+                ),
+                (
+                    "low_vth",
+                    "low-threshold",
+                    "the strong end: lowest threshold, strongest channel",
+                ),
+            ] {
+                out.push(row(
+                    &format!("{family}_corner_{corner}"),
+                    GROUP_GENERIC_MODEL,
+                    &format!("{name} at its {corner_words} corner"),
+                    Some(&format!(
+                        "An assumed corner of the {name}, {why}. Results are checked at both corners because no part number says which is fitted."
+                    )),
+                ));
+            }
+        }
+    }
+    out
+}
+
 /// Emulator backend kinds: the part of `simavr:atmega328p` before the colon.
 const BACKEND_KINDS: &[(&str, &str)] = &[
     ("simavr", "simavr"),
@@ -655,6 +814,34 @@ fn term_id(term: Term) -> String {
         .unwrap_or_default()
 }
 
+/// The rows for the words a run's setup and inputs are described in: solver
+/// methods, supply kinds and profiles, battery chemistries, the generic
+/// MOSFET stand-ins and the input file formats.
+fn run_setup_rows() -> Vec<Label> {
+    let mut out = Vec::new();
+    for &(id, label, explain) in SOLVER_METHODS {
+        out.push(row(id, GROUP_SOLVER_METHOD, label, Some(explain)));
+    }
+    for &(id, label, explain) in SUPPLY_KINDS {
+        out.push(row(id, GROUP_SUPPLY_KIND, label, Some(explain)));
+    }
+    for &(id, label) in USB_PROFILES {
+        out.push(row(id, GROUP_USB_PROFILE, label, None));
+    }
+    for &(id, label) in BATTERY_CHEMISTRIES {
+        out.push(row(id, GROUP_BATTERY_CHEMISTRY, label, None));
+    }
+    out.extend(generic_mosfet_rows());
+    for &(kind, label) in ARTIFACT_KINDS {
+        let id = serde_json::to_value(kind)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        out.push(row(&id, GROUP_ARTIFACT_KIND, label, None));
+    }
+    out
+}
+
 /// Every row in precedence order, duplicates included.
 fn raw_entries() -> Vec<Label> {
     let mut out = Vec::new();
@@ -697,6 +884,7 @@ fn raw_entries() -> Vec<Label> {
             out.push(row(&compact, GROUP_MODEL_KIND, label, Some(explain)));
         }
     }
+    out.extend(run_setup_rows());
     for &(c, label, explain) in MATCH_CONFIDENCE {
         let id = serde_json::to_value(c)
             .ok()
@@ -973,6 +1161,84 @@ mod tests {
             Term::ScopeUnspecified.entry().label
         );
         assert_eq!(label_for("unresolved"), Term::OpenPart.entry().label);
+    }
+
+    /// Solver methods, supply kinds and USB profiles never reach a reader as
+    /// the id the engine or the spec writes.
+    #[test]
+    fn solver_methods_and_supply_kinds_have_plain_words() {
+        for (id, want) in [
+            ("trap", "Trapezoidal"),
+            ("trapezoidal", "Trapezoidal"),
+            ("gear2", "Gear 2"),
+            ("backward-euler", "Backward Euler"),
+            ("reduced-step", "Smaller steps"),
+            ("ideal", "Ideal source"),
+            ("bench", "Bench supply"),
+            ("wall", "Wall adapter"),
+            ("usb", "USB port"),
+            ("battery", "Battery"),
+            ("5v1.5a", "5 V, 1.5 A"),
+            ("v5_0_5a", "5 V, 0.5 A"),
+            ("li_ion", "Li-ion"),
+            ("ni_mh", "NiMH"),
+        ] {
+            assert_eq!(label_for(id), want, "{id}");
+        }
+        // Every method the solver can report has a row of its own, so the
+        // fallback humaniser never has to guess.
+        for method in [
+            "trapezoidal",
+            "gear2",
+            "backward-euler",
+            "reduced-step",
+            "cold-start-backward-euler",
+            "subdivided-backward-euler",
+        ] {
+            let row = entries().into_iter().find(|e| e.id == method);
+            assert_eq!(row.map(|e| e.group), Some(GROUP_SOLVER_METHOD), "{method}");
+        }
+        for id in ["trap", "gear2", "bench", "usb"] {
+            assert!(explain_for(id).is_some(), "{id} has no tooltip");
+        }
+        // The rows do not shadow an id another group already owns.
+        let dropped = dropped_duplicates();
+        for id in ["trap", "ideal", "bench", "wall", "usb", "battery"] {
+            assert!(!dropped.iter().any(|d| d == id), "{id} is already taken");
+        }
+    }
+
+    #[test]
+    fn generic_mosfet_models_read_as_what_they_stand_in_for() {
+        assert_eq!(
+            label_for("generic_pmos_sot_corner_high_vth"),
+            "Generic small-signal P-channel MOSFET at its high-threshold corner"
+        );
+        assert_eq!(
+            label_for("generic_nmos_power_corner_low_vth"),
+            "Generic power N-channel MOSFET at its low-threshold corner"
+        );
+        assert_eq!(
+            label_for("generic_nmos_class"),
+            "Generic other-package N-channel MOSFET"
+        );
+        // No comma inside a label, so a list of them in a sentence stays a list.
+        for e in entries().iter().filter(|e| e.group == GROUP_GENERIC_MODEL) {
+            assert!(!e.label.contains(','), "{:?}", e.label);
+            assert!(e.explain.is_some(), "{} has no tooltip", e.id);
+        }
+    }
+
+    #[test]
+    fn input_formats_have_plain_words_and_assumption_kinds_use_the_glossary() {
+        assert_eq!(label_for("ki_cad_pcb"), "KiCad board");
+        assert_eq!(label_for("gerber_archive"), "Gerber files");
+        // An assumption kind is a glossary term of the same id, so the table
+        // has one word for it, not two.
+        assert_eq!(label_for("open_part"), Term::OpenPart.entry().label);
+        assert_eq!(label_for("reduced_fidelity"), "Reduced fidelity");
+        assert_eq!(label_for("waived"), "Waived");
+        assert_eq!(label_for("not_checked"), "Not checked");
     }
 
     #[test]
