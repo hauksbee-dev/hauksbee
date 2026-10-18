@@ -19,6 +19,7 @@ import type { FindingGroup, ReportView, VerdictExplanation } from '../../lib/rep
 import { plural } from '../../lib/report-view'
 import { verdictTag } from '../../lib/result-export'
 import { entitiesIn } from '../../lib/result-links'
+import { ringLabel } from '../../lib/gauge'
 import { CheckIcon, ChecksIcon, CloseIcon, TerminalIcon, WarningIcon } from '../Icons'
 import { CopyButton } from '../ui'
 import { ExplainVerdict, PartlyJudged, ResultRow, VerdictConditions } from './VerdictConditions'
@@ -48,24 +49,34 @@ const TONE = {
   error: { ink: 'var(--err)', glyph: <CloseIcon size={16} /> },
 } as const
 
-/** A ring gauge: `value` of `total`, the arc in `ink`, the count inside. */
+/** A ring gauge: `value` of `total`, the arc in `ink`, the count inside. A count
+ *  too long for the hole is a percentage inside and the exact numbers beside
+ *  (see `ringLabel`), so no count is ever clipped to a wrong-looking number. */
 function Ring({ value, total, ink, label, testId }: { value: number; total: number; ink: string; label: string; testId: string }) {
-  const r = 17
+  const r = 19
   const c = 2 * Math.PI * r
   const frac = total > 0 ? Math.max(0, Math.min(1, value / total)) : 0
+  const { center, exact } = ringLabel(value, total)
+  const full = `${value} of ${total} ${label}`
   return (
-    <div className="flex items-center gap-2.5" data-testid={testId} data-value={value} data-total={total}>
-      <svg width="44" height="44" viewBox="0 0 44 44" role="img" aria-label={`${value} of ${total} ${label}`}>
-        <circle cx="22" cy="22" r={r} fill="none" stroke="var(--hairline)" strokeWidth="5" />
+    <div className="flex items-center gap-2.5 min-w-0" data-testid={testId} data-value={value} data-total={total} title={full}>
+      <svg width="48" height="48" viewBox="0 0 48 48" role="img" aria-label={full} className="shrink-0">
+        <circle cx="24" cy="24" r={r} fill="none" stroke="var(--hairline)" strokeWidth="5" />
         <circle
-          cx="22" cy="22" r={r} fill="none" stroke={ink} strokeWidth="5" strokeLinecap="round"
-          strokeDasharray={`${c * frac} ${c}`} transform="rotate(-90 22 22)"
+          cx="24" cy="24" r={r} fill="none" stroke={ink} strokeWidth="5" strokeLinecap="round"
+          strokeDasharray={`${c * frac} ${c}`} transform="rotate(-90 24 24)"
         />
-        <text x="22" y="26" textAnchor="middle" fontSize="11" fontWeight="700" fill="var(--silk)" className="tnum">
-          {value}/{total}
+        <text
+          data-testid={`${testId}-text`}
+          x="24" y="28" textAnchor="middle" fontSize={exact ? 10 : 11} fontWeight="700" fill="var(--silk)" className="tnum"
+        >
+          {center}
         </text>
       </svg>
-      <div className="text-[12px] leading-tight" style={{ color: 'var(--silk-dim)', maxWidth: 110 }}>{label}</div>
+      <div className="text-[12px] leading-tight min-w-0" style={{ color: 'var(--silk-dim)', maxWidth: 140 }}>
+        {exact && <div className="tnum font-semibold" data-testid={`${testId}-exact`} style={{ color: 'var(--silk)' }}>{exact}</div>}
+        {label}
+      </div>
     </div>
   )
 }
@@ -90,13 +101,18 @@ const LEVEL_INK: Record<string, string> = { serious: 'var(--err)', warning: 'var
 const SHOWN_FINDINGS = 5
 
 /** The findings that gate or warn, worst first, as rows that reach the board. */
-function FindingRows({ groups, onLocate }: {
+function FindingRows({ groups, total, onLocate }: {
   groups: (FindingGroup & { section: string })[]
+  /** The finding counter above: whatever the rows do not list is said, so
+   *  the rows and the counter always add up. */
+  total: number
   onLocate?: (x: number, y: number, label: string) => void
 }) {
   const { vocab } = useContext(ResultLinkContext)
-  if (groups.length === 0) return null
   const shown = groups.slice(0, SHOWN_FINDINGS)
+  const listed = shown.reduce((n, g) => n + g.items.length, 0)
+  const unlisted = Math.max(0, total - listed)
+  if (groups.length === 0 && unlisted === 0) return null
   return (
     <div className="text-[13px]" style={{ color: 'var(--silk)' }}>
       <div className="pb-1.5 text-[11px] font-bold tracking-widest uppercase" style={{ color: 'var(--silk-faint)' }}>
@@ -145,9 +161,9 @@ function FindingRows({ groups, onLocate }: {
           )
         })}
       </ul>
-      {groups.length > SHOWN_FINDINGS && (
-        <div className="pt-1.5 text-[12px]" style={{ color: 'var(--silk-dim)' }}>
-          {plural(groups.length - SHOWN_FINDINGS, 'more finding')} in the sections below.
+      {unlisted > 0 && (
+        <div className="pt-1.5 text-[12px]" data-testid="result-findings-more" style={{ color: 'var(--silk-dim)' }}>
+          {groups.length === 0 ? '' : 'and '}{plural(unlisted, groups.length === 0 ? 'finding' : 'more finding')} in the sections below.
         </div>
       )}
     </div>
@@ -202,12 +218,15 @@ export function ResultPanel({
   const { title, rest } = splitHeadline(v.headline)
   const scope = v.partlyJudged
   const [bound, keyParts] = (r.bind?.critical_parts_bound ?? '').split('/').map(Number)
+  // The held-back copper findings are listed apart, labelled as held back, and
+  // are not in the counters: they must not show here tagged serious too.
   const groups = v.sections
+    .filter(s => s !== v.preLayout?.copper)
     .flatMap(s => s.groups.map(g => ({ ...g, section: s.title.replace(/\s*\(.*\)$/, '') })))
     .filter(g => g.level === 'serious' || g.level === 'warning')
     .sort((a, b) => (a.level === b.level ? 0 : a.level === 'serious' ? -1 : 1))
   const nothingFound = r.verdict === 'pass' && groups.length === 0
-  const hasRows = !!scope || v.conditions.length > 0 || groups.length > 0 || nothingFound || !!explanation
+  const hasRows = !!scope || v.conditions.length > 0 || groups.length > 0 || r.total > 0 || nothingFound || !!explanation
 
   return (
     <section
@@ -278,7 +297,7 @@ export function ResultPanel({
         <div className="px-4 pt-2.5 pb-3 space-y-3">
           <PartlyJudged scope={v.partlyJudged} />
           <VerdictConditions conditions={v.conditions} />
-          <FindingRows groups={groups} onLocate={onLocate} />
+          <FindingRows groups={groups} total={r.total} onLocate={onLocate} />
           {nothingFound && v.conditions.length === 0 && (
             <ul className="list-none p-0 m-0 text-[13px]" style={{ color: 'var(--silk)' }}>
               <ResultRow testId="result-nothing-found" accent="var(--ok)" glyph={<CheckIcon size={12} />}>

@@ -568,6 +568,16 @@ export function reportTerms(r: WebReport, checks?: { failed: number; invalid: nu
 
 export type Overall = 'passed' | 'measured' | 'invalid' | 'failed'
 
+/** How many `[[assert]]` rows a spec text holds: the results the run returns
+ *  come back in that order, one per row, and anything after them was added by
+ *  the engine (the board's own static check). */
+export const assertRowCount = (specToml: string): number => (specToml.match(/^\[\[assert\]\]/gm) ?? []).length
+
+/** The results no spec row owns. The strip and the top bar count every result,
+ *  so each of these needs a place of its own on the Checks page. */
+export const resultsWithoutRows = <T,>(results: readonly T[], specToml: string): T[] =>
+  results.slice(assertRowCount(specToml))
+
 /** The run's one-word verdict, from the per-assertion results when there are
  *  any and from the runner's own exit otherwise. */
 export function overallVerdict(result: RunResponse): Overall {

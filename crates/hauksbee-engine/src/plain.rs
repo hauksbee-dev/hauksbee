@@ -453,17 +453,20 @@ fn is_unrouted_state(f: &PlainFinding) -> bool {
 /// The verdict reason when routing is the only cause listed.
 pub const PRE_LAYOUT_REASON: &str = "the board must be routed before it can be ordered.";
 
-/// The headline of a pre-layout board. The not-routed state is not a defect, so
-/// it is not counted; `total` / `serious` are the circuit findings only (see
-/// [`without_pre_layout`]).
+/// The headline of a pre-layout board.
+///
+/// `total` / `serious` are the counters
+/// the report shows (see [`without_held_copper`]): they include the not-routed
+/// state, because that finding is listed and tagged serious, so the headline
+/// quotes the same numbers the counters and the sections do.
 #[must_use]
 pub fn pre_layout_headline(total: usize, serious: usize, copper_held: usize) -> String {
     let lead = "Not routed yet:";
     let issues = if total == 1 { "issue" } else { "issues" };
-    let mut headline = match (total, serious) {
-        (0, _) => format!("{lead} the circuit checks found no problems."),
-        (_, 0) => format!("{lead} circuit checks found {total} {issues}, none serious."),
-        _ => format!("{lead} circuit checks found {total} {issues} ({serious} serious)."),
+    let mut headline = if total <= 1 {
+        format!("{lead} the board cannot be ordered as is, and nothing else was found.")
+    } else {
+        format!("{lead} {total} {issues} found, {serious} serious, including the missing routing.")
     };
     if copper_held > 0 {
         let _ = write!(
@@ -474,25 +477,19 @@ pub fn pre_layout_headline(total: usize, serious: usize, copper_held: usize) -> 
     headline
 }
 
-/// The report's `(total, serious)` without what a pre-layout board holds back:
-/// every copper finding (it says nothing until the board is routed) and the
-/// not-routed state itself.
+/// The report's `(total, serious)` without the held-back copper findings.
+///
+/// A pre-layout board holds copper findings back (they say nothing until the board is routed, and the web
+/// lists them apart, labelled as held back). The not-routed state itself IS
+/// counted: it is listed and tagged serious, and the CLI verdict counts it too.
 #[must_use]
-pub fn without_pre_layout(
-    copper: &PlainReport,
-    wiring: &PlainReport,
-    total: usize,
-    serious: usize,
-) -> (usize, usize) {
+pub fn without_held_copper(copper: &PlainReport, total: usize, serious: usize) -> (usize, usize) {
     let held = |level: Option<PlainLevel>| {
-        let at = |f: &&PlainFinding| level.is_none_or(|l| f.level == l);
-        copper.findings.iter().filter(at).count()
-            + wiring
-                .findings
-                .iter()
-                .filter(|f| is_unrouted_state(f))
-                .filter(at)
-                .count()
+        copper
+            .findings
+            .iter()
+            .filter(|f| level.is_none_or(|l| f.level == l))
+            .count()
     };
     (
         total.saturating_sub(held(None)),
@@ -2862,24 +2859,25 @@ mod tests {
         assert!(first.render().contains("wait until the board is routed"));
         // The state is said once (the notice); the item only says what to do.
         assert!(!first.render().contains("pad groups"));
-        // The state is not a defect and the copper waits: neither is counted.
-        let (total, serious) = without_pre_layout(&copper, &wiring, 3, 3);
-        assert_eq!((total, serious), (1, 1));
+        // The copper waits and is not counted; the not-routed state is listed
+        // as serious, so it is counted (1 floating pin + 1 unrouted = 2).
+        let (total, serious) = without_held_copper(&copper, 3, 3);
+        assert_eq!((total, serious), (2, 2));
     }
 
     #[test]
-    fn a_pre_layout_headline_frames_the_state_and_counts_only_circuit_issues() {
+    fn a_pre_layout_headline_quotes_the_counters_and_names_the_routing() {
         assert_eq!(
-            pre_layout_headline(0, 0, 0),
-            "Not routed yet: the circuit checks found no problems."
+            pre_layout_headline(1, 1, 0),
+            "Not routed yet: the board cannot be ordered as is, and nothing else was found."
         );
         assert_eq!(
-            pre_layout_headline(10, 0, 0),
-            "Not routed yet: circuit checks found 10 issues, none serious."
+            pre_layout_headline(12, 1, 0),
+            "Not routed yet: 12 issues found, 1 serious, including the missing routing."
         );
         assert_eq!(
-            pre_layout_headline(1, 1, 2),
-            "Not routed yet: circuit checks found 1 issue (1 serious). 2 copper finding(s) are held back until it is routed."
+            pre_layout_headline(2, 2, 2),
+            "Not routed yet: 2 issues found, 2 serious, including the missing routing. 2 copper finding(s) are held back until it is routed."
         );
     }
 

@@ -2,7 +2,8 @@ import { lazy, Suspense, useState } from 'react'
 import { downloadText } from '../../lib/report-export'
 import { RunResults } from './RunResults'
 import { RunStrip, type RunStatus } from './RunStrip'
-import type { RunResponse } from '../../types/report'
+import { BoardGate } from './BoardGate'
+import type { CheckResult, RunResponse } from '../../types/report'
 import type { RemedyActions } from './Remedies'
 import type { GutterResult } from '../editor/TomlEditor'
 
@@ -24,7 +25,7 @@ export function SpecPane({
   mode, onModeChange, builder, firmwareChoice,
   specText, specStem, specFileName, bodyText, onBodyChange, pathLines, select, nets, refs, gutter, onGutterClick,
   showAllResults, stale, running, canRun, preparing, pulseRun, remedyActions, remedyEditor, onRun, onJump,
-  validationCount, result, runKey, workflowYml, workflowPinned, reportSerious,
+  validationCount, result, runKey, workflowYml, workflowPinned, reportSerious, gateResults,
 }: {
   mode: SpecMode
   onModeChange: (mode: SpecMode) => void
@@ -73,6 +74,8 @@ export function SpecPane({
   workflowPinned: boolean
   /** Serious findings on the board's own report, carried into the verdict. */
   reportSerious: number
+  /** Results of the run that no spec row owns (the board's own check). */
+  gateResults: readonly CheckResult[]
 }) {
   const [ciOpen, setCiOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
@@ -151,6 +154,9 @@ export function SpecPane({
         validationCount={validationCount} reportSerious={reportSerious}
         detailsOpen={detailsOpen} onToggleDetails={() => setDetailsOpen(open => !open)} onJump={onJump}
       />
+
+      {/* Every counted result is visible here: the ones no row owns get a card. */}
+      <BoardGate results={gateResults} stale={stale} />
 
       {/* The run's full account behind one click: the single slot for the
           remedies and the evidence. */}

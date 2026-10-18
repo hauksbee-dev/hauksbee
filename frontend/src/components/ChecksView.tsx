@@ -20,7 +20,7 @@ import {
 import type { SpecModel } from '../lib/spec-model'
 import { applyOps, readCst } from '../lib/toml-cst'
 import type { PatchOp } from '../lib/toml-cst'
-import { coverageFor } from '../lib/report-view'
+import { assertRowCount, coverageFor, resultsWithoutRows } from '../lib/report-view'
 import { ToBoard } from './checks/ChecksLinks'
 import { BuilderSection, Field, RemoveButton } from './checks/pieces'
 import { InteractionBuilder } from './checks/InteractionBuilder'
@@ -686,6 +686,9 @@ export function ChecksView({
   // its [[assert]] position, so a kept-as-written assertion between two rows
   // never shifts the mapping. Grouping in the display reorders only what is shown.
   const resultForRow = (id: number): CheckResult | null => results[id - 1] ?? null
+  // The results after the last row: shown in their own card, so every count in
+  // the strip and the top bar has something to point at.
+  const gateResults = useMemo(() => resultsWithoutRows(results, run?.toml ?? ''), [results, run?.toml])
 
   const gutter = useMemo<(GutterResult | null)[]>(() => results.map((r): GutterResult => ({
     status: r.invalid ? 'invalid' : r.measured ? 'measured' : r.passed ? 'pass' : 'fail',
@@ -697,6 +700,13 @@ export function ChecksView({
    *  strip's count. In the TOML it selects that assertion's header line; in the
    *  builder it brings the row into view. */
   const jumpToResult = (assertIndex: number) => {
+    // A result no spec row owns (the board's own check) has its card, not a row.
+    if (assertIndex >= assertRowCount(run?.toml ?? '')) {
+      const card = document.querySelector<HTMLElement>('[data-testid="board-gate"]')
+      card?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      card?.animate?.([{ boxShadow: 'inset 0 0 0 2px var(--copper)' }, { boxShadow: 'inset 0 0 0 2px transparent' }], { duration: 1200 })
+      return
+    }
     if (mode === 'toml') {
       const at = Array.from(specText.matchAll(/^\[\[assert\]\]/gm))[assertIndex]?.index
       if (at !== undefined) showInText(at)
@@ -1049,6 +1059,7 @@ export function ChecksView({
           workflowYml={workflowYml}
           workflowPinned={workflowExportAvailable}
           reportSerious={report.serious}
+          gateResults={gateResults}
         />
       </div>
     </div>

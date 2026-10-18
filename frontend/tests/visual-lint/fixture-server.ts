@@ -91,6 +91,9 @@ async function api(req: Request, url: URL): Promise<Response | null> {
       : name?.includes('pmos_switch_gate_0v') ? 'analyze-conditional-pass.json'
       : name?.includes('pmos_switch_gate_2v5') ? 'analyze-conditional-fail.json'
       : name?.includes('verdict_fet_partial') ? 'analyze-partly-judged.json'
+      // An unrouted board: one serious finding (the board is not routed) among
+      // eleven notes, and a check run whose own static gate fails it.
+      : name?.includes('stormduino') ? 'analyze-unrouted.json'
       : 'analyze-watchy.json'
     const captured = await file(join(FIXTURES, which)).json() as Record<string, unknown>
     const layoutSha256 = uploaded
@@ -101,7 +104,10 @@ async function api(req: Request, url: URL): Promise<Response | null> {
   // A dropped SPICE deck. The fixture is the rc_ac_bode.cir answer: an AC
   // sweep, the one analysis whose plot is not a straight line off the response.
   if (p === '/api/sim' && method === 'POST') return fixture('sim-ac.json')
-  if (p === '/api/check' && method === 'POST') return fixture('check-run.json')
+  if (p === '/api/check' && method === 'POST') {
+    const board = (await req.formData()).get('board')
+    return fixture(board instanceof File && board.name.includes('stormduino') ? 'check-run-board-gate.json' : 'check-run.json')
+  }
   if (p === '/api/deps' && method === 'GET') return fixture('deps.json')
   // The assertion catalogue (`hauksbee-ci`'s v2 answer, as the server sends it): the Add a check menu and the check-this dock read it.
   if (p === '/api/ci/catalog' && method === 'GET') return fixture('ci-catalog.json')
