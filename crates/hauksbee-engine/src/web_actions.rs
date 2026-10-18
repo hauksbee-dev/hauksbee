@@ -25,7 +25,8 @@ pub fn model_actions(refs: &[String]) -> Vec<WebAction> {
     ]
 }
 
-/// The action one typed [`Remedy`] stands for, for a single-subject remedy.
+/// The action one typed [`Remedy`] stands for.
+///
 /// Remedies that act on several parts at once are grouped by [`from_remedies`]
 /// instead, so ten unfitted parts are one button, not ten.
 #[must_use]

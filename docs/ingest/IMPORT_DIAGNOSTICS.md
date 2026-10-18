@@ -38,6 +38,22 @@ at 300 characters. If the parser did not localize the failure, no arbitrary
 line is shown as causal. Fab packages are told to remove manifest ambiguity or provide
 the original CAD source.
 
+The `import_failure` record on `/api/analyze` is structured so the app does not
+have to guess from prose. `kind` is one of `truncated` (a reader claimed the
+file but it ends inside a bracket or string), `syntax_error`, `wrong_content`
+(no reader claims the bytes although the extension is a board one; a Git LFS
+pointer or a gerber file saved under a board name land here, with
+`detected_format` and `expected_format`), `unsupported_extension`,
+`empty_file`, `unsupported_format`, `invalid_content`, `fab_package`,
+`schematic_sheets` and `unreadable`. `file` and `extension` name the upload;
+`line` and `byte` say where the parser stopped when it said; `suggested_fix` is
+the one-sentence first step; `title`, `cause` and `steps` are the plain words
+the app shows; `supported_formats` serves the readable board formats as data
+(`vendor`, `exts`). The wording lives in `crates/hauksbee-engine/src/import_failure.rs`;
+the browser keeps its own phrase matching only as a fallback for a server that
+predates these fields. The design route (`/api/analyze` with a project) returns
+the same record as the single-file route.
+
 This is not a general-purpose standalone fixture reducer. A one-line excerpt
 may depend on surrounding declarations; it is the smallest honest location the
 parser supplied, not a promise that the line reproduces the failure alone.

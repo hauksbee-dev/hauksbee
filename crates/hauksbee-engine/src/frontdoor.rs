@@ -4531,10 +4531,22 @@ mod tests {
             "triage",
             "verdict",
             "verdict_reason",
+            // Structured next steps and the command-free reason: additive
+            // fields the golden predates.
+            "verdict_why",
+            "next_actions",
             // The CLI's own `run --check --json` document, sent alongside.
             "check_report",
         ] {
             object.remove(key);
+        }
+        // Per-section buttons are additive too.
+        for section in object
+            .get_mut("sections")
+            .and_then(serde_json::Value::as_array_mut)
+            .unwrap()
+        {
+            section.as_object_mut().unwrap().remove("actions");
         }
         let mut golden_value: serde_json::Value = serde_json::from_str(golden).unwrap();
         for key in ["headline", "serious", "total"] {
@@ -4574,6 +4586,40 @@ mod tests {
             reason.starts_with("3 blocking problem(s), first: ") && reason.contains("; next: "),
             "{reason}"
         );
+    }
+
+    #[test]
+    fn the_web_reason_has_no_terminal_command_and_the_steps_are_buttons() {
+        let json = analyze_json("boot_gate.kicad_pcb", SHORTED);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        // `verdict_reason` is unchanged (CLI wording); `verdict_why` is the
+        // same sentence without its `next:` clause.
+        let reason = value["verdict_reason"].as_str().unwrap();
+        let why = value["verdict_why"].as_str().expect("verdict_why");
+        assert!(reason.contains("; next: ") && !why.contains("next:"), "{why}");
+        assert!(why.starts_with("3 blocking problem(s), first: "), "{why}");
+        // The board ran on default clearance rules (no .kicad_pro was sent), so
+        // the typed provenance asks for the file: once on the report, once on
+        // the copper section it concerns.
+        let ids = |actions: &serde_json::Value| -> Vec<String> {
+            actions
+                .as_array()
+                .map(|a| a.iter().map(|x| x["id"].as_str().unwrap().to_string()).collect())
+                .unwrap_or_default()
+        };
+        assert_eq!(ids(&value["next_actions"]), ["add_project_rules"]);
+        let drc = value["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["title"].as_str().unwrap().starts_with("Copper spacing"))
+            .unwrap();
+        assert_eq!(ids(&drc["actions"]), ["add_project_rules"]);
+        // No section prose carries a terminal command.
+        for section in value["sections"].as_array().unwrap() {
+            let verdict = section["verdict"].as_str().unwrap();
+            assert!(!verdict.contains("hauksbee "), "{verdict}");
+        }
     }
 
     #[test]

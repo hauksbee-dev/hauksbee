@@ -258,7 +258,7 @@ impl WebAction {
         )
     }
 
-    /// "Add the .kicad_pro file".
+    /// "Add the `.kicad_pro` file".
     #[must_use]
     pub fn add_project_rules(file: &str) -> Self {
         Self::new(

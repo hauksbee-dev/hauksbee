@@ -859,10 +859,11 @@ pub fn inconclusive_verdict(refs: &[String]) -> String {
     )
 }
 
-/// [`inconclusive_verdict`] for the web app: the same count and parts, the
-/// same refusal of a clean bill, and no terminal commands. The app puts the
-/// ways to fix it on the section as buttons (`actions`), so the sentence only
-/// says what is wrong.
+/// [`inconclusive_verdict`] for the web app, without terminal commands.
+///
+/// The same count and parts and the same refusal of a clean bill. The app puts
+/// the ways to fix it on the section as buttons (`actions`), so the sentence
+/// only says what is wrong.
 #[must_use]
 pub fn web_inconclusive_verdict(refs: &[String]) -> String {
     let list = hauksbee_ir::vocabulary::names_summary(refs);
@@ -873,7 +874,7 @@ pub fn web_inconclusive_verdict(refs: &[String]) -> String {
         ("parts", "have")
     };
     format!(
-        "Inconclusive: {count} current-carrying or active {parts} {have} no model ({list}), \
+        "INCONCLUSIVE: {count} current-carrying or active {parts} {have} no model ({list}), \
          so a clean result here is not a clean bill."
     )
 }

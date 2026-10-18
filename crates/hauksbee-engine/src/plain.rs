@@ -158,7 +158,7 @@ pub struct PlainReport {
 /// named the parts with no model: the fact once, then a pointer, never the
 /// same paragraph twice.
 pub const WEB_INCONCLUSIVE_SEE_ABOVE: &str =
-    "Not a clean bill: the same key parts have no model (named in the section above).";
+    "INCONCLUSIVE: the key parts named in the section above have no model, so this is not a clean bill either.";
 
 /// What a model-dependent section says when the INCONCLUSIVE banner naming the
 /// unmodelled parts was already printed once, above every section.

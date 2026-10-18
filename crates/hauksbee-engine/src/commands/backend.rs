@@ -381,16 +381,12 @@ pub fn check(send: bool) -> anyhow::Result<()> {
 
 // ── setup ────────────────────────────────────────────────────────────────────
 
-/// The preset `setup` offers as the default choice: the first *recommended*
-/// preset whose backend is already installed, else the first recommended
-/// preset, else the first preset of any kind (there is always at least one).
+/// The preset `setup` offers as the default choice. The rule (the first
+/// recommended preset whose tool is installed, in the engine's own tool order)
+/// lives in [`extract_config::default_preset`], which the web Settings page
+/// reads too, so the two cannot steer a person to different tools.
 fn default_setup_choice(backends: &[extract_config::BackendStatus]) -> &'static Preset {
-    let installed = |b: Backend| backends.iter().any(|s| s.backend == b && s.available);
-    let all = extract_config::presets();
-    all.iter()
-        .find(|p| p.recommended && installed(p.backend))
-        .or_else(|| all.iter().find(|p| p.recommended))
-        .unwrap_or(&all[0])
+    extract_config::default_preset(|b| backends.iter().any(|s| s.backend == b && s.available))
 }
 
 fn model_key(b: Backend) -> String {

@@ -71,6 +71,9 @@ const LLM_API_KEY_ENV: &str = "HAUKSBEE_LLM_API_KEY";
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct ModelChoice {
     pub name: &'static str,
+    /// The short name a ladder or button shows ("Haiku 5.5"), so no surface
+    /// derives its own from the id.
+    pub label: &'static str,
     pub note: &'static str,
     /// Tokens of context one agent of the staged harness may hold (0 = one
     /// unbounded agent). A small model reads a datasheet well in short, focused
@@ -78,9 +81,10 @@ pub struct ModelChoice {
     pub context_budget: u64,
 }
 
-const fn choice(name: &'static str, note: &'static str) -> ModelChoice {
+const fn choice(name: &'static str, label: &'static str, note: &'static str) -> ModelChoice {
     ModelChoice {
         name,
+        label,
         note,
         context_budget: 0,
     }
@@ -133,8 +137,8 @@ pub struct AgentSpec {
 
 /// Codex and the OpenAI-compatible API share one list: Sol first, Luna as the budget pick.
 const OPENAI_MODELS: &[ModelChoice] = &[
-    choice("gpt-6.1-sol", MOST_ACCURATE),
-    choice("gpt-6-luna", BUDGET),
+    choice("gpt-6.1-sol", "GPT-6.1 Sol", MOST_ACCURATE),
+    choice("gpt-6-luna", "GPT-6 Luna", BUDGET),
 ];
 
 /// The agent CLIs, in the order the surfaces list them.
@@ -157,15 +161,21 @@ pub const AGENTS: [AgentSpec; 3] = [
         models: &[
             ModelChoice {
                 name: "claude-haiku-5-5",
+                label: "Haiku 5.5",
                 note: "Cheapest; runs in short stages kept under 100k tokens (locate, draft, fix)",
                 context_budget: HARNESS_BUDGET,
             },
             choice(
                 "claude-sonnet-5-5",
+                "Sonnet 5.5",
                 "Recommended: the most accurate tier in the benchmark; one session",
             ),
-            choice("claude-opus-5-5", "Strongest single model; one session"),
-            choice("claude-fable-5-1", ""),
+            choice(
+                "claude-opus-5-5",
+                "Opus 5.5",
+                "Strongest single model; one session",
+            ),
+            choice("claude-fable-5-1", "Fable 5.1", ""),
         ],
         escalate: BALANCED_CLAUDE.split_at(1).1,
     },
@@ -178,9 +188,14 @@ pub const AGENTS: [AgentSpec; 3] = [
         efforts: &["low", "medium", "high"],
         permission_modes: &["accept-edits", "plan"],
         models: &[
-            choice("gemini-3.8-flash", "Recommended: fast and accurate"),
+            choice(
+                "gemini-3.8-flash",
+                "Gemini 3.8 Flash",
+                "Recommended: fast and accurate",
+            ),
             choice(
                 "gemini-3.1-pro",
+                "Gemini 3.1 Pro",
                 "Slower, stronger tier for dense datasheets",
             ),
         ],
@@ -775,14 +790,14 @@ impl ExtractConfig {
             }
             _ => {
                 // Nothing installed: codex, so the error names one install command.
-                let found = [
-                    (Backend::Codex, &codex),
-                    (Backend::ClaudeCode, &claude_code),
-                    (Backend::Agy, &agy),
-                ]
-                .into_iter()
-                .find(|(_, a)| host.find(&a.command).is_some())
-                .map(|(backend, _)| backend);
+                let found = TOOL_ORDER.into_iter().find(|b| {
+                    let a = match b {
+                        Backend::ClaudeCode => &claude_code,
+                        Backend::Agy => &agy,
+                        _ => &codex,
+                    };
+                    host.find(&a.command).is_some()
+                });
                 (found.unwrap_or(Backend::Codex), BackendSource::Auto)
             }
         };
@@ -903,6 +918,32 @@ pub struct Preset {
     /// True for the preset a fresh install should be steered to when its
     /// tool is present.
     pub recommended: bool,
+    /// True for the cheaper way to use the same tool as the recommended
+    /// preset (one per tool at most). Settings offers it under the
+    /// recommendation; no surface keeps its own list of which preset that is.
+    pub cheaper: bool,
+}
+
+/// The agent tools in the order every surface tries and lists them.
+///
+/// It is the order auto-detection picks the first installed one, the order the
+/// setup wizard and the Settings page steer a fresh install, and the order of
+/// [`presets`].
+pub const TOOL_ORDER: [Backend; 3] = [Backend::Codex, Backend::ClaudeCode, Backend::Agy];
+
+/// The preset a fresh install is steered to.
+///
+/// The first recommended one, in [`TOOL_ORDER`], whose tool `installed` says is
+/// present; with none present, the first recommended one (codex, as
+/// auto-detection does), so the error that follows names one install command.
+/// The CLI's `setup` and the web Settings page both read this.
+#[must_use]
+pub fn default_preset(installed: impl Fn(Backend) -> bool) -> &'static Preset {
+    let all = presets();
+    all.iter()
+        .find(|p| p.recommended && installed(p.backend))
+        .or_else(|| all.iter().find(|p| p.recommended))
+        .unwrap_or(&all[0])
 }
 
 const fn agent_preset(
@@ -925,6 +966,7 @@ const fn agent_preset(
         api_base: "",
         api_key_env: "",
         recommended,
+        cheaper: false,
     }
 }
 
@@ -947,6 +989,7 @@ const fn api_preset(
         api_base,
         api_key_env,
         recommended: false,
+        cheaper: false,
     }
 }
 
@@ -956,6 +999,28 @@ pub fn presets() -> &'static [Preset] {
 }
 
 static PRESETS: [Preset; 11] = [
+    agent_preset(
+        "codex",
+        "Codex · gpt-6.1-sol, high effort",
+        "OpenAI's agent CLI. Signs in with your ChatGPT account (`codex login`).",
+        Backend::Codex,
+        DEFAULT_CODEX_MODEL,
+        DEFAULT_CODEX_EFFORT,
+        true,
+    ),
+    Preset {
+        cheaper: true,
+        escalate: &["gpt-6.1-sol"],
+        ..agent_preset(
+            "codex-luna",
+            "Codex · gpt-6-luna → gpt-6.1-sol, high effort",
+            "Much cheaper, and very good for most circuit extraction; escalates to Sol when a draft fails or doubts its pin map.",
+            Backend::Codex,
+            "gpt-6-luna",
+            "high",
+            false,
+        )
+    },
     Preset {
         escalate: AGENTS[0].escalate,
         ..agent_preset(
@@ -973,6 +1038,7 @@ static PRESETS: [Preset; 11] = [
     // (one part hit its context budget), so it is not offered without a
     // Sonnet fallback.
     Preset {
+        cheaper: true,
         escalate: &["claude-sonnet-5-5"],
         ..agent_preset(
             "claude-code-haiku",
@@ -1020,27 +1086,6 @@ static PRESETS: [Preset; 11] = [
         "high",
         false,
     ),
-    agent_preset(
-        "codex",
-        "Codex · gpt-6.1-sol, high effort",
-        "OpenAI's agent CLI. Signs in with your ChatGPT account (`codex login`).",
-        Backend::Codex,
-        DEFAULT_CODEX_MODEL,
-        DEFAULT_CODEX_EFFORT,
-        true,
-    ),
-    Preset {
-        escalate: &["gpt-6.1-sol"],
-        ..agent_preset(
-            "codex-luna",
-            "Codex · gpt-6-luna → gpt-6.1-sol, high effort",
-            "Much cheaper, and very good for most circuit extraction; escalates to Sol when a draft fails or doubts its pin map.",
-            Backend::Codex,
-            "gpt-6-luna",
-            "high",
-            false,
-        )
-    },
     api_preset(
         "openai",
         "OpenAI API · gpt-6.1-sol",
@@ -1595,6 +1640,45 @@ mod tests {
         assert_eq!(load_in(&host).unwrap().config.backend, Some(Backend::Agy));
         let home = FakeHost::new(&[("HOME", dir.path().to_str().unwrap())], &[]);
         assert!(!load_in(&home).unwrap().exists); // the default path may be absent
+    }
+
+    #[test]
+    fn presets_follow_the_tool_order_and_default_preset_agrees_with_auto_detection() {
+        // The list is grouped by tool in TOOL_ORDER, API presets last.
+        let tools: Vec<Backend> = presets()
+            .iter()
+            .map(|p| p.backend)
+            .fold(Vec::new(), |mut seen, b| {
+                if seen.last() != Some(&b) {
+                    seen.push(b);
+                }
+                seen
+            });
+        assert_eq!(tools[..3], TOOL_ORDER);
+        for (installed, expected) in [
+            (&["codex", "claude", "agy"][..], "codex"),
+            (&["claude", "agy"][..], "claude-code"),
+            (&["agy"][..], "agy"),
+            (&[][..], "codex"),
+        ] {
+            let host = FakeHost::new(&[], installed);
+            let resolved = ExtractConfig::default().resolve(&host, None);
+            let chosen = default_preset(|b| {
+                let name = match b {
+                    Backend::ClaudeCode => "claude",
+                    other => other.tool().unwrap_or("none"),
+                };
+                host.find(name).is_some()
+            });
+            assert_eq!(chosen.id, expected);
+            assert_eq!(chosen.backend, resolved.backend, "the preset and the auto-detected backend agree");
+        }
+        // At most one cheaper preset per tool, and never the recommended one.
+        for tool in TOOL_ORDER {
+            let cheaper = presets().iter().filter(|p| p.backend == tool && p.cheaper).count();
+            assert!(cheaper <= 1, "{tool:?}");
+        }
+        assert!(presets().iter().all(|p| !(p.cheaper && p.recommended)));
     }
 
     #[test]
