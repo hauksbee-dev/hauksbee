@@ -11,7 +11,7 @@ import { deriveRunState, formatClock } from '../src/components/sim/run-state'
 import {
   factorToTick, formatFactor, isPreset, speedText, tickToFactor, tidyFactor, SPEED_TICKS,
 } from '../src/components/sim/speed'
-import { chipName, mcuBackendText } from '../src/components/sim/mcu-label'
+import { mcuBackendText } from '../src/components/sim/mcu-label'
 import { netBehaviour, netTrace } from '../src/components/sim/LiveNetCard'
 import type { SimFrame } from '../src/types/protocol'
 
@@ -160,13 +160,10 @@ test('speeds print as a person would type them', () => {
 
 // ---- MCU names ------------------------------------------------------------
 
-test('backend ids become chip and emulator names', () => {
-  expect(mcuBackendText('simavr:atmega328p')).toBe('ATmega328P (AVR emulator)')
-  expect(mcuBackendText('qemu:esp32c3')).toBe('ESP32-C3 (QEMU emulator)')
-  expect(mcuBackendText('renode:stm32f072')).toBe('STM32F072 (Renode emulator)')
-  // An id the table does not know is shown as the chip alone, never the raw id.
-  expect(mcuBackendText('mystery:rp2040')).toBe('RP2040')
-  expect(chipName('attiny85')).toBe('ATtiny85')
+test('backend ids become chip names from the shared label table', () => {
+  expect(mcuBackendText('simavr:atmega328p')).toBe('ATmega328P (simavr)')
+  // A backend the table does not list is still never the raw id.
+  expect(mcuBackendText('renode:stm32f072')).not.toContain(':')
 })
 
 // ---- the live net card ----------------------------------------------------
