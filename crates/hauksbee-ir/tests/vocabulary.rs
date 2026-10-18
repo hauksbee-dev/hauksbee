@@ -55,11 +55,18 @@ fn verdict_headline_words_are_the_cli_words() {
             .unwrap_or_else(|| panic!("{s:?}: {}", s.label()))
     };
     for s in VerdictState::ALL {
-        assert_eq!(s.label().ends_with(", not a pass"), !s.is_pass() && s != VerdictState::Fail, "{s:?}");
+        assert_eq!(
+            s.label().ends_with(", not a pass"),
+            !s.is_pass() && s != VerdictState::Fail,
+            "{s:?}"
+        );
     }
     assert_eq!(
         vocabulary::PARTLY_JUDGED_LEAD,
-        format!("{} (not a pass)", head(VerdictState::PartlyJudged).to_uppercase())
+        format!(
+            "{} (not a pass)",
+            head(VerdictState::PartlyJudged).to_uppercase()
+        )
     );
     assert_eq!(head(VerdictState::InvalidRun), "inconclusive");
 }
