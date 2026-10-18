@@ -398,6 +398,14 @@ pub struct Update {
     /// Overall progress, `0.0..=1.0`. Never decreases within one load.
     pub fraction: f64,
     pub elapsed: Duration,
+    /// What the table says the whole load costs on this board, in milliseconds
+    /// of an optimised build, with the simulation priced from its own speed
+    /// once that is known. The ceiling on a web run scales from it
+    /// ([`run_ceiling`]).
+    pub total_ms: f64,
+    /// Milliseconds left at the pace so far, once there is enough pace to read
+    /// (3% of the work and two seconds); `None` before that.
+    pub eta_ms: Option<u64>,
 }
 
 impl Update {
@@ -409,6 +417,8 @@ impl Update {
             "label": self.label,
             "fraction": (self.fraction * 10_000.0).round() / 10_000.0,
             "elapsed_ms": u64::try_from(self.elapsed.as_millis()).unwrap_or(u64::MAX),
+            "total_ms": self.total_ms.round(),
+            "eta_ms": self.eta_ms,
         })
         .to_string()
     }
@@ -452,6 +462,9 @@ struct Tracker {
     /// them have been counted.
     layout_total: u64,
     layout_credited: u64,
+    /// Stages this run does not have (a command-line run has no separate
+    /// copper pass before its simulation, say): they cost nothing.
+    skipped: u16,
 }
 
 #[derive(Clone, Copy)]
@@ -503,6 +516,9 @@ impl Tracker {
     }
 
     fn cost(&self, spec: &StageSpec) -> f64 {
+        if self.skipped & bit(spec.stage) != 0 {
+            return 0.0;
+        }
         if spec.stage == Stage::Simulate && !self.simulates {
             return 0.0;
         }
@@ -531,7 +547,8 @@ impl Tracker {
         Some(began.elapsed().as_secs_f64() * 1000.0 / share.min(1.0))
     }
 
-    fn fraction(&self) -> f64 {
+    /// Work done and work expected, in the table's milliseconds.
+    fn done_and_total(&self) -> (f64, f64) {
         let (mut done, mut total) = (0.0, 0.0);
         for spec in &STAGES {
             let cost = self.cost(spec);
@@ -543,6 +560,11 @@ impl Tracker {
                 done += cost * share;
             }
         }
+        (done, total)
+    }
+
+    fn fraction(&self) -> f64 {
+        let (done, total) = self.done_and_total();
         if total <= 0.0 {
             0.0
         } else {
@@ -565,12 +587,15 @@ impl Tracker {
         self.last_emit = Some(now);
         let stage = self.current.unwrap_or(Stage::Read);
         let spec = &STAGES[stage as usize];
+        let elapsed = now.duration_since(self.started);
         let update = Update {
             stage,
             key: spec.key,
             label: spec.label,
             fraction,
-            elapsed: now.duration_since(self.started),
+            elapsed,
+            total_ms: self.done_and_total().1,
+            eta_ms: eta_ms(fraction, elapsed),
         };
         (self.sink)(&update);
     }
@@ -669,6 +694,7 @@ pub fn with_reporter<R>(
             lint_done: 0,
             layout_total: 0,
             layout_credited: 0,
+            skipped: 0,
         });
         true
     });
@@ -688,6 +714,20 @@ pub fn with_reporter<R>(
 pub fn begin(stage: Stage, units: u64) {
     if watched() {
         with_tracker(|t| t.begin(stage, units));
+    }
+}
+
+/// [`begin`], unless the stage has already been entered.
+///
+/// For work that is done in several rounds (the members of an ensemble each
+/// bind and simulate) where the stage should be counted once, across all of them.
+pub fn begin_once(stage: Stage, units: u64) {
+    if watched() {
+        with_tracker(|t| {
+            if t.current != Some(stage) && t.finished & bit(stage) == 0 {
+                t.begin(stage, units);
+            }
+        });
     }
 }
 
@@ -764,6 +804,132 @@ pub fn will_simulate(seconds: f64) {
     }
 }
 
+/// This run has no `stages`: they cost nothing and are not waited for.
+///
+/// For a run that is not the web analysis (a scaffold has no findings to
+/// write up, say), so its bar does not stop short of 100% by the stages it
+/// never enters.
+pub fn skip(stages: &[Stage]) {
+    if watched() {
+        with_tracker(|t| {
+            for stage in stages {
+                t.skipped |= bit(*stage);
+            }
+        });
+    }
+}
+
+/// Milliseconds left at the pace so far. Nothing is claimed until 3% of the
+/// work and two seconds have gone, because an early pace says little.
+fn eta_ms(fraction: f64, elapsed: Duration) -> Option<u64> {
+    if fraction < 0.03 || elapsed < Duration::from_secs(2) {
+        return None;
+    }
+    let left = elapsed.as_secs_f64() * 1000.0 * (1.0 - fraction) / fraction;
+    Some(left.round() as u64)
+}
+
+/// The least a web run is given before it is stopped.
+pub const RUN_CEILING_FLOOR: Duration = Duration::from_secs(300);
+/// The most, however large the board: a run this long belongs on a terminal.
+pub const RUN_CEILING_MAX: Duration = Duration::from_secs(2 * 60 * 60);
+/// How many times the expected length of the whole run a web run may go on
+/// without finishing before it is stopped.
+pub const RUN_CEILING_FACTOR: f64 = 12.0;
+
+/// How long a web run may go on from its start before it is stopped, scaled
+/// from the work the board has (the same estimate the bar is drawn from).
+///
+/// `latest` is the last report heard from the run: its `total_ms` (the
+/// table's estimate, for an optimised build) and its pace so far (`elapsed`
+/// over `fraction`), whichever projects the longer, because a debug build or a
+/// slow machine runs several times slower than the table. A run that has said
+/// nothing yet gets the floor. The ceiling is a guard against a run that has
+/// stopped moving, not a deadline on one that is progressing: every report
+/// re-reads it, and it ends at [`RUN_CEILING_MAX`] at the latest.
+#[must_use]
+pub fn run_ceiling(latest: Option<&Update>) -> Duration {
+    latest.map_or(RUN_CEILING_FLOOR, |u| {
+        ceiling_from(u.total_ms, u.fraction, u.elapsed)
+    })
+}
+
+fn ceiling_from(total_ms: f64, fraction: f64, elapsed: Duration) -> Duration {
+    let table = total_ms / 1000.0;
+    let pace = if fraction >= 0.02 {
+        elapsed.as_secs_f64() / fraction
+    } else {
+        0.0
+    };
+    let secs = RUN_CEILING_FACTOR * table.max(pace);
+    Duration::from_secs_f64(secs.clamp(
+        RUN_CEILING_FLOOR.as_secs_f64(),
+        RUN_CEILING_MAX.as_secs_f64(),
+    ))
+}
+
+/// A progress report as heard from another process: the line
+/// [`Update::to_json`] wrote, read back.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Heard {
+    /// The stage's words ("Simulating").
+    pub label: String,
+    /// Overall progress, `0.0..=1.0`.
+    pub fraction: f64,
+    pub elapsed: Duration,
+    pub total_ms: f64,
+}
+
+impl Heard {
+    /// Read one line of a run's progress stream; `None` for any other line.
+    #[must_use]
+    pub fn from_json(line: &str) -> Option<Self> {
+        let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+        let fraction = v.get("fraction")?.as_f64()?;
+        Some(Self {
+            label: v.get("label")?.as_str()?.to_string(),
+            fraction: fraction.clamp(0.0, 1.0),
+            elapsed: Duration::from_millis(v.get("elapsed_ms")?.as_u64()?),
+            total_ms: v.get("total_ms").and_then(serde_json::Value::as_f64)?,
+        })
+    }
+
+    /// The whole percent of the estimated work done.
+    #[must_use]
+    pub fn percent(&self) -> u32 {
+        (self.fraction * 100.0).floor() as u32
+    }
+
+    /// [`run_ceiling`] as of this report.
+    #[must_use]
+    pub fn ceiling(&self) -> Duration {
+        ceiling_from(self.total_ms, self.fraction, self.elapsed)
+    }
+}
+
+/// The environment variable that asks a command-line run to report its progress.
+///
+/// One JSON line per update on stderr (the shape [`Update::to_json`] gives),
+/// which is how the web server watches the `hauksbee-ci` it starts. Named here
+/// so the asker and the answerer cannot drift.
+pub const STREAM_ENV: &str = "HAUKSBEE_PROGRESS_STREAM";
+
+/// Whether the environment asks for [`STREAM_ENV`].
+#[must_use]
+pub fn stream_requested() -> bool {
+    std::env::var_os(STREAM_ENV).is_some_and(|v| !v.is_empty() && v != "0")
+}
+
+/// A sink that writes each update to stderr as one JSON line.
+pub fn json_lines_to_stderr() -> impl FnMut(&Update) + 'static {
+    |update| {
+        use std::io::Write as _;
+        let mut err = std::io::stderr().lock();
+        let _ = writeln!(err, "{}", update.to_json());
+        let _ = err.flush();
+    }
+}
+
 /// The load is complete: report 100%.
 pub fn finish() {
     if watched() {
@@ -779,6 +945,8 @@ pub fn finish() {
                 label: spec.label,
                 fraction: 1.0,
                 elapsed: t.started.elapsed(),
+                total_ms: t.done_and_total().1,
+                eta_ms: Some(0),
             };
             (t.sink)(&update);
         });
@@ -1064,6 +1232,8 @@ mod tests {
             label: "Matching parts to models",
             fraction: 0.4,
             elapsed: Duration::ZERO,
+            total_ms: 0.0,
+            eta_ms: None,
         };
         assert_eq!(
             render_bar(&u),
@@ -1079,10 +1249,88 @@ mod tests {
             label: "Matching parts to models",
             fraction: 0.123_456_7,
             elapsed: Duration::from_millis(1500),
+            total_ms: 1234.4,
+            eta_ms: Some(900),
         };
         let v: serde_json::Value = serde_json::from_str(&u.to_json()).unwrap();
         assert_eq!(v["label"], "Matching parts to models");
         assert_eq!(v["fraction"], 0.1235);
         assert_eq!(v["elapsed_ms"], 1500);
+        assert_eq!(v["total_ms"], 1234.0);
+        assert_eq!(v["eta_ms"], 900);
+    }
+
+    fn heard(fraction: f64, elapsed_s: f64, total_ms: f64) -> Update {
+        Update {
+            stage: Stage::Simulate,
+            key: "simulate",
+            label: "Simulating",
+            fraction,
+            elapsed: Duration::from_secs_f64(elapsed_s),
+            total_ms,
+            eta_ms: None,
+        }
+    }
+
+    #[test]
+    fn a_run_that_has_said_nothing_gets_the_floor() {
+        assert_eq!(run_ceiling(None), RUN_CEILING_FLOOR);
+        assert_eq!(
+            run_ceiling(Some(&heard(0.0, 1.0, 5_000.0))),
+            RUN_CEILING_FLOOR
+        );
+    }
+
+    #[test]
+    fn the_ceiling_scales_with_the_work_and_with_the_pace_and_is_bounded() {
+        // A table estimate of 60 s (optimised) gives 12 x 60 s = 12 min.
+        let by_table = run_ceiling(Some(&heard(0.01, 5.0, 60_000.0)));
+        assert_eq!(by_table, Duration::from_secs(720));
+        // 10% done after 300 s projects 3000 s: 12 x that is past the most.
+        let by_pace = run_ceiling(Some(&heard(0.10, 300.0, 60_000.0)));
+        assert_eq!(by_pace, RUN_CEILING_MAX);
+        // 50% after 120 s projects 240 s, past the table's 60 s: 12 x 240 s.
+        let mid = run_ceiling(Some(&heard(0.5, 120.0, 60_000.0)));
+        assert_eq!(mid, Duration::from_secs(2880));
+    }
+
+    #[test]
+    fn a_report_read_back_gives_the_same_ceiling_as_the_update() {
+        let sent = heard(0.5, 120.0, 60_000.0);
+        let back = Heard::from_json(&sent.to_json()).expect("reads back");
+        assert_eq!(back.label, "Simulating");
+        assert_eq!(back.percent(), 50);
+        assert_eq!(back.ceiling(), run_ceiling(Some(&sent)));
+        assert_eq!(Heard::from_json("not a report"), None);
+        assert_eq!(Heard::from_json("{\"ok\":false}"), None);
+    }
+
+    #[test]
+    fn the_eta_waits_for_a_pace_worth_reading() {
+        assert_eq!(eta_ms(0.02, Duration::from_secs(10)), None);
+        assert_eq!(eta_ms(0.5, Duration::from_secs(1)), None);
+        assert_eq!(eta_ms(0.25, Duration::from_secs(10)), Some(30_000));
+    }
+
+    #[test]
+    fn a_skipped_stage_costs_nothing_and_is_not_waited_for() {
+        let updates = collect(
+            Plan {
+                bytes: 1_000_000,
+                simulate_s: None,
+            },
+            || {
+                skip(&[Stage::Copper, Stage::Nets, Stage::Signals, Stage::Report]);
+                learned(1_000, 500);
+                begin_bind(1_000, 1);
+                advance_in(Stage::Bind, 1_000 * BIND_STEPS);
+            },
+        );
+        let bind_peak = updates
+            .iter()
+            .filter(|u| u.key == "bind")
+            .map(|u| u.fraction)
+            .fold(0.0, f64::max);
+        assert!(bind_peak > 0.9, "bind was nearly all the run: {bind_peak}");
     }
 }

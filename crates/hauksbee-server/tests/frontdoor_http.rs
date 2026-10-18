@@ -294,6 +294,131 @@ async fn scaffold_route_hands_the_runner_the_scaffold_marker() {
     );
 }
 
+/// A page that asks for a stream gets the runner's progress as it reports it and
+/// then exactly the document the plain route answers; a page that does not ask
+/// gets the plain document and no frames, for both Checks routes.
+#[tokio::test]
+async fn a_streamed_check_carries_the_runners_progress_then_the_same_answer() {
+    let check: frontdoor::DesignCheckRunner = Arc::new(|upload, _spec| {
+        hauksbee_frontdoor_api::frontdoor::report_progress(
+            "{\"stage\":\"simulate\",\"label\":\"Simulating\",\"fraction\":0.5,\"elapsed_ms\":10,\"total_ms\":20,\"eta_ms\":null}",
+        );
+        format!("{{\"ok\":true,\"board_len\":{}}}", upload.board.bytes.len())
+    });
+    let addr = support::spawn_router(frontdoor::check_route_with_design(check)).await;
+    let boundary = "----hauksbee-stream-boundary";
+    let board = b"<eagle><drawing><board/></drawing></eagle>";
+    let body = multipart_body(
+        boundary,
+        &[
+            ("board", "design.brd", board),
+            ("spec", "spec.toml", b"duration_ms = 1"),
+        ],
+    );
+    for path in ["/api/check", "/api/ci/scaffold"] {
+        let plain = support::http(addr, &multipart_post(path, boundary, body.len()), &body).await;
+        assert!(plain.contains("application/json"), "{path}: {plain:.200}");
+        assert!(
+            !plain.contains("event:"),
+            "{path}: no frames unless asked: {plain}"
+        );
+
+        let head = multipart_post(path, boundary, body.len()).replace(
+            "Content-Type:",
+            "Accept: text/event-stream\r\nContent-Type:",
+        );
+        let streamed = support::http(addr, &head, &body).await;
+        assert!(
+            streamed.contains("text/event-stream"),
+            "{path}: {streamed:.300}"
+        );
+        assert!(streamed.contains("event: progress"), "{path}: {streamed}");
+        assert!(
+            streamed.contains("\"label\":\"Simulating\""),
+            "{path}: {streamed}"
+        );
+        assert!(
+            streamed.contains(&format!(
+                "data: {{\"ok\":true,\"board_len\":{}}}",
+                board.len()
+            )),
+            "{path}: the done frame is the plain answer: {streamed}"
+        );
+        assert!(
+            streamed.rfind("event: progress") < streamed.rfind("event: done"),
+            "{path}: progress never follows done: {streamed}"
+        );
+    }
+}
+
+/// Closing the stream is the page's Cancel: the runner is told nobody is waiting,
+/// so it can stop its child instead of running to the ceiling.
+#[tokio::test]
+async fn closing_a_streamed_check_tells_the_runner_nobody_is_waiting() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let started = Arc::new(AtomicBool::new(false));
+    let saw_cancel = Arc::new(AtomicBool::new(false));
+    let (s, c) = (started.clone(), saw_cancel.clone());
+    let check: frontdoor::DesignCheckRunner = Arc::new(move |_, _| {
+        s.store(true, Ordering::SeqCst);
+        // A run that goes on until it is told to stop (bounded, so a failure of
+        // the signal fails the test instead of hanging it).
+        for _ in 0..300 {
+            hauksbee_frontdoor_api::frontdoor::report_progress(
+                "{\"label\":\"Simulating\",\"fraction\":0.1,\"elapsed_ms\":1,\"total_ms\":1}",
+            );
+            if hauksbee_frontdoor_api::frontdoor::run_cancelled() {
+                c.store(true, Ordering::SeqCst);
+                return "{\"ok\":false,\"error\":\"the check run was cancelled\"}".to_string();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        "{\"ok\":true}".to_string()
+    });
+    let addr = support::spawn_router(frontdoor::check_route_with_design(check)).await;
+    let boundary = "----hauksbee-cancel-boundary";
+    let body = multipart_body(
+        boundary,
+        &[
+            ("board", "design.brd", b"<eagle/>"),
+            ("spec", "spec.toml", b"duration_ms = 1"),
+        ],
+    );
+    let head = multipart_post("/api/check", boundary, body.len()).replace(
+        "Content-Type:",
+        "Accept: text/event-stream\r\nContent-Type:",
+    );
+    let mut conn = tokio::net::TcpStream::connect(addr).await.expect("connect");
+    conn.write_all(head.as_bytes()).await.expect("head");
+    conn.write_all(&body).await.expect("body");
+    // Wait for the first progress frame, so the run is known to be under way.
+    let mut seen = Vec::new();
+    let mut buf = [0u8; 2048];
+    while !String::from_utf8_lossy(&seen).contains("event: progress") {
+        let n = tokio::time::timeout(std::time::Duration::from_secs(10), conn.read(&mut buf))
+            .await
+            .expect("a frame within 10 s")
+            .expect("read");
+        assert!(
+            n > 0,
+            "stream ended early: {}",
+            String::from_utf8_lossy(&seen)
+        );
+        seen.extend_from_slice(&buf[..n]);
+    }
+    assert!(started.load(Ordering::SeqCst));
+    drop(conn);
+    for _ in 0..100 {
+        if saw_cancel.load(Ordering::SeqCst) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("the runner was never told the page had gone");
+}
+
 /// The assertion catalogue is a plain GET: no board, just the marker the runner answers.
 #[tokio::test]
 async fn catalog_route_asks_the_runner_for_the_catalogue_marker() {

@@ -143,18 +143,21 @@ export interface LoadProgress {
   /** Overall progress, 0..1. The engine never reports a smaller value than before. */
   fraction: number
   elapsedMs: number
+  /** Milliseconds left at the pace so far, once there is enough pace to read. */
+  etaMs?: number
 }
 
 /** One `progress` frame's data, or null when it is not a progress report. */
 export function parseLoadProgress(data: string): LoadProgress | null {
   try {
-    const v = JSON.parse(data) as Partial<Record<'stage' | 'label' | 'fraction' | 'elapsed_ms', unknown>>
+    const v = JSON.parse(data) as Partial<Record<'stage' | 'label' | 'fraction' | 'elapsed_ms' | 'eta_ms', unknown>>
     if (typeof v.label !== 'string' || typeof v.fraction !== 'number' || !Number.isFinite(v.fraction)) return null
     return {
       stage: typeof v.stage === 'string' ? v.stage : '',
       label: v.label,
       fraction: Math.min(1, Math.max(0, v.fraction)),
       elapsedMs: typeof v.elapsed_ms === 'number' ? v.elapsed_ms : 0,
+      etaMs: typeof v.eta_ms === 'number' && Number.isFinite(v.eta_ms) ? v.eta_ms : undefined,
     }
   } catch {
     return null
@@ -178,6 +181,33 @@ export async function readAnalysisStream(
     else if (frame.event === 'error') out.error = frame.data
   })
   return out
+}
+
+/** POST a multipart body and read the answer as a stream when the server gives
+ *  one: progress frames go to `onProgress`, and the `done` frame is the same
+ *  JSON document the plain endpoint answers. A server that does not stream
+ *  answers plain JSON, which is read as before; `signal` aborting closes the
+ *  request, which is how the server learns the page no longer wants the answer.
+ *  A stream that ends with no answer throws, because asking again would start
+ *  the whole run over. */
+export async function postFormStreamed<T>(
+  url: string,
+  body: FormData,
+  signal?: AbortSignal,
+  onProgress?: (p: LoadProgress) => void,
+): Promise<T> {
+  const res = await fetch(url, {
+    method: 'POST',
+    body,
+    signal,
+    headers: onProgress ? { Accept: 'text/event-stream' } : {},
+  })
+  if (onProgress && res.body && (res.headers.get('content-type') ?? '').includes('text/event-stream')) {
+    const streamed = await readAnalysisStream(res.body, onProgress)
+    if (streamed.done !== undefined) return JSON.parse(streamed.done) as T
+    throw new Error(streamed.error ?? 'the connection to the server dropped before the run finished')
+  }
+  return readJson<T>(res)
 }
 
 /** Read a settings answer, preferring the server's own refusal message over
@@ -264,10 +294,12 @@ export const api = {
     return restoreRepeats(await readJson<WebReport>(res))
   },
   /** hauksbee-ci reports its refusals in the body, so a non-2xx is parsed too. */
-  check: (upload: FormData) => postForm<RunResponse>('/api/check', upload),
+  check: (upload: FormData, signal?: AbortSignal, onProgress?: (p: LoadProgress) => void) =>
+    postFormStreamed<RunResponse>('/api/check', upload, signal, onProgress),
   /** The starter spec's supplies for an uploaded board: the answer of
    *  `hauksbee-ci init`, so the builder starts from what the CLI would write. */
-  scaffold: (upload: FormData, signal?: AbortSignal) => postForm<ScaffoldResponse>('/api/ci/scaffold', upload, signal),
+  scaffold: (upload: FormData, signal?: AbortSignal, onProgress?: (p: LoadProgress) => void) =>
+    postFormStreamed<ScaffoldResponse>('/api/ci/scaffold', upload, signal, onProgress),
   sensorSpecs: (signal: AbortSignal) => getJson<{ entries?: SensorCatalogEntry[] }>('/api/sensor-specs', { signal }),
   deps: () => getJson<{ deps?: DepInfo[]; environment?: DepsEnvironment }>('/api/deps'),
   depsInstall: (id: string, onFrame: (frame: SseFrame) => void) =>

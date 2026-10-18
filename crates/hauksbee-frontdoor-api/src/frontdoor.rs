@@ -51,6 +51,61 @@ pub type DeckSimulator = Arc<dyn Fn(&str, &str) -> Result<String, String> + Send
 /// Run browser-composed checks against the complete design-input bundle.
 pub type DesignCheckRunner = Arc<dyn Fn(DesignUpload, &str) -> String + Send + Sync>;
 
+/// Someone watching a [`DesignCheckRunner`] work: what it reports as it goes,
+/// and whether the watcher has gone away.
+///
+/// A runner that is slow (a large board takes minutes) looks for a watch on its
+/// own thread ([`report_progress`], [`run_cancelled`]), so the runner's
+/// signature stays the one every embedding and test double already has. With
+/// no watch installed both calls do nothing.
+pub struct RunWatch {
+    /// Called with one progress report as a single-line JSON object (the shape
+    /// of `hauksbee_ir::progress::Update::to_json`).
+    pub progress: Box<dyn FnMut(&str)>,
+    /// True once nobody is waiting for the answer any more (the page cancelled
+    /// or went away): the runner stops its work and returns.
+    pub cancelled: Box<dyn Fn() -> bool>,
+}
+
+thread_local! {
+    static RUN_WATCH: std::cell::RefCell<Option<RunWatch>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run `work` (a [`DesignCheckRunner`] call) with `watch` installed on this
+/// thread.
+pub fn with_run_watch<R>(watch: RunWatch, work: impl FnOnce() -> R) -> R {
+    struct Restore(Option<RunWatch>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            RUN_WATCH.with(|slot| *slot.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(RUN_WATCH.with(|slot| slot.borrow_mut().replace(watch)));
+    work()
+}
+
+/// Tell the watcher, if there is one, how the run is going.
+pub fn report_progress(json: &str) {
+    RUN_WATCH.with(|slot| {
+        if let Ok(mut slot) = slot.try_borrow_mut() {
+            if let Some(watch) = slot.as_mut() {
+                (watch.progress)(json);
+            }
+        }
+    });
+}
+
+/// Whether the watcher has gone away. False when nobody is watching.
+#[must_use]
+pub fn run_cancelled() -> bool {
+    RUN_WATCH.with(|slot| {
+        slot.try_borrow()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(|watch| (watch.cancelled)()))
+            .unwrap_or(false)
+    })
+}
+
 /// The spec body that asks a [`DesignCheckRunner`] for the board's starter supplies.
 ///
 /// The answer is what `hauksbee-ci init --json` prints, not a run. The marker is

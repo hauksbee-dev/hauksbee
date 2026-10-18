@@ -395,9 +395,17 @@ const BOARD_LIMIT_ROOT: &str = "-supply-envelope-";
 /// [`SpecError`] when the spec, a model directory, a SPICE model file or an
 /// evidence input cannot be loaded, when the co-sim cannot be set up, or when
 /// the run's evidence cannot be assembled.
+pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
+    progress::observed(
+        || progress::plan_for_spec(&cfg.spec),
+        &[hauksbee_ir::progress::Stage::Models],
+        || run_unobserved(cfg),
+    )
+}
+
 // One pipeline read top to bottom; its counts are ensemble sizes, bounded by the u32 seed space.
 #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
-pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
+fn run_unobserved(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     let started = Instant::now();
     let mut spec = Spec::load(&cfg.spec)?;
     spec.record_waveforms = cfg.waveforms.is_some();
@@ -961,6 +969,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     // the verdict every surface leads with ("GREEN, conditionally", the JSON
     // `verdict_conditions`). Added after the member-sweep assumptions above,
     // which are built from the sweep's own sentences only.
+    hauksbee_ir::progress::begin_untracked(hauksbee_ir::progress::Stage::Report);
     let mut verdict_conditions = verdict_conditions;
     verdict_conditions.extend(static_conditions);
     verdict_conditions.extend(assertions::host_paced_conditions(&results));

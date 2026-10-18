@@ -1,4 +1,6 @@
 import type { RunResponse } from '../../types/report'
+import type { LoadProgress } from '../../lib/api'
+import { LoadBar } from '../LoadBar'
 import { overallVerdict, type Overall } from '../../lib/report-view'
 
 // The one-line state of the last run, above whichever surface is active. It says
@@ -31,11 +33,17 @@ const COUNT_WORDS: Record<RunStatus, string> = {
 }
 
 export function RunStrip({
-  result, stale, running, canRun, validationCount, reportSerious, detailsOpen, onToggleDetails, onJump,
+  result, stale, running, preparing, progress, onCancel, canRun, validationCount, reportSerious, detailsOpen, onToggleDetails, onJump,
 }: {
   result: RunResponse | null
   stale: boolean
   running: boolean
+  /** The starter supplies are still being worked out: a run waits for them. */
+  preparing?: boolean
+  /** How far the engine says the work has got, once it has said. */
+  progress?: LoadProgress | null
+  /** Stop waiting: ends the run (or the preparation) now. */
+  onCancel?: () => void
   canRun: boolean
   /** Rows the preflight refused, for the "nothing was run" line. */
   validationCount: number
@@ -56,7 +64,9 @@ export function RunStrip({
   let line: React.ReactNode = canRun
     ? 'Not run yet. Each check gets its verdict beside it.'
     : 'Running from here needs the board uploaded in this session.'
+  const working = running || !!preparing
   if (running) line = 'Running…'
+  else if (preparing) line = 'Preparing the checks for this board…'
   else if (result && result.ok === false) {
     tone = TONE.failed
     line = result.error
@@ -104,6 +114,27 @@ export function RunStrip({
           </button>
         )}
       </div>
+      {working && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-2" data-testid="run-progress">
+          <LoadBar
+            progress={progress ?? null}
+            delayMs={0}
+            ariaLabel={running ? 'Running the checks' : 'Preparing the checks'}
+            className="flex-1 min-w-[220px]"
+            maxWidth={520}
+          />
+          {onCancel && (
+            <button
+              type="button"
+              data-testid="run-cancel"
+              onClick={onCancel}
+              className="hb-btn hb-press px-3 py-1 text-[12px]"
+            >
+              {running ? 'Cancel the run' : 'Skip preparing'}
+            </button>
+          )}
+        </div>
+      )}
       {uncovered && (
         <div className="text-[12px] font-normal mt-1" data-testid="run-uncovered" style={{ color: 'var(--warn-strong)' }}>
           {reportSerious} serious issue{reportSerious === 1 ? '' : 's'} in the board report {reportSerious === 1 ? 'is' : 'are'} not

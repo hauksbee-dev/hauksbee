@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState } from 'react'
 import { downloadText } from '../../lib/report-export'
+import type { LoadProgress } from '../../lib/api'
 import { RunResults } from './RunResults'
 import { RunStrip, type RunStatus } from './RunStrip'
 import { BoardGate } from './BoardGate'
@@ -24,7 +25,7 @@ export type SpecMode = 'builder' | 'toml'
 export function SpecPane({
   mode, onModeChange, builder, firmwareChoice,
   specText, specStem, specFileName, bodyText, onBodyChange, pathLines, select, nets, refs, gutter, onGutterClick,
-  showAllResults, stale, running, canRun, preparing, pulseRun, remedyActions, remedyEditor, onRun, onJump,
+  showAllResults, stale, running, canRun, preparing, progress, onCancel, pulseRun, remedyActions, remedyEditor, onRun, onJump,
   validationCount, result, runKey, workflowYml, workflowPinned, reportSerious, gateResults,
 }: {
   mode: SpecMode
@@ -58,6 +59,10 @@ export function SpecPane({
   canRun: boolean
   /** The starter supplies are still on their way: a run now would not be the first one. */
   preparing?: boolean
+  /** How far the engine says the run (or the preparation) has got. */
+  progress?: LoadProgress | null
+  /** Stop the run, or stop waiting for the preparation. */
+  onCancel?: () => void
   /** A remedy changed the spec: point at Run, the only thing that re-judges. */
   pulseRun?: boolean
   remedyActions?: RemedyActions
@@ -151,6 +156,7 @@ export function SpecPane({
 
       <RunStrip
         result={result} stale={stale} running={running} canRun={canRun}
+        preparing={preparing} progress={progress} onCancel={onCancel}
         validationCount={validationCount} reportSerious={reportSerious}
         detailsOpen={detailsOpen} onToggleDetails={() => setDetailsOpen(open => !open)} onJump={onJump}
       />
