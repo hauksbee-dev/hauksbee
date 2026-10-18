@@ -30,6 +30,11 @@ pub const EXIT_CONTRACT: &str = "hauksbee/1";
 /// `VERDICT:` line all start from it, so the words are spelled once.
 pub const PARTLY_JUDGED_LEAD: &str = "PARTLY JUDGED (not a pass)";
 
+/// How every human surface opens an inconclusive verdict: the same word the
+/// closing `VERDICT: inconclusive` line uses, in capitals as
+/// [`PARTLY_JUDGED_LEAD`] is.
+pub const INCONCLUSIVE_LEAD: &str = "INCONCLUSIVE (not a pass)";
+
 /// How every human surface opens the verdict on an input that is not a board.
 ///
 /// A schematic cannot be ordered: the checks that apply to it ran, and nothing
@@ -53,6 +58,10 @@ pub const NOT_JUDGED_LEAD: &str = "NOT JUDGED";
 pub const DRAFT_MODELS_NEXT_STEP: &str =
     "Draft the model(s) with `hauksbee models extract --unmodelled <board>` to judge the rest.";
 
+/// [`DRAFT_MODELS_NEXT_STEP`] for the web app, which offers the step as a
+/// button and so names no terminal command.
+pub const DRAFT_MODELS_NEXT_STEP_WEB: &str = "Add a model for each open part to judge the rest.";
+
 /// How a reader's reason opens when its input cannot hold a part's value.
 ///
 /// Altium `.PcbDoc`, EasyEDA Pro `.epcb`, IPC-D-356, and ODB++ or IPC-2581
@@ -65,6 +74,26 @@ pub const VALUE_NOT_CARRIED_REASON_LEAD: &str = "no value in";
 /// sentence, the `NOT COVERED` line and the open-part remedy all end with it.
 pub const VALUES_NOT_CARRIED_NEXT_STEP: &str =
     "Pass the BOM beside the board (`--bom <bom.csv>`) so the values are read, not guessed.";
+
+/// [`VALUES_NOT_CARRIED_NEXT_STEP`] for the web app, where the BOM is uploaded
+/// with the board and no flag is typed.
+pub const VALUES_NOT_CARRIED_NEXT_STEP_WEB: &str =
+    "Upload the BOM with the board so the values are read, not guessed.";
+
+/// A terminal-worded sentence as the web app says it: each next step that
+/// names a command swapped for its web wording, everything else unchanged.
+///
+/// The web text must hold no terminal command (the page has buttons and
+/// uploads for these steps); the CLI keeps the originals. It is the one
+/// place the pairs are listed.
+#[must_use]
+pub fn without_terminal_commands(text: &str) -> String {
+    text.replace(DRAFT_MODELS_NEXT_STEP, DRAFT_MODELS_NEXT_STEP_WEB)
+        .replace(
+            VALUES_NOT_CARRIED_NEXT_STEP,
+            VALUES_NOT_CARRIED_NEXT_STEP_WEB,
+        )
+}
 
 /// The scope sentence for parts whose values the input does not carry.
 ///
@@ -144,6 +173,20 @@ pub fn list_summary<S: AsRef<str>>(items: &[S], separator: &str) -> String {
             format!("{} and {} more", join(head), rest.len())
         }
         _ => join(items),
+    }
+}
+
+/// A sentence with its first letter in capitals, the rest untouched.
+///
+/// Conditions a pass rests on are listed one under another and joined into the
+/// headline, so each one starts like a sentence. Their sources say so; this is
+/// the guard at the one list every surface reads, for a source that forgets.
+#[must_use]
+pub fn sentence_case(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) if first.is_lowercase() => first.to_uppercase().chain(chars).collect(),
+        _ => text.to_string(),
     }
 }
 

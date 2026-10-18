@@ -767,7 +767,10 @@ export interface ExtractBackendAvailability {
 export interface ExtractPreset {
   id: string
   label: string
+  /** The terminal's wording (it may name a command). */
   summary: string
+  /** The app's wording: plain sentences, no terminal command. */
+  web_summary?: string
   backend: string
   model: string
   effort: string

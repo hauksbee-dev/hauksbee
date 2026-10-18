@@ -40,7 +40,7 @@ fn a_full_gate_drive_passes_on_the_corner_condition() {
     assert_eq!(conditions[0], CONDITION, "{doc:#}");
     assert!(
         conditions[1..].iter().all(|c| c.as_str().is_some_and(|c| c
-            .starts_with("copper spacing was judged against a DEFAULT")
+            .starts_with("Copper spacing was judged against a DEFAULT")
             || c.starts_with("Rails held at their named voltage"))),
         "{doc:#}"
     );

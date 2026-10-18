@@ -546,7 +546,7 @@ export function reportView(r: WebReport): ReportView {
  *  card's verdict word: a lead-in ("OK to order, conditionally: ..."), a
  *  trailing restatement ("... OK to order, conditionally") and pointers at
  *  rows the card shows anyway ("see the reason below", "this rests on:"). */
-const VERDICT_LEADS = /^(ok to order(,\s*conditionally)?|partly judged,\s*not a pass|not routed yet|not conclusive|clean(,\s*conditionally)?)\s*[:.]\s*/i
+const VERDICT_LEADS = /^(ok to order(,\s*conditionally)?|partly judged,\s*not a pass|inconclusive,\s*not a pass|not routed yet|not conclusive|clean(,\s*conditionally)?)\s*[:.]\s*/i
 const VERDICT_TAILS = [
   /\s*ok to order(,\s*conditionally)?\.?$/i,
   /[;,]?\s*see the reason below\.?$/i,

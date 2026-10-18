@@ -61,7 +61,7 @@ pub enum Term {
 pub struct TermEntry {
     /// The wire name, e.g. `invalid`.
     pub term: Term,
-    /// How the term is displayed, e.g. `INVALID`.
+    /// How the term is displayed, e.g. `Open part`.
     pub label: &'static str,
     /// What it means, in one or two plain sentences.
     pub short: &'static str,
@@ -89,7 +89,7 @@ impl Term {
                  Fix the design (or the limit, if the limit is wrong) and rerun.",
             ),
             Self::Invalid => (
-                "INVALID",
+                "PARTLY JUDGED / INCONCLUSIVE",
                 "Hauksbee refused to give this a pass or fail, because something it rests on was \
                  not simulated (an open part, an unpowered regulator, firmware that never ran). \
                  It is not a failure of your board.",
@@ -268,6 +268,27 @@ mod tests {
         assert_eq!(terms, [Term::Invalid, Term::OpenPart]);
         let json = serde_json::to_value(g[0]).unwrap();
         assert_eq!(json["term"], "invalid");
-        assert_eq!(json["label"], "INVALID");
+        assert_eq!(json["label"], "PARTLY JUDGED / INCONCLUSIVE");
+    }
+
+    /// The `invalid` term is the refusal a run states as a verdict, so its
+    /// label is the verdict states' own words, never the retired "INVALID".
+    #[test]
+    fn the_refusal_term_is_labelled_in_the_verdict_words() {
+        use crate::vocabulary::VerdictState;
+        let e = Term::Invalid.entry();
+        for state in [VerdictState::PartlyJudged, VerdictState::InvalidRun] {
+            let word = state
+                .label()
+                .split(',')
+                .next()
+                .expect("a verdict label has a word")
+                .to_uppercase();
+            assert!(e.label.contains(&word), "{:?} lacks {word:?}", e.label);
+        }
+        assert!(!e.label.contains("INVALID"), "{:?}", e.label);
+        // The definition stays plain: what happened, and that it is not a fault.
+        assert!(e.short.contains("refused to give this a pass or fail"));
+        assert!(e.short.contains("not a failure of your board"));
     }
 }

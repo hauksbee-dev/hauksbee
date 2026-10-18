@@ -105,16 +105,21 @@ pub fn from_remedies<'a>(assumptions: impl IntoIterator<Item = &'a Assumption>) 
 /// web shows the first half as prose and the second as buttons, so this keeps
 /// the first half and the `Also:` sentence that follows it (what was not
 /// judged). A reason that does not have the shape (a refusal's own sentence,
-/// the PARTLY JUDGED form) is returned unchanged.
+/// the PARTLY JUDGED form) keeps its sentences, with any next step that names
+/// a terminal command said in the web's words ([`hauksbee_ir::vocabulary::without_terminal_commands`]).
 #[must_use]
 pub fn reason_without_next(reason: &str) -> String {
-    let Some((why, rest)) = reason.split_once("; next: ") else {
-        return reason.to_string();
+    let without = match reason.split_once("; next: ") {
+        None => reason.to_string(),
+        Some((why, rest)) => match rest.split_once(NOT_JUDGED_JOINER) {
+            Some((_, tail)) => format!("{why}.{NOT_JUDGED_JOINER}{tail}"),
+            None => format!("{why}."),
+        },
     };
-    match rest.split_once(NOT_JUDGED_JOINER) {
-        Some((_, tail)) => format!("{why}.{NOT_JUDGED_JOINER}{tail}"),
-        None => format!("{why}."),
-    }
+    // What is left may still end on a next step worded as a command (the
+    // PARTLY JUDGED form, and the sentence naming what a failing run did not
+    // judge): the page says it in its own words.
+    hauksbee_ir::vocabulary::without_terminal_commands(&without)
 }
 
 #[cfg(test)]
@@ -181,5 +186,34 @@ mod tests {
             reason_without_next("PARTLY JUDGED: x."),
             "PARTLY JUDGED: x."
         );
+    }
+
+    #[test]
+    fn a_partly_judged_reason_says_its_next_step_without_a_terminal_command() {
+        use hauksbee_ir::vocabulary::{
+            DRAFT_MODELS_NEXT_STEP, DRAFT_MODELS_NEXT_STEP_WEB, PARTLY_JUDGED_LEAD,
+        };
+        let cli = format!(
+            "{PARTLY_JUDGED_LEAD}: nothing found blocks ordering among the checks this run \
+             could judge. Q1 has no usable model, so the checks it could change are not \
+             judged. {DRAFT_MODELS_NEXT_STEP}"
+        );
+        assert!(cli.contains('`'), "the CLI sentence keeps its command");
+        let web = reason_without_next(&cli);
+        assert!(!web.contains('`') && !web.contains("hauksbee models"), "{web}");
+        assert!(web.starts_with(PARTLY_JUDGED_LEAD), "{web}");
+        assert!(web.ends_with(DRAFT_MODELS_NEXT_STEP_WEB), "{web}");
+        assert_eq!(
+            DRAFT_MODELS_NEXT_STEP_WEB,
+            "Add a model for each open part to judge the rest."
+        );
+        // The same step inside a failing run's "Also:" sentence.
+        let failing = format!(
+            "1 blocking problem(s), first: a; next: fix a.{NOT_JUDGED_JOINER}Q1 has no usable \
+             model. {DRAFT_MODELS_NEXT_STEP}"
+        );
+        let web = reason_without_next(&failing);
+        assert!(!web.contains('`'), "{web}");
+        assert!(web.ends_with(DRAFT_MODELS_NEXT_STEP_WEB), "{web}");
     }
 }

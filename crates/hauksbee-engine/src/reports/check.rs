@@ -1548,7 +1548,7 @@ mod tests {
                 ..row(
                     "unmodelled key parts",
                     "invalid",
-                    "NOT CONCLUSIVE: ",
+                    "INCONCLUSIVE (not a pass): ",
                     "VERDICT: inconclusive: ",
                 )
             },
@@ -1599,7 +1599,7 @@ mod tests {
                 ..row(
                     "unmodelled key part on every net",
                     "invalid",
-                    "NOT CONCLUSIVE: ",
+                    "INCONCLUSIVE (not a pass): ",
                     "VERDICT: inconclusive: ",
                 )
             },

@@ -197,26 +197,27 @@ const NAME: Field = opt(
 );
 
 /// Where each kind is offered, in the offer's own words. `{net}`, `{ref}` and `{id}`
-/// are the picked object; `...` marks a value the reader supplies or accepts.
+/// are the picked object. An offer names no placeholder for a value ("..."): the
+/// check editor that opens asks for it.
 #[rustfmt::skip]
 static OFFERS: &[(&str, Target, &str)] = &[
-    ("voltage", Target::Net, "Keep {net} between ... V"),
+    ("voltage", Target::Net, "Keep {net} within a voltage range"),
     ("rail_window", Target::Net, "Hold {net} through a load step"),
     ("no_faults", Target::Board, "Nothing is over-stressed anywhere"),
-    ("max_current", Target::Part, "Keep {ref} under ... A"),
-    ("max_temp", Target::Part, "Keep {ref} under ... C"),
-    ("uart", Target::Uart, "Firmware prints ..."),
-    ("toggle", Target::Net, "{net} toggles at ... Hz"),
-    ("pulse_width", Target::Net, "The first pulse on {net} is ... ms wide"),
+    ("max_current", Target::Part, "Set a current limit for {ref}"),
+    ("max_temp", Target::Part, "Set a temperature limit for {ref}"),
+    ("uart", Target::Uart, "Firmware prints an expected message"),
+    ("toggle", Target::Net, "{net} toggles at the expected rate"),
+    ("pulse_width", Target::Net, "The first pulse on {net} is the expected width"),
     ("logic_level", Target::Net, "{net} reaches a valid logic level"),
-    ("boot_coverage", Target::Net, "Firmware drives {net} to ... V within ... ms of reset"),
+    ("boot_coverage", Target::Net, "Firmware drives {net} to its level soon after reset"),
     ("protection_trip", Target::Net, "The supply on {net} trips its protection (or not)"),
     ("peripheral", Target::Peripheral, "{id} ends in the right state"),
-    ("phase_margin", Target::Net, "The loop at {net} has ... degrees of margin"),
-    ("ac_gain", Target::Net, "Gain at {net} is ... dB"),
+    ("phase_margin", Target::Net, "The loop at {net} has enough phase margin"),
+    ("ac_gain", Target::Net, "Gain at {net} is as expected"),
     ("model_coverage", Target::Board, "Enough of the board is modelled"),
     ("hwtrace", Target::Net, "{net} matches a captured trace"),
-    ("fires", Target::Part, "{ref} trips at ... V"),
+    ("fires", Target::Part, "{ref} trips at its threshold"),
     ("increases", Target::Part, "{ref} fires more as a swept net rises"),
     ("decreases", Target::Part, "{ref} fires less as a swept net rises"),
 ];
@@ -659,6 +660,27 @@ mod tests {
         );
         assert!(entry("boot-coverage").is_some() && entry("nope").is_none());
         assert_eq!(to_json()["kinds"].as_array().unwrap().len(), CATALOG.len());
+    }
+
+    /// An offer is shown to the user as written: a placeholder for a value
+    /// ("... V") reads as a sentence cut short, so the offer names what is set
+    /// and the editor that opens asks for the number.
+    #[test]
+    fn no_offer_holds_a_placeholder_for_a_value() {
+        for (kind, _, words) in OFFERS {
+            for placeholder in ["...", "\u{2026}"] {
+                assert!(!words.contains(placeholder), "{kind}: {words:?}");
+            }
+            assert!(
+                words.chars().next().is_some_and(|c| c.is_uppercase() || c == '{'),
+                "{kind}: {words:?} does not read as a sentence"
+            );
+        }
+        let wording = |kind| offers_for(kind).next().map(|(_, w)| w);
+        assert_eq!(wording("voltage"), Some("Keep {net} within a voltage range"));
+        assert_eq!(wording("max_current"), Some("Set a current limit for {ref}"));
+        assert_eq!(wording("max_temp"), Some("Set a temperature limit for {ref}"));
+        assert_eq!(wording("toggle"), Some("{net} toggles at the expected rate"));
     }
 
     /// The v2 keys a click-to-assert UI reads, next to the v1 keys it replaces.

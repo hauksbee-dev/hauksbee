@@ -279,7 +279,7 @@ pub(crate) fn default_rules_condition(
         _ => return None,
     };
     Some(format!(
-        "copper spacing was judged against a DEFAULT {:.3} mm clearance, not your rules; \
+        "Copper spacing was judged against a DEFAULT {:.3} mm clearance, not your rules; \
          {lift} to remove this assumption.",
         provenance.value_mm
     ))
@@ -352,7 +352,7 @@ pub(crate) fn unmeasured_spacing_condition(kind: crate::board_input::InputKind) 
     )
     .then(|| {
         format!(
-            "copper spacing was not checked: {} gives Hauksbee connectivity but no copper \
+            "Copper spacing was not checked: {} gives Hauksbee connectivity but no copper \
              geometry to measure gaps on, so a gap below your fab's minimum would not be \
              flagged; run your CAD tool's design-rule check on the layout to remove this \
              assumption.",
@@ -704,13 +704,42 @@ mod tests {
             let condition = unmeasured_spacing_condition(kind)
                 .unwrap_or_else(|| panic!("{kind:?} must state that spacing was not measured"));
             assert!(
-                condition.starts_with("copper spacing was not checked"),
+                condition.starts_with("Copper spacing was not checked"),
                 "{condition}"
             );
         }
         // The controls: inputs whose copper the DRC reads carry no such condition.
         for kind in [InputKind::Text, InputKind::Altium] {
             assert!(unmeasured_spacing_condition(kind).is_none(), "{kind:?}");
+        }
+    }
+
+    /// Conditions are listed one under another and joined into the headline,
+    /// so each starts like a sentence ("Copper spacing ...", like the next
+    /// one's "Rails ...").
+    #[test]
+    fn the_default_rules_condition_starts_with_a_capital_for_every_source() {
+        use crate::result::{ClearanceRuleProvenance, DrcStructured};
+        let drc = DrcStructured {
+            clearance_rule_mm: 0.2,
+            primitive_count: 20,
+            shorts: Vec::new(),
+            violations: Vec::new(),
+            at_limit: Vec::new(),
+            version_warning: None,
+            suppression_note: None,
+        };
+        for provenance in [
+            ClearanceRuleProvenance::defaulted(0.2, false),
+            ClearanceRuleProvenance::defaulted(0.2, true),
+            ClearanceRuleProvenance::tool_default(0.2),
+        ] {
+            let condition = default_rules_condition(&drc, &provenance)
+                .unwrap_or_else(|| panic!("{:?} is a default rule", provenance.source));
+            assert!(
+                condition.starts_with("Copper spacing was judged against a DEFAULT 0.200 mm"),
+                "{condition}"
+            );
         }
     }
 

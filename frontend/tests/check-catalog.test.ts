@@ -23,7 +23,7 @@ const kind = (
 const NET = f('net', { type: 'string', required: true })
 const REF = f('ref', { type: 'string', required: true })
 const CATALOG: CatalogKind[] = [
-  kind('voltage', ['net'], { net: '{net} sits at ...' }, [
+  kind('voltage', ['net'], { net: 'Keep {net} within a voltage range' }, [
     NET,
     f('min', { required: true, help: 'lowest allowed volts (or give max)', default_from: { source: 'measured', pct: -5 } }),
     f('max', { default_from: { source: 'measured', pct: 5 } }),
@@ -47,13 +47,13 @@ const CATALOG: CatalogKind[] = [
     [{ need: 'trace', label: 'a captured trace', fix: 'Capture a trace.' }]),
   kind('ac_gain', ['net'], { net: 'Gain at {net}' }, [NET, f('min', { required: true, help: 'lowest gain (or max)' })],
     [{ need: 'ac', label: 'an [ac] block', fix: 'Add [ac].', action: { id: 'add_ac_sweep', label: 'Add a frequency sweep' } }], '[ac]\nsource = "VIN"\n\n[[assert]]\nkind = "ac_gain"\n'),
-  kind('max_current', ['part'], { part: 'Keep {ref} under ... A' }, [
+  kind('max_current', ['part'], { part: 'Set a current limit for {ref}' }, [
     REF, f('amps', {
       required: true,
       default_from: { source: 'rating', key: 'max_current_a', derate: 0.8, fallback: { source: 'measured_peak', factor: 2 } },
     }),
   ]),
-  kind('max_temp', ['part'], { part: 'Keep {ref} under ... C' }, [REF, f('celsius')]),
+  kind('max_temp', ['part'], { part: 'Set a temperature limit for {ref}' }, [REF, f('celsius')]),
   kind('fires', ['part'], { part: '{ref} fires' }, [REF]),
   kind('no_faults', ['board'], { board: 'Nothing over-stressed' }, []),
 ]

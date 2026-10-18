@@ -69,6 +69,26 @@ fn verdict_headline_words_are_the_cli_words() {
         )
     );
     assert_eq!(head(VerdictState::InvalidRun), "inconclusive");
+    // The triage headline and the web headline open an inconclusive run with
+    // this lead, not the retired "NOT CONCLUSIVE".
+    assert_eq!(
+        vocabulary::INCONCLUSIVE_LEAD,
+        format!(
+            "{} (not a pass)",
+            head(VerdictState::InvalidRun).to_uppercase()
+        )
+    );
+}
+
+#[test]
+fn sentence_case_raises_only_a_leading_lower_case_letter() {
+    assert_eq!(
+        vocabulary::sentence_case("copper spacing was judged"),
+        "Copper spacing was judged"
+    );
+    for kept in ["Rails held", "U1 is open", "'+5V' at 5 V", "5 V rail", ""] {
+        assert_eq!(vocabulary::sentence_case(kept), kept);
+    }
 }
 
 #[test]
