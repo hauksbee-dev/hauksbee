@@ -316,7 +316,7 @@ function FindingItem({ entry: e, openRefs }: { entry: FindingEntry; openRefs: Re
         </span>
       </div>
       <div data-testid="finding-title" className="mt-1 text-[13px] font-semibold leading-snug" style={{ color: 'var(--silk)' }}>
-        <Linked text={e.title} />
+        <Linked text={sentenceCase(e.title)} />
       </div>
       {e.detail && (
         <div className="mt-0.5 text-[12px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}><Linked text={e.detail} /></div>
@@ -432,6 +432,10 @@ function ClearLine({ sections }: { sections: SectionStatus['clear'] }) {
   )
 }
 
+/** An engine sentence as a card title: its first letter capitalised, unless
+ *  it opens on an engine id (that reads through the label table instead). */
+const sentenceCase = (t: string) => /^[a-z][a-z0-9]*_/.test(t) ? t : t.charAt(0).toUpperCase() + t.slice(1)
+
 export function FindingsList({ entries, status, openParts, openRefs, preLayout, onListParts, onLocate }: {
   entries: FindingEntry[]
   status: SectionStatus
@@ -465,8 +469,10 @@ export function FindingsList({ entries, status, openParts, openRefs, preLayout, 
       </h2>
       {shown > 0 && (
         <ul className="list-none p-0 m-0 flex flex-col gap-2" data-testid="result-findings">
+          {/* Serious first, then the parts with no model (a warning), then the rest. */}
+          {entries.filter(e => e.level === 'serious').map(e => <FindingItem key={e.key} entry={e} openRefs={openRefs} />)}
           {openParts && <OpenPartsCard count={openParts.count} active={openParts.active} onList={onListParts} />}
-          {entries.map(e => <FindingItem key={e.key} entry={e} openRefs={openRefs} />)}
+          {entries.filter(e => e.level !== 'serious').map(e => <FindingItem key={e.key} entry={e} openRefs={openRefs} />)}
         </ul>
       )}
       <InconclusiveRow sections={status.inconclusive} />

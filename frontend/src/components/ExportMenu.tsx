@@ -60,25 +60,41 @@ export function ExportMenu({
 }) {
   const [open, setOpen] = useState(false)
   const [done, setDone] = useState<string | null>(null)
-  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null)
+  const [pos, setPos] = useState<{ top: number; left: number; width: number; maxHeight?: number } | null>(null)
   const wrap = useRef<HTMLDivElement>(null)
   const menu = useRef<HTMLDivElement>(null)
   const reduced = useReducedMotion()
 
-  // Under the trigger and inside the window: left-aligned with the trigger
-  // where it fits, else pulled back so its right edge keeps the gutter.
+  // Inside the window: under the trigger where it fits, else above it, else
+  // pinned to the window's bottom gutter and scrolling. Left-aligned with the
+  // trigger where it fits, else pulled back so its right edge keeps the gutter.
   const place = useCallback(() => {
     const box = wrap.current?.getBoundingClientRect()
     if (!box) return
     const vw = document.documentElement.clientWidth
+    const vh = window.innerHeight
     const width = Math.min(MENU_WIDTH, vw - 2 * GUTTER)
     const left = Math.max(GUTTER, Math.min(box.left, vw - GUTTER - width))
-    setPos({ top: box.bottom + 6, left, width })
+    const height = menu.current?.scrollHeight ?? 0
+    const below = box.bottom + 6
+    const above = box.top - 6 - height
+    if (!height || below + height <= vh - GUTTER) setPos({ top: below, left, width })
+    else if (above >= GUTTER) setPos({ top: above, left, width })
+    else {
+      const top = Math.max(GUTTER, vh - GUTTER - height)
+      setPos({ top, left, width, maxHeight: vh - GUTTER - top })
+    }
   }, [])
   useLayoutEffect(() => {
     if (open) place()
     else setPos(null)
   }, [open, place])
+  // Once the panel is drawn its height is known: place it again so it never
+  // runs off the bottom of the window.
+  const drawn = pos !== null
+  useLayoutEffect(() => {
+    if (open && drawn) place()
+  }, [open, drawn, place])
 
   // Both ways out: a click outside the trigger AND the panel (the panel is no
   // longer inside the trigger's subtree), and Escape. A scroll or a resize
@@ -221,6 +237,7 @@ export function ExportMenu({
               className="hb-card overflow-hidden"
               style={{
                 position: 'fixed', top: pos.top, left: pos.left, width: pos.width, zIndex: 70,
+                maxHeight: pos.maxHeight, overflowY: pos.maxHeight ? 'auto' : undefined,
                 boxShadow: 'var(--shadow-pop)',
               }}
             >

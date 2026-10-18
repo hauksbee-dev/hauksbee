@@ -48,7 +48,7 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 }, timeout: 9
     ok('the one next step is to route the board, with the re-drop button', /Route the board in your layout editor/.test(nextText) && await page.locator('[data-testid="next-redrop"]').count() === 1, nextText)
     ok('the next step does not offer firmware', !/add firmware/i.test(nextText))
     const routeCard = await page.locator('[data-testid="findings"] [data-level="serious"]').first().innerText()
-    ok('the serious finding says what to do, in board-level words', routeCard.includes('Route the board') && routeCard.includes('Route all the nets'), routeCard)
+    ok('the serious finding says what to do, in board-level words', /not routed yet/i.test(routeCard) && routeCard.includes('Route all the nets'), routeCard)
     ok('the pad-group detail is said at most once on the page', (await page.locator('body').innerText()).split('pad group').length <= 2)
     ok('says the board is not routed yet', /not routed yet/i.test(await page.locator('body').innerText()))
     const banner = Number(await page.locator('[data-testid="open-parts-banner"]').getAttribute('data-open-count'))
@@ -63,7 +63,9 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 }, timeout: 9
     await page.waitForSelector('[data-testid="report-verdict"]')
     await settle(page, 800)
     ok('no fix-first list', await page.locator('[data-testid="fix-first"]').count() === 0)
-    ok('verdict says it looks healthy', (await page.locator('[data-testid="report-verdict"]').innerText()).includes('Looks healthy'))
+    // A pass in the shared words (blinky's rests on a default-spacing condition), no filler.
+    ok('the verdict word is a pass', /pass/i.test(await page.locator('[data-testid="result-verdict-word"]').innerText()))
+    ok('no "Looks healthy" filler', !(await page.locator('body').innerText()).includes('Looks healthy'))
     await shoot(page, `blinky-${name}`)
   }
 })

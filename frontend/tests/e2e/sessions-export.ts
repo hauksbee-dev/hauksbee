@@ -124,9 +124,17 @@ await browserFlow(flow, async (page, { base, browser }) => {
     if (!menu) return 'no menu'
     const box = menu.getBoundingClientRect()
     const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
-    return hit && menu.contains(hit) ? 'ok' : `covered by ${hit?.outerHTML.slice(0, 80) ?? 'nothing'}`
+    if (!hit || !menu.contains(hit)) return `covered by ${hit?.outerHTML.slice(0, 80) ?? 'nothing'}`
+    if (box.top < 0 || box.bottom > window.innerHeight) return `runs off the window: ${box.top}..${box.bottom} of ${window.innerHeight}`
+    // Every item is reachable where it is drawn, the last one included.
+    for (const item of menu.querySelectorAll('[role="menuitem"]')) {
+      const r = item.getBoundingClientRect()
+      const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+      if (!at || !item.contains(at)) return `${item.getAttribute('data-testid')} is not reachable`
+    }
+    return 'ok'
   })
-  ok('the open menu is on top: elementFromPoint at its centre is inside it', onTop === 'ok', onTop)
+  ok('the open menu is on top and inside the window: elementFromPoint at its centre and at every item is the menu', onTop === 'ok', onTop)
   const menuBox = await page.locator('[data-testid="export-menu"]').boundingBox()
   ok('the menu is wide enough to read its labels', (menuBox?.width ?? 0) >= 280, `${menuBox?.width}px`)
   await shoot(page, '02-export-menu')
