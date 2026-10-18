@@ -303,7 +303,7 @@ const LINT_UNITS: u64 = 100;
 
 /// Enter the nets stage.
 ///
-/// It counts the lint's [`LINT_UNITS`], then the layout checks that
+/// It counts the lint's `LINT_UNITS` (100), then the layout checks that
 /// follow it ([`layout_begins`]), sized by the table's own costs for each so a
 /// board with copper gets the layout's share and a netlist gets none.
 pub fn begin_lint() {
@@ -323,7 +323,7 @@ pub fn begin_lint() {
 /// The lint has run passes worth `percent` of its own time.
 ///
 /// Counted up to the
-/// lint's [`LINT_UNITS`] and no further, so the extra runs of the corner sweep
+/// lint's `LINT_UNITS` (100) and no further, so the extra runs of the corner sweep
 /// do not eat the share that belongs to the layout checks.
 pub fn lint_advance(percent: u64) {
     if !watched() {
@@ -494,7 +494,7 @@ const fn bit(stage: Stage) -> u16 {
 
 impl Tracker {
     /// Units of the nets stage the layout checks are worth, against the
-    /// lint's [`LINT_UNITS`]: the ratio of their two costs in the table.
+    /// lint's `LINT_UNITS` (100): the ratio of their two costs in the table.
     fn layout_units(&self) -> u64 {
         let spec = &STAGES[Stage::Nets as usize];
         let layout = spec.per_copper_ms * self.sizes.copper;
