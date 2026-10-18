@@ -2940,8 +2940,9 @@ fn print_coverage_text(board_path: &Path, report: &CoverageReport) {
         .iter()
         .map(|component| {
             let mut row = coverage_row_head(component);
-            row.push(dash_join(&component.implements));
-            row.push(dash_join(&component.missing));
+            // Words for the capability ids; `--json` keeps the ids.
+            row.push(hauksbee_ir::labels::labels_for(&component.implements));
+            row.push(hauksbee_ir::labels::labels_for(&component.missing));
             row
         })
         .collect::<Vec<_>>();
@@ -2993,22 +2994,13 @@ fn coverage_row_head(component: &CoverageComponent) -> Vec<String> {
         component.value.clone(),
         serde_json::to_value(component.stage)
             .ok()
-            .and_then(|value| value.as_str().map(str::to_owned))
+            .and_then(|value| value.as_str().map(hauksbee_ir::labels::label_for))
             .unwrap_or_else(|| "unknown".to_string()),
         component
             .model_id
             .clone()
             .unwrap_or_else(|| "UNRESOLVED".to_string()),
     ]
-}
-
-/// A comma-joined list, or `-` when it is empty.
-fn dash_join(list: &[String]) -> String {
-    if list.is_empty() {
-        "-".to_string()
-    } else {
-        list.join(",")
-    }
 }
 
 /// `hauksbee models prepare <BOARD> --pack-dir <DIR>`: plan and write model scaffolds.

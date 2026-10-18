@@ -420,5 +420,1682 @@
       "short": "The microcontroller sent or received bytes on its serial port (UART) in the last two seconds of real time; the console shows what it printed.",
       "what_to_do": "Open the Serial tab to read the output or type input to the firmware."
     }
-  ]
+  ],
+  "labels": {
+    "entries": [
+      {
+        "id": "adc_channels_6_and_7",
+        "group": "capability",
+        "label": "ADC channels 6 and 7",
+        "explain": "The two ADC-only inputs that only the TQFP and QFN packages bring out."
+      },
+      {
+        "id": "adc_external_channels_0_to_3",
+        "group": "capability",
+        "label": "External ADC channels 0 to 3",
+        "explain": "The firmware can read analog voltages on ADC inputs 0 to 3."
+      },
+      {
+        "id": "adc_external_channels_0_to_5",
+        "group": "capability",
+        "label": "External ADC channels 0 to 5",
+        "explain": "The firmware can read analog voltages on ADC inputs 0 to 5."
+      },
+      {
+        "id": "adc_injection",
+        "group": "capability",
+        "label": "ADC input injection",
+        "explain": "Feeding the simulated circuit's voltage into the chip's ADC inputs."
+      },
+      {
+        "id": "adc_input_mailbox_contract",
+        "group": "capability",
+        "label": "ADC input hand-off",
+        "explain": "How the simulated circuit's voltages are handed to the emulated firmware's ADC."
+      },
+      {
+        "id": "adc_temperature_channel_4",
+        "group": "capability",
+        "label": "ADC temperature channel",
+        "explain": "The on-chip temperature sensor read through ADC channel 4."
+      },
+      {
+        "id": "application_firmware_end_to_end_proof",
+        "group": "capability",
+        "label": "End-to-end application firmware run",
+        "explain": "Real application firmware has not been run through the whole chip model and checked against hardware behaviour."
+      },
+      {
+        "id": "avr_firmware_execution",
+        "group": "capability",
+        "label": "AVR firmware execution",
+        "explain": "The AVR core runs your compiled firmware instruction by instruction."
+      },
+      {
+        "id": "board_crystal_frequency_binding",
+        "group": "capability",
+        "label": "Crystal frequency from the board",
+        "explain": "The chip runs at the clock its crystal sets. The model does not yet read that frequency from the board, so timing uses the default clock."
+      },
+      {
+        "id": "boot_rom_to_main",
+        "group": "capability",
+        "label": "Boot ROM through to main()",
+        "explain": "The chip's boot ROM runs and hands over to the application's main()."
+      },
+      {
+        "id": "boot_strap_levels",
+        "group": "capability",
+        "label": "Boot strap pin levels",
+        "explain": "The levels on the boot-mode strap pins at reset decide how the chip boots."
+      },
+      {
+        "id": "boot_to_application",
+        "group": "capability",
+        "label": "Boot through to the application",
+        "explain": "The chip boots and starts the application firmware."
+      },
+      {
+        "id": "boot_to_main",
+        "group": "capability",
+        "label": "Boot through to main()",
+        "explain": "The chip boots and reaches the application's main()."
+      },
+      {
+        "id": "clock_tree",
+        "group": "capability",
+        "label": "Clock tree",
+        "explain": "The PLLs, dividers and clock gating that set each peripheral's clock."
+      },
+      {
+        "id": "cortex_m0plus_firmware_execution",
+        "group": "capability",
+        "label": "Cortex-M0+ firmware execution",
+        "explain": "The Cortex-M0+ core runs your compiled firmware."
+      },
+      {
+        "id": "cortex_m3_firmware_execution",
+        "group": "capability",
+        "label": "Cortex-M3 firmware execution",
+        "explain": "The Cortex-M3 core runs your compiled firmware."
+      },
+      {
+        "id": "cortex_m4_firmware_execution",
+        "group": "capability",
+        "label": "Cortex-M4 firmware execution",
+        "explain": "The Cortex-M4 core runs your compiled firmware."
+      },
+      {
+        "id": "cortex_m7_firmware_execution",
+        "group": "capability",
+        "label": "Cortex-M7 firmware execution",
+        "explain": "The Cortex-M7 core runs your compiled firmware."
+      },
+      {
+        "id": "cycle_exact_virtual_clock_and_timers",
+        "group": "capability",
+        "label": "Cycle-exact clock and timers",
+        "explain": "Simulated time advances exactly one clock cycle per cycle executed, so timers and delays match the hardware."
+      },
+      {
+        "id": "dma_fidelity",
+        "group": "capability",
+        "label": "DMA accuracy",
+        "explain": "DMA transfers match the hardware's timing and arbitration."
+      },
+      {
+        "id": "dma_transfers",
+        "group": "capability",
+        "label": "DMA transfers",
+        "explain": "The DMA controller moving data without the CPU."
+      },
+      {
+        "id": "fdcan_frames",
+        "group": "capability",
+        "label": "FDCAN frames",
+        "explain": "Sending and receiving CAN FD frames."
+      },
+      {
+        "id": "firmware_cosim_core",
+        "group": "capability",
+        "label": "Firmware co-simulation core",
+        "explain": "The processor core that runs firmware alongside the circuit simulation."
+      },
+      {
+        "id": "gpio_32_to_48_observation",
+        "group": "capability",
+        "label": "Reading GPIO 32 to 48",
+        "explain": "The state of the upper GPIO pins can be observed from the circuit."
+      },
+      {
+        "id": "gpio_behaviour",
+        "group": "capability",
+        "label": "GPIO behaviour",
+        "explain": "How the general-purpose pins drive and read the circuit."
+      },
+      {
+        "id": "gpio_cluster_current_limits",
+        "group": "capability",
+        "label": "GPIO bank current limits",
+        "explain": "The total current a group of GPIO pins may source or sink."
+      },
+      {
+        "id": "gpio_external_input",
+        "group": "capability",
+        "label": "GPIO external input",
+        "explain": "The firmware reads the logic level the circuit puts on an input pin."
+      },
+      {
+        "id": "gpio_input_mailbox_contract",
+        "group": "capability",
+        "label": "GPIO input hand-off",
+        "explain": "How the circuit's pin levels are handed to the emulated firmware."
+      },
+      {
+        "id": "gpio_input_mailbox_contract_0_to_31",
+        "group": "capability",
+        "label": "GPIO input hand-off (pins 0 to 31)",
+        "explain": "How the circuit's levels on GPIO 0 to 31 are handed to the emulated firmware."
+      },
+      {
+        "id": "gpio_internal_pulls",
+        "group": "capability",
+        "label": "GPIO internal pull-ups and pull-downs",
+        "explain": "The chip's built-in pull resistors on its pins."
+      },
+      {
+        "id": "gpio_output_and_direction",
+        "group": "capability",
+        "label": "GPIO output and direction",
+        "explain": "The firmware sets pins as inputs or outputs and drives them high or low."
+      },
+      {
+        "id": "gpio_output_register_or_mailbox_observation",
+        "group": "capability",
+        "label": "GPIO output readback",
+        "explain": "The circuit sees the levels the firmware drives onto its pins."
+      },
+      {
+        "id": "gpio_output_register_or_mailbox_observation_0_to_31",
+        "group": "capability",
+        "label": "GPIO output readback (pins 0 to 31)",
+        "explain": "The circuit sees the levels the firmware drives onto GPIO 0 to 31."
+      },
+      {
+        "id": "i2c0_i2c1_controller_bridge",
+        "group": "capability",
+        "label": "I2C0 and I2C1 controller bridge",
+        "explain": "Both I2C controllers talk to the devices on the board's I2C buses."
+      },
+      {
+        "id": "i2c1_controller_bridge",
+        "group": "capability",
+        "label": "I2C1 controller bridge",
+        "explain": "The I2C1 controller talks to the devices on the board's I2C bus."
+      },
+      {
+        "id": "i2c_controller_bridge",
+        "group": "capability",
+        "label": "I2C controller bridge",
+        "explain": "The firmware's I2C controller talks to the devices on the board's I2C bus."
+      },
+      {
+        "id": "i2c_spi_mailbox_contract",
+        "group": "capability",
+        "label": "I2C and SPI hand-off",
+        "explain": "How bus traffic is handed between the emulated firmware and the simulated devices."
+      },
+      {
+        "id": "instruction_counted_timing",
+        "group": "capability",
+        "label": "Instruction-counted timing",
+        "explain": "Time is counted per instruction, not per bus cycle, so tight timing is approximate."
+      },
+      {
+        "id": "instruction_exact_timing",
+        "group": "capability",
+        "label": "Instruction-exact timing",
+        "explain": "Every instruction takes exactly its documented number of cycles."
+      },
+      {
+        "id": "missing_external_crystal_startup_validation",
+        "group": "capability",
+        "label": "External crystal start-up check",
+        "explain": "Whether the external crystal oscillator starts reliably with the board's load capacitors."
+      },
+      {
+        "id": "native_adc_peripheral",
+        "group": "capability",
+        "label": "Native ADC peripheral",
+        "explain": "The chip's own ADC converts the circuit's voltages instead of a stand-in."
+      },
+      {
+        "id": "pad_map",
+        "group": "capability",
+        "label": "Pad map",
+        "explain": "Which package pad carries which pin function."
+      },
+      {
+        "id": "pin_and_package_current_ratings",
+        "group": "capability",
+        "label": "Pin and package current ratings",
+        "explain": "The current limits for each pin and for the whole package."
+      },
+      {
+        "id": "pio",
+        "group": "capability",
+        "label": "PIO (programmable I/O)",
+        "explain": "The RP2040's programmable I/O state machines."
+      },
+      {
+        "id": "proven_two_core_firmware",
+        "group": "capability",
+        "label": "Two-core firmware",
+        "explain": "Firmware that uses both cores has been run on the model."
+      },
+      {
+        "id": "shared_lead_contention",
+        "group": "capability",
+        "label": "Shared-pin contention",
+        "explain": "Two drivers fighting over the same pin."
+      },
+      {
+        "id": "shared_sio_register_state",
+        "group": "capability",
+        "label": "Shared SIO register state",
+        "explain": "The RP2040's single-cycle I/O registers shared by both cores."
+      },
+      {
+        "id": "silicon_power_current_profile",
+        "group": "capability",
+        "label": "Supply current by state",
+        "explain": "How much current the real chip draws when running, sleeping and starting up. Without it, power budgets cannot count the chip's own draw."
+      },
+      {
+        "id": "silicon_timing_and_errata",
+        "group": "capability",
+        "label": "Silicon timing and errata",
+        "explain": "The datasheet's exact timing figures and the chip's known silicon bugs."
+      },
+      {
+        "id": "spi1_controller_bridge",
+        "group": "capability",
+        "label": "SPI1 controller bridge",
+        "explain": "The SPI1 controller talks to the devices on the board's SPI bus."
+      },
+      {
+        "id": "spi_controller_bridge",
+        "group": "capability",
+        "label": "SPI controller bridge",
+        "explain": "The firmware's SPI controller talks to the devices on the board's SPI bus."
+      },
+      {
+        "id": "spi_external_slave",
+        "group": "capability",
+        "label": "SPI as a slave",
+        "explain": "The chip acts as an SPI slave to a controller elsewhere on the board."
+      },
+      {
+        "id": "supply_current_rating",
+        "group": "capability",
+        "label": "Supply current rating",
+        "explain": "The most current the chip's supply pins may carry."
+      },
+      {
+        "id": "supply_envelope",
+        "group": "capability",
+        "label": "Supply voltage range",
+        "explain": "The supply voltages the chip is specified to run at."
+      },
+      {
+        "id": "tmp105_temperature_injection",
+        "group": "capability",
+        "label": "TMP105 temperature input",
+        "explain": "The simulated TMP105 sensor reports a temperature you set."
+      },
+      {
+        "id": "uart",
+        "group": "capability",
+        "label": "UART",
+        "explain": "The serial port."
+      },
+      {
+        "id": "uart0_tx",
+        "group": "capability",
+        "label": "UART0 transmit",
+        "explain": "Serial output from UART0."
+      },
+      {
+        "id": "uart_transport",
+        "group": "capability",
+        "label": "UART transport",
+        "explain": "Serial bytes moving between the firmware and whatever is wired to the port."
+      },
+      {
+        "id": "uart_tx",
+        "group": "capability",
+        "label": "UART transmit",
+        "explain": "Serial output from the firmware."
+      },
+      {
+        "id": "uart_tx_and_rx",
+        "group": "capability",
+        "label": "UART transmit and receive",
+        "explain": "The firmware sends and receives serial data."
+      },
+      {
+        "id": "unmodified_firmware_gpio_input",
+        "group": "capability",
+        "label": "GPIO input with unmodified firmware",
+        "explain": "Your firmware reads the pins as built, with no test hooks added."
+      },
+      {
+        "id": "unmodified_firmware_i2c_spi_observation",
+        "group": "capability",
+        "label": "I2C and SPI traffic with unmodified firmware",
+        "explain": "Bus traffic from your firmware as built can be observed, with no test hooks added."
+      },
+      {
+        "id": "usb_device_controller",
+        "group": "capability",
+        "label": "USB device controller",
+        "explain": "The chip's USB port, so USB enumeration and traffic are not simulated."
+      },
+      {
+        "id": "usb_serial_jtag",
+        "group": "capability",
+        "label": "USB serial and JTAG port",
+        "explain": "The built-in USB port used for console output and debugging."
+      },
+      {
+        "id": "virtual_clock_and_systick",
+        "group": "capability",
+        "label": "Virtual clock and SysTick",
+        "explain": "Simulated time and the SysTick timer firmware uses for delays."
+      },
+      {
+        "id": "virtual_clock_and_timers",
+        "group": "capability",
+        "label": "Virtual clock and timers",
+        "explain": "Simulated time and the hardware timers firmware uses for delays."
+      },
+      {
+        "id": "wall_bounded_virtual_time",
+        "group": "capability",
+        "label": "Virtual time bounded by real time",
+        "explain": "Simulated time cannot run faster than the emulator runs in real time."
+      },
+      {
+        "id": "watchdog_behavior",
+        "group": "capability",
+        "label": "Watchdog behaviour",
+        "explain": "The watchdog timer and what it does when firmware stops feeding it."
+      },
+      {
+        "id": "watchdog_reboot",
+        "group": "capability",
+        "label": "Watchdog reboot",
+        "explain": "The chip resets when the watchdog times out."
+      },
+      {
+        "id": "watchdog_reboot_continuation",
+        "group": "capability",
+        "label": "Resuming after a watchdog reboot",
+        "explain": "The run carries on through the reboot instead of ending."
+      },
+      {
+        "id": "xtensa_lx6_firmware_execution",
+        "group": "capability",
+        "label": "Xtensa LX6 firmware execution",
+        "explain": "The ESP32's Xtensa LX6 cores run your compiled firmware."
+      },
+      {
+        "id": "xtensa_lx7_machine_boot",
+        "group": "capability",
+        "label": "Xtensa LX7 boot",
+        "explain": "The ESP32-S3's Xtensa LX7 cores boot."
+      },
+      {
+        "id": "unresolved",
+        "group": "coverage_stage",
+        "label": "Open part",
+        "explain": "A part with no model. It is left out of the circuit (treated as not there), so readings on its nets show the board without it."
+      },
+      {
+        "id": "identity_only",
+        "group": "coverage_stage",
+        "label": "Identity only",
+        "explain": "Hauksbee knows the part and its pins, but not what it does, so it stays open in simulation."
+      },
+      {
+        "id": "executable_scope_unspecified",
+        "group": "coverage_stage",
+        "label": "Scope not stated",
+        "explain": "The part simulates, but its model does not say which behaviours it covers, so Hauksbee cannot tell which results it vouches for."
+      },
+      {
+        "id": "executable_partial",
+        "group": "coverage_stage",
+        "label": "Partly modelled",
+        "explain": "The part simulates, but only some of what it does is modelled."
+      },
+      {
+        "id": "executable_declared",
+        "group": "coverage_stage",
+        "label": "Modelled for its declared scope",
+        "explain": "The model runs, and it states what it covers and what it does not. Nothing it declares is missing."
+      },
+      {
+        "id": "ignored",
+        "group": "coverage_stage",
+        "label": "Ignored",
+        "explain": "The part is deliberately left out of the circuit (mechanical, test point or marked do-not-fit)."
+      },
+      {
+        "id": "open",
+        "group": "model_tier",
+        "label": "No model",
+        "explain": "The part is left out of the circuit."
+      },
+      {
+        "id": "estimated-fallback",
+        "group": "model_tier",
+        "label": "Estimated stand-in",
+        "explain": "A generic estimate stood in because no model matched the part."
+      },
+      {
+        "id": "interval-model",
+        "group": "model_tier",
+        "label": "Interval model",
+        "explain": "A model with stated minimum and maximum bounds, not one exact behaviour."
+      },
+      {
+        "id": "datasheet-derived",
+        "group": "model_tier",
+        "label": "Derived from the datasheet",
+        "explain": "Built from the part's datasheet figures, not from the vendor's own model."
+      },
+      {
+        "id": "curated-library",
+        "group": "model_tier",
+        "label": "Curated library model",
+        "explain": "A model from the built-in library, reviewed against the datasheet."
+      },
+      {
+        "id": "curated-pack",
+        "group": "model_tier",
+        "label": "Curated pack model",
+        "explain": "A model from an installed model pack, reviewed against the datasheet."
+      },
+      {
+        "id": "vendor-spice",
+        "group": "model_tier",
+        "label": "Vendor SPICE model",
+        "explain": "The manufacturer's own SPICE model."
+      },
+      {
+        "id": "user-model",
+        "group": "model_tier",
+        "label": "Your model",
+        "explain": "A model you supplied for this part; it overrides the others."
+      },
+      {
+        "id": "unvalidated",
+        "group": "model_validation",
+        "label": "Not validated",
+        "explain": "Nothing has checked the model against the real part."
+      },
+      {
+        "id": "physical-bounds-only",
+        "group": "model_validation",
+        "label": "Range-checked only",
+        "explain": "Its values are checked to be physically possible, not compared with the part's curves."
+      },
+      {
+        "id": "datasheet-curves",
+        "group": "model_validation",
+        "label": "Checked against datasheet curves",
+        "explain": "Compared with the curves the datasheet publishes."
+      },
+      {
+        "id": "vendor-qualified",
+        "group": "model_validation",
+        "label": "Vendor-qualified",
+        "explain": "Qualified by the manufacturer."
+      },
+      {
+        "id": "unspecified",
+        "group": "model_layer",
+        "label": "Source not recorded"
+      },
+      {
+        "id": "builtin",
+        "group": "model_layer",
+        "label": "Built-in library"
+      },
+      {
+        "id": "pack",
+        "group": "model_layer",
+        "label": "Model pack"
+      },
+      {
+        "id": "user-dir",
+        "group": "model_layer",
+        "label": "Your models folder"
+      },
+      {
+        "id": "user-config-dir",
+        "group": "model_layer",
+        "label": "Your configuration folder"
+      },
+      {
+        "id": "models-dir",
+        "group": "model_layer",
+        "label": "Project models folder"
+      },
+      {
+        "id": "spice",
+        "group": "model_layer",
+        "label": "SPICE file"
+      },
+      {
+        "id": "engine-fallback",
+        "group": "model_layer",
+        "label": "Engine fallback"
+      },
+      {
+        "id": "passive",
+        "group": "model_kind",
+        "label": "Passive",
+        "explain": "A resistor, capacitor, inductor, ferrite or crystal."
+      },
+      {
+        "id": "diode",
+        "group": "model_kind",
+        "label": "Diode",
+        "explain": "A rectifier, Schottky, Zener, TVS or LED."
+      },
+      {
+        "id": "bjt_npn",
+        "group": "model_kind",
+        "label": "NPN transistor",
+        "explain": "A discrete bipolar transistor, NPN."
+      },
+      {
+        "id": "bjtnpn",
+        "group": "model_kind",
+        "label": "NPN transistor",
+        "explain": "A discrete bipolar transistor, NPN."
+      },
+      {
+        "id": "bjt_pnp",
+        "group": "model_kind",
+        "label": "PNP transistor",
+        "explain": "A discrete bipolar transistor, PNP."
+      },
+      {
+        "id": "bjtpnp",
+        "group": "model_kind",
+        "label": "PNP transistor",
+        "explain": "A discrete bipolar transistor, PNP."
+      },
+      {
+        "id": "nmos",
+        "group": "model_kind",
+        "label": "N-channel MOSFET",
+        "explain": "A discrete MOSFET, N-channel."
+      },
+      {
+        "id": "pmos",
+        "group": "model_kind",
+        "label": "P-channel MOSFET",
+        "explain": "A discrete MOSFET, P-channel."
+      },
+      {
+        "id": "vreg",
+        "group": "model_kind",
+        "label": "Voltage regulator",
+        "explain": "A linear or switching regulator, reference or other part whose job is a rail."
+      },
+      {
+        "id": "opamp",
+        "group": "model_kind",
+        "label": "Op-amp",
+        "explain": "An amplifier with an analog output."
+      },
+      {
+        "id": "comparator",
+        "group": "model_kind",
+        "label": "Comparator",
+        "explain": "A comparator or supervisor with a two-level output."
+      },
+      {
+        "id": "timer",
+        "group": "model_kind",
+        "label": "Timer",
+        "explain": "A 555-class precision timer."
+      },
+      {
+        "id": "analog_switch",
+        "group": "model_kind",
+        "label": "Analog switch",
+        "explain": "An analog switch, multiplexer or load switch."
+      },
+      {
+        "id": "analogswitch",
+        "group": "model_kind",
+        "label": "Analog switch",
+        "explain": "An analog switch, multiplexer or load switch."
+      },
+      {
+        "id": "digital",
+        "group": "model_kind",
+        "label": "Logic or driver IC",
+        "explain": "Logic, a buffer, a level shifter, or a driver steered by logic inputs."
+      },
+      {
+        "id": "dac",
+        "group": "model_kind",
+        "label": "DAC",
+        "explain": "A digital-to-analog converter."
+      },
+      {
+        "id": "adc",
+        "group": "model_kind",
+        "label": "ADC",
+        "explain": "An analog-to-digital converter."
+      },
+      {
+        "id": "shift_register",
+        "group": "model_kind",
+        "label": "Shift register",
+        "explain": "A shift or storage register."
+      },
+      {
+        "id": "shiftregister",
+        "group": "model_kind",
+        "label": "Shift register",
+        "explain": "A shift or storage register."
+      },
+      {
+        "id": "mcu",
+        "group": "model_kind",
+        "label": "Microcontroller",
+        "explain": "A programmable microcontroller; its firmware runs in an emulator."
+      },
+      {
+        "id": "connector",
+        "group": "model_kind",
+        "label": "Connector",
+        "explain": "A connector, header or test point; only pin continuity is modelled."
+      },
+      {
+        "id": "ignore",
+        "group": "model_kind",
+        "label": "Left out",
+        "explain": "A part with no electrical effect: a mounting hole, logo or fiducial."
+      },
+      {
+        "id": "i2c_sensor",
+        "group": "model_kind",
+        "label": "I2C sensor",
+        "explain": "A register-map sensor or peripheral on an I2C bus."
+      },
+      {
+        "id": "i2csensor",
+        "group": "model_kind",
+        "label": "I2C sensor",
+        "explain": "A register-map sensor or peripheral on an I2C bus."
+      },
+      {
+        "id": "spi_sensor",
+        "group": "model_kind",
+        "label": "SPI sensor",
+        "explain": "A register-map sensor or peripheral on an SPI bus."
+      },
+      {
+        "id": "spisensor",
+        "group": "model_kind",
+        "label": "SPI sensor",
+        "explain": "A register-map sensor or peripheral on an SPI bus."
+      },
+      {
+        "id": "charger",
+        "group": "model_kind",
+        "label": "Battery charger",
+        "explain": "A battery charger."
+      },
+      {
+        "id": "pmic",
+        "group": "model_kind",
+        "label": "Power-management IC",
+        "explain": "A multi-rail power-management IC."
+      },
+      {
+        "id": "balancer",
+        "group": "model_kind",
+        "label": "Cell balancer",
+        "explain": "A battery cell balancer."
+      },
+      {
+        "id": "exact",
+        "group": "match_confidence",
+        "label": "Exact match",
+        "explain": "The part number matches the model exactly."
+      },
+      {
+        "id": "high",
+        "group": "match_confidence",
+        "label": "Close match",
+        "explain": "The part number matches a model for the same device."
+      },
+      {
+        "id": "heuristic",
+        "group": "match_confidence",
+        "label": "Probable match",
+        "explain": "Chosen from the part's name and pins; check it."
+      },
+      {
+        "id": "guessed",
+        "group": "match_confidence",
+        "label": "Guess",
+        "explain": "No reliable match; the model is a guess."
+      },
+      {
+        "id": "serious",
+        "group": "severity",
+        "label": "serious",
+        "explain": "A real problem with the design."
+      },
+      {
+        "id": "warning",
+        "group": "severity",
+        "label": "worth a look",
+        "explain": "Worth a look before ordering."
+      },
+      {
+        "id": "note",
+        "group": "severity",
+        "label": "note",
+        "explain": "Worth knowing; no action expected."
+      },
+      {
+        "id": "info",
+        "group": "severity",
+        "label": "info",
+        "explain": "Context, not a problem."
+      },
+      {
+        "id": "blocking",
+        "group": "severity",
+        "label": "blocking",
+        "explain": "The gate fails the run on this finding unless it is waived. Independent of severity: a gating warning blocks."
+      },
+      {
+        "id": "pass",
+        "group": "verdict",
+        "label": "pass",
+        "explain": "Every check in scope ran on trustworthy evidence and nothing blocks."
+      },
+      {
+        "id": "pass_conditional",
+        "group": "verdict",
+        "label": "pass, conditionally",
+        "explain": "Nothing blocks, but the pass rests on named conditions (default rules, guessed or fallback models, partly modelled parts, inferred pin roles, parts with no model, checks that could not judge a part or did not run); each condition says how to lift it."
+      },
+      {
+        "id": "fail",
+        "group": "verdict",
+        "label": "fail",
+        "explain": "At least one blocking finding or failed assertion."
+      },
+      {
+        "id": "partly_judged",
+        "group": "verdict",
+        "label": "partly judged, not a pass",
+        "explain": "Nothing blocks among the checks that ran, but key parts have no usable model, so the checks they could change were not judged."
+      },
+      {
+        "id": "invalid_run",
+        "group": "verdict",
+        "label": "invalid run, not a pass",
+        "explain": "The run's own evidence is not trustworthy (a refusal, an undermined claim, a failed simulation), so it vouches for nothing either way."
+      },
+      {
+        "id": "full",
+        "group": "evidence_grade",
+        "label": "full evidence",
+        "explain": "The conclusion stands on evidence alone: nothing on its causal path was assumed."
+      },
+      {
+        "id": "qualified",
+        "group": "evidence_grade",
+        "label": "qualified evidence",
+        "explain": "The conclusion holds with named caveats: assumptions sit on its path, none critical."
+      },
+      {
+        "id": "undermined",
+        "group": "evidence_grade",
+        "label": "undermined evidence",
+        "explain": "A critical assumption sits on the causal path, so the conclusion gets no verdict."
+      },
+      {
+        "id": "drc",
+        "group": "check",
+        "label": "Design rules (DRC)",
+        "explain": "Copper geometry against the clearance and width rules: shorts, spacing, unrouted pads."
+      },
+      {
+        "id": "lint",
+        "group": "check",
+        "label": "Connectivity lint",
+        "explain": "The netlist the copper implements: floating inputs, unpowered parts, wrong values."
+      },
+      {
+        "id": "si",
+        "group": "check",
+        "label": "Signal integrity",
+        "explain": "Signal integrity of fast nets: impedance, length and coupling."
+      },
+      {
+        "id": "resources",
+        "group": "check",
+        "label": "MCU resources",
+        "explain": "MCU pins and peripherals the board uses, against what the part provides."
+      },
+      {
+        "id": "usb_c",
+        "group": "check",
+        "label": "USB-C",
+        "explain": "USB-C configuration: CC resistors, VBUS and the receptacle wiring."
+      },
+      {
+        "id": "thermal",
+        "group": "check",
+        "label": "Thermal",
+        "explain": "Dissipation and temperature rise of each part against its ratings."
+      },
+      {
+        "id": "ac",
+        "group": "check",
+        "label": "AC response",
+        "explain": "Small-signal frequency response of the solved circuit."
+      },
+      {
+        "id": "cosim",
+        "group": "check",
+        "label": "Firmware co-simulation",
+        "explain": "Compiled firmware run against the solved board, with ratings checked over time."
+      },
+      {
+        "id": "spec",
+        "group": "check",
+        "label": "Spec assertions",
+        "explain": "The assertions a hauksbee-ci spec states, each judged against the run."
+      },
+      {
+        "id": "evidence",
+        "group": "check",
+        "label": "Evidence",
+        "explain": "Claims whose own evidence is undermined, reported as findings."
+      },
+      {
+        "id": "invalid",
+        "group": "term",
+        "label": "INVALID",
+        "explain": "Hauksbee refused to give this a pass or fail, because something it rests on was not simulated (an open part, an unpowered regulator, firmware that never ran). It is not a failure of your board."
+      },
+      {
+        "id": "conditional_pass",
+        "group": "term",
+        "label": "Conditional pass",
+        "explain": "Passed, but only under the assumptions listed."
+      },
+      {
+        "id": "open_part",
+        "group": "term",
+        "label": "Open part",
+        "explain": "A part with no model. It is left out of the circuit (treated as not there), so readings on its nets show the board without it."
+      },
+      {
+        "id": "substitute_model",
+        "group": "term",
+        "label": "Stand-in model",
+        "explain": "No model matched this exact part, so a similar one stood in. Where the two differ, results describe the stand-in."
+      },
+      {
+        "id": "reduced_fidelity",
+        "group": "term",
+        "label": "Reduced fidelity",
+        "explain": "This part or result was simulated with a simpler stand-in. It is good enough for the claim shown, but not for finer ones."
+      },
+      {
+        "id": "assumed_corner",
+        "group": "term",
+        "label": "Assumed corner",
+        "explain": "The board names only the kind of part (e.g. 'LED'), so Hauksbee checked a high and a low plausible part."
+      },
+      {
+        "id": "not_exercised",
+        "group": "term",
+        "label": "Not exercised",
+        "explain": "The run never reached this (a regulator with no input supply, a bus never addressed, firmware that never ran), so there is no result for it."
+      },
+      {
+        "id": "not_checked",
+        "group": "term",
+        "label": "Not checked",
+        "explain": "This check could not run on these inputs. No findings here does not mean there are none."
+      },
+      {
+        "id": "inferred_pin_role",
+        "group": "term",
+        "label": "Inferred pin role",
+        "explain": "Nothing said what this pin does, so Hauksbee went by the usual pin order for the package."
+      },
+      {
+        "id": "default_parameter",
+        "group": "term",
+        "label": "Default value",
+        "explain": "A value the inputs did not give was set to a documented default."
+      },
+      {
+        "id": "fitted_by_default",
+        "group": "term",
+        "label": "Assumed fitted",
+        "explain": "With no BOM, every placed part is treated as fitted, including any left off the real board."
+      },
+      {
+        "id": "operating_limit",
+        "group": "term",
+        "label": "Outside part limits",
+        "explain": "The run measured a part outside a limit its datasheet sets, so results that depend on it are not trusted."
+      },
+      {
+        "id": "parser_limitation",
+        "group": "term",
+        "label": "Reader limitation",
+        "explain": "The file reader has a known gap here, so findings in this area may be missing or wrong."
+      },
+      {
+        "id": "waived",
+        "group": "term",
+        "label": "Waived",
+        "explain": "Someone accepted this finding by hand, with a reason and an end date. It does not fail the run until that date."
+      },
+      {
+        "id": "default_rules",
+        "group": "term",
+        "label": "Default rules",
+        "explain": "The board's own spacing and width rules were not available, so checks used Hauksbee's defaults."
+      },
+      {
+        "id": "scope_unspecified",
+        "group": "term",
+        "label": "Scope not stated",
+        "explain": "The part simulates, but its model does not say which behaviours it covers, so Hauksbee cannot tell which results it vouches for."
+      },
+      {
+        "id": "report_only_exit",
+        "group": "term",
+        "label": "Report only",
+        "explain": "This command reports problems but still exits 0, so a script or CI job will not fail on them."
+      },
+      {
+        "id": "mcu_halted",
+        "group": "term",
+        "label": "Halted",
+        "explain": "The emulated microcontroller is not executing firmware right now: the simulation is paused, the firmware has stopped (a fault, a sleep it never wakes from, or the end of main), or its supply is below the operating range."
+      },
+      {
+        "id": "uart_activity",
+        "group": "term",
+        "label": "UART traffic",
+        "explain": "The microcontroller sent or received bytes on its serial port (UART) in the last two seconds of real time; the console shows what it printed."
+      },
+      {
+        "id": "simavr:atmega168",
+        "group": "backend",
+        "label": "ATmega168 (simavr)"
+      },
+      {
+        "id": "simavr:atmega1284",
+        "group": "backend",
+        "label": "ATmega1284 (simavr)"
+      },
+      {
+        "id": "simavr:atmega1284p",
+        "group": "backend",
+        "label": "ATmega1284P (simavr)"
+      },
+      {
+        "id": "simavr:atmega328p",
+        "group": "backend",
+        "label": "ATmega328P (simavr)"
+      },
+      {
+        "id": "simavr:atmega32u4",
+        "group": "backend",
+        "label": "ATmega32U4 (simavr)"
+      },
+      {
+        "id": "simavr:attiny85",
+        "group": "backend",
+        "label": "ATtiny85 (simavr)"
+      },
+      {
+        "id": "renode:nrf52840",
+        "group": "backend",
+        "label": "nRF52840 (Renode)"
+      },
+      {
+        "id": "renode:rp2040",
+        "group": "backend",
+        "label": "RP2040 (Renode)"
+      },
+      {
+        "id": "renode:sifive_fe310",
+        "group": "backend",
+        "label": "SiFive FE310 (Renode)"
+      },
+      {
+        "id": "renode:stm32f072",
+        "group": "backend",
+        "label": "STM32F072 (Renode)"
+      },
+      {
+        "id": "renode:stm32f103",
+        "group": "backend",
+        "label": "STM32F103 (Renode)"
+      },
+      {
+        "id": "renode:stm32f4",
+        "group": "backend",
+        "label": "STM32F4 (Renode)"
+      },
+      {
+        "id": "renode:stm32f4_discovery",
+        "group": "backend",
+        "label": "STM32F4 Discovery (Renode)"
+      },
+      {
+        "id": "renode:stm32f7",
+        "group": "backend",
+        "label": "STM32F7 (Renode)"
+      },
+      {
+        "id": "renode:stm32g4",
+        "group": "backend",
+        "label": "STM32G4 (Renode)"
+      },
+      {
+        "id": "renode:stm32l0",
+        "group": "backend",
+        "label": "STM32L0 (Renode)"
+      },
+      {
+        "id": "qemu:esp32",
+        "group": "backend",
+        "label": "ESP32 (QEMU)"
+      },
+      {
+        "id": "qemu:esp32c3",
+        "group": "backend",
+        "label": "ESP32-C3 (QEMU)"
+      },
+      {
+        "id": "qemu:esp32s3",
+        "group": "backend",
+        "label": "ESP32-S3 (QEMU)"
+      },
+      {
+        "id": "none:atmega16u2",
+        "group": "backend",
+        "label": "ATmega16U2 (no emulator)"
+      },
+      {
+        "id": "none:ch32v003",
+        "group": "backend",
+        "label": "CH32V003 (no emulator)"
+      },
+      {
+        "id": "none:efm32pg22",
+        "group": "backend",
+        "label": "EFM32PG22 (no emulator)"
+      },
+      {
+        "id": "none:esp32c6",
+        "group": "backend",
+        "label": "ESP32-C6 (no emulator)"
+      },
+      {
+        "id": "none:samd21",
+        "group": "backend",
+        "label": "SAMD21 (no emulator)"
+      },
+      {
+        "id": "none:stm32h7",
+        "group": "backend",
+        "label": "STM32H7 (no emulator)"
+      }
+    ],
+    "acronyms": [
+      [
+        "ac",
+        "AC"
+      ],
+      [
+        "adc",
+        "ADC"
+      ],
+      [
+        "avr",
+        "AVR"
+      ],
+      [
+        "bjt",
+        "BJT"
+      ],
+      [
+        "bom",
+        "BOM"
+      ],
+      [
+        "can",
+        "CAN"
+      ],
+      [
+        "cc",
+        "CC"
+      ],
+      [
+        "cmos",
+        "CMOS"
+      ],
+      [
+        "cpu",
+        "CPU"
+      ],
+      [
+        "dac",
+        "DAC"
+      ],
+      [
+        "dc",
+        "DC"
+      ],
+      [
+        "dma",
+        "DMA"
+      ],
+      [
+        "dnp",
+        "DNP"
+      ],
+      [
+        "drc",
+        "DRC"
+      ],
+      [
+        "eeprom",
+        "EEPROM"
+      ],
+      [
+        "esd",
+        "ESD"
+      ],
+      [
+        "fdcan",
+        "FDCAN"
+      ],
+      [
+        "fifo",
+        "FIFO"
+      ],
+      [
+        "gnd",
+        "GND"
+      ],
+      [
+        "gpio",
+        "GPIO"
+      ],
+      [
+        "i2c",
+        "I2C"
+      ],
+      [
+        "i2s",
+        "I2S"
+      ],
+      [
+        "ic",
+        "IC"
+      ],
+      [
+        "id",
+        "ID"
+      ],
+      [
+        "iec",
+        "IEC"
+      ],
+      [
+        "io",
+        "I/O"
+      ],
+      [
+        "jtag",
+        "JTAG"
+      ],
+      [
+        "lcd",
+        "LCD"
+      ],
+      [
+        "ldo",
+        "LDO"
+      ],
+      [
+        "led",
+        "LED"
+      ],
+      [
+        "mcu",
+        "MCU"
+      ],
+      [
+        "mosfet",
+        "MOSFET"
+      ],
+      [
+        "ocp",
+        "OCP"
+      ],
+      [
+        "ovp",
+        "OVP"
+      ],
+      [
+        "pcb",
+        "PCB"
+      ],
+      [
+        "pio",
+        "PIO"
+      ],
+      [
+        "pll",
+        "PLL"
+      ],
+      [
+        "pmos",
+        "PMOS"
+      ],
+      [
+        "nmos",
+        "NMOS"
+      ],
+      [
+        "psrr",
+        "PSRR"
+      ],
+      [
+        "pwm",
+        "PWM"
+      ],
+      [
+        "ram",
+        "RAM"
+      ],
+      [
+        "rom",
+        "ROM"
+      ],
+      [
+        "rtc",
+        "RTC"
+      ],
+      [
+        "sfdp",
+        "SFDP"
+      ],
+      [
+        "sio",
+        "SIO"
+      ],
+      [
+        "spi",
+        "SPI"
+      ],
+      [
+        "spice",
+        "SPICE"
+      ],
+      [
+        "sram",
+        "SRAM"
+      ],
+      [
+        "tqfp",
+        "TQFP"
+      ],
+      [
+        "uart",
+        "UART"
+      ],
+      [
+        "usb",
+        "USB"
+      ],
+      [
+        "uvlo",
+        "UVLO"
+      ],
+      [
+        "vcc",
+        "VCC"
+      ],
+      [
+        "vdd",
+        "VDD"
+      ],
+      [
+        "vf",
+        "Vf"
+      ],
+      [
+        "vss",
+        "VSS"
+      ],
+      [
+        "als",
+        "ALS"
+      ],
+      [
+        "avdd",
+        "AVDD"
+      ],
+      [
+        "cbus",
+        "CBUS"
+      ],
+      [
+        "cmti",
+        "CMTI"
+      ],
+      [
+        "cpvdd",
+        "CPVDD"
+      ],
+      [
+        "crc",
+        "CRC"
+      ],
+      [
+        "cv",
+        "CV"
+      ],
+      [
+        "dcr",
+        "DCR"
+      ],
+      [
+        "din",
+        "DIN"
+      ],
+      [
+        "dout",
+        "DOUT"
+      ],
+      [
+        "dpdt",
+        "DPDT"
+      ],
+      [
+        "drdy",
+        "DRDY"
+      ],
+      [
+        "dtr",
+        "DTR"
+      ],
+      [
+        "dvdd",
+        "DVDD"
+      ],
+      [
+        "ecc",
+        "ECC"
+      ],
+      [
+        "erm",
+        "ERM"
+      ],
+      [
+        "esr",
+        "ESR"
+      ],
+      [
+        "fet",
+        "FET"
+      ],
+      [
+        "fpwm",
+        "FPWM"
+      ],
+      [
+        "gpif",
+        "GPIF"
+      ],
+      [
+        "gpo",
+        "GPO"
+      ],
+      [
+        "hdq",
+        "HDQ"
+      ],
+      [
+        "i3c",
+        "I3C"
+      ],
+      [
+        "ioff",
+        "Ioff"
+      ],
+      [
+        "ir",
+        "IR"
+      ],
+      [
+        "jedec",
+        "JEDEC"
+      ],
+      [
+        "lra",
+        "LRA"
+      ],
+      [
+        "mdio",
+        "MDIO"
+      ],
+      [
+        "mux",
+        "MUX"
+      ],
+      [
+        "ntc",
+        "NTC"
+      ],
+      [
+        "nvm",
+        "NVM"
+      ],
+      [
+        "odr",
+        "ODR"
+      ],
+      [
+        "ois",
+        "OIS"
+      ],
+      [
+        "pfm",
+        "PFM"
+      ],
+      [
+        "phy",
+        "PHY"
+      ],
+      [
+        "pmbus",
+        "PMBus"
+      ],
+      [
+        "psm",
+        "PSM"
+      ],
+      [
+        "rc",
+        "RC"
+      ],
+      [
+        "rmii",
+        "RMII"
+      ],
+      [
+        "rts",
+        "RTS"
+      ],
+      [
+        "rx",
+        "RX"
+      ],
+      [
+        "rxd",
+        "RXD"
+      ],
+      [
+        "scl",
+        "SCL"
+      ],
+      [
+        "sda",
+        "SDA"
+      ],
+      [
+        "shdn",
+        "SHDN"
+      ],
+      [
+        "smbus",
+        "SMBus"
+      ],
+      [
+        "soa",
+        "SOA"
+      ],
+      [
+        "spdt",
+        "SPDT"
+      ],
+      [
+        "sys",
+        "SYS"
+      ],
+      [
+        "tx",
+        "TX"
+      ],
+      [
+        "txd",
+        "TXD"
+      ],
+      [
+        "uvp",
+        "UVP"
+      ],
+      [
+        "vbus",
+        "VBUS"
+      ],
+      [
+        "vccio",
+        "VCCIO"
+      ],
+      [
+        "vddio",
+        "VDDIO"
+      ]
+    ],
+    "backend_kinds": [
+      {
+        "kind": "simavr",
+        "label": "simavr"
+      },
+      {
+        "kind": "renode",
+        "label": "Renode"
+      },
+      {
+        "kind": "qemu",
+        "label": "QEMU"
+      },
+      {
+        "kind": "none",
+        "label": "no emulator"
+      }
+    ],
+    "humanise_examples": [
+      {
+        "input": "board_crystal_frequency_binding",
+        "output": "Board crystal frequency binding"
+      },
+      {
+        "input": "spi_dual_quad_io",
+        "output": "SPI dual quad I/O"
+      },
+      {
+        "input": "adc_injection",
+        "output": "ADC injection"
+      },
+      {
+        "input": "i2c0_uart1_bridge",
+        "output": "I2C0 UART1 bridge"
+      },
+      {
+        "input": "led_generic_corner_high_vf",
+        "output": "LED generic corner high Vf"
+      },
+      {
+        "input": "logic_levels_at_3v3_vddio",
+        "output": "Logic levels at 3V3 VDDIO"
+      },
+      {
+        "input": "some-kebab-id",
+        "output": "Some kebab ID"
+      },
+      {
+        "input": "already Fine",
+        "output": "Already fine"
+      },
+      {
+        "input": "x",
+        "output": "X"
+      },
+      {
+        "input": "",
+        "output": ""
+      },
+      {
+        "input": "__double__underscore__",
+        "output": "Double underscore"
+      },
+      {
+        "input": "UPPER_CASE_ID",
+        "output": "Upper case ID"
+      }
+    ]
+  }
 }
