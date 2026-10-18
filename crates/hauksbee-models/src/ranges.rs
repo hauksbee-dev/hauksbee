@@ -78,7 +78,7 @@ use Kind::{Magnitude, NonNegative, Span};
 ///
 /// Specific rows come first: the first row whose pattern names a field is its
 /// range. The unit rows last cover every other field spelled with a unit suffix
-/// ([`crate::units::suffix_unit`]), so a name the table has no row for still gets its
+/// (`units::suffix_unit`), so a name the table has no row for still gets its
 /// unit's range.
 pub const ROWS: &[Row] = &[
     // Capacitors a card states a requirement for.

@@ -4,7 +4,7 @@
 //! The routes, in order:
 //!
 //! 1. The board's own `Datasheet` link: a local file is used as it is; a URL is
-//!    downloaded with [`datasheet_fetch`] (retries, browser headers, landing
+//!    downloaded with [`crate::datasheet_fetch`] (retries, browser headers, landing
 //!    pages). The board's author chose it, so the existing wrong-sheet guard in
 //!    the extraction is the check.
 //! 2. When the board names none, or its link cannot be downloaded: an agent

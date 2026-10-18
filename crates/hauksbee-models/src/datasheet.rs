@@ -623,7 +623,7 @@ pub fn squash(text: &str) -> String {
         .collect()
 }
 
-/// The stem a datasheet must print for `part` (see [`part_stem`]), if the name
+/// The stem a datasheet must print for `part` (see `part_stem`), if the name
 /// is long enough to search for.
 #[must_use]
 pub fn stem_of(part: &str) -> Option<String> {
@@ -653,7 +653,7 @@ impl std::fmt::Display for Vouch {
 ///
 /// For a PDF nobody on the board vouched for (one an agent found on the web): it
 /// must print the part number (or a board value for it) or its family base name,
-/// and must not be the wrong-sheet guard's catch. [`wrong_datasheet`] alone passes a sheet
+/// and must not be the wrong-sheet guard's catch. `wrong_datasheet` alone passes a sheet
 /// that never names the part when nothing else contradicts it; that is right
 /// for a link the board's author chose and wrong for a stranger's.
 ///
