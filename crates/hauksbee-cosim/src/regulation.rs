@@ -8,7 +8,7 @@
 use hauksbee_bind::bind_report::{OpenPart, SimpleRegulator};
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::{run_op, Probe, SolverOptions};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 /// One unsupported regulator: the shared reason, and everything it invalidates.
@@ -225,6 +225,8 @@ pub fn reason(
 /// terminals of still-trusted voltage sources.
 pub struct Walk {
     stop: Vec<NodeId>,
+    /// `stop` as a set, for the membership tests a walk makes per edge.
+    stop_set: HashSet<NodeId>,
     next: HashMap<NodeId, Vec<NodeId>>,
 }
 
@@ -260,7 +262,12 @@ impl Walk {
                 }
             }
         }
-        Self { stop, next }
+        let stop_set = stop.iter().copied().collect();
+        Self {
+            stop,
+            stop_set,
+            next,
+        }
     }
 
     /// The nodes this walk never enters: ground, the declared supply nets and
@@ -271,12 +278,16 @@ impl Walk {
         &self.stop
     }
 
+    /// Breadth-first from `seen`, in discovery order. Membership is tested
+    /// against sets: a linear scan per edge made a rail feeding thousands of
+    /// nets quadratic.
     fn reach(&self, mut seen: Vec<NodeId>) -> Vec<NodeId> {
+        let mut visited: HashSet<NodeId> = seen.iter().copied().collect();
         let mut at = 0;
         while let Some(node) = seen.get(at).copied() {
             at += 1;
             for x in self.next.get(&node).into_iter().flatten() {
-                if !self.stop.contains(x) && !seen.contains(x) {
+                if !self.stop_set.contains(x) && visited.insert(*x) {
                     seen.push(*x);
                 }
             }
@@ -288,7 +299,7 @@ impl Walk {
     #[must_use]
     pub fn regulator(&self, circuit: &Circuit, reg: &SimpleRegulator) -> Vec<NodeId> {
         let (p, n, _) = terminals(circuit, reg);
-        let seed = |x: &NodeId| !self.stop.contains(x) || (*x == p && !p.is_ground());
+        let seed = |x: &NodeId| !self.stop_set.contains(x) || (*x == p && !p.is_ground());
         self.reach([p, n].into_iter().filter(seed).collect())
     }
 
@@ -304,7 +315,7 @@ impl Walk {
         let from = part.pins.iter().map(|p| p.0).find(|n| powered(*n))?;
         let mut seeds = Vec::new();
         for (node, drives) in &part.pins {
-            if *drives && !self.stop.contains(node) && !seeds.contains(node) {
+            if *drives && !self.stop_set.contains(node) && !seeds.contains(node) {
                 seeds.push(*node);
             }
         }

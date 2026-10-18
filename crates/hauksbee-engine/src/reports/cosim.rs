@@ -385,6 +385,45 @@ pub(crate) fn fault_event(f: hauksbee_frontdoor_api::protocol::FaultInfo) -> cra
     }
 }
 
+/// Wall seconds an in-process co-sim runs before it starts reporting progress.
+const SLOW_RUN_FIRST_REPORT_S: f64 = 15.0;
+/// Wall seconds between later progress reports.
+const SLOW_RUN_REPORT_EVERY_S: f64 = 30.0;
+
+/// Format wall seconds for a person: seconds under two minutes, then minutes,
+/// then hours.
+fn human_wall(secs: f64) -> String {
+    if secs < 120.0 {
+        format!("{secs:.0} s")
+    } else if secs < 2.0 * 3600.0 {
+        format!("{:.0} min", secs / 60.0)
+    } else {
+        format!("{:.1} h", secs / 3600.0)
+    }
+}
+
+/// The progress line for a slow in-process co-sim: how much simulated time is
+/// done, the measured cost per simulated second, and the projected time left.
+/// The first report also says how to get a quicker answer.
+fn slow_run_progress(done_s: f64, total_s: f64, wall_s: f64, first: bool) -> String {
+    let per_sim_s = wall_s / done_s;
+    let left = per_sim_s * (total_s - done_s).max(0.0);
+    let mut line = format!(
+        "  ... {done_s:.3} / {total_s:.2}s simulated in {} wall \
+         (~{} wall per simulated second; about {} left at this rate)",
+        human_wall(wall_s),
+        human_wall(per_sim_s),
+        human_wall(left)
+    );
+    if first {
+        line.push_str(
+            "\n  large boards simulate slowly; a smaller --seconds gives a quicker look, \
+             and `run --check` needs no simulation",
+        );
+    }
+    line
+}
+
 /// Step the engine headlessly for `seconds` of simulated time.
 ///
 /// Collects faults and UART output, prints the human summary unless `quiet`,
@@ -452,6 +491,8 @@ pub fn run_headless(
     let run_started = std::time::Instant::now();
     let mut t = 0.0;
     let mut next_progress = seconds / 5.0; // ~5 progress lines over the run
+    let mut next_report_wall = SLOW_RUN_FIRST_REPORT_S;
+    let mut reports = 0_u32;
     let mut last_uart: Vec<u8> = Vec::new();
     let mut faults: Vec<FaultEvent> = Vec::new();
     // Probe recording: one (time_s, [volts per probed net]) row per chunk. The
@@ -478,6 +519,19 @@ pub fn run_headless(
         if external && t >= next_progress {
             eprintln!("  ... {t:.2} / {seconds:.2}s simulated");
             next_progress += (seconds / 5.0).max(frame_dt);
+        }
+        // An in-process run on a large board can take many minutes per
+        // simulated second. Once it has run long enough to matter, say how far
+        // it has got and how long the rest will take at the rate measured so
+        // far, so a long run is never a silent hang (stderr only: `--json`
+        // stdout is untouched, and a quick run prints nothing extra).
+        if !external && t > 0.0 {
+            let wall = run_started.elapsed().as_secs_f64();
+            if wall >= next_report_wall {
+                eprintln!("{}", slow_run_progress(t, seconds, wall, reports == 0));
+                reports += 1;
+                next_report_wall = wall + SLOW_RUN_REPORT_EVERY_S;
+            }
         }
         let frame = engine.step(frame_dt);
         if !probes.is_empty() {
@@ -738,8 +792,31 @@ pub fn run_headless(
 
 #[cfg(test)]
 mod tests {
-    use super::{cosim_substituted, heuristic_framing_warnings, probe_csv_header};
+    use super::{
+        cosim_substituted, heuristic_framing_warnings, human_wall, probe_csv_header,
+        slow_run_progress,
+    };
     use crate::scheduler::McuSubstitution;
+
+    // A slow run states its measured rate and a projection, never a bare
+    // "still running"; only the first report carries the advice.
+    #[test]
+    fn slow_run_progress_projects_from_the_measured_rate() {
+        // 0.1 s simulated in 42 s wall: 420 s per simulated second, 1.9 s left.
+        let line = slow_run_progress(0.1, 2.0, 42.0, true);
+        assert!(
+            line.contains("0.100 / 2.00s simulated in 42 s wall"),
+            "{line}"
+        );
+        assert!(line.contains("~7 min wall per simulated second"), "{line}");
+        assert!(line.contains("about 13 min left"), "{line}");
+        assert!(line.contains("--seconds"), "{line}");
+        let later = slow_run_progress(1.0, 2.0, 420.0, false);
+        assert!(later.contains("about 7 min left"), "{later}");
+        assert!(!later.contains("--seconds"), "{later}");
+        assert_eq!(human_wall(59.4), "59 s");
+        assert_eq!(human_wall(9000.0), "2.5 h");
+    }
 
     // U3 finding 3: the heuristic framing tier, documented as actively wrong
     // (merges/truncates transactions), must produce the canonical warning the

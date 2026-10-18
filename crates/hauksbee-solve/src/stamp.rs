@@ -376,8 +376,14 @@ impl StampSink for MatrixSink<'_> {
 
 /// Reserve the structural slots a device will ever touch, so the symbolic
 /// factorization sees the complete pattern even when a value is momentarily 0.
-pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix) {
-    let touch = |m: &mut SparseMatrix, a: Option<usize>, b: Option<usize>| {
+pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, matrix: &mut SparseMatrix) {
+    // Slots are gathered per row and merged once at the end
+    // (`SparseMatrix::touch_all`): touching one at a time inserted into a
+    // sorted row, quadratic in a rail row's thousands of entries, and the
+    // co-sim builds this pattern for every chunk.
+    let mut pending = PendingSlots(vec![Vec::new(); matrix.dim()]);
+    let m = &mut pending;
+    let touch = |m: &mut PendingSlots, a: Option<usize>, b: Option<usize>| {
         if let Some(a) = a {
             m.touch(a, a);
         }
@@ -506,6 +512,17 @@ pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix)
                 _ => unreachable!("controlling_sources() is non-empty for F/H/B/K only"),
             }
         }
+    }
+    matrix.touch_all(pending.0);
+}
+
+/// Structural slots awaiting [`SparseMatrix::touch_all`], one column list per
+/// row, in any order and with repeats.
+struct PendingSlots(Vec<Vec<usize>>);
+
+impl PendingSlots {
+    fn touch(&mut self, row: usize, col: usize) {
+        self.0[row].push(col);
     }
 }
 
