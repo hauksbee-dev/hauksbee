@@ -126,7 +126,9 @@ export function SessionRail({ state, onResume }: {
     : state.rows.length > 0 ? 'Sessions' : 'No saved session yet'
   const sub = current
     ? `${state.rows.length > 1 ? `${state.rows.length} saved · ` : ''}saved ${relTime(current.updatedAt, now)}`
-    : `${state.rows.length} saved`
+    // "No saved session yet" already says there are none; "0 saved" under it
+    // would say it twice.
+    : state.rows.length > 0 ? `${state.rows.length} saved` : ''
 
   return (
     <div ref={wrap}>
@@ -138,8 +140,8 @@ export function SessionRail({ state, onResume }: {
           onClick={() => setOpen(o => !o)}
           aria-haspopup="dialog"
           aria-expanded={open}
-          title={`${label} · ${sub} · open the session switcher`}
-          aria-label={`Sessions: ${label}, ${sub}`}
+          title={`${[label, sub].filter(Boolean).join(' · ')} · open the session switcher`}
+          aria-label={`Sessions: ${[label, sub].filter(Boolean).join(', ')}`}
         >
           <span style={{ display: 'inline-flex', flexShrink: 0, color: note ? TONE[note.tone].color : undefined }}>
             <HistoryIcon size={15} />
@@ -149,7 +151,7 @@ export function SessionRail({ state, onResume }: {
               ellipses instead of widening the rail. */}
           <span className="sidebar-label flex-1 min-w-0">
             <span className="block truncate text-[12px]" style={{ color: 'var(--silk)' }}>{label}</span>
-            <span className="block truncate text-[10px]" style={{ color: 'var(--silk-faint)' }}>{sub}</span>
+            {sub && <span className="block truncate text-[10px]" style={{ color: 'var(--silk-faint)' }}>{sub}</span>}
           </span>
         </button>
       </div>

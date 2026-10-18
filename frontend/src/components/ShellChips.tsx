@@ -134,6 +134,31 @@ function ChipPill({ chip }: { chip: Chip }) {
   )
 }
 
+/** Whether the element `selector` names is on screen (false while absent or
+ *  not watched). It may mount after the chip, so it is looked for until found. */
+function useInView(selector: string, watch: boolean): boolean {
+  const [seen, setSeen] = useState(false)
+  useEffect(() => {
+    if (!watch || typeof IntersectionObserver === 'undefined') { setSeen(false); return }
+    let io: IntersectionObserver | null = null
+    let observed: Element | null = null
+    const attach = () => {
+      const el = document.querySelector(selector)
+      if (el === observed) return
+      io?.disconnect()
+      observed = el
+      if (!el) { setSeen(false); return }
+      io = new IntersectionObserver(([e]) => setSeen(e.isIntersecting))
+      io.observe(el)
+    }
+    attach()
+    const mo = new MutationObserver(attach)
+    mo.observe(document.body, { childList: true, subtree: true })
+    return () => { mo.disconnect(); io?.disconnect() }
+  }, [selector, watch])
+  return watch && seen
+}
+
 /** One thing a surface has to say: a board verdict, the checks, or the live
  *  session. The header shows the worst of them as its one chip. */
 interface Part {
@@ -180,8 +205,12 @@ export function ShellChips({
 }) {
   useGlossary(report?.glossary)
   const word = useStatusLabel()
-  // Environment and Settings are about this machine, not a board.
-  if (view === 'env' || view === 'settings') return null
+  // On the Board view the verdict card states the verdict; the chip only
+  // stands in for it once the card has scrolled out of sight.
+  const cardInView = useInView('[data-testid="report-verdict"]', view === 'board' && report?.ok === true)
+  // Environment and Settings are about this machine, not a board. The Checks
+  // page states its own verdict in its band, once, so the header does not.
+  if (view === 'env' || view === 'settings' || view === 'checks') return null
 
   const parts: Part[] = []
   const faultDetail = `${sim.faults} part${sim.faults === 1 ? '' : 's'} faulted`
@@ -221,7 +250,10 @@ export function ShellChips({
       parts.push({ key: 'sim', tone: 'err', detail: 'sim offline', view: 'sim' })
     } else if (simMounted && sessionMatchesCurrent) {
       parts.push(simPart())
-    } else if ((simMounted || serverLiveActive) && sessionBoard) {
+    } else if ((simMounted || serverLiveActive) && sessionBoard && report?.ok === true) {
+      // Only on a tab with a board of its own: a fresh or failed tab has
+      // nothing the other session could be confused with, and the drop page
+      // offers the session itself.
       // A session is live for some OTHER board (or a pre-reload launch of this
       // one): never show "sim running" as if it were this board's. Another tab,
       // an earlier page load or a CLI launch can all have started it, and a
@@ -247,6 +279,8 @@ export function ShellChips({
     }
   }
 
+  // The board's verdict is the card's to state while the card is on screen.
+  if (cardInView) parts.splice(0, parts.length, ...parts.filter(p => p.key !== 'board'))
   if (parts.length === 0) return null
 
   // The worst part is the chip; ties keep the order board, checks, sim.

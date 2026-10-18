@@ -83,21 +83,24 @@ await browserFlow({ out: OUT, viewport: { width: 1440, height: 900 }, timeout: 9
     ok('the card says what its rows leave out', /and \d+ more findings? in the sections below/.test(text))
     await shoot(page, `counters-${name}`)
 
-    step(`the Checks page lists every failure it counts at ${name}px`)
+    step(`the Checks page states one verdict and reads not-routed as layout at ${name}px`)
     await page.click('[data-testid="nav-checks"]')
     await page.waitForSelector('[data-testid="checks-panel"]', { timeout: 20_000 })
     await page.click('[data-testid="run-checks"]')
-    await page.waitForSelector('[data-testid="run-count-fail"]', { timeout: 60_000 })
-    const failedByStrip = Number((await page.locator('[data-testid="run-count-fail"]').innerText()).match(/\d+/)?.[0])
-    const chip = (await page.locator('header, [data-testid="header-chips"]').first().innerText().catch(() => '')) || ''
-    // A FAIL chip rides on each spec row and on each board-gate result.
+    await page.waitForSelector('[data-testid="run-tag"]', { timeout: 60_000 })
+    // The page states its verdict once: the band, with no header chip beside it.
+    ok('the header carries no second verdict on Checks', (await page.locator('[data-testid="chip-status"]').count()) === 0)
+    // Not routed is layout readiness: a calm note naming the nets, with what CI does.
+    const layout = page.locator('[data-testid="layout-note"]')
+    const layoutText = (await layout.innerText().catch(() => '')) || ''
+    ok('the not-routed state is a layout note', /not routed yet/.test(layoutText) && /CI run of this spec also fails/.test(layoutText), layoutText.slice(0, 120))
+    ok('the unrouted nets are one click from the board', (await page.locator('[data-testid="layout-show-on-board"]').count()) === 1)
+    // Every failure the band counts is on the page, as a FAIL chip on a row or a board finding.
+    const headline = await page.locator('[data-testid="run-headline"]').innerText()
+    const counted = Number(/(\d+) of \d+ checks? fails?/.exec(headline)?.[1] ?? 0)
     const shownFails = await page.locator('[data-testid="row-result"]').filter({ hasText: /^FAIL$/ }).count()
-    const gate = page.locator('[data-testid="board-gate-result"]')
-    const gateFails = await gate.filter({ has: page.locator('[data-testid="row-result"]', { hasText: 'FAIL' }) }).count()
-    const rowFails = shownFails - gateFails
-    ok('every failure the strip counts is on the page', shownFails === failedByStrip && gateFails > 0, `${rowFails} on rows + ${gateFails} in the gate card vs ${failedByStrip} counted`)
-    ok('the failure has a reason and a fix', (await gate.first().innerText()).includes('Fix:') && /not routed yet/.test(await gate.first().innerText()))
-    ok('the top-bar chip does not outrun the page', !chip.includes('check failed') || gateFails + rowFails > 0, chip.slice(0, 80))
+    ok('every failure the band counts is on the page', shownFails === counted, `${shownFails} shown vs ${counted} counted`)
+    ok('no internal ids on the page', !/static_check|hauksbee check\)/.test(await page.locator('[data-testid="checks-panel"]').innerText()))
     ok('no horizontal page scroll on Checks', await noHorizontalScroll(page))
     await shoot(page, `checks-${name}`)
   }

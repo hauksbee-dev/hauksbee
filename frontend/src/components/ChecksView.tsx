@@ -20,14 +20,16 @@ import {
 import type { SpecModel } from '../lib/spec-model'
 import { applyOps, readCst } from '../lib/toml-cst'
 import type { PatchOp } from '../lib/toml-cst'
-import { assertRowCount, coverageFor, resultsWithoutRows } from '../lib/report-view'
+import { assertRowCount, coverageFor, runMarkdown, runView } from '../lib/report-view'
+import { downloadText } from '../lib/report-export'
+import { useCatalog } from '../lib/check-catalog'
+import { STATIC_CHECK_KIND, statusOf, type RunStatus } from '../lib/status-vocab'
 import { ToBoard } from './checks/ChecksLinks'
-import { BuilderSection, Field, RemoveButton } from './checks/pieces'
+import { BuilderSection, Field, NetField, RemoveButton } from './checks/pieces'
 import { InteractionBuilder } from './checks/InteractionBuilder'
 import { SensorBuilder } from './checks/SensorBuilder'
 import { AssertionGroups, hasNoGroups } from './checks/AssertionGroups'
 import { SpecPane, type SpecMode } from './checks/SpecPane'
-import { statusOf, type RunStatus } from './checks/RunStrip'
 import { AddCheckMenu } from './checks/AddCheckMenu'
 import type { RemedyActions } from './checks/Remedies'
 import type { GutterResult } from './editor/TomlEditor'
@@ -463,7 +465,10 @@ export function ChecksView({
   // Report the run summary to the shell's chips; a stale or failed run
   // reports nothing rather than a number that no longer matches the spec.
   useEffect(() => {
-    const results = run?.response.ok ? run.response.results ?? [] : []
+    // What the page judges: the spec's rows and the board findings that fail
+    // the circuit. The not-routed state is layout readiness, which the board's
+    // own verdict already carries, so it is not counted a second time here.
+    const results = run?.response.ok ? runView(run.response, run.toml).judged : []
     if (!run || stale || !run.response.ok || results.length === 0) {
       onSummary(null)
       return
@@ -744,7 +749,15 @@ export function ChecksView({
   const resultForRow = (id: number): CheckResult | null => results[id - 1] ?? null
   // The results after the last row: shown in their own card, so every count in
   // the strip and the top bar has something to point at.
-  const gateResults = useMemo(() => resultsWithoutRows(results, run?.toml ?? ''), [results, run?.toml])
+  const catalog = useCatalog()
+  const downloadMarkdown = () => {
+    if (!result?.ok || !run) return
+    const md = runMarkdown({
+      result, specToml: run.toml, specFileName, boardLabel: report.file_name ?? specStem,
+      title: r => r.kind === STATIC_CHECK_KIND ? "The board's own check" : catalog?.find(k => k.kind === r.kind)?.title ?? r.label,
+    })
+    downloadText(`${specStem}-checks.md`, md, 'text/markdown;charset=utf-8')
+  }
 
   const gutter = useMemo<(GutterResult | null)[]>(() => results.map((r): GutterResult => ({
     status: r.invalid ? 'invalid' : r.measured ? 'measured' : r.passed ? 'pass' : 'fail',
@@ -758,7 +771,7 @@ export function ChecksView({
   const jumpToResult = (assertIndex: number) => {
     // A result no spec row owns (the board's own check) has its card, not a row.
     if (assertIndex >= assertRowCount(run?.toml ?? '')) {
-      const card = document.querySelector<HTMLElement>('[data-testid="board-gate"]')
+      const card = document.querySelector<HTMLElement>('[data-testid="board-gate"], [data-testid="run-summary"]')
       card?.scrollIntoView({ behavior: 'smooth', block: 'start' })
       card?.animate?.([{ boxShadow: 'inset 0 0 0 2px var(--copper)' }, { boxShadow: 'inset 0 0 0 2px transparent' }], { duration: 1200 })
       return
@@ -880,33 +893,63 @@ export function ChecksView({
       {/* While the text does not parse, the builder shows the last spec that
           did, read-only: an edit here would have nothing to patch. */}
       <fieldset disabled={!parsed} className="min-w-0" style={{ border: 0, padding: 0, margin: 0, opacity: parsed ? 1 : 0.6 }}>
-        {/* Spec identity */}
-        <div className="hb-card px-4 py-3 mb-4 flex flex-wrap items-center gap-x-5 gap-y-2">
-          <label className="inline-flex items-center gap-2 text-[12px] min-w-0 max-w-full" style={{ color: 'var(--silk-faint)' }}>
-            spec name
-            <input
-              className="hb-input min-w-0 flex-1"
-              style={{ maxWidth: 220 }}
-              value={root.name}
-              onChange={e => updateRoot({ name: e.target.value })}
-            />
-          </label>
-          <Field label="run length (ms)" value={root.duration} width={70} onChange={duration => updateRoot({ duration })} />
-          {!firmwareFile && (
-            <span className="text-[12px]" style={{ color: 'var(--silk-faint)' }}>
-              no firmware loaded: <ToBoard>add it on the Board view</ToBoard> to check UART/blink/boot
-            </span>
-          )}
-        </div>
+        <AssertionGroups
+          checks={checks}
+          validation={validation}
+          stale={stale}
+          resultForRow={resultForRow}
+          assumptions={run?.response.assumptions ?? []}
+          inventory={run?.response.inventory ?? []}
+          onAdd={addCheck}
+          onUpdate={updateCheck}
+          onRemove={id => removeTable('assert', id - 1)}
+          footer={<>
+            {/* Every check removed. A blank area is a question the
+                interface asked and then refused to answer: say what is
+                missing, what happens if it stays missing (the run is
+                refused, not silently empty), and the one check worth
+                starting from. */}
+            {hasNoGroups(checks) && keptAsserts === 0 && (
+              <div className="mb-4">
+                <EmptyState
+                  testId="checks-empty"
+                  title="No checks in this spec yet"
+                  body={<>
+                    A spec with no assertions has nothing to pass or fail, so the run is
+                    refused rather than reported as green. Add one below, or{' '}
+                    <ToBoard>click a trace on the Board view</ToBoard> to start from a real net.
+                  </>}
+                  action={
+                    <button
+                      type="button"
+                      data-testid="checks-empty-add"
+                      onClick={() => addCheck('no_faults')}
+                      className="hb-btn-primary hb-press px-3.5 py-2 text-[13px] inline-flex items-center gap-1.5"
+                    >
+                      <PlusIcon size={13} /> Start with “nothing over-stressed”
+                    </button>
+                  }
+                />
+              </div>
+            )}
+
+            {/* The one way to add a check here: every kind the engine knows,
+            grouped; the board's check-this dock is the other door. */}
+        <AddCheckMenu open={addOpen} onOpenChange={setAddOpen} />
+          </>}
+        />
+
 
         {/* Power. The net picker gives up width first (it is the one
             field with slack), then the row wraps; `remove` is last in
             reading order but never last in line, so it stays inside
             the card at every width. */}
         <BuilderSection
-          title="Power supplies"
-          actions={<span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>detected from the board, adjust if wrong</span>}
+          testId="test-setup"
+          title="Test setup"
+          caption="What the board is powered from and what is done to it while the checks run. The supplies were read off the board; adjust them if they are wrong."
         >
+          <h3 className="text-[12px] font-semibold mb-1.5" style={{ margin: 0, color: 'var(--silk-dim)' }}>Power</h3>
           {supplies.map(({ row: s, index }) => {
             const patch = (next: Partial<SupplyRow>) => updateSupply(index, next)
             return (
@@ -916,13 +959,11 @@ export function ChecksView({
                 data-net={s.net.trim()}
                 className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-1.5"
               >
-                <input
-                  className="hb-input min-w-0 flex-1"
-                  style={{ maxWidth: 180 }}
-                  list="net-options"
+                <NetField
                   value={s.net}
-                  placeholder="net (e.g. +5V)"
-                  onChange={e => patch({ net: e.target.value })}
+                  nets={nets}
+                  ariaLabel="supply net"
+                  onChange={net => patch({ net })}
                 />
                 <select
                   className="hb-input"
@@ -930,8 +971,8 @@ export function ChecksView({
                   value={s.kind ?? 'ideal'}
                   onChange={e => patch({ kind: e.target.value as SupplyRow['kind'] })}
                 >
-                  <option value="ideal">ideal</option>
-                  <option value="bench">bench supply</option>
+                  <option value="ideal">Ideal source</option>
+                  <option value="bench">Bench supply</option>
                   <option value="usb">USB port</option>
                 </select>
                 {s.kind === 'usb' ? (
@@ -944,10 +985,10 @@ export function ChecksView({
                     {USB_PROFILES.map(p => <option key={p} value={p}>{p}</option>)}
                   </select>
                 ) : (
-                  <Field label="volts" testId="supply-volts" value={s.volts} width={70} onChange={volts => patch({ volts })} />
+                  <Field label="volts" suffix="V" testId="supply-volts" value={s.volts} width={70} onChange={volts => patch({ volts })} />
                 )}
                 {s.kind === 'bench' && (
-                  <Field label="limit (A)" value={s.limit ?? ''} width={60} onChange={limit => patch({ limit })} />
+                  <Field label="limit" suffix="A" value={s.limit ?? ''} width={60} onChange={limit => patch({ limit })} />
                 )}
                 <RemoveButton
                   className="text-[12px] shrink-0"
@@ -964,8 +1005,29 @@ export function ChecksView({
           >
             <PlusIcon size={12} /> add a supply
           </button>
+
+          {/* Stimuli and bus devices: rows when there are any, otherwise one
+              quiet line of ways to add them. */}
+          {peripherals.length === 0 && sensors.length === 0 ? (
+            <div className="mt-3 pt-3 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-[12px]" data-testid="setup-add-more" style={{ borderTop: '1px solid var(--hairline)', color: 'var(--silk-faint)' }}>
+              <span>Drive it while it runs:</span>
+              {(['stimulus', 'pushbutton', 'toggle'] as const).map(kind => (
+                <button key={kind} type="button" className="hb-chip hb-press px-2 py-0.5 text-[11px]" onClick={() => addPeripheral(kind)}>
+                  + {kind === 'stimulus' ? 'waveform' : kind === 'pushbutton' ? 'button' : 'switch'}
+                </button>
+              ))}
+              <button type="button" className="hb-chip hb-press px-2 py-0.5 text-[11px]" onClick={() => addSensor()}>+ bus device</button>
+              <span>or <ToBoard>click a net or part on the board</ToBoard>.</span>
+            </div>
+          ) : null}
+          <div className="mt-2 text-[12px]" data-testid="setup-firmware" style={{ color: 'var(--silk-faint)' }}>
+            {firmwareFile
+              ? <>Firmware: <span style={{ fontFamily: 'var(--font-mono)' }}>{firmwareFile.name}</span> (choose above whether this run includes it).</>
+              : <>No firmware loaded, so UART, blink and boot checks have nothing to run. <ToBoard>Add it on the Board view</ToBoard>.</>}
+          </div>
         </BuilderSection>
 
+        {(peripherals.length > 0 || sensors.length > 0) && <>
         <InteractionBuilder
           peripherals={peripherals}
           validation={peripheralValidation}
@@ -989,17 +1051,7 @@ export function ChecksView({
           onAttachLive={attachSensorLive}
         />
 
-        <AssertionGroups
-          checks={checks}
-          validation={validation}
-          stale={stale}
-          resultForRow={resultForRow}
-          assumptions={run?.response.assumptions ?? []}
-          inventory={run?.response.inventory ?? []}
-          onAdd={addCheck}
-          onUpdate={updateCheck}
-          onRemove={id => removeTable('assert', id - 1)}
-        />
+        </>}
 
         {/* What the builder shows but leaves to the TOML pane: tables and
             keys outside its vocabulary, kept byte for byte. */}
@@ -1029,38 +1081,26 @@ export function ChecksView({
           </section>
         )}
 
-        {/* Every check removed. A blank area is a question the
-            interface asked and then refused to answer: say what is
-            missing, what happens if it stays missing (the run is
-            refused, not silently empty), and the one check worth
-            starting from. */}
-        {hasNoGroups(checks) && keptAsserts === 0 && (
-          <div className="mb-4">
-            <EmptyState
-              testId="checks-empty"
-              title="No checks in this spec yet"
-              body={<>
-                A spec with no assertions has nothing to pass or fail, so the run is
-                refused rather than reported as green. Add one below, or{' '}
-                <ToBoard>click a trace on the Board view</ToBoard> to start from a real net.
-              </>}
-              action={
-                <button
-                  type="button"
-                  data-testid="checks-empty-add"
-                  onClick={() => addCheck('no_faults')}
-                  className="hb-btn-primary hb-press px-3.5 py-2 text-[13px] inline-flex items-center gap-1.5"
-                >
-                  <PlusIcon size={13} /> Start with “nothing over-stressed”
-                </button>
-              }
-            />
+        {/* Rarely changed: behind one disclosure, each with what its default means. */}
+        <details className="mb-4 text-[12px]" data-testid="checks-advanced" style={{ color: 'var(--silk-faint)' }}>
+          <summary className="cursor-pointer">Advanced: spec name and simulated time</summary>
+          <div className="hb-card mt-2 px-4 py-3 flex flex-wrap items-center gap-x-5 gap-y-2">
+            <label className="inline-flex items-center gap-2 text-[12px] min-w-0 max-w-full" style={{ color: 'var(--silk-faint)' }}>
+              Spec name
+              <input
+                className="hb-input min-w-0 flex-1"
+                style={{ maxWidth: 220 }}
+                value={root.name}
+                onChange={e => updateRoot({ name: e.target.value })}
+              />
+            </label>
+            <span title="How long each run simulates the board after power-up. 100 ms covers rails settling and a typical boot; a check that needs longer (a slow blink, a late UART line) raises it when added.">
+              <Field label="Simulated time" suffix="ms" value={root.duration} width={70} onChange={duration => updateRoot({ duration })} />
+            </span>
+            <span className="text-[11px]">Default 100 ms: rails settle and a typical boot finishes. Checks that need longer raise it.</span>
           </div>
-        )}
+        </details>
 
-        {/* The one way to add a check here: every kind the engine knows,
-            grouped; the board's check-this dock is the other door. */}
-        <AddCheckMenu open={addOpen} onOpenChange={setAddOpen} />
       </fieldset>
     </div>
   )
@@ -1117,7 +1157,8 @@ export function ChecksView({
           workflowYml={workflowYml}
           workflowPinned={workflowExportAvailable}
           reportSerious={report.serious}
-          gateResults={gateResults}
+          preLayoutNotice={report.fix_first?.notice ?? null}
+          onMarkdown={downloadMarkdown}
         />
       </div>
     </div>
