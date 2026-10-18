@@ -236,9 +236,12 @@ export function drawScope(ctx: CanvasRenderingContext2D, W: number, H: number, p
       // On a phone the decades are 40px apart and the labels ran together into
       // one illegible word, so a label is drawn only when it has room.
       const half = ctx.measureText(xTick(gx)).width / 2
-      if (px - half < lastRight + 6) continue
-      ctx.fillText(xTick(gx), px, H - PAD_B + 10)
-      lastRight = px + half
+      // Keep the label inside the plot's own columns: centred on a tick at the
+      // left edge it ran under the y labels ("0V" over "2.0 s").
+      const cx = Math.min(Math.max(px, PAD_L + half), W - half - 2)
+      if (cx - half < lastRight + 6) continue
+      ctx.fillText(xTick(gx), cx, H - PAD_B + 10)
+      lastRight = cx + half
     }
   }
   ctx.setLineDash([])

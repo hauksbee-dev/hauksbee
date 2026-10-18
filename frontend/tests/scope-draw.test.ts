@@ -123,14 +123,12 @@ test('a trace is nothing, one held sample, or a line', () => {
 
 // ---- run state ------------------------------------------------------------
 
-test('status follows the clock, not the loop flag', () => {
-  const base = { connected: true, loopRunning: false, advancing: false, simTime: 0 }
+test('status words follow the derived running flag and the clock', () => {
+  const base = { connected: true, running: false, simTime: 0 }
   expect(deriveRunState(base)).toBe('ready')
   expect(deriveRunState({ ...base, simTime: 2.5 })).toBe('paused')
-  // "Run 100 ms" steps the clock with the loop off: that is running.
-  expect(deriveRunState({ ...base, simTime: 2.5, advancing: true })).toBe('running')
-  expect(deriveRunState({ ...base, loopRunning: true })).toBe('running')
-  expect(deriveRunState({ ...base, connected: false, loopRunning: true, advancing: true })).toBe('offline')
+  expect(deriveRunState({ ...base, simTime: 2.5, running: true })).toBe('running')
+  expect(deriveRunState({ ...base, connected: false, running: true })).toBe('offline')
 })
 
 test('the clock text keeps changing on a 1 ms step late in a run', () => {

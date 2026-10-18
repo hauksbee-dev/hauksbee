@@ -371,9 +371,8 @@ export function TransportBar({
             · {speedText(realtimeFactor)} real time
             {requestedFactor != null && requestedFactor > 0
               && Math.abs(requestedFactor - realtimeFactor) > requestedFactor * 0.05 && (
-              <> (asked for {speedText(requestedFactor)})</>
+              <> ({rateLimited ? `can't reach ${speedText(requestedFactor)}` : `asked for ${speedText(requestedFactor)}`})</>
             )}
-            {rateLimited && <> · this board can&apos;t go faster</>}
           </span>
         )}
       </div>
@@ -390,10 +389,17 @@ export function TransportBar({
             width: 8, height: 8, borderRadius: 4,
             background: connected ? 'var(--ok)' : 'var(--err)',
           }}
+          role="img"
+          aria-label={connected ? 'Connected to the simulator' : 'Not connected'}
+          title={connected ? 'Connected to the simulator' : 'Not connected'}
         />
-        <span style={{ color: connected ? 'var(--ok)' : 'var(--err)' }}>
-          {connected ? (replay ? 'replay' : 'connected') : 'offline'}
-        </span>
+        {/* A healthy live link is the dot alone: the word cost a second toolbar
+            row while the rate text was showing. Anything else is spelled out. */}
+        {(!connected || replay) && (
+          <span style={{ color: connected ? 'var(--ok)' : 'var(--err)' }}>
+            {connected ? 'replay' : 'offline'}
+          </span>
+        )}
       </div>
     </div>
   )

@@ -56,7 +56,7 @@ export function McuChips({ mcus, frame, uartActive, running: simRunning }: {
             {simRunning && (
               <Chip on={running} tone="ok">
                 {running && <span className="run-dot" style={{ width: 5, height: 5, borderRadius: 3, background: 'currentColor' }} />}
-                <Term id="mcu_halted" bare>{running ? 'running' : 'halted'}</Term>
+                <Term id="mcu_halted" bare>{running ? 'executing' : 'halted'}</Term>
               </Chip>
             )}
             {uart && (

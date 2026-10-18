@@ -25,7 +25,7 @@ import { vocabulary, type ResultEntity } from './lib/result-links'
 import { McuChips } from './components/sim/McuChips'
 import { SimStatusBar } from './components/sim/StatusBar'
 import { LiveNetCard } from './components/sim/LiveNetCard'
-import { deriveRunState, useClockAdvancing } from './components/sim/run-state'
+import { deriveRunState } from './components/sim/run-state'
 import {
   BoardPlaceholder, ForeignSessionBanner, ServerErrorBanner, ShortsBanner,
 } from './components/sim/Banners'
@@ -282,14 +282,14 @@ export default function SimView({
   const netEnvelopes = useMemo(() => envelopesFromHistory(frames), [frames])
   const netEnvelopeSource = envelopeSource(liveFrame, netEnvelopes)
 
-  // ONE run state for the whole view, derived from the clock's own stream
-  // (status.sim_time), not from the server's loop flag alone: "Run 100 ms" and
-  // the step button advance the clock with the loop off, and a status read from
-  // the flag said "paused" over a clock that was counting up. The play button,
-  // the header chip (via onStatus), the MCU chips and the keyboard all read it.
+  // ONE run state for the whole view. `status.running` is already derived from
+  // the clock's own stream (useAdvancingStatus, below): "Run 100 ms" and the
+  // step button advance the clock with the loop off, and a status read from the
+  // flag alone said "paused" over a clock that was counting up. This only adds
+  // the words (ready / paused / offline); the play button, the header chip (via
+  // onStatus), the MCU chips and the keyboard all read it.
   const simTime = status?.sim_time ?? 0
-  const advancing = useClockAdvancing(status ? status.sim_time : null)
-  const runState = deriveRunState({ connected, loopRunning: status?.running ?? false, advancing, simTime })
+  const runState = deriveRunState({ connected, running: status?.running ?? false, simTime })
   const running = runState === 'running'
   const sessionBoard = boardInfo?.name ?? null
 
