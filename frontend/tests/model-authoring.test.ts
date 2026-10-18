@@ -54,7 +54,7 @@ describe('choosing the kind of a part from the board', () => {
   test('kinds are named in plain words outside the TOML', () => {
     expect(kindLabel('pmos')).toBe('P-channel MOSFET')
     expect(kindLabel('i2c_sensor')).toBe('I2C sensor')
-    expect(kindLabel('some_new_kind')).toBe('some new kind')
+    expect(kindLabel('some_new_kind')).toBe('Some new kind')
   })
 })
 

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { CardValue, ModelCard } from '../../types/report'
 import { Callout, CopyButton } from '../ui'
-import { kindLabel } from '../editor/part-class'
+import { labelFor } from '../../lib/labels'
 
 /** Blocks where a missing citation is worth pointing out. A pin map or a match
  *  regex has no datasheet page to cite; a simulation parameter or an
@@ -84,7 +84,7 @@ export function ReviewCard({ card, onAccept, onReject, saving, saveError }: {
           Draft model for {card.reference || card.part}
         </span>
         <span className="text-[12px]" style={{ color: 'var(--silk-dim)', fontFamily: 'var(--font-mono)' }}>
-          {card.part} · {kindLabel(card.kind)}
+          {card.part} · {labelFor(card.kind)}
         </span>
         <Chip text={card.provenance === 'datasheet-extracted' ? 'Drafted from datasheet' : card.provenance} tone="copper" />
       </div>
