@@ -1417,7 +1417,7 @@ pub fn extract(args: hauksbee_models::datasheet::Args, assume_yes: bool) -> anyh
              or use the guided flow: `hauksbee serve` fetches the datasheet and \
              extracts the model for you (Extract a part).",
             pdf.display(),
-            datasheet_search(part)
+            hauksbee_models::extract_messages::datasheet_search(part)
         );
     }
 
@@ -1433,7 +1433,12 @@ pub fn extract(args: hauksbee_models::datasheet::Args, assume_yes: bool) -> anyh
         println!("Extract a model for {part} ({kind}) from {}", pdf.display());
     }
     println!();
-    if !extract_consent(&args, assume_yes, "Send the datasheet and draft a model?")? {
+    if !extract_consent(
+        &args,
+        assume_yes,
+        "Send the datasheet and draft a model?",
+        None,
+    )? {
         return Ok(());
     }
     let out_dir = args.out_dir.clone();
@@ -1467,21 +1472,6 @@ pub fn extract(args: hauksbee_models::datasheet::Args, assume_yes: bool) -> anyh
     Ok(())
 }
 
-/// A web search for a part's datasheet, the next move when there is none.
-fn datasheet_search(part: &str) -> String {
-    let query: String = part
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
-                c.to_string()
-            } else {
-                format!("%{:02X}", c as u32)
-            }
-        })
-        .collect();
-    format!("https://duckduckgo.com/?q={query}+datasheet+pdf")
-}
-
 /// Name the backend, show the consent notice, and ask. Settings are resolved
 /// (and therefore any bad config file reported) before consent, not after: the
 /// user is told exactly what is about to read their datasheet.
@@ -1489,6 +1479,7 @@ fn extract_consent(
     args: &hauksbee_models::datasheet::Args,
     assume_yes: bool,
     question: &str,
+    extra_notice: Option<&str>,
 ) -> anyhow::Result<bool> {
     use hauksbee_models::datasheet;
     let resolved = datasheet::resolve_settings(args)?;
@@ -1498,6 +1489,9 @@ fn extract_consent(
         resolved.backend_source.describe()
     );
     println!("\n{}\n", datasheet::CONSENT_NOTICE);
+    if let Some(notice) = extra_notice {
+        println!("{notice}\n");
+    }
     let refusal = "refusing to send anything without consent. This is not a terminal, so \
                    there is nobody to ask: pass --yes if you meant it.";
     let yes = assume_yes || datasheet::confirm(&mut std::io::stdout(), question, refusal)?;
@@ -1519,6 +1513,10 @@ pub struct UnmodelledPart {
     pub references: Vec<String>,
     /// A local PDF path or an http(s) URL; `None` when the board names none.
     pub datasheet: Option<String>,
+    /// The board symbol's description, as context for a datasheet search.
+    pub description: Option<String>,
+    /// The board's manufacturer property, as context for a datasheet search.
+    pub manufacturer: Option<String>,
     /// Set when `datasheet` is the board's own `Datasheet` field and its file
     /// name clearly belongs to a different device.
     pub doubt: Option<DatasheetDoubt>,
@@ -1612,6 +1610,14 @@ fn datasheet_for(
     )
 }
 
+/// The first non-blank board property of `comp` under any of `names`.
+fn board_property(comp: &hauksbee_extract::Component, names: &[&str]) -> Option<String> {
+    comp.properties
+        .iter()
+        .find(|(k, v)| !v.trim().is_empty() && names.iter().any(|n| k.eq_ignore_ascii_case(n)))
+        .map(|(_, v)| v.trim().to_string())
+}
+
 /// The key parts the check verdict counts as having no usable model, by part
 /// number.
 ///
@@ -1690,6 +1696,8 @@ pub fn unmodelled_parts(
                 footprints: Vec::new(),
                 references: Vec::new(),
                 datasheet: None,
+                description: None,
+                manufacturer: None,
                 doubt: None,
             });
             parts.len() - 1
@@ -1699,6 +1707,13 @@ pub fn unmodelled_parts(
         if entry.datasheet.is_none() && datasheet.is_some() {
             entry.datasheet = datasheet;
             entry.doubt = doubt;
+        }
+        if entry.description.is_none() {
+            entry.description = board_property(comp, &["description"]);
+        }
+        if entry.manufacturer.is_none() {
+            entry.manufacturer =
+                board_property(comp, &["manufacturer", "mfr", "mfg", "manufacturer_name"]);
         }
         if !comp.value.trim().is_empty() && !entry.aliases.contains(&comp.value) {
             entry.aliases.push(comp.value.clone());
@@ -1718,81 +1733,6 @@ pub fn unmodelled_parts(
         parts,
         set_aside,
     })
-}
-
-/// Download a datasheet URL into `dir` with `curl` (no shell), refusing
-/// anything that is not a PDF: a landing page would otherwise be read as one.
-fn fetch_datasheet(url: &str, dir: &Path, part: &str) -> anyhow::Result<PathBuf> {
-    use hauksbee_models::datasheet;
-    std::fs::create_dir_all(dir)
-        .map_err(|e| anyhow::anyhow!("creating '{}': {e}", dir.display()))?;
-    let path = dir.join(format!("{}.pdf", datasheet::sanitise_filename(part)));
-    let status = if datasheet::is_pdf(&path) {
-        None
-    } else {
-        let target = path.display().to_string();
-        let doing = format!("fetching the {part} datasheet");
-        let out = std::process::Command::new("curl")
-            .args(curl_fetch_args(url, &target))
-            .output()
-            .map_err(|e| anyhow::anyhow!("{doing}: cannot run `curl`: {e}"))?;
-        if !out.status.success() {
-            let _ = std::fs::remove_file(&path);
-            anyhow::bail!(
-                "{doing}: curl failed: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
-        String::from_utf8_lossy(&out.stdout)
-            .trim()
-            .parse::<u16>()
-            .ok()
-    };
-    if !datasheet::is_pdf(&path) {
-        let _ = std::fs::remove_file(&path);
-        anyhow::bail!("{}", fetch_refusal(url, part, status));
-    }
-    Ok(path)
-}
-
-/// The `curl` arguments for a datasheet fetch: a browser's `User-Agent` and
-/// `Accept` (vendor sites refuse curl's own), redirects followed (most
-/// datasheet links redirect to a CDN), and the final HTTP status on stdout.
-/// Nothing here answers a CAPTCHA or works around bot protection: a site that
-/// asks for a person gets one, via `--datasheet`.
-fn curl_fetch_args(url: &str, target: &str) -> Vec<String> {
-    const BROWSER: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 \
-                           (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
-    let args = [
-        "-sSL",
-        "--max-redirs",
-        "10",
-        "--max-time",
-        "180",
-        "-A",
-        BROWSER,
-        "-H",
-        "Accept: application/pdf,application/octet-stream;q=0.9,*/*;q=0.8",
-        "-w",
-        "%{http_code}",
-        "-o",
-        target,
-        url,
-    ];
-    args.map(str::to_owned).to_vec()
-}
-
-/// Why a datasheet fetch produced no PDF, and what to do instead.
-fn fetch_refusal(url: &str, part: &str, status: Option<u16>) -> String {
-    let instead =
-        format!("Download the datasheet yourself and pass --datasheet '{part}=<file.pdf>'");
-    match status {
-        Some(code @ (401 | 403 | 429)) => format!(
-            "{url} refused the download (HTTP {code}): the site blocks automated fetches or asks for a person. {instead}"
-        ),
-        Some(code) if code >= 400 => format!("{url} answered HTTP {code}. {instead}"),
-        _ => format!("{url} did not serve a PDF (a landing page?). {instead}"),
-    }
 }
 
 /// `--kind PART=KIND` pairs for a batch: each kind checked against what the
@@ -1902,6 +1842,102 @@ fn say_datasheet_doubts(ready: &[&UnmodelledPart]) -> usize {
     said
 }
 
+/// What a batch did, part by part.
+#[derive(Debug, Default)]
+struct Tally {
+    drafted: usize,
+    skipped: usize,
+    failed: Vec<String>,
+}
+
+/// Split the offered parts into those to work on and those that already have a
+/// card in the target library. A kept card is reported (with its own reason
+/// when it is an identity-only abstention), not re-extracted, not a failure. A
+/// part with no datasheet link is worked on when the backend can search the web
+/// for it, else named with the hint about backends that can.
+fn triage<'a>(
+    parts: &'a [UnmodelledPart],
+    out_dir: &Path,
+    force: bool,
+    backend: hauksbee_models::datasheet::Backend,
+) -> (Vec<&'a UnmodelledPart>, usize) {
+    use hauksbee_models::extract_messages as words;
+    let mut kept = 0;
+    let mut work = Vec::new();
+    for p in parts {
+        let card = (!force)
+            .then(|| words::existing_card(out_dir, &p.part))
+            .flatten();
+        if let Some(card) = card {
+            println!("{}", words::has_card(&p.part, &card));
+            kept += 1;
+        } else if p.datasheet.is_some() || backend.can_search() {
+            work.push(p);
+        } else {
+            println!("{}", words::no_datasheet(&p.part, backend));
+        }
+    }
+    (work, kept)
+}
+
+/// Get a verified datasheet for each part and draft its card. A part that fails
+/// is reported and the batch carries on.
+fn draft_parts(
+    work: &[&UnmodelledPart],
+    acquirer: &hauksbee_models::datasheet_discovery::Acquirer<'_>,
+    template: &hauksbee_models::datasheet::Args,
+    kind_of: &dyn Fn(&UnmodelledPart) -> String,
+) -> Tally {
+    use hauksbee_models::datasheet;
+    use hauksbee_models::datasheet_discovery::{Outcome, Wanted};
+    use hauksbee_models::extract_messages as words;
+    let mut tally = Tally::default();
+    for p in work {
+        let want = Wanted {
+            part: p.part.clone(),
+            aliases: p.aliases.clone(),
+            footprints: p.footprints.clone(),
+            description: p.description.clone(),
+            manufacturer: p.manufacturer.clone(),
+        };
+        let got = acquirer.acquire(&want, p.datasheet.as_deref(), &mut |line| {
+            println!("{line}");
+        });
+        let pdf = match got {
+            Outcome::Ready(ready) => ready.pdf,
+            Outcome::Skipped(why) => {
+                println!("{}", words::skipped(&p.part, &why));
+                tally.skipped += 1;
+                continue;
+            }
+            Outcome::Failed(why) => {
+                eprintln!("{why}");
+                tally.failed.push(p.part.clone());
+                continue;
+            }
+        };
+        let args = datasheet::Args {
+            pdf,
+            part: p.part.clone(),
+            aliases: p.aliases.clone(),
+            footprints: p.footprints.clone(),
+            kind_str: kind_of(p),
+            ..template.clone()
+        };
+        match hauksbee_models::extract_progress::with_spinner(|| datasheet::run(args)) {
+            Ok(path) => {
+                println!("{}: drafted {}", p.part, path.display());
+                tally.drafted += 1;
+            }
+            Err(e) => {
+                eprintln!("{}: {e:#}", p.part);
+                tally.failed.push(p.part.clone());
+            }
+        }
+    }
+    tally
+}
+
 /// `hauksbee models extract --unmodelled <board>`: draft every unmodelled part.
 ///
 /// Covers each connected active part the board leaves unmodelled, from the
@@ -1922,6 +1958,9 @@ pub fn extract_unmodelled(
     assume_yes: bool,
 ) -> anyhow::Result<()> {
     use hauksbee_models::datasheet;
+    use hauksbee_models::datasheet_discovery::{Acquirer, AgentSearcher, Searcher};
+    use hauksbee_models::datasheet_fetch::CurlHttp;
+    use hauksbee_models::extract_messages as words;
     if let Some(name) = &template.api_key_env {
         datasheet::validate_api_key_env_name(name)?;
     }
@@ -1947,58 +1986,44 @@ pub fn extract_unmodelled(
         return Ok(());
     }
     say_unmodelled(&plan, board_path);
-    let (ready, missing): (Vec<_>, Vec<_>) = parts.iter().partition(|p| p.datasheet.is_some());
-    for p in &missing {
-        println!(
-            "no datasheet for {}: pass --datasheet '{}=<file.pdf or URL>' ({})",
-            p.part,
-            p.part,
-            datasheet_search(&p.part)
-        );
-    }
-    if ready.is_empty() {
+    let resolved = datasheet::resolve_settings(template)?;
+    let backend = resolved.backend;
+    let (work, kept) = triage(parts, &out_dir, template.force, backend);
+    if work.is_empty() {
+        if kept > 0 {
+            println!("{}", words::batch_summary(0, kept, 0, &[]));
+        }
         return Ok(());
     }
-    let doubted = say_datasheet_doubts(&ready);
-    let question = format!(
-        "Fetch and send {} datasheet(s) and draft a model for each{}?",
-        ready.len(),
-        if doubted == 0 {
-            String::new()
-        } else {
-            format!(" ({doubted} of them look like another part's, see above)")
-        }
+    let doubted = say_datasheet_doubts(&work);
+    let searching = work.iter().filter(|p| p.datasheet.is_none()).count();
+    let may_search = backend.can_search()
+        && work
+            .iter()
+            .any(|p| p.datasheet.as_deref().is_none_or(|d| d.starts_with("http")));
+    let question = words::batch_question(work.len(), searching, doubted);
+    let notice = may_search.then_some(words::SEARCH_NOTICE);
+    if !extract_consent(template, assume_yes, &question, notice)? {
+        return Ok(());
+    }
+    let (http, searcher) = (CurlHttp, AgentSearcher { resolved });
+    let datasheets = out_dir.join("datasheets");
+    let acquirer = Acquirer {
+        http: &http,
+        searcher: backend.can_search().then_some(&searcher as &dyn Searcher),
+        dir: &datasheets,
+        read_text: datasheet::pdf_text,
+    };
+    let tally = draft_parts(&work, &acquirer, template, &kind_of);
+    let (drafted, skipped, failed) = (
+        tally.drafted,
+        tally.skipped,
+        tally.failed.iter().map(String::as_str).collect::<Vec<_>>(),
     );
-    if !extract_consent(template, assume_yes, &question)? {
-        return Ok(());
-    }
-    let mut failed = Vec::new();
-    for p in ready {
-        let source = p.datasheet.as_deref().unwrap_or_default();
-        let pdf = if source.starts_with("http") {
-            fetch_datasheet(source, &out_dir.join("datasheets"), &p.part)
-        } else {
-            Ok(PathBuf::from(source))
-        };
-        let run = pdf.and_then(|pdf| {
-            let args = datasheet::Args {
-                pdf,
-                part: p.part.clone(),
-                aliases: p.aliases.clone(),
-                footprints: p.footprints.clone(),
-                kind_str: kind_of(p),
-                ..template.clone()
-            };
-            hauksbee_models::extract_progress::with_spinner(|| datasheet::run(args))
-        });
-        match run {
-            Ok(path) => println!("{}: drafted {}", p.part, path.display()),
-            Err(e) => {
-                eprintln!("{}: {e:#}", p.part);
-                failed.push(p.part.as_str());
-            }
-        }
-    }
+    println!(
+        "\n{}",
+        words::batch_summary(drafted, kept, skipped, &failed)
+    );
     let models_dir = (template.out_dir.as_deref())
         .map(|d| format!(" --models-dir {}", shell_quote(&d.display().to_string())));
     println!(
@@ -2008,11 +2033,7 @@ pub fn extract_unmodelled(
         models_dir.unwrap_or_default()
     );
     if !failed.is_empty() {
-        anyhow::bail!(
-            "{} of the extractions failed: {}",
-            failed.len(),
-            failed.join(", ")
-        );
+        anyhow::bail!("{}", words::batch_failed(drafted, &failed));
     }
     Ok(())
 }
@@ -3977,33 +3998,6 @@ mcu_label = "test part"
                 toml::from_str(&format!("value = {encoded}")).expect("quoted string is TOML");
             assert_eq!(parsed["value"].as_str(), Some(value));
         }
-    }
-
-    /// A datasheet fetch looks like a browser, follows redirects, and a site
-    /// that refuses it is named with the way round: the user downloads it.
-    #[test]
-    fn a_datasheet_fetch_sends_browser_headers_and_a_refusal_says_download_it() {
-        let args = super::curl_fetch_args("https://vendor.example/x.pdf", "/tmp/x.pdf");
-        let at = |flag: &str| {
-            args.iter()
-                .position(|a| a == flag)
-                .map(|i| args[i + 1].as_str())
-        };
-        assert!(args[0].contains('L'), "follows redirects: {args:?}");
-        assert!(at("-A").is_some_and(|ua| ua.starts_with("Mozilla/5.0")));
-        assert!(at("-H").is_some_and(|h| h.starts_with("Accept: application/pdf")));
-        assert_eq!(at("-w"), Some("%{http_code}"));
-        assert_eq!(
-            args.last().map(String::as_str),
-            Some("https://vendor.example/x.pdf")
-        );
-        let refused = super::fetch_refusal("https://vendor.example/x.pdf", "ABC1", Some(403));
-        assert!(
-            refused.contains("HTTP 403") && refused.contains("--datasheet 'ABC1=<file.pdf>'"),
-            "{refused}"
-        );
-        let landing = super::fetch_refusal("https://vendor.example/x", "ABC1", Some(200));
-        assert!(landing.contains("did not serve a PDF") && landing.contains("--datasheet 'ABC1="));
     }
 
     #[test]

@@ -11,9 +11,13 @@
 //! web stream forwards as `activity: <json>` lines and `HAUKSBEE_EXTRACT_EVENTS`
 //! appends to a JSONL file, so a person can watch what the agent is doing.
 //!
-//! The estimate is the median of recent completed runs (one stuck run drags a
-//! mean for weeks), each scaled by relative page count within 0.5-2x, kept
-//! beside the backend config. With no history it is a typical agent run.
+//! The estimate is the median of recent completed runs of the SAME model (a
+//! strong model's minutes are no estimate for a fast one's, and one stuck run
+//! drags a mean for weeks), each scaled by relative page count within 0.5-2x,
+//! kept beside the backend config. A model with no history yet gets its tier's
+//! typical time ([`tier_default_secs`]): the fast cheap tier (Luna, Flash,
+//! Haiku) takes a couple of minutes a part, the strong tier (Sol, Opus, Sonnet)
+//! several times that.
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -21,11 +25,17 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 const DEFAULT_SECS: u64 = 180;
+/// A fast, cheap model's typical run: measured 1-3 minutes a part on Luna.
+const FAST_TIER_SECS: u64 = 120;
+/// A strong model's typical run, until its own history says otherwise.
+const STRONG_TIER_SECS: u64 = 600;
 const KEEP: usize = 20;
 
 struct State {
     phase: String,
     pages: u64,
+    /// The model the run uses, whose history sets the estimate ("" = unknown).
+    model: String,
     estimate: u64,
     /// A spinner line is on screen and must be erased before anything prints.
     drawn: bool,
@@ -37,6 +47,7 @@ struct State {
 static STATE: Mutex<State> = Mutex::new(State {
     phase: String::new(),
     pages: 0,
+    model: String::new(),
     estimate: DEFAULT_SECS,
     drawn: false,
     events: Vec::new(),
@@ -99,9 +110,58 @@ pub fn drain_events() -> Vec<String> {
 
 /// The datasheet's page count, once known (0 = unknown); rescales the estimate.
 pub fn pages(count: usize) {
-    let estimate = median_scaled(&history(), count as u64);
+    let model = state().model.clone();
+    let estimate = estimate_for(&model, count as u64);
     let mut s = state();
     (s.pages, s.estimate) = (count as u64, estimate);
+}
+
+/// The model the run uses: its own recorded runs set the estimate, and with
+/// none it is its tier's typical time.
+pub fn model(name: &str) {
+    let pages = state().pages;
+    let estimate = estimate_for(name, pages);
+    let mut s = state();
+    s.model = name.to_string();
+    s.estimate = estimate;
+}
+
+/// Set the estimate directly, for a step that is not an extraction (a web
+/// search for a datasheet); the next [`pages`] or [`model`] call replaces it.
+pub fn expect(secs: u64) {
+    state().estimate = secs;
+}
+
+/// How long a model's run takes when it has no history: by name, the fast
+/// cheap tier or the strong tier; an unrecognised model gets the generic time.
+#[must_use]
+pub fn tier_default_secs(model: &str) -> u64 {
+    let name = model.to_ascii_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| name.contains(w));
+    if has(&["luna", "flash", "haiku", "mini", "nano", "lite"]) {
+        FAST_TIER_SECS
+    } else if has(&["sol", "opus", "sonnet", "pro", "max"]) {
+        STRONG_TIER_SECS
+    } else {
+        DEFAULT_SECS
+    }
+}
+
+fn estimate_for(model: &str, pages: u64) -> u64 {
+    estimate_in(&history(), model, pages)
+}
+
+/// The estimate for `model` from `history`: the page-scaled median of its own
+/// runs, else its tier's typical time.
+fn estimate_in(history: &[(u64, u64, String)], model: &str, pages: u64) -> u64 {
+    let own: Vec<(u64, u64)> = (history.iter())
+        .filter(|run| !model.is_empty() && run.2 == model)
+        .map(|(secs, was, _)| (*secs, *was))
+        .collect();
+    if own.is_empty() {
+        return tier_default_secs(model);
+    }
+    median_scaled(&own, pages)
 }
 
 /// The current phase and the estimated whole-run seconds.
@@ -136,13 +196,20 @@ fn history_path() -> Option<PathBuf> {
     Some(config.with_file_name("extract-history.txt"))
 }
 
-/// `(seconds, pages)` per completed run, oldest first.
-fn history() -> Vec<(u64, u64)> {
+/// `(seconds, pages, model)` per completed run, oldest first. A line written
+/// before runs were kept per model has no model and counts for none.
+fn history() -> Vec<(u64, u64, String)> {
     let text = history_path().and_then(|p| std::fs::read_to_string(p).ok());
-    (text.unwrap_or_default().lines())
+    parse_history(&text.unwrap_or_default())
+}
+
+fn parse_history(text: &str) -> Vec<(u64, u64, String)> {
+    text.lines()
         .filter_map(|l| {
-            l.split_once(' ')
-                .and_then(|(s, p)| Some((s.parse().ok()?, p.parse().ok()?)))
+            let mut fields = l.splitn(3, ' ');
+            let secs = fields.next()?.parse().ok()?;
+            let pages = fields.next()?.parse().ok()?;
+            Some((secs, pages, fields.next().unwrap_or_default().to_string()))
         })
         .collect()
 }
@@ -165,6 +232,22 @@ fn median_scaled(history: &[(u64, u64)], pages: u64) -> u64 {
         .map_or(DEFAULT_SECS, |m| m.round() as u64)
 }
 
+/// The history file's text: each model keeps its own last [`KEEP`] runs, oldest
+/// first, and a run from before models were recorded is dropped.
+fn history_text(runs: &[(u64, u64, String)]) -> String {
+    let mut kept: Vec<&(u64, u64, String)> = Vec::new();
+    for run in runs.iter().rev().filter(|run| !run.2.is_empty()) {
+        if kept.iter().filter(|k| k.2 == run.2).count() < KEEP {
+            kept.push(run);
+        }
+    }
+    kept.reverse();
+    (kept.iter())
+        .map(|(s, p, m)| format!("{s} {p} {m}\n"))
+        .collect::<Vec<_>>()
+        .concat()
+}
+
 /// Remember a completed run. Best effort: an unwritable history only costs a
 /// worse estimate, and a canned mock reply says nothing about real runs.
 pub fn record(took: Duration) {
@@ -172,13 +255,17 @@ pub fn record(took: Duration) {
     if std::env::var_os("HAUKSBEE_EXTRACT_MOCK_REPLY").is_some() {
         return;
     }
+    let (pages, model) = {
+        let s = state();
+        (s.pages, s.model.clone())
+    };
+    // Without a model the run says nothing about any one of them.
+    if model.is_empty() {
+        return;
+    }
     let mut runs = history();
-    runs.push((took.as_secs(), state().pages));
-    let keep = runs[runs.len().saturating_sub(KEEP)..].iter();
-    let text = keep
-        .map(|(s, p)| format!("{s} {p}\n"))
-        .collect::<Vec<_>>()
-        .concat();
+    runs.push((took.as_secs(), pages, model));
+    let text = history_text(&runs);
     let _ = path.parent().map(std::fs::create_dir_all);
     let _ = std::fs::write(path, text);
 }
@@ -194,9 +281,24 @@ pub fn record(took: Duration) {
 /// # Errors
 ///
 /// Returns `run`'s own error unchanged; the spinner adds none.
+pub fn with_spinner<T, E>(run: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
+    spinner(true, run)
+}
+
+/// [`with_spinner`] for a step that is not an extraction (a web search): its
+/// duration says nothing about how long a model takes to draft a card, so it is
+/// not remembered.
+///
+/// # Errors
+///
+/// Returns `run`'s own error unchanged; the spinner adds none.
+pub fn with_unrecorded_spinner<T, E>(run: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
+    spinner(false, run)
+}
+
 // The ticker holds its lock across a redraw so `stop` cannot land mid-line.
 #[allow(clippy::significant_drop_tightening)]
-pub fn with_spinner<T, E>(run: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
+fn spinner<T, E>(record_run: bool, run: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
     let (started, tty) = (Instant::now(), std::io::stderr().is_terminal());
     let stop = Arc::new((Mutex::new(false), Condvar::new()));
     let flag = Arc::clone(&stop);
@@ -230,7 +332,7 @@ pub fn with_spinner<T, E>(run: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
     stop.1.notify_all();
     let _ = ticker.join();
     drop(erased());
-    if result.is_ok() {
+    if record_run && result.is_ok() {
         record(started.elapsed());
     }
     result
@@ -253,7 +355,63 @@ fn about(secs: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{about, clock, median_scaled, DEFAULT_SECS};
+    use super::{
+        about, clock, estimate_in, history_text, median_scaled, parse_history, tier_default_secs,
+        DEFAULT_SECS, FAST_TIER_SECS, KEEP, STRONG_TIER_SECS,
+    };
+
+    /// The hint is per model: the fast cheap tier reads in minutes, the strong
+    /// tier several times that, and a model nobody has classified keeps the
+    /// generic time rather than borrowing either.
+    #[test]
+    fn the_typical_time_depends_on_the_model_tier() {
+        assert_eq!(tier_default_secs("gpt-6-luna"), FAST_TIER_SECS);
+        assert_eq!(tier_default_secs("gemini-3.8-flash"), FAST_TIER_SECS);
+        assert_eq!(tier_default_secs("gpt-6.1-sol"), STRONG_TIER_SECS);
+        assert_eq!(tier_default_secs("claude-opus-5-5"), STRONG_TIER_SECS);
+        assert_eq!(tier_default_secs("something-else"), DEFAULT_SECS);
+        assert_eq!(
+            (
+                about(tier_default_secs("gpt-6-luna")),
+                about(STRONG_TIER_SECS)
+            ),
+            ("~2 min".into(), "~10 min".into())
+        );
+    }
+
+    /// History is kept per model: a slow strong-model run must not set the
+    /// estimate for the fast one (the old single history showed ~14 min for
+    /// Luna, whose runs take 1-3), and a model without runs falls back to its
+    /// tier.
+    #[test]
+    fn recorded_runs_set_only_their_own_models_estimate() {
+        let runs = parse_history("840 20 gpt-6.1-sol\n900 20 gpt-6.1-sol\n95 20 gpt-6-luna\n");
+        assert_eq!(estimate_in(&runs, "gpt-6-luna", 0), 95);
+        assert_eq!(estimate_in(&runs, "gpt-6.1-sol", 0), 900);
+        assert_eq!(estimate_in(&runs, "gemini-3.8-flash", 0), FAST_TIER_SECS);
+        assert_eq!(estimate_in(&runs, "", 0), DEFAULT_SECS);
+    }
+
+    /// A line from before models were recorded counts for no model and is not
+    /// written back; each model keeps its own last runs.
+    #[test]
+    fn old_history_lines_count_for_no_model_and_each_model_keeps_its_own_tail() {
+        let old = parse_history("700 12\n");
+        assert_eq!(old, vec![(700, 12, String::new())]);
+        assert_eq!(estimate_in(&old, "gpt-6-luna", 0), FAST_TIER_SECS);
+        let mut runs = old;
+        runs.extend((0..KEEP as u64 + 5).map(|n| (n, 10, "a".to_string())));
+        runs.push((7, 10, "b".to_string()));
+        let kept = parse_history(&history_text(&runs));
+        assert_eq!(kept.iter().filter(|r| r.2 == "a").count(), KEEP);
+        assert_eq!(kept.iter().filter(|r| r.2 == "b").count(), 1);
+        assert!(kept.iter().all(|r| !r.2.is_empty()));
+        assert_eq!(
+            kept.iter().find(|r| r.2 == "a").map(|r| r.0),
+            Some(5),
+            "the oldest are the ones dropped"
+        );
+    }
 
     #[test]
     fn times_read_as_seconds_then_minutes_and_estimates_stay_rough() {

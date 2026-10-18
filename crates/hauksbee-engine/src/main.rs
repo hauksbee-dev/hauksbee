@@ -464,7 +464,11 @@ struct ModelsExtractArgs {
     part: Option<String>,
     /// Draft a model for every connected active part this board leaves
     /// unmodelled, from the datasheet its Datasheet field names (a URL is
-    /// fetched) or --datasheet. Lists them, asks once, then extracts each.
+    /// fetched) or --datasheet. A part with no usable link is searched for on
+    /// the web by an agent backend (codex, claude-code, agy); the PDF is
+    /// downloaded and checked against the part number, and skipped if in doubt.
+    /// A part that already has a card in --out-dir is reported, not redone
+    /// (--force replaces it). Lists them, asks once, then extracts each.
     #[arg(long, value_name = "BOARD", conflicts_with_all = ["pdf", "part"])]
     unmodelled: Option<PathBuf>,
     /// With --unmodelled: the datasheet for one part, as PART=PDF-OR-URL (a

@@ -598,6 +598,116 @@ fn names_stem(printed: &str, stem: &str) -> bool {
             .all(|(p, s)| p == s || p == 'X')
 }
 
+/// The part-number stems printed on one line of datasheet text.
+fn line_stems(line: &str) -> Vec<String> {
+    line.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter_map(part_stem)
+        .collect()
+}
+
+/// Whether one line of datasheet text prints any of the `wanted` stems, or a
+/// family name covering one (see [`names_stem`]).
+fn line_names(line: &str, wanted: &[String]) -> bool {
+    let squashed = squash(line);
+    wanted
+        .iter()
+        .any(|w| squashed.contains(w.as_str()) || line_stems(line).iter().any(|p| names_stem(p, w)))
+}
+
+/// Letters and digits only, upper-cased: how a part number is compared.
+#[must_use]
+pub fn squash(text: &str) -> String {
+    (text.chars())
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_uppercase())
+        .collect()
+}
+
+/// The stem a datasheet must print for `part` (see [`part_stem`]), if the name
+/// is long enough to search for.
+#[must_use]
+pub fn stem_of(part: &str) -> Option<String> {
+    part_stem(part)
+}
+
+/// How a datasheet's text vouches for the part it was fetched for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Vouch {
+    /// The part number (or a board value for it) is printed in full.
+    Exact(String),
+    /// Only the part's family base name is printed (`TPS6213x` for
+    /// `TPS62130`), per the same family match the wrong-sheet guard uses.
+    Family(String),
+}
+
+impl std::fmt::Display for Vouch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Exact(name) => write!(f, "the PDF prints {name}"),
+            Self::Family(stem) => write!(f, "the PDF prints the {stem} family name"),
+        }
+    }
+}
+
+/// Positive evidence that `pdf_text` is `part`'s datasheet.
+///
+/// For a PDF nobody on the board vouched for (one an agent found on the web): it
+/// must print the part number (or a board value for it) or its family base name,
+/// and must not be the wrong-sheet guard's catch. [`wrong_datasheet`] alone passes a sheet
+/// that never names the part when nothing else contradicts it; that is right
+/// for a link the board's author chose and wrong for a stranger's.
+///
+/// # Errors
+///
+/// The reason, as a clause, when the text cannot vouch: no readable text layer,
+/// no mention of the part or its family, or a catch of the wrong-sheet guard.
+pub fn vouches_for(part: &str, aliases: &[String], pdf_text: &str) -> Result<Vouch, String> {
+    if pdf_text == PDF_TEXT_UNAVAILABLE || pdf_text.trim().len() < 500 {
+        return Err(
+            "the PDF has no readable text, so it cannot be checked against the part number".into(),
+        );
+    }
+    let squashed = squash(pdf_text);
+    let exact = std::iter::once(part)
+        .chain(aliases.iter().map(String::as_str))
+        .map(|n| (n, squash(n)))
+        .find(|(_, s)| s.len() >= 3 && squashed.contains(s.as_str()));
+    let verdict = if let Some((name, _)) = exact {
+        Vouch::Exact(name.to_string())
+    } else {
+        let wanted: Vec<String> = std::iter::once(part_stem(part))
+            .chain(aliases.iter().map(|a| part_stem(a)))
+            .flatten()
+            .collect();
+        let family = wanted.iter().find(|w| {
+            pdf_text
+                .lines()
+                .any(|l| line_names(l, std::slice::from_ref(*w)))
+        });
+        match family {
+            Some(stem) => Vouch::Family(stem.clone()),
+            None => {
+                return Err(format!(
+                    "the PDF never prints {part}{}",
+                    wanted
+                        .first()
+                        .map_or_else(String::new, |s| format!(" or its family name {s}"))
+                ))
+            }
+        }
+    };
+    wrong_datasheet(part, aliases, pdf_text).map_or(Ok(verdict), Err)
+}
+
+/// The text layer of a PDF for [`vouches_for`], read quietly (no progress or
+/// narration). Empty when `pdftotext` is missing or finds no text.
+#[must_use]
+pub fn pdf_text(path: &Path) -> String {
+    pdftotext(path, false)
+        .map(|text| truncate_to_chars(&text, 400_000))
+        .unwrap_or_default()
+}
+
 /// Why `pdf_text` is not `part`'s datasheet, checked before anything is sent:
 /// its title block names another part of the same family and `part` appears
 /// only as a complementary or related part, or nowhere (measured: a file saved
@@ -619,21 +729,8 @@ fn wrong_datasheet(part: &str, aliases: &[String], pdf_text: &str) -> Option<Str
     let wanted: Vec<String> = std::iter::once(stem.clone())
         .chain(aliases.iter().filter_map(|a| part_stem(a)))
         .collect();
-    let stems = |l: &str| -> Vec<String> {
-        l.split(|c: char| !c.is_ascii_alphanumeric())
-            .filter_map(part_stem)
-            .collect()
-    };
-    let names = |l: &str| {
-        let squashed: String = l
-            .chars()
-            .filter(char::is_ascii_alphanumeric)
-            .map(|c| c.to_ascii_uppercase())
-            .collect();
-        wanted
-            .iter()
-            .any(|w| squashed.contains(w.as_str()) || stems(l).iter().any(|p| names_stem(p, w)))
-    };
+    let stems = line_stems;
+    let names = |l: &str| line_names(l, &wanted);
     let mentioned = |own: bool| {
         lines
             .iter()
@@ -1000,6 +1097,23 @@ impl Backend {
             Self::Agy => Some("agy"),
             Self::Api => None,
         }
+    }
+
+    /// Whether the backend is an agent that can search the web, which datasheet
+    /// discovery needs (the API backend answers from the text it is sent only).
+    #[must_use]
+    pub const fn can_search(self) -> bool {
+        !matches!(self, Self::Api)
+    }
+
+    /// The agent backends that can search the web, as a list for a hint.
+    #[must_use]
+    pub fn searchers() -> Vec<&'static str> {
+        Self::ALL
+            .iter()
+            .filter(|b| b.can_search())
+            .map(|b| b.name())
+            .collect()
     }
 
     /// The one command that makes it available.
@@ -3177,6 +3291,8 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
     // about what is about to read the datasheet.
     let resolved = resolve_settings(args)?;
     let chosen = resolved.backend;
+    // The "typical" time shown is this model's own, not another's.
+    progress::model(resolved.model());
     say!(
         "[model-extract] backend: {} ({})",
         resolved.summary(),
@@ -3260,19 +3376,47 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
     // A subscription run is reported as its share of the plan's limits, read
     // before and after; dollars only for a metered (API-key) run.
     let command = resolved.agent(chosen).expect("agent").command.clone();
-    let billing = match chosen {
-        Backend::Codex => {
-            let a = resolved.agent(chosen).expect("agent");
-            crate::extract_usage::codex_billing(&a.command, &a.extra_args)
-        }
-        Backend::ClaudeCode => crate::extract_plan::claude_billing(&command),
-        _ => crate::extract_usage::Billing::Unknown,
-    };
+    let billing = billing_for(&resolved);
     // `run` reads the plan again when the extraction ends.
     if billing == crate::extract_usage::Billing::Plan {
         crate::extract_plan::begin(chosen.name(), &command);
     }
     run_ladder(&resolved, &prompts, reply, &ws, &ladder, billing)
+}
+
+/// How the active backend bills a run: a plan's share, metered dollars, or unknown.
+fn billing_for(resolved: &Resolved) -> crate::extract_usage::Billing {
+    let Some(a) = resolved.agent(resolved.backend) else {
+        return crate::extract_usage::Billing::Unknown;
+    };
+    match resolved.backend {
+        Backend::Codex => crate::extract_usage::codex_billing(&a.command, &a.extra_args),
+        Backend::ClaudeCode => crate::extract_plan::claude_billing(&a.command),
+        _ => crate::extract_usage::Billing::Unknown,
+    }
+}
+
+/// One web-searching agent run in a scratch sandbox (the datasheet discovery step).
+///
+/// The active agent backend with its search tool, its usage recorded, returning
+/// the agent's final message. Files and shell are confined exactly as for an
+/// extraction; the sandbox holds only the prompt.
+///
+/// # Errors
+///
+/// Fails for the API backend (no search), when the agent CLI is missing, and
+/// when the run fails or times out.
+pub fn run_agent_searching(resolved: &Resolved, prompt: &str) -> Result<String> {
+    if !resolved.backend.can_search() {
+        bail!(
+            "the {} backend cannot search the web; use one of: {}",
+            resolved.backend.label(),
+            Backend::searchers().join(", ")
+        );
+    }
+    require_tool(resolved)?;
+    let ws = Workspace::scratch()?;
+    run_and_record_with(resolved, prompt, &ws, 0, billing_for(resolved), true)
 }
 
 /// The escalation ladder over `ladder`'s models in one sandbox (see `call_backend`).
@@ -3530,10 +3674,22 @@ fn run_and_record(
     budget: u64,
     billing: crate::extract_usage::Billing,
 ) -> Result<String> {
+    run_and_record_with(resolved, prompt, ws, budget, billing, false)
+}
+
+/// [`run_and_record`], optionally with the agent's web search tool.
+fn run_and_record_with(
+    resolved: &Resolved,
+    prompt: &str,
+    ws: &Workspace,
+    budget: u64,
+    billing: crate::extract_usage::Billing,
+    web: bool,
+) -> Result<String> {
     use crate::extract_usage as usage;
     let (chosen, model) = (resolved.backend, resolved.model());
     let ran = with_backoff(&BACKOFF, || {
-        run_agent_budgeted(resolved, prompt, ws, budget)
+        run_agent_with(resolved, prompt, ws, budget, web)
     });
     let stdout = ran.as_ref().map(String::as_str).unwrap_or_default();
     let said = match chosen {
@@ -4529,6 +4685,39 @@ pub fn run_agent_budgeted(
     ws: &Workspace,
     budget: u64,
 ) -> Result<String> {
+    run_agent_with(resolved, prompt, ws, budget, false)
+}
+
+/// Codex's web search. Its own flag is `--search` on the top-level command only;
+/// `exec` takes the same setting as a config override (checked against
+/// codex-cli 0.159.0: the run shows `web_search` events).
+const fn codex_search_args(web: bool) -> &'static [&'static str] {
+    if web {
+        &["-c", "web_search=\"live\""]
+    } else {
+        &[]
+    }
+}
+
+/// Claude Code's tools: a search run gets its web tools and a file to write the
+/// answer to, no shell; an extraction run gets the shell and file tools.
+const fn claude_tools(web: bool) -> &'static str {
+    if web {
+        "WebSearch,WebFetch,Write"
+    } else {
+        "Bash,Read,Edit,Write"
+    }
+}
+
+/// One agent run; with `web` the agent is given its web search tool and nothing
+/// else changes (same confinement of files and shell, no page images).
+pub(crate) fn run_agent_with(
+    resolved: &Resolved,
+    prompt: &str,
+    ws: &Workspace,
+    budget: u64,
+    web: bool,
+) -> Result<String> {
     let backend = resolved.backend;
     let Some(a) = resolved.agent(backend) else {
         bail!("the api backend is not an agent CLI");
@@ -4554,6 +4743,7 @@ pub fn run_agent_budgeted(
             }
             let effort = format!("model_reasoning_effort=\"{}\"", a.effort);
             cmd.args(["--model", &a.model, "-c", &effort]);
+            cmd.args(codex_search_args(web));
             match a.permission_mode.as_str() {
                 "danger-full-access" => cmd.args(["--sandbox", "danger-full-access"]),
                 mode => cmd
@@ -4598,11 +4788,7 @@ pub fn run_agent_budgeted(
                 "--no-session-persistence",
             ])
             .args(["--restricted", "--strict-mcp-config", "--tools"])
-            .args([
-                "Bash,Read,Edit,Write",
-                "--settings",
-                &claude_confinement(ws),
-            ])
+            .args([claude_tools(web), "--settings", &claude_confinement(ws)])
             .env("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1")
             .env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
             // No `--json-schema` (see `schema_flag`): the envelope is asked for
