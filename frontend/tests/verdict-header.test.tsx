@@ -1,6 +1,6 @@
 // The verdict header must agree with itself and with the page under it. Three
 // defects from a real-browser pass over an unrouted board, pinned here:
-//   1. the key-parts ring clipped a four-digit count to "000/500";
+//   1. the card's ring clipped a four-digit count to "000/500";
 //   2. the card said "0 serious" and "none serious" beside a finding tagged
 //      SERIOUS, and the section below said "1 serious";
 //   3. the Checks strip counted "1 failed" for a check no row showed. The
@@ -12,7 +12,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ResultPanel } from '../src/components/report/ResultPanel'
+import { ResultPanel, Ring } from '../src/components/report/ResultPanel'
 import { VerdictBand } from '../src/components/checks/VerdictBand'
 import { RING_FRACTION_MAX } from '../src/lib/gauge'
 import { assertRowCount, findingEntries, readStaticFinding, reportView, resultsWithoutRows, runMarkdown, runView, sectionStatus } from '../src/lib/report-view'
@@ -36,22 +36,24 @@ const card = (report: WebReport) =>
     />,
   )
 
-const withKeyParts = (bound: number, total: number): WebReport => ({
-  ...unrouted,
-  bind: { ...unrouted.bind!, critical_parts_bound: `${bound}/${total}` },
-})
+/** The card's ring alone: the gauge the card draws for "net checks judged".
+ *  (The card's second ring, "key parts modelled", is gone: it counted a subset
+ *  of the parts with no usable model the card's row already names, and on an
+ *  unrouted board it said 4/5 beside two unmodelled key parts.) */
+const ring = (value: number, total: number) =>
+  renderToStaticMarkup(<Ring testId="result-gauge-judged" value={value} total={total} ink="var(--warn)" label="net checks judged" />)
 
 /** The text the ring draws inside its hole. */
-const ringText = (html: string) => html.match(/data-testid="result-gauge-modelled-text"[^>]*>([^<]*)</)?.[1] ?? ''
+const ringText = (html: string) => html.match(/data-testid="result-gauge-judged-text"[^>]*>([^<]*)</)?.[1] ?? ''
 
-describe('the key-parts ring', () => {
+describe('the coverage ring', () => {
   test.each([1, 3, 4, 5, 6])('a %i-digit count never draws more than fits, and says the exact numbers', digits => {
     const total = 10 ** digits - 1
     for (const bound of [total, total - 1, Math.floor(total / 3)]) {
-      const html = card(withKeyParts(bound, total))
+      const html = ring(bound, total)
       expect(ringText(html).length).toBeLessThanOrEqual(RING_FRACTION_MAX)
       // The exact numbers are on the page for any reader, in the label and the tooltip.
-      expect(html).toContain(`aria-label="${bound} of ${total} key parts modelled"`)
+      expect(html).toContain(`aria-label="${bound} of ${total} net checks judged"`)
       expect(html).toContain(`data-value="${bound}" data-total="${total}"`)
       if (digits >= 4) {
         const grouped = (n: number) => n.toLocaleString('en-US')
@@ -61,14 +63,18 @@ describe('the key-parts ring', () => {
   })
 
   test('5000 of 5000 is not clipped to a fragment of itself', () => {
-    const html = card(withKeyParts(5000, 5000))
+    const html = ring(5000, 5000)
     expect(ringText(html)).toBe('100%')
     expect(html).toContain('5,000 of 5,000')
     expect(html).not.toMatch(/>\d*000\/500</)
   })
 
   test('a small count keeps its fraction inside the ring', () => {
-    expect(ringText(card(withKeyParts(4, 5)))).toBe('4/5')
+    expect(ringText(ring(4, 5))).toBe('4/5')
+  })
+
+  test('the card draws no key-parts ring: the unmodelled parts are one measure, stated once', () => {
+    expect(card(unrouted)).not.toContain('key parts modelled')
   })
 })
 

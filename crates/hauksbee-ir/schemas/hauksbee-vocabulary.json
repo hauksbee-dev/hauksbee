@@ -56,7 +56,7 @@
     },
     {
       "id": "invalid_run",
-      "label": "invalid run, not a pass",
+      "label": "inconclusive, not a pass",
       "meaning": "The run's own evidence is not trustworthy (a refusal, an undermined claim, a failed simulation), so it vouches for nothing either way.",
       "aliases": [
         "invalid",
@@ -184,7 +184,7 @@
     {
       "id": "invalid_run",
       "label": "not judged",
-      "meaning": "Partly judged or invalid run: not a pass, and not a fail.",
+      "meaning": "Partly judged or inconclusive: not a pass, and not a fail.",
       "aliases": [
         "invalid for analysis"
       ],
@@ -1258,7 +1258,7 @@
       {
         "id": "invalid_run",
         "group": "verdict",
-        "label": "invalid run, not a pass",
+        "label": "inconclusive, not a pass",
         "explain": "The run's own evidence is not trustworthy (a refusal, an undermined claim, a failed simulation), so it vouches for nothing either way."
       },
       {

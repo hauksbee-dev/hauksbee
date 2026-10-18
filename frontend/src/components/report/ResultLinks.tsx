@@ -176,6 +176,34 @@ export function RowAction({ testId, onClick, children, primary = false, title }:
   )
 }
 
+/** The "show on board" action every card shares. */
+export function ShowOnBoard({ entities, at, id, label }: {
+  entities: ResultEntity[]
+  at: { x: number; y: number; label: string } | null
+  id: string
+  label: string
+}) {
+  const { onShow, shownKey } = useContext(ResultLinkContext)
+  if (!onShow || (entities.length === 0 && !at)) return null
+  const on = shownKey === id
+  return (
+    <button
+      type="button"
+      data-testid="finding-show"
+      aria-pressed={on}
+      aria-label={`Show on board: ${label}`}
+      onClick={() => onShow(entities, at, id)}
+      className={`${on ? 'hb-chip' : 'hb-btn'} hb-press inline-flex items-center gap-1 px-2 text-[12px] whitespace-nowrap`}
+      style={{ height: 26 }}
+    >
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
+        <circle cx="12" cy="12" r="7" /><path d="M12 2v4M12 18v4M2 12h4M18 12h4" strokeLinecap="round" />
+      </svg>
+      {on ? 'On the board' : 'Show on board'}
+    </button>
+  )
+}
+
 /** "Add as check" for the first part or net in `entities` the add-check path
  *  can start a check on; nothing when none can. */
 export function AddCheck({ entities }: { entities: ResultEntity[] }) {

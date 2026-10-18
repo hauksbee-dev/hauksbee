@@ -311,6 +311,11 @@ impl VerdictState {
     }
 
     /// The display label every human surface prints.
+    ///
+    /// A state that is neither a pass nor a fail reads "<word>, not a pass":
+    /// the app's verdict card shows the word as its headline ("PARTLY
+    /// JUDGED", "INCONCLUSIVE") and the rest as its qualifier, the words the
+    /// CLI's [`PARTLY_JUDGED_LEAD`] and closing `VERDICT: inconclusive` use.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -318,7 +323,7 @@ impl VerdictState {
             Self::PassConditional => "pass, conditionally",
             Self::Fail => "fail",
             Self::PartlyJudged => "partly judged, not a pass",
-            Self::InvalidRun => "invalid run, not a pass",
+            Self::InvalidRun => "inconclusive, not a pass",
         }
     }
 
@@ -507,7 +512,7 @@ impl ExitClass {
             Self::Pass => "Pass or conditional pass.",
             Self::Fail => "Fail: a blocking finding or a failed assertion.",
             Self::Usage => "Usage, spec or input error: the run did not start.",
-            Self::InvalidRun => "Partly judged or invalid run: not a pass, and not a fail.",
+            Self::InvalidRun => "Partly judged or inconclusive: not a pass, and not a fail.",
             Self::ToolFault => "Internal error in hauksbee itself; please report it.",
         }
     }

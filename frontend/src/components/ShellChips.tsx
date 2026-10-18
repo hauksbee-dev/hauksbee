@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { WebReport } from '../types/report'
-import { boardVerdict, TONE_RANK, TONE_STYLE, useStatusLabel } from '../lib/status-vocab'
+import { explainFor } from '../lib/labels'
+import { boardVerdict, isBoardState, TONE_RANK, TONE_STYLE, useStatusLabel } from '../lib/status-vocab'
 import type { ChipTone, StatusTerm } from '../lib/status-vocab'
 import type { SimShellStatus } from '../SimView'
 import { useGlossary, useTermEntry } from './ui'
@@ -259,7 +260,9 @@ export function ShellChips({
     }
   } else {
     const board = report ? boardVerdict(report) : null
-    if (board) parts.push({ key: 'board', view: 'board', term: board.term, detail: board.detail, tone: board.tone })
+    // A board state the glossary has no row for (partly judged, inconclusive)
+    // is explained by its line in the shared vocabulary.
+    if (board) parts.push({ key: 'board', view: 'board', term: board.term, detail: board.detail, tone: board.tone, explain: isBoardState(board.term) ? explainFor(board.term) : undefined })
     if (checks) {
       const { passed, failed, invalid, measured = 0 } = checks
       // A green checks result must never sit beside the report's own serious

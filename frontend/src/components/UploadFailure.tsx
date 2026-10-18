@@ -17,7 +17,7 @@ import { FindFilesHelp, SampleRow } from './UploadView'
 // board" is absent for this state so there is a single retry.
 
 /** The "choose a file" button: a label for the app's one hidden board input. */
-export function DropBoardAgain({ testId, label, height }: { testId: string; label: string; height: number }) {
+export function DropBoardAgain({ testId, label, height, primary = true }: { testId: string; label: string; height: number; primary?: boolean }) {
   return (
     <label
       htmlFor="board-file"
@@ -30,7 +30,7 @@ export function DropBoardAgain({ testId, label, height }: { testId: string; labe
           document.getElementById('board-file')?.click()
         }
       }}
-      className="hb-btn-primary hb-press inline-flex items-center px-3.5 text-[13px] cursor-pointer"
+      className={`${primary ? 'hb-btn-primary' : 'hb-btn'} hb-press inline-flex items-center px-3.5 text-[13px] cursor-pointer`}
       style={{ height }}
     >
       {label}

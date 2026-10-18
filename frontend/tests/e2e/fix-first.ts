@@ -52,8 +52,10 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 }, timeout: 9
     ok('the pad-group detail is said at most once on the page', (await page.locator('body').innerText()).split('pad group').length <= 2)
     ok('says the board is not routed yet', /not routed yet/i.test(await page.locator('body').innerText()))
     const banner = Number(await page.locator('[data-testid="open-parts-banner"]').getAttribute('data-open-count'))
-    const cards = await page.locator('[data-testid^="open-part-"]').count()
-    ok('banner count equals the open-part cards', banner === cards && cards > 0, `${banner} vs ${cards}`)
+    // A part can be listed open by more than one assumption; the count is of parts.
+    const cardRefs = await page.locator('[data-testid^="open-part-"]').evaluateAll(els => els.map(e => e.getAttribute('data-testid')))
+    const cards = new Set(cardRefs).size
+    ok('banner count equals the distinct parts in the open-part cards', banner === cards && cards > 0, `${banner} vs ${cards} (${cardRefs.join(', ')})`)
     ok('no horizontal page scroll', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
     await shoot(page, `stormduino-${name}`)
 

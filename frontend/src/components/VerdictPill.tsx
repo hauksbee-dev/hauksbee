@@ -1,15 +1,16 @@
-import { TONE_STYLE, useStatusLabel } from '../lib/status-vocab'
+import { savedVerdict, TONE_STYLE, useStatusLabel } from '../lib/status-vocab'
 import type { ChipTone, StatusTerm } from '../lib/status-vocab'
 
 // A verdict as a small pill in the glossary's own words: the saved-session rows
 // and the resume card show the same claim the header chip made when the run was
 // last written.
 
-export function VerdictPill({ verdict, testId }: {
+export function VerdictPill({ verdict: stored, testId }: {
   verdict: { term: StatusTerm; detail: string; tone: ChipTone }
   testId?: string
 }) {
   const label = useStatusLabel()
+  const verdict = savedVerdict(stored)
   return (
     <span
       data-testid={testId}

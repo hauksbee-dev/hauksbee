@@ -82,7 +82,7 @@ export function suggestions(r: WebReport): Suggestion[] {
  *  way. Never two of these at once. */
 export type NextKind = 'ci' | 'route' | 'fix-first' | 'fix' | 'model' | 'cosim' | 'firmware-failed' | 'checks'
 
-export function nextKind(r: WebReport, v: Pick<ReportView, 'fixFirst' | 'partlyJudged' | 'unresolved'>, state: {
+export function nextKind(r: WebReport, v: Pick<ReportView, 'fixFirst' | 'unmodelled'>, state: {
   firmwareName: string | null
   checks: { passed: number; failed: number; invalid: number } | null
 }): NextKind {
@@ -97,8 +97,7 @@ export function nextKind(r: WebReport, v: Pick<ReportView, 'fixFirst' | 'partlyJ
 }
 
 /** The key parts a model would let the run judge. */
-const modelRefs = (v: Pick<ReportView, 'partlyJudged' | 'unresolved'>) =>
-  [...new Set([...(v.partlyJudged?.openParts ?? []), ...v.unresolved])]
+const modelRefs = (v: Pick<ReportView, 'unmodelled'>) => v.unmodelled.key
 
 const Lead = ({ children }: { children: React.ReactNode }) => (
   <div className="text-[11px] font-bold tracking-widest uppercase mb-0.5" style={{ color: 'var(--copper-hi)' }}>{children}</div>
@@ -110,10 +109,10 @@ const Buttons = ({ children }: { children: React.ReactNode }) => (
 /** The card's one Next step: one sentence for the board's state and, where
  *  the app can do it, the one button that does it. */
 export function NextStep({
-  report, view, firmwareName, checks, specFile, onQueue, onOpenChecks, onOpenEvidence, onGiveModel, onLocate,
+  report, view, firmwareName, checks, specFile, onQueue, onOpenChecks, onOpenEvidence, onGiveModel, onLocate, quiet = false,
 }: {
   report: WebReport
-  view: Pick<ReportView, 'fixFirst' | 'partlyJudged' | 'unresolved'>
+  view: Pick<ReportView, 'fixFirst' | 'unmodelled'>
   firmwareName: string | null
   checks: { passed: number; failed: number; invalid: number } | null
   specFile: string | null
@@ -124,7 +123,11 @@ export function NextStep({
   /** Opens the model flow for a part; absent when restored. */
   onGiveModel?: (ref: string) => void
   onLocate?: LocateFn
+  /** Another surface on screen holds the one primary button (an open
+   *  inspector card), so this step's buttons are all secondary. */
+  quiet?: boolean
 }) {
+  const PRIMARY = quiet ? 'hb-btn' : 'hb-btn-primary'
   const [added, setAdded] = useState<ReadonlySet<string>>(new Set())
   const kind = nextKind(report, view, { firmwareName, checks })
   const add = (s: Suggestion) => {
@@ -135,7 +138,7 @@ export function NextStep({
   const checksButton = (primary: boolean) => (
     <button
       type="button" data-testid="open-checks-next" onClick={onOpenChecks}
-      className={`${primary ? 'hb-btn-primary' : 'hb-btn'} hb-press px-3 py-1.5 text-[12px]`}
+      className={`${primary ? PRIMARY : 'hb-btn'} hb-press px-3 py-1.5 text-[12px]`}
     >
       Set up checks
     </button>
@@ -150,7 +153,7 @@ export function NextStep({
             (<code className="hb-inline break-all">ci/{specFile ?? '<name>.toml'}</code>)
           </span>
           <Buttons>
-            <button type="button" data-testid="ci-next" onClick={onOpenChecks} className="hb-btn-primary hb-press px-3 py-1.5 text-[12px]">
+            <button type="button" data-testid="ci-next" onClick={onOpenChecks} className={`${PRIMARY} hb-press px-3 py-1.5 text-[12px]`}>
               Set up GitHub CI
             </button>
           </Buttons>
@@ -162,7 +165,7 @@ export function NextStep({
         <>
           <Lead>Next step</Lead>Route the board in your layout editor, then drop it here again. The copper checks run once it is routed.
           <Buttons>
-            <DropBoardAgain testId="next-redrop" label="Drop the routed board" height={30} />
+            <DropBoardAgain testId="next-redrop" label="Drop the routed board" height={30} primary={!quiet} />
           </Buttons>
         </>
       )
@@ -207,7 +210,7 @@ export function NextStep({
               {refs.slice(0, 3).map((ref, i) => (
                 <button
                   key={ref} type="button" data-testid={`result-give-model-${ref}`} onClick={() => onGiveModel(ref)}
-                  className={`${i === 0 ? 'hb-btn-primary' : 'hb-btn'} hb-press px-3 py-1.5 text-[12px]`}
+                  className={`${i === 0 ? PRIMARY : 'hb-btn'} hb-press px-3 py-1.5 text-[12px]`}
                 >
                   Give {ref} a model
                 </button>
@@ -264,7 +267,7 @@ export function NextStep({
       )
   }
   return (
-    <div data-testid="static-next-step" data-next={kind} className="text-[13px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
+    <div data-testid="static-next-step" data-next={kind} data-quiet={quiet || undefined} className="text-[13px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
       {body}
     </div>
   )

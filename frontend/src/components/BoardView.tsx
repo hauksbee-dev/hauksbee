@@ -1,7 +1,7 @@
 import { loadPercent } from './LoadBar'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BoardRequest, ModelCoverageComponent, WebOpenPart } from '../types/report'
-import { coverageFor, explainReport, findingEntries, modelsOnNet, padNetsOf, plural, reportView, sectionStatus, stageWords } from '../lib/report-view'
+import { coverageFor, explainReport, findingEntries, modelsOnNet, padNetsOf, plural, reportView, sectionStatus, stageWords, unmodelledHome } from '../lib/report-view'
 import type { BoardSession } from '../hooks/useBoardSession'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './BoardViewer'
 import { OpenSelectionsBanner, SelectionCard } from './SelectionCard'
@@ -224,13 +224,14 @@ export function BoardView({
   // no model, the variants the board leaves open, and what each model covers.
   const selections = r.bind?.open_selections ?? []
   const coverageGaps = r.model_coverage?.components.filter(c => c.actionable_behavior_gap).length ?? 0
-  const guessN = v.openParts.length + selections.length + coverageGaps
+  const guessN = v.unmodelled.all.length + selections.length + coverageGaps
+  // The parts with no usable model are stated once, above (the verdict card or
+  // their finding, whose "List all" opens this); the summary names only what
+  // is not said anywhere else.
   const guessSummary = [
-    // The same count, in the same words, as the findings' open-parts card.
-    v.openParts.length > 0 && `${plural(v.openParts.length, 'part')} with no usable model`,
     selections.length > 0 && `${plural(selections.length, 'variant')} not pinned`,
     coverageGaps > 0 && `${coverageGaps} modelled only in part`,
-  ].filter(Boolean).join(' · ')
+  ].filter(Boolean).join(' · ') || 'every part, and the way to give each a model'
   const guessBody = (
     <div ref={guessRef}>
       <OpenSelectionsBanner
@@ -495,6 +496,7 @@ export function BoardView({
                     view={v}
                     explanation={explanation}
                     onOpenChecks={onOpenChecks}
+                    onListParts={showGuessed}
                     next={restoredFrom ? undefined : (
                       <NextStep
                         report={r}
@@ -507,6 +509,7 @@ export function BoardView({
                         onOpenEvidence={openEvidence}
                         onGiveModel={resultLinks.onGiveModel}
                         onLocate={boardUrl ? locate : undefined}
+                        quiet={!!(selectedNet || selectedComponent)}
                       />
                     )}
                     exportSlot={(
@@ -559,7 +562,7 @@ export function BoardView({
                   <FindingsList
                     entries={entries}
                     status={status}
-                    openParts={v.bindOpen ? { count: v.openParts.length || v.unresolved.length, active: v.unresolved } : null}
+                    openParts={unmodelledHome(r, v.unmodelled) === 'findings' ? v.unmodelled : null}
                     openRefs={openRefs}
                     preLayout={v.preLayout}
                     onListParts={showGuessed}

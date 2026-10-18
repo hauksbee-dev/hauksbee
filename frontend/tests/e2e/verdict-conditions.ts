@@ -99,7 +99,8 @@ await browserFlow({ out: OUT, viewport: { width: 1440, height: 900 } }, async pa
   const partly = page.locator('[data-testid="report-verdict"] [data-testid="report-partly-judged"]')
   ok('the partly judged block sits inside the verdict card', await partly.count() === 1)
   const partlyText = await partly.innerText()
-  ok('the verdict says it is not a pass, once', /partly judged, not a pass/i.test(await page.locator('[data-testid="result-verdict-detail"]').innerText()) && !/not a pass/i.test(partlyText), partlyText)
+  ok('the verdict word is PARTLY JUDGED, from the shared vocabulary', (await page.locator('[data-testid="result-verdict-word"]').innerText()).trim() === 'PARTLY JUDGED')
+  ok('the verdict says it is not a pass, once', /^not a pass$/i.test((await page.locator('[data-testid="result-verdict-detail"]').innerText()).trim()) && !/not a pass/i.test(partlyText), partlyText)
   ok('it names the part with no usable model', (await page.locator('[data-testid="partly-judged-open"]').innerText()).includes('Q1'))
   ok('it says what was not judged, once, in one row', await page.locator('[data-testid="partly-judged-unjudged"]').count() === 1 && await page.locator('[data-testid="partly-judged-wiring"], [data-testid="partly-judged-electrical"]').count() === 0)
   const unjudgedNames = await page.locator('[data-testid="partly-judged-unjudged"] [data-testid="result-link"]').evaluateAll(els => els.map(e => e.getAttribute('data-name')))
@@ -162,7 +163,7 @@ await browserFlow({ out: OUT, viewport: { width: 1440, height: 900 } }, async pa
   await page.click('[data-testid="export-open"]')
   ok('the CLI command is in the Export menu', /hauksbee run \S+ --check/.test(await page.locator('[data-testid="export-copy-cli"]').innerText()))
   await page.keyboard.press('Escape')
-  ok('the panel says the verdict in the shared words', (await page.locator('[data-testid="result-verdict-word"]').innerText()).trim() === 'INVALID')
+  ok('the panel says the verdict in the shared words', (await page.locator('[data-testid="result-verdict-word"]').innerText()).trim() === 'PARTLY JUDGED')
 
   step('a conditional pass and a fail are not partly judged')
   await load(page, 'generic_pmos_switch_gate_0v.kicad_pcb')

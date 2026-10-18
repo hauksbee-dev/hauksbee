@@ -8,7 +8,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { AdditionalEvidencePanel } from '../src/components/AdditionalEvidencePanel'
 import { FixFirstCard, PreLayoutStrip } from '../src/components/report/Findings'
 import { OpenSelectionsBanner } from '../src/components/SelectionCard'
-import { openPartRef, reportView } from '../src/lib/report-view'
+import { openPartRef, reportView, unmodelledHome, unmodelledParts, unmodelledSentence } from '../src/lib/report-view'
 import type { EvidenceAssumption, FixFirst, WebOpenSelection, WebReport } from '../src/types/report'
 
 const base = JSON.parse(
@@ -61,7 +61,28 @@ describe('fix first view', () => {
     const other = { ...open('X'), kind: 'other' }
     expect(openPartRef(open('C2'))).toBe('C2')
     expect(openPartRef(other)).toBeNull()
-    expect(reportView({ ...base, assumptions: [open('C2'), other, open('F1')] }).openParts).toEqual(['C2', 'F1'])
+    expect(reportView({ ...base, assumptions: [open('C2'), other, open('F1')] }).unmodelled.other).toEqual(['C2', 'F1'])
+  })
+
+  test('the unmodelled parts are one measure: key parts first, each part once, one sentence', () => {
+    const r = {
+      ...base,
+      assumptions: [open('AE1'), open('C7'), open('U1')],
+      bind: { critical_parts_bound: '5/6', active_path_unresolved: ['U1'] },
+      judgement_scope: { nets: 3, open_parts: ['U1'], wiring_dependent: [], electrical_dependent: [] },
+    } as unknown as WebReport
+    const u = unmodelledParts(r)
+    expect(u).toEqual({ key: ['U1'], other: ['AE1', 'C7'], all: ['U1', 'AE1', 'C7'] })
+    expect(unmodelledSentence(u)).toBe('U1 (key part) and 2 other parts have no usable model')
+    expect(unmodelledSentence({ key: ['Q1', 'U4'], other: ['C1'], all: ['Q1', 'U4', 'C1'] }))
+      .toBe('Q1 and U4 (key parts) and 1 other part have no usable model')
+    expect(unmodelledSentence({ key: ['U1'], other: [], all: ['U1'] })).toBe('U1 (key part) has no usable model')
+    expect(unmodelledSentence({ key: [], other: ['R1'], all: ['R1'] })).toBe('1 part has no usable model')
+    expect(unmodelledSentence({ key: [], other: [], all: [] })).toBe('')
+    // Stated once: in the verdict card for a partly judged run, else beside the board.
+    expect(unmodelledHome({ ...r, partly_judged: true } as WebReport, u)).toBe('verdict')
+    expect(unmodelledHome({ ...r, verdict: 'fail' } as WebReport, u)).toBe('findings')
+    expect(unmodelledHome(r, { key: [], other: [], all: [] })).toBeNull()
   })
 
   test('the card lists the causes in order with their remedy and the overflow count', () => {

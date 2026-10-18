@@ -313,6 +313,62 @@ export interface PartlyJudgedView {
   total: number
 }
 
+/** The parts with no usable model: the one measure of the modelling gap. Every
+ *  surface that counts or names them (the verdict card, the open-parts finding,
+ *  the board overlay's "no model" tags, the export) reads this, so the numbers
+ *  never disagree. Key parts are the ones the verdict depends on (the judged
+ *  scope's open parts and the active ICs left open on the live circuit); the
+ *  others are every further part the evidence lists as open. */
+export interface UnmodelledParts {
+  key: string[]
+  other: string[]
+  /** `key` then `other`. */
+  all: string[]
+}
+
+export function unmodelledParts(r: WebReport): UnmodelledParts {
+  const key = [...new Set([...(r.judgement_scope?.open_parts ?? []), ...(r.bind?.active_path_unresolved ?? [])])]
+  const keys = new Set(key)
+  const listed = (r.assumptions ?? []).flatMap(a => openPartRef(a) ?? [])
+  const other = [...new Set(listed)].filter(ref => !keys.has(ref))
+  return { key, other, all: [...key, ...other] }
+}
+
+/** Names in a sentence: "U1", "Q1 and U4", "Q1, U4 and U5", the first few then a count. */
+function namesInSentence(names: string[]): string {
+  const SHOWN = 6
+  if (names.length > SHOWN) return `${names.slice(0, SHOWN).join(', ')} and ${names.length - SHOWN} more`
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+}
+
+/** The words after the key parts' names in [`unmodelledSentence`]: what a
+ *  surface that shows the names as chips prints after them. */
+export function unmodelledTail(u: UnmodelledParts): string {
+  const { key, other } = u
+  if (key.length === 0) {
+    return other.length === 0 ? '' : `${plural(other.length, 'part')} ${other.length === 1 ? 'has' : 'have'} no usable model`
+  }
+  const keyed = `(${key.length === 1 ? 'key part' : 'key parts'})`
+  if (other.length === 0) return `${keyed} ${key.length === 1 ? 'has' : 'have'} no usable model`
+  return `${keyed} and ${plural(other.length, 'other part')} have no usable model`
+}
+
+/** The measure in one sentence, the one wording every surface uses:
+ *  "U1 (key part) and 6 other parts have no usable model". Empty when none. */
+export function unmodelledSentence(u: UnmodelledParts): string {
+  return [namesInSentence(u.key), unmodelledTail(u)].filter(Boolean).join(' ')
+}
+
+/** Where the board report states the measure, once: in the verdict card when
+ *  the verdict rests on it (a partly judged run, or a pass whose engine
+ *  condition names the parts), else as a finding beside the board. */
+export function unmodelledHome(r: WebReport, u: UnmodelledParts): 'verdict' | 'findings' | null {
+  if (u.all.length === 0) return null
+  if (r.partly_judged) return 'verdict'
+  if (u.key.length === 0 && r.verdict === 'pass') return 'verdict'
+  return 'findings'
+}
+
 /** What a partly judged run left unjudged, each net named once under the kind
  *  of check that was not judged on it. The electrical set holds the wiring set
  *  (a part that cannot be modelled changes the electrical claim on every net it
@@ -373,8 +429,9 @@ export interface ReportView {
   /** A board with no copper yet: the engine's notice, and the copper section
    *  the report folds under it (it stays in `sections` for the export). */
   preLayout: { notice: string; copper: SectionView | null } | null
-  /** Open parts, from the evidence list: the one count every surface quotes. */
-  openParts: string[]
+  /** The parts with no usable model ([`unmodelledParts`]): the one measure
+   *  every surface counts and names. */
+  unmodelled: UnmodelledParts
   refusalRows: [string, string][] | null
   sections: SectionView[]
   cosim: CosimView | null
@@ -465,7 +522,7 @@ export function reportView(r: WebReport): ReportView {
     sections,
     fixFirst: r.fix_first?.items.length ? r.fix_first : null,
     preLayout: notice ? { notice, copper } : null,
-    openParts: assumptions.flatMap(a => openPartRef(a) ?? []),
+    unmodelled: unmodelledParts(r),
     cosim: r.cosim ? cosimView(r.cosim, r.refusal) : null,
     evidence: {
       has: maps.length > 0 || assumptions.length > 0 || inventory.length > 0,

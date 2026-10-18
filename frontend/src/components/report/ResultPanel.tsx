@@ -2,7 +2,7 @@
 //
 //   ┌ [glyph] VERDICT WORD  detail                        board · parts · nets ┐
 //   │ What the run found, in one sentence (the headline, verdict words cut)   │
-//   │ (ring) net checks judged  (ring) key parts modelled                     │
+//   │ (ring) net checks judged (a partly judged run)                          │
 //   ├ rows: what the pass rests on, or what was left unjudged ────────────────┤
 //   ├ Next: the one next step for this board, with its button ────────────────┤
 //   └ [Export ▾] [Open in Checks] ─────────────────────────────────────────────┘
@@ -49,7 +49,7 @@ const GLYPH: Record<ChipTone, React.ReactNode> = {
 /** A ring gauge: `value` of `total`, the arc in `ink`, the count inside. A count
  *  too long for the hole is a percentage inside and the exact numbers beside
  *  (see `ringLabel`), so no count is ever clipped to a wrong-looking number. */
-function Ring({ value, total, ink, label, testId }: { value: number; total: number; ink: string; label: string; testId: string }) {
+export function Ring({ value, total, ink, label, testId }: { value: number; total: number; ink: string; label: string; testId: string }) {
   const r = 15
   const c = 2 * Math.PI * r
   const frac = total > 0 ? Math.max(0, Math.min(1, value / total)) : 0
@@ -79,7 +79,7 @@ function Ring({ value, total, ink, label, testId }: { value: number; total: numb
 }
 
 export function ResultPanel({
-  report: r, view: v, explanation, exportSlot, onOpenChecks, next,
+  report: r, view: v, explanation, exportSlot, onOpenChecks, onListParts, next,
 }: {
   report: WebReport
   view: ReportView
@@ -87,6 +87,8 @@ export function ResultPanel({
   /** The Export menu, in the action bar. */
   exportSlot: React.ReactNode
   onOpenChecks?: () => void
+  /** Opens the full list of parts (where each can be given a model). */
+  onListParts?: () => void
   /** The card's one Next step (see NextStep); absent for a restored session. */
   next?: React.ReactNode
 }) {
@@ -101,8 +103,6 @@ export function ResultPanel({
   const reason = v.reason && !v.partlyJudged ? reasonForCard(v.reason) : null
   const showReason = !!reason && !sentence.toLowerCase().includes(reason.toLowerCase().replace(/\.$/, ''))
   const scope = v.partlyJudged
-  const [bound, keyParts] = (r.bind?.critical_parts_bound ?? '').split('/').map(Number)
-  const modelled = Number.isFinite(bound) && Number.isFinite(keyParts) && keyParts > 0
   const judged = !!scope && scope.total > 0
   const hasRows = !!scope || v.conditions.length > 0 || !!explanation
 
@@ -150,17 +150,12 @@ export function ResultPanel({
                 <Linked text={reason} />
               </div>
             )}
-            {(judged || modelled) && (
+            {/* How much of the board the verdict speaks for. The parts with no
+                usable model are a row below, in one sentence; a second gauge
+                counting a subset of them would state the same gap twice. */}
+            {judged && (
               <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2" data-testid="result-gauges">
-                {judged && (
-                  <Ring testId="result-gauge-judged" value={scope.judged} total={scope.total} ink="var(--warn)" label="net checks judged" />
-                )}
-                {modelled && (
-                  <Ring
-                    testId="result-gauge-modelled" value={bound} total={keyParts}
-                    ink={bound === keyParts ? 'var(--ok)' : 'var(--warn)'} label="key parts modelled"
-                  />
-                )}
+                <Ring testId="result-gauge-judged" value={scope.judged} total={scope.total} ink="var(--warn)" label="net checks judged" />
               </div>
             )}
           </div>
@@ -169,7 +164,7 @@ export function ResultPanel({
 
       {hasRows && (
         <div className="px-4 pt-1 pb-2.5 space-y-2" style={{ borderTop: '1px solid var(--hairline)' }}>
-          <PartlyJudged scope={v.partlyJudged} />
+          <PartlyJudged scope={v.partlyJudged} unmodelled={v.unmodelled} onList={onListParts} />
           <VerdictConditions conditions={v.conditions} />
           {explanation && <ExplainVerdict explanation={explanation} />}
         </div>
