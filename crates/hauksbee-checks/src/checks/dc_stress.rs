@@ -500,7 +500,7 @@ fn dead_rail_note(
         &format!(
             "the DC ratings check abstained on the parts powered from {}: {cause}, so no part \
              on it was checked against its ratings at that level",
-            rails.join(", ")
+            hauksbee_ir::vocabulary::names_summary(&rails)
         ),
         dead.into_keys().collect(),
     )
@@ -631,8 +631,8 @@ fn unstated_rating_note(
              with is assumed and its real rating is not checked ({}). State each rating in \
              the value (for example 10uF 25V) or give the manufacturer part number\
              {INFORMATIONAL_MARKER}.",
-            refs.join(", "),
-            seen.join("; "),
+            hauksbee_ir::vocabulary::names_summary(&refs),
+            hauksbee_ir::vocabulary::list_summary(&seen, "; "),
         ),
         refs,
         nets: Vec::new(),

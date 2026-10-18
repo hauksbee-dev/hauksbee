@@ -517,7 +517,10 @@ pub(super) fn unfitted_note(unfitted: &[String]) -> String {
     match unfitted {
         [] => String::new(),
         [one] => format!(" ({one} on the net is not fitted)"),
-        many => format!(" ({} on the net are not fitted)", many.join(", ")),
+        many => format!(
+            " ({} on the net are not fitted)",
+            hauksbee_ir::vocabulary::names_summary(many)
+        ),
     }
 }
 

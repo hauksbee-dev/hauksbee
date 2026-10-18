@@ -145,6 +145,21 @@ describe('the Checks page shows every failure it counts', () => {
     expect(renderToStaticMarkup(<BoardGate results={[]} stale={false} />)).toBe('')
   })
 
+  test('a failure on dozens of nets prints a short label and keeps every name behind Show all', () => {
+    const gate = resultsWithoutRows(results, spec)[0]
+    const names = gate.all_subjects ?? []
+    expect(names.length).toBeGreaterThan(40)
+    expect(gate.label.length).toBeLessThan(120)
+    expect(gate.label).toContain(`and ${names.length - 6} more`)
+    const html = renderToStaticMarkup(<BoardGate results={[gate]} stale={false} />)
+    expect(html).toContain(`Show all ${names.length}`)
+    // The label stays short; the expander holds the names the label counts.
+    for (const name of names) expect(html).toContain(name.replace(/&/g, '&amp;'))
+    // A result whose label names everything has no expander.
+    const short = { ...gate, label: 'static_check: lint x on U1', all_subjects: undefined }
+    expect(renderToStaticMarkup(<BoardGate results={[short]} stale={false} />)).not.toContain('Show all')
+  })
+
   test('the strip counts the same failure the card lists', () => {
     const strip = renderToStaticMarkup(
       <RunStrip

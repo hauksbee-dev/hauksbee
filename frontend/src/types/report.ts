@@ -892,6 +892,9 @@ export interface CheckResult {
   /** What to do about a failed result, when the engine says (the board's own
    *  static check always does). */
   why?: string
+  /** Every part and net a long `label` stands for ("... and 44 more"); absent
+   *  when the label names them all. */
+  all_subjects?: string[]
   evidence?: EvidenceMap
 }
 

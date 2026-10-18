@@ -114,6 +114,39 @@ pub fn check_run_stopped(doing: Option<(&str, u32)>, elapsed_s: u64) -> String {
     )
 }
 
+/// How many part or net names a one-line message names before it counts the rest.
+pub const NAMES_SHOWN: usize = 6;
+
+/// The first few part or net names, then a count of the rest ("A, B and 12 more").
+///
+/// Every surface that puts a list of parts or nets into a sentence or a label
+/// goes through it, so a board with thousands of nets never prints them in one
+/// line. The full list stays wherever the structured record carries it (the
+/// `--json` finding's `nets`/`refs`, a CI row's `all_subjects`).
+#[must_use]
+pub fn names_summary<S: AsRef<str>>(names: &[S]) -> String {
+    list_summary(names, ", ")
+}
+
+/// [`names_summary`] for items a sentence separates with something other than
+/// a comma (a "; "-joined list of per-part readings, say).
+#[must_use]
+pub fn list_summary<S: AsRef<str>>(items: &[S], separator: &str) -> String {
+    let join = |items: &[S]| {
+        items
+            .iter()
+            .map(AsRef::as_ref)
+            .collect::<Vec<&str>>()
+            .join(separator)
+    };
+    match items.split_at_checked(NAMES_SHOWN) {
+        Some((head, rest)) if !rest.is_empty() => {
+            format!("{} and {} more", join(head), rest.len())
+        }
+        _ => join(items),
+    }
+}
+
 /// What joins a failing verdict's own sentence to the sentence naming what it
 /// did not judge, in `verdict_reason`, so a surface that prints the two apart
 /// can split them where the engine joined them.
@@ -1021,6 +1054,25 @@ pub fn labels() -> Vec<&'static str> {
     out.sort_unstable();
     out.dedup();
     out
+}
+
+#[cfg(test)]
+mod names_summary_tests {
+    use super::*;
+
+    #[test]
+    fn a_short_list_is_named_in_full() {
+        assert_eq!(names_summary(&["U1", "GND"]), "U1, GND");
+        assert_eq!(names_summary::<&str>(&[]), "");
+        let six: Vec<String> = (1..=NAMES_SHOWN).map(|i| format!("N{i}")).collect();
+        assert_eq!(names_summary(&six), "N1, N2, N3, N4, N5, N6");
+    }
+
+    #[test]
+    fn a_long_list_names_the_first_few_and_counts_the_rest() {
+        let many: Vec<String> = (1..=50).map(|i| format!("N{i}")).collect();
+        assert_eq!(names_summary(&many), "N1, N2, N3, N4, N5, N6 and 44 more");
+    }
 }
 
 #[cfg(test)]

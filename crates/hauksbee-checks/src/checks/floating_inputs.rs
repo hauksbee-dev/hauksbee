@@ -399,7 +399,7 @@ fn driven_only_by_dnp<'b>(
             comp.value,
             if one { "input" } else { "inputs" },
             compress_labels(pins.iter().map(|p| p.label.as_str())),
-            nets.join(", "),
+            hauksbee_ir::vocabulary::names_summary(&nets),
             if one { "is" } else { "are" },
             if one { "input" } else { "inputs" },
             if one { "floats" } else { "float" },

@@ -74,6 +74,13 @@ pub struct AssertResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(schema_with = "schema_absent_or_string")]
     pub waived: Option<String>,
+    /// Every part and net the `label` stands for when it names too many to print
+    /// ("... and 44 more"): the whole list, parts first, so the label can stay
+    /// one readable line without dropping a name. ABSENT (not empty) when the
+    /// label already names them all.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[schemars(schema_with = "schema_absent_or_strings")]
+    pub all_subjects: Vec<String>,
     /// Net names this assertion judges, for waiver matching. Not serialized:
     /// the JSON surface already carries them in the label/detail.
     #[serde(skip)]
@@ -142,6 +149,19 @@ impl AssertResult {
             ..Default::default()
         }
     }
+
+    /// The whole list a summarised label stands for, as one line, or `None`
+    /// when the label names everything.
+    #[must_use]
+    pub fn all_subjects_line(&self) -> Option<String> {
+        (!self.all_subjects.is_empty()).then(|| {
+            format!(
+                "all {}: {}",
+                self.all_subjects.len(),
+                self.all_subjects.join(", ")
+            )
+        })
+    }
 }
 
 /// An ensemble-member index that is ALWAYS emitted and may be `null`. Hand
@@ -162,6 +182,12 @@ pub(crate) fn schema_nullable_seed(_: &mut schemars::SchemaGenerator) -> schemar
 /// presence is doing the right thing, and the schema should say so.
 pub(crate) fn schema_absent_or_string(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({ "type": "string" })
+}
+
+/// A list of strings that is OMITTED rather than empty when there is nothing to
+/// list (`skip_serializing_if`), like [`schema_absent_or_string`].
+pub(crate) fn schema_absent_or_strings(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({ "type": "array", "items": { "type": "string" } })
 }
 
 /// Evaluate every assertion in the spec; returns one result per assertion.

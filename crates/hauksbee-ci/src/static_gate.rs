@@ -17,7 +17,8 @@
 use hauksbee_engine::reports::check::StaticGate;
 use hauksbee_engine::result::JsonFinding;
 use hauksbee_ir::vocabulary::{
-    STATIC_CHECK_FAILS_LEAD, STATIC_CHECK_KIND, STATIC_CHECK_NOT_JUDGED_LEAD,
+    names_summary, NAMES_SHOWN, STATIC_CHECK_FAILS_LEAD, STATIC_CHECK_KIND,
+    STATIC_CHECK_NOT_JUDGED_LEAD,
 };
 
 use crate::assertions::AssertResult;
@@ -50,12 +51,19 @@ pub fn gate_rows(gate: &StaticGate, seeds_total: usize) -> Vec<AssertResult> {
         .filter(|(f, _)| f.gates())
         .map(|(f, why)| (f, Some(why.clone())));
     for (finding, waiver) in gating.chain(waived) {
-        let mut subjects: Vec<&str> = finding.refs.iter().map(String::as_str).collect();
-        subjects.extend(finding.nets.iter().map(String::as_str));
+        // The label names the first few and counts the rest: a board with a
+        // thousand unrouted nets must not print a thousand names in one line.
+        // The whole list rides in `all_subjects`.
+        let subjects: Vec<String> = finding.refs.iter().chain(&finding.nets).cloned().collect();
         let on = if subjects.is_empty() {
             String::new()
         } else {
-            format!(" on {}", subjects.join(", "))
+            format!(" on {}", names_summary(&subjects))
+        };
+        let all_subjects = if subjects.len() > NAMES_SHOWN {
+            subjects
+        } else {
+            Vec::new()
         };
         let base = format!(
             "{STATIC_CHECK_KIND}: {} {}{on}",
@@ -104,6 +112,7 @@ pub fn gate_rows(gate: &StaticGate, seeds_total: usize) -> Vec<AssertResult> {
             subject_nets: finding.nets.clone(),
             subject_refs: finding.refs.clone(),
             waived: waiver,
+            all_subjects,
             ..AssertResult::shell(label, STATIC_CHECK_KIND, seeds_total)
         });
     }
@@ -153,6 +162,33 @@ mod tests {
         let rows =
             static_check_results(&[finding("lint", "serious"), finding("lint", "serious")], 1);
         assert_eq!(rows[1].label, format!("{} #2", rows[0].label));
+    }
+
+    #[test]
+    fn a_finding_on_hundreds_of_nets_gets_a_short_label_and_keeps_every_name() {
+        let mut long = finding("lint", "serious");
+        long.kind = "unrouted_pad".into();
+        long.refs.clear();
+        long.nets = (1..=300).map(|i| format!("N{i}")).collect();
+        let rows = static_check_results(&[long.clone()], 1);
+        assert_eq!(
+            rows[0].label,
+            "static_check: lint unrouted_pad on N1, N2, N3, N4, N5, N6 and 294 more"
+        );
+        assert_eq!(rows[0].all_subjects, long.nets);
+        assert_eq!(rows[0].subject_nets, long.nets, "waiver matching sees all");
+        // A short list names everything and carries no duplicate.
+        let short = static_check_results(&[finding("lint", "serious")], 1);
+        assert!(short[0].all_subjects.is_empty());
+        // The JSON and JUnit surfaces keep the whole list.
+        let result = crate::report::CiResult {
+            results: rows,
+            ..crate::report::CiResult::default()
+        };
+        let json = result.render_json();
+        assert!(json.contains("\"all_subjects\""), "{json}");
+        assert!(json.contains("\"N300\""), "{json}");
+        assert!(result.render_junit().contains("N300"));
     }
 
     #[test]

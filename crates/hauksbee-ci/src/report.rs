@@ -22,8 +22,8 @@ type ExplainedAssumptions = HashSet<hauksbee_ir::evidence::AssumptionId>;
 /// are internal waiver keys, while the causal evidence map is part of the
 /// external contract. The committed schema is generated from this type via
 /// [`CiJsonReport`]: see `crates/hauksbee-ci/tests/ci_report_schema_drift.rs`.
-/// `why`, `waived`, and `evidence` are the only fields a consumer may find
-/// ABSENT rather than null.
+/// `why`, `waived`, `all_subjects` and `evidence` are the only fields a consumer
+/// may find ABSENT rather than null.
 #[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct CiJsonAssertion {
     /// The assertion's label: its `label` in the spec, or a generated one
@@ -65,6 +65,12 @@ pub struct CiJsonAssertion {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(schema_with = "crate::assertions::schema_absent_or_string")]
     pub waived: Option<String>,
+    /// Every part and net the `label` stands for when it names too many to
+    /// print ("... and 44 more"): the whole list, parts first. ABSENT (not
+    /// empty) when the label already names them all.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[schemars(schema_with = "crate::assertions::schema_absent_or_strings")]
+    pub all_subjects: Vec<String>,
     /// The causal evidence map for this assertion: its assumption ids,
     /// artifacts, models, parameters and numerical error budget. ABSENT (not
     /// null) when the run produced no map for this label.
@@ -700,6 +706,7 @@ impl CiResult {
                     seeds_total: result.seeds_total,
                     why: result.why.clone(),
                     waived: result.waived.clone(),
+                    all_subjects: result.all_subjects.clone(),
                     evidence: self.evidence_for(&result.label).cloned(),
                 })
                 .collect(),
@@ -1016,6 +1023,10 @@ impl CiResult {
                 "FAIL"
             };
             let _ = writeln!(out, "  [{mark}] {}\n        {}", r.label, r.detail);
+            // A label that counts names it does not print: `--verbose` lists them.
+            if let (true, Some(all)) = (verbose, r.all_subjects_line()) {
+                let _ = writeln!(out, "        {all}");
+            }
             let evidence = self.evidence_text(&r.label, &mut explained, verbose, &mut hidden);
             for line in evidence.lines() {
                 let _ = writeln!(out, "        {line}");
@@ -1152,6 +1163,20 @@ impl CiResult {
         render_junit_document(std::slice::from_ref(&self.junit_suite()))
     }
 
+    /// A `JUnit` row's evidence text. The names a long label counts but does not
+    /// print ride with it, so every branch (failure, error, skipped) carries them.
+    fn junit_evidence(&self, r: &AssertResult) -> String {
+        [
+            r.all_subjects_line(),
+            Some(self.evidence_text(&r.label, &mut HashSet::default(), true, &mut false)),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+    }
+
     /// This run as ONE `<testsuite>` fragment plus its counters, so a
     /// multi-spec invocation can merge several runs (and spec errors) into a
     /// single `<testsuites>` document with honest aggregate counts.
@@ -1182,7 +1207,7 @@ impl CiResult {
             self.elapsed.as_secs_f64()
         );
         for r in &self.results {
-            let evidence = self.evidence_text(&r.label, &mut HashSet::default(), true, &mut false);
+            let evidence = self.junit_evidence(r);
             let gating = !r.passed && !r.invalid && r.waived.is_none();
             // The body is the measured detail, then (on a gating red) the
             // `why:` line, then the evidence. Plenty of people only ever read

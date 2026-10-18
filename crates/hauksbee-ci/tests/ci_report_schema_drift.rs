@@ -83,7 +83,7 @@ fn generated_schema() -> String {
     let required = obj["definitions"]["CiJsonAssertion"]["required"]
         .as_array_mut()
         .expect("CiJsonAssertion has required fields");
-    required.retain(|f| f != "why" && f != "waived" && f != "evidence");
+    required.retain(|f| f != "why" && f != "waived" && f != "evidence" && f != "all_subjects");
 
     let mut text = serde_json::to_string_pretty(obj).expect("schema serializes");
     text.push('\n');
@@ -268,6 +268,17 @@ fn generated_schema_pins_the_optionality() {
              tells a consumer to null-check a key that is simply not there"
         );
     }
+    // `all_subjects` is the whole list behind a summarised label: absent when
+    // the label names everything, an array of strings otherwise.
+    assert!(
+        !a_required.contains(&"all_subjects"),
+        "`all_subjects` is omitted entirely when the label names every subject"
+    );
+    assert_eq!(
+        assertion["properties"]["all_subjects"]["type"],
+        json!("array"),
+        "`all_subjects` is absent-or-array, never null"
+    );
     // The other side of that distinction: `failing_seed` IS emitted as null.
     assert_eq!(
         assertion["properties"]["failing_seed"]["type"],

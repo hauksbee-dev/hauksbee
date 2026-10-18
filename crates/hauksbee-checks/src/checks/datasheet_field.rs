@@ -128,7 +128,7 @@ pub fn datasheet_field_lint(board: &ExtractedBoard) -> NetLintReport {
                  drafted from it would describe the wrong part. {REMEDY_MARKER}replace the \
                  Datasheet field with the {} datasheet (for `hauksbee models extract \
                  --unmodelled`, pass --datasheet '{}=<correct pdf>').",
-                refs.join(", "),
+                hauksbee_ir::vocabulary::names_summary(&refs),
                 doubt.sentence(),
                 doubt.part,
                 doubt.part

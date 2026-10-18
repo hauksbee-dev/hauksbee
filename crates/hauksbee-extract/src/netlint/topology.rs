@@ -274,11 +274,9 @@ fn island_finding(
     refs: BTreeSet<String>,
 ) -> LintFinding {
     let refs: Vec<String> = refs.into_iter().collect();
-    let listed = nets
-        .iter()
-        .map(|n| format!("'{n}'"))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let listed = hauksbee_ir::vocabulary::names_summary(
+        &nets.iter().map(|n| format!("'{n}'")).collect::<Vec<_>>(),
+    );
     // A name alone proves nothing: a signal pair named for its return
     // (`SNS_GND+`) is no ground. Only a ground word as the whole name or a
     // ground-named pin makes this a fault; otherwise it is a question.
@@ -295,7 +293,7 @@ fn island_finding(
                     "ground net {listed} ({}) is never joined to the board ground '{main_name}': no copper, \
                      resistor, ferrite, net tie or part ties them, so its return current has no path \
                      on the board",
-                    refs.join(", "),
+                    hauksbee_ir::vocabulary::names_summary(&refs),
                 ),
             )
     } else {
@@ -304,7 +302,7 @@ fn island_finding(
                 format!(
                     "{listed} ({}) has ground in its name but no ground pin, and nothing joins it to '{main_name}'. \
                      If it is a ground, join it; if it is a signal or sense pair, ignore this.",
-                    refs.join(", "),
+                    hauksbee_ir::vocabulary::names_summary(&refs),
                 ),
             )
     };
@@ -402,7 +400,7 @@ pub(super) fn check_unwired_connectors(board: &ExtractedBoard, report: &mut NetL
                  touches only that pin ({}), so whatever plugs into it is not connected to the board",
                 c.reference,
                 pads.len(),
-                drawn.join(", "),
+                hauksbee_ir::vocabulary::names_summary(&drawn),
             ),
             refs: vec![c.reference.clone()],
             nets: drawn,
