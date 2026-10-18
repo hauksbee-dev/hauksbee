@@ -1356,6 +1356,7 @@ name = "hauksbee-frontdoor-api"
 version = "0.1.0-beta.6"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]

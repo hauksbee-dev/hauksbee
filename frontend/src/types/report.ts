@@ -32,12 +32,59 @@ export interface WebHeadsUp {
   fix?: string
 }
 
+/** What an action does. A closed set: the app has one handler per id (the
+ *  engine's `ActionId`), so a step the app cannot run is never sent as prose. */
+export type ActionId =
+  | 'model_parts'
+  | 'extract_unmodelled'
+  | 'add_bom'
+  | 'choose_models_folder'
+  | 'add_scenario'
+  | 'add_supply'
+  | 'add_ac_sweep'
+  | 'add_firmware'
+  | 'open_check'
+  | 'show_on_board'
+  | 'start_checks'
+  | 'add_project_rules'
+  | 'set_part_number'
+  | 'mark_not_fitted'
+  | 'install_backend'
+
+/** The arguments a handler reads; every field is omitted when unset. */
+export interface ActionArgs {
+  refs?: string[]
+  net?: string
+  /** A check kind from the check catalogue. */
+  check?: string
+  /** A file name the action asks for (`.kicad_pro`). */
+  file?: string
+  /** A simulator backend id. */
+  backend?: string
+  volts?: number
+  /** A board position, mm, layout space. */
+  x?: number
+  y?: number
+}
+
+/** One button the engine offers: the structured form of a next step the CLI
+ *  prints as a command. `label` is the plain-English words for the button. */
+export interface WebAction {
+  id: ActionId
+  label: string
+  args?: ActionArgs
+}
+
 export interface WebSection {
   title: string
   verdict: string
   findings: WebFinding[]
   /** Actionable info-level notes; may be omitted when empty. */
   heads_up?: WebHeadsUp[]
+  /** Buttons that move this section forward (give the open parts models, add
+   *  the project rules file). Present on the section that states the problem in
+   *  full; omitted when there is nothing to offer. */
+  actions?: WebAction[]
 }
 
 export interface BindSummaryWeb {
@@ -169,10 +216,50 @@ export interface WebImportDiagnostics {
   issues?: WebImportIssue[]
 }
 
+/** Which refusal this was (engine `ImportFailureKind`, snake_case). */
+export type ImportFailureKind =
+  | 'truncated'
+  | 'syntax_error'
+  | 'wrong_content'
+  | 'unsupported_extension'
+  | 'empty_file'
+  | 'unsupported_format'
+  | 'invalid_content'
+  | 'fab_package'
+  | 'schematic_sheets'
+  | 'unreadable'
+
+/** One board format hauksbee reads, served as data beside a refusal. */
+export interface WebSupportedFormat {
+  vendor: string
+  exts: string[]
+}
+
 export interface WebImportFailure {
   stage: string
   excerpt?: string
   suggested_fix: string
+  // Everything below is sent by current engines only; an older server sends
+  // just the three fields above, and `UploadFailure` falls back to phrase
+  // matching on the error text for it.
+  kind?: ImportFailureKind
+  /** The file as named on upload. */
+  file?: string
+  /** Lower case with the dot; absent when the file has none. */
+  extension?: string
+  /** Where the parser stopped, when it said. */
+  line?: number
+  byte?: number
+  /** `wrong_content`: what the contents are, when recognisable ("a Git LFS pointer"). */
+  detected_format?: string
+  /** `wrong_content`: what the extension promised ("a KiCad board"). */
+  expected_format?: string
+  /** The engine's plain wording: heading, one-sentence cause, ordered steps. */
+  title?: string
+  cause?: string
+  steps?: string[]
+  /** The formats hauksbee reads, so a refusal can list them without prose. */
+  supported_formats?: WebSupportedFormat[]
 }
 
 export interface JsonNote {
@@ -420,6 +507,12 @@ export interface WebReport {
   /** Why the verdict is not a pass, and what to do next: one sentence, the
    *  same text the CLI, `--json` and the CI report carry. */
   verdict_reason?: string
+  /** `verdict_reason` without its terminal-command "next:" clause: show this
+   *  sentence and render `next_actions` as buttons instead. */
+  verdict_why?: string
+  /** The steps that would move the verdict forward, as buttons. Omitted when
+   *  nothing is open. */
+  next_actions?: WebAction[]
   /** The assumptions a pass rests on beyond the checks, one sentence each
    *  (e.g. "Q1 passes across assumed corners (...); put the MPN on Q1 to
    *  remove this assumption."): the same list `--json` and the CLI's
@@ -681,6 +774,9 @@ export interface ExtractPreset {
   api_base: string
   api_key_env: string
   recommended: boolean
+  /** The cheaper way to use the same tool as the recommended preset (at most one
+   *  per tool). Absent from an older server. */
+  cheaper?: boolean
   /** The models tried after `model` fails, in order. Absent from an older server. */
   escalate?: string[]
   /** A caution the server attaches to this preset, shown as written. */
@@ -730,6 +826,10 @@ export interface ExtractSettings {
   summary: string
   backends: ExtractBackendAvailability[]
   presets: ExtractPreset[]
+  /** The id of the preset a fresh install is steered to, chosen by the engine
+   *  (the same rule as `hauksbee models backend setup`). Absent from an older
+   *  server. */
+  default_preset?: string
   options: ExtractOptions
   keys: ExtractSettingsKey[]
   consent_notice: string
@@ -849,6 +949,9 @@ export interface DepInfo {
   path: string | null
   version: string | null
   unlocks: string
+  /** What is missing without it, in plain words (engine text; `DepsPanel`'s
+   *  `DEP_PLAIN` stopgap can drop its copy and read this). Absent on an older server. */
+  without?: string
   installable: boolean
   cost: string
   manual: string

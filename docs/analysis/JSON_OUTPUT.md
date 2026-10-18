@@ -156,6 +156,19 @@ reach every net electrically, the verdict is the plain `invalid` above, and
 `verdict_reason` adds, as information only, how many wiring/value checks on
 the nets they do not touch found nothing.
 
+The web report (`/api/analyze`) adds fields next to `verdict_reason`; the CLI's
+`--json` document does not carry them and `verdict_reason` itself is unchanged.
+`verdict_why` is the reason without its `; next: ...` clause (that clause names
+terminal commands), and `next_actions`, plus `actions` on a section, are the
+same steps as structured buttons: `{id, label, args}` where `id` comes from a
+closed set (`model_parts`, `extract_unmodelled`, `add_bom`, `add_supply`,
+`add_firmware`, `add_project_rules`, `set_part_number`, `mark_not_fitted`,
+`install_backend`, and the check and board shortcuts). Each comes from typed
+data (the open-part list, an assumption's remedy, the clearance-rule
+provenance), never from parsing prose. A section whose INCONCLUSIVE sentence
+was already stated in full by an earlier section points back to it instead of
+repeating it.
+
 Read `verdict` together with `notes` and the `bind` fields, never on its own:
 `thermal.valid: true` under `--thermal --no-strict-thermal` means the table is
 usable, not that the coverage is complete, and the top-level `verdict` is

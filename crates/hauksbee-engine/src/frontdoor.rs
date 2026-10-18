@@ -28,6 +28,7 @@ use crate::plain::{
     PlainLevel, PlainReport,
 };
 use crate::result::{BindSummary, JsonNote, JsonNoteKind, Refusal};
+use hauksbee_frontdoor_api::actions::{push_unique, WebAction};
 
 /// A finding, in the shape the browser renders.
 #[derive(Debug, Clone, Serialize)]
@@ -122,15 +123,22 @@ pub struct WebSection {
     /// exact false-comfort breach the plain/text/json surfaces already avoid.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub heads_up: Vec<WebHeadsUp>,
+    /// What the app can offer as buttons to move this section forward (give
+    /// the open parts models, add the project rules file). The section's text
+    /// stays free of terminal commands; this is the structured form of them.
+    /// Omitted when there is nothing to offer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<WebAction>,
 }
 
 impl WebSection {
     fn from_plain(title: &str, p: &PlainReport) -> Self {
         Self {
             title: title.to_string(),
-            verdict: p.verdict(),
+            verdict: p.web_verdict(),
             findings: p.findings.iter().map(WebFinding::from).collect(),
             heads_up: p.heads_up.iter().map(WebHeadsUp::from).collect(),
+            actions: Vec::new(),
         }
     }
 }
@@ -530,18 +538,7 @@ pub struct WebImportDiagnostics {
     pub issues: Vec<WebImportIssue>,
 }
 
-/// Actionable context for a board the parser refused.
-///
-/// `excerpt` is present only
-/// when the underlying parser identified an exact line; no arbitrary first line
-/// is presented as the cause when the parser did not localise it.
-#[derive(Debug, Clone, Serialize)]
-pub struct WebImportFailure {
-    pub stage: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub excerpt: Option<String>,
-    pub suggested_fix: String,
-}
+pub use crate::import_failure::{ImportFailureKind, WebImportFailure, WebSupportedFormat};
 
 /// What one bound component's card says it can take, and the logic levels it reads.
 /// Every field is omitted when the model does not state it.
@@ -702,6 +699,19 @@ pub struct WebReport {
     /// the verdict is not a pass.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verdict_conditions: Vec<String>,
+    /// [`Self::verdict_reason`] without its `next:` clause. That clause names
+    /// terminal commands (`hauksbee models extract ...`); the app shows this
+    /// sentence and offers [`Self::next_actions`] as buttons instead. Absent
+    /// when `verdict_reason` is. Additive: `verdict_reason` is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict_why: Option<String>,
+    /// The steps that would move this verdict forward, as buttons: give the
+    /// open parts models, add a BOM, declare a supply, add the project rules
+    /// file. Each comes from typed data (the open-part list, an assumption's
+    /// remedy), never from parsing prose. Empty (and omitted) when nothing is
+    /// open.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub next_actions: Vec<WebAction>,
     /// The machine verdict, `"pass"` | `"fail"` | `"invalid"`: the same
     /// derivation `run --check --json` prints for this board, so the browser
     /// can never read a pass the CLI fails. Absent on a report that could not
@@ -803,6 +813,7 @@ impl WebReport {
         self.partly_judged = verdict.partial;
         self.judgement_scope.clone_from(&machine.judgement_scope);
         self.verdict_reason = verdict.reason;
+        self.next_actions = self.derive_next_actions();
         // Routing is the only blocking problem: the headline frames the state and
         // the strip says what ran, so the reason names the blocker once, briefly.
         let only_unrouted = format!(
@@ -817,7 +828,39 @@ impl WebReport {
         {
             self.verdict_reason = Some(crate::plain::PRE_LAYOUT_REASON.to_string());
         }
+        self.verdict_why = self
+            .verdict_reason
+            .as_deref()
+            .map(crate::web_actions::reason_without_next);
         self.verdict_conditions = verdict.conditions;
+    }
+
+    /// The buttons for [`Self::next_actions`]: the open key parts first (the
+    /// thing the verdict is waiting on), then whatever the assumptions' typed
+    /// remedies ask for, then the project rules file when the copper check ran
+    /// on default rules for want of it.
+    fn derive_next_actions(&self) -> Vec<WebAction> {
+        let open = self
+            .bind
+            .as_ref()
+            .map(|b| b.active_path_unresolved.as_slice())
+            .unwrap_or_default();
+        let mut out = crate::web_actions::model_actions(open);
+        for action in crate::web_actions::from_remedies(&self.assumptions) {
+            // The grouped AddModel remedy repeats the open-part button.
+            if action.id == hauksbee_frontdoor_api::actions::ActionId::ModelParts && !out.is_empty() {
+                continue;
+            }
+            push_unique(&mut out, action);
+        }
+        if self
+            .clearance_rule_source
+            .as_ref()
+            .is_some_and(crate::result::ClearanceRuleProvenance::wants_project_rules)
+        {
+            push_unique(&mut out, WebAction::add_project_rules(".kicad_pro"));
+        }
+        out
     }
 }
 
@@ -1124,10 +1167,9 @@ fn error_line_number(message: &str) -> Option<usize> {
 
 fn web_import_failure(
     error: &crate::board_input::BoardInputError,
+    file_name: &str,
     contents: &[u8],
 ) -> WebImportFailure {
-    use crate::board_input::BoardInputError;
-
     let message = error.to_string();
     let excerpt = std::str::from_utf8(contents).ok().and_then(|text| {
         let line = error_line_number(&message)?;
@@ -1138,33 +1180,7 @@ fn web_import_failure(
             )
         })
     });
-    let (stage, suggested_fix) = match error {
-        BoardInputError::Zip(_) | BoardInputError::Gerber(_) => (
-            "fab-package reader",
-            "Re-export the package with one unambiguous layer/drill manifest, or supply the original CAD board. Do not rename ambiguous films to force a guess.",
-        ),
-        BoardInputError::Schematic(_) => (
-            "schematic reader",
-            "Open and re-save the schematic hierarchy in KiCad, ensuring every referenced sheet is present beside the root file.",
-        ),
-        BoardInputError::Unsupported(_) => (
-            "format capability check",
-            "Use the conversion named in the refusal, then retry the converted file.",
-        ),
-        BoardInputError::Extract(_) => (
-            "board reader",
-            "Open and re-save the file in its source EDA tool, or export one of the supported interchange formats. The parser did not guess past invalid input.",
-        ),
-        BoardInputError::NotFound { .. } | BoardInputError::Io { .. } => (
-            "input read",
-            "Check the path and file permissions, then retry the exact file.",
-        ),
-    };
-    WebImportFailure {
-        stage: stage.to_string(),
-        excerpt,
-        suggested_fix: suggested_fix.to_string(),
-    }
+    crate::import_failure::classify(error, file_name, contents, excerpt)
 }
 
 /// The board name a report shows: the board's own title, else the uploaded
@@ -1330,7 +1346,7 @@ fn unreadable_input(
     contents: &[u8],
     error: &crate::board_input::BoardInputError,
 ) -> WebReport {
-    let failure = web_import_failure(error, contents);
+    let failure = web_import_failure(error, file_name, contents);
     unreadable_with_import_failure(file_name, error.web_message(), Some(failure))
 }
 
@@ -1507,6 +1523,11 @@ fn analyze_normalized_with_context(
     let si = crate::checks::engine_si(board, lib, text_view);
     let mut si_plain = plain_si(&si);
     si_plain.unmodelled_critical.clone_from(&verdict_blockers);
+    // The open parts are named once. Connectivity comes first, so when its
+    // verdict states them in full (no findings of its own to say instead) the
+    // signal-integrity verdict points back rather than repeating the paragraph.
+    let lint_states_open_parts = lint_plain.findings.is_empty() && !verdict_blockers.is_empty();
+    si_plain.inconclusive_said_above = lint_states_open_parts;
 
     let mut sections = vec![
         if is_gerber {
@@ -1521,6 +1542,7 @@ fn analyze_normalized_with_context(
                 ),
                 findings: Vec::new(),
                 heads_up: Vec::new(),
+                actions: Vec::new(),
             }
         } else {
             let provenance = clearance_rule_source
@@ -1539,6 +1561,22 @@ fn analyze_normalized_with_context(
         WebSection::from_plain("Connectivity & wiring", &lint_plain),
         WebSection::from_plain("Signal integrity", &si_plain),
     ];
+
+    // Buttons for the section that states the open parts in full: the same
+    // fix the CLI prints as commands, as actions the app can run.
+    let open_part_actions = crate::web_actions::model_actions(&verdict_blockers);
+    if lint_states_open_parts {
+        sections[1].actions.clone_from(&open_part_actions);
+    } else if si_plain.findings.is_empty() && !verdict_blockers.is_empty() {
+        sections[2].actions.clone_from(&open_part_actions);
+    }
+    if clearance_rule_source
+        .as_ref()
+        .is_some_and(crate::result::ClearanceRuleProvenance::wants_project_rules)
+        && !is_gerber
+    {
+        push_unique(&mut sections[0].actions, WebAction::add_project_rules(".kicad_pro"));
+    }
 
     // USB-C CC compliance: the CLI text/plain/json surfaces all carry this
     // verdict (a Serious shared-CC-pulldown fault gates `--check --strict`), but
@@ -3069,6 +3107,7 @@ fn usbc_web_section(usbc: &crate::checks::usb_c::UsbcReport) -> Option<WebSectio
         verdict: String::new(),
         findings: Vec::new(),
         heads_up: Vec::new(),
+        actions: Vec::new(),
     };
     // The verdict must be a full sentence, matching every other section (which is
     // built via `WebSection::from_plain`, whose verdict is `PlainReport::verdict()`
@@ -3182,9 +3221,14 @@ pub fn analyze_design_json(upload: hauksbee_frontdoor_api::frontdoor::DesignUplo
         // The firmware co-sim covers 200 one-millisecond frames (`FRAMES`).
         hauksbee_ir::progress::will_simulate(0.2);
     }
-    let prepared = match crate::web_design::prepare(upload) {
+    // A refused board keeps its typed error, so this route answers with the same
+    // structured `import_failure` as the single-file route instead of prose alone.
+    let prepared = match crate::web_design::prepare_typed(upload) {
         Ok(prepared) => prepared,
-        Err(error) => return error_json(&name, error),
+        Err(crate::web_design::PrepareFailure::Board(refusal, bytes)) => {
+            return unreadable_input_json(&name, &bytes, &refusal);
+        }
+        Err(crate::web_design::PrepareFailure::Other(error)) => return error_json(&name, error),
     };
     // Firmware makes two more binds (the co-sim's and the evidence pass's).
     hauksbee_ir::progress::begin_bind(
@@ -3671,6 +3715,44 @@ mod tests {
             report["import_failure"]["excerpt"],
             "line 2: malformed schematic record"
         );
+    }
+
+    /// `/api/analyze` goes through the design route. A refused board there used
+    /// to come back as prose only (with the "Supported:" list inside it); it now
+    /// carries the same structured refusal as the single-file route.
+    #[test]
+    fn the_design_route_refuses_a_board_with_a_structured_import_failure() {
+        use hauksbee_frontdoor_api::frontdoor::{DesignUpload, NamedUpload};
+
+        let refuse = |name: &str, bytes: &[u8]| -> serde_json::Value {
+            let json = analyze_design_json(DesignUpload {
+                board: NamedUpload {
+                    name: name.into(),
+                    bytes: bytes.to_vec(),
+                },
+                firmware: None,
+                schematic: None,
+                bom: None,
+                placement: None,
+                variant: None,
+                asbuilt: None,
+                models: Vec::new(),
+            });
+            serde_json::from_str(&json).expect("report JSON")
+        };
+        let cut = refuse("cut.kicad_pcb", b"(kicad_pcb (version 20240108)\n  (footprint \"R\"");
+        assert_eq!(cut["ok"], false);
+        let failure = &cut["import_failure"];
+        assert_eq!(failure["kind"], "truncated", "{cut}");
+        assert_eq!(failure["file"], "cut.kicad_pcb");
+        assert_eq!(failure["line"], 2);
+        assert!(failure["suggested_fix"].as_str().is_some_and(|s| !s.is_empty()));
+        assert!(failure["supported_formats"].as_array().is_some_and(|l| !l.is_empty()));
+
+        let wrong = refuse("notes.kicad_pcb", b"hello, not a board");
+        assert_eq!(wrong["import_failure"]["kind"], "wrong_content", "{wrong}");
+        let odd = refuse("design.xyz", b"hello, not a board");
+        assert_eq!(odd["import_failure"]["kind"], "unsupported_extension", "{odd}");
     }
 
     #[cfg(feature = "avr")]
@@ -4449,10 +4531,22 @@ mod tests {
             "triage",
             "verdict",
             "verdict_reason",
+            // Structured next steps and the command-free reason: additive
+            // fields the golden predates.
+            "verdict_why",
+            "next_actions",
             // The CLI's own `run --check --json` document, sent alongside.
             "check_report",
         ] {
             object.remove(key);
+        }
+        // Per-section buttons are additive too.
+        for section in object
+            .get_mut("sections")
+            .and_then(serde_json::Value::as_array_mut)
+            .unwrap()
+        {
+            section.as_object_mut().unwrap().remove("actions");
         }
         let mut golden_value: serde_json::Value = serde_json::from_str(golden).unwrap();
         for key in ["headline", "serious", "total"] {
@@ -4492,6 +4586,40 @@ mod tests {
             reason.starts_with("3 blocking problem(s), first: ") && reason.contains("; next: "),
             "{reason}"
         );
+    }
+
+    #[test]
+    fn the_web_reason_has_no_terminal_command_and_the_steps_are_buttons() {
+        let json = analyze_json("boot_gate.kicad_pcb", SHORTED);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        // `verdict_reason` is unchanged (CLI wording); `verdict_why` is the
+        // same sentence without its `next:` clause.
+        let reason = value["verdict_reason"].as_str().unwrap();
+        let why = value["verdict_why"].as_str().expect("verdict_why");
+        assert!(reason.contains("; next: ") && !why.contains("next:"), "{why}");
+        assert!(why.starts_with("3 blocking problem(s), first: "), "{why}");
+        // The board ran on default clearance rules (no .kicad_pro was sent), so
+        // the typed provenance asks for the file: once on the report, once on
+        // the copper section it concerns.
+        let ids = |actions: &serde_json::Value| -> Vec<String> {
+            actions
+                .as_array()
+                .map(|a| a.iter().map(|x| x["id"].as_str().unwrap().to_string()).collect())
+                .unwrap_or_default()
+        };
+        assert_eq!(ids(&value["next_actions"]), ["add_project_rules"]);
+        let drc = value["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["title"].as_str().unwrap().starts_with("Copper spacing"))
+            .unwrap();
+        assert_eq!(ids(&drc["actions"]), ["add_project_rules"]);
+        // No section prose carries a terminal command.
+        for section in value["sections"].as_array().unwrap() {
+            let verdict = section["verdict"].as_str().unwrap();
+            assert!(!verdict.contains("hauksbee "), "{verdict}");
+        }
     }
 
     #[test]

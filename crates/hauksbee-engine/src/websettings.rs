@@ -73,12 +73,21 @@ fn build_payload(
         let id = a.backend.name().to_string();
         efforts.insert(id.clone(), serde_json::json!(a.efforts));
         permission_modes.insert(id.clone(), serde_json::json!(a.permission_modes));
-        models.insert(id, serde_json::json!(a.models));
+        models.insert(id, model_options(a.models, a.model));
     }
     models.insert(
         "api".to_string(),
-        serde_json::json!(extract_config::suggested_models(Backend::Api)),
+        model_options(
+            extract_config::suggested_models(Backend::Api),
+            extract_config::DEFAULT_API_MODEL,
+        ),
     );
+    // The one preset a fresh install is steered to, chosen by the same rule as
+    // `hauksbee models backend setup`.
+    let default_preset = extract_config::default_preset(|b| {
+        backends.iter().any(|s| s.backend == b && s.available)
+    })
+    .id;
 
     let mut value = serde_json::json!({
         "path": path.display().to_string(),
@@ -88,6 +97,7 @@ fn build_payload(
         "summary": resolved.summary(),
         "backends": backends,
         "presets": extract_config::presets(),
+        "default_preset": default_preset,
         "options": {
             "efforts": efforts,
             "permission_modes": permission_modes,
@@ -105,6 +115,21 @@ fn build_payload(
     serde_json::to_string(&value).unwrap_or_else(|e| {
         format!("{{\"error\":\"could not serialise extraction settings: {e}\"}}")
     })
+}
+
+/// A backend's model picker as served: each entry with its short `label` and a
+/// `default` flag on the one the backend runs when none is chosen.
+fn model_options(models: &[extract_config::ModelChoice], default_model: &str) -> serde_json::Value {
+    models
+        .iter()
+        .map(|m| {
+            let mut value = serde_json::json!(m);
+            if m.name == default_model {
+                value["default"] = serde_json::Value::Bool(true);
+            }
+            value
+        })
+        .collect()
 }
 
 /// `PUT /api/settings/extract`: replace the saved config with the JSON body.
@@ -198,6 +223,32 @@ mod tests {
         assert!(value["consent_notice"]
             .as_str()
             .is_some_and(|s| !s.is_empty()));
+    }
+
+    #[test]
+    fn the_payload_names_the_default_preset_the_cheaper_ones_and_each_default_model() {
+        let (_guard, _dir, path) = with_config_path();
+        std::fs::write(&path, "").unwrap();
+        let value: serde_json::Value = serde_json::from_str(&settings_json()).unwrap();
+        // The default preset is one of the recommended ones, chosen by the
+        // same function the CLI wizard uses.
+        let default = value["default_preset"].as_str().expect("default_preset");
+        let presets = value["presets"].as_array().unwrap();
+        let chosen = presets.iter().find(|p| p["id"] == default).expect("a known preset");
+        assert_eq!(chosen["recommended"], true, "{chosen}");
+        // The cheaper option is flagged on the preset, one per tool.
+        let cheaper: Vec<_> = presets
+            .iter()
+            .filter(|p| p["cheaper"] == true)
+            .map(|p| p["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(cheaper, ["codex-luna", "claude-code-haiku"]);
+        // Every agent picker has a label per model and exactly one default.
+        for backend in ["codex", "claude-code", "agy"] {
+            let models = value["options"]["models"][backend].as_array().unwrap();
+            assert!(models.iter().all(|m| m["label"].as_str().is_some_and(|l| !l.is_empty())));
+            assert_eq!(models.iter().filter(|m| m["default"] == true).count(), 1, "{backend}");
+        }
     }
 
     #[test]

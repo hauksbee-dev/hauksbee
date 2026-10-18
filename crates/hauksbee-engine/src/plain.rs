@@ -154,6 +154,12 @@ pub struct PlainReport {
     pub unvalidated: Option<String>,
 }
 
+/// What a model-dependent web section says when an earlier section already
+/// named the parts with no model: the fact once, then a pointer, never the
+/// same paragraph twice.
+pub const WEB_INCONCLUSIVE_SEE_ABOVE: &str =
+    "INCONCLUSIVE: the key parts named in the section above have no model, so this is not a clean bill either.";
+
 /// What a model-dependent section says when the INCONCLUSIVE banner naming the
 /// unmodelled parts was already printed once, above every section.
 pub const INCONCLUSIVE_SEE_TOP: &str =
@@ -194,6 +200,17 @@ impl PlainReport {
             INCONCLUSIVE_SEE_TOP.to_string()
         } else {
             crate::result::inconclusive_verdict(&self.unmodelled_critical)
+        }
+    }
+
+    /// [`Self::inconclusive`] for the web app: the same fact (the count, the
+    /// parts), without the terminal commands. The buttons that fix it are the
+    /// section's `actions`.
+    fn web_inconclusive(&self) -> String {
+        if self.inconclusive_said_above {
+            WEB_INCONCLUSIVE_SEE_ABOVE.to_string()
+        } else {
+            crate::result::web_inconclusive_verdict(&self.unmodelled_critical)
         }
     }
 
@@ -281,6 +298,17 @@ impl PlainReport {
     /// The one-line overall verdict.
     #[must_use]
     pub fn verdict(&self) -> String {
+        self.verdict_for(false)
+    }
+
+    /// [`Self::verdict`] as the web app words it: identical except that an
+    /// INCONCLUSIVE section names no terminal command (the app offers buttons).
+    #[must_use]
+    pub fn web_verdict(&self) -> String {
+        self.verdict_for(true)
+    }
+
+    fn verdict_for(&self, web: bool) -> String {
         let n = self.findings.len();
         if let Some(reason) = &self.unvalidated {
             let reason = reason.trim_end_matches(['.', ';']);
@@ -295,8 +323,8 @@ impl PlainReport {
             if serious > 0 {
                 let remaining = n.saturating_sub(serious);
                 return format!(
-                    "{n} potential copper {issues} found; {serious} oracle-confirmed short(s) \
-                     count as serious. The board format remains UNVALIDATED ({reason}); the \
+                    "{n} potential copper {issues} found; {serious} short(s) confirmed by KiCad's own \
+                     check count as serious. The board format remains UNVALIDATED ({reason}); the \
                      other {remaining} finding(s) keep their qualified severity."
                 );
             }
@@ -323,7 +351,11 @@ impl PlainReport {
             // Actionable heads-up notes stay on the verdict line: INCONCLUSIVE
             // must not hide the one observation the user may have come to check.
             if !self.unmodelled_critical.is_empty() {
-                let mut v = self.inconclusive();
+                let mut v = if web {
+                    self.web_inconclusive()
+                } else {
+                    self.inconclusive()
+                };
                 if !self.heads_up.is_empty() {
                     let hn = self.heads_up.len();
                     let things = if hn == 1 { "thing" } else { "things" };
@@ -752,7 +784,7 @@ impl OrderTriage {
                 .take_while(|candidate| candidate.id == entry.id && candidate.kind == entry.kind)
                 .count();
             let class = match (heading, entry.id.as_str(), entry.kind.as_str()) {
-                ("DO NOT ORDER", "drc", "short") => Some("oracle-confirmed copper shorts"),
+                ("DO NOT ORDER", "drc", "short") => Some("copper shorts confirmed by KiCad's own check"),
                 (INSPECT_BEFORE_ORDERING, "drc", "short") => {
                     Some("tool-only potential copper shorts with coordinates")
                 }
@@ -947,7 +979,7 @@ pub(crate) fn order_triage_with_rule_source(
         if finding.level == PlainLevel::Serious {
             triage.do_not_order.push(entry(finding.what.clone()));
         } else {
-            let tool_only = " Tool-only: no matching KiCad-oracle confirmation is attached.";
+            let tool_only = " Tool-only: KiCad's own check has not confirmed it.";
             let evidence = short.oracle_agreement().map_or(tool_only, |_| "");
             triage
                 .inspect
@@ -1280,7 +1312,7 @@ pub fn plain_drc_structured_with_rule_source(
             && st.version_warning.is_some()
         {
             " TOOL-ONLY: this net-pair claim comes from Hauksbee's unvalidated-format \
-             geometry alone; no matching KiCad-oracle line confirms it."
+             geometry alone; no matching line from KiCad's own check confirms it."
         } else {
             ""
         };

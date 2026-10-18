@@ -149,10 +149,49 @@ fn assembly_artifact(
 /// read or parsed (non-TOML or duplicate model files, non-UTF-8 variant or
 /// overlay, an unnamed variant), if model files cannot be staged, or if applying
 /// the BOM, placement, DNP policy or as-built overlay to the board fails.
-#[allow(clippy::too_many_lines, reason = "one upload, normalized per input")]
 pub fn prepare(upload: DesignUpload) -> Result<PreparedWebDesign, String> {
-    let mut norm = crate::board_input::from_bytes(&upload.board.name, &upload.board.bytes)
-        .map_err(|error| error.web_message())?;
+    prepare_typed(upload).map_err(PrepareFailure::into_message)
+}
+
+/// Why [`prepare_typed`] stopped.
+#[derive(Debug)]
+pub enum PrepareFailure {
+    /// The board itself was refused; the typed error lets the caller build the
+    /// structured `import_failure` instead of re-deriving it from prose. Holds
+    /// the board's bytes too, which the located excerpt is cut from.
+    Board(crate::board_input::BoardInputError, Vec<u8>),
+    /// Any other upload problem, already a user-facing sentence.
+    Other(String),
+}
+
+impl PrepareFailure {
+    /// The single user-facing sentence [`prepare`] reports.
+    #[must_use]
+    pub fn into_message(self) -> String {
+        match self {
+            Self::Board(error, _) => error.web_message(),
+            Self::Other(message) => message,
+        }
+    }
+}
+
+impl From<String> for PrepareFailure {
+    fn from(message: String) -> Self {
+        Self::Other(message)
+    }
+}
+
+/// [`prepare`] with the board refusal kept typed.
+///
+/// # Errors
+///
+/// As [`prepare`]; a refused board comes back as [`PrepareFailure::Board`].
+#[allow(clippy::too_many_lines, reason = "one upload, normalized per input")]
+pub fn prepare_typed(upload: DesignUpload) -> Result<PreparedWebDesign, PrepareFailure> {
+    let mut norm = match crate::board_input::from_bytes(&upload.board.name, &upload.board.bytes) {
+        Ok(norm) => norm,
+        Err(error) => return Err(PrepareFailure::Board(error, upload.board.bytes)),
+    };
     hauksbee_ir::progress::learned(norm.board.components.len(), norm.board.nets.len());
     hauksbee_ir::progress::learned_layout(norm.layout_text.as_deref());
     hauksbee_ir::progress::begin(hauksbee_ir::progress::Stage::Models, 0);

@@ -653,14 +653,36 @@ fn web_front_door_refuses_a_clean_bill_over_an_unbound_fet() {
     );
     for section in &report.sections {
         if section.title.starts_with("Connectivity") || section.title.starts_with("Signal") {
+            // Every model-dependent section still refuses a clean bill. The
+            // parts are named once (the first section), later sections point
+            // back instead of repeating the paragraph.
             assert!(
-                section.verdict.starts_with("INCONCLUSIVE") && section.verdict.contains("Q1"),
-                "web section '{}' must read INCONCLUSIVE naming Q1: {}",
+                section.verdict.starts_with("INCONCLUSIVE"),
+                "web section '{}' must read INCONCLUSIVE: {}",
                 section.title,
                 section.verdict
             );
         }
     }
+    let naming_q1 = report
+        .sections
+        .iter()
+        .filter(|s| s.verdict.starts_with("INCONCLUSIVE") && s.verdict.contains("Q1"))
+        .count();
+    assert_eq!(
+        naming_q1, 1,
+        "the unbound part is named in exactly one section: {:?}",
+        report.sections.iter().map(|s| &s.verdict).collect::<Vec<_>>()
+    );
+    assert!(
+        report
+            .sections
+            .iter()
+            .any(|s| s.title.starts_with("Connectivity")
+                && s.verdict.contains("Q1")
+                && !s.actions.is_empty()),
+        "the section that names the open part offers the fix as actions"
+    );
     // The bound twin restores the normal web verdicts.
     let b = bound();
     let bytes = std::fs::read(&b).expect("fixture readable");

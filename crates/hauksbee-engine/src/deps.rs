@@ -50,6 +50,9 @@ pub struct DepStatus {
     pub version: Option<String>,
     /// What having it unlocks, in plain language.
     pub unlocks: &'static str,
+    /// What is missing without it, in plain language: the other half of
+    /// `unlocks`, so a page can say both without keeping its own copy.
+    pub without: &'static str,
     /// True when POST `/api/deps/install/<id>` can install it on this host.
     pub installable: bool,
     /// Honest cost: real download size and OS support.
@@ -75,10 +78,25 @@ pub struct DepStatus {
     pub sign_in: Option<&'static str>,
 }
 
+/// What a missing dependency costs, by id. Plain engineering English: no
+/// internal vocabulary ("oracle"), and the board checks stay clearly separate
+/// from the optional extras.
+fn plain_without(id: &str) -> &'static str {
+    match id {
+        "renode" => "Without it, STM32, nRF52 and RISC-V firmware cannot be simulated. Board checks do not need it.",
+        "esp-qemu" => "Without it, ESP32, ESP32-S3 and ESP32-C3 firmware cannot be simulated.",
+        "ngspice" => "Without it, analog results are not cross-checked against a second simulator.",
+        "kicad-cli" => "Without it, copper findings are not cross-checked against KiCad's own rules and SVG/Gerber export is unavailable.",
+        "avr" => "Without it, ATmega and ATtiny firmware cannot be simulated.",
+        "codex" | "claude-code" | "agy" => "Without it, a part with no model cannot be drafted from its datasheet with this tool. Another extraction tool, an API key, or a model written by hand still works.",
+        _ => "",
+    }
+}
+
 impl DepStatus {
     /// An absent row for a local binary (running it sends nothing anywhere):
     /// no path, version, install button or detail until the probe says so.
-    const fn local(
+    fn local(
         id: &'static str,
         name: &'static str,
         unlocks: &'static str,
@@ -92,6 +110,7 @@ impl DepStatus {
             path: None,
             version: None,
             unlocks,
+            without: plain_without(id),
             installable: false,
             cost,
             manual,
@@ -425,7 +444,7 @@ fn probe_claude_code() -> DepStatus {
         bin: "claude",
         id: "claude-code",
         name: "Claude Code (datasheet extraction)",
-        unlocks: "datasheet-to-model extraction (`hauksbee models extract`, the web Extend flow) via the Claude Code CLI",
+        unlocks: "drafting a part model from its datasheet with the Claude Code CLI (you review it before it is saved)",
         cost: "free if you already pay for Claude: the CLI signs in with that account".to_string(),
         manual: "npm install -g @anthropic-ai/claude-code   # then: claude auth login".to_string(),
         privacy: "Using this sends the datasheet, and what the agent reads in its sandbox, to Anthropic. Nothing is sent unless you ask for an extraction, and hauksbee never runs it on its own.",
@@ -447,7 +466,7 @@ fn probe_agy() -> DepStatus {
         bin: "agy",
         id: "agy",
         name: "Antigravity (datasheet extraction)",
-        unlocks: "datasheet-to-model extraction (`hauksbee models extract`, the web Extend flow) via Antigravity's `agy` CLI",
+        unlocks: "drafting a part model from its datasheet with Antigravity's agy CLI (you review it before it is saved)",
         cost: "free if you already use Antigravity: agy signs in with your Google account".to_string(),
         // Antigravity installs from its own site, not a terminal command; the
         // install prose is served with the backend, so there is nothing to copy.
@@ -473,7 +492,7 @@ fn probe_agy() -> DepStatus {
 /// tool.
 fn probe_codex() -> DepStatus {
     let unlocks =
-        "drafting a device model from a datasheet, for a part with no model (you review it \
+        "drafting a part model from its datasheet, for a part with no model (you review it \
          before it is saved)";
     // The cost line is the one most likely to change someone's mind, so it
     // leads with the fact rather than the price: codex signs in with a ChatGPT
@@ -662,7 +681,7 @@ fn host_is_installable_os() -> bool {
 }
 
 fn probe_renode() -> DepStatus {
-    let unlocks = "STM32, nRF52 and RISC-V firmware co-simulation";
+    let unlocks = "STM32, nRF52 and RISC-V firmware simulation";
     // Real numbers from the renode/renode release assets (v1.16.x): the
     // portable download is 75-90 MB, and the unpacked install is a few
     // hundred MB on disk.
@@ -721,7 +740,7 @@ fn probe_renode() -> DepStatus {
 }
 
 fn probe_esp_qemu() -> DepStatus {
-    let unlocks = "ESP32, ESP32-S3 and ESP32-C3 firmware co-simulation";
+    let unlocks = "ESP32, ESP32-S3 and ESP32-C3 firmware simulation";
     // Real numbers from the espressif/qemu release assets (esp-develop-9.2.x):
     // the two per-arch tarballs total ~8 MB on macOS and ~35 MB on Linux.
     // The checksum wording is conditional on purpose. The installer verifies
@@ -834,7 +853,7 @@ pub(crate) fn find_ngspice() -> Option<PathBuf> {
 }
 
 fn probe_ngspice() -> DepStatus {
-    let unlocks = "cross-checking hauksbee's analog solver against ngspice, the SPICE oracle";
+    let unlocks = "a second opinion on analog results, from the ngspice circuit simulator";
     let manual = match std::env::consts::OS {
         "macos" => "brew install ngspice",
         "linux" => "sudo apt install ngspice   # or your distro's package",
@@ -869,8 +888,8 @@ fn find_kicad_cli() -> Option<(String, String)> {
 }
 
 fn probe_kicad_cli() -> DepStatus {
-    let unlocks = "cross-checking copper DRC findings against KiCad's own DRC (the layout \
-                   oracle), and SVG/Gerber export of re-laid-out boards";
+    let unlocks = "a second opinion on copper design-rule findings from KiCad's own rules, and \
+                   SVG/Gerber export";
     let manual = match std::env::consts::OS {
         "macos" => "brew install --cask kicad   # or download from kicad.org",
         "linux" => "sudo apt install kicad   # or download from kicad.org",
@@ -900,7 +919,7 @@ fn probe_kicad_cli() -> DepStatus {
 }
 
 fn probe_avr() -> DepStatus {
-    let unlocks = "ATmega and ATtiny firmware co-simulation";
+    let unlocks = "ATmega and ATtiny firmware simulation";
     // libsimavr is linked INTO the binary at build time (GPL-3.0, so it is
     // system-linked, never vendored). There is nothing to install at runtime:
     // it is present-or-not per build, which is why this row never gets an
@@ -1482,6 +1501,14 @@ mod tests {
             assert!(d["present"].is_boolean(), "present is a bool: {d}");
             assert!(d["installable"].is_boolean(), "installable is a bool: {d}");
             assert!(d["unlocks"].as_str().is_some_and(|s| !s.is_empty()));
+            // Plain words only: no internal vocabulary, no CLI command in what
+            // the web app prints, and every row says what it costs to go without.
+            for field in ["unlocks", "without"] {
+                let text = d[field].as_str().unwrap_or_default();
+                assert!(!text.is_empty(), "{field} missing on {d}");
+                assert!(!text.to_lowercase().contains("oracle"), "{field}: {text}");
+                assert!(!text.contains("hauksbee models"), "{field}: {text}");
+            }
             // Honesty: an absent dep explains itself; a present one has a
             // location (except AVR, which is linked into the binary).
             if d["present"] == false {

@@ -3,7 +3,7 @@
 // detail"), but it is never the only thing the person is given.
 
 import { describe, expect, test } from 'bun:test'
-import { explainBoardFailure } from '../src/components/UploadFailure'
+import { explainBoardFailure, failureExplanation } from '../src/components/UploadFailure'
 
 // The engine's wording for the audit's three bad files.
 const TRUNCATED = "Could not read this board file: 'truncated.kicad_pcb': parse error at line 1 (byte 24): unclosed list"
@@ -50,5 +50,29 @@ describe('explainBoardFailure', () => {
     for (const m of [TRUNCATED, WRONG_KICAD, WRONG_TXT, '', 'boom']) {
       expect(explainBoardFailure(m, 'x.bin').steps.length).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('failureExplanation', () => {
+  const structured = {
+    stage: 'board reader',
+    suggested_fix: 'Save it again.',
+    kind: 'wrong_content' as const,
+    file: 'a.kicad_pcb',
+    title: 'The engine title',
+    cause: 'The engine cause.',
+    steps: ['Save it again.', 'Load the new file.'],
+  }
+
+  test('the engine wording wins over the phrase-matching fallback', () => {
+    const e = failureExplanation(structured, TRUNCATED, 'truncated.kicad_pcb')
+    expect(e).toEqual({ title: 'The engine title', cause: 'The engine cause.', steps: ['Save it again.', 'Load the new file.'] })
+  })
+
+  test('an older server (no structured fields) still gets the fallback wording', () => {
+    const legacy = { stage: 'board reader', suggested_fix: 'Re-save it.' }
+    expect(failureExplanation(legacy, TRUNCATED, 'truncated.kicad_pcb').title).toBe('This file ends early')
+    expect(failureExplanation(null, WRONG_TXT, 'notes.txt').title).toBe('Hauksbee cannot read a .txt file')
+    expect(failureExplanation(undefined, 'boom', 'x.bin').steps.length).toBeGreaterThan(0)
   })
 })
