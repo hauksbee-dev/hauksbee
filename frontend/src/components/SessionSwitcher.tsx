@@ -259,10 +259,8 @@ export function SessionRail({ state, onResume }: {
               className="px-3 py-2.5 text-[11px] leading-relaxed"
               style={{ borderTop: '1px solid var(--hairline)', color: 'var(--silk-faint)' }}
             >
-              A session holds the report, which firmware was staged, and the checks you composed.
-              It cannot hold the board file itself: browsers do not keep one between visits.
-              Opening a session brings everything else back, and re-running it needs the file again
-              unless this server still has the board loaded.
+              A session keeps the report and your checks. It cannot hold the board file itself, so
+              re-running one needs the file dropped again unless this server still has it.
             </div>
           </motion.div>
         )}
@@ -368,14 +366,17 @@ function SessionRowView({ row, now, isCurrent, onOpen, onRename, onDelete, onExp
             {facts} &middot; saved {relTime(row.updatedAt, now)}
           </div>
           {row.boardSha256 && (
-            <div
-              className="text-[10.5px] mt-0.5 truncate"
-              data-testid="session-row-hash"
-              title={`board sha256 ${row.boardSha256}${row.specSha256 ? `\nspec sha256 ${row.specSha256}` : ''}`}
-              style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}
-            >
-              board {row.boardSha256.slice(0, 12)}{row.specSha256 ? ` · spec ${row.specSha256.slice(0, 12)}` : ''}
-            </div>
+            <details className="mt-0.5 text-[10.5px]" style={{ color: 'var(--silk-faint)' }}>
+              <summary className="cursor-pointer">Technical details</summary>
+              <div
+                data-testid="session-row-hash"
+                className="mt-0.5 break-all"
+                style={{ fontFamily: 'var(--font-mono)' }}
+              >
+                board sha256 {row.boardSha256}
+                {row.specSha256 ? <><br />spec sha256 {row.specSha256}</> : null}
+              </div>
+            </details>
           )}
           {!row.hasReport && (
             <div className="text-[10.5px] mt-0.5" style={{ color: 'var(--warn)' }}>

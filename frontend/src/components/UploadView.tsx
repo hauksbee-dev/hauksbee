@@ -7,7 +7,6 @@ import { hasDefaultName } from '../lib/session-store'
 import { AdditionalEvidencePanel, evidenceSlots } from './AdditionalEvidencePanel'
 import { ArriveOnce, PressCard, SkeletonBar, useDropTarget, useSkeletonSwap } from '../motion'
 import { UploadBanners } from './ui'
-import { VerdictPill } from './VerdictPill'
 import { LoadBar } from './LoadBar'
 import { acceptedFormatsSentence, withoutEngineFormatList } from '../lib/board-formats'
 import { motion, useReducedMotion } from 'motion/react'
@@ -119,41 +118,6 @@ export function UploadView({ session, onOpenLive, sessions, onResume, avrAvailab
   return (
     <div className="landing h-full overflow-y-auto view-enter">
       <div className="max-w-xl mx-auto px-6 pb-24" style={{ paddingTop: 'clamp(2rem, 7vh, 4.5rem)' }}>
-        {/* Where you were last time, offered before the drop zone. It leads with
-            what resuming will actually do, because half of it (the report, the
-            checks) genuinely comes back and half of it (the file) cannot: a
-            "Resume" button that restored a report and then failed on the first
-            action needing the bytes would be worse than no offer at all. */}
-        {!busy && sessions?.resumable && onResume && (
-          <ResumeCard sessions={sessions} onResume={onResume} />
-        )}
-        {/* A live session survives a page reload server-side. Landing on a
-            bare drop zone while the server still runs a board reads as data
-            loss; acknowledge the session and offer to open it. */}
-        {!busy && session.serverLive?.active && session.serverLive.boardName && onOpenLive && (
-          <div
-            data-testid="landing-live-notice"
-            className="mb-6 rounded-lg px-4 py-3 text-[13px] flex flex-wrap items-center gap-x-3 gap-y-2"
-            style={{ background: 'var(--surface)', border: '1px solid var(--copper-deep)', color: 'var(--silk)' }}
-          >
-            <span>
-              A live session for{' '}
-              <b style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
-                {session.serverLive.boardName}
-              </b>{' '}
-              is still running on this server.
-            </span>
-            <button
-              type="button"
-              data-testid="landing-open-live"
-              onClick={onOpenLive}
-              className="hb-btn hb-press px-3 text-[12px]"
-              style={{ height: 28 }}
-            >
-              Open the live sim
-            </button>
-          </div>
-        )}
         {/* Hero, a calm, centered thesis */}
         {!busy && (
           <div className="text-center">
@@ -303,33 +267,46 @@ export function UploadView({ session, onOpenLive, sessions, onResume, avrAvailab
 
           <UploadBanners notice={uploadNotice} error={null} onDismiss={dismissNotice} />
 
-          {/* Samples, a first report with no file needed at all */}
-          {!busy && (
-            <div className="mt-8 text-center" data-testid="samples">
-              <div className="text-[11px] uppercase" style={{ color: 'var(--silk-faint)', letterSpacing: '0.08em' }}>
-                No board handy? Try a sample
-              </div>
-              {/* One deliberate row of three, or a clean stack when the column
-                  is too narrow for it. Never a two-then-one rag. */}
-              <div className="sample-row mt-3">
-                {SAMPLES.filter(s => avrAvailable || !s.firmware).map(s => (
-                  // A card that rises 1 px on hover and sinks 1 px on press.
-                  // The press tracking is the substance here, not the movement:
-                  // it releases when the pointer leaves the card mid-press, when
-                  // the window loses focus, and on a keyboard Space-hold, none
-                  // of which :active gets right. See PressCard in ../motion.
-                  <PressCard
-                    key={s.label}
-                    data-testid={`sample-${s.label.toLowerCase().replace(/[^a-z]+/g, '-')}`}
-                    onPress={() => runSample(s)}
-                    className="hb-btn px-3.5 py-2.5 text-[13px]"
-                  >
-                    <span className="block font-semibold" style={{ color: 'var(--silk)' }}>{s.label}</span>
-                    <span className="block text-[12px] mt-0.5">{s.desc}</span>
-                  </PressCard>
-                ))}
-              </div>
+          {/* A live session survives a page reload server-side. Landing on a
+              bare drop zone while the server still runs a board reads as data
+              loss, so this is the page's ONE statement of it, as a quiet line
+              under the drop card rather than a second call to action. */}
+          {!busy && session.serverLive?.active && session.serverLive.boardName && onOpenLive && (
+            <div
+              data-testid="landing-live-notice"
+              className="mt-5 text-center text-[13px] flex flex-wrap items-center justify-center gap-x-3 gap-y-2"
+              style={{ color: 'var(--silk-dim)' }}
+            >
+              <span>
+                The live sim is still running{' '}
+                <b style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--silk)' }}>
+                  {session.serverLive.boardName}
+                </b>{' '}
+                on this server.
+              </span>
+              <button
+                type="button"
+                data-testid="landing-open-live"
+                onClick={onOpenLive}
+                className="hb-btn hb-press px-3 text-[12px]"
+                style={{ height: 28 }}
+              >
+                Open the live sim
+              </button>
             </div>
+          )}
+
+          {/* Samples, a first report with no file needed at all */}
+          {!busy && <SampleRow onRun={runSample} avrAvailable={avrAvailable} />}
+
+          {/* Saved sessions: a quiet list below the samples, never a second
+              primary. The board the user just left is not offered back. */}
+          {!busy && sessions && onResume && (
+            <SavedSessions
+              sessions={sessions}
+              onResume={onResume}
+              leftId={session.runEpoch > 0 ? sessions.current?.id ?? null : null}
+            />
           )}
 
           {/* One companion-input contract feeds report, Checks and Live Sim. */}
@@ -350,44 +327,7 @@ export function UploadView({ session, onOpenLive, sessions, onResume, avrAvailab
             </details>
           )}
 
-          {/* Prepare your own project, one line per ECAD, no jargon */}
-          {!busy && (
-            <details className="mt-6 mx-auto text-[13px]" style={{ color: 'var(--silk-dim)', maxWidth: '34rem' }}>
-              <summary className="cursor-pointer text-center" style={{ listStylePosition: 'inside' }}>
-                Where do I find my board and firmware files?
-              </summary>
-              <div className="mt-3 space-y-2 leading-relaxed text-left rounded-lg px-4 py-3" style={{ background: 'var(--surface)', border: '1px solid var(--hairline)' }}>
-                <div>
-                  <strong style={{ color: 'var(--silk)' }}>KiCad</strong>, drop the{' '}
-                  <code className="hb-inline">.kicad_pcb</code> straight from your project folder. No export step.
-                </div>
-                <div>
-                  <strong style={{ color: 'var(--silk)' }}>Eagle</strong>; the <code className="hb-inline">.brd</code>.{' '}
-                  <strong style={{ color: 'var(--silk)' }}>Altium</strong>; the <code className="hb-inline">.PcbDoc</code>.
-                </div>
-                <div>
-                  <strong style={{ color: 'var(--silk)' }}>EasyEDA</strong>; Standard: File → Export → EasyEDA source
-                  (the <code className="hb-inline">.json</code>). Pro: the <code className="hb-inline">.epcb</code> or
-                  the whole <code className="hb-inline">.epro</code> project.
-                </div>
-                <div>
-                  <strong style={{ color: 'var(--silk)' }}>Only fab files?</strong> Zip the folder
-                  with the gerbers and drill file, drop the zip. The circuit is reverse-extracted
-                  from the copper itself.
-                </div>
-                <div>
-                  <strong style={{ color: 'var(--silk)' }}>Firmware</strong>; the compiled image.
-                  PlatformIO: <code className="hb-inline">.pio/build/&lt;env&gt;/firmware.elf</code>, or just zip the whole
-                  project and it is found (or built) for you. ESP-IDF/CMake:{' '}
-                  <code className="hb-inline">build/&lt;app&gt;.elf</code>. Arduino IDE: Sketch → Export Compiled Binary.
-                </div>
-                <div>
-                  Want this in a pipeline instead? Set up checks from the report once your board loads, or run{' '}
-                  <code className="hb-inline">hauksbee-ci init your_board.kicad_pcb</code> to scaffold a checked-in spec.
-                </div>
-              </div>
-            </details>
-          )}
+          {!busy && <FindFilesHelp />}
 
           {/* Privacy reassurance */}
           {!busy && (
@@ -434,83 +374,168 @@ export function UploadView({ session, onOpenLive, sessions, onResume, avrAvailab
   )
 }
 
-/** The "resume where you left off" offer. */
-function ResumeCard({ sessions, onResume }: {
+
+/** The bundled sample boards: a first report with no file at all. Shared with
+ *  the refusal card, which keeps them one click away after a bad drop. */
+export function SampleRow({ onRun, avrAvailable = true }: {
+  onRun: (s: { label: string; desc: string; board: string; firmware?: string }) => void
+  avrAvailable?: boolean
+}) {
+  const samples = SAMPLES.filter(s => avrAvailable || !s.firmware)
+  return (
+    <div className="mt-8 text-center" data-testid="samples">
+      <div className="text-[11px] uppercase" style={{ color: 'var(--silk-faint)', letterSpacing: '0.08em' }}>
+        No board handy? Try a sample
+      </div>
+      {/* One deliberate row of three, or a clean stack when the column
+          is too narrow for it. Never a two-then-one rag. */}
+      {/* Fewer than three (no AVR backend, or the refusal card) fill the row
+          instead of leaving an empty third column. */}
+      <div
+        className="sample-row mt-3"
+        style={samples.length < 3 ? { gridTemplateColumns: `repeat(${samples.length}, minmax(0, 1fr))` } : undefined}
+      >
+        {samples.map(s => (
+          // A card that rises 1 px on hover and sinks 1 px on press.
+          // The press tracking is the substance here, not the movement:
+          // it releases when the pointer leaves the card mid-press, when
+          // the window loses focus, and on a keyboard Space-hold, none
+          // of which :active gets right. See PressCard in ../motion.
+          <PressCard
+            key={s.label}
+            data-testid={`sample-${s.label.toLowerCase().replace(/[^a-z]+/g, '-')}`}
+            onPress={() => onRun(s)}
+            className="hb-btn px-3.5 py-2.5 text-[13px]"
+          >
+            <span className="block font-semibold" style={{ color: 'var(--silk)' }}>{s.label}</span>
+            <span className="block text-[12px] mt-0.5">{s.desc}</span>
+          </PressCard>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** "Where do I find my board and firmware files?", one line per ECAD. */
+export function FindFilesHelp() {
+  return (
+    <details className="mt-6 mx-auto text-[13px]" style={{ color: 'var(--silk-dim)', maxWidth: '34rem' }}>
+      <summary className="cursor-pointer text-center" style={{ listStylePosition: 'inside' }}>
+        Where do I find my board and firmware files?
+      </summary>
+      <div className="mt-3 space-y-2 leading-relaxed text-left rounded-lg px-4 py-3" style={{ background: 'var(--surface)', border: '1px solid var(--hairline)' }}>
+        <div>
+          <strong style={{ color: 'var(--silk)' }}>KiCad</strong>, drop the{' '}
+          <code className="hb-inline">.kicad_pcb</code> straight from your project folder. No export step.
+        </div>
+        <div>
+          <strong style={{ color: 'var(--silk)' }}>Eagle</strong>; the <code className="hb-inline">.brd</code>.{' '}
+          <strong style={{ color: 'var(--silk)' }}>Altium</strong>; the <code className="hb-inline">.PcbDoc</code>.
+        </div>
+        <div>
+          <strong style={{ color: 'var(--silk)' }}>EasyEDA</strong>; Standard: File → Export → EasyEDA source
+          (the <code className="hb-inline">.json</code>). Pro: the <code className="hb-inline">.epcb</code> or
+          the whole <code className="hb-inline">.epro</code> project.
+        </div>
+        <div>
+          <strong style={{ color: 'var(--silk)' }}>Only fab files?</strong> Zip the folder
+          with the gerbers and drill file, drop the zip. The circuit is reverse-extracted
+          from the copper itself.
+        </div>
+        <div>
+          <strong style={{ color: 'var(--silk)' }}>Firmware</strong>; the compiled image.
+          PlatformIO: <code className="hb-inline">.pio/build/&lt;env&gt;/firmware.elf</code>, or just zip the whole
+          project and it is found (or built) for you. ESP-IDF/CMake:{' '}
+          <code className="hb-inline">build/&lt;app&gt;.elf</code>. Arduino IDE: Sketch → Export Compiled Binary.
+        </div>
+        <div>
+          Want this in a pipeline instead? Set up checks from the report once your board loads, or run{' '}
+          <code className="hb-inline">hauksbee-ci init your_board.kicad_pcb</code> to scaffold a checked-in spec.
+        </div>
+      </div>
+    </details>
+  )
+}
+
+/** How many saved sessions the drop page lists. The rest live in the rail's
+ *  Sessions panel; this is a way back in, not a manager. */
+const LISTED_SESSIONS = 3
+
+/** Saved sessions on the drop page, as a quiet secondary list under the
+ *  samples. Every row is a board you can recognise (its file name), when it was
+ *  last touched and how big it was, with one plain button. Nothing here is a
+ *  primary action: the drop card above it is. `leftId` is the session whose
+ *  board the user just walked away from with "Analyze another board"; offering
+ *  it straight back would undo the choice they just made. */
+function SavedSessions({ sessions, onResume, leftId }: {
   sessions: SessionsState
   onResume: (id: string) => void
+  leftId: string | null
 }) {
-  const row = sessions.resumable!
+  // `resumable` is null while a board is loaded and after "Hide", so it also
+  // carries those two decisions.
+  if (!sessions.resumable) return null
+  const rows = sessions.rows.filter(r => r.hasReport && r.id !== leftId)
+  if (rows.length === 0) return null
+  const listed = rows.slice(0, LISTED_SESSIONS)
+  const more = rows.length - listed.length
   const now = Date.now()
-  const facts = [
-    `${row.board.numComponents} ${row.board.numComponents === 1 ? 'part' : 'parts'}`,
-    row.checkCount > 0 ? `${row.checkCount} ${row.checkCount === 1 ? 'check' : 'checks'} composed` : null,
-    row.firmwareName ? `firmware ${row.firmwareName}` : null,
-  ].filter(Boolean).join(' · ')
-  const others = sessions.rows.length - 1
-  const autoNamed = hasDefaultName(row)
 
   return (
-    <ArriveOnce
-      className="mb-6 rounded-xl px-4 py-3.5"
-      style={{ background: 'var(--surface)', border: '1px solid var(--copper-deep)', boxShadow: 'var(--shadow-card)' }}
-    >
+    <ArriveOnce className="mt-8">
       <div data-testid="session-resume">
-        <div className="flex items-center gap-2 text-[11px] font-bold tracking-widest uppercase" style={{ color: 'var(--copper)' }}>
-          <HistoryIcon size={13} /> Resume where you left off
-        </div>
-        <div
-          className="mt-2 text-[14px] font-semibold truncate"
-          title={row.name}
-          style={{ color: 'var(--silk)', fontFamily: autoNamed ? 'var(--font-mono)' : undefined }}
+      <div className="flex items-center justify-center gap-2 text-[11px] uppercase" style={{ color: 'var(--silk-faint)', letterSpacing: '0.08em' }}>
+        <HistoryIcon size={12} /> Pick up a saved session
+      </div>
+      <ul className="mt-3 space-y-2 list-none p-0 m-0">
+        {listed.map(row => {
+          const facts = [
+            `${row.board.numComponents} ${row.board.numComponents === 1 ? 'part' : 'parts'}`,
+            row.checkCount > 0 ? `${row.checkCount} ${row.checkCount === 1 ? 'check' : 'checks'}` : null,
+            row.firmwareName ? `firmware ${row.firmwareName}` : null,
+          ].filter(Boolean).join(' · ')
+          const renamed = !hasDefaultName(row)
+          return (
+            <li
+              key={row.id}
+              data-testid="session-resume-row"
+              className="hb-card flex items-center gap-3 px-3.5 py-2.5"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[13px] font-semibold" title={row.name} style={{ color: 'var(--silk)', fontFamily: renamed ? undefined : 'var(--font-mono)' }}>
+                  {row.name}
+                </div>
+                <div className="truncate text-[11.5px] tnum" style={{ color: 'var(--silk-faint)' }}>
+                  {renamed ? `${row.board.fileName} · ` : ''}{facts} · saved {relTime(row.updatedAt, now)}
+                </div>
+              </div>
+              <button
+                type="button"
+                data-testid="session-resume-open"
+                onClick={() => onResume(row.id)}
+                aria-label={`Open the saved session ${row.name}`}
+                className="hb-btn hb-press px-3 text-[12px] shrink-0"
+                style={{ height: 30 }}
+              >
+                Open
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+      <div className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11.5px]" style={{ color: 'var(--silk-faint)' }}>
+        {more > 0 && <span>{more} more under Sessions in the sidebar</span>}
+        <span>The report and checks come back; the board file does not, so re-running needs it dropped again.</span>
+        <button
+          type="button"
+          data-testid="session-resume-dismiss"
+          onClick={sessions.dismissResume}
+          className="hb-press underline cursor-pointer"
+          style={{ background: 'none', border: 'none', color: 'inherit', padding: 0 }}
         >
-          {row.name}
-        </div>
-        {/* The board file, unless the name is already it: the card led with the
-            same string twice, which reads as a rendering mistake. */}
-        {!autoNamed && (
-          <div className="text-[12px] truncate" title={row.board.fileName} style={{ color: 'var(--silk-dim)', fontFamily: 'var(--font-mono)' }}>
-            {row.board.fileName}
-          </div>
-        )}
-        {row.verdict && (
-          <div className="mt-1.5 flex">
-            <VerdictPill testId="session-resume-verdict" verdict={row.verdict} />
-          </div>
-        )}
-        <div className="mt-0.5 text-[11px] tnum" style={{ color: 'var(--silk-faint)' }}>
-          {facts} · saved {relTime(row.updatedAt, now)}
-        </div>
-        <div className="mt-2.5 flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            data-testid="session-resume-open"
-            onClick={() => onResume(row.id)}
-            className="hb-btn-primary hb-press px-3.5 text-[13px] inline-flex items-center"
-            style={{ height: 32 }}
-          >
-            Resume this session
-          </button>
-          <button
-            type="button"
-            data-testid="session-resume-dismiss"
-            onClick={sessions.dismissResume}
-            className="hb-btn hb-press px-3 text-[12px]"
-            style={{ height: 32 }}
-          >
-            Start fresh
-          </button>
-          {others > 0 && (
-            <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
-              {others} other saved {others === 1 ? 'session' : 'sessions'} under Sessions
-            </span>
-          )}
-        </div>
-        <div className="mt-2.5 text-[11.5px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
-          The report and the checks come back. The board file itself does not: browsers do not
-          keep one between visits, so re-running the checks or driving it live needs the same
-          file dropped again. If this server still has that board loaded, Resume re-runs it
-          for real instead.
-        </div>
+          Hide this list
+        </button>
+      </div>
       </div>
     </ArriveOnce>
   )
