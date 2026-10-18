@@ -253,6 +253,49 @@ fn theta_findings(entry: &ModelEntry, facts: &Facts, pages: &[String]) -> Vec<Fi
     if rows.is_empty() {
         return out;
     }
+    // A card with a θJA row per package carries the least favourable of them as
+    // its scalar fallback (the harness's own rule), so it is each row that is
+    // judged against the package it names, not the scalar against the bound one.
+    let tagged: Vec<(&str, f64)> = entry
+        .source
+        .iter()
+        .flat_map(|s| &s.characteristic)
+        .filter(|c| c.rating.as_deref() == Some("theta_ja_c_per_w"))
+        .filter_map(|c| {
+            let v = crate::derating::rating_value("theta_ja_c_per_w", c)?;
+            Some((c.package.as_deref()?, v))
+        })
+        .collect();
+    if !tagged.is_empty() {
+        for (package, v) in tagged {
+            let (own, other): (Vec<&ThermalRow>, Vec<&ThermalRow>) =
+                rows.iter().partition(|r| covers(package, r));
+            if own.is_empty() || own.iter().any(|r| close(r.theta, v)) {
+                continue;
+            }
+            if let Some(wrong) = other.iter().find(|r| close(r.theta, v)) {
+                let right = own
+                    .iter()
+                    .map(|r| format!("{} {} (p.{})", r.label, r.theta, r.page))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                out.push(Finding {
+                    severity: if wrong.columnar && own.iter().all(|r| r.columnar) {
+                        Severity::Error
+                    } else {
+                        Severity::Warn
+                    },
+                    check: "scope",
+                    message: format!(
+                        "the θJA row for package '{package}' is {v}, the {} package's value \
+                         (p.{}); its own is {right}",
+                        wrong.label, wrong.page
+                    ),
+                });
+            }
+        }
+        return out;
+    }
     if let (Some(bound), Some(v)) = (
         bound_package(entry, facts, &rows),
         entry.ratings.theta_ja_c_per_w,
@@ -730,6 +773,43 @@ theta_ja_c_per_w = 307.6
         ));
         assert!(entry_findings(&card, &facts()).is_empty());
         assert!(theta_coverage(&[card], &facts()).is_empty());
+    }
+
+    #[test]
+    fn the_scalar_of_a_card_with_a_row_per_package_is_its_least_favourable_row() {
+        let rows = |dck: f64| {
+            let mut rows = String::new();
+            for (p, v) in [
+                ("DCK (SC70)", dck),
+                ("DDC (SOT-23-5)", 235.9),
+                ("DSE (WSON-6)", 321.3),
+            ] {
+                let _ = write!(
+                    rows,
+                    "[[models.source.characteristic]]\nparameter = \"RθJA\"\nrating = \"theta_ja_c_per_w\"\n\
+                     package = \"{p}\"\nmax = {v}\nunit = \"°C/W\"\nconditions = \"c\"\nbasis = \"b\"\n"
+                );
+            }
+            rows
+        };
+        let card = |dck: f64| {
+            entry(&format!(
+                "{}\n[models.source]\ntier = \"datasheet-derived\"\nvalidation = \"physical-bounds-only\"\n{}",
+                LDO.replace("307.6", "321.3"),
+                rows(dck)
+            ))
+        };
+        // The harness sets the scalar to the worst row (321.3, another package's),
+        // which is not an error while every row is its own package's.
+        assert!(entry_findings(&card(307.6), &facts()).is_empty());
+        // A row carrying another package's value is.
+        let found = entry_findings(&card(235.9), &facts());
+        assert!(
+            found
+                .iter()
+                .any(|f| f.severity == Severity::Error && f.message.contains("DCK (SC70)")),
+            "{found:?}"
+        );
     }
 
     #[test]

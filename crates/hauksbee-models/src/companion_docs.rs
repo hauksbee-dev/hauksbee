@@ -297,7 +297,10 @@ pub fn fetch(
         if round > 0 {
             let _ = write!(
                 prompt,
-                "\n\nThe links you gave before did not work:\n- {}\nDo not give those again.",
+                "\n\nThe links you gave before did not work:\n- {}\nDo not give those again. \
+                 If the manufacturer's server refuses downloads, a mirror serving the same \
+                 document unaltered (another site's copy of the PDF) is acceptable; give a \
+                 different host this time.",
                 failures.join("\n- ")
             );
         }
