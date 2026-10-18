@@ -22,11 +22,13 @@ if ($ChildMode) {
 $scratch = Join-Path ([IO.Path]::GetTempPath()) "hauksbee job test $([guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $scratch | Out-Null
 $markerPath = Join-Path $scratch "grandchild.pid"
+# Cold PowerShell start-up on a hosted runner can exceed 5 s, so the timeout must outlast
+# two nested launches; the grandchild sleeps 300 s, so the timeout still always fires.
 try {
     $result = Invoke-HauksbeeJobProcess -FilePath "powershell.exe" -ArgumentList @(
         "-NoProfile", "-File", $PSCommandPath, "-ChildMode", "-Marker", $markerPath
     ) -WorkingDirectory $PSScriptRoot -StandardOutput (Join-Path $scratch "stdout.log") `
-        -StandardError (Join-Path $scratch "stderr.log") -TimeoutMilliseconds 5000
+        -StandardError (Join-Path $scratch "stderr.log") -TimeoutMilliseconds 30000
     if (-not $result.TimedOut -or $result.ExitCode -ne 124) {
         throw "owned process did not report its timeout"
     }
