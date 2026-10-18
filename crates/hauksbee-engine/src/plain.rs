@@ -3010,6 +3010,7 @@ mod tests {
             clearance_rule_mm: 0.2,
             primitive_count: 0,
             shorts: Vec::new(),
+            stale_fills: Vec::new(),
             violations: Vec::new(),
             at_limit: Vec::new(),
             version_warning: None,
