@@ -973,6 +973,14 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         ));
     }
 
+    // A unit-suffixed field outside the range its meaning allows is a unit slip
+    // (`cout_min_f = 1.0` for 1 uF), the one table `ranges::ROWS` holds.
+    p.0.extend(
+        crate::ranges::problems(entry)
+            .iter()
+            .map(crate::ranges::Implausible::message),
+    );
+
     if let Some(program) = &entry.current_program {
         check_current_program(entry, program, &mut p);
     }

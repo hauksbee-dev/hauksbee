@@ -73,6 +73,7 @@ pub mod pin_roles;
 pub mod pin_rules;
 mod plausibility;
 pub mod profile;
+pub mod ranges;
 pub mod rating_basis;
 pub mod refdes;
 pub mod schema;

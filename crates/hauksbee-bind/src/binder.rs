@@ -653,9 +653,23 @@ pub fn bind_board_driven(
                         Vec::new(),
                     )
                 } else {
+                    // A card that reached binding without validation (a built-in, an
+                    // older saved draft) may carry a unit slip (`cout_min_f = 1.0`);
+                    // bind it with those values dropped and say so, never demand them.
+                    let suspect = found.suspect();
+                    let bound_card = suspect.as_ref().map_or(m, |q| &q.model);
+                    let suspect_note = suspect.as_ref().map(|q| {
+                        format!(
+                            "{}{} ({}): {}",
+                            Assumption::PARTIAL_MODEL_MARKER,
+                            comp.reference,
+                            comp.value,
+                            q.summary()
+                        )
+                    });
                     let (outcome, warning, guesses) = bind_component(
                         comp,
-                        m,
+                        bound_card,
                         source.as_ref(),
                         &mut circuit,
                         &node_of,
@@ -680,7 +694,7 @@ pub fn bind_board_driven(
                     (
                         Some(kind_str),
                         outcome,
-                        merge_bind_warnings(warning, unknown),
+                        merge_bind_warnings(merge_bind_warnings(suspect_note, warning), unknown),
                         guesses,
                     )
                 }
@@ -1373,6 +1387,8 @@ pub fn resolve(lib: &ModelLibrary, part: FittedComponent<'_>) -> hauksbee_models
 pub struct PartFacts {
     pub resolution: hauksbee_models::Resolution,
     rated: std::sync::OnceLock<Arc<Rated>>,
+    /// The card with its out-of-range values distrusted, worked out on first ask.
+    suspect: std::sync::OnceLock<Option<Arc<hauksbee_models::ranges::Quarantined>>>,
 }
 
 /// A part's ratings and derating, as the stress monitor holds them.
@@ -1386,7 +1402,17 @@ impl PartFacts {
         Self {
             resolution,
             rated: std::sync::OnceLock::new(),
+            suspect: std::sync::OnceLock::new(),
         }
+    }
+
+    /// The resolved card read with its out-of-range values distrusted
+    /// ([`hauksbee_models::ranges::quarantine`]), or `None` when it has none.
+    fn suspect(&self) -> Option<Arc<hauksbee_models::ranges::Quarantined>> {
+        let m = self.resolution.model.as_ref()?;
+        self.suspect
+            .get_or_init(|| hauksbee_models::ranges::quarantine(m).map(Arc::new))
+            .clone()
     }
 
     /// The ratings the model gives the part `comp`, worked out on first ask.
