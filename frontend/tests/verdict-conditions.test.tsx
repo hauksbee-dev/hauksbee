@@ -11,6 +11,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { ShellChips } from '../src/components/ShellChips'
 import { PartlyJudged, VerdictConditions } from '../src/components/report/VerdictConditions'
 import { buildReportHtml } from '../src/lib/report-export'
+import { boardVerdict } from '../src/lib/status-vocab'
+import { ResultPanel } from '../src/components/report/ResultPanel'
 import { explainReport, reportView, unjudgedGroups } from '../src/lib/report-view'
 import type { WebReport } from '../src/types/report'
 
@@ -139,10 +141,12 @@ describe('partly judged', () => {
     expect(renderToStaticMarkup(<PartlyJudged scope={null} />)).toBe('')
   })
 
-  test('the block says not a pass, names the part, what was not judged and what was', () => {
+  test('the block names the part and what was not judged; the verdict word says it is not a pass', () => {
     const html = renderToStaticMarkup(<PartlyJudged scope={reportView(partly).partlyJudged} />)
     expect(html).toContain('data-testid="report-partly-judged"')
-    expect(html).toContain('Not a pass: partly judged')
+    // "Not a pass" is the card's verdict word and detail, said once there.
+    expect(html).not.toContain('Not a pass')
+    expect(boardVerdict(partly)).toMatchObject({ term: 'invalid', detail: 'partly judged, not a pass' })
     expect(html).toContain('No usable model: </span>')
     expect(chipNames(html.slice(html.indexOf('partly-judged-open')))[0]).toBe('Q1')
     expect(html).toContain('electrical checks')
@@ -150,9 +154,10 @@ describe('partly judged', () => {
     expect(html.match(/Not judged on/g)).toHaveLength(1)
     expect(html).not.toContain('partly-judged-wiring')
     expect(html).not.toContain('partly-judged-electrical')
-    const names = chipNames(html.slice(html.indexOf('partly-judged-unjudged'), html.indexOf('partly-judged-judged')))
+    const names = chipNames(html.slice(html.indexOf('partly-judged-unjudged')))
     expect(new Set(names).size).toBe(names.length)
-    expect(html).toMatch(/Judged: <\/span>\d+ of \d+ net checks/)
+    // The judged count is the card's ring, not a second row here.
+    expect(html).not.toContain('Judged: ')
     // A warning, not the quiet note accent of a conditional pass and not an error.
     expect(html).toContain('var(--warn)')
     expect(html).not.toContain('--err')
@@ -171,7 +176,8 @@ describe('partly judged', () => {
     expect(html).toContain('Not judged on 10 nets, by kind:')
     expect(html).toContain('wiring and value checks, 1 net:')
     expect(html).toContain('electrical checks (levels, ratings, rails), 9 nets:')
-    expect(html).toContain('give U1, U2 models.')
+    // The way to judge the rest is the card's one Next step, not this block.
+    expect(html).not.toContain('give U1, U2 models')
   })
 
   test('a net in both sets is named once, under the kind that covers both', () => {
@@ -184,17 +190,22 @@ describe('partly judged', () => {
     expect(unjudgedGroups({ wiring: [], electrical: [] })).toEqual([])
   })
 
-  test('an older engine that sends only the flag still gets the non-pass block', () => {
-    const view = reportView({ ...partly, judgement_scope: undefined })
+  test('an older engine that sends only the flag still gets a non-pass verdict', () => {
+    const report = { ...partly, judgement_scope: undefined }
+    const view = reportView(report)
     expect(view.partlyJudged).toEqual({ openParts: [], wiring: [], electrical: [], judged: 0, total: 0 })
-    const html = renderToStaticMarkup(<PartlyJudged scope={view.partlyJudged} />)
-    expect(html).toContain('Not a pass: partly judged')
+    // Nothing to list, so no rows; the verdict word still says it is not a pass.
+    expect(renderToStaticMarkup(<PartlyJudged scope={view.partlyJudged} />)).toBe('')
+    expect(boardVerdict(report)).toMatchObject({ term: 'invalid', detail: 'partly judged, not a pass' })
   })
 
   test('the analysis view mounts the block inside the verdict card and drops the clipped reason', () => {
     const card = resultCard()
     expect(card).toContain('<PartlyJudged scope={v.partlyJudged} />')
-    expect(card).toContain('v.reason && !v.partlyJudged')
+    // Rendered, a partly judged card carries the rows and not the clipped reason.
+    const html = renderToStaticMarkup(<ResultPanel report={partly} view={reportView(partly)} explanation={null} exportSlot={null} />)
+    expect(html).toContain('data-testid="report-partly-judged"')
+    expect(html).not.toContain('data-testid="report-verdict-reason"')
   })
 
   test('the exported report keeps the full partly judged sentence', () => {

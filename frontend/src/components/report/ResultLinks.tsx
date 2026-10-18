@@ -28,6 +28,14 @@ export interface ResultLinkHandlers {
    *  any, and the call that opens its editor. */
   checkOffer?: (entity: ResultEntity) => CheckOffer | null
   onAddCheck?: (offer: CheckOffer) => void
+  /** Frame and light up on the board everything a finding names (and the spot
+   *  it was found at), without selecting any one of them. `key` names the
+   *  finding so its card can say it is the one on the map. */
+  onShow?: (entities: ResultEntity[], at: { x: number; y: number; label: string } | null, key: string) => void
+  /** The finding the board is showing now, if any. */
+  shownKey?: string | null
+  /** Open the Checks view. */
+  onOpenChecks?: () => void
 }
 
 /** A check the add-check path can start: the kind, its target, and a label. */
@@ -151,7 +159,7 @@ export function AddCheck({ entities }: { entities: ResultEntity[] }) {
   if (!offer) return null
   return (
     <RowAction testId="result-add-check" onClick={() => onAddCheck(offer)} title={`Opens it in the board's check-this dock: ${offer.label}`}>
-      + Add as check
+      Add a check
     </RowAction>
   )
 }

@@ -479,6 +479,160 @@ export function reportView(r: WebReport): ReportView {
   }
 }
 
+// ── The verdict card's one sentence ─────────────────────────────────────────
+
+/** The engine headline's own verdict words, each said once already by the
+ *  card's verdict word: a lead-in ("OK to order, conditionally: ..."), a
+ *  trailing restatement ("... OK to order, conditionally") and pointers at
+ *  rows the card shows anyway ("see the reason below", "this rests on:"). */
+const VERDICT_LEADS = /^(ok to order(,\s*conditionally)?|partly judged,\s*not a pass|not routed yet|not conclusive|clean(,\s*conditionally)?)\s*[:.]\s*/i
+const VERDICT_TAILS = [
+  /\s*ok to order(,\s*conditionally)?\.?$/i,
+  /[;,]?\s*see the reason below\.?$/i,
+  /[;,]?\s*this rests on:?$/i,
+]
+
+/** The headline as the one sentence under the verdict word: what the run
+ *  found, without the verdict said a second time in other words. Empty when
+ *  the headline is nothing but the verdict. */
+export function verdictSentence(headline: string): string {
+  let text = headline.trim().replace(VERDICT_LEADS, '')
+  for (let changed = true; changed;) {
+    changed = false
+    for (const tail of VERDICT_TAILS) {
+      const next = text.replace(tail, '').trim()
+      if (next !== text) { text = next; changed = true }
+    }
+  }
+  if (!text) return ''
+  text = text[0].toUpperCase() + text.slice(1)
+  return /[.!?…]$/.test(text) ? text : `${text}.`
+}
+
+// ── The findings list beside the board ──────────────────────────────────────
+
+/** One severity scale on the page: the engine's serious/warning/note, with a
+ *  section's heads-up and a top-level note both a Note. */
+export type FindingLevel = 'serious' | 'warning' | 'note'
+export const LEVEL_WORD: Record<FindingLevel, string> = { serious: 'Serious', warning: 'Warning', note: 'Note' }
+const LEVEL_ORDER: Record<FindingLevel, number> = { serious: 0, warning: 1, note: 2 }
+
+export interface FindingEntry {
+  key: string
+  level: FindingLevel
+  /** The section it came from, without its parenthetical ("Connectivity & wiring"). */
+  section: string
+  /** One line: the finding's first sentence. */
+  title: string
+  /** The rest of the finding's own text, when it has more than one sentence. */
+  detail: string | null
+  /** Why it matters, when the engine gave a reason. */
+  why: string | null
+  /** A "why" that is really measured data ("J2: CC1 Rd=none"), shown as data. */
+  data: string | null
+  /** What to do, once. */
+  fix: string | null
+  /** Every place it was found (more than one for a group of similar findings). */
+  items: { what: string; x?: number; y?: number }[]
+  /** The text the parts and nets it names are read from. */
+  text: string
+  /** The finding asks for a stated intent the Checks view can record. */
+  wantsCheck: boolean
+}
+
+/** A section's name without its parenthetical qualifier. */
+export const sectionName = (title: string) => title.replace(/\s*\(.*\)$/, '')
+
+/** "Remedy: ..." inside the finding's own text, when the fix says it again. */
+const withoutRemedy = (what: string, fix: string | null) => {
+  const at = what.search(/\s*Remedy:\s/)
+  return fix && at > 0 ? what.slice(0, at).trim() : what
+}
+
+/** A terminal pointer inside a note, for a step the app does itself. */
+const CLI_SCAFFOLD = /[;,]?\s*`hauksbee-ci init` scaffolds one to confirm\.?/
+
+/** Split a finding's text into a one-line title and the rest. */
+function titleAndDetail(what: string): { title: string; detail: string | null } {
+  const end = what.search(/[.!?](?=\s+[A-Z(])/)
+  if (end < 0) return { title: what.trim(), detail: null }
+  return { title: what.slice(0, end + 1).trim(), detail: what.slice(end + 1).trim() || null }
+}
+
+/** A "why" with no sentence in it, only fields and values. */
+const isData = (why: string) => !/[.!?]$/.test(why.trim()) && /[=:]/.test(why) && why.length < 120
+
+function entry(key: string, level: FindingLevel, section: string, what: string, why: string, fix: string, items: FindingEntry['items']): FindingEntry {
+  const cleanFix = fix.trim() || null
+  const wantsCheck = CLI_SCAFFOLD.test(what)
+  const own = withoutRemedy(what.replace(CLI_SCAFFOLD, '.').replace(/\.\.$/, '.'), cleanFix)
+  const { title, detail } = titleAndDetail(own)
+  const reason = why.trim()
+  const data = reason && isData(reason) ? reason : null
+  return {
+    key, level, section, title, detail,
+    why: reason && !data ? reason : null,
+    data,
+    // A fix the title already says verbatim is not said twice.
+    fix: cleanFix && !own.includes(cleanFix.replace(/\.$/, '')) ? cleanFix : null,
+    items,
+    text: [what, ...items.map(i => i.what)].join(' '),
+    wantsCheck,
+  }
+}
+
+/** Every finding, heads-up and top-level note on the page, worst first, as
+ *  the cards beside the board. The copper findings an unrouted board holds
+ *  back are not here (the pre-layout line counts them). */
+export function findingEntries(v: ReportView): FindingEntry[] {
+  const out: FindingEntry[] = []
+  v.sections.filter(s => s !== v.preLayout?.copper).forEach((s, si) => {
+    const section = sectionName(s.title)
+    s.groups.forEach((g, gi) => {
+      const level: FindingLevel = g.level === 'serious' || g.level === 'warning' ? g.level : 'note'
+      out.push(entry(`s${si}g${gi}`, level, section, g.items[0].what, g.why, g.fix, g.items))
+    })
+    s.headsUp.forEach((h, hi) => {
+      out.push(entry(`s${si}h${hi}`, 'note', section, h.what, h.why ?? '', h.fix ?? '', [{ what: h.what }]))
+    })
+  })
+  v.notes.forEach((n, ni) => {
+    out.push(entry(`n${ni}`, 'note', 'Note', n.message, '', '', [{ what: n.message }]))
+  })
+  return out
+    .map((e, i) => ({ e, i }))
+    .sort((a, b) => LEVEL_ORDER[a.e.level] - LEVEL_ORDER[b.e.level] || a.i - b.i)
+    .map(({ e }) => e)
+}
+
+/** The sections with nothing to show as a card, by what they said: checked
+ *  and clear, or not able to judge (an INCONCLUSIVE section, whose parts with
+ *  no model the page offers to model). A section that both found things and
+ *  could not judge everything is in `inconclusive` too. */
+export interface SectionStatus {
+  clear: { title: string; verdict: string }[]
+  inconclusive: { title: string; verdict: string }[]
+}
+
+export function sectionStatus(v: ReportView): SectionStatus {
+  const clear: SectionStatus['clear'] = []
+  const inconclusive: SectionStatus['inconclusive'] = []
+  for (const s of v.sections) {
+    if (s === v.preLayout?.copper) continue
+    if (/^INCONCLUSIVE\b/i.test(s.verdict)) inconclusive.push({ title: sectionName(s.title), verdict: s.verdict })
+    else if (s.groups.length === 0 && s.headsUp.length === 0) clear.push({ title: s.title, verdict: s.verdict })
+  }
+  return { clear, inconclusive }
+}
+
+/** The engine reason's first half, without a terminal command the page offers
+ *  as a button ("...; next: draft their models with `hauksbee models ...`"). */
+export function reasonForCard(reason: string): string {
+  const { what, next } = splitReason(reason)
+  if (next && /`/.test(next)) return briefReason(what)
+  return briefReason(reason)
+}
+
 // ── Model coverage lookups (the selection cards on both boards) ─────────────
 
 /** The coverage row for one part, or null. */

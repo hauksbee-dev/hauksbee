@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import { suggestions } from '../src/components/report/NextStep'
+import { readFileSync } from 'node:fs'
+import { nextKind, suggestions } from '../src/components/report/NextStep'
+import { reportView } from '../src/lib/report-view'
 import type { WebReport } from '../src/types/report'
 
 const report = (cosim: Partial<NonNullable<WebReport['cosim']>> | null, supplies: WebReport['supplies'] = []) => ({
@@ -36,5 +38,26 @@ describe('next-step suggestions come only from what the co-sim observed', () => 
     expect(s.request).toMatchObject({ kind: 'voltage', net: '+5V', min: '4.75' })
     expect(s.note).toContain('less 5%')
     expect(suggestions(report({ gpio_nets: [{ name: '+5V', volts: 4.2, driven: false }] }, supplies))).toEqual([])
+  })
+})
+
+describe('the one next step follows the board state', () => {
+  const fixture = (name: string): WebReport =>
+    JSON.parse(readFileSync(new URL(`./visual-lint/fixtures/${name}`, import.meta.url), 'utf8')) as WebReport
+  const kind = (r: WebReport, firmwareName: string | null = null, checks: { passed: number; failed: number; invalid: number } | null = null) =>
+    nextKind(r, reportView(r), { firmwareName, checks })
+
+  test('an unrouted board is routed first, never offered firmware', () => {
+    expect(kind(fixture('analyze-unrouted.json'))).toBe('route')
+    expect(kind(fixture('analyze-unrouted.json'), 'blink.elf')).toBe('route')
+  })
+  test('a partly judged board is given the missing model', () => {
+    expect(kind(fixture('analyze-partly-judged.json'))).toBe('model')
+  })
+  test('a checks run leads to CI, whatever the board', () => {
+    expect(kind(fixture('analyze-unrouted.json'), null, { passed: 1, failed: 0, invalid: 0 })).toBe('ci')
+  })
+  test('a clean pass is offered checks and firmware', () => {
+    expect(kind(fixture('analyze-conditional-pass.json'))).toBe('checks')
   })
 })
