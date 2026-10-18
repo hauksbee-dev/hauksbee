@@ -244,7 +244,13 @@ export interface EvidenceMap {
   assertion: string
   artifacts?: number[]
   models?: ModelOnPath[]
+  /** The same models grouped by shared model, source and confidence; the
+   *  engine sends these instead of `models` when a map lists more than 256. */
+  model_groups?: ModelGroup[]
   parameters?: unknown[]
+  /** The same parameters grouped by shared value and origin, sent instead of
+   *  `parameters` for a long list. */
+  parameter_groups?: Array<Record<string, unknown>>
   assumptions?: string[]
   error_budget?: ErrorBudget
   coverage?: string
@@ -268,6 +274,17 @@ export interface ModelOnPath {
   model_id: string
   source: ModelSource
   confidence: string
+}
+
+/** Parts that share one model, source and confidence. `subjects` runs parallel
+ *  to `references` and is absent when every identity is its reference. */
+export interface ModelGroup {
+  model_id: string
+  layer: string
+  confidence: string
+  source: ModelSource
+  references: string[]
+  subjects?: string[]
 }
 
 export interface ArtifactProvenance {

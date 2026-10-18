@@ -96,7 +96,7 @@ pub fn schematic_analyzer() -> hauksbee_frontdoor_api::frontdoor::SchematicAnaly
                 );
             }
         };
-        match firmware {
+        let json = match firmware {
             Some((fw_name, fw_bytes)) => crate::frontdoor::analyze_with_firmware_json_with_ties(
                 name,
                 contents,
@@ -105,12 +105,16 @@ pub fn schematic_analyzer() -> hauksbee_frontdoor_api::frontdoor::SchematicAnaly
                 ties.as_ref(),
             ),
             None => crate::frontdoor::analyze_json_with_ties(name, contents, ties.as_ref()),
-        }
+        };
+        crate::web_transport::for_browser(json)
     })
 }
 
+#[must_use]
 pub fn design_analyzer() -> hauksbee_frontdoor_api::frontdoor::DesignAnalyzer {
-    std::sync::Arc::new(crate::frontdoor::analyze_design_json)
+    std::sync::Arc::new(|upload| {
+        crate::web_transport::for_browser(crate::frontdoor::analyze_design_json(upload))
+    })
 }
 
 /// The browser deck panel's backend: run one uploaded SPICE deck as `hauksbee sim` does.

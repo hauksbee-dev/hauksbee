@@ -11,7 +11,7 @@
 
 import type {
   CheckResult, ErrorBudget, ErrorBudgetWindow, EvidenceAssumption, EvidenceMap, FixFirst, JsonNote, ModelCoverageComponent,
-  ModelCoverageSnapshot, ModelOnPath, RefusalContract, RunResponse, WebCosimSection, WebFallbackWindow, WebFinding,
+  ModelCoverageSnapshot, ModelGroup, ModelOnPath, RefusalContract, RunResponse, WebCosimSection, WebFallbackWindow, WebFinding,
   WebGpioNet, WebHeadsUp, WebImportObject, WebReport, WebSection, WebTimingCoverage,
 } from '../types/report'
 
@@ -91,6 +91,23 @@ export function describeModelSource(model: ModelOnPath): string {
       ? 'non-guaranteed typical/estimated range'
       : 'validated two-sided bound'
   return `${model.reference} ${model.model_id}: ${model.source.tier} · ${model.source.validation} · ${accuracy}`
+}
+
+/** One line for a group of parts that share a model: the first few parts, then
+ *  a count of the rest, so a rail with thousands of parts stays one line. */
+export function describeModelGroup(group: ModelGroup): string {
+  const shown = 6
+  const head = group.references.slice(0, shown).join(', ')
+  const rest = group.references.length - shown
+  const parts = rest > 0 ? `${head} and ${rest} more` : head
+  const row = { reference: parts, model_id: group.model_id, source: group.source, confidence: group.confidence }
+  return `${describeModelSource(row)} (${plural(group.references.length, 'part')})`
+}
+
+/** The model lines of an evidence map, whichever shape it arrived in. */
+export function modelProvenanceLines(map: EvidenceMap | undefined): string[] {
+  if (!map) return []
+  return [...(map.models ?? []).map(describeModelSource), ...(map.model_groups ?? []).map(describeModelGroup)]
 }
 
 /** Resolve a map's assumption ids through the run's registry. Missing ids are

@@ -1470,10 +1470,10 @@
       "type": "object"
     },
     "EvidenceMap": {
-      "description": "What one assertion rests on: the artifacts, models, parameters and assumptions on its causal path, its error budget, and the status derived from them.",
+      "description": "What one assertion rests on: the artifacts, models, parameters and\nassumptions on its causal path, its error budget, and the derived status.\n\n`status`, the assertion it is a status OF, and the id list it was derived\nfrom are all private, and there is one constructor. What that guarantees,\nexactly: a status cannot disagree with the assumptions it was handed, and no\nproducer, renderer or sibling crate can move the three apart afterwards.\n`Undermined` maps onto the run's existing invalid-for-analysis outcome, which\nwaivers already refuse to flip green, so the only routes back to a clean\nverdict are closing the assumption or acknowledging it in the open.\n\nConstruction requires the opaque result of [`CausalPathIndex::traverse`]. A\ncaller cannot hand over an arbitrary empty slice and mint `Clean`; an unknown\nnet is an error, while a known net with no on-path assumptions is clean.\n\nLike [`Assumption`], and for the same reason, the type does not implement\n`Deserialize`. A serialized map carries assumption *ids*, not kinds, so a\nstatus could not be re-derived on the way back in even in principle: the kinds\nlive in the run's registry, a different part of the document. A permissive\n`Deserialize` would therefore be a laundering route with no compensating\ncheck, and deleting the `assumptions` key from a hand-edited report would read\nback `Clean` over a real gap. A consumer that has the registry and wants the\nanswer calls [`EvidenceMap::derive_status`] on it, which is the only honest\nway to get one.\n\n```\nuse hauksbee_ir::evidence::{Assumption, CausalPathIndex, EvidenceMap,\n    EvidenceRegistry, EvidenceStatus, NetScope, RunDate};\n\nlet today = RunDate::from_epoch_days(20_666); // 2026-08-01\nlet open = Assumption::open_part(\"U2\", \"XC6206\", \"no model matched\");\nlet registry = EvidenceRegistry::new(vec![open]).unwrap();\nlet graph = CausalPathIndex::from_net_parts([(\"3V3\", [\"U2\"].as_slice()),\n    (\"VBUS\", [\"J1\"].as_slice())]).unwrap();\nlet on_3v3 = graph.traverse(&NetScope::new([\"3V3\"], None).unwrap(), &registry).unwrap();\nlet map = EvidenceMap::from_traversal(\"3V3 stays above 3.1 V\", on_3v3,\n    &registry, today).unwrap();\nassert_eq!(map.status(), EvidenceStatus::Undermined);\nassert_eq!(map.assumptions()[0].as_str(), \"open-part:U2\");\n\nlet on_vbus = graph.traverse(&NetScope::new([\"VBUS\"], None).unwrap(), &registry).unwrap();\nlet clean = EvidenceMap::from_traversal(\"VBUS stays below 5.5 V\", on_vbus,\n    &registry, today).unwrap();\nassert_eq!(clean.status(), EvidenceStatus::Clean);\nassert!(clean.assumptions().is_empty());\n```",
       "properties": {
         "artifacts": {
-          "description": "Indices into the run's `inventory`, causal only: the artifacts whose\ncontributions this assertion actually consumed. Omitted when empty, per\nthe module's serde convention: a check that reads no artifact says so by\ncarrying no key, and adding this skip after the schema publishes would be\nthe breaking change the once-only version bump is being saved for.",
+          "description": "Indices into the run's `inventory`, causal only.",
           "items": {
             "$ref": "#/definitions/ArtifactId"
           },
@@ -1491,7 +1491,7 @@
           "type": "array"
         },
         "coverage": {
-          "description": "Statistical coverage wording for ensemble assertions. Not an\nassumption: an accurate statement of method.",
+          "description": "Statistical coverage wording for ensemble assertions.",
           "type": "string"
         },
         "error_budget": {
@@ -1502,15 +1502,29 @@
           ],
           "description": "How good the numbers behind this assertion are."
         },
+        "model_groups": {
+          "description": "The same models grouped by their shared model, source and confidence,\nused instead of `models` when the list is long.",
+          "items": {
+            "$ref": "#/definitions/ModelGroup"
+          },
+          "type": "array"
+        },
         "models": {
-          "description": "Models bound on the causal path.",
+          "description": "Models bound on the causal path, one row each.",
           "items": {
             "$ref": "#/definitions/ModelOnPath"
           },
           "type": "array"
         },
+        "parameter_groups": {
+          "description": "The same parameters grouped by their shared value and origin, used\ninstead of `parameters` when the list is long.",
+          "items": {
+            "$ref": "#/definitions/ParameterGroup"
+          },
+          "type": "array"
+        },
         "parameters": {
-          "description": "Parameters read on the causal path.",
+          "description": "Parameters read on the causal path, one row each.",
           "items": {
             "$ref": "#/definitions/ParameterProvenance"
           },
@@ -2026,6 +2040,61 @@
       ],
       "type": "string"
     },
+    "ModelGroup": {
+      "description": "The models of one evidence map that share a model, source and confidence.",
+      "properties": {
+        "confidence": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MatchConfidence"
+            }
+          ],
+          "description": "How good the match was."
+        },
+        "layer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelLayer"
+            }
+          ],
+          "description": "Storage layer of the model's source."
+        },
+        "model_id": {
+          "description": "The model that bound.",
+          "type": "string"
+        },
+        "references": {
+          "description": "The parts bound to it, in the order the map lists them.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelSource"
+            }
+          ],
+          "description": "The canonical source, validation and uncertainty record, stated once."
+        },
+        "subjects": {
+          "description": "Causal identity of each part, parallel to `references`. Absent when\nevery identity is its reference.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "model_id",
+        "layer",
+        "confidence",
+        "source",
+        "references"
+      ],
+      "type": "object"
+    },
     "ModelIntervalKind": {
       "description": "Interval bounds a model places on a derived quantity.\n\nThis is the socket for interval models: shaped before its producer exists so\nthat work lands in this vocabulary instead of inventing a second one.\n\nBoth bounds are real numbers. A one-sided datasheet limit (\"at least 100\")\nis [`ModelUncertainty::Unknown`] until a defensible other bound exists. A\nproducer must never turn a typical value or an invented physical cap into a\nguaranteed two-sided accuracy interval.",
       "oneOf": [
@@ -2336,6 +2405,43 @@
         "cli"
       ],
       "type": "string"
+    },
+    "ParameterGroup": {
+      "description": "The parameters of one evidence map that share a value and origin.",
+      "properties": {
+        "origin": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ValueOrigin"
+            }
+          ],
+          "description": "Where the value came from."
+        },
+        "parameters": {
+          "description": "Reference-qualified parameter names (\"R7.resistance\"), in the order the\nmap lists them.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "subjects": {
+          "description": "Causal identity of each parameter's component, parallel to\n`parameters`. Absent when the parameters in the group have none; a\ngroup never mixes parameters with and without one.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "value": {
+          "description": "Rendered value shared by every parameter in the group.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "origin",
+        "parameters"
+      ],
+      "type": "object"
     },
     "ParameterProvenance": {
       "description": "Provenance for one bound parameter of one device.",

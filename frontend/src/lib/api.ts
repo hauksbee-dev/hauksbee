@@ -9,6 +9,7 @@ import type {
 } from '../types/report'
 import type { ClientMessage, ServerMessage } from '../types/protocol'
 import { buildBoardUpload, type SupplementalDesignFiles } from './board-upload'
+import { restoreRepeats } from './intern'
 
 /** What to show a user for a thrown value of unknown type. */
 export const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
@@ -191,7 +192,11 @@ const settingsOrRefusal = async (sent: Promise<Response>): Promise<ExtractSettin
 // ── The endpoints ────────────────────────────────────────────────────────────
 
 export const api = {
-  startup: () => getJson<Startup>('/api/startup'),
+  startup: async (): Promise<Startup> => {
+    const startup = await getJson<Startup>('/api/startup')
+    // A preloaded large report travels with its repeated values shared.
+    return startup.preloaded && startup.report ? { ...startup, report: restoreRepeats(startup.report) } : startup
+  },
   liveStatus: () => getJson<LiveStatus>('/api/live/status'),
   /** Launching replaces the one live session and the server closes every
    *  socket attached to the old one. The page's `/ws` is held, and reattached
@@ -249,14 +254,14 @@ export const api = {
     if (!res.ok) return refuse(res)
     if (onProgress && res.body && (res.headers.get('content-type') ?? '').includes('text/event-stream')) {
       const streamed = await readAnalysisStream(res.body, onProgress)
-      if (streamed.done !== undefined) return JSON.parse(streamed.done) as WebReport
+      if (streamed.done !== undefined) return restoreRepeats(JSON.parse(streamed.done) as WebReport)
       if (streamed.error !== undefined) throw new Error(streamed.error)
       // The stream ended with no answer (a dropped connection, a proxy that cut
       // it): the report still has to arrive, so ask again the plain way.
       res = await send(false)
       if (!res.ok) return refuse(res)
     }
-    return readJson<WebReport>(res)
+    return restoreRepeats(await readJson<WebReport>(res))
   },
   /** hauksbee-ci reports its refusals in the body, so a non-2xx is parsed too. */
   check: (upload: FormData) => postForm<RunResponse>('/api/check', upload),

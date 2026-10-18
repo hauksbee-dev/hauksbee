@@ -1,6 +1,6 @@
 import { useContext, useMemo } from 'react'
 import type { ArtifactProvenance, CheckResult, EvidenceAssumption } from '../../types/report'
-import { assumptionsForEvidence, describeModelSource, evidenceStatusTerm, plural } from '../../lib/report-view'
+import { assumptionsForEvidence, evidenceStatusTerm, modelProvenanceLines, plural } from '../../lib/report-view'
 import type { ResultEntity } from '../../lib/result-links'
 import { EntityChip, ResultLinkContext } from '../report/ResultLinks'
 import { causeGroups, openPartCount, showOpenParts, withoutIds } from './Remedies'
@@ -197,7 +197,7 @@ export function AssertionEvidence({ result, assumptions, inventory, repeats, sta
       ? `this whole-board check is judged once every part has a model, so it waits on the ${plural(open, 'open part')}. That is expected on a first run.`
       : linked[0] ? withoutIds(linked[0].statement) : null
   const status = map?.status ?? 'clean'
-  const details = linked.length > 0 || artifacts.length > 0 || !!map?.error_budget || (map?.models ?? []).length > 0
+  const details = linked.length > 0 || artifacts.length > 0 || !!map?.error_budget || modelProvenanceLines(map).length > 0
   const showSubject = !!subject && !!onGo
   const glance = part !== 'details'
   const unfold = part !== 'glance'
@@ -223,9 +223,9 @@ export function AssertionEvidence({ result, assumptions, inventory, repeats, sta
         {summarizeErrorBudget(map.error_budget).map(row => <div key={row}>{row}</div>)}
       </div>
     )}
-    {(map?.models ?? []).length > 0 && (
+    {modelProvenanceLines(map).length > 0 && (
       <div className="mt-1" data-testid="model-provenance" style={{ color: 'var(--silk-faint)' }}>
-        Models: {(map?.models ?? []).map(describeModelSource).join('; ')}
+        Models: {modelProvenanceLines(map).join('; ')}
       </div>
     )}
   </>
