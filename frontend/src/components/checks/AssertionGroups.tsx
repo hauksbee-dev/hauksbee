@@ -13,8 +13,11 @@ import { ConstraintEditor } from '../ConstraintEditor'
 /** The checks: ONE card, first on the page, with the kinds as subheads only
  *  when there is more than one, and the way to add a check at its foot. */
 export function AssertionGroups({
-  checks, validation, stale, resultForRow, assumptions, inventory, onAdd, onUpdate, onRemove, footer,
+  checks, validation, stale, resultForRow, assumptions, inventory, onAdd, onUpdate, onRemove, footer, bandOffersModelling = false,
 }: {
+  /** The verdict band above already offers to model the open parts, so a not
+   *  judged row does not offer it a second time. */
+  bandOffersModelling?: boolean
   /** Under the rows: the empty state and the Add a check menu. */
   footer?: React.ReactNode
   checks: CheckRow[]
@@ -114,7 +117,10 @@ export function AssertionGroups({
                             wraps rather than truncating: on a phone column the
                             kind chip and the verdict leave it about 24px. */}
                         <span>{titleOf(checkKind(c.kind)?.kind ?? c.kind)}</span>
-                        {rowResult && <ResultChip result={rowResult} stale={stale} />}
+                        {/* A check that was not judged says so in its own "Not
+                            judged:" line below, with the reason and the parts;
+                            a second status pill here would be the same fact twice. */}
+                        {rowResult && !rowResult.invalid && <ResultChip result={rowResult} stale={stale} />}
                       </div>
                       <div className="flex items-center gap-3 shrink-0">
                         {rowResult && (
@@ -159,6 +165,7 @@ export function AssertionGroups({
                     {rowResult && (
                       <AssertionEvidence
                         part="glance"
+                        offerModel={!bandOffersModelling}
                         result={rowResult}
                         assumptions={assumptions}
                         inventory={inventory}

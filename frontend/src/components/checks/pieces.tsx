@@ -2,11 +2,12 @@ import { useContext, useMemo } from 'react'
 import type { ArtifactProvenance, CheckResult, EvidenceAssumption } from '../../types/report'
 import { assumptionsForEvidence, evidenceStatusTerm, modelProvenanceLines, plural } from '../../lib/report-view'
 import type { ResultEntity } from '../../lib/result-links'
-import { ChipList, EntityChip, ResultLinkContext } from '../report/ResultLinks'
-import { causeGroups, showOpenParts, withoutIds } from './Remedies'
+import { ChipList, EntityChip, netsOf, partsOf, ResultLinkContext } from '../report/ResultLinks'
+import { causeGroups, showOpenParts, withoutIds, type CauseGroup } from './Remedies'
 import { summarizeErrorBudget } from '../../lib/report-view'
 import { VerdictBadge } from '../../motion'
-import { Term } from '../ui'
+import { labelFor } from '../../lib/labels'
+import { Term, useTermEntry } from '../ui'
 
 // The small pieces the Checks view repeats: a labelled input, the PASS/FAIL
 // chip that rides on a row, and the evidence block under it.
@@ -84,10 +85,13 @@ export function NetField({ value, nets, onChange, ariaLabel, width = 180, testId
   )
 }
 
-/** Inline PASS / FAIL / INVALID / MEASURED chip riding on a check row. */
+/** Inline PASS / FAIL / INVALID / MEASURED chip. The formal word for a check
+ *  that could not be judged is always paired with what it means in plain
+ *  words, so nobody has to know "INVALID" is the engine's term for it. A check
+ *  row that already says "Not judged:" itself leaves this chip off. */
 export function ResultChip({ result, stale }: { result: CheckResult; stale: boolean }) {
   const tone = result.invalid
-    ? { color: 'var(--warn)', bg: 'var(--warn-bg)', border: 'var(--warn-border)', label: 'INVALID', term: 'invalid' }
+    ? { color: 'var(--warn)', bg: 'var(--warn-bg)', border: 'var(--warn-border)', label: 'INVALID · NOT JUDGED', term: 'invalid' }
     : result.measured
     ? { color: 'var(--silk-faint)', bg: 'var(--surface-2)', border: 'var(--hairline)', label: 'MEASURED' }
     : result.passed
@@ -224,12 +228,40 @@ function subjectOf(detail: string): ResultEntity | null {
   return net ? { kind: 'net', net: net[1] } : null
 }
 
+/** What a check also rests on beyond the open parts: a disclosure naming each
+ *  kind of assumption, with the parts and nets it is about as chips that go to
+ *  the board. Closed by default, so a row stays one line until asked. */
+function OtherAssumptions({ groups }: { groups: readonly CauseGroup[] }) {
+  const parts = [...new Set(groups.flatMap(g => g.parts))]
+  const nets = [...new Set(groups.flatMap(g => g.nets))]
+  const what = [parts.length > 0 ? plural(parts.length, 'assumed part') : '', nets.length > 0 ? plural(nets.length, 'assumed net') : ''].filter(Boolean).join(' and ')
+  return (
+    <details className="basis-full text-[11px]" data-testid="other-assumptions" style={{ color: 'var(--silk-faint)' }}>
+      <summary className="cursor-pointer">It also rests on {what}</summary>
+      <ul className="list-none p-0 m-0 mt-1" style={{ color: 'var(--silk-dim)' }}>
+        {groups.map(g => <OtherAssumptionRow key={g.kind} group={g} />)}
+      </ul>
+    </details>
+  )
+}
+
+function OtherAssumptionRow({ group }: { group: CauseGroup }) {
+  const entry = useTermEntry(group.term)
+  return (
+    <li className="mt-1" data-testid="other-assumption" data-kind={group.kind}>
+      <span className="font-semibold" style={{ color: 'var(--silk)' }}>{entry?.label ?? labelFor(group.kind)}</span>
+      {' '}
+      <ChipList entities={[...partsOf(group.parts), ...netsOf(group.nets)]} testId="other-assumption-chips" />
+    </li>
+  )
+}
+
 /** A check row's result, inline: the measured-vs-limit bar, a chip that shows
  *  the subject on the board, and for a check that could not be judged one line
  *  saying what blocks it, with the button that opens the open-parts sheet. The
  *  registry's own sentences, inputs and numbers are one click away, verbatim,
  *  so web, CLI and CI explain a limitation the same way. */
-export function AssertionEvidence({ result, assumptions, inventory, repeats, stale, part = 'all' }: {
+export function AssertionEvidence({ result, assumptions, inventory, repeats, stale, part = 'all', offerModel = true }: {
   result: CheckResult
   assumptions: readonly EvidenceAssumption[]
   inventory: readonly ArtifactProvenance[]
@@ -239,6 +271,10 @@ export function AssertionEvidence({ result, assumptions, inventory, repeats, sta
    *  judged); 'details': the evidence behind it, unfolded; 'all': both, with
    *  the evidence folded. */
   part?: 'all' | 'glance' | 'details'
+  /** Whether the "Model them" button rides on the not-judged line. The verdict
+   *  band offers the same action for the same parts; a page that shows the band
+   *  turns this off so the action is there once. */
+  offerModel?: boolean
 }) {
   const { onGo } = useContext(ResultLinkContext)
   const map = result.evidence
@@ -301,16 +337,12 @@ export function AssertionEvidence({ result, assumptions, inventory, repeats, sta
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1" data-testid="not-judged" style={{ color: 'var(--silk-dim)' }}>
           <span><span className="font-semibold" style={{ color: 'var(--warn-strong)' }}>Not judged:</span> {why}</span>
           {open.length > 0 && <ChipList entities={open.map(ref => ({ kind: 'part' as const, ref }))} testId="not-judged-parts" />}
-          {open.length > 0 && (
+          {offerModel && open.length > 0 && (
             <button type="button" className="hb-chip hb-press px-2 text-[12px]" style={{ height: 24 }} data-testid="not-judged-open" onClick={showOpenParts}>
               Model {open.length === 1 ? 'it' : 'them'}
             </button>
           )}
-          {(blockers?.others.length ?? 0) > 0 && (
-            <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
-              It also rests on assumptions about {plural(blockers!.others.reduce((n, g) => n + g.parts.length + g.nets.length, 0), 'other part')}; Why lists them.
-            </span>
-          )}
+          {(blockers?.others.length ?? 0) > 0 && <OtherAssumptions groups={blockers!.others} />}
         </div>
       )}
       {unfold && details && (part === 'details' ? (

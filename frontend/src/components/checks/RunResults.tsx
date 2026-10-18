@@ -1,5 +1,6 @@
 import type { RunResponse } from '../../types/report'
 import { explainRun, repeatedAssumptions, type Overall } from '../../lib/report-view'
+import { labelFor } from '../../lib/labels'
 import { useGlossary } from '../ui'
 import { ExplainVerdict } from '../report/VerdictConditions'
 import { AssertionEvidence, parseMeasures, plainDetail, ResultChip } from './pieces'
@@ -39,7 +40,7 @@ export function RunResults({ result, overall, stale, rawMode }: {
     ...(result.substitutions ?? []).map(s => `Substitute core: ${s}`),
     ...(result.coverage_warnings ?? []).map(s => `Coverage: ${s}`),
     ...(result.timing_coverage ?? []).map(t =>
-      `Timing on ${t.mcu_ref} (${t.backend}): edges land within ±${(t.timestamp_precision_s * 1e6).toFixed(3)} µs, and pulses of ${(t.minimum_guaranteed_pulse_s * 1e6).toFixed(3)} µs or longer are always seen${t.cycle_exact ? ' (cycle-exact)' : ' (sampled at poll boundaries)'}.`),
+      `Timing on ${t.mcu_ref}, emulated as ${labelFor(t.backend)}: edges land within ±${(t.timestamp_precision_s * 1e6).toFixed(3)} µs, and pulses of ${(t.minimum_guaranteed_pulse_s * 1e6).toFixed(3)} µs or longer are always seen${t.cycle_exact ? ' (cycle-exact)' : ' (sampled at poll boundaries)'}.`),
   ]
   if (!result.ok) return null
   return (
@@ -71,6 +72,7 @@ export function RunResults({ result, overall, stale, rawMode }: {
           </div>
           <AssertionEvidence
             result={x}
+            offerModel={overall !== 'invalid'}
             assumptions={result.assumptions ?? []}
             inventory={result.inventory ?? []}
             repeats={repeats[i] ?? new Set()}

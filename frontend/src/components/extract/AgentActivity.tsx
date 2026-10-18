@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { type ActivityState, budgetLabel, formatTokens, spendLines } from './activity'
+import { type ActivityState, attemptWords, formatTokens, spendLines, VALIDATOR_OK } from './activity'
 
 // A compact live view of what the extraction agent is doing, driven by the
 // `activity:` events the server streams alongside the plain progress lines.
@@ -29,7 +29,8 @@ export function AgentActivity({ activity }: { activity: ActivityState }) {
 
   if (activity.count === 0) return null
   const { tier, stage, pages, escalations, validator } = activity
-  const harness = tier && (budgetLabel(tier.budget) ?? tier.harness)
+  // A model with a small context works through the datasheet in fixed-size steps.
+  const stepSize = tier && tier.budget > 0 ? `reads in ~${formatTokens(tier.budget).replace(/\.0(?=[kM]$)/, '')}-token steps` : null
   const mono = { fontFamily: 'var(--font-mono)' }
 
   return (
@@ -43,17 +44,17 @@ export function AgentActivity({ activity }: { activity: ActivityState }) {
       </div>
 
       <div className="mt-1.5 grid gap-x-4 gap-y-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(10rem, 1fr))' }}>
-        <Fact label="Tier" testId="agent-activity-tier">
+        <Fact label="Model" testId="agent-activity-tier">
           {tier ? (
             <>
               <span style={mono} title={tier.model}>{tier.label ?? tier.model}</span>
-              <span style={{ color: 'var(--silk-dim)' }}> · tier {tier.tier} of {tier.tiers} · {harness}</span>
+              <span style={{ color: 'var(--silk-dim)' }}> · {attemptWords(tier.tier, tier.tiers)}{stepSize && ` · ${stepSize}`}</span>
               {tier.badge && <span data-testid="agent-activity-badge" style={{ color: 'var(--copper-hi)' }}> · {tier.badge}</span>}
             </>
           ) : '...'}
         </Fact>
-        <Fact label="Stage" testId="agent-activity-stage">
-          {stage ? `${stage.stage} (attempt ${stage.attempt} of ${stage.attempts})` : '...'}
+        <Fact label="Step" testId="agent-activity-stage">
+          {stage ? `${stage.stage} (try ${stage.attempt} of ${stage.attempts})` : '...'}
         </Fact>
         <Fact label="Pages read" testId="agent-activity-pages">
           <span style={mono}>{pages.length ? pages.join(', ') : 'none yet'}</span>
@@ -64,14 +65,14 @@ export function AgentActivity({ activity }: { activity: ActivityState }) {
             <div key={line} data-testid="agent-activity-spend-line" style={{ color: 'var(--silk-dim)' }}>{line}</div>
           ))}
         </Fact>
-        <Fact label="Validator" testId="agent-activity-validator">
-          {validator === null ? 'not run yet' : validator.ok ? 'ok' : (
-            <span style={{ color: 'var(--warn, var(--silk))' }}>failed: {validator.error ?? 'no detail'}</span>
+        <Fact label="Checked" testId="agent-activity-validator">
+          {validator === null ? 'not yet' : validator.ok ? VALIDATOR_OK : (
+            <span style={{ color: 'var(--warn, var(--silk))' }}>problem found: {validator.error ?? 'no detail'}</span>
           )}
         </Fact>
         {activity.final && (
           <Fact label="Result" testId="agent-activity-final">
-            tier {activity.final.tier} of {activity.final.tiers}, confidence {activity.final.confidence}
+            finished on {attemptWords(activity.final.tier, activity.final.tiers).toLowerCase()}, confidence {activity.final.confidence}
           </Fact>
         )}
       </div>
@@ -80,7 +81,7 @@ export function AgentActivity({ activity }: { activity: ActivityState }) {
         <ul className="mt-2 text-[12px] leading-snug" data-testid="agent-activity-escalations" style={{ color: 'var(--silk-dim)' }}>
           {escalations.map((e, i) => (
             <li key={i}>
-              <span className="font-semibold" style={{ color: 'var(--silk)' }}>Escalated</span>{' '}
+              <span className="font-semibold" style={{ color: 'var(--silk)' }}>Moved to a stronger model</span>{' '}
               <span style={mono}>{e.from}</span> &rarr; <span style={mono}>{e.to}</span>: {e.reason}
             </li>
           ))}
