@@ -1,3 +1,4 @@
+import { explainFor, labelFor } from '../../lib/labels'
 import type { ModelCoverageComponent, ModelCoverageSnapshot, WebImportDiagnostics } from '../../types/report'
 import { openPartRef, plural, stageTerm, stageWords } from '../../lib/report-view'
 import type { ReportView } from '../../lib/report-view'
@@ -143,14 +144,14 @@ export function ImportDiagnosticsPanel({
             style={{ borderBottom: '1px solid var(--hairline)', color: 'var(--silk-dim)' }}
           >
             <span style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)' }}>{object.id}</span>
-            <span style={{ color: object.status === 'recovered' ? 'var(--ok)' : 'var(--warn-strong)' }}>{object.status}</span>
+            <span style={{ color: object.status === 'recovered' ? 'var(--ok)' : 'var(--warn-strong)' }}>{labelFor(object.status)}</span>
             <span title={object.explanation}>{object.confidence} confidence · {object.explanation}</span>
             {object.x !== undefined && object.y !== undefined ? (
               <button
                 type="button"
                 className="hb-press text-[11px] font-semibold"
                 style={{ color: 'var(--copper-hi)', background: 'none', border: 'none' }}
-                onClick={() => onLocate(object.x!, object.y!, `Imported ${object.id}: ${object.status}`)}
+                onClick={() => onLocate(object.x!, object.y!, `Imported ${object.id}: ${labelFor(object.status)}`)}
               >
                 Show
               </button>
@@ -313,7 +314,7 @@ export function EvidencePanel({ evidence: { inventory, assumptions, summary, cav
           <div className="font-semibold" style={{ color: 'var(--silk)' }}>Affected assertions</div>
           {caveated.slice(0, 20).map((map, index) => (
             <div key={`${index}:${map.assertion}:${map.status}`} className="mt-1 flex gap-2">
-              <span style={{ color: map.status === 'undermined' ? 'var(--warn-strong)' : 'var(--note)' }}>{map.status}</span>
+              <span title={explainFor(map.status)} style={{ color: map.status === 'undermined' ? 'var(--warn-strong)' : 'var(--note)' }}>{labelFor(map.status)}</span>
               <span>{map.assertion}</span>
             </div>
           ))}

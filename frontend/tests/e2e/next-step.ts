@@ -46,7 +46,9 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 }, timeout: 9
   await page.getByTestId('suggest-uart').click()
   await page.waitForSelector('[data-testid="checks-panel"]', { timeout: 20_000 })
   const row = page.locator('.check-row', { hasText: 'Firmware prints a string' })
-  ok('a UART row arrived in Checks', await row.count() === 1)
+  // The row lands a moment after the panel opens: wait for it, then count.
+  await row.first().waitFor({ timeout: 20_000 }).catch(() => {})
+  ok('a UART row arrived in Checks', await row.count() === 1, `${await row.count()} rows`)
   await page.getByTestId('nav-board').click()
   await page.getByTestId('suggest-toggle-D13').click()
   await page.getByTestId('nav-board').click()
@@ -66,7 +68,8 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 }, timeout: 9
   await page.getByTestId('nav-board').click()
   await settle(page, 500)
   const after = await next.innerText()
-  ok('CI is the next step', /Run these in CI/.test(after) && /hauksbee-ci run ci\//.test(after), after)
+  // One plain sentence and one button; the command itself lives in the CI setup it opens.
+  ok('CI is the next step', /Run these checks on every push/.test(after) && /ci\/\S+\.toml/.test(after) && await page.getByTestId('ci-next').count() === 1, after)
   ok('no suggestions repeat', await page.getByTestId('suggest-uart').count() === 0)
   await next.scrollIntoViewIfNeeded()
   await shoot(page, '05-ci')

@@ -15,7 +15,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { ResultPanel } from '../src/components/report/ResultPanel'
 import { VerdictBand } from '../src/components/checks/VerdictBand'
 import { RING_FRACTION_MAX } from '../src/lib/gauge'
-import { assertRowCount, readStaticFinding, reportView, resultsWithoutRows, runMarkdown, runView } from '../src/lib/report-view'
+import { assertRowCount, findingEntries, readStaticFinding, reportView, resultsWithoutRows, runMarkdown, runView, sectionStatus } from '../src/lib/report-view'
+import { FindingsList } from '../src/components/report/Findings'
 import { boardVerdict } from '../src/lib/status-vocab'
 import type { RunResponse, WebReport } from '../src/types/report'
 
@@ -32,7 +33,6 @@ const card = (report: WebReport) =>
       view={reportView(report)}
       explanation={null}
       exportSlot={null}
-      command="hauksbee run board.kicad_pcb --check"
     />,
   )
 
@@ -74,11 +74,19 @@ describe('the key-parts ring', () => {
 
 describe('every number on an unrouted board agrees', () => {
   const html = card(unrouted)
-  const counters = [...html.matchAll(/text-\[20px\][^>]*>(\d+)</g)].map(m => Number(m[1]))
+  const view = reportView(unrouted)
+  const entries = findingEntries(view)
+  const list = renderToStaticMarkup(
+    <FindingsList entries={entries} status={sectionStatus(view)} openParts={null} openRefs={new Set()} preLayout={view.preLayout} />,
+  )
 
-  test('the counters are the report numbers, and the serious one is not zero', () => {
+  test('the card says the verdict once, with the one serious finding named', () => {
     expect(unrouted.serious).toBe(1)
-    expect(counters).toEqual([unrouted.serious, unrouted.total])
+    expect(html.match(/data-testid="result-verdict-word"/g)).toHaveLength(1)
+    expect(html).toMatch(/data-testid="result-verdict-word"[^>]*>FAIL</)
+    expect(html).toMatch(/data-testid="result-verdict-detail"[^>]*>not routed yet</)
+    // "Not routed" is said by the verdict detail, not again by the sentence.
+    expect(html.match(/>[^<]*not routed/gi)).toHaveLength(1)
   })
 
   test('the headline quotes the counters and names the routing', () => {
@@ -88,10 +96,14 @@ describe('every number on an unrouted board agrees', () => {
     expect(html).not.toContain('no findings')
   })
 
-  test('the card lists the serious finding and says what the rows leave out', () => {
-    expect(html.match(/data-testid="result-finding"/g)).toHaveLength(1)
-    expect(html).toContain('>serious<')
-    expect(html).toMatch(/and 11 more findings in the sections below/)
+  test('the findings beside the board are every counted finding, the serious one first', () => {
+    const found = entries.filter(e => /^s\d+g/.test(e.key))
+    expect(found.reduce((n, e) => n + e.items.length, 0)).toBe(unrouted.total)
+    expect(entries[0].level).toBe('serious')
+    expect(entries.filter(e => e.level === 'serious').reduce((n, e) => n + e.items.length, 0)).toBe(unrouted.serious)
+    expect(list).toMatch(/data-testid="findings-count"[^>]*>1 serious/)
+    // No filler for a section that found nothing: one quiet line instead.
+    expect(list).not.toContain('Looks healthy')
   })
 
   test('the sections add up to the counters, outside the copper held back', () => {
@@ -116,6 +128,7 @@ describe('every number on an unrouted board agrees', () => {
     const view = reportView(report)
     expect(view.preLayout?.copper).toBe(view.sections[0])
     expect(card(report)).not.toContain('two pads overlap here')
+    expect(findingEntries(view).some(e => e.title.includes('two pads overlap here'))).toBe(false)
   })
 })
 

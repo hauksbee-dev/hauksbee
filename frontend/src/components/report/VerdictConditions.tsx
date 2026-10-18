@@ -22,7 +22,6 @@ import { unjudgedGroups } from '../../lib/report-view'
 import type { PartlyJudgedView, VerdictExplanation } from '../../lib/report-view'
 import { entitiesIn } from '../../lib/result-links'
 import { useTermEntry } from '../ui'
-import { CheckIcon } from '../Icons'
 import { AddCheck, ChipList, Linked, netsOf, partsOf, ResultLinkContext, RowAction } from './ResultLinks'
 
 /** One result row: a glyph in the row's colour, the sentence, and its actions. */
@@ -70,21 +69,6 @@ const NetGlyph = () => (
     <path d="M3 12h4l3-6 4 12 3-6h4" strokeDasharray="0" />
   </svg>
 )
-const NextGlyph = () => (
-  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M5 12h14" /><path d="m13 6 6 6-6 6" />
-  </svg>
-)
-
-/** The engine's condition sentence is "<what>; <how to remove it>." when it
- *  says how; the second half is what removes the assumption. */
-function removal(condition: string): string | null {
-  const at = condition.lastIndexOf('; ')
-  if (at < 0) return null
-  const tail = condition.slice(at + 2).trim()
-  if (!/remove|pin|put|declare|state|set/i.test(tail)) return null
-  return tail.replace(/\s+to remove (this|the) assumptions?\.?$/i, '').replace(/\.$/, '')
-}
 
 export function VerdictConditions({ conditions }: { conditions: string[] }) {
   const { vocab, variantRefs, onPickVariant } = useContext(ResultLinkContext)
@@ -92,7 +76,7 @@ export function VerdictConditions({ conditions }: { conditions: string[] }) {
   return (
     <div className="text-[13px]" style={{ color: 'var(--silk)' }}>
     <div aria-hidden="true" className="pb-1.5 text-[11px] font-bold tracking-widest uppercase" style={{ color: 'var(--silk-faint)' }}>
-      {conditions.length === 1 ? 'The condition this pass rests on' : `The ${conditions.length} conditions this pass rests on`}
+      {conditions.length === 1 ? 'Rests on one condition' : `Rests on ${conditions.length} conditions`}
     </div>
     <ul
       data-testid="report-verdict-conditions"
@@ -103,7 +87,6 @@ export function VerdictConditions({ conditions }: { conditions: string[] }) {
         const named = vocab ? entitiesIn(condition, vocab) : []
         const parts = named.flatMap(e => (e.kind === 'part' ? [e.ref] : []))
         const pinnable = parts.filter(ref => variantRefs?.has(ref))
-        const fix = removal(condition)
         return (
           <ResultRow
             key={condition}
@@ -125,14 +108,6 @@ export function VerdictConditions({ conditions }: { conditions: string[] }) {
             <span style={{ borderLeft: '3px solid var(--note-accent)', paddingLeft: 8, display: 'block' }}>
               <Linked text={condition} />
             </span>
-            {(fix || pinnable.length > 0) && (
-              <div className="mt-1 text-[12px]" data-testid="report-verdict-condition-fix" style={{ color: 'var(--silk-dim)' }}>
-                <span className="font-semibold">To remove it: </span>
-                {pinnable.length > 0
-                  ? <>the spec setting <code className="hb-inline">[[override]] select</code> on {pinnable.join(', ')}{fix ? <>, or {fix}</> : null}</>
-                  : fix}
-              </div>
-            )}
           </ResultRow>
         )
       })}
@@ -142,36 +117,23 @@ export function VerdictConditions({ conditions }: { conditions: string[] }) {
 }
 
 /** A PARTLY JUDGED run's scope as rows in the warning colour (not the quiet
- *  note accent a conditional pass uses): the parts with no usable model, what
- *  that left unjudged (one list, each net named once, grouped by the kind of
- *  check), and what to do. The CLI and `--json` carry the same scope
- *  as one sentence. The judged count is the coverage gauge's (the result panel
- *  draws it); here it is the row that says it in words. */
+ *  note accent a conditional pass uses): the parts with no usable model and
+ *  what that left unjudged (one list, each net named once, grouped by the kind
+ *  of check). The verdict word above says it is not a pass, the judged count
+ *  is the coverage gauge's, and the way to judge the rest is the card's Next
+ *  step, so none of those is said again here. */
 export function PartlyJudged({ scope }: { scope: PartlyJudgedView | null }) {
-  const { onGiveModel } = useContext(ResultLinkContext)
   if (!scope) return null
-  const { openParts, judged, total } = scope
+  const { openParts } = scope
   const unjudged = unjudgedGroups(scope)
   const unjudgedNets = unjudged.flatMap(g => g.nets)
-  const many = openParts.length !== 1
   const warn = 'var(--warn)'
+  if (openParts.length === 0 && unjudged.length === 0) return null
   return (
     <div data-testid="report-partly-judged" role="note" className="text-[13px]" style={{ color: 'var(--silk)' }}>
-      <div className="pb-1.5 text-[11px] font-bold tracking-widest uppercase" data-testid="partly-judged-label" style={{ color: warn }}>
-        Not a pass: partly judged
-      </div>
       <ul className="list-none p-0 m-0">
         {openParts.length > 0 && (
-          <ResultRow
-            testId="partly-judged-open"
-            accent={warn}
-            glyph={<PartGlyph />}
-            actions={onGiveModel && openParts.map(ref => (
-              <RowAction key={ref} testId={`result-give-model-${ref}`} primary onClick={() => onGiveModel(ref)}>
-                Give {ref} a model
-              </RowAction>
-            ))}
-          >
+          <ResultRow testId="partly-judged-open" accent={warn} glyph={<PartGlyph />}>
             <span className="font-semibold" style={{ color: 'var(--silk-dim)' }}>No usable model: </span>
             <ChipList entities={partsOf(openParts)} />
           </ResultRow>
@@ -188,18 +150,6 @@ export function PartlyJudged({ scope }: { scope: PartlyJudgedView | null }) {
                 <ChipList entities={netsOf(group.nets)} />
               </div>
             ))}
-          </ResultRow>
-        )}
-        {total > 0 && (
-          <ResultRow testId="partly-judged-judged" accent="var(--ok)" glyph={<CheckIcon size={12} />}>
-            <span className="font-semibold" style={{ color: 'var(--silk-dim)' }}>Judged: </span>
-            {judged} of {total} net checks
-          </ResultRow>
-        )}
-        {openParts.length > 0 && (
-          <ResultRow testId="partly-judged-next" accent="var(--copper-hi)" glyph={<NextGlyph />}>
-            <span className="font-semibold" style={{ color: 'var(--silk-dim)' }}>To judge the rest: </span>
-            give {openParts.join(', ')} {many ? 'models' : 'a model'}.
           </ResultRow>
         )}
       </ul>

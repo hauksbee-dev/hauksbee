@@ -70,17 +70,22 @@ await browserFlow({ out: OUT, viewport: { width: 1440, height: 900 }, timeout: 9
     await load(page)
     const card = page.locator('[data-testid="report-verdict"]')
     const text = (await card.innerText()).replace(/\s+/g, ' ')
-    const counters = await card.locator('[data-testid="result-counts"] .tnum').allInnerTexts()
-    const serious = Number(counters[0])
-    const total = Number(counters[1])
-    const tags = await card.locator('[data-testid="result-finding"]').filter({ hasText: /^\s*serious/i }).count()
-    ok('the serious counter is not zero beside a SERIOUS finding', serious > 0 && tags > 0, `counter ${serious}, SERIOUS rows ${tags}`)
+    // One verdict on the card: one word, its detail, and "not routed" once.
+    ok('the card shows one verdict word', await card.locator('[data-testid="result-verdict-word"]').count() === 1)
+    ok('the verdict is FAIL, not routed yet', (await card.locator('[data-testid="result-verdict-word"]').innerText()).trim() === 'FAIL' &&
+      (await card.locator('[data-testid="result-verdict-detail"]').innerText()).trim() === 'not routed yet', text.slice(0, 120))
+    ok('"not routed" is said once on the card', (text.match(/not routed/gi) ?? []).length === 1, text.slice(0, 200))
     ok('the card never says none serious', !/none serious|no findings/.test(text), text.slice(0, 200))
+    // The findings beside the board count the same serious finding the headline quotes.
+    const tally = await page.locator('[data-testid="findings-count"]').innerText()
+    const serious = Number(/(\d+) serious/.exec(tally)?.[1] ?? 0)
+    const seriousCards = await page.locator('[data-testid="findings"] [data-level="serious"]').count()
+    ok('the findings list leads with the serious finding', serious > 0 && seriousCards > 0, `${tally}; ${seriousCards} serious cards`)
     const quoted = text.match(/(\d+) issues? found, (\d+) serious/)
-    ok('the headline quotes the same numbers as the counters', !!quoted && Number(quoted[1]) === total && Number(quoted[2]) === serious, `${quoted?.[0]} vs ${serious}/${total}`)
-    const section = (await page.locator('main, body').first().innerText()).replace(/\s+/g, ' ')
-    ok('the section line agrees with the serious counter', new RegExp(`${total} issues? found, ${serious} serious\\.`).test(section), `serious ${serious} total ${total}`)
-    ok('the card says what its rows leave out', /and \d+ more findings? in the sections below/.test(text))
+    ok('the card sentence quotes the same serious count as the findings', !!quoted && Number(quoted[2]) === serious, `${quoted?.[0]} vs ${tally}`)
+    ok('the next step is to route the board, not firmware', (await page.locator('[data-testid="static-next-step"]').getAttribute('data-next')) === 'route' &&
+      !/add firmware/i.test(await page.locator('[data-testid="static-next-step"]').innerText()))
+    ok('the board drawing starts above the fold', name === '390' || ((await page.locator('[data-testid="board-map-frame"]').boundingBox())?.y ?? 9999) < 200)
     await shoot(page, `counters-${name}`)
 
     step(`the Checks page states one verdict and reads not-routed as layout at ${name}px`)

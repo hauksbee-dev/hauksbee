@@ -8,6 +8,7 @@
 // simply has nowhere to go.
 
 import { createContext, useContext, useState } from 'react'
+import { explainFor, labelFor } from '../../lib/labels'
 import { linkify } from '../../lib/result-links'
 import type { ResultEntity, Vocabulary } from '../../lib/result-links'
 
@@ -28,6 +29,14 @@ export interface ResultLinkHandlers {
    *  any, and the call that opens its editor. */
   checkOffer?: (entity: ResultEntity) => CheckOffer | null
   onAddCheck?: (offer: CheckOffer) => void
+  /** Frame and light up on the board everything a finding names (and the spot
+   *  it was found at), without selecting any one of them. `key` names the
+   *  finding so its card can say it is the one on the map. */
+  onShow?: (entities: ResultEntity[], at: { x: number; y: number; label: string } | null, key: string) => void
+  /** The finding the board is showing now, if any. */
+  shownKey?: string | null
+  /** Open the Checks view. */
+  onOpenChecks?: () => void
 }
 
 /** A check the add-check path can start: the kind, its target, and a label. */
@@ -84,13 +93,38 @@ export function EntityChip({ entity }: { entity: ResultEntity }) {
  *  report does not list as a part or a net stay text. */
 export function Linked({ text }: { text: string }) {
   const { vocab } = useContext(ResultLinkContext)
-  if (!vocab) return <>{text}</>
+  if (!vocab) return <Plain text={text} />
   return (
     <>
       {linkify(text, vocab).map((seg, i) =>
-        typeof seg === 'string' ? <span key={i}>{seg}</span> : <EntityChip key={i} entity={seg} />)}
+        typeof seg === 'string' ? <Plain key={i} text={seg} /> : <EntityChip key={i} entity={seg} />)}
     </>
   )
+}
+
+/** An engine id in a sentence (a model card, a capability: lower-case words
+ *  joined by underscores), never a part or a net name, nor part of a file
+ *  name, a path or inline code. */
+const RAW_ID = /(?<![\w./`-])[a-z][a-z0-9]*(?:_[a-z0-9]+)+(?![\w./`-])/g
+
+/** Text with any raw engine id shown as its label from the shared table
+ *  (labels.ts), the id itself kept in the tooltip. */
+function Plain({ text }: { text: string }) {
+  const out: React.ReactNode[] = []
+  let last = 0
+  for (const m of text.matchAll(RAW_ID)) {
+    const at = m.index ?? 0
+    if (at > last) out.push(text.slice(last, at))
+    out.push(
+      <span key={at} data-testid="raw-id" title={explainFor(m[0]) ?? m[0]} style={{ textDecoration: 'underline dotted', textUnderlineOffset: 3 }}>
+        {labelFor(m[0])}
+      </span>,
+    )
+    last = at + m[0].length
+  }
+  if (last === 0) return <span>{text}</span>
+  if (last < text.length) out.push(text.slice(last))
+  return <span>{out}</span>
 }
 
 const SHOWN = 6
@@ -151,7 +185,7 @@ export function AddCheck({ entities }: { entities: ResultEntity[] }) {
   if (!offer) return null
   return (
     <RowAction testId="result-add-check" onClick={() => onAddCheck(offer)} title={`Opens it in the board's check-this dock: ${offer.label}`}>
-      + Add as check
+      Add a check
     </RowAction>
   )
 }

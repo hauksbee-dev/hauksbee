@@ -1,9 +1,8 @@
 import { loadPercent } from './LoadBar'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BoardRequest, ModelCoverageComponent, WebOpenPart } from '../types/report'
-import { coverageFor, explainReport, modelsOnNet, padNetsOf, plural, reportView, stageWords } from '../lib/report-view'
+import { coverageFor, explainReport, findingEntries, modelsOnNet, padNetsOf, plural, reportView, sectionStatus, stageWords } from '../lib/report-view'
 import type { BoardSession } from '../hooks/useBoardSession'
-import { WarningIcon } from './Icons'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './BoardViewer'
 import { OpenSelectionsBanner, SelectionCard } from './SelectionCard'
 import { AdditionalEvidencePanel, evidenceSlots } from './AdditionalEvidencePanel'
@@ -12,8 +11,8 @@ import { DropBoardAgain, UploadFailure } from './UploadFailure'
 import { StaggerItem } from '../motion'
 import { ExportMenu } from './ExportMenu'
 import type { SpecSnapshot } from '../hooks/useSessions'
-import { Callout, CopyButton, Term, UploadBanners, useGlossary } from './ui'
-import { FixFirstCard, NoteBlock, PreLayoutStrip, SectionBlock } from './report/Findings'
+import { Callout, CopyButton, UploadBanners, useGlossary } from './ui'
+import { FindingsList } from './report/Findings'
 import { centerInScroller } from '../lib/scroll'
 import { EvidencePanel, ImportDiagnosticsPanel, ModelCoveragePanel, ReportPanel } from './report/Panels'
 import { CosimBlock } from './report/CosimBlock'
@@ -108,7 +107,7 @@ export function BoardView({
     setSelectedNet(net)
     centerInScroller(mapRef.current)
   }, [setSelectedNet])
-  const author = useCallback((component: ModelCoverageComponent) => {
+  const author = useCallback((component: ModelCoverageComponent | WebOpenPart) => {
     setAuthoringComponent(component)
     setGuessOpen(true)
     setAuthoringSignal(value => value + 1)
@@ -128,6 +127,12 @@ export function BoardView({
   // "Add as check" on a result row lands on the same CheckThis dock a click on
   // the map does, with that offer already open: one way to add a check.
   const [checkIntent, setCheckIntent] = useState<{ kind: string; seq: number } | null>(null)
+  // The finding the map is showing: everything it names stays lit (on top of
+  // the hover highlight) until another finding is shown or this one again.
+  const [shown, setShown] = useState<{ key: string; refs: string[]; nets: string[] } | null>(null)
+  const shownKeyRef = useRef<string | null>(null)
+  shownKeyRef.current = shown?.key ?? null
+  useEffect(() => setShown(null), [session.runEpoch])
   const resultLinks = useMemo<ResultLinkHandlers>(() => {
     const go = (entity: ResultEntity) => {
       frameSeq.current += 1
@@ -156,7 +161,8 @@ export function BoardView({
     onGo: go,
     onGiveModel: restoredFrom ? undefined : ref => {
       const row = coverageFor(r.model_coverage, ref)
-      if (row) author(row)
+      const part = row ?? r.bind?.open_parts?.find(p => p.reference === ref)
+      if (part) author(part)
       else showGuessed()
     },
     variantRefs: new Set((r.bind?.open_selections ?? []).map(s => s.reference)),
@@ -172,22 +178,45 @@ export function BoardView({
       go(offer.ref ? { kind: 'part', ref: offer.ref } : { kind: 'net', net: offer.net ?? '' })
       setCheckIntent(prev => ({ kind: offer.kind, seq: (prev?.seq ?? 0) + 1 }))
     },
+    onShow: (entities, at, key) => {
+      if (shownKeyRef.current === key) {
+        setShown(null)
+        setFocusPoint(null)
+        return
+      }
+      const refs = entities.flatMap(e => (e.kind === 'part' ? [e.ref] : []))
+      const nets = entities.flatMap(e => (e.kind === 'net' ? [e.net] : []))
+      setShown({ key, refs, nets })
+      if (at) {
+        locate(at.x, at.y, at.label)
+      } else {
+        setFocusPoint(null)
+        frameSeq.current += 1
+        setFrameTarget({ refs, nets, seq: frameSeq.current })
+        centerInScroller(mapRef.current)
+      }
+    },
+    shownKey: shown?.key ?? null,
+    onOpenChecks,
     }
-  }, [r, restoredFrom, author, showGuessed, setSelectedNet, setSelectedComponent])
-  const pointedRefs = useMemo(() => (pointed?.kind === 'part' ? [pointed.ref] : []), [pointed])
+  }, [r, restoredFrom, author, showGuessed, setSelectedNet, setSelectedComponent, locate, shown, onOpenChecks])
+  const pointedRefs = useMemo(
+    () => [...(shown?.refs ?? []), ...(pointed?.kind === 'part' ? [pointed.ref] : [])], [pointed, shown])
   // A set of nets another view asked to see together (the Checks page's
   // "show the unrouted nets"): lit with the pointed net, framed once per ask.
   const highlight = session.highlightNets
   const pointedNets = useMemo(
-    () => [...(pointed?.kind === 'net' ? [pointed.net] : []), ...(highlight?.nets ?? [])],
-    [pointed, highlight],
-  )
+    () => [...(shown?.nets ?? []), ...(pointed?.kind === 'net' ? [pointed.net] : []), ...(highlight?.nets ?? [])],
+    [pointed, shown, highlight])
   useEffect(() => {
     if (!highlight) return
     frameSeq.current += 1
     setFrameTarget({ refs: [], nets: highlight.nets, seq: frameSeq.current })
     requestAnimationFrame(() => centerInScroller(mapRef.current))
   }, [highlight])
+  const entries = useMemo(() => findingEntries(v), [v])
+  const status = useMemo(() => sectionStatus(v), [v])
+  const moreRef = useRef<HTMLDivElement>(null)
 
   if (!r.ok) return <UploadFailure report={r} session={session} />
 
@@ -197,9 +226,10 @@ export function BoardView({
   const coverageGaps = r.model_coverage?.components.filter(c => c.actionable_behavior_gap).length ?? 0
   const guessN = v.openParts.length + selections.length + coverageGaps
   const guessSummary = [
-    v.openParts.length > 0 && `${v.openParts.length} left out of the circuit`,
+    // The same count, in the same words, as the findings' open-parts card.
+    v.openParts.length > 0 && `${plural(v.openParts.length, 'part')} with no usable model`,
     selections.length > 0 && `${plural(selections.length, 'variant')} not pinned`,
-    coverageGaps > 0 && `${plural(coverageGaps, 'model')} with gaps`,
+    coverageGaps > 0 && `${coverageGaps} modelled only in part`,
   ].filter(Boolean).join(' · ')
   const guessBody = (
     <div ref={guessRef}>
@@ -234,33 +264,11 @@ export function BoardView({
       {!restoredFrom && (
         <>
           <div className="mt-3" ref={authoringRef}>
-            {unmodelled.length > 1 && (
-              <label className="flex flex-wrap items-center gap-1.5 text-[12px] mb-1.5" style={{ color: 'var(--silk-dim)' }}>
-                {plural(unmodelled.length, 'part')} have no model:
-                <select
-                  className="hb-input text-[12px] truncate"
-                  data-testid="model-part-pick"
-                  aria-label="Part to model"
-                  value={authoringComponent?.reference ?? ''}
-                  onChange={e => {
-                    const ref = e.target.value
-                    const pickedPart = coverageFor(r.model_coverage, ref) ?? unmodelled.find(p => p.reference === ref)
-                    if (!pickedPart) return
-                    setAuthoringComponent(pickedPart)
-                    setAuthoringSignal(value => value + 1)
-                  }}
-                  style={{ height: 28, maxWidth: 220 }}
-                >
-                  <option value="" disabled>choose one</option>
-                  {unmodelled.map(p => (
-                    <option key={p.reference} value={p.reference}>{p.reference}{p.value ? ` · ${p.value}` : ''}</option>
-                  ))}
-                </select>
-              </label>
-            )}
             <WritePart
               onSaved={session.reanalyzeCurrent}
-              suggested={authoringComponent ?? unmodelled[0]}
+              // The coverage row where there is one: its lib_id and footprint let the
+              // editor infer the part's class (WebOpenPart carries neither).
+              suggested={authoringComponent ?? (unmodelled[0] && (coverageFor(r.model_coverage, unmodelled[0].reference) ?? unmodelled[0]))}
               openSignal={authoringSignal > 0 ? `${authoringComponent?.reference}:${authoringSignal}` : null}
               boardLabel={boardLabel ?? r.file_name}
               onOpenSettings={onOpenSettings}
@@ -296,17 +304,69 @@ export function BoardView({
   )
 
   const runCommand = `hauksbee run ${boardLabel ?? r.file_name} --serve`
+  const firmwareName = firmwareFile?.name ?? restoredFrom?.firmwareName ?? null
+  const hasMap = !!boardUrl || r.components?.length > 0
+  const openRefs = new Set(overlay.openRefs)
+  const openEvidence = () => {
+    setEvidenceOpen(true)
+    requestAnimationFrame(() => centerInScroller(moreRef.current))
+  }
+
+  // The legend of what the result draws on the board, with its on/off switch.
+  const legend = boardUrl && overlayHasContent(overlay) && (
+    <div data-testid="result-legend" className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]" style={{ color: 'var(--silk-dim)' }}>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={overlayOn}
+        data-testid="result-overlay-toggle"
+        onClick={() => setOverlayOn(on => !on)}
+        title="Draw this result on the board: parts with no model, nets not judged, findings by severity"
+        className="hb-press inline-flex items-center gap-1.5 font-semibold"
+        style={{ background: 'none', border: 'none', padding: 0, color: 'var(--silk-dim)' }}
+      >
+        <span
+          aria-hidden="true"
+          className="relative inline-block rounded-full shrink-0"
+          style={{ width: 22, height: 12, background: overlayOn ? 'var(--copper)' : 'var(--hairline)', transition: 'background 0.15s' }}
+        >
+          <span className="absolute rounded-full" style={{ top: 2, left: overlayOn ? 12 : 2, width: 8, height: 8, background: 'var(--surface)', transition: 'left 0.15s' }} />
+        </span>
+        Result on the board
+      </button>
+      {overlayOn && overlay.openRefs.length > 0 && (
+        <span className="inline-flex items-center gap-1.5">
+          <span aria-hidden="true" style={{ width: 12, height: 9, border: '1.5px dashed var(--warn)', borderRadius: 2 }} />no model
+        </span>
+      )}
+      {overlayOn && overlay.unjudgedNets.length > 0 && (
+        <span className="inline-flex items-center gap-1.5">
+          <span aria-hidden="true" style={{ width: 14, height: 0, borderTop: '2px dashed var(--warn)' }} />not judged
+        </span>
+      )}
+      {overlayOn && (Object.values(overlay.findingNets).includes('serious') || Object.values(overlay.findingRefs).includes('serious')) && (
+        <span className="inline-flex items-center gap-1.5">
+          <span aria-hidden="true" style={{ width: 14, height: 3, background: 'var(--err)', borderRadius: 2 }} />serious finding
+        </span>
+      )}
+      {overlayOn && (Object.values(overlay.findingNets).includes('warning') || Object.values(overlay.findingRefs).includes('warning')) && (
+        <span className="inline-flex items-center gap-1.5">
+          <span aria-hidden="true" style={{ width: 14, height: 3, background: 'var(--warn)', borderRadius: 2 }} />warning
+        </span>
+      )}
+    </div>
+  )
 
   return (
     <div className="h-full overflow-y-auto view-enter" data-testid="report">
-      <div className="max-w-4xl mx-auto px-6 pt-5 pb-16">
+      <div className="max-w-[1680px] mx-auto px-4 sm:px-6 pt-4 pb-16">
         {/* Re-analysis in progress (firmware added or swapped): the report
             stays visible, this line says what is happening. */}
         {busy && (
           <div
             role="status"
             aria-live="polite"
-            className="mb-4 text-sm flex items-center justify-center gap-2"
+            className="mb-3 text-sm flex items-center justify-center gap-2"
             style={{ color: 'var(--copper-hi)' }}
           >
             <span className="slot-spin" />
@@ -324,274 +384,196 @@ export function BoardView({
           notice={uploadNotice}
           error={uploadError}
           onDismiss={dismissNotice}
-          className="mb-4"
+          className="mb-3"
         />
 
-        {/* The board result: verdict, coverage, the rows that qualify it, and
-            what it can become (board overlay, export, CLI command). Its parts
-            and nets are live links to the map below. The report's parts arrive
-            staggered ONCE, when the report itself is new: keyed on the run, so
-            clicking a net on the map does not re-run the entry. Everything this
-            report can become sits in the panel's action bar: below every line
-            that qualifies the verdict, since those say how much to trust what
-            is about to be exported. */}
-        <StaggerItem index={0}>
-          <ResultLinkContext.Provider value={resultLinks}>
-            <ResultPanel
-              report={r}
-              view={v}
-              explanation={explanation}
-              onLocate={boardUrl ? locate : undefined}
-              overlay={boardUrl && overlayHasContent(overlay) ? { on: overlayOn, onToggle: () => setOverlayOn(on => !on) } : undefined}
-              command={cliCommand({ board: boardLabel ?? r.file_name, firmware: firmwareFile?.name ?? restoredFrom?.firmwareName ?? null })}
-              onOpenChecks={onOpenChecks}
-              exportSlot={(
-                <ExportMenu
-                  report={r}
-                  boardLabel={boardLabel}
-                  firmwareName={firmwareFile?.name ?? restoredFrom?.firmwareName ?? null}
-                  analyzedAt={session.analyzedAt}
-                  engineVersion={engineVersion}
-                  spec={spec}
-                  checks={checks}
-                  sessionName={sessionName}
-                  restored={restoredFrom !== null}
-                />
-              )}
-            />
-          </ResultLinkContext.Provider>
-        </StaggerItem>
-
-        {v.preLayout && (
-          <PreLayoutStrip notice={v.preLayout.notice} copper={v.preLayout.copper} onLocate={boardUrl ? locate : undefined} />
-        )}
-        {v.fixFirst && <FixFirstCard fixFirst={v.fixFirst} onLocate={boardUrl ? locate : undefined} />}
-
-        {!restoredFrom && (
-          <NextStep
-            report={r}
-            firmwareName={firmwareFile?.name ?? null}
-            boardName={boardFile?.name ?? null}
-            checks={checks}
-            specFile={spec?.fileName ?? null}
-            onQueue={onQueue}
-            onOpenChecks={onOpenChecks}
-            onOpenEvidence={() => setEvidenceOpen(true)}
-          />
-        )}
-
-        {/* A report that came out of storage rather than out of a run. It says
-            so for as long as it is on screen, and it says which actions are
-            unavailable: everything that needs the board's bytes (a re-run, a
-            checks run, a live launch) is gone rather than broken. */}
-        {restoredFrom && (
-          <Callout tone="warn" testId="restored-notice" className="mt-3" title="Restored from a saved session">
-            This is the report from{' '}
-            <b style={{ fontWeight: 600 }}>{restoredFrom.sessionName}</b>, kept in this browser.
-            The findings, the bind table and your composed checks are all here and can be
-            exported.{' '}
-            {restoredFrom.firmwareName || restoredFrom.schematicName
-              ? <>The board file and its companion files ({[restoredFrom.firmwareName, restoredFrom.schematicName].filter(Boolean).join(', ')}) are not: </>
-              : 'The board file itself is not: '}
-            running the checks again, or driving it live, needs{' '}
-            <span style={{ fontFamily: 'var(--font-mono)' }}>{restoredFrom.boardName}</span> dropped
-            once more.
-            <div className="mt-2.5">
-              <DropBoardAgain testId="restored-redrop" label="Drop the board again" height={30} />
-            </div>
-          </Callout>
-        )}
-
-        {/* No live capability registered: the CLI hint remains (the header's
-            primary action covers the launch/reconnect cases). */}
-        {liveMode === 'none' && (
+        {/* The board and its result. Where there is room (1100 px and up) the
+            drawing fills the left and the result is a rail beside it: the
+            verdict card, the part or net picked on the board, then every
+            finding as a card that reaches the board. Narrower, the verdict
+            card comes first, then the drawing, then the findings under it.
+            The rail is `display: contents` when narrow so the same elements
+            reorder rather than render twice. */}
+        <ResultLinkContext.Provider value={resultLinks}>
           <div
-            data-testid="run-it-hint"
-            className="mt-3 rounded-lg px-4 py-3 text-xs"
-            style={{ border: '1px solid var(--hairline)', background: 'var(--surface)', color: 'var(--silk-dim)' }}
+            className="flex flex-col gap-3 min-[1100px]:flex-row min-[1100px]:items-stretch"
+            style={{ '--row-h': 'clamp(520px, calc(100dvh - 120px), 1100px)' } as React.CSSProperties}
           >
-            <div>To bring this board to life (live scope, board view, transport controls) run:</div>
-            <div className="mt-1.5 flex items-center flex-wrap">
-              <code className="hb-code" style={{ padding: '2px 6px', fontSize: 11 }}>{runCommand}</code>
-              <CopyButton text={runCommand} testId="copy-cli" />
-            </div>
-          </div>
-        )}
-
-        {/* Bind-honesty line. The verdict above is the page's one accent
-            surface; this keeps its amber and its place above the fold, but as a
-            single row under the verdict rather than a second shouting box. */}
-        {v.bindOpen && (
-          <div
-            data-testid="open-parts-banner"
-            data-open-count={v.openParts.length || v.unresolved.length}
-            className="mt-2 flex items-start gap-2 px-1 text-sm"
-            style={{ color: 'var(--warn-strong)' }}
-          >
-            <span className="shrink-0" style={{ display: 'inline-flex', marginTop: 3 }}>
-              <WarningIcon size={14} />
-            </span>
-            <span style={{ color: 'var(--silk-dim)' }}>
-              <span style={{ color: 'var(--warn-strong)' }}>
-                <Term id="open_part">{plural(v.openParts.length || v.unresolved.length, 'part')} left out of the circuit</Term>
-              </span>{' '}
-              (no model). {v.unresolved.join(', ')} {v.unresolved.length === 1 ? 'is an active part' : 'are active parts'},
-              so analog / AC / thermal results on their nets are not trustworthy.{' '}
-              <button
-                type="button"
-                data-testid="show-guessed-parts"
-                className="hb-press underline"
-                style={{ color: 'var(--copper-hi)', background: 'none', border: 'none', padding: 0 }}
-                onClick={() => { setGuessOpen(true); requestAnimationFrame(() => centerInScroller(guessRef.current)) }}
-              >
-                Show these parts
-              </button>
-            </span>
-          </div>
-        )}
-
-        {/* Top-level honesty notes (minus the one the amber line above already
-            says; see reportView). */}
-        <div className="mt-3">
-          {v.notes.map((n, i) => <NoteBlock key={i}>{n.message}</NoteBlock>)}
-        </div>
-
-        {/* Board map: the real renderer (pads, outline, pan/zoom, layers)
-            whenever the uploaded file is KiCad layout text; the dot map only
-            as the fallback for formats the client cannot draw. */}
-        {boardUrl ? (
-          <section className="mt-6">
-            {/* The map and the selection card side by side where there is room
-                (a right rail at 1100 px and up), the card under the map below
-                that. Never over the map, so the part you picked stays in view;
-                only the full-screen map, which has no room to spare, floats it. */}
-            <div className="flex flex-col gap-3 min-[1100px]:flex-row min-[1100px]:items-start">
-            <div className="min-w-0 flex-1 w-full">
-            {highlight && (
-              <div
-                data-testid="board-highlight"
-                className="flex items-center gap-2 mb-2 px-3 py-1.5 rounded-lg text-[12px]"
-                style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)', color: 'var(--silk)' }}
-              >
-                <span className="min-w-0 flex-1">Lit on the board: {highlight.label}</span>
-                <button
-                  type="button"
-                  data-testid="board-highlight-clear"
-                  className="hb-btn hb-press"
-                  onClick={() => session.setHighlightNets(null)}
-                >
-                  Clear
-                </button>
+            {hasMap && (
+              <div className="order-2 min-[1100px]:order-none min-w-0 flex-1 flex flex-col min-[1100px]:h-[var(--row-h)]">
+                {boardUrl ? (
+                  <>
+                    {highlight && (
+                      <div
+                        data-testid="board-highlight"
+                        className="flex items-center gap-2 mb-2 px-3 py-1.5 rounded-lg text-[12px]"
+                        style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)', color: 'var(--silk)' }}
+                      >
+                        <span className="min-w-0 flex-1">Lit on the board: {highlight.label}</span>
+                        <button
+                          type="button"
+                          data-testid="board-highlight-clear"
+                          className="hb-btn hb-press"
+                          onClick={() => session.setHighlightNets(null)}
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    )}
+                    <div
+                      ref={mapRef}
+                      data-testid="board-map-frame"
+                      className={mapFullscreen ? 'overflow-hidden' : 'rounded-xl overflow-hidden h-[clamp(320px,62vh,560px)] min-[1100px]:h-auto min-[1100px]:flex-1 min-h-0'}
+                      style={mapFullscreen
+                        ? { position: 'fixed', inset: 0, zIndex: 60, background: 'var(--instrument)' }
+                        : { position: 'relative', border: '1px solid var(--hairline)', boxShadow: 'var(--shadow-card)' }}
+                    >
+                      <BoardViewer
+                        boardFile={boardUrl}
+                        frame={null}
+                        selectedNet={selectedNet}
+                        netOptions={r.nets}
+                        // The map sits inside a scrolling report, so it must not eat
+                        // the page wheel; it zooms once clicked, or with ctrl/cmd held.
+                        wheelMode="capture-on-focus"
+                        partCount={r.num_components}
+                        focusPoint={focusPoint}
+                        importMarkers={importMarkers}
+                        fullscreen={mapFullscreen}
+                        onToggleFullscreen={() => setMapFullscreen(on => !on)}
+                        onNetClick={setSelectedNet}
+                        onFootprintClick={fp => setSelectedComponent({
+                          ref: fp.ref, value: fp.value, lib_id: fp.lib_id,
+                          padNet: fp.padNet, padNets: fp.padNets,
+                        })}
+                        onEmptyBoard={onEmptyBoard}
+                        pointedRefs={pointedRefs}
+                        pointedNets={pointedNets}
+                        frameTarget={frameTarget}
+                        resultOverlay={overlayOn ? overlay : null}
+                      />
+                      {mapFullscreen && (selectedNet || selectedComponent) && (
+                        <div className="selection-dock absolute left-3 z-10 flex items-end pointer-events-none" style={{ top: TOOLBAR_CLEARANCE, bottom: 12 }}>
+                          <div className="pointer-events-auto" style={{ maxHeight: '100%', display: 'flex' }}>{card}</div>
+                        </div>
+                      )}
+                    </div>
+                    {legend}
+                    <div className="mt-1 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+                      Click the board (or hold ctrl) to zoom · drag to pan · click a trace or part to inspect it, drive it or check it
+                    </div>
+                  </>
+                ) : (
+                  <section ref={mapRef}>
+                    <h2 className="text-[11px] font-bold tracking-widest uppercase mb-2" style={{ color: 'var(--silk-faint)' }}>
+                      Board map (2D)
+                    </h2>
+                    <BoardMap
+                      components={r.components}
+                      importDiagnostics={r.import_diagnostics ?? undefined}
+                      showImportOverlay={importOverlay}
+                      selectedNet={selectedNet}
+                    />
+                  </section>
+                )}
               </div>
             )}
+
             <div
-              ref={mapRef}
-              className={mapFullscreen ? 'overflow-hidden' : 'rounded-xl overflow-hidden'}
-              style={mapFullscreen
-                ? { position: 'fixed', inset: 0, zIndex: 60, background: 'var(--instrument)' }
-                : {
-                    height: 'clamp(420px, 52vh, 620px)',
-                    position: 'relative',
-                    border: '1px solid var(--hairline)',
-                    boxShadow: 'var(--shadow-card)',
-                  }}
+              data-testid="result-rail"
+              className={hasMap
+                ? 'contents min-[1100px]:flex min-[1100px]:flex-col min-[1100px]:gap-3 min-[1100px]:order-1 min-[1100px]:w-[400px] min-[1100px]:shrink-0 min-[1100px]:h-[var(--row-h)] min-[1100px]:overflow-y-auto min-[1100px]:pr-1'
+                : 'flex flex-col gap-3 w-full max-w-4xl mx-auto'}
             >
-              <BoardViewer
-                boardFile={boardUrl}
-                frame={null}
-                selectedNet={selectedNet}
-                netOptions={r.nets}
-                // The map sits inside a scrolling report, so it must not eat
-                // the page wheel; it zooms once clicked, or with ctrl/cmd held.
-                wheelMode="capture-on-focus"
-                partCount={r.num_components}
-                focusPoint={focusPoint}
-                importMarkers={importMarkers}
-                fullscreen={mapFullscreen}
-                onToggleFullscreen={() => setMapFullscreen(v => !v)}
-                onNetClick={setSelectedNet}
-                onFootprintClick={fp => setSelectedComponent({
-                  ref: fp.ref, value: fp.value, lib_id: fp.lib_id,
-                  padNet: fp.padNet, padNets: fp.padNets,
-                })}
-                onEmptyBoard={onEmptyBoard}
-                pointedRefs={pointedRefs}
-                pointedNets={pointedNets}
-                frameTarget={frameTarget}
-                resultOverlay={overlayOn ? overlay : null}
-              />
-              {mapFullscreen && (selectedNet || selectedComponent) && (
-                <div className="selection-dock absolute left-3 z-10 flex items-end pointer-events-none" style={{ top: TOOLBAR_CLEARANCE, bottom: 12 }}>
-                  <div className="pointer-events-auto" style={{ maxHeight: '100%', display: 'flex' }}>{card}</div>
+              {/* The verdict, how much of the board it speaks for, what it
+                  rests on, the one next step, and what it can become (an
+                  export). Its parts and nets are live links to the board. */}
+              <div className="order-1">
+                <StaggerItem index={0}>
+                  <ResultPanel
+                    report={r}
+                    view={v}
+                    explanation={explanation}
+                    onOpenChecks={onOpenChecks}
+                    next={restoredFrom ? undefined : (
+                      <NextStep
+                        report={r}
+                        view={v}
+                        firmwareName={firmwareFile?.name ?? null}
+                        checks={checks}
+                        specFile={spec?.fileName ?? null}
+                        onQueue={onQueue}
+                        onOpenChecks={onOpenChecks}
+                        onOpenEvidence={openEvidence}
+                        onGiveModel={resultLinks.onGiveModel}
+                        onLocate={boardUrl ? locate : undefined}
+                      />
+                    )}
+                    exportSlot={(
+                      <ExportMenu
+                        report={r}
+                        boardLabel={boardLabel}
+                        firmwareName={firmwareName}
+                        analyzedAt={session.analyzedAt}
+                        engineVersion={engineVersion}
+                        spec={spec}
+                        checks={checks}
+                        sessionName={sessionName}
+                        restored={restoredFrom !== null}
+                        command={cliCommand({ board: boardLabel ?? r.file_name, firmware: firmwareName })}
+                      />
+                    )}
+                  />
+                </StaggerItem>
+
+                {/* A report that came out of storage rather than out of a run.
+                    It says so for as long as it is on screen, and which
+                    actions need the board's bytes again. */}
+                {restoredFrom && (
+                  <Callout tone="warn" testId="restored-notice" className="mt-3" title="Restored from a saved session">
+                    This is the report from{' '}
+                    <b style={{ fontWeight: 600 }}>{restoredFrom.sessionName}</b>, kept in this browser.
+                    The findings, the bind table and your composed checks are all here and can be
+                    exported.{' '}
+                    {restoredFrom.firmwareName || restoredFrom.schematicName
+                      ? <>The board file and its companion files ({[restoredFrom.firmwareName, restoredFrom.schematicName].filter(Boolean).join(', ')}) are not: </>
+                      : 'The board file itself is not: '}
+                    running the checks again, or driving it live, needs{' '}
+                    <span style={{ fontFamily: 'var(--font-mono)' }}>{restoredFrom.boardName}</span> dropped
+                    once more.
+                    <div className="mt-2.5">
+                      <DropBoardAgain testId="restored-redrop" label="Drop the board again" height={30} />
+                    </div>
+                  </Callout>
+                )}
+              </div>
+
+              {!mapFullscreen && (selectedNet || selectedComponent) && (
+                <div data-testid="selection-dock" className="order-3 w-full">
+                  {card}
                 </div>
               )}
-            </div>
-            {overlayOn && overlayHasContent(overlay) && (
-              <div data-testid="result-legend" className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]" style={{ color: 'var(--silk-dim)' }}>
-                <span className="font-semibold" style={{ color: 'var(--silk-faint)' }}>Result on the board:</span>
-                {overlay.openRefs.length > 0 && (
-                  <span className="inline-flex items-center gap-1.5">
-                    <span aria-hidden="true" style={{ width: 12, height: 9, border: '1.5px dashed var(--warn)', borderRadius: 2 }} />no model
-                  </span>
-                )}
-                {overlay.unjudgedNets.length > 0 && (
-                  <span className="inline-flex items-center gap-1.5">
-                    <span aria-hidden="true" style={{ width: 14, height: 0, borderTop: '2px dashed var(--warn)' }} />not judged
-                  </span>
-                )}
-                {Object.values(overlay.findingNets).includes('serious') || Object.values(overlay.findingRefs).includes('serious') ? (
-                  <span className="inline-flex items-center gap-1.5">
-                    <span aria-hidden="true" style={{ width: 14, height: 3, background: 'var(--err)', borderRadius: 2 }} />serious finding
-                  </span>
-                ) : null}
-                {Object.values(overlay.findingNets).includes('warning') || Object.values(overlay.findingRefs).includes('warning') ? (
-                  <span className="inline-flex items-center gap-1.5">
-                    <span aria-hidden="true" style={{ width: 14, height: 3, background: 'var(--warn)', borderRadius: 2 }} />warning
-                  </span>
-                ) : null}
-              </div>
-            )}
-            </div>
-            {!mapFullscreen && (selectedNet || selectedComponent) && (
-              <div
-                data-testid="selection-dock"
-                className="w-full min-[1100px]:sticky min-[1100px]:top-3 min-[1100px]:w-[340px] min-[1100px]:shrink-0"
-              >
-                {card}
-              </div>
-            )}
-            </div>
-            <div className="mt-1.5 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
-              Click the map (or hold ctrl) to zoom · drag to pan · hover a trace to see its net · click a trace or part to inspect it, drive it, probe it or check it
-            </div>
-          </section>
-        ) : r.components?.length > 0 ? (
-          <section className="mt-6" ref={mapRef}>
-            <h2 className="text-[11px] font-bold tracking-widest uppercase mb-2" style={{ color: 'var(--silk-faint)' }}>
-              Board map (2D)
-            </h2>
-            <BoardMap
-              components={r.components}
-              importDiagnostics={r.import_diagnostics ?? undefined}
-              showImportOverlay={importOverlay}
-              selectedNet={selectedNet}
-            />
-          </section>
-        ) : null}
 
-        {/* Check sections. Staggered arrival, capped (see ../motion/tokens): a
-            report with fourteen sections must become readable in a quarter of a
-            second, not walk down the page. The index starts at 1 because the
-            verdict above is index 0, so the whole report reads as one arrival. */}
-        {v.sections.filter(sec => sec !== v.preLayout?.copper).map((s, i) => (
-          <StaggerItem key={i} index={i + 1}>
-            <SectionBlock section={s} onLocate={boardUrl ? locate : undefined} />
-          </StaggerItem>
-        ))}
+              <div className="order-4">
+                <StaggerItem index={1}>
+                  <FindingsList
+                    entries={entries}
+                    status={status}
+                    openParts={v.bindOpen ? { count: v.openParts.length || v.unresolved.length, active: v.unresolved } : null}
+                    openRefs={openRefs}
+                    preLayout={v.preLayout}
+                    onListParts={showGuessed}
+                    onLocate={boardUrl ? locate : undefined}
+                  />
+                </StaggerItem>
+              </div>
+            </div>
+          </div>
+        </ResultLinkContext.Provider>
 
         {v.refusalRows && (
           <section
-            className="mt-7 rounded-lg px-4 py-3"
+            className="mt-6 rounded-lg px-4 py-3"
             data-testid="analysis-refusal-contract"
             style={{ border: '1px solid var(--warn-border)', borderLeft: '4px solid var(--warn)', background: 'var(--warn-bg)' }}
           >
@@ -615,41 +597,61 @@ export function BoardView({
           />
         )}
 
-        {guessN > 0 ? (
-          <ReportPanel
-            testId="guessed-parts"
-            title="Parts Hauksbee had to guess at"
-            summary={guessSummary}
-            open={guessOpen}
-            warn
-            onToggle={setGuessOpen}
-          >
-            {guessBody}
-          </ReportPanel>
-        ) : guessBody}
+        {/* What else the run holds, each folded: the parts it had to guess at
+            (where a model is written), how the file was read, the evidence
+            behind each claim, and the slots for more evidence. */}
+        <div className="mt-6 max-w-4xl" ref={moreRef}>
+          {guessN > 0 ? (
+            <ReportPanel
+              testId="guessed-parts"
+              title="Parts Hauksbee had to guess at"
+              summary={guessSummary}
+              open={guessOpen}
+              warn
+              onToggle={setGuessOpen}
+            >
+              {guessBody}
+            </ReportPanel>
+          ) : guessBody}
 
-        {r.import_diagnostics && (
-          <ImportDiagnosticsPanel
-            diagnostics={r.import_diagnostics}
-            overlay={importOverlay}
-            selectedNet={selectedNet}
-            onToggleOverlay={() => setImportOverlay(value => !value)}
-            onLocate={locate}
-            onInspectNet={inspectImportNet}
+          {r.import_diagnostics && (
+            <ImportDiagnosticsPanel
+              diagnostics={r.import_diagnostics}
+              overlay={importOverlay}
+              selectedNet={selectedNet}
+              onToggleOverlay={() => setImportOverlay(value => !value)}
+              onLocate={locate}
+              onInspectNet={inspectImportNet}
+            />
+          )}
+
+          {v.evidence.has && <EvidencePanel evidence={v.evidence} />}
+
+          <AdditionalEvidencePanel
+            placement="report"
+            {...evidenceSlots(session)}
+            boardName={boardLabel ?? r.file_name}
+            cosimRan={r.cosim?.ran}
+            showWebControls={!!boardFile && !restoredFrom}
+            open={evidenceOpen}
+            onOpenChange={setEvidenceOpen}
           />
-        )}
 
-        {v.evidence.has && <EvidencePanel evidence={v.evidence} />}
-
-        <AdditionalEvidencePanel
-          placement="report"
-          {...evidenceSlots(session)}
-          boardName={boardLabel ?? r.file_name}
-          cosimRan={r.cosim?.ran}
-          showWebControls={!!boardFile && !restoredFrom}
-          open={evidenceOpen}
-          onOpenChange={setEvidenceOpen}
-        />
+          {/* No live capability registered: how to start one from a terminal. */}
+          {liveMode === 'none' && (
+            <div
+              data-testid="run-it-hint"
+              className="mt-3 rounded-lg px-4 py-3 text-xs"
+              style={{ border: '1px solid var(--hairline)', background: 'var(--surface)', color: 'var(--silk-dim)' }}
+            >
+              <div>To drive this board live (scope, transport controls), start it with:</div>
+              <div className="mt-1.5 flex items-center flex-wrap">
+                <code className="hb-code" style={{ padding: '2px 6px', fontSize: 11 }}>{runCommand}</code>
+                <CopyButton text={runCommand} testId="copy-cli" />
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

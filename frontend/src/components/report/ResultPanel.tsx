@@ -1,29 +1,25 @@
-// The board result: one panel that says the verdict, shows how much of the
-// board it covers, itemises what qualifies it, and leads from each item to the
-// board, the model flow, the checks and an export.
+// The board result card: the one verdict display on the Board view.
 //
-//   ┌ [glyph] VERDICT TAG                                  board · parts · nets ┐
-//   │ Title (the engine headline's lead)                                       │
-//   │ the rest of the headline                                                 │
-//   │ (ring) net checks judged  (ring) key parts modelled  (n) serious · found │
-//   ├ rows: partly judged scope / conditions / findings, with actions ─────────┤
-//   └ [Result on map] [Export ▾] [Copy CLI command] [Open Checks] ──────┘
+//   ┌ [glyph] VERDICT WORD  detail                        board · parts · nets ┐
+//   │ What the run found, in one sentence (the headline, verdict words cut)   │
+//   │ (ring) net checks judged  (ring) key parts modelled                     │
+//   ├ rows: what the pass rests on, or what was left unjudged ────────────────┤
+//   ├ Next: the one next step for this board, with its button ────────────────┤
+//   └ [Export ▾] [Open in Checks] ─────────────────────────────────────────────┘
 //
-// The words are the engine's: the tag is what `VERDICT: <tag>:` prints, the
-// title and subtitle are the headline cut at its first colon, and every row is
-// a sentence or a field of the report. Nothing here re-judges the board.
+// The verdict word and its colour are status-vocab's (the word every surface
+// uses); the sentence and rows are the engine's. The findings themselves sit
+// beside the board map, not here. Nothing here re-judges the board.
 
-import { useContext } from 'react'
 import type { WebReport } from '../../types/report'
-import type { FindingGroup, ReportView, VerdictExplanation } from '../../lib/report-view'
-import { plural } from '../../lib/report-view'
-import { verdictTag } from '../../lib/result-export'
-import { entitiesIn } from '../../lib/result-links'
+import type { ReportView, VerdictExplanation } from '../../lib/report-view'
+import { plural, reasonForCard, verdictSentence } from '../../lib/report-view'
 import { ringLabel } from '../../lib/gauge'
-import { CheckIcon, ChecksIcon, CloseIcon, TerminalIcon, WarningIcon } from '../Icons'
-import { CopyButton } from '../ui'
-import { ExplainVerdict, PartlyJudged, ResultRow, VerdictConditions } from './VerdictConditions'
-import { AddCheck, Linked, ResultLinkContext, RowAction } from './ResultLinks'
+import { boardVerdict, TONE_STYLE, useStatusLabel } from '../../lib/status-vocab'
+import type { ChipTone } from '../../lib/status-vocab'
+import { CheckIcon, ChecksIcon, CloseIcon, WarningIcon } from '../Icons'
+import { ExplainVerdict, PartlyJudged, VerdictConditions } from './VerdictConditions'
+import { Linked } from './ResultLinks'
 
 /** The headline as a title and the rest: cut at the first colon, else after
  *  the first sentence. A conditional headline's trailing "this rests on:" is
@@ -43,37 +39,38 @@ export function splitHeadline(headline: string): { title: string; rest: string }
   return { title, rest }
 }
 
-const TONE = {
-  ok: { ink: 'var(--ok)', glyph: <CheckIcon size={16} /> },
-  warning: { ink: 'var(--warn)', glyph: <WarningIcon size={16} /> },
-  error: { ink: 'var(--err)', glyph: <CloseIcon size={16} /> },
-} as const
+const GLYPH: Record<ChipTone, React.ReactNode> = {
+  ok: <CheckIcon size={15} />,
+  warn: <WarningIcon size={15} />,
+  err: <CloseIcon size={15} />,
+  quiet: <WarningIcon size={15} />,
+}
 
 /** A ring gauge: `value` of `total`, the arc in `ink`, the count inside. A count
  *  too long for the hole is a percentage inside and the exact numbers beside
  *  (see `ringLabel`), so no count is ever clipped to a wrong-looking number. */
 function Ring({ value, total, ink, label, testId }: { value: number; total: number; ink: string; label: string; testId: string }) {
-  const r = 19
+  const r = 15
   const c = 2 * Math.PI * r
   const frac = total > 0 ? Math.max(0, Math.min(1, value / total)) : 0
   const { center, exact } = ringLabel(value, total)
   const full = `${value} of ${total} ${label}`
   return (
-    <div className="flex items-center gap-2.5 min-w-0" data-testid={testId} data-value={value} data-total={total} title={full}>
-      <svg width="48" height="48" viewBox="0 0 48 48" role="img" aria-label={full} className="shrink-0">
-        <circle cx="24" cy="24" r={r} fill="none" stroke="var(--hairline)" strokeWidth="5" />
+    <div className="flex items-center gap-2 min-w-0" data-testid={testId} data-value={value} data-total={total} title={full}>
+      <svg width="38" height="38" viewBox="0 0 38 38" role="img" aria-label={full} className="shrink-0">
+        <circle cx="19" cy="19" r={r} fill="none" stroke="var(--hairline)" strokeWidth="4" />
         <circle
-          cx="24" cy="24" r={r} fill="none" stroke={ink} strokeWidth="5" strokeLinecap="round"
-          strokeDasharray={`${c * frac} ${c}`} transform="rotate(-90 24 24)"
+          cx="19" cy="19" r={r} fill="none" stroke={ink} strokeWidth="4" strokeLinecap="round"
+          strokeDasharray={`${c * frac} ${c}`} transform="rotate(-90 19 19)"
         />
         <text
           data-testid={`${testId}-text`}
-          x="24" y="28" textAnchor="middle" fontSize={exact ? 10 : 11} fontWeight="700" fill="var(--silk)" className="tnum"
+          x="19" y="22.5" textAnchor="middle" fontSize={exact ? 8.5 : 10} fontWeight="700" fill="var(--silk)" className="tnum"
         >
           {center}
         </text>
       </svg>
-      <div className="text-[12px] leading-tight min-w-0" style={{ color: 'var(--silk-dim)', maxWidth: 140 }}>
+      <div className="text-[12px] leading-tight min-w-0" style={{ color: 'var(--silk-dim)', maxWidth: 130 }}>
         {exact && <div className="tnum font-semibold" data-testid={`${testId}-exact`} style={{ color: 'var(--silk)' }}>{exact}</div>}
         {label}
       </div>
@@ -81,252 +78,113 @@ function Ring({ value, total, ink, label, testId }: { value: number; total: numb
   )
 }
 
-/** Serious and all findings as two counts, the serious one in the error ink. */
-function FindingCounts({ serious, total }: { serious: number; total: number }) {
-  return (
-    <div className="flex items-center gap-3" data-testid="result-counts">
-      <div className="text-center">
-        <div className="text-[20px] font-bold tnum leading-none" style={{ color: serious > 0 ? 'var(--err)' : 'var(--silk-faint)' }}>{serious}</div>
-        <div className="text-[11px] mt-1" style={{ color: 'var(--silk-dim)' }}>serious</div>
-      </div>
-      <div className="text-center">
-        <div className="text-[20px] font-bold tnum leading-none" style={{ color: total > 0 ? 'var(--warn)' : 'var(--silk-faint)' }}>{total}</div>
-        <div className="text-[11px] mt-1" style={{ color: 'var(--silk-dim)' }}>{total === 1 ? 'finding' : 'findings'}</div>
-      </div>
-    </div>
-  )
-}
-
-const LEVEL_INK: Record<string, string> = { serious: 'var(--err)', warning: 'var(--warn)' }
-const SHOWN_FINDINGS = 5
-
-/** The findings that gate or warn, worst first, as rows that reach the board. */
-function FindingRows({ groups, total, onLocate }: {
-  groups: (FindingGroup & { section: string })[]
-  /** The finding counter above: whatever the rows do not list is said, so
-   *  the rows and the counter always add up. */
-  total: number
-  onLocate?: (x: number, y: number, label: string) => void
-}) {
-  const { vocab } = useContext(ResultLinkContext)
-  const shown = groups.slice(0, SHOWN_FINDINGS)
-  const listed = shown.reduce((n, g) => n + g.items.length, 0)
-  const unlisted = Math.max(0, total - listed)
-  if (groups.length === 0 && unlisted === 0) return null
-  return (
-    <div className="text-[13px]" style={{ color: 'var(--silk)' }}>
-      <div className="pb-1.5 text-[11px] font-bold tracking-widest uppercase" style={{ color: 'var(--silk-faint)' }}>
-        What it found
-      </div>
-      <ul className="list-none p-0 m-0" data-testid="result-findings">
-        {shown.map((g, i) => {
-          const first = g.items[0]
-          const located = g.items.find(item => item.x !== undefined && item.y !== undefined)
-          const named = vocab ? entitiesIn(g.items.map(item => item.what).join(' '), vocab) : []
-          const ink = LEVEL_INK[g.level] ?? 'var(--note)'
-          return (
-            <ResultRow
-              key={i}
-              testId="result-finding"
-              accent={ink}
-              glyph={g.level === 'serious' ? <CloseIcon size={12} /> : <WarningIcon size={12} />}
-              actions={(
-                <>
-                  {located && onLocate && (
-                    <RowAction testId="result-show-on-board" onClick={() => onLocate(located.x!, located.y!, first.what)}>
-                      Show on board
-                    </RowAction>
-                  )}
-                  <AddCheck entities={named} />
-                </>
-              )}
-            >
-              <span
-                className="inline-block mr-1.5 px-1.5 rounded text-[10px] font-bold uppercase tracking-wider align-middle"
-                style={{ color: ink, border: `1px solid ${ink}` }}
-              >
-                {g.level}
-              </span>
-              <span className="text-[11px] mr-1" style={{ color: 'var(--silk-faint)' }}>{g.section}</span>
-              <div className="mt-0.5"><Linked text={first.what} /></div>
-              {g.items.length > 1 && (
-                <div className="text-[12px]" style={{ color: 'var(--silk-dim)' }}>and {plural(g.items.length - 1, 'more place')} like it</div>
-              )}
-              {g.fix && (
-                <div className="mt-0.5 text-[12px]" style={{ color: 'var(--silk-dim)' }}>
-                  <span className="font-semibold">Fix: </span><Linked text={g.fix} />
-                </div>
-              )}
-            </ResultRow>
-          )
-        })}
-      </ul>
-      {unlisted > 0 && (
-        <div className="pt-1.5 text-[12px]" data-testid="result-findings-more" style={{ color: 'var(--silk-dim)' }}>
-          {groups.length === 0 ? '' : 'and '}{plural(unlisted, groups.length === 0 ? 'finding' : 'more finding')} in the sections below.
-        </div>
-      )}
-    </div>
-  )
-}
-
-/** The "Result on map" switch. */
-function OverlaySwitch({ on, onToggle }: { on: boolean; onToggle: () => void }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      data-testid="result-overlay-toggle"
-      onClick={onToggle}
-      title="Draw this result on the board map: parts with no model, nets not judged, findings by severity"
-      className="hb-btn hb-press inline-flex items-center gap-2 px-2.5 text-[12px] whitespace-nowrap min-w-0 max-w-full"
-      style={{ height: 30, color: on ? 'var(--silk)' : undefined }}
-    >
-      <span
-        aria-hidden="true"
-        className="relative inline-block rounded-full shrink-0"
-        style={{ width: 26, height: 14, background: on ? 'var(--copper)' : 'var(--hairline)', transition: 'background 0.15s' }}
-      >
-        <span
-          className="absolute rounded-full"
-          style={{ top: 2, left: on ? 14 : 2, width: 10, height: 10, background: 'var(--surface)', transition: 'left 0.15s' }}
-        />
-      </span>
-      <span className="truncate">Result on map</span>
-    </button>
-  )
-}
-
 export function ResultPanel({
-  report: r, view: v, explanation, onLocate, overlay, exportSlot, command, onOpenChecks,
+  report: r, view: v, explanation, exportSlot, onOpenChecks, next,
 }: {
   report: WebReport
   view: ReportView
   explanation: VerdictExplanation | null
-  onLocate?: (x: number, y: number, label: string) => void
-  /** The board overlay switch; absent when there is no drawn board. */
-  overlay?: { on: boolean; onToggle: () => void }
-  /** The Export menu, folded into the action bar. */
+  /** The Export menu, in the action bar. */
   exportSlot: React.ReactNode
-  /** The CLI command that reproduces the run. */
-  command: string
   onOpenChecks?: () => void
+  /** The card's one Next step (see NextStep); absent for a restored session. */
+  next?: React.ReactNode
 }) {
-  const tone = TONE[v.tone]
-  const tag = verdictTag(r)
-  const { title, rest } = splitHeadline(v.headline)
+  const label = useStatusLabel()
+  const verdict = boardVerdict(r)
+  const tone: ChipTone = verdict?.tone ?? 'quiet'
+  const style = TONE_STYLE[tone]
+  const ink = String(style.color)
+  const word = verdict ? label(verdict.term) : label('not_checked')
+  const sentence = verdictSentence(v.headline)
+  // The engine's reason, unless the sentence above already says it.
+  const reason = v.reason && !v.partlyJudged ? reasonForCard(v.reason) : null
+  const showReason = !!reason && !sentence.toLowerCase().includes(reason.toLowerCase().replace(/\.$/, ''))
   const scope = v.partlyJudged
   const [bound, keyParts] = (r.bind?.critical_parts_bound ?? '').split('/').map(Number)
-  // The held-back copper findings are listed apart, labelled as held back, and
-  // are not in the counters: they must not show here tagged serious too.
-  const groups = v.sections
-    .filter(s => s !== v.preLayout?.copper)
-    .flatMap(s => s.groups.map(g => ({ ...g, section: s.title.replace(/\s*\(.*\)$/, '') })))
-    .filter(g => g.level === 'serious' || g.level === 'warning')
-    .sort((a, b) => (a.level === b.level ? 0 : a.level === 'serious' ? -1 : 1))
-  const nothingFound = r.verdict === 'pass' && groups.length === 0
-  const hasRows = !!scope || v.conditions.length > 0 || groups.length > 0 || r.total > 0 || nothingFound || !!explanation
+  const modelled = Number.isFinite(bound) && Number.isFinite(keyParts) && keyParts > 0
+  const judged = !!scope && scope.total > 0
+  const hasRows = !!scope || v.conditions.length > 0 || !!explanation
 
   return (
     <section
       data-testid="report-verdict"
       data-verdict={r.verdict ?? 'unknown'}
-      aria-label={`Board result: ${tag}`}
-      className="rounded-xl overflow-hidden"
-      style={{ border: `1px solid ${v.palette.border}`, background: 'var(--surface)', boxShadow: 'var(--shadow-card)' }}
+      data-tone={tone}
+      aria-label={`Board result: ${word}${verdict?.detail ? `, ${verdict.detail}` : ''}`}
+      className="rounded-xl"
+      style={{ border: style.border, background: 'var(--surface)', boxShadow: 'var(--shadow-card)' }}
     >
-      <div className="px-4 pt-3.5 pb-3" style={{ background: v.palette.background, borderBottom: `1px solid ${v.palette.border}` }}>
+      <div className="px-4 pt-3 pb-3 rounded-t-xl" style={{ background: String(style.background) }}>
         <div className="flex items-start gap-3">
           <span
             aria-hidden="true"
             className="shrink-0 inline-flex items-center justify-center rounded-full"
-            style={{ width: 34, height: 34, marginTop: 2, color: tone.ink, border: `2px solid ${tone.ink}`, background: 'var(--surface)' }}
+            style={{ width: 30, height: 30, marginTop: 1, color: ink, border: `2px solid ${ink}`, background: 'var(--surface)' }}
           >
-            {tone.glyph}
+            {GLYPH[tone]}
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-              <span data-testid="result-tag" className="text-[11px] font-bold tracking-widest uppercase" style={{ color: tone.ink }}>
-                VERDICT: {tag}
-              </span>
+              <div className="flex flex-wrap items-baseline gap-x-2 min-w-0">
+                <span data-testid="result-verdict-word" className="text-[18px] font-bold leading-tight" style={{ color: ink }}>
+                  {word}
+                </span>
+                {verdict?.detail && (
+                  <span data-testid="result-verdict-detail" className="text-[13px] font-semibold" style={{ color: ink }}>
+                    {verdict.detail}
+                  </span>
+                )}
+              </div>
               <span className="text-xs tnum" data-testid="report-inventory" style={{ color: 'var(--silk-dim)' }}>
                 {v.title} · {plural(r.num_components, 'part')} · {plural(r.num_nets, 'net')}
               </span>
             </div>
-            <h2 data-testid="result-title" className="mt-0.5 text-[18px] font-semibold leading-snug" style={{ color: 'var(--silk)', overflowWrap: 'anywhere' }}>
-              {title}
-            </h2>
-            {rest && (
-              <p data-testid="result-subtitle" className="mt-0.5 text-[13px] leading-relaxed" style={{ color: 'var(--silk-dim)', overflowWrap: 'anywhere' }}>
-                <Linked text={rest} />
-              </p>
+            {sentence && (
+              <h2 data-testid="result-title" className="mt-1 text-[14px] font-medium leading-snug" style={{ color: 'var(--silk)', overflowWrap: 'anywhere' }}>
+                <Linked text={sentence} />
+              </h2>
             )}
-            {v.reason && !v.partlyJudged && (
-              <div className="text-[13px] mt-1.5" data-testid="report-verdict-reason" title={v.reason} style={{ color: 'var(--silk)', overflowWrap: 'anywhere' }}>
-                <Linked text={v.reasonBrief ?? v.reason} />
+            {showReason && (
+              <div className="text-[13px] mt-1" data-testid="report-verdict-reason" title={v.reason ?? undefined} style={{ color: 'var(--silk-dim)', overflowWrap: 'anywhere' }}>
+                <Linked text={reason} />
+              </div>
+            )}
+            {(judged || modelled) && (
+              <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2" data-testid="result-gauges">
+                {judged && (
+                  <Ring testId="result-gauge-judged" value={scope.judged} total={scope.total} ink="var(--warn)" label="net checks judged" />
+                )}
+                {modelled && (
+                  <Ring
+                    testId="result-gauge-modelled" value={bound} total={keyParts}
+                    ink={bound === keyParts ? 'var(--ok)' : 'var(--warn)'} label="key parts modelled"
+                  />
+                )}
               </div>
             )}
           </div>
         </div>
-
-        {/* Coverage: how much of the board the verdict speaks for. Each gauge is
-            an engine number: the judged scope, the bind count, the findings. */}
-        <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-3" data-testid="result-gauges">
-          {scope && scope.total > 0 && (
-            <Ring testId="result-gauge-judged" value={scope.judged} total={scope.total} ink="var(--warn)" label="net checks judged" />
-          )}
-          {Number.isFinite(bound) && Number.isFinite(keyParts) && keyParts > 0 && (
-            <Ring
-              testId="result-gauge-modelled" value={bound} total={keyParts}
-              ink={bound === keyParts ? 'var(--ok)' : 'var(--warn)'} label="key parts modelled"
-            />
-          )}
-          {r.total > 0 ? <FindingCounts serious={r.serious} total={r.total} /> : (
-            <div className="flex items-center gap-2 text-[12px]" data-testid="result-counts" style={{ color: 'var(--silk-dim)' }}>
-              <span className="inline-flex items-center justify-center rounded-full" style={{ width: 22, height: 22, color: 'var(--ok)', border: '2px solid var(--ok)' }}>
-                <CheckIcon size={12} />
-              </span>
-              no findings
-            </div>
-          )}
-        </div>
       </div>
 
       {hasRows && (
-        <div className="px-4 pt-2.5 pb-3 space-y-3">
+        <div className="px-4 pt-1 pb-2.5 space-y-2" style={{ borderTop: '1px solid var(--hairline)' }}>
           <PartlyJudged scope={v.partlyJudged} />
           <VerdictConditions conditions={v.conditions} />
-          <FindingRows groups={groups} total={r.total} onLocate={onLocate} />
-          {nothingFound && v.conditions.length === 0 && (
-            <ul className="list-none p-0 m-0 text-[13px]" style={{ color: 'var(--silk)' }}>
-              <ResultRow testId="result-nothing-found" accent="var(--ok)" glyph={<CheckIcon size={12} />}>
-                Nothing the checks found blocks ordering.
-              </ResultRow>
-            </ul>
-          )}
           {explanation && <ExplainVerdict explanation={explanation} />}
         </div>
       )}
 
-      {/* What this result can become: the board overlay, a file, a command. */}
+      {next && (
+        <div className="px-4 py-2.5" style={{ borderTop: '1px solid var(--hairline)' }}>{next}</div>
+      )}
+
       <div
         data-testid="result-actions"
-        className="px-4 py-2.5 flex flex-wrap items-center gap-2"
+        className="px-4 py-2 flex flex-wrap items-center gap-2 rounded-b-xl"
         style={{ borderTop: '1px solid var(--hairline)', background: 'var(--surface-2)' }}
       >
-        {overlay && <OverlaySwitch on={overlay.on} onToggle={overlay.onToggle} />}
         {exportSlot}
-        <span
-          className="inline-flex items-center gap-1.5 rounded-lg px-2 text-[11px] min-w-0"
-          data-testid="result-cli"
-          title={command}
-          style={{ height: 30, border: '1px solid var(--hairline)', background: 'var(--code-bg)', color: 'var(--silk-dim)', maxWidth: '100%', flex: '1 1 220px' }}
-        >
-          <TerminalIcon size={12} />
-          <code className="truncate" style={{ fontFamily: 'var(--font-mono)' }}>{command}</code>
-          <CopyButton text={command} label="Copy CLI command" testId="result-copy-cli" small />
-        </span>
         {onOpenChecks && (
           <button
             type="button"

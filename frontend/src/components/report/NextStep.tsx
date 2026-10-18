@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import type { BoardRequest, WebReport } from '../../types/report'
+import type { ReportView } from '../../lib/report-view'
 import { displayNet } from '../../lib/net-name'
+import { DropBoardAgain } from '../UploadFailure'
+import type { LocateFn } from './Findings'
 
 /** One observation from the co-sim, offered as a check. Every field comes from
  *  the report; the only derived numbers (a rate, a rail floor, a run length)
@@ -71,86 +74,199 @@ export function suggestions(r: WebReport): Suggestion[] {
   return out
 }
 
-const BOX = { border: '1px solid var(--hairline)', borderLeft: '4px solid var(--copper)', background: 'var(--surface)', color: 'var(--silk-dim)' }
-const Lead = ({ children }: { children: string }) => <b style={{ color: 'var(--copper-hi)', fontWeight: 600 }}>{children}</b>
+/** Which one next step the board's state calls for, in order: a run of
+ *  checks goes to CI; a board with no copper is routed first; the causes to
+ *  fix first; any other failure; key parts with no usable model (the rest of
+ *  the board cannot be judged without them); then what firmware did or did
+ *  not do; and only then checks or firmware for a board with nothing in the
+ *  way. Never two of these at once. */
+export type NextKind = 'ci' | 'route' | 'fix-first' | 'fix' | 'model' | 'cosim' | 'firmware-failed' | 'checks'
 
-/** The Next card. It follows the session: no firmware, firmware that ran, checks
- *  that ran. Once firmware has run it never asks for firmware again. */
-export function NextStep({ report, firmwareName, boardName, checks, specFile, onQueue, onOpenChecks, onOpenEvidence }: {
-  report: WebReport
+export function nextKind(r: WebReport, v: Pick<ReportView, 'fixFirst' | 'partlyJudged' | 'unresolved'>, state: {
   firmwareName: string | null
-  /** The board file the terminal scaffold names; absent when restored. */
-  boardName: string | null
+  checks: { passed: number; failed: number; invalid: number } | null
+}): NextKind {
+  if (state.checks) return 'ci'
+  if (r.fix_first?.notice) return 'route'
+  if (v.fixFirst) return 'fix-first'
+  if (r.verdict === 'fail' || r.serious > 0) return 'fix'
+  if (modelRefs(v).length > 0) return 'model'
+  if (r.cosim?.ran) return 'cosim'
+  if (state.firmwareName) return 'firmware-failed'
+  return 'checks'
+}
+
+/** The key parts a model would let the run judge. */
+const modelRefs = (v: Pick<ReportView, 'partlyJudged' | 'unresolved'>) =>
+  [...new Set([...(v.partlyJudged?.openParts ?? []), ...v.unresolved])]
+
+const Lead = ({ children }: { children: React.ReactNode }) => (
+  <div className="text-[11px] font-bold tracking-widest uppercase mb-0.5" style={{ color: 'var(--copper-hi)' }}>{children}</div>
+)
+const Buttons = ({ children }: { children: React.ReactNode }) => (
+  <div className="mt-2 flex flex-wrap items-center gap-2">{children}</div>
+)
+
+/** The card's one Next step: one sentence for the board's state and, where
+ *  the app can do it, the one button that does it. */
+export function NextStep({
+  report, view, firmwareName, checks, specFile, onQueue, onOpenChecks, onOpenEvidence, onGiveModel, onLocate,
+}: {
+  report: WebReport
+  view: Pick<ReportView, 'fixFirst' | 'partlyJudged' | 'unresolved'>
+  firmwareName: string | null
   checks: { passed: number; failed: number; invalid: number } | null
   specFile: string | null
   onQueue: (request: BoardRequest) => void
   onOpenChecks: () => void
-  onOpenEvidence: () => void
+  /** Opens the evidence slots (firmware, BOM, models); absent when restored. */
+  onOpenEvidence?: () => void
+  /** Opens the model flow for a part; absent when restored. */
+  onGiveModel?: (ref: string) => void
+  onLocate?: LocateFn
 }) {
   const [added, setAdded] = useState<ReadonlySet<string>>(new Set())
-  const ran = report.cosim?.ran === true
-  const chips = suggestions(report)
+  const kind = nextKind(report, view, { firmwareName, checks })
   const add = (s: Suggestion) => {
     onQueue(s.request)
     setAdded(prev => new Set(prev).add(s.key))
     onOpenChecks()
   }
-  const checksButton = (
-    <button type="button" data-testid="open-checks-next" onClick={onOpenChecks} className="hb-btn-primary hb-press px-3 py-1.5 text-[12px]">
+  const checksButton = (primary: boolean) => (
+    <button
+      type="button" data-testid="open-checks-next" onClick={onOpenChecks}
+      className={`${primary ? 'hb-btn-primary' : 'hb-btn'} hb-press px-3 py-1.5 text-[12px]`}
+    >
       Set up checks
     </button>
   )
-  return (
-    <div data-testid="static-next-step" className="mt-3 rounded-lg px-4 py-2.5 text-[13px] leading-relaxed" style={BOX}>
-      {checks ? (
+  let body: React.ReactNode
+  switch (kind) {
+    case 'ci':
+      body = (
         <>
-          <Lead>Next:</Lead> Run these in CI:{' '}
-          <code className="hb-inline break-all">hauksbee-ci run ci/{specFile ?? '<name>.toml'}</code>
-          <div className="mt-2">
+          <Lead>Next step</Lead>Run these checks on every push.{' '}
+          <span style={{ color: 'var(--silk-faint)' }}>
+            (<code className="hb-inline break-all">ci/{specFile ?? '<name>.toml'}</code>)
+          </span>
+          <Buttons>
             <button type="button" data-testid="ci-next" onClick={onOpenChecks} className="hb-btn-primary hb-press px-3 py-1.5 text-[12px]">
               Set up GitHub CI
             </button>
-          </div>
+          </Buttons>
         </>
-      ) : ran ? (
+      )
+      break
+    case 'route':
+      body = (
         <>
-          <Lead>Next:</Lead> Turn what it did into checks:
+          <Lead>Next step</Lead>Route the board in your layout editor, then drop it here again. The copper checks run once it is routed.
+          <Buttons>
+            <DropBoardAgain testId="next-redrop" label="Drop the routed board" height={30} />
+          </Buttons>
+        </>
+      )
+      break
+    case 'fix-first': {
+      // A pointer at the first cause, not a second list: every cause is a
+      // card in the findings beside the board.
+      const ff = view.fixFirst!
+      const first = ff.items[0]
+      const rest = ff.items.length - 1 + ff.more
+      body = (
+        <div data-testid="fix-first">
+          <Lead>Next step</Lead>
+          Fix this first: <span data-testid="fix-first-item" className="font-semibold" style={{ color: 'var(--silk)' }}>{first.what}</span>
+          {first.fix && <> {first.fix}</>}
+          {rest > 0 && <> Then the {rest === 1 ? 'other serious finding' : `other ${rest} serious findings`} beside the board.</>}
+          {onLocate && first.x !== undefined && first.y !== undefined && (
+            <Buttons>
+              <button
+                type="button" data-testid="finding-locate"
+                onClick={() => onLocate(first.x!, first.y!, first.what)}
+                className="hb-btn hb-press px-3 py-1.5 text-[12px]"
+              >
+                Show it on the board
+              </button>
+            </Buttons>
+          )}
+        </div>
+      )
+      break
+    }
+    case 'fix':
+      body = <><Lead>Next step</Lead>Fix the serious {report.serious === 1 ? 'finding' : 'findings'} beside the board, then drop it here again.</>
+      break
+    case 'model': {
+      const refs = modelRefs(view)
+      body = (
+        <>
+          <Lead>Next step</Lead>Give {refs.join(', ')} {refs.length === 1 ? 'a model' : 'models'} so the rest of the board can be judged.
+          {onGiveModel && (
+            <Buttons>
+              {refs.slice(0, 3).map((ref, i) => (
+                <button
+                  key={ref} type="button" data-testid={`result-give-model-${ref}`} onClick={() => onGiveModel(ref)}
+                  className={`${i === 0 ? 'hb-btn-primary' : 'hb-btn'} hb-press px-3 py-1.5 text-[12px]`}
+                >
+                  Give {ref} a model
+                </button>
+              ))}
+            </Buttons>
+          )}
+        </>
+      )
+      break
+    }
+    case 'cosim': {
+      const chips = suggestions(report)
+      body = (
+        <>
+          <Lead>Next step</Lead>Turn what it did into checks:
           <ul className="mt-1.5 flex flex-col gap-1.5">
             {chips.map(s => (
               <li key={s.key} className="flex flex-wrap items-center gap-x-2" data-testid="suggestion">
                 <span className="tnum" style={{ color: 'var(--silk)' }}>{s.text}</span>
-                <button
-                  type="button" data-testid={s.testId} onClick={() => add(s)}
-                  className="hb-btn hb-press px-2 py-0.5 text-[11px]"
-                >
+                <button type="button" data-testid={s.testId} onClick={() => add(s)} className="hb-btn hb-press px-2 py-0.5 text-[11px]">
                   {added.has(s.key) ? 'Added, add again' : 'Add'}
                 </button>
                 {s.note && <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>{s.note}</span>}
               </li>
             ))}
           </ul>
-          <div className="mt-2">{checksButton}</div>
+          <Buttons>{checksButton(true)}</Buttons>
         </>
-      ) : firmwareName ? (
+      )
+      break
+    }
+    case 'firmware-failed':
+      body = (
         <>
-          <Lead>Next:</Lead> {firmwareName} did not run on this board; the reason is under Firmware co-sim below.
-          <div className="mt-2">{checksButton}</div>
+          <Lead>Next step</Lead>{firmwareName} did not run on this board; the reason is under Firmware co-sim.
+          <Buttons>{checksButton(true)}</Buttons>
         </>
-      ) : (
+      )
+      break
+    default:
+      body = (
         <>
-          <Lead>Next:</Lead> Add firmware to see it run. This static report does not prove powered
-          behavior, brownout, overheating, or firmware timing.
-          {boardName && <> Terminal scaffold: <code className="hb-inline break-all">hauksbee-ci init {boardName}</code>.</>}
-          <div className="mt-2">
-            {checksButton}
-            {boardName && (
-              <button type="button" data-testid="open-evidence-next" onClick={onOpenEvidence} className="hb-btn hb-press ml-2 px-3 py-1.5 text-[12px]">
-                Add firmware or other evidence
+          <Lead>Next step</Lead>Say what the board should do, or add firmware to see it run. This check is static: it does not
+          prove powered behaviour, brownout, overheating or firmware timing.
+          <Buttons>
+            {checksButton(true)}
+            {onOpenEvidence && (
+              <button type="button" data-testid="open-evidence-next" onClick={onOpenEvidence} className="hb-btn hb-press px-3 py-1.5 text-[12px]">
+                Add firmware
               </button>
             )}
-          </div>
+          </Buttons>
         </>
-      )}
+      )
+  }
+  return (
+    <div data-testid="static-next-step" data-next={kind} className="text-[13px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
+      {body}
     </div>
   )
 }
+
