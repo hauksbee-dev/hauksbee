@@ -934,9 +934,7 @@ mod tests {
 
     /// A one-entry library holding `toml`, written to a temp dir keyed on `tag`.
     fn lib_from(tag: &str, toml_src: &str) -> ModelLibrary {
-        let dir =
-            std::env::temp_dir().join(format!("hauksbee_ampacity_{tag}_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = hauksbee_testkit::fresh_scratch_dir("ampacity", tag);
         std::fs::write(dir.join("m.toml"), toml_src).unwrap();
         let mut lib = ModelLibrary::empty();
         let errs = lib.load_user_dir(&dir);

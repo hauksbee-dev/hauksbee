@@ -1043,8 +1043,7 @@ vih = [0.0, 2.0]
 "#;
 
     fn library() -> ModelLibrary {
-        let dir = std::env::temp_dir().join(format!("hauksbee_straps_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = hauksbee_testkit::fresh_scratch_dir("straps", "card");
         std::fs::write(dir.join("models.toml"), STRAP_CARD).unwrap();
         let mut lib = ModelLibrary::builtin();
         assert!(lib.load_user_dir(&dir).is_empty(), "test card must load");

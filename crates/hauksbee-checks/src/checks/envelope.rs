@@ -1747,9 +1747,9 @@ mod tests {
     }
 
     fn library(tag: &str, source: &str) -> ModelLibrary {
-        let dir =
-            std::env::temp_dir().join(format!("hauksbee_envelope_{tag}_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        // Tests that share a tag run as threads of one process under `cargo test`; a
+        // per-call directory keeps one from reading another's half-written card.
+        let dir = hauksbee_testkit::fresh_scratch_dir("envelope", tag);
         std::fs::write(dir.join("models.toml"), source).unwrap();
         let mut lib = ModelLibrary::empty();
         let errors = lib.load_user_dir(&dir);
