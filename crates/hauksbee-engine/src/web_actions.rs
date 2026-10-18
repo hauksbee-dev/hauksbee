@@ -200,7 +200,10 @@ mod tests {
         );
         assert!(cli.contains('`'), "the CLI sentence keeps its command");
         let web = reason_without_next(&cli);
-        assert!(!web.contains('`') && !web.contains("hauksbee models"), "{web}");
+        assert!(
+            !web.contains('`') && !web.contains("hauksbee models"),
+            "{web}"
+        );
         assert!(web.starts_with(PARTLY_JUDGED_LEAD), "{web}");
         assert!(web.ends_with(DRAFT_MODELS_NEXT_STEP_WEB), "{web}");
         assert_eq!(

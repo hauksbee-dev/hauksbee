@@ -381,6 +381,12 @@ impl JudgementScope {
         } else {
             "have"
         };
+        // The verb agrees with the pronoun: "it connects", "they connect".
+        let connects = if self.open_parts.len() == 1 {
+            "connects"
+        } else {
+            "connect"
+        };
         let held = if self.held_rails.is_empty() {
             String::new()
         } else {
@@ -401,13 +407,13 @@ impl JudgementScope {
         let what = if self.electrical_dependent.len() == self.wiring_dependent.len() {
             format!(
                 "wiring, value and electrical checks (levels, ratings, rails) on the {} net(s) \
-                 {it} connects to ({}); nothing further is reached through the circuit",
+                 {it} {connects} to ({}); nothing further is reached through the circuit",
                 self.wiring_dependent.len(),
                 sample(&self.wiring_dependent),
             )
         } else {
             format!(
-                "wiring and value checks on the {} net(s) {it} connects to ({}), and \
+                "wiring and value checks on the {} net(s) {it} {connects} to ({}), and \
                  electrical checks (levels, ratings, rails) on the {} of {} net(s) {it} can \
                  reach through the circuit ({})",
                 self.wiring_dependent.len(),
@@ -516,6 +522,25 @@ mod tests {
         for net in ["SDA", "VOUT", "VIN"] {
             assert!(s.electrical_dependent.contains(&net.to_string()), "{net}");
         }
+    }
+
+    #[test]
+    fn the_condition_agrees_in_number_with_the_open_parts() {
+        // One open part: "it connects". Two: "they connect", never "they connects".
+        let one = scope(("U3", &["VOUT", "GND"])).condition();
+        assert!(one.contains("it connects to"), "{one}");
+        assert!(one.contains("U3 has no usable model"), "{one}");
+
+        let mut parts = BASE.to_vec();
+        parts.push(("U3", &["VOUT", "GND"]));
+        parts.push(("U4", &["SDA", "GND"]));
+        let open = vec!["U3".to_string(), "U4".to_string()];
+        let two = JudgementScope::of(&board(&parts), &BoundBoard::default(), &open)
+            .unwrap()
+            .condition();
+        assert!(two.contains("they connect to"), "{two}");
+        assert!(!two.contains("they connects"), "{two}");
+        assert!(two.contains("have no usable model"), "{two}");
     }
 
     #[test]

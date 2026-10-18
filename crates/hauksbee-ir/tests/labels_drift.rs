@@ -165,12 +165,19 @@ fn every_generic_mosfet_model_has_a_row() {
         .filter(|id| id.starts_with("generic_") && id.contains("mos_") && !id.ends_with("_pkg"))
         .map(str::to_string)
         .collect();
-    assert!(ids.len() >= 12, "found only {} generic MOSFET ids", ids.len());
+    assert!(
+        ids.len() >= 12,
+        "found only {} generic MOSFET ids",
+        ids.len()
+    );
     let missing: Vec<&String> = ids
         .iter()
         .filter(|id| entries().iter().all(|e| &e.id != *id))
         .collect();
-    assert!(missing.is_empty(), "generic MOSFET ids in db/mosfet.toml with no row: {missing:?}");
+    assert!(
+        missing.is_empty(),
+        "generic MOSFET ids in db/mosfet.toml with no row: {missing:?}"
+    );
 }
 
 /// No row describes a capability no card declares (a renamed id must not leave

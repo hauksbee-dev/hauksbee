@@ -672,15 +672,30 @@ mod tests {
                 assert!(!words.contains(placeholder), "{kind}: {words:?}");
             }
             assert!(
-                words.chars().next().is_some_and(|c| c.is_uppercase() || c == '{'),
+                words
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_uppercase() || c == '{'),
                 "{kind}: {words:?} does not read as a sentence"
             );
         }
         let wording = |kind| offers_for(kind).next().map(|(_, w)| w);
-        assert_eq!(wording("voltage"), Some("Keep {net} within a voltage range"));
-        assert_eq!(wording("max_current"), Some("Set a current limit for {ref}"));
-        assert_eq!(wording("max_temp"), Some("Set a temperature limit for {ref}"));
-        assert_eq!(wording("toggle"), Some("{net} toggles at the expected rate"));
+        assert_eq!(
+            wording("voltage"),
+            Some("Keep {net} within a voltage range")
+        );
+        assert_eq!(
+            wording("max_current"),
+            Some("Set a current limit for {ref}")
+        );
+        assert_eq!(
+            wording("max_temp"),
+            Some("Set a temperature limit for {ref}")
+        );
+        assert_eq!(
+            wording("toggle"),
+            Some("{net} toggles at the expected rate")
+        );
     }
 
     /// The v2 keys a click-to-assert UI reads, next to the v1 keys it replaces.

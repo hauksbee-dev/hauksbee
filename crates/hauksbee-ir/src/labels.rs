@@ -32,7 +32,9 @@ use std::sync::OnceLock;
 
 use serde::Serialize;
 
-use crate::evidence::{ArtifactKind, MatchConfidence, ModelLayer, ModelSourceTier, ModelValidation};
+use crate::evidence::{
+    ArtifactKind, MatchConfidence, ModelLayer, ModelSourceTier, ModelValidation,
+};
 use crate::glossary::Term;
 use crate::vocabulary::{Check, EvidenceGrade, Severity, VerdictState, BLOCKING};
 
@@ -430,11 +432,31 @@ const SOLVER_METHODS: &[(&str, &str, &str)] = &[
 /// Power supply kinds, as the checks spec and the live supply panel spell
 /// them. `(id, label, one-line explanation)`.
 const SUPPLY_KINDS: &[(&str, &str, &str)] = &[
-    ("ideal", "Ideal source", "A perfect voltage source: the rail holds its level whatever the board pulls."),
-    ("bench", "Bench supply", "A constant voltage that folds back when the board pulls more than its current limit."),
-    ("wall", "Wall adapter", "A nominal voltage behind some output resistance, with ripple."),
-    ("usb", "USB port", "A USB source that sags under load and cuts out at the port's current limit."),
-    ("battery", "Battery", "A battery pack that drains as the board draws from it."),
+    (
+        "ideal",
+        "Ideal source",
+        "A perfect voltage source: the rail holds its level whatever the board pulls.",
+    ),
+    (
+        "bench",
+        "Bench supply",
+        "A constant voltage that folds back when the board pulls more than its current limit.",
+    ),
+    (
+        "wall",
+        "Wall adapter",
+        "A nominal voltage behind some output resistance, with ripple.",
+    ),
+    (
+        "usb",
+        "USB port",
+        "A USB source that sags under load and cuts out at the port's current limit.",
+    ),
+    (
+        "battery",
+        "Battery",
+        "A battery pack that drains as the board draws from it.",
+    ),
 ];
 
 /// USB supply profiles, as the spec spells them (`5v1.5a`) and as the wire
@@ -513,8 +535,16 @@ fn generic_mosfet_rows() -> Vec<Label> {
                 )),
             ));
             for (corner, corner_words, why) in [
-                ("high_vth", "high-threshold", "the weak end: highest threshold, weakest channel"),
-                ("low_vth", "low-threshold", "the strong end: lowest threshold, strongest channel"),
+                (
+                    "high_vth",
+                    "high-threshold",
+                    "the weak end: highest threshold, weakest channel",
+                ),
+                (
+                    "low_vth",
+                    "low-threshold",
+                    "the strong end: lowest threshold, strongest channel",
+                ),
             ] {
                 out.push(row(
                     &format!("{family}_corner_{corner}"),
@@ -784,6 +814,34 @@ fn term_id(term: Term) -> String {
         .unwrap_or_default()
 }
 
+/// The rows for the words a run's setup and inputs are described in: solver
+/// methods, supply kinds and profiles, battery chemistries, the generic
+/// MOSFET stand-ins and the input file formats.
+fn run_setup_rows() -> Vec<Label> {
+    let mut out = Vec::new();
+    for &(id, label, explain) in SOLVER_METHODS {
+        out.push(row(id, GROUP_SOLVER_METHOD, label, Some(explain)));
+    }
+    for &(id, label, explain) in SUPPLY_KINDS {
+        out.push(row(id, GROUP_SUPPLY_KIND, label, Some(explain)));
+    }
+    for &(id, label) in USB_PROFILES {
+        out.push(row(id, GROUP_USB_PROFILE, label, None));
+    }
+    for &(id, label) in BATTERY_CHEMISTRIES {
+        out.push(row(id, GROUP_BATTERY_CHEMISTRY, label, None));
+    }
+    out.extend(generic_mosfet_rows());
+    for &(kind, label) in ARTIFACT_KINDS {
+        let id = serde_json::to_value(kind)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        out.push(row(&id, GROUP_ARTIFACT_KIND, label, None));
+    }
+    out
+}
+
 /// Every row in precedence order, duplicates included.
 fn raw_entries() -> Vec<Label> {
     let mut out = Vec::new();
@@ -826,26 +884,7 @@ fn raw_entries() -> Vec<Label> {
             out.push(row(&compact, GROUP_MODEL_KIND, label, Some(explain)));
         }
     }
-    for &(id, label, explain) in SOLVER_METHODS {
-        out.push(row(id, GROUP_SOLVER_METHOD, label, Some(explain)));
-    }
-    for &(id, label, explain) in SUPPLY_KINDS {
-        out.push(row(id, GROUP_SUPPLY_KIND, label, Some(explain)));
-    }
-    for &(id, label) in USB_PROFILES {
-        out.push(row(id, GROUP_USB_PROFILE, label, None));
-    }
-    for &(id, label) in BATTERY_CHEMISTRIES {
-        out.push(row(id, GROUP_BATTERY_CHEMISTRY, label, None));
-    }
-    out.extend(generic_mosfet_rows());
-    for &(kind, label) in ARTIFACT_KINDS {
-        let id = serde_json::to_value(kind)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_string))
-            .unwrap_or_default();
-        out.push(row(&id, GROUP_ARTIFACT_KIND, label, None));
-    }
+    out.extend(run_setup_rows());
     for &(c, label, explain) in MATCH_CONFIDENCE {
         let id = serde_json::to_value(c)
             .ok()
@@ -1179,7 +1218,10 @@ mod tests {
             label_for("generic_nmos_power_corner_low_vth"),
             "Generic power N-channel MOSFET at its low-threshold corner"
         );
-        assert_eq!(label_for("generic_nmos_class"), "Generic other-package N-channel MOSFET");
+        assert_eq!(
+            label_for("generic_nmos_class"),
+            "Generic other-package N-channel MOSFET"
+        );
         // No comma inside a label, so a list of them in a sentence stays a list.
         for e in entries().iter().filter(|e| e.group == GROUP_GENERIC_MODEL) {
             assert!(!e.label.contains(','), "{:?}", e.label);

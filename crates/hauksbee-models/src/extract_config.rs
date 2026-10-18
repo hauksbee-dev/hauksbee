@@ -1659,7 +1659,11 @@ mod tests {
         for p in presets() {
             let web = p.web_summary;
             assert!(!web.trim().is_empty(), "{}", p.id);
-            assert!(!web.contains('`'), "{}: a terminal command in {web:?}", p.id);
+            assert!(
+                !web.contains('`'),
+                "{}: a terminal command in {web:?}",
+                p.id
+            );
             for jargon in ["benchmark", "baseline", "login"] {
                 assert!(
                     !web.to_lowercase().contains(jargon),
