@@ -569,6 +569,47 @@ impl ExtractedBoard {
         }
     }
 
+    /// A part the sibling schematic `sch` marks do-not-populate is not fitted on
+    /// the assembled board, whatever its layout footprint says: the footprint
+    /// is only synchronised when someone runs "Update PCB from Schematic". So a
+    /// part DNP on EITHER side is DNP.
+    ///
+    /// Marks every layout component whose reference the schematic places only
+    /// as DNP, and returns the one coverage note that names them
+    /// ([`dnp::schematic_only_dnp_note`]), or `None` when nothing disagreed (no
+    /// schematic, an unreadable one, or both sides already agree). A layout
+    /// record whose identity is contested (a duplicate designator with
+    /// conflicting contents) is left alone.
+    pub fn adopt_schematic_dnp(&mut self, sch: &Path) -> Option<String> {
+        if !sch.is_file() {
+            return None;
+        }
+        let sheet = Self::from_kicad_schematic_path(sch).ok()?;
+        // reference -> every placement of it is DNP
+        let mut dnp_by_ref: std::collections::HashMap<&str, bool> =
+            std::collections::HashMap::new();
+        for c in &sheet.components {
+            let all = dnp_by_ref.entry(c.reference.as_str()).or_insert(true);
+            *all &= c.dnp;
+        }
+        let mut disagreeing: Vec<String> = Vec::new();
+        for c in self.components.iter_mut().filter(|c| {
+            !c.dnp
+                && !c
+                    .properties
+                    .iter()
+                    .any(|(key, _)| key == DUPLICATE_REFERENCE_CONFLICT_KEY)
+        }) {
+            if dnp_by_ref.get(c.reference.as_str()) == Some(&true) {
+                c.dnp = true;
+                if !disagreeing.contains(&c.reference) {
+                    disagreeing.push(c.reference.clone());
+                }
+            }
+        }
+        dnp::schematic_only_dnp_note(&disagreeing)
+    }
+
     /// Geometric copper short / clearance check on the raw board text.
     ///
     /// Connectivity extraction works off pad nets alone, but a *short* is a
@@ -1784,5 +1825,143 @@ mod canonical_order_tests {
         };
         assert_eq!(names(&a), names(&b));
         assert_eq!(a.nets[0].name, "AREF");
+    }
+}
+
+#[cfg(test)]
+mod schematic_dnp_merge_tests {
+    use crate::testutil::{part, pin};
+    use crate::ExtractedBoard;
+    use std::fmt::Write as _;
+
+    /// A schematic placing `parts` ((reference, dnp)) of a two-pin symbol
+    /// whose library definition carries a Description and keywords.
+    fn schematic(parts: &[(&str, bool)]) -> String {
+        let mut text = String::from(
+            r#"(kicad_sch (version 20250114) (generator "t") (uuid "00000000-0000-0000-0000-000000000010")
+(lib_symbols (symbol "Lib:Z"
+  (property "Description" "Bidirectional TVS, 5 V" (at 0 0 0))
+  (property "ki_keywords" "DIODE TVS" (at 0 0 0))
+  (symbol "Z_1_1"
+    (pin passive line (at 0 3.81 270) (length 1.27) (name "A") (number "1"))
+    (pin passive line (at 0 -3.81 90) (length 1.27) (name "C") (number "2")))))
+"#,
+        );
+        for (i, (reference, dnp)) in parts.iter().enumerate() {
+            let flag = if *dnp { "yes" } else { "no" };
+            write!(
+                text,
+                r#"(symbol (lib_id "Lib:Z") (at {x} 100 0) (unit 1) (dnp {flag})
+  (uuid "00000000-0000-0000-0000-0000000000{i:02}")
+  (property "Reference" "{reference}" (at 0 0 0)) (property "Value" "0R" (at 0 0 0))
+  (pin "1" (uuid "00000000-0000-0000-0000-0000000001{i:02}"))
+  (pin "2" (uuid "00000000-0000-0000-0000-0000000002{i:02}"))
+  (instances (project "t" (path "/00000000-0000-0000-0000-000000000010" (reference "{reference}") (unit 1)))))
+"#,
+                x = 50 + 20 * i
+            )
+            .unwrap();
+        }
+        text.push_str("(sheet_instances (path \"/\" (page \"1\"))))\n");
+        text
+    }
+
+    fn pcb(parts: &[(&str, bool)]) -> ExtractedBoard {
+        ExtractedBoard {
+            name: "b".into(),
+            nets: Vec::new(),
+            components: parts
+                .iter()
+                .map(|(r, dnp)| {
+                    let mut c = part(r, "0R", "", "R_0603", vec![pin("1", None), pin("2", None)]);
+                    c.dnp = *dnp;
+                    c
+                })
+                .collect(),
+        }
+    }
+
+    fn merged(
+        sch: &[(&str, bool)],
+        pcb_parts: &[(&str, bool)],
+    ) -> (ExtractedBoard, Option<String>) {
+        let mut tag = String::new();
+        for (r, d) in sch {
+            write!(tag, "{r}{d}").unwrap();
+        }
+        let path = std::env::temp_dir().join(format!(
+            "hauksbee-dnp-merge-{}-{tag}.kicad_sch",
+            std::process::id()
+        ));
+        std::fs::write(&path, schematic(sch)).unwrap();
+        let mut board = pcb(pcb_parts);
+        let note = board.adopt_schematic_dnp(&path);
+        std::fs::remove_file(&path).ok();
+        (board, note)
+    }
+
+    /// Both sides say DNP: DNP, nothing to report.
+    #[test]
+    fn schematic_and_pcb_agreeing_on_dnp_say_nothing() {
+        let (b, note) = merged(&[("R1", true)], &[("R1", true)]);
+        assert!(b.components[0].dnp);
+        assert_eq!(note, None);
+    }
+
+    /// Schematic DNP, footprint fitted: DNP, and one note names the part and
+    /// the fix.
+    #[test]
+    fn a_schematic_dnp_wins_over_a_fitted_footprint_with_one_note() {
+        let (b, note) = merged(
+            &[("R1", true), ("R2", true)],
+            &[("R1", false), ("R2", true)],
+        );
+        assert!(b.components.iter().all(|c| c.dnp));
+        assert_eq!(
+            note.as_deref(),
+            Some(
+                "R1 is DNP in the schematic but fitted on the PCB; treated as not fitted. \
+                 Update PCB from schematic to sync"
+            )
+        );
+        let (_, plural) = merged(
+            &[("R3", true), ("R4", true)],
+            &[("R3", false), ("R4", false)],
+        );
+        assert!(plural
+            .unwrap()
+            .starts_with("R3, R4 are DNP in the schematic"));
+    }
+
+    /// Neither side marks it: fitted, no note. A DNP PCB footprint the
+    /// schematic fits stays DNP (either side wins).
+    #[test]
+    fn unmarked_parts_stay_fitted_and_a_pcb_dnp_stays_dnp() {
+        let (b, note) = merged(
+            &[("R1", false), ("R2", false)],
+            &[("R1", false), ("R2", true)],
+        );
+        assert!(!b.components[0].dnp);
+        assert!(b.components[1].dnp);
+        assert_eq!(note, None);
+        // A reference the schematic does not place is untouched.
+        let (b, note) = merged(&[("R1", true)], &[("R9", false)]);
+        assert!(!b.components[0].dnp);
+        assert_eq!(note, None);
+    }
+
+    /// The library symbol's Description and keywords reach the placed part.
+    #[test]
+    fn library_description_and_keywords_reach_the_placed_component() {
+        let b = ExtractedBoard::from_kicad_schematic(&schematic(&[("D1", false)])).unwrap();
+        let props = &b.component("D1").unwrap().properties;
+        let get = |k: &str| {
+            props
+                .iter()
+                .find(|(pk, _)| pk == k)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(get("Description"), Some("Bidirectional TVS, 5 V"));
+        assert_eq!(get("ki_keywords"), Some("DIODE TVS"));
     }
 }

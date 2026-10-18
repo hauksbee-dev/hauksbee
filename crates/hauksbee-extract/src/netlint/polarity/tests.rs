@@ -164,6 +164,69 @@ fn bidirectional_diodes_and_diodes_between_rails_stay_silent() {
     assert_eq!(count(&tvs("SS14", 6, 5), LintCheck::DiodeReversed), 0);
 }
 
+/// A two-pad TVS with neutral value, lib id and footprint and the
+/// unidirectional pin names C and A, carrying only the given properties.
+fn neutral_tvs(properties: &[(&str, &str)]) -> ExtractedBoard {
+    let mut d = diode(
+        "XYZ1234",
+        "CustomLib:XYZ1234",
+        "Package:SOD-323",
+        vec![named("1", 1, "C"), named("2", 2, "A")],
+    );
+    d.properties = properties
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect();
+    diode_board(d)
+}
+
+/// Variant 1: only the Description says bidirectional.
+#[test]
+fn a_description_saying_bidirectional_clears_a_diode_reversed_finding() {
+    for text in [
+        "Bidirectional TVS, 5 V, 400 W",
+        "TVS diode, bi-directional, 5 V",
+        "ESD protection (bidir)",
+        "Bi directional ESD",
+    ] {
+        let b = neutral_tvs(&[("Description", text)]);
+        assert_eq!(count(&b, LintCheck::DiodeReversed), 0, "{text}");
+    }
+}
+
+/// Variant 2: no Description, or one that says unidirectional, is still read
+/// as a forward diode across the rail.
+#[test]
+fn no_description_or_a_unidirectional_one_stays_reversed() {
+    assert_eq!(count(&neutral_tvs(&[]), LintCheck::DiodeReversed), 1);
+    for text in ["Unidirectional TVS, 5 V", "Uni-directional TVS, 5 V"] {
+        let b = neutral_tvs(&[("Description", text)]);
+        assert_eq!(count(&b, LintCheck::DiodeReversed), 1, "{text}");
+    }
+}
+
+/// Variant 3: the keyword field alone.
+#[test]
+fn keywords_saying_bidirectional_clear_the_finding() {
+    for key in ["ki_keywords", "Keywords"] {
+        for text in ["DIODE, TVS, ESD, bidirectional", "TVS, bi-directional"] {
+            let b = neutral_tvs(&[(key, text)]);
+            assert_eq!(count(&b, LintCheck::DiodeReversed), 0, "{key}: {text}");
+        }
+    }
+    let uni = neutral_tvs(&[("ki_keywords", "DIODE, SEMICONDUCTOR, TVS, ESD")]);
+    assert_eq!(count(&uni, LintCheck::DiodeReversed), 1);
+}
+
+/// Variant 4: pins named A1 and A2 stay honoured, with or without a Description.
+#[test]
+fn pins_named_a1_and_a2_stay_unjudged() {
+    let mut b = neutral_tvs(&[]);
+    b.components[0].pins[0].function = "A1".into();
+    b.components[0].pins[1].function = "A2".into();
+    assert_eq!(count(&b, LintCheck::DiodeReversed), 0);
+}
+
 #[test]
 fn a_symbol_naming_a1_a2_or_a_led_or_an_unfitted_diode_is_not_judged() {
     let bidirectional = diode_board(diode(

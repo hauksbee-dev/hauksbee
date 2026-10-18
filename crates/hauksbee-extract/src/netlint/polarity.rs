@@ -434,6 +434,27 @@ fn is_plain_diode(c: &Component) -> bool {
     named_diode && !source_like
 }
 
+/// Component properties that describe the part in words.
+const DESCRIPTIVE_PROPERTIES: [&str; 4] =
+    ["Description", "ki_description", "ki_keywords", "Keywords"];
+
+/// Does free text call the part bidirectional: the whole word `bidirectional`,
+/// `bi-directional`, `bi directional` or `bidir`/`bi-dir`? Word-bounded, so
+/// `unidirectional` and `uni-directional` never match.
+fn says_bidirectional(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let words: Vec<&str> = (lower.split(|ch: char| !ch.is_ascii_alphanumeric()))
+        .filter(|w| !w.is_empty())
+        .collect();
+    words.iter().enumerate().any(|(i, w)| {
+        matches!(*w, "bidirectional" | "bidir" | "bidirect")
+            || (*w == "bi"
+                && words
+                    .get(i + 1)
+                    .is_some_and(|n| matches!(*n, "directional" | "dir" | "direct")))
+    })
+}
+
 /// Whether the part may conduct both ways: a bidirectional TVS (`SMBJ6.0CA`,
 /// `P6KE15C`, "bidir" in its name).
 fn maybe_bidirectional(c: &Component) -> bool {
@@ -441,6 +462,19 @@ fn maybe_bidirectional(c: &Component) -> bool {
     if ["BIDIR", "BI-DIR", "BI_DIR", "BIPOLAR"]
         .iter()
         .any(|k| text.contains(k))
+    {
+        return true;
+    }
+    // The Description and keywords are often the only field that says so: a
+    // custom library names its pins C and A (the unidirectional convention)
+    // and its symbol after the part number.
+    if (c.properties.iter())
+        .filter(|(key, _)| {
+            DESCRIPTIVE_PROPERTIES
+                .iter()
+                .any(|k| key.eq_ignore_ascii_case(k))
+        })
+        .any(|(_, text)| says_bidirectional(text))
     {
         return true;
     }

@@ -247,6 +247,42 @@ pub fn is_far_past_rating(kind: FaultKind, value: f64, limit: f64) -> bool {
     }
 }
 
+/// Junction temperature (C) past which a computed figure is unbounded.
+///
+/// No package survives to reach it, so it is the model's arithmetic (a linear
+/// estimate on power the idealised circuit sets), not a measurement.
+pub const UNBOUNDED_TEMP_C: f64 = 500.0;
+
+/// Whether a finite stress figure is physically unbounded.
+///
+/// It is so far past anything the part, or any real source behind it, could
+/// give that it is the circuit's idealisation (a diode or a short straight
+/// across an ideal source) and not a measurement. Hundreds of amps, kilowatts
+/// on a small part, a junction past [`UNBOUNDED_TEMP_C`], or
+/// [`is_far_past_rating`] its own limit.
+///
+/// Such a figure is no basis for a gating claim on its own: the surfaces say
+/// the current is unbounded and ask for the part's orientation and model to be
+/// checked ([`unbounded_note`]), and never print the number. A non-finite
+/// value is no result at all and is not this.
+#[must_use]
+pub fn is_unbounded(kind: FaultKind, value: f64, limit: f64) -> bool {
+    value.is_finite()
+        && (is_far_past_rating(kind, value, limit)
+            || (kind == FaultKind::Overtemperature && value > UNBOUNDED_TEMP_C))
+}
+
+/// The plain note for a part whose stress is [`is_unbounded`]: nothing in the
+/// simulation limits it, so what it shows is the idealised source, not a
+/// measured overstress.
+#[must_use]
+pub fn unbounded_note(part: &str) -> String {
+    format!(
+        "the simulation shows an unbounded current through {part}: it sits directly across a \
+         source; check its orientation and its model"
+    )
+}
+
 /// Whether a stress passing a stand-in card's limit is a fault after all.
 ///
 /// A stand-in's limit says nothing exact about the part, so passing it is a
@@ -408,6 +444,12 @@ impl FaultEvent {
     #[must_use]
     pub fn is_far_past_rating(&self) -> bool {
         is_far_past_rating(self.kind, self.value, self.limit)
+    }
+
+    /// Whether this fault's figure is physically unbounded ([`is_unbounded`]).
+    #[must_use]
+    pub fn is_unbounded(&self) -> bool {
+        is_unbounded(self.kind, self.value, self.limit)
     }
 }
 

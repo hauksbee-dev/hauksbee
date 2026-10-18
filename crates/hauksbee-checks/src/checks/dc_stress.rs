@@ -30,8 +30,8 @@ use hauksbee_bind::binder::{
     bind_board, held_off_rails, is_ground, power_rail_voltage, BoundBoard,
 };
 use hauksbee_bind::stress::{
-    bjt_currents, stress_clause, stress_quantity, strip_unit_suffix, FaultEvent, FaultKind,
-    GateDrive, RegulatorHeat, StandInExceedance, StressMonitor,
+    bjt_currents, stress_clause, stress_quantity, strip_unit_suffix, unbounded_note, FaultEvent,
+    FaultKind, GateDrive, RegulatorHeat, StandInExceedance, StressMonitor,
 };
 use hauksbee_extract::{
     ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity, INFORMATIONAL_MARKER,
@@ -195,15 +195,22 @@ const SETTLE_SWEEPS: usize = 8;
 /// in, the clauses describing the trip, and the nets named.
 type PartFaults = (Vec<&'static str>, Vec<String>, Vec<String>);
 
-/// One part's stress faults: `(part, clauses, nets)`.
-type PartFault = (String, Vec<String>, Vec<String>);
+/// One part's stress faults: `(part, clauses, nets, unbounded)`. `unbounded`
+/// is true when every figure behind the clauses is physically unbounded
+/// ([`hauksbee_bind::stress::is_unbounded`]): the idealised source, not the
+/// part, set it, so it is a plain note and never a gating claim.
+type PartFault = (String, Vec<String>, Vec<String>, bool);
+
+/// The parts whose only stress is unbounded, with the nets named: each becomes
+/// one plain note ([`unbounded_finding`]).
+type Unbounded = BTreeMap<String, Vec<String>>;
 
 /// Record a part's fault in `label`'s state: the state, the first clauses
 /// seen, and every net named.
 fn record_fault(
     by_part: &mut BTreeMap<String, PartFaults>,
     label: &'static str,
-    (part, clauses, nets): PartFault,
+    (part, clauses, nets): (String, Vec<String>, Vec<String>),
 ) {
     let entry = by_part.entry(part).or_default();
     entry.0.push(label);
@@ -239,7 +246,7 @@ fn hold_overloaded_rails(
         real.as_ref()
             .and_then(|(_, conditions)| conditions.get(part).cloned())
     };
-    for (part, clauses, _) in found.iter().chain(strong_found.iter()) {
+    for (part, clauses, ..) in found.iter().chain(strong_found.iter()) {
         if keep(part.as_str()) {
             continue;
         }
@@ -279,6 +286,21 @@ fn strong_corner_faults(
     strong_found
 }
 
+/// Keep, per part, the gate drive that was lowest in any state.
+fn note_under_driven(
+    under: &mut BTreeMap<String, (GateDrive, Vec<String>)>,
+    under_driven: Vec<(GateDrive, Vec<String>)>,
+) {
+    for (drive, nets) in under_driven {
+        let worst = under
+            .entry(drive.reference.clone())
+            .or_insert_with(|| (drive.clone(), nets));
+        if drive.vgs < worst.0.vgs {
+            worst.0 = drive;
+        }
+    }
+}
+
 /// [`dc_stress_lint`] over an already bound board.
 #[must_use]
 pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
@@ -299,6 +321,7 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
     let mut overloaded: Vec<rest_supply::Overload> = Vec::new();
     let mut only_ideal: BTreeMap<String, String> = BTreeMap::new();
     let mut held_unsolved = false;
+    let mut unbounded: Unbounded = BTreeMap::new();
     // Named rails dead in every state solved: what the solve did not judge.
     let mut dead: Option<BTreeMap<String, (f64, f64)>> = None;
     for ((label, registers_high), strong_label) in STATES.into_iter().zip(STRONG_STATES) {
@@ -322,14 +345,7 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
         let over = rest_supply::overloads(state, &x.0, &x.1);
         note_absurd(&mut impossible, absurd);
         note_stand_in(&mut stated, &mut unstated, stand_in);
-        for (drive, nets) in under_driven {
-            let worst = under
-                .entry(drive.reference.clone())
-                .or_insert_with(|| (drive.clone(), nets));
-            if drive.vgs < worst.0.vgs {
-                worst.0 = drive;
-            }
-        }
+        note_under_driven(&mut under, under_driven);
         let mut weak: Vec<String> = Vec::new();
         let mut found = overstressed;
         // The same state at the strong-drive corner, then back to the weak
@@ -353,21 +369,25 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
         }
         for fault in found {
             weak.push(fault.0.clone());
-            record_fault(&mut by_part, label, fault);
+            record_fault_or_note(&mut by_part, &mut unbounded, label, fault);
         }
         for fault in strong_found {
             if !weak.contains(&fault.0) {
-                record_fault(&mut by_part, strong_label, fault);
+                record_fault_or_note(&mut by_part, &mut unbounded, strong_label, fault);
             }
         }
     }
     // A part over a rating at a plausible draw in any state is reported there.
     only_ideal.retain(|part, _| !by_part.contains_key(part));
-    let mut conditional = unknown_state_faults(&mut bound, &by_part);
+    let mut conditional = unknown_state_faults(&mut bound, &by_part, &mut unbounded);
     conditional.retain(|part, _| !only_ideal.contains_key(part));
+    // A part with a bounded overstress is reported as one; the unbounded
+    // figure beside it adds nothing.
+    unbounded.retain(|part, _| !by_part.contains_key(part) && !conditional.contains_key(part));
     let reported: Vec<&String> = (by_part.keys())
         .chain(conditional.keys())
         .chain(only_ideal.keys())
+        .chain(unbounded.keys())
         .collect();
     let stated: Vec<LintFinding> = (stated.into_iter())
         .filter(|(part, _)| !reported.contains(&part))
@@ -385,6 +405,7 @@ pub fn dc_stress_findings(mut bound: BoundBoard) -> NetLintReport {
             .into_iter()
             .map(|(part, clause)| not_a_number_note(part, &clause)),
     );
+    findings.extend(unbounded.into_iter().map(unbounded_finding));
     findings.extend(stated);
     findings.extend(rest_supply::implausible_rest_finding(
         &overloaded,
@@ -513,6 +534,38 @@ fn not_judged_note(what: &str, nets: Vec<String>) -> LintFinding {
         severity: Severity::Low,
         message: rating_basis::not_judged(what),
         refs: Vec::new(),
+        nets,
+    }
+}
+
+/// File one part's stress: a bounded one as an overstress of that state, an
+/// unbounded one as a note for the part ([`unbounded_finding`]).
+fn record_fault_or_note(
+    by_part: &mut BTreeMap<String, PartFaults>,
+    unbounded: &mut Unbounded,
+    label: &'static str,
+    (part, clauses, nets, is_unbounded): PartFault,
+) {
+    if is_unbounded {
+        unbounded.entry(part).or_default().extend(nets);
+    } else {
+        record_fault(by_part, label, (part, clauses, nets));
+    }
+}
+
+/// The plain note for a part whose only stress is physically unbounded: a
+/// diode or a short straight across an ideal source gives a current no part
+/// or supply sees, so the figure is not a measurement and is never printed
+/// ([`hauksbee_bind::stress::unbounded_note`]). Low severity: it names what to
+/// check and gates nothing on its own.
+fn unbounded_finding((part, mut nets): (String, Vec<String>)) -> LintFinding {
+    nets.sort();
+    nets.dedup();
+    LintFinding {
+        check: LintCheck::DcOverstress,
+        severity: Severity::Low,
+        message: unbounded_note(&part),
+        refs: vec![part],
         nets,
     }
 }
@@ -697,14 +750,20 @@ fn set_unknown_state_loads(bound: &mut BoundBoard, worst: bool) -> bool {
 fn unknown_state_faults(
     bound: &mut BoundBoard,
     at_rest: &BTreeMap<String, PartFaults>,
+    unbounded: &mut Unbounded,
 ) -> BTreeMap<String, PartFaults> {
     let mut conditional = BTreeMap::new();
     if set_unknown_state_loads(bound, true) {
         if let Ok(x) = settle(bound) {
-            for (part, clauses, nets) in judge(bound, &x).0 {
+            for (part, clauses, nets, is_unbounded) in judge(bound, &x).0 {
                 // A stand-in limit passed only here is no more a fault than at
                 // rest; the monitor already kept it out of the trips.
-                if !at_rest.contains_key(&part) {
+                if at_rest.contains_key(&part) {
+                    continue;
+                }
+                if is_unbounded {
+                    unbounded.entry(part).or_default().extend(nets);
+                } else {
                     conditional.insert(part, (vec![UNKNOWN_STATE], clauses, nets));
                 }
             }
@@ -896,7 +955,7 @@ fn gate_underdrive(
 /// gates conducting under-driven, the values too large to be physical, and
 /// the limits passed that were a stand-in card's, not the part's own.
 type Judged = (
-    Vec<(String, Vec<String>, Vec<String>)>,
+    Vec<PartFault>,
     Vec<(GateDrive, Vec<String>)>,
     Vec<FaultEvent>,
     Vec<StandInExceedance>,
@@ -1006,6 +1065,7 @@ fn judge(bound: &mut BoundBoard, solved: &(Workspace, Vec<f64>)) -> Judged {
                 }
             }
             let mut nets = Vec::new();
+            let unbounded = worst.values().all(|(f, ..)| f.is_unbounded());
             let clauses = worst
                 .into_values()
                 .map(|(f, ..)| {
@@ -1020,7 +1080,7 @@ fn judge(bound: &mut BoundBoard, solved: &(Workspace, Vec<f64>)) -> Judged {
                     stress_clause(&f.component, f.kind, f.value, f.limit, rated, &detail)
                 })
                 .collect();
-            (part, clauses, nets)
+            (part, clauses, nets, unbounded)
         })
         .collect();
     (overstressed, under, monitor.implausible, monitor.stand_in)
@@ -1304,21 +1364,28 @@ mod tests {
     }
 
     /// Faulty: a diode fed through a near-zero resistance computes to kiloamps.
-    /// The exact figure is not physical, but the overstress is: the circuit
-    /// gives the diode no limit at all, so it stays a serious finding, worded
-    /// without the number. Legal control: the 22R case prints its real figure.
+    /// The figure is the ideal source's, not the part's: the finding stays on
+    /// the board as a plain note that the current is unbounded and the part's
+    /// orientation and model are to be checked, never a serious claim and never
+    /// the number. Legal control: the 22R case prints its real figure and stays
+    /// serious.
     #[test]
-    fn an_impossible_current_is_a_serious_finding_without_the_number() {
+    fn an_unbounded_current_is_a_plain_note_without_the_number() {
         let report = diode_at("1N4148", "0.0001R");
         let found = findings_on(&report, "D1");
         assert_eq!(found.len(), 1, "{:#?}", report.findings);
-        assert_eq!(found[0].severity, Severity::High, "{}", found[0].message);
+        assert_eq!(found[0].severity, Severity::Low, "{}", found[0].message);
         let m = &found[0].message;
+        assert_eq!(*m, hauksbee_bind::stress::unbounded_note("D1"));
         assert!(
-            m.contains("D1 carries far more than its") && m.contains("not physical"),
+            m.contains("unbounded current through D1") && m.contains("check its orientation"),
             "{m}"
         );
-        assert!(!m.contains("no real part can see"), "{m}");
+        assert!(
+            !m.contains("not physical") && !m.contains("far more than"),
+            "{m}"
+        );
+        assert!(!m.chars().any(|c| c.is_ascii_digit() && c != '1'), "{m}");
         assert!(!m.contains("4000") && !m.contains(" kA"), "{m}");
         let real = diode_at("1N4148", "22R");
         let real = &findings_on(&real, "D1")[0].message;
@@ -1379,7 +1446,7 @@ mod tests {
     /// raises nothing on D1, where it used to raise a serious "not physical"
     /// overstress (the MNT Reform motherboard's eight balancing diodes).
     /// Legal control: the same leg on a DC that solves is silent, and the
-    /// genuine near-zero-resistance diode still reads as serious.
+    /// near-zero-resistance diode still reads, as an unbounded-current note.
     #[test]
     fn a_figure_read_off_the_relaxed_stand_in_is_not_judged() {
         let (report, relaxed) = balancing_leg(true);
@@ -1408,10 +1475,10 @@ mod tests {
         let (solved, relaxed) = balancing_leg(false);
         assert!(!relaxed);
         assert!(solved.findings.is_empty(), "{:#?}", solved.findings);
-        let genuine = diode_at("1N4148", "0.0001R");
-        let found = findings_on(&genuine, "D1");
-        assert_eq!(found.len(), 1, "{:#?}", genuine.findings);
-        assert_eq!(found[0].severity, Severity::High, "{}", found[0].message);
+        let unbounded = diode_at("1N4148", "0.0001R");
+        let found = findings_on(&unbounded, "D1");
+        assert_eq!(found.len(), 1, "{:#?}", unbounded.findings);
+        assert_eq!(found[0].severity, Severity::Low, "{}", found[0].message);
     }
 
     /// A diode clamping a net that only an unmodelled part (no model, left
@@ -1441,31 +1508,65 @@ mod tests {
         dc_stress_lint(&board(&nets, vec![link, d]), &ModelLibrary::builtin())
     }
 
-    /// Faulty: the same diode with no series limit on a 5, 12 or 24 V rail is
-    /// overstressed on every one; raising the rail only makes it worse, so the
-    /// finding must never vanish as the figure passes the plausibility bound.
-    /// A generic LED is a finding at each too: its rating is a stand-in, but
-    /// a stand-in is never 100x wrong, so "far past" is not excused by it.
+    /// Faulty: the same diode with no series limit on a 5, 12 or 24 V rail
+    /// sits directly across an ideal source: its current is the source's, not
+    /// the part's, so it is never silent but is the plain unbounded-current
+    /// note (never a serious claim, never the number) on every rail. A generic
+    /// LED is a stand-in card, so what it says is its stated condition or the
+    /// same note; it is never silent.
     #[test]
-    fn no_series_limit_stays_a_finding_as_the_rail_rises() {
+    fn no_series_limit_is_an_unbounded_note_as_the_rail_rises() {
         for rail in ["+5V", "+12V", "+24V"] {
             let own = straight_across(rail, "1N4148");
             let on = findings_on(&own, "D1");
-            assert!(
-                on.iter().any(|f| f.severity == Severity::High),
-                "{rail}: {:#?}",
-                own.findings
-            );
+            assert_eq!(on.len(), 1, "{rail}: {:#?}", own.findings);
+            assert_eq!(on[0].severity, Severity::Low, "{rail}: {}", on[0].message);
+            assert_eq!(on[0].message, hauksbee_bind::stress::unbounded_note("D1"));
             let led = straight_across(rail, "LED");
             let on = findings_on(&led, "D1");
             assert!(
-                on.iter().any(|f| f.severity != Severity::Low
-                    && f.message.contains("far more than")
-                    && !hauksbee_models::rating_basis::is_condition(&f.message)),
-                "{rail}: {:#?}",
+                !on.is_empty(),
+                "{rail}: LED went silent: {:#?}",
                 led.findings
             );
         }
+    }
+
+    /// Genuine overstress stays serious and keeps its figure: a 1N4148 fed
+    /// through 10R from 5 V carries some 0.4 A, a few times its rating and
+    /// nowhere near unbounded, so it is High, names the milliamps and never
+    /// says the current is unbounded.
+    #[test]
+    fn genuine_overstress_stays_serious_with_its_figure() {
+        let report = diode_at("1N4148", "10R");
+        let on = findings_on(&report, "D1");
+        assert!(
+            on.iter().any(|f| f.severity == Severity::High),
+            "{:#?}",
+            report.findings
+        );
+        assert!(
+            on.iter()
+                .all(|f| f.message != hauksbee_bind::stress::unbounded_note("D1")),
+            "{:#?}",
+            report.findings
+        );
+        assert!(on.iter().any(|f| f.message.contains("mA")), "{on:#?}");
+    }
+
+    /// The bound that separates a note from a finding: hundreds of amps,
+    /// kilowatts on a small part and a junction past 500 C are unbounded;
+    /// a few times the rating or a hot but real junction are not.
+    #[test]
+    fn unbounded_means_hundreds_of_amps_kilowatts_or_a_molten_junction() {
+        use hauksbee_bind::stress::is_unbounded;
+        assert!(is_unbounded(FaultKind::Overcurrent, 400.0, 0.2));
+        assert!(is_unbounded(FaultKind::Overpower, 3.0e3, 0.25));
+        assert!(is_unbounded(FaultKind::Overtemperature, 900.0, 150.0));
+        assert!(!is_unbounded(FaultKind::Overcurrent, 0.43, 0.2));
+        assert!(!is_unbounded(FaultKind::Overpower, 2.0, 0.25));
+        assert!(!is_unbounded(FaultKind::Overtemperature, 180.0, 150.0));
+        assert!(!is_unbounded(FaultKind::Overcurrent, f64::INFINITY, 0.2));
     }
 
     /// Faulty: a generic LED straight across a USB 2.0 port's +5V (declared

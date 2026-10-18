@@ -925,6 +925,7 @@ impl NetlistBuilder {
                 }
             }
         }
+        carry_library_text(&mut properties, def);
 
         let mut pins = Vec::new();
         if let Some(def) = def {
@@ -2055,7 +2056,29 @@ struct LibDef {
     /// Reach of the net a power symbol names: `(power local)` (KiCad 9+) is
     /// scoped to its sheet, any other power symbol is global.
     power_scope: NameScope,
+    /// The library symbol's descriptive text ([`LIB_TEXT_PROPERTIES`]): the
+    /// only place a part's `Description` or `ki_keywords` live when the placed
+    /// instance does not repeat them.
+    text: Vec<(String, String)>,
 }
+
+/// The placed instance often omits the descriptive text the library symbol
+/// carries (KiCad stores `ki_keywords` only there, and a symbol edited in place
+/// keeps its Description in the embedded definition): carry it over so checks
+/// that read words see the same part the designer picked. An instance's own,
+/// non-empty property wins.
+fn carry_library_text(properties: &mut Vec<(String, String)>, def: Option<&LibDef>) {
+    for (k, v) in def.map_or(&[][..], |d| d.text.as_slice()) {
+        if !properties.iter().any(|(pk, pv)| pk == k && !pv.is_empty()) {
+            properties.retain(|(pk, _)| pk != k);
+            properties.push((k.clone(), v.clone()));
+        }
+    }
+}
+
+/// Library-symbol properties that describe the part in words and so are
+/// carried onto the placed component when the instance lacks them.
+const LIB_TEXT_PROPERTIES: [&str; 3] = ["Description", "ki_keywords", "ki_description"];
 
 /// All lib symbol definitions embedded in one schematic, indexed by `lib_id`.
 struct LibSymbols {
@@ -2106,12 +2129,17 @@ impl LibSymbols {
                         }
                     }
                 }
+                let text = (sym.find_all("property"))
+                    .filter_map(|prop| Some((prop.arg_value(0)?, prop.arg_value(1)?)))
+                    .filter(|(k, v)| LIB_TEXT_PROPERTIES.contains(&k.as_str()) && !v.is_empty())
+                    .collect();
                 defs.insert(
                     lib_id,
                     LibDef {
                         pins,
                         is_power,
                         power_scope,
+                        text,
                     },
                 );
             }
