@@ -323,7 +323,9 @@ async function exerciseLiveSimulation(page: Page, expectedFile: string, failures
     return { liveStarted, before, after }
   }
 
-  await page.getByText('connected', { exact: true }).waitFor({ state: 'visible', timeout: 30_000 })
+  // The live link is a dot with an accessible name; the word "connected" was
+  // dropped from the transport bar to keep it on one row.
+  await page.getByRole('img', { name: 'Connected to the simulator' }).waitFor({ state: 'visible', timeout: 30_000 })
   liveStarted = true
   const time = page.locator('[data-testid="transport-time"]')
   if (await time.count() !== 1) {

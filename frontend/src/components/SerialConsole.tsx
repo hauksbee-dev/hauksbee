@@ -26,7 +26,7 @@ function McuTerminal({ mcu, lines, analysis, onSend, onClear, readOnly }: {
   onClear: (mcu: string) => void
   readOnly?: boolean
 }) {
-  const [mcuRef, mcuName] = mcu
+  const [mcuRef, mcuBackend] = mcu
   const [input, setInput] = useState('')
   const [showAnalysis, setShowAnalysis] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -57,7 +57,9 @@ function McuTerminal({ mcu, lines, analysis, onSend, onClear, readOnly }: {
       <div className="flex items-center justify-between px-3 py-1.5 shrink-0" style={{ borderBottom: '1px solid var(--rule)' }}>
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-bold" style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)' }}>{mcuRef}</span>
-          <span className="text-[9px]" style={{ color: 'var(--silk-faint)' }}>{mcuName}</span>
+          {/* The chip and how it is emulated live in the dock header; here only
+              what this pane is. */}
+          <span className="text-[10px]" style={{ color: 'var(--silk-faint)' }} title={`Emulation backend: ${mcuBackend}`}>serial port</span>
         </div>
         <button onClick={() => onClear(mcuRef)} className="hb-press text-[9px] cursor-pointer"
           style={{ color: 'var(--silk-faint)', background: 'none', border: 'none' }}>
@@ -86,7 +88,7 @@ function McuTerminal({ mcu, lines, analysis, onSend, onClear, readOnly }: {
             )}
           </div>
         )}
-        {mine.length === 0 && <div style={{ color: 'var(--term-ts)' }}>-- no live output yet --</div>}
+        {mine.length === 0 && <div style={{ color: 'var(--term-ts)' }}>No serial output yet. It appears here as the firmware prints.</div>}
         {mine.map((entry, i) => (
           <div key={i} className="flex gap-2 mb-0.5">
             <span className="tnum" style={{ color: 'var(--term-ts)', flexShrink: 0 }}>{(entry.t * 1000).toFixed(1)}ms</span>
@@ -109,7 +111,7 @@ function McuTerminal({ mcu, lines, analysis, onSend, onClear, readOnly }: {
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
-            placeholder="type here, Enter to send..."
+            placeholder="Type a line and press Enter to send it to the firmware"
             aria-label={`Send to ${mcuRef}'s UART`}
             className="flex-1 bg-transparent text-[11px] py-1.5 pr-2 outline-none placeholder:opacity-40"
             style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)', border: 'none' }}

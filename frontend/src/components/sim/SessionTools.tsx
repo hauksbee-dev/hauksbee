@@ -35,7 +35,7 @@ export function SupplyChip({ running, checks, onUseChecks, onOpen }: {
         data-testid="sim-supply-chip"
         onClick={onOpen}
         title={same
-          ? 'Every rail the checks power runs the same supply here. Open the power rails.'
+          ? `Every rail the checks power runs the same supply here (${checks.length === 1 ? `${first.net}: ${supplyLabel(first.wire)}` : `${checks.length} rails`}). Open the power rails.`
           : differing.map(c => `${c.net}: live ${supplyLabel(running[c.net])}, checks ${supplyLabel(c.wire)}`).join('\n')}
         className="hb-press inline-flex items-center gap-1.5 px-2 rounded-md text-[11px] min-w-0 cursor-pointer"
         style={chip(same ? 'ok' : 'warn')}
@@ -43,7 +43,7 @@ export function SupplyChip({ running, checks, onUseChecks, onOpen }: {
         <PowerIcon size={11} />
         <span className="truncate">
           {same
-            ? `same supply as checks (${checks.length === 1 ? `${first.net} ${supplyLabel(first.wire)}` : `${checks.length} rails`})`
+            ? 'Supply: same as checks'
             : `${differing.length} rail${differing.length === 1 ? '' : 's'} differ from checks`}
         </span>
       </button>
@@ -76,10 +76,16 @@ export function useRunFor(send: (msg: ClientMessage) => void, liveFrame: SimFram
     j.left -= 1
     send({ type: 'Step', dt: j.dt })
   }, [liveFrame, send])
+  /** Stop a run in progress (the transport's Pause/Restart end it too, or the
+   *  next step would carry on after the user said stop). */
+  const cancel = () => {
+    if (!job.current) return
+    job.current = null
+    setBusy(false)
+  }
   const start = (seconds: number) => {
     if (job.current) {
-      job.current = null
-      setBusy(false)
+      cancel()
       return
     }
     // ~100 frames over the run, each at most the server's 1 s step ceiling.
@@ -90,16 +96,16 @@ export function useRunFor(send: (msg: ClientMessage) => void, liveFrame: SimFram
     setBusy(true)
     send({ type: 'Step', dt })
   }
-  return { busy, start }
+  return { busy, start, cancel }
 }
 
 export function RunForButton({ seconds, busy, onRun }: { seconds: number; busy: boolean; onRun: () => void }) {
   return (
     <button type="button" data-testid="sim-run-checks-duration" onClick={onRun}
-      title={busy ? 'Stop the run' : `Step the sim through ${simTimeText(seconds)} of sim time, the duration the checks simulate, then pause`}
+      title={busy ? 'Stop the run' : `Run ${simTimeText(seconds)} of sim time, the duration the checks simulate, then pause`}
       className="hb-press px-2 rounded-md text-[11px] cursor-pointer shrink-0"
       style={busy ? chip('warn') : chip('plain')}>
-      {busy ? 'Stop run' : `Run ${simTimeText(seconds)} (checks duration)`}
+      {busy ? 'Stop run' : `Run ${simTimeText(seconds)}`}
     </button>
   )
 }

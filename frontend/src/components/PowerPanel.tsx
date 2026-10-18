@@ -88,16 +88,16 @@ export function PowerPanel({ boardInfo, frame, send, supplies: running, onSupply
                 )}
               </span>
             </div>
-            {checksSupplies?.[net] && (
+            {/* Only a DIFFERENCE is said here. "Same as checks" is the toolbar
+                chip's one statement; repeating it per rail stated it twice. */}
+            {checksSupplies?.[net] && !sameSupply(supplies?.[net], checksSupplies[net]) && (
               <span
                 data-testid={`rail-vs-checks-${net}`}
                 className="text-[10px] self-start px-1.5 py-0.5 rounded"
                 title={`The checks spec runs this rail on ${supplyLabel(checksSupplies[net])}`}
-                style={sameSupply(supplies?.[net], checksSupplies[net])
-                  ? { color: 'var(--ok)', background: 'var(--ok-bg)', border: '1px solid var(--ok-border)' }
-                  : { color: 'var(--warn-strong)', background: 'var(--warn-bg)', border: '1px solid var(--warn-border)' }}
+                style={{ color: 'var(--warn-strong)', background: 'var(--warn-bg)', border: '1px solid var(--warn-border)' }}
               >
-                {sameSupply(supplies?.[net], checksSupplies[net]) ? 'same as checks' : `checks: ${supplyLabel(checksSupplies[net])}`}
+                {`checks run this rail on ${supplyLabel(checksSupplies[net])}`}
               </span>
             )}
             {overLimit && state && (
@@ -124,7 +124,7 @@ export function PowerPanel({ boardInfo, frame, send, supplies: running, onSupply
                   />
                 </div>
                 <span className="text-[9px] tnum" style={{ color: 'var(--silk-faint)' }}>
-                  SoC {(state.soc * 100).toFixed(1)}%
+                  charge {(state.soc * 100).toFixed(1)}%
                 </span>
               </div>
             )}
@@ -162,7 +162,7 @@ export function PowerPanel({ boardInfo, frame, send, supplies: running, onSupply
                 onChange={v => updateConfig(net, { volts: v })}
               />
               <SupplyField
-                label="I limit (A)"
+                label="Current limit (A)"
                 value={cfg.currentLimit}
                 step={0.1}
                 min={0}
