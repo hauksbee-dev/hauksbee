@@ -111,7 +111,7 @@ export const machineFindings = (r: WebReport): CheckReportFinding[] =>
 
 export function resultOverlay(r: WebReport, v: ReportView): ResultOverlay {
   const vocab = vocabulary(r)
-  const openRefs = [...new Set([...(v.partlyJudged?.openParts ?? []), ...v.openParts, ...v.unresolved])]
+  const openRefs = v.unmodelled.all
   const unjudgedNets = [...new Set([...(v.partlyJudged?.wiring ?? []), ...(v.partlyJudged?.electrical ?? [])])]
   const findingNets: Record<string, ResultLevel> = {}
   const findingRefs: Record<string, ResultLevel> = {}

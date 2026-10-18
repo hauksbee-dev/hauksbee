@@ -28,7 +28,7 @@ fn verdict_table_covers_every_state() {
             ),
             ("fail", "fail", Some("RED"), 1),
             ("partly_judged", "partly judged, not a pass", None, 3),
-            ("invalid_run", "invalid run, not a pass", None, 3),
+            ("invalid_run", "inconclusive, not a pass", None, 3),
         ]
     );
     for state in VerdictState::ALL {
@@ -40,6 +40,28 @@ fn verdict_table_covers_every_state() {
         assert!(state.meaning().ends_with('.'), "{state:?}");
         assert_eq!(state.is_pass(), state.exit_class() == ExitClass::Pass);
     }
+}
+
+/// A state that is neither a pass nor a fail reads "<word>, not a pass": the
+/// app shows the word as its headline and the rest as its qualifier, and the
+/// CLI opens a partly judged verdict with the same word, so the two never say
+/// different things (the app once said INVALID where the CLI said PARTLY
+/// JUDGED). An inconclusive run's word is the CLI's closing tag.
+#[test]
+fn verdict_headline_words_are_the_cli_words() {
+    let head = |s: VerdictState| {
+        s.label()
+            .strip_suffix(", not a pass")
+            .unwrap_or_else(|| panic!("{s:?}: {}", s.label()))
+    };
+    for s in VerdictState::ALL {
+        assert_eq!(s.label().ends_with(", not a pass"), !s.is_pass() && s != VerdictState::Fail, "{s:?}");
+    }
+    assert_eq!(
+        vocabulary::PARTLY_JUDGED_LEAD,
+        format!("{} (not a pass)", head(VerdictState::PartlyJudged).to_uppercase())
+    );
+    assert_eq!(head(VerdictState::InvalidRun), "inconclusive");
 }
 
 #[test]

@@ -11,7 +11,7 @@
 
 import type { CheckReportFinding, CheckReportJson, WebReport } from '../types/report'
 import { entitiesIn, vocabulary } from './result-links'
-import { plural, reportView, unjudgedGroups } from './report-view'
+import { plural, reportView, unjudgedGroups, unmodelledSentence } from './report-view'
 
 export const REBUILT_NOTE =
   'Rebuilt in the browser from the board report (this engine did not send its run --check --json document): '
@@ -122,14 +122,14 @@ export function reportMarkdown({ report: r, boardLabel, firmwareName, engineVers
   if (scope) {
     lines.push('### Judged scope (not a pass: partly judged)', '')
     if (scope.total > 0) lines.push(`- Judged: ${scope.judged} of ${scope.total} net checks`)
-    if (scope.openParts.length) lines.push(`- No usable model: ${scope.openParts.map(md).join(', ')}`)
+    if (v.unmodelled.all.length) lines.push(`- ${md(unmodelledSentence(v.unmodelled))}.`)
     const unjudged = unjudgedGroups(scope)
     const unjudgedCount = unjudged.reduce((n, g) => n + g.nets.length, 0)
     if (unjudgedCount) {
       lines.push(`- Not judged on ${plural(unjudgedCount, 'net')}:`)
       for (const g of unjudged) lines.push(`  - ${g.label}, ${plural(g.nets.length, 'net')}: ${g.nets.map(md).join(', ')}`)
     }
-    if (scope.openParts.length) lines.push(`- To judge the rest: give ${scope.openParts.map(md).join(', ')} ${scope.openParts.length === 1 ? 'a model' : 'models'}.`)
+    if (v.unmodelled.key.length) lines.push(`- To judge the rest: give ${v.unmodelled.key.map(md).join(', ')} ${v.unmodelled.key.length === 1 ? 'a model' : 'models'}.`)
     lines.push('')
   }
   if (v.conditions.length) {

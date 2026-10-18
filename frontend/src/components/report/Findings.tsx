@@ -1,10 +1,9 @@
 import { useContext } from 'react'
 import type { FixFirst, WebHeadsUp } from '../../types/report'
-import type { FindingEntry, FindingGroup, SectionStatus, SectionView } from '../../lib/report-view'
-import { LEVEL_WORD, plural } from '../../lib/report-view'
+import type { FindingEntry, FindingGroup, SectionStatus, SectionView, UnmodelledParts } from '../../lib/report-view'
+import { LEVEL_WORD, plural, unmodelledTail } from '../../lib/report-view'
 import { entitiesIn } from '../../lib/result-links'
-import type { ResultEntity } from '../../lib/result-links'
-import { AddCheck, ChipList, Linked, partsOf, ResultLinkContext, RowAction } from './ResultLinks'
+import { AddCheck, ChipList, Linked, partsOf, ResultLinkContext, RowAction, ShowOnBoard } from './ResultLinks'
 
 // A report section and the cards in it. One card shape serves every kind of
 // note a section can carry (a finding, a collapsed group of similar ones, a
@@ -239,34 +238,6 @@ function LevelTag({ level }: { level: FindingEntry['level'] }) {
   )
 }
 
-/** The "show on board" action every card shares. */
-function ShowOnBoard({ entities, at, id, label }: {
-  entities: ResultEntity[]
-  at: { x: number; y: number; label: string } | null
-  id: string
-  label: string
-}) {
-  const { onShow, shownKey } = useContext(ResultLinkContext)
-  if (!onShow || (entities.length === 0 && !at)) return null
-  const on = shownKey === id
-  return (
-    <button
-      type="button"
-      data-testid="finding-show"
-      aria-pressed={on}
-      aria-label={`Show on board: ${label}`}
-      onClick={() => onShow(entities, at, id)}
-      className={`${on ? 'hb-chip' : 'hb-btn'} hb-press inline-flex items-center gap-1 px-2 text-[12px] whitespace-nowrap`}
-      style={{ height: 26 }}
-    >
-      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
-        <circle cx="12" cy="12" r="7" /><path d="M12 2v4M12 18v4M2 12h4M18 12h4" strokeLinecap="round" />
-      </svg>
-      {on ? 'On the board' : 'Show on board'}
-    </button>
-  )
-}
-
 /** The part a finding is about, as the action that opens it: the model flow
  *  for a part with no model, else the part itself in the inspector. */
 function PartAction({ parts, openRefs }: { parts: string[]; openRefs: ReadonlySet<string> }) {
@@ -353,14 +324,16 @@ function FindingItem({ entry: e, openRefs }: { entry: FindingEntry; openRefs: Re
   )
 }
 
-/** Parts left out of the circuit: a warning card of its own, with the active
- *  parts on the board and the way to model or list them. */
-export function OpenPartsCard({ count, active, onList }: { count: number; active: string[]; onList?: () => void }) {
+/** The parts with no usable model, as a warning card of its own when the
+ *  verdict card does not already state them: the one measure in its one
+ *  sentence, with the way to see, model or list them. */
+export function OpenPartsCard({ parts, onList }: { parts: UnmodelledParts; onList?: () => void }) {
   const { onGiveModel } = useContext(ResultLinkContext)
+  const shown = parts.key.length > 0 ? parts.key : parts.all
   return (
     <li
       data-testid="open-parts-banner"
-      data-open-count={count}
+      data-open-count={parts.all.length}
       className="rounded-lg px-3 py-2.5"
       style={{ border: '1px solid var(--hairline)', borderLeft: `3px solid ${ENTRY_INK.warning}`, background: 'var(--surface)' }}
     >
@@ -368,22 +341,22 @@ export function OpenPartsCard({ count, active, onList }: { count: number; active
         <LevelTag level="warning" />
         <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>Models</span>
       </div>
-      <div className="mt-1 text-[13px] font-semibold leading-snug" style={{ color: 'var(--silk)' }}>
-        {plural(count, 'part')} with no usable model
+      <div data-testid="open-parts-sentence" className="mt-1 text-[13px] font-semibold leading-snug" style={{ color: 'var(--silk)' }}>
+        {parts.key.length > 0 && <><ChipList entities={partsOf(parts.key)} />{' '}</>}
+        {unmodelledTail(parts)}
       </div>
-      {active.length > 0 && (
+      {parts.key.length > 0 && (
         <div className="mt-0.5 text-[12px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
-          <ChipList entities={partsOf(active)} />{' '}
-          {active.length === 1 ? 'is an active part' : 'are active parts'}, so analog, AC and thermal results on their nets are not trustworthy.
+          Analog, AC and thermal results on the key {parts.key.length === 1 ? "part's" : "parts'"} nets are not trustworthy.
         </div>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        <ShowOnBoard entities={partsOf(active)} at={null} id="open-parts" label="the active parts with no model" />
-        {onGiveModel && active.slice(0, 2).map(ref => (
+        <ShowOnBoard entities={partsOf(shown)} at={null} id="open-parts" label="the parts with no usable model" />
+        {onGiveModel && parts.key.slice(0, 2).map(ref => (
           <RowAction key={ref} testId={`finding-give-model-${ref}`} onClick={() => onGiveModel(ref)}>Give {ref} a model</RowAction>
         ))}
         {onList && (
-          <RowAction testId="show-guessed-parts" onClick={onList}>List all {count}</RowAction>
+          <RowAction testId="show-guessed-parts" onClick={onList}>List all {parts.all.length}</RowAction>
         )}
       </div>
     </li>
@@ -439,8 +412,8 @@ const sentenceCase = (t: string) => /^[a-z][a-z0-9]*_/.test(t) ? t : t.charAt(0)
 export function FindingsList({ entries, status, openParts, openRefs, preLayout, onListParts, onLocate }: {
   entries: FindingEntry[]
   status: SectionStatus
-  /** Parts left out of the circuit: how many, and the active ones among them. */
-  openParts: { count: number; active: string[] } | null
+  /** The parts with no usable model, when this list is where they are stated. */
+  openParts: UnmodelledParts | null
   /** Parts with no model, for "Give X a model" rather than "Open X". */
   openRefs: ReadonlySet<string>
   /** An unrouted board's note on what waits for copper, with the held-back findings. */
@@ -471,7 +444,7 @@ export function FindingsList({ entries, status, openParts, openRefs, preLayout, 
         <ul className="list-none p-0 m-0 flex flex-col gap-2" data-testid="result-findings">
           {/* Serious first, then the parts with no model (a warning), then the rest. */}
           {entries.filter(e => e.level === 'serious').map(e => <FindingItem key={e.key} entry={e} openRefs={openRefs} />)}
-          {openParts && <OpenPartsCard count={openParts.count} active={openParts.active} onList={onListParts} />}
+          {openParts && <OpenPartsCard parts={openParts} onList={onListParts} />}
           {entries.filter(e => e.level !== 'serious').map(e => <FindingItem key={e.key} entry={e} openRefs={openRefs} />)}
         </ul>
       )}

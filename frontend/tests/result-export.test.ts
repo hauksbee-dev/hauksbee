@@ -118,7 +118,7 @@ describe('the Markdown summary', () => {
     expect(text).toContain(`**Reason:** ${partly.verdict_reason}`)
     expect(text).toContain('### Judged scope (not a pass: partly judged)')
     expect(text).toContain(`- Judged: ${scope.judged} of ${scope.total} net checks`)
-    expect(text).toContain('- No usable model: Q1')
+    expect(text).toContain('- Q1 (key part) has no usable model.')
     expect(text).toContain('give Q1 a model.')
   })
 

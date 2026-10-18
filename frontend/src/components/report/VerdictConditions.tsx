@@ -18,11 +18,11 @@
 // evidence one more click down.
 
 import { useContext } from 'react'
-import { unjudgedGroups } from '../../lib/report-view'
-import type { PartlyJudgedView, VerdictExplanation } from '../../lib/report-view'
+import { unjudgedGroups, unmodelledTail } from '../../lib/report-view'
+import type { PartlyJudgedView, UnmodelledParts, VerdictExplanation } from '../../lib/report-view'
 import { entitiesIn } from '../../lib/result-links'
 import { useTermEntry } from '../ui'
-import { AddCheck, ChipList, Linked, netsOf, partsOf, ResultLinkContext, RowAction } from './ResultLinks'
+import { AddCheck, ChipList, Linked, netsOf, partsOf, ResultLinkContext, RowAction, ShowOnBoard } from './ResultLinks'
 
 /** One result row: a glyph in the row's colour, the sentence, and its actions. */
 export function ResultRow({ testId, accent, glyph, children, actions }: {
@@ -117,25 +117,45 @@ export function VerdictConditions({ conditions }: { conditions: string[] }) {
 }
 
 /** A PARTLY JUDGED run's scope as rows in the warning colour (not the quiet
- *  note accent a conditional pass uses): the parts with no usable model and
- *  what that left unjudged (one list, each net named once, grouped by the kind
- *  of check). The verdict word above says it is not a pass, the judged count
- *  is the coverage gauge's, and the way to judge the rest is the card's Next
- *  step, so none of those is said again here. */
-export function PartlyJudged({ scope }: { scope: PartlyJudgedView | null }) {
+ *  note accent a conditional pass uses): the parts with no usable model (the
+ *  one measure, in its one sentence, stated here and nowhere else on the
+ *  board) and what that left unjudged (one list, each net named once, grouped
+ *  by the kind of check). The verdict word above says it is not a pass, the
+ *  judged count is the coverage gauge's, and the way to judge the rest is the
+ *  card's Next step, so none of those is said again here. */
+export function PartlyJudged({ scope, unmodelled, onList }: {
+  scope: PartlyJudgedView | null
+  unmodelled?: UnmodelledParts
+  /** Opens the full list of parts, where each can be given a model. */
+  onList?: () => void
+}) {
   if (!scope) return null
-  const { openParts } = scope
+  const parts = unmodelled ?? { key: scope.openParts, other: [], all: scope.openParts }
   const unjudged = unjudgedGroups(scope)
   const unjudgedNets = unjudged.flatMap(g => g.nets)
   const warn = 'var(--warn)'
-  if (openParts.length === 0 && unjudged.length === 0) return null
+  if (parts.all.length === 0 && unjudged.length === 0) return null
   return (
     <div data-testid="report-partly-judged" role="note" className="text-[13px]" style={{ color: 'var(--silk)' }}>
       <ul className="list-none p-0 m-0">
-        {openParts.length > 0 && (
-          <ResultRow testId="partly-judged-open" accent={warn} glyph={<PartGlyph />}>
-            <span className="font-semibold" style={{ color: 'var(--silk-dim)' }}>No usable model: </span>
-            <ChipList entities={partsOf(openParts)} />
+        {parts.all.length > 0 && (
+          <ResultRow
+            testId="partly-judged-open"
+            accent={warn}
+            glyph={<PartGlyph />}
+            actions={(
+              <>
+                <ShowOnBoard entities={partsOf(parts.all)} at={null} id="open-parts" label="the parts with no usable model" />
+                {onList && parts.all.length > 1 && (
+                  <RowAction testId="show-guessed-parts" onClick={onList}>List all {parts.all.length}</RowAction>
+                )}
+              </>
+            )}
+          >
+            <span data-testid="open-parts-sentence">
+              {parts.key.length > 0 && <><ChipList entities={partsOf(parts.key)} />{' '}</>}
+              {unmodelledTail(parts)}.
+            </span>
           </ResultRow>
         )}
         {unjudged.length > 0 && (

@@ -154,8 +154,10 @@ describe('partly judged', () => {
     expect(html).toContain('data-testid="report-partly-judged"')
     // "Not a pass" is the card's verdict word and detail, said once there.
     expect(html).not.toContain('Not a pass')
-    expect(boardVerdict(partly)).toMatchObject({ term: 'invalid', detail: 'partly judged, not a pass' })
-    expect(html).toContain('No usable model: </span>')
+    // The verdict state's own word, the CLI's PARTLY JUDGED, never the check-level INVALID.
+    expect(boardVerdict(partly)).toMatchObject({ term: 'partly_judged', detail: 'not a pass' })
+    // The one measure, in its one sentence.
+    expect(html).toContain('(key part) has no usable model.')
     expect(chipNames(html.slice(html.indexOf('partly-judged-open')))[0]).toBe('Q1')
     expect(html).toContain('electrical checks')
     // One list under the one heading: every net named once, however many kinds.
@@ -204,12 +206,12 @@ describe('partly judged', () => {
     expect(view.partlyJudged).toEqual({ openParts: [], wiring: [], electrical: [], judged: 0, total: 0 })
     // Nothing to list, so no rows; the verdict word still says it is not a pass.
     expect(renderToStaticMarkup(<PartlyJudged scope={view.partlyJudged} />)).toBe('')
-    expect(boardVerdict(report)).toMatchObject({ term: 'invalid', detail: 'partly judged, not a pass' })
+    expect(boardVerdict(report)).toMatchObject({ term: 'partly_judged', detail: 'not a pass' })
   })
 
   test('the analysis view mounts the block inside the verdict card and drops the clipped reason', () => {
     const card = resultCard()
-    expect(card).toContain('<PartlyJudged scope={v.partlyJudged} />')
+    expect(card).toContain('<PartlyJudged scope={v.partlyJudged} unmodelled={v.unmodelled} onList={onListParts} />')
     // Rendered, a partly judged card carries the rows and not the clipped reason.
     const html = renderToStaticMarkup(<ResultPanel report={partly} view={reportView(partly)} explanation={null} exportSlot={null} />)
     expect(html).toContain('data-testid="report-partly-judged"')
@@ -244,12 +246,19 @@ describe('the header chip', () => {
       />,
     )
 
-  test('a conditional pass is not a plain PASS and a partly judged run is INVALID, not a pass', () => {
+  test('a conditional pass is not a plain PASS and a partly judged run is PARTLY JUDGED, not a pass', () => {
+    // The watchy fixture is a NOT CONCLUSIVE run (`verdict: "invalid"`, not
+    // partly judged); the chip used to read PASS for it. The unconditional pass
+    // is the same report with the engine's pass verdict.
+    const pass = { ...unconditional, verdict: 'pass' } as WebReport
     expect(chip(conditional)).toContain('Conditional pass')
-    expect(chip(unconditional)).not.toContain('Conditional')
-    expect(chip(unconditional)).toContain('PASS')
-    expect(chip(partly)).toContain('INVALID')
-    expect(chip(partly)).toContain('partly judged, not a pass')
+    expect(chip(pass)).not.toContain('Conditional')
+    expect(chip(pass)).toContain('PASS')
+    expect(chip(unconditional)).toContain('INCONCLUSIVE')
+    expect(chip(unconditional)).not.toContain('PASS')
+    expect(chip(partly)).toContain('PARTLY JUDGED')
+    expect(chip(partly)).toContain('not a pass')
+    expect(chip(partly)).not.toContain('INVALID')
     expect(chip(partly)).not.toContain('undermined')
   })
 
@@ -257,7 +266,7 @@ describe('the header chip', () => {
     const html = renderToStaticMarkup(
       <ShellChips
         view="board"
-        report={unconditional}
+        report={{ ...unconditional, verdict: 'pass' } as WebReport}
         checks={{ passed: 3, failed: 1, invalid: 0, measured: 0 } as never}
         sim={{ running: false, faults: 0, connected: false, sessionBoard: null } as never}
         simMounted={false}

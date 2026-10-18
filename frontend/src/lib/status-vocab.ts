@@ -9,10 +9,43 @@
 // lands, delete this file and read them from there (listed for Batch D).
 
 import { useTermEntry } from '../components/ui'
+import { labelFor } from './labels'
 import type { WebReport } from '../types/report'
 import { plural, reportVerdictTone, summarizeEvidence } from './report-view'
 
-export type StatusTerm = 'pass' | 'fail' | 'invalid' | 'conditional_pass' | 'not_checked'
+export type StatusTerm = 'pass' | 'fail' | 'invalid' | 'conditional_pass' | 'not_checked' | BoardStateTerm
+
+/** A board run that is neither a pass nor a fail, as the shared vocabulary's
+ *  verdict states (`hauksbee_ir::vocabulary::VerdictState`, served in the
+ *  generated label table): partly judged (key parts have no usable model) and
+ *  inconclusive (the run's own evidence is not trustworthy). The glossary's
+ *  INVALID is one check that was refused, never a whole board. */
+export type BoardStateTerm = 'partly_judged' | 'invalid_run'
+
+export const isBoardState = (term: StatusTerm): term is BoardStateTerm =>
+  term === 'partly_judged' || term === 'invalid_run'
+
+/** A verdict a session saved before the board states existed: a partly judged
+ *  board was stored as the check-level INVALID with the state's label as its
+ *  detail. Read it as the state it was. */
+export function savedVerdict<V extends { term: StatusTerm; detail: string }>(v: V): V {
+  if (v.term !== 'invalid') return v
+  if (v.detail === 'partly judged, not a pass') return { ...v, term: 'partly_judged', detail: boardStateWords('partly_judged').detail }
+  if (v.detail === 'evidence undermined') return { ...v, term: 'invalid_run' }
+  return v
+}
+
+/** The state's headline word and its qualifier, from its one label in the
+ *  shared table ("partly judged, not a pass" reads PARTLY JUDGED, "not a
+ *  pass"): the words the CLI prints as `PARTLY JUDGED (not a pass)` and
+ *  `VERDICT: inconclusive`. */
+export function boardStateWords(term: BoardStateTerm): { word: string; detail: string } {
+  const label = labelFor(term)
+  const at = label.indexOf(', ')
+  return at < 0
+    ? { word: label.toUpperCase(), detail: '' }
+    : { word: label.slice(0, at).toUpperCase(), detail: label.slice(at + 2) }
+}
 export type ChipTone = 'ok' | 'err' | 'warn' | 'quiet'
 
 /** Tone of each term. */
@@ -22,10 +55,12 @@ export const TERM_TONE: Record<StatusTerm, ChipTone> = {
   invalid: 'warn',
   not_checked: 'warn',
   fail: 'err',
+  partly_judged: 'warn',
+  invalid_run: 'warn',
 }
 
 /** The words used when the engine's glossary is not there (an older server). */
-const FALLBACK_LABEL: Record<StatusTerm, string> = {
+const FALLBACK_LABEL: Record<Exclude<StatusTerm, BoardStateTerm>, string> = {
   pass: 'PASS',
   fail: 'FAIL',
   invalid: 'INVALID',
@@ -36,14 +71,16 @@ const FALLBACK_LABEL: Record<StatusTerm, string> = {
 /** The glossary label for each status term. Always the same five hooks, so the
  *  call order never changes. */
 export function useStatusLabel(): (term: StatusTerm) => string {
-  const rows: Record<StatusTerm, string | undefined> = {
+  const rows: Record<Exclude<StatusTerm, BoardStateTerm>, string | undefined> = {
     pass: useTermEntry('pass')?.label,
     fail: useTermEntry('fail')?.label,
     invalid: useTermEntry('invalid')?.label,
     conditional_pass: useTermEntry('conditional_pass')?.label,
     not_checked: useTermEntry('not_checked')?.label,
   }
-  return term => rows[term] ?? FALLBACK_LABEL[term]
+  return term => isBoardState(term)
+    ? boardStateWords(term).word
+    : rows[term] ?? FALLBACK_LABEL[term]
 }
 
 /** The pill colours of each tone, shared by every surface that shows a verdict. */
@@ -119,15 +156,19 @@ export function boardVerdict(report: WebReport): { term: StatusTerm; detail: str
         ? { term: 'fail', detail: `${report.serious} serious` }
         : { term: 'fail', detail: 'analysis failed' }
   } else if (tone === 'warning') {
-    // An undermined run-level claim is what the body headline leads with.
+    // A run that is not a pass and not a fail says which of the two states it
+    // is, in the shared vocabulary's words; an undermined run-level claim is
+    // what the body headline leads with.
     board = report.partly_judged
-      ? { term: 'invalid', detail: 'partly judged, not a pass' }
-      : summarizeEvidence(report.evidence).undermined > 0
-        ? { term: 'invalid', detail: 'evidence undermined' }
-        : conditional
-          ? { term: 'conditional_pass', detail: report.total > 0 ? plural(report.total, 'finding') : 'rests on conditions' }
-          // Findings without conditions are qualifications on a pass, not a conditional pass.
-          : { term: 'pass', detail: report.total > 0 ? plural(report.total, 'finding') : 'analysis qualified', tone: 'warn' }
+      ? { term: 'partly_judged', detail: boardStateWords('partly_judged').detail }
+      : report.verdict === 'invalid'
+        ? { term: 'invalid_run', detail: boardStateWords('invalid_run').detail }
+        : summarizeEvidence(report.evidence).undermined > 0
+          ? { term: 'invalid_run', detail: 'evidence undermined' }
+          : conditional
+            ? { term: 'conditional_pass', detail: report.total > 0 ? plural(report.total, 'finding') : 'rests on conditions' }
+            // Findings without conditions are qualifications on a pass, not a conditional pass.
+            : { term: 'pass', detail: report.total > 0 ? plural(report.total, 'finding') : 'analysis qualified', tone: 'warn' }
   } else {
     // A pass that rests on conditions is never the plain PASS; its colour is
     // the verdict card's (green), so the chip never disagrees with the card.

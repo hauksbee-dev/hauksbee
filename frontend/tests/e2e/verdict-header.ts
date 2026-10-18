@@ -2,7 +2,7 @@
 // End-to-end pass over the verdict header and the Checks strip, in a real
 // browser, on an unrouted board. Three defects from a real-drop session:
 //
-//   1. the key-parts ring clipped a four-digit count ("5000/5000" read "000/500");
+//   1. the card's ring clipped a four-digit count ("5000/5000" read "000/500");
 //   2. the card said "0 serious" / "none serious" beside a finding tagged SERIOUS;
 //   3. the Checks page said "1 failed" while the only listed check said PASS.
 //
@@ -28,14 +28,18 @@ const shoot = shotsInto(OUT)
 // The widest text that fits the ring's hole: r 19, stroke 5, so 33 user units.
 const HOLE = 33
 
-/** Drop the board; `keyParts` rewrites the engine's bind count for the ring test. */
-async function load(page: Page, keyParts?: string) {
+/** Drop the board; `nets` rewrites the run as partly judged over that many
+ *  nets (every check judged), so the card draws its coverage ring at a count
+ *  of that size. The card's only ring: the key-parts ring is gone, the parts
+ *  with no usable model being one measure stated once in words. */
+async function load(page: Page, nets?: number) {
   await page.unroute('**/api/analyze').catch(() => {})
-  if (keyParts) {
+  if (nets) {
     await page.route('**/api/analyze', async route => {
       const response = await route.fetch()
-      const body = await response.json() as { bind?: { critical_parts_bound?: string } }
-      if (body.bind) body.bind.critical_parts_bound = keyParts
+      const body = await response.json() as Record<string, unknown>
+      body.partly_judged = true
+      body.judgement_scope = { nets, open_parts: [], wiring_dependent: [], electrical_dependent: [] }
       await route.fulfill({ response, json: body })
     })
   }
@@ -51,12 +55,15 @@ await browserFlow({ out: OUT, viewport: { width: 1440, height: 900 }, timeout: 9
   for (const [name, viewport] of [['1440', { width: 1440, height: 900 }], ['390', { width: 390, height: 844 }]] as const) {
     await page.setViewportSize(viewport)
 
-    step(`the key-parts ring at ${name}px, from 1 to 6 digits`)
+    step(`the coverage ring at ${name}px, from 1 to 6 digits`)
     for (const digits of [1, 3, 4, 5, 6]) {
-      const total = 10 ** digits - 1
-      await load(page, `${total}/${total}`)
-      const gauge = page.locator('[data-testid="result-gauge-modelled"]')
-      const text = page.locator('[data-testid="result-gauge-modelled-text"]')
+      // Two checks per net, so the count is even: 10, 1000, ... 1000000 less 2.
+      const nets = Math.max(1, (10 ** digits - 2) / 2)
+      const total = 2 * nets
+      await load(page, nets)
+      ok(`${digits}-digit count: no key-parts ring beside it`, (await page.locator('[data-testid="result-gauge-modelled"]').count()) === 0)
+      const gauge = page.locator('[data-testid="result-gauge-judged"]')
+      const text = page.locator('[data-testid="result-gauge-judged-text"]')
       const width = await text.evaluate(el => (el as unknown as SVGGraphicsElement).getBBox().width)
       ok(`${digits}-digit count fits the ring hole`, width <= HOLE, `${width.toFixed(1)} <= ${HOLE}: "${await text.textContent()}"`)
       const said = `${await gauge.getAttribute('title')} ${await gauge.innerText()}`

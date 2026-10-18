@@ -166,7 +166,7 @@ export const LABEL_ENTRIES: readonly LabelEntry[] = [
   { id: 'pass_conditional', group: 'verdict', label: 'pass, conditionally', explain: 'Nothing blocks, but the pass rests on named conditions (default rules, guessed or fallback models, partly modelled parts, inferred pin roles, parts with no model, checks that could not judge a part or did not run); each condition says how to lift it.' },
   { id: 'fail', group: 'verdict', label: 'fail', explain: 'At least one blocking finding or failed assertion.' },
   { id: 'partly_judged', group: 'verdict', label: 'partly judged, not a pass', explain: 'Nothing blocks among the checks that ran, but key parts have no usable model, so the checks they could change were not judged.' },
-  { id: 'invalid_run', group: 'verdict', label: 'invalid run, not a pass', explain: "The run's own evidence is not trustworthy (a refusal, an undermined claim, a failed simulation), so it vouches for nothing either way." },
+  { id: 'invalid_run', group: 'verdict', label: 'inconclusive, not a pass', explain: "The run's own evidence is not trustworthy (a refusal, an undermined claim, a failed simulation), so it vouches for nothing either way." },
   { id: 'full', group: 'evidence_grade', label: 'full evidence', explain: 'The conclusion stands on evidence alone: nothing on its causal path was assumed.' },
   { id: 'qualified', group: 'evidence_grade', label: 'qualified evidence', explain: 'The conclusion holds with named caveats: assumptions sit on its path, none critical.' },
   { id: 'undermined', group: 'evidence_grade', label: 'undermined evidence', explain: 'A critical assumption sits on the causal path, so the conclusion gets no verdict.' },
