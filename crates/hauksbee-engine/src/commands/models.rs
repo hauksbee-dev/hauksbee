@@ -1501,6 +1501,28 @@ fn extract_consent(
     Ok(yes)
 }
 
+/// A board part as the drafting agent sees it: value, footprint, and each
+/// pad's net by name.
+fn board_facts(
+    board: &hauksbee_extract::ExtractedBoard,
+    comp: &hauksbee_extract::Component,
+) -> hauksbee_models::card_coverage::Board {
+    let net_name = |id: Option<i64>| {
+        id.and_then(|id| board.nets.iter().find(|n| n.id == id))
+            .map_or_else(|| "(unconnected)".to_string(), |n| n.name.clone())
+    };
+    hauksbee_models::card_coverage::Board {
+        refdes: comp.reference.clone(),
+        value: comp.value.clone(),
+        footprint: comp.footprint.clone(),
+        pads: comp
+            .pins
+            .iter()
+            .map(|p| (p.number.clone(), net_name(p.net)))
+            .collect(),
+    }
+}
+
 /// One board identity `models extract --unmodelled` drafts a card for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnmodelledPart {
@@ -1520,6 +1542,9 @@ pub struct UnmodelledPart {
     /// Set when `datasheet` is the board's own `Datasheet` field and its file
     /// name clearly belongs to a different device.
     pub doubt: Option<DatasheetDoubt>,
+    /// The first reference's value, footprint, pads and nets, which the
+    /// drafting agent reads as `board.md` and the draft is checked against.
+    pub board: Option<hauksbee_models::card_coverage::Board>,
 }
 
 /// Parts the verdict counts as having no usable model that extraction is not
@@ -1699,11 +1724,15 @@ pub fn unmodelled_parts(
                 description: None,
                 manufacturer: None,
                 doubt: None,
+                board: None,
             });
             parts.len() - 1
         });
         let entry = &mut parts[at];
         entry.references.push(comp.reference.clone());
+        if entry.board.is_none() {
+            entry.board = Some(board_facts(board, comp));
+        }
         if entry.datasheet.is_none() && datasheet.is_some() {
             entry.datasheet = datasheet;
             entry.doubt = doubt;
@@ -1923,7 +1952,8 @@ fn draft_parts(
             footprints: p.footprints.clone(),
             kind_str: kind_of(p),
             ..template.clone()
-        };
+        }
+        .board(p.board.clone());
         match hauksbee_models::extract_progress::with_spinner(|| datasheet::run(args)) {
             Ok(path) => {
                 println!("{}: drafted {}", p.part, path.display());

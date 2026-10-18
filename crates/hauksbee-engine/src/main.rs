@@ -316,6 +316,21 @@ enum ModelsCommand {
     /// (which backend, model, and effort `models extract` uses by default).
     #[command(subcommand)]
     Backend(ModelsBackendCommand),
+    /// The datasheet helpers an extraction agent runs in its sandbox as `ds`
+    /// (toc, find, page, pins, board, checklist, check). Hidden: the agent's
+    /// `ds` shim calls it, and nothing else needs to.
+    #[command(hide = true)]
+    Ds(ModelsDsArgs),
+}
+
+#[derive(Parser)]
+struct ModelsDsArgs {
+    /// The extraction sandbox the helpers read.
+    #[arg(long, default_value = ".")]
+    dir: PathBuf,
+    /// The `ds` command and its arguments.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    args: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -516,6 +531,17 @@ struct ModelsExtractArgs {
     /// refuses before sending anything, since that file may hold your fixes.
     #[arg(long)]
     force: bool,
+    /// The board footprint the part sits on, for a single-PDF run: it picks
+    /// the package's pin-table column and the card's footprint_re must match it.
+    #[arg(long, value_name = "NAME")]
+    footprint: Option<String>,
+    /// The board's value for the part, for a single-PDF run: the card must bind it.
+    #[arg(long, value_name = "TEXT")]
+    value: Option<String>,
+    /// Keep no trace of the agent's prompt and event stream (default: kept
+    /// under <out-dir>/trace/, the last 10 runs).
+    #[arg(long)]
+    no_trace: bool,
 }
 
 /// CLI spelling of the extraction backend. Separate from
@@ -1573,10 +1599,19 @@ fn main() -> anyhow::Result<()> {
                     .api_base(args.api_base)
                     .api_key_env(args.api_key_env)
                     .checker(std::env::current_exe().ok());
+                let board = (args.footprint.is_some() || args.value.is_some()).then(|| {
+                    hauksbee_models::card_coverage::Board {
+                        footprint: args.footprint.clone().unwrap_or_default(),
+                        value: args.value.clone().unwrap_or_default(),
+                        ..Default::default()
+                    }
+                });
                 let template = Args {
                     force: args.force,
                     ..template
-                };
+                }
+                .board(board)
+                .trace(!args.no_trace);
                 match &args.unmodelled {
                     Some(board) => hauksbee_engine::commands::models::extract_unmodelled(
                         board,
@@ -1587,6 +1622,11 @@ fn main() -> anyhow::Result<()> {
                     ),
                     None => hauksbee_engine::commands::models::extract(template, args.yes),
                 }
+            }
+            ModelsCommand::Ds(args) => {
+                let out = hauksbee_models::ds_toolkit::main(&args.dir, &args.args)?;
+                println!("{}", out.trim_end());
+                Ok(())
             }
             ModelsCommand::Backend(cmd) => match cmd {
                 ModelsBackendCommand::Show(args) => {

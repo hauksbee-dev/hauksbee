@@ -156,6 +156,9 @@ pub struct Workspace {
     /// The product's own checker executable (canonical), named in the prompt
     /// and the only file outside the workspace the confined agent may run.
     pub checker: Option<PathBuf>,
+    /// Where each agent call's prompt and event stream are kept, when traces
+    /// are on ([`crate::extract_trace`]).
+    pub trace: Option<std::sync::Arc<crate::extract_trace::Trace>>,
 }
 
 impl Workspace {
@@ -179,6 +182,7 @@ impl Workspace {
             category_disclosures: Vec::new(),
             has_text_dump: false,
             checker: None,
+            trace: None,
         })
     }
 
@@ -229,6 +233,7 @@ impl Workspace {
             category_disclosures: self.category_disclosures.clone(),
             has_text_dump: self.has_text_dump,
             checker: self.checker.clone(),
+            trace: self.trace.clone(),
             dir,
         })
     }
@@ -287,8 +292,13 @@ fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
             .map(|n| SelectedPage::new(n, vec![why], vec![], 0))
             .collect()
     };
+    // The contents pages and the pin table, read once here for the agent's `ds`
+    // helpers (and the deterministic checks) to print.
+    let texts: Vec<String> = page_text.iter().flatten().map(|p| p.text.clone()).collect();
+    let toc = crate::ds_toolkit::write_datasheet_files(dir.path(), &copied, &texts);
     let selections = page_text.as_deref().map_or_else(front_pages, |pages| {
-        select_relevant_pages(pages, MAX_RENDERED_PAGES)
+        let limit = render_limit(pages.len());
+        with_key_sections(select_relevant_pages(pages, limit), &toc, limit)
     });
 
     // Page renders are best-effort. Without poppler the extraction still runs
@@ -363,7 +373,34 @@ fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
         has_text_dump,
         dir,
         checker: None,
+        trace: None,
     })
+}
+
+/// Write a sandbox's text files for `pdf` into `into` (page texts, the page
+/// index, `toc.md`, `pins/`), with no renders and no agent: for replaying
+/// saved drafts against the deterministic checks and scoring page selection.
+/// Returns the pages the selection picks without the contents and with them.
+///
+/// # Errors
+///
+/// The PDF has no text layer, or `into` cannot be written.
+#[doc(hidden)]
+pub fn prepare_files(pdf: &Path, into: &Path) -> Result<(Vec<usize>, Vec<usize>)> {
+    std::fs::create_dir_all(into)?;
+    let pages = extract_pdf_pages_text(pdf)?;
+    let texts: Vec<String> = pages.iter().map(|p| p.text.clone()).collect();
+    let toc = crate::ds_toolkit::write_datasheet_files(into, pdf, &texts);
+    let before = select_relevant_pages(&pages, MAX_RENDERED_PAGES);
+    let limit = render_limit(pages.len());
+    let now = with_key_sections(select_relevant_pages(&pages, limit), &toc, limit);
+    let topics = |text: &str| -> Vec<&'static str> {
+        let found = PAGE_TOPICS.iter().filter(|t| topic_score(text, t.2) > 0);
+        found.map(|t| t.0).collect()
+    };
+    harness::write_pages(into, pages.iter().map(|p| (p.number, p.text.as_str(), topics(&p.text))));
+    let numbers = |v: Vec<SelectedPage>| v.into_iter().map(|p| p.number).collect();
+    Ok((numbers(before), numbers(now)))
 }
 
 /// Run one extraction end to end, as the CLI does.
@@ -482,8 +519,7 @@ fn run_inner(mut args: Args) -> Result<PathBuf> {
     let out_dir = args.out_dir.clone().unwrap_or_else(default_out_dir);
     let out_path = out_dir.join(format!("{}{suffix}", sanitise_filename(part)));
     if !args.force && out_path.exists() {
-        let shown = out_path.display();
-        bail!("{shown} already exists, and it may hold your corrections; hauksbee will not overwrite it. Nothing was sent. Move or delete it, write the draft elsewhere with --out-dir, or pass --force to replace it.");
+        bail!("{} already exists, and it may hold your corrections; hauksbee will not overwrite it. Nothing was sent. Move or delete it, write the draft elsewhere with --out-dir, or pass --force to replace it.", out_path.display());
     }
     // Declarative register-map sensor kinds emit a `[sensor]` spec validated
     // as a `SensorSpec`, NOT the SPICE `[[models]]` schema.
@@ -528,8 +564,12 @@ fn run_inner(mut args: Args) -> Result<PathBuf> {
             say!("[model-extract] warning: [models.ratings] {warning}");
         }
         let id = entry.id;
+        // A board library names an orderable part by a wildcard of its code
+        // (`STM32F407VETx`): the card must bind that spelling too.
+        let mut aliases = args.aliases.clone();
+        aliases.extend(crate::card_coverage::ordering_wildcards(part));
         (
-            output::finalise(&raw, part, &args.aliases, &args.pdf)?,
+            output::finalise(&raw, part, &aliases, &args.pdf)?,
             id,
             timed_out,
         )
@@ -1213,6 +1253,14 @@ pub struct Args {
     pub checker: Option<PathBuf>,
     /// Replace an existing `<part>.toml` rather than refuse (`--force`).
     pub force: bool,
+    /// The board part being drafted for (value, footprint, pads and nets),
+    /// written into the sandbox as `board.md` and checked against the draft's
+    /// match rules and pin map ([`crate::card_coverage`]).
+    pub board: Option<crate::card_coverage::Board>,
+    /// Keep the agent's prompt and event stream under `<out-dir>/trace/`
+    /// ([`crate::extract_trace`]); on unless `--no-trace` or
+    /// `HAUKSBEE_EXTRACT_NO_TRACE` is set.
+    pub trace: bool,
 }
 
 impl Args {
@@ -1235,7 +1283,31 @@ impl Args {
             api_key_env: None,
             checker: None,
             force: false,
+            board: None,
+            trace: true,
         }
+    }
+
+    /// Name the board part this draft is for; see [`Args::board`].
+    #[must_use]
+    pub fn board(mut self, board: Option<crate::card_coverage::Board>) -> Self {
+        if let Some(b) = &board {
+            if !b.value.is_empty() && !self.aliases.contains(&b.value) {
+                self.aliases.push(b.value.clone());
+            }
+            if !b.footprint.is_empty() && !self.footprints.contains(&b.footprint) {
+                self.footprints.push(b.footprint.clone());
+            }
+        }
+        self.board = board;
+        self
+    }
+
+    /// Keep (or not) the agent trace; see [`Args::trace`].
+    #[must_use]
+    pub const fn trace(mut self, keep: bool) -> Self {
+        self.trace = keep;
+        self
     }
 
     #[must_use]
@@ -1402,6 +1474,17 @@ pub fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args> {
             }
             "--api-base" => out.api_base = Some(value("a value")?),
             "--force" => out.force = true,
+            "--no-trace" => out.trace = false,
+            "--footprint" | "--value" => {
+                let v = value("a value")?;
+                let mut board = out.board.take().unwrap_or_default();
+                if flag == "--footprint" {
+                    board.footprint = v;
+                } else {
+                    board.value = v;
+                }
+                out = out.board(Some(board));
+            }
             "--api-key-env" => {
                 let name = value("an environment variable NAME")?;
                 validate_api_key_env_name(&name)?;
@@ -1431,6 +1514,11 @@ OPTIONS:
                           i2c_sensor|spi_sensor give a [sensor] spec, not SPICE)
     --out-dir <dir>       Output directory (default: ~/.hauksbee/models/)
     --force               Replace an existing model of the same name
+    --footprint <name>    The board footprint the part sits on (picks the
+                          package's pin-table column and is checked against
+                          the card's footprint_re)
+    --value <text>        The board's value for the part (the card must bind it)
+    --no-trace            Keep no agent trace (default: <out-dir>/trace/)
     --model <id>          Model for the extraction agent (default: the
                           backend's own, e.g. claude-opus-5-5 for claude-code,
                           gemini-3.8-flash for agy, gpt-6.1-sol for codex)
@@ -1646,6 +1734,74 @@ fn select_relevant_pages(pages: &[PdfPageText], limit: usize) -> Vec<SelectedPag
     }
     // Keyed by page number, so already in page order.
     selected.into_values().collect()
+}
+
+/// How many pages a datasheet of `pages` pages gets rendered and inlined: the
+/// base seven, one more per fifty pages up to eleven. A 200-page MCU datasheet
+/// spreads a card's sources over twice the sections a 40-page LDO has.
+const fn render_limit(pages: usize) -> usize {
+    let extra = pages / 50;
+    let limit = MAX_RENDERED_PAGES + extra;
+    if limit > MAX_RENDERED_PAGES + 4 {
+        MAX_RENDERED_PAGES + 4
+    } else {
+        limit
+    }
+}
+
+/// The selection with the contents' key sections first: a section the
+/// contents name (the pin table, operating conditions, thermal data, boot
+/// configuration) is the page a card needs even when its heading reads unlike
+/// the topic terms, and a heading match elsewhere (a revision note, a figure
+/// list) is not. Measured on a 206-page MCU datasheet against the 23 pages an
+/// expert card cites: the heading heuristic alone picked 2 of them and none of
+/// the pin table; with the contents first, 6 including the pin table's start.
+fn with_key_sections(
+    selected: Vec<SelectedPage>,
+    toc: &[crate::ds_toolkit::TocEntry],
+    limit: usize,
+) -> Vec<SelectedPage> {
+    let keys = crate::ds_toolkit::key_pages(toc);
+    if keys.is_empty() {
+        return selected;
+    }
+    // Each section's first page before any section's second, so a late
+    // section (thermal data, ordering codes) is not crowded out by an early
+    // one split over several contents entries.
+    let mut seen = std::collections::HashSet::new();
+    let (firsts, repeats): (Vec<_>, Vec<_>) = keys.into_iter().partition(|&(_, label)| seen.insert(label));
+    let keys = firsts.into_iter().chain(repeats);
+    let mut chosen: std::collections::BTreeMap<usize, SelectedPage> = std::collections::BTreeMap::new();
+    let mut rest = Vec::new();
+    for page in selected {
+        if page.number == 1 {
+            chosen.insert(1, page);
+        } else {
+            rest.push(page);
+        }
+    }
+    for (number, label) in keys {
+        if chosen.len() >= limit {
+            break;
+        }
+        chosen
+            .entry(number)
+            .or_insert_with(|| SelectedPage::new(number, vec![], vec![], 0))
+            .reasons
+            .push(label);
+    }
+    rest.sort_by_key(|p| std::cmp::Reverse(p.score));
+    for page in rest {
+        if chosen.len() >= limit {
+            break;
+        }
+        if let Some(had) = chosen.get_mut(&page.number) {
+            had.reasons.extend(page.reasons);
+        } else {
+            chosen.insert(page.number, page);
+        }
+    }
+    chosen.into_values().collect()
 }
 
 fn category_disclosures(pages: &[PdfPageText], selected: &[SelectedPage]) -> Vec<String> {
@@ -3248,7 +3404,18 @@ impl Reply<'_> {
             return Vec::new();
         };
         parse_and_validate_reply(raw, part, kind)
-            .map(|entry| crate::param_names::source_warnings(&entry))
+            .map(|entry| {
+                let mut out = crate::param_names::source_warnings(&entry);
+                // The binding, pin-table and coverage checks the agent's
+                // `ds check` runs, against this run's sandbox facts.
+                out.extend(
+                    crate::card_coverage::current_findings(&entry)
+                        .into_iter()
+                        .filter(|f| f.severity == crate::card_coverage::Severity::Warn)
+                        .map(|f| format!("{}: {}", f.check, f.message)),
+                );
+                out
+            })
             .unwrap_or_default()
     }
 
@@ -3328,6 +3495,10 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
     progress::phase("rendering the datasheet pages");
     let mut ws = prepare_workspace_in(&args.pdf, &std::env::temp_dir())?;
     ws.checker = args.checker.as_deref().and_then(|c| c.canonicalize().ok());
+    if let Reply::Model { part, kind } | Reply::Sensor { part, kind } = reply {
+        crate::ds_toolkit::write_run_files(ws.path(), part, kind, args.board.as_ref());
+    }
+    ws.trace = crate::extract_trace::begin(args.out_dir.as_deref(), &args.part, args.trace);
     say!(
         "[model-extract] sandbox {} with {} page render(s)",
         ws.path().display(),
@@ -3381,7 +3552,12 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
     if billing == crate::extract_usage::Billing::Plan {
         crate::extract_plan::begin(chosen.name(), &command);
     }
-    run_ladder(&resolved, &prompts, reply, &ws, &ladder, billing)
+    // The deterministic binding, pin-table and coverage checks read the same
+    // sandbox files the agent's `ds` helpers print.
+    let facts = crate::ds_toolkit::facts_from_dir(ws.path());
+    crate::card_coverage::with_facts(facts, || {
+        run_ladder(&resolved, &prompts, reply, &ws, &ladder, billing)
+    })
 }
 
 /// How the active backend bills a run: a plan's share, metered dollars, or unknown.
@@ -4417,7 +4593,7 @@ fn verification_clause(ws: &Workspace, table: &str, inline: bool) -> String {
         },
     );
     format!(
-        "## Before you answer\n\n         {pages}\n\n         Prefer the supplied authoritative schema and datasheet. Use ONLY the \
+        "## Before you answer\n\n         {pages}{}\n\n         Prefer the supplied authoritative schema and datasheet. Use ONLY the \
          files in your working directory: do not list, search or read anything outside it \
          (home, other projects, temporary directories, installed skills) and do not look \
          anything up online. If evidence is missing or ambiguous, name the missing context \
@@ -4428,7 +4604,47 @@ fn verification_clause(ws: &Workspace, table: &str, inline: bool) -> String {
             the row and variant; abstain if the available evidence cannot resolve it.\n         3. DO NOT INVENT ASSUMPTIONS. For a missing required fact, {abstain}; \
             omit optional fields that are not stated. TOML comments may record \
             pin/package ambiguity but must not turn a guess into data.\n\n         Write the final answer to `model.toml` in your working directory as one \
-         TOML document and nothing else."
+         TOML document and nothing else.",
+        helper_clause(ws)
+    )
+}
+
+/// What the agent is told about the precomputed files and the `ds` helpers.
+///
+/// Measured: a strong drafter found the pin table through the contents pages,
+/// parsed its word boxes to get the right package column, and diffed its draft
+/// against the board; a cheaper one read the pins off the text dump and took
+/// ten pads from the neighbouring package. The harness now does those steps
+/// (see [`crate::ds_toolkit`]); this tells the drafter where the results are.
+fn helper_clause(ws: &Workspace) -> String {
+    let has = |name: &str| ws.path().join(name).exists();
+    let mut files = vec!["`toc.md` (contents mapped to PDF pages, key sections first)"];
+    if has("pins/index.md") {
+        files.push(
+            "`pins/` (the pin table read per package column from the PDF's word positions; \
+             `pins/index.md` lists the columns)",
+        );
+    }
+    if has(crate::ds_toolkit::CHECKLIST_FILE) {
+        files.push("`checklist.md` (every field this kind of card needs, and where it lives)");
+    }
+    if has(crate::ds_toolkit::BOARD_FILE) {
+        files.push("`board.md` (the board part: value, footprint, pad count, each pad's net)");
+    }
+    let commands = if ws.checker.is_some() {
+        "\n\nThe same as one-line commands on your PATH: `ds toc`, `ds find <regex>` \
+         (page-numbered hits), `ds page N`, `ds pins [--package P | --pads N]`, `ds board`, \
+         `ds checklist`, and `ds check` (validation, value_re/footprint_re binding, the pin map \
+         against the pin table, and checklist coverage, each finding worded as its fix). Take \
+         the pin map from `ds pins` for THIS package's column rather than counting columns in \
+         the text. Before you finish, run `ds check` and fix each finding, or record the field \
+         as an `unknown` uncertainty when the datasheet has no row for it."
+    } else {
+        ""
+    };
+    format!(
+        "\n\nPrecomputed in your working directory: {}.{commands}",
+        files.join(", ")
     )
 }
 
@@ -4623,6 +4839,23 @@ fn agent_path(ws: &Workspace) -> Result<std::ffi::OsString> {
     )?;
     #[cfg(unix)]
     std::fs::set_permissions(&shim, std::os::unix::fs::PermissionsExt::from_mode(0o755))?;
+    // `ds`: the datasheet helpers, the same checker's hidden `models ds`.
+    let here = ws.path().to_string_lossy().replace('\'', r"'\''");
+    let ds = bin.join("ds");
+    let body = if ws.checker.is_some() {
+        format!("#!/bin/sh\nexec '{quoted}' models ds --dir '{here}' \"$@\"\n")
+    } else {
+        "#!/bin/sh\necho 'ds is unavailable in this run: read toc.md, pins/, board.md and \
+         checklist.md directly' >&2\nexit 1\n"
+            .to_string()
+    };
+    std::fs::write(&ds, body)?;
+    std::fs::write(
+        bin.join("ds.cmd"),
+        format!("@\"{}\" models ds --dir \"{}\" %*", checker.display(), ws.path().display()),
+    )?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&ds, std::os::unix::fs::PermissionsExt::from_mode(0o755))?;
     let dirs = std::iter::once(bin).chain(std::env::split_paths(&path));
     Ok(std::env::join_paths(dirs)?)
 }
@@ -4804,6 +5037,8 @@ pub(crate) fn run_agent_with(
         Backend::Api => unreachable!("handled above"),
     }
     cmd.env("PATH", agent_path(ws)?);
+    // A helper script the agent runs leaves no __pycache__ in the sandbox.
+    cmd.env("PYTHONDONTWRITEBYTECODE", "1");
     cmd.args(&a.extra_args).current_dir(ws.path());
     let log = ws.path().join(format!("{}-stderr.log", backend.name()));
     let stdout = run_cli_agent(
@@ -4819,11 +5054,32 @@ pub(crate) fn run_agent_with(
         (backend == Backend::Codex && resolved.idle_secs > 0)
             .then(|| Duration::from_secs(resolved.idle_secs)),
         Some(harness::watch(&a.model, &ws.label(), budget)),
-    )?;
+    );
+    record_trace(ws, &exe, &cmd, &stdin_text, &stdout);
+    let stdout = stdout?;
     if backend == Backend::Agy {
         agy_denial(&stdout, &log, ws)?;
     }
     Ok(stdout)
+}
+
+/// Keep this call's argv, prompt and event stream in the run's trace, when
+/// it keeps one; a failed call's error becomes its one event.
+fn record_trace(ws: &Workspace, exe: &Path, cmd: &Command, stdin_text: &str, stdout: &Result<String>) {
+    let Some(trace) = &ws.trace else {
+        return;
+    };
+    let argv: Vec<String> = std::iter::once(exe.to_string_lossy().into_owned())
+        .chain(cmd.get_args().map(|a| a.to_string_lossy().into_owned()))
+        .collect();
+    let events = match stdout {
+        Ok(s) => s.clone(),
+        Err(e) => {
+            let message = serde_json::Value::String(format!("{e:#}"));
+            format!("{{\"type\":\"hauksbee.error\",\"message\":{message}}}\n")
+        }
+    };
+    trace.record(&argv, stdin_text, &events);
 }
 
 /// What agy is told beyond the shared prompt. Headless agy auto-denies every
@@ -4844,7 +5100,8 @@ fn agy_tool_note(ws: &Workspace) -> String {
     format!(
         "\n\nTool rule for this run: list and read files with your file tools, never with \
          shell commands (no `ls`, `cat`, `find`, `head`). {lint} Never run `--help` or any \
-         other command: a denied command ends the whole run with no answer."
+         other command, `ds` included (read its precomputed files instead): a denied command \
+         ends the whole run with no answer."
     )
 }
 
@@ -5396,7 +5653,60 @@ fn parse_and_validate_reply(raw: &str, part: &str, kind_str: &str) -> Result<Mod
     if let Some(problem) = ambiguous_cards(&all, part) {
         bail!("{problem}");
     }
+    let blocking: Vec<String> = crate::card_coverage::current_findings(&first)
+        .into_iter()
+        .filter(|f| f.severity == crate::card_coverage::Severity::Error)
+        .map(|f| format!("{}: {}", f.check, f.message))
+        .collect();
+    if !blocking.is_empty() {
+        bail!("{}", blocking.join("\n"));
+    }
     Ok(first)
+}
+
+/// The base card kind a requested kind drafts as (`charger` -> `vreg`).
+#[must_use]
+pub fn base_kind_name(kind: &str) -> Option<&'static str> {
+    behavioral_family_base_kind(kind)
+}
+
+/// Everything the drafting loop would say about `raw` against `facts`; what `ds check` prints.
+///
+/// The validation error that refuses it, else the lint warnings and every
+/// binding, pin-table and coverage finding. Empty when the draft is clean.
+#[must_use]
+pub fn check_draft(
+    raw: &str,
+    part: &str,
+    kind: &str,
+    facts: &crate::card_coverage::Facts,
+) -> Vec<String> {
+    let checked = crate::card_coverage::with_facts(facts.clone(), || {
+        parse_and_validate_reply(raw, part, kind)
+    });
+    match checked {
+        Err(e) => vec![format!("error (the draft is refused): {e:#}")],
+        Ok(entry) => {
+            let mut out: Vec<String> = crate::param_names::source_warnings(&entry)
+                .into_iter()
+                .map(|w| format!("warning: {w}"))
+                .collect();
+            out.extend(crate::ranges::problems(&entry).iter().map(|p| {
+                format!(
+                    "range: {} = {} is outside what this field ever holds: recheck the row's \
+                     unit and column",
+                    p.place, p.value
+                )
+            }));
+            out.extend(
+                crate::card_coverage::findings(&entry, facts)
+                    .into_iter()
+                    .filter(|f| f.severity == crate::card_coverage::Severity::Warn)
+                    .map(|f| format!("{}: {}", f.check, f.message)),
+            );
+            out
+        }
+    }
 }
 
 /// Cards in one reply that a board could not tell apart: a repeated id (the
@@ -5711,6 +6021,18 @@ mod tests {
                 .join("\u{000c}"),
             "first\u{000c}\u{000c}third"
         );
+    }
+
+    /// A pin table split over many contents entries must not crowd the thermal
+    /// section out of a tight page budget: each section's first page comes first.
+    #[test]
+    fn every_key_section_gets_a_page_before_any_gets_a_second() {
+        let entry = |title: &str, pdf| crate::ds_toolkit::TocEntry { title: title.into(), printed: pdf, pdf };
+        let mut toc: Vec<_> = (10..16).map(|p| entry("Pin definitions (continued)", p)).collect();
+        toc.push(entry("Thermal characteristics", 90));
+        let first = SelectedPage::new(1, vec![], vec![], usize::MAX);
+        let picked: Vec<usize> = with_key_sections(vec![first], &toc, 4).iter().map(|p| p.number).collect();
+        assert_eq!(picked, [1, 10, 11, 90]);
     }
 
     #[test]
