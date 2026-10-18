@@ -3438,6 +3438,10 @@ impl JsonReport {
                 }
             }
             actionable += drc.actionable_group_count(self.clearance_rule_source.as_ref());
+            // One per out-of-date zone fill, the unit of `drc.stale_fills`: each
+            // is something to refill and sits on the inspect list, but it never
+            // gates (it is not `serious`).
+            actionable += drc.stale_fills.len();
         }
         let evidence_undermined = self.run_level_evidence_undermined();
         // The INCONCLUSIVE bind contract on the machine surface: a clean

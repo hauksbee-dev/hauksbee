@@ -84,6 +84,23 @@ fn a_stale_fill_alone_reads_inspect_before_ordering_not_ok_to_order() {
                 .is_some_and(|f| !f.is_empty()),
             "{what}: the stale fill is reported:\n{doc:#}"
         );
+        // One count per stale-fill finding, the unit of `drc.stale_fills`: each
+        // is a refill the user must do, though none is serious. The lone copper
+        // is also leftover copper on its own net, which the lint lists as an
+        // actionable note beside it, so that is counted separately.
+        let stale = doc["drc"]["stale_fills"].as_array().map_or(0, Vec::len);
+        let other = doc["findings"].as_array().map_or(0, |f| {
+            f.iter()
+                .filter(|f| f["check"] != "drc" && f["actionable"] == true)
+                .count()
+        });
+        assert!(stale > 0, "{what}: the fill is stale:\n{doc:#}");
+        assert_eq!(
+            doc["actionable_count"].as_u64(),
+            Some((stale + other) as u64),
+            "{what}: actionable_count is one per stale fill plus the {other} other finding(s):\n{doc:#}"
+        );
+        assert_eq!(doc["serious_count"], 0, "{what}: none is serious");
         assert_eq!(
             doc["triage"]["do_not_order"].as_array().map(Vec::len),
             Some(0),
