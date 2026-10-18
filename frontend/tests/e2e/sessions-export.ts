@@ -111,11 +111,24 @@ await browserFlow(flow, async (page, { base, browser }) => {
   await page.click('[data-testid="nav-board"]')
   await openExportMenu(page)
   const itemCount = await page.locator('[data-testid="export-menu"] [role="menuitem"]').count()
-  const expectedItems = expectWorkflowExport ? 6 : 5
+  // Six files and the CLI command; a development build leaves out the workflow.
+  const expectedItems = expectWorkflowExport ? 7 : 6
   ok(expectWorkflowExport
-    ? 'a release build offers all six files once a spec exists'
+    ? 'a release build offers all six files and the CLI command once a spec exists'
     : 'a development build omits the credential-bearing workflow export',
   itemCount === expectedItems, `${itemCount} items`)
+  // The menu is drawn on top of everything: the point at its centre is the
+  // menu's own, not a card or the map clipping it.
+  const onTop = await page.evaluate(() => {
+    const menu = document.querySelector('[data-testid="export-menu"]')
+    if (!menu) return 'no menu'
+    const box = menu.getBoundingClientRect()
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+    return hit && menu.contains(hit) ? 'ok' : `covered by ${hit?.outerHTML.slice(0, 80) ?? 'nothing'}`
+  })
+  ok('the open menu is on top: elementFromPoint at its centre is inside it', onTop === 'ok', onTop)
+  const menuBox = await page.locator('[data-testid="export-menu"]').boundingBox()
+  ok('the menu is wide enough to read its labels', (menuBox?.width ?? 0) >= 280, `${menuBox?.width}px`)
   await shoot(page, '02-export-menu')
 
   const grab = async (testid: string): Promise<string> => {
@@ -155,9 +168,12 @@ await browserFlow(flow, async (page, { base, browser }) => {
   await page.click('[data-testid="export-open"]')
   const mdPath = await grab('export-markdown')
   const mdText = readFileSync(mdPath, 'utf8')
-  const shownTag = (await page.locator('[data-testid="result-tag"]').textContent() ?? '').trim()
+  // The card's one verdict and the Markdown name the same status term.
+  const shownVerdict = await page.locator('[data-testid="report-verdict"]').getAttribute('data-verdict') ?? ''
+  const shownWord = (await page.locator('[data-testid="result-verdict-word"]').textContent() ?? '').trim()
   ok('the Markdown summary carries the verdict the panel shows',
-    mdPath.endsWith('.md') && mdText.includes(`**${shownTag}**`), `${shownTag} / ${mdText.split('\n').find(l => l.includes('VERDICT')) ?? ''}`)
+    mdPath.endsWith('.md') && shownWord !== '' && mdText.includes(`(\`${shownVerdict}\`)`),
+    `${shownWord} (${shownVerdict}) / ${mdText.split('\n').find(l => l.includes('VERDICT')) ?? ''}`)
 
   // ── 3. The exported HTML is self-contained ──────────────────────────────
   step('the exported HTML renders standalone, off a file:// URL, with no network')

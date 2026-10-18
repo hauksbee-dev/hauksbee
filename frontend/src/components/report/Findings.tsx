@@ -369,7 +369,7 @@ export function OpenPartsCard({ count, active, onList }: { count: number; active
         <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>Models</span>
       </div>
       <div className="mt-1 text-[13px] font-semibold leading-snug" style={{ color: 'var(--silk)' }}>
-        {plural(count, 'part')} left out of the circuit (no model)
+        {plural(count, 'part')} with no usable model
       </div>
       {active.length > 0 && (
         <div className="mt-0.5 text-[12px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
@@ -446,7 +446,10 @@ export function FindingsList({ entries, status, openParts, openRefs, preLayout, 
 }) {
   const shown = entries.length + (openParts ? 1 : 0)
   // The cards below, counted by level, so the count is the list's own.
-  const count = (level: FindingEntry['level']) => entries.filter(e => e.level === level).length + (level === 'warning' && openParts ? 1 : 0)
+  // Every place counts, so a card "found in 10 places" adds ten, as the
+  // engine's own "12 issues found" does.
+  const count = (level: FindingEntry['level']) =>
+    entries.filter(e => e.level === level).reduce((n, e) => n + e.items.length, 0) + (level === 'warning' && openParts ? 1 : 0)
   const tally = [
     count('serious') > 0 && `${count('serious')} serious`,
     count('warning') > 0 && plural(count('warning'), 'warning'),

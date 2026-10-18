@@ -107,7 +107,7 @@ export function BoardView({
     setSelectedNet(net)
     centerInScroller(mapRef.current)
   }, [setSelectedNet])
-  const author = useCallback((component: ModelCoverageComponent) => {
+  const author = useCallback((component: ModelCoverageComponent | WebOpenPart) => {
     setAuthoringComponent(component)
     setGuessOpen(true)
     setAuthoringSignal(value => value + 1)
@@ -161,7 +161,8 @@ export function BoardView({
     onGo: go,
     onGiveModel: restoredFrom ? undefined : ref => {
       const row = coverageFor(r.model_coverage, ref)
-      if (row) author(row)
+      const part = row ?? r.bind?.open_parts?.find(p => p.reference === ref)
+      if (part) author(part)
       else showGuessed()
     },
     variantRefs: new Set((r.bind?.open_selections ?? []).map(s => s.reference)),
@@ -225,9 +226,10 @@ export function BoardView({
   const coverageGaps = r.model_coverage?.components.filter(c => c.actionable_behavior_gap).length ?? 0
   const guessN = v.openParts.length + selections.length + coverageGaps
   const guessSummary = [
-    v.openParts.length > 0 && `${v.openParts.length} left out of the circuit`,
+    // The same count, in the same words, as the findings' open-parts card.
+    v.openParts.length > 0 && `${plural(v.openParts.length, 'part')} with no usable model`,
     selections.length > 0 && `${plural(selections.length, 'variant')} not pinned`,
-    coverageGaps > 0 && `${plural(coverageGaps, 'model')} with gaps`,
+    coverageGaps > 0 && `${coverageGaps} modelled only in part`,
   ].filter(Boolean).join(' · ')
   const guessBody = (
     <div ref={guessRef}>
@@ -262,33 +264,11 @@ export function BoardView({
       {!restoredFrom && (
         <>
           <div className="mt-3" ref={authoringRef}>
-            {unmodelled.length > 1 && (
-              <label className="flex flex-wrap items-center gap-1.5 text-[12px] mb-1.5" style={{ color: 'var(--silk-dim)' }}>
-                {plural(unmodelled.length, 'part')} have no model:
-                <select
-                  className="hb-input text-[12px] truncate"
-                  data-testid="model-part-pick"
-                  aria-label="Part to model"
-                  value={authoringComponent?.reference ?? ''}
-                  onChange={e => {
-                    const ref = e.target.value
-                    const pickedPart = coverageFor(r.model_coverage, ref) ?? unmodelled.find(p => p.reference === ref)
-                    if (!pickedPart) return
-                    setAuthoringComponent(pickedPart)
-                    setAuthoringSignal(value => value + 1)
-                  }}
-                  style={{ height: 28, maxWidth: 220 }}
-                >
-                  <option value="" disabled>choose one</option>
-                  {unmodelled.map(p => (
-                    <option key={p.reference} value={p.reference}>{p.reference}{p.value ? ` · ${p.value}` : ''}</option>
-                  ))}
-                </select>
-              </label>
-            )}
             <WritePart
               onSaved={session.reanalyzeCurrent}
-              suggested={authoringComponent ?? unmodelled[0]}
+              // The coverage row where there is one: its lib_id and footprint let the
+              // editor infer the part's class (WebOpenPart carries neither).
+              suggested={authoringComponent ?? (unmodelled[0] && (coverageFor(r.model_coverage, unmodelled[0].reference) ?? unmodelled[0]))}
               openSignal={authoringSignal > 0 ? `${authoringComponent?.reference}:${authoringSignal}` : null}
               boardLabel={boardLabel ?? r.file_name}
               onOpenSettings={onOpenSettings}
