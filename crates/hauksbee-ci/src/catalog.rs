@@ -19,6 +19,8 @@ use std::sync::OnceLock;
 use schemars::generate::SchemaSettings;
 use serde_json::{json, Value};
 
+use hauksbee_frontdoor_api::actions::WebAction;
+
 use crate::spec::{Assertion, Spec};
 
 /// Where an assertion kind can be offered. A pin selection reuses the `Net`
@@ -67,6 +69,23 @@ impl Need {
             Self::Trace => ("trace", "a trace file", "Capture the real board's waveform into a `trace.toml` and point `trace` at it."),
             Self::Supply => ("supply", "[[supply]] kind = \"battery\"", "Declare the supply with a `[[supply]]` block whose `kind` is `\"battery\"`."),
             Self::Peripheral => ("peripheral", "[[peripheral]]", "Declare the device with a `[[peripheral]]` (or `[[sensor]]`) block and use its `id`."),
+        }
+    }
+}
+
+impl Need {
+    /// The button that meets this need inside the web app, when the app has one.
+    /// The words in [`Self::copy`] spell the spec (`[[scenario]]`, `[ac]`) for a
+    /// person editing TOML; this is what a person clicking through uses instead.
+    /// `search`, `trace` and `peripheral` have no guided flow yet, so they offer
+    /// no action and the app falls back to the spec text.
+    fn action(self) -> Option<WebAction> {
+        match self {
+            Self::Firmware => Some(WebAction::add_firmware()),
+            Self::Ac => Some(WebAction::add_ac_sweep()),
+            Self::Scenario => Some(WebAction::add_scenario()),
+            Self::Supply => Some(WebAction::add_supply(None, None)),
+            Self::Search | Self::Trace | Self::Peripheral => None,
         }
     }
 }
@@ -434,7 +453,9 @@ fn entry_json(e: &Entry) -> Value {
         "targets": targets, "offer": offer, "fields": fields,
         "prerequisites": e.needs.iter().map(|n| {
             let (token, spelled, fix) = n.copy();
-            json!({ "need": token, "label": spelled, "fix": fix })
+            // `action` is additive: the id and button words the web app uses
+            // instead of the spec text in `fix`; absent when it has no flow.
+            json!({ "need": token, "label": spelled, "fix": fix, "action": n.action() })
         }).collect::<Vec<_>>(),
     })
 }
@@ -675,6 +696,19 @@ mod tests {
             .unwrap();
         assert_eq!(t["needs"], json!(["[ac]"]));
         assert_eq!(t["prerequisites"][0]["need"], "ac");
+        // The web app gets a button id beside the spec text.
+        assert_eq!(t["prerequisites"][0]["action"]["id"], "add_ac_sweep");
+        assert!(t["prerequisites"][0]["action"]["label"].is_string());
+    }
+
+    /// A need with a guided flow carries its action; one without says null, so
+    /// the app knows to show the spec text instead of an empty button.
+    #[test]
+    fn needs_offer_an_action_only_where_the_app_has_a_flow() {
+        let with = [Need::Firmware, Need::Ac, Need::Scenario, Need::Supply];
+        let without = [Need::Search, Need::Trace, Need::Peripheral];
+        assert!(with.iter().all(|n| n.action().is_some()));
+        assert!(without.iter().all(|n| n.action().is_none()));
     }
 
     #[test]

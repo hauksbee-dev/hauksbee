@@ -127,13 +127,33 @@ export function explainBoardFailure(message: string, fileName: string): FailureE
   }
 }
 
+/**
+ * The explanation to show. The engine's structured refusal (title, cause and
+ * steps, written once in Rust) wins; `explainBoardFailure` is only the fallback
+ * for a server that predates it and sends the error text alone.
+ */
+export function failureExplanation(
+  failure: WebReport['import_failure'],
+  message: string,
+  fileName: string,
+): FailureExplanation {
+  if (failure?.title && failure.cause && failure.steps && failure.steps.length > 0) {
+    return { title: failure.title, cause: failure.cause, steps: failure.steps }
+  }
+  return explainBoardFailure(message, fileName)
+}
+
 export function UploadFailure({ report, session }: { report: WebReport; session: BoardSession }) {
   const drop = useDropTarget(files => { if (files[0]) session.handleBoard(files[0]) })
   const message = report.error ? withoutEngineFormatList(report.error) : 'Could not read the file.'
   const failure = report.import_failure
   const [snippet, setSnippet] = useState<Snippet | null>(null)
   const file = session.boardFile
-  const explained = explainBoardFailure(message, file?.name ?? report.file_name ?? 'this file')
+  const explained = failureExplanation(failure, message, file?.name ?? failure?.file ?? report.file_name ?? 'this file')
+  // A structured refusal already shows its steps above, so the second callout
+  // (which repeated the first step as "Suggested fix") appears only for an old
+  // server; the located line moves behind Technical detail either way.
+  const structured = Boolean(failure?.title)
 
   // The engine's excerpt wins when it sent one; otherwise read the file around
   // the offset the message names.
@@ -169,6 +189,15 @@ export function UploadFailure({ report, session }: { report: WebReport; session:
             <details data-testid="failure-detail" className="mt-3 text-[12px]">
               <summary className="cursor-pointer">Technical detail</summary>
               <div className="mt-2" style={{ fontFamily: 'var(--font-mono)', wordBreak: 'break-word' }}>{message}</div>
+              {structured && failure?.excerpt && (
+                <pre
+                  data-testid="import-failure-excerpt"
+                  className="mt-2 overflow-x-auto rounded px-3 py-2 text-[11px]"
+                  style={{ background: 'var(--canvas)', border: '1px solid var(--hairline)' }}
+                >
+                  {failure.excerpt}
+                </pre>
+              )}
               {snippet && (
                 <pre
                   data-testid="parse-snippet"
@@ -181,7 +210,7 @@ export function UploadFailure({ report, session }: { report: WebReport; session:
               )}
             </details>
           </Callout>
-          {failure && (
+          {failure && !structured && (
             <Callout tone="warn" testId="import-failure" className="mt-3" title={`Import stopped at ${failure.stage}`}>
               {failure.excerpt && (
                 <pre className="mt-2 overflow-x-auto rounded px-3 py-2 text-[11px]" style={{ background: 'var(--canvas)', border: '1px solid var(--hairline)' }}>

@@ -859,6 +859,25 @@ pub fn inconclusive_verdict(refs: &[String]) -> String {
     )
 }
 
+/// [`inconclusive_verdict`] for the web app: the same count and parts, the
+/// same refusal of a clean bill, and no terminal commands. The app puts the
+/// ways to fix it on the section as buttons (`actions`), so the sentence only
+/// says what is wrong.
+#[must_use]
+pub fn web_inconclusive_verdict(refs: &[String]) -> String {
+    let list = hauksbee_ir::vocabulary::names_summary(refs);
+    let count = refs.len();
+    let (parts, have) = if count == 1 {
+        ("part", "has")
+    } else {
+        ("parts", "have")
+    };
+    format!(
+        "Inconclusive: {count} current-carrying or active {parts} {have} no model ({list}), \
+         so a clean result here is not a clean bill."
+    )
+}
+
 /// Whether an unresolved/open part on the live circuit blocks a conclusive
 /// verdict: an active IC, or a discrete transistor. Shared by
 /// [`unmodelled_critical_refs`] and the web front door so the CLI and browser
@@ -1591,6 +1610,17 @@ impl ClearanceRuleProvenance {
         )
     }
 
+    /// Whether the project rules file would change the answer: the check fell
+    /// back to a default rule only because no `.kicad_pro` sat beside the board.
+    /// A tool-default source (the importer reads no rules at all) is not helped
+    /// by a project file, and nor is an input that carried no rule.
+    #[must_use]
+    pub const fn wants_project_rules(&self) -> bool {
+        !self.no_rule_read
+            && !self.project_file_found
+            && matches!(self.source, ClearanceRuleSource::Defaulted)
+    }
+
     /// A below-rule group measured only against a default rule whose tightest
     /// gap still meets [`DEFAULT_RULE_SPACING_FLOOR_MM`]: noted, not an issue.
     #[must_use]
@@ -1978,7 +2008,7 @@ impl DrcStructured {
                     if phantom {
                         plain.push_str(
                             "; TOOL-ONLY: Hauksbee reports this contact from an unvalidated \
-                             board format; no matching KiCad-oracle confirmation is attached",
+                             board format; KiCad's own check has not confirmed it",
                         );
                     }
                     shorts.push(DrcShort {

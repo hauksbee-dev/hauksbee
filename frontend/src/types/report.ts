@@ -169,10 +169,50 @@ export interface WebImportDiagnostics {
   issues?: WebImportIssue[]
 }
 
+/** Which refusal this was (engine `ImportFailureKind`, snake_case). */
+export type ImportFailureKind =
+  | 'truncated'
+  | 'syntax_error'
+  | 'wrong_content'
+  | 'unsupported_extension'
+  | 'empty_file'
+  | 'unsupported_format'
+  | 'invalid_content'
+  | 'fab_package'
+  | 'schematic_sheets'
+  | 'unreadable'
+
+/** One board format hauksbee reads, served as data beside a refusal. */
+export interface WebSupportedFormat {
+  vendor: string
+  exts: string[]
+}
+
 export interface WebImportFailure {
   stage: string
   excerpt?: string
   suggested_fix: string
+  // Everything below is sent by current engines only; an older server sends
+  // just the three fields above, and `UploadFailure` falls back to phrase
+  // matching on the error text for it.
+  kind?: ImportFailureKind
+  /** The file as named on upload. */
+  file?: string
+  /** Lower case with the dot; absent when the file has none. */
+  extension?: string
+  /** Where the parser stopped, when it said. */
+  line?: number
+  byte?: number
+  /** `wrong_content`: what the contents are, when recognisable ("a Git LFS pointer"). */
+  detected_format?: string
+  /** `wrong_content`: what the extension promised ("a KiCad board"). */
+  expected_format?: string
+  /** The engine's plain wording: heading, one-sentence cause, ordered steps. */
+  title?: string
+  cause?: string
+  steps?: string[]
+  /** The formats hauksbee reads, so a refusal can list them without prose. */
+  supported_formats?: WebSupportedFormat[]
 }
 
 export interface JsonNote {
@@ -849,6 +889,9 @@ export interface DepInfo {
   path: string | null
   version: string | null
   unlocks: string
+  /** What is missing without it, in plain words (engine text; `DepsPanel`'s
+   *  `DEP_PLAIN` stopgap can drop its copy and read this). Absent on an older server. */
+  without?: string
   installable: boolean
   cost: string
   manual: string
