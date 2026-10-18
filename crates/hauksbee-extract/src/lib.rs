@@ -392,6 +392,27 @@ pub struct Component {
     pub pins: Vec<Pin>,
 }
 
+impl Component {
+    /// Whether the input this part came from does not carry values at all, as
+    /// opposed to the designer having left one unset.
+    ///
+    /// A reader marks a part with [`altium::VALUE_UNRESOLVED_KEY`] when its
+    /// format has nowhere to hold the value (an Altium `.PcbDoc` keeps values in
+    /// the `.SchDoc`, an EasyEDA Pro `.epcb` in the project's device library, an
+    /// IPC-D-356 netlist has none). A part that is marked and still empty is not
+    /// a placeholder the designer entered: telling them to "set the value" is
+    /// wrong, and the fix is to supply a BOM or the schematic. A value that is
+    /// present, even a placeholder such as `R` or `?`, is never "not carried".
+    #[must_use]
+    pub fn value_not_carried(&self) -> bool {
+        self.value.trim().is_empty()
+            && self
+                .properties
+                .iter()
+                .any(|(key, _)| key == altium::VALUE_UNRESOLVED_KEY)
+    }
+}
+
 /// The extraction result: everything the binder and renderer need to know
 /// about what the board is, electrically.
 #[derive(Debug, Clone, Serialize, Deserialize)]

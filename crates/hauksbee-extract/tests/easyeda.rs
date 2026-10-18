@@ -355,7 +355,6 @@ fn the_notes_say_what_was_not_read_and_not_checked() {
             "NOT read",
             "TEXT on a copper layer",
             "Read past",
-            "carry no value",
             "NC",
         ],
     );
@@ -843,4 +842,71 @@ fn the_ladder_of_public_apis_agree() {
     let direct = ExtractedBoard::from_easyeda(&bytes).expect("reads");
     let reg = Registry::builtin().read(&bytes, None).expect("reads");
     assert_eq!(pin_map(&direct), pin_map(&reg));
+}
+
+// ── values from the project's device library ─────────────────────────────────
+
+/// The `Device` attribute on a Pro part is a UUID into the project's device
+/// records. The `devices` layout below is INFERRED from public project
+/// exports (no vendor specification may be used), so it is covered by these
+/// in-test archives only.
+fn pro_project_with_devices(project_json: &str) -> Vec<u8> {
+    let nano = fixture(NANO);
+    zip_of(&[
+        ("project.json", project_json.as_bytes()),
+        ("PCB/Nano.epcb", &nano),
+    ])
+}
+
+fn component<'a>(board: &'a ExtractedBoard, reference: &str) -> &'a hauksbee_extract::Component {
+    board
+        .components
+        .iter()
+        .find(|c| c.reference == reference)
+        .unwrap_or_else(|| panic!("{reference} present"))
+}
+
+#[test]
+fn a_pro_project_resolves_values_through_its_device_records() {
+    use hauksbee_extract::altium::VALUE_UNRESOLVED_KEY;
+    let zip = pro_project_with_devices(
+        r#"{"devices":{
+            "3627182c3ed84f81908efec03cdc4632":{"title":"CAP_0603","attributes":{
+                "Value":"10uF","Manufacturer Part":"CL10A106MA8NRNC",
+                "Manufacturer":"SAMSUNG","Supplier Part":"C96446"}},
+            "74a5788e70784dcba75fcacc5223fa3f":{"title":"CAP_0603","attributes":{
+                "Manufacturer Part":"CC0603KRX7R9BB104"}}
+        }}"#,
+    );
+    let got = extract_archive(&zip).expect("reads");
+    let c1 = component(&got.board, "C1");
+    assert_eq!(c1.value, "10uF");
+    assert!(
+        !c1.properties.iter().any(|(k, _)| k == VALUE_UNRESOLVED_KEY),
+        "a resolved value carries no unresolved marker"
+    );
+    assert!(c1
+        .properties
+        .iter()
+        .any(|(k, v)| k == "Manufacturer Part" && v == "CL10A106MA8NRNC"));
+    assert!(!c1.value_not_carried());
+    // A device with a part number but no `Value` falls back to the part number.
+    assert_eq!(component(&got.board, "C3").value, "CC0603KRX7R9BB104");
+    // Devices the project does not describe stay honestly unresolved.
+    let u1 = component(&got.board, "U1");
+    assert!(u1.value.is_empty() && u1.value_not_carried());
+    assert!(got.stats.value_unresolved.len() < 23);
+    assert!(!got.stats.value_unresolved.iter().any(|r| r == "C1"));
+}
+
+#[test]
+fn a_project_without_device_records_leaves_values_unresolved_not_invented() {
+    let zip = pro_project_with_devices(r#"{"schematics":{},"pcbs":{}}"#);
+    let got = extract_archive(&zip).expect("reads");
+    assert!(got.board.components.iter().all(|c| c.value.is_empty()));
+    assert!(got
+        .board
+        .components
+        .iter()
+        .all(hauksbee_extract::Component::value_not_carried));
 }

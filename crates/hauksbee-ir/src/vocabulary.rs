@@ -53,6 +53,37 @@ pub const NOT_JUDGED_LEAD: &str = "NOT JUDGED";
 pub const DRAFT_MODELS_NEXT_STEP: &str =
     "Draft the model(s) with `hauksbee models extract --unmodelled <board>` to judge the rest.";
 
+/// How a reader's reason opens when its input cannot hold a part's value.
+///
+/// Altium `.PcbDoc`, EasyEDA Pro `.epcb`, IPC-D-356, and ODB++ or IPC-2581
+/// without a value property all use it. Lower case, matched against a
+/// lower-cased reason: it tells "the input has no place for the value" from "the designer
+/// left a placeholder", which only the first is a reduced scope and not a defect.
+pub const VALUE_NOT_CARRIED_REASON_LEAD: &str = "no value in";
+
+/// The step that supplies the values an input does not carry. The scope
+/// sentence, the `NOT COVERED` line and the open-part remedy all end with it.
+pub const VALUES_NOT_CARRIED_NEXT_STEP: &str =
+    "Pass the BOM beside the board (`--bom <bom.csv>`) so the values are read, not guessed.";
+
+/// The scope sentence for parts whose values the input does not carry.
+///
+/// `n` is how many and `subjects` names a few. They are not judged on anything
+/// that depends on a value, and no defect is claimed: the values are unknown,
+/// not unset.
+#[must_use]
+pub fn values_not_carried_scope(n: usize, subjects: &str) -> String {
+    let lead = if n == 1 {
+        format!("1 part carries no value in this input ({subjects}), so its value is unknown")
+    } else {
+        format!("{n} parts carry no value in this input ({subjects}), so their values are unknown")
+    };
+    format!(
+        "{lead} and the checks and simulation that depend on a value are not judged for them. \
+         {VALUES_NOT_CARRIED_NEXT_STEP}"
+    )
+}
+
 /// What joins a failing verdict's own sentence to the sentence naming what it
 /// did not judge, in `verdict_reason`, so a surface that prints the two apart
 /// can split them where the engine joined them.
@@ -960,4 +991,30 @@ pub fn labels() -> Vec<&'static str> {
     out.sort_unstable();
     out.dedup();
     out
+}
+
+#[cfg(test)]
+mod value_scope_tests {
+    use super::*;
+
+    #[test]
+    fn the_scope_sentence_agrees_in_number_and_names_the_fix() {
+        let one = values_not_carried_scope(1, "C1");
+        assert!(one.starts_with("1 part carries no value in this input (C1), so its value is"));
+        let many = values_not_carried_scope(23, "C1, C2 and 21 more");
+        assert!(many.starts_with("23 parts carry no value in this input"));
+        for s in [&one, &many] {
+            assert!(s.contains("not judged"), "{s}");
+            assert!(s.ends_with(VALUES_NOT_CARRIED_NEXT_STEP), "{s}");
+            assert!(s.contains("--bom"), "{s}");
+        }
+    }
+
+    #[test]
+    fn the_reason_lead_is_lower_case_so_it_matches_a_lower_cased_reason() {
+        assert_eq!(
+            VALUE_NOT_CARRIED_REASON_LEAD,
+            VALUE_NOT_CARRIED_REASON_LEAD.to_lowercase()
+        );
+    }
 }

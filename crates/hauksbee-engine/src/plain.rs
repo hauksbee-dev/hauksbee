@@ -700,6 +700,38 @@ pub struct OrderTriage {
     pub not_covered: String,
 }
 
+/// The not-covered sentence for parts whose values the input cannot carry, or
+/// `None` when every fitted part has a value or a placeholder the designer set.
+///
+/// This is a reduced scope and not a defect: an Altium `.PcbDoc`, an EasyEDA
+/// Pro `.epcb` or an IPC-D-356 netlist has nowhere to hold a value, so the
+/// lint raises no placeholder finding for such a part, and this line says what
+/// was therefore not judged and how to supply the values (the BOM). A part
+/// whose value is present, even a placeholder such as `R` or `?`, is not
+/// counted here: the lint still flags it.
+pub(crate) fn values_not_carried_note(board: &hauksbee_extract::ExtractedBoard) -> Option<String> {
+    let refs: Vec<String> = board
+        .components
+        .iter()
+        // A manufacturer part number names the part outright (a BOM supplied
+        // one), so the unknown value is not what keeps it from being judged.
+        .filter(|c| {
+            !c.dnp
+                && c.value_not_carried()
+                && !c.properties.iter().any(|(key, value)| {
+                    hauksbee_extract::bom::is_mpn_property_key(key) && !value.trim().is_empty()
+                })
+        })
+        .map(|c| c.reference.clone())
+        .collect();
+    (!refs.is_empty()).then(|| {
+        hauksbee_ir::vocabulary::values_not_carried_scope(
+            refs.len(),
+            &crate::result::refs_summary(&refs),
+        )
+    })
+}
+
 impl OrderTriage {
     /// Append one sentence to the not-covered line (nothing for `None`).
     pub(crate) fn add_not_covered(&mut self, note: Option<String>) {

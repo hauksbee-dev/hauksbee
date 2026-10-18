@@ -1569,6 +1569,7 @@ fn analyze_normalized_with_context(
             false,
         );
         triage.add_not_covered(indicators_not_judged.clone());
+        triage.add_not_covered(crate::plain::values_not_carried_note(board));
         triage
     });
 

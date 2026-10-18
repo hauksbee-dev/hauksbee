@@ -1638,6 +1638,10 @@ fn every_open_part_cause_maps_to_a_remedy() {
             "the card has no curve{}a datasheet with the curve",
             Assumption::UNLOCKED_BY_MARKER
         ),
+        OpenPartCause::ValueNotCarried => format!(
+            "{} the EasyEDA Pro layout; give the whole project or a BOM",
+            crate::vocabulary::VALUE_NOT_CARRIED_REASON_LEAD
+        ),
     }
     };
     for cause in OpenPartCause::iter() {
@@ -1652,9 +1656,14 @@ fn every_open_part_cause_maps_to_a_remedy() {
                 reference: "C2".into(),
                 conflict: "footprints differ (CP_6.3x5.4 vs 0805)".into(),
             },
+            OpenPartCause::ValueNotCarried => Remedy::AddBom,
             OpenPartCause::AmbiguousReference | OpenPartCause::NamedBlocker => Remedy::Other,
         };
         assert_eq!(a.remedy(), &expected, "{cause:?}");
+        if cause == OpenPartCause::ValueNotCarried {
+            assert!(a.replacement().contains("--bom"), "{}", a.replacement());
+            assert!(!a.replacement().contains("Add a model"));
+        }
         if cause == OpenPartCause::DuplicateDesignator {
             assert!(
                 a.replacement().contains("Rename one"),
