@@ -4,7 +4,7 @@ import type { BoardInfoMsg, SimFault, SimFrame } from '../types/protocol'
 import { CloseIcon, PlusIcon, EyeIcon, EyeOffIcon } from './Icons'
 import { displayNet } from '../lib/net-name'
 import { netReadoutText, readNet } from '../lib/net-state'
-import { drawScope, traceToken } from './scope-draw'
+import { drawScope, timeTickLabeler, traceToken } from './scope-draw'
 import type { ScopePlot } from './scope-draw'
 import { cssToken } from '../lib/theme-tokens'
 import { useDismissable } from '../hooks/useDismissable'
@@ -32,8 +32,9 @@ export interface ScopeExport {
   png: (header: string[]) => HTMLCanvasElement
 }
 
-const timeTick = (span: number) => (t: number) =>
-  span < 0.01 ? `${(t * 1e6).toFixed(0)}µs` : span < 2 ? `${(t * 1000).toFixed(span < 0.1 ? 1 : 0)}ms` : `${t.toFixed(1)}s`
+/** The narrowest x window the scope will draw: a probe attached to a paused sim
+ *  has one sample, and a window a microsecond wide gave two identical labels. */
+const MIN_SPAN_S = 1e-3
 
 interface ProbeScopePanelProps {
   boardInfo: BoardInfoMsg | null
@@ -47,10 +48,14 @@ interface ProbeScopePanelProps {
   onRemoveProbe: (net: string) => void
   exportRef?: Ref<ScopeExport>
   height?: number
+  /** The frames the session retained, oldest first: a newly probed net starts
+   *  from what they measured instead of from nothing. */
+  retained?: SimFrame[]
 }
 
 export function ProbeScopePanel({
   boardInfo, frame, probes, probeReasons = {}, faults = [], onAddProbe, onRemoveProbe, exportRef, height = 170,
+  retained = [],
 }: ProbeScopePanelProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const boxRef = useRef<HTMLDivElement>(null)
@@ -71,7 +76,25 @@ export function ProbeScopePanel({
       // did not simulate or cannot observe is not buffered at all.
       const r = readNet(frame, net)
       if (r.kind !== 'measured') continue
-      if (!buffers.current.has(net)) buffers.current.set(net, [])
+      if (!buffers.current.has(net)) {
+        // A net probed AFTER the sim ran would otherwise start with one sample
+        // and an empty-looking scope. The frames the session already retained
+        // are real measurements of it, so the trace starts where they do.
+        // Walk back from the newest and stop where time stops decreasing: a
+        // restart begins time again at 0, and frames from before it are a
+        // different run.
+        const past: Sample[] = []
+        let next = frame.t
+        for (let i = retained.length - 1; i >= 0; i--) {
+          const old = retained[i]
+          if (old.t > next) break
+          if (old.t === next && past.length > 0) continue
+          const o = readNet(old, net)
+          if (o.kind === 'measured') past.unshift({ t: old.t, v: o.volts })
+          next = old.t
+        }
+        buffers.current.set(net, past)
+      }
       const buf = buffers.current.get(net)!
       // A restart begins time again at 0: the old run is a different story.
       if (buf.length > 0 && frame.t < buf[buf.length - 1].t) buf.length = 0
@@ -82,6 +105,9 @@ export function ProbeScopePanel({
     for (const k of buffers.current.keys()) {
       if (!probes.includes(k)) buffers.current.delete(k)
     }
+    // `retained` is read, not subscribed to: it is a ref's array that grows
+    // every frame, and the effect already runs on each new frame.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [frame, probes])
 
   const plotFor = (visible: string[], live: boolean): ScopePlot => {
@@ -96,23 +122,26 @@ export function ProbeScopePanel({
     }
     const has = Number.isFinite(tMax)
     const lo = live ? Math.max(tFirst, tMax - WINDOW_SECS) : tFirst
-    const span = has ? Math.max(tMax - lo, 1e-6) : WINDOW_SECS
+    const span = has ? Math.max(tMax - lo, MIN_SPAN_S) : WINDOW_SECS
+    // Never below the newest sample: `lo + span` can round under it and would
+    // drop the very point the window exists to show.
+    const xHi = has ? Math.max(tMax, lo + span) : WINDOW_SECS
     return {
       traces: visible.map(net => ({
         label: displayNet(net),
         colorToken: traceToken(probes.indexOf(net)),
         points: (buffers.current.get(net) ?? []).map(s => ({ x: s.t, y: s.v })),
       })),
-      xLabel: live && has && tMax - tFirst > WINDOW_SECS ? `newest ${WINDOW_SECS} s of sim time` : 'sim time',
+      xLabel: live && has && tMax - tFirst > WINDOW_SECS ? `newest ${WINDOW_SECS} s of simulated time` : 'simulated time',
       yUnit: 'V',
-      xTick: timeTick(span),
-      xRange: has ? [lo, lo + span] : undefined,
+      xTick: has ? timeTickLabeler(lo, xHi) : timeTickLabeler(0, WINDOW_SECS),
+      xRange: has ? [lo, xHi] : undefined,
       yFloor: [0, 3.3],
       markers: faultsRef.current.map(f => ({ x: f.t, label: f.component })),
       hint: probes.length === 0
         ? 'Probe a net to plot its voltage'
         : visible.length === 0 ? 'All traces hidden'
-          : !has ? 'Waiting for the first sample: press play or run the checks duration' : null,
+          : !has ? 'Waiting for the first sample. Press Play.' : null,
     }
   }
   const plotRef = useRef(plotFor)

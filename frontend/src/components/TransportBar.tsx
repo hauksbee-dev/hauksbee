@@ -1,51 +1,13 @@
-import { useState, useCallback, useEffect } from 'react'
-import type { BoardInfoMsg, StatusMsg, ClientMessage } from '../types/protocol'
+import { useState, useCallback, useEffect, useRef } from 'react'
+import type { StatusMsg, ClientMessage } from '../types/protocol'
 import type { ReplayTransport } from '../hooks/useSimulation'
 import { PlayIcon, PauseIcon, StepIcon, StepBackIcon, ResetIcon } from './Icons'
-
-// ── The speed scale ──────────────────────────────────────────────────────────
-//
-// A board that outruns real time is the exception; almost every reason to touch
-// this control is to slow the sim down until a transient is legible. A linear
-// 0.1x..10x track spends 90% of its travel on speeds nobody asks for.
-//
-// So: logarithmic, four decades, 0.001x to 10x. Realtime sits at 75% of the
-// track and every one of the first three quarters is a decade of slowing down.
-// The server accepts 0.001..1000; the slider covers the useful part of that and
-// the typed box below reaches the rest, because "exactly 0.0125x" is a thing
-// people want and no slider hits it.
-const SPEED_MIN_LOG = -3 // 0.001x
-const SPEED_MAX_LOG = 1 // 10x
-const SPEED_TICKS = 1000
-/** What the server itself will accept (`factor.clamp(0.001, 1000.0)`). */
-const SPEED_HARD_MIN = 0.001
-const SPEED_HARD_MAX = 1000
-
-const factorToTick = (f: number) => Math.round(
-  ((Math.log10(f) - SPEED_MIN_LOG) / (SPEED_MAX_LOG - SPEED_MIN_LOG)) * SPEED_TICKS,
-)
-const tickToFactor = (t: number) =>
-  10 ** (SPEED_MIN_LOG + (t / SPEED_TICKS) * (SPEED_MAX_LOG - SPEED_MIN_LOG))
-
-/** Enough significant figures to read, without a wall of zeros, and WITHOUT
- *  rounding away what the reader typed: a box that answers "0.0125" with
- *  "0.013" has silently disagreed with the rate it is actually running. */
-function formatFactor(f: number): string {
-  if (f >= 100) return f.toFixed(0)
-  if (f >= 10) return Number(f.toPrecision(3)).toString()
-  // toPrecision then back through Number drops trailing zeros, so 1 stays "1"
-  // and 0.0125 stays "0.0125".
-  return Number(f.toPrecision(3)).toString()
-}
-
-/** Rounded to something a person would have typed, so nudging the slider does
- *  not send 0.09999999999999998 to the server or show it back to the reader. */
-function tidyFactor(f: number): number {
-  const clamped = Math.min(SPEED_HARD_MAX, Math.max(SPEED_HARD_MIN, f))
-  return Number(clamped.toPrecision(3))
-}
-
-const SPEED_PRESETS = [0.001, 0.01, 0.1, 1] as const
+import { useDismissable } from '../hooks/useDismissable'
+import { formatClock, type RunState } from './sim/run-state'
+import {
+  SPEED_HARD_MAX, SPEED_HARD_MIN, SPEED_PRESETS, SPEED_TICKS,
+  factorToTick, formatFactor, isPreset, speedText, tickToFactor, tidyFactor,
+} from './sim/speed'
 
 /** Stepping back through the frames the client retained. The engine has no
  *  reverse: nothing in the solver, the server, or the wire can un-step a
@@ -74,11 +36,16 @@ export interface HistoryReview {
 // shell's sidebar owns navigation and the wordmark, so this row is purely the
 // instrument's controls. With a replay source the row gains what only a
 // finite recording can offer: a scrub slider over the whole timeline.
+//
+// There is ONE run status here, and it is the play button: it reads `runState`,
+// which is derived from the same stream as the clock (see sim/run-state.ts), so
+// the button, the header chip and the clock cannot disagree.
 
 interface TransportBarProps {
   connected: boolean
-  boardInfo: BoardInfoMsg | null
   status: StatusMsg | null
+  /** What the sim is doing, derived from the clock rather than the loop flag. */
+  runState: RunState
   /** The rate the loop ACHIEVED (`SimFrame.realtime_factor`). */
   realtimeFactor: number | null
   /** The rate the sim was ASKED for (`SimFrame.requested_factor`). Kept apart
@@ -101,7 +68,7 @@ interface TransportBarProps {
 }
 
 export function TransportBar({
-  connected, boardInfo, status, realtimeFactor, requestedFactor, rateLimited,
+  connected, status, runState, realtimeFactor, requestedFactor, rateLimited,
   send, replay, history, tools,
 }: TransportBarProps) {
   // The rate this client asked for. Seeded from the session's own requested
@@ -109,12 +76,15 @@ export function TransportBar({
   // shows 0.01x rather than this component's local default.
   const [speed, setSpeed] = useState(1.0)
   const [typed, setTyped] = useState<string | null>(null)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const moreRef = useRef<HTMLSpanElement>(null)
+  useDismissable(moreOpen, moreRef, setMoreOpen)
   const serverRequested = status?.requested_factor
   useEffect(() => {
     if (serverRequested && serverRequested > 0) setSpeed(serverRequested)
   }, [serverRequested])
 
-  const running = status?.running ?? false
+  const running = runState === 'running'
   const simTime = status?.sim_time ?? 0
   const reviewing = history?.index != null
 
@@ -146,12 +116,6 @@ export function TransportBar({
     else setTyped(null)
   }, [typed, applySpeed])
 
-  const formatTime = (t: number) => {
-    if (t < 0.001) return `${(t * 1e6).toFixed(1)} µs`
-    if (t < 1) return `${(t * 1000).toFixed(2)} ms`
-    return `${t.toFixed(3)} s`
-  }
-
   const quietBtn: React.CSSProperties = {
     background: 'var(--surface-2)',
     border: '1px solid var(--hairline)',
@@ -159,9 +123,11 @@ export function TransportBar({
     cursor: 'pointer',
   }
 
+  const ready = runState === 'ready'
+
   return (
     <div
-      className="flex flex-wrap items-center gap-3 px-4 py-2 min-h-[46px] shrink-0 select-none xl:py-0"
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2 min-h-[46px] shrink-0 select-none xl:py-0"
       style={{
         background: 'var(--surface)',
         borderBottom: '1px solid var(--hairline)',
@@ -171,19 +137,24 @@ export function TransportBar({
       <div className="flex items-center gap-1.5 shrink-0">
         <button
           onClick={handlePlayPause}
+          data-testid="transport-play"
+          data-run-state={runState}
           title={running ? 'Pause (Space)' : 'Play (Space)'}
           aria-label={running ? 'Pause' : 'Play'}
-          className="hb-press flex items-center justify-center rounded-lg"
+          className="hb-press flex items-center justify-center gap-1.5 rounded-lg text-[12px] font-semibold"
           style={{
-            width: 34, height: 30, cursor: 'pointer',
-            // running → live green; ready-to-play → copper (the action accent)
+            minWidth: 34, height: 30, padding: '0 10px 0 9px', cursor: 'pointer',
+            // running → live green; ready-to-play → copper (the action accent),
+            // with a halo until the first press so "what now?" has one answer.
             background: running ? 'var(--ok-bg)' : 'var(--copper-tint-strong)',
             border: running ? '1px solid var(--ok-border)' : '1px solid var(--copper-deep)',
             color: running ? 'var(--ok)' : 'var(--copper-hi)',
+            boxShadow: ready ? '0 0 0 3px var(--copper-tint)' : undefined,
           }}
         >
           {/* Play triangle sits optically left of center; nudge it right. */}
           {running ? <PauseIcon size={13} /> : <PlayIcon size={13} style={{ marginLeft: 1 }} />}
+          <span aria-hidden="true">{running ? 'Pause' : 'Play'}</span>
         </button>
 
         {history && (
@@ -280,7 +251,7 @@ export function TransportBar({
             }}
           >
             <span className="text-[11px] tnum min-w-0 break-words" style={{ fontFamily: 'var(--font-mono)' }}>
-              reviewing t={formatTime(history.t ?? 0)} ·{' '}
+              reviewing t={formatClock(history.t ?? 0)} ·{' '}
               {history.retained - (history.index ?? 0)} back of {history.retained} kept
             </span>
             <button
@@ -296,61 +267,83 @@ export function TransportBar({
         </>
       )}
 
-      {/* Speed: a log scale whose first three quarters are all slower than
-          realtime, the presets for the decade marks, and a box for an exact
-          rate the slider cannot land on. */}
-      <div className="flex flex-wrap items-center gap-2 min-w-0 max-w-full">
-        <span className="text-[10px]" style={{ color: 'var(--silk-faint)' }} title="How much sim time passes per second of real time">sim time per real second</span>
-        <input
-          type="range"
-          min={0}
-          max={SPEED_TICKS}
-          step={1}
-          value={factorToTick(speed)}
-          onChange={e => applySpeed(tickToFactor(parseFloat(e.target.value)))}
-          aria-label="Simulation speed factor (logarithmic, 0.001x to 10x)"
+      {/* Speed: ONE control. The segments are the speeds people reach for
+          (everything left of 1× is slow motion); an exact rate, or one the
+          segments do not hold, lives under "More". */}
+      <div className="flex items-center gap-2 min-w-0 max-w-full">
+        <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }} title="How much sim time passes per second of real time">Speed</span>
+        <div
+          role="group"
+          aria-label="Simulation speed"
           data-testid="transport-speed"
-          className="w-24 h-1 rounded cursor-pointer"
-          style={{ accentColor: 'var(--copper)' }}
-        />
-        <input
-          type="text"
-          inputMode="decimal"
-          value={typed ?? formatFactor(speed)}
-          onChange={e => setTyped(e.target.value)}
-          onBlur={commitTyped}
-          onKeyDown={e => {
-            if (e.key === 'Enter') { commitTyped(); (e.target as HTMLInputElement).blur() }
-            if (e.key === 'Escape') setTyped(null)
-          }}
-          aria-label="Exact simulation speed factor"
-          data-testid="transport-speed-exact"
-          title={`Type an exact rate (${SPEED_HARD_MIN}x to ${SPEED_HARD_MAX}x)`}
-          className="hb-input text-[11px] tnum text-right"
-          style={{ width: 58, fontFamily: 'var(--font-mono)', padding: '2px 5px' }}
-        />
-        <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>x</span>
-        <div className="flex flex-wrap items-center gap-0.5">
+          className="inline-flex rounded-md overflow-hidden"
+          style={{ border: '1px solid var(--hairline)' }}
+        >
           {SPEED_PRESETS.map(p => (
-            <button
-              key={p}
-              type="button"
-              onClick={() => applySpeed(p)}
-              title={`Set the rate to ${formatFactor(p)}x`}
-              className="hb-press text-[10px] rounded"
-              style={{
-                padding: '2px 5px',
-                fontFamily: 'var(--font-mono)',
-                background: speed === p ? 'var(--copper-tint-strong)' : 'transparent',
-                border: `1px solid ${speed === p ? 'var(--copper-deep)' : 'var(--hairline)'}`,
-                color: speed === p ? 'var(--copper-hi)' : 'var(--silk-faint)',
-                cursor: 'pointer',
-              }}
-            >
-              {formatFactor(p)}
-            </button>
+            <SpeedSegment key={p} on={speed === p} onClick={() => applySpeed(p)} title={`Run at ${speedText(p)} real time`}>
+              {speedText(p)}
+            </SpeedSegment>
           ))}
+          {!isPreset(speed) && (
+            <SpeedSegment on onClick={() => setMoreOpen(true)} title="A custom speed. Open More to change it.">
+              {speedText(speed)}
+            </SpeedSegment>
+          )}
         </div>
+        <span ref={moreRef} className="relative shrink-0">
+          <button
+            type="button"
+            data-testid="transport-speed-more"
+            aria-expanded={moreOpen}
+            onClick={() => setMoreOpen(o => !o)}
+            className="hb-press text-[11px] rounded-md cursor-pointer"
+            style={{ ...quietBtn, height: 24, padding: '0 8px' }}
+          >
+            More ▾
+          </button>
+          {moreOpen && (
+            <div
+              className="hb-card absolute z-30 p-3 flex flex-col gap-2"
+              style={{ top: 'calc(100% + 4px)', left: 0, width: 260, maxWidth: '80vw', boxShadow: 'var(--shadow-pop)' }}
+            >
+              <div className="text-[11px]" style={{ color: 'var(--silk-dim)' }}>
+                Sim seconds per real second. Below 1× slows the board down until a fast transient is readable.
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={SPEED_TICKS}
+                step={1}
+                value={factorToTick(speed)}
+                onChange={e => applySpeed(tickToFactor(parseFloat(e.target.value)))}
+                aria-label="Simulation speed, logarithmic from 0.001× to 10×"
+                className="w-full h-1 rounded cursor-pointer"
+                style={{ accentColor: 'var(--copper)' }}
+              />
+              <div className="flex items-center gap-1.5">
+                <label htmlFor="transport-speed-exact" className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>Exact</label>
+                <input
+                  id="transport-speed-exact"
+                  type="text"
+                  inputMode="decimal"
+                  value={typed ?? formatFactor(speed)}
+                  onChange={e => setTyped(e.target.value)}
+                  onBlur={commitTyped}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') { commitTyped(); (e.target as HTMLInputElement).blur() }
+                    if (e.key === 'Escape') setTyped(null)
+                  }}
+                  aria-label="Exact simulation speed"
+                  data-testid="transport-speed-exact"
+                  title={`Type an exact speed (${SPEED_HARD_MIN}× to ${SPEED_HARD_MAX}×)`}
+                  className="hb-input text-[11px] tnum text-right"
+                  style={{ width: 72, fontFamily: 'var(--font-mono)', padding: '2px 5px' }}
+                />
+                <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>×</span>
+              </div>
+            </div>
+          )}
+        </span>
       </div>
 
       <div className="hidden xl:block w-px h-5 shrink-0" style={{ background: 'var(--hairline)' }} />
@@ -364,23 +357,23 @@ export function TransportBar({
           data-testid="transport-time"
           style={{ color: 'var(--silk)' }}
         >
-          {formatTime(simTime)}
+          {formatClock(simTime)}
         </span>
-        {realtimeFactor !== null && (
+        {running && realtimeFactor !== null && Number.isFinite(realtimeFactor) && (
           <span
             className="text-[11px] tnum"
             data-testid="transport-rate"
             title={rateLimited
-              ? 'The requested rate is not sustainable on this board and backend; the loop is pacing at what it can really deliver.'
-              : 'Achieved rate, measured over a rolling window.'}
+              ? 'The requested speed is not sustainable on this board and emulator; the loop is pacing at what it can really deliver.'
+              : 'Measured over a rolling window.'}
             style={{ color: rateLimited ? 'var(--warn-strong)' : 'var(--silk-faint)' }}
           >
-            · achieving {formatFactor(realtimeFactor)}x
+            · {speedText(realtimeFactor)} real time
             {requestedFactor != null && requestedFactor > 0
               && Math.abs(requestedFactor - realtimeFactor) > requestedFactor * 0.05 && (
-              <> of {formatFactor(requestedFactor)}x asked</>
+              <> (asked for {speedText(requestedFactor)})</>
             )}
-            {rateLimited && <> · capped</>}
+            {rateLimited && <> · this board can&apos;t go faster</>}
           </span>
         )}
       </div>
@@ -389,12 +382,7 @@ export function TransportBar({
 
       <div className="flex-1" />
 
-      {/* Board identity + connection */}
-      {boardInfo && (
-        <span className="text-[11px] truncate min-w-0 max-w-full" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
-          {boardInfo.name}
-        </span>
-      )}
+      {/* Connection only: the board's name is the page title's, not repeated. */}
       <div className="flex items-center gap-1.5 text-[11px]">
         <div
           className={connected ? 'run-dot' : undefined}
@@ -408,5 +396,33 @@ export function TransportBar({
         </span>
       </div>
     </div>
+  )
+}
+
+function SpeedSegment({ on, onClick, title, children }: {
+  on: boolean
+  onClick: () => void
+  title: string
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={on}
+      title={title}
+      className="hb-press text-[11px] tnum cursor-pointer"
+      style={{
+        height: 24,
+        padding: '0 8px',
+        fontFamily: 'var(--font-mono)',
+        background: on ? 'var(--copper-tint-strong)' : 'transparent',
+        border: 'none',
+        borderRight: '1px solid var(--hairline)',
+        color: on ? 'var(--copper-hi)' : 'var(--silk-dim)',
+      }}
+    >
+      {children}
+    </button>
   )
 }

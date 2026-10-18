@@ -24,13 +24,15 @@ import { ResultLinkContext, type ResultLinkHandlers } from './components/report/
 import { vocabulary, type ResultEntity } from './lib/result-links'
 import { McuChips } from './components/sim/McuChips'
 import { SimStatusBar } from './components/sim/StatusBar'
+import { LiveNetCard } from './components/sim/LiveNetCard'
+import { deriveRunState, useClockAdvancing } from './components/sim/run-state'
 import {
   BoardPlaceholder, ForeignSessionBanner, ServerErrorBanner, ShortsBanner,
 } from './components/sim/Banners'
 import {
   CpuIcon, SlidersIcon, PowerIcon, BoltIcon, TerminalIcon, LayersIcon,
 } from './components/Icons'
-import type { ActionResultMsg, PowerSupplyWire } from './types/protocol'
+import type { ActionResultMsg, ClientMessage, PowerSupplyWire } from './types/protocol'
 import type { BoardRequest, ModelCoverageSnapshot, QueuedLiveRegisterMap, WebReport } from './types/report'
 import { envelopesFromHistory, envelopeSource, readNet } from './lib/net-state'
 import { coverageFor, modelsOnNet } from './lib/report-view'
@@ -280,8 +282,23 @@ export default function SimView({
   const netEnvelopes = useMemo(() => envelopesFromHistory(frames), [frames])
   const netEnvelopeSource = envelopeSource(liveFrame, netEnvelopes)
 
-  const running = status?.running ?? false
+  // ONE run state for the whole view, derived from the clock's own stream
+  // (status.sim_time), not from the server's loop flag alone: "Run 100 ms" and
+  // the step button advance the clock with the loop off, and a status read from
+  // the flag said "paused" over a clock that was counting up. The play button,
+  // the header chip (via onStatus), the MCU chips and the keyboard all read it.
+  const simTime = status?.sim_time ?? 0
+  const advancing = useClockAdvancing(status ? status.sim_time : null)
+  const runState = deriveRunState({ connected, loopRunning: status?.running ?? false, advancing, simTime })
+  const running = runState === 'running'
   const sessionBoard = boardInfo?.name ?? null
+
+  // Pause and Restart end a "Run N ms" in progress, or its next step would
+  // carry on after the user said stop; Play hands the clock back to the loop.
+  const transportSend = useCallback((msg: ClientMessage) => {
+    if (msg.type === 'Pause' || msg.type === 'Reset' || msg.type === 'Play') runFor.cancel()
+    sendWrapped(msg)
+  }, [runFor, sendWrapped])
 
   // Report status up to the shell (chips + nav badges); only on change.
   const lastReported = useRef<SimShellStatus | null>(null)
@@ -319,7 +336,7 @@ export default function SimView({
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       if (e.key === ' ') {
         e.preventDefault()
-        send({ type: (status?.running ?? false) ? 'Pause' : 'Play' })
+        transportSend({ type: running ? 'Pause' : 'Play' })
       } else if (e.key === 'n' || e.key === 'N') {
         e.preventDefault()
         send({ type: 'Step', dt: 0.001 })
@@ -327,7 +344,7 @@ export default function SimView({
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [status, send])
+  }, [running, send, transportSend])
 
   // Board URL comes from BoardInfo (sent on connect). No demo fallback: in the
   // shell, SimView mounts only for a launched session.
@@ -442,7 +459,7 @@ export default function SimView({
   useEffect(() => {
     if (selection && !narrow && !boardFullscreen) setRailOpen(true)
   }, [selection, narrow, boardFullscreen])
-  const card = (
+  const staticCard = (
     <SelectionCard
       net={selectedFp ? null : selectedNet}
       docked={!boardFullscreen}
@@ -461,6 +478,24 @@ export default function SimView({
       onPickNet={net => { setSelectedFp(null); setSelectedNet(net) }}
     />
   )
+  // In the LIVE view a click on a net asks "what is it doing right now?", so the
+  // answer is its value, how it moves and a trace. The static check card (the
+  // report's suggested assertions, which read as nonsense on a supply rail) is
+  // one disclosure away on that card instead of replacing it. A part click keeps
+  // the component card, whose model-coverage detail is the same live or not.
+  const card = selectedNet && !selectedFp ? (
+    <LiveNetCard
+      net={selectedNet}
+      reading={readNet(frame, selectedNet, netEnvelopes)}
+      frame={frame}
+      frames={frames}
+      probed={probes.includes(selectedNet)}
+      onProbe={() => addProbe(selectedNet)}
+      onUnprobe={() => removeProbe(selectedNet)}
+      onClose={() => { setSelectedFp(null); setSelectedNet(null) }}
+      checks={onQueue ? staticCard : undefined}
+    />
+  ) : staticCard
 
   const tabs: DockTab[] = [
     ...(replay ? [{
@@ -513,7 +548,7 @@ export default function SimView({
       ),
     },
     ...(!replay ? [{
-      id: 'solver', label: 'Solver', icon: <CpuIcon size={12} />,
+      id: 'solver', label: 'Conditions', icon: <CpuIcon size={12} />,
       body: <SolverControlsPanel controls={status?.options ?? null} send={send} />,
     }] : []),
   ]
@@ -523,8 +558,8 @@ export default function SimView({
       <div className="flex flex-col h-full overflow-hidden" style={{ background: 'var(--canvas)' }}>
         <TransportBar
           connected={connected}
-          boardInfo={boardInfo}
           status={status}
+          runState={runState}
           // In a replay the capture-time throughput would read as the playback
           // rate; the speed control already owns that number. The rates come
           // off the LIVE frame: a retained frame's rates describe the moment it
@@ -532,7 +567,7 @@ export default function SimView({
           realtimeFactor={replay ? null : liveFrame?.realtime_factor ?? null}
           requestedFactor={replay ? null : liveFrame?.requested_factor ?? null}
           rateLimited={replay ? false : liveFrame?.rate_limited ?? false}
-          send={sendWrapped}
+          send={transportSend}
           replay={replay}
           // A recording has a real timeline to scrub; the retained-frame walk
           // is for the live sim, which has none.
@@ -588,22 +623,25 @@ export default function SimView({
                 </div>
               )}
 
-              {/* Board overlay hints. While an input has focus the keyboard
-                  shortcuts are suppressed, so the hint dims and says why. */}
-              <div
-                className="absolute bottom-9 md:bottom-2 left-2 max-w-[calc(100%-1rem)] text-[10px] px-2 py-1 rounded pointer-events-none"
-                style={{
-                  background: 'var(--overlay-hint-bg)',
-                  color: inputFocused ? 'var(--overlay-hint-dim)' : 'var(--overlay-chip-text)',
-                  border: '1px solid var(--overlay-hint-border)',
-                  opacity: inputFocused ? 0.65 : 1,
-                  transition: 'opacity 0.2s ease, color 0.2s ease',
-                }}
-              >
-                {inputFocused
-                  ? 'shortcuts paused, click away from the input to use Space / N'
-                  : 'Space=play/pause · N=step · scroll=zoom · drag=pan · hover=probe'}
-              </div>
+              {/* The server starts every session paused, so the first thing a
+                  user sees is a still board. Say what to do about it, once,
+                  in words; it is not a second button (Play is the one). */}
+              {runState === 'ready' && !replay && boardUrl !== null && !selection && (
+                <div
+                  data-testid="sim-press-play"
+                  className="absolute left-1/2 text-[12px] px-3 py-1.5 rounded-full pointer-events-none text-center"
+                  style={{
+                    top: TOOLBAR_CLEARANCE,
+                    transform: 'translateX(-50%)',
+                    maxWidth: 'calc(100% - 1.5rem)',
+                    background: 'var(--overlay-hint-bg)',
+                    color: 'var(--overlay-chip-text)',
+                    border: '1px solid var(--overlay-hint-border)',
+                  }}
+                >
+                  The simulation is waiting. Press Play to start it.
+                </div>
+              )}
             </div>
 
             {narrow && !railOpen && !boardFullscreen && selection && (
@@ -618,6 +656,7 @@ export default function SimView({
                 <ProbeScopePanel
                   boardInfo={boardInfo}
                   frame={frame}
+                  retained={frames}
                   probes={probes}
                   probeReasons={probeReasons}
                   faults={faultLog}
@@ -628,11 +667,29 @@ export default function SimView({
                 />
               </div>
             )}
+
+            {/* Phone: the 18 px edge strip below is unreadable and easy to
+                miss, so the dock opens from a labelled control that names
+                what is inside it. */}
+            {!boardFullscreen && (
+              <button
+                type="button"
+                data-testid="sim-dock-open"
+                onClick={() => setRailOpen(true)}
+                className="hb-btn hb-press sm:hidden shrink-0 flex items-center justify-between gap-2 px-3 text-[12px] cursor-pointer"
+                style={{ minHeight: 40, borderRadius: 0, borderLeft: 'none', borderRight: 'none' }}
+              >
+                <span className="font-semibold">Instruments</span>
+                <span className="truncate text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+                  {tabs.map(t => t.label).join(' · ')}
+                </span>
+              </button>
+            )}
           </div>
 
           <button
             onClick={() => setRailOpen(o => !o)}
-            className="hb-press flex items-center justify-center shrink-0"
+            className="hb-press max-sm:hidden flex items-center justify-center shrink-0"
             style={{
               width: 18,
               background: 'var(--surface)',
@@ -650,6 +707,15 @@ export default function SimView({
           {railOpen && (
             <div className="shrink-0 flex flex-col min-h-0 w-[340px] max-sm:w-auto max-sm:flex-1 max-sm:min-w-0"
               style={{ borderLeft: '1px solid var(--hairline)', background: 'var(--canvas)' }}>
+              <button
+                type="button"
+                data-testid="sim-dock-close"
+                onClick={() => { setRailOpen(false); setSelectedFp(null); setSelectedNet(null) }}
+                className="hb-btn hb-press sm:hidden shrink-0 text-[12px] px-3 cursor-pointer text-left"
+                style={{ minHeight: 40, borderRadius: 0, borderLeft: 'none', borderRight: 'none', borderTop: 'none' }}
+              >
+                ← Back to the board
+              </button>
               {/* Without this the dock's panels ("No nets loaded") read as
                   findings ABOUT the board rather than as a lost connection. */}
               {sessionLost && (
@@ -680,13 +746,7 @@ export default function SimView({
           )}
         </div>
 
-        <SimStatusBar
-          sessionLost={sessionLost}
-          frame={frame}
-          probes={probes}
-          faultCount={faultCount}
-          boardInfo={boardInfo}
-        />
+        <SimStatusBar sessionLost={sessionLost} inputFocused={inputFocused} />
       </div>
     </ResultLinkContext.Provider>
   )

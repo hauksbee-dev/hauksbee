@@ -1,5 +1,6 @@
 import type { SimFrame } from '../../types/protocol'
 import { Term } from '../ui'
+import { mcuBackendText } from './mcu-label'
 
 /** One small-caps chip in the MCU card. */
 function Chip({ on, tone, title, children }: {
@@ -17,7 +18,6 @@ function Chip({ on, tone, title, children }: {
         background: lit ? (tone === 'ok' ? 'var(--ok-bg)' : 'var(--copper-tint)') : 'var(--surface-2)',
         border: `1px solid ${lit ? (tone === 'ok' ? 'var(--ok-border)' : 'var(--copper-deep)') : 'var(--hairline)'}`,
         color: lit ? (tone === 'ok' ? 'var(--ok)' : 'var(--copper-hi)') : tone === 'plain' ? 'var(--silk-dim)' : 'var(--silk-faint)',
-        fontFamily: tone === 'plain' ? 'var(--font-mono)' : undefined,
       }}
     >
       {children}
@@ -26,15 +26,19 @@ function Chip({ on, tone, title, children }: {
 }
 
 /** MCU stat chips, the live dock's header: what the co-sim is actually doing
- *  per MCU (backend, run state, recent UART traffic), each state word a
- *  glossary term. Only real signals from the wire; no invented
- *  frequency counters. */
+ *  per MCU (what chip and how it is emulated, whether its CPU is executing,
+ *  recent UART traffic), each state word a glossary term. Only real signals
+ *  from the wire; no invented frequency counters.
+ *
+ *  Whether the SIM is paused is the transport bar's to say, once: a second
+ *  "paused" here could (and did) disagree with the clock. So the CPU chip
+ *  appears only while the sim is advancing, when it carries real information
+ *  (executing or halted). */
 export function McuChips({ mcus, frame, uartActive, running: simRunning }: {
   mcus: [string, string][]
   frame: SimFrame | null
   uartActive: Set<string>
-  /** The sim clock is running. Paused, every MCU is paused with it: the last
-   *  frame's run flag would otherwise keep reading "running". */
+  /** Sim time is advancing (derived from the clock; see run-state.ts). */
   running: boolean
 }) {
   return (
@@ -48,16 +52,18 @@ export function McuChips({ mcus, frame, uartActive, running: simRunning }: {
             <span className="text-[12px] font-bold" style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)' }}>
               {ref}
             </span>
-            <Chip on tone="plain" title="Emulation backend">{backend}</Chip>
-            <Chip on={running} tone="ok">
-              {running && <span className="run-dot" style={{ width: 5, height: 5, borderRadius: 3, background: 'currentColor' }} />}
-              {simRunning
-                ? <Term id="mcu_halted" bare>{running ? 'running' : 'halted'}</Term>
-                : 'paused'}
-            </Chip>
-            <Chip on={uart} tone="copper">
-              <Term id="uart_activity" bare>{uart ? 'serial active' : 'serial quiet'}</Term>
-            </Chip>
+            <Chip on tone="plain" title={`Emulation backend: ${backend}`}>{mcuBackendText(backend)}</Chip>
+            {simRunning && (
+              <Chip on={running} tone="ok">
+                {running && <span className="run-dot" style={{ width: 5, height: 5, borderRadius: 3, background: 'currentColor' }} />}
+                <Term id="mcu_halted" bare>{running ? 'running' : 'halted'}</Term>
+              </Chip>
+            )}
+            {uart && (
+              <Chip on tone="copper">
+                <Term id="uart_activity" bare>serial active</Term>
+              </Chip>
+            )}
           </div>
         )
       })}

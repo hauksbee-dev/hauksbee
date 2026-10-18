@@ -40,16 +40,101 @@ export function traceToken(idx: number): string {
   return `--trace-${(idx % 6) + 1}`
 }
 
+/** The gap between ticks that gives roughly five round values across `range`. */
+export function tickStep(range: number): number {
+  const r = Math.abs(range) || 1
+  const pow = 10 ** Math.floor(Math.log10(r))
+  const n = r / pow
+  return pow * (n > 5 ? 2 : n > 2 ? 1 : 0.5)
+}
+
 /** Roughly five round tick values across [lo, hi]. Both axes step through this,
  *  so graticule rows and x labels share one idea of a round number. */
 export function ticksAcross(lo: number, hi: number): number[] {
-  const range = Math.abs(hi - lo) || 1
-  const pow = 10 ** Math.floor(Math.log10(range))
-  const n = range / pow
-  const step = pow * (n > 5 ? 2 : n > 2 ? 1 : 0.5)
+  const step = tickStep(hi - lo)
   const out: number[] = []
   for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) out.push(v)
   return out
+}
+
+/** The y axis: a range that CONTAINS every plotted value, with headroom, ending
+ *  on round tick values. */
+export interface YAxis {
+  lo: number
+  hi: number
+  step: number
+  ticks: number[]
+}
+
+/** Plan the y axis. The old axis padded the data by 5% and then stopped at the
+ *  last tick below it, so a 5.000 V probe sat on the top edge of a 0-4 V axis
+ *  with its trace clipped away. Here the top and bottom are rounded OUT to the
+ *  next tick, so the data can never be outside the frame.
+ *
+ *  `floor` is a range the axis may only grow: the scope's usual 0-3.3 V, so a
+ *  quiet rail does not zoom into noise. When the floor starts at zero and the
+ *  data never goes negative the baseline stays on zero rather than floating
+ *  below it. */
+export function planYAxis(dataLo: number, dataHi: number, floor?: [number, number]): YAxis | null {
+  let lo = Math.min(dataLo, floor?.[0] ?? Infinity)
+  let hi = Math.max(dataHi, floor?.[1] ?? -Infinity)
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null
+  if (hi - lo < 1e-12) {
+    // A flat line (or a lone sample): give it a frame to sit in.
+    const m = Math.max(Math.abs(hi), 1)
+    lo -= m * 0.5
+    hi += m * 0.5
+  }
+  const range = hi - lo
+  const keepZero = floor?.[0] === 0 && lo >= 0
+  hi += range * 0.08
+  if (!keepZero) lo -= range * 0.08
+  const step = tickStep(hi - lo)
+  // Round OUT to the tick grid. The 1e-9 guards a value already on a tick from
+  // being pushed a whole step away by floating-point noise.
+  const snap = (v: number) => Number(v.toFixed(10))
+  const sLo = snap(Math.floor(lo / step + 1e-9) * step)
+  const sHi = snap(Math.ceil(hi / step - 1e-9) * step)
+  const ticks: number[] = []
+  for (let v = sLo; v <= sHi + step * 1e-9; v += step) ticks.push(snap(v))
+  return { lo: sLo, hi: sHi, step, ticks }
+}
+
+/** A duration in sim time with the unit a person would say it in: "2.51 s",
+ *  "12.5 ms", "840 µs". Three significant figures, no trailing zeros. */
+export function formatSimTime(t: number): string {
+  const a = Math.abs(t)
+  const trim = (v: number) => Number(v.toPrecision(3)).toString()
+  if (a === 0) return '0 s'
+  if (a < 1e-3) return `${trim(t * 1e6)} µs`
+  if (a < 1) return `${trim(t * 1e3)} ms`
+  return `${trim(t)} s`
+}
+
+/** x tick labels for a window [lo, hi] of sim time: ONE unit for the whole axis
+ *  (chosen from the window's largest value) and just enough decimals that
+ *  neighbouring ticks never print the same text. A window 1 ms wide at t = 2.5 s
+ *  reads "2.5004 s", "2.5006 s"; the old labels printed the raw microsecond
+ *  count, "2509611µs", at both ends. */
+export function timeTickLabeler(lo: number, hi: number): (t: number) => string {
+  const top = Math.max(Math.abs(lo), Math.abs(hi))
+  const [scale, unit] = top >= 1 ? [1, 's'] : top >= 1e-3 ? [1e3, 'ms'] : [1e6, 'µs']
+  const step = tickStep(hi - lo) * scale
+  const decimals = Math.max(0, Math.min(6, Math.ceil(-Math.log10(step) - 1e-9)))
+  return t => `${(t * scale).toFixed(decimals)} ${unit}`
+}
+
+/** The samples of a trace that fall inside the x window, as a drawable shape:
+ *  a polyline of two or more, or a single held level. A lone sample is a real
+ *  measurement (a probe attached to a paused sim has exactly one), and drawing
+ *  nothing for it made a correct 5 V reading look like an empty scope. */
+export function traceShape(
+  points: { x: number; y: number }[], xMin: number, xMax: number,
+): { kind: 'none' } | { kind: 'point'; point: { x: number; y: number } } | { kind: 'line'; points: { x: number; y: number }[] } {
+  const inside = points.filter(p => p.x >= xMin && p.x <= xMax)
+  if (inside.length === 0) return { kind: 'none' }
+  if (inside.length === 1) return { kind: 'point', point: inside[0] }
+  return { kind: 'line', points: inside }
 }
 
 /** Left pad wide enough for the widest y label. Fixed at 38px it clipped the
@@ -78,7 +163,7 @@ export function drawScope(ctx: CanvasRenderingContext2D, W: number, H: number, p
   }
 
   if (plot.hint) {
-    ctx.fillStyle = cssToken('--scope-hint')
+    ctx.fillStyle = cssToken('--silk-dim')
     ctx.font = '11px monospace'
     ctx.textAlign = 'center'
     ctx.fillText(plot.hint, W / 2, H / 2)
@@ -98,23 +183,23 @@ export function drawScope(ctx: CanvasRenderingContext2D, W: number, H: number, p
   ]
   const xSpan = xMax - xMin || 1
 
-  // Voltage (or dB, or degrees) range: autoscale, then 5% headroom.
-  let yMin = plot.yFloor?.[0] ?? Infinity
-  let yMax = plot.yFloor?.[1] ?? -Infinity
+  // Voltage (or dB, or degrees) range: autoscaled to CONTAIN every plotted
+  // value, with headroom, ending on round ticks (see planYAxis).
+  let dataLo = Infinity
+  let dataHi = -Infinity
   for (const p of pts) {
     if (p.x < xMin || p.x > xMax) continue
-    yMin = Math.min(yMin, p.y)
-    yMax = Math.max(yMax, p.y)
+    dataLo = Math.min(dataLo, p.y)
+    dataHi = Math.max(dataHi, p.y)
   }
-  if (!Number.isFinite(yMin) || !Number.isFinite(yMax)) return
-  const yRange = yMax - yMin || 1
-  yMin -= yRange * 0.05
-  yMax += yRange * 0.05
+  const axis = planYAxis(dataLo, dataHi, plot.yFloor)
+  if (!axis) return
+  const yMin = axis.lo
+  const yMax = axis.hi
 
   // The labels are measured BEFORE the left pad is fixed; see leftPadFor.
-  const yVals = ticksAcross(yMin, yMax)
-  const yStep = yVals.length > 1 ? yVals[1] - yVals[0] : yRange
-  const yTicks = yVals.map(v => `${tickText(v, yStep)}${plot.yUnit}`)
+  const yVals = axis.ticks
+  const yTicks = yVals.map(v => `${tickText(v, axis.step)}${plot.yUnit}`)
   ctx.font = '9px JetBrains Mono, monospace'
   const PAD_L = leftPadFor(ctx, yTicks, W)
   const plotW = W - PAD_L - PAD_R
@@ -122,9 +207,11 @@ export function drawScope(ctx: CanvasRenderingContext2D, W: number, H: number, p
   const xAt = (x: number) => PAD_L + ((x - xMin) / xSpan) * plotW
   const yAt = (y: number) => PAD_T + plotH - ((y - yMin) / (yMax - yMin)) * plotH
 
-  // Graticule (phosphor green in dark, deep green ink in light)
+  // Graticule (phosphor green in dark, deep green ink in light). The numbers
+  // on it are NOT green: dim phosphor on a near-black face was unreadable at
+  // 9 px, so the labels use the app's own dim text colour.
   ctx.strokeStyle = cssToken('--scope-grid')
-  ctx.fillStyle = cssToken('--scope-tick')
+  ctx.fillStyle = cssToken('--silk-dim')
   ctx.lineWidth = 0.5
   ctx.setLineDash([2, 4])
   ctx.textAlign = 'right'
@@ -156,7 +243,7 @@ export function drawScope(ctx: CanvasRenderingContext2D, W: number, H: number, p
   }
   ctx.setLineDash([])
 
-  ctx.fillStyle = cssToken('--scope-axis')
+  ctx.fillStyle = cssToken('--silk-dim')
   ctx.textAlign = 'center'
   ctx.fillText(plot.xLabel, PAD_L + plotW / 2, H - 4)
 
@@ -183,8 +270,31 @@ export function drawScope(ctx: CanvasRenderingContext2D, W: number, H: number, p
   // mode or the beam reads as smudge on paper.
   for (const trace of plot.traces) {
     const color = cssToken(trace.colorToken)
-    const path = trace.points.filter(p => p.x >= xMin && p.x <= xMax).map(p => ({ x: xAt(p.x), y: yAt(p.y) }))
-    if (path.length < 2) continue
+    const shape = traceShape(trace.points, xMin, xMax)
+    if (shape.kind === 'none') continue
+    // A lone sample: a dot where it was measured and a dashed rule carrying the
+    // level across, so a correct reading is visible rather than an empty scope.
+    const path = shape.kind === 'line'
+      ? shape.points.map(p => ({ x: xAt(p.x), y: yAt(p.y) }))
+      : [{ x: xAt(shape.point.x), y: yAt(shape.point.y) }]
+    if (shape.kind === 'point') {
+      const dot = path[0]
+      ctx.strokeStyle = color + (light ? '80' : '99')
+      ctx.lineWidth = 1.2
+      ctx.setLineDash([4, 4])
+      ctx.beginPath()
+      ctx.moveTo(dot.x, dot.y)
+      ctx.lineTo(PAD_L + plotW, dot.y)
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.fillStyle = color
+      ctx.shadowColor = color
+      ctx.shadowBlur = light ? 0 : 8
+      ctx.beginPath()
+      ctx.arc(dot.x, dot.y, 3.5, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.shadowBlur = 0
+    }
 
     const drawPath = () => {
       ctx.beginPath()

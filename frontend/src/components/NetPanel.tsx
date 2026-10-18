@@ -58,7 +58,7 @@ export function NetPanel({
   if (entries.length === 0) {
     return (
       <div className="px-3 py-2.5 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
-        No data, start the simulation
+        No readings yet. Press Play to start the simulation.
       </div>
     )
   }
@@ -112,9 +112,14 @@ export function NetPanel({
                 if (event.key !== 'Enter' && event.key !== ' ') return
                 event.preventDefault()
                 onSelectNet(isSelected ? null : name)
-                // The card opens elsewhere on the page: move to its checks so the
-                // next Tab lands on the first offer, not on the next net.
-                if (!isSelected) window.setTimeout(() => document.querySelector<HTMLElement>('[data-testid="check-this"]')?.focus(), 60)
+                // The card opens elsewhere on the page: move to it so the next
+                // Tab lands on its first control, not on the next net. In the
+                // live view that is the net's live card; elsewhere, the checks.
+                if (!isSelected) {
+                  window.setTimeout(() => document.querySelector<HTMLElement>(
+                    '[data-testid="live-net-card"] button, [data-testid="check-this"]',
+                  )?.focus(), 60)
+                }
               }}
               data-testid={moving ? 'net-row-moving' : unmeasured ? 'net-row-unmeasured' : undefined}
               className="flex items-center gap-2 px-3 py-1.5 cursor-pointer"
@@ -207,8 +212,8 @@ export function NetPanel({
           // built from the frames that reached the browser, so a pulse shorter
           // than a chunk is still not in it.
           <div className="px-3 py-1.5 text-[9px] leading-snug" style={{ color: 'var(--silk-faint)' }}>
-            ranges span the frames received; a pulse shorter than one sim chunk
-            is not captured
+            Ranges cover the frames received; a pulse shorter than one
+            simulation step may not show.
           </div>
         )}
       </div>
