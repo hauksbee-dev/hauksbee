@@ -50,8 +50,12 @@ macro_rules! standard_condition {
 
 pub mod behavioral;
 pub mod card_coverage;
+pub mod card_provenance;
+pub mod card_scope;
+pub mod card_templates;
 mod check;
 pub mod chip_size;
+pub mod companion_docs;
 mod conventions;
 pub mod datasheet;
 pub mod datasheet_discovery;

@@ -108,7 +108,7 @@ fn words(text: &str) -> HashSet<String> {
 
 /// Every `[[models]]` block of the builtin files as written, less the comment
 /// header of the card that follows it.
-fn blocks() -> Vec<&'static str> {
+pub(crate) fn blocks() -> Vec<&'static str> {
     let mut out = Vec::new();
     for (_, text) in crate::BUILTIN_TOML_FILES {
         let starts: Vec<usize> = text

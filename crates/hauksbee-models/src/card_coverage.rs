@@ -124,6 +124,25 @@ pub struct Facts {
     pub pages: Vec<String>,
     pub pin_columns: Vec<Column>,
     pub board: Option<Board>,
+    /// Companion documents fetched for the run (an application note the
+    /// datasheet defers to): each one's name and page texts.
+    pub companions: Vec<(String, Vec<String>)>,
+}
+
+impl Facts {
+    /// Every page the run holds, the datasheet's and the companions'.
+    #[must_use]
+    pub fn workspace_pages(&self) -> Vec<&str> {
+        self.pages
+            .iter()
+            .map(String::as_str)
+            .chain(
+                self.companions
+                    .iter()
+                    .flat_map(|(_, pages)| pages.iter().map(String::as_str)),
+            )
+            .collect()
+    }
 }
 
 thread_local! {
@@ -294,6 +313,16 @@ pub fn needs(entry: &ModelEntry, text: &str, columns: &[Column]) -> Vec<Need> {
         _ => {}
     }
     out
+}
+
+/// What a card of `kind` needs before any draft exists (the checklist's groups).
+#[must_use]
+pub fn kind_needs(kind: ComponentKind, text: &str, columns: &[Column]) -> Vec<Need> {
+    let entry = ModelEntry {
+        kind,
+        ..ModelEntry::default()
+    };
+    needs(&entry, text, columns)
 }
 
 fn has_role(entry: &ModelEntry, pred: &dyn Fn(&str) -> bool) -> bool {
@@ -546,9 +575,47 @@ pub fn findings(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
             }
         }
     }
+    out.extend(crate::card_scope::entry_findings(entry, facts));
+    out.extend(crate::card_provenance::findings(
+        entry,
+        &facts.workspace_pages(),
+    ));
     let mut seen = std::collections::HashSet::new();
     out.retain(|f| seen.insert(f.message.clone()));
     out
+}
+
+/// The findings for every entry of a reply: the first entry's full set, the
+/// scope and provenance checks on the others (named by id), and whether the
+/// reply covers every package the pin table lists.
+#[must_use]
+pub fn reply_findings(entries: &[ModelEntry], facts: &Facts) -> Vec<Finding> {
+    let Some((first, rest)) = entries.split_first() else {
+        return Vec::new();
+    };
+    let mut out = findings(first, facts);
+    let pages = facts.workspace_pages();
+    for e in rest {
+        let mut more = crate::card_scope::entry_findings(e, facts);
+        more.extend(crate::card_provenance::findings(e, &pages));
+        for f in &mut more {
+            f.message = format!("[[models]] '{}': {}", e.id, f.message);
+        }
+        out.extend(more);
+    }
+    out.extend(crate::card_scope::package_coverage(entries, facts));
+    out
+}
+
+/// [`reply_findings`] against the facts [`with_facts`] holds.
+#[must_use]
+pub fn current_reply_findings(entries: &[ModelEntry]) -> Vec<Finding> {
+    FACTS.with(|c| {
+        c.borrow()
+            .as_ref()
+            .map(|f| reply_findings(entries, f))
+            .unwrap_or_default()
+    })
 }
 
 fn re_matches(pattern: Option<&str>, s: &str) -> Option<bool> {
@@ -791,6 +858,7 @@ value_re = "(?i)^TLV70033$"
                 footprint: "Package_TO_SOT_SMD:SOT-23-5".into(),
                 ..Board::default()
             }),
+            ..Facts::default()
         };
         let found = findings(&card, &facts);
         let text = |c: &str| {
