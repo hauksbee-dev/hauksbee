@@ -243,7 +243,9 @@ impl QemuProcess {
             .arg("-qmp")
             .arg(format!("tcp:127.0.0.1:{qmp_port},server,nowait,nodelay=on"))
             .arg("-serial")
-            .arg(format!("tcp:127.0.0.1:{uart_port},server,nowait,nodelay=on"))
+            .arg(format!(
+                "tcp:127.0.0.1:{uart_port},server,nowait,nodelay=on"
+            ))
             .arg("-global")
             .arg(format!(
                 "driver=timer.{machine}.timg,property=wdt_disable,value=true"
