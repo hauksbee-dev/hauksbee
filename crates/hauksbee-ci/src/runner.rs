@@ -965,6 +965,7 @@ fn run_members(
         base.components.len(),
         base.nets.len()
     ));
+    hauksbee_ir::progress::learned(base.components.len(), base.nets.len());
 
     // Validate referenced nets against the board's net names before running.
     let known: Vec<String> = base.nets.iter().map(|n| n.name.clone()).collect();
@@ -2072,6 +2073,11 @@ fn run_one(
     let mut drives = fuzz_net_drives(spec, seed);
     let forced = plan.conditions.iter().filter(|c| !c.amps);
     drives.extend(forced.map(|c| (c.net.clone(), c.value)));
+    // The bar counts binding once across the members, and the simulation across all of them.
+    hauksbee_ir::progress::begin_once(
+        hauksbee_ir::progress::Stage::Bind,
+        board.components.len() as u64 * hauksbee_ir::progress::BIND_STEPS,
+    );
     let statics = boards.statics(plan, &board);
     let mut bound = bind_driven(&board, lib, spec, &drives, Some(statics.facts()));
 
@@ -2234,6 +2240,13 @@ fn run_one(
     let frame_dt = (spec.frame_ms / 1000.0).max(1e-6);
     let total_s = spec.duration_ms / 1000.0;
     let mut t = 0.0;
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a frame count, rounded up, for a progress bar"
+    )]
+    let frames_in_all = (total_s / frame_dt).ceil().max(1.0) as u64 * member_count as u64;
+    hauksbee_ir::progress::begin_once(hauksbee_ir::progress::Stage::Simulate, frames_in_all);
 
     // On an external, wall-bounded emulator backend (QEMU/Renode), the analog
     // chunk must be coarse or the run drowns in TCP round-trips: the 100 us
@@ -2496,6 +2509,7 @@ fn run_one(
         }
 
         t += frame_dt;
+        hauksbee_ir::progress::advance_in(hauksbee_ir::progress::Stage::Simulate, 1);
     }
     engine.scheduler_mut().refresh_execution_evidence();
 

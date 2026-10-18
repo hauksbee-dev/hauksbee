@@ -125,13 +125,14 @@ fn toml_path_key(value: &toml::Value) -> Option<&'static str> {
     }
 }
 
-/// Hard ceiling on one web-triggered check run. The builder caps `duration_ms`
-/// client-side, but the web UI also lets a user edit the spec TOML directly, so
-/// nothing client-side is trustworthy. A pathological spec (huge fuzz count, a
-/// hung external emulator) must not pin the request forever, and the
-/// `validate_web_limits` ceilings below stop it from getting that far in the
-/// first place.
-const CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+/// The deadline of a short web request that has no board to scale it by (the
+/// catalogue, the schema, a lint), and the least a board's run is given. The
+/// builder caps `duration_ms` client-side, but the web UI also lets a user edit
+/// the spec TOML directly, so nothing client-side is trustworthy. A pathological
+/// spec (huge fuzz count, a hung external emulator) must not pin the request
+/// forever, and the `validate_web_limits` ceilings below stop it from getting
+/// that far in the first place.
+const CHECK_TIMEOUT: std::time::Duration = hauksbee_ir::progress::RUN_CEILING_FLOOR;
 
 // ── Web-only resource ceilings ────────────────────────────────────────────────
 //
@@ -536,7 +537,7 @@ pub fn run_web_check_design(
     // starter supplies instead of a run.
     if spec_fragment.trim() == hauksbee_frontdoor_api::frontdoor::SCAFFOLD_SPEC {
         let board_path = dir.join(&board_file);
-        return run_ci_json(&["init".as_ref(), board_path.as_os_str(), "--json".as_ref()]);
+        return run_ci_json_watched(&["init".as_ref(), board_path.as_os_str(), "--json".as_ref()]);
     }
     if let Some(index) = measure {
         let index = index.to_string();
@@ -564,7 +565,7 @@ pub fn run_web_check_design(
 fn run_with_exports(dir: &std::path::Path, spec_path: &std::path::Path) -> String {
     let junit = dir.join("results.xml");
     let manifest = dir.join("manifest.json");
-    let line = run_ci_json(&[
+    let line = run_ci_json_watched(&[
         "run".as_ref(),
         spec_path.as_os_str(),
         "--json".as_ref(),
@@ -578,7 +579,11 @@ fn run_with_exports(dir: &std::path::Path, spec_path: &std::path::Path) -> Strin
     };
     let Ok(junit_xml) = std::fs::read_to_string(&junit) else {
         if line.contains("run manifest") {
-            return run_ci_json(&["run".as_ref(), spec_path.as_os_str(), "--json".as_ref()]);
+            return run_ci_json_watched(&[
+                "run".as_ref(),
+                spec_path.as_os_str(),
+                "--json".as_ref(),
+            ]);
         }
         return line;
     };
@@ -715,13 +720,84 @@ fn run_ci_json(args: &[&std::ffi::OsStr]) -> String {
 
 /// [`run_ci_json`] with its own deadline.
 fn run_ci_json_within(args: &[&std::ffi::OsStr], timeout: std::time::Duration) -> String {
+    run_ci(args, Deadline::Fixed(timeout))
+}
+
+/// A run of a board (the scaffold, the checks): the child reports how far it has
+/// got, that is passed to whoever is watching this thread
+/// ([`hauksbee_frontdoor_api::frontdoor::with_run_watch`]), and the run is
+/// stopped at a ceiling scaled to the work it reports rather than at a fixed
+/// time, or as soon as the watcher goes away.
+fn run_ci_json_watched(args: &[&std::ffi::OsStr]) -> String {
+    run_ci(args, Deadline::Scaled)
+}
+
+/// The environment variable an operator sets to cap a board's web run, in whole
+/// seconds: a shared server that wants runs shorter than the scaled ceiling says
+/// so here, and the stopped run's message still names where it got to.
+const RUN_LIMIT_ENV: &str = "HAUKSBEE_CHECK_RUN_LIMIT_SECS";
+
+fn operator_limit() -> Option<std::time::Duration> {
+    std::env::var(RUN_LIMIT_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .map(std::time::Duration::from_secs)
+}
+
+/// How long a child may run.
+#[derive(Clone, Copy)]
+enum Deadline {
+    /// This long from its start, whatever it says.
+    Fixed(std::time::Duration),
+    /// The ceiling its own progress reports give (`hauksbee_ir::progress::Heard::ceiling`),
+    /// which is the floor until it has said how big its board is.
+    Scaled,
+}
+
+/// What the stderr reader hands the waiting loop: one progress line as the
+/// child wrote it, and as read.
+type ProgressLine = (String, hauksbee_ir::progress::Heard);
+
+/// Read the child's stderr to its end, passing each progress line on and keeping
+/// every other byte (the failure tail is made from what remains).
+fn drain_stderr(
+    stream: Option<std::process::ChildStderr>,
+    progress: Option<std::sync::mpsc::Sender<ProgressLine>>,
+) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut kept = Vec::new();
+        let Some(stream) = stream else {
+            return kept;
+        };
+        let mut lines = std::io::BufReader::new(stream);
+        let mut line = Vec::new();
+        while matches!(std::io::BufRead::read_until(&mut lines, b'\n', &mut line), Ok(n) if n > 0) {
+            let text = String::from_utf8_lossy(&line);
+            match (&progress, hauksbee_ir::progress::Heard::from_json(&text)) {
+                (Some(tx), Some(heard)) => {
+                    let _ = tx.send((text.trim().to_string(), heard));
+                }
+                _ => kept.extend_from_slice(&line),
+            }
+            line.clear();
+        }
+        kept
+    })
+}
+
+fn run_ci(args: &[&std::ffi::OsStr], deadline: Deadline) -> String {
     let bin = ci_binary();
-    let child = std::process::Command::new(&bin)
+    let watched = matches!(deadline, Deadline::Scaled);
+    let mut command = std::process::Command::new(&bin);
+    command
         .args(args)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn();
-    let mut child = match child {
+        .stderr(std::process::Stdio::piped());
+    if watched {
+        command.env(hauksbee_ir::progress::STREAM_ENV, "1");
+    }
+    let mut child = match command.spawn() {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return err_json(&format!(
@@ -738,41 +814,39 @@ fn run_ci_json_within(args: &[&std::ffi::OsStr], timeout: std::time::Duration) -
     // evidence spine alone can be several hundred KiB of JSON), the child
     // blocked in write(), try_wait never saw an exit, and every web check
     // "timed out" against a child that was only waiting for someone to read.
-    let drain = |stream: Option<Box<dyn std::io::Read + Send>>| {
+    let stdout_thread = child.stdout.take().map(|mut s| {
         std::thread::spawn(move || {
             let mut buf = Vec::new();
-            if let Some(mut s) = stream {
-                let _ = std::io::Read::read_to_end(&mut s, &mut buf);
-            }
+            let _ = std::io::Read::read_to_end(&mut s, &mut buf);
             buf
         })
-    };
-    let stdout_thread = drain(
-        child
-            .stdout
-            .take()
-            .map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
-    );
-    let stderr_thread = drain(
-        child
-            .stderr
-            .take()
-            .map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
-    );
+    });
+    let (tx, rx) = std::sync::mpsc::channel::<ProgressLine>();
+    let stderr_thread = drain_stderr(child.stderr.take(), watched.then_some(tx));
 
     // Poll-wait with a deadline instead of output(): a hung run must produce
     // an error the browser can show, not an eternally pending request.
     let started = std::time::Instant::now();
+    let operator_cap = operator_limit();
+    let mut latest: Option<hauksbee_ir::progress::Heard> = None;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
-                if started.elapsed() > timeout {
+                while let Ok((raw, heard)) = rx.try_recv() {
+                    hauksbee_frontdoor_api::frontdoor::report_progress(&raw);
+                    latest = Some(heard);
+                }
+                if watched && hauksbee_frontdoor_api::frontdoor::run_cancelled() {
                     stop_child(&mut child);
-                    return err_json(&format!(
-                        "the check run exceeded {}s and was stopped; shorten duration_ms \
-                         or run it from the CLI: hauksbee-ci run <spec>",
-                        timeout.as_secs()
+                    return err_json("the check run was cancelled");
+                }
+                if started.elapsed() > limit_for(deadline, latest.as_ref(), operator_cap) {
+                    stop_child(&mut child);
+                    return err_json(&stopped_message(
+                        deadline,
+                        latest.as_ref(),
+                        started.elapsed().as_secs(),
                     ));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
@@ -781,8 +855,14 @@ fn run_ci_json_within(args: &[&std::ffi::OsStr], timeout: std::time::Duration) -
         }
     };
     // The child has exited, so both readers see EOF; the joins cannot block.
-    let out_stdout = stdout_thread.join().unwrap_or_default();
+    let out_stdout = stdout_thread
+        .and_then(|t| t.join().ok())
+        .unwrap_or_default();
     let out_stderr = stderr_thread.join().unwrap_or_default();
+    // The last words of the run, sent just before it exited.
+    while let Ok((raw, _)) = rx.try_recv() {
+        hauksbee_frontdoor_api::frontdoor::report_progress(&raw);
+    }
 
     // --json prints one JSON object on stdout for both green and red runs, and
     // {"ok":false,...} for a spec error. Anything else is relayed with the
@@ -799,6 +879,48 @@ fn run_ci_json_within(args: &[&std::ffi::OsStr], timeout: std::time::Duration) -
         status.code(),
         tail.join(" | ")
     ))
+}
+
+/// How long a child may run from its start, given what it has reported so far.
+///
+/// A fixed deadline is that. A board's run is scaled to the work its own
+/// progress reports ([`hauksbee_ir::progress::Heard::ceiling`]), the floor until
+/// it has reported any, and an operator's cap (when set) can only shorten it.
+fn limit_for(
+    deadline: Deadline,
+    latest: Option<&hauksbee_ir::progress::Heard>,
+    operator_cap: Option<std::time::Duration>,
+) -> std::time::Duration {
+    match deadline {
+        Deadline::Fixed(limit) => limit,
+        Deadline::Scaled => {
+            let scaled = latest.map_or(
+                hauksbee_ir::progress::RUN_CEILING_FLOOR,
+                hauksbee_ir::progress::Heard::ceiling,
+            );
+            operator_cap.map_or(scaled, |cap| cap.min(scaled))
+        }
+    }
+}
+
+/// What the browser is told when a run is stopped at its ceiling.
+fn stopped_message(
+    deadline: Deadline,
+    latest: Option<&hauksbee_ir::progress::Heard>,
+    elapsed_s: u64,
+) -> String {
+    match deadline {
+        Deadline::Scaled => hauksbee_ir::vocabulary::check_run_stopped(
+            latest.map(|h| (h.label.as_str(), h.percent())),
+            elapsed_s,
+        ),
+        Deadline::Fixed(limit) => format!(
+            "the check run exceeded {}s and was stopped; shorten duration_ms \
+             or run it from the CLI: {}",
+            limit.as_secs(),
+            hauksbee_ir::vocabulary::CHECK_RUN_CLI_COMMAND
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -1223,6 +1345,171 @@ kind = "no_faults"
             started.elapsed() < CHECK_TIMEOUT / 2,
             "the run returned promptly instead of riding the timeout ({}s)",
             started.elapsed().as_secs()
+        );
+    }
+
+    /// A stub `hauksbee-ci` for the watched-run tests: the shell `body`, run as
+    /// the child.
+    #[cfg(unix)]
+    fn stub_ci(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let stub = dir.join("hauksbee-ci");
+        std::fs::write(&stub, format!("#!/bin/sh\n{body}\n")).expect("write stub");
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        stub
+    }
+
+    /// The web run asks the child to report its progress and hands each report,
+    /// as the child wrote it, to whoever watches the thread; the reports are not
+    /// left in the failure tail, and the answer is still the child's JSON.
+    #[cfg(unix)]
+    #[test]
+    fn a_watched_run_passes_the_childs_progress_to_the_watcher() {
+        use hauksbee_frontdoor_api::frontdoor::{with_run_watch, RunWatch};
+        let _serial = serial_guard();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stub = stub_ci(
+            dir.path(),
+            r#"if [ "$HAUKSBEE_PROGRESS_STREAM" = 1 ]; then
+  echo '{"stage":"bind","label":"Matching parts to models","fraction":0.25,"elapsed_ms":900,"total_ms":4000,"eta_ms":null}' >&2
+  echo 'ordinary diagnostic line' >&2
+  echo '{"stage":"simulate","label":"Simulating","fraction":0.75,"elapsed_ms":2900,"total_ms":4000,"eta_ms":900}' >&2
+fi
+echo '{"ok":true,"passed":true,"results":[]}'"#,
+        );
+        std::env::set_var("HAUKSBEE_CI_BIN", &stub);
+        let heard = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let sink = heard.clone();
+        let json = with_run_watch(
+            RunWatch {
+                progress: Box::new(move |line| sink.borrow_mut().push(line.to_string())),
+                cancelled: Box::new(|| false),
+            },
+            || run_web_check("b.kicad_pcb", b"(kicad_pcb)", None, spec_fragment()),
+        );
+        std::env::remove_var("HAUKSBEE_CI_BIN");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(v["ok"], true, "{json}");
+        let heard = heard.borrow();
+        assert_eq!(
+            heard.len(),
+            2,
+            "both reports reached the watcher: {heard:?}"
+        );
+        assert!(heard[0].contains("Matching parts to models"), "{heard:?}");
+        assert!(heard[1].contains("\"Simulating\""), "{heard:?}");
+    }
+
+    /// A page that has closed the stream is not waited for: the child is
+    /// stopped, and promptly, instead of running on to the ceiling.
+    #[cfg(unix)]
+    #[test]
+    fn a_watcher_that_has_gone_away_stops_the_child() {
+        use hauksbee_frontdoor_api::frontdoor::{with_run_watch, RunWatch};
+        let _serial = serial_guard();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stub = stub_ci(dir.path(), "exec sleep 120");
+        std::env::set_var("HAUKSBEE_CI_BIN", &stub);
+        let started = std::time::Instant::now();
+        let json = with_run_watch(
+            RunWatch {
+                progress: Box::new(|_| {}),
+                cancelled: Box::new(|| true),
+            },
+            || run_web_check("b.kicad_pcb", b"(kicad_pcb)", None, spec_fragment()),
+        );
+        std::env::remove_var("HAUKSBEE_CI_BIN");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(v["ok"], false, "{json}");
+        assert!(
+            v["error"].as_str().unwrap_or("").contains("cancelled"),
+            "{json}"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "the child was stopped, not waited for ({}s)",
+            started.elapsed().as_secs()
+        );
+    }
+
+    /// With nobody watching, the same run behaves as it always did (no progress
+    /// is asked for beyond the environment flag, and nothing is cancelled).
+    #[cfg(unix)]
+    #[test]
+    fn an_unwatched_run_is_unchanged() {
+        let _serial = serial_guard();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stub = stub_ci(
+            dir.path(),
+            r#"echo '{"stage":"bind","label":"x","fraction":0.5,"elapsed_ms":1,"total_ms":1,"eta_ms":null}' >&2
+echo '{"ok":true,"passed":true,"results":[]}'"#,
+        );
+        std::env::set_var("HAUKSBEE_CI_BIN", &stub);
+        let json = run_web_check("b.kicad_pcb", b"(kicad_pcb)", None, spec_fragment());
+        std::env::remove_var("HAUKSBEE_CI_BIN");
+        assert!(json.contains("\"ok\":true"), "{json}");
+    }
+
+    /// What a stopped run says is built from the one vocabulary, names the stage
+    /// it was in and how far it got, and gives the terminal command.
+    #[test]
+    fn a_boards_ceiling_scales_with_its_reported_work_and_an_operator_can_only_shorten_it() {
+        use std::time::Duration;
+        let floor = hauksbee_ir::progress::RUN_CEILING_FLOOR;
+        // Nothing heard yet: the floor, then the work the run says it has.
+        assert_eq!(limit_for(Deadline::Scaled, None, None), floor);
+        let big = hauksbee_ir::progress::Heard {
+            label: "Simulating".into(),
+            fraction: 0.09,
+            elapsed: Duration::from_secs(600),
+            total_ms: 14_000.0,
+        };
+        let scaled = limit_for(Deadline::Scaled, Some(&big), None);
+        assert!(scaled > Duration::from_secs(3600), "{scaled:?}");
+        assert_eq!(
+            limit_for(Deadline::Scaled, Some(&big), Some(Duration::from_secs(90))),
+            Duration::from_secs(90)
+        );
+        // A cap longer than the scaled ceiling changes nothing.
+        assert_eq!(
+            limit_for(Deadline::Scaled, None, Some(Duration::from_secs(99_999))),
+            floor
+        );
+        // A short request keeps its own fixed deadline, whatever the cap says.
+        assert_eq!(
+            limit_for(
+                Deadline::Fixed(CHECK_TIMEOUT),
+                None,
+                Some(Duration::from_secs(1))
+            ),
+            CHECK_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn a_stopped_board_run_names_what_was_running_and_the_next_step() {
+        let heard = hauksbee_ir::progress::Heard {
+            label: "Simulating".into(),
+            fraction: 0.42,
+            elapsed: std::time::Duration::from_secs(600),
+            total_ms: 60_000.0,
+        };
+        let said = stopped_message(Deadline::Scaled, Some(&heard), 612);
+        assert!(said.contains("10 minutes"), "{said}");
+        assert!(said.contains("\"Simulating\" (42%"), "{said}");
+        assert!(
+            said.contains(hauksbee_ir::vocabulary::CHECK_RUN_CLI_COMMAND),
+            "{said}"
+        );
+        let silent = stopped_message(Deadline::Scaled, None, 300);
+        assert!(
+            silent.contains("300 seconds") || silent.contains("5 minutes"),
+            "{silent}"
+        );
+        let fixed = stopped_message(Deadline::Fixed(CHECK_TIMEOUT), None, 300);
+        assert!(
+            fixed.contains(hauksbee_ir::vocabulary::CHECK_RUN_CLI_COMMAND),
+            "{fixed}"
         );
     }
 

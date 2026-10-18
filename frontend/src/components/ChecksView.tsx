@@ -7,7 +7,7 @@ import { EmptyState } from '../motion'
 import { buildCheckUpload, buildPortableCheckSpec } from '../lib/board-upload'
 import type { SupplementalDesignFiles } from '../lib/board-upload'
 import { checksStorageKey } from '../lib/checks-storage'
-import { api, errorText } from '../lib/api'
+import { api, errorText, type LoadProgress } from '../lib/api'
 import {
   assertToml, buildToml, componentCapabilityIssues, CONSTRAINT_KEYS, emptyCheck, emptyPeripheral,
   emptySensor, normalizeSavedCheck, overrideToml, peripheralIssues, peripheralToml, railPolarity, rowIssues,
@@ -36,6 +36,10 @@ import { WritePart } from './WritePart'
 /** The spec body that asks `/api/ci/scaffold` for the starter spec rather than
  *  a run; the server does not read it as TOML. */
 const SCAFFOLD_SPEC = '# hauksbee:scaffold'
+
+/** What a run the person cancelled says: nothing was judged, and how to go on. */
+const RUN_CANCELLED =
+  'The run was cancelled, so nothing was judged. Run the checks again when you are ready.'
 
 const MODE_KEY = 'hauksbee.checks.mode'
 
@@ -283,6 +287,33 @@ export function ChecksView({
   }
   const [select, setSelect] = useState<{ start: number; end: number; seq: number } | null>(null)
   const [running, setRunning] = useState(false)
+  // How far the engine says the work in hand (the preparation, then the run) has
+  // got, and the handles that stop it. The engine's report is the only source:
+  // nothing here is a guess at a duration.
+  const [progress, setProgress] = useState<LoadProgress | null>(null)
+  const runAbort = useRef<AbortController | null>(null)
+  const scaffoldAbort = useRef<AbortController | null>(null)
+  const mounted = useRef(true)
+  // Leaving the view ends a run nobody is waiting for: the server stops its work
+  // when the request closes.
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      runAbort.current?.abort()
+    }
+  }, [])
+  // Cancel ends the run in hand; before the run it skips the preparation, and
+  // the first run then starts from the supplies the board's own report found.
+  const cancelWork = useCallback(() => {
+    if (runAbort.current) {
+      runAbort.current.abort()
+      return
+    }
+    scaffoldAbort.current?.abort()
+    setScaffolding(false)
+    setProgress(null)
+  }, [])
   // The last run's response, plus the exact spec text it ran, so results can
   // be flagged stale the moment the spec diverges.
   const [run, setRun] = useState<{
@@ -379,7 +410,12 @@ export function ChecksView({
   useEffect(() => {
     if (!scaffolding || !boardFile) return
     const abort = new AbortController()
-    void api.scaffold(buildCheckUpload(boardFile, null, schematicFile, SCAFFOLD_SPEC, supplementalFiles), abort.signal)
+    scaffoldAbort.current = abort
+    void api.scaffold(
+      buildCheckUpload(boardFile, null, schematicFile, SCAFFOLD_SPEC, supplementalFiles),
+      abort.signal,
+      p => { if (!abort.signal.aborted) setProgress(p) },
+    )
       .then(answer => {
         const s = seed.current
         if (!answer.ok || !answer.supplies?.length || !s) return
@@ -387,7 +423,11 @@ export function ChecksView({
         setSpecText(buildToml(s.name, s.duration, scaffoldRows(answer.supplies), [], s.checks))
       })
       .catch(() => undefined) // the report's own rails stay: a scaffold is a convenience
-      .finally(() => { if (!abort.signal.aborted) setScaffolding(false) })
+      .finally(() => {
+        if (abort.signal.aborted) return
+        setScaffolding(false)
+        setProgress(null)
+      })
     return () => abort.abort()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -621,6 +661,9 @@ export function ChecksView({
       }
     }
     setRunning(true)
+    setProgress(null)
+    const abort = new AbortController()
+    runAbort.current = abort
     const tomlAtRun = specText
     const firmwareAtRun = firmwareForRun
     const ran = {
@@ -633,12 +676,25 @@ export function ChecksView({
     try {
       const response = await api.check(
         buildCheckUpload(boardFile, firmwareAtRun, schematicFile, tomlAtRun, supplementalFiles),
+        abort.signal,
+        p => { if (!abort.signal.aborted) setProgress(p) },
       )
+      if (!mounted.current) return
       setRun({ response, ...ran })
     } catch (e) {
-      setRun({ response: { ok: false, error: errorText(e) }, ...ran })
+      if (!mounted.current) return
+      // A stop the person asked for is not a fault in the board: say what it
+      // means for the verdict and what to do next.
+      setRun({
+        response: { ok: false, error: abort.signal.aborted ? RUN_CANCELLED : errorText(e) },
+        ...ran,
+      })
     } finally {
-      setRunning(false)
+      if (runAbort.current === abort) runAbort.current = null
+      if (mounted.current) {
+        setRunning(false)
+        setProgress(null)
+      }
     }
   }, [
     boardFile, firmwareForRun, schematicFile, supplementalFiles, specText, parsed,
@@ -1049,6 +1105,8 @@ export function ChecksView({
           running={running}
           canRun={!!boardFile}
           preparing={scaffolding}
+          progress={progress}
+          onCancel={cancelWork}
           pulseRun={pulseRun}
           remedyActions={remedyActions}
           remedyEditor={modelEditor}

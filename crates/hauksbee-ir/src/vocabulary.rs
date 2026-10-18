@@ -84,6 +84,36 @@ pub fn values_not_carried_scope(n: usize, subjects: &str) -> String {
     )
 }
 
+/// The command that runs a check spec with no time limit. The browser stops a
+/// run at a ceiling scaled to the board; the terminal never does.
+pub const CHECK_RUN_CLI_COMMAND: &str = "hauksbee-ci run <spec.toml>";
+
+/// The step after a check run in the browser was stopped at its ceiling.
+pub const CHECK_RUN_STOPPED_NEXT_STEP: &str =
+    "Download this spec from the page and run it in a terminal, which has no time limit: \
+     `hauksbee-ci run <spec.toml>`.";
+
+/// Why and where a browser check run was stopped at its ceiling.
+///
+/// `doing` is the stage's words as the progress bar showed them ("Simulating"),
+/// `percent` how far the estimated work had got, `elapsed_s` how long it had
+/// run. `None` for the stage when the run had not reported one.
+#[must_use]
+pub fn check_run_stopped(doing: Option<(&str, u32)>, elapsed_s: u64) -> String {
+    let how_long = if elapsed_s >= 120 {
+        format!("{} minutes", elapsed_s / 60)
+    } else {
+        format!("{elapsed_s} seconds")
+    };
+    let where_it_was = doing.map_or_else(String::new, |(label, percent)| {
+        format!(" while \"{label}\" ({percent}% of the estimated work done)")
+    });
+    format!(
+        "The check run was stopped after {how_long}{where_it_was} because it passed the \
+         time the browser gives a board this size. {CHECK_RUN_STOPPED_NEXT_STEP}"
+    )
+}
+
 /// What joins a failing verdict's own sentence to the sentence naming what it
 /// did not judge, in `verdict_reason`, so a surface that prints the two apart
 /// can split them where the engine joined them.
@@ -991,6 +1021,27 @@ pub fn labels() -> Vec<&'static str> {
     out.sort_unstable();
     out.dedup();
     out
+}
+
+#[cfg(test)]
+mod check_run_stopped_tests {
+    use super::*;
+
+    #[test]
+    fn a_stopped_run_names_the_stage_how_far_it_got_and_the_terminal_command() {
+        let said = check_run_stopped(Some(("Simulating", 42)), 600);
+        assert!(said.contains("stopped after 10 minutes"), "{said}");
+        assert!(said.contains("\"Simulating\" (42%"), "{said}");
+        assert!(said.ends_with(CHECK_RUN_STOPPED_NEXT_STEP), "{said}");
+        assert!(CHECK_RUN_STOPPED_NEXT_STEP.contains(CHECK_RUN_CLI_COMMAND));
+    }
+
+    #[test]
+    fn a_run_that_never_reported_a_stage_still_says_what_to_do() {
+        let said = check_run_stopped(None, 90);
+        assert!(said.starts_with("The check run was stopped after 90 seconds because"));
+        assert!(said.contains("hauksbee-ci run"));
+    }
 }
 
 #[cfg(test)]

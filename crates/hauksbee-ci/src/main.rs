@@ -703,13 +703,29 @@ fn cmd_init(args: InitArgs) -> ExitCode {
         return report(Err(suggest_board_in_cwd()));
     };
     if args.json {
-        return report(
-            hauksbee_ci::init::scaffold(&board)
-                .map(|found| {
-                    serde_json::json!({ "ok": true, "supplies": found.supplies }).to_string()
-                })
-                .map_err(anyhow::Error::from),
-        );
+        use hauksbee_ir::progress::{Plan, Stage};
+        // The scaffold reads and binds the board, then (when a regulator might need a
+        // supply) runs it for a millisecond: no copper, lint or findings of its own.
+        let plan = || Plan {
+            bytes: std::fs::metadata(&board).map_or(0, |m| m.len()),
+            simulate_s: Some(0.001),
+        };
+        let unused = [
+            Stage::Models,
+            Stage::Copper,
+            Stage::Nets,
+            Stage::Signals,
+            Stage::Report,
+        ];
+        return hauksbee_ci::progress::observed(plan, &unused, || {
+            report(
+                hauksbee_ci::init::scaffold(&board)
+                    .map(|found| {
+                        serde_json::json!({ "ok": true, "supplies": found.supplies }).to_string()
+                    })
+                    .map_err(anyhow::Error::from),
+            )
+        });
     }
     report(
         hauksbee_ci::init::init_to(&board, args.out.as_deref())

@@ -87,6 +87,46 @@ pub fn say(line: &str) {
     }
 }
 
+/// Run `work` reporting its stages to whoever started this process and asked.
+///
+/// The ask is `HAUKSBEE_PROGRESS_STREAM` (see [`hauksbee_ir::progress::STREAM_ENV`]):
+/// one JSON line per update on stderr, the same words and the same fraction the
+/// browser's loading bar and `hauksbee check`'s terminal bar draw. With no one
+/// asking it is `work()` and nothing else.
+///
+/// `unused` names the stages this command never enters, so its bar reaches 100%
+/// rather than stopping short by their share.
+pub fn observed<R>(
+    plan: impl FnOnce() -> hauksbee_ir::progress::Plan,
+    unused: &[hauksbee_ir::progress::Stage],
+    work: impl FnOnce() -> R,
+) -> R {
+    if !hauksbee_ir::progress::stream_requested() {
+        return work();
+    }
+    hauksbee_ir::progress::with_reporter(
+        plan(),
+        hauksbee_ir::progress::json_lines_to_stderr(),
+        || {
+            hauksbee_ir::progress::skip(unused);
+            work()
+        },
+    )
+}
+
+/// What a run of the spec at `spec_path` will have to do, as far as can be said
+/// before it starts: the board's size on disk and the board time to simulate.
+#[must_use]
+pub fn plan_for_spec(spec_path: &std::path::Path) -> hauksbee_ir::progress::Plan {
+    let Ok(spec) = crate::spec::Spec::load(spec_path) else {
+        return hauksbee_ir::progress::Plan::default();
+    };
+    hauksbee_ir::progress::Plan {
+        bytes: std::fs::metadata(spec.board_path()).map_or(0, |m| m.len()),
+        simulate_s: Some(spec.duration_ms / 1000.0),
+    }
+}
+
 /// Reports a long simulation: one line per heartbeat interval saying how much
 /// board time has run, which ensemble member it is, and how long it has taken.
 pub struct Ticker {

@@ -944,18 +944,29 @@ async fn parse_upload(multipart: &mut Multipart) -> Result<UploadedParts, String
 /// own multi-minute timeout), so it runs on the blocking pool: called inline
 /// it would pin an async worker thread per active check, and a handful of
 /// concurrent checks could pin every worker and stall all the other routes.
+///
+/// A page that asks for `Accept: text/event-stream` gets the run as a stream
+/// instead ([`stream_run`]): `progress` events while it works, one `done` event
+/// carrying this same document. Closing that stream is how the page cancels.
 async fn check_handler(
     State(check): State<Arc<DesignCheckRunner>>,
     headers: HeaderMap,
     mut multipart: Multipart,
-) -> JsonResponse {
+) -> Response {
     let mut parts = match guarded_upload(&headers, &mut multipart).await {
         Ok(parts) => parts,
-        Err(response) => return response,
+        Err(response) => return response.into_response(),
     };
     let Some(spec) = parts.spec.take() else {
-        return json_error(NEEDS_BOARD_AND_SPEC);
+        return json_error(NEEDS_BOARD_AND_SPEC).into_response();
     };
+    if wants_stream(&headers) {
+        return match parts.into_design_upload() {
+            // The run's JUnit, JSON and manifest stay server-side for the export route.
+            Ok(upload) => stream_run(check, upload, spec, crate::ci_export::stash),
+            Err(message) => json_error(message).into_response(),
+        };
+    }
     match run_blocking("the check task", move || {
         parts
             .into_design_upload()
@@ -965,8 +976,8 @@ async fn check_handler(
     .await
     {
         // The run's JUnit, JSON and manifest stay server-side for the export route.
-        Ok(json) => json_ok(crate::ci_export::stash(json)),
-        Err(response) => response,
+        Ok(json) => json_ok(crate::ci_export::stash(json)).into_response(),
+        Err(response) => response.into_response(),
     }
 }
 
@@ -1097,22 +1108,68 @@ async fn scaffold_handler(
     State(check): State<Arc<DesignCheckRunner>>,
     headers: HeaderMap,
     mut multipart: Multipart,
-) -> JsonResponse {
+) -> Response {
     let parts = match guarded_upload(&headers, &mut multipart).await {
         Ok(parts) => parts,
-        Err(response) => return response,
+        Err(response) => return response.into_response(),
     };
+    let spec = hauksbee_frontdoor_api::frontdoor::SCAFFOLD_SPEC;
+    if wants_stream(&headers) {
+        return match parts.into_design_upload() {
+            Ok(upload) => stream_run(check, upload, spec.to_string(), |json| json),
+            Err(message) => json_error(message).into_response(),
+        };
+    }
     match run_blocking("the scaffold task", move || {
         parts
             .into_design_upload()
-            .map(|upload| check(upload, hauksbee_frontdoor_api::frontdoor::SCAFFOLD_SPEC))
+            .map(|upload| check(upload, spec))
             .map_err(str::to_string)
     })
     .await
     {
-        Ok(json) => json_ok(json),
-        Err(response) => response,
+        Ok(json) => json_ok(json).into_response(),
+        Err(response) => response.into_response(),
     }
+}
+
+/// Run a check (or the scaffold) on the blocking pool and stream it as SSE:
+/// `progress` events (`{stage, label, fraction, elapsed_ms, total_ms, eta_ms}`)
+/// as the run reports them, then exactly one `done` event whose data is the
+/// document the plain endpoint answers (passed through `finish`), or one
+/// `error` event when the task panics.
+///
+/// The run is watched, not just timed: when the page closes the stream (its
+/// Cancel, or navigating away) the receiver is gone, the runner sees
+/// `run_cancelled`, and it stops the child. Progress goes through `try_send` so
+/// a client that stops reading cannot park the run; the `done` frame waits for
+/// room, because it is the answer.
+fn stream_run(
+    check: Arc<DesignCheckRunner>,
+    upload: DesignUpload,
+    spec: String,
+    finish: fn(String) -> String,
+) -> Response {
+    let (tx, rx) = tokio::sync::mpsc::channel::<String>(64);
+    tokio::task::spawn_blocking(move || {
+        let progress_tx = tx.clone();
+        let cancel_tx = tx.clone();
+        let watch = hauksbee_frontdoor_api::frontdoor::RunWatch {
+            progress: Box::new(move |line| {
+                let _ = progress_tx.try_send(sse_event("progress", line));
+            }),
+            cancelled: Box::new(move || cancel_tx.is_closed()),
+        };
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            hauksbee_frontdoor_api::frontdoor::with_run_watch(watch, || check(upload, &spec))
+        }));
+        let last = outcome.map_or_else(
+            |_| sse_event("error", "the check task panicked; see the server log"),
+            |json| sse_event("done", &finish(json)),
+        );
+        let _ = tx.blocking_send(last);
+    });
+    sse_response(rx)
 }
 
 /// Whether the page asked for the answer as a stream (`Accept: text/event-stream`).

@@ -835,6 +835,8 @@ fn gather_static(
     lib: &ModelLibrary,
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<GatheredStatic> {
+    // The stages a progress bar names, in the web analysis's own words and order.
+    hauksbee_ir::progress::begin_copper();
     let (clearance_input, mut drc) = super::run_drc(board_path, board, text, raw, altium_present)?;
 
     // The companion schematic's declarations, applied before anything reads the
@@ -843,10 +845,12 @@ fn gather_static(
     // This surface produces CI findings only and builds no evidence registry, so
     // there is no inventory row to add here; the report surfaces above own that.
     let qualification = schematic_ties.map(|ties| ties.qualify(&drc));
+    hauksbee_ir::progress::begin_lint();
     let mut lint = crate::checks::engine_lint(board, lib);
     let geo_text = if altium_present { None } else { Some(text) };
     lint.findings
         .extend(crate::checks::layout_lint(board, geo_text, Some(board_path)).findings);
+    hauksbee_ir::progress::begin_untracked(hauksbee_ir::progress::Stage::Signals);
     let mut si = crate::checks::engine_si(board, lib, geo_text);
     let usbc = crate::usb_c_report(board);
 

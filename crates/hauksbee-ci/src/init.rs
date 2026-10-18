@@ -262,7 +262,12 @@ pub struct Scaffold {
 /// Any error from loading `board` (`runner::load_board`).
 pub fn scaffold(board: &Path) -> Result<Scaffold, SpecError> {
     let extracted = runner::load_board(board)?;
+    hauksbee_ir::progress::learned(extracted.components.len(), extracted.nets.len());
     let lib = ModelLibrary::builtin_with_user_dirs(&[]);
+    hauksbee_ir::progress::begin_once(
+        hauksbee_ir::progress::Stage::Bind,
+        extracted.components.len() as u64 * hauksbee_ir::progress::BIND_STEPS,
+    );
     let bound = bind_board(&extracted, &lib);
     let rails: Vec<(String, f64)> = bound
         .supplies
@@ -297,6 +302,11 @@ fn scaffold_supplies(
         }
     }
     for _ in 0..4 {
+        // The probe is a run of the whole board, and only a regulator can ask for a supply:
+        // a board the binder found none on has nothing for it to find.
+        if bound.report.regulators.is_empty() {
+            break;
+        }
         // One input per pass, the one that wants the most volts: a cascade's
         // first stage (12 V into a 5 V regulator feeding a 3.3 V one) is the
         // highest, and powering it powers the stages behind it, which must not
