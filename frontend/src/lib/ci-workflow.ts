@@ -20,6 +20,18 @@ export function specStemFor(boardFileName: string): string {
     .replace(/^[.-]+|[.-]+$/g, '') || 'board'
 }
 
+/** The spec file's placeholder in an engine message, such as the stopped-run
+ *  message's `hauksbee-ci run <spec.toml>`. Mirrors
+ *  hauksbee_ir::vocabulary::CHECK_RUN_CLI_COMMAND; a drift test in that crate
+ *  holds the two equal. The page replaces it with the real file name. */
+export const SPEC_FILE_PLACEHOLDER = '<spec.toml>'
+
+/** An engine message with the spec placeholder named for the spec this page
+ *  is showing, so the command the person copies names the file they downloaded. */
+export function namedSpecIn(message: string | undefined, specFileName: string): string | undefined {
+  return message?.split(SPEC_FILE_PLACEHOLDER).join(specFileName)
+}
+
 /** What a development build shows where a released build shows the pinned
  *  commit. Not a 40-hex commit, so a copy of the preview cannot run. */
 const UNPINNED = 'PIN-A-RELEASE-COMMIT'

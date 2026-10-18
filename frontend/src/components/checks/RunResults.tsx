@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RunResponse } from '../../types/report'
 import { explainRun, overallVerdict, plural, repeatedAssumptions, type Overall } from '../../lib/report-view'
+import { namedSpecIn } from '../../lib/ci-workflow'
 import { ArriveOnce } from '../../motion'
 import { DownloadIcon } from '../Icons'
 import { useGlossary } from '../ui'
@@ -84,8 +85,10 @@ function RunExport({ id }: { id: string }) {
 /** Overall result. It fades up once when the run lands; it does NOT re-animate
  *  when the spec is edited afterwards, because the panel then goes stale rather
  *  than becoming new. */
-export function RunResults({ result, runKey, stale, rawMode, reportSerious, remedyActions, remedyEditor }: {
+export function RunResults({ result, runKey, stale, rawMode, reportSerious, remedyActions, remedyEditor, specFileName }: {
   result: RunResponse
+  /** The spec file the page downloads; named in an engine message's placeholder. */
+  specFileName: string
   /** Changes only when a new run lands, so the arrival plays once per run. */
   runKey: string | undefined
   stale: boolean
@@ -129,7 +132,7 @@ export function RunResults({ result, runKey, stale, rawMode, reportSerious, reme
             className="rounded-lg px-3 py-2.5 text-[13px]"
             style={{ background: 'var(--err-bg)', border: '1px solid var(--err-border)', color: 'var(--err-strong)', overflowWrap: 'anywhere' }}
           >
-            {result.error}
+            {namedSpecIn(result.error, specFileName)}
           </div>
         ) : (
           <div className="rounded-xl px-3.5 py-3" data-testid="run-summary" style={{ background: tone.bg, border: `1px solid ${tone.border}` }}>

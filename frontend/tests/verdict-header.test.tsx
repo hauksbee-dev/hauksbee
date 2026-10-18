@@ -149,7 +149,7 @@ describe('the Checks page shows every failure it counts', () => {
     const strip = renderToStaticMarkup(
       <RunStrip
         result={gateRun} stale={false} running={false} canRun validationCount={0} reportSerious={0}
-        detailsOpen={false} onToggleDetails={() => {}} onJump={() => {}}
+        detailsOpen={false} onToggleDetails={() => {}} onJump={() => {}} specFileName="spec.toml"
       />,
     )
     expect(strip).toMatch(/data-testid="run-count-fail"[^>]*>1 failed/)

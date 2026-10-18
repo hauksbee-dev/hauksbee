@@ -88,7 +88,7 @@ describe('what blocks judgement', () => {
 describe('an unjudged run', () => {
   const run = invalidRun(registry, ['open-part:Q1'])
   const html = renderToStaticMarkup(
-    <RunResults result={run} runKey="k" stale={false} rawMode={false} reportSerious={0} remedyActions={actions} />,
+    <RunResults result={run} runKey="k" stale={false} rawMode={false} reportSerious={0} remedyActions={actions} specFileName="spec.toml" />,
   )
 
   test('says it was not judged and opens what blocks it from one chip with the backend count', () => {
