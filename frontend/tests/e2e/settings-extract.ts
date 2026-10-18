@@ -5,10 +5,13 @@
 // What this exists to prove, and what nothing else in the repo can:
 //   - the Settings rail item opens a real page reading GET /api/settings/extract,
 //     and it renders the server's own summary line;
-//   - a preset's "Use" button really calls the server (POST .../preset/<id>)
-//     and the page reflects what came back: the backend picker shows the new
-//     backend active, and the model field's placeholder is the resolved
-//     default for THAT backend;
+//   - "Change" opens the one place to choose; a preset's "Use" button really
+//     calls the server (POST .../preset/<id>) and the page reflects what came
+//     back: the row reads Active, the Custom backend list shows the new backend
+//     selected, and the model field's placeholder is the resolved default for
+//     THAT backend;
+//   - exactly one setup is marked Recommended, and the escalation help agrees
+//     with the escalation option that is selected;
 //   - editing a field marks the draft dirty (Save goes from disabled to
 //     enabled) and the terminal-equivalent line updates to match;
 //   - Save really PUTs the draft and shows the server's own confirmation;
@@ -174,10 +177,18 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
   await shoot(page, '01-settings-loaded')
 
   // ── 2. A preset's Use really applies it ──────────────────────────────────
-  step('the agy preset\'s Use button applies it')
+  step('Change opens the one chooser; the agy preset\'s Use button applies it')
+  ok('the page starts with the current choice only, no chooser', await page.locator('[data-testid="settings-choose"]').count() === 0)
+  await page.click('[data-testid="settings-change"]')
+  const tags = await page.locator('[data-testid="settings-choose"] [data-testid$="-tag"]').allInnerTexts()
+  ok('exactly one setup is marked Recommended', tags.filter(t => /recommended/i.test(t)).length === 1, tags.join(' | '))
+  ok('the rest of the setups are behind More setups', await page.locator('[data-testid="settings-preset-agy"]').count() === 0)
+  await page.click('[data-testid="settings-more-toggle"]')
   await page.click('[data-testid="settings-preset-agy-use"]')
+  await page.waitForSelector('[data-testid="settings-preset-agy-use"]:disabled', { timeout: 10_000 })
+  await page.click('[data-testid="settings-custom-toggle"]')
   await page.waitForSelector('[data-testid="settings-backend-agy"][aria-pressed="true"]', { timeout: 10_000 })
-  ok('the backend picker now shows agy pressed/active', true)
+  ok('the custom backend list now shows agy selected', true)
   const modelPlaceholder = await page.locator('[data-testid="settings-model"]').getAttribute('placeholder')
   ok('the model field placeholder is agy\'s resolved default', modelPlaceholder === 'gemini-3.8-flash', String(modelPlaceholder))
   await shoot(page, '02-agy-preset-applied')
@@ -219,7 +230,8 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
   await page.click('[data-testid="settings-backend-codex"]')
   await page.locator('[data-testid="settings-model-pick-gpt-6.1-sol"]').waitFor()
   const picks = (await page.locator('[data-testid="settings-model-picks"] button').allInnerTexts()).map(t => t.replace(/\s+/g, ' '))
-  ok('the picker lists Sol first, recommended', picks[0]?.includes('gpt-6.1-sol') && picks[0].includes('Recommended'), picks.join(' | '))
+  ok('the picker lists Sol first, as the most accurate', picks[0]?.includes('gpt-6.1-sol') && picks[0].includes('Most accurate'), picks.join(' | '))
+  ok('a model note never adds a second Recommended marker', !picks.join(' ').includes('Recommended'), picks.join(' | '))
   ok('Luna is next, labelled as the cheaper pick', picks[1]?.includes('gpt-6-luna') && picks[1].includes('much cheaper'), picks.join(' | '))
   ok('no outdated model is offered', picks.length === 2 && !/gpt-5|gpt-6-sol/.test(picks.join(' ')), picks.join(' | '))
   ok('the unset model reads Sol as the default', await page.locator('[data-testid="settings-model"]').getAttribute('placeholder') === 'gpt-6.1-sol')
@@ -227,7 +239,7 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
   ok('choosing Luna fills the model field', await page.locator('[data-testid="settings-model"]').inputValue() === 'gpt-6-luna')
   await page.locator('[data-testid="settings-model"]').fill('gpt-5.6-sol')
   ok('an older name typed in is accepted and gets a hint, not a refusal',
-    (await page.locator('[data-testid="settings-model-hint"]').innerText()).includes('gpt-6.1-sol is recommended'))
+    (await page.locator('[data-testid="settings-model-hint"]').innerText()).includes('gpt-6.1-sol is the default'))
   await shoot(page, '05a-model-picker')
   await page.locator('[data-testid="settings-model"]').fill('')
   const permission = page.locator('[data-testid="settings-permission-mode"]')
@@ -243,6 +255,8 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.click('[data-testid="nav-settings"]')
   await page.waitForSelector('[data-testid="settings-status"]')
+  await page.click('[data-testid="settings-change"]')
+  await page.click('[data-testid="settings-custom-toggle"]')
   await page.click('[data-testid="settings-backend-codex"]')
   await page.click('[data-testid="settings-advanced-toggle"]')
   ok('approve-for-me remains selected after reload',
@@ -265,7 +279,9 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
     (await page.locator('[data-testid="settings-model-pick-claude-haiku-5-5"]').innerText()).includes('harnessed: ~100k-token stages'))
   const terminal = () => page.locator('[data-testid="settings-terminal"]').innerText()
   await page.click('[data-testid="settings-escalate-none"]')
-  ok('Never escalate is the terminal spelling of an empty ladder', (await terminal()).includes('claude-code.escalate=none'))
+  ok('No escalation is the terminal spelling of an empty ladder', (await terminal()).includes('claude-code.escalate=none'))
+  ok('the escalation help agrees with No escalation',
+    /^No escalation/.test(await page.locator('[data-testid="settings-escalate-effective"]').innerText()))
   await page.click('[data-testid="settings-escalate-pick-claude-sonnet-5-5"]')
   await page.click('[data-testid="settings-escalate-pick-claude-haiku-5-5"]')
   ok('the terminal line spells the ladder comma-separated, in the order picked',
@@ -273,7 +289,13 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
   ok('a picked model shows its position', (await page.locator('[data-testid="settings-escalate-pick-claude-haiku-5-5"]').innerText()).includes('2.'))
   await shoot(page, '05b-escalate')
   await page.click('[data-testid="settings-escalate-default"]')
-  ok('Default ladder leaves the setting blank', !(await terminal()).includes('claude-code.escalate='))
+  ok('Default leaves the setting blank', !(await terminal()).includes('claude-code.escalate='))
+  // The fixture's default for Claude Code is no ladder: the option's name and the
+  // help must then both say so (they used to say "Default ladder" and "no escalation").
+  const defaultName = await page.locator('[data-testid="settings-escalate-default"]').innerText()
+  const defaultHelp = await page.locator('[data-testid="settings-escalate-effective"]').innerText()
+  ok('the Default option and its help say the same thing about escalation',
+    /no escalation/i.test(defaultName) === /no escalation/i.test(defaultHelp) && !/ladder/i.test(defaultName), `${defaultName} | ${defaultHelp}`)
 
   // ── 6. Test backend streams and reports ─────────────────────────────────
   step('Test backend streams a reply')

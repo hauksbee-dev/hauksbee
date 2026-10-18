@@ -23,6 +23,43 @@ const isExtractor = (d: { sends_data_offhost?: string | null }) => !!d.sends_dat
 const inThisPage = (text: string) =>
   text.replace(/in the app use Install on the\s+Environment page/g, 'use the Install button on this page')
 
+/** One plain line per tool on what it adds and what is missing without it. The
+ *  engine's own wording for `unlocks` names internal oracles; until that is
+ *  reworded at the source and a shared label table exists, the Environment page
+ *  keeps these few lines here, keyed by the engine's dependency id. An id not
+ *  listed falls back to the engine's text. */
+const DEP_PLAIN: Record<string, { enables: string; without: string }> = {
+  renode: {
+    enables: 'STM32, nRF52 and RISC-V firmware simulation',
+    without: 'Without it, STM32, nRF52 and RISC-V firmware cannot be simulated. Board checks do not need it.',
+  },
+  'esp-qemu': {
+    enables: 'ESP32, ESP32-S3 and ESP32-C3 firmware simulation',
+    without: 'Without it, ESP32, ESP32-S3 and ESP32-C3 firmware cannot be simulated.',
+  },
+  ngspice: {
+    enables: 'a second opinion on analog results, from the ngspice circuit simulator',
+    without: 'Without it, analog results are not cross-checked against a second simulator.',
+  },
+  'kicad-cli': {
+    enables: "a second opinion on copper design-rule findings from KiCad's own rules, and SVG/Gerber export",
+    without: "Without it, copper findings are not cross-checked against KiCad's own rules and SVG/Gerber export is unavailable.",
+  },
+  avr: {
+    enables: 'ATmega and ATtiny firmware simulation',
+    without: 'Without it, ATmega and ATtiny firmware cannot be simulated.',
+  },
+}
+
+/** The engine quotes download sizes for every OS ("about a 120 MB download on
+ *  Windows (about 80 MB on Unix)"); show only the one for this machine. */
+export function costForOs(cost: string, os: string | undefined): string {
+  const both = /about an? (\d+) MB download on Windows \(about (\d+) MB on Unix\)/
+  const m = both.exec(cost)
+  if (!m || !os) return cost
+  return cost.replace(both, `about ${os === 'windows' ? m[1] : m[2]} MB download`)
+}
+
 /** After this long the first probe is slow, not stuck: say so. */
 const SLOW_PROBE_MS = 4000
 
@@ -39,6 +76,9 @@ export function DepsPanel({ engineVersion, onOpenSettings }: { engineVersion?: s
   const allDeps = fetchState.phase === 'ready' ? fetchState.deps : []
   const deps = allDeps.filter(d => !isExtractor(d))
   const missing = deps.filter(d => !d.present).length
+  const os = fetchState.phase === 'ready' ? fetchState.environment?.os : undefined
+  // One main action on the page: the first install the server can do.
+  const firstInstallable = deps.find(d => !d.present && d.installable)
 
   return (
     <div className="mt-10" data-testid="deps-panel">
@@ -114,83 +154,108 @@ export function DepsPanel({ engineVersion, onOpenSettings }: { engineVersion?: s
         <>
           <div className="text-[12px] text-center mb-5" style={{ color: 'var(--silk-dim)' }}>
             {missing === 0
-              ? 'Everything optional is installed. All co-sim backends and oracles are ready.'
-              : `Core hauksbee works now. ${missing} optional ${missing === 1 ? 'piece' : 'pieces'} would unlock more, install from here or from the terminal.`}
+              ? 'Everything optional is installed. All firmware simulators and cross-checks are ready.'
+              : `Board checks work now. ${missing} optional ${missing === 1 ? 'tool adds' : 'tools add'} more simulation or cross-checking.`}
           </div>
 
           <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--hairline)' }}>
-            {deps.map((d, i) => (
-              <div
-                key={d.id}
-                data-testid={`dep-${d.id}`}
-                className="px-4 py-3"
-                style={{ background: 'var(--surface)', borderTop: i > 0 ? '1px solid var(--hairline)' : 'none' }}
-              >
-                <div className="flex items-start gap-3 flex-wrap">
-                  <span
-                    aria-hidden
-                    className="mt-1.5"
-                    style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: 4,
-                      flexShrink: 0,
-                      // A missing tool here is optional, not a fault: neutral, not red.
-                      background: d.present ? 'var(--ok)' : 'var(--silk-faint)',
-                      boxShadow: d.present ? '0 0 8px rgba(87,224,160,0.5)' : 'none',
-                      display: 'inline-block',
-                    }}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[13px] font-semibold" style={{ color: 'var(--silk)' }}>
-                      {d.name}
-                      <span
-                        className="ml-2 text-[10px] font-bold tracking-widest uppercase"
-                        style={{ color: d.present ? 'var(--ok)' : 'var(--silk-faint)' }}
-                        data-testid={`dep-status-${d.id}`}
-                      >
-                        {d.present ? 'installed' : 'optional · not installed'}
-                      </span>
-                      {d.version && (
-                        <span className="ml-2 text-[11px] font-normal" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
-                          {d.version}
+            {deps.map((d, i) => {
+              const plain = DEP_PLAIN[d.id]
+              const unlocks = plain?.enables ?? d.unlocks
+              return (
+                <div
+                  key={d.id}
+                  data-testid={`dep-${d.id}`}
+                  className="px-4 py-3"
+                  style={{ background: 'var(--surface)', borderTop: i > 0 ? '1px solid var(--hairline)' : 'none' }}
+                >
+                  <div className="flex items-start gap-3 flex-wrap">
+                    <span
+                      aria-hidden
+                      className="mt-1.5"
+                      style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: 4,
+                        flexShrink: 0,
+                        // A missing tool here is optional, not a fault: neutral, not red.
+                        background: d.present ? 'var(--ok)' : 'var(--silk-faint)',
+                        boxShadow: d.present ? '0 0 8px rgba(87,224,160,0.5)' : 'none',
+                        display: 'inline-block',
+                      }}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[13px] font-semibold" style={{ color: 'var(--silk)' }}>
+                        {d.name}
+                        <span
+                          className="ml-2 text-[10px] font-bold tracking-widest uppercase"
+                          style={{ color: d.present ? 'var(--ok)' : 'var(--silk-faint)' }}
+                          data-testid={`dep-status-${d.id}`}
+                        >
+                          {d.present ? 'installed' : 'optional · not installed'}
                         </span>
+                        {d.version && (
+                          <span className="ml-2 text-[11px] font-normal" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
+                            {d.version}
+                          </span>
+                        )}
+                      </div>
+                      {/* One line on why it matters: what it adds, and what is missing without it. */}
+                      <div className="text-[12px] mt-0.5 leading-relaxed" style={{ color: 'var(--silk-dim)' }} data-testid={`dep-why-${d.id}`}>
+                        {d.present ? `Adds ${unlocks}.` : (plain?.without ?? `Without it: no ${unlocks}.`)}
+                      </div>
+                      {d.present && d.path && (
+                        <div
+                          className="text-[11px] mt-0.5 truncate"
+                          style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}
+                          title={d.path}
+                        >
+                          {tildeHome(d.path)}
+                        </div>
+                      )}
+                      {!d.present && !d.installable && d.cost && (
+                        <div className="text-[11px] mt-1 leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
+                          <span style={{ color: 'var(--silk-faint)' }}>Cost: </span>
+                          {costForOs(d.cost, os)}
+                        </div>
+                      )}
+                      {/* A tool the app cannot install gets the exact command for this OS; one it
+                          can install gets the button, with the command kept behind Details. */}
+                      {!d.present && d.manual && !d.installable && (
+                        <div className="text-[11px] mt-1.5" style={{ color: 'var(--silk-faint)' }}>
+                          <TerminalCommand command={d.manual} testId="dep-manual-copy" />
+                        </div>
+                      )}
+                      {!d.present && (d.detail || (d.installable && d.manual)) && (
+                        <details className="mt-1.5 text-[11px]" data-testid={`dep-detail-${d.id}`} style={{ color: 'var(--silk-faint)' }}>
+                          <summary className="cursor-pointer">Details</summary>
+                          {d.detail && (
+                            <div className="mt-1 leading-relaxed">
+                              <LinkedText text={inThisPage(tildeHome(d.detail))} />
+                            </div>
+                          )}
+                          {d.installable && d.manual && (
+                            <div className="mt-1.5">
+                              <TerminalCommand command={d.manual} testId="dep-manual-copy" />
+                            </div>
+                          )}
+                        </details>
                       )}
                     </div>
-                    <div className="text-[12px] mt-0.5 leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
-                      {d.present ? 'Unlocks' : 'Would unlock'}: {d.unlocks}
-                    </div>
-                    {d.present && d.path && (
-                      <div
-                        className="text-[11px] mt-0.5 truncate"
-                        style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}
-                        title={d.path}
-                      >
-                        {tildeHome(d.path)}
-                      </div>
-                    )}
-                    {d.detail && (
-                      <div className="text-[11px] mt-0.5 leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
-                        <LinkedText text={inThisPage(tildeHome(d.detail))} />
-                      </div>
-                    )}
-                    {!d.present && !d.installable && d.cost && (
-                      <div className="text-[11px] mt-1 leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
-                        <span style={{ color: 'var(--silk-faint)' }}>Cost: </span>
-                        {d.cost}
-                      </div>
-                    )}
-                    {!d.present && d.manual && (
-                      <div className="text-[11px] mt-1.5" style={{ color: 'var(--silk-faint)' }}>
-                        <TerminalCommand command={d.manual} testId="dep-manual-copy" />
-                      </div>
+                    {!d.present && d.installable && (
+                      <InstallButton
+                        dep={d}
+                        install={install}
+                        onInstall={id => void runInstall(id)}
+                        variant={d.id === firstInstallable?.id ? 'primary' : 'secondary'}
+                        cost={costForOs(d.cost, os)}
+                      />
                     )}
                   </div>
-                  {!d.present && d.installable && <InstallButton dep={d} install={install} onInstall={id => void runInstall(id)} />}
+                  <InstallProgress id={d.id} install={install} />
                 </div>
-                <InstallProgress id={d.id} install={install} />
-              </div>
-            ))}
+              )
+            })}
           </div>
 
           {/* Datasheet drafting has one owner: Settings chooses, installs and
