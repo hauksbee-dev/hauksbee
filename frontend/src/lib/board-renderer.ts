@@ -326,7 +326,7 @@ export interface OverlayData {
 /** The board result's layer: drawn under the highlight and hover passes, so
  *  a part or net the reader points at still answers on top of it. Colours are
  *  the app's own severity tokens. */
-function drawResultLayer(ctx: Ctx, board: ParsedBoard, cam: Camera, result: ResultOverlay, renderOpts?: RenderOptions) {
+function drawResultLayer(ctx: Ctx, board: ParsedBoard, cam: Camera, result: ResultOverlay, renderOpts?: RenderOptions, hoverRefs?: ReadonlySet<string>) {
   const warn = cssToken('--warn') || '#fbbf24'
   const err = cssToken('--err') || '#f87171'
   const ink = (level: ResultLevel) => (level === 'serious' ? err : warn)
@@ -359,18 +359,24 @@ function drawResultLayer(ctx: Ctx, board: ParsedBoard, cam: Camera, result: Resu
     ctx.strokeRect(bx, by, bw, bh)
     ctx.setLineDash([])
     if (!tag) return
+    // The tag is a hover label, one at a time: at fit zoom a dozen of them
+    // overlapped into unreadable stacks. The outline plus the legend says "no
+    // model"; the label names which part and what is wrong when you point at it.
     const fontPx = 10
     ctx.font = `600 ${fontPx}px ui-monospace, monospace`
     const w = ctx.measureText(tag).width + 8
+    // Kept inside the canvas: a part at the edge must not push its label off it.
+    const tx = Math.min(Math.max(2, bx), ctx.canvas.width - w - 2)
+    const ty = Math.max(2, by - fontPx - 7)
     ctx.fillStyle = color
     ctx.beginPath()
-    ctx.roundRect(bx, by - fontPx - 7, w, fontPx + 6, 3)
+    ctx.roundRect(tx, ty, w, fontPx + 6, 3)
     ctx.fill()
     ctx.fillStyle = boardTheme().bg
-    ctx.fillText(tag, bx + 4, by - 5)
+    ctx.fillText(tag, tx + 4, ty + fontPx + 1)
   }
   for (const [ref, level] of Object.entries(result.findingRefs)) outline(ref, ink(level), false, null)
-  for (const ref of result.openRefs) outline(ref, warn, true, 'no model')
+  for (const ref of result.openRefs) outline(ref, warn, true, hoverRefs?.has(ref) ? `${ref} · no model` : null)
   for (const p of result.points) {
     const [sx, sy] = ws(cam, p)
     if (offscreenCircle(ctx, sx, sy, 10)) continue
@@ -451,7 +457,7 @@ export function renderDynamicOverlay(ctx: Ctx, board: ParsedBoard, cam: Camera, 
     ctx.shadowBlur = 0
   }
 
-  if (overlay.result) drawResultLayer(ctx, board, cam, overlay.result, renderOpts)
+  if (overlay.result) drawResultLayer(ctx, board, cam, overlay.result, renderOpts, overlay.hoverRefs)
 
   // Highlighted nets: copper, vias, pads drawn bright.
   if (hasHighlight) {

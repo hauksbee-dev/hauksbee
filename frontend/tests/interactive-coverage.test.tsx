@@ -191,15 +191,30 @@ test('a live trace click offers a scope probe and repeatable checks together', a
     onClose={() => {}}
   />)
   expect(html).toContain('data-testid="selection-add-probe"')
-  expect(html).toContain('Watch this trace live')
+  expect(html).toContain('Show +3V3 on the scope')
+  expect(html).toContain('NET · LIVE')
   // Checks come from the assertion catalogue (see check-catalog.test.ts), which
   // the static render has not loaded; the card itself never opens a dialog.
   expect(html).not.toContain('constraint-modal')
   expect(html).not.toContain('aria-modal')
+  // Driving the net sits behind one disclosure, not three loose buttons.
+  expect(html).toContain('data-testid="selection-drive"')
   expect(html).toContain('data-testid="selection-add-stimulus"')
-  expect(html).toContain('Drive this trace in a co-sim scenario')
+  expect(html).toContain('Apply a signal now and save it as a test')
   expect(html).toContain('data-testid="selection-add-supply"')
-  expect(html).toContain('Use this trace as a 3.3 V scenario supply')
+  expect(html).toContain('Power this net at 3.3 V now and save the supply')
+
+  const staticHtml = renderToStaticMarkup(<SelectionCard
+    net="+3V3"
+    component={null}
+    onQueue={() => {}}
+    onClose={() => {}}
+  />)
+  expect(staticHtml).not.toContain('NET · LIVE')
+  expect(staticHtml).not.toContain('selection-add-probe')
+  expect(staticHtml).toContain('Apply a signal to this net in a test')
+  expect(staticHtml).toContain('Attach a pushbutton to this net')
+  expect(staticHtml).toContain('Power this net at 3.3 V in a test')
 
   const liveHtml = renderToStaticMarkup(<SelectionCard
     net="+3V3"
@@ -208,9 +223,40 @@ test('a live trace click offers a scope probe and repeatable checks together', a
     peripheralMode="live-and-scenario"
     onClose={() => {}}
   />)
-  expect(liveHtml).toContain('Drive this trace now and save the interaction')
   expect(liveHtml).toContain('Attach a pushbutton now and save it')
-  expect(liveHtml).toContain('Power this trace now at 3.3 V and save the supply')
+})
+
+test('a part card says its model state in plain words, never a raw id', async () => {
+  const { SelectionCard } = await import('../src/components/SelectionCard')
+  const html = renderToStaticMarkup(<SelectionCard
+    net={null}
+    component={{ ref: 'U3', value: 'AMS1117-3.3', lib_id: 'Package_TO_SOT_SMD:SOT-223-3_TabPin2' }}
+    boundKind="vreg"
+    modelCoverage={{
+      reference: 'U3', value: 'AMS1117-3.3', lib_id: 'Package_TO_SOT_SMD:SOT-223-3_TabPin2', footprint: 'SOT-223',
+      stage: 'executable_scope_unspecified', actionable_behavior_gap: true, model_id: 'ams1117_3v3',
+      model_kind: 'vreg', layer: 'builtin', origin: 'vreg',
+      source: { tier: 'datasheet-derived', layer: 'builtin', origin: 'vreg', validation: 'datasheet-curves' },
+      implements: [], missing: ['board_crystal_frequency_binding', 'usb_device_controller', 'silicon_timing_and_errata', 'silicon_power_current_profile'], pins: [],
+    }}
+    onQueue={() => {}}
+    onAuthorModel={() => {}}
+    onClose={() => {}}
+  />)
+  const [visible] = html.split('data-testid="selection-technical"')
+  expect(visible).toContain('Voltage regulator')
+  expect(visible).toContain('Scope not stated')
+  expect(visible).toContain('4 gaps')
+  expect(visible).toContain('Crystal frequency from the board')
+  expect(visible).toContain('Checked against datasheet curves')
+  expect(visible).toContain('Extend U3&#x27;s model')
+  for (const raw of ['vreg', 'datasheet-curves', 'ams1117_3v3', 'board_crystal_frequency_binding', 'SOT-223-3_TabPin2', 'executable_scope_unspecified']) {
+    expect(visible).not.toContain(raw)
+  }
+  // The raw ids live under Technical details, for the developer who wants them.
+  expect(html).toContain('ams1117_3v3')
+  // One primary action on the card.
+  expect(html.split('hb-btn-primary').length - 1).toBe(1)
 })
 
 test('visual interaction builder round-trips a real stimulus and timeline', async () => {
@@ -273,7 +319,7 @@ test('a component with a bus-model gap offers explicit register-map attachment',
   />)
   const html = card(['pin_roles'], ['i2c_spi_register_map'])
   expect(html).toContain('data-testid="selection-add-sensor"')
-  expect(html).toContain('Open its register-map behavior builder')
+  expect(html).toContain('Simulate its registers with a behavior builder')
 
   const modelOwned = card(['register_map_subset', 'chip_id_read'], ['full_register_map'])
   expect(modelOwned).toContain('data-testid="selection-register-map-owned"')
