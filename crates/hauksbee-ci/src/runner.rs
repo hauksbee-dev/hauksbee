@@ -1938,7 +1938,7 @@ fn build_evidence(
             if refs.is_empty() {
                 "none".to_string()
             } else {
-                refs.join(", ")
+                hauksbee_ir::vocabulary::names_summary(refs)
             }
         };
         let (fit, no_fit) = (listed(&variant.fit), listed(&variant.no_fit));

@@ -113,7 +113,7 @@ pub(crate) fn emit_quiet(
     let unmapped_note = (!unmapped.is_empty()).then(|| {
         format!(
             "Not mapped to the board: {} connect(s) to no board net, so those thermal rows have no board location.",
-            unmapped.join(", ")
+            hauksbee_ir::vocabulary::names_summary(&unmapped)
         )
     });
     let report_evidence = evidence.with_maps(maps);
@@ -318,7 +318,7 @@ fn emit_thermal_coverage_caveat(coverage: &CheckCoverage, open_refs: &[String]) 
             "  open/unresolved active IC(s): {}. Bind them with --models-dir, then re-run. \
              (Partial coverage FAILS with exit 3 by default; pass --no-strict-thermal to \
              keep exit 0 while this caveat still prints.)",
-            open_refs.join(", ")
+            hauksbee_ir::vocabulary::names_summary(open_refs)
         );
     }
 }

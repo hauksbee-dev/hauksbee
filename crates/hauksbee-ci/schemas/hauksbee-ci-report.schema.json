@@ -372,8 +372,15 @@
       ]
     },
     "CiJsonAssertion": {
-      "description": "Published JSON shape for one evaluated assertion.\n\nKept separate from the runtime [`AssertResult`] because subject nets/refs\nare internal waiver keys, while the causal evidence map is part of the\nexternal contract. The committed schema is generated from this type via\n[`CiJsonReport`]: see `crates/hauksbee-ci/tests/ci_report_schema_drift.rs`.\n`why`, `waived`, and `evidence` are the only fields a consumer may find\nABSENT rather than null.",
+      "description": "Published JSON shape for one evaluated assertion.\n\nKept separate from the runtime [`AssertResult`] because subject nets/refs\nare internal waiver keys, while the causal evidence map is part of the\nexternal contract. The committed schema is generated from this type via\n[`CiJsonReport`]: see `crates/hauksbee-ci/tests/ci_report_schema_drift.rs`.\n`why`, `waived`, `all_subjects` and `evidence` are the only fields a consumer\nmay find ABSENT rather than null.",
       "properties": {
+        "all_subjects": {
+          "description": "Every part and net the `label` stands for when it names too many to\nprint (\"... and 44 more\"): the whole list, parts first. ABSENT (not\nempty) when the label already names them all.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "detail": {
           "description": "One-line detail (the measured value, the offending seed, etc).",
           "type": "string"

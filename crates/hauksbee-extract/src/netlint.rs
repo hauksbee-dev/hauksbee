@@ -2278,7 +2278,7 @@ fn check_output_contention(board: &ExtractedBoard, report: &mut NetLintReport) {
                 "net '{}' is driven by {} push-pull outputs with no series resistor or tri-state to resolve them: {}",
                 net.name,
                 drivers.len(),
-                drv_desc.join(", ")
+                hauksbee_ir::vocabulary::names_summary(&drv_desc)
             ),
             refs: distinct.into_iter().collect(),
             nets: vec![net.name.clone()],
@@ -2383,7 +2383,7 @@ fn check_pin_functions(board: &ExtractedBoard, report: &mut NetLintReport) {
                 .collect();
             push(Severity::High, format!(
                 "net '{}' joins {} UART transmit pins and no receive pin: {}. Two transmitters drive the same wire and neither hears the other, so the link cannot work (TX must go to the other side's RX); swap the TX/RX pair between these parts",
-                net.name, pins.len(), pins.join(", ")), parts.into_iter().collect(), vec![net.name.clone()]);
+                net.name, pins.len(), hauksbee_ir::vocabulary::names_summary(&pins)), parts.into_iter().collect(), vec![net.name.clone()]);
         }
     }
     for led in board

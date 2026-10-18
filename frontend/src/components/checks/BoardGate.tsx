@@ -43,6 +43,16 @@ export function BoardGate({ results, stale }: {
             <div className="mt-0.5 text-[11px]" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)', overflowWrap: 'anywhere' }}>
               {r.label}
             </div>
+            {r.all_subjects && r.all_subjects.length > 0 && (
+              <details data-testid="board-gate-all" className="mt-0.5 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+                <summary className="cursor-pointer" style={{ color: 'var(--silk-dim)' }}>
+                  Show all {r.all_subjects.length}
+                </summary>
+                <div className="mt-0.5" style={{ fontFamily: 'var(--font-mono)', overflowWrap: 'anywhere' }}>
+                  {r.all_subjects.join(', ')}
+                </div>
+              </details>
+            )}
             {r.why && (
               <div className="mt-0.5 text-[12px]" style={{ color: 'var(--silk-dim)' }}>
                 <span className="font-semibold">Fix: </span>{r.why}

@@ -507,15 +507,10 @@ fn first_siblings<'a>(
     refs_summary(&others)
 }
 
-/// The first few references, then a count of the rest.
+/// The first few references, then a count of the rest (the one implementation,
+/// [`hauksbee_ir::vocabulary::names_summary`], shared by every surface).
 pub(crate) fn refs_summary(refs: &[String]) -> String {
-    const SHOWN: usize = 6;
-    match refs.split_at_checked(SHOWN) {
-        Some((head, rest)) if !rest.is_empty() => {
-            format!("{} and {} more", head.join(", "), rest.len())
-        }
-        _ => refs.join(", "),
-    }
+    hauksbee_ir::vocabulary::names_summary(refs)
 }
 
 /// Version of the `run --json` document contract.
@@ -614,7 +609,7 @@ pub fn no_signal_path_reason(net: &str, summary: &BindSummary) -> String {
     } else {
         format!(
             "no signal path to {net}; unresolved driving ICs: {}",
-            drivers.join(", ")
+            hauksbee_ir::vocabulary::names_summary(&drivers)
         )
     }
 }
@@ -648,7 +643,7 @@ pub fn thermal_validity(dissipating_rows: usize, summary: &BindSummary) -> Valid
                 .filter(|u| u.active_ic)
                 .map(|u| u.reference.clone()),
         );
-        let refs = refs.join(", ");
+        let refs = hauksbee_ir::vocabulary::names_summary(&refs);
         Validity::refused(Refusal::new(
             "a thermal-safety conclusion for the board",
             format!(
@@ -852,7 +847,7 @@ pub fn unmodelled_critical_refs(summary: &BindSummary) -> Vec<String> {
 /// docs/ci/CI.md.
 #[must_use]
 pub fn inconclusive_verdict(refs: &[String]) -> String {
-    let list = refs.join(", ");
+    let list = hauksbee_ir::vocabulary::names_summary(refs);
     format!(
         "INCONCLUSIVE: {} current-carrying / active part(s) have no model ({list}), \
          so a clean result here is not a clean bill. Draft models from their \

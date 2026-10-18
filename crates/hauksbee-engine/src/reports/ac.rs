@@ -64,7 +64,7 @@ pub(crate) fn emit_quiet(
             .iter()
             .all(|n| !bound.net_names.iter().any(|k| k == n))
     {
-        let missing = nodes.join(", ");
+        let missing = hauksbee_ir::vocabulary::names_summary(&nodes);
         let reason = format!("no requested AC nodes found in the circuit: {missing}");
         let refusal = Refusal::new(
             format!("an AC response for requested node(s) {missing}"),
@@ -128,7 +128,7 @@ pub(crate) fn emit_quiet(
     // the user explicitly asked for nodes; the "every node" default never lands
     // here because at least one real node exists in any bound circuit.
     if nonempty.is_empty() {
-        let missing = nodes.join(", ");
+        let missing = hauksbee_ir::vocabulary::names_summary(&nodes);
         let reason = format!("no requested AC nodes found in the circuit: {missing}");
         let refusal = Refusal::new(
             format!("an AC response for requested node(s) {missing}"),
@@ -227,7 +227,7 @@ pub(crate) fn emit_quiet(
             eprintln!(
                 "  (omitted {} net(s) with no signal path from the CSV: {})",
                 no_path.len(),
-                no_path.join(", ")
+                hauksbee_ir::vocabulary::names_summary(&no_path)
             );
         }
     }
@@ -365,7 +365,7 @@ pub(crate) fn emit_quiet(
             no_path_nets.len(),
             requested_nets,
             crate::result::AC_FLOOR_DB,
-            no_path_nets.join(", "),
+            hauksbee_ir::vocabulary::names_summary(&no_path_nets),
         );
     }
 
@@ -382,7 +382,7 @@ pub(crate) fn emit_quiet(
              are unresolved/open ({}), so the response/loop shown is a passive shell, not the real \
              circuit. Bind them with --models-dir, then re-run.",
             ac_open.len(),
-            ac_open.join(", "),
+            hauksbee_ir::vocabulary::names_summary(&ac_open),
         );
     }
 
