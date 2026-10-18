@@ -30,6 +30,8 @@ import { mkdirSync, realpathSync } from 'node:fs'
 // refusal card renders the diagnostic through it, so the journey has to compare
 // against the same transform rather than a second copy of the rule.
 import { withoutEngineFormatList } from '../../src/lib/board-formats'
+import { reportView, verdictSentence } from '../../src/lib/report-view'
+import type { WebReport as AppReport } from '../../src/types/report'
 import {
   canonicalJson,
   cosimDrovePin,
@@ -641,10 +643,17 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
       + `${exportedReport.num_nets} ${exportedReport.num_nets === 1 ? 'net' : 'nets'}`
     const verdict = await page.locator('[data-testid="report-verdict"]').innerText()
     if (inventory.trim() !== expectedInventory) failures.push('rendered board inventory differs from JSON export')
-    if (!verdict.includes(exportedReport.headline)) failures.push('rendered headline differs from JSON export')
+    // The card prints the headline as its sentence (verdict words cut, the
+    // word sits beside it) plus one row per condition the headline rests on,
+    // so the export's headline must reach the page as exactly those pieces.
+    // The export is the app's whole report; this file's WebReport names only the fields it reads.
+    const view = reportView(exportedReport as unknown as AppReport)
+    const pieces = [verdictSentence(view.headline), ...view.conditions].filter(Boolean)
+    const headlineShown = pieces.length > 0 && pieces.every(piece => verdict.includes(piece))
+    if (!headlineShown) failures.push('rendered headline differs from JSON export')
     exported = canonicalJson(exportedReport) === canonicalJson(independentReport)
       && inventory.trim() === expectedInventory
-      && verdict.includes(exportedReport.headline)
+      && headlineShown
   } else {
     failures.push('JSON export is unavailable after a successful drop')
   }

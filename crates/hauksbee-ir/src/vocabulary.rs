@@ -312,7 +312,7 @@ impl VerdictState {
 
     /// The display label every human surface prints.
     ///
-    /// A state that is neither a pass nor a fail reads "<word>, not a pass":
+    /// A state that is neither a pass nor a fail reads "`<word>`, not a pass":
     /// the app's verdict card shows the word as its headline ("PARTLY
     /// JUDGED", "INCONCLUSIVE") and the rest as its qualifier, the words the
     /// CLI's [`PARTLY_JUDGED_LEAD`] and closing `VERDICT: inconclusive` use.

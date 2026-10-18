@@ -123,7 +123,7 @@ await browserFlow({ out: OUT, viewport: { width: 1280, height: 900 } }, async (p
     ...tail,
   ])
   const panelText = await panel.innerText()
-  ok('the panel shows the current tier and harness', /claude-sonnet-5-5/.test(panelText) && /tier 2 of 3/.test(panelText), panelText)
+  ok('the panel shows the current tier and harness', /claude-sonnet-5-5/.test(panelText) && /Attempt 2 of 3/.test(panelText), panelText)
   ok('the panel lists the page read', (await panel.locator('[data-testid="agent-activity-pages"]').innerText()).includes('7'))
   ok('API billing shows tokens and the list-price dollar cost', /12\.3k tokens/.test(panelText) && panelText.includes('$0.0123 list price'), panelText)
   ok('the panel shows the escalation', /claude-haiku-5-5\s*→\s*claude-sonnet-5-5: validator failed/.test(
