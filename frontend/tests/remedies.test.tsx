@@ -142,11 +142,19 @@ describe('measured against its limits', () => {
 })
 
 describe('writing a model', () => {
-  test('starts on an identity-only scaffold for the part', () => {
-    const toml = identityScaffold({ reference: 'U1', value: 'XLOGIC9999' })
+  test('starts on an identity-only scaffold of the part\'s own kind', () => {
+    const toml = identityScaffold({ reference: 'U1', value: 'XLOGIC9999' }, 'digital')
     expect(toml).toContain('id = "u1_xlogic9999"')
     expect(toml).toContain("value_re = '^XLOGIC9999$'")
     expect(toml).toContain('identity_only = true')
+    expect(toml).toContain('kind = "digital"')
+  })
+
+  test('never claims a kind it was not told: no default "digital"', () => {
+    const toml = identityScaffold({ reference: 'Q1', value: 'BS250' })
+    expect(toml).not.toContain('kind = "digital"')
+    expect(toml).toContain('kind = "choose_kind"')
+    expect(identityScaffold({ reference: 'Q1', value: 'BS250' }, 'pmos')).toContain('kind = "pmos"')
   })
 
   test('places validator complaints on their lines, with a fix where one is honest', () => {
