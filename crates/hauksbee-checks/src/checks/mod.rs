@@ -364,14 +364,19 @@ pub fn engine_lint_swept(
     (report, plan)
 }
 
-/// The lint's progress, in `LINT_UNITS`: each tick below is the share, in
-/// percent, of the lint's wall time spent in the passes just run, measured
-/// with a sampling profiler on a private 6,884-part netlist.
+/// The lint's progress, in percent of its own time: each tick below is the share, in
+/// percent, of the lint's wall time spent in the passes just run (they sum to
+/// 100). Measured by timestamping every tick over `stickhub` tiled 12 and 30
+/// times and a private 6,884-part netlist; the passes' shares agreed to within
+/// a few points across them. The first tick also carries a start-up cost that
+/// does not grow with the board, and the last covers the model-control pass.
+/// The layout checks that follow the lint are not here: they are one pass that
+/// `layout_lint` credits whole (see `progress::layout_begins`).
 /// The bar only needs the shape (a handful of passes carry most of the time),
 /// so a pass that later speeds up or slows down moves the bar a little off the
 /// clock and nothing else.
 fn lint_tick(percent: u64) {
-    hauksbee_ir::progress::advance_in(hauksbee_ir::progress::Stage::Nets, percent);
+    hauksbee_ir::progress::lint_advance(percent);
 }
 
 /// An LED string's current judged with no solve (a GPIO-lit string, or a
@@ -395,11 +400,11 @@ fn add_unsolved_led_findings(
 /// One [`engine_lint`] pass over `board` as it stands.
 fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = board.net_lint();
-    lint_tick(2);
+    lint_tick(5);
     report
         .findings
         .extend(straps::strap_lint(board, lib).findings);
-    lint_tick(15);
+    lint_tick(13);
     report.findings.extend(resources_lint(board, lib).findings);
     report
         .findings
@@ -407,7 +412,7 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     report
         .findings
         .extend(envelope::envelope_lint(board, lib).findings);
-    lint_tick(14);
+    lint_tick(12);
     report
         .findings
         .extend(contention::contention_lint(board, lib).findings);
@@ -451,12 +456,12 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
         .collect();
     report.findings.extend(held_off);
     report.findings.extend(control);
-    lint_tick(3);
+    lint_tick(4);
     // One binding serves both checks that need the bound board: the rail
     // conflicts read its report, the DC stress pass then consumes it. Binding
     // a large board is not cheap, so it is done once here, not once per check.
     let bound = hauksbee_bind::binder::bind_board(board, lib);
-    lint_tick(17);
+    lint_tick(16);
     report
         .findings
         .extend(rail_conflicts::rail_conflict_findings(&bound.report).findings);
@@ -478,24 +483,24 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     report
         .findings
         .extend(dc_stress::dc_stress_at_corners(board, lib, bound).findings);
-    lint_tick(7);
+    lint_tick(14);
     add_unsolved_led_findings(&mut report, board, lib);
     // Static surfaces have no solved levels, so the comparator half of this
     // check reads the rail table and abstains on a divider tap; the ADC
     // source-impedance half is pure topology and runs either way.
     let rails = |net: &str| hauksbee_bind::binder::power_rail_voltage(net);
-    lint_tick(13);
+    lint_tick(12);
     report
         .findings
         .extend(analog_inputs::analog_input_lint(board, lib, &rails).findings);
-    lint_tick(13);
+    lint_tick(10);
     // Likewise a logic input is judged statically only where it is tied to a
     // named rail (3.3 V into a 5 V CMOS input); solved levels judge the rest.
     let point = |net: &str| rails(net).map(|v| envelope::RailRange { min_v: v, max_v: v });
     report
         .findings
         .extend(logic_levels::logic_level_lint(board, lib, &point).findings);
-    lint_tick(13);
+    lint_tick(12);
     for finding in model_controls::model_control_lint(board, lib).findings {
         // Schematic/netlist extraction can already carry the pin function and
         // raise the same structural finding. The model-aware path exists for
@@ -508,6 +513,7 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
             report.findings.push(finding);
         }
     }
+    lint_tick(2);
     report
 }
 
@@ -523,10 +529,16 @@ pub fn layout_lint(
     board_path: Option<&std::path::Path>,
 ) -> NetLintReport {
     let Some(text) = text.filter(|t| t.contains("(kicad_pcb")) else {
+        hauksbee_ir::progress::layout_ends();
         return NetLintReport::default();
     };
+    // One pass over the layout with nothing inside it to tick: the bar's share
+    // for it is credited half before and half after.
+    hauksbee_ir::progress::layout_begins();
     let schematic = board_path.and_then(ExtractedBoard::companion_schematic);
-    board.layout_lint(text, schematic.as_ref())
+    let report = board.layout_lint(text, schematic.as_ref());
+    hauksbee_ir::progress::layout_ends();
+    report
 }
 
 /// The full engine-level signal-integrity report.

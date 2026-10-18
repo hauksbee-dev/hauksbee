@@ -154,9 +154,7 @@ pub fn prepare(upload: DesignUpload) -> Result<PreparedWebDesign, String> {
     let mut norm = crate::board_input::from_bytes(&upload.board.name, &upload.board.bytes)
         .map_err(|error| error.web_message())?;
     hauksbee_ir::progress::learned(norm.board.components.len(), norm.board.nets.len());
-    if norm.layout_text.is_none() {
-        hauksbee_ir::progress::learned_copper(0);
-    }
+    hauksbee_ir::progress::learned_layout(norm.layout_text.as_deref());
     hauksbee_ir::progress::begin(hauksbee_ir::progress::Stage::Models, 0);
     let design_identity = norm.board.clone();
     let board_is_eagle = norm

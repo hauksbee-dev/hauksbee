@@ -1408,7 +1408,7 @@ fn analyze_normalized_with_context(
     // (`altium_drc`) for a binary board, the KiCad layout text otherwise. A
     // gerber archive has neither; its DRC section says so below instead of
     // reporting a vacuous "no problems".
-    hauksbee_ir::progress::begin(hauksbee_ir::progress::Stage::Copper, 0);
+    hauksbee_ir::progress::begin_copper();
     let drc = if is_binary {
         ExtractedBoard::altium_drc(&norm.raw).unwrap_or_default()
     } else if is_gerber {
@@ -1490,10 +1490,7 @@ fn analyze_normalized_with_context(
     // + the unchecked-strap-bearing-MCU coverage note), so the web report never
     // prints "Looks healthy" over a strap-bearing MCU whose BOOT0 was unexamined.
     // Swept across the assumed corners of class-only parts, as `--check` is.
-    hauksbee_ir::progress::begin(
-        hauksbee_ir::progress::Stage::Nets,
-        hauksbee_ir::progress::LINT_UNITS,
-    );
+    hauksbee_ir::progress::begin_lint();
     let (mut lint, corner_plan) = crate::checks::engine_lint_swept(board, lib);
     lint.findings
         .extend(crate::checks::layout_lint(board, text_view, None).findings);
@@ -1505,7 +1502,7 @@ fn analyze_normalized_with_context(
     // chokepoint so the web report carries the trace-ampacity + input-cap-ripple
     // findings too; the bare `si_checks` left the web "Signal integrity" section
     // silently missing an under-width power trace the CLI `--si` flags.
-    hauksbee_ir::progress::begin(hauksbee_ir::progress::Stage::Signals, 0);
+    hauksbee_ir::progress::begin_untracked(hauksbee_ir::progress::Stage::Signals);
     let si = crate::checks::engine_si(board, lib, text_view);
     let mut si_plain = plain_si(&si);
     si_plain.unmodelled_critical.clone_from(&verdict_blockers);

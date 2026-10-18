@@ -88,6 +88,28 @@ pub struct StageSpec {
     pub fixed_ms: f64,
     /// Cost per unit, in milliseconds.
     pub per_unit_ms: f64,
+    /// Cost per unit squared, in milliseconds: the part of a stage that grows
+    /// faster than the board (a scan of every part against every net) and is
+    /// negligible on a small one.
+    pub per_unit_sq_ms: f64,
+    /// Further cost per copper primitive, on top of the unit's, for a stage
+    /// whose work has a part that follows the copper (the lint's layout
+    /// checks, the report's per-primitive findings).
+    pub per_copper_ms: f64,
+}
+
+impl StageSpec {
+    /// What the stage costs on a board of these sizes, in milliseconds.
+    fn cost(&self, sizes: &Sizes) -> f64 {
+        let units = sizes.of(self.unit);
+        self.per_copper_ms.mul_add(
+            sizes.copper,
+            self.per_unit_sq_ms.mul_add(
+                units * units,
+                self.per_unit_ms.mul_add(units, self.fixed_ms),
+            ),
+        )
+    }
 }
 
 /// The stages, their user-facing words and their measured costs.
@@ -95,20 +117,31 @@ pub struct StageSpec {
 /// The costs are relative weights, in milliseconds of an optimised (`--release`)
 /// build on Apple silicon. The units are the quantities each stage loops over
 /// (bytes, parts, copper primitives), so a stage that grows with copper shows up
-/// as a per-unit cost on `Copper` rather than as a flat share.
+/// as a per-unit cost on `Copper` rather than as a flat share. A stage whose
+/// work has a part that follows the copper as well (the lint's layout checks,
+/// the report) carries that part as `per_copper_ms`.
 ///
-/// How they were measured: the load was run with `HAUKSBEE_PROGRESS_LOG` on
-/// (every stage change and tick, with its time) over `testdata/boards`
-/// (`pic_programmer`, `stickhub`: 63 and 94 parts), `stickhub` tiled 4, 12 and 30
-/// times into synthetic `.kicad_pcb` files (up to 31 MB, 2,800 parts, about 290,000
-/// copper primitives) and a 6 MB private netlist (6,884 parts, no
-/// layout). A stage's duration is the time from its first report to the next
-/// stage's; dividing by its unit count gave a figure per board and the boards
-/// agreed to within about 20% (read 6 to 8 microseconds per KB, bind 0.13 to
-/// 0.19 ms per part, copper 0.003 to 0.004 ms per primitive, signals 0.0017 per
-/// primitive, report 0.05 to 0.14 per part). The nets stage (the lint) is a fixed
-/// start-up of about 50 ms plus 0.3 to 0.5 ms per part. Simulating is the
-/// exception: a second of board time costs 80 to 3,000 ms depending on the
+/// How they were measured (after the per-part and per-net scans were indexed,
+/// which made binding, the lint and the report several times cheaper on large
+/// boards): the load was run with `HAUKSBEE_PROGRESS_LOG` on (every stage
+/// change and tick, with its time), through the web analysis and through the
+/// command line's `check` and `run`, over `testdata/boards` (`pic_programmer`,
+/// `stickhub`: 63 and 94 parts), `stickhub` tiled 4, 12, 30 and 200 times into
+/// synthetic `.kicad_pcb` files (up to 208 MB, 18,800 parts, 1.9 million copper
+/// primitives as the spacing check counts them: tracks, vias, pads and zones)
+/// and a private 6,884-part netlist (no layout). A stage's duration is the time
+/// from its first report to the next stage's; dividing by its unit count gave a
+/// figure per board. From 4 to 30 tiles the boards agreed to within about 30%
+/// (read 5 to 7 microseconds per KB, bind 0.03 to 0.05 ms per part, copper
+/// 0.0035 to 0.004 ms per primitive, signals 0.0014 per primitive, report 0.03
+/// per part plus 0.001 per primitive). Binding and the lint are not linear:
+/// per part they cost 3 to 4 times as much on the 18,800-part board as on the
+/// 1,100-part one (and the netlist with 6,884 parts sits between), so those
+/// two rows carry a squared term, fitted to the five large boards. The nets
+/// stage is the lint (a start-up of about 60 ms, then the squared and linear
+/// terms) followed by the layout checks, about 0.0014 ms per primitive, which
+/// on a dense layout take about as long as the lint itself. Simulating is the
+/// exception: a second of board time costs 80 to 6,000 ms depending on the
 /// circuit, so the row is only the opening guess and the stage reads its real
 /// speed once it is under way. Re-measure after a change that moves a stage's
 /// cost by several times; the bar stays monotonic either way, it just drifts
@@ -120,15 +153,19 @@ pub const STAGES: [StageSpec; 8] = [
         label: "Reading the board file",
         unit: Unit::Bytes,
         fixed_ms: 1.0,
-        per_unit_ms: 0.000_007,
+        per_unit_ms: 0.000_005,
+        per_unit_sq_ms: 0.0,
+        per_copper_ms: 0.0,
     },
     StageSpec {
         stage: Stage::Models,
         key: "models",
         label: "Loading part models",
         unit: Unit::Fixed,
-        fixed_ms: 55.0,
+        fixed_ms: 65.0,
         per_unit_ms: 0.0,
+        per_unit_sq_ms: 0.0,
+        per_copper_ms: 0.0,
     },
     StageSpec {
         stage: Stage::Bind,
@@ -136,7 +173,9 @@ pub const STAGES: [StageSpec; 8] = [
         label: "Matching parts to models",
         unit: Unit::Parts,
         fixed_ms: 1.0,
-        per_unit_ms: 0.14,
+        per_unit_ms: 0.046,
+        per_unit_sq_ms: 0.000_000_54,
+        per_copper_ms: 0.0,
     },
     StageSpec {
         stage: Stage::Copper,
@@ -144,15 +183,19 @@ pub const STAGES: [StageSpec; 8] = [
         label: "Checking copper and spacing",
         unit: Unit::Copper,
         fixed_ms: 1.0,
-        per_unit_ms: 0.003_5,
+        per_unit_ms: 0.004_2,
+        per_unit_sq_ms: 0.000_000_000_059,
+        per_copper_ms: 0.0,
     },
     StageSpec {
         stage: Stage::Nets,
         key: "nets",
         label: "Checking nets and connections",
         unit: Unit::Parts,
-        fixed_ms: 50.0,
-        per_unit_ms: 0.4,
+        fixed_ms: 60.0,
+        per_unit_ms: 0.133,
+        per_unit_sq_ms: 0.000_021_5,
+        per_copper_ms: 0.001_4,
     },
     StageSpec {
         stage: Stage::Signals,
@@ -160,7 +203,9 @@ pub const STAGES: [StageSpec; 8] = [
         label: "Checking signal integrity",
         unit: Unit::Copper,
         fixed_ms: 1.0,
-        per_unit_ms: 0.001_7,
+        per_unit_ms: 0.000_9,
+        per_unit_sq_ms: 0.0,
+        per_copper_ms: 0.0,
     },
     StageSpec {
         stage: Stage::Report,
@@ -168,7 +213,9 @@ pub const STAGES: [StageSpec; 8] = [
         label: "Writing up the findings",
         unit: Unit::Parts,
         fixed_ms: 3.0,
-        per_unit_ms: 0.07,
+        per_unit_ms: 0.028,
+        per_unit_sq_ms: 0.0,
+        per_copper_ms: 0.001_5,
     },
     StageSpec {
         stage: Stage::Simulate,
@@ -177,6 +224,8 @@ pub const STAGES: [StageSpec; 8] = [
         unit: Unit::SimSeconds,
         fixed_ms: 1.0,
         per_unit_ms: 1000.0,
+        per_unit_sq_ms: 0.0,
+        per_copper_ms: 0.0,
     },
 ];
 
@@ -189,6 +238,36 @@ pub const STAGES: [StageSpec; 8] = [
 /// to the part (a tick per part). Measured on a 6,884-part netlist, where the
 /// derivation took about three times as long as the visits.
 pub const BIND_STEPS: u64 = 4;
+
+/// Enter the copper stage before its sweep has counted anything.
+///
+/// The layout is
+/// being read into primitives, which [`begin_sweep`] credits once it is done, so
+/// the bar waits in the middle of that stretch, not at the start of it.
+pub fn begin_copper() {
+    begin(Stage::Copper, 100);
+    if watched() {
+        with_tracker(|t| {
+            t.stage_done = COPPER_PREP_PERCENT / 2;
+            t.emit(true);
+        });
+    }
+}
+
+/// Enter a stage that does its work in one pass with nothing inside to tick.
+///
+/// Signal integrity and the report are such stages:
+/// (signal integrity, the report): half its share is credited at once, so the
+/// bar waits in the middle of the stretch the stage takes, not at one end of it.
+pub fn begin_untracked(stage: Stage) {
+    begin(stage, 2);
+    if watched() {
+        with_tracker(|t| {
+            t.stage_done = 1;
+            t.emit(true);
+        });
+    }
+}
 
 /// Enter the bind stage for `passes` binds of a board of `parts` parts.
 pub fn begin_bind(parts: usize, passes: u64) {
@@ -214,14 +293,98 @@ pub fn begin_sweep(primitives: usize) {
     advance_in(Stage::Copper, total - primitives as u64);
 }
 
-/// What the nets stage counts: the lint reports its progress in percent of its
-/// own time, so a pass worth a seventh of it ticks 14. See `lint_tick` in the
-/// checks crate for where the percentages come from.
-pub const LINT_UNITS: u64 = 100;
+/// What the nets stage counts for the lint proper.
+///
+/// The lint reports its progress in
+/// percent of its own time, so a pass worth a seventh of it ticks 14
+/// ([`lint_advance`]). See `lint_tick` in the checks crate for where the
+/// percentages come from.
+const LINT_UNITS: u64 = 100;
+
+/// Enter the nets stage.
+///
+/// It counts the lint's [`LINT_UNITS`], then the layout checks that
+/// follow it ([`layout_begins`]), sized by the table's own costs for each so a
+/// board with copper gets the layout's share and a netlist gets none.
+pub fn begin_lint() {
+    if !watched() {
+        return;
+    }
+    let mut layout = 0;
+    with_tracker(|t| layout = t.layout_units());
+    begin(Stage::Nets, LINT_UNITS + layout);
+    with_tracker(|t| {
+        t.lint_done = 0;
+        t.layout_total = layout;
+        t.layout_credited = 0;
+    });
+}
+
+/// The lint has run passes worth `percent` of its own time.
+///
+/// Counted up to the
+/// lint's [`LINT_UNITS`] and no further, so the extra runs of the corner sweep
+/// do not eat the share that belongs to the layout checks.
+pub fn lint_advance(percent: u64) {
+    if !watched() {
+        return;
+    }
+    let mut credit = 0;
+    with_tracker(|t| {
+        if t.current == Some(Stage::Nets) {
+            credit = percent.min(LINT_UNITS.saturating_sub(t.lint_done));
+            t.lint_done += credit;
+        }
+    });
+    if credit > 0 {
+        advance_in(Stage::Nets, credit);
+    }
+}
+
+/// The layout checks are starting.
+///
+/// Half of their share is credited now, so the
+/// bar waits in the middle of the stretch they take, not at one end of it. They
+/// are a single pass over the layout, with nothing inside to tick.
+pub fn layout_begins() {
+    credit_layout(true);
+}
+
+/// The layout checks are done (or had nothing to do): the rest of their share.
+pub fn layout_ends() {
+    credit_layout(false);
+}
+
+fn credit_layout(half: bool) {
+    if !watched() {
+        return;
+    }
+    with_tracker(|t| {
+        if t.current != Some(Stage::Nets) {
+            return;
+        }
+        let target = if half {
+            t.layout_total / 2
+        } else {
+            t.layout_total
+        };
+        let credit = target.saturating_sub(t.layout_credited);
+        t.layout_credited += credit;
+        t.stage_done += credit;
+        // A pass with nothing inside it to tick is a long wait with no report, so
+        // what came before it is shown now, past the gap that holds ticks back:
+        // the lint's last ticks are otherwise lost behind the one before them.
+        if half {
+            t.emit(true);
+        } else if credit > 0 {
+            t.emit(false);
+        }
+    });
+}
 
 /// Size ratios used before the board has been read: parts, nets and copper
 /// primitives per byte of file, measured on the same boards as [`STAGES`].
-const BYTES_PER_PART: f64 = 2_000.0;
+const BYTES_PER_PART: f64 = 10_000.0;
 const NETS_PER_PART: f64 = 1.3;
 const BYTES_PER_COPPER: f64 = 100.0;
 
@@ -283,6 +446,12 @@ struct Tracker {
     /// When the simulating stage began, to read its real speed once it is under way.
     sim_began: Option<Instant>,
     shown: f64,
+    /// Lint units counted so far in the nets stage (capped at the lint's own).
+    lint_done: u64,
+    /// Units of the nets stage given to the layout checks, and how many of
+    /// them have been counted.
+    layout_total: u64,
+    layout_credited: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -324,6 +493,15 @@ const fn bit(stage: Stage) -> u16 {
 }
 
 impl Tracker {
+    /// Units of the nets stage the layout checks are worth, against the
+    /// lint's [`LINT_UNITS`]: the ratio of their two costs in the table.
+    fn layout_units(&self) -> u64 {
+        let spec = &STAGES[Stage::Nets as usize];
+        let layout = spec.per_copper_ms * self.sizes.copper;
+        let lint = spec.cost(&self.sizes) - layout;
+        (LINT_UNITS as f64 * layout / lint.max(1.0)).round() as u64
+    }
+
     fn cost(&self, spec: &StageSpec) -> f64 {
         if spec.stage == Stage::Simulate && !self.simulates {
             return 0.0;
@@ -333,8 +511,7 @@ impl Tracker {
                 return measured;
             }
         }
-        spec.per_unit_ms
-            .mul_add(self.sizes.of(spec.unit), spec.fixed_ms)
+        spec.cost(&self.sizes)
     }
 
     /// What simulating costs, read from how fast it is actually going. A second
@@ -489,6 +666,9 @@ pub fn with_reporter<R>(
             next_check: 0,
             sim_began: None,
             shown: 0.0,
+            lint_done: 0,
+            layout_total: 0,
+            layout_credited: 0,
         });
         true
     });
@@ -552,6 +732,17 @@ pub fn learned(parts: usize, nets: usize) {
             t.sizes.parts = (parts as f64).max(1.0);
             t.sizes.nets = (nets as f64).max(1.0);
         });
+    }
+}
+
+/// The board's layout text, if it has one, tells how much copper there is.
+///
+/// Copper is walked
+/// walk: only a KiCad layout is read primitive by primitive, and a netlist (whose
+/// text the readers keep too) has none, so it must not be priced from its size.
+pub fn learned_layout(layout_text: Option<&str>) {
+    if !layout_text.is_some_and(|t| t.contains("(kicad_pcb")) {
+        learned_copper(0);
     }
 }
 
@@ -805,6 +996,64 @@ mod tests {
         // The nested scope's sink is never called; the outer sink heard the run.
         assert!(!outer.is_empty());
         assert_eq!(inner.get(), 0);
+    }
+
+    fn nets_counts() -> (u64, u64) {
+        let mut out = (0, 0);
+        with_tracker(|t| out = (t.stage_done, t.stage_total));
+        out
+    }
+
+    #[test]
+    fn the_lint_stops_at_its_own_share_and_the_layout_checks_take_the_rest() {
+        let mut seen = Vec::new();
+        collect(
+            Plan {
+                bytes: 1_000_000,
+                simulate_s: None,
+            },
+            || {
+                learned(1_000, 500);
+                learned_copper(100_000);
+                begin_lint();
+                let (_, total) = nets_counts();
+                assert!(total > LINT_UNITS, "a board with copper has layout checks");
+                // The corner sweep runs the lint again: it must not eat the layout's share.
+                lint_advance(70);
+                lint_advance(70);
+                seen.push(nets_counts().0);
+                layout_begins();
+                seen.push(nets_counts().0);
+                layout_ends();
+                seen.push(nets_counts().0);
+                layout_ends();
+                seen.push(nets_counts().0);
+                seen.push(total);
+            },
+        );
+        let total = seen[4];
+        assert_eq!(seen[0], LINT_UNITS);
+        assert!(seen[1] > seen[0] && seen[1] < total);
+        assert_eq!(seen[2], total);
+        assert_eq!(seen[3], total, "finishing twice counts once");
+    }
+
+    #[test]
+    fn a_netlist_has_no_layout_share_in_the_nets_stage() {
+        collect(
+            Plan {
+                bytes: 1_000_000,
+                simulate_s: None,
+            },
+            || {
+                learned(1_000, 500);
+                learned_copper(0);
+                begin_lint();
+                assert_eq!(nets_counts().1, LINT_UNITS);
+                layout_ends();
+                assert_eq!(nets_counts().0, 0, "nothing to credit");
+            },
+        );
     }
 
     #[test]
