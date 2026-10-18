@@ -18,6 +18,7 @@ import { netReadoutText, readNet } from '../lib/net-state'
 import { fetchLayoutText, isAbort } from '../lib/api'
 import { LayersControl, useLayerControls } from './board/LayersPanel'
 import { useBoardPointer } from '../hooks/useBoardPointer'
+import { COARSE_POINTER, PHONE_WIDTH, useMediaQuery } from '../hooks/useMediaQuery'
 
 /** Pixels from the top of the viewer to clear the floating toolbar. The toolbar
  *  sits at top-3 (12px) and its controls are 28px tall inside a 1px border;
@@ -134,6 +135,9 @@ export function BoardViewer({
   // so the map gives the page back the moment attention moves on.
   const [zoomFocused, setZoomFocused] = useState(false)
   const [hovering, setHovering] = useState(false)
+  // A touch screen has no hover and no ctrl-scroll: the zoom hint says what a
+  // finger does instead.
+  const coarsePointer = useMediaQuery(COARSE_POINTER)
 
   // Per-layer overrides plus the pads/labels/activity switches. Hidden layers
   // also stop rendering activity on their copper.
@@ -395,6 +399,24 @@ export function BoardViewer({
       panY: ch / 2 - ((box.y1 + box.y2) / 2) * scale,
     })
   }, [frameTarget, frameTarget?.seq, board, setCamera])
+
+  // On a phone the part's card sits BELOW the map, so a part picked from a
+  // finding framed the map and left its card under the fold. Bring it into view
+  // (minimal scroll, so the framed map stays as much on screen as fits). Only
+  // for a map embedded in a scrolling document, and only on a narrow screen:
+  // on a desktop the card is already beside or under the map, and nothing
+  // should yank the page.
+  useEffect(() => {
+    if (!frameTarget || wheelMode !== 'capture-on-focus') return
+    if (typeof window.matchMedia !== 'function' || !window.matchMedia(PHONE_WIDTH).matches) return
+    const timer = window.setTimeout(() => {
+      const dock = document.querySelector<HTMLElement>('[data-testid="selection-dock"]')
+      if (!dock) return
+      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      dock.scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' })
+    }, 120)
+    return () => window.clearTimeout(timer)
+  }, [frameTarget, frameTarget?.seq, wheelMode])
 
   // "Show on board": jump the camera to the finding's spot at a readable
   // close-up and keep a pulsing marker there. Counts as a user move (the
@@ -766,7 +788,7 @@ export function BoardViewer({
             color: 'var(--silk-dim)',
           }}
         >
-          Click to enable zoom · or hold ctrl and scroll
+          {coarsePointer ? 'Tap the map to enable pinch zoom' : 'Click to enable zoom · or hold ctrl and scroll'}
         </div>
       )}
 

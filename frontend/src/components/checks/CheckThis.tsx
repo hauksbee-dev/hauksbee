@@ -305,7 +305,10 @@ export function CheckThis({
 
   const available = hideBlocked ? offers.filter(o => !o.blocked) : offers
   const front = max === undefined ? available : available.filter(o => !o.blocked).slice(0, max)
-  const rest = available.filter(o => !front.includes(o))
+  // Two suggestions behind a "More checks (2)" fold, with nothing above it, is
+  // a disclosure that hides everything the card has to say: show them.
+  const showAll = front.length === 0 && available.length > 0 && available.length <= 2
+  const rest = showAll ? [] : available.filter(o => !front.includes(o))
   const restHoldsOpen = rest.some(o => offerKey(o) === open)
   if (!kinds || available.length === 0) return null
   const fix = (offer: Offer) => {
@@ -352,7 +355,7 @@ export function CheckThis({
   return (
     <div data-testid="check-this" tabIndex={-1} className="flex flex-col gap-1.5 outline-none">
       <div className="text-[10px] font-bold tracking-[0.14em] uppercase" style={{ color: 'var(--silk-faint)' }}>{heading}</div>
-      {front.map((offer, i) => row(offer, primaryFirst && i === 0 && !offer.blocked))}
+      {(showAll ? available : front).map((offer, i) => row(offer, primaryFirst && i === 0 && !offer.blocked))}
       {rest.length > 0 && (
         <details
           data-testid="check-this-more" open={more || restHoldsOpen}

@@ -80,9 +80,9 @@
   --scope-edge: rgba(0, 180, 70, 0.3);
   --scope-glow: 0 0 12px rgba(0, 180, 70, 0.12), inset 0 0 20px rgba(0, 0, 0, 0.6);
   --scope-grid: rgba(0, 200, 80, 0.15);
-  --scope-tick: rgba(0, 200, 80, 0.45);
-  --scope-axis: rgba(0, 200, 80, 0.35);
-  --scope-hint: rgba(0, 200, 80, 0.8);
+  --scope-tick: rgba(0, 200, 80, 0.8);
+  --scope-axis: rgba(0, 200, 80, 0.6);
+  --scope-hint: rgba(0, 200, 80, 0.85);
   --scope-scan: rgba(0, 255, 100, 0.012);
   --trace-1: #3b82f6;
   --trace-2: #f59e0b;
@@ -174,8 +174,8 @@
   --scope-edge: rgba(13, 110, 60, 0.35);
   --scope-glow: 0 1px 2px rgba(28, 36, 49, 0.06), inset 0 0 14px rgba(13, 110, 60, 0.05);
   --scope-grid: rgba(13, 110, 60, 0.22);
-  --scope-tick: rgba(13, 110, 60, 0.65);
-  --scope-axis: rgba(13, 110, 60, 0.5);
+  --scope-tick: rgba(13, 110, 60, 0.92);
+  --scope-axis: rgba(13, 110, 60, 0.72);
   --scope-hint: rgb(13, 110, 60);
   --scope-scan: rgba(13, 110, 60, 0);
   --trace-1: #1d4ed8;

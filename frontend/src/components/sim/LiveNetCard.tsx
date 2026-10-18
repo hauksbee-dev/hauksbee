@@ -142,13 +142,17 @@ export function LiveNetCard({
         {netBehaviour(reading, span)}
       </div>
 
-      <div
-        ref={boxRef}
-        data-testid="live-net-trace"
-        style={{ border: '1px solid var(--scope-edge)', borderRadius: 6, overflow: 'hidden', background: 'var(--scope-face)' }}
-      >
-        <canvas ref={canvasRef} aria-label={`Recent trace of ${displayNet(net)}`} style={{ display: 'block', width: '100%', height: CANVAS_H }} />
-      </div>
+      {/* Once the net is on the scope the scope IS the trace: a second copy
+          of the same line beside it only repeats it. */}
+      {!probed && (
+        <div
+          ref={boxRef}
+          data-testid="live-net-trace"
+          style={{ border: '1px solid var(--scope-edge)', borderRadius: 6, overflow: 'hidden', background: 'var(--scope-face)' }}
+        >
+          <canvas ref={canvasRef} aria-label={`Recent trace of ${displayNet(net)}`} style={{ display: 'block', width: '100%', height: CANVAS_H }} />
+        </div>
+      )}
 
       <div className="flex items-center gap-2 flex-wrap">
         {probed ? (

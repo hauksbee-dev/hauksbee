@@ -3,6 +3,7 @@ import type { StatusMsg, ClientMessage } from '../types/protocol'
 import type { ReplayTransport } from '../hooks/useSimulation'
 import { PlayIcon, PauseIcon, StepIcon, StepBackIcon, ResetIcon } from './Icons'
 import { useDismissable } from '../hooks/useDismissable'
+import { PHONE_WIDTH, useMediaQuery } from '../hooks/useMediaQuery'
 import { formatClock, type RunState } from './sim/run-state'
 import {
   SPEED_HARD_MAX, SPEED_HARD_MIN, SPEED_PRESETS, SPEED_TICKS,
@@ -63,14 +64,19 @@ interface TransportBarProps {
    *  has a real timeline to scrub instead. */
   history?: HistoryReview
   /** The session's own tools (supply, run length, faults, export), after the
-   *  sim time. */
+   *  sim time. On a phone they sit behind one "Tools" button, so the transport
+   *  is two rows rather than five. */
   tools?: React.ReactNode
+  /** Something in the tools needs eyes even while they are folded away (parts
+   *  faulted). Printed on the phone's Tools button; the full chip is inside. */
+  toolsAlert?: string | null
 }
 
 export function TransportBar({
   connected, status, runState, realtimeFactor, requestedFactor, rateLimited,
-  send, replay, history, tools,
+  send, replay, history, tools, toolsAlert,
 }: TransportBarProps) {
+  const phone = useMediaQuery(PHONE_WIDTH)
   // The rate this client asked for. Seeded from the session's own requested
   // factor when the server reports one, so joining a sim already set to 0.01x
   // shows 0.01x rather than this component's local default.
@@ -124,17 +130,19 @@ export function TransportBar({
   }
 
   const ready = runState === 'ready'
+  const rateMissed = realtimeFactor !== null && requestedFactor != null && requestedFactor > 0
+    && Math.abs(requestedFactor - realtimeFactor) > requestedFactor * 0.05
 
   return (
     <div
-      className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2 min-h-[46px] shrink-0 select-none xl:py-0"
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 max-sm:px-3 py-2 min-h-[46px] shrink-0 select-none xl:py-0"
       style={{
         background: 'var(--surface)',
         borderBottom: '1px solid var(--hairline)',
       }}
     >
       {/* Transport controls */}
-      <div className="flex items-center gap-1.5 shrink-0">
+      <div className="flex items-center gap-1.5 shrink-0 max-sm:order-1">
         <button
           onClick={handlePlayPause}
           data-testid="transport-play"
@@ -270,7 +278,7 @@ export function TransportBar({
       {/* Speed: ONE control. The segments are the speeds people reach for
           (everything left of 1× is slow motion); an exact rate, or one the
           segments do not hold, lives under "More". */}
-      <div className="flex items-center gap-2 min-w-0 max-w-full">
+      <div className="flex items-center gap-2 min-w-0 max-w-full max-sm:order-4">
         <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }} title="How much sim time passes per second of real time">Speed</span>
         <div
           role="group"
@@ -350,7 +358,7 @@ export function TransportBar({
 
       {/* Elapsed sim time, and the two rates kept apart. Asked-for and achieved
           are different numbers and the bar never prints one as the other. */}
-      <div className="flex flex-wrap items-baseline gap-1.5 min-w-0 max-w-full" style={{ fontFamily: 'var(--font-mono)' }}>
+      <div className="flex flex-wrap items-baseline gap-1.5 min-w-0 max-w-full max-sm:order-2" style={{ fontFamily: 'var(--font-mono)' }}>
         <span className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--silk-faint)' }}>t</span>
         <span
           className="text-[13px] font-semibold tnum"
@@ -359,30 +367,40 @@ export function TransportBar({
         >
           {formatClock(simTime)}
         </span>
+        {/* The achieved rate, compact: "real time" is what the Speed control
+            already says, and the long form (with the asked-for rate) is in the
+            hover. It wrapped the toolbar at 1440 once the asked-for text
+            joined it. Only a rate the loop CANNOT reach is worth more of the
+            bar, because that one changes what the user should conclude. A
+            phone has no room for it at all. */}
         {running && realtimeFactor !== null && Number.isFinite(realtimeFactor) && (
           <span
-            className="text-[11px] tnum"
+            className="text-[11px] tnum max-sm:hidden"
             data-testid="transport-rate"
-            title={rateLimited
-              ? 'The requested speed is not sustainable on this board and emulator; the loop is pacing at what it can really deliver.'
-              : 'Measured over a rolling window.'}
+            title={[
+              `Running at ${speedText(realtimeFactor)} real time (measured over a rolling window).`,
+              rateMissed
+                ? (rateLimited
+                  ? `The requested ${speedText(requestedFactor ?? 0)} is not sustainable on this board and emulator; the loop is pacing at what it can really deliver.`
+                  : `Asked for ${speedText(requestedFactor ?? 0)}.`)
+                : '',
+            ].filter(Boolean).join(' ')}
             style={{ color: rateLimited ? 'var(--warn-strong)' : 'var(--silk-faint)' }}
           >
-            · {speedText(realtimeFactor)} real time
-            {requestedFactor != null && requestedFactor > 0
-              && Math.abs(requestedFactor - realtimeFactor) > requestedFactor * 0.05 && (
-              <> ({rateLimited ? `can't reach ${speedText(requestedFactor)}` : `asked for ${speedText(requestedFactor)}`})</>
-            )}
+            · {speedText(realtimeFactor)}
+            {rateLimited && rateMissed && <> of {speedText(requestedFactor ?? 0)} asked</>}
           </span>
         )}
       </div>
 
-      {tools && <div className="flex flex-wrap items-center gap-1.5 min-w-0 max-w-full">{tools}</div>}
+      {tools && (phone
+        ? <ToolsPopover alert={toolsAlert ?? null}>{tools}</ToolsPopover>
+        : <div className="flex flex-wrap items-center gap-1.5 min-w-0 max-w-full">{tools}</div>)}
 
-      <div className="flex-1" />
+      <div className="flex-1 max-sm:order-3" />
 
       {/* Connection only: the board's name is the page title's, not repeated. */}
-      <div className="flex items-center gap-1.5 text-[11px]">
+      <div className="flex items-center gap-1.5 text-[11px] max-sm:order-3">
         <div
           className={connected ? 'run-dot' : undefined}
           style={{
@@ -430,5 +448,47 @@ function SpeedSegment({ on, onClick, title, children }: {
     >
       {children}
     </button>
+  )
+}
+
+/** A phone's folded session tools: one button, and the chips (supply, run
+ *  length, faults, export) stacked in a small sheet under it. Closes on an
+ *  outside tap, Escape, or after a chip does its job (the Export menu keeps it
+ *  open while its own list is showing). */
+function ToolsPopover({ alert, children }: { alert: string | null; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false)
+  const wrap = useRef<HTMLSpanElement>(null)
+  useDismissable(open, wrap, setOpen)
+  return (
+    <span ref={wrap} className="relative shrink-0 max-sm:order-5 max-sm:ml-auto">
+      <button
+        type="button"
+        data-testid="transport-tools"
+        aria-expanded={open}
+        onClick={() => setOpen(o => !o)}
+        className="hb-press text-[11px] rounded-md cursor-pointer inline-flex items-center gap-1.5"
+        style={{
+          height: 24, padding: '0 8px',
+          background: alert ? 'var(--err-bg)' : 'var(--surface-2)',
+          border: `1px solid ${alert ? 'var(--err-border)' : 'var(--hairline)'}`,
+          color: alert ? 'var(--err)' : 'var(--silk-dim)',
+        }}
+      >
+        {alert ?? 'Tools'} ▾
+      </button>
+      {open && (
+        <div
+          data-testid="transport-tools-sheet"
+          className="hb-card absolute right-0 z-30 p-2 flex flex-col items-stretch gap-2"
+          style={{ top: 'calc(100% + 4px)', width: 'min(300px, calc(100vw - 24px))', boxShadow: 'var(--shadow-pop)' }}
+          onClickCapture={e => {
+            const hit = (e.target as HTMLElement).closest('button')
+            if (hit && hit.dataset.testid !== 'sim-export') setOpen(false)
+          }}
+        >
+          {children}
+        </div>
+      )}
+    </span>
   )
 }

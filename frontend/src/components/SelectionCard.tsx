@@ -2,7 +2,7 @@ import { CloseIcon } from './Icons'
 import { displayNet } from '../lib/net-name'
 import { explainFor, labelFor } from '../lib/labels'
 import { netReadoutText, type NetReading } from '../lib/net-state'
-import type { ModelCoverageComponent, BoardRequest, WebOpenSelection } from '../types/report'
+import type { ModelCoverageComponent, BoardRequest, WebOpenPart, WebOpenSelection } from '../types/report'
 import { Callout } from './ui'
 import { CheckThis } from './checks/CheckThis'
 
@@ -133,6 +133,11 @@ function PlainList({ ids, testId, limit = 3 }: { ids: readonly string[]; testId?
   )
 }
 
+/** Coverage stages whose label alone does not tell a reader what the part's
+ *  results are worth ("Scope not stated"): the card prints the label table's
+ *  explanation under the headline. */
+const PLAIN_STAGES: ReadonlySet<string> = new Set(['executable_scope_unspecified', 'identity_only'])
+
 /** "gap" or "gaps": the count of things a model still does not cover. */
 const gaps = (n: number) => `${n} ${n === 1 ? 'gap' : 'gaps'}`
 
@@ -161,8 +166,13 @@ function showMention(name: string) {
 export function SelectionCard({
   net, liveVolts, reading, component, boundKind, modelCoverage, netModels = [], assertionCapabilities = [],
   onQueue, openOffer = null, peripheralMode = 'scenario', onAddProbe, onAuthorModel, onClose, onPickNet, openSelection, docked = false,
-  liveSim,
+  liveSim, embedded = false,
 }: {
+  /** Shown INSIDE another card (the live net card's "Add a check" disclosure):
+   *  no frame, no title row, no net name or reading and no probe button, all of
+   *  which the host card already has. What is left is what only this card adds:
+   *  the devices on the net, the checks and the drive controls. */
+  embedded?: boolean
   /** In a dock (a rail or a block under the map) rather than floating over it:
    *  fills the dock's width and may grow taller. */
   docked?: boolean
@@ -207,7 +217,7 @@ export function SelectionCard({
    *  the live view; the report view has no running wire to probe. */
   onAddProbe?: (net: string) => void
   /** Open the deterministic local model editor for the selected component. */
-  onAuthorModel?: (component: ModelCoverageComponent) => void
+  onAuthorModel?: (component: ModelCoverageComponent | WebOpenPart) => void
   onClose: () => void
   /** Jump the selection to one of the part's pad nets. */
   onPickNet?: (net: string) => void
@@ -221,8 +231,11 @@ export function SelectionCard({
   const hasMention = mentionsOf(subject).length > 0
   // The one primary action of a part card is the model, when it has a gap and
   // the model flow is reachable; otherwise the first check is.
-  const modelPrimary = !!(component && modelCoverage?.actionable_behavior_gap && !modelCoverage.rename_fix && onAuthorModel)
   const noModel = !!component && (modelCoverage ? modelCoverage.stage === 'unresolved' : !boundKind)
+  // A part with no model at all always offers one, even when the report carries
+  // no coverage row for it (then the editor is opened from the part itself).
+  const modelPrimary = !!(component && !modelCoverage?.rename_fix && onAuthorModel
+    && (modelCoverage?.actionable_behavior_gap || noModel))
   const measuredNow = reading?.kind === 'measured'
   const readingNote = reading?.kind === 'unsupported'
     ? 'This net is held by a regulator whose input headroom was never established; the number is that ideal source’s setpoint, not a simulated value.'
@@ -252,13 +265,14 @@ export function SelectionCard({
     <div
       data-testid="selection-card"
       data-mode={net && live ? 'live-net' : net ? 'net' : 'part'}
-      className="hb-card flex flex-col"
-      style={docked
+      className={embedded ? 'flex flex-col' : 'hb-card flex flex-col'}
+      style={embedded ? { width: '100%' } : docked
         // Same height as the map beside it, so the dock never leaves a hole
         // under the map or runs past it.
         ? { width: '100%', maxHeight: 'clamp(420px, 52vh, 620px)', boxShadow: 'var(--shadow-card)' }
         : { minWidth: 230, maxWidth: 320, maxHeight: '100%', boxShadow: 'var(--shadow-pop)' }}
     >
+      {!embedded && (
       <div className="shrink-0 flex flex-col gap-2 px-3 pt-3 pb-2">
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-bold tracking-[0.14em]" style={{ color: 'var(--silk-faint)' }}>
@@ -327,10 +341,11 @@ export function SelectionCard({
           </div>
         ) : null}
       </div>
+      )}
 
       <div
         data-testid="selection-card-body"
-        className="flex flex-col gap-2.5 overflow-y-auto px-3 pb-3"
+        className={embedded ? 'flex flex-col gap-2.5' : 'flex flex-col gap-2.5 overflow-y-auto px-3 pb-3'}
         style={{ minHeight: 0 }}
       >
       {component ? (
@@ -355,6 +370,12 @@ export function SelectionCard({
                   </b>
                   {(modelCoverage.missing?.length ?? 0) > 0 && <span>· {gaps(modelCoverage.missing!.length)}</span>}
                 </div>
+                {/* A stage whose name is jargon says what it means for the
+                    reader, in the label table's own sentence, not only in a
+                    hover. */}
+                {!noModel && PLAIN_STAGES.has(modelCoverage.stage) && explainFor(modelCoverage.stage) && (
+                  <div className="mt-0.5" data-testid="selection-model-meaning">{explainFor(modelCoverage.stage)}</div>
+                )}
                 {!noModel && (
                   <div className="mt-0.5" data-testid="selection-model-source">
                     {[labelFor(modelCoverage.source.tier), labelFor(modelCoverage.source.validation)].filter(Boolean).join(' · ')}
@@ -394,7 +415,9 @@ export function SelectionCard({
             <button
               type="button"
               data-testid="selection-author-model"
-              onClick={() => onAuthorModel!(modelCoverage!)}
+              onClick={() => onAuthorModel!(modelCoverage ?? {
+                reference: component.ref, value: component.value, reason: '', consequence: '', active_ic: false, bound: false,
+              })}
               className="hb-btn-primary hb-press px-2.5 py-1.5 text-[12px] text-left"
             >
               {noModel ? `Give ${component.ref} a model` : `Extend ${component.ref}'s model`}
@@ -449,7 +472,7 @@ export function SelectionCard({
       )}
 
       {/* A live net's one primary action is the probe; a static net's is its first check. */}
-      {net && onAddProbe && (
+      {net && onAddProbe && !embedded && (
         <button
           type="button"
           data-testid="selection-add-probe"
