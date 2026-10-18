@@ -571,8 +571,9 @@ impl ComponentRatings {
 
 /// The largest `run --check --json` document sent inside a web report. A real
 /// board's is well under 1 MiB; past this the document only repeats what the
-/// report already carries, so it is left out.
-const WEB_CHECK_REPORT_MAX_BYTES: usize = 8 * 1024 * 1024;
+/// report already carries (its evidence and findings), so it is left out and
+/// `check_report_omitted_bytes` says how big it is.
+const WEB_CHECK_REPORT_MAX_BYTES: usize = 1024 * 1024;
 
 /// The whole payload sent back to the browser after an upload.
 #[derive(Debug, Clone, Default, Serialize)]

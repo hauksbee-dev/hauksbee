@@ -140,7 +140,8 @@ pub fn emit_or_serve(
         },
     );
     let report_val: serde_json::Value =
-        serde_json::from_str(&report_json).unwrap_or(serde_json::Value::Null);
+        serde_json::from_str(&crate::web_transport::for_browser(report_json))
+            .unwrap_or(serde_json::Value::Null);
     let startup_json = serde_json::json!({
         "preloaded": true,
         "board_name": file_name,

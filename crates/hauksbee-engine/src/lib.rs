@@ -51,6 +51,7 @@ pub mod scope;
 pub mod verdict_conditions;
 pub mod web_design;
 pub mod web_dist;
+pub mod web_transport;
 pub mod webcheck;
 pub mod webextract;
 pub mod websettings;

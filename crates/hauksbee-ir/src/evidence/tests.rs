@@ -1128,6 +1128,142 @@ fn the_published_schema_does_not_permit_a_null_the_writers_never_write() {
     assert_eq!(required, ["assertion", "status"]);
 }
 
+fn fallback_source() -> ModelSource {
+    ModelSource::new(
+        ModelSourceTier::EstimatedFallback,
+        ModelLayer::EngineFallback,
+        "engine-fallback",
+        ModelValidation::Unvalidated,
+        vec![ModelUncertainty::unknown("model", "no validated error interval").unwrap()],
+    )
+    .unwrap()
+}
+
+fn long_map(parts: usize) -> EvidenceMap {
+    let open = Assumption::open_part("U2", "XC6206", "no model matched");
+    let registry = EvidenceRegistry::new(vec![open.clone()]).unwrap();
+    let models = (0..parts)
+        .map(|n| {
+            // Two models alternate so the groups interleave, and one part's
+            // machine identity differs from the reference it is shown as.
+            let (id, subject) = if n == 3 {
+                ("r_fallback", format!("R{n}#2"))
+            } else if n % 2 == 0 {
+                ("r_fallback", format!("R{n}"))
+            } else {
+                ("c_fallback", format!("R{n}"))
+            };
+            ModelOnPath::for_subject(
+                subject,
+                format!("R{n}"),
+                id,
+                fallback_source(),
+                MatchConfidence::Guessed,
+            )
+            .unwrap()
+        })
+        .collect();
+    let parameters = (0..parts)
+        .map(|n| {
+            let origin = ValueOrigin::Model {
+                model_id: "r_fallback".into(),
+                layer: ModelLayer::EngineFallback,
+                confidence: MatchConfidence::Guessed,
+            };
+            if n % 3 == 0 {
+                ParameterProvenance::for_subject(
+                    format!("R{n}"),
+                    format!("R{n}.resistance"),
+                    "10k",
+                    origin,
+                )
+            } else {
+                ParameterProvenance::new(format!("R{n}.resistance"), "10k", origin)
+            }
+            .unwrap()
+        })
+        .collect();
+    EvidenceMap::new("3V3 stays above 3.1 V", &[open], today())
+        .with_models(models)
+        .with_parameters(&registry, parameters)
+        .unwrap()
+}
+
+#[test]
+fn a_map_at_the_limit_keeps_its_rows() {
+    let v = serde_json::to_value(long_map(EVIDENCE_GROUP_ROWS_ABOVE)).unwrap();
+    assert_eq!(
+        v["models"].as_array().unwrap().len(),
+        EVIDENCE_GROUP_ROWS_ABOVE
+    );
+    assert_eq!(
+        v["parameters"].as_array().unwrap().len(),
+        EVIDENCE_GROUP_ROWS_ABOVE
+    );
+    assert!(v.get("model_groups").is_none() && v.get("parameter_groups").is_none());
+}
+
+#[test]
+fn a_long_map_reports_groups_and_loses_no_row() {
+    let parts = EVIDENCE_GROUP_ROWS_ABOVE + 40;
+    let map = long_map(parts);
+    let v = serde_json::to_value(&map).unwrap();
+    assert!(v.get("models").is_none() && v.get("parameters").is_none());
+
+    // Expanding the model groups gives back the rows, as a set.
+    let mut seen = Vec::new();
+    for group in v["model_groups"].as_array().unwrap() {
+        let refs = group["references"].as_array().unwrap();
+        let subjects = group.get("subjects").and_then(|s| s.as_array());
+        for (i, reference) in refs.iter().enumerate() {
+            let subject = subjects.map_or(reference, |s| &s[i]);
+            seen.push((
+                group["model_id"].as_str().unwrap().to_owned(),
+                reference.as_str().unwrap().to_owned(),
+                subject.as_str().unwrap().to_owned(),
+            ));
+        }
+        assert_eq!(group["source"]["tier"], "estimated-fallback");
+    }
+    let mut want: Vec<_> = map
+        .models()
+        .iter()
+        .map(|m| {
+            (
+                m.model_id().to_owned(),
+                m.reference().to_owned(),
+                m.subject().to_owned(),
+            )
+        })
+        .collect();
+    seen.sort();
+    want.sort();
+    assert_eq!(seen, want);
+    assert_eq!(v["model_groups"].as_array().unwrap().len(), 2);
+
+    // Parameters: every group is all-with or all-without a subject.
+    let mut count = 0;
+    for group in v["parameter_groups"].as_array().unwrap() {
+        let names = group["parameters"].as_array().unwrap();
+        count += names.len();
+        if let Some(subjects) = group.get("subjects") {
+            assert_eq!(subjects.as_array().unwrap().len(), names.len());
+        }
+        assert_eq!(group["value"], "10k");
+    }
+    assert_eq!(count, parts);
+    assert_eq!(v["parameter_groups"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn grouping_does_not_change_the_status_or_the_in_memory_rows() {
+    let map = long_map(EVIDENCE_GROUP_ROWS_ABOVE + 1);
+    let v = serde_json::to_value(&map).unwrap();
+    assert_eq!(v["status"], "undermined");
+    assert_eq!(map.models().len(), EVIDENCE_GROUP_ROWS_ABOVE + 1);
+    assert_eq!(map.parameters().len(), EVIDENCE_GROUP_ROWS_ABOVE + 1);
+}
+
 // ── the discrimination fixture ──────────────────────────────────────
 
 /// THE CONTRACT FOR THE CAUSAL-PATH TRAVERSAL, written before any

@@ -59,7 +59,7 @@
 use crate::glossary::Term;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 
 mod date;
@@ -3987,10 +3987,8 @@ wire_enum!(EvidenceStatus, "evidence status", {
 /// assert_eq!(clean.status(), EvidenceStatus::Clean);
 /// assert!(clean.assumptions().is_empty());
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
-#[schemars(description = "What one assertion rests on: the artifacts, models, \
-                          parameters and assumptions on its causal path, its error \
-                          budget, and the status derived from them.")]
+#[derive(Debug, Clone, PartialEq, schemars::JsonSchema)]
+#[schemars(with = "EvidenceMapWire<'static>")]
 pub struct EvidenceMap {
     /// The assertion or finding this map belongs to.
     // Private with a getter: it is set once, and relabelling a clean map onto a
@@ -4035,6 +4033,186 @@ pub struct EvidenceMap {
     /// assumptions on its causal path.
     // DERIVED, never set: see `EvidenceMap::derive_status`.
     status: EvidenceStatus,
+}
+
+/// The row count past which an evidence map reports a list in groups.
+///
+/// A map that lists more models or parameters than this reports that list in
+/// groups, not row by row. A board with tens of thousands of parts puts every
+/// part on the causal path of a rail-wide assertion, and a row per part (each
+/// repeating the same source record) made the report hundreds of megabytes. A
+/// group names the shared record once and lists the parts it applies to, so
+/// nothing is left out. Every map at or below the limit keeps the row shape.
+pub const EVIDENCE_GROUP_ROWS_ABOVE: usize = 256;
+
+/// The serialized shape of an [`EvidenceMap`]: the rows as stored, or, past
+/// [`EVIDENCE_GROUP_ROWS_ABOVE`], the same rows grouped by their shared record.
+#[derive(Serialize, schemars::JsonSchema)]
+#[schemars(description = "What one assertion rests on: the artifacts, models, \
+                          parameters and assumptions on its causal path, its error \
+                          budget, and the status derived from them. A list longer \
+                          than 256 rows is reported as `model_groups` / \
+                          `parameter_groups` instead of `models` / `parameters`.")]
+struct EvidenceMapWire<'a> {
+    /// The assertion or finding this map belongs to.
+    assertion: &'a str,
+    /// Indices into the run's `inventory`, causal only.
+    #[serde(default, skip_serializing_if = "<[ArtifactId]>::is_empty")]
+    #[schemars(with = "Vec<ArtifactId>")]
+    artifacts: &'a [ArtifactId],
+    /// Models bound on the causal path, one row each.
+    #[serde(default, skip_serializing_if = "<[ModelOnPath]>::is_empty")]
+    #[schemars(with = "Vec<ModelOnPath>")]
+    models: &'a [ModelOnPath],
+    /// The same models grouped by their shared model, source and confidence,
+    /// used instead of `models` when the list is long.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    model_groups: Vec<ModelGroup<'a>>,
+    /// Parameters read on the causal path, one row each.
+    #[serde(default, skip_serializing_if = "<[ParameterProvenance]>::is_empty")]
+    #[schemars(with = "Vec<ParameterProvenance>")]
+    parameters: &'a [ParameterProvenance],
+    /// The same parameters grouped by their shared value and origin, used
+    /// instead of `parameters` when the list is long.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    parameter_groups: Vec<ParameterGroup<'a>>,
+    /// On-path assumptions, by id into the run's assumption registry.
+    #[serde(default, skip_serializing_if = "<[AssumptionId]>::is_empty")]
+    #[schemars(with = "Vec<AssumptionId>")]
+    assumptions: &'a [AssumptionId],
+    /// How good the numbers behind this assertion are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "ErrorBudget")]
+    error_budget: Option<&'a ErrorBudget>,
+    /// Statistical coverage wording for ensemble assertions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String")]
+    coverage: Option<&'a str>,
+    /// How much this conclusion is entitled to claim, derived from the
+    /// assumptions on its causal path.
+    status: EvidenceStatus,
+}
+
+/// The models of one evidence map that share a model, source and confidence.
+#[derive(Serialize, schemars::JsonSchema)]
+struct ModelGroup<'a> {
+    /// The model that bound.
+    model_id: &'a str,
+    /// Storage layer of the model's source.
+    layer: ModelLayer,
+    /// How good the match was.
+    confidence: MatchConfidence,
+    /// The canonical source, validation and uncertainty record, stated once.
+    #[schemars(with = "ModelSource")]
+    source: &'a ModelSource,
+    /// The parts bound to it, in the order the map lists them.
+    references: Vec<&'a str>,
+    /// Causal identity of each part, parallel to `references`. Absent when
+    /// every identity is its reference.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    subjects: Vec<&'a str>,
+}
+
+/// The parameters of one evidence map that share a value and origin.
+#[derive(Serialize, schemars::JsonSchema)]
+struct ParameterGroup<'a> {
+    /// Rendered value shared by every parameter in the group.
+    value: &'a str,
+    /// Where the value came from.
+    #[schemars(with = "ValueOrigin")]
+    origin: &'a ValueOrigin,
+    /// Reference-qualified parameter names ("R7.resistance"), in the order the
+    /// map lists them.
+    parameters: Vec<&'a str>,
+    /// Causal identity of each parameter's component, parallel to
+    /// `parameters`. Absent when the parameters in the group have none; a
+    /// group never mixes parameters with and without one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    subjects: Vec<&'a str>,
+}
+
+fn group_models(rows: &[ModelOnPath]) -> Vec<ModelGroup<'_>> {
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut groups: Vec<ModelGroup<'_>> = Vec::new();
+    for (n, row) in rows.iter().enumerate() {
+        // A row that cannot be keyed is kept alone rather than merged.
+        let key = serde_json::to_string(&(&row.model_id, row.layer, row.confidence, &row.source))
+            .unwrap_or_else(|_| format!("row {n}"));
+        let slot = *index.entry(key).or_insert_with(|| {
+            groups.push(ModelGroup {
+                model_id: &row.model_id,
+                layer: row.layer,
+                confidence: row.confidence,
+                source: &row.source,
+                references: Vec::new(),
+                subjects: Vec::new(),
+            });
+            groups.len() - 1
+        });
+        groups[slot].references.push(&row.reference);
+        groups[slot].subjects.push(&row.subject);
+    }
+    for group in &mut groups {
+        if group.references == group.subjects {
+            group.subjects.clear();
+        }
+    }
+    groups
+}
+
+fn group_parameters(rows: &[ParameterProvenance]) -> Vec<ParameterGroup<'_>> {
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut groups: Vec<ParameterGroup<'_>> = Vec::new();
+    for (n, row) in rows.iter().enumerate() {
+        let key = serde_json::to_string(&(&row.value, &row.origin, row.subject.is_some()))
+            .unwrap_or_else(|_| format!("row {n}"));
+        let slot = *index.entry(key).or_insert_with(|| {
+            groups.push(ParameterGroup {
+                value: &row.value,
+                origin: &row.origin,
+                parameters: Vec::new(),
+                subjects: Vec::new(),
+            });
+            groups.len() - 1
+        });
+        groups[slot].parameters.push(&row.parameter);
+        if let Some(subject) = row.subject.as_deref() {
+            groups[slot].subjects.push(subject);
+        }
+    }
+    groups
+}
+
+impl Serialize for EvidenceMap {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let group_models_too = self.models.len() > EVIDENCE_GROUP_ROWS_ABOVE;
+        let group_parameters_too = self.parameters.len() > EVIDENCE_GROUP_ROWS_ABOVE;
+        EvidenceMapWire {
+            assertion: &self.assertion,
+            artifacts: &self.artifacts,
+            models: if group_models_too { &[] } else { &self.models },
+            model_groups: if group_models_too {
+                group_models(&self.models)
+            } else {
+                Vec::new()
+            },
+            parameters: if group_parameters_too {
+                &[]
+            } else {
+                &self.parameters
+            },
+            parameter_groups: if group_parameters_too {
+                group_parameters(&self.parameters)
+            } else {
+                Vec::new()
+            },
+            assumptions: &self.assumptions,
+            error_budget: self.error_budget.as_ref(),
+            coverage: self.coverage.as_deref(),
+            status: self.status,
+        }
+        .serialize(serializer)
+    }
 }
 
 impl EvidenceMap {

@@ -132,6 +132,29 @@ document that a consumer may find MISSING. They are omitted, never `null`, so
 test for presence rather than for null. A waived failure keeps `passed: false` here while lifting
 `assertions_passed` to `true`: waived is visible, not hidden, and not gating.
 
+### Long evidence maps are grouped
+
+An evidence map that lists more than 256 models, or more than 256 parameters,
+reports that list in groups instead of rows. On a board with tens of thousands
+of parts every part is on the causal path of a rail-wide assertion, and a row
+per part (each repeating the same source record) made the report hundreds of
+megabytes. The groups state each shared record once and list the parts it
+applies to, so no part is left out:
+
+- `model_groups[]` replaces `models[]`: each group is `model_id`, `layer`,
+  `confidence`, the shared `source` record, and `references[]` (the parts
+  bound to it, in the order the map lists them). `subjects[]`, parallel to
+  `references`, appears only when some part's causal identity differs from the
+  reference it is shown as.
+- `parameter_groups[]` replaces `parameters[]`: each group is the shared
+  `value` and `origin` and `parameters[]` (the reference-qualified names).
+  `subjects[]`, parallel to `parameters`, appears when the group's parameters
+  carry a causal identity; a group never mixes parameters with and without one.
+
+A map at or below the limit keeps the `models[]` / `parameters[]` rows exactly
+as before. A consumer reads whichever of the two shapes is present. Both
+shapes are additive, so `schema_version` is unchanged.
+
 Every outcome a `results` entry can express:
 
 | `passed` | `invalid` | `waived` | outcome |
