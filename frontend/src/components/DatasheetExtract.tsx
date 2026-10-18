@@ -46,17 +46,18 @@ export function DatasheetExtract({
   openParts,
   onSaved,
   onOpenSettings,
-  focus = false,
+  onCancel,
 }: {
+  /** The one part being modelled: its draft flow opens straight away, as the
+   *  "Draft from datasheet" tab of the model surface. */
   openParts: WebOpenPart[]
-  /** One part, opened straight on its draft flow: the "Draft from datasheet"
-   *  tab of the model surface, with no list of other parts around it. */
-  focus?: boolean
   onSaved?: () => void
   /** Opens the Settings page's "Datasheet extraction" section, where the
    *  backend that runs an extraction is actually configured. Omitted, the
    *  "Change in Settings" link is not shown (there is nowhere to send it). */
   onOpenSettings?: () => void
+  /** Leave the draft flow for the hand-written form ("Not now", "Reject"). */
+  onCancel?: () => void
 }) {
   // Only a part with no model at all can be helped by drafting one. A part that
   // bound and is open on the live circuit has a model already; offering an
@@ -182,11 +183,11 @@ export function DatasheetExtract({
     }
   }, [flow, onSaved])
 
-  // In focus mode the one part's flow is open from the start.
+  // The one part's flow is open from the start.
   const first = draftable[0]
   useEffect(() => {
-    if (focus && first && active?.reference !== first.reference) begin(first)
-  }, [focus, first, active, begin])
+    if (first && active?.reference !== first.reference) begin(first)
+  }, [first, active, begin])
 
   if (draftable.length === 0) return null
 
@@ -195,75 +196,8 @@ export function DatasheetExtract({
   const blocked = info !== null && !info.ready
 
   return (
-    <section className={focus ? '' : 'mt-4'} data-testid="datasheet-extract">
-      <div
-        className={focus ? '' : 'rounded-xl px-4 py-3'}
-        style={focus ? undefined : { border: '1px solid var(--hairline)', background: 'var(--surface)' }}
-      >
-        {!focus && <>
-        <div className="text-[11px] font-bold tracking-widest uppercase" style={{ color: 'var(--silk-faint)' }}>
-          Parts with no model
-        </div>
-        <div className="text-[12px] mt-1 leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
-          These parts default to open, so anything analog on their nets is guesswork. A model is one
-          TOML file: write it by hand, or draft one from the part's datasheet and check it.
-          {info && <> {info.cost}</>}
-        </div>
-
-        <div className="mt-2.5 rounded-lg overflow-hidden" style={{ border: '1px solid var(--hairline)' }}>
-          {draftable.map((p, i) => (
-            <div
-              key={p.reference}
-              data-testid={`extract-part-${p.reference}`}
-              className="px-3 py-2.5 flex items-start gap-3 flex-wrap"
-              style={{ borderTop: i > 0 ? '1px solid var(--hairline)' : 'none' }}
-            >
-              <div className="flex-1 min-w-0">
-                <div className="text-[13px] font-semibold" style={{ color: 'var(--silk)' }}>
-                  <span style={{ fontFamily: 'var(--font-mono)' }}>{p.reference}</span>
-                  {p.value && (
-                    <span className="ml-2 text-[12px] font-normal" style={{ color: 'var(--silk-dim)', fontFamily: 'var(--font-mono)' }}>
-                      {p.value}
-                    </span>
-                  )}
-                </div>
-                <div className="text-[11px] mt-0.5 leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
-                  {p.reason}
-                </div>
-              </div>
-              {p.rename_fix ? (
-                <div data-testid={`extract-rename-${p.reference}`} className="text-[12px] leading-relaxed w-full" style={{ color: 'var(--silk)' }}>
-                  {p.rename_fix}
-                </div>
-              ) : (
-              <button
-                type="button"
-                data-testid={`extract-start-${p.reference}`}
-                disabled={active !== null}
-                onClick={() => begin(p)}
-                /* Named for its part. One row per unnamed part means one button
-                   per part, and "Draft a model from a datasheet" repeated down
-                   the list is a set of controls that cannot be told apart. */
-                aria-label={`Draft a model for ${p.reference} from a datasheet`}
-                className="hb-btn hb-press px-3 py-1 text-[12px] shrink-0 max-w-full w-full sm:w-auto sm:whitespace-nowrap leading-tight"
-                style={{ minHeight: 28 }}
-              >
-                {/* The row already wraps, so on a phone this sits on its own line
-                    across the card. Even then 320px has no room for the long
-                    spelling, and the short one says the same thing. Below the
-                    sm breakpoint the label may also wrap onto a second line (the
-                    button grows with minHeight, not a fixed height): the card is
-                    narrower than its text in a wide fallback font, and a label
-                    that wraps is better than one cut off at the button's edge. */}
-                <span className="hidden min-[400px]:inline">Draft a model from a datasheet</span>
-                <span className="min-[400px]:hidden">Draft from a datasheet</span>
-              </button>
-              )}
-            </div>
-          ))}
-        </div>
-        </>}
-
+    <section data-testid="datasheet-extract">
+      <div>
         {ready.phase === 'unavailable' && (
           <div
             data-testid="extract-unavailable"
@@ -276,26 +210,7 @@ export function DatasheetExtract({
         )}
 
         {active && (
-          <div
-            className={focus ? '' : 'mt-3 rounded-lg px-3.5 py-3'}
-            style={focus ? undefined : { border: '1px solid var(--copper-deep)', background: 'var(--copper-tint)' }}
-          >
-            {!focus && <div className="flex items-center justify-between gap-2 flex-wrap">
-              <span className="text-[12px] font-semibold" style={{ color: 'var(--silk)' }}>
-                {active.reference}
-                {active.value ? ` · ${active.value}` : ''}
-              </span>
-              <button
-                type="button"
-                data-testid="extract-close"
-                onClick={close}
-                disabled={flow.step === 'running'}
-                className="hb-btn hb-press px-2.5 text-[11px]"
-                style={{ height: 24 }}
-              >
-                {flow.step === 'running' ? 'Drafting ...' : 'Close'}
-              </button>
-            </div>}
+          <div>
 
             {/* Step 1: can it run, and does the user consent. Both before any
                 file picker exists: an extraction that dies on "codex is not
@@ -357,8 +272,31 @@ export function DatasheetExtract({
                       className="py-2.5 text-[12px]"
                       title={<span className="inline-flex items-center gap-1.5"><WarningIcon size={12} /> Leaves your machine</span>}
                     >
-                      <div style={{ color: 'var(--silk-dim)' }}>{info.consent_notice}</div>
-                      <div className="mt-1.5" style={{ color: 'var(--silk-faint)' }}>{info.cost}</div>
+                      {/* The one thing that matters, for the backend that will run:
+                          where the datasheet goes, and who pays. Everything the
+                          engine's full notice says, verbatim, stays one click away. */}
+                      <div data-testid="extract-consent-line" style={{ color: 'var(--silk)' }}>
+                        Sends this datasheet to {info.backend_label ?? info.backend} ({info.default_model}, {info.default_effort} effort)
+                        {info.sends_data_to ? `: ${info.sends_data_to}.` : '.'}
+                      </div>
+                      <div className="mt-1" style={{ color: 'var(--silk-dim)' }}>{info.cost}</div>
+                      <details className="mt-1.5" data-testid="extract-consent-details">
+                        <summary className="cursor-pointer" style={{ color: 'var(--silk-faint)' }}>
+                          What leaves your machine, and what confines it
+                        </summary>
+                        <div className="mt-1" style={{ color: 'var(--silk-dim)' }}>{info.consent_notice}</div>
+                      </details>
+                      {onOpenSettings && (
+                        <button
+                          type="button"
+                          data-testid="extract-consent-settings"
+                          onClick={onOpenSettings}
+                          className="hb-press mt-1.5 block cursor-pointer text-[11px] font-semibold"
+                          style={{ background: 'none', border: 'none', padding: 0, color: 'var(--copper-hi)' }}
+                        >
+                          Use a different backend (Settings)
+                        </button>
+                      )}
                     </Callout>
                     <div className="mt-2.5 flex items-center gap-2 flex-wrap">
                       <button
@@ -372,7 +310,8 @@ export function DatasheetExtract({
                       </button>
                       <button
                         type="button"
-                        onClick={close}
+                        data-testid="extract-consent-decline"
+                        onClick={onCancel ?? close}
                         className="hb-btn hb-press px-3 text-[12px]"
                         style={{ height: 30 }}
                       >
@@ -443,7 +382,7 @@ export function DatasheetExtract({
                           the widest option wider than this card is on a phone,
                           and the browser cuts it rather than wrapping. */}
                       {info.kinds.map(k => (
-                        <option key={k.id} value={k.id}>{k.id}</option>
+                        <option key={k.id} value={k.id}>{k.label.split(' (')[0]}</option>
                       ))}
                     </select>
                     <span className="block mt-1" style={{ color: 'var(--silk-faint)' }}>
@@ -528,7 +467,7 @@ export function DatasheetExtract({
                 saving={saving}
                 saveError={saveError}
                 onAccept={(toml, saveAs) => void accept(toml, saveAs)}
-                onReject={close}
+                onReject={onCancel ?? close}
               />
             )}
 

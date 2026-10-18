@@ -3,12 +3,18 @@ import type { WebOpenPart } from '../types/report'
 import { api, errorText } from '../lib/api'
 import { tildeHome } from '../lib/display-path'
 import { DatasheetExtract } from './DatasheetExtract'
+import { ModelForm } from './editor/ModelForm'
+import { KIND_CHOICES, inferPartClass, kindLabel } from './editor/part-class'
+import type { PartFacts } from './editor/part-class'
+import { describesBehaviour, isIdentityOnly, missingParams, missingSentence, readModel, setKey, tomlString } from './editor/toml-edit'
+import type { ParsedModel } from './editor/toml-edit'
 
 // Model this part: one surface with three ways in, as tabs. Extend copies the
 // part's existing executable model to edit; Draft from datasheet runs the
-// extraction for this one part; Write it opens hauksbee's native TOML on a
-// scaffold that already validates (identity only: the part binds by name and
-// reports say what it does not simulate yet).
+// extraction for this one part; Fill in by hand opens on a guided form for the
+// kind of part the board says it is (chosen from its reference, symbol, footprint
+// and part number, with the reason shown) and offers the TOML as a mode switch
+// over the same text, so an edit in either view shows in the other.
 //
 // The validation comes from POST /api/models/check, which runs the SAME checks
 // the save path runs, never a friendlier client-side copy: an editor that
@@ -36,15 +42,19 @@ V1 vin 0 5
 X1 vin mid divider
 `
 
-/** A model that validates as written: the part binds by its value, and the
- *  report says plainly that its behaviour is not simulated yet. */
-export function identityScaffold(part?: { reference: string; value: string }): string {
+/** A starting file for a part, used when the server has not drawn a richer one
+ *  (no kind chosen yet, or the standalone editor). With a kind it validates as an
+ *  identity-only entry of THAT kind: the part binds by name and reports say what
+ *  it does not simulate yet. Without one the kind is left as a placeholder the
+ *  checker refuses, because a wrong default kind is worse than none: a MOSFET
+ *  must never validate as "a digital part". */
+export function identityScaffold(part?: { reference: string; value: string }, kind?: string): string {
   const value = (part?.value.trim() || 'MY_PART').replace(/["\\']/g, '')
   const id = `${(part?.reference ?? 'part').toLowerCase()}_${value.toLowerCase()}`.replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
   const re = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   return `[[models]]
 id = "${id}"
-kind = "digital"
+${kind ? `kind = "${kind}"` : '# Choose what the part is: the checker refuses this placeholder.\nkind = "choose_kind"'}
 description = "${value}: identified on the board, behaviour not modelled yet"
 
 # Which parts on a board this entry claims: a regex over the value field.
@@ -52,7 +62,7 @@ description = "${value}: identified on the board, behaviour not modelled yet"
 value_re = '^${re}$'
 
 # Identity only: the part binds by name and stays open in the simulation.
-# Pick a kind above to replace this with a model that simulates.
+# Add the values for its kind to replace this with a model that simulates.
 [models.params]
 identity_only = true
 warning = "${value} is identified but its behaviour is not simulated"
@@ -87,18 +97,19 @@ function draftRequest(suggested: WebOpenPart | ModelAuthoringSuggestion, boardLa
   }
 }
 
-/** The kinds a hand-written model can be, in the words someone with a datasheet
- *  in hand would use. A reference letter does not say (`Q` is a BJT or a MOSFET),
- *  so the author chooses. */
-const KIND_CHOICES: [id: string, what: string][] = [
-  ['passive', 'resistor, capacitor, inductor'], ['diode', 'diode, Schottky, Zener, LED'],
-  ['bjt_npn', 'NPN transistor'], ['bjt_pnp', 'PNP transistor'],
-  ['nmos', 'N-channel MOSFET'], ['pmos', 'P-channel MOSFET'],
-  ['vreg', 'regulator, LDO, charger'], ['opamp', 'op-amp'], ['comparator', 'comparator'],
-  ['timer', '555-class timer'], ['analog_switch', 'analogue or load switch'],
-  ['digital', 'logic or digital part'], ['dac', 'DAC'], ['adc', 'ADC'],
-  ['shift_register', 'shift register'], ['mcu', 'microcontroller'], ['connector', 'connector'],
-]
+/** What the board says about a part, for choosing its kind. A report's open-part
+ *  row carries only the reference and value; a coverage row adds the symbol and
+ *  footprint, which sharpen the answer. */
+function factsOf(part: WebOpenPart | ModelAuthoringSuggestion): PartFacts {
+  return {
+    reference: part.reference,
+    value: part.value,
+    lib_id: 'lib_id' in part ? part.lib_id : undefined,
+    footprint: 'footprint' in part ? part.footprint : undefined,
+    model_kind: 'model_kind' in part ? part.model_kind : undefined,
+    properties: 'properties' in part ? part.properties : undefined,
+  }
+}
 
 type CheckState =
   | { phase: 'idle' }
@@ -108,6 +119,54 @@ type CheckState =
 
 export function isModelCheckCurrent(check: CheckState, body: string, format: Format): boolean {
   return check.phase !== 'idle' && check.body === body && check.format === format
+}
+
+export interface PlainStatus {
+  state: 'checking' | 'choose' | 'ok' | 'missing' | 'fix' | 'deck-ok' | 'deck-bad'
+  text: string
+  note?: string
+}
+
+/** The checker's answer in plain words for the author. The checker's own words
+ *  stay one click away ("What the checker said"); this line says what is wrong
+ *  and what to do, never "valid but incomplete" in a success colour. */
+export function plainStatus(
+  check: CheckState,
+  ctx: { toml: boolean; kindChosen: boolean; model: ParsedModel | null; view: 'form' | 'toml' },
+): PlainStatus {
+  if (check.phase === 'checking') return { state: 'checking', text: 'Checking …' }
+  if (!ctx.toml) {
+    return check.phase === 'ok'
+      ? { state: 'deck-ok', text: `Valid: ${check.summary.replace(/^valid:\s*/i, '')}` }
+      : { state: 'deck-bad', text: check.phase === 'bad' ? check.error : '' }
+  }
+  if (!ctx.kindChosen) return { state: 'choose', text: 'Choose what kind of part it is, then it can be saved.' }
+  if (check.phase === 'bad') {
+    const missing = missingParams(check.error)
+    if (missing.length > 0) {
+      return {
+        state: 'missing',
+        text: `Still needed: ${missingSentence(missing)}.`,
+        note: 'Enter them from the datasheet, or tick "keep this part open for now" to save without values.',
+      }
+    }
+    if (ctx.view === 'toml') return { state: 'fix', text: 'Fix the marked lines to save.' }
+    const first = tomlIssues('', check.error)[0]?.message ?? check.error
+    return { state: 'fix', text: `It cannot be saved yet: ${first}` }
+  }
+  if (check.phase !== 'ok') return { state: 'checking', text: 'Checking …' }
+  const model = ctx.model?.ok ? ctx.model.model : null
+  const text = 'Ready to save. A saved model is used the next time the board is analysed.'
+  if (model && isIdentityOnly(model)) {
+    return { state: 'ok', text, note: 'The part stays open: its behaviour is not simulated until you add values.' }
+  }
+  if (model && !describesBehaviour(model)) {
+    return { state: 'ok', text, note: 'It names the part but describes no behaviour yet, so simulations will not change.' }
+  }
+  if (/no model declares \[models\.coverage\]/.test(check.summary)) {
+    return { state: 'ok', text, note: 'It does not say which behaviours it covers, so reports keep showing this part’s coverage as it is.' }
+  }
+  return { state: 'ok', text }
 }
 
 /** One validator complaint, placed on the line it is about. */
@@ -226,23 +285,28 @@ function MarkedEditor({ value, onChange, issues, tone, disabled, busy }: {
   return (
     <>
       <div className="relative flex rounded-lg overflow-hidden" style={{ border: '1px solid var(--hairline)', background: 'var(--input-bg)' }}>
-        <div aria-hidden="true" className="shrink-0 overflow-hidden select-none text-right tnum" style={{ width: 34, background: 'var(--surface-2)', borderRight: '1px solid var(--hairline)' }}>
-          <div style={{ transform: `translateY(${-scroll}px)`, paddingTop: PAD, paddingBottom: PAD }}>
-            {lines.map((_, i) => {
-              const marked = byLine.get(i + 1)
-              return (
-                <div
-                  key={i}
-                  data-testid={marked ? 'toml-gutter-mark' : undefined}
-                  title={marked?.map(m => m.message).join('\n')}
-                  onMouseDown={marked ? e => { e.preventDefault(); goTo(i + 1) } : undefined}
-                  className="pr-1.5 text-[10px]"
-                  style={{ height: LINE_H, lineHeight: `${LINE_H}px`, color: marked ? color : 'var(--silk-faint)', cursor: marked ? 'pointer' : 'default', fontWeight: marked ? 700 : 400 }}
-                >
-                  {marked ? '●' : i + 1}
-                </div>
-              )
-            })}
+        {/* The gutter takes its height from the text box, never from its own
+            line count: it is a clipped window onto the numbers, scrolled in step
+            with the text, so 38 lines of numbers cannot grow a 13-line box. */}
+        <div aria-hidden="true" className="relative shrink-0 select-none text-right tnum" style={{ width: 34, background: 'var(--surface-2)', borderRight: '1px solid var(--hairline)' }}>
+          <div className="absolute inset-0 overflow-hidden">
+            <div style={{ transform: `translateY(${-scroll}px)`, paddingTop: PAD, paddingBottom: PAD }}>
+              {lines.map((_, i) => {
+                const marked = byLine.get(i + 1)
+                return (
+                  <div
+                    key={i}
+                    data-testid={marked ? 'toml-gutter-mark' : undefined}
+                    title={marked?.map(m => m.message).join('\n')}
+                    onMouseDown={marked ? e => { e.preventDefault(); goTo(i + 1) } : undefined}
+                    className="pr-1.5 text-[10px]"
+                    style={{ height: LINE_H, lineHeight: `${LINE_H}px`, color: marked ? color : 'var(--silk-faint)', cursor: marked ? 'pointer' : 'default', fontWeight: marked ? 700 : 400 }}
+                  >
+                    {marked ? '●' : i + 1}
+                  </div>
+                )
+              })}
+            </div>
           </div>
         </div>
         <div className="relative flex-1 min-w-0">
@@ -265,7 +329,9 @@ function MarkedEditor({ value, onChange, issues, tone, disabled, busy }: {
             spellCheck={false}
             className="relative block w-full text-[12px] outline-none"
             style={{
-              minHeight: 240, fontFamily: 'var(--font-mono)', lineHeight: `${LINE_H}px`, padding: PAD,
+              // Grows with the text up to a cap, then scrolls with the gutter.
+              height: Math.min(Math.max(lines.length * LINE_H + 2 * PAD + 14, 200), 460),
+              minHeight: 200, fontFamily: 'var(--font-mono)', lineHeight: `${LINE_H}px`, padding: PAD,
               background: 'transparent', color: 'var(--silk)', border: 'none', resize: 'vertical', whiteSpace: 'pre',
             }}
           />
@@ -315,7 +381,12 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel, onOpenSe
   // Whether the author has touched the text. Until they have, a gap in a
   // server scaffold is a to-do the page already told them about, not an error.
   const [edited, setEdited] = useState(false)
-  const [kind, setKind] = useState<string | null>(null)
+  // The guided form or the TOML, over the same text. Extend starts on the TOML
+  // (an existing model is rarely a handful of values); a new part starts on the form.
+  const [view, setView] = useState<'form' | 'toml'>('form')
+  // Why the starting kind was chosen, shown under the kind picker until the
+  // author picks one themselves.
+  const [why, setWhy] = useState<string | null>(null)
   const [saveMsg, setSaveMsg] = useState<string | null>(null)
   const [drafting, setDrafting] = useState(false)
   const timer = useRef<number | null>(null)
@@ -344,6 +415,48 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel, onOpenSe
     if (!cancelled()) setDrafting(false)
   }, [suggested, boardLabel])
 
+  // A kind was chosen, by the author or from the board's evidence. Untouched
+  // text is replaced by the server's scaffold for it, drawn from the board's own
+  // identity for this part; text the author has already edited keeps its lines
+  // and only its kind changes.
+  const pick = useCallback(async (chosen: string, opts: { why?: string | null; fresh?: boolean } = {}) => {
+    setWhy(opts.why ?? null)
+    setCheck({ phase: 'idle' })
+    if (edited && !opts.fresh) {
+      setTexts(t => ({ ...t, write: setKey(t.write, '[[models]]', 'kind', tomlString(chosen)) }))
+      return
+    }
+    setEdited(false)
+    if (!suggested) {
+      setTexts(t => ({ ...t, write: identityScaffold(undefined, chosen) }))
+      return
+    }
+    setDrafting(true)
+    setSaveMsg(null)
+    try {
+      const result = await api.modelsDraft(draftRequest(suggested, boardLabel, chosen))
+      if (result.ok && result.toml) setTexts(t => ({ ...t, write: result.toml! }))
+      else {
+        // The server could not draw one: a local scaffold of the same kind.
+        setTexts(t => ({ ...t, write: identityScaffold(suggested, chosen) }))
+        setSaveMsg(result.error ?? 'the server could not prepare a scaffold')
+      }
+    } catch (error) {
+      setTexts(t => ({ ...t, write: identityScaffold(suggested, chosen) }))
+      setSaveMsg(errorText(error))
+    }
+    setDrafting(false)
+  }, [suggested, boardLabel, edited])
+
+  // Starting a new part: the kind the board's evidence settles, with its reason,
+  // or a question when it does not.
+  const startWrite = useCallback(() => {
+    if (!suggested) return
+    const found = inferPartClass(factsOf(suggested))
+    setWhy(found.why)
+    if (found.kind) void pick(found.kind, { why: found.why, fresh: true })
+  }, [suggested, pick])
+
   useEffect(() => {
     if (!openSignal || !suggested) return
     const asked = requestedTab
@@ -352,40 +465,23 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel, onOpenSe
       : (asked === 'extend' || asked === null) && extendable ? 'extend' : 'write'
     setTab(start)
     setFormat('toml')
+    setView(start === 'extend' ? 'toml' : 'form')
     setPart(suggested.value.trim() || suggested.reference)
     setTexts({ extend: '', write: identityScaffold(suggested) })
-    setKind(null)
+    setWhy(null)
     setCheck({ phase: 'idle' })
     setSaveMsg(null)
     setEdited(false)
     setOpen(true)
+    if (start === 'write') startWrite()
     if (start !== 'extend') return
     let cancelled = false
     void copyExisting(() => cancelled)
     return () => { cancelled = true }
+  // `startWrite` follows `pick`, which follows `edited`; an edit must not
+  // restart the part, so only the open signal and the part itself re-run this.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openSignal, suggested, draftable, extendable, copyExisting])
-
-  // The author chose a kind: the server's scaffold for it replaces the
-  // identity-only one, drawn from the board's own identity for this part.
-  const pick = useCallback(async (chosen: string) => {
-    setKind(chosen)
-    setEdited(false)
-    setCheck({ phase: 'idle' })
-    if (!suggested) {
-      setTexts(t => ({ ...t, write: identityScaffold().replace('kind = "digital"', `kind = "${chosen}"`) }))
-      return
-    }
-    setDrafting(true)
-    setSaveMsg(null)
-    try {
-      const result = await api.modelsDraft(draftRequest(suggested, boardLabel, chosen))
-      if (result.ok && result.toml) setTexts(t => ({ ...t, write: result.toml! }))
-      else setSaveMsg(result.error ?? 'the server could not prepare a scaffold')
-    } catch (error) {
-      setSaveMsg(errorText(error))
-    }
-    setDrafting(false)
-  }, [suggested, boardLabel])
 
   // Debounced, because this runs the real validator on the server and a request
   // per keystroke would queue behind itself while someone types a paragraph.
@@ -455,12 +551,29 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel, onOpenSe
     }
   }, [part, body, onSaved])
 
+  // The kind the TOML currently names, read from the text itself so a kind typed
+  // in the TOML view and a kind picked in the form are the same thing.
+  const parsedModel = bodyFormat === 'toml' ? readModel(body) : null
+  const parsedKind = parsedModel?.ok && typeof parsedModel.model.kind === 'string' ? parsedModel.model.kind : ''
+  const kindChosen = parsedKind !== '' && parsedKind !== 'choose_kind'
+  const writeKindChosen = (() => {
+    const m = readModel(texts.write)
+    return m.ok && typeof m.model.kind === 'string' && m.model.kind !== 'choose_kind'
+  })()
+
   if (!open) {
     return (
       <button
         type="button"
         data-testid="write-part-open"
-        onClick={() => { setTab(extendable ? 'extend' : 'write'); setOpen(true); if (extendable && !texts.extend) void copyExisting(() => false) }}
+        onClick={() => {
+          const start: ModelTab = extendable ? 'extend' : 'write'
+          setTab(start)
+          setView(start === 'extend' ? 'toml' : 'form')
+          setOpen(true)
+          if (extendable && !texts.extend) void copyExisting(() => false)
+          if (start === 'write' && !writeKindChosen && !edited) startWrite()
+        }}
         className="hb-btn hb-press px-3 text-[12px]"
         style={{ height: 30 }}
       >
@@ -472,14 +585,18 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel, onOpenSe
   const tabs: [ModelTab, string][] = [
     ...(extendable ? [['extend', 'Extend model'] as [ModelTab, string]] : []),
     ...(draftable ? [['draft', 'Draft from datasheet'] as [ModelTab, string]] : []),
-    ['write', 'Write it'],
+    ['write', 'Fill in by hand'],
   ]
   const switchTo = (next: ModelTab) => {
     setTab(next)
     setEdited(false)
+    setView(next === 'extend' ? 'toml' : 'form')
     if (next === 'extend' && !texts.extend) void copyExisting(() => false)
+    if (next === 'write' && !writeKindChosen) startWrite()
   }
-  const quiet = !edited && kind !== null
+  const quiet = !edited && kindChosen
+  const status = plainStatus(visibleCheck, { toml: bodyFormat === 'toml', kindChosen, model: parsedModel, view })
+  const kindKnown = KIND_CHOICES.some(([id]) => id === parsedKind)
 
   return (
     <div data-testid="write-part" className="rounded-xl px-4 py-3.5 mt-3" style={{ border: '1px solid var(--hairline)', background: 'var(--surface)' }}>
@@ -514,29 +631,58 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel, onOpenSe
       </div>
 
       {tab === 'draft' && openPart ? (
-        <DatasheetExtract focus openParts={[openPart]} onSaved={onSaved} onOpenSettings={onOpenSettings} />
+        <DatasheetExtract openParts={[openPart]} onSaved={onSaved} onOpenSettings={onOpenSettings} onCancel={() => switchTo('write')} />
       ) : (<>
-        {tab === 'write' && (
-          <div className="flex flex-wrap items-center gap-1.5 mb-2" data-testid="kind-picker">
-            <span className="text-[12px]" style={{ color: 'var(--silk-dim)' }}>Simulate it as</span>
-            <select
-              className="hb-input text-[12px] w-full truncate"
-              aria-label="Kind of part"
-              data-testid="kind-select"
-              value={format === 'spice' ? 'spice' : kind ?? ''}
-              onChange={e => {
-                const v = e.target.value
-                if (v === 'spice') { setFormat('spice'); return }
-                setFormat('toml')
-                if (v === '') { setKind(null); setTexts(t => ({ ...t, write: identityScaffold(suggested) })) } else void pick(v)
-              }}
-              style={{ height: 28, maxWidth: 260 }}
-            >
-              <option value="">identity only</option>
-              {KIND_CHOICES.map(([id, what]) => <option key={id} value={id}>{what}</option>)}
-              <option value="spice">a SPICE deck</option>
-            </select>
-          </div>
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 mb-2">
+          {tab === 'write' ? (
+            <label className="flex flex-wrap items-center gap-1.5 text-[12px] min-w-0" data-testid="kind-picker" style={{ color: 'var(--silk-dim)' }}>
+              <span>What it is</span>
+              <select
+                className="hb-input text-[12px] truncate"
+                aria-label="Kind of part"
+                data-testid="kind-select"
+                value={format === 'spice' ? 'spice' : kindChosen ? parsedKind : ''}
+                onChange={e => {
+                  const v = e.target.value
+                  if (v === 'spice') { setFormat('spice'); return }
+                  setFormat('toml')
+                  void pick(v)
+                }}
+                style={{ height: 28, maxWidth: 260 }}
+              >
+                <option value="" disabled>choose what it is</option>
+                {kindChosen && !kindKnown && <option value={parsedKind}>{kindLabel(parsedKind)}</option>}
+                {KIND_CHOICES.map(([id, what]) => <option key={id} value={id}>{what}</option>)}
+                <option value="spice">a SPICE deck</option>
+              </select>
+            </label>
+          ) : <span />}
+          {bodyFormat === 'toml' && (
+            <div role="tablist" aria-label="How to edit the model" className="inline-flex items-center gap-0.5 p-0.5 rounded-lg" style={{ border: '1px solid var(--hairline)', background: 'var(--surface-2)' }}>
+              {(['form', 'toml'] as const).map(v => (
+                <button
+                  key={v}
+                  type="button"
+                  role="tab"
+                  aria-selected={view === v}
+                  data-testid={`model-view-${v}`}
+                  onClick={() => setView(v)}
+                  className="hb-press px-3 py-1 text-[12px] cursor-pointer rounded-md"
+                  style={{
+                    border: 'none',
+                    background: view === v ? 'var(--copper-tint-strong)' : 'transparent',
+                    color: view === v ? 'var(--silk)' : 'var(--silk-dim)',
+                    fontWeight: view === v ? 600 : 400,
+                  }}
+                >
+                  {v === 'form' ? 'Form' : 'TOML'}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {tab === 'write' && format !== 'spice' && why && (
+          <div data-testid="kind-why" className="text-[12px] mb-2 leading-relaxed" style={{ color: 'var(--silk-faint)' }}>{why}</div>
         )}
 
         {bodyFormat === 'spice' ? (
@@ -554,7 +700,7 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel, onOpenSe
             />
             <MarkedEditor value={spice} onChange={t => { setEdited(true); setSpice(t) }} issues={[]} tone="err" disabled={false} busy={false} />
           </>
-        ) : (
+        ) : view === 'toml' ? (
           <MarkedEditor
             value={toml}
             onChange={(t, fixed) => { if (!fixed) setEdited(true); setToml(t) }}
@@ -563,18 +709,39 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel, onOpenSe
             disabled={drafting}
             busy={drafting}
           />
+        ) : kindChosen || tab === 'extend' ? (
+          <fieldset disabled={drafting} aria-busy={drafting} className="min-w-0" style={{ border: 'none', padding: 0, margin: 0 }}>
+            <ModelForm
+              key={`${tab}:${drafting}`}
+              text={toml}
+              onChange={t => { setEdited(true); setToml(t) }}
+              error={visibleCheck.phase === 'bad' ? visibleCheck.error : null}
+              onShowToml={() => setView('toml')}
+            />
+          </fieldset>
+        ) : (
+          <div data-testid="model-form-choose" className="text-[12px] rounded-lg px-3 py-2.5" style={{ border: '1px dashed var(--hairline)', color: 'var(--silk-dim)' }}>
+            Choose what the part is above, and the form asks for the values that kind of part needs.
+          </div>
         )}
 
         <div
           data-testid="write-part-status"
+          data-state={status.state}
           data-quiet={quiet || undefined}
-          className="text-[12px] mt-1.5"
-          style={{ color: visibleCheck.phase === 'ok' ? 'var(--ok)' : 'var(--silk-faint)' }}
+          className="text-[12px] mt-2"
+          style={{ color: status.state === 'ok' ? 'var(--ok)' : status.state === 'fix' ? 'var(--err)' : 'var(--silk-dim)' }}
         >
-          {visibleCheck.phase === 'checking' && 'Checking …'}
-          {visibleCheck.phase === 'ok' && `Valid: ${visibleCheck.summary.replace(/^valid:\s*/i, '')}`}
-          {visibleCheck.phase === 'bad' && bodyFormat === 'spice' && <span style={{ color: 'var(--err)' }}>{visibleCheck.error}</span>}
-          {visibleCheck.phase === 'bad' && bodyFormat === 'toml' && (quiet ? 'Fill in the marked lines from the datasheet, then it will save.' : 'Fix the marked lines to save.')}
+          <div>{status.text}</div>
+          {status.note && <div style={{ color: 'var(--silk-faint)' }}>{status.note}</div>}
+          {bodyFormat === 'toml' && (visibleCheck.phase === 'ok' || visibleCheck.phase === 'bad') && (
+            <details className="mt-1" data-testid="write-part-checker-detail">
+              <summary className="cursor-pointer" style={{ color: 'var(--silk-faint)' }}>What the checker said</summary>
+              <div className="mt-1 whitespace-pre-wrap break-words" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
+                {visibleCheck.phase === 'ok' ? visibleCheck.summary : visibleCheck.error}
+              </div>
+            </details>
+          )}
         </div>
 
         {bodyFormat === 'toml' && (

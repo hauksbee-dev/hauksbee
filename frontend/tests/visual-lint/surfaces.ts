@@ -127,26 +127,41 @@ export const APP_SURFACES: Surface[] = [
   },
   {
     id: 'write-part-kind',
-    what: 'the "Model U1" surface opening on Write it, an identity-only scaffold that validates',
+    what: 'the "Model U1" surface opening on the guided form: a part the board cannot classify asks what it is',
     async reach(page) {
       const opener = await page.locator('[data-testid="write-part"]').textContent()
       if (!opener?.includes('Model U1')) {
         throw new Error(`manual model editor did not name its selected part: ${opener}`)
       }
       await page.click('[data-testid="model-tab-write"]')
-      // The editor opens on a scaffold that already validates (identity only),
-      // with the kind picker above it for a model that simulates.
+      // The editor opens on the form, not on raw TOML, with the kind picker
+      // above it. XLOGIC9999 says nothing about what it is, so it must ask
+      // instead of defaulting to a kind.
       await page.waitForSelector('[data-testid="kind-picker"]')
-      await page.waitForSelector('[data-testid="write-part-status"]:has-text("Valid")', { timeout: 10_000 })
+      await page.waitForSelector('[data-testid="write-part-status"][data-state="choose"]', { timeout: 10_000 })
+      if (await page.locator('[data-testid="write-part-toml"]').count() > 0) {
+        throw new Error('the model editor opened on raw TOML instead of the guided form')
+      }
       await page.locator('[data-testid="kind-picker"]').scrollIntoViewIfNeeded()
       await settle(page)
     },
   },
   {
-    id: 'write-part',
-    what: 'the "write a part yourself" editor, TOML with the live validator',
+    id: 'write-part-form',
+    what: 'the guided form once a kind is chosen: values the kind needs, and what is still missing',
     async reach(page) {
       await page.selectOption('[data-testid="kind-select"]', 'digital')
+      await page.waitForSelector('[data-testid="model-form"]')
+      await page.waitForSelector('[data-testid="write-part-status"]:not([data-state="checking"])', { timeout: 10_000 })
+      await page.locator('[data-testid="model-form"]').scrollIntoViewIfNeeded()
+      await settle(page, 700)
+    },
+  },
+  {
+    id: 'write-part',
+    what: 'the "write a part yourself" editor, TOML view of the same text with the live validator',
+    async reach(page) {
+      await page.click('[data-testid="model-view-toml"]')
       // The scaffold is requested from the server, and the box is busy (and
       // still holds the generic starter) until it lands.
       await page.waitForSelector('[data-testid="write-part-toml"]:not([aria-busy="true"])')
@@ -195,9 +210,9 @@ export const APP_SURFACES: Surface[] = [
     async reach(page) {
       const panel = page.locator('[data-testid="ci-setup-panel"]')
       if (!(await panel.isVisible())) {
-        // The report's Next card keeps its own, hidden "Set up GitHub CI" on
-        // the Board view, so take the one a user can see.
-        await page.locator('button:visible', { hasText: 'Set up GitHub CI' }).first().click()
+        // "Set up GitHub CI" lives in the Checks Export menu.
+        await page.locator('[data-testid="checks-export"]:visible').first().click()
+        await page.locator('[data-testid="export-ci"]:visible').first().click()
       }
       await panel.waitFor({ state: 'visible' })
       await panel.scrollIntoViewIfNeeded()
