@@ -153,9 +153,15 @@ impl SubjectLookup {
         let mut nets_by_name: HashMap<String, BTreeSet<String>> = HashMap::new();
         for (net, refs) in refs_by_net {
             for subject in refs {
-                nets_by_name.entry(subject.clone()).or_default().insert(net.clone());
+                nets_by_name
+                    .entry(subject.clone())
+                    .or_default()
+                    .insert(net.clone());
                 if let Some(display) = display_ref_by_subject.get(subject) {
-                    nets_by_name.entry(display.clone()).or_default().insert(net.clone());
+                    nets_by_name
+                        .entry(display.clone())
+                        .or_default()
+                        .insert(net.clone());
                 }
             }
         }
@@ -785,7 +791,8 @@ impl BoardEvidence {
             .map(|(subject, component)| (subject.clone(), component.reference.clone()))
             .collect();
         let refs_by_net = owned.iter().cloned().collect();
-        let lookup = SubjectLookup::new(&refs_by_net, &display_ref_by_subject, &report.supply_groups);
+        let lookup =
+            SubjectLookup::new(&refs_by_net, &display_ref_by_subject, &report.supply_groups);
         Ok(Self {
             registry: registry.clone(),
             index,
@@ -1575,7 +1582,7 @@ impl BoardEvidence {
         rails
             .iter()
             .copied()
-            .chain(controls.map(|n| n.as_str()))
+            .chain(controls.map(String::as_str))
             .chain(taps.map(String::as_str))
             .filter(|n| !crate::is_ground(n) && self.refs_by_net.contains_key(*n))
             .map(str::to_string)

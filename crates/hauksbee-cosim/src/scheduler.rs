@@ -3927,10 +3927,12 @@ impl Scheduler {
         // start-up step superlinear in the board's parts and nets.
         let rails: HashSet<NodeId> = rails.into_iter().collect();
         let names = self.node_name_index();
-        let mut tainted_nets: HashSet<String> =
-            (self.regulation.iter()).flat_map(|t| t.nets.iter().cloned()).collect();
-        let mut taken: HashSet<String> =
-            (self.regulation.iter()).map(|t| t.refs[0].clone()).collect();
+        let mut tainted_nets: HashSet<String> = (self.regulation.iter())
+            .flat_map(|t| t.nets.iter().cloned())
+            .collect();
+        let mut taken: HashSet<String> = (self.regulation.iter())
+            .map(|t| t.refs[0].clone())
+            .collect();
         loop {
             let tainted = |n: NodeId| tainted_nets.contains(&*names.name(n.0));
             let powered = |n: NodeId| !n.is_ground() && (rails.contains(&n) || tainted(n));
@@ -3945,7 +3947,10 @@ impl Scheduler {
             let (r, v) = (&part.reference, &part.value);
             let reason = |nets: &[String]| regulation::open_driver_reason(r, v, &from, nets);
             self.push_taint_named(&names, part.reference.clone(), nodes, reason);
-            let added = self.regulation.last().expect("push_taint_named pushes one taint");
+            let added = self
+                .regulation
+                .last()
+                .expect("push_taint_named pushes one taint");
             tainted_nets.extend(added.nets.iter().cloned());
             taken.insert(added.refs[0].clone());
         }
@@ -8351,9 +8356,10 @@ impl NodeNames {
     /// The name of the net on `node`, or `"node N"` for an unnamed one: what
     /// `Scheduler::net_name_of` answers.
     fn name(&self, node: u32) -> Cow<'_, str> {
-        self.0
-            .get(&node)
-            .map_or_else(|| Cow::Owned(format!("node {node}")), |n| Cow::Borrowed(n.as_str()))
+        self.0.get(&node).map_or_else(
+            || Cow::Owned(format!("node {node}")),
+            |n| Cow::Borrowed(n.as_str()),
+        )
     }
 }
 

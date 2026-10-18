@@ -71,7 +71,10 @@ impl SparseMatrix {
     ///
     /// Panics if `slots` has more rows than the matrix.
     pub fn touch_all(&mut self, slots: Vec<Vec<usize>>) {
-        assert!(slots.len() <= self.n, "touch_all: more slot rows than the matrix has");
+        assert!(
+            slots.len() <= self.n,
+            "touch_all: more slot rows than the matrix has"
+        );
         for (row, mut cols) in slots.into_iter().enumerate() {
             if cols.is_empty() {
                 continue;
@@ -1332,7 +1335,11 @@ mod tests {
             // Some entries exist (with values) before the batch, as when a
             // caller reserves into a matrix that already holds stamps.
             for _ in 0..next(10) {
-                let (r, c, v) = (next(n), next(n), 1.0 + f64::from(u32::try_from(next(9)).unwrap()));
+                let (r, c, v) = (
+                    next(n),
+                    next(n),
+                    1.0 + f64::from(u32::try_from(next(9)).unwrap()),
+                );
                 one.add(r, c, v);
                 all.add(r, c, v);
             }
