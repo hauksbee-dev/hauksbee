@@ -51,8 +51,14 @@ export const ResultLinkContext = createContext<ResultLinkHandlers>({ vocab: null
 
 const nameOf = (e: ResultEntity) => (e.kind === 'part' ? e.ref : e.net)
 
-/** A part or a net as a chip: a small glyph for which it is, then its name. */
-export function EntityChip({ entity }: { entity: ResultEntity }) {
+/** Punctuation that closes a clause: a chip it follows sits flush against it. */
+const CLOSING_PUNCTUATION = /^[,.;:)\]!?]/
+
+/** A part or a net as a chip: a small glyph for which it is, then its name.
+ *  `tightBefore` / `tightAfter` say the chip sits against an opening bracket or
+ *  closing punctuation in the sentence, so its padding on that side shrinks and
+ *  the text reads "(from D13, driven by U1)", not "(from D13 , driven by U1 )". */
+export function EntityChip({ entity, tightBefore = false, tightAfter = false }: { entity: ResultEntity; tightBefore?: boolean; tightAfter?: boolean }) {
   const { onPoint, onGo } = useContext(ResultLinkContext)
   const name = nameOf(entity)
   const part = entity.kind === 'part'
@@ -62,14 +68,19 @@ export function EntityChip({ entity }: { entity: ResultEntity }) {
       data-testid="result-link"
       data-kind={entity.kind}
       data-name={name}
+      data-tight={tightBefore || tightAfter ? [tightBefore && 'before', tightAfter && 'after'].filter(Boolean).join(' ') : undefined}
       title={onGo ? `${part ? 'Part' : 'Net'} ${name}: show it on the board` : undefined}
       onMouseEnter={() => onPoint?.(entity)}
       onMouseLeave={() => onPoint?.(null)}
       onFocus={() => onPoint?.(entity)}
       onBlur={() => onPoint?.(null)}
       onClick={() => onGo?.(entity)}
-      className="hb-press result-chip inline-flex items-center gap-1 align-baseline rounded-md px-1.5 mx-px"
+      className="hb-press result-chip inline-flex items-center gap-1 align-baseline rounded-md"
       style={{
+        paddingLeft: tightBefore ? 3 : 6,
+        paddingRight: tightAfter ? 3 : 6,
+        marginLeft: tightBefore ? 0 : 1,
+        marginRight: tightAfter ? 0 : 1,
         fontFamily: 'var(--font-mono)',
         fontSize: '0.9em',
         lineHeight: 1.45,
@@ -94,10 +105,22 @@ export function EntityChip({ entity }: { entity: ResultEntity }) {
 export function Linked({ text }: { text: string }) {
   const { vocab } = useContext(ResultLinkContext)
   if (!vocab) return <Plain text={text} />
+  const segments = linkify(text, vocab)
   return (
     <>
-      {linkify(text, vocab).map((seg, i) =>
-        typeof seg === 'string' ? <Plain key={i} text={seg} /> : <EntityChip key={i} entity={seg} />)}
+      {segments.map((seg, i) => {
+        if (typeof seg === 'string') return <Plain key={i} text={seg} />
+        const before = segments[i - 1]
+        const after = segments[i + 1]
+        return (
+          <EntityChip
+            key={i}
+            entity={seg}
+            tightBefore={typeof before === 'string' && before.endsWith('(')}
+            tightAfter={typeof after === 'string' && CLOSING_PUNCTUATION.test(after)}
+          />
+        )
+      })}
     </>
   )
 }
