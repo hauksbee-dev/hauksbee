@@ -468,6 +468,8 @@ fn keep_rejected(e: anyhow::Error, dest: &Path, args: &Args) -> anyhow::Error {
     }
 }
 
+// One run, top to bottom, as the user sees it.
+#[allow(clippy::too_many_lines)]
 fn run_inner(mut args: Args) -> Result<PathBuf> {
     // Magic bytes rather than extension, and BEFORE any backend is chosen: a
     // non-PDF (a saved HTML page, a .docx) would otherwise be text-dumped and
@@ -516,6 +518,10 @@ fn run_inner(mut args: Args) -> Result<PathBuf> {
         args.pdf.display()
     );
 
+    if !is_sensor_kind(&args.kind_str) && args.templates.is_empty() {
+        args.templates =
+            crate::card_templates::select(&args.part, &args.kind_str, crate::card_templates::LIMIT);
+    }
     let (part, kind) = (args.part.as_str(), args.kind_str.as_str());
     // The destination is settled before anything is sent: an existing model
     // may be hand-corrected, and finding that out after a paid run is too late.
@@ -549,7 +555,7 @@ fn run_inner(mut args: Args) -> Result<PathBuf> {
                 crate::validation::KIND_NAMES.join(", ")
             );
         }
-        let mut prompt = build_prompt(part, kind, &pdf_text);
+        let mut prompt = build_prompt_with(part, kind, &pdf_text, &args.templates);
         if !args.footprints.is_empty() {
             use std::fmt::Write as _;
             let _ = write!(
@@ -1266,6 +1272,9 @@ pub struct Args {
     /// ([`crate::extract_trace`]); on unless `--no-trace` or
     /// `HAUKSBEE_EXTRACT_NO_TRACE` is set.
     pub trace: bool,
+    /// Finished library cards of this kind shown as worked examples
+    /// ([`crate::card_templates`]); chosen by the run itself.
+    pub templates: Vec<crate::card_templates::Template>,
 }
 
 impl Args {
@@ -1290,6 +1299,7 @@ impl Args {
             force: false,
             board: None,
             trace: true,
+            templates: Vec::new(),
         }
     }
 
@@ -2210,24 +2220,46 @@ fn prompt_for_agent_backend(prompt: &str) -> String {
     )
 }
 
+#[cfg(test)]
+fn build_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
+    build_prompt_with(part, kind, pdf_text, &[])
+}
+
+/// [`build_prompt`] with finished library cards of the part's kind as worked
+/// examples; they replace the fixed other-kind format examples when there are any.
 // The prompt is one template read top to bottom, as the model reads it.
 #[allow(clippy::too_many_lines)]
-fn build_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
+fn build_prompt_with(
+    part: &str,
+    kind: &str,
+    pdf_text: &str,
+    templates: &[crate::card_templates::Template],
+) -> String {
     let examples = format_examples_for_kind(kind);
-    let example_cards = examples
-        .iter()
-        .enumerate()
-        .map(|(index, example)| {
-            format!(
-                "EXAMPLE {} -- DIFFERENT PART CLASS ({}, kind={}):\n{}",
-                index + 1,
-                example.part,
-                example.kind,
-                example.card
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
+    let example_cards = if templates.is_empty() {
+        let cards = examples
+            .iter()
+            .enumerate()
+            .map(|(index, example)| {
+                format!(
+                    "EXAMPLE {} -- DIFFERENT PART CLASS ({}, kind={}):\n{}",
+                    index + 1,
+                    example.part,
+                    example.kind,
+                    example.card
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        format!(
+            "FORMAT EXAMPLES ONLY:\nThese are NOT the part being extracted. Each is from a \
+             different part class.\nYour answer must have the SAME SHAPE, using this datasheet's \
+             part, kind, pins,\nparameters, ratings, and sources. Copying the example's part \
+             number or numbers\nis a WRONG ANSWER.\n\n{cards}"
+        )
+    } else {
+        crate::card_templates::prompt_section(templates)
+    };
     format!(
         r#"You are a SPICE model extraction assistant.
 
@@ -2258,12 +2290,6 @@ charger, a level shifter, an addressable LED driver), do not invent a kind: use
 the closest legal kind for the part's primary electrical behavior (a charger's
 power path fits vreg; a level shifter fits digital) and say in `description`
 what real behavior the chosen kind does not model.
-
-FORMAT EXAMPLES ONLY:
-These are NOT the part being extracted. Each is from a different part class.
-Your answer must have the SAME SHAPE, using this datasheet's part, kind, pins,
-parameters, ratings, and sources. Copying the example's part number or numbers
-is a WRONG ANSWER.
 
 {example_cards}
 
@@ -3410,13 +3436,13 @@ impl Reply<'_> {
         let Reply::Model { part, kind } = self else {
             return Vec::new();
         };
-        parse_and_validate_reply(raw, part, kind)
-            .map(|entry| {
-                let mut out = crate::param_names::source_warnings(&entry);
-                // The binding, pin-table and coverage checks the agent's
-                // `ds check` runs, against this run's sandbox facts.
+        parse_and_validate_all(raw, part, kind)
+            .map(|all| {
+                let mut out = crate::param_names::source_warnings(&all[0]);
+                // The binding, pin-table, coverage, scope and provenance checks
+                // the agent's `ds check` runs, against this run's sandbox facts.
                 out.extend(
-                    crate::card_coverage::current_findings(&entry)
+                    crate::card_coverage::current_reply_findings(&all)
                         .into_iter()
                         .filter(|f| f.severity == crate::card_coverage::Severity::Warn)
                         .map(|f| format!("{}: {}", f.check, f.message)),
@@ -3502,10 +3528,20 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
     progress::phase("rendering the datasheet pages");
     let mut ws = prepare_workspace_in(&args.pdf, &std::env::temp_dir())?;
     ws.checker = args.checker.as_deref().and_then(|c| c.canonicalize().ok());
+    ws.trace = crate::extract_trace::begin(args.out_dir.as_deref(), &args.part, args.trace);
+    if let Reply::Model { part, kind } = reply {
+        // Worked examples and the documents the datasheet defers to, in the
+        // sandbox before the agent starts and in the trace after it.
+        let mut notes = fetch_companions(&ws, &resolved, part, kind);
+        crate::card_templates::write_to(ws.path(), &args.templates);
+        notes.extend(crate::card_templates::provenance_line(&args.templates));
+        if let (Some(trace), false) = (ws.trace.as_ref(), notes.is_empty()) {
+            let _ = std::fs::write(trace.dir().join("rounding.txt"), notes.join("\n") + "\n");
+        }
+    }
     if let Reply::Model { part, kind } | Reply::Sensor { part, kind } = reply {
         crate::ds_toolkit::write_run_files(ws.path(), part, kind, args.board.as_ref());
     }
-    ws.trace = crate::extract_trace::begin(args.out_dir.as_deref(), &args.part, args.trace);
     say!(
         "[model-extract] sandbox {} with {} page render(s)",
         ws.path().display(),
@@ -3565,6 +3601,44 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
     crate::card_coverage::with_facts(facts, || {
         run_ladder(&resolved, &prompts, reply, &ws, &ladder, billing)
     })
+}
+
+/// Fetch the documents the datasheet defers the kind checklist's facts to
+/// into the sandbox ([`crate::companion_docs`]); the lines to trace.
+///
+/// Off when the backend cannot search the web, when the kind is unknown, or
+/// when `HAUKSBEE_EXTRACT_NO_COMPANIONS` is set.
+fn fetch_companions(ws: &Workspace, resolved: &Resolved, part: &str, kind: &str) -> Vec<String> {
+    let off = std::env::var("HAUKSBEE_EXTRACT_NO_COMPANIONS")
+        .is_ok_and(|v| !v.trim().is_empty() && v.trim() != "0");
+    if off || !resolved.backend.can_search() {
+        return Vec::new();
+    }
+    let Some(kind) = crate::ds_toolkit::kind_from_name(kind) else {
+        return Vec::new();
+    };
+    let facts = crate::ds_toolkit::facts_from_dir(ws.path());
+    let needs = crate::card_coverage::kind_needs(kind, &facts.pages.join("\n"), &facts.pin_columns);
+    let searcher = crate::datasheet_discovery::AgentSearcher {
+        resolved: resolved.clone(),
+    };
+    let notes = crate::companion_docs::prepare(
+        ws.path(),
+        part,
+        &facts.pages,
+        &needs,
+        &crate::datasheet_fetch::CurlHttp,
+        &searcher,
+        &|pdf| {
+            extract_pdf_pages_text(pdf)
+                .map(|pages| pages.into_iter().map(|p| p.text).collect())
+                .unwrap_or_default()
+        },
+    );
+    for n in &notes {
+        say!("[model-extract] companion: {n}");
+    }
+    notes
 }
 
 /// How the active backend bills a run: a plan's share, metered dollars, or unknown.
@@ -4638,10 +4712,24 @@ fn helper_clause(ws: &Workspace) -> String {
     if has(crate::ds_toolkit::BOARD_FILE) {
         files.push("`board.md` (the board part: value, footprint, pad count, each pad's net)");
     }
+    if has(crate::card_templates::DIR) {
+        files.push(
+            "`templates/` (finished library cards of this kind to copy the structure and \
+             coverage from, never their values; `templates/index.md` says why each was chosen)",
+        );
+    }
+    if has(crate::companion_docs::DIR) {
+        files.push(
+            "`companions/` (documents the datasheet defers to, fetched and verified; \
+             `companions/index.md` lists them, `ds find` searches them, `ds page N --doc DOC` \
+             reads one page)",
+        );
+    }
     let commands = if ws.checker.is_some() {
         "\n\nThe same as one-line commands on your PATH: `ds toc`, `ds find <regex>` \
          (page-numbered hits), `ds page N`, `ds pins [--package P | --pads N]`, `ds board`, \
-         `ds checklist`, and `ds check` (validation, value_re/footprint_re binding, the pin map \
+         `ds checklist`, `ds similar [--kind K]` (finished cards to copy the shape from), \
+         and `ds check` (validation, value_re/footprint_re binding, the pin map \
          against the pin table, and checklist coverage, each finding worded as its fix). Take \
          the pin map from `ds pins` for THIS package's column rather than counting columns in \
          the text. Before you finish, run `ds check` and fix each finding, or record the field \
@@ -5602,6 +5690,11 @@ fn extract_toml_block(s: &str, table: &str) -> String {
 
 /// Parse raw TOML and validate the first model entry.
 fn parse_and_validate_reply(raw: &str, part: &str, kind_str: &str) -> Result<ModelEntry> {
+    parse_and_validate_all(raw, part, kind_str).map(|mut all| all.swap_remove(0))
+}
+
+/// Parse raw TOML and validate every model entry it holds (never empty).
+fn parse_and_validate_all(raw: &str, part: &str, kind_str: &str) -> Result<Vec<ModelEntry>> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         bail!("empty reply for {part}: the backend returned no TOML at all");
@@ -5653,7 +5746,7 @@ fn parse_and_validate_reply(raw: &str, part: &str, kind_str: &str) -> Result<Mod
         check_reply_entry(entry, part, kind_str)
             .map_err(|e| anyhow::anyhow!("[[models]] entry '{}': {e:#}", entry.id))?;
     }
-    let all: Vec<ModelEntry> = std::iter::once(first.clone()).chain(entries).collect();
+    let all: Vec<ModelEntry> = std::iter::once(first).chain(entries).collect();
     if !names_part(&all, part) {
         bail!(
             "no [models.match] value_re or mpn_re matches '{part}', the name this card was \
@@ -5670,7 +5763,7 @@ fn parse_and_validate_reply(raw: &str, part: &str, kind_str: &str) -> Result<Mod
     if let Some(problem) = ambiguous_cards(&all, part) {
         bail!("{problem}");
     }
-    let blocking: Vec<String> = crate::card_coverage::current_findings(&first)
+    let blocking: Vec<String> = crate::card_coverage::current_reply_findings(&all)
         .into_iter()
         .filter(|f| f.severity == crate::card_coverage::Severity::Error)
         .map(|f| format!("{}: {}", f.check, f.message))
@@ -5678,7 +5771,7 @@ fn parse_and_validate_reply(raw: &str, part: &str, kind_str: &str) -> Result<Mod
     if !blocking.is_empty() {
         bail!("{}", blocking.join("\n"));
     }
-    Ok(first)
+    Ok(all)
 }
 
 /// The base card kind a requested kind drafts as (`charger` -> `vreg`).
@@ -5698,17 +5791,17 @@ pub fn check_draft(
     kind: &str,
     facts: &crate::card_coverage::Facts,
 ) -> Vec<String> {
-    let checked = crate::card_coverage::with_facts(facts.clone(), || {
-        parse_and_validate_reply(raw, part, kind)
-    });
+    let checked =
+        crate::card_coverage::with_facts(facts.clone(), || parse_and_validate_all(raw, part, kind));
     match checked {
         Err(e) => vec![format!("error (the draft is refused): {e:#}")],
-        Ok(entry) => {
-            let mut out: Vec<String> = crate::param_names::source_warnings(&entry)
+        Ok(all) => {
+            let entry = &all[0];
+            let mut out: Vec<String> = crate::param_names::source_warnings(entry)
                 .into_iter()
                 .map(|w| format!("warning: {w}"))
                 .collect();
-            out.extend(crate::ranges::problems(&entry).iter().map(|p| {
+            out.extend(crate::ranges::problems(entry).iter().map(|p| {
                 format!(
                     "range: {} = {} is outside what this field ever holds: recheck the row's \
                      unit and column",
@@ -5716,7 +5809,7 @@ pub fn check_draft(
                 )
             }));
             out.extend(
-                crate::card_coverage::findings(&entry, facts)
+                crate::card_coverage::reply_findings(&all, facts)
                     .into_iter()
                     .filter(|f| f.severity == crate::card_coverage::Severity::Warn)
                     .map(|f| format!("{}: {}", f.check, f.message)),

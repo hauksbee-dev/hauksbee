@@ -124,6 +124,29 @@ pub struct Facts {
     pub pages: Vec<String>,
     pub pin_columns: Vec<Column>,
     pub board: Option<Board>,
+    /// Companion documents fetched for the run (an application note the
+    /// datasheet defers to): each one's name and page texts.
+    pub companions: Vec<(String, Vec<String>)>,
+}
+
+impl Facts {
+    /// Every page a number may be read from: the datasheet's, and the
+    /// companions' pages that are about what they were fetched for (a whole
+    /// reference manual prints nearly every small number somewhere, so its
+    /// other pages would vouch for anything).
+    #[must_use]
+    pub fn workspace_pages(&self) -> Vec<&str> {
+        self.pages
+            .iter()
+            .map(String::as_str)
+            .chain(
+                self.companions
+                    .iter()
+                    .flat_map(|(_, pages)| pages.iter().map(String::as_str))
+                    .filter(|p| crate::companion_docs::on_topic(p)),
+            )
+            .collect()
+    }
 }
 
 thread_local! {
@@ -294,6 +317,16 @@ pub fn needs(entry: &ModelEntry, text: &str, columns: &[Column]) -> Vec<Need> {
         _ => {}
     }
     out
+}
+
+/// What a card of `kind` needs before any draft exists (the checklist's groups).
+#[must_use]
+pub fn kind_needs(kind: ComponentKind, text: &str, columns: &[Column]) -> Vec<Need> {
+    let entry = ModelEntry {
+        kind,
+        ..ModelEntry::default()
+    };
+    needs(&entry, text, columns)
 }
 
 fn has_role(entry: &ModelEntry, pred: &dyn Fn(&str) -> bool) -> bool {
@@ -546,9 +579,49 @@ pub fn findings(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
             }
         }
     }
+    out.extend(boot_straps(entry, facts));
+    out.extend(crate::card_scope::entry_findings(entry, facts));
+    out.extend(crate::card_provenance::findings(
+        entry,
+        &facts.workspace_pages(),
+    ));
     let mut seen = std::collections::HashSet::new();
     out.retain(|f| seen.insert(f.message.clone()));
     out
+}
+
+/// The findings for every entry of a reply: the first entry's full set, the
+/// scope and provenance checks on the others (named by id), and whether the
+/// reply covers every package the pin table lists.
+#[must_use]
+pub fn reply_findings(entries: &[ModelEntry], facts: &Facts) -> Vec<Finding> {
+    let Some((first, rest)) = entries.split_first() else {
+        return Vec::new();
+    };
+    let mut out = findings(first, facts);
+    let pages = facts.workspace_pages();
+    for e in rest {
+        let mut more = crate::card_scope::entry_findings(e, facts);
+        more.extend(crate::card_provenance::findings(e, &pages));
+        for f in &mut more {
+            f.message = format!("[[models]] '{}': {}", e.id, f.message);
+        }
+        out.extend(more);
+    }
+    out.extend(crate::card_scope::package_coverage(entries, facts));
+    out.extend(crate::card_scope::theta_coverage(entries, facts));
+    out
+}
+
+/// [`reply_findings`] against the facts [`with_facts`] holds.
+#[must_use]
+pub fn current_reply_findings(entries: &[ModelEntry]) -> Vec<Finding> {
+    FACTS.with(|c| {
+        c.borrow()
+            .as_ref()
+            .map(|f| reply_findings(entries, f))
+            .unwrap_or_default()
+    })
 }
 
 fn re_matches(pattern: Option<&str>, s: &str) -> Option<bool> {
@@ -626,10 +699,57 @@ pub fn role_agrees(role: &str, printed: &str, kind: ComponentKind) -> bool {
     })
 }
 
-/// Remedy 2: the pad map against the datasheet's column for this package.
-fn pins(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
-    if facts.pin_columns.is_empty() || entry.pins.is_empty() {
+/// Every pad the pin table names for a boot-select pin (`PB2/BOOT1`, `BOOT0`)
+/// has a `[[models.straps]]` row: one strap row for `BOOT0` leaves the other
+/// pin of the boot-mode table unmodelled.
+fn boot_straps(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
+    static BOOT_PIN: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"(?i)\bn?BOOT\d\b|/n?BOOT\d").expect("re"));
+    if entry.straps.is_empty() {
         return Vec::new();
+    }
+    let Some(col) = board_column(entry, facts) else {
+        return Vec::new();
+    };
+    let strapped = |role: &str| {
+        entry
+            .straps
+            .iter()
+            .any(|s| s.role.eq_ignore_ascii_case(role))
+    };
+    let missing: Vec<String> = entry
+        .pins
+        .iter()
+        .filter_map(|(pad, role)| {
+            let (printed, _) = col.pads.get(pad)?;
+            (BOOT_PIN.is_match(printed) && !strapped(role))
+                .then(|| format!("pad {pad} '{printed}' (role '{role}')"))
+        })
+        .collect();
+    if missing.is_empty() {
+        return Vec::new();
+    }
+    let hint = if facts.companions.is_empty() {
+        "the boot-mode table"
+    } else {
+        "the boot-mode table (a companion document holds it: `ds find 'boot configuration'`, then `ds page N --doc DOC`)"
+    };
+    vec![Finding {
+        severity: Severity::Warn,
+        check: "coverage",
+        message: format!(
+            "the pin table names {} for boot selection but the card has no [[models.straps]] row \
+             for it: add one (role, level, only_with) from {hint}, or an `unknown` record naming \
+             the pin saying why",
+            missing.join(", ")
+        ),
+    }]
+}
+
+/// The pin-table column for the package the board (or, failing that, the card) is for.
+fn board_column<'a>(entry: &ModelEntry, facts: &'a Facts) -> Option<&'a Column> {
+    if facts.pin_columns.is_empty() || entry.pins.is_empty() {
+        return None;
     }
     let card_max = entry
         .pins
@@ -649,7 +769,20 @@ fn pins(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
                 .and_then(|s| s.pinout.first().map(|p| p.package.clone()))
         });
     let pads = facts.board.as_ref().and_then(Board::pad_count).or(card_max);
-    let Ok(col) = pin_table::choose(&facts.pin_columns, package.as_deref(), pads) else {
+    pin_table::choose(&facts.pin_columns, package.as_deref(), pads).ok()
+}
+
+/// Remedy 2: the pad map against the datasheet's column for this package.
+fn pins(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
+    if facts.pin_columns.is_empty() || entry.pins.is_empty() {
+        return Vec::new();
+    }
+    let card_max = entry
+        .pins
+        .keys()
+        .filter_map(|p| p.parse::<usize>().ok())
+        .max();
+    let Some(col) = board_column(entry, facts) else {
         return Vec::new();
     };
     let mut wrong = Vec::new();
@@ -791,6 +924,7 @@ value_re = "(?i)^TLV70033$"
                 footprint: "Package_TO_SOT_SMD:SOT-23-5".into(),
                 ..Board::default()
             }),
+            ..Facts::default()
         };
         let found = findings(&card, &facts);
         let text = |c: &str| {
@@ -819,6 +953,37 @@ value_re = "(?i)^TLV70033$"
         assert!(findings(&card, &blind)
             .iter()
             .all(|f| f.check != "coverage"));
+    }
+
+    #[test]
+    fn a_boot_select_pad_without_a_strap_row_is_reported() {
+        let card = entry(
+            "[[models]]\nid = \"mcu\"\nkind = \"mcu\"\n[models.pins]\n37 = \"pb2\"\n94 = \"boot0\"\n100 = \"vdd\"\n\
+             [[models.straps]]\nrole = \"boot0\"\nlevel = \"low\"\nboot_select = true\n",
+        );
+        let mut col = Column {
+            label: "LQFP100".into(),
+            ..Column::default()
+        };
+        col.pads.insert("37".into(), ("PB2/BOOT1".into(), 52));
+        col.pads.insert("94".into(), ("BOOT0".into(), 60));
+        col.pads.insert("100".into(), ("VDD".into(), 61));
+        let facts = Facts {
+            part: "STM32F407VET6".into(),
+            pin_columns: vec![col],
+            ..Facts::default()
+        };
+        let found = boot_straps(&card, &facts);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("pad 37 'PB2/BOOT1'"), "{found:?}");
+        assert!(!found[0].message.contains("pad 94"), "{found:?}");
+        // With both straps present there is nothing to say.
+        let both = entry(
+            "[[models]]\nid = \"mcu\"\nkind = \"mcu\"\n[models.pins]\n37 = \"pb2\"\n94 = \"boot0\"\n100 = \"vdd\"\n\
+             [[models.straps]]\nrole = \"boot0\"\nlevel = \"low\"\nboot_select = true\n\
+             [[models.straps]]\nrole = \"pb2\"\nlevel = \"low\"\nboot_select = false\n",
+        );
+        assert!(boot_straps(&both, &facts).is_empty());
     }
 
     #[test]

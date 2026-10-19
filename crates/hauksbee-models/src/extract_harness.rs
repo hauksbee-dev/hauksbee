@@ -337,7 +337,19 @@ pub fn finish(
         "[model-extract] final tier: {line}; confidence {level}"
     ));
     let line = line.replace('\n', " ");
-    format!("# extracted by {line}\n{raw}")
+    // What the drafter was shown and given beyond the datasheet, so a card can
+    // be traced to its worked examples and companion documents.
+    let mut stamp = format!("# extracted by {line}\n");
+    for note in [
+        crate::card_templates::index_note(dir),
+        crate::companion_docs::index_note(dir),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let _ = writeln!(stamp, "# {}", note.replace('\n', " "));
+    }
+    format!("{stamp}{raw}")
 }
 
 #[cfg(test)]

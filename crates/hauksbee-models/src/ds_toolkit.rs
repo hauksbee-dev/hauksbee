@@ -333,7 +333,15 @@ pub fn facts_from_dir(dir: &Path) -> Facts {
         pages: page_texts(dir),
         pin_columns: pin_columns(dir),
         board: read(dir, BOARD_FILE).map(|t| Board::from_markdown(&t)),
+        companions: crate::companion_docs::read_all(dir),
     }
+}
+
+/// The card kind a kind name (or a `kind/subtype` spelling) denotes.
+#[must_use]
+pub fn kind_from_name(name: &str) -> Option<crate::schema::ComponentKind> {
+    let base = name.split(['/', ' ']).next().unwrap_or(name);
+    kind_of(base).or_else(|| crate::datasheet::base_kind_name(base).and_then(kind_of))
 }
 
 fn kind_of(name: &str) -> Option<crate::schema::ComponentKind> {
@@ -357,12 +365,16 @@ fn checklist(dir: &Path, facts: &Facts) -> Option<String> {
         })
         .unwrap_or_default();
     let roles: Vec<&str> = roles.iter().map(String::as_str).collect();
-    Some(card_coverage::checklist_text(
-        kind,
-        &roles,
-        &facts.pages.join("\n"),
-        &facts.pin_columns,
-    ))
+    let mut text =
+        card_coverage::checklist_text(kind, &roles, &facts.pages.join("\n"), &facts.pin_columns);
+    text.push_str(&crate::card_scope::package_lines(facts));
+    if let Some(note) = crate::companion_docs::index_note(dir) {
+        let _ = writeln!(
+            text,
+            "- {note}: search them with `ds find`; a fact the datasheet defers is answered there"
+        );
+    }
+    Some(text)
 }
 
 fn chosen_column<'a>(
@@ -392,8 +404,11 @@ fn chosen_column<'a>(
 
 const USAGE: &str = "ds: datasheet helpers (read-only, offline)
   ds toc                     contents / tables / figures -> PDF pages, key sections first
-  ds find <regex>            page-numbered hits on every page (case-insensitive)
+  ds find <regex>            page-numbered hits on every page, and in companion documents
+                             (`DOC p.N`), case-insensitive
   ds page N [--render]       page N's text, and its PNG render
+  ds page N --doc DOC        page N of a companion document (`companions/index.md`)
+  ds similar [--kind K]      finished library cards of this kind to copy the shape from
   ds pins [--package P | --pads N]
                              the pin table column for one package (pad, name, page)
   ds board                   the board part: value, footprint, pad count, nets
@@ -420,6 +435,12 @@ pub fn main(dir: &Path, args: &[String]) -> Result<String> {
             Ok(read(dir, TOC_FILE).unwrap_or_else(|| toc_markdown(&parse_toc(&page_texts(dir)))))
         }
         "find" => find(dir, rest),
+        "similar" => crate::card_templates::similar(
+            dir,
+            &part_field(dir, "part").unwrap_or_default(),
+            &part_field(dir, "kind").unwrap_or_default(),
+            flag("--kind").as_deref(),
+        ),
         "page" => page(dir, rest),
         "pins" => {
             let facts = facts_from_dir(dir);
@@ -518,6 +539,18 @@ fn find(dir: &Path, rest: &[String]) -> Result<String> {
             }
         }
     }
+    for (doc, pages) in crate::companion_docs::read_all(dir) {
+        for (i, text) in pages.iter().enumerate() {
+            for line in text.lines().filter(|l| re.is_match(l)) {
+                hits += 1;
+                if hits <= 80 {
+                    let line: String = line.split_whitespace().collect::<Vec<_>>().join(" ");
+                    let line: String = line.chars().take(160).collect();
+                    let _ = writeln!(out, "{doc} p.{}: {line}", i + 1);
+                }
+            }
+        }
+    }
     if hits > 80 {
         let _ = writeln!(out, "... {} more; narrow the pattern", hits - 80);
     }
@@ -533,6 +566,18 @@ fn page(dir: &Path, rest: &[String]) -> Result<String> {
         .context("usage: ds page N [--render]")?
         .parse()
         .context("N is a PDF page number")?;
+    if let Some(i) = rest.iter().position(|a| a == "--doc") {
+        let doc = rest.get(i + 1).context("usage: ds page N --doc DOC")?;
+        let pages = crate::companion_docs::read_all(dir)
+            .into_iter()
+            .find(|(d, _)| d.eq_ignore_ascii_case(doc))
+            .map(|(_, p)| p)
+            .with_context(|| format!("no companion document '{doc}' (see companions/index.md)"))?;
+        let text = pages
+            .get(n.saturating_sub(1))
+            .with_context(|| format!("{doc} has {} pages", pages.len()))?;
+        return Ok(format!("=== {doc} page {n} ===\n\n{text}"));
+    }
     let text = read(dir, &format!("pages/page-{n:03}.txt"))
         .with_context(|| format!("no page {n} in this PDF"))?;
     let png = dir.join(format!("page-{n:03}.png"));
