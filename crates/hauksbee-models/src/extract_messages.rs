@@ -7,6 +7,8 @@
 //! line, ready to print; none prints.
 
 use crate::datasheet::Backend;
+use crate::datasheet_discovery::Missing;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 /// What a datasheet search sends and where, shown before the first search (the
@@ -116,14 +118,34 @@ pub fn doubted(part: &str, url: &str, why: &str) -> String {
     format!("{part}: not using {url}: {why}")
 }
 
-/// Under `--yes` (and interactively) a part whose datasheet cannot be trusted
-/// is left alone.
+/// A part no datasheet could be obtained for, said when it happens. One
+/// wording whether the board gave a link that failed, gave none, or the search
+/// found nothing it could vouch for: it is "no datasheet", never an extraction
+/// failure, and the batch's closing list says how to supply it.
 #[must_use]
-pub fn skipped(part: &str, why: &str) -> String {
+pub fn no_datasheet_found(part: &str, why: &str) -> String {
+    format!("no datasheet for {part}: {why}. Nothing was sent for it; it is on the list at the end")
+}
+
+/// A PDF a person saved for the part is used instead of fetching one.
+#[must_use]
+pub fn using_supplied(part: &str, pdf: &Path) -> String {
     format!(
-        "skipped {part}: {why}. Nothing was sent for it. Pass {} to use one you trust",
-        datasheet_flag(part)
+        "{part}: using the datasheet you supplied, {}",
+        pdf.display()
     )
+}
+
+/// A host that refused (or went quiet) is skipped for the rest of the run.
+#[must_use]
+pub fn host_skipped(host: &str, why: &str) -> String {
+    format!("{host}: {why}; skipping its links for the rest of this run and looking elsewhere")
+}
+
+/// A long batch is not silent: how far it has got.
+#[must_use]
+pub fn progress(done: usize, total: usize, running: usize) -> String {
+    format!("[batch] {done} of {total} parts done, {running} running")
 }
 
 /// The search found nothing hauksbee could use.
@@ -215,15 +237,17 @@ pub fn has_card(part: &str, card: &ExistingCard) -> String {
     )
 }
 
-/// The closing line of a batch.
+/// The closing line of a batch. `no_datasheet` is its own count: parts nothing
+/// could be fetched for are not extraction failures, and are listed separately
+/// ([`supply_report`]).
 #[must_use]
-pub fn batch_summary(drafted: usize, kept: usize, skipped: usize, failed: &[&str]) -> String {
+pub fn batch_summary(drafted: usize, kept: usize, no_datasheet: usize, failed: &[&str]) -> String {
     let mut bits = vec![format!("{drafted} drafted")];
     if kept > 0 {
         bits.push(format!("{kept} already had a card"));
     }
-    if skipped > 0 {
-        bits.push(format!("{skipped} skipped"));
+    if no_datasheet > 0 {
+        bits.push(format!("{no_datasheet} without a datasheet"));
     }
     if !failed.is_empty() {
         bits.push(format!("{} failed ({})", failed.len(), failed.join(", ")));
@@ -246,9 +270,199 @@ pub fn batch_failed(drafted: usize, failed: &[&str]) -> String {
     )
 }
 
+/// Something an agent could not decide from the datasheet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Need {
+    pub part: String,
+    pub question: String,
+}
+
+/// The name a person gives a datasheet for `part`: `<part>.pdf`.
+#[must_use]
+pub fn supplied_name(part: &str) -> String {
+    format!("{}.pdf", crate::datasheet::sanitise_filename(part))
+}
+
+/// The end-of-run list of what a person has to supply, or empty when there is
+/// nothing: every part no datasheet could be obtained for with each link tried
+/// and why it failed, then each question an agent asked that nobody was there
+/// to answer. `datasheet_dir` is where `<part>.pdf` files are picked up on a
+/// rerun and `rerun` is the one command that reruns the batch with them; both
+/// are named exactly. Printed at the end of a batch and saved beside the cards
+/// ([`SUPPLY_FILE`]).
+#[must_use]
+pub fn supply_report(
+    missing: &[(String, Missing)],
+    needs: &[Need],
+    datasheet_dir: &Path,
+    out_dir: &Path,
+    rerun: &str,
+) -> String {
+    if missing.is_empty() && needs.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    if !missing.is_empty() {
+        let _ = writeln!(
+            out,
+            "{} part(s) have no datasheet to extract from. Supply these by hand:",
+            missing.len()
+        );
+        for (part, m) in missing {
+            let _ = writeln!(out, "  {part}: {}", m.why);
+            for t in &m.tried {
+                let _ = writeln!(out, "      tried {}: {}", t.url, t.why);
+            }
+            let _ = writeln!(
+                out,
+                "      save the PDF as {}  (search: {})",
+                datasheet_dir.join(supplied_name(part)).display(),
+                datasheet_search(part)
+            );
+        }
+        let _ = writeln!(
+            out,
+            "\nThen rerun the same batch. Files named <part>.pdf in {} are picked up (use \
+             --datasheet-dir to point at another folder); parts that already have a card are left \
+             alone:\n  {rerun}\nOr give one directly with {}.",
+            datasheet_dir.display(),
+            datasheet_flag("<part>")
+        );
+    }
+    if !needs.is_empty() {
+        if !missing.is_empty() {
+            out.push('\n');
+        }
+        let _ = writeln!(
+            out,
+            "{} thing(s) an agent needed and nobody was there to answer:",
+            needs.len()
+        );
+        for n in needs {
+            let _ = writeln!(out, "  {}: needs: {}", n.part, n.question);
+            let card = existing_card(out_dir, &n.part).map_or_else(String::new, |c| {
+                format!(" or edit {} by hand", c.path.display())
+            });
+            let _ = writeln!(
+                out,
+                "      supply it: save a datasheet or note that states it as {}, then run \
+                 `hauksbee models extract --part {} --pdf {} --out-dir {} --force`{card}",
+                datasheet_dir.join(supplied_name(&n.part)).display(),
+                shell_word(&n.part),
+                shell_word(
+                    &datasheet_dir
+                        .join(supplied_name(&n.part))
+                        .display()
+                        .to_string()
+                ),
+                shell_word(&out_dir.display().to_string()),
+            );
+        }
+    }
+    out
+}
+
+/// The list written beside the cards by [`supply_report`].
+pub const SUPPLY_FILE: &str = "supply-by-hand.txt";
+
+/// `text` quoted for a POSIX shell when it needs it.
+fn shell_word(text: &str) -> String {
+    let plain = !text.is_empty()
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:=+@".contains(c));
+    if plain {
+        text.to_string()
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datasheet_discovery::Tried;
+
+    fn missing(why: &str, urls: &[(&str, &str)]) -> Missing {
+        Missing {
+            why: why.into(),
+            tried: urls
+                .iter()
+                .map(|(u, w)| Tried {
+                    url: (*u).into(),
+                    why: (*w).into(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn the_supply_list_names_each_link_tried_the_folder_and_the_one_rerun_command() {
+        let miss = [
+            (
+                "LM358".to_string(),
+                missing(
+                    "the board's link could not be downloaded",
+                    &[("https://vendor.example/a.pdf", "HTTP 403")],
+                ),
+            ),
+            ("TPS7A".to_string(), missing("no link", &[])),
+        ];
+        let rerun = "hauksbee models extract --unmodelled b.kicad_pcb --datasheet-dir /d --yes";
+        let text = supply_report(&miss, &[], Path::new("/d"), Path::new("/out"), rerun);
+        for want in [
+            "2 part(s) have no datasheet",
+            "LM358: the board's link could not be downloaded",
+            "tried https://vendor.example/a.pdf: HTTP 403",
+            "save the PDF as /d/LM358.pdf",
+            "save the PDF as /d/TPS7A.pdf",
+            rerun,
+        ] {
+            assert!(text.contains(want), "{want}\n{text}");
+        }
+        assert!(!text.contains("needs:"), "{text}");
+    }
+
+    #[test]
+    fn an_unanswered_question_is_a_need_with_the_way_to_supply_it() {
+        let needs = [Need {
+            part: "U 1".into(),
+            question: "which variant is fitted?".into(),
+        }];
+        let text = supply_report(&[], &needs, Path::new("/d"), Path::new("/out"), "rerun");
+        assert!(
+            text.contains("U 1: needs: which variant is fitted?"),
+            "{text}"
+        );
+        assert!(
+            text.contains("hauksbee models extract --part 'U 1' --pdf"),
+            "{text}"
+        );
+        assert!(!text.contains("Supply these by hand"), "{text}");
+    }
+
+    #[test]
+    fn nothing_outstanding_is_an_empty_list_and_progress_reads_plainly() {
+        assert_eq!(
+            supply_report(&[], &[], Path::new("/d"), Path::new("/o"), "r"),
+            ""
+        );
+        assert_eq!(progress(3, 10, 4), "[batch] 3 of 10 parts done, 4 running");
+    }
+
+    /// One wording for every way of having no datasheet.
+    #[test]
+    fn no_datasheet_reads_the_same_whatever_the_cause() {
+        for why in [
+            "the board gives no link",
+            "HTTP 404",
+            "the search found nothing",
+        ] {
+            let line = no_datasheet_found("X1", why);
+            assert!(line.starts_with("no datasheet for X1: "), "{line}");
+            assert!(!line.contains("failed"), "{line}");
+        }
+    }
 
     #[test]
     fn an_api_backend_is_told_which_backends_can_search() {
@@ -282,7 +496,7 @@ mod tests {
     fn a_batch_summary_separates_drafts_kept_cards_skips_and_failures() {
         assert_eq!(
             batch_summary(2, 1, 3, &["A", "B"]),
-            "Batch: 2 drafted, 1 already had a card, 3 skipped, 2 failed (A, B)"
+            "Batch: 2 drafted, 1 already had a card, 3 without a datasheet, 2 failed (A, B)"
         );
         assert_eq!(batch_summary(4, 0, 0, &[]), "Batch: 4 drafted");
         assert!(batch_failed(2, &["A"]).contains("2 others were drafted and kept"));

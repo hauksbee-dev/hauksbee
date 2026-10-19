@@ -171,12 +171,26 @@ fn unmodelled_batch_drafts_a_card_the_next_run_binds() {
     );
     assert!(run.status.success(), "{all}");
     // U2 names no datasheet, so the (fake) agent backend was asked to search for
-    // it; its reply holds no link, so the part is skipped, not failed.
+    // it; its reply holds no link, so the part has no datasheet (its own
+    // category, not an extraction failure): the run still succeeds and the end
+    // of the run lists it with the way to supply one.
     assert!(
         all.contains("XNOSHEET7: the board gives no datasheet; searching the web")
-            && all.contains("skipped XNOSHEET7: the web search found no usable datasheet")
-            && all.contains("Batch: 1 drafted, 1 skipped"),
+            && all.contains("no datasheet for XNOSHEET7: the web search found no usable datasheet")
+            && all.contains("Batch: 1 drafted, 1 without a datasheet")
+            && !all.contains("extractions failed"),
         "{all}"
+    );
+    assert!(
+        all.contains("Supply these by hand")
+            && all.contains("--datasheet-dir")
+            && all.contains("XNOSHEET7.pdf"),
+        "the list says how to supply it:\n{all}"
+    );
+    let saved = std::fs::read_to_string(out.join("supply-by-hand.txt")).unwrap();
+    assert!(
+        saved.contains("XNOSHEET7") && saved.contains("--datasheet-dir"),
+        "{saved}"
     );
     assert!(
         !all.contains("no model cards"),
@@ -228,6 +242,17 @@ fn draft_batch(
     extra: &[&str],
     on_kind: &str,
 ) -> (std::process::Output, PathBuf) {
+    draft_batch_with(dir, extra, on_kind, "cp CARD model.toml; echo done")
+}
+
+/// [`draft_batch`] with the drafting step's shell too (`CARD` is the fake card).
+#[cfg(unix)]
+fn draft_batch_with(
+    dir: &std::path::Path,
+    extra: &[&str],
+    on_kind: &str,
+    on_draft: &str,
+) -> (std::process::Output, PathBuf) {
     use std::os::unix::fs::PermissionsExt;
     let board = unmodelled_board(dir);
     let card = dir.join("card.toml");
@@ -265,7 +290,7 @@ max_voltage_v = 6.0 # Source: Absolute Maximum Ratings
     )
     .unwrap();
     let agent = dir.join("agent");
-    let script = format!("#!/bin/sh\ncat >/dev/null\nif grep -q 'EXACTLY ONE identifier' prompt.md; then {on_kind}; else cp '{}' model.toml; echo done; fi\n", card.display());
+    let script = format!("#!/bin/sh\ncat >/dev/null\nif grep -q 'EXACTLY ONE identifier' prompt.md; then {on_kind}; else {}; fi\n", on_draft.replace("CARD", &format!("'{}'", card.display())));
     std::fs::write(&agent, script).unwrap();
     std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o700)).unwrap();
     let config = dir.join("extract.toml");
@@ -465,4 +490,198 @@ fn an_identity_only_card_already_in_the_library_is_reported_not_failed() {
         "{all}"
     );
     assert!(run.status.success(), "a kept card is not a failure:\n{all}");
+}
+
+fn text_of(run: &std::process::Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    )
+}
+
+/// A real extraction failure (the agent writes no card) fails the run, and is
+/// kept apart from the part with no datasheet in the same batch.
+#[cfg(unix)]
+#[test]
+fn a_failed_extraction_exits_non_zero_and_is_not_counted_as_no_datasheet() {
+    let dir = tempfile::tempdir().unwrap();
+    let (run, out) = draft_batch_with(dir.path(), &[], "echo opamp", "echo nothing written");
+    let all = text_of(&run);
+    assert!(!run.status.success(), "{all}");
+    assert!(
+        all.contains("1 of the extractions failed: XOPAMP1-TR")
+            && all.contains("Batch: 0 drafted, 1 without a datasheet, 1 failed (XOPAMP1-TR)"),
+        "{all}"
+    );
+    let saved = std::fs::read_to_string(out.join("supply-by-hand.txt")).unwrap();
+    assert!(
+        saved.contains("XNOSHEET7") && !saved.contains("XOPAMP1-TR"),
+        "{saved}"
+    );
+}
+
+/// A board link that cannot be fetched is labelled exactly like a part with no
+/// link: "no datasheet for", on the end-of-run list with the link tried, and
+/// the run still exits 0.
+#[cfg(unix)]
+#[test]
+fn a_dead_board_link_is_labelled_like_no_link_and_lists_the_link_tried() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = unmodelled_board(dir.path());
+    // Point XNOSHEET7 at a URL nothing listens on.
+    // U1 gets no link either, so no extraction is attempted (the API backend
+    // here has no pdftotext to rely on); it is the no-link case beside the dead link.
+    let text = std::fs::read_to_string(&board)
+        .unwrap()
+        .replace(
+            r#"(property "Value" "XNOSHEET7") (property "Datasheet" "~")"#,
+            r#"(property "Value" "XNOSHEET7") (property "Datasheet" "http://127.0.0.1:9/x.pdf")"#,
+        )
+        .replace(
+            r#"(property "Datasheet" "stub.pdf")"#,
+            r#"(property "Datasheet" "~")"#,
+        );
+    std::fs::write(&board, text).unwrap();
+    let config = dir.path().join("extract.toml");
+    std::fs::write(&config, "").unwrap();
+    let out = dir.path().join("drafts");
+    let run = Command::new(hauksbee())
+        .args([
+            "models",
+            "extract",
+            "--backend",
+            "api",
+            "--yes",
+            "--unmodelled",
+        ])
+        .arg(&board)
+        .arg("--out-dir")
+        .arg(&out)
+        .env("HAUKSBEE_EXTRACT_CONFIG", &config)
+        .env("HAUKSBEE_API_KEY", "unused")
+        .stdin(Stdio::null())
+        .output()
+        .expect("run hauksbee");
+    let all = text_of(&run);
+    assert!(
+        all.contains("no datasheet for XNOSHEET7") && all.contains("http://127.0.0.1:9/x.pdf"),
+        "{all}"
+    );
+    assert!(
+        all.contains("no datasheet for XOPAMP1-TR"),
+        "the no-link part reads the same:\n{all}"
+    );
+    assert!(
+        run.status.success(),
+        "no datasheet is not a failure:\n{all}"
+    );
+    assert!(!all.contains("extractions failed"), "{all}");
+    let saved = std::fs::read_to_string(out.join("supply-by-hand.txt")).unwrap();
+    assert!(saved.contains("tried http://127.0.0.1:9/x.pdf"), "{saved}");
+    assert!(saved.contains("XOPAMP1-TR"), "{saved}");
+}
+
+/// The saved list names the folder the PDFs go in; putting `<part>.pdf` there
+/// and rerunning with `--datasheet-dir` picks it up, and the stale list goes.
+#[cfg(unix)]
+#[test]
+fn a_supplied_datasheet_is_picked_up_on_rerun_and_clears_the_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let (run, out) = draft_batch(dir.path(), &[], "echo opamp");
+    assert!(run.status.success(), "{}", text_of(&run));
+    assert!(out.join("supply-by-hand.txt").is_file());
+    let supply = dir.path().join("pdfs");
+    std::fs::create_dir_all(&supply).unwrap();
+    std::fs::copy(dir.path().join("stub.pdf"), supply.join("xnosheet7.pdf")).unwrap();
+    let dir_arg = supply.display().to_string();
+    let (run, out) = draft_batch(
+        dir.path(),
+        &["--datasheet-dir", &dir_arg, "--force"],
+        "echo opamp",
+    );
+    let all = text_of(&run);
+    // The fake agent's one card only fits XOPAMP1-TR, so XNOSHEET7's extraction
+    // is refused by validation: that is a real extraction failure (non-zero),
+    // and it proves the supplied PDF reached the extractor.
+    assert!(
+        all.contains("1 of the extractions failed: XNOSHEET7"),
+        "{all}"
+    );
+    assert!(
+        all.contains("using the datasheet you supplied") && all.contains("xnosheet7.pdf"),
+        "{all}"
+    );
+    assert!(
+        !all.contains("no datasheet for XNOSHEET7"),
+        "it is no longer missing:\n{all}"
+    );
+    assert!(!out.join("supply-by-hand.txt").exists(), "{all}");
+}
+
+/// An agent question nobody can answer in a `--yes` run is not lost: it is on
+/// the end-of-run list as "needs:" with how to supply it.
+#[cfg(unix)]
+#[test]
+fn an_unanswerable_agent_question_is_listed_as_a_need() {
+    let dir = tempfile::tempdir().unwrap();
+    let envelope = r#"{"status":"drafted","confidence":"medium","reason":"r","questions":["which package variant is fitted?"]}"#;
+    let (run, out) = draft_batch_with(
+        dir.path(),
+        &[],
+        "echo opamp",
+        &format!("cp CARD model.toml; echo '{envelope}'"),
+    );
+    let all = text_of(&run);
+    assert!(run.status.success(), "{all}");
+    assert!(
+        all.contains("XOPAMP1-TR: needs: which package variant is fitted?")
+            && all.contains("hauksbee models extract --part XOPAMP1-TR --pdf"),
+        "{all}"
+    );
+    let saved = std::fs::read_to_string(out.join("supply-by-hand.txt")).unwrap();
+    assert!(
+        saved.contains("needs: which package variant is fitted?"),
+        "{saved}"
+    );
+}
+
+/// `--jobs` is bounded, and `--jobs 1` is the serial loop (same results).
+#[cfg(unix)]
+#[test]
+fn jobs_one_is_the_serial_loop_and_the_bound_is_enforced() {
+    let dir = tempfile::tempdir().unwrap();
+    let (run, out) = draft_batch(dir.path(), &["--jobs", "1"], "echo opamp");
+    let all = text_of(&run);
+    assert!(run.status.success(), "{all}");
+    assert!(out.join("XOPAMP1-TR.toml").is_file(), "{all}");
+    assert!(
+        !all.contains("[XOPAMP1-TR] "),
+        "no prefixes when serial:\n{all}"
+    );
+    let bad = tempfile::tempdir().unwrap();
+    let (run, _) = draft_batch(bad.path(), &["--jobs", "99"], "echo opamp");
+    assert!(!run.status.success());
+    assert!(text_of(&run).contains("99"), "{}", text_of(&run));
+}
+
+/// Several at once: the same drafted card, lines prefixed by part.
+#[cfg(unix)]
+#[test]
+fn jobs_four_drafts_the_same_cards_with_prefixed_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let (run, out) = draft_batch(dir.path(), &["--jobs", "4"], "echo opamp");
+    let all = text_of(&run);
+    assert!(run.status.success(), "{all}");
+    assert!(out.join("XOPAMP1-TR.toml").is_file(), "{all}");
+    assert!(
+        all.contains("Batch: 1 drafted, 1 without a datasheet"),
+        "{all}"
+    );
+    assert!(
+        all.lines()
+            .filter(|l| l.contains("searching the web"))
+            .all(|l| l.contains("XNOSHEET7")),
+        "{all}"
+    );
 }

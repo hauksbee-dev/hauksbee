@@ -417,6 +417,12 @@ pub fn prepare_files(pdf: &Path, into: &Path) -> Result<(Vec<usize>, Vec<usize>)
 /// validates within the retries, the run times out, or the result cannot be
 /// written.
 pub fn run(args: Args) -> Result<PathBuf> {
+    // The usage ledger and the plan reading are process-wide, one run's worth.
+    // With several runs at once (`--unmodelled --jobs N`) the batch resets the
+    // ledger once and reports the whole cost at its end.
+    if progress::concurrent() {
+        return run_inner(args);
+    }
     crate::extract_usage::reset();
     crate::extract_plan::clear();
     let outcome = run_inner(args);
@@ -4075,10 +4081,10 @@ fn note_envelope(ws: &Workspace, text: &str) {
     let status = v["status"].as_str().unwrap_or("unstated");
     say!("[model-extract] reply envelope: {status}, confidence {level}: {reason}");
     for q in v["questions"].as_array().into_iter().flatten() {
-        say!(
-            "[model-extract] agent question: {}",
-            q.as_str().unwrap_or_default()
-        );
+        let q = q.as_str().unwrap_or_default().trim();
+        if !q.is_empty() {
+            progress::question(q);
+        }
     }
     let path = ws.path().join(harness::CONFIDENCE);
     if !path.is_file() {
@@ -5329,7 +5335,9 @@ fn wait_for_cli_backend(
     let mut pipe = child.stdout.take().context("capturing agent stdout")?;
     let reader = {
         let (beat, stop) = (Arc::clone(&beat), Arc::clone(&stop));
+        let label = progress::label();
         std::thread::spawn(move || {
+            progress::set_label(label);
             let (mut out, mut buf) = (Vec::new(), [0u8; 8192]);
             let mut line_start = 0;
             while let Ok(n) = pipe.read(&mut buf) {

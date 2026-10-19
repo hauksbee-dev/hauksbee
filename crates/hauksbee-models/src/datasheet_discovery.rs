@@ -3,22 +3,29 @@
 //!
 //! The routes, in order:
 //!
-//! 1. The board's own `Datasheet` link: a local file is used as it is; a URL is
-//!    downloaded with [`crate::datasheet_fetch`] (retries, browser headers, landing
-//!    pages). The board's author chose it, so the existing wrong-sheet guard in
-//!    the extraction is the check.
-//! 2. When the board names none, or its link cannot be downloaded: an agent
+//! 0. A PDF a person saved for the part (`<part>.pdf`) in the datasheet
+//!    directory: the way to supply the ones that could not be fetched.
+//! 1. The board's own `Datasheet` link(s): a local file is used as it is; each
+//!    URL is downloaded in turn with [`crate::datasheet_fetch`] (retries,
+//!    browser headers, landing pages), and a link on a host that has already
+//!    refused during this run is not tried. The board's author chose them, so
+//!    the existing wrong-sheet guard in the extraction is the check.
+//! 2. When the board names none, or none of its links download: an agent
 //!    backend with web search finds the official PDF. What it answers is
 //!    untrusted text. hauksbee downloads the URL itself and
 //!    [`datasheet::vouches_for`] demands positive evidence in the PDF's own
 //!    text (the part number, or its family base name) before it is used. A
 //!    doubt skips the part; nothing is sent to the extraction for it.
 //!
+//! Every way of failing ends as the one [`Outcome::NoDatasheet`], carrying each
+//! link tried and why it failed, so a batch can list what the person must
+//! supply by hand.
+//!
 //! The search is the [`Searcher`] trait so everything here is tested without a
 //! model or a network.
 
 use crate::datasheet;
-use crate::datasheet_fetch::{self as fetch, FetchError, Http, Via};
+use crate::datasheet_fetch::{self as fetch, FetchError, HostLedger, Http, Via};
 use std::path::{Path, PathBuf};
 
 /// What the board (and the person) tell hauksbee about one part.
@@ -35,8 +42,8 @@ pub struct Wanted {
 }
 
 /// Something that can search the web for a datasheet. The real one is
-/// [`AgentSearcher`].
-pub trait Searcher {
+/// [`AgentSearcher`]. `Sync` because a batch searches for several parts at once.
+pub trait Searcher: Sync {
     /// What does the work, for the lines hauksbee prints (`codex gpt-6-luna`).
     fn describe(&self) -> String;
     /// Run the search prompt and return the agent's reply.
@@ -171,17 +178,34 @@ pub struct Ready {
     pub pdf: PathBuf,
 }
 
+/// One link that was tried (or deliberately not tried) and why it gave no
+/// datasheet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tried {
+    pub url: String,
+    pub why: String,
+}
+
+/// A part no datasheet could be obtained for: what stopped it, and every link
+/// that was tried on the way. It is one category however it came about (the
+/// board gave no link, the link did not download, the search found nothing it
+/// could vouch for), and the end of a batch lists these for the person to
+/// supply by hand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Missing {
+    /// The reason, as one clause.
+    pub why: String,
+    pub tried: Vec<Tried>,
+}
+
 /// What came of getting a datasheet for one part.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     /// Use this PDF.
     Ready(Ready),
-    /// Leave this part alone: nothing trustworthy to extract from. Not an
-    /// error; the line says why and what to pass instead.
-    Skipped(String),
-    /// A datasheet the board named could not be obtained and there was no
-    /// other route. An error for the batch.
-    Failed(String),
+    /// Nothing trustworthy to extract from. Not an extraction failure: nothing
+    /// was sent for it, and the person can supply the PDF.
+    NoDatasheet(Missing),
 }
 
 /// The ways and means of one acquisition.
@@ -191,66 +215,84 @@ pub struct Acquirer<'a> {
     pub searcher: Option<&'a dyn Searcher>,
     /// Where downloaded PDFs are kept.
     pub dir: &'a Path,
+    /// Directories searched first for a PDF named for the part
+    /// (`<part>.pdf`): where a person puts the ones that could not be fetched.
+    pub supplied: &'a [PathBuf],
+    /// Hosts that have refused or gone quiet during this run.
+    pub hosts: &'a HostLedger,
     /// A PDF's text, for the check that it is the part's own datasheet
     /// ([`datasheet::pdf_text`] in use; a canned text in tests).
     pub read_text: fn(&Path) -> String,
 }
 
 impl Acquirer<'_> {
-    /// Get a verified datasheet PDF for `want`, from the board's `source` (a
-    /// file path or URL) when it has one, else by search. `say` receives each
-    /// line to show the person as it happens.
+    /// Get a verified datasheet PDF for `want` from the board's `sources` (file
+    /// paths and URLs, in order of preference), else by search. `say` receives
+    /// each line to show the person as it happens.
+    ///
+    /// The order: a local file named as a source; a PDF a person put in a
+    /// [`supplied`](Self::supplied) directory; each source URL in turn (every
+    /// candidate is tried before the search is paid for, and one on a host that
+    /// has already refused this run is not tried at all); then the search.
     pub fn acquire(
         &self,
         want: &Wanted,
-        source: Option<&str>,
+        sources: &[String],
         say: &mut dyn FnMut(String),
     ) -> Outcome {
         use crate::extract_messages as words;
         let part = want.part.as_str();
-        let mut failed_board: Option<String> = None;
-        let mut tried: Vec<String> = Vec::new();
-        let why_search = match source {
-            Some(local) if !local.starts_with("http") => {
-                return Outcome::Ready(Ready {
-                    pdf: PathBuf::from(local),
-                });
-            }
-            Some(url) => match self.download(url, part, true, say) {
+        if let Some(local) = sources.iter().find(|s| !s.starts_with("http")) {
+            return Outcome::Ready(Ready {
+                pdf: PathBuf::from(local),
+            });
+        }
+        if let Some(pdf) = self.supplied_pdf(want) {
+            say(words::using_supplied(part, &pdf));
+            return Outcome::Ready(Ready { pdf });
+        }
+        let mut tried: Vec<Tried> = Vec::new();
+        let links: Vec<&String> = sources.iter().collect();
+        for (at, url) in links.iter().enumerate() {
+            let outcome = match self.hosts.refusal(url) {
+                Some(why) => Err(format!("not tried: its host was skipped earlier ({why})")),
+                None => self.download(url, part, true, say).map_err(|e| e.why()),
+            };
+            match outcome {
                 Ok(ready) => return Outcome::Ready(ready),
-                Err(e) => {
-                    failed_board = Some(url.to_string());
-                    tried.push(url.to_string());
-                    let next = if self.searcher.is_some() {
+                Err(why) => {
+                    let next = if at + 1 < links.len() {
+                        "trying the board's next link".to_string()
+                    } else if self.searcher.is_some() {
                         "looking for another copy".to_string()
                     } else {
                         words::download_yourself(part, url)
                     };
-                    say(words::link_failed(part, url, &e.why(), &next));
-                    if self.searcher.is_none() {
-                        return Outcome::Failed(format!(
-                            "{part}: could not download {url}: {}",
-                            e.why()
-                        ));
-                    }
-                    format!("its board link did not download ({})", e.why())
+                    say(words::link_failed(part, url, &why, &next));
+                    tried.push(Tried {
+                        url: (*url).clone(),
+                        why,
+                    });
                 }
-            },
+            }
+        }
+        let why_search = match tried.first() {
             None => "the board gives no datasheet".to_string(),
+            Some(first) => format!("its board link did not download ({})", first.why),
         };
         let Some(searcher) = self.searcher else {
-            return Outcome::Skipped("no datasheet link and no way to search for one".into());
+            let why = if tried.is_empty() {
+                "no datasheet link and no way to search for one".to_string()
+            } else {
+                format!("the board's link did not download ({})", tried[0].why)
+            };
+            return Outcome::NoDatasheet(Missing { why, tried });
         };
-        match self.discover(want, searcher, &why_search, &mut tried, say) {
-            Outcome::Skipped(why) => match failed_board {
-                Some(url) => Outcome::Failed(format!(
-                    "{part}: {why}; {}",
-                    words::download_yourself(part, &url)
-                )),
-                None => Outcome::Skipped(why),
-            },
-            other => other,
-        }
+        self.discover(want, searcher, &why_search, &mut tried, say)
+    }
+
+    fn supplied_pdf(&self, want: &Wanted) -> Option<PathBuf> {
+        supplied_pdf(self.supplied, &want.part, &want.aliases)
     }
 
     /// A board URL, downloaded and (if a landing page) followed.
@@ -271,7 +313,19 @@ impl Acquirer<'_> {
         if reuse && datasheet::is_pdf(&dest) {
             return Ok(Ready { pdf: dest });
         }
-        let got = fetch::fetch_pdf(self.http, url, &dest, part)?;
+        let got = fetch::fetch_pdf(self.http, url, &dest, part);
+        match &got {
+            Ok(_) => {
+                self.hosts.note(url, &Ok(()));
+            }
+            Err(e) => {
+                if let Some(why) = self.hosts.note(e.url(), &Err(e)) {
+                    let host = fetch::host_of(e.url()).unwrap_or_default();
+                    say(crate::extract_messages::host_skipped(&host, &why));
+                }
+            }
+        }
+        let got = got?;
         if let Via::LandingPage { page } = &got.via {
             say(crate::extract_messages::followed_landing_page(
                 part, page, &got.url,
@@ -282,34 +336,46 @@ impl Acquirer<'_> {
 
     /// Search, download and verify; the first candidate that is the part's own
     /// datasheet wins. When every link the agent gave fails (a dead link, a
-    /// different part's sheet), it is asked once more with those failures.
+    /// different part's sheet), it is asked once more with those failures. Hosts
+    /// that have refused this run are named in the prompt so the agent looks
+    /// elsewhere, and a link on one is not downloaded.
     fn discover(
         &self,
         want: &Wanted,
         searcher: &dyn Searcher,
         why: &str,
-        tried: &mut Vec<String>,
+        tried: &mut Vec<Tried>,
         say: &mut dyn FnMut(String),
     ) -> Outcome {
         use crate::extract_messages as words;
         let part = want.part.as_str();
         let by = searcher.describe();
         let mut doubts: Vec<String> = Vec::new();
+        let missing = |why: String, tried: &[Tried]| {
+            Outcome::NoDatasheet(Missing {
+                why,
+                tried: tried.to_vec(),
+            })
+        };
         for round in 0..SEARCH_ROUNDS {
+            let avoid: Vec<String> = self.hosts.skipped().into_iter().map(|(h, _)| h).collect();
             let prompt = if round == 0 {
                 say(words::searching(part, why, &by));
-                search_prompt(want)
+                search_prompt_avoiding(want, &avoid)
             } else {
                 say(words::searching_again(part, &by));
-                retry_prompt(want, &doubts)
+                avoid_hosts(retry_prompt(want, &doubts), &avoid)
             };
             let reply = match searcher.search(&prompt) {
                 Ok(reply) => reply,
                 Err(e) => {
-                    return Outcome::Skipped(format!(
-                        "the web search for its datasheet failed: {}",
-                        first_line(&format!("{e:#}"))
-                    ));
+                    return missing(
+                        format!(
+                            "the web search for its datasheet failed: {}",
+                            first_line(&format!("{e:#}"))
+                        ),
+                        tried,
+                    );
                 }
             };
             let answer = parse_answer(&reply);
@@ -322,7 +388,7 @@ impl Acquirer<'_> {
                         || "the agent gave no link".to_string(),
                         |n| format!("the agent said: {n}"),
                     );
-                return Outcome::Skipped(words::nothing_found(&note));
+                return missing(words::nothing_found(&note), tried);
             }
             let before = doubts.len();
             for url in &answer.urls {
@@ -340,6 +406,12 @@ impl Acquirer<'_> {
                     Err(why) => {
                         say(words::doubted(part, url, &why));
                         doubts.push(format!("{url}: {why}"));
+                        if !tried.iter().any(|t| t.url == *url) {
+                            tried.push(Tried {
+                                url: url.clone(),
+                                why,
+                            });
+                        }
                     }
                 }
             }
@@ -347,19 +419,23 @@ impl Acquirer<'_> {
                 break;
             }
         }
-        Outcome::Skipped(format!(
-            "no downloaded candidate could be verified as its datasheet ({})",
-            doubts.join("; ")
-        ))
+        missing(
+            format!(
+                "no downloaded candidate could be verified as its datasheet ({})",
+                doubts.join("; ")
+            ),
+            tried,
+        )
     }
 
-    /// One link from the agent: not local, not tried already, downloadable, and
-    /// vouched for by the PDF's own text. The error is why not.
+    /// One link from the agent: not local, not tried already, not on a host
+    /// that has refused, downloadable, and vouched for by the PDF's own text.
+    /// The error is why not.
     fn try_candidate(
         &self,
         want: &Wanted,
         url: &str,
-        tried: &mut Vec<String>,
+        tried: &[Tried],
         say: &mut dyn FnMut(String),
     ) -> Result<(Ready, String), String> {
         if fetch::is_local_host(url) {
@@ -367,10 +443,12 @@ impl Acquirer<'_> {
                 "it points at this machine or its network, not a manufacturer's site".into(),
             );
         }
-        if tried.iter().any(|t| t == url) {
+        if tried.iter().any(|t| t.url == url) {
             return Err("that link was already tried and did not work".into());
         }
-        tried.push(url.to_string());
+        if let Some(why) = self.hosts.refusal(url) {
+            return Err(format!("not tried: its host was skipped earlier ({why})"));
+        }
         let ready = self
             .download(url, &want.part, false, say)
             .map_err(|e| e.why())?;
@@ -385,9 +463,63 @@ impl Acquirer<'_> {
     }
 }
 
+/// A PDF a person put in one of `dirs` for `part`: `<part>.pdf` (or under one
+/// of its board values), case-insensitively, and really a PDF. Never doubted:
+/// the person chose it.
+#[must_use]
+pub fn supplied_pdf(dirs: &[PathBuf], part: &str, aliases: &[String]) -> Option<PathBuf> {
+    let names: Vec<String> = std::iter::once(part)
+        .chain(aliases.iter().map(String::as_str))
+        .map(|n| datasheet::sanitise_filename(n).to_ascii_lowercase())
+        .collect();
+    dirs.iter().find_map(|dir| {
+        let stem_of = |p: &Path| {
+            p.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+        };
+        let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+            .ok()?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+                    && names.contains(&stem_of(p))
+                    && datasheet::is_pdf(p)
+            })
+            .collect();
+        // The part's own name before its aliases, then by name for a stable pick.
+        found.sort_by_key(|p| (names.iter().position(|n| *n == stem_of(p)), p.clone()));
+        found.into_iter().next()
+    })
+}
+
 /// How many times the agent is asked: once, and once more when every link it
 /// gave failed.
 const SEARCH_ROUNDS: usize = 2;
+
+/// `prompt`, with the hosts that refused this run named so the agent looks
+/// elsewhere.
+fn avoid_hosts(prompt: String, hosts: &[String]) -> String {
+    if hosts.is_empty() {
+        return prompt;
+    }
+    format!(
+        "{prompt}\n\nDo not give links on these hosts: they refuse automated downloads, so \
+         hauksbee cannot fetch from them: {}. Find the same official datasheet on another host \
+         (the manufacturer's own site or a different official mirror).",
+        hosts.join(", ")
+    )
+}
+
+/// [`search_prompt`] for a run that has already learned which hosts refuse.
+#[must_use]
+pub fn search_prompt_avoiding(want: &Wanted, hosts: &[String]) -> String {
+    avoid_hosts(search_prompt(want), hosts)
+}
 
 /// The prompt for the second ask: the first one plus what went wrong.
 #[must_use]
@@ -414,18 +546,18 @@ fn first_line(text: &str) -> &str {
 mod tests {
     use super::*;
     use crate::datasheet_fetch::{Request, Response, TransportError};
-    use std::cell::RefCell;
     use std::collections::HashMap;
+    use std::sync::Mutex;
 
     /// A transport that serves fixed bodies by URL and counts requests.
     struct Site {
         pages: HashMap<&'static str, (u16, Vec<u8>)>,
-        hits: RefCell<Vec<String>>,
+        hits: Mutex<Vec<String>>,
     }
 
     impl Http for Site {
         fn get(&self, req: &Request<'_>) -> Result<Response, TransportError> {
-            self.hits.borrow_mut().push(req.url.to_string());
+            self.hits.lock().unwrap().push(req.url.to_string());
             match self.pages.get(req.url) {
                 Some((status, body)) => {
                     std::fs::write(req.dest, body).unwrap();
@@ -455,15 +587,15 @@ mod tests {
 
     /// A searcher that gives its answers in turn and records each prompt.
     struct Sequence {
-        answers: RefCell<Vec<&'static str>>,
-        prompts: RefCell<Vec<String>>,
+        answers: Mutex<Vec<&'static str>>,
+        prompts: Mutex<Vec<String>>,
     }
 
     impl Sequence {
         fn new(answers: &[&'static str]) -> Self {
             Self {
-                answers: RefCell::new(answers.iter().rev().copied().collect()),
-                prompts: RefCell::default(),
+                answers: Mutex::new(answers.iter().rev().copied().collect()),
+                prompts: Mutex::default(),
             }
         }
     }
@@ -473,10 +605,11 @@ mod tests {
             "codex gpt-6-luna".into()
         }
         fn search(&self, prompt: &str) -> anyhow::Result<String> {
-            self.prompts.borrow_mut().push(prompt.to_string());
+            self.prompts.lock().unwrap().push(prompt.to_string());
             Ok(self
                 .answers
-                .borrow_mut()
+                .lock()
+                .unwrap()
                 .pop()
                 .unwrap_or("NOT FOUND: out of answers")
                 .to_string())
@@ -526,7 +659,7 @@ mod tests {
     fn site(pages: Vec<(&'static str, u16, Vec<u8>)>) -> Site {
         Site {
             pages: pages.into_iter().map(|(u, s, b)| (u, (s, b))).collect(),
-            hits: RefCell::default(),
+            hits: Mutex::default(),
         }
     }
 
@@ -535,16 +668,39 @@ mod tests {
         searcher: Option<&dyn Searcher>,
         source: Option<&str>,
     ) -> (Outcome, Vec<String>) {
+        let sources: Vec<String> = source.iter().map(ToString::to_string).collect();
+        acquire_with(http, searcher, &sources, &HostLedger::default(), &[])
+    }
+
+    /// `acquire` with several board links, a shared host ledger and supplied
+    /// directories.
+    fn acquire_with(
+        http: &Site,
+        searcher: Option<&dyn Searcher>,
+        sources: &[String],
+        hosts: &HostLedger,
+        supplied: &[PathBuf],
+    ) -> (Outcome, Vec<String>) {
         let dir = tempfile::tempdir().unwrap();
         let mut lines = Vec::new();
         let outcome = Acquirer {
             http,
             searcher,
             dir: dir.path(),
+            supplied,
+            hosts,
             read_text: |p| String::from_utf8_lossy(&std::fs::read(p).unwrap()).into_owned(),
         }
-        .acquire(&want(), source, &mut |l| lines.push(l));
+        .acquire(&want(), sources, &mut |l| lines.push(l));
         (outcome, lines)
+    }
+
+    /// The `NoDatasheet` inside, or a failed assertion.
+    fn missing(out: Outcome) -> Missing {
+        match out {
+            Outcome::NoDatasheet(m) => m,
+            other @ Outcome::Ready(_) => panic!("expected no datasheet, got {other:?}"),
+        }
     }
 
     #[test]
@@ -600,7 +756,7 @@ mod tests {
                 pdf: PathBuf::from("/boards/ds.pdf")
             })
         );
-        assert!(lines.is_empty() && http.hits.borrow().is_empty());
+        assert!(lines.is_empty() && http.hits.lock().unwrap().is_empty());
     }
 
     /// A board URL that downloads is used with no search.
@@ -617,7 +773,9 @@ mod tests {
     fn no_link_and_no_searcher_skips() {
         let http = site(vec![]);
         let (out, _) = acquire(&http, None, None);
-        assert!(matches!(out, Outcome::Skipped(_)), "{out:?}");
+        let m = missing(out);
+        assert!(m.why.contains("no way to search"), "{m:?}");
+        assert!(m.tried.is_empty());
     }
 
     /// The positive path: the agent's link downloads, the PDF prints the part
@@ -659,13 +817,16 @@ mod tests {
         let said = Said("URL: https://ti.example/f.pdf");
         let dir = tempfile::tempdir().unwrap();
         let mut lines = Vec::new();
+        let hosts = HostLedger::default();
         let acq = Acquirer {
             http: &http,
             searcher: Some(&said),
             dir: dir.path(),
+            supplied: &[],
+            hosts: &hosts,
             read_text: |p| String::from_utf8_lossy(&std::fs::read(p).unwrap()).into_owned(),
         };
-        let out = acq.acquire(&w, None, &mut |l| lines.push(l));
+        let out = acq.acquire(&w, &[], &mut |l| lines.push(l));
         assert!(matches!(out, Outcome::Ready(_)), "{out:?}");
         assert!(
             lines
@@ -679,10 +840,12 @@ mod tests {
             http: &http,
             searcher: Some(&said),
             dir: dir.path(),
+            supplied: &[],
+            hosts: &hosts,
             read_text: |p| String::from_utf8_lossy(&std::fs::read(p).unwrap()).into_owned(),
         };
-        let out = acq.acquire(&w, None, &mut |_| {});
-        assert!(matches!(out, Outcome::Skipped(_)), "{out:?}");
+        let out = acq.acquire(&w, &[], &mut |_| {});
+        assert!(matches!(out, Outcome::NoDatasheet(_)), "{out:?}");
     }
 
     /// The agent's answer is only a lead: a PDF that cannot vouch for the part
@@ -693,14 +856,14 @@ mod tests {
         let http = site(vec![("https://ti.example/other.pdf", 200, pdf_bytes())]);
         let said = Said("URL: https://ti.example/other.pdf\nSOURCE: https://ti.example/p");
         let (out, lines) = acquire(&http, Some(&said), None);
-        let Outcome::Skipped(why) = out else {
-            panic!("expected a skip, got {out:?}");
-        };
+        let Missing { why, tried } = missing(out);
         assert!(
             why.contains("no downloaded candidate could be verified")
                 && why.contains("https://ti.example/other.pdf"),
             "{why}"
         );
+        assert_eq!(tried.len(), 1, "{tried:?}");
+        assert_eq!(tried[0].url, "https://ti.example/other.pdf");
         assert!(
             lines
                 .iter()
@@ -721,17 +884,19 @@ mod tests {
         let http = site(vec![]);
         let said = Said("URL: http://127.0.0.1:9/secret.pdf");
         let (out, _) = acquire(&http, Some(&said), None);
-        assert!(matches!(out, Outcome::Skipped(_)));
-        assert!(http.hits.borrow().is_empty(), "{:?}", http.hits.borrow());
+        assert!(matches!(out, Outcome::NoDatasheet(_)));
+        assert!(
+            http.hits.lock().unwrap().is_empty(),
+            "{:?}",
+            http.hits.lock().unwrap()
+        );
     }
 
     #[test]
     fn a_failed_or_empty_search_is_a_skip_with_the_reason() {
         let http = site(vec![]);
         let (out, _) = acquire(&http, Some(&Failing), None);
-        let Outcome::Skipped(why) = out else {
-            panic!("{out:?}");
-        };
+        let why = missing(out).why;
         assert!(
             why.contains("web search")
                 && why.contains("codex timed out")
@@ -740,26 +905,23 @@ mod tests {
         );
         let nf = Said("NOT FOUND: it is a custom part");
         let (out, _) = acquire(&http, Some(&nf), None);
-        let Outcome::Skipped(why) = out else {
-            panic!("{out:?}");
-        };
+        let why = missing(out).why;
         assert!(why.contains("the agent said: it is a custom part"), "{why}");
     }
 
     /// A board link blocked with a 403 falls back to search; if that also
-    /// finds nothing the person is told to download it themselves, by name.
+    /// finds nothing the part is "no datasheet", with the link and why it
+    /// failed for the person to act on.
     #[test]
-    fn a_blocked_board_link_then_no_discovery_says_download_it_yourself() {
+    fn a_blocked_board_link_then_no_discovery_is_no_datasheet_naming_the_link() {
         let http = site(vec![("https://m.example/ds.pdf", 403, b"no".to_vec())]);
         let nf = Said("NOT FOUND: nothing official");
         let (out, lines) = acquire(&http, Some(&nf), Some("https://m.example/ds.pdf"));
-        let Outcome::Failed(why) = out else {
-            panic!("{out:?}");
-        };
-        assert!(
-            why.contains("download it yourself") && why.contains("https://m.example/ds.pdf"),
-            "{why}"
-        );
+        let m = missing(out);
+        assert!(m.why.contains("nothing official"), "{m:?}");
+        assert_eq!(m.tried.len(), 1, "{m:?}");
+        assert_eq!(m.tried[0].url, "https://m.example/ds.pdf");
+        assert!(m.tried[0].why.contains("HTTP 403"), "{m:?}");
         assert!(
             lines
                 .iter()
@@ -768,16 +930,15 @@ mod tests {
         );
     }
 
-    /// Without a searcher, a board link that cannot be downloaded fails with
-    /// the same instruction.
+    /// Without a searcher, a board link that cannot be downloaded is the same
+    /// category, with the same instruction.
     #[test]
-    fn a_failed_board_link_without_a_searcher_fails_with_instructions() {
+    fn a_failed_board_link_without_a_searcher_is_no_datasheet_with_instructions() {
         let http = site(vec![("https://m.example/ds.pdf", 404, b"gone".to_vec())]);
         let (out, lines) = acquire(&http, None, Some("https://m.example/ds.pdf"));
-        let Outcome::Failed(why) = out else {
-            panic!("{out:?}");
-        };
-        assert!(why.contains("HTTP 404"), "{why}");
+        let m = missing(out);
+        assert!(m.why.contains("HTTP 404"), "{m:?}");
+        assert_eq!(m.tried[0].url, "https://m.example/ds.pdf");
         assert!(
             lines.iter().any(|l| l.contains("download it yourself")),
             "{lines:?}"
@@ -795,7 +956,7 @@ mod tests {
         ]);
         let (out, lines) = acquire(&http, Some(&said), None);
         assert!(matches!(out, Outcome::Ready(_)), "{out:?} {lines:?}");
-        let prompts = said.prompts.borrow();
+        let prompts = said.prompts.lock().unwrap();
         assert_eq!(prompts.len(), 2);
         assert!(!prompts[0].contains("did not work"), "{}", prompts[0]);
         assert!(
@@ -818,17 +979,16 @@ mod tests {
             "URL: https://ti.example/never-asked-for.pdf",
         ]);
         let (out, lines) = acquire(&http, Some(&said), None);
-        let Outcome::Skipped(why) = out else {
-            panic!("{out:?}");
-        };
-        assert_eq!(said.prompts.borrow().len(), 2, "asked at most twice");
+        let why = missing(out).why;
+        assert_eq!(said.prompts.lock().unwrap().len(), 2, "asked at most twice");
         let fetched = http
             .hits
-            .borrow()
+            .lock()
+            .unwrap()
             .iter()
             .filter(|u| u.contains("dead.pdf"))
             .count();
-        assert_eq!(fetched, 1, "{:?}", http.hits.borrow());
+        assert_eq!(fetched, 1, "{:?}", http.hits.lock().unwrap());
         assert!(why.contains("already tried"), "{why} {lines:?}");
     }
 
@@ -838,30 +998,172 @@ mod tests {
         let http = site(vec![("https://m.example/ds.pdf", 404, b"gone".to_vec())]);
         let said = Sequence::new(&["URL: https://m.example/ds.pdf", "NOT FOUND: nothing else"]);
         let (out, _) = acquire(&http, Some(&said), Some("https://m.example/ds.pdf"));
-        assert!(matches!(out, Outcome::Failed(_)), "{out:?}");
+        assert!(matches!(out, Outcome::NoDatasheet(_)), "{out:?}");
         let n = http
             .hits
-            .borrow()
+            .lock()
+            .unwrap()
             .iter()
             .filter(|u| u.as_str() == "https://m.example/ds.pdf")
             .count();
-        assert_eq!(n, 1, "{:?}", http.hits.borrow());
+        assert_eq!(n, 1, "{:?}", http.hits.lock().unwrap());
     }
 
     /// Any failed board link (not only a 403) followed by a fruitless search
-    /// ends as a failure naming the link, not a quiet skip.
+    /// ends the same way: no datasheet, naming the link.
     #[test]
-    fn a_board_link_that_will_not_download_then_no_discovery_is_a_named_failure() {
+    fn a_board_link_that_will_not_download_then_no_discovery_names_the_link() {
         // Unknown host: the transport fails (curl could not resolve the host).
         let http = site(vec![]);
         let nf = Said("NOT FOUND: nothing official");
         let (out, _) = acquire(&http, Some(&nf), Some("https://gone.example/ds.pdf"));
-        let Outcome::Failed(why) = out else {
+        let m = missing(out);
+        assert_eq!(m.tried.len(), 1, "{m:?}");
+        assert_eq!(m.tried[0].url, "https://gone.example/ds.pdf");
+    }
+
+    // ── The batch cases ──────────────────────────────────────────────────────
+
+    /// Every datasheet link the board gives is tried before the search is paid
+    /// for: the second one works, so the agent is never asked.
+    #[test]
+    fn a_failed_board_link_tries_the_boards_other_links_before_any_search() {
+        let http = site(vec![
+            ("https://a.example/ds.pdf", 404, b"gone".to_vec()),
+            ("https://b.example/ds.pdf", 200, pdf_bytes()),
+        ]);
+        let sources = vec![
+            "https://a.example/ds.pdf".to_string(),
+            "https://b.example/ds.pdf".to_string(),
+        ];
+        let (out, lines) =
+            acquire_with(&http, Some(&Failing), &sources, &HostLedger::default(), &[]);
+        assert!(matches!(out, Outcome::Ready(_)), "{out:?} {lines:?}");
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("trying the board's next link")),
+            "{lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("searching the web")),
+            "{lines:?}"
+        );
+        // All of them failing is one no-datasheet with both reasons.
+        let http = site(vec![
+            ("https://a.example/ds.pdf", 404, b"gone".to_vec()),
+            ("https://b.example/ds.pdf", 500, b"oops".to_vec()),
+        ]);
+        let nf = Said("NOT FOUND: nothing");
+        let (out, _) = acquire_with(&http, Some(&nf), &sources, &HostLedger::default(), &[]);
+        let m = missing(out);
+        assert_eq!(
+            m.tried.iter().map(|t| t.url.as_str()).collect::<Vec<_>>(),
+            ["https://a.example/ds.pdf", "https://b.example/ds.pdf"]
+        );
+        assert!(
+            m.tried[0].why.contains("404") && m.tried[1].why.contains("500"),
+            "{m:?}"
+        );
+    }
+
+    /// A host that refused one part is not tried for the next: its board link
+    /// is skipped with the reason, the search prompt names it, and a link the
+    /// agent gives on it is not downloaded.
+    #[test]
+    fn a_host_that_refused_earlier_is_skipped_by_later_parts() {
+        let hosts = HostLedger::default();
+        let blocked = site(vec![("https://m.example/a.pdf", 403, b"no".to_vec())]);
+        let nf = Said("NOT FOUND: x");
+        let (out, lines) = acquire_with(
+            &blocked,
+            Some(&nf),
+            &["https://m.example/a.pdf".into()],
+            &hosts,
+            &[],
+        );
+        assert!(matches!(out, Outcome::NoDatasheet(_)));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("m.example") && l.contains("skip")),
+            "the first refusal is announced: {lines:?}"
+        );
+        assert_eq!(hosts.skipped().len(), 1);
+
+        // Another part: same host for its board link, then the agent offers a
+        // link on it again, then one elsewhere that works.
+        let later = site(vec![("https://ok.example/b.pdf", 200, sheet("LM358B"))]);
+        let said = Sequence::new(&["URL: https://m.example/b.pdf
+URL: https://ok.example/b.pdf"]);
+        let (out, lines) = acquire_with(
+            &later,
+            Some(&said),
+            &["https://m.example/b.pdf".into()],
+            &hosts,
+            &[],
+        );
+        assert!(matches!(out, Outcome::Ready(_)), "{out:?} {lines:?}");
+        assert_eq!(
+            *later.hits.lock().unwrap(),
+            ["https://ok.example/b.pdf"],
+            "nothing was requested from the refusing host"
+        );
+        let prompts = said.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1, "one search, not two");
+        assert!(
+            prompts[0].contains("Do not give links on these hosts")
+                && prompts[0].contains("m.example"),
+            "{}",
+            prompts[0]
+        );
+        // The skipped board link is on the record with why.
+        let again = site(vec![]);
+        let (out, _) = acquire_with(
+            &again,
+            None,
+            &["https://m.example/c.pdf".into()],
+            &hosts,
+            &[],
+        );
+        let m = missing(out);
+        assert!(m.tried[0].why.contains("skipped earlier"), "{m:?}");
+        assert!(again.hits.lock().unwrap().is_empty());
+    }
+
+    /// A PDF saved for the part in the datasheet directory is used before
+    /// anything is fetched or searched, whatever its case.
+    #[test]
+    fn a_pdf_saved_for_the_part_is_picked_up_before_any_fetch() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("lm358b.PDF"), pdf_bytes()).unwrap();
+        std::fs::write(dir.path().join("OTHER.pdf"), pdf_bytes()).unwrap();
+        std::fs::write(dir.path().join("NOTAPDF.pdf"), b"<html>").unwrap();
+        let http = site(vec![]);
+        let supplied = [dir.path().to_path_buf()];
+        let (out, lines) = acquire_with(
+            &http,
+            Some(&Failing),
+            &["https://m.example/ds.pdf".into()],
+            &HostLedger::default(),
+            &supplied,
+        );
+        let Outcome::Ready(ready) = out else {
             panic!("{out:?}");
         };
-        assert!(
-            why.contains("download it yourself") && why.contains("https://gone.example/ds.pdf"),
-            "{why}"
+        assert_eq!(ready.pdf, dir.path().join("lm358b.PDF"));
+        assert!(http.hits.lock().unwrap().is_empty(), "nothing fetched");
+        assert!(lines.iter().any(|l| l.contains("supplied")), "{lines:?}");
+        // A file that only looks like one is not used.
+        let fake = tempfile::tempdir().unwrap();
+        std::fs::write(fake.path().join("LM358B.pdf"), b"<html>not a pdf").unwrap();
+        let (out, _) = acquire_with(
+            &http,
+            None,
+            &[],
+            &HostLedger::default(),
+            &[fake.path().to_path_buf()],
         );
+        assert!(matches!(out, Outcome::NoDatasheet(_)));
     }
 }
