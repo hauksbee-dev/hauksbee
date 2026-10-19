@@ -249,23 +249,25 @@ fn close(a: f64, b: f64) -> bool {
 /// row of its own.
 fn theta_findings(entry: &ModelEntry, facts: &Facts, pages: &[String]) -> Vec<Finding> {
     let rows = thermal_rows(pages);
-    let mut out = Vec::new();
     if rows.is_empty() {
-        return out;
+        return Vec::new();
     }
+    let mut out: Vec<Finding> = loose_theta_finding(entry).into_iter().collect();
     // A card with a θJA row per package carries the least favourable of them as
     // its scalar fallback (the harness's own rule), so it is each row that is
     // judged against the package it names, not the scalar against the bound one.
-    let tagged: Vec<(&str, f64)> = entry
-        .source
-        .iter()
-        .flat_map(|s| &s.characteristic)
-        .filter(|c| c.rating.as_deref() == Some("theta_ja_c_per_w"))
-        .filter_map(|c| {
-            let v = crate::derating::rating_value("theta_ja_c_per_w", c)?;
-            Some((c.package.as_deref()?, v))
-        })
-        .collect();
+    let tagged = tagged_thetas(entry);
+    if !tagged.is_empty() {
+        out.extend(tagged_theta_findings(&tagged, &rows));
+        return out;
+    }
+    out.extend(bound_theta_finding(entry, facts, &rows));
+    out
+}
+
+/// The `θJA` rows that name no package. When two or more differ, the harness
+/// reads the least favourable of them for every package.
+fn loose_theta_finding(entry: &ModelEntry) -> Option<Finding> {
     let mut loose: Vec<f64> = entry
         .source
         .iter()
@@ -275,95 +277,123 @@ fn theta_findings(entry: &ModelEntry, facts: &Facts, pages: &[String]) -> Vec<Fi
         .collect();
     loose.sort_by(f64::total_cmp);
     loose.dedup_by(|a, b| close(*a, *b));
-    if loose.len() >= 2 {
-        let values: Vec<String> = loose.iter().map(ToString::to_string).collect();
-        out.push(Finding {
-            severity: Severity::Warn,
-            check: "scope",
-            message: format!(
-                "{} θJA rows ({}) are tagged rating = \"theta_ja_c_per_w\" but name no package, \
-                 so the harness reads the least favourable ({}) for every package: give each \
-                 row package = ... (the package it is printed for)",
-                loose.len(),
-                values.join(", "),
-                loose.last().copied().unwrap_or_default()
-            ),
-        });
+    if loose.len() < 2 {
+        return None;
     }
-    if !tagged.is_empty() {
-        for (package, v) in tagged {
-            let (own, other): (Vec<&ThermalRow>, Vec<&ThermalRow>) =
-                rows.iter().partition(|r| covers(package, r));
-            if own.is_empty() || own.iter().any(|r| close(r.theta, v)) {
-                continue;
-            }
-            if let Some(wrong) = other.iter().find(|r| close(r.theta, v)) {
-                let right = own
-                    .iter()
-                    .map(|r| format!("{} {} (p.{})", r.label, r.theta, r.page))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                out.push(Finding {
-                    severity: if wrong.columnar && own.iter().all(|r| r.columnar) {
-                        Severity::Error
-                    } else {
-                        Severity::Warn
-                    },
-                    check: "scope",
-                    message: format!(
-                        "the θJA row for package '{package}' is {v}, the {} package's value \
-                         (p.{}); its own is {right}",
-                        wrong.label, wrong.page
-                    ),
-                });
-            }
-        }
-        return out;
-    }
-    if let (Some(bound), Some(v)) = (
-        bound_package(entry, facts, &rows),
-        entry.ratings.theta_ja_c_per_w,
-    ) {
-        let pads = facts
-            .board
-            .as_ref()
-            .and_then(crate::card_coverage::Board::pad_count)
-            .or_else(|| {
-                entry
-                    .pins
-                    .keys()
-                    .filter_map(|p| p.parse::<usize>().ok())
-                    .max()
-            });
+    let values: Vec<String> = loose.iter().map(ToString::to_string).collect();
+    Some(Finding {
+        severity: Severity::Warn,
+        check: "scope",
+        message: format!(
+            "{} θJA rows ({}) are tagged rating = \"theta_ja_c_per_w\" but name no package, \
+             so the harness reads the least favourable ({}) for every package: give each \
+             row package = ... (the package it is printed for)",
+            loose.len(),
+            values.join(", "),
+            loose.last().copied().unwrap_or_default()
+        ),
+    })
+}
+
+/// The `θJA` rows that name their package, as `(package, θJA)`.
+fn tagged_thetas(entry: &ModelEntry) -> Vec<(&str, f64)> {
+    entry
+        .source
+        .iter()
+        .flat_map(|s| &s.characteristic)
+        .filter(|c| c.rating.as_deref() == Some("theta_ja_c_per_w"))
+        .filter_map(|c| {
+            let v = crate::derating::rating_value("theta_ja_c_per_w", c)?;
+            Some((c.package.as_deref()?, v))
+        })
+        .collect()
+}
+
+/// For each package-tagged `θJA` that no row of its own package carries, a
+/// finding when another package's row carries that value.
+fn tagged_theta_findings(tagged: &[(&str, f64)], rows: &[ThermalRow]) -> Vec<Finding> {
+    let mut out = Vec::new();
+    for &(package, v) in tagged {
         let (own, other): (Vec<&ThermalRow>, Vec<&ThermalRow>) =
-            rows.iter().partition(|r| row_fits(r, &bound, pads));
-        if !own.is_empty() && !own.iter().any(|r| close(r.theta, v)) {
-            if let Some(wrong) = other.iter().find(|r| close(r.theta, v)) {
-                let right = own
-                    .iter()
-                    .map(|r| format!("{} {} (p.{})", r.label, r.theta, r.page))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                out.push(Finding {
-                    severity: if wrong.columnar && own.iter().all(|r| r.columnar) {
-                        Severity::Error
-                    } else {
-                        Severity::Warn
-                    },
-                    check: "scope",
-                    message: format!(
-                        "ratings.theta_ja_c_per_w = {v} is the {} package's θJA (p.{}), but this \
-                         card is bound for {bound}: its own row is {right}. Use the bound \
-                         package's value, and give every other package its own \
-                         [[models.source.characteristic]] row (rating = \"theta_ja_c_per_w\", \
-                         package = ...)",
-                        wrong.label, wrong.page
-                    ),
-                });
-            }
+            rows.iter().partition(|r| covers(package, r));
+        if own.is_empty() || own.iter().any(|r| close(r.theta, v)) {
+            continue;
+        }
+        if let Some(wrong) = other.iter().find(|r| close(r.theta, v)) {
+            out.push(Finding {
+                severity: mismatch_severity(wrong, &own),
+                check: "scope",
+                message: format!(
+                    "the θJA row for package '{package}' is {v}, the {} package's value \
+                     (p.{}); its own is {}",
+                    wrong.label,
+                    wrong.page,
+                    describe_rows(&own)
+                ),
+            });
         }
     }
     out
+}
+
+/// The scalar `ratings.theta_ja_c_per_w` of a card bound to one package, when
+/// it is another package's `θJA` and the bound package's own row differs.
+fn bound_theta_finding(entry: &ModelEntry, facts: &Facts, rows: &[ThermalRow]) -> Option<Finding> {
+    let bound = bound_package(entry, facts, rows)?;
+    let v = entry.ratings.theta_ja_c_per_w?;
+    let pads = pad_count_for(entry, facts);
+    let (own, other): (Vec<&ThermalRow>, Vec<&ThermalRow>) =
+        rows.iter().partition(|r| row_fits(r, &bound, pads));
+    if own.is_empty() || own.iter().any(|r| close(r.theta, v)) {
+        return None;
+    }
+    let wrong = other.iter().find(|r| close(r.theta, v))?;
+    Some(Finding {
+        severity: mismatch_severity(wrong, &own),
+        check: "scope",
+        message: format!(
+            "ratings.theta_ja_c_per_w = {v} is the {} package's θJA (p.{}), but this \
+             card is bound for {bound}: its own row is {}. Use the bound \
+             package's value, and give every other package its own \
+             [[models.source.characteristic]] row (rating = \"theta_ja_c_per_w\", \
+             package = ...)",
+            wrong.label,
+            wrong.page,
+            describe_rows(&own)
+        ),
+    })
+}
+
+/// The pad count of the bound board, else the highest pin number the card names.
+fn pad_count_for(entry: &ModelEntry, facts: &Facts) -> Option<usize> {
+    facts
+        .board
+        .as_ref()
+        .and_then(crate::card_coverage::Board::pad_count)
+        .or_else(|| {
+            entry
+                .pins
+                .keys()
+                .filter_map(|p| p.parse::<usize>().ok())
+                .max()
+        })
+}
+
+/// An error only when the mismatched row and every row of its own are columnar.
+fn mismatch_severity(wrong: &ThermalRow, own: &[&ThermalRow]) -> Severity {
+    if wrong.columnar && own.iter().all(|r| r.columnar) {
+        Severity::Error
+    } else {
+        Severity::Warn
+    }
+}
+
+/// `label θJA (p.page)` for each row, comma separated.
+fn describe_rows(rows: &[&ThermalRow]) -> String {
+    rows.iter()
+        .map(|r| format!("{} {} (p.{})", r.label, r.theta, r.page))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Reply-level: every package the thermal table lists has a `θJA` in the reply.

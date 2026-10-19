@@ -12,7 +12,7 @@
 //! 1. [`deferrals`] reads the datasheet's text for the checklist groups it
 //!    cannot answer itself and the documents it names for them. Only a
 //!    document the datasheet names is fetched; none is guessed.
-//! 2. [`fetch`] finds the named document with the same agent web search the
+//! 2. [`fetch()`] finds the named document with the same agent web search the
 //!    datasheet discovery uses ([`crate::datasheet_discovery`]), downloads it
 //!    with the same transport and limits ([`crate::datasheet_fetch::fetch_pdf`]:
 //!    http(s) only, never a local host, a PDF by its magic bytes, bounded
@@ -270,7 +270,7 @@ pub struct Companion {
 
 /// Download the document `d` names and verify it.
 ///
-/// Asks `searcher` for the link (up to [`ROUNDS`] times, the second time
+/// Asks `searcher` for the link (up to `ROUNDS` times, the second time
 /// with the failures), downloads each candidate with `http` into `dir`, and
 /// takes the first whose text [`vouches`]. `read_pages` turns a PDF into its
 /// page texts.
