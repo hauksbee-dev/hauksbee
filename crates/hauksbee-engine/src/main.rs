@@ -503,8 +503,8 @@ struct ModelsExtractArgs {
     )]
     jobs: Option<u64>,
     /// With --unmodelled: a folder of datasheets you saved by hand, named
-    /// <part>.pdf (the end-of-run list says which are missing and where to put
-    /// them). Used before any download. Defaults to <out-dir>/datasheets.
+    /// `<part>.pdf` (the end-of-run list says which are missing and where to put
+    /// them). Used before any download. Defaults to `<out-dir>/datasheets`.
     #[arg(long, value_name = "DIR", requires = "unmodelled")]
     datasheet_dir: Option<PathBuf>,
     /// What kind of device it is (bjt_npn, vreg, opamp, i2c_sensor, ...).
