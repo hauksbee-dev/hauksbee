@@ -9,6 +9,7 @@ pub mod backend;
 pub mod common;
 pub mod doctor;
 pub mod examples;
+pub mod extract_batch;
 pub mod hostserial;
 pub mod install;
 pub mod models;

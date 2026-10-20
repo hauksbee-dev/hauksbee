@@ -417,6 +417,12 @@ pub fn prepare_files(pdf: &Path, into: &Path) -> Result<(Vec<usize>, Vec<usize>)
 /// validates within the retries, the run times out, or the result cannot be
 /// written.
 pub fn run(args: Args) -> Result<PathBuf> {
+    // The usage ledger and the plan reading are process-wide, one run's worth.
+    // With several runs at once (`--unmodelled --jobs N`) the batch resets the
+    // ledger once and reports the whole cost at its end.
+    if progress::concurrent() {
+        return run_inner(args);
+    }
     crate::extract_usage::reset();
     crate::extract_plan::clear();
     let outcome = run_inner(args);
@@ -3627,7 +3633,7 @@ fn fetch_companions(ws: &Workspace, resolved: &Resolved, part: &str, kind: &str)
         part,
         &facts.pages,
         &needs,
-        &crate::datasheet_fetch::CurlHttp,
+        &crate::datasheet_fetch::CurlHttp::default(),
         &searcher,
         &|pdf| {
             extract_pdf_pages_text(pdf)
@@ -3642,7 +3648,7 @@ fn fetch_companions(ws: &Workspace, resolved: &Resolved, part: &str, kind: &str)
 }
 
 /// How the active backend bills a run: a plan's share, metered dollars, or unknown.
-fn billing_for(resolved: &Resolved) -> crate::extract_usage::Billing {
+pub(crate) fn billing_for(resolved: &Resolved) -> crate::extract_usage::Billing {
     let Some(a) = resolved.agent(resolved.backend) else {
         return crate::extract_usage::Billing::Unknown;
     };
@@ -3967,12 +3973,7 @@ fn run_and_record_with(
             ran.map(|_| text)
         }
         Backend::Codex => {
-            usage::record(
-                chosen.name(),
-                model,
-                billing,
-                usage::from_codex_events(stdout),
-            );
+            usage::record_codex_call(model, billing, stdout);
             if billing == usage::Billing::Plan {
                 crate::extract_plan::note_stream(stdout);
             }
@@ -4039,6 +4040,9 @@ fn with_backoff<T>(delays: &[Duration], mut call: impl FnMut() -> Result<T>) -> 
     for (n, delay) in delays.iter().enumerate() {
         match call() {
             Err(e) if transient_backend_error(&e) => {
+                if crate::extract_capacity::is_rate_limited(&format!("{e:#}")) {
+                    progress::note_rate_limit();
+                }
                 say!(
                     "[model-extract] transient backend error ({e:#}); waiting {}s before \
                      try {} of {}",
@@ -4149,10 +4153,10 @@ fn note_envelope(ws: &Workspace, text: &str) {
     let status = v["status"].as_str().unwrap_or("unstated");
     say!("[model-extract] reply envelope: {status}, confidence {level}: {reason}");
     for q in v["questions"].as_array().into_iter().flatten() {
-        say!(
-            "[model-extract] agent question: {}",
-            q.as_str().unwrap_or_default()
-        );
+        let q = q.as_str().unwrap_or_default().trim();
+        if !q.is_empty() {
+            progress::question(q);
+        }
     }
     let path = ws.path().join(harness::CONFIDENCE);
     if !path.is_file() {
@@ -5417,7 +5421,9 @@ fn wait_for_cli_backend(
     let mut pipe = child.stdout.take().context("capturing agent stdout")?;
     let reader = {
         let (beat, stop) = (Arc::clone(&beat), Arc::clone(&stop));
+        let label = progress::label();
         std::thread::spawn(move || {
+            progress::set_label(label);
             let (mut out, mut buf) = (Vec::new(), [0u8; 8192]);
             let mut line_start = 0;
             while let Ok(n) = pipe.read(&mut buf) {

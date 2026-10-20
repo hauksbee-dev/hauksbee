@@ -208,9 +208,30 @@ fn streamed() -> std::sync::MutexGuard<'static, Option<(Reading, Reading)>> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+static LATEST: std::sync::Mutex<Option<Reading>> = std::sync::Mutex::new(None);
+
+/// The newest plan reading any codex call has streamed, kept across runs (a
+/// batch watches it to refine its cost per part). `None` before the first.
+#[must_use]
+pub fn latest_reading() -> Option<Reading> {
+    *LATEST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Keeps a codex call's streamed readings: the run's first one and its latest.
 pub fn note_stream(stdout: &str) {
     if let Some((first, last)) = codex_stream_limits(stdout) {
+        let mut latest = LATEST
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A window the call did not report keeps its previous reading.
+        let old = latest.unwrap_or_default();
+        *latest = Some(Reading {
+            week: last.week.or(old.week),
+            session: last.session.or(old.session),
+        });
+        drop(latest);
         let mut s = streamed();
         let first = s.map_or(first, |(f, _)| f);
         *s = Some((first, last));

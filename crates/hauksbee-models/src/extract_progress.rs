@@ -19,8 +19,10 @@
 //! Haiku) takes a couple of minutes a part, the strong tier (Sol, Opus, Sonnet)
 //! several times that.
 
+use std::cell::RefCell;
 use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -173,14 +175,114 @@ pub fn snapshot() -> (String, u64) {
 
 /// Print narration on stderr (or a result on stdout) without ever sharing a
 /// line with the spinner: the line is erased and the print made under one lock.
+///
+/// While several extractions run at once ([`set_concurrent`]) each line is
+/// prefixed with the part its thread is working on ([`with_label`]), so lines
+/// from different parts stay attributable and never interleave mid-line.
 pub fn say(line: &str) {
     let _s = erased();
-    eprintln!("{line}");
+    eprintln!("{}", labelled(line));
 }
 
 pub fn out(text: &str) {
     let _s = erased();
-    println!("{text}");
+    println!("{}", labelled(text));
+}
+
+static CONCURRENT: AtomicBool = AtomicBool::new(false);
+
+/// Several extractions share this process (`models extract --unmodelled --jobs N`).
+///
+/// The process-wide spinner, per-run plan and cost summary describe
+/// one run, so they stand down: every line is labelled with its part instead,
+/// and the batch reports the cost once for all of them.
+pub fn set_concurrent(on: bool) {
+    CONCURRENT.store(on, Ordering::SeqCst);
+}
+
+/// Whether [`set_concurrent`] is on.
+#[must_use]
+pub fn concurrent() -> bool {
+    CONCURRENT.load(Ordering::SeqCst)
+}
+
+thread_local! {
+    static LABEL: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// The part this thread is working on, if it was told ([`with_label`]).
+#[must_use]
+pub fn label() -> Option<String> {
+    LABEL.with(|l| l.borrow().clone())
+}
+
+/// Set (or clear) this thread's label. For a helper thread that works for a
+/// labelled one: capture [`label`] before spawning and set it first thing.
+pub fn set_label(label: Option<String>) {
+    LABEL.with(|l| *l.borrow_mut() = label);
+}
+
+/// Run `f` as work on `part`: its narration is labelled with it and any agent
+/// question it raises ([`question`]) is kept under it.
+pub fn with_label<T>(part: &str, f: impl FnOnce() -> T) -> T {
+    let before = label();
+    set_label(Some(part.to_string()));
+    let result = f();
+    set_label(before);
+    result
+}
+
+fn labelled(text: &str) -> String {
+    label().filter(|_| concurrent()).map_or_else(
+        || text.to_string(),
+        |part| {
+            text.lines()
+                .map(|l| format!("[{part}] {l}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        },
+    )
+}
+
+static RATE_LIMITS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A backend call was refused for rate limiting (HTTP 429 or its wording). A
+/// batch reads [`rate_limit_hits`] to run fewer agents at once.
+pub fn note_rate_limit() {
+    RATE_LIMITS.fetch_add(1, Ordering::SeqCst);
+}
+
+/// How many rate-limit refusals this process has seen.
+#[must_use]
+pub fn rate_limit_hits() -> usize {
+    RATE_LIMITS.load(Ordering::SeqCst)
+}
+
+static QUESTIONS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+const KEEP_QUESTIONS: usize = 500;
+
+/// An agent asked a question it could not answer from the datasheet.
+///
+/// Said now, and kept under the current label for [`take_questions`], so a run nobody is
+/// watching still ends with it on the list instead of losing it in the log.
+pub fn question(text: &str) {
+    say(&format!("[model-extract] agent question: {text}"));
+    let mut all = QUESTIONS.lock().unwrap_or_else(PoisonError::into_inner);
+    if all.len() < KEEP_QUESTIONS {
+        all.push((label().unwrap_or_default(), text.to_string()));
+    }
+}
+
+/// The questions raised under `label` since the last call, oldest first.
+#[must_use]
+pub fn take_questions(label: &str) -> Vec<String> {
+    let mut all = QUESTIONS.lock().unwrap_or_else(PoisonError::into_inner);
+    let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut *all)
+        .into_iter()
+        .partition(|(l, _)| l == label);
+    *all = rest;
+    drop(all);
+    mine.into_iter().map(|(_, q)| q).collect()
 }
 
 fn erased() -> MutexGuard<'static, State> {
@@ -299,6 +401,11 @@ pub fn with_unrecorded_spinner<T, E>(run: impl FnOnce() -> Result<T, E>) -> Resu
 // The ticker holds its lock across a redraw so `stop` cannot land mid-line.
 #[allow(clippy::significant_drop_tightening)]
 fn spinner<T, E>(record_run: bool, run: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
+    // One redrawn line and one run's estimate mean nothing with several runs at
+    // once; the batch prints its own progress.
+    if concurrent() {
+        return run();
+    }
     let (started, tty) = (Instant::now(), std::io::stderr().is_terminal());
     let stop = Arc::new((Mutex::new(false), Condvar::new()));
     let flag = Arc::clone(&stop);

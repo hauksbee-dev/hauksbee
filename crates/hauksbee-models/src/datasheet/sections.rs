@@ -503,7 +503,11 @@ pub(super) fn draft(
     let drafted = std::thread::scope(|scope| {
         let mut agents = Vec::new();
         for name in &NAMES[1..] {
-            agents.push(scope.spawn(|| run(name, &known)));
+            let label = crate::extract_progress::label();
+            agents.push(scope.spawn(|| {
+                crate::extract_progress::set_label(label);
+                run(name, &known)
+            }));
         }
         agents
             .into_iter()
