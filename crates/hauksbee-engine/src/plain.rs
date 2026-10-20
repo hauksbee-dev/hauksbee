@@ -1947,8 +1947,23 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
             ),
             LintCheck::I2cBusLoading => (
                 format!("The I2C line \"{net}\" has pull-ups, but they are mis-sized for the bus. {}", f.message),
-                "I2C devices can only pull the line LOW; the resistor pulls it back HIGH. Too strong a pull-up and a device cannot sink enough current to make a valid low (the spec guarantees only 3 mA), so reads fail intermittently. Too weak and the line rises too slowly for the clock rate, corrupting edges as more devices load the bus.".to_string(),
-                "Size the pull-up between the two limits: above (rail voltage - 0.4 V) / 3 mA (so lows work), and low enough that the rise time fits the bus speed at the real bus capacitance. 2.2k to 4.7k suits most 3.3 V buses.".to_string(),
+                "I2C devices can only pull the line LOW; the resistor pulls it back HIGH. Too strong a pull-up and a device cannot sink enough current to make a valid low (the spec guarantees only 3 mA, or 20 mA in the fast-mode plus class), so reads fail intermittently. Too weak and the line rises too slowly for the bus speed (1000 ns at 100 kHz, 300 ns at 400 kHz, 120 ns at 1 MHz), corrupting edges as more devices load the bus. The capacitance used is a floor, so the real rise is slower than the one reported.".to_string(),
+                "Size the pull-up between the two limits: above (rail voltage - 0.4 V) / 3 mA (so lows work), and low enough that the rise time fits the bus speed at the real bus capacitance. 2.2k to 4.7k suits most 3.3 V buses; name the net for its speed (for example SDA_400K) so it is judged against that speed.".to_string(),
+            ),
+            LintCheck::PullupIneffective if f.is_abstention() => (
+                format!("The pull-up on \"{net}\" was not judged. {}", f.message),
+                "A pull-up holds a line high only if its rail reaches the receiver's input-high level and the receiver's leakage does not drop it below that level through the resistor. The part's datasheet levels are what decide it, and here they were not available, so the check says it could not tell rather than guess.".to_string(),
+                "Give the receiving part a model card with its VIL/VIH levels and input leakage, then re-check; until then verify the pull-up against the datasheet by hand.".to_string(),
+            ),
+            LintCheck::PullupIneffective => (
+                format!("A pull-up resistor on \"{net}\" cannot hold the line high. {}", f.message),
+                "A pull-up resistor only works if the voltage it pulls to is above the level the receiving chip needs to read a high (VIH), and stays above it once the resistor's voltage drop from the chip's input leakage is subtracted. A pull-up to a rail that is too low, a rail that never comes up, or a resistor too large for the load leaves the line idling where the chip reads low or in the band where its datasheet promises nothing.".to_string(),
+                "Pull the line up to the receiver's own supply rail (or to a rail at least VIH(min) high), use a smaller resistor if the leakage is the problem, or add a level shifter between the two voltage domains.".to_string(),
+            ),
+            LintCheck::AudioBusWiring => (
+                format!("The digital-audio wiring on {parts} (net \"{net}\") disagrees with the pins' roles. {}", f.message),
+                "An I2S or TDM audio bus has one bit clock and one frame clock, each driven by exactly one part (the master) and listened to by the rest, and data lines that each have a transmitter and a receiver. Two outputs on one line, a line nobody sends on, a clock on the wrong pin, a clock driven by two parts or none, or a codec missing the master clock it needs all leave the bus silent or noisy, and nothing about the board looks wrong to a power or level check.".to_string(),
+                "Rewire the named pins so each signal reaches the pin with its own role (BCLK to BCLK, LRCLK to LRCLK, one part's data out to the other's data in), make exactly one part the clock master, and connect MCLK where the codec needs it.".to_string(),
             ),
         };
         // A finding that worked out its own remedy is acted on by that, not by

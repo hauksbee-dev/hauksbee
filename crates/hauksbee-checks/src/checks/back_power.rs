@@ -41,15 +41,19 @@
 //!
 //! - Direct tie of a signal pin to a higher rail: **High**. There is no series
 //!   element; the clamp carries whatever the rail sources.
-//! - Pull-up resistor to a higher rail: **Medium**. The resistor bounds the
-//!   clamp current, and higher-voltage-tolerant pins make this idiom
-//!   legitimate on SOME parts. Where the card rates a signal pin with its own
-//!   `supply_range` envelope, or lists it in an `input_tolerance` envelope (a
-//!   74LVC input's `VI` abs max of 6.5 V at any VCC), that supply-independent
-//!   rating replaces the clamp assumption
+//! - Pull-up resistor to a higher rail, pin rating unknown: **Medium**. The
+//!   resistor bounds the clamp current, and higher-voltage-tolerant pins make
+//!   this idiom legitimate on SOME parts. The finding says what the clamp path
+//!   is and names the exception the reader must verify.
+//! - Pull-up resistor to a rail above a rating the card DECLARES for that pin:
+//!   **High**. Where the card rates a signal pin with its own `supply_range`
+//!   envelope, or lists it in an `input_tolerance` envelope (a 74LVC input's
+//!   `VI` abs max of 6.5 V at any VCC), that supply-independent rating
+//!   replaces the clamp assumption
 //!   ([`hauksbee_models::declared_pin_ceiling_v`]): a rail at or under it is
-//!   silent, a rail above it still fires. Otherwise the finding says what the
-//!   clamp path is and names the exception the reader must verify.
+//!   silent (a 5 V-tolerant input takes its 5 V pull-up), and a rail above it
+//!   is a stated absolute maximum exceeded, whatever the clamp does, so there
+//!   is no exception left for the reader to verify.
 //!
 //! Pins the check deliberately skips: supply and ground roles (they belong on
 //! rails), and roles that are higher-voltage inputs by design (`vin`, `vbus`,
@@ -60,7 +64,7 @@ use std::collections::BTreeSet;
 use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
 };
-use hauksbee_models::{declared_pin_ceiling_v, ModelLibrary};
+use hauksbee_models::{declared_pin_ceiling_v, ModelEntry, ModelLibrary};
 
 use hauksbee_bind::binder::power_rail_voltage;
 use hauksbee_extract::assembly::AssemblyState;
@@ -210,6 +214,43 @@ fn user_card_suffix(lib: &ModelLibrary, comp: &Component) -> String {
     }
 }
 
+/// How bad a pull-up above the part's supply is. A family-router model derives
+/// its pad roles from CAD pin names and carries no per-pin tolerance, so the
+/// "unless tolerant" exception is unverifiable and the finding is only a note
+/// (STM32 FT pins such as PA9 are 5 V tolerant). A pull-up to a rail above a
+/// rating the card states for the pin leaves no exception to verify: High.
+/// Otherwise the exception is for the reader to check: Medium.
+fn pull_up_severity(model: &ModelEntry, ceiling: Option<f64>, rail_v: f64) -> Severity {
+    if model.params.get_str("auto_bind") == Some("family_router") {
+        Severity::Low
+    } else if ceiling.is_some_and(|c| rail_v > c) {
+        Severity::High
+    } else {
+        Severity::Medium
+    }
+}
+
+/// The closing clause of a pull-up finding: the tolerance exception to verify,
+/// or the card's own rating the rail is above.
+fn tolerance_clause(ceiling: Option<f64>, rail_v: f64) -> String {
+    ceiling.filter(|c| rail_v > *c).map_or_else(
+        || {
+            format!(
+                "unless this pin is explicitly {}-tolerant.",
+                format_volts(rail_v)
+            )
+        },
+        |c| {
+            format!(
+                "and the card rates this pin for only {}, below the {} rail: past its stated \
+                 absolute maximum whatever the supply does.",
+                format_volts(c),
+                format_volts(rail_v)
+            )
+        },
+    )
+}
+
 /// Run the back-powering lint over every modelled part on the board.
 #[must_use]
 pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
@@ -288,15 +329,7 @@ pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
                 continue; // a rail net has no pull-ups to judge
             }
 
-            // Pull-up to a higher rail. A family-router model derives its pad
-            // roles from CAD pin names and carries no per-pin tolerance, so the
-            // "unless tolerant" exception is unverifiable and the finding is
-            // only a note (STM32 FT pins such as PA9 are 5 V tolerant).
-            let severity = if model.params.get_str("auto_bind") == Some("family_router") {
-                Severity::Low
-            } else {
-                Severity::Medium
-            };
+            // Pull-up to a higher rail (severity: `pull_up_severity`).
             // A divider that holds the pin within its supply at the worst
             // resistor corner is how a higher rail is brought to an input: the
             // clamp never conducts while the part is powered.
@@ -307,14 +340,14 @@ pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
                 if clamps(rail_v) && seen.insert((comp.reference.clone(), id, rail_net.clone())) {
                     report.findings.push(LintFinding {
                         check: LintCheck::BackPower,
-                        severity,
+                        severity: pull_up_severity(&model, ceiling, rail_v),
                         message: format!(
                             "{} pad {pad} ({role}) on \"{}\" is pulled up through {r_ref} \
                              to {rail_net} ({}) while {}'s supply {} is \
                              {}: current flows through the pin clamp into the \
                              {} domain, back-powering it when it is off and \
                              sitting past the VCC+0.5 V input abs-max when it is on, \
-                             unless this pin is explicitly {}-tolerant.",
+                             {}",
                             comp.reference,
                             net.name,
                             format_volts(rail_v),
@@ -322,7 +355,7 @@ pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
                             supply_net,
                             format_volts(supply_v),
                             format_volts(supply_v),
-                            format_volts(rail_v)
+                            tolerance_clause(ceiling, rail_v)
                         ) + &user_card_suffix(lib, comp),
                         refs: vec![comp.reference.clone(), r_ref],
                         nets: vec![net.name.clone(), rail_net],
@@ -745,6 +778,28 @@ unlocked_by = "validated behavior"
             count("74LVC125AD", 2, "+12V"),
             1,
             "12 V is above the input's 6.5 V absolute maximum"
+        );
+        let over = run(&quad_buffer_pull_board("74LVC125AD", 2, "+12V"));
+        let over = over.of_check(LintCheck::BackPower).next().expect("fires");
+        assert_eq!(
+            over.severity,
+            Severity::High,
+            "a rail above the card's stated 6.5 V maximum leaves no exception to verify"
+        );
+        assert!(
+            over.message.contains("rates this pin for only"),
+            "{}",
+            over.message
+        );
+        let clamp = run(&quad_buffer_pull_board("74HC125D", 2, "+5V"));
+        assert_eq!(
+            clamp
+                .of_check(LintCheck::BackPower)
+                .next()
+                .expect("fires")
+                .severity,
+            Severity::Medium,
+            "a pin the card rates only through its supply keeps the tolerance caveat"
         );
     }
 

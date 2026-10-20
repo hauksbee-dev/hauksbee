@@ -38,8 +38,16 @@
 //!   power-down, abs-max violation powered up.
 //! - [`bus_loading`]: I2C pull-up SIZING (the presence check is the extract
 //!   layer's `MissingI2cPullup`): an effective pull-up demanding more sink
-//!   current than the spec's 3 mA driver rating, or advisorily too weak for
-//!   the estimated bus capacitance to meet the rise-time budget.
+//!   current than the speed class's driver rating (3 mA; 20 mA in fast-mode
+//!   plus; lower when a device card states `iol_a`), or too weak for the
+//!   estimated bus capacitance to meet the class's rise-time budget.
+//! - [`pullup_effect`]: a pull-up that is present and cannot do its job: its
+//!   rail never comes up, it leaves the line below the receiver's VIH(min), or
+//!   it is too large for the receivers' stated input leakage.
+//! - [`audio_bus`]: an I2S/TDM bus wired against its pad roles: two
+//!   transmitters on one data line, a data line nothing transmits on, BCLK on
+//!   the LRCLK pad, a clock nobody or two masters drive, a required MCLK
+//!   unconnected.
 //! - [`power_pins`]: a carded IC whose supply pads are all open, whose return
 //!   pads are all open, whose supply sits on ground or whose ground sits on a
 //!   rail, judged from the card's pin roles alone.
@@ -96,6 +104,7 @@
 
 pub mod ampacity;
 pub mod analog_inputs;
+pub mod audio_bus;
 pub mod back_power;
 pub mod boot;
 pub mod bus_loading;
@@ -116,6 +125,7 @@ pub mod model_controls;
 pub mod node_drive;
 pub mod open_paths;
 pub mod power_pins;
+pub mod pullup_effect;
 pub mod rail_basis;
 pub mod rail_conflicts;
 pub mod rail_decoupling;
@@ -131,7 +141,7 @@ pub mod usb_c;
 
 use hauksbee_bind::binder::BoardFacts;
 use hauksbee_bind::variant_sweep::CornerPlan;
-use hauksbee_extract::{ExtractedBoard, LintCheck, NetLintReport, SiReport};
+use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, NetLintReport, SiReport};
 use hauksbee_models::ModelLibrary;
 
 /// Net-name classification: the one table (`hauksbee_models::netclass`).
@@ -155,6 +165,16 @@ pub(crate) fn stated_tolerance(c: &hauksbee_extract::Component) -> Option<f64> {
         })
         .filter(|pct| pct.is_finite() && *pct >= 0.0)
         .map(|pct| pct / 100.0)
+}
+
+/// A card's numeric param, unless it lies outside its physical range (a unit
+/// slip), in which case it is read as not stated
+/// ([`hauksbee_models::ranges::quarantine`]).
+pub(crate) fn plausible_param(model: &hauksbee_models::ModelEntry, key: &str) -> Option<f64> {
+    let value = model.params.get_f64(key)?;
+    let slip = hauksbee_models::ranges::quarantine(model)
+        .is_some_and(|q| q.found.iter().any(|f| f.param && f.key == key));
+    (!slip).then_some(value)
 }
 
 /// `KiCad`'s placeholder net for a pin that is on no net at all.
@@ -397,6 +417,43 @@ fn add_unsolved_led_findings(
     }
 }
 
+/// The pull-up and digital-audio checks, appended to `report`. A pull-up is
+/// judged against the receivers on its line and the rails the rail model says
+/// come up. `back_power` already reports a pull-up that is above its
+/// receiver's supply, and `contention` a pair of outputs, so what either has
+/// reported on a net is not reported again here.
+fn extend_with_pullup_and_audio(
+    report: &mut NetLintReport,
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    bases: &hauksbee_bind::rail_basis::RailBases,
+) {
+    let never_up: std::collections::HashSet<String> = bases
+        .rails
+        .iter()
+        .filter(|r| r.never_up())
+        .flat_map(|r| r.nets.iter().cloned())
+        .collect();
+    let reported = |report: &NetLintReport, check: LintCheck, f: &LintFinding| {
+        report
+            .findings
+            .iter()
+            .any(|r| r.check == check && f.nets.iter().any(|n| r.nets.contains(n)))
+    };
+    let pullups: Vec<_> = pullup_effect::pullup_effect_lint(board, lib, &never_up)
+        .findings
+        .into_iter()
+        .filter(|f| !reported(report, LintCheck::BackPower, f))
+        .collect();
+    report.findings.extend(pullups);
+    let audio: Vec<_> = audio_bus::audio_bus_lint(board, lib)
+        .findings
+        .into_iter()
+        .filter(|f| !reported(report, LintCheck::OutputContention, f))
+        .collect();
+    report.findings.extend(audio);
+}
+
 /// One [`engine_lint`] pass over `board` as it stands.
 fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = board.net_lint();
@@ -424,7 +481,7 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
         .extend(datasheet_field::datasheet_field_lint(board).findings);
     report
         .findings
-        .extend(bus_loading::bus_loading_lint(board).findings);
+        .extend(bus_loading::bus_loading_lint(board, lib).findings);
     report
         .findings
         .extend(regulator_cout::regulator_cout_lint(board, lib).findings);
@@ -467,10 +524,11 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
         .extend(rail_conflicts::rail_conflict_findings(&bound.report).findings);
     // A rail powered by its name alone whose only source is unfitted never
     // comes up; a run that powered no rail judged no level.
-    report.findings.extend(
-        rail_basis::rail_basis_findings(&hauksbee_bind::rail_basis::rail_bases(board, lib, &bound))
-            .findings,
-    );
+    let bases = hauksbee_bind::rail_basis::rail_bases(board, lib, &bound);
+    report
+        .findings
+        .extend(rail_basis::rail_basis_findings(&bases).findings);
+    extend_with_pullup_and_audio(&mut report, board, lib, &bases);
     report
         .findings
         .extend(rail_decoupling::decoupling_lint(board, lib).findings);
