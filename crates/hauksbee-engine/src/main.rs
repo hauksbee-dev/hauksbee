@@ -293,7 +293,7 @@ enum ModelsCommand {
     /// Draft a device model from a PDF datasheet (or, with --unmodelled, one per
     /// unmodelled part on a board). Asks first: this sends the
     /// datasheet, and whatever the agent reads, to an LLM backend.
-    Extract(ModelsExtractArgs),
+    Extract(Box<ModelsExtractArgs>),
     /// Scaffold a model entry for one board component, pre-seeded only from
     /// the board's own identity (reference and value). It never invents
     /// datasheet parameters or guesses the device kind; until the author
@@ -491,17 +491,17 @@ struct ModelsExtractArgs {
     /// board's own Datasheet field.
     #[arg(long, value_name = "PART=PDF-OR-URL", requires = "unmodelled")]
     datasheet: Vec<String>,
-    /// With --unmodelled: how many parts to extract at once (1 to 16). Each
-    /// part's lines are prefixed with its name; --jobs 1 is the plain serial
-    /// loop with the live spinner.
+    /// With --unmodelled: how many parts to extract at once (1 to 8). Left out,
+    /// the highest number your plan's headroom can carry is used and said
+    /// before the run. Each part's lines are prefixed with its name; --jobs 1
+    /// is the plain serial loop with the live spinner.
     #[arg(
         long,
         value_name = "N",
-        default_value_t = hauksbee_engine::commands::extract_batch::DEFAULT_JOBS as u64,
-        value_parser = clap::value_parser!(u64).range(1..=16),
+        value_parser = clap::value_parser!(u64).range(1..=hauksbee_models::extract_capacity::JOBS_CAP as u64),
         requires = "unmodelled"
     )]
-    jobs: u64,
+    jobs: Option<u64>,
     /// With --unmodelled: a folder of datasheets you saved by hand, named
     /// <part>.pdf (the end-of-run list says which are missing and where to put
     /// them). Used before any download. Defaults to <out-dir>/datasheets.
@@ -1636,7 +1636,7 @@ fn main() -> anyhow::Result<()> {
                         &template,
                         args.yes,
                         &hauksbee_engine::commands::extract_batch::BatchOptions {
-                            jobs: usize::try_from(args.jobs).unwrap_or(1),
+                            jobs: args.jobs.map(|n| usize::try_from(n).unwrap_or(1)),
                             datasheet_dir: args.datasheet_dir.clone(),
                             ..Default::default()
                         },

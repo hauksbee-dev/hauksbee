@@ -186,8 +186,10 @@ pub struct Tried {
     pub why: String,
 }
 
-/// A part no datasheet could be obtained for: what stopped it, and every link
-/// that was tried on the way. It is one category however it came about (the
+/// A part no datasheet could be obtained for.
+///
+/// It records what stopped it and every link that was tried on the way. It is
+/// one category however it came about (the
 /// board gave no link, the link did not download, the search found nothing it
 /// could vouch for), and the end of a batch lists these for the person to
 /// supply by hand.
@@ -254,10 +256,10 @@ impl Acquirer<'_> {
         let mut tried: Vec<Tried> = Vec::new();
         let links: Vec<&String> = sources.iter().collect();
         for (at, url) in links.iter().enumerate() {
-            let outcome = match self.hosts.refusal(url) {
-                Some(why) => Err(format!("not tried: its host was skipped earlier ({why})")),
-                None => self.download(url, part, true, say).map_err(|e| e.why()),
-            };
+            let outcome = self.hosts.refusal(url).map_or_else(
+                || self.download(url, part, true, say).map_err(|e| e.why()),
+                |why| Err(format!("not tried: its host was skipped earlier ({why})")),
+            );
             match outcome {
                 Ok(ready) => return Outcome::Ready(ready),
                 Err(why) => {
@@ -276,10 +278,10 @@ impl Acquirer<'_> {
                 }
             }
         }
-        let why_search = match tried.first() {
-            None => "the board gives no datasheet".to_string(),
-            Some(first) => format!("its board link did not download ({})", first.why),
-        };
+        let why_search = tried.first().map_or_else(
+            || "the board gives no datasheet".to_string(),
+            |first| format!("its board link did not download ({})", first.why),
+        );
         let Some(searcher) = self.searcher else {
             let why = if tried.is_empty() {
                 "no datasheet link and no way to search for one".to_string()
@@ -956,7 +958,7 @@ mod tests {
         ]);
         let (out, lines) = acquire(&http, Some(&said), None);
         assert!(matches!(out, Outcome::Ready(_)), "{out:?} {lines:?}");
-        let prompts = said.prompts.lock().unwrap();
+        let prompts = said.prompts.lock().unwrap().clone();
         assert_eq!(prompts.len(), 2);
         assert!(!prompts[0].contains("did not work"), "{}", prompts[0]);
         assert!(
@@ -1109,7 +1111,7 @@ URL: https://ok.example/b.pdf"]);
             ["https://ok.example/b.pdf"],
             "nothing was requested from the refusing host"
         );
-        let prompts = said.prompts.lock().unwrap();
+        let prompts = said.prompts.lock().unwrap().clone();
         assert_eq!(prompts.len(), 1, "one search, not two");
         assert!(
             prompts[0].contains("Do not give links on these hosts")

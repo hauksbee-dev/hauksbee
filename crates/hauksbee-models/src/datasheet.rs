@@ -3574,7 +3574,7 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
 }
 
 /// How the active backend bills a run: a plan's share, metered dollars, or unknown.
-fn billing_for(resolved: &Resolved) -> crate::extract_usage::Billing {
+pub(crate) fn billing_for(resolved: &Resolved) -> crate::extract_usage::Billing {
     let Some(a) = resolved.agent(resolved.backend) else {
         return crate::extract_usage::Billing::Unknown;
     };
@@ -3899,12 +3899,7 @@ fn run_and_record_with(
             ran.map(|_| text)
         }
         Backend::Codex => {
-            usage::record(
-                chosen.name(),
-                model,
-                billing,
-                usage::from_codex_events(stdout),
-            );
+            usage::record_codex_call(model, billing, stdout);
             if billing == usage::Billing::Plan {
                 crate::extract_plan::note_stream(stdout);
             }
@@ -3971,6 +3966,9 @@ fn with_backoff<T>(delays: &[Duration], mut call: impl FnMut() -> Result<T>) -> 
     for (n, delay) in delays.iter().enumerate() {
         match call() {
             Err(e) if transient_backend_error(&e) => {
+                if crate::extract_capacity::is_rate_limited(&format!("{e:#}")) {
+                    progress::note_rate_limit();
+                }
                 say!(
                     "[model-extract] transient backend error ({e:#}); waiting {}s before \
                      try {} of {}",

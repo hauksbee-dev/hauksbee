@@ -709,11 +709,10 @@ pub fn host_of(url: &str) -> Option<String> {
     let origin = origin_of(url)?;
     let authority = origin.split_once("://")?.1;
     let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
-    let host = if let Some(rest) = host.strip_prefix('[') {
-        rest.split(']').next().unwrap_or("")
-    } else {
-        host.split(':').next().unwrap_or("")
-    };
+    let host = host.strip_prefix('[').map_or_else(
+        || host.split(':').next().unwrap_or(""),
+        |rest| rest.split(']').next().unwrap_or(""),
+    );
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
@@ -780,10 +779,13 @@ impl HostLedger {
                 )
             });
         }
+        let blocked = record.blocked.clone();
+        drop(hosts);
         if before {
-            return None;
+            None
+        } else {
+            blocked
         }
-        record.blocked.clone()
     }
 
     /// Every host skipped so far with its reason, sorted by host.
@@ -891,7 +893,7 @@ mod tests {
         ]);
         let got = fetch_pdf(&http, "https://a.example/ds.pdf", &path, "LM358").unwrap();
         assert_eq!(got.via, Via::Direct);
-        let seen = http.seen.lock().unwrap();
+        let seen = http.seen.lock().unwrap().clone();
         assert_eq!(seen.len(), 2);
         assert!(
             !seen[0].2 && seen[1].2,
@@ -1453,7 +1455,7 @@ mod tests {
             took > Duration::from_secs(2 * u64::from(timeouts.stall_secs)),
             "it took {took:?}: longer than the stall time, so a fixed total would have cut it"
         );
-        assert!(std::fs::metadata(&path).unwrap().len() as usize > PDF.len());
+        assert!(std::fs::metadata(&path).unwrap().len() > PDF.len() as u64);
 
         let stalled = serve(|_, _, stream| {
             let head = "HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n";

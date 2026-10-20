@@ -685,3 +685,118 @@ fn jobs_four_drafts_the_same_cards_with_prefixed_lines() {
         "{all}"
     );
 }
+
+/// Run `models extract --unmodelled` with a fake codex that is signed in with a
+/// plan, reports `session` and `week` percent used, and cannot extract (so the
+/// run's plan lines are what is under test, not its drafts).
+#[cfg(unix)]
+fn plan_batch(
+    dir: &std::path::Path,
+    session: u32,
+    week: u32,
+    extra: &[&str],
+) -> std::process::Output {
+    use std::os::unix::fs::PermissionsExt;
+    let board = unmodelled_board(dir);
+    let agent = dir.join("codex");
+    let script = format!(
+        "#!/bin/sh\ncase \"$1\" in\n  login) echo 'Logged in using ChatGPT'; exit 0;;\n  app-server) while read line; do case \"$line\" in *account/rateLimits/read*) echo '{{\"id\":2,\"result\":{{\"rateLimits\":{{\"primary\":{{\"usedPercent\":{session},\"windowDurationMins\":300}},\"secondary\":{{\"usedPercent\":{week},\"windowDurationMins\":10080}}}}}}}}';; esac; done; exit 0;;\n  *) cat >/dev/null; echo 'fake codex cannot extract' >&2; exit 1;;\nesac\n"
+    );
+    std::fs::write(&agent, script).unwrap();
+    std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let config = dir.join("extract.toml");
+    std::fs::write(&config, "").unwrap();
+    let out = dir.join("drafts");
+    std::fs::create_dir_all(&out).unwrap();
+    Command::new(hauksbee())
+        .args(["models", "extract", "--backend", "codex", "--unmodelled"])
+        .arg(&board)
+        .arg("--out-dir")
+        .arg(&out)
+        .args(extra)
+        .env("HAUKSBEE_EXTRACT_CONFIG", &config)
+        .env("HAUKSBEE_CODEX_COMMAND", &agent)
+        .stdin(Stdio::null())
+        .output()
+        .expect("run hauksbee")
+}
+
+/// Plenty of headroom: one line says the cost and the pool, no warning, and the
+/// run leaves its usage record beside the cards.
+#[cfg(unix)]
+#[test]
+fn the_preflight_line_names_the_cost_and_the_highest_safe_pool() {
+    let dir = tempfile::tempdir().unwrap();
+    let run = plan_batch(dir.path(), 10, 20, &["--model", "gpt-6-luna", "--yes"]);
+    let all = text_of(&run);
+    assert!(
+        all.contains("2 parts, about 2% of your 5-hour window and 0.1% of your weekly; running 2 agents in parallel (highest safe)"),
+        "{all}"
+    );
+    assert!(!all.contains("warning:"), "{all}");
+    let record = std::fs::read_to_string(dir.path().join("drafts/batch-summary.txt")).unwrap();
+    assert!(record.contains("plan: 2 parts, about 2%"), "{record}");
+    assert!(record.contains("agents: 2 throughout"), "{record}");
+    assert!(record.contains("usage:"), "{record}");
+}
+
+/// `--jobs` overrides the recommendation but the plan is still said.
+#[cfg(unix)]
+#[test]
+fn jobs_overrides_the_recommendation_and_the_line_still_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let run = plan_batch(
+        dir.path(),
+        10,
+        20,
+        &["--model", "gpt-6-luna", "--yes", "--jobs", "1"],
+    );
+    let all = text_of(&run);
+    assert!(
+        all.contains("running 1 agent in parallel (as asked; the highest safe is 2)"),
+        "{all}"
+    );
+}
+
+/// A run that would overrun the 5-hour window warns; under --yes it goes on,
+/// holds the pool to what the window can carry, and says so.
+#[cfg(unix)]
+#[test]
+fn a_run_past_the_window_warns_and_yes_holds_the_pool() {
+    let dir = tempfile::tempdir().unwrap();
+    let run = plan_batch(
+        dir.path(),
+        95,
+        20,
+        &["--model", "gpt-6.1-sol", "--yes", "--jobs", "2"],
+    );
+    let all = text_of(&run);
+    assert!(
+        all.contains("warning: it needs more than your 5-hour window has left")
+            && all.contains("continuing because of --yes, with 1 agent"),
+        "{all}"
+    );
+    // Without --yes the same warning is shown, then consent is refused (no terminal).
+    let ask = tempfile::tempdir().unwrap();
+    let run = plan_batch(ask.path(), 95, 20, &["--model", "gpt-6.1-sol"]);
+    let all = text_of(&run);
+    assert!(!run.status.success(), "{all}");
+    assert!(
+        all.contains("warning: it needs more than your 5-hour window has left")
+            && all.contains("pass --yes"),
+        "{all}"
+    );
+}
+
+/// An agent whose plan cannot be read gets a small pool and says why.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_plan_runs_a_conservative_pool_and_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let (run, _) = draft_batch(dir.path(), &[], "echo opamp");
+    let all = text_of(&run);
+    assert!(
+        all.contains("plan headroom unknown; running 2 agents in parallel (conservative)"),
+        "{all}"
+    );
+}

@@ -191,8 +191,9 @@ pub fn out(text: &str) {
 
 static CONCURRENT: AtomicBool = AtomicBool::new(false);
 
-/// Several extractions share this process (`models extract --unmodelled
-/// --jobs N`). The process-wide spinner, per-run plan and cost summary describe
+/// Several extractions share this process (`models extract --unmodelled --jobs N`).
+///
+/// The process-wide spinner, per-run plan and cost summary describe
 /// one run, so they stand down: every line is labelled with its part instead,
 /// and the batch reports the cost once for all of them.
 pub fn set_concurrent(on: bool) {
@@ -232,21 +233,37 @@ pub fn with_label<T>(part: &str, f: impl FnOnce() -> T) -> T {
 }
 
 fn labelled(text: &str) -> String {
-    match label().filter(|_| concurrent()) {
-        Some(part) => text
-            .lines()
-            .map(|l| format!("[{part}] {l}"))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        None => text.to_string(),
-    }
+    label().filter(|_| concurrent()).map_or_else(
+        || text.to_string(),
+        |part| {
+            text.lines()
+                .map(|l| format!("[{part}] {l}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        },
+    )
+}
+
+static RATE_LIMITS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A backend call was refused for rate limiting (HTTP 429 or its wording). A
+/// batch reads [`rate_limit_hits`] to run fewer agents at once.
+pub fn note_rate_limit() {
+    RATE_LIMITS.fetch_add(1, Ordering::SeqCst);
+}
+
+/// How many rate-limit refusals this process has seen.
+#[must_use]
+pub fn rate_limit_hits() -> usize {
+    RATE_LIMITS.load(Ordering::SeqCst)
 }
 
 static QUESTIONS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 const KEEP_QUESTIONS: usize = 500;
 
-/// An agent asked a question it could not answer from the datasheet. Said now,
-/// and kept under the current label for [`take_questions`], so a run nobody is
+/// An agent asked a question it could not answer from the datasheet.
+///
+/// Said now, and kept under the current label for [`take_questions`], so a run nobody is
 /// watching still ends with it on the list instead of losing it in the log.
 pub fn question(text: &str) {
     say(&format!("[model-extract] agent question: {text}"));
@@ -264,6 +281,7 @@ pub fn take_questions(label: &str) -> Vec<String> {
         .into_iter()
         .partition(|(l, _)| l == label);
     *all = rest;
+    drop(all);
     mine.into_iter().map(|(_, q)| q).collect()
 }
 

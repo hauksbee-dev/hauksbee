@@ -2,9 +2,12 @@
 //! on a bounded pool, one readable line at a time, and one honest tally.
 //!
 //! A whole board is dozens of parts, each a web search, a download and an
-//! agent run that is mostly waiting, so they run side by side (`--jobs N`,
-//! default [`DEFAULT_JOBS`]); `--jobs 1` is the plain serial loop with the
-//! spinner. Each part is its own unit of work and ends in exactly one of three
+//! agent run that is mostly waiting, so they run side by side. How many is
+//! worked out from the plan's headroom (`hauksbee_models::extract_capacity`)
+//! unless `--jobs N` says; `--jobs 1` is the plain serial loop with the
+//! spinner. The pool only ever shrinks during a run: halved when the backend
+//! rate limits, lowered when the observed usage says the 5-hour window will not
+//! last. Each part is its own unit of work and ends in exactly one of three
 //! ways, and the tally counts them apart:
 //!
 //! - **drafted**: a card was written;
@@ -26,37 +29,55 @@ use std::time::{Duration, Instant};
 use hauksbee_ir::{eprintln, println};
 use hauksbee_models::datasheet::{self, Args};
 use hauksbee_models::datasheet_discovery::{Acquirer, Missing, Outcome, Wanted};
+use hauksbee_models::extract_capacity as capacity;
 use hauksbee_models::extract_messages::{self as words, Need};
+use hauksbee_models::extract_plan::{self, Reading};
 use hauksbee_models::extract_progress as progress;
 
 use super::models::UnmodelledPart;
 
-/// How many parts are worked on at once unless `--jobs` says otherwise.
-pub const DEFAULT_JOBS: usize = 4;
+/// The most parts worked on at once: one constant, in `extract_capacity`, so a
+/// measured ramp can tune it in one place.
+pub const MAX_JOBS: usize = capacity::JOBS_CAP;
 
-/// The most parts worked on at once: past this a batch hits the backend's and
-/// the vendors' rate limits long before it gets faster.
-pub const MAX_JOBS: usize = 16;
+/// What a running batch watches of the plan to refine its cost per part.
+#[derive(Debug, Clone, Copy)]
+pub struct PlanWatch {
+    /// The 5-hour usage when the batch began.
+    pub start_session: Option<f64>,
+    /// The prior cost per part, in points of the 5-hour window.
+    pub prior_session: f64,
+}
 
 /// How a batch is run.
 #[derive(Debug, Clone)]
 pub struct BatchOptions {
-    /// Parts worked on at once (`--jobs`); 1 is the serial loop.
-    pub jobs: usize,
+    /// Parts worked on at once as asked (`--jobs`); `None` takes the
+    /// recommendation for the plan's headroom. 1 is the serial loop.
+    pub jobs: Option<usize>,
     /// A folder of PDFs named `<part>.pdf` to use instead of fetching
     /// (`--datasheet-dir`). `None` uses `<out-dir>/datasheets`, where fetched
     /// ones are kept, so the same folder serves both.
     pub datasheet_dir: Option<PathBuf>,
     /// How often a quiet stretch of a long batch says how far it has got.
     pub progress_every: Duration,
+    /// The shortest time between two halvings of the pool for rate limiting.
+    pub backoff_every: Duration,
+    /// Refine the plan's cost during the run (`None`: say nothing of the plan).
+    pub watch: Option<PlanWatch>,
+    /// The newest plan reading ([`hauksbee_models::extract_plan::latest_reading`]).
+    pub reading: fn() -> Option<Reading>,
 }
 
 impl Default for BatchOptions {
     fn default() -> Self {
         Self {
-            jobs: DEFAULT_JOBS,
+            jobs: None,
             datasheet_dir: None,
             progress_every: Duration::from_secs(30),
+            backoff_every: Duration::from_secs(30),
+            watch: None,
+            reading: extract_plan::latest_reading,
         }
     }
 }
@@ -71,6 +92,8 @@ pub struct Tally {
     pub failed: Vec<(String, String)>,
     /// Questions an agent asked that nobody was there to answer.
     pub needs: Vec<Need>,
+    /// The pool the batch began with and the one it ended with.
+    pub jobs: (usize, usize),
 }
 
 impl Tally {
@@ -132,6 +155,97 @@ impl Console {
     }
 }
 
+/// How many jobs may run at once, which only ever goes down.
+struct Pool<'a> {
+    start: usize,
+    limit: AtomicUsize,
+    active: Mutex<usize>,
+    turn: Condvar,
+    /// The rate-limit refusals seen when last looked.
+    seen: AtomicUsize,
+    hits: &'a (dyn Fn() -> usize + Sync),
+    last_halved: Mutex<Option<Instant>>,
+    backoff_every: Duration,
+    say: &'a (dyn Fn(&str) + Sync),
+}
+
+impl<'a> Pool<'a> {
+    fn new(
+        start: usize,
+        backoff_every: Duration,
+        hits: &'a (dyn Fn() -> usize + Sync),
+        say: &'a (dyn Fn(&str) + Sync),
+    ) -> Self {
+        Self {
+            start,
+            limit: AtomicUsize::new(start),
+            active: Mutex::new(0),
+            turn: Condvar::new(),
+            seen: AtomicUsize::new(hits()),
+            hits,
+            last_halved: Mutex::new(None),
+            backoff_every,
+            say,
+        }
+    }
+
+    fn limit(&self) -> usize {
+        self.limit.load(Ordering::SeqCst)
+    }
+
+    /// Lower the pool to `to` (never raise it); true when it went down.
+    fn lower_to(&self, to: usize, wording: fn(usize, usize) -> String) -> bool {
+        let to = to.max(1);
+        let from = self.limit.fetch_min(to, Ordering::SeqCst);
+        if to < from {
+            (self.say)(&wording(from, to));
+        }
+        to < from
+    }
+
+    /// The backend refused for rate limiting: run half as many from now on, at
+    /// most once per `backoff_every` however many refusals arrive together.
+    fn rate_limited(&self) {
+        let mut last = self
+            .last_halved
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if last.is_some_and(|t| t.elapsed() < self.backoff_every) {
+            return;
+        }
+        if self.lower_to(capacity::halve(self.limit()), words::rate_limited) {
+            *last = Some(Instant::now());
+        }
+    }
+
+    /// Notice rate-limit refusals the backend layer has counted since last time.
+    fn poll(&self) {
+        let now = (self.hits)();
+        if now > self.seen.swap(now, Ordering::SeqCst) {
+            self.rate_limited();
+        }
+    }
+
+    /// Wait for a place in the pool.
+    fn enter(&self) {
+        self.poll();
+        let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
+        while *active >= self.limit() {
+            active = self
+                .turn
+                .wait_timeout(active, Duration::from_millis(100))
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        *active += 1;
+    }
+
+    fn leave(&self) {
+        *self.active.lock().unwrap_or_else(PoisonError::into_inner) -= 1;
+        self.turn.notify_all();
+    }
+}
+
 /// Group the parts that would write the same file (a card, its downloaded
 /// datasheet, its rejected draft) so one worker takes them in turn.
 fn lanes(work: &[&UnmodelledPart]) -> Vec<Vec<usize>> {
@@ -146,7 +260,7 @@ fn lanes(work: &[&UnmodelledPart]) -> Vec<Vec<usize>> {
     lanes.into_iter().map(|(_, lane)| lane).collect()
 }
 
-/// Run `job(0..count)` on up to `jobs` threads, every lane (indexes that must
+/// Run `job(0..count)` on the `pool`'s threads, every lane (indexes that must
 /// not overlap) on one thread in order, and return each result by index. A job
 /// that panics leaves `None` and the rest carry on. While it runs,
 /// `announce(done, count, running)` is called whenever `every` passes without
@@ -154,13 +268,13 @@ fn lanes(work: &[&UnmodelledPart]) -> Vec<Vec<usize>> {
 fn schedule<T: Send>(
     count: usize,
     lanes: Vec<Vec<usize>>,
-    jobs: usize,
+    pool: &Pool<'_>,
     every: Duration,
     job: &(dyn Fn(usize) -> T + Sync),
     announce: &(dyn Fn(usize, usize, usize) + Sync),
 ) -> Vec<Option<T>> {
     let slots: Vec<Mutex<Option<T>>> = (0..count).map(|_| Mutex::new(None)).collect();
-    let workers = jobs.clamp(1, MAX_JOBS).min(lanes.len().max(1));
+    let workers = pool.start.clamp(1, MAX_JOBS).min(lanes.len().max(1));
     if workers == 1 {
         for at in lanes.into_iter().flatten() {
             let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(at)));
@@ -183,10 +297,12 @@ fn schedule<T: Send>(
                     .pop_front();
                 let Some(lane) = lane else { break };
                 for at in lane {
+                    pool.enter();
                     running.fetch_add(1, Ordering::SeqCst);
                     let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(at)));
                     *slots[at].lock().unwrap_or_else(PoisonError::into_inner) = made.ok();
                     running.fetch_sub(1, Ordering::SeqCst);
+                    pool.leave();
                     *done.lock().unwrap_or_else(PoisonError::into_inner) += 1;
                     finished.notify_all();
                 }
@@ -205,6 +321,7 @@ fn schedule<T: Send>(
                 last = Instant::now();
             }
         }
+        drop(now);
     });
     slots
         .into_iter()
@@ -220,6 +337,7 @@ fn run_part(
     kind_of: &(dyn Fn(&UnmodelledPart) -> String + Sync),
     extract: Extract<'_>,
     console: &Console,
+    pool: Option<&Pool<'_>>,
 ) -> PartRun {
     progress::with_label(&p.part, || {
         let want = Wanted {
@@ -262,6 +380,11 @@ fn run_part(
             }
             Err(e) => {
                 let why = format!("{e:#}");
+                if capacity::is_rate_limited(&why) {
+                    if let Some(pool) = pool {
+                        pool.rate_limited();
+                    }
+                }
                 console.complain(&p.part, &format!("{}: {why}", p.part));
                 Ended::Failed(why)
             }
@@ -273,33 +396,65 @@ fn run_part(
     })
 }
 
-/// Get a verified datasheet for each part and draft its card, `opts.jobs` at a
-/// time. A part that fails is reported and the batch carries on.
+/// Get a verified datasheet for each part and draft its card, `jobs` at a time
+/// (the pool can shrink during the run, never grow). A part that fails is
+/// reported and the batch carries on.
 pub fn draft_parts(
     work: &[&UnmodelledPart],
     acquirer: &Acquirer<'_>,
     template: &Args,
     kind_of: &(dyn Fn(&UnmodelledPart) -> String + Sync),
     extract: Extract<'_>,
+    jobs: usize,
     opts: &BatchOptions,
 ) -> Tally {
     let lanes = lanes(work);
-    let concurrent = opts.jobs.clamp(1, MAX_JOBS).min(lanes.len().max(1)) > 1;
+    let start = jobs.clamp(1, MAX_JOBS).min(lanes.len().max(1));
+    let concurrent = start > 1;
     let console = Console {
         prefixed: concurrent,
     };
+    hauksbee_models::extract_usage::reset_calls();
     if concurrent {
         // One ledger for the whole batch, reported once at the end.
         progress::set_concurrent(true);
         hauksbee_models::extract_usage::reset();
     }
+    let say_pool = |text: &str| console.say("", text);
+    let hits = progress::rate_limit_hits;
+    let pool = Pool::new(start, opts.backoff_every, &hits, &say_pool);
+    let announce = |done: usize, total: usize, running: usize| {
+        let plan = opts.watch.and_then(|w| {
+            let now = (opts.reading)()?.session?;
+            let (per, observed) =
+                capacity::refined_per_part(w.prior_session, w.start_session, Some(now), done);
+            let lowered = capacity::relimit(total - done, now, per, pool.limit());
+            pool.lower_to(lowered, words::window_tight);
+            Some(words::plan_now(now, per, observed))
+        });
+        let line = plan.map_or_else(
+            || words::progress(done, total, running),
+            |plan| words::progress_plan(done, total, running, &plan),
+        );
+        console.say("", &line);
+    };
     let ran = schedule(
         work.len(),
         lanes,
-        opts.jobs,
+        &pool,
         opts.progress_every,
-        &|at| run_part(work[at], acquirer, template, kind_of, extract, &console),
-        &|done, total, running| println!("{}", words::progress(done, total, running)),
+        &|at| {
+            run_part(
+                work[at],
+                acquirer,
+                template,
+                kind_of,
+                extract,
+                &console,
+                Some(&pool),
+            )
+        },
+        &announce,
     );
     if concurrent {
         progress::set_concurrent(false);
@@ -308,7 +463,10 @@ pub fn draft_parts(
             println!("[model-extract] {cost}");
         }
     }
-    let mut tally = Tally::default();
+    let mut tally = Tally {
+        jobs: (start, pool.limit()),
+        ..Tally::default()
+    };
     for (p, run) in work.iter().zip(ran) {
         let Some(run) = run else {
             tally
@@ -335,6 +493,148 @@ pub fn draft_parts(
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    fn no_hits() -> usize {
+        0
+    }
+
+    /// A plan nearly used up (the batch's `reading` hook has this fixed shape).
+    #[allow(clippy::unnecessary_wraps)]
+    fn nearly_spent() -> Option<Reading> {
+        Some(Reading {
+            week: Some(10.0),
+            session: Some(95.0),
+        })
+    }
+
+    fn silent(_: &str) {}
+
+    fn test_pool(n: usize) -> Pool<'static> {
+        Pool::new(n, Duration::ZERO, &no_hits, &silent)
+    }
+
+    fn fake_parts(n: usize) -> Vec<UnmodelledPart> {
+        (0..n).map(|i| named(&format!("P{i}"))).collect()
+    }
+
+    /// A batch whose parts all have a PDF supplied, so only the fake extractor
+    /// runs: returns the temp dir to keep it alive.
+    fn supplied_dir(parts: &[UnmodelledPart]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for p in parts {
+            std::fs::write(dir.path().join(format!("{}.pdf", p.part)), b"%PDF-1.4\n").unwrap();
+        }
+        dir
+    }
+
+    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+    /// A backend that answers 429 halves the pool; the refusals are failed
+    /// extractions, not lost, and the pool never grows back.
+    #[test]
+    fn a_rate_limited_backend_halves_the_pool_and_the_run_carries_on() {
+        use hauksbee_models::datasheet_fetch::{CurlHttp, HostLedger};
+        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+        let parts = fake_parts(8);
+        let dir = supplied_dir(&parts);
+        let supplied = [dir.path().to_path_buf()];
+        let (http, hosts) = (CurlHttp::default(), HostLedger::default());
+        let fetched = dir.path().join("fetched");
+        let acquirer = Acquirer {
+            http: &http,
+            searcher: None,
+            dir: &fetched,
+            supplied: &supplied,
+            hosts: &hosts,
+            read_text: |_| String::new(),
+        };
+        let work: Vec<&UnmodelledPart> = parts.iter().collect();
+        let template = Args::new(PathBuf::new(), String::new(), String::new());
+        let kind_of = |_: &UnmodelledPart| String::from("opamp");
+        let extract = |args: Args| -> anyhow::Result<PathBuf> {
+            std::thread::sleep(Duration::from_millis(20));
+            if args.part == "P0" {
+                anyhow::bail!("HTTP 429 Too Many Requests");
+            }
+            Ok(PathBuf::from(format!("{}.toml", args.part)))
+        };
+        let opts = BatchOptions {
+            backoff_every: Duration::from_secs(60),
+            progress_every: Duration::from_secs(60),
+            ..BatchOptions::default()
+        };
+        let tally = draft_parts(&work, &acquirer, &template, &kind_of, &extract, 4, &opts);
+        assert_eq!(tally.jobs, (4, 2), "halved once, debounced after");
+        assert_eq!(tally.drafted, 7);
+        assert_eq!(tally.failed.len(), 1);
+        assert!(tally.failed[0].1.contains("429"));
+    }
+
+    /// Refusals the backend layer counted (retried inside the extraction) shrink
+    /// the pool too, though no part failed.
+    #[test]
+    fn counted_rate_limit_refusals_shrink_the_pool_once_per_interval() {
+        let said = Mutex::new(Vec::<String>::new());
+        let hits = AtomicUsize::new(0);
+        let read = || hits.load(Ordering::SeqCst);
+        let say = |t: &str| said.lock().unwrap().push(t.to_string());
+        let pool = Pool::new(8, Duration::from_secs(60), &read, &say);
+        pool.poll();
+        assert_eq!(pool.limit(), 8, "no refusals, no change");
+        hits.fetch_add(3, Ordering::SeqCst);
+        pool.poll();
+        assert_eq!(pool.limit(), 4);
+        hits.fetch_add(1, Ordering::SeqCst);
+        pool.poll();
+        assert_eq!(pool.limit(), 4, "a burst inside the interval halves once");
+        assert_eq!(said.lock().unwrap().len(), 1);
+        assert!(said.lock().unwrap()[0].contains("running 4 agents instead of 8"));
+        assert!(!pool.lower_to(6, words::window_tight), "never raised");
+    }
+
+    /// The progress line carries the plan's state, and a window that is
+    /// draining faster than the prior lowers the pool.
+    #[test]
+    fn progress_reports_the_plan_and_a_draining_window_lowers_the_pool() {
+        use hauksbee_models::datasheet_fetch::{CurlHttp, HostLedger};
+        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+        let parts = fake_parts(12);
+        let dir = supplied_dir(&parts);
+        let supplied = [dir.path().to_path_buf()];
+        let (http, hosts) = (CurlHttp::default(), HostLedger::default());
+        let fetched = dir.path().join("fetched");
+        let acquirer = Acquirer {
+            http: &http,
+            searcher: None,
+            dir: &fetched,
+            supplied: &supplied,
+            hosts: &hosts,
+            read_text: |_| String::new(),
+        };
+        let work: Vec<&UnmodelledPart> = parts.iter().collect();
+        let template = Args::new(PathBuf::new(), String::new(), String::new());
+        let kind_of = |_: &UnmodelledPart| String::from("opamp");
+        let extract = |args: Args| -> anyhow::Result<PathBuf> {
+            std::thread::sleep(Duration::from_millis(150));
+            Ok(PathBuf::from(format!("{}.toml", args.part)))
+        };
+        // The plan reads 95% used, from 40% when the batch began: once a few
+        // parts are done that is several points per part, far above the 0.8
+        // prior, so the 5 points left cannot carry the parts still to do.
+        let opts = BatchOptions {
+            progress_every: Duration::from_millis(400),
+            backoff_every: Duration::from_secs(60),
+            watch: Some(PlanWatch {
+                start_session: Some(40.0),
+                prior_session: 0.8,
+            }),
+            reading: nearly_spent,
+            ..BatchOptions::default()
+        };
+        let tally = draft_parts(&work, &acquirer, &template, &kind_of, &extract, 4, &opts);
+        assert_eq!(tally.drafted, 12);
+        assert!(tally.jobs.1 < 4, "pool was lowered: {:?}", tally.jobs);
+    }
 
     #[test]
     fn parts_that_would_share_a_file_share_a_lane() {
@@ -365,7 +665,7 @@ mod tests {
         let out = schedule(
             8,
             lanes,
-            4,
+            &test_pool(4),
             Duration::from_secs(60),
             &|i| {
                 let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
@@ -397,7 +697,7 @@ mod tests {
         schedule(
             4,
             vec![vec![0, 1, 2], vec![3]],
-            4,
+            &test_pool(4),
             Duration::from_secs(60),
             &|i| {
                 if i < 3 {
@@ -420,7 +720,7 @@ mod tests {
         schedule(
             4,
             (0..4).map(|i| vec![i]).collect(),
-            2,
+            &test_pool(2),
             Duration::from_millis(60),
             &|_| std::thread::sleep(Duration::from_millis(300)),
             &|done, total, running| said.lock().unwrap().push((done, total, running)),
@@ -494,12 +794,12 @@ mod tests {
         };
         let run = |jobs: usize| {
             let opts = BatchOptions {
-                jobs,
+                jobs: Some(jobs),
                 progress_every: Duration::from_secs(60),
                 ..BatchOptions::default()
             };
             let started = Instant::now();
-            let tally = draft_parts(&work, &acquirer, &template, &kind_of, &extract, &opts);
+            let tally = draft_parts(&work, &acquirer, &template, &kind_of, &extract, jobs, &opts);
             (tally, started.elapsed())
         };
         let (tally, fast) = run(4);
@@ -531,7 +831,7 @@ mod tests {
         let out = schedule(
             3,
             (0..3).map(|i| vec![i]).collect(),
-            2,
+            &test_pool(2),
             Duration::from_secs(60),
             &|i| {
                 assert_ne!(i, 1, "boom");

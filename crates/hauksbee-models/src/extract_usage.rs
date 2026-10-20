@@ -146,6 +146,125 @@ pub fn note_plan(line: String) {
     ledger().get_or_insert_with(Ledger::default).plan_note = Some(line);
 }
 
+/// One backend call as the batch record keeps it.
+///
+/// Its tokens and the plan's 5-hour and weekly usage (percent) as the call's
+/// own stream first and last reported it. Nothing is recorded that the backend
+/// did not say.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallRecord {
+    /// The part being extracted (empty outside a labelled batch).
+    pub part: String,
+    pub tool: String,
+    pub model: String,
+    pub usage: Option<Usage>,
+    pub session_before: Option<f64>,
+    pub session_after: Option<f64>,
+    pub week_before: Option<f64>,
+    pub week_after: Option<f64>,
+}
+
+static CALLS: Mutex<Vec<CallRecord>> = Mutex::new(Vec::new());
+
+fn calls() -> MutexGuard<'static, Vec<CallRecord>> {
+    CALLS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Start a new batch record. Unlike [`reset`], single extractions do not clear it.
+pub fn reset_calls() {
+    calls().clear();
+}
+
+/// Every call recorded since [`reset_calls`], in the order they finished.
+#[must_use]
+pub fn batch_calls() -> Vec<CallRecord> {
+    calls().clone()
+}
+
+/// [`record`] for a codex call, keeping its token counts and the plan readings
+/// from its own `--json` stream (`token_count` events' `rate_limits`) in the
+/// batch record.
+pub fn record_codex_call(model: &str, billing: Billing, stdout: &str) {
+    let usage = from_codex_events(stdout);
+    record("codex", model, billing, usage);
+    let limits = crate::extract_plan::codex_stream_limits(stdout);
+    let reading = |pick: fn(&crate::extract_plan::Reading) -> Option<f64>| {
+        (
+            limits.as_ref().and_then(|(first, _)| pick(first)),
+            limits.as_ref().and_then(|(_, last)| pick(last)),
+        )
+    };
+    let (session_before, session_after) = reading(|r| r.session);
+    let (week_before, week_after) = reading(|r| r.week);
+    calls().push(CallRecord {
+        part: crate::extract_progress::label().unwrap_or_default(),
+        tool: "codex".into(),
+        model: model.into(),
+        usage,
+        session_before,
+        session_after,
+        week_before,
+        week_after,
+    });
+}
+
+/// Totals over a set of calls.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct CallTotals {
+    pub calls: usize,
+    /// Calls that reported token counts.
+    pub known: usize,
+    pub tokens: Usage,
+    /// The lowest 5-hour reading seen before a call, and the highest after one.
+    pub session: Option<(f64, f64)>,
+    pub week: Option<(f64, f64)>,
+}
+
+impl CallTotals {
+    /// The share of input tokens served from the cache (0 to 1), if any input.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)] // token counts are far below 2^52
+    pub fn cache_share(&self) -> Option<f64> {
+        (self.tokens.input > 0).then(|| self.tokens.cached as f64 / self.tokens.input as f64)
+    }
+}
+
+/// Sum `calls`.
+#[must_use]
+pub fn totals(calls: &[CallRecord]) -> CallTotals {
+    let span = |pairs: Vec<(Option<f64>, Option<f64>)>| {
+        let lo = pairs
+            .iter()
+            .filter_map(|(b, a)| b.or(*a))
+            .fold(None, |m: Option<f64>, x| Some(m.map_or(x, |m| m.min(x))));
+        let hi = pairs
+            .iter()
+            .filter_map(|(b, a)| a.or(*b))
+            .fold(None, |m: Option<f64>, x| Some(m.map_or(x, |m| m.max(x))));
+        lo.zip(hi)
+    };
+    CallTotals {
+        calls: calls.len(),
+        known: calls.iter().filter(|c| c.usage.is_some()).count(),
+        tokens: calls
+            .iter()
+            .filter_map(|c| c.usage)
+            .fold(Usage::default(), add),
+        session: span(
+            calls
+                .iter()
+                .map(|c| (c.session_before, c.session_after))
+                .collect(),
+        ),
+        week: span(
+            calls
+                .iter()
+                .map(|c| (c.week_before, c.week_after))
+                .collect(),
+        ),
+    }
+}
+
 /// The summed `turn.completed` usage in a codex `--json` stream (`None` when it has none).
 #[must_use]
 pub fn from_codex_events(stdout: &str) -> Option<Usage> {
@@ -429,6 +548,57 @@ mod tests {
             })
         );
         assert_eq!(from_chat_reply(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn a_codex_call_keeps_its_tokens_and_plan_readings_for_the_batch_totals() {
+        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+        reset_calls();
+        let limits = |five: f64, week: f64| {
+            format!(
+                "{{\"type\":\"token_count\",\"rate_limits\":{{\"primary\":{{\"used_percent\":{five},\"window_minutes\":300}},\"secondary\":{{\"used_percent\":{week},\"window_minutes\":10080}}}}}}\n"
+            )
+        };
+        let stream = |first: (f64, f64), last: (f64, f64)| {
+            format!(
+                "{}{STREAM}{}",
+                limits(first.0, first.1),
+                limits(last.0, last.1)
+            )
+        };
+        crate::extract_progress::with_label("U1", || {
+            record_codex_call(
+                "gpt-6-luna",
+                Billing::Plan,
+                &stream((10.0, 30.0), (11.0, 30.5)),
+            );
+        });
+        record_codex_call(
+            "gpt-6-luna",
+            Billing::Plan,
+            &stream((11.0, 30.5), (12.5, 31.0)),
+        );
+        record_codex_call("gpt-6-luna", Billing::Plan, "{\"type\":\"turn.started\"}");
+        let all = batch_calls();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].part, "U1");
+        assert_eq!(
+            (
+                all[0].session_before,
+                all[0].session_after,
+                all[0].week_after
+            ),
+            (Some(10.0), Some(11.0), Some(30.5))
+        );
+        assert_eq!(all[2].usage, None, "no usage is unknown, not zero");
+        let t = totals(&all);
+        assert_eq!((t.calls, t.known), (3, 2));
+        assert_eq!(t.tokens.input, 3_000_000);
+        assert_eq!(t.session, Some((10.0, 12.5)));
+        assert_eq!(t.week, Some((30.0, 31.0)));
+        assert!((t.cache_share().unwrap() - 0.2666).abs() < 1e-3);
+        reset_calls();
+        assert!(batch_calls().is_empty());
     }
 
     #[test]

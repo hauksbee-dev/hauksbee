@@ -1442,6 +1442,7 @@ pub fn extract(args: hauksbee_models::datasheet::Args, assume_yes: bool) -> anyh
         assume_yes,
         "Send the datasheet and draft a model?",
         None,
+        &[],
     )? {
         return Ok(());
     }
@@ -1484,6 +1485,7 @@ fn extract_consent(
     assume_yes: bool,
     question: &str,
     extra_notice: Option<&str>,
+    plan_lines: &[String],
 ) -> anyhow::Result<bool> {
     use hauksbee_models::datasheet;
     let resolved = datasheet::resolve_settings(args)?;
@@ -1495,6 +1497,9 @@ fn extract_consent(
     println!("\n{}\n", datasheet::CONSENT_NOTICE);
     if let Some(notice) = extra_notice {
         println!("{notice}\n");
+    }
+    if !plan_lines.is_empty() {
+        println!("{}\n", plan_lines.join("\n"));
     }
     let refusal = "refusing to send anything without consent. This is not a terminal, so \
                    there is nobody to ask: pass --yes if you meant it.";
@@ -1552,6 +1557,25 @@ pub struct UnmodelledPart {
     /// The first reference's value, footprint, pads and nets, which the
     /// drafting agent reads as `board.md` and the draft is checked against.
     pub board: Option<hauksbee_models::card_coverage::Board>,
+}
+
+impl UnmodelledPart {
+    /// A part with nothing but its number; the rest is filled in from the board.
+    #[must_use]
+    pub fn empty(part: &str) -> Self {
+        Self {
+            part: part.to_string(),
+            aliases: Vec::new(),
+            footprints: Vec::new(),
+            references: Vec::new(),
+            datasheet: None,
+            more_datasheets: Vec::new(),
+            description: None,
+            manufacturer: None,
+            doubt: None,
+            board: None,
+        }
+    }
 }
 
 /// Parts the verdict counts as having no usable model that extraction is not
@@ -1722,18 +1746,7 @@ pub fn unmodelled_parts(
             .iter()
             .position(|p| p.part.eq_ignore_ascii_case(&part)))
         .unwrap_or_else(|| {
-            parts.push(UnmodelledPart {
-                part: part.clone(),
-                aliases: Vec::new(),
-                footprints: Vec::new(),
-                references: Vec::new(),
-                datasheet: None,
-                more_datasheets: Vec::new(),
-                description: None,
-                manufacturer: None,
-                doubt: None,
-                board: None,
-            });
+            parts.push(UnmodelledPart::empty(&part));
             parts.len() - 1
         });
         let entry = &mut parts[at];
@@ -2002,23 +2015,18 @@ pub fn extract_unmodelled(
         return Ok(());
     }
     let doubted = say_datasheet_doubts(&work);
-    let searching = work
-        .iter()
-        .filter(|p| {
-            p.datasheet.is_none()
-                && hauksbee_models::datasheet_discovery::supplied_pdf(
-                    &supplied, &p.part, &p.aliases,
-                )
-                .is_none()
-        })
-        .count();
+    let searching = count_searches(&work, &supplied);
     let may_search = backend.can_search()
         && work
             .iter()
             .any(|p| p.datasheet.as_deref().is_none_or(|d| d.starts_with("http")));
-    let question = words::batch_question(work.len(), searching, doubted);
+    let (plan, plan_lines, watch) = plan_batch(&resolved, work.len(), opts.jobs, assume_yes);
+    let mut question = words::batch_question(work.len(), searching, doubted);
+    if plan.needs_confirmation() && !assume_yes {
+        question.push_str(words::PLAN_QUESTION_SUFFIX);
+    }
     let notice = may_search.then_some(words::SEARCH_NOTICE);
-    if !extract_consent(template, assume_yes, &question, notice)? {
+    if !extract_consent(template, assume_yes, &question, notice, &plan_lines)? {
         return Ok(());
     }
     let (http, searcher, hosts) = (
@@ -2040,29 +2048,106 @@ pub fn extract_unmodelled(
         template,
         &kind_of,
         &|args| hauksbee_models::extract_progress::with_spinner(|| datasheet::run(args)),
-        opts,
+        plan.jobs,
+        &BatchOptions {
+            watch,
+            ..opts.clone()
+        },
     );
     let mut no_datasheet = unreachable;
     no_datasheet.append(&mut tally.no_datasheet);
     let (drafted, failed) = (tally.drafted, tally.failed_names());
-    println!(
-        "\n{}",
-        words::batch_summary(drafted, kept, no_datasheet.len(), &failed)
-    );
+    let summary = words::batch_summary(drafted, kept, no_datasheet.len(), &failed);
+    println!("\n{summary}");
+    write_batch_record(&out_dir, &plan_lines[0], &summary, tally.jobs);
     let rerun = rerun_command(board_path, overrides, kinds, template, opts, &supply_dir);
     write_supply_report(&no_datasheet, &tally.needs, &supply_dir, &out_dir, &rerun);
-    let models_dir = (template.out_dir.as_deref())
-        .map(|d| format!(" --models-dir {}", shell_quote(&d.display().to_string())));
+    say_recheck(board_path, template.out_dir.as_deref());
+    if !failed.is_empty() {
+        anyhow::bail!("{}", words::batch_failed(drafted, &failed));
+    }
+    Ok(())
+}
+
+/// How many parts the batch will have to search the web for: those the board
+/// gives no datasheet for and nobody supplied one for.
+fn count_searches(work: &[&UnmodelledPart], supplied: &[PathBuf]) -> usize {
+    work.iter()
+        .filter(|p| {
+            p.datasheet.is_none()
+                && hauksbee_models::datasheet_discovery::supplied_pdf(supplied, &p.part, &p.aliases)
+                    .is_none()
+        })
+        .count()
+}
+
+/// After a batch: the drafts are unverified, and the command that checks them.
+fn say_recheck(board_path: &Path, models_dir: Option<&Path>) {
+    let models_dir =
+        models_dir.map(|d| format!(" --models-dir {}", shell_quote(&d.display().to_string())));
     println!(
         "\nThese models are drafts (tier \"datasheet-derived\"): read each pin map against its \
          datasheet before trusting a result.\nre-check:  hauksbee run {} --check{}",
         shell_quote(&board_path.display().to_string()),
         models_dir.unwrap_or_default()
     );
-    if !failed.is_empty() {
-        anyhow::bail!("{}", words::batch_failed(drafted, &failed));
+}
+
+/// How many agents the plan can carry and what the batch will cost it: the
+/// decision, the lines said before consent (the one preflight line, each
+/// warning, and under `--yes` that the run goes on), and what the running batch
+/// watches to refine its cost per part.
+fn plan_batch(
+    resolved: &hauksbee_models::extract_config::Resolved,
+    parts: usize,
+    requested: Option<usize>,
+    assume_yes: bool,
+) -> (
+    hauksbee_models::extract_capacity::Plan,
+    Vec<String>,
+    Option<extract_batch::PlanWatch>,
+) {
+    use hauksbee_models::extract_capacity as capacity;
+    use hauksbee_models::extract_messages as words;
+    if resolved.backend != hauksbee_models::datasheet::Backend::Api {
+        println!("{}", words::CHECKING_HEADROOM);
     }
-    Ok(())
+    let prior = capacity::prior(resolved.backend, resolved.model());
+    let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    let plan = capacity::plan(
+        parts,
+        capacity::headroom(resolved),
+        prior,
+        cpus,
+        requested,
+        assume_yes,
+    );
+    let mut lines = vec![words::preflight(&plan)];
+    lines.extend(plan.warnings.iter().map(words::plan_warning));
+    if assume_yes && plan.needs_confirmation() {
+        lines.push(words::plan_continues(plan.pause, plan.jobs));
+    }
+    let watch = match (plan.basis, prior) {
+        (capacity::Basis::Known { session_now, .. }, Some(p)) => Some(extract_batch::PlanWatch {
+            start_session: session_now,
+            prior_session: p.session,
+        }),
+        _ => None,
+    };
+    (plan, lines, watch)
+}
+
+/// Save the batch's record (plan, outcome, pool, and every backend call's
+/// tokens and plan readings) as `batch-summary.txt` in `out_dir`.
+fn write_batch_record(out_dir: &Path, planned: &str, summary: &str, jobs: (usize, usize)) {
+    use hauksbee_models::{extract_messages as words, extract_usage};
+    let calls = extract_usage::batch_calls();
+    let record = words::batch_record(planned, summary, jobs, &calls);
+    let file = out_dir.join(words::BATCH_RECORD_FILE);
+    match std::fs::create_dir_all(out_dir).and_then(|()| std::fs::write(&file, record)) {
+        Ok(()) => println!("The usage record is saved as {}", file.display()),
+        Err(e) => eprintln!("could not save {}: {e}", file.display()),
+    }
 }
 
 /// Print the end-of-run "supply these by hand" list and save it as
@@ -2099,36 +2184,38 @@ fn rerun_command(
     supply_dir: &Path,
 ) -> String {
     let q = |s: &str| shell_quote(s);
-    let mut cmd = format!(
-        "hauksbee models extract --unmodelled {}",
-        q(&board_path.display().to_string())
-    );
+    let mut words = vec![
+        "hauksbee models extract --unmodelled".to_string(),
+        q(&board_path.display().to_string()),
+    ];
+    let mut flag = |name: &str, value: String| {
+        words.push(name.to_string());
+        words.push(value);
+    };
     if let Some(d) = &template.out_dir {
-        cmd.push_str(&format!(" --out-dir {}", q(&d.display().to_string())));
+        flag("--out-dir", q(&d.display().to_string()));
     }
     if let Some(b) = template.backend {
-        cmd.push_str(&format!(" --backend {}", b.name()));
+        flag("--backend", b.name().to_string());
     }
     if let Some(m) = &template.model {
-        cmd.push_str(&format!(" --model {}", q(m)));
+        flag("--model", q(m));
     }
     if let Some(e) = &template.effort {
-        cmd.push_str(&format!(" --effort {}", q(e)));
+        flag("--effort", q(e));
     }
     for o in overrides {
-        cmd.push_str(&format!(" --datasheet {}", q(o)));
+        flag("--datasheet", q(o));
     }
     for k in kinds {
-        cmd.push_str(&format!(" --kind {}", q(k)));
+        flag("--kind", q(k));
     }
-    if opts.jobs != extract_batch::DEFAULT_JOBS {
-        cmd.push_str(&format!(" --jobs {}", opts.jobs));
+    if let Some(jobs) = opts.jobs {
+        flag("--jobs", jobs.to_string());
     }
-    cmd.push_str(&format!(
-        " --datasheet-dir {} --yes",
-        q(&supply_dir.display().to_string())
-    ));
-    cmd
+    flag("--datasheet-dir", q(&supply_dir.display().to_string()));
+    words.push("--yes".to_string());
+    words.join(" ")
 }
 
 /// `hauksbee models new <REF> --board <board>`: scaffold a model entry for one component.
