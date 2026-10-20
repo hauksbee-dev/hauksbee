@@ -361,7 +361,7 @@ fn section_brief(
         "PIN ROLE NAMES for kind=\"{base}\": {}",
         pin_roles_for_kind(kind)
     );
-    let (owns, topics, images, guide) = match section {
+    match section {
         "identity" => (
             format!(
                 "`id` (as given under THE PART), `kind = \"{base}\"`, `[models.match]` (`value_re` \
@@ -428,7 +428,7 @@ fn section_brief(
                 behavioral_hint_for_kind(kind),
             ),
         ),
-    };
+    }
 }
 
 /// The brief of one section agent; `known` is what the identity agent wrote.
