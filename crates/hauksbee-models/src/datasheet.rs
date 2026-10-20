@@ -50,6 +50,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 
+use crate::extract_cache::Prompt;
 use crate::extract_config::{self, ProcessHost, Resolved, ResolvedApi};
 use crate::extract_harness as harness;
 use crate::extract_output as output;
@@ -141,7 +142,7 @@ impl SelectedPage {
 /// Dropping this removes the directory, so a killed run leaves nothing behind.
 #[derive(Debug)]
 pub struct Workspace {
-    dir: tempfile::TempDir,
+    dir: crate::extract_cache::slots::Sandbox,
     /// The PDF, copied in. The original is never exposed.
     ///
     /// Read by the tests that check the boundary, and by nothing in the run
@@ -169,11 +170,7 @@ impl Workspace {
     ///
     /// Fails when the sandbox directory cannot be created under the temp root.
     pub fn scratch() -> Result<Self> {
-        let dir = workspace_tempdir(
-            &std::env::temp_dir(),
-            "hauksbee-extract-check-",
-            "creating the check sandbox",
-        )?;
+        let dir = workspace_tempdir(&std::env::temp_dir(), "creating the check sandbox")?;
         Ok(Self {
             pdf: dir.path().join("datasheet.pdf"),
             dir,
@@ -223,7 +220,7 @@ impl Workspace {
             Ok(())
         }
         let parent = self.path().parent().unwrap_or_else(|| Path::new("."));
-        let dir = workspace_tempdir(parent, "hauksbee-extract-", "creating a section sandbox")?;
+        let dir = workspace_tempdir(parent, "creating a section sandbox")?;
         copy_all(self.path(), dir.path()).context("copying the sandbox for a section agent")?;
         let moved = |p: &PathBuf| dir.path().join(p.file_name().unwrap_or_default());
         Ok(Self {
@@ -239,16 +236,13 @@ impl Workspace {
     }
 }
 
-/// Create a temporary directory whose retained path is the canonical absolute
+/// Create a sandbox directory whose retained path is the canonical absolute
 /// path used by every file operation, child cwd, and provider path argument.
-fn workspace_tempdir(root: &Path, prefix: &str, context: &str) -> Result<tempfile::TempDir> {
-    let root = root
-        .canonicalize()
-        .with_context(|| format!("canonicalizing temporary root {}", root.display()))?;
-    tempfile::Builder::new()
-        .prefix(prefix)
-        .tempdir_in(root)
-        .with_context(|| context.to_string())
+/// Its name is the process's lowest free slot, not a random one (see
+/// [`crate::extract_cache::slots`]), so the path the agent is told is the same
+/// for every part that runs in that slot.
+fn workspace_tempdir(root: &Path, context: &str) -> Result<crate::extract_cache::slots::Sandbox> {
+    crate::extract_cache::slots::Sandbox::create(root, context)
 }
 
 /// Build a sandbox, for the tests that check the boundary holds.
@@ -271,7 +265,7 @@ pub fn sandbox_for_test_in(pdf: &Path, root: &Path) -> Result<Workspace> {
 
 /// Build the sandbox: copy the PDF in, render its pages, and write the text.
 fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
-    let dir = workspace_tempdir(root, "hauksbee-extract-", "creating the extraction sandbox")?;
+    let dir = workspace_tempdir(root, "creating the extraction sandbox")?;
 
     let copied = dir.path().join("datasheet.pdf");
     std::fs::copy(pdf, &copied)
@@ -530,8 +524,9 @@ fn run_inner(mut args: Args) -> Result<PathBuf> {
     // as a `SensorSpec`, NOT the SPICE `[[models]]` schema.
     let (raw, id, timed_out) = if sensor {
         let prompt = build_sensor_prompt(part, kind, &pdf_text);
-        let (raw, timed_out) = call_backend(&prompt, &args, Reply::Sensor { part, kind })
-            .map_err(|e| keep_rejected(e, &out_path, &args))?;
+        let (raw, timed_out) =
+            call_backend(&Prompt::from(prompt), &args, Reply::Sensor { part, kind })
+                .map_err(|e| keep_rejected(e, &out_path, &args))?;
         let name = validate_sensor_reply(&raw, part, kind)?.sensor.name;
         (raw, name, timed_out)
     } else {
@@ -549,11 +544,11 @@ fn run_inner(mut args: Args) -> Result<PathBuf> {
                 crate::validation::KIND_NAMES.join(", ")
             );
         }
-        let mut prompt = build_prompt(part, kind, &pdf_text);
+        let mut prompt = build_prompt_parts(part, kind, &pdf_text);
         if !args.footprints.is_empty() {
             use std::fmt::Write as _;
             let _ = write!(
-                prompt,
+                prompt.tail,
                 "\n\nTHE BOARD places {part} on footprint {}: model the package that footprint \
                  names (P4) and name it in the description.",
                 args.footprints.join(", ")
@@ -2210,9 +2205,18 @@ fn prompt_for_agent_backend(prompt: &str) -> String {
     )
 }
 
-// The prompt is one template read top to bottom, as the model reads it.
-#[allow(clippy::too_many_lines)]
+/// The whole drafting prompt as one text.
+#[cfg(test)]
 fn build_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
+    build_prompt_parts(part, kind, pdf_text).full()
+}
+
+// The prompt is one template read top to bottom, as the model reads it. Its
+// `base` is everything that depends on the kind alone and is byte-identical for
+// every part of that kind (so a prompt cache reads it); the part, its template
+// cards and its datasheet text come last, in the `tail`.
+#[allow(clippy::too_many_lines)]
+fn build_prompt_parts(part: &str, kind: &str, pdf_text: &str) -> Prompt {
     let examples = format_examples_for_kind(kind);
     let example_cards = examples
         .iter()
@@ -2228,12 +2232,12 @@ fn build_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n\n");
-    format!(
+    let base = format!(
         r#"You are a SPICE model extraction assistant.
 
 YOUR ANSWER IS ONE THING ONLY: the complete [[models]] TOML entry for the
-component {part}, extracted from the datasheet below, written in full to
-model.toml. There is no shorter valid answer. In particular, a component
+component named in THE PART block that follows these instructions, extracted from
+its datasheet, written in full to model.toml. There is no shorter valid answer. In particular, a component
 kind, a classification, a summary, or any single field on its own is NOT an
 answer and fails validation.
 
@@ -2267,11 +2271,9 @@ is a WRONG ANSWER.
 
 {example_cards}
 
-{library_patterns}{datasheet_text}
-
 Produce a TOML model entry that exactly conforms to the hauksbee-models schema.
 The entry must use [[models]] array syntax and include:
-- id: lowercase part number (e.g. "{part_lower}")
+- id: the lowercase part number (given in THE PART block)
 - kind: "{entry_kind}"
 - description: brief human-readable description
 - [models.match] section with at least value_re or mpn_re
@@ -2286,13 +2288,13 @@ fails validation. Start from this skeleton and keep every field name exactly
 as written:
 
 [[models]]
-id = "{part_lower}"
+id = "the lowercase part number from THE PART block"
 kind = "{entry_kind}"
 description = "one line"
 
 [models.match]
 # {match_rule}
-value_re = '(?i)^{part_re}'
+value_re = '(?i)^<the part regex from THE PART block>'
 
 [models.params]
 # the required params for this kind, listed below
@@ -2352,10 +2354,7 @@ WHERE TO LOOK AND HOW TO READ IT:
 {extraction_rules}
 {param_bounds}
 {behavioral_hint}
-OUTPUT (TOML only, starting with [[models]]):
 "#,
-        part_lower = part.to_lowercase(),
-        part_re = regex::escape(&part.to_uppercase()),
         legal_kinds = crate::validation::KIND_NAMES.join(", "),
         entry_kind = behavioral_family_base_kind(kind).unwrap_or(kind),
         kind_line = behavioral_family_base_kind(kind).map_or_else(
@@ -2364,12 +2363,6 @@ OUTPUT (TOML only, starting with [[models]]):
                 "{base} (the {kind} family, written as a {base} entry; see its notes below)"
             )
         ),
-        library_patterns = crate::extract_examples::prompt_section(
-            part,
-            behavioral_family_base_kind(kind).unwrap_or(kind),
-            pdf_text,
-        ),
-        datasheet_text = datasheet_text_block(pdf_text),
         required_params = required_params_for_kind(kind),
         conventions = conventions_for_kind(kind),
         optional_params = optional_params_for_kind(kind),
@@ -2385,7 +2378,22 @@ OUTPUT (TOML only, starting with [[models]]):
         extraction_rules = EXTRACTION_RULES,
         source_quantity_guidance = SOURCE_QUANTITY_GUIDANCE,
         match_rule = crate::validation::MATCH_PATTERN_RULE,
-    )
+    );
+    let tail = format!(
+        "THE PART\n\nComponent: {part}\nIts entry's id is \"{part_lower}\" and its match line is \
+         value_re = '(?i)^{part_re}' (the skeleton's placeholders above stand for these).\n\n\
+         {library_patterns}{datasheet_text}\n\n\
+         OUTPUT (TOML only, starting with [[models]]):\n",
+        part_lower = part.to_lowercase(),
+        part_re = regex::escape(&part.to_uppercase()),
+        library_patterns = crate::extract_examples::prompt_section(
+            part,
+            behavioral_family_base_kind(kind).unwrap_or(kind),
+            pdf_text,
+        ),
+        datasheet_text = datasheet_text_block(pdf_text),
+    );
+    Prompt::new(format!("{base}\n"), tail)
 }
 
 /// Drop the end anchor ([`crate::validation::MATCH_PATTERN_RULE`]) from each match
@@ -3438,7 +3446,11 @@ impl Reply<'_> {
 
 /// The validated reply, plus the timeout when it is a timed-out run's last
 /// lint-clean draft rather than a finished answer.
-fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, Option<TimedOut>)> {
+fn call_backend(
+    prompt: &Prompt,
+    args: &Args,
+    reply: Reply<'_>,
+) -> Result<(String, Option<TimedOut>)> {
     // Test / offline hook: HAUKSBEE_EXTRACT_MOCK_REPLY points to a file holding
     // a canned backend reply. This exercises the full parse + validate path
     // with no codex and no network, and the reply is validated exactly like a
@@ -3475,7 +3487,7 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
     // The API backend has no local-file access, so a prompt carrying the
     // no-text sentinel would ship it nothing to read. Refuse before sending
     // rather than spend the call.
-    if chosen == Backend::Api && !api_source_available(prompt) {
+    if chosen == Backend::Api && !api_source_available(&prompt.full()) {
         bail!(
             "the API backend cannot read the local PDF and pdftotext is unavailable. \
              Install Poppler/pdftotext, then retry; nothing was sent."
@@ -3485,7 +3497,7 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
     if chosen == Backend::Api {
         let request = ApiRequest::prepare(&resolved.api)?;
         let raw = validated_attempts(resolved.retries, prompt, reply, ("api", false), |p| {
-            let (text, usage) = request.send_with_usage(p)?;
+            let (text, usage) = request.send_with_usage(&p.full())?;
             let metered = crate::extract_usage::Billing::Metered { fast: false };
             crate::extract_usage::record("api", &request.model, metered, usage);
             Ok(extract_toml_block(&text, reply.table()))
@@ -3511,7 +3523,7 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
         ws.path().display(),
         ws.pages.len()
     );
-    let agent_prompt = prompt_for_agent_backend(prompt);
+    let agent_prompt = prompt.map_tail(prompt_for_agent_backend);
     // The reply's shape, enforced by a backend that can (see `schema_flag`).
     let schema = if reply.table().is_empty() {
         identify_schema()
@@ -3523,15 +3535,18 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
     // the prompt. Measured: given the drafting clause and page images, the
     // agent read the whole datasheet to answer it (430k to 790k input tokens,
     // over half of a part's total, and two idle kills).
+    // Each clause is its fixed rules (the base, the same for every part of this
+    // kind) and the pages and files of this part (the tail).
     let (clause, staged_clause) = if reply.table().is_empty() {
         ws.pages.clear();
-        (IDENTIFY_CLAUSE.to_string(), IDENTIFY_CLAUSE.to_string())
+        let same = (IDENTIFY_CLAUSE.to_string(), String::new());
+        (same.clone(), same)
     } else {
         // A staged tier's drafting agents read pages by number and its fix agent
         // edits a draft in place, so the clause it gets inlines no page text.
         (
-            verification_clause(&ws, reply.table(), true),
-            verification_clause(&ws, reply.table(), false),
+            verification_parts(&ws, reply.table(), true),
+            verification_parts(&ws, reply.table(), false),
         )
     };
     let agy_note = if chosen == Backend::Agy {
@@ -3539,9 +3554,19 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<(String, 
     } else {
         String::new()
     };
+    let join = |(rules, here): (String, String)| {
+        let tail = if here.is_empty() {
+            String::new()
+        } else {
+            format!("\n\n{here}")
+        };
+        agent_prompt
+            .with_base(&format!("\n\n{rules}{agy_note}"))
+            .then(&tail)
+    };
     let prompts = Prompts {
-        single: format!("{agent_prompt}\n\n{clause}{agy_note}"),
-        staged: format!("{agent_prompt}\n\n{staged_clause}{agy_note}"),
+        single: join(clause),
+        staged: join(staged_clause),
     };
     // The escalation ladder: each tier a model, the next tried only when this
     // one fails, times out, doubts itself or leaves its pin map unresolved. A
@@ -3599,7 +3624,14 @@ pub fn run_agent_searching(resolved: &Resolved, prompt: &str) -> Result<String> 
     }
     require_tool(resolved)?;
     let ws = Workspace::scratch()?;
-    run_and_record_with(resolved, prompt, &ws, 0, billing_for(resolved), true)
+    run_and_record_with(
+        resolved,
+        &Prompt::from(prompt),
+        &ws,
+        0,
+        billing_for(resolved),
+        true,
+    )
 }
 
 /// The escalation ladder over `ladder`'s models in one sandbox (see `call_backend`).
@@ -3706,12 +3738,12 @@ fn run_ladder(
 /// draft in place: measured, inlined text is re-sent on every turn of a fix
 /// agent that mostly does not read it).
 struct Prompts {
-    single: String,
-    staged: String,
+    single: Prompt,
+    staged: Prompt,
 }
 
 impl Prompts {
-    fn for_harness(&self, staged: bool) -> String {
+    fn for_harness(&self, staged: bool) -> Prompt {
         let prompt = if staged { &self.staged } else { &self.single };
         prompt.clone()
     }
@@ -3733,7 +3765,7 @@ fn run_tier(
     let tool = resolved.agent(chosen).expect("agent").command.as_str();
     let staged = budget > 0;
     let _ = std::fs::remove_file(ws.path().join(harness::CONFIDENCE));
-    let run = |p: &str| run_and_record(resolved, p, ws, budget, billing);
+    let run = |p: &Prompt| run_and_record(resolved, p, ws, budget, billing);
     // A model card is first drafted by four section agents, merged
     // with no model call; a clean merge goes straight to the validator, a
     // flawed one to a fix agent told what the merge found.
@@ -3757,8 +3789,8 @@ fn run_tier(
                     "stage",
                     serde_json::json!({"stage": "locate", "attempt": 1, "attempts": 1}),
                 );
-                let locate = harness::locate_prompt(part, kind, required_params_for_kind(kind));
-                run(&(locate + &harness::page_list(ws.path())))?;
+                let locate = harness::locate_parts(part, kind, required_params_for_kind(kind));
+                run(&locate.then(&harness::page_list(ws.path())))?;
                 if !ws.path().join(harness::NOTES).is_file() {
                     bail!("the locating agent wrote no {}", harness::NOTES);
                 }
@@ -3768,10 +3800,15 @@ fn run_tier(
     }
     let mut prompt = prompts.for_harness(staged);
     if !reply.table().is_empty() {
-        prompt += &harness::handoff(ws.path(), staged, escalated_because.map(String::as_str));
+        prompt = prompt.then(&harness::handoff(
+            ws.path(),
+            staged,
+            escalated_because.map(String::as_str),
+        ));
     }
     if laddered || staged {
-        prompt += harness::CONFIDENCE_CLAUSE;
+        // The same words for every part of the run: part of the shared base.
+        prompt = prompt.with_base(harness::CONFIDENCE_CLAUSE);
     }
     let mut timed_out = None;
     // The last card-shaped draft, so a retry edits it instead of a fresh agent
@@ -3852,7 +3889,7 @@ fn run_tier(
 /// `result` event's text respectively.
 fn run_and_record(
     resolved: &Resolved,
-    prompt: &str,
+    prompt: &Prompt,
     ws: &Workspace,
     budget: u64,
     billing: crate::extract_usage::Billing,
@@ -3863,7 +3900,7 @@ fn run_and_record(
 /// [`run_and_record`], optionally with the agent's web search tool.
 fn run_and_record_with(
     resolved: &Resolved,
-    prompt: &str,
+    prompt: &Prompt,
     ws: &Workspace,
     budget: u64,
     billing: crate::extract_usage::Billing,
@@ -4188,12 +4225,14 @@ fn announce_attempt(attempt: usize, attempts: usize, reply: Reply<'_>) {
 /// field id` with a line number, so it repeated the same shape mistake.
 fn validated_attempts(
     retries: usize,
-    base_prompt: &str,
+    base_prompt: impl Into<Prompt>,
     reply: Reply<'_>,
     (tool, edit_in_place): (&str, bool),
-    mut fetch: impl FnMut(&str) -> Result<String>,
+    mut fetch: impl FnMut(&Prompt) -> Result<String>,
 ) -> Result<String> {
-    let mut prompt = base_prompt.to_string();
+    let base_prompt: Prompt = base_prompt.into();
+    // A retry's feedback joins the tail only, so the base stays the cacheable prefix.
+    let mut prompt = base_prompt.clone();
     let mut idle_retried = false;
     // A draft that passed the checker but drew lint warnings is redrafted once with
     // them quoted; if that redraft fails, this one stands.
@@ -4226,7 +4265,7 @@ fn validated_attempts(
                 say!(
                     "[model-extract] attempt {attempt} {e}; a fresh agent continues from its draft"
                 );
-                prompt = format!("{base_prompt}{}", harness::CONTINUE_AFTER_STOP);
+                prompt = base_prompt.then(harness::CONTINUE_AFTER_STOP);
                 continue;
             }
             fetched => fetched?,
@@ -4262,10 +4301,10 @@ fn validated_attempts(
                     "the draft passes validation, but the model lint warns about it:\n- {}",
                     warnings.join("\n- ")
                 );
-                prompt = format!(
-                    "{base_prompt}\n\n{}",
+                prompt = base_prompt.then(&format!(
+                    "\n\n{}",
                     retry_feedback(&raw, &note, reply.table(), edit_in_place)
-                );
+                ));
                 accepted = Some(raw);
             }
             Err(_) if accepted.is_some() => return Ok(accepted.unwrap_or_default()),
@@ -4279,10 +4318,10 @@ fn validated_attempts(
             Err(e) if attempt <= retries => {
                 previous_failure = Some(raw.trim().to_string());
                 say!("[model-extract] attempt {attempt} failed: {e:#}; retrying with feedback...");
-                prompt = format!(
-                    "{base_prompt}\n\n{}",
+                prompt = base_prompt.then(&format!(
+                    "\n\n{}",
                     retry_feedback(&raw, &format!("{e:#}"), reply.table(), edit_in_place)
-                );
+                ));
             }
             Err(e) => {
                 return Err(Rejected {
@@ -4373,32 +4412,42 @@ fn retry_feedback(raw: &str, validation_error: &str, table: &str, edit_in_place:
 /// it, and a mis-identified kind is the one error they are best placed to
 /// catch.
 fn identify_kind(args: &Args, pdf_text: &str) -> Result<String> {
-    let (reply, _) = call_backend(&identify_prompt(&args.part, pdf_text), args, Reply::Word)?;
+    let (reply, _) = call_backend(&identify_parts(&args.part, pdf_text), args, Reply::Word)?;
     kind_from_reply(&args.part, &reply.to_ascii_lowercase())
 }
 
+/// The whole identification prompt as one text.
+#[cfg(test)]
 fn identify_prompt(part: &str, pdf_text: &str) -> String {
+    identify_parts(part, pdf_text).full()
+}
+
+/// The identification prompt: the rules and the kind list are the base, the same
+/// for every part; the part number and the front pages are the tail.
+fn identify_parts(part: &str, pdf_text: &str) -> Prompt {
     // The front of the datasheet is where the part describes itself. Sending
     // the whole thing to answer one question would cost far more for no gain.
-    format!(
+    let base = format!(
         "You are identifying what kind of electronic part a datasheet describes, so a \
          simulator can pick the right model schema.\n\n\
-         Part number: {part}\n\n\
          Answer with EXACTLY ONE identifier (before the colon) and nothing else:\n\
          {}\n\
          No kind need model everything: pick the one closest to the part's primary \
          pins and supply. The extraction then writes what that kind holds, else an \
          identity-only card (ratings, supply envelope, pin map) declaring the unmodelled \
          behaviour. Answer exactly `unsupported` only when not even that fits.\n\n\
-         Do not explain. Do not add punctuation. One word.\n\n\
-         Datasheet (first pages):\n{}",
+         Do not explain. Do not add punctuation. One word.\n\n",
         supported_kinds()
             .iter()
             .map(|k| format!("{k}: {}\n", kind_definition(k)))
             .collect::<Vec<_>>()
             .concat(),
+    );
+    let tail = format!(
+        "Part number: {part}\n\nDatasheet (first pages):\n{}",
         truncate_to_chars(pdf_text, 6000)
-    )
+    );
+    Prompt::new(base, tail)
 }
 
 /// The supported kinds a reply names as whole words. The model may answer with
@@ -4517,7 +4566,10 @@ pub fn supported_kinds() -> Vec<&'static str> {
 /// not "be accurate", which asks for nothing, but three specific acts: read
 /// each number back against the page it came from, test it against physics,
 /// and say out loud which values were never stated.
-fn verification_clause(ws: &Workspace, table: &str, inline: bool) -> String {
+///
+/// Returned as two texts: the fixed rules (the same for every part of a kind, so
+/// they belong to the cacheable base) and this part's pages and files.
+fn verification_parts(ws: &Workspace, table: &str, inline: bool) -> (String, String) {
     let abstain = if table == "[sensor]" {
         "omit that register or field and name it in a `status = \"unknown\"` \
          `[[sensor.source.uncertainty]]` record whose reason starts `ABSTAIN:`"
@@ -4599,8 +4651,8 @@ fn verification_clause(ws: &Workspace, table: &str, inline: bool) -> String {
             )
         },
     );
-    format!(
-        "## Before you answer\n\n         {pages}{}\n\n         Prefer the supplied authoritative schema and datasheet. Use ONLY the \
+    let rules = format!(
+        "## Before you answer\n\n         Prefer the supplied authoritative schema and datasheet. Use ONLY the \
          files in your working directory: do not list, search or read anything outside it \
          (home, other projects, temporary directories, installed skills) and do not look \
          anything up online. If evidence is missing or ambiguous, name the missing context \
@@ -4611,9 +4663,21 @@ fn verification_clause(ws: &Workspace, table: &str, inline: bool) -> String {
             the row and variant; abstain if the available evidence cannot resolve it.\n         3. DO NOT INVENT ASSUMPTIONS. For a missing required fact, {abstain}; \
             omit optional fields that are not stated. TOML comments may record \
             pin/package ambiguity but must not turn a guess into data.\n\n         Write the final answer to `model.toml` in your working directory as one \
-         TOML document and nothing else.",
-        helper_clause(ws)
-    )
+         TOML document and nothing else.{}",
+        helper_commands(ws)
+    );
+    let here = format!(
+        "## The pages and files for this part\n\n{pages}{}",
+        helper_files(ws)
+    );
+    (rules, here)
+}
+
+/// [`verification_parts`] as one text, pages first.
+#[cfg(test)]
+fn verification_clause(ws: &Workspace, table: &str, inline: bool) -> String {
+    let (rules, here) = verification_parts(ws, table, inline);
+    format!("{here}\n\n{rules}")
 }
 
 /// What the agent is told about the precomputed files and the `ds` helpers.
@@ -4623,7 +4687,7 @@ fn verification_clause(ws: &Workspace, table: &str, inline: bool) -> String {
 /// against the board; a cheaper one read the pins off the text dump and took
 /// ten pads from the neighbouring package. The harness now does those steps
 /// (see [`crate::ds_toolkit`]); this tells the drafter where the results are.
-fn helper_clause(ws: &Workspace) -> String {
+fn helper_files(ws: &Workspace) -> String {
     let has = |name: &str| ws.path().join(name).exists();
     let mut files = vec!["`toc.md` (contents mapped to PDF pages, key sections first)"];
     if has("pins/index.md") {
@@ -4638,21 +4702,26 @@ fn helper_clause(ws: &Workspace) -> String {
     if has(crate::ds_toolkit::BOARD_FILE) {
         files.push("`board.md` (the board part: value, footprint, pad count, each pad's net)");
     }
-    let commands = if ws.checker.is_some() {
-        "\n\nThe same as one-line commands on your PATH: `ds toc`, `ds find <regex>` \
-         (page-numbered hits), `ds page N`, `ds pins [--package P | --pads N]`, `ds board`, \
-         `ds checklist`, and `ds check` (validation, value_re/footprint_re binding, the pin map \
-         against the pin table, and checklist coverage, each finding worded as its fix). Take \
-         the pin map from `ds pins` for THIS package's column rather than counting columns in \
-         the text. Before you finish, run `ds check` and fix each finding, or record the field \
-         as an `unknown` uncertainty when the datasheet has no row for it."
-    } else {
-        ""
-    };
     format!(
-        "\n\nPrecomputed in your working directory: {}.{commands}",
+        "\n\nPrecomputed in your working directory: {}.",
         files.join(", ")
     )
+}
+
+/// The `ds` commands, fixed text for a given checker (so part of the shared base).
+fn helper_commands(ws: &Workspace) -> String {
+    if ws.checker.is_none() {
+        return String::new();
+    }
+    "\n\nThe precomputed files listed under \"The pages and files for this part\" are also \
+     one-line commands on your PATH: `ds toc`, `ds find <regex>` \
+     (page-numbered hits), `ds page N`, `ds pins [--package P | --pads N]`, `ds board`, \
+     `ds checklist`, and `ds check` (validation, value_re/footprint_re binding, the pin map \
+     against the pin table, and checklist coverage, each finding worded as its fix). Take \
+     the pin map from `ds pins` for THIS package's column rather than counting columns in \
+     the text. Before you finish, run `ds check` and fix each finding, or record the field \
+     as an `unknown` uncertainty when the datasheet has no row for it."
+        .to_string()
 }
 
 /// The selected pages' text, inline, so the agent starts with the tables it
@@ -4929,7 +4998,7 @@ pub fn run_agent_budgeted(
     ws: &Workspace,
     budget: u64,
 ) -> Result<String> {
-    run_agent_with(resolved, prompt, ws, budget, false)
+    run_agent_with(resolved, &Prompt::from(prompt), ws, budget, false)
 }
 
 /// Codex's web search. Its own flag is `--search` on the top-level command only;
@@ -4955,19 +5024,72 @@ const fn claude_tools(web: bool) -> &'static str {
 
 /// One agent run; with `web` the agent is given its web search tool and nothing
 /// else changes (same confinement of files and shell, no page images).
+///
+/// A codex run whose prompt has a shared base is, when it can be, an ephemeral
+/// fork of a warmed base session (see [`crate::extract_cache::codex`]); it falls
+/// back to a fresh call whenever forking is unavailable or the base is gone.
 pub(crate) fn run_agent_with(
     resolved: &Resolved,
-    prompt: &str,
+    prompt: &Prompt,
     ws: &Workspace,
     budget: u64,
     web: bool,
 ) -> Result<String> {
+    use crate::extract_cache::codex as shared;
+    let Some((key, base)) = fork_base(resolved, prompt, ws, web) else {
+        return launch_agent(resolved, prompt, ws, budget, web, Launch::Fresh);
+    };
+    match launch_agent(resolved, prompt, ws, budget, web, Launch::Fork(&base)) {
+        Err(e) if base_is_gone(&e) => {
+            say!("[model-extract] cache: the shared codex base could not be forked ({e:#}); using fresh calls");
+            shared::invalidate(&key);
+            launch_agent(resolved, prompt, ws, budget, web, Launch::Fresh)
+        }
+        ran => ran,
+    }
+}
+
+/// How a codex run starts: a fresh process (`exec --ephemeral`), the warm-up of a
+/// shared base (`exec`, persisted), or an ephemeral fork of a warmed base.
+#[derive(Clone, Copy)]
+pub(crate) enum Launch<'a> {
+    Fresh,
+    Warm,
+    Fork(&'a crate::extract_cache::codex::Base),
+}
+
+/// One launch of the agent CLI (see [`run_agent_with`] and [`run_agent_once`]).
+#[allow(clippy::too_many_lines)] // one launcher: every CLI's flags stay side by side
+pub(crate) fn launch_agent(
+    resolved: &Resolved,
+    prompt: &Prompt,
+    ws: &Workspace,
+    budget: u64,
+    web: bool,
+    launch: Launch<'_>,
+) -> Result<String> {
+    use crate::extract_cache as cache;
     let backend = resolved.backend;
     let Some(a) = resolved.agent(backend) else {
         bail!("the api backend is not an agent CLI");
     };
-    let mut stdin_text = agent_stdin(backend, prompt);
+    let cache_on = cache::Mode::from_env() != cache::Mode::Off;
+    // What the trace and prompt.md hold: the whole instruction, however it is sent.
+    let whole = agent_stdin(backend, &prompt.full());
+    let mut stdin_text = match launch {
+        Launch::Fresh => whole.clone(),
+        Launch::Warm => prompt.tail.clone(),
+        Launch::Fork(_) => cache::codex::fork_prompt(&prompt.tail),
+    };
+    // Claude Code takes the shared base as its appended system prompt, which it
+    // caches by content; the stdin is then the part's tail alone.
+    let mut claude_base = None;
     if backend == Backend::ClaudeCode {
+        if cache_on && !prompt.base.is_empty() {
+            let text = format!("{WORKSPACE_NOTE}\n\n{}", prompt.base);
+            claude_base = Some(cache::base_file(&text).context("writing the shared base prompt")?);
+            stdin_text = prompt.tail.clone();
+        }
         stdin_text += &envelope_note(&ws.path().join(REPLY_SCHEMA));
     }
     let tool = &a.command;
@@ -4981,7 +5103,13 @@ pub(crate) fn run_agent_with(
     match backend {
         Backend::Codex => {
             // `--json` streams one JSONL event per step; the idle watchdog reads that stream.
-            cmd.args(["exec", "--json"]);
+            // A fork takes the exec-level `--ephemeral` before `fork`, and no `--cd`,
+            // `-p`, `--sandbox` or `--approve-for-me`: its cwd is the process's.
+            cmd.arg("exec");
+            if matches!(launch, Launch::Fork(_)) {
+                cmd.args(["--ephemeral", "fork"]);
+            }
+            cmd.arg("--json");
             if let Some(profile) = &a.profile {
                 cmd.args(["-p", profile]);
             }
@@ -4994,13 +5122,22 @@ pub(crate) fn run_agent_with(
                     .args((mode == "approve-for-me").then_some("--approve-for-me"))
                     .args(codex_confinement(ws, mode != "read-only")),
             };
-            cmd.args(["--skip-git-repo-check", "--cd"])
-                .arg(ws.path())
-                .arg("--output-last-message")
-                .arg(ws.path().join("last-message.txt"))
-                .arg("--ephemeral")
-                .args(a.profile.is_none().then_some("--ignore-user-config"))
+            cmd.arg("--skip-git-repo-check");
+            if !matches!(launch, Launch::Fork(_)) {
+                cmd.arg("--cd").arg(ws.path());
+            }
+            cmd.arg("--output-last-message")
+                .arg(ws.path().join("last-message.txt"));
+            if matches!(launch, Launch::Fresh) {
+                cmd.arg("--ephemeral");
+            }
+            cmd.args(a.profile.is_none().then_some("--ignore-user-config"))
                 .args(["--ignore-rules", "-c", "skills.include_instructions=false"]);
+            if cache_on {
+                // The date and time ahead of the prompt would end a cache hit at the
+                // first line; the model needs neither to read a datasheet.
+                cmd.args(["-c", "include_environment_context_time=false"]);
+            }
             for feature in CODEX_DISABLED_FEATURES {
                 cmd.args(["--disable", feature]);
             }
@@ -5035,6 +5172,12 @@ pub(crate) fn run_agent_with(
             .args([claude_tools(web), "--settings", &claude_confinement(ws)])
             .env("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1")
             .env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
+            if cache_on {
+                // The base as the cached system prompt, the per-machine sections
+                // moved behind it, and the long cache lifetime (see `claude_flags`).
+                cmd.args(cache::claude_flags(claude_base.as_deref()))
+                    .envs(cache::CLAUDE_CACHE_ENV);
+            }
             // No `--json-schema` (see `schema_flag`): the envelope is asked for
             // in the prompt, so the run has no forced extra turn.
         }
@@ -5051,12 +5194,21 @@ pub(crate) fn run_agent_with(
     // A helper script the agent runs leaves no __pycache__ in the sandbox.
     cmd.env("PYTHONDONTWRITEBYTECODE", "1");
     cmd.args(&a.extra_args).current_dir(ws.path());
+    if let Launch::Fork(base) = launch {
+        // The positionals last: the session to fork, and the prompt from stdin.
+        cmd.arg(&base.id).arg("-");
+    }
     let log = ws.path().join(format!("{}-stderr.log", backend.name()));
+    let prompt_file = if matches!(launch, Launch::Warm) {
+        prompt.tail.clone()
+    } else {
+        prompt.full()
+    };
     let stdout = run_cli_agent(
         tool,
         &mut cmd,
         ws,
-        (prompt, &stdin_text),
+        (&prompt_file, &stdin_text),
         &log,
         Duration::from_secs(resolved.timeout_secs),
         // Codex streams an event per step; claude streams one per turn, and a
@@ -5066,10 +5218,48 @@ pub(crate) fn run_agent_with(
             .then(|| Duration::from_secs(resolved.idle_secs)),
         Some(harness::watch(&a.model, &ws.label(), budget)),
     );
-    record_trace(ws, &exe, &cmd, &stdin_text, &stdout);
+    // A fork reports the usage of the base it came from too: take that out.
+    let stdout = match (stdout, launch) {
+        (Ok(out), Launch::Fork(base)) => Ok(cache::codex::without_base(&out, base.used)),
+        (ran, _) => ran,
+    };
+    // The trace keeps the whole instruction, however it was split between a
+    // shared base and this call's own text.
+    let traced = match launch {
+        Launch::Warm => stdin_text.clone(),
+        _ if backend == Backend::ClaudeCode => {
+            format!("{whole}{}", envelope_note(&ws.path().join(REPLY_SCHEMA)))
+        }
+        _ => whole.clone(),
+    };
+    record_trace(ws, &exe, &cmd, &traced, &stdout);
     let stdout = stdout?;
     if backend == Backend::Agy {
         agy_denial(&stdout, &log, ws)?;
+    }
+    let (how, tokens) = match (backend, launch) {
+        (Backend::Codex, _) => (
+            match launch {
+                Launch::Fresh => "fresh",
+                Launch::Warm => "base warm-up",
+                Launch::Fork(_) => "fork",
+            },
+            cache::codex::tokens_of(&stdout),
+        ),
+        (Backend::ClaudeCode, _) => (
+            if claude_base.is_some() {
+                "system-cached base"
+            } else {
+                "fresh"
+            },
+            harness::claude_result(&stdout)
+                .as_ref()
+                .and_then(cache::Tokens::from_claude),
+        ),
+        _ => ("fresh", None),
+    };
+    if let Some(tokens) = tokens {
+        cache::record_call(backend.name(), how, tokens);
     }
     Ok(stdout)
 }
@@ -5097,6 +5287,138 @@ fn record_trace(
         }
     };
     trace.record(&argv, stdin_text, &events);
+}
+
+/// The shared codex base to fork this run from, with its pool key: `None` when
+/// the run must be a fresh call. Forking needs a codex run with a shared base
+/// and no profile, `--sandbox` or `--approve-for-me` (`exec fork` takes none of
+/// them), no attached page images, and a codex that has `exec fork`.
+fn fork_base(
+    resolved: &Resolved,
+    prompt: &Prompt,
+    ws: &Workspace,
+    web: bool,
+) -> Option<(String, crate::extract_cache::codex::Base)> {
+    use crate::extract_cache as cache;
+    let a = resolved.agent(resolved.backend)?;
+    let mode = cache::Mode::from_env();
+    let eligible = resolved.backend == Backend::Codex
+        && mode.forks()
+        && !web
+        && !prompt.base.is_empty()
+        && a.profile.is_none()
+        && !matches!(
+            a.permission_mode.as_str(),
+            "danger-full-access" | "approve-for-me"
+        )
+        && (ws.pages.is_empty() || ws.has_text_dump);
+    if !eligible || (mode == cache::Mode::Auto && !fork_supported(&a.command)) {
+        return None;
+    }
+    let base_text = format!("{WORKSPACE_NOTE}\n\n{}", prompt.base);
+    let schema = std::fs::read_to_string(ws.path().join(REPLY_SCHEMA)).unwrap_or_default();
+    let key = cache::pool_key(&[
+        &a.command,
+        &a.model,
+        &a.effort,
+        &a.permission_mode,
+        &a.extra_args.join("\u{1f}"),
+        &ws.checker
+            .as_deref()
+            .map(|c| c.display().to_string())
+            .unwrap_or_default(),
+        &schema,
+        &base_text,
+    ]);
+    let base = cache::codex::base_for(&key, || warm_codex_base(resolved, ws, &base_text))?;
+    Some((key, base))
+}
+
+/// Run the one warm-up call of a shared base: the briefing and a request to say
+/// READY, persisted so forks can start from it. Its usage is recorded like any call.
+fn warm_codex_base(
+    resolved: &Resolved,
+    ws: &Workspace,
+    base_text: &str,
+) -> Result<crate::extract_cache::codex::Base> {
+    use crate::extract_cache::codex as shared;
+    let mut scratch = Workspace::scratch()?;
+    scratch.checker.clone_from(&ws.checker);
+    // The same schema file, byte for byte: it is part of the cached prefix.
+    if let Ok(schema) = std::fs::read(ws.path().join(REPLY_SCHEMA)) {
+        std::fs::write(scratch.path().join(REPLY_SCHEMA), schema)?;
+    }
+    let prompt = Prompt::from(shared::warm_prompt(base_text));
+    say!(
+        "[model-extract] cache: warming a shared codex base for {}",
+        resolved.model()
+    );
+    let stdout = launch_agent(resolved, &prompt, &scratch, 0, false, Launch::Warm)?;
+    let id = shared::session_id(&stdout)
+        .context("the warm-up run reported no session id (is codex too old for `exec fork`?)")?;
+    crate::extract_usage::record(
+        resolved.backend.name(),
+        resolved.model(),
+        billing_for(resolved),
+        crate::extract_usage::from_codex_events(&stdout),
+    );
+    Ok(shared::Base {
+        id,
+        used: shared::tokens_of(&stdout).unwrap_or_default(),
+    })
+}
+
+/// Whether `exec fork` exists in this codex (one `--help` per executable per process).
+fn fork_supported(command: &str) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, PoisonError};
+    static KNOWN: Mutex<Option<HashMap<String, bool>>> = Mutex::new(None);
+    if let Some(known) = KNOWN
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .and_then(|m| m.get(command))
+    {
+        return *known;
+    }
+    let found = which_path(command).is_some_and(|exe| {
+        Command::new(exe)
+            .args(["exec", "fork", "--help"])
+            .current_dir(std::env::temp_dir())
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .is_ok_and(|o| {
+                o.status.success() && String::from_utf8_lossy(&o.stdout).contains("Fork a previous")
+            })
+    });
+    KNOWN
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get_or_insert_with(HashMap::new)
+        .insert(command.to_string(), found);
+    found
+}
+
+/// Whether a failed fork says the base session it needed is not there (deleted
+/// rollout, unknown id), as opposed to the run itself failing or timing out.
+fn base_is_gone(e: &anyhow::Error) -> bool {
+    if e.is::<TimedOut>() || e.is::<IdleStalled>() || e.is::<harness::Stopped>() {
+        return false;
+    }
+    let text = format!("{e:#}").to_ascii_lowercase();
+    [
+        "session not found",
+        "no session",
+        "not found",
+        "no such",
+        "unknown session",
+        "rollout",
+        "could not find",
+        "failed to fork",
+    ]
+    .iter()
+    .any(|m| text.contains(m))
 }
 
 /// What agy is told beyond the shared prompt. Headless agy auto-denies every
@@ -6289,10 +6611,11 @@ mod tests {
             assert!(examples.len() >= 2, "the prompt must be many-shot");
             assert!(examples.iter().all(|e| e.kind != kind));
         }
-        let prompt = build_prompt("TXB0101", "digital", "datasheet text");
-        let start = prompt.find("FORMAT EXAMPLES ONLY").unwrap();
-        let end = prompt.find("DATASHEET TEXT (truncated):").unwrap();
-        assert!(!prompt[start..end].contains("TXB0101"));
+        // The examples are the shared base; the part and its text come after them.
+        let prompt = build_prompt_parts("TXB0101", "digital", "datasheet text");
+        let start = prompt.base.find("FORMAT EXAMPLES ONLY").unwrap();
+        assert!(!prompt.base[start..].contains("TXB0101"));
+        assert!(prompt.tail.contains("DATASHEET TEXT (truncated):"));
     }
 
     #[test]
@@ -6485,7 +6808,8 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
     fn draft(src: PathBuf, text: &str, part: &str, kind: &str) -> (String, ModelEntry) {
         let prompt = build_prompt(part, kind, text);
         let args = Args::new(src, part.into(), kind.into());
-        let (raw, _) = call_backend(&prompt, &args, Reply::Model { part, kind }).expect("backend");
+        let (raw, _) = call_backend(&Prompt::from(prompt), &args, Reply::Model { part, kind })
+            .expect("backend");
         let entry = parse_and_validate_reply(&raw, part, kind).unwrap();
         (raw, entry)
     }
@@ -7040,7 +7364,8 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
                     "--tools",
                     "Bash,Read,Edit,Write",
                     "--settings",
-                    &settings
+                    &settings,
+                    "--exclude-dynamic-system-prompt-sections"
                 ]
             );
             let read = |name: &str| std::fs::read_to_string(ws.path().join(name)).unwrap();
@@ -7100,6 +7425,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             // A profile opts into the operator's codex config: no --ignore-user-config.
             expected.extend(["--ephemeral", "--ignore-rules", "-c"].map(Into::into));
             expected.push("skills.include_instructions=false".into());
+            expected.extend(["-c", "include_environment_context_time=false"].map(Into::into));
             for feature in CODEX_DISABLED_FEATURES {
                 expected.extend(["--disable".into(), (*feature).into()]);
             }
@@ -7162,6 +7488,284 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             .to_string()
             .contains("custom wrapper"));
         assert!(smoke_test(&resolved, &mut |_| {}).is_err());
+    }
+
+    /// The prompt-cache contract: for one kind, everything but the part-specific
+    /// text is byte-identical across parts, so a cache reads it every time.
+    #[test]
+    fn two_parts_of_one_kind_share_a_byte_identical_base() {
+        for kind in [
+            "digital", "vreg", "bjt_npn", "opamp", "diode", "mcu", "charger",
+        ] {
+            let a = build_prompt_parts("SN74LVC1T45", kind, "front page text one");
+            let b = build_prompt_parts("TXB0101", kind, "a different datasheet entirely");
+            assert_eq!(a.base, b.base, "{kind}: the base differs between parts");
+            assert!(a.base.len() > 4_000, "{kind}: the shared base is the bulk");
+            assert!(a.tail.contains("SN74LVC1T45") && b.tail.contains("TXB0101"));
+            assert!(
+                !a.base.contains("SN74LVC1T45") && !a.base.to_lowercase().contains("sn74lvc1t45")
+            );
+            assert!(!a.base.contains("front page text one"));
+            assert_ne!(a.tail, b.tail);
+            // Splitting loses nothing: the whole is still the old prompt's content.
+            let whole = a.full();
+            assert!(
+                whole.contains("Its entry's id is \"sn74lvc1t45\"")
+                    && whole.contains("PIN ROLE NAMES")
+            );
+            assert!(whole.ends_with("OUTPUT (TOML only, starting with [[models]]):\n"));
+        }
+        // A different kind is a different base: the checklist and examples are the kind's.
+        assert_ne!(
+            build_prompt_parts("X", "vreg", "").base,
+            build_prompt_parts("X", "digital", "").base
+        );
+        let (a, b) = (
+            identify_parts("LM1117", "text a"),
+            identify_parts("BC847", "text b"),
+        );
+        assert_eq!(a.base, b.base);
+        assert!(!a.base.contains("LM1117") && a.tail.contains("LM1117"));
+        let (a, b) = (
+            harness::locate_parts("A1", "i2c_sensor", "needs"),
+            harness::locate_parts("B2", "i2c_sensor", "needs"),
+        );
+        assert_eq!(a.base, b.base);
+        assert!(a.tail.contains("A1") && !a.base.contains("A1"));
+    }
+
+    /// The clause after the prompt follows the same rule: its rules are the base,
+    /// the page inventory and the precomputed-file list this part's tail.
+    #[test]
+    fn the_verification_rules_are_shared_and_the_pages_are_per_part() {
+        let (one, two) = (Workspace::scratch().unwrap(), Workspace::scratch().unwrap());
+        std::fs::write(two.path().join("board.md"), "board").unwrap();
+        for table in ["[[models]]", "[sensor]"] {
+            let (rules_a, here_a) = verification_parts(&one, table, true);
+            let (rules_b, here_b) = verification_parts(&two, table, true);
+            assert_eq!(rules_a, rules_b, "{table}");
+            assert_ne!(here_a, here_b, "{table}: the file list is the part's");
+            assert!(here_b.contains("`board.md`") && !rules_b.contains("board.md` ("));
+            assert!(rules_a.contains("VERIFY EACH NUMBER") && rules_a.contains("model.toml"));
+        }
+    }
+
+    /// Codex forking, with a fake codex that logs every call: the first call of a
+    /// shared base warms it (persisted, nothing else asked), every later call is an
+    /// ephemeral fork of it in its own sandbox with the same confinement flags and
+    /// only its own text on stdin, and the base's usage is taken off a fork's report.
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::too_many_lines)] // one scripted scenario, read top to bottom
+    fn codex_runs_fork_a_warmed_base_in_their_own_sandbox() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = MOCK_ENV.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let (command, log) = (dir.path().join("fake-codex"), dir.path().join("calls.log"));
+        std::fs::write(
+            &command,
+            r#"#!/bin/sh
+[ "$1" = login ] && echo 'Logged in using an API key' && exit 0
+cat > stdin.txt
+{ echo "CALL cwd=$PWD"; printf 'ARG %s\n' "$@"; echo "STDIN<<"; cat stdin.txt; echo ">>"; } >> "$FAKE_LOG"
+case " $* " in *" fork "*) FORKED=1;; esac
+if [ -n "$FORKED" ]; then
+  echo '{"type":"thread.started","thread_id":"cccc-0002"}'
+  echo '{"type":"turn.completed","usage":{"input_tokens":2500,"cached_input_tokens":900,"cache_write_input_tokens":0,"output_tokens":35}}'
+elif [ -n "$FAKE_FAIL_WARM" ] && grep -q "single word READY" stdin.txt; then
+  echo "boom" >&2; exit 1
+else
+  echo '{"type":"thread.started","thread_id":"aaaa-0001"}'
+  echo '{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":10}}'
+fi
+printf 'done' > last-message.txt
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut cfg = extract_config::ExtractConfig::default();
+        cfg.set("codex.command", command.to_str().unwrap()).unwrap();
+        let mut resolved = cfg.resolve(&extract_config::FakeHost::default(), Some(Backend::Codex));
+        resolved.codex.permission_mode = "workspace-write".into();
+        resolved.codex.profile = None;
+        std::env::set_var("FAKE_LOG", &log);
+        std::env::set_var("CODEX_HOME", dir.path().join("codex-home"));
+        std::env::set_var(crate::extract_cache::ENV_CACHE, "force");
+        let calls = || {
+            std::fs::read_to_string(&log)
+                .unwrap_or_default()
+                .split("CALL ")
+                .skip(1)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        let (one, two) = (Workspace::scratch().unwrap(), Workspace::scratch().unwrap());
+        let prompt = |tail: &str| Prompt::new("SHARED BASE RULES", tail);
+
+        let first = run_agent_with(&resolved, &prompt("PART ONE TAIL"), &one, 0, false).unwrap();
+        let seen = calls();
+        assert_eq!(seen.len(), 2, "one warm-up call, then the fork: {seen:?}");
+        let warm = &seen[0];
+        assert!(warm.contains("ARG exec\nARG --json\n") && !warm.contains("ARG --ephemeral"));
+        assert!(warm.contains("SHARED BASE RULES") && warm.contains("single word READY"));
+        assert!(
+            !warm.contains("PART ONE TAIL"),
+            "the warm-up carries no part text"
+        );
+        let fork = &seen[1];
+        assert!(
+            fork.contains(&format!("cwd={}", one.path().display())),
+            "{fork}"
+        );
+        assert!(
+            fork.contains("ARG exec\nARG --ephemeral\nARG fork\nARG --json\n"),
+            "{fork}"
+        );
+        assert!(fork.contains("ARG aaaa-0001\nARG -\n") && fork.trim_end().contains(">>"));
+        for flag in ["--cd", "-p", "--sandbox", "--approve-for-me"] {
+            assert!(
+                !fork.contains(&format!("ARG {flag}\n")),
+                "a fork takes no {flag}"
+            );
+        }
+        for kept in [
+            "ARG default_permissions=\"hauksbee\"",
+            "ARG --ignore-user-config",
+            "ARG --ignore-rules",
+            "ARG --skip-git-repo-check",
+            "ARG include_environment_context_time=false",
+            "ARG --output-last-message",
+        ] {
+            assert!(fork.contains(kept), "the fork keeps {kept}: {fork}");
+        }
+        assert!(fork.contains("PART ONE TAIL") && !fork.contains("SHARED BASE RULES"));
+        let used = crate::extract_cache::codex::tokens_of(&first).unwrap();
+        assert_eq!(
+            (used.input, used.cached, used.output),
+            (1500, 900, 25),
+            "{first}"
+        );
+
+        // A second part in another sandbox forks the same base: no second warm-up.
+        run_agent_with(&resolved, &prompt("PART TWO TAIL"), &two, 0, false).unwrap();
+        let seen = calls();
+        assert_eq!(seen.len(), 3);
+        assert!(seen[2].contains(&format!("cwd={}", two.path().display())));
+        assert!(seen[2].contains("ARG aaaa-0001\nARG -\n") && seen[2].contains("PART TWO TAIL"));
+        assert_ne!(one.path(), two.path());
+
+        // Caching off: a fresh, ephemeral call carrying the whole prompt.
+        std::env::set_var(crate::extract_cache::ENV_CACHE, "off");
+        run_agent_with(&resolved, &prompt("PART THREE TAIL"), &one, 0, false).unwrap();
+        let fresh = calls().pop().unwrap();
+        assert!(fresh.contains("ARG --ephemeral\n") && !fresh.contains("ARG fork"));
+        assert!(fresh.contains("SHARED BASE RULES") && fresh.contains("PART THREE TAIL"));
+        assert!(!fresh.contains("include_environment_context_time"));
+        std::env::set_var(crate::extract_cache::ENV_CACHE, "force");
+
+        // A prompt with no shared base, a profile or danger-full-access never forks.
+        let before = calls().len();
+        run_agent_with(&resolved, &Prompt::from("NO BASE"), &one, 0, false).unwrap();
+        resolved.codex.profile = Some("p".into());
+        run_agent_with(&resolved, &prompt("PROFILE TAIL"), &one, 0, false).unwrap();
+        resolved.codex.profile = None;
+        resolved.codex.permission_mode = "danger-full-access".into();
+        run_agent_with(&resolved, &prompt("FULL ACCESS TAIL"), &one, 0, false).unwrap();
+        let rest = calls().split_off(before);
+        assert_eq!(rest.len(), 3);
+        assert!(rest
+            .iter()
+            .all(|c| !c.contains("ARG fork") && c.contains("ARG --ephemeral")));
+        resolved.codex.permission_mode = "workspace-write".into();
+
+        // A base that cannot be warmed means fresh calls, not a failed extraction.
+        std::env::set_var("FAKE_FAIL_WARM", "1");
+        resolved.codex.model = "another-model".into(); // another pool key
+        let before = calls().len();
+        let ran = run_agent_with(&resolved, &prompt("AFTER FAILURE"), &one, 0, false).unwrap();
+        std::env::remove_var("FAKE_FAIL_WARM");
+        let rest = calls().split_off(before);
+        assert_eq!(
+            rest.len(),
+            2,
+            "the failed warm-up, then one fresh call: {rest:?}"
+        );
+        assert!(rest[1].contains("ARG --ephemeral\n") && !rest[1].contains("ARG fork"));
+        assert!(rest[1].contains("SHARED BASE RULES") && rest[1].contains("AFTER FAILURE"));
+        assert!(
+            !ran.contains("cccc-0002"),
+            "no fork from a base that failed: {ran}"
+        );
+        crate::extract_cache::codex::release_bases();
+        std::env::remove_var("CODEX_HOME");
+        std::env::remove_var(crate::extract_cache::ENV_CACHE);
+        std::env::remove_var("FAKE_LOG");
+    }
+
+    /// Claude Code takes the shared base as its appended system prompt (cached by
+    /// content), keeps every restriction of a fresh call, and gets only the part's
+    /// own text on stdin; with caching off it is the whole prompt on stdin.
+    #[cfg(unix)]
+    #[test]
+    fn claude_runs_carry_the_base_as_a_cached_system_prompt_with_the_same_restrictions() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = MOCK_ENV.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let command = dir.path().join("fake-claude");
+        std::fs::write(
+            &command,
+            "#!/bin/sh\ncat > stdin.txt\nprintf '%s\\n' \"$@\"\nprintf 'TTL=%s\\n' \"$CLAUDE_CODE_PROMPT_CACHE_TTL\"\n\
+             f=''; for a in \"$@\"; do [ -n \"$f\" ] && cp \"$a\" base-seen.txt && f=''; [ \"$a\" = --append-system-prompt-file ] && f=1; done\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut cfg = extract_config::ExtractConfig::default();
+        cfg.set("claude-code.command", command.to_str().unwrap())
+            .unwrap();
+        let resolved = cfg.resolve(
+            &extract_config::FakeHost::default(),
+            Some(Backend::ClaudeCode),
+        );
+        let ws = Workspace::scratch().unwrap();
+        let prompt = Prompt::new("CLAUDE SHARED BASE", "CLAUDE PART TAIL");
+        let restrictions = [
+            "--restricted",
+            "--strict-mcp-config",
+            "--no-session-persistence",
+            "--settings",
+        ];
+
+        std::env::set_var(crate::extract_cache::ENV_CACHE, "force");
+        let out = run_agent_with(&resolved, &prompt, &ws, 0, false).unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        for flag in restrictions {
+            assert!(lines.contains(&flag), "a cached run keeps {flag}: {out}");
+        }
+        assert!(
+            lines.contains(&"--exclude-dynamic-system-prompt-sections"),
+            "{out}"
+        );
+        assert!(lines.contains(&"TTL=1h"), "{out}");
+        let base = std::fs::read_to_string(ws.path().join("base-seen.txt")).unwrap();
+        assert!(base.contains("CLAUDE SHARED BASE") && !base.contains("CLAUDE PART TAIL"));
+        let stdin = std::fs::read_to_string(ws.path().join("stdin.txt")).unwrap();
+        assert!(stdin.contains("CLAUDE PART TAIL") && !stdin.contains("CLAUDE SHARED BASE"));
+
+        std::env::set_var(crate::extract_cache::ENV_CACHE, "off");
+        let out = run_agent_with(&resolved, &prompt, &ws, 0, false).unwrap();
+        for flag in restrictions {
+            assert!(
+                out.lines().any(|l| l == flag),
+                "an uncached run keeps {flag}: {out}"
+            );
+        }
+        assert!(
+            !out.contains("--append-system-prompt-file") && !out.contains("TTL=1h"),
+            "{out}"
+        );
+        let stdin = std::fs::read_to_string(ws.path().join("stdin.txt")).unwrap();
+        assert!(stdin.contains("CLAUDE SHARED BASE") && stdin.contains("CLAUDE PART TAIL"));
+        std::env::remove_var(crate::extract_cache::ENV_CACHE);
     }
 
     /// Headless agy auto-denies a command with no allow-rule and stops with

@@ -25,6 +25,7 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
+use crate::extract_cache::Prompt;
 use crate::extract_progress::event;
 
 pub const NOTES: &str = "notes.md";
@@ -199,13 +200,14 @@ pub fn page_list(dir: &Path) -> String {
     out
 }
 
-/// The first stage: find the facts and hand off compact notes.
+/// The first stage: find the facts and hand off compact notes. The instruction
+/// is the base (the same for every part of a kind), the part and kind the tail.
 #[must_use]
-pub fn locate_prompt(part: &str, kind: &str, needs: &str) -> String {
-    format!(
-        "You are the first of several short agents drafting a Hauksbee model card for {part} \
-         (kind `{kind}`). Your only job is to LOCATE the facts and hand off compact notes; a \
-         later agent writes the card from them.\n\n\
+pub fn locate_parts(part: &str, kind: &str, needs: &str) -> Prompt {
+    let base = format!(
+        "You are the first of several short agents drafting a Hauksbee model card for the part \
+         named under THE PART after these instructions. Your only job is to LOCATE the facts and \
+         hand off compact notes; a later agent writes the card from them.\n\n\
          Files in your working directory: `page-index.md` lists every PDF page with the topics \
          found on it and its first line; `pages/page-NNN.txt` is each page's text; \
          `page-NNN.png` are renders of the most relevant pages. Your context is small: do NOT \
@@ -214,7 +216,7 @@ pub fn locate_prompt(part: &str, kind: &str, needs: &str) -> String {
          Use only files in your working directory.\n\n\
          The card will need: {needs}\n\n\
          Write `{NOTES}` (under 150 lines) with exactly these sections:\n\
-         ## Part and package: the orderable code(s) that are {part}, the package each uses, \
+         ## Part and package: the orderable code(s) that are the part, the package each uses, \
          and which package the card should model.\n\
          ## Pin map: a table `pin | name | function` for that package, read off the pinout \
          image AND the pin-function table (say on which pages, and whether they agree).\n\
@@ -226,7 +228,8 @@ pub fn locate_prompt(part: &str, kind: &str, needs: &str) -> String {
          unclear variant, a missing table).\n\
          End with one line `CONFIDENCE: high`, `medium` or `low` (low when the pin map or \
          package is ambiguous). Do not write model.toml."
-    )
+    );
+    Prompt::new(base, format!("\n\nTHE PART: {part} (kind `{kind}`)"))
 }
 
 /// What a drafting agent is told about the notes already in the sandbox:

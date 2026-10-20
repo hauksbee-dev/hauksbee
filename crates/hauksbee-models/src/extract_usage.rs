@@ -139,6 +139,7 @@ fn ledger() -> MutexGuard<'static, Option<Ledger>> {
 /// A new extraction: forget the previous one's calls.
 pub fn reset() {
     *ledger() = None;
+    crate::extract_cache::reset();
 }
 
 /// Attach the run's plan-usage line (see `extract_plan::report`) to the summary.
@@ -340,10 +341,16 @@ pub fn summary() -> String {
         return String::new();
     };
     let line = summary_of(&l);
-    match l.plan_note {
+    let line = match l.plan_note {
         Some(note) if !line.is_empty() => format!("{line}; {note}"),
         Some(note) => note,
         None => line,
+    };
+    // How much of the input the prompt cache served, when any call reported it.
+    match crate::extract_cache::summary() {
+        cache if cache.is_empty() => line,
+        cache if line.is_empty() => cache,
+        cache => format!("{line}; {cache}"),
     }
 }
 
