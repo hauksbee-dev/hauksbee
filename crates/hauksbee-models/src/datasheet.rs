@@ -3457,8 +3457,8 @@ fn mock_reply(path: &str, reply: Reply<'_>) -> Result<(String, Option<TimedOut>)
     // a canned backend reply. This exercises the full parse + validate path
     // with no codex and no network, and the reply is validated exactly like a
     // real one so the hook cannot smuggle garbage past the pipeline.
-    let canned = std::fs::read_to_string(path)
-        .with_context(|| format!("reading mock reply from {path}"))?;
+    let canned =
+        std::fs::read_to_string(path).with_context(|| format!("reading mock reply from {path}"))?;
     let raw = reply.complete(extract_toml_block(&canned, reply.table()));
     if let Err(e) = reply.check(&raw) {
         return Err(Rejected {
