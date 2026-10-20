@@ -7746,7 +7746,7 @@ printf 'done' > last-message.txt
         std::fs::write(
             &command,
             "#!/bin/sh\ncat > stdin.txt\nprintf '%s\\n' \"$@\"\nprintf 'TTL=%s\\n' \"$CLAUDE_CODE_PROMPT_CACHE_TTL\"\n\
-             f=''; for a in \"$@\"; do [ -n \"$f\" ] && cp \"$a\" base-seen.txt && f=''; [ \"$a\" = --append-system-prompt-file ] && f=1; done\n",
+             f=''; for a in \"$@\"; do [ -n \"$f\" ] && cp \"$a\" base-seen.txt && f=''; [ \"$a\" = --append-system-prompt-file ] && f=1; done\nexit 0\n",
         )
         .unwrap();
         std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
