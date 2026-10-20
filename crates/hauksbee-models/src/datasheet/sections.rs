@@ -350,13 +350,13 @@ fn unmodelled_levels(card: &Table) -> Option<String> {
     })
 }
 
-/// The brief of one section agent; `known` is what the identity agent wrote.
-/// The rules for the section and kind are the base (the same for every part of
-/// the kind); the part, its id and match line and the identity agent's keys are
-/// the tail.
-fn prompt(part: &str, kind: &str, section: &str, known: &str) -> Prompt {
-    let base = behavioral_family_base_kind(kind).unwrap_or(kind);
-    let (lower, re) = (part.to_lowercase(), regex::escape(&part.to_uppercase()));
+/// What one section agent owns, the topics it reads, its image allowance and the
+/// guidance for its keys: `(owns, topics, images, guide)`.
+fn section_brief(
+    kind: &str,
+    base: &str,
+    section: &str,
+) -> (String, &'static str, &'static str, String) {
     let roles = format!(
         "PIN ROLE NAMES for kind=\"{base}\": {}",
         pin_roles_for_kind(kind)
@@ -429,6 +429,16 @@ fn prompt(part: &str, kind: &str, section: &str, known: &str) -> Prompt {
             ),
         ),
     };
+}
+
+/// The brief of one section agent; `known` is what the identity agent wrote.
+/// The rules for the section and kind are the base (the same for every part of
+/// the kind); the part, its id and match line and the identity agent's keys are
+/// the tail.
+fn prompt(part: &str, kind: &str, section: &str, known: &str) -> Prompt {
+    let base = behavioral_family_base_kind(kind).unwrap_or(kind);
+    let (lower, re) = (part.to_lowercase(), regex::escape(&part.to_uppercase()));
+    let (owns, topics, images, guide) = section_brief(kind, base, section);
     let known = if known.is_empty() {
         String::new()
     } else {
@@ -451,7 +461,7 @@ fn prompt(part: &str, kind: &str, section: &str, known: &str) -> Prompt {
         )
     });
     let finish = if section == "switching" { "" } else { FINISH };
-    let rules = format!(
+    let text = format!(
         "You are one of the agents drafting the Hauksbee model card for the part named under \
          THE PART after these instructions (kind `{kind}`). \
          YOUR SECTION: {section}. Write `model.toml` as a `[[models]]` entry holding ONLY these \
@@ -462,7 +472,7 @@ fn prompt(part: &str, kind: &str, section: &str, known: &str) -> Prompt {
          text columns are scrambled.{images} Never open `datasheet.pdf` or `datasheet.txt` whole. \
          Omit what the datasheet does not state.\n\n{guide}\n\n{example}"
     );
-    Prompt::new(rules, format!("\n\nTHE PART: {part}{given}{known}"))
+    Prompt::new(text, format!("\n\nTHE PART: {part}{given}{known}"))
 }
 
 /// Draft the card: identity first, then every other section at once, each

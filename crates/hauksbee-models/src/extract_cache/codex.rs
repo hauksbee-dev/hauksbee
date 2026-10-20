@@ -132,8 +132,9 @@ pub fn tokens_of(stdout: &str) -> Option<Tokens> {
         .reduce(Tokens::plus)
 }
 
-/// `stdout` with the base's usage taken out of each `turn.completed` event: a
-/// fork reports its parent's accumulated usage too, and the base was already
+/// `stdout` with the base's usage taken out of each `turn.completed` event.
+///
+/// A fork reports its parent's accumulated usage too, and the base was already
 /// recorded when it was warmed. Other lines pass through untouched.
 #[must_use]
 pub fn without_base(stdout: &str, base: Tokens) -> String {

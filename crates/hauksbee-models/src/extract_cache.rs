@@ -6,7 +6,7 @@
 //! checklist blocks, the format examples), then a per-part **tail** (the part, the
 //! board binding, the template cards, the pages, the retry feedback). A backend that
 //! cannot do better sends `base + tail` as one prompt, which still puts the shared
-//! text first so a prefix cache (OpenAI's automatic one, Anthropic's) can hit it.
+//! text first so a prefix cache (`OpenAI`'s automatic one, Anthropic's) can hit it.
 //!
 //! * **codex** keys its cache on the session id and gives a fresh `codex exec` a new
 //!   one, so nothing is shared between processes. The supported way to share is an
@@ -89,7 +89,7 @@ impl From<String> for Prompt {
     }
 }
 
-impl From<&Prompt> for Prompt {
+impl From<&Self> for Prompt {
     fn from(p: &Self) -> Self {
         p.clone()
     }
@@ -134,7 +134,7 @@ impl Mode {
 
     /// Whether the codex fork path may be used at all.
     #[must_use]
-    pub fn forks(self) -> bool {
+    pub const fn forks(self) -> bool {
         match self {
             Self::Off => false,
             Self::Force => true,
@@ -143,8 +143,9 @@ impl Mode {
     }
 }
 
-/// Flags that make a `claude -p` call's prefix stable across parts: the shared base as
-/// the appended system prompt (read from `base_file`, outside the sandbox) and the
+/// Flags that make a `claude -p` call's prefix stable across parts.
+///
+/// They carry the shared base as the appended system prompt (read from `base_file`, outside the sandbox) and the
 /// per-machine sections (cwd, platform, memory paths, git status) moved into the first
 /// user message, so only the sandbox path and the tail differ between calls. The cache
 /// TTL is asked for explicitly: a subscription already gets one hour for the main
@@ -172,7 +173,16 @@ pub fn pool_key(parts: &[&str]) -> String {
         hash.update((part.len() as u64).to_le_bytes());
         hash.update(part.as_bytes());
     }
-    hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    hex(&hash.finalize())
+}
+
+/// Lower-case hex of `bytes`.
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut out, b| {
+        let _ = write!(out, "{b:02x}");
+        out
+    })
 }
 
 /// A directory for files shared by every call of this process (the Claude base
@@ -201,7 +211,7 @@ pub fn shared_dir() -> std::io::Result<PathBuf> {
 pub fn base_file(base: &str) -> std::io::Result<PathBuf> {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(base.as_bytes());
-    let name: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
+    let name = hex(&digest[..8]);
     let path = shared_dir()?.join(format!("base-{name}.md"));
     if !path.is_file() {
         std::fs::write(&path, base)?;

@@ -39,7 +39,7 @@ impl Sandbox {
             .with_context(|| format!("canonicalizing temporary root {}", root.display()))?;
         let slot = {
             let mut used = IN_USE.lock().unwrap_or_else(PoisonError::into_inner);
-            let free = (0..).find(|n| !used.contains(n)).unwrap_or(0);
+            let free = (0..=usize::MAX).find(|n| !used.contains(n)).unwrap_or(0);
             used.insert(free);
             free
         };

@@ -462,6 +462,21 @@ fn keep_rejected(e: anyhow::Error, dest: &Path, args: &Args) -> anyhow::Error {
     }
 }
 
+/// Add the board's footprints for `part` to the prompt's tail, so the card models
+/// the package the board places.
+fn name_footprints(prompt: &mut Prompt, part: &str, footprints: &[String]) {
+    use std::fmt::Write as _;
+    if footprints.is_empty() {
+        return;
+    }
+    let _ = write!(
+        prompt.tail,
+        "\n\nTHE BOARD places {part} on footprint {}: model the package that footprint \
+         names (P4) and name it in the description.",
+        footprints.join(", ")
+    );
+}
+
 fn run_inner(mut args: Args) -> Result<PathBuf> {
     // Magic bytes rather than extension, and BEFORE any backend is chosen: a
     // non-PDF (a saved HTML page, a .docx) would otherwise be text-dumped and
@@ -545,15 +560,7 @@ fn run_inner(mut args: Args) -> Result<PathBuf> {
             );
         }
         let mut prompt = build_prompt_parts(part, kind, &pdf_text);
-        if !args.footprints.is_empty() {
-            use std::fmt::Write as _;
-            let _ = write!(
-                prompt.tail,
-                "\n\nTHE BOARD places {part} on footprint {}: model the package that footprint \
-                 names (P4) and name it in the description.",
-                args.footprints.join(", ")
-            );
-        }
+        name_footprints(&mut prompt, part, &args.footprints);
         let (raw, timed_out) = call_backend(&prompt, &args, Reply::Model { part, kind })
             .map_err(|e| keep_rejected(e, &out_path, &args))?;
         let entry = parse_and_validate_reply(&raw, part, kind)?;
@@ -3444,6 +3451,28 @@ impl Reply<'_> {
     }
 }
 
+/// The canned reply of `HAUKSBEE_EXTRACT_MOCK_REPLY`, validated like a real one.
+fn mock_reply(path: &str, reply: Reply<'_>) -> Result<(String, Option<TimedOut>)> {
+    // Test / offline hook: HAUKSBEE_EXTRACT_MOCK_REPLY points to a file holding
+    // a canned backend reply. This exercises the full parse + validate path
+    // with no codex and no network, and the reply is validated exactly like a
+    // real one so the hook cannot smuggle garbage past the pipeline.
+    let canned = std::fs::read_to_string(path)
+        .with_context(|| format!("reading mock reply from {path}"))?;
+    let raw = reply.complete(extract_toml_block(&canned, reply.table()));
+    if let Err(e) = reply.check(&raw) {
+        return Err(Rejected {
+            tool: "mock reply".into(),
+            attempts: 1,
+            error: format!("{e:#}"),
+            draft: raw,
+            kept: None,
+        }
+        .into());
+    }
+    Ok((raw, None))
+}
+
 /// The validated reply, plus the timeout when it is a timed-out run's last
 /// lint-clean draft rather than a finished answer.
 fn call_backend(
@@ -3451,25 +3480,8 @@ fn call_backend(
     args: &Args,
     reply: Reply<'_>,
 ) -> Result<(String, Option<TimedOut>)> {
-    // Test / offline hook: HAUKSBEE_EXTRACT_MOCK_REPLY points to a file holding
-    // a canned backend reply. This exercises the full parse + validate path
-    // with no codex and no network, and the reply is validated exactly like a
-    // real one so the hook cannot smuggle garbage past the pipeline.
     if let Ok(path) = std::env::var("HAUKSBEE_EXTRACT_MOCK_REPLY") {
-        let canned = std::fs::read_to_string(&path)
-            .with_context(|| format!("reading mock reply from {path}"))?;
-        let raw = reply.complete(extract_toml_block(&canned, reply.table()));
-        if let Err(e) = reply.check(&raw) {
-            return Err(Rejected {
-                tool: "mock reply".into(),
-                attempts: 1,
-                error: format!("{e:#}"),
-                draft: raw,
-                kept: None,
-            }
-            .into());
-        }
-        return Ok((raw, None));
+        return mock_reply(&path, reply);
     }
 
     // Flags, then environment, then the config file, then defaults: one
@@ -3749,6 +3761,52 @@ impl Prompts {
     }
 }
 
+/// A staged tier's first pass. A model card is first drafted by four section
+/// agents, merged with no model call: a clean merge is returned for the validator,
+/// a flawed one is left for a fix agent told what the merge found. A sensor spec
+/// is first located: the pin map and key tables are noted for the drafting agent.
+fn first_pass(
+    resolved: &Resolved,
+    ws: &Workspace,
+    reply: Reply<'_>,
+    budget: u64,
+    billing: crate::extract_usage::Billing,
+) -> Result<Option<String>> {
+    match reply {
+        Reply::Model { part, kind } => {
+            progress::phase("drafting the card's sections in parallel");
+            let merged = sections::draft(resolved, ws, (part, kind), budget, billing)?;
+            let problems = merged.problems();
+            std::fs::write(ws.answer_path(), &merged.card)?;
+            std::fs::write(
+                ws.path().join(harness::NOTES),
+                format!("Section agents ran.{problems}\n"),
+            )?;
+            Ok(problems.is_empty().then_some(merged.card))
+        }
+        Reply::Sensor { part, kind } => {
+            progress::phase("locating the pin map and key tables");
+            progress::event(
+                "stage",
+                serde_json::json!({"stage": "locate", "attempt": 1, "attempts": 1}),
+            );
+            let locate = harness::locate_parts(part, kind, required_params_for_kind(kind));
+            run_and_record(
+                resolved,
+                &locate.then(&harness::page_list(ws.path())),
+                ws,
+                budget,
+                billing,
+            )?;
+            if !ws.path().join(harness::NOTES).is_file() {
+                bail!("the locating agent wrote no {}", harness::NOTES);
+            }
+            Ok(None)
+        }
+        Reply::Word => Ok(None),
+    }
+}
+
 /// One model's attempt at the extraction in the shared sandbox: the staged
 /// harness when `budget` is set (locate, then draft and fix, each a fresh agent
 /// bounded to `budget` tokens of context), else one agent with the full prompt.
@@ -3766,38 +3824,11 @@ fn run_tier(
     let staged = budget > 0;
     let _ = std::fs::remove_file(ws.path().join(harness::CONFIDENCE));
     let run = |p: &Prompt| run_and_record(resolved, p, ws, budget, billing);
-    // A model card is first drafted by four section agents, merged
-    // with no model call; a clean merge goes straight to the validator, a
-    // flawed one to a fix agent told what the merge found.
-    let mut merged_draft = None::<String>;
-    if staged && !ws.path().join(harness::NOTES).is_file() {
-        match reply {
-            Reply::Model { part, kind } => {
-                progress::phase("drafting the card's sections in parallel");
-                let merged = sections::draft(resolved, ws, (part, kind), budget, billing)?;
-                let problems = merged.problems();
-                std::fs::write(ws.answer_path(), &merged.card)?;
-                std::fs::write(
-                    ws.path().join(harness::NOTES),
-                    format!("Section agents ran.{problems}\n"),
-                )?;
-                merged_draft = problems.is_empty().then_some(merged.card);
-            }
-            Reply::Sensor { part, kind } => {
-                progress::phase("locating the pin map and key tables");
-                progress::event(
-                    "stage",
-                    serde_json::json!({"stage": "locate", "attempt": 1, "attempts": 1}),
-                );
-                let locate = harness::locate_parts(part, kind, required_params_for_kind(kind));
-                run(&locate.then(&harness::page_list(ws.path())))?;
-                if !ws.path().join(harness::NOTES).is_file() {
-                    bail!("the locating agent wrote no {}", harness::NOTES);
-                }
-            }
-            Reply::Word => {}
-        }
-    }
+    let mut merged_draft = if staged && !ws.path().join(harness::NOTES).is_file() {
+        first_pass(resolved, ws, reply, budget, billing)?
+    } else {
+        None
+    };
     let mut prompt = prompts.for_harness(staged);
     if !reply.table().is_empty() {
         prompt = prompt.then(&harness::handoff(
@@ -5088,7 +5119,7 @@ pub(crate) fn launch_agent(
         if cache_on && !prompt.base.is_empty() {
             let text = format!("{WORKSPACE_NOTE}\n\n{}", prompt.base);
             claude_base = Some(cache::base_file(&text).context("writing the shared base prompt")?);
-            stdin_text = prompt.tail.clone();
+            stdin_text.clone_from(&prompt.tail);
         }
         stdin_text += &envelope_note(&ws.path().join(REPLY_SCHEMA));
     }
@@ -5230,7 +5261,7 @@ pub(crate) fn launch_agent(
         _ if backend == Backend::ClaudeCode => {
             format!("{whole}{}", envelope_note(&ws.path().join(REPLY_SCHEMA)))
         }
-        _ => whole.clone(),
+        _ => whole,
     };
     record_trace(ws, &exe, &cmd, &traced, &stdout);
     let stdout = stdout?;
