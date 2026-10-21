@@ -20,8 +20,7 @@ on:
 
 concurrency:
   # A full candidate dispatch supersedes the automatic push run for the same
-  # ref. That validates Linux once before native runners instead of paying for
-  # two complete prerequisite passes.
+  # ref, so a superseded run stops spending runner minutes.
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
@@ -36,12 +35,21 @@ env:
   # A failing test should print its assertion, not spend a minute on backtraces.
   RUST_BACKTRACE: 1
 
+# Wall-time policy: every gate depends only on `plan`, so the longest single job
+# sets the run time instead of a chain of them (Linux lints and tests, the
+# native macOS gate, and the native Windows jobs all start together). Nothing
+# was dropped to get there; the native jobs no longer wait for the Linux tests.
+#
 # Rust cache policy:
-# - linux-ci is intentionally shared by the serial Rust gates;
+# - linux-ci is shared by the Linux Rust gates (the cache key also hashes each
+#   job's environment, so jobs with different env keep separate entries);
 # - workspace crates are retained, so the same Hauksbee graph is not rebuilt
 #   from zero for clippy, no-default, docs, and both full-test shards;
-# - the first Rust job runs the last failed test before broad compilation, so a
-#   known regression fails early and its successful build seeds later gates.
+# - the clippy job runs the last failed tests before broad compilation, so a
+#   known regression fails early and its build seeds later runs;
+# - each native Windows job keeps its own key (tests, flows, release): their
+#   feature shapes and profiles differ, so one shared key would keep only the
+#   first finisher's artifacts.
 
 jobs:
   plan:
@@ -154,8 +162,8 @@ jobs:
 
   no-default-engine:
     name: engine without default features
-    needs: [plan, clippy]
-    if: always() && needs.plan.outputs.rust == 'true' && needs.clippy.result == 'success'
+    needs: plan
+    if: needs.plan.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -178,8 +186,8 @@ jobs:
 
   test:
     name: cargo test (${{ matrix.os }} / ${{ matrix.suite }})
-    needs: [plan, no-default-engine]
-    if: always() && needs.plan.outputs.rust == 'true' && needs.no-default-engine.result == 'success'
+    needs: plan
+    if: needs.plan.outputs.rust == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     strategy:
@@ -212,10 +220,13 @@ jobs:
         shell: bash
         run: cargo test ${{ matrix.packages }}
 
+  # One macOS job, not shards: GitHub's macOS arm64 pool is capacity-constrained
+  # and a second concurrent macOS job was repeatedly never acquired (cancelled
+  # after ~15 minutes in the queue), which costs more than sharding saves.
   macos:
     name: native macOS workspace candidate gate
-    needs: [plan, test]
-    if: always() && needs.plan.outputs.full == 'true' && needs.test.result == 'success'
+    needs: plan
+    if: needs.plan.outputs.full == 'true'
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
@@ -223,6 +234,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: macos-ci
+          # (stable across runner images, as above)
+          add-rust-environment-hash-key: false
           add-job-id-key: false
           cache-on-failure: true
           cache-workspace-crates: true
@@ -236,18 +249,20 @@ jobs:
       - name: cargo test (native macOS workspace)
         run: cargo test --workspace
 
-  windows:
-    name: native Windows tests, release binary, and drag-and-drop front door
-    needs: [plan, test]
-    if: always() && needs.plan.outputs.full == 'true' && needs.test.result == 'success'
+  # The native Windows gate is parallel jobs (six test shards, the flows, the release build) and one rollup that keeps the
+  # original check name. None of them waits on the Linux tests (they share no
+  # artifact), so the longest of them, not the sum, sets the wall time. Every
+  # command of the former single job still runs, in the same feature shapes.
+  windows-tests:
+    name: native Windows tests (engine, CI, mcu) shard ${{ matrix.shard }}/6
+    needs: plan
+    if: needs.plan.outputs.full == 'true'
     runs-on: windows-latest
-    # Measured end-to-end: ~30 min of setup and pinned-simulator installs,
-    # ~43 min of serialized native tests, then the firmware-flow gates with
-    # their warmup builds, the front-door build, the release-profile
-    # binaries (~35 min, not covered by the dev-profile cache), and the
-    # drag-and-drop proof land near 140 minutes cold. 180 guards hangs
-    # without killing an honest pass.
-    timeout-minutes: 180
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
     env:
       # The Windows artifact is permissive-only. If avr leaks into the feature
       # graph, build.rs must fail rather than finding an accidental runner copy.
@@ -257,11 +272,64 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: windows-ci
+          shared-key: windows-tests
+          # (stable across runner images, as above)
+          add-rust-environment-hash-key: false
+          # Every shard compiles the same graph; one of them saves it.
+          save-if: ${{ matrix.shard == 1 }}
           add-job-id-key: false
           cache-on-failure: true
           cache-workspace-crates: true
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - name: install checksum-pinned cargo-nextest
+        shell: pwsh
+        run: .\scripts\ci-install-nextest.ps1
+      # The installer-timeout test spawns Windows PowerShell and a grandchild of
+      # it and gives the pair 20 s to come up. The first Windows PowerShell
+      # start on a fresh runner can eat most of that (5 s to 23 s measured), a
+      # cost the single serial job never paid because its earlier PowerShell
+      # steps had already warmed it. Start one here so the test measures the
+      # job-object teardown, not a cold disk.
+      - name: warm Windows PowerShell
+        shell: powershell
+        run: |
+          $child = Start-Process powershell -ArgumentList '-NoProfile','-Command','Start-Sleep -Milliseconds 500' -PassThru
+          Wait-Process -Id $child.Id
+      - name: install checksum-pinned Windows simulator backends
+        shell: pwsh
+        run: .\scripts\install-sims-windows.ps1
+      # `-j 1` is Windows-runner load management, not a smaller test set: every
+      # test still runs, one at a time, and the six shards together run each
+      # test exactly once (`--partition count:` splits the whole listed set).
+      # Several of these tests spawn a whole emulator (Renode's .NET host,
+      # QEMU) as a child process, and on this 4-core runner two Renode
+      # instances running concurrently is exactly the configuration that killed
+      # one of them mid-run (both TCP bridges reset with os error 10054,
+      # sensor_attach's cold leg in the v0.1.0-beta.1 release run) while the
+      # same co-sims pass one at a time. corpus-gate.yml serializes its
+      # emulator suites for the same reason. The shards run on separate
+      # machines, so serial per runner still finishes in a sixth of the time.
+      - name: native engine, CI, and emulator-lifecycle tests (shard ${{ matrix.shard }}/6)
+        run: cargo nextest run -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --no-fail-fast --all-targets --no-default-features --features renode,qemu -j 1 --partition count:${{ matrix.shard }}/6
+
+  windows-flows:
+    name: native Windows process-tree and required firmware-through-emulator flows
+    needs: plan
+    if: needs.plan.outputs.full == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      SIMAVR_INCLUDE_DIR: C:\nonexistent\simavr-must-not-be-linked
+      SIMAVR_LIB_DIR: C:\nonexistent\simavr-must-not-be-linked
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: windows-flows
+          # (stable across runner images, as above)
+          add-rust-environment-hash-key: false
+          add-job-id-key: false
+          cache-on-failure: true
+          cache-workspace-crates: true
       - name: offline Windows release-contract tests
         run: python scripts/test-windows-port-contract.py
       - name: native Windows Job Object timeout regression
@@ -273,22 +341,45 @@ jobs:
       - name: refuse modified installed simulator payloads
         shell: powershell
         run: .\scripts\test-windows-simulator-integrity.ps1
-      # `--test-threads=1` is Windows-runner load management, not a smaller
-      # test set: every test still runs, one at a time. Several of these tests
-      # spawn a whole emulator (Renode's .NET host, QEMU) as a child process,
-      # and on this 4-core runner two Renode instances running concurrently is
-      # exactly the configuration that killed one of them mid-run (both TCP
-      # bridges reset with os error 10054, sensor_attach's cold leg in the
-      # v0.1.0-beta.1 release run) while the same co-sims pass one at a time.
-      # corpus-gate.yml serializes its emulator suites for the same reason.
-      - name: native engine, CI, and emulator-lifecycle tests
-        run: cargo test -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --no-fail-fast --all-targets --no-default-features --features renode,qemu -- --test-threads=1
       - name: require three real firmware-through-emulator flows
         shell: pwsh
         run: |
           .\scripts\run-required-integrations-windows.ps1 `
             -ExpectedSha "${{ github.sha }}" `
             -EvidenceOut "output\windows-frontdoor\required-integrations-windows-x86_64.json"
+      - name: Windows required-integration evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-required-integrations-evidence
+          path: output/windows-frontdoor
+          if-no-files-found: error
+
+  windows-release:
+    name: native Windows release binaries and drag-and-drop front door
+    needs: plan
+    if: needs.plan.outputs.full == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      # The Windows artifact is permissive-only. If avr leaks into the feature
+      # graph, build.rs must fail rather than finding an accidental runner copy.
+      SIMAVR_INCLUDE_DIR: C:\nonexistent\simavr-must-not-be-linked
+      SIMAVR_LIB_DIR: C:\nonexistent\simavr-must-not-be-linked
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: windows-release
+          # (stable across runner images, as above)
+          add-rust-environment-hash-key: false
+          add-job-id-key: false
+          cache-on-failure: true
+          cache-workspace-crates: true
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - name: install checksum-pinned Windows simulator backends
+        shell: pwsh
+        run: .\scripts\install-sims-windows.ps1
       - name: build the embedded browser front door
         working-directory: frontend
         env:
@@ -350,6 +441,24 @@ jobs:
           path: output/windows-frontdoor
           if-no-files-found: error
 
+  windows:
+    name: native Windows tests, release binary, and drag-and-drop front door
+    needs: [plan, windows-tests, windows-flows, windows-release]
+    if: always() && needs.plan.outputs.full == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Rollup under the original check name, so anything that requires that
+      # name still sees one verdict covering every Windows job.
+      - name: require every native Windows job
+        env:
+          TESTS: ${{ needs.windows-tests.result }}
+          FLOWS: ${{ needs.windows-flows.result }}
+          RELEASE: ${{ needs.windows-release.result }}
+        run: |
+          echo "tests=$TESTS flows=$FLOWS release=$RELEASE"
+          [[ "$TESTS" == "success" && "$FLOWS" == "success" && "$RELEASE" == "success" ]]
+
   diagrams:
     name: diagram geometry lint
     runs-on: ubuntu-latest
@@ -405,8 +514,8 @@ jobs:
 
   defect-regressions:
     name: pinned upstream defect regressions
-    needs: [plan, test]
-    if: always() && needs.plan.outputs.full == 'true' && needs.test.result == 'success'
+    needs: plan
+    if: needs.plan.outputs.full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -442,8 +551,8 @@ jobs:
 
   docs:
     name: cargo doc (rendered module docs stay valid)
-    needs: [plan, clippy]
-    if: always() && needs.plan.outputs.rust == 'true' && needs.clippy.result == 'success'
+    needs: plan
+    if: needs.plan.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -542,8 +651,8 @@ jobs:
 
   vscode-extension:
     name: VS Code extension (build and tests)
-    needs: [plan, no-default-engine]
-    if: always() && needs.plan.outputs.vscode == 'true' && (needs.no-default-engine.result == 'success' || needs.no-default-engine.result == 'skipped')
+    needs: plan
+    if: needs.plan.outputs.vscode == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -571,8 +680,8 @@ jobs:
 
   scenario-qc:
     name: scenario QC (ten real-user sessions, end to end)
-    needs: [plan, test]
-    if: always() && needs.plan.outputs.full == 'true' && needs.test.result == 'success'
+    needs: plan
+    if: needs.plan.outputs.full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -615,8 +724,8 @@ jobs:
 
   gpl-free-check:
     name: cargo check (GPL-free renode+qemu shape)
-    needs: [plan, clippy]
-    if: always() && needs.plan.outputs.rust == 'true' && needs.clippy.result == 'success'
+    needs: plan
+    if: needs.plan.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:

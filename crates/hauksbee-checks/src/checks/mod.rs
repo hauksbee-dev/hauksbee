@@ -51,6 +51,10 @@
 //! - [`power_pins`]: a carded IC whose supply pads are all open, whose return
 //!   pads are all open, whose supply sits on ground or whose ground sits on a
 //!   rail, judged from the card's pin roles alone.
+//! - [`power_states`]: what a board does with one rail switched off and the
+//!   rest on: a part with every supply off whose signal pin a rail that stays
+//!   on holds high (back-feed), and an I2C bus whose pull-ups die with the
+//!   gated rail or that an unpowered device clamps (bus lock-up).
 //! - [`regulator_cout`]: a linear regulator whose output carries less
 //!   capacitance than its card's stability minimum (`cout_min_f`).
 //! - [`regulator_enable`]: a linear regulator whose card says an open enable
@@ -108,6 +112,7 @@ pub mod audio_bus;
 pub mod back_power;
 pub mod boot;
 pub mod bus_loading;
+pub(crate) mod card_trust;
 pub mod contention;
 pub mod control_held_off;
 pub mod converter;
@@ -125,6 +130,7 @@ pub mod model_controls;
 pub mod node_drive;
 pub mod open_paths;
 pub mod power_pins;
+pub mod power_states;
 pub mod pullup_effect;
 pub mod rail_basis;
 pub mod rail_conflicts;
@@ -454,6 +460,25 @@ fn extend_with_pullup_and_audio(
     report.findings.extend(audio);
 }
 
+/// The power-state findings, less what `back_power` already says of the same
+/// part and net: a pull-up above the part's supply is its fault in every
+/// state, not a second finding about the switched one.
+fn power_state_findings(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    report: &NetLintReport,
+) -> Vec<LintFinding> {
+    let mut found = power_states::power_state_lint(board, lib).findings;
+    found.retain(|f| {
+        !report.findings.iter().any(|r| {
+            r.check == LintCheck::BackPower
+                && r.refs.iter().any(|x| f.refs.first() == Some(x))
+                && f.nets.iter().any(|n| r.nets.contains(n))
+        })
+    });
+    found
+}
+
 /// One [`engine_lint`] pass over `board` as it stands.
 fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = board.net_lint();
@@ -470,24 +495,19 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
         .findings
         .extend(envelope::envelope_lint(board, lib).findings);
     lint_tick(12);
+    for findings in [
+        contention::contention_lint(board, lib).findings,
+        back_power::back_power_lint(board, lib).findings,
+        datasheet_field::datasheet_field_lint(board).findings,
+        bus_loading::bus_loading_lint(board, lib).findings,
+        regulator_cout::regulator_cout_lint(board, lib).findings,
+        power_pins::power_pin_lint(board, lib).findings,
+    ] {
+        report.findings.extend(findings);
+    }
     report
         .findings
-        .extend(contention::contention_lint(board, lib).findings);
-    report
-        .findings
-        .extend(back_power::back_power_lint(board, lib).findings);
-    report
-        .findings
-        .extend(datasheet_field::datasheet_field_lint(board).findings);
-    report
-        .findings
-        .extend(bus_loading::bus_loading_lint(board, lib).findings);
-    report
-        .findings
-        .extend(regulator_cout::regulator_cout_lint(board, lib).findings);
-    report
-        .findings
-        .extend(power_pins::power_pin_lint(board, lib).findings);
+        .extend(power_state_findings(board, lib, &report));
     // A regulator held off by its open enable pin is one finding: the
     // extract layer's generic floating-control note on the same pin and net
     // says less (no rail, no datasheet state) and gives way to it.
@@ -572,6 +592,9 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
         }
     }
     lint_tick(2);
+    // Last, so every check's finding is seen: what rests only on a drafted
+    // card's doubtful field is a note to check the card, not a board fault.
+    card_trust::cap_doubted_cards(&mut report, board, lib);
     report
 }
 

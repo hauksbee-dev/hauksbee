@@ -293,6 +293,13 @@ enum ModelsCommand {
     /// Draft a device model from a PDF datasheet (or, with --unmodelled, one per
     /// unmodelled part on a board). Asks first: this sends the
     /// datasheet, and whatever the agent reads, to an LLM backend.
+    ///
+    /// Exit status of --unmodelled: 0 when every part attempted was saved or
+    /// listed for hand supply (parts that already have a card, or that
+    /// failed before with these same inputs and were skipped, do not count
+    /// against it); 4 when some parts were saved and some failed; 1 when parts
+    /// failed and none was saved, or on a hard error (unreadable board, bad
+    /// settings, no consent).
     Extract(Box<ModelsExtractArgs>),
     /// Scaffold a model entry for one board component, pre-seeded only from
     /// the board's own identity (reference and value). It never invents
@@ -470,6 +477,10 @@ struct ModelsCoverageArgs {
 
 #[derive(Parser)]
 #[allow(clippy::doc_markdown, reason = "clap prints these docs as --help")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent command-line switches"
+)]
 struct ModelsExtractArgs {
     /// The datasheet PDF to read.
     #[arg(long, required_unless_present = "unmodelled")]
@@ -509,6 +520,13 @@ struct ModelsExtractArgs {
     /// them). Used before any download. Defaults to `<out-dir>/datasheets`.
     #[arg(long, value_name = "DIR", requires = "unmodelled")]
     datasheet_dir: Option<PathBuf>,
+    /// With --unmodelled: try again the parts this library remembers failing,
+    /// or finding no datasheet for, with these very inputs (same datasheet,
+    /// backend, model and hauksbee version). Without it they are skipped, in one
+    /// line each; supplying a new datasheet, or choosing another model, retries
+    /// a part by itself. --force also retries.
+    #[arg(long, requires = "unmodelled")]
+    retry_failed: bool,
     /// What kind of device it is (bjt_npn, vreg, opamp, i2c_sensor, ...).
     /// Omit it and the model works it out from the datasheet, which is usually
     /// what you want: it is about to read the page that says so. With
@@ -1640,6 +1658,7 @@ fn main() -> anyhow::Result<()> {
                         &hauksbee_engine::commands::extract_batch::BatchOptions {
                             jobs: args.jobs.map(|n| usize::try_from(n).unwrap_or(1)),
                             datasheet_dir: args.datasheet_dir.clone(),
+                            retry_failed: args.retry_failed,
                             ..Default::default()
                         },
                     ),

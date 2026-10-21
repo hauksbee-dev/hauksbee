@@ -300,6 +300,7 @@ mod tests {
                     uncertainty: Vec::new(),
                     characteristic: Vec::new(),
                     pinout: Vec::new(),
+                    doubt: Vec::new(),
                 }),
                 ..ModelEntry::default()
             }),
