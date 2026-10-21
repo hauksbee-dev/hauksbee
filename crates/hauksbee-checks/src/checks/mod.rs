@@ -51,6 +51,10 @@
 //! - [`power_pins`]: a carded IC whose supply pads are all open, whose return
 //!   pads are all open, whose supply sits on ground or whose ground sits on a
 //!   rail, judged from the card's pin roles alone.
+//! - [`power_states`]: what a board does with one rail switched off and the
+//!   rest on: a part with every supply off whose signal pin a rail that stays
+//!   on holds high (back-feed), and an I2C bus whose pull-ups die with the
+//!   gated rail or that an unpowered device clamps (bus lock-up).
 //! - [`regulator_cout`]: a linear regulator whose output carries less
 //!   capacitance than its card's stability minimum (`cout_min_f`).
 //! - [`regulator_enable`]: a linear regulator whose card says an open enable
@@ -125,6 +129,7 @@ pub mod model_controls;
 pub mod node_drive;
 pub mod open_paths;
 pub mod power_pins;
+pub mod power_states;
 pub mod pullup_effect;
 pub mod rail_basis;
 pub mod rail_conflicts;
@@ -454,6 +459,25 @@ fn extend_with_pullup_and_audio(
     report.findings.extend(audio);
 }
 
+/// The power-state findings, less what `back_power` already says of the same
+/// part and net: a pull-up above the part's supply is its fault in every
+/// state, not a second finding about the switched one.
+fn power_state_findings(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    report: &NetLintReport,
+) -> Vec<LintFinding> {
+    let mut found = power_states::power_state_lint(board, lib).findings;
+    found.retain(|f| {
+        !report.findings.iter().any(|r| {
+            r.check == LintCheck::BackPower
+                && r.refs.iter().any(|x| f.refs.first() == Some(x))
+                && f.nets.iter().any(|n| r.nets.contains(n))
+        })
+    });
+    found
+}
+
 /// One [`engine_lint`] pass over `board` as it stands.
 fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = board.net_lint();
@@ -488,6 +512,9 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     report
         .findings
         .extend(power_pins::power_pin_lint(board, lib).findings);
+    report
+        .findings
+        .extend(power_state_findings(board, lib, &report));
     // A regulator held off by its open enable pin is one finding: the
     // extract layer's generic floating-control note on the same pin and net
     // says less (no rail, no datasheet state) and gives way to it.

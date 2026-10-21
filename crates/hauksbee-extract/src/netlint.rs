@@ -327,6 +327,16 @@ pub enum LintCheck {
     /// Fires only when every non-passive pin on the net has a known audio role.
     /// Produced by the engine-layer `audio_bus` check.
     AudioBusWiring,
+    /// A part with every supply off (a rail an MCU-driven switch turned off)
+    /// while a signal pin is pulled up to, or driven from, a rail that stays
+    /// on: the pin's protection clamp conducts into the unpowered chip.
+    /// Produced by the engine-layer `power_states` check.
+    PowerDomainBackfeed,
+    /// An I2C bus left unusable by a rail switched off: its pull-ups all on
+    /// the gated rail while powered devices still use it, or an unpowered
+    /// device clamping a bus the powered devices still use. Produced by the
+    /// engine-layer `power_states` check.
+    PowerDomainBusLockup,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -451,7 +461,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 40] = [
+    pub const ALL: [Self; 42] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -492,6 +502,8 @@ impl LintCheck {
         Self::DatasheetMismatch,
         Self::PullupIneffective,
         Self::AudioBusWiring,
+        Self::PowerDomainBackfeed,
+        Self::PowerDomainBusLockup,
     ];
 
     #[must_use]
@@ -537,6 +549,8 @@ impl LintCheck {
             Self::DatasheetMismatch => "datasheet_mismatch",
             Self::PullupIneffective => "pullup_ineffective",
             Self::AudioBusWiring => "audio_bus_wiring",
+            Self::PowerDomainBackfeed => "power_domain_backfeed",
+            Self::PowerDomainBusLockup => "power_domain_bus_lockup",
         }
     }
 }

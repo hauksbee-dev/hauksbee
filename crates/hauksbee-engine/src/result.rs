@@ -3806,9 +3806,7 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::FloatingControlPin => {
             "Tie the pin to a defined level with a pull-up/pull-down per the datasheet, or drive it from a known output."
         }
-        LintCheck::LedCurrentSanity => {
-            "Re-pick the series resistor for ~1-20 mA: R = (Vsupply - Vf) / I_target."
-        }
+        LintCheck::LedCurrentSanity => "Re-pick the series resistor for ~1-20 mA: R = (Vsupply - Vf) / I_target.",
         LintCheck::OutputContention => {
             "Leave one push-pull driver on the net, or switch to open-drain with a single pull-up."
         }
@@ -3890,7 +3888,9 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         | LintCheck::ControlHeldOff
         | LintCheck::I2cBusLoading
         | LintCheck::PullupIneffective
-        | LintCheck::AudioBusWiring => supply_fix_hint(check),
+        | LintCheck::AudioBusWiring
+        | LintCheck::PowerDomainBackfeed
+        | LintCheck::PowerDomainBusLockup => supply_fix_hint(check),
     })
 }
 
@@ -3913,6 +3913,12 @@ const fn supply_fix_hint(check: LintCheck) -> &'static str {
         }
         LintCheck::PullupIneffective => {
             "Pull the line up to the receiver's own supply rail (at least its VIH), use a smaller resistor if its input leakage drops the level, or add a level shifter."
+        }
+        LintCheck::PowerDomainBackfeed => {
+            "Pull the line up to the switched rail instead (so it goes off with the chip), add a buffer or switch with a power-down rating, or park the driving pin low in firmware before the rail turns off."
+        }
+        LintCheck::PowerDomainBusLockup => {
+            "Put the I2C pull-ups on a rail that stays on while any chip on the bus does, and power every chip on the bus together, or isolate the switched chip with a bus switch or buffer."
         }
         LintCheck::AudioBusWiring => {
             "Wire each audio pin to the net carrying its own role (BCLK to BCLK, LRCLK to LRCLK, one part's data out to the other's data in), keep exactly one clock master, and connect MCLK where the codec needs it."
