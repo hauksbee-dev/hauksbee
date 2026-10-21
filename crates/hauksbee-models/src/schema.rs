@@ -203,6 +203,10 @@ pub struct ModelEntry {
     /// The package `[models.pins]` is read for, kept likewise (see `validation::pin_package`).
     #[serde(skip)]
     pub pin_package: Option<String>,
+    /// `source`'s `[[models.source.doubt]]` rows, kept likewise: what a drafted card
+    /// left unconfirmed ([`crate::card_trust`]).
+    #[serde(skip)]
+    pub doubts: Vec<Doubt>,
 }
 
 /// One rail a part sources on its own pin (see [`ModelEntry::supply_outputs`]).
@@ -437,6 +441,33 @@ pub struct ModelSourceSpec {
     /// sheet prints, so `[models.pins]` is checked against its own package's.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pinout: Vec<Pinout>,
+    /// `[[models.source.doubt]]`: what the drafting validator, or the drafter's own
+    /// confidence, left unconfirmed on a drafted card ([`crate::card_trust`]). A finding
+    /// whose only basis is such a field is reported as "check this card", never as a
+    /// board fault. Delete a row once the card has been reviewed against the datasheet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub doubt: Vec<Doubt>,
+}
+
+/// Which part of a drafted card a [`Doubt`] covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DoubtArea {
+    /// The whole card: the drafter reported low confidence, or the pad map is
+    /// read from the wrong package. Every card-derived finding is doubted.
+    Card,
+    /// The pad-to-role map: findings that read what a pad is for.
+    Pins,
+    /// The operating-envelope rows: findings that compare a level with a window.
+    Envelope,
+}
+
+/// One field group of a drafted card the validator could not confirm, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Doubt {
+    pub area: DoubtArea,
+    pub reason: String,
 }
 
 /// One package's pin-table column: pad identifier to the name printed for it.

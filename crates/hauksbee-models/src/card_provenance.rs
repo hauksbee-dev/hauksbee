@@ -57,7 +57,7 @@ const SKIPPED_KEYS: &[&str] = &[
 ];
 
 /// Keys under `source` that are provenance themselves.
-const SKIPPED_SOURCE: &[&str] = &["references", "pinout", "tier", "validation"];
+const SKIPPED_SOURCE: &[&str] = &["references", "pinout", "tier", "validation", "doubt"];
 
 /// Words in a row's `basis` or `conditions` that document a non-printed origin.
 const DOCUMENTED: &[&str] = &["derived", "computed", "calculated", "assumed", "assumption"];
