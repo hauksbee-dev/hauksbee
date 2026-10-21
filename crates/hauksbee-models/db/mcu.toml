@@ -74,6 +74,18 @@ reset_pull_up_ohms = 30000.0
 "27" = "pc4_adc4_sda"
 "28" = "pc5_adc5_scl"
 
+# ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020): sec. 1.1.5 p.13
+# (PC6/RESET: low longer than the minimum pulse resets; with RSTDISBL unprogrammed, the factory
+# default per Table 28-7 p.291, PC6 is the reset input); Table 30-1 p.323: RRST Reset Pull-up
+# Resistor 30-60 kOhm. RSTDISBL programmed turns the pad into I/O, so a board may legitimately
+# reuse it.
+[[models.straps]]
+role = "pc6_reset"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+note = "RESET (PC6) is active low with an internal 30-60 kOhm pull-up while RSTDISBL is unprogrammed (factory default); held low it keeps the part in reset"
+
 [models.ratings]
 max_pin_current_a = 0.04  # 40mA abs max per I/O pin
 max_current_a = 0.2       # 200mA total VCC/GND
@@ -170,6 +182,18 @@ reset_pull_up_ohms = 30000.0
 "32" = "pd2_int0"
 "33" = "gnd4"      # VQFN/MLF exposed pad
 
+# ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020): sec. 1.1.5 p.13
+# (PC6/RESET: low longer than the minimum pulse resets; with RSTDISBL unprogrammed, the factory
+# default per Table 28-7 p.291, PC6 is the reset input); Table 30-1 p.323: RRST Reset Pull-up
+# Resistor 30-60 kOhm. RSTDISBL programmed turns the pad into I/O, so a board may legitimately
+# reuse it.
+[[models.straps]]
+role = "pc6_reset"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+note = "RESET (PC6) is active low with an internal 30-60 kOhm pull-up while RSTDISBL is unprogrammed (factory default); held low it keeps the part in reset"
+
 [models.ratings]
 max_pin_current_a = 0.04
 max_current_a = 0.2
@@ -254,6 +278,18 @@ reset_pull_up_ohms = 30000.0
 "27" = "pd1_txd"
 "28" = "pd2_int0"
 "29" = "gnd3"      # QFN/MLF bottom pad
+
+# ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020): sec. 1.1.5 p.13
+# (PC6/RESET: low longer than the minimum pulse resets; with RSTDISBL unprogrammed, the factory
+# default per Table 28-7 p.291, PC6 is the reset input); Table 30-1 p.323: RRST Reset Pull-up
+# Resistor 30-60 kOhm. RSTDISBL programmed turns the pad into I/O, so a board may legitimately
+# reuse it.
+[[models.straps]]
+role = "pc6_reset"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+note = "RESET (PC6) is active low with an internal 30-60 kOhm pull-up while RSTDISBL is unprogrammed (factory default); held low it keeps the part in reset"
 
 [models.ratings]
 max_pin_current_a = 0.04
@@ -347,6 +383,18 @@ default_clock_hz = 8000000
 "31" = "pd1_txd"
 "32" = "pd2_int0"
 
+# ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020): sec. 1.1.5 p.13
+# (PC6/RESET: low longer than the minimum pulse resets; with RSTDISBL unprogrammed, the factory
+# default per Table 28-7 p.291, PC6 is the reset input); Table 30-1 p.323: RRST Reset Pull-up
+# Resistor 30-60 kOhm. RSTDISBL programmed turns the pad into I/O, so a board may legitimately
+# reuse it.
+[[models.straps]]
+role = "pc6_reset"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+note = "RESET (PC6) is active low with an internal 30-60 kOhm pull-up while RSTDISBL is unprogrammed (factory default); held low it keeps the part in reset"
+
 [models.ratings]
 max_pin_current_a = 0.04  # Table 33-1, DC current per I/O pin 40.0 mA
 max_current_a = 0.2       # Table 33-1, DC current VCC and GND pins 200.0 mA
@@ -438,6 +486,16 @@ backend = "none:atmega16u2"
 "31" = "uvcc"
 "32" = "avcc"
 "33" = "gnd2"     # QFN centre pad, soldered to ground (Figure 1-1 note)
+
+# ATmega8U2/16U2/32U2 datasheet 7799E-AVR-09/2012 (cover; the page footers read 7799D-AVR-11/10):
+# sec. 26.2 DC Characteristics p.264, RRST Reset Pull-up Resistor 30-60 kOhm; pin 24 is Reset (PC1/dW)
+# in the pinout, sec. 2.2.12 RESET/PC1/dW. The DWEN fuse (default unprogrammed) repurposes it as debugWIRE.
+[[models.straps]]
+role = "pc1_reset"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+note = "RESET (PC1/dW) is active low with an internal 30-60 kOhm pull-up; held low it keeps the part in reset"
 
 [models.ratings]
 max_pin_current_a = 0.04  # 26.1, DC current per I/O pin 40.0 mA
@@ -587,6 +645,16 @@ backend = "none:samd21"
 "31" = "pa30_swclk"
 "32" = "pa31_swdio"
 "33" = "gnd3"        # exposed pad, tied inside to GND and GNDANA
+
+# SAM D21/DA1 Family Complete Data Sheet DS40001882L: sec. 16.6.2.7 Reset Controller p.139: "The external
+# reset is generated when pulling the RESET pin low. This pin has an internal pull-up, and does not need
+# to be driven externally during normal operation."
+[[models.straps]]
+role = "reset_n"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+note = "RESET is active low with an internal pull-up and needs no external drive in normal operation"
 
 [models.ratings]
 max_current_a = 0.092     # Table 37-2, IVDD 92 mA into a VDD pin
@@ -747,6 +815,15 @@ default_clock_hz = 8000000
 # margay does. Named `gnd5` so the binder counts it as a ground connection
 # rather than reporting the pad as unmodelled.
 "TH" = "gnd5"
+
+# Atmel-42719C-ATmega1284P_Datasheet_Complete-10/2016: Table 29-2 Common DC characteristics
+# (pp.409-410; the RRST row, Reset Pull-up Resistor 30-60 kOhm, is on p.410). Reset pad 4 on the 44-lead packages.
+[[models.straps]]
+role = "reset"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+note = "RESET is active low with an internal 30-60 kOhm pull-up; held low it keeps the part in reset"
 
 [models.ratings]
 # Table 29-1 Absolute Maximum Ratings.
@@ -1153,6 +1230,15 @@ default_clock_hz = 8000000
 "43" = "gnd4"
 "44" = "avcc2"
 
+# ATmega16U4/32U4 datasheet Atmel-7766J-USB-ATmega16U4/32U4-Datasheet_04/2016: Table 29-1 DC
+# Characteristics, p.384, RRST Reset Pull-up Resistor 30-60 kOhm.
+[[models.straps]]
+role = "reset"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+note = "RESET is active low with an internal 30-60 kOhm pull-up; held low it keeps the part in reset"
+
 [models.ratings]
 max_pin_current_a = 0.04  # Section 29.1 Absolute Maximum Ratings, DC current per I/O pin 40.0 mA
 max_current_a = 0.2       # DC current VCC and GND pins, 200.0 mA
@@ -1242,6 +1328,16 @@ default_clock_hz = 8000000
 "7" = "pb2_sck_scl_adc1"
 "8" = "vcc"
 
+# ATtiny25/45/85 datasheet 2586Q-AVR-08/2013: Table 21-1 DC Characteristics p.161, RRST Reset
+# Pull-up Resistor 30-60 kOhm (VCC = 5.5 V, input low). With the RSTDISBL fuse unprogrammed (its
+# factory default, p.148) PB5 is the reset input; programmed, it is an I/O pad.
+[[models.straps]]
+role = "pb5_reset_adc0"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+note = "RESET (PB5) is active low with an internal 30-60 kOhm pull-up while RSTDISBL is unprogrammed (factory default)"
+
 [models.ratings]
 max_pin_current_a = 0.04
 max_current_a = 0.2
@@ -1284,6 +1380,16 @@ default_clock_hz = 8000000
 "12" = "pb1_miso"
 "14" = "pb2_sck_scl_adc1"
 "15" = "vcc"
+
+# ATtiny25/45/85 datasheet 2586Q-AVR-08/2013: Table 21-1 DC Characteristics p.161, RRST Reset
+# Pull-up Resistor 30-60 kOhm (VCC = 5.5 V, input low). With the RSTDISBL fuse unprogrammed (its
+# factory default, p.148) PB5 is the reset input; programmed, it is an I/O pad.
+[[models.straps]]
+role = "pb5_reset_adc0"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+note = "RESET (PB5) is active low with an internal 30-60 kOhm pull-up while RSTDISBL is unprogrammed (factory default)"
 
 [models.ratings]
 max_pin_current_a = 0.04
@@ -1600,6 +1706,16 @@ internal_clock = "internal 16 MHz HSI RC oscillator"
 "48" = "vdd3"
 "49" = "vss"  # exposed pad
 
+# STM32G474xB/xC/xE datasheet DS12288 Rev 6 (Nov 2021): Table 11 Legend/abbreviations p.56, NRST "Bidirectional
+# reset pin with embedded weak pull-up resistor"; sec. 5.3.15 NRST pin characteristics p.133: "connected to a
+# permanent pull-up resistor, RPU". Pad 7 = PG10-NRST (pinout, LQFP48/UFQFPN48).
+[[models.straps]]
+role = "reset"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+note = "NRST is active low with an embedded weak pull-up; held low it keeps the part in reset"
+
 [models.ratings]
 max_pin_current_a = 0.02
 max_current_a = 0.15
@@ -1745,6 +1861,16 @@ internal_clock = "internal 16 MHz HSI RC oscillator"
 "99" = "vss5"
 "100" = "vdd5"
 
+# STM32F777xx/F778Ax/F779xx datasheet DS11243 Rev 8 (July 2025): Table 10 Legend/abbreviations p.66, RST
+# "Bidirectional reset pin with weak pull-up resistor"; sec. 6.3.21 NRST pin characteristics p.162: "connected
+# to a permanent pull-up resistor, RPU (see Table 66)". Pad 14 = NRST on LQFP100 (Table 11 pin definitions pp.68-69).
+[[models.straps]]
+role = "reset"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+note = "NRST is active low with a weak internal pull-up; held low it keeps the part in reset"
+
 [models.ratings]
 max_pin_current_a = 0.025
 max_current_a = 0.32
@@ -1824,6 +1950,16 @@ internal_clock = "internal MSI/HSI16 RC oscillator"
 "30" = "pb7"
 "31" = "pb9"
 "32" = "vss2"
+
+# STM32L011x3/x4 datasheet DocID027973 Rev 5 (the card's DS11152 basis): Table 12 Legend/abbreviations p.36, RST
+# "Bidirectional reset pin with embedded weak pull-up resistor"; Table 13 Pin definitions p.37, NRST at LQFP32
+# pin 4; sec. 6.3.14 NRST pin characteristics p.79: "connected to a permanent pull-up resistor, RPU".
+[[models.straps]]
+role = "reset"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+note = "NRST is active low with an embedded weak pull-up; held low it keeps the part in reset"
 
 [models.ratings]
 max_pin_current_a = 0.016
@@ -1911,6 +2047,17 @@ backend = "qemu:esp32"
 "26" = "p04"        # GPIO4: ~5 Hz blink, observable through the solved circuit
 "35" = "p01_txd"    # TXD0 (UART0 TX, GPIO1)
 "34" = "p03_rxd"    # RXD0 (UART0 RX, GPIO3)
+
+# ESP32-WROOM-32E & WROOM-32UE Datasheet v2.1: Table 3 Pin Definitions p.11, EN pad 3 "High: On; enables the
+# chip. Low: Off; the chip shuts down. Note: Do not leave the pin floating." Figure 7 ESP32-WROOM-32E Schematics
+# p.37 shows CHIP_PU wired straight to module pad 3 with no pull-up or RC on the module; sec. 9 p.39 asks for
+# the RC delay (R = 10 kOhm, C = 1 uF) on the host board.
+[[models.straps]]
+role = "en"
+level = "high"
+boot_select = false
+internal_pull = "none"
+note = "EN (CHIP_PU) high = chip enabled, low = chip off; the module has no on-board pull on EN, so an undriven net floats"
 
 [models.ratings]
 max_pin_current_a = 0.04   # ~40 mA abs max source/sink per pad (datasheet)
@@ -2162,6 +2309,17 @@ must_not_float_roles = "en"
 "26" = "gpio45"
 "16" = "gpio46"
 
+# ESP32-S3-WROOM-1 & WROOM-1U Datasheet v1.8: Table 3-1 Pin Definitions p.11, EN pad 3 "High: on, enables the
+# chip. Low: off, the chip powers off. Note: Do not leave the EN pin floating." Figure 8-1 ESP32-S3-WROOM-1
+# Schematics p.39 shows CHIP_PU wired straight to module pad 3 with no pull-up on the module; sec. 9 p.41
+# asks for an RC delay on the board.
+[[models.straps]]
+role = "en"
+level = "high"
+boot_select = false
+internal_pull = "none"
+note = "EN (CHIP_PU) high = chip enabled, low = chip off; the module has no on-board pull on EN, so an undriven net floats"
+
 # The module's one supply pin, 3V3 (VDD33). Its abs max IS the recommended
 # ceiling, so a 5 V rail on it is past both.
 [[models.envelope]]
@@ -2235,6 +2393,16 @@ must_not_float_roles = "en"
 "8"  = "gpio3"
 "51" = "gpio45"
 "52" = "gpio46"
+
+# ESP32-S3 Series Datasheet v2.2: Table 2-10 Analog Pins p.28, CHIP_PU pin 4 "High: on, enables the chip
+# (powered up). Low: off, disables the chip (powered down). Note: Do not leave the CHIP_PU pin floating."
+# Table 2-1 Pin Overview p.16 lists CHIP_PU with no reset-time pull (GPIO0 beside it shows WPU).
+[[models.straps]]
+role = "en"
+level = "high"
+boot_select = false
+internal_pull = "none"
+note = "CHIP_PU high = chip enabled, low = chip off; the chip has no internal pull on CHIP_PU, so an undriven net floats"
 
 # Same strap table and citations as esp32s3_wroom.
 [[models.straps]]
@@ -2665,6 +2833,16 @@ backend = "none:esp32c6"
 "51" = "gnd20"
 "52" = "gnd21"
 "53" = "gnd22"
+
+# ESP32-C6-MINI-1 & MINI-1U Datasheet v1.5: Table 3-1 Pin Definitions p.11 (continued), EN pad 8 "High: on,
+# enables the chip. Low: off, the chip powers off. Note: Do not leave the EN pin floating." Figure 8-1
+# ESP32-C6-MINI-1 Schematics p.38 shows CHIP_EN wired straight to module pad 8 with no pull-up on the module.
+[[models.straps]]
+role = "en"
+level = "high"
+boot_select = false
+internal_pull = "none"
+note = "EN (CHIP_PU) high = chip enabled, low = chip off; the module has no on-board pull on EN, so an undriven net floats"
 
 [models.ratings]
 max_voltage_v = 3.6       # Table 6-1, VDD33 -0.3 to 3.6 V
@@ -3293,6 +3471,16 @@ backend = "none:efm32pg22"
 # datasheet says. See the note above for exactly what is sourced and what is not,
 # and why the key is 41.
 "41" = "vss4"
+
+# EFM32PG22 Gecko MCU Family Data Sheet Rev. 1.4: Table 6.2 QFN40 Device Pinout p.60 (pin 11 RESETn:
+# "internally pulled up to DVDD"); Table 4.17 GPIO Pins (3V GPIO pins) p.38: RESETn pin pull-up to
+# DVDD 35 / 44 / 55 kOhm; Table 4.1 p.18 note 2: the RESETn pin has a pull-up device to DVDD.
+[[models.straps]]
+role = "reset"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+note = "RESETn is active low with an internal 35-55 kOhm pull-up to DVDD; held low it keeps the part in reset"
 
 [models.ratings]
 # Absolute Maximum Ratings.
