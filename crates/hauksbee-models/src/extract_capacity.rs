@@ -21,6 +21,12 @@
 //! more every [`RAMP_EVERY`] while nothing is refused) and, after the service
 //! rate-limits and the pool is halved, grows back one at a time once it has been
 //! quiet for [`REGROW_AFTER`]. Usage headroom can only ever lower the ceiling.
+//!
+//! Everything that paces a batch lives here, in one place: the agent ceiling
+//! ([`JOBS_DEFAULT`]), the datasheet stage that runs outside the agent pool
+//! ([`DOWNLOADERS`], [`PER_HOST`]), the spacing of agent session starts
+//! ([`START_SPACING`]) and the short waits before retrying a refused start
+//! ([`rate_limit_wait`]).
 
 use std::time::Duration;
 
@@ -42,6 +48,31 @@ pub const RAMP_START: usize = 2;
 pub const RAMP_EVERY: Duration = Duration::from_secs(10);
 /// After a rate-limit refusal, the quiet stretch before the pool grows by one.
 pub const REGROW_AFTER: Duration = Duration::from_secs(60);
+/// Datasheet downloads (search and fetch) running at once, outside the agent
+/// pool: a part waiting on a vendor's server never holds an agent's place.
+pub const DOWNLOADERS: usize = 6;
+/// Most downloads in flight to one host, so no vendor is hammered.
+pub const PER_HOST: usize = 2;
+/// The shortest time between two agent sessions starting (a refusal's own
+/// cost is about two seconds; a burst of starts is what invites one).
+pub const START_SPACING: Duration = Duration::from_secs(2);
+/// How wide refusals may stretch [`START_SPACING`] (it doubles per refusal).
+pub const START_SPACING_MAX: Duration = Duration::from_secs(8);
+/// After a refusal, the quiet stretch before the start spacing is the base again.
+pub const START_CALM_AFTER: Duration = REGROW_AFTER;
+/// The waits before retrying a session whose first request was refused for rate
+/// limiting: short and growing, each jittered by up to half either way so
+/// several parts do not come back at the same moment.
+pub const RATE_LIMIT_WAITS: [Duration; 8] = [
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+    Duration::from_secs(8),
+    Duration::from_secs(15),
+    Duration::from_secs(30),
+    Duration::from_secs(45),
+    Duration::from_secs(60),
+    Duration::from_secs(60),
+];
 /// The pool when the plan's headroom cannot be read.
 pub const JOBS_UNKNOWN: usize = 2;
 /// The pool for a metered (API key) backend, which has no plan to protect.
@@ -326,6 +357,16 @@ pub struct PoolStats {
     pub rate_limits: usize,
 }
 
+/// The wait before retry number `attempt` (from 0) of a refused session start.
+///
+/// `None` once the schedule is spent. `unit` in `[0, 1)` places the wait within
+/// its jitter, from half to one and a half times the base.
+#[must_use]
+pub fn rate_limit_wait(attempt: usize, unit: f64) -> Option<Duration> {
+    let base = RATE_LIMIT_WAITS.get(attempt)?;
+    Some(base.mul_f64(0.5 + unit.clamp(0.0, 1.0)))
+}
+
 /// Half the pool, for a backend that is rate limiting; never below 1.
 #[must_use]
 pub const fn halve(jobs: usize) -> usize {
@@ -596,6 +637,35 @@ mod tests {
         );
         assert_eq!((grown(2, 4), grown(3, 4), grown(4, 4)), (3, 4, 4));
         assert_eq!(grown(5, 4), 4, "a lowered ceiling pulls it down, never up");
+    }
+
+    #[test]
+    fn a_refused_start_is_retried_after_a_short_jittered_wait_that_grows() {
+        let secs = |a, u| rate_limit_wait(a, u).map(|d| d.as_secs_f64());
+        assert_eq!(
+            secs(0, 0.5),
+            Some(2.0),
+            "the middle of the jitter is the base"
+        );
+        assert_eq!((secs(0, 0.0), secs(0, 1.0)), (Some(1.0), Some(3.0)));
+        let middles: Vec<f64> = (0..RATE_LIMIT_WAITS.len())
+            .map(|a| secs(a, 0.5).unwrap())
+            .collect();
+        assert!(middles.windows(2).all(|w| w[0] <= w[1]), "{middles:?}");
+        assert!(middles[0] < 5.0, "the first retry is a few seconds, not 30");
+        assert_eq!(secs(RATE_LIMIT_WAITS.len(), 0.5), None, "then it gives up");
+    }
+
+    #[test]
+    fn the_stage_and_pacing_constants_are_sane() {
+        const {
+            assert!(DOWNLOADERS > JOBS_DEFAULT && PER_HOST >= 1 && PER_HOST < DOWNLOADERS);
+        }
+        assert!(START_SPACING < START_SPACING_MAX);
+        assert_eq!(
+            JOBS_DEFAULT, 4,
+            "the default ceiling stays 4 until a live probe says more"
+        );
     }
 
     #[test]

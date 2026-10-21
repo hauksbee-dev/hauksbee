@@ -483,13 +483,13 @@ fn name_footprints(prompt: &mut Prompt, part: &str, footprints: &[String]) {
     );
 }
 
-// One run, top to bottom, as the user sees it.
-#[allow(clippy::too_many_lines)]
-fn run_inner(mut args: Args) -> Result<PathBuf> {
-    // Magic bytes rather than extension, and BEFORE any backend is chosen: a
-    // non-PDF (a saved HTML page, a .docx) would otherwise be text-dumped and
-    // shipped to the LLM, producing a confidently wrong model; a downloaded
-    // datasheet with no extension still passes.
+/// The datasheet's text, after the checks that come before anything is sent.
+///
+/// Magic bytes rather than extension, and BEFORE any backend is chosen: a
+/// non-PDF (a saved HTML page, a .docx) would otherwise be text-dumped and
+/// shipped to the LLM, producing a confidently wrong model; a downloaded
+/// datasheet with no extension still passes.
+fn precheck(args: &Args) -> Result<String> {
     if !is_pdf(&args.pdf) {
         bail!(
             "'{}' is not a PDF (no %PDF header); the extractor reads PDF datasheets only. \
@@ -507,6 +507,44 @@ fn run_inner(mut args: Args) -> Result<PathBuf> {
             args.part
         );
     }
+    Ok(pdf_text)
+}
+
+/// What kind of card to draft for the part: asks the agent to identify it from
+/// the datasheet's first page and says what it answered.
+fn identified_card_kind(args: &Args, pdf_text: &str) -> Result<String> {
+    let identified = identify_kind(args, pdf_text)?;
+    let kind = card_kind(&identified).to_string();
+    say!(
+        "[model-extract] identified {} as kind '{identified}'{}",
+        args.part,
+        if identified == kind {
+            String::new()
+        } else {
+            format!("; drafting the '{kind}' card a board binds")
+        }
+    );
+    Ok(kind)
+}
+
+/// Work out which kind of card the part's datasheet calls for, without drafting.
+///
+/// The same checks and the same identification [`run`] makes when no kind is
+/// given, so a batch can do this as soon as a datasheet lands. Pass the result
+/// as `kind_str` and the run skips it.
+///
+/// # Errors
+///
+/// When the file is not a PDF, is the wrong datasheet, or no supported kind fits.
+pub fn classify_part(args: &Args) -> Result<String> {
+    let pdf_text = precheck(args)?;
+    identified_card_kind(args, &pdf_text)
+}
+
+// One run, top to bottom, as the user sees it.
+#[allow(clippy::too_many_lines)]
+fn run_inner(mut args: Args) -> Result<PathBuf> {
+    let pdf_text = precheck(&args)?;
 
     // An empty kind means "you work it out". Being made to classify a part
     // before the tool will look at it is a barrier at exactly the wrong
@@ -514,17 +552,7 @@ fn run_inner(mut args: Args) -> Result<PathBuf> {
     // person asking for a model is precisely the one who may not know which
     // of our categories their part falls into.
     if args.kind_str.trim().is_empty() {
-        let identified = identify_kind(&args, &pdf_text)?;
-        args.kind_str = card_kind(&identified).to_string();
-        say!(
-            "[model-extract] identified {} as kind '{identified}'{}",
-            args.part,
-            if identified == args.kind_str {
-                String::new()
-            } else {
-                format!("; drafting the '{}' card a board binds", args.kind_str)
-            }
-        );
+        args.kind_str = identified_card_kind(&args, &pdf_text)?;
     }
     say!(
         "[model-extract] part={} kind={} pdf={}",
@@ -3590,7 +3618,6 @@ fn call_backend(
         ws.path().display(),
         ws.pages.len()
     );
-    let agent_prompt = prompt.map_tail(prompt_for_agent_backend);
     // The reply's shape, enforced by a backend that can (see `schema_flag`).
     let schema = if reply.table().is_empty() {
         identify_schema()
@@ -3598,43 +3625,7 @@ fn call_backend(
         envelope_schema()
     };
     std::fs::write(ws.path().join(REPLY_SCHEMA), schema.to_string())?;
-    // Naming the kind is one word read off the front page, whose text is in
-    // the prompt. Measured: given the drafting clause and page images, the
-    // agent read the whole datasheet to answer it (430k to 790k input tokens,
-    // over half of a part's total, and two idle kills).
-    // Each clause is its fixed rules (the base, the same for every part of this
-    // kind) and the pages and files of this part (the tail).
-    let (clause, staged_clause) = if reply.table().is_empty() {
-        ws.pages.clear();
-        let same = (IDENTIFY_CLAUSE.to_string(), String::new());
-        (same.clone(), same)
-    } else {
-        // A staged tier's drafting agents read pages by number and its fix agent
-        // edits a draft in place, so the clause it gets inlines no page text.
-        (
-            verification_parts(&ws, reply.table(), true),
-            verification_parts(&ws, reply.table(), false),
-        )
-    };
-    let agy_note = if chosen == Backend::Agy {
-        agy_tool_note(&ws)
-    } else {
-        String::new()
-    };
-    let join = |(rules, here): (String, String)| {
-        let tail = if here.is_empty() {
-            String::new()
-        } else {
-            format!("\n\n{here}")
-        };
-        agent_prompt
-            .with_base(&format!("\n\n{rules}{agy_note}"))
-            .then(&tail)
-    };
-    let prompts = Prompts {
-        single: join(clause),
-        staged: join(staged_clause),
-    };
+    let prompts = drafting_prompts(prompt, &mut ws, reply, chosen);
     // The escalation ladder: each tier a model, the next tried only when this
     // one fails, times out, doubts itself or leaves its pin map unresolved. A
     // kind identification is one cheap call on the first model.
@@ -3657,6 +3648,133 @@ fn call_backend(
     crate::card_coverage::with_facts(facts, || {
         run_ladder(&resolved, &prompts, reply, &ws, &ladder, billing)
     })
+}
+
+/// The instruction an agent run is given, in its single and staged shapes: the
+/// prompt with the verification clause (or, for naming a kind, its own short
+/// one) added. Its `base` depends on the kind, the checker and the backend
+/// alone, never on the part, so a base can be warmed before any part is read.
+fn drafting_prompts(
+    prompt: &Prompt,
+    ws: &mut Workspace,
+    reply: Reply<'_>,
+    chosen: Backend,
+) -> Prompts {
+    let agent_prompt = prompt.map_tail(prompt_for_agent_backend);
+    // Naming the kind is one word read off the front page, whose text is in
+    // the prompt. Measured: given the drafting clause and page images, the
+    // agent read the whole datasheet to answer it (430k to 790k input tokens,
+    // over half of a part's total, and two idle kills).
+    // Each clause is its fixed rules (the base, the same for every part of this
+    // kind) and the pages and files of this part (the tail).
+    let (clause, staged_clause) = if reply.table().is_empty() {
+        ws.pages.clear();
+        let same = (IDENTIFY_CLAUSE.to_string(), String::new());
+        (same.clone(), same)
+    } else {
+        // A staged tier's drafting agents read pages by number and its fix agent
+        // edits a draft in place, so the clause it gets inlines no page text.
+        (
+            verification_parts(ws, reply.table(), true),
+            verification_parts(ws, reply.table(), false),
+        )
+    };
+    let agy_note = if chosen == Backend::Agy {
+        agy_tool_note(ws)
+    } else {
+        String::new()
+    };
+    let join = |(rules, here): (String, String)| {
+        let tail = if here.is_empty() {
+            String::new()
+        } else {
+            format!("\n\n{here}")
+        };
+        agent_prompt
+            .with_base(&format!("\n\n{rules}{agy_note}"))
+            .then(&tail)
+    };
+    Prompts {
+        single: join(clause),
+        staged: join(staged_clause),
+    }
+}
+
+/// A tier's prompt with the words every part of a ladder (or a staged run)
+/// shares added to its base.
+fn tier_base(prompt: Prompt, staged: bool, laddered: bool) -> Prompt {
+    if laddered || staged {
+        // The same words for every part of the run: part of the shared base.
+        prompt.with_base(harness::CONFIDENCE_CLAUSE)
+    } else {
+        prompt
+    }
+}
+
+/// Warm ahead of time the shared codex base a call of `reply`'s kind will fork
+/// from, so the first part to need it does not wait for it. The prompt is built
+/// by the same code as the real call's, so the base is the same bytes and the
+/// real call finds it warm. Only a codex run on its first tier with the single
+/// agent forks; anything else is left alone. Returns whether a base is warm.
+fn warm_ahead(args: &Args, prompt: &Prompt, reply: Reply<'_>) -> bool {
+    if std::env::var_os("HAUKSBEE_EXTRACT_MOCK_REPLY").is_some() {
+        return false;
+    }
+    let Ok(resolved) = resolve_settings(args) else {
+        return false;
+    };
+    if resolved.backend != Backend::Codex {
+        return false;
+    }
+    let naming = reply.table().is_empty();
+    let ladder = if naming {
+        vec![resolved.model().to_string()]
+    } else {
+        resolved.ladder()
+    };
+    let model = &ladder[0];
+    let staged = !naming && extract_config::context_budget(&ProcessHost, model) > 0;
+    if staged {
+        return false;
+    }
+    let tier = resolved.with_model(model);
+    let Ok(mut ws) = Workspace::scratch() else {
+        return false;
+    };
+    ws.checker = args.checker.as_deref().and_then(|c| c.canonicalize().ok());
+    let schema = if naming {
+        identify_schema()
+    } else {
+        envelope_schema()
+    };
+    if std::fs::write(ws.path().join(REPLY_SCHEMA), schema.to_string()).is_err() {
+        return false;
+    }
+    let prompts = drafting_prompts(prompt, &mut ws, reply, resolved.backend);
+    let wanted = tier_base(prompts.single, staged, ladder.len() > 1);
+    fork_base(&tier, &wanted, &ws, false).is_some()
+}
+
+/// Warm the shared base that naming a part's kind forks from (one base for
+/// every part, since the instruction does not depend on the part).
+#[must_use]
+pub fn warm_identify_base(template: &Args) -> bool {
+    warm_ahead(template, &identify_parts("", ""), Reply::Word)
+}
+
+/// Warm the shared base that drafting a card of `kind` forks from; `part` picks
+/// which worked examples the instruction carries (it has two shapes).
+#[must_use]
+pub fn warm_kind_base(template: &Args, part: &str, kind: &str) -> bool {
+    if is_sensor_kind(kind) || component_kind(kind).is_none() {
+        return false;
+    }
+    let templates = crate::card_templates::select(part, kind, crate::card_templates::LIMIT);
+    warm_ahead(
+        template,
+        &build_prompt_parts(part, kind, "", &templates),
+        Reply::Model { part, kind },
+    )
 }
 
 /// Fetch the documents the datasheet defers the kind checklist's facts to
@@ -3930,10 +4048,7 @@ fn run_tier(
             escalated_because.map(String::as_str),
         ));
     }
-    if laddered || staged {
-        // The same words for every part of the run: part of the shared base.
-        prompt = prompt.with_base(harness::CONFIDENCE_CLAUSE);
-    }
+    prompt = tier_base(prompt, staged, laddered);
     let mut timed_out = None;
     // The last card-shaped draft, so a retry edits it instead of a fresh agent
     // re-reading the datasheet from page one: measured, an unstaged retry cost
@@ -4170,27 +4285,52 @@ fn json_string_body(s: &str) -> Option<String> {
 
 /// `call`, re-run after each of `delays` while it fails on a transient backend
 /// error; the last failure, or any other, is returned as is.
+///
+/// A rate-limit refusal (the service turning a session away at its first
+/// request) is not an outage: it is retried after a few jittered seconds that
+/// grow ([`crate::extract_capacity::rate_limit_wait`]), through the batch's gate
+/// so the caller's place in the pool is free for another part while it waits,
+/// and it widens the spacing of session starts. `delays` is for the other
+/// transient errors.
 fn with_backoff<T>(delays: &[Duration], mut call: impl FnMut() -> Result<T>) -> Result<T> {
-    for (n, delay) in delays.iter().enumerate() {
-        match call() {
-            Err(e) if transient_backend_error(&e) => {
-                if crate::extract_capacity::is_rate_limited(&format!("{e:#}")) {
-                    progress::note_rate_limit();
-                }
-                say!(
-                    "[model-extract] transient backend error ({}); waiting {}s before \
-                     try {} of {}",
-                    short_backend_reason(&format!("{e:#}")),
-                    delay.as_secs(),
-                    n + 2,
-                    delays.len() + 1
-                );
-                std::thread::sleep(*delay);
-            }
+    let (mut outages, mut refusals) = (0, 0);
+    loop {
+        let e = match call() {
+            Err(e) if transient_backend_error(&e) => e,
             done => return done,
-        }
+        };
+        let text = format!("{e:#}");
+        let (delay, tries, of) = if crate::extract_capacity::is_rate_limited(&text) {
+            progress::note_rate_limit();
+            crate::extract_admission::refused();
+            let wait = crate::extract_capacity::rate_limit_wait(
+                refusals,
+                crate::extract_admission::jitter_unit(),
+            );
+            refusals += 1;
+            (
+                wait,
+                refusals + 1,
+                crate::extract_capacity::RATE_LIMIT_WAITS.len() + 1,
+            )
+        } else {
+            outages += 1;
+            (
+                delays.get(outages - 1).copied(),
+                outages + 1,
+                delays.len() + 1,
+            )
+        };
+        let Some(delay) = delay else {
+            return Err(e);
+        };
+        say!(
+            "[model-extract] transient backend error ({}); waiting {}s before try {tries} of {of}",
+            short_backend_reason(&text),
+            delay.as_secs().max(1)
+        );
+        crate::extract_admission::pause(delay);
     }
-    call()
 }
 
 /// The JSON Schema an agent's final message must match, written into the
@@ -5300,6 +5440,8 @@ pub(crate) fn launch_agent(
     let Some(a) = resolved.agent(backend) else {
         bail!("the api backend is not an agent CLI");
     };
+    // A batch spaces the starts of its sessions (a burst is what the service refuses).
+    crate::extract_admission::before_session();
     let cache_on = cache::Mode::from_env() != cache::Mode::Off;
     // What the trace and prompt.md hold: the whole instruction, however it is sent.
     let whole = agent_stdin(backend, &prompt.full());
@@ -5532,6 +5674,7 @@ fn fork_base(
     let mode = cache::Mode::from_env();
     let eligible = resolved.backend == Backend::Codex
         && mode.forks()
+        && !crate::extract_admission::solo()
         && !web
         && !prompt.base.is_empty()
         && a.profile.is_none()
@@ -8917,6 +9060,72 @@ printf 'done' > last-message.txt
             IdleStalled("codex".into(), 300).into(),
         ] {
             assert!(!transient_backend_error(&permanent), "{permanent:#}");
+        }
+    }
+
+    /// A session turned away at its first request waits a few jittered seconds
+    /// through the batch's gate (which frees the caller's place meanwhile) and
+    /// tells the gate it was refused; it does not sit out the long outage waits.
+    #[test]
+    fn a_refused_start_waits_briefly_through_the_gate() {
+        use crate::extract_admission::{install, Gate};
+        use std::sync::{Arc, Mutex};
+        struct Recorder {
+            waits: Mutex<Vec<Duration>>,
+            refused: Mutex<usize>,
+        }
+        impl Gate for Recorder {
+            fn before_start(&self) {}
+            fn refused(&self) {
+                *self.refused.lock().unwrap() += 1;
+            }
+            fn pause(&self, how_long: Duration) {
+                self.waits.lock().unwrap().push(how_long);
+            }
+        }
+        let gate = Arc::new(Recorder {
+            waits: Mutex::new(Vec::new()),
+            refused: Mutex::new(0),
+        });
+        let _installed = install(Arc::clone(&gate) as Arc<dyn Gate>);
+        let mut calls = 0;
+        let got = with_backoff(&[Duration::from_secs(30)], || {
+            calls += 1;
+            if calls < 3 {
+                Err(anyhow::anyhow!("HTTP 429 Too Many Requests"))
+            } else {
+                Ok("drafted")
+            }
+        });
+        assert_eq!((got.unwrap(), calls), ("drafted", 3));
+        let waits = gate.waits.lock().unwrap().clone();
+        assert_eq!(waits.len(), 2, "{waits:?}");
+        assert!(
+            (Duration::from_secs(1)..=Duration::from_secs(3)).contains(&waits[0]),
+            "a few seconds, not 30: {waits:?}"
+        );
+        assert!(
+            (Duration::from_secs(2)..=Duration::from_secs(6)).contains(&waits[1]),
+            "growing: {waits:?}"
+        );
+        assert_eq!(*gate.refused.lock().unwrap(), 2, "each refusal is pressure");
+    }
+
+    /// The base a kind's batch warms is the base every part of that kind forks
+    /// from: it does not depend on which part asked.
+    #[test]
+    fn the_warmed_base_of_a_kind_is_the_same_for_every_part() {
+        for kind in ["opamp", "vreg", "comparator", "ldo", "mosfet"] {
+            if component_kind(kind).is_none() {
+                continue;
+            }
+            let base = |part: &str| {
+                let templates =
+                    crate::card_templates::select(part, kind, crate::card_templates::LIMIT);
+                build_prompt_parts(part, kind, "", &templates).base
+            };
+            assert_eq!(base("LM358"), base("TLV9062"), "{kind}");
+            assert_eq!(base("LM358"), base("OPA2134"), "{kind}");
         }
     }
 
