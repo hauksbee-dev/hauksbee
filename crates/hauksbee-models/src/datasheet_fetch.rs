@@ -4,18 +4,31 @@
 //! Measured on real boards, a quarter to a half of the datasheet links a board
 //! names do not download on the first try: curl exit 92 ("HTTP/2 stream not
 //! closed cleanly") on many hosts, an HTML landing page where a PDF was
-//! promised, HTTP 403. Each has a bounded remedy here, in a fixed order, and
-//! nothing loops:
+//! promised, HTTP 403, HTTP 404 for a browser's `User-Agent` that curl's own
+//! gets through. Each has a bounded remedy here, in a fixed order, and nothing
+//! loops:
 //!
-//! 1. A transient failure (a curl transport error such as 92, or HTTP 429, 502,
-//!    503, 504) is retried twice with a growing pause, the first retry over
-//!    HTTP/1.1.
-//! 2. An HTTP 403 is retried once with a fuller browser-style request. The first
-//!    request already carries a browser's `User-Agent`, `Accept` and
-//!    `Accept-Language`; many manufacturer sites refuse curl's own.
+//! 1. A URL is tried with several client [`Strategy`]s, cheapest first: `curl`
+//!    with its own `User-Agent`, `curl` with a browser's headers, `curl` with a
+//!    fuller browser header set (including a same-site `Referer`), and, when
+//!    `node` (18 or later) is on the `PATH`, Node's `fetch`, whose TLS stack
+//!    (OpenSSL) several CDNs accept where macOS's `curl` is reset. (With `node`
+//!    present, a `curl` that goes quiet is waited for 20 s, not the full stall
+//!    time: such hosts send nothing at all, so the rest is pure waiting.) The first
+//!    strategy that yields a verified PDF wins, and [`StrategyMemory`] makes
+//!    the rest of the run try the winner first for that host. A transport
+//!    failure (reset, stall, TLS) says nothing a different header set can fix,
+//!    so the strategies on the same client are skipped after one and the next
+//!    client is tried; an HTTP answer (403, 404, an HTML page) moves on to
+//!    the next strategy. A rate limit (429) or server error that outlasts its
+//!    retries ends the attempt: another client would hit the same wall.
+//! 2. Within a strategy, a transient failure (a curl transport error such as 92,
+//!    or HTTP 429, 502, 503, 504) is retried twice with a growing pause, the
+//!    first retry over HTTP/1.1. A stall (no bytes for [`Timeouts::stall_secs`])
+//!    is not retried: the next client is the remedy.
 //! 3. A page that is HTML is searched for its PDF links; when exactly one is a
 //!    plausible datasheet (or exactly one names the part), that is followed, one
-//!    hop.
+//!    hop, with the same strategy.
 //!
 //! A download is bounded by a stall timeout (no bytes at all for
 //! [`Timeouts::stall_secs`]) and a generous overall cap, not a short fixed
@@ -26,13 +39,16 @@
 //! answer, so a batch does not spend a search and a download per part finding
 //! that out again.
 //!
-//! Anything left over is a [`FetchError`], and the caller decides what is next
-//! (discovery, or telling the person to download it). Nothing here answers a
-//! CAPTCHA or works around bot protection: a site that asks for a person gets
-//! one, via `--datasheet`.
+//! Anything left over is a [`FetchError`] whose one-line text names the
+//! strategies tried, and the caller decides what is next (discovery, or telling
+//! the person to download it). Nothing here answers a CAPTCHA, hides what the
+//! client is, or works around bot protection: a site that asks for a person gets
+//! one, via `--datasheet`. The alternative clients that were measured and not
+//! adopted are in `docs/how-and-why/hauksbee-models/datasheet-fetch.md`.
 //!
 //! The transport is the [`Http`] trait so every rule above is tested without a
-//! network; [`CurlHttp`] is the one real implementation (`curl`, no shell).
+//! network; [`CurlHttp`] is the one real implementation (`curl`, and `node`
+//! when present; no shell).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -40,15 +56,59 @@ use std::process::Command;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-/// Which request headers a fetch sends.
+/// Which program makes the request. Two strategies on one client share a TLS
+/// stack, so a connection-level failure on one is the same failure on the other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Profile {
-    /// A browser's `User-Agent` and a PDF-first `Accept` (vendor sites refuse
-    /// curl's own).
-    Standard,
-    /// The retry after an HTTP 403: a different browser build's full header set,
-    /// including a language and a same-site `Referer`.
-    Browser,
+pub enum Client {
+    Curl,
+    Node,
+}
+
+/// One way of asking for a URL, tried cheapest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Strategy {
+    /// `curl` with its own `User-Agent` and no extra headers. Some manufacturer
+    /// sites refuse a browser's `User-Agent` on a bare download link.
+    CurlPlain,
+    /// `curl` with a browser's `User-Agent`, a PDF-first `Accept` and a language
+    /// (many manufacturer sites refuse curl's own).
+    CurlStandard,
+    /// `curl` with a different browser build's full header set, including a
+    /// language and a same-site `Referer`.
+    CurlBrowser,
+    /// Node's built-in `fetch` with its default headers: another TLS stack
+    /// (OpenSSL) and a different handshake, for hosts that reset `curl`'s.
+    NodeFetch,
+}
+
+impl Strategy {
+    /// Every strategy in the order they are tried.
+    pub const ALL: [Self; 4] = [
+        Self::CurlPlain,
+        Self::CurlStandard,
+        Self::CurlBrowser,
+        Self::NodeFetch,
+    ];
+
+    /// The program that runs it.
+    #[must_use]
+    pub const fn client(self) -> Client {
+        match self {
+            Self::NodeFetch => Client::Node,
+            _ => Client::Curl,
+        }
+    }
+
+    /// A few words for an error line.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::CurlPlain => "curl",
+            Self::CurlStandard => "curl with browser headers",
+            Self::CurlBrowser => "curl with full browser headers",
+            Self::NodeFetch => "node fetch",
+        }
+    }
 }
 
 /// One download attempt.
@@ -57,8 +117,9 @@ pub struct Request<'a> {
     pub url: &'a str,
     /// Where the body is written.
     pub dest: &'a Path,
-    pub profile: Profile,
+    pub strategy: Strategy,
     /// Force HTTP/1.1 (`--http1.1`): the cure for curl's HTTP/2 stream errors.
+    /// Ignored by clients that have no such switch.
     pub http1: bool,
 }
 
@@ -73,7 +134,8 @@ pub struct Response {
 /// The transport failed before an HTTP status came back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransportError {
-    /// curl's exit code, when there was one.
+    /// The client's exit code, when there was one (curl's, or 28 for a Node
+    /// fetch that stalled).
     pub code: Option<i32>,
     pub message: String,
 }
@@ -85,6 +147,12 @@ impl TransportError {
     #[must_use]
     pub const fn transient(&self) -> bool {
         matches!(self.code, Some(16 | 18 | 28 | 35 | 52 | 55 | 56 | 92))
+    }
+
+    /// The client went quiet (curl's exit 28): the same client will again.
+    #[must_use]
+    pub const fn stalled(&self) -> bool {
+        matches!(self.code, Some(28))
     }
 }
 
@@ -101,6 +169,46 @@ pub trait Http: Sync {
     /// Wait before a retry. The default does not wait, so a test double never
     /// sleeps; a real transport overrides it.
     fn pause(&self, _how_long: Duration) {}
+
+    /// Whether this transport can run `strategy` at all (an optional program may
+    /// be absent). A strategy that cannot run is skipped without a word. The
+    /// default runs only curl's own, so a transport opts in to the fallbacks.
+    fn available(&self, strategy: Strategy) -> bool {
+        strategy == Strategy::CurlPlain
+    }
+
+    /// Which strategy worked for which host so far, if this transport keeps
+    /// that. The default keeps nothing.
+    fn memory(&self) -> Option<&StrategyMemory> {
+        None
+    }
+}
+
+/// Which [`Strategy`] last produced a PDF from each host, within one run, so the
+/// rest of a batch asks that way first instead of rediscovering it. Shared
+/// between the batch's threads.
+#[derive(Debug, Default)]
+pub struct StrategyMemory {
+    hosts: Mutex<HashMap<String, Strategy>>,
+}
+
+impl StrategyMemory {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Strategy>> {
+        self.hosts.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The strategy that last worked for `url`'s host.
+    #[must_use]
+    pub fn preferred(&self, url: &str) -> Option<Strategy> {
+        self.lock().get(&host_of(url)?).copied()
+    }
+
+    /// Record that `strategy` fetched a PDF from `url`'s host.
+    pub fn worked(&self, url: &str, strategy: Strategy) {
+        if let Some(host) = host_of(url) {
+            self.lock().insert(host, strategy);
+        }
+    }
 }
 
 /// How long one download may take.
@@ -125,10 +233,41 @@ impl Default for Timeouts {
     }
 }
 
-/// `curl`, run without a shell.
-#[derive(Debug, Clone, Copy, Default)]
+/// `curl`, and `node` when it is on the `PATH`, each run without a shell. The
+/// name is the first, always-present client; see [`Strategy`] for the rest.
+#[derive(Debug, Default)]
 pub struct CurlHttp {
     pub timeouts: Timeouts,
+    memory: StrategyMemory,
+}
+
+/// How long a quiet `curl` is waited for when `node` is there to take over.
+/// Measured: the hosts that stall `curl` do so with no byte at all, so the
+/// full stall time is pure waiting; a last resort keeps the full time.
+const HANDOFF_STALL_SECS: u32 = 20;
+
+impl CurlHttp {
+    /// The limits for a `curl` attempt: the stall time is cut to
+    /// [`HANDOFF_STALL_SECS`] when a second client can take over.
+    fn curl_timeouts(&self, other_client: bool) -> Timeouts {
+        Timeouts {
+            stall_secs: if other_client {
+                self.timeouts.stall_secs.min(HANDOFF_STALL_SECS)
+            } else {
+                self.timeouts.stall_secs
+            },
+            ..self.timeouts
+        }
+    }
+
+    /// A transport with these limits and nothing learned yet.
+    #[must_use]
+    pub fn with_timeouts(timeouts: Timeouts) -> Self {
+        Self {
+            timeouts,
+            memory: StrategyMemory::default(),
+        }
+    }
 }
 
 const STANDARD_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 \
@@ -173,8 +312,9 @@ pub fn curl_args(req: &Request<'_>, timeouts: &Timeouts) -> Vec<String> {
         args.push("-H".into());
         args.push(h);
     };
-    match req.profile {
-        Profile::Standard => {
+    match req.strategy {
+        Strategy::CurlPlain | Strategy::NodeFetch => args.push("--compressed".into()),
+        Strategy::CurlStandard => {
             args.extend(["-A".into(), STANDARD_UA.into(), "--compressed".into()]);
             header(
                 &mut args,
@@ -183,7 +323,7 @@ pub fn curl_args(req: &Request<'_>, timeouts: &Timeouts) -> Vec<String> {
             );
             header(&mut args, "Accept-Language: en-US,en;q=0.9".into());
         }
-        Profile::Browser => {
+        Strategy::CurlBrowser => {
             args.extend(["-A".into(), BROWSER_UA.into(), "--compressed".into()]);
             header(
                 &mut args,
@@ -205,37 +345,128 @@ pub fn curl_args(req: &Request<'_>, timeouts: &Timeouts) -> Vec<String> {
     args
 }
 
-impl Http for CurlHttp {
-    fn get(&self, req: &Request<'_>) -> Result<Response, TransportError> {
-        let out = Command::new("curl")
-            .args(curl_args(req, &self.timeouts))
+/// Node's `fetch`, run as `node -e SCRIPT url dest stall_secs overall_secs`.
+/// It sends Node's default headers (no `User-Agent` of a browser is claimed),
+/// follows redirects (http and https only), streams the body to `dest`, and
+/// prints `status final-url` like curl's `-w`. No bytes for `stall_secs` aborts
+/// with exit 28, as curl's stall does; 78 means this Node has no `fetch`.
+const NODE_FETCH: &str = r"
+const [url, dest, stall, overall] = [process.argv[1], process.argv[2], +process.argv[3] * 1000, +process.argv[4] * 1000];
+if (typeof fetch !== 'function') process.exit(78);
+if (!/^https?:\/\//i.test(url)) process.exit(2);
+const fs = require('fs');
+const ac = new AbortController();
+let timer;
+const arm = () => { clearTimeout(timer); timer = setTimeout(() => ac.abort(), stall); };
+setTimeout(() => ac.abort(), overall).unref();
+(async () => {
+  try {
+    arm();
+    const r = await fetch(url, { signal: ac.signal, redirect: 'follow' });
+    const fd = fs.openSync(dest, 'w');
+    if (r.body) {
+      const rd = r.body.getReader();
+      for (;;) {
+        arm();
+        const { done, value } = await rd.read();
+        if (done) break;
+        for (let at = 0; at < value.length;) at += fs.writeSync(fd, value, at);
+      }
+    }
+    fs.closeSync(fd);
+    process.stdout.write(r.status + ' ' + r.url);
+    process.exit(0);
+  } catch (e) {
+    process.stderr.write(String((e && e.cause && (e.cause.code || e.cause.message)) || (e && e.message) || e));
+    process.exit(ac.signal.aborted ? 28 : 1);
+  }
+})();
+";
+
+/// Whether a Node with `fetch` (18 or later) is on the `PATH`, asked once.
+fn node_available() -> bool {
+    static NODE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *NODE.get_or_init(|| {
+        Command::new("node")
+            .args(["-e", "process.exit(typeof fetch === 'function' ? 0 : 1)"])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .is_ok_and(|o| o.status.success())
+    })
+}
+
+/// The first line of a program's stderr, kept short for an error line.
+fn first_line(stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    let line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    line.trim().chars().take(100).collect()
+}
+
+fn parse_status_line(said: &str) -> Response {
+    let said = said.trim();
+    let (status, final_url) = said.split_once(' ').unwrap_or((said, ""));
+    Response {
+        status: status.parse().unwrap_or(0),
+        final_url: final_url.to_string(),
+    }
+}
+
+impl CurlHttp {
+    fn run(program: &str, args: &[String], stderr_label: &str) -> Result<Response, TransportError> {
+        let out = Command::new(program)
+            .args(args)
+            .stdin(std::process::Stdio::null())
             .output()
             .map_err(|e| TransportError {
                 code: None,
-                message: format!("cannot run `curl`: {e}"),
+                message: format!("cannot run `{program}`: {e}"),
             })?;
         if !out.status.success() {
+            let why = first_line(&out.stderr);
             return Err(TransportError {
                 code: out.status.code(),
-                message: format!(
-                    "curl failed: {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
-                ),
+                message: match out.status.code() {
+                    Some(code) if why.is_empty() => format!("{stderr_label} exit {code}"),
+                    Some(code) => format!("{stderr_label} exit {code}: {why}"),
+                    None => format!("{stderr_label} was killed"),
+                },
             });
         }
-        let said = String::from_utf8_lossy(&out.stdout);
-        let (status, final_url) = said
-            .trim()
-            .split_once(' ')
-            .unwrap_or_else(|| (said.trim(), ""));
-        Ok(Response {
-            status: status.parse().unwrap_or(0),
-            final_url: final_url.to_string(),
-        })
+        Ok(parse_status_line(&String::from_utf8_lossy(&out.stdout)))
+    }
+}
+
+impl Http for CurlHttp {
+    fn get(&self, req: &Request<'_>) -> Result<Response, TransportError> {
+        match req.strategy.client() {
+            Client::Curl => {
+                let timeouts = self.curl_timeouts(node_available());
+                Self::run("curl", &curl_args(req, &timeouts), "curl")
+            }
+            Client::Node => {
+                let args = [
+                    "-e".to_owned(),
+                    NODE_FETCH.to_owned(),
+                    req.url.to_owned(),
+                    req.dest.display().to_string(),
+                    self.timeouts.stall_secs.max(1).to_string(),
+                    self.timeouts.overall_secs.to_string(),
+                ];
+                Self::run("node", &args, "node")
+            }
+        }
     }
 
     fn pause(&self, how_long: Duration) {
         std::thread::sleep(how_long);
+    }
+
+    fn available(&self, strategy: Strategy) -> bool {
+        strategy.client() == Client::Curl || node_available()
+    }
+
+    fn memory(&self) -> Option<&StrategyMemory> {
+        Some(&self.memory)
     }
 }
 
@@ -502,6 +733,13 @@ pub enum FetchError {
     NotPdf { url: String },
     /// curl could not complete, even after its retry.
     Transport { url: String, message: String },
+    /// Several strategies were tried and none produced a PDF. `best` is the
+    /// failure that got furthest (the one that says most about the host), and
+    /// `tried` is every strategy with a few words on how it failed.
+    Tried {
+        best: Box<Self>,
+        tried: Vec<(Strategy, String)>,
+    },
 }
 
 impl FetchError {
@@ -515,7 +753,53 @@ impl FetchError {
             | Self::NotPdf { url }
             | Self::Transport { url, .. } => url,
             Self::LinkNotPdf { page, .. } => page,
+            Self::Tried { best, .. } => best.url(),
         }
+    }
+
+    /// The single failure behind this one: itself, or the best of the several
+    /// strategies tried. What a host ledger learns from.
+    #[must_use]
+    pub fn representative(&self) -> &Self {
+        match self {
+            Self::Tried { best, .. } => best.representative(),
+            other => other,
+        }
+    }
+
+    /// The failure in a few words, for a list of strategies.
+    #[must_use]
+    pub fn brief(&self) -> String {
+        match self {
+            Self::Blocked { status, .. } | Self::Status { status, .. } => format!("HTTP {status}"),
+            Self::LandingPage { .. } => "a web page, no single datasheet link".into(),
+            Self::LinkNotPdf { .. } => "a web page whose link was no PDF".into(),
+            Self::NotPdf { .. } => "not a PDF".into(),
+            Self::Transport { message, .. } => message.clone(),
+            Self::Tried { best, .. } => best.brief(),
+        }
+    }
+
+    /// How far a failure got, to pick the one that says most about the host: an
+    /// answer that is no refusal (a dead link, a page) beats a refusal, which
+    /// beats not being answered at all.
+    fn reach(&self) -> u8 {
+        match self {
+            Self::Blocked { .. } => 2,
+            Self::Transport { .. } => 1,
+            Self::Status { status, .. } if *status >= 500 => 1,
+            Self::Tried { best, .. } => best.reach(),
+            _ => 3,
+        }
+    }
+
+    /// Another strategy would meet the same wall: a rate limit or a server error
+    /// that outlasted its retries.
+    const fn ends_all_strategies(&self) -> bool {
+        matches!(
+            self,
+            Self::Blocked { status: 429, .. } | Self::Status { status: 500.., .. }
+        )
     }
 
     /// The failure as one clause, for a line that then says what happens next.
@@ -537,6 +821,21 @@ impl FetchError {
             }
             Self::NotPdf { .. } => "it did not serve a PDF".into(),
             Self::Transport { message, .. } => message.clone(),
+            Self::Tried { best, tried } => {
+                let same = tried.windows(2).all(|w| w[0].1 == w[1].1);
+                let list = tried
+                    .iter()
+                    .map(|(s, how)| {
+                        if same {
+                            s.label().to_string()
+                        } else {
+                            format!("{}: {how}", s.label())
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{} (tried {list})", best.why())
+            }
         }
     }
 }
@@ -574,38 +873,33 @@ const fn transient_status(status: u16) -> bool {
 /// The pauses before the first and second retry of a transient failure.
 const BACKOFF: [Duration; 2] = [Duration::from_secs(2), Duration::from_secs(6)];
 
-/// One URL with the transport rules: a transient failure or status retried
-/// twice (after a pause that grows), the first retry over HTTP/1.1, and an
-/// HTTP 403 retried once with the browser profile.
-fn get_with_retries(http: &dyn Http, url: &str, dest: &Path) -> Result<Response, TransportError> {
-    let (mut profile, mut http1) = (Profile::Standard, false);
-    let (mut transient_retries, mut retried_blocked) = (0, false);
+/// One URL with one strategy: a transient failure or status retried twice
+/// (after a pause that grows), the first retry over HTTP/1.1. A stall is not
+/// retried; the caller's next client is the remedy.
+fn get_with_retries(
+    http: &dyn Http,
+    strategy: Strategy,
+    url: &str,
+    dest: &Path,
+) -> Result<Response, TransportError> {
+    let (mut http1, mut retries) = (false, 0);
     loop {
         let attempt = http.get(&Request {
             url,
             dest,
-            profile,
+            strategy,
             http1,
         });
-        let again = match &attempt {
-            Ok(r) if r.status == 403 && !retried_blocked => {
-                (profile, retried_blocked) = (Profile::Browser, true);
-                true
-            }
-            Ok(r) if transient_status(r.status) => true,
-            Err(e) if e.transient() => true,
-            _ => false,
+        let transient = match &attempt {
+            Ok(r) => transient_status(r.status),
+            Err(e) => e.transient() && !e.stalled(),
         };
-        let transient = matches!(&attempt, Ok(r) if transient_status(r.status))
-            || matches!(&attempt, Err(e) if e.transient());
-        if !again || (transient && transient_retries >= BACKOFF.len()) {
+        if !transient || retries >= BACKOFF.len() {
             return attempt;
         }
-        if transient {
-            http1 = true;
-            http.pause(BACKOFF[transient_retries]);
-            transient_retries += 1;
-        }
+        http1 = true;
+        http.pause(BACKOFF[retries]);
+        retries += 1;
     }
 }
 
@@ -614,13 +908,15 @@ enum Landed {
     Page { url: String, html: String },
 }
 
-/// Fetch `url` once (with retries) and say what landed in `dest`.
-fn land(http: &dyn Http, url: &str, dest: &Path) -> Result<Landed, FetchError> {
+/// Fetch `url` once with `strategy` (and its retries) and say what landed in
+/// `dest`.
+fn land(http: &dyn Http, strategy: Strategy, url: &str, dest: &Path) -> Result<Landed, FetchError> {
     let _ = std::fs::remove_file(dest);
-    let response = get_with_retries(http, url, dest).map_err(|e| FetchError::Transport {
-        url: url.to_string(),
-        message: e.message,
-    })?;
+    let response =
+        get_with_retries(http, strategy, url, dest).map_err(|e| FetchError::Transport {
+            url: url.to_string(),
+            message: e.message,
+        })?;
     let url_error = |status| match status {
         401 | 403 | 429 => FetchError::Blocked {
             url: url.to_string(),
@@ -657,19 +953,16 @@ fn land(http: &dyn Http, url: &str, dest: &Path) -> Result<Landed, FetchError> {
     })
 }
 
-/// Download `url` to `dest` as a PDF for `part`, applying the remedies in the
-/// module doc. `dest` holds a PDF on `Ok` and nothing otherwise.
-///
-/// # Errors
-///
-/// A [`FetchError`] naming the URL and why no PDF came of it.
-pub fn fetch_pdf(
+/// `url` with one strategy: the landing page's single datasheet link followed,
+/// when it is a page.
+fn fetch_with(
     http: &dyn Http,
+    strategy: Strategy,
     url: &str,
     dest: &Path,
     part: &str,
 ) -> Result<Fetched, FetchError> {
-    match land(http, url, dest)? {
+    match land(http, strategy, url, dest)? {
         Landed::Pdf(final_url) => Ok(Fetched {
             path: dest.to_path_buf(),
             url: final_url,
@@ -683,7 +976,7 @@ pub fn fetch_pdf(
                     links: links.len(),
                 });
             };
-            match land(http, &link.url, dest) {
+            match land(http, strategy, &link.url, dest) {
                 Ok(Landed::Pdf(final_url)) => Ok(Fetched {
                     path: dest.to_path_buf(),
                     url: final_url,
@@ -699,6 +992,77 @@ pub fn fetch_pdf(
             }
         }
     }
+}
+
+/// The strategies to try for `url`, in order: the one that worked for its host
+/// before, then the rest cheapest first, leaving out those the transport cannot
+/// run.
+fn strategy_order(http: &dyn Http, url: &str) -> Vec<Strategy> {
+    let first = http.memory().and_then(|m| m.preferred(url));
+    first
+        .into_iter()
+        .chain(Strategy::ALL.into_iter().filter(|s| Some(*s) != first))
+        .filter(|s| http.available(*s))
+        .collect()
+}
+
+/// Download `url` to `dest` as a PDF for `part`, applying the remedies in the
+/// module doc. `dest` holds a PDF on `Ok` and nothing otherwise.
+///
+/// # Errors
+///
+/// A [`FetchError`] naming the URL and why no PDF came of it, and, when several
+/// strategies failed, which they were.
+pub fn fetch_pdf(
+    http: &dyn Http,
+    url: &str,
+    dest: &Path,
+    part: &str,
+) -> Result<Fetched, FetchError> {
+    let mut failed: Vec<(Strategy, FetchError)> = Vec::new();
+    let mut unreachable: Vec<Client> = Vec::new();
+    for strategy in strategy_order(http, url) {
+        if unreachable.contains(&strategy.client()) {
+            continue;
+        }
+        match fetch_with(http, strategy, url, dest, part) {
+            Ok(got) => {
+                if let Some(memory) = http.memory() {
+                    memory.worked(url, strategy);
+                }
+                return Ok(got);
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(dest);
+                if matches!(e, FetchError::Transport { .. }) {
+                    unreachable.push(strategy.client());
+                }
+                let stop = e.ends_all_strategies();
+                failed.push((strategy, e));
+                if stop {
+                    break;
+                }
+            }
+        }
+    }
+    let Some(best) = failed
+        .iter()
+        .rev()
+        .max_by_key(|(_, e)| e.reach())
+        .map(|(_, e)| e.clone())
+    else {
+        return Err(FetchError::Transport {
+            url: url.to_string(),
+            message: "no way to download is available".into(),
+        });
+    };
+    if failed.len() == 1 {
+        return Err(best);
+    }
+    Err(FetchError::Tried {
+        best: Box::new(best),
+        tried: failed.iter().map(|(s, e)| (*s, e.brief())).collect(),
+    })
 }
 
 // ── Hosts that have said no ───────────────────────────────────────────────────
@@ -760,7 +1124,7 @@ impl HostLedger {
         let mut hosts = self.lock();
         let record = hosts.entry(host).or_default();
         let before = record.blocked.is_some();
-        match result {
+        match result.as_ref().map_err(|e| e.representative()) {
             Ok(()) => record.silent = 0,
             Err(FetchError::Blocked { status, .. }) => {
                 record.blocked.get_or_insert_with(|| {
@@ -818,17 +1182,37 @@ mod tests {
     /// A transport that plays `steps` in order and records each request.
     struct Scripted {
         steps: StdMutex<VecDeque<(&'static str, Step)>>,
-        seen: StdMutex<Vec<(String, Profile, bool)>>,
+        seen: StdMutex<Vec<(String, Strategy, bool)>>,
         paused: StdMutex<Vec<Duration>>,
+        /// The strategies it can run (`new` runs only the first).
+        runs: Vec<Strategy>,
+        memory: StrategyMemory,
     }
 
     impl Scripted {
+        /// One strategy only (plain `curl`): the retry rules, free of fallbacks.
         fn new(steps: Vec<(&'static str, Step)>) -> Self {
+            Self::running(&[Strategy::CurlPlain], steps)
+        }
+
+        /// Every strategy, as on a machine with `node`.
+        fn all(steps: Vec<(&'static str, Step)>) -> Self {
+            Self::running(&Strategy::ALL, steps)
+        }
+
+        fn running(runs: &[Strategy], steps: Vec<(&'static str, Step)>) -> Self {
             Self {
                 steps: StdMutex::new(steps.into()),
                 seen: StdMutex::default(),
                 paused: StdMutex::default(),
+                runs: runs.to_vec(),
+                memory: StrategyMemory::default(),
             }
+        }
+
+        /// The strategies of the requests so far, in order.
+        fn strategies(&self) -> Vec<Strategy> {
+            self.seen.lock().unwrap().iter().map(|s| s.1).collect()
         }
     }
 
@@ -837,11 +1221,19 @@ mod tests {
             self.paused.lock().unwrap().push(how_long);
         }
 
+        fn available(&self, strategy: Strategy) -> bool {
+            self.runs.contains(&strategy)
+        }
+
+        fn memory(&self) -> Option<&StrategyMemory> {
+            Some(&self.memory)
+        }
+
         fn get(&self, req: &Request<'_>) -> Result<Response, TransportError> {
             self.seen
                 .lock()
                 .unwrap()
-                .push((req.url.to_string(), req.profile, req.http1));
+                .push((req.url.to_string(), req.strategy, req.http1));
             let (expected, step) = self
                 .steps
                 .lock()
@@ -903,7 +1295,7 @@ mod tests {
             &Request {
                 url: "u",
                 dest: &path,
-                profile: Profile::Standard,
+                strategy: Strategy::CurlStandard,
                 http1: true,
             },
             &Timeouts::default(),
@@ -936,43 +1328,64 @@ mod tests {
         assert!(fetch_pdf(&http, "https://a.example/ds.pdf", &path, "LM358").is_ok());
     }
 
-    /// An HTTP 403 is retried once with the browser profile; if that works the
-    /// PDF is used, and if it does not the error is the block, naming the URL.
+    const U: &str = "https://b.example/ds.pdf";
+
+    /// The strategies run cheapest first and the first verified PDF stops them:
+    /// curl's own `User-Agent`, then a browser's, then the fuller set, then node.
     #[test]
-    fn a_403_is_retried_once_with_a_browser_profile() {
+    fn strategies_run_cheapest_first_and_stop_at_the_first_pdf() {
         let (_d, path) = dest();
-        let http = Scripted::new(vec![
-            ("https://b.example/ds.pdf", Step::Answer(403, b"no")),
-            ("https://b.example/ds.pdf", Step::Answer(200, PDF)),
+        let http = Scripted::all(vec![
+            (U, Step::Answer(404, b"no")),
+            (U, Step::Answer(403, b"no")),
+            (U, Step::Answer(404, b"no")),
+            (U, Step::Answer(200, PDF)),
         ]);
-        assert!(fetch_pdf(&http, "https://b.example/ds.pdf", &path, "LM358").is_ok());
+        let got = fetch_pdf(&http, U, &path, "LM358").unwrap();
+        assert_eq!(got.via, Via::Direct);
+        assert_eq!(http.strategies(), Strategy::ALL);
+        assert!(http.paused.lock().unwrap().is_empty(), "no pause for a 404");
+        let http = Scripted::all(vec![(U, Step::Answer(200, PDF))]);
+        assert!(fetch_pdf(&http, U, &path, "LM358").is_ok());
+        assert_eq!(http.strategies(), [Strategy::CurlPlain], "one request");
+        // A site that refuses curl's own agent and takes a browser's: two requests.
+        let http = Scripted::all(vec![
+            (U, Step::Answer(403, b"no")),
+            (U, Step::Answer(200, PDF)),
+        ]);
+        assert!(fetch_pdf(&http, U, &path, "LM358").is_ok());
         assert_eq!(
-            http.seen
-                .lock()
-                .unwrap()
-                .iter()
-                .map(|s| s.1)
-                .collect::<Vec<_>>(),
-            [Profile::Standard, Profile::Browser]
+            http.strategies(),
+            [Strategy::CurlPlain, Strategy::CurlStandard]
         );
-        let http = Scripted::new(vec![
-            ("https://b.example/ds.pdf", Step::Answer(403, b"no")),
-            ("https://b.example/ds.pdf", Step::Answer(403, b"no")),
+    }
+
+    /// A dead link or refusal on one strategy does not end the others (a vendor
+    /// that 404s a browser's agent serves curl's own).
+    #[test]
+    fn an_http_error_falls_back_to_the_next_strategy_then_reports_all() {
+        let (_d, path) = dest();
+        let http = Scripted::all(vec![
+            (U, Step::Answer(403, b"no")),
+            (U, Step::Answer(403, b"no")),
+            (U, Step::Answer(403, b"no")),
+            (U, Step::Answer(403, b"no")),
         ]);
-        let err = fetch_pdf(&http, "https://b.example/ds.pdf", &path, "LM358").unwrap_err();
+        let err = fetch_pdf(&http, U, &path, "LM358").unwrap_err();
         assert_eq!(
-            err,
-            FetchError::Blocked {
-                url: "https://b.example/ds.pdf".into(),
+            err.representative(),
+            &FetchError::Blocked {
+                url: U.into(),
                 status: 403
             }
         );
+        assert_eq!(err.url(), U);
         assert!(!path.exists(), "a failed fetch leaves no file");
         let args = curl_args(
             &Request {
                 url: "https://b.example/x/ds.pdf",
                 dest: &path,
-                profile: Profile::Browser,
+                strategy: Strategy::CurlBrowser,
                 http1: false,
             },
             &Timeouts::default(),
@@ -982,6 +1395,203 @@ mod tests {
             "{args:?}"
         );
         assert!(args.contains(&"Accept-Language: en-US,en;q=0.9".to_string()));
+    }
+
+    /// curl's own request carries no `User-Agent` of a browser and no extra
+    /// headers; the other curl sets do.
+    #[test]
+    fn plain_curl_sends_its_own_headers() {
+        let plain = args_of(Strategy::CurlPlain, &Timeouts::default());
+        assert!(!plain.contains(&"-A".to_string()), "{plain:?}");
+        assert!(!plain.contains(&"-H".to_string()), "{plain:?}");
+        assert!(plain.contains(&"--compressed".to_string()));
+        for s in [Strategy::CurlStandard, Strategy::CurlBrowser] {
+            assert!(args_of(s, &Timeouts::default()).contains(&"-A".to_string()));
+        }
+    }
+
+    /// A reset (curl 92) is a fact about the TLS stack, not the headers: after
+    /// its retries the other curl strategies are skipped and node is tried. A
+    /// stall is not retried at all.
+    #[test]
+    fn a_transport_failure_skips_the_same_client_and_tries_the_next() {
+        let (_d, path) = dest();
+        let http = Scripted::all(vec![
+            (U, Step::Curl(92)),
+            (U, Step::Curl(92)),
+            (U, Step::Curl(92)),
+            (U, Step::Answer(200, PDF)),
+        ]);
+        assert!(fetch_pdf(&http, U, &path, "LM358").is_ok());
+        assert_eq!(
+            http.strategies(),
+            [
+                Strategy::CurlPlain,
+                Strategy::CurlPlain,
+                Strategy::CurlPlain,
+                Strategy::NodeFetch
+            ]
+        );
+        assert_eq!(*http.paused.lock().unwrap(), BACKOFF.to_vec());
+        let http = Scripted::all(vec![(U, Step::Curl(28)), (U, Step::Answer(200, PDF))]);
+        assert!(fetch_pdf(&http, U, &path, "LM358").is_ok());
+        assert_eq!(
+            http.strategies(),
+            [Strategy::CurlPlain, Strategy::NodeFetch],
+            "a stall costs one wait, not one per curl strategy"
+        );
+        assert!(http.paused.lock().unwrap().is_empty());
+    }
+
+    /// A quiet `curl` is waited for less when node can take over, and the full
+    /// stall time otherwise.
+    #[test]
+    fn a_quiet_curl_is_handed_to_node_sooner() {
+        let http = CurlHttp::default();
+        assert_eq!(http.curl_timeouts(true).stall_secs, HANDOFF_STALL_SECS);
+        assert_eq!(http.curl_timeouts(false).stall_secs, 60);
+        assert_eq!(http.curl_timeouts(true).overall_secs, 900);
+        let short = CurlHttp::with_timeouts(Timeouts {
+            connect_secs: 1,
+            stall_secs: 2,
+            overall_secs: 3,
+        });
+        assert_eq!(short.curl_timeouts(true).stall_secs, 2, "never lengthened");
+    }
+
+    /// Without node the curl strategies still run and node is never asked for;
+    /// the error names only what was tried.
+    #[test]
+    fn a_missing_optional_program_is_skipped_quietly() {
+        let (_d, path) = dest();
+        let http = Scripted::running(
+            &[
+                Strategy::CurlPlain,
+                Strategy::CurlStandard,
+                Strategy::CurlBrowser,
+            ],
+            vec![
+                (U, Step::Answer(404, b"gone")),
+                (U, Step::Answer(404, b"gone")),
+                (U, Step::Answer(404, b"gone")),
+            ],
+        );
+        let err = fetch_pdf(&http, U, &path, "LM358").unwrap_err();
+        assert!(!http.strategies().contains(&Strategy::NodeFetch));
+        assert!(!err.why().contains("node"), "{}", err.why());
+        assert!(err.why().contains("curl"), "{}", err.why());
+    }
+
+    /// A rate limit or server error that outlasts its retries ends the attempt:
+    /// another client would meet the same wall, and hammering it is rude.
+    #[test]
+    fn a_rate_limit_ends_the_attempt() {
+        let (_d, path) = dest();
+        let http = Scripted::all(vec![
+            (U, Step::Answer(429, b"slow down")),
+            (U, Step::Answer(429, b"slow down")),
+            (U, Step::Answer(429, b"slow down")),
+        ]);
+        let err = fetch_pdf(&http, U, &path, "LM358").unwrap_err();
+        assert_eq!(
+            err,
+            FetchError::Blocked {
+                url: U.into(),
+                status: 429
+            }
+        );
+        assert_eq!(http.strategies(), [Strategy::CurlPlain; 3]);
+    }
+
+    /// The strategy that worked is remembered per host and tried first next
+    /// time; another host starts from the beginning; a remembered strategy that
+    /// stops working falls back to the rest.
+    #[test]
+    fn the_strategy_that_worked_for_a_host_is_tried_first_next_time() {
+        let (_d, path) = dest();
+        let (u1, u2) = ("https://h.example/a.pdf", "https://h.example/b.pdf");
+        let http = Scripted::all(vec![
+            (u1, Step::Curl(28)),
+            (u1, Step::Answer(200, PDF)),
+            (u2, Step::Answer(200, PDF)),
+            ("https://other.example/c.pdf", Step::Answer(200, PDF)),
+            ("https://h.example/d.pdf", Step::Answer(404, b"gone")),
+            ("https://h.example/d.pdf", Step::Answer(200, PDF)),
+        ]);
+        assert!(fetch_pdf(&http, u1, &path, "LM358").is_ok());
+        assert_eq!(http.memory.preferred(u2), Some(Strategy::NodeFetch));
+        assert!(fetch_pdf(&http, u2, &path, "LM358").is_ok());
+        assert!(fetch_pdf(&http, "https://other.example/c.pdf", &path, "LM358").is_ok());
+        assert!(fetch_pdf(&http, "https://h.example/d.pdf", &path, "LM358").is_ok());
+        assert_eq!(
+            http.strategies(),
+            [
+                Strategy::CurlPlain,
+                Strategy::NodeFetch,
+                Strategy::NodeFetch,
+                Strategy::CurlPlain,
+                Strategy::NodeFetch,
+                Strategy::CurlPlain,
+            ]
+        );
+        // A failure teaches nothing: the host keeps the strategy that worked.
+        let http = Scripted::all(vec![
+            (U, Step::Answer(404, b"gone")),
+            (U, Step::Answer(404, b"gone")),
+            (U, Step::Answer(404, b"gone")),
+            (U, Step::Answer(404, b"gone")),
+        ]);
+        assert!(fetch_pdf(&http, U, &path, "LM358").is_err());
+        assert_eq!(http.memory.preferred(U), None);
+    }
+
+    /// A page that offers no single datasheet link may be bot protection's
+    /// page: the next strategy is tried before giving up.
+    #[test]
+    fn a_page_without_a_datasheet_link_tries_the_next_strategy() {
+        let (_d, path) = dest();
+        let html: &'static [u8] = Box::leak(page(&[("/buy", "Buy")]).into_boxed_slice());
+        let http = Scripted::all(vec![
+            (U, Step::Answer(200, html)),
+            (U, Step::Answer(200, PDF)),
+        ]);
+        let got = fetch_pdf(&http, U, &path, "LM358").unwrap();
+        assert_eq!(got.via, Via::Direct);
+        assert_eq!(
+            http.strategies(),
+            [Strategy::CurlPlain, Strategy::CurlStandard]
+        );
+    }
+
+    /// The error for a part names the strategies tried on one short line.
+    #[test]
+    fn the_error_names_the_strategies_tried_in_one_short_line() {
+        let (_d, path) = dest();
+        let http = Scripted::all(vec![
+            (U, Step::Answer(404, b"gone")),
+            (U, Step::Answer(404, b"gone")),
+            (U, Step::Answer(404, b"gone")),
+            (U, Step::Answer(404, b"gone")),
+        ]);
+        let err = fetch_pdf(&http, U, &path, "LM358").unwrap_err();
+        let line = err.to_string();
+        assert!(!line.contains('\n') && line.len() < 220, "{line}");
+        assert!(line.starts_with(U), "{line}");
+        for s in Strategy::ALL {
+            assert!(line.contains(s.label()), "{line}");
+        }
+        assert!(line.contains("HTTP 404"), "{line}");
+        // Different outcomes are shown per strategy.
+        let http = Scripted::all(vec![
+            (U, Step::Answer(403, b"no")),
+            (U, Step::Answer(404, b"gone")),
+            (U, Step::Answer(403, b"no")),
+            (U, Step::Curl(1)),
+        ]);
+        let line = fetch_pdf(&http, U, &path, "LM358").unwrap_err().to_string();
+        assert!(line.contains("curl: HTTP 403"), "{line}");
+        assert!(line.contains("node fetch: curl failed: exit 1"), "{line}");
+        assert!(!line.contains('\n'), "{line}");
     }
 
     /// A landing page with exactly one datasheet PDF link is followed to it.
@@ -1137,7 +1747,7 @@ mod tests {
             &Request {
                 url: "https://a.example/x.pdf",
                 dest: &path,
-                profile: Profile::Standard,
+                strategy: Strategy::CurlStandard,
                 http1: false,
             },
             &Timeouts::default(),
@@ -1146,13 +1756,13 @@ mod tests {
         assert_eq!(args[at + 1], "=http,https");
     }
 
-    fn args_of(profile: Profile, timeouts: &Timeouts) -> Vec<String> {
+    fn args_of(strategy: Strategy, timeouts: &Timeouts) -> Vec<String> {
         let (_d, path) = dest();
         curl_args(
             &Request {
                 url: "https://a.example/x.pdf",
                 dest: &path,
-                profile,
+                strategy,
                 http1: false,
             },
             timeouts,
@@ -1163,7 +1773,7 @@ mod tests {
     /// asks for the PDF, and a language. Vendor sites 403 curl's own.
     #[test]
     fn the_first_request_already_carries_browser_headers() {
-        let args = args_of(Profile::Standard, &Timeouts::default());
+        let args = args_of(Strategy::CurlStandard, &Timeouts::default());
         let ua = args.iter().position(|a| a == "-A").unwrap();
         assert!(args[ua + 1].starts_with("Mozilla/5.0"), "{args:?}");
         for header in ["Accept: application/pdf", "Accept-Language: en-US"] {
@@ -1179,7 +1789,7 @@ mod tests {
     /// download is capped overall, not after a short fixed total.
     #[test]
     fn the_limits_are_a_stall_time_and_a_generous_overall_cap() {
-        let args = args_of(Profile::Standard, &Timeouts::default());
+        let args = args_of(Strategy::CurlStandard, &Timeouts::default());
         let value = |flag: &str| {
             let at = args.iter().position(|a| a == flag).unwrap();
             args[at + 1].clone()
@@ -1190,7 +1800,7 @@ mod tests {
         assert_eq!(value("--speed-time"), "60");
         assert_eq!(value("--max-time"), "900");
         let custom = args_of(
-            Profile::Browser,
+            Strategy::CurlBrowser,
             &Timeouts {
                 connect_secs: 3,
                 stall_secs: 7,
@@ -1229,7 +1839,7 @@ mod tests {
             2,
             "two retries, then stop"
         );
-        let http = Scripted::new(vec![
+        let http = Scripted::all(vec![
             (u, Step::Answer(403, b"no")),
             (u, Step::Answer(200, PDF)),
         ]);
@@ -1294,6 +1904,34 @@ mod tests {
             Some("www.example.com".into())
         );
         assert_eq!(host_of("not a url"), None);
+    }
+
+    /// The ledger learns from the strategy failure that got furthest: a 404 from
+    /// any client means the host answers; only refusals everywhere block it.
+    #[test]
+    fn the_ledger_reads_through_several_strategies() {
+        let ledger = HostLedger::default();
+        let tried = |best: FetchError| FetchError::Tried {
+            best: Box::new(best),
+            tried: vec![
+                (Strategy::CurlPlain, "x".into()),
+                (Strategy::NodeFetch, "y".into()),
+            ],
+        };
+        let dead = tried(FetchError::Status {
+            url: "https://dead.example/a.pdf".into(),
+            status: 404,
+        });
+        for _ in 0..3 {
+            ledger.note(dead.url(), &Err(&dead));
+        }
+        assert!(ledger.refusal(dead.url()).is_none());
+        let blocked = tried(FetchError::Blocked {
+            url: "https://no.example/a.pdf".into(),
+            status: 403,
+        });
+        assert!(ledger.note(blocked.url(), &Err(&blocked)).is_some());
+        assert!(ledger.refusal("https://no.example/b.pdf").is_some());
     }
 
     // ── Over a real socket, through curl ─────────────────────────────────────
@@ -1362,8 +2000,8 @@ mod tests {
     }
 
     /// A site that 403s anything that is not a browser serves the PDF to the
-    /// first request, which now looks like one; a site that also wants a
-    /// same-site `Referer` 403s it, and the single browser-profile retry gets in.
+    /// second request, which looks like one; a site that also wants a same-site
+    /// `Referer` 403s that, and the fuller browser strategy gets in.
     #[test]
     fn a_403_site_serves_the_pdf_once_the_request_looks_like_a_browser() {
         if !curl_available() {
@@ -1381,13 +2019,21 @@ mod tests {
         });
         let (_d, path) = dest();
         let url = format!("{}/ds.pdf", ua_only.base);
-        let got = fetch_pdf(&CurlHttp::default(), &url, &path, "LM358").unwrap();
+        let http = CurlHttp::default();
+        let got = fetch_pdf(&http, &url, &path, "LM358").unwrap();
         assert_eq!(got.via, Via::Direct);
         assert_eq!(
             ua_only.heads.lock().unwrap().len(),
-            1,
-            "no 403 round trip needed"
+            2,
+            "curl's own agent refused, the browser's served"
         );
+        assert_eq!(
+            http.memory().unwrap().preferred(&url),
+            Some(Strategy::CurlStandard)
+        );
+        // The next part from that host goes straight to what worked.
+        assert!(fetch_pdf(&http, &url, &path, "LM358").is_ok());
+        assert_eq!(ua_only.heads.lock().unwrap().len(), 3);
 
         let strict = serve(move |head, _, stream| {
             if looks_like_browser(head) && has_header(head, "Referer") {
@@ -1399,21 +2045,101 @@ mod tests {
         let url = format!("{}/ds.pdf", strict.base);
         assert!(fetch_pdf(&CurlHttp::default(), &url, &path, "LM358").is_ok());
         let heads = strict.heads.lock().unwrap();
-        assert_eq!(heads.len(), 2, "one refusal, one browser-profile retry");
-        assert!(!has_header(&heads[0], "Referer") && has_header(&heads[1], "Referer"));
+        assert_eq!(heads.len(), 3, "two refusals, then the fuller browser set");
+        assert!(!has_header(&heads[1], "Referer") && has_header(&heads[2], "Referer"));
         drop(heads);
+
+        // The reverse of the above: a site that serves curl's own agent and
+        // refuses a browser's.
+        let curl_only = serve(|head, _, stream| {
+            if head.contains("User-Agent: curl/") {
+                reply(stream, "200 OK", PDF);
+            } else {
+                reply(stream, "404 Not Found", b"no");
+            }
+        });
+        let url = format!("{}/ds.pdf", curl_only.base);
+        assert!(fetch_pdf(&CurlHttp::default(), &url, &path, "LM358").is_ok());
+        assert_eq!(curl_only.heads.lock().unwrap().len(), 1);
 
         let never = serve(|_, _, stream| reply(stream, "403 Forbidden", b"no"));
         let url = format!("{}/ds.pdf", never.base);
         let err = fetch_pdf(&CurlHttp::default(), &url, &path, "LM358").unwrap_err();
         assert!(
-            matches!(err, FetchError::Blocked { status: 403, .. }),
+            matches!(
+                err.representative(),
+                FetchError::Blocked { status: 403, .. }
+            ),
             "{err}"
         );
-        assert_eq!(
-            never.heads.lock().unwrap().len(),
-            2,
-            "tried twice, not forever"
+        let asked = never.heads.lock().unwrap().len();
+        assert!(
+            (3..=4).contains(&asked),
+            "three curl sets, plus node when it is installed, not forever: {asked}"
+        );
+        assert!(!err.to_string().contains('\n'), "{err}");
+    }
+
+    /// Node's `fetch` (when node is installed): it fetches a PDF across a
+    /// redirect, reports an HTTP error status rather than failing, refuses a URL
+    /// that is not http(s), and abandons a server that goes quiet with curl's
+    /// stall code.
+    #[test]
+    fn node_fetch_follows_redirects_and_stops_at_a_stall() {
+        if !node_available() {
+            eprintln!("SKIP: node is not installed");
+            return;
+        }
+        let timeouts = Timeouts {
+            connect_secs: 5,
+            stall_secs: 2,
+            overall_secs: 40,
+        };
+        let http = CurlHttp::with_timeouts(timeouts);
+        let (_d, path) = dest();
+        let get = |url: &str| {
+            http.get(&Request {
+                url,
+                dest: &path,
+                strategy: Strategy::NodeFetch,
+                http1: false,
+            })
+        };
+        let server = serve(|head, _, stream| {
+            if head.starts_with("GET /go ") {
+                let _ = stream.write_all(
+                    b"HTTP/1.1 302 Found\r\nLocation: /ds.pdf\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+            } else if head.starts_with("GET /ds.pdf ") {
+                reply(stream, "200 OK", PDF);
+            } else {
+                reply(stream, "404 Not Found", b"gone");
+            }
+        });
+        let got = get(&format!("{}/go", server.base)).unwrap();
+        assert_eq!(got.status, 200);
+        assert_eq!(got.final_url, format!("{}/ds.pdf", server.base));
+        assert_eq!(std::fs::read(&path).unwrap(), PDF);
+        let got = get(&format!("{}/missing", server.base)).unwrap();
+        assert_eq!(got.status, 404, "an HTTP error is an answer, not a failure");
+        assert!(get("data:application/pdf;base64,JVBERg==").is_err());
+        assert!(get("file:///etc/hostname").is_err());
+
+        let stalled = serve(|_, _, stream| {
+            let head = "HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n";
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(PDF);
+            let _ = stream.flush();
+            std::thread::sleep(Duration::from_secs(20));
+        });
+        let started = std::time::Instant::now();
+        let err = get(&format!("{}/ds.pdf", stalled.base)).unwrap_err();
+        assert_eq!(err.code, Some(28), "{err:?}");
+        assert!(err.stalled());
+        assert!(
+            started.elapsed() < Duration::from_secs(12),
+            "abandoned after about the stall time: {:?}",
+            started.elapsed()
         );
     }
 
@@ -1431,7 +2157,7 @@ mod tests {
             stall_secs: 2,
             overall_secs: 40,
         };
-        let http = CurlHttp { timeouts };
+        let http = CurlHttp::with_timeouts(timeouts);
         let trickle = serve(|_, _, stream| {
             let chunks = 14usize;
             let head = format!(
@@ -1469,7 +2195,7 @@ mod tests {
             .get(&Request {
                 url: &format!("{}/ds.pdf", stalled.base),
                 dest: &path,
-                profile: Profile::Standard,
+                strategy: Strategy::CurlStandard,
                 http1: false,
             })
             .unwrap_err();
