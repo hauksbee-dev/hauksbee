@@ -3587,7 +3587,7 @@ fn call_backend(
             crate::extract_usage::record("api", &request.model, metered, usage);
             Ok(extract_toml_block(&text, reply.table()))
         });
-        return raw.map(|raw| (raw, None));
+        return raw.map(|raw| (stamp_doubts(&raw, reply, None), None));
     }
     require_tool(&resolved)?;
 
@@ -3648,6 +3648,41 @@ fn call_backend(
     crate::card_coverage::with_facts(facts, || {
         run_ladder(&resolved, &prompts, reply, &ws, &ladder, billing)
     })
+}
+
+/// `raw`, a finished card, with what is left unconfirmed on it stamped as
+/// `[[models.source.doubt]]` rows ([`crate::card_trust`]): the trust problems the
+/// drafter did not fix, a pad map that disagrees with the datasheet's column, and
+/// the drafter's own `low` confidence (`confidence` is its level and reason). A
+/// finding that rests only on a doubted field of this card is then a note to check
+/// the card, not a board fault.
+fn stamp_doubts(raw: &str, reply: Reply<'_>, confidence: Option<(String, String)>) -> String {
+    let Reply::Model { part, kind } = reply else {
+        return raw.to_string();
+    };
+    let Ok(entries) = parse_and_validate_all(raw, part, kind) else {
+        return raw.to_string();
+    };
+    let mut doubts = crate::card_coverage::current_doubts(&entries);
+    if let Some((level, why)) = confidence.filter(|(level, _)| level == "low") {
+        let reason = format!("the drafter reported {level} confidence: {why}");
+        for (_, rows) in &mut doubts {
+            rows.push(crate::schema::Doubt {
+                area: crate::schema::DoubtArea::Card,
+                reason: reason.clone(),
+            });
+        }
+    }
+    for (id, rows) in &doubts {
+        for d in rows {
+            say!(
+                "[model-extract] {id}: left unconfirmed on the card ({:?}): {}",
+                d.area,
+                d.reason
+            );
+        }
+    }
+    crate::card_trust::stamp(raw, &doubts)
 }
 
 /// The instruction an agent run is given, in its single and staged shapes: the
@@ -3905,6 +3940,7 @@ fn run_ladder(
                 (n + 1, tiers),
                 why,
             );
+            let raw = stamp_doubts(&raw, reply, Some(harness::confidence(ws.path())));
             Ok((raw, t))
         };
         let reason = match ran {

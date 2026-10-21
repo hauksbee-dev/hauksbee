@@ -108,6 +108,7 @@ pub mod audio_bus;
 pub mod back_power;
 pub mod boot;
 pub mod bus_loading;
+pub(crate) mod card_trust;
 pub mod contention;
 pub mod control_held_off;
 pub mod converter;
@@ -572,6 +573,9 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
         }
     }
     lint_tick(2);
+    // Last, so every check's finding is seen: what rests only on a drafted
+    // card's doubtful field is a note to check the card, not a board fault.
+    card_trust::cap_doubted_cards(&mut report, board, lib);
     report
 }
 

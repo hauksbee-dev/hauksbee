@@ -54,6 +54,7 @@ pub mod card_coverage;
 pub mod card_provenance;
 pub mod card_scope;
 pub mod card_templates;
+pub mod card_trust;
 mod check;
 pub mod chip_size;
 pub mod companion_docs;
@@ -116,9 +117,9 @@ pub use pack::{Pack, PackError, PackManifest, PackRecord, PackStore, Provenance}
 pub use pin_rules::{InferredRole, PinRule, PinRuleTable};
 pub use profile::{LoadProfile, Segment};
 pub use schema::{
-    abs_max_citation, basis_names_abs_max, declared_pin_ceiling_v, ComponentKind, EnvelopeSeverity,
-    ModelCoverage, ModelEntry, ModelSourceReference, OperatingEnvelope, Params, PeripheralPower,
-    PeripheralSpec, StrapInternalPull, StrapLevel, StrapPin,
+    abs_max_citation, basis_names_abs_max, declared_pin_ceiling_v, ComponentKind, Doubt, DoubtArea,
+    EnvelopeSeverity, ModelCoverage, ModelEntry, ModelSourceReference, OperatingEnvelope, Params,
+    PeripheralPower, PeripheralSpec, StrapInternalPull, StrapLevel, StrapPin,
 };
 pub use sensor_spec::{
     Bus, Encoding, ProtocolStyle, RegisterSpec, Sensor, SensorSpec, SensorSpecError,
@@ -1132,6 +1133,11 @@ impl ModelLibrary {
             entry.derating = derating::Derating::of(&entry);
             entry.pin_standard = validation::pin_standard(&entry).map(str::to_owned);
             entry.pin_package = validation::pin_package(&entry).map(str::to_owned);
+            entry.doubts = entry
+                .source
+                .as_ref()
+                .map(|s| s.doubt.clone())
+                .unwrap_or_default();
             // A level printed at a heavy test current is the light-load level
             // behind an output resistance (`output_load`), for every digital card.
             let (load_rows, load_records) = output_load::light_load_levels(&mut entry);

@@ -3584,6 +3584,7 @@ fn editable_model_upgrade(
         )?],
         characteristic: Vec::new(),
         pinout: Vec::new(),
+        doubt: Vec::new(),
     });
     let missing = model.coverage.missing.join(", ");
     // Do not flatten ModelEntry into an auxiliary wrapper here. The TOML
