@@ -30,8 +30,8 @@ use std::cmp::Ordering;
 
 use super::topology::is_connector;
 use super::{
-    is_capacitor, is_ground, is_led, is_positive_supply, is_supply, is_unconnected_net, norm,
-    LintCheck, LintFinding, NetLintReport, Severity,
+    is_capacitor, is_ground, is_led, is_positive_supply, is_resistor, is_supply,
+    is_unconnected_net, norm, parse_ohms, LintCheck, LintFinding, NetLintReport, Severity,
 };
 use crate::assembly::AssemblyState;
 use crate::part_class::{connected_pads, ref_designator};
@@ -495,6 +495,31 @@ fn maybe_bidirectional(c: &Component) -> bool {
             && (hauksbee_models::value::TVS_FAMILIES.iter()).any(|(f, _)| token.starts_with(*f)))
 }
 
+/// Resistance at or above which a resistor between two supply nets is a bias
+/// feed (a current limit for the node it feeds), not a link inside one rail.
+const BIAS_FEED_OHMS: f64 = 100.0;
+
+/// Whether `net` is fed from another supply through a resistor: a node that a
+/// resistor of a bias value ties to a positive or negative rail. A diode
+/// conducting from ground into such a node is a diode-drop bias or clamp by
+/// design (the resistor limits what it draws), not a rail shorted through a
+/// wrong-way clamp, whatever the node is called.
+fn is_resistor_fed(board: &ExtractedBoard, net: i64) -> bool {
+    board.net_members(net).into_iter().any(|(r, _)| {
+        fitted(r)
+            && connected_pads(r) == 2
+            && is_resistor(r)
+            && parse_ohms(&r.value).is_some_and(|ohms| ohms >= BIAS_FEED_OHMS)
+            && (r.pins.iter().filter_map(|p| p.net)).any(|far| {
+                far != net
+                    && matches!(
+                        level_of(net_name(board, far)),
+                        Level::Positive(_) | Level::Negative(_)
+                    )
+            })
+    })
+}
+
 pub(super) fn check_diodes_across_rails(board: &ExtractedBoard, report: &mut NetLintReport) {
     for c in board
         .components
@@ -520,6 +545,14 @@ pub(super) fn check_diodes_across_rails(board: &ExtractedBoard, report: &mut Net
         } else {
             (a_name, k_name)
         };
+        let rail_id = if a_level == Level::Ground {
+            cathode
+        } else {
+            anode
+        };
+        if is_resistor_fed(board, rail_id) {
+            continue;
+        }
         report.findings.push(forward_diode_finding(
             c,
             (a_name, k_name),

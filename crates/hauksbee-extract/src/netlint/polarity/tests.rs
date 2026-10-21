@@ -164,6 +164,87 @@ fn bidirectional_diodes_and_diodes_between_rails_stay_silent() {
     assert_eq!(count(&tvs("SS14", 6, 5), LintCheck::DiodeReversed), 0);
 }
 
+/// The legitimate ways round for the diodes that sit beside a rail. None of
+/// them is a forward diode across a rail, and none may be called one.
+#[test]
+fn flyback_catch_protection_and_clamp_orientations_stay_silent() {
+    // Flyback across a high-side-switched relay coil: cathode on the supply,
+    // anode on the switch node.
+    assert_eq!(count(&tvs("1N4007", 6, 2), LintCheck::DiodeReversed), 0);
+    // Freewheel or buck catch diode: anode at ground, cathode on the switch
+    // node, which is no named rail.
+    assert_eq!(count(&tvs("SS34", 1, 5), LintCheck::DiodeReversed), 0);
+    // Catch diode whose switch node is named like a rail (cathode positive).
+    assert_eq!(count(&tvs("SS34", 1, 4), LintCheck::DiodeReversed), 0);
+    // ESD or TVS from ground to a positive rail, and reverse-polarity shunt
+    // across the input: cathode on the rail.
+    assert_eq!(count(&tvs("SMAJ5.0A", 1, 2), LintCheck::DiodeReversed), 0);
+    assert_eq!(count(&tvs("SMAJ24A", 1, 4), LintCheck::DiodeReversed), 0);
+    // Negative-rail clamp: anode on the negative rail.
+    assert_eq!(count(&tvs("SMAJ12A", 3, 1), LintCheck::DiodeReversed), 0);
+    // Reverse-polarity series diode and ideal-diode OR-ing between rails.
+    assert_eq!(count(&tvs("SS14", 7, 4), LintCheck::DiodeReversed), 0);
+    assert_eq!(count(&tvs("SS14", 4, 7), LintCheck::DiodeReversed), 0);
+}
+
+/// A diode-drop bias: ground to a node named for a rail, the node fed from a
+/// real supply through a bias resistor. The diode conducts by design and the
+/// resistor limits it.
+fn bias_diode(feed_ohms: &str, dnp_feed: bool, feed_net: i64, node: i64) -> ExtractedBoard {
+    let mut feed = part(
+        "R1",
+        feed_ohms,
+        "Device:R",
+        "Resistor_SMD:R_0603",
+        vec![pin("1", Some(node)), pin("2", Some(feed_net))],
+    );
+    feed.dnp = dnp_feed;
+    board(
+        &[(1, "GND"), (2, "+5V"), (3, "-12V"), (4, "VEE"), (5, "VIN")],
+        vec![
+            diode(
+                "1N4148",
+                "Diode:1N4148",
+                "Diode_SMD:D_SOD-323",
+                vec![named("1", 4, "K"), named("2", 1, "A")],
+            ),
+            feed,
+        ],
+    )
+}
+
+#[test]
+fn a_diode_drop_bias_fed_through_a_resistor_is_not_a_reversed_clamp() {
+    // GND (anode) into VEE (cathode), VEE fed from -12V through 1k: a bias.
+    assert_eq!(
+        count(&bias_diode("1k", false, 3, 4), LintCheck::DiodeReversed),
+        0
+    );
+}
+
+#[test]
+fn a_forward_diode_with_no_resistor_limit_is_still_reversed() {
+    // The same diode with the node tied to the rail by a 0R link or a 10R
+    // sense part is a short, not a bias.
+    for value in ["0R", "10"] {
+        assert_eq!(
+            count(&bias_diode(value, false, 3, 4), LintCheck::DiodeReversed),
+            1,
+            "{value}"
+        );
+    }
+    // A resistor not fitted feeds nothing.
+    assert_eq!(
+        count(&bias_diode("1k", true, 3, 4), LintCheck::DiodeReversed),
+        1
+    );
+    // A resistor to ground is a bleeder, not a feed.
+    assert_eq!(
+        count(&bias_diode("1k", false, 1, 4), LintCheck::DiodeReversed),
+        1
+    );
+}
+
 /// A two-pad TVS with neutral value, lib id and footprint and the
 /// unidirectional pin names C and A, carrying only the given properties.
 fn neutral_tvs(properties: &[(&str, &str)]) -> ExtractedBoard {
