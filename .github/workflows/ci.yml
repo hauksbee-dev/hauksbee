@@ -237,6 +237,10 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: macos-ci-${{ matrix.suite }}
+          # The runner image's preinstalled rustc moves between roll-outs; the
+          # toolchain that builds is pinned by rust-toolchain.toml, which is
+          # already part of the key, so keep the key stable across images.
+          add-rust-environment-hash-key: false
           add-job-id-key: false
           cache-on-failure: true
           cache-workspace-crates: true
@@ -288,6 +292,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: windows-tests
+          # (stable across runner images, as above)
+          add-rust-environment-hash-key: false
           # Every shard compiles the same graph; one of them saves it.
           save-if: ${{ matrix.shard == 1 }}
           add-job-id-key: false
@@ -296,6 +302,17 @@ jobs:
       - name: install checksum-pinned cargo-nextest
         shell: pwsh
         run: .\scripts\ci-install-nextest.ps1
+      # The installer-timeout test spawns Windows PowerShell and a grandchild of
+      # it and gives the pair 20 s to come up. The first Windows PowerShell
+      # start on a fresh runner can eat most of that (5 s to 23 s measured), a
+      # cost the single serial job never paid because its earlier PowerShell
+      # steps had already warmed it. Start one here so the test measures the
+      # job-object teardown, not a cold disk.
+      - name: warm Windows PowerShell
+        shell: powershell
+        run: |
+          $child = Start-Process powershell -ArgumentList '-NoProfile','-Command','Start-Sleep -Milliseconds 500' -PassThru
+          Wait-Process -Id $child.Id
       - name: install checksum-pinned Windows simulator backends
         shell: pwsh
         run: .\scripts\install-sims-windows.ps1
@@ -327,6 +344,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: windows-flows
+          # (stable across runner images, as above)
+          add-rust-environment-hash-key: false
           add-job-id-key: false
           cache-on-failure: true
           cache-workspace-crates: true
@@ -371,6 +390,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: windows-release
+          # (stable across runner images, as above)
+          add-rust-environment-hash-key: false
           add-job-id-key: false
           cache-on-failure: true
           cache-workspace-crates: true
