@@ -307,6 +307,42 @@ fn abstention(net: &str, pulls: &[Pull], unjudged: &[(String, String)]) -> LintF
     f
 }
 
+/// The do-not-populate resistors on a net: left out of the assembled board, so
+/// never counted as pull-ups, but named in a finding so a reader who sees a
+/// resistor drawn on the line knows why it was not credited.
+fn dnp_resistor_refs(board: &ExtractedBoard, net_id: i64) -> Vec<String> {
+    let mut refs: Vec<String> = Vec::new();
+    for (c, _) in board.net_members(net_id) {
+        if matches!(AssemblyState::of(c), AssemblyState::DnpAbsent(_))
+            && hauksbee_extract::is_resistor(c)
+            && !refs.contains(&c.reference)
+        {
+            refs.push(c.reference.clone());
+        }
+    }
+    refs
+}
+
+/// Say in a finding that `dnp` resistors on its line were not counted. The note
+/// goes ahead of the remedy so the remedy stays the message's last sentence.
+fn note_uncounted_dnp(finding: &mut LintFinding, dnp: &[String]) {
+    if dnp.is_empty() {
+        return;
+    }
+    let one = dnp.len() == 1;
+    let note = format!(
+        "{} on this line {} marked do-not-populate and not counted as {}. ",
+        dnp.join(", "),
+        if one { "is" } else { "are" },
+        if one { "a pull-up" } else { "pull-ups" },
+    );
+    let at = finding
+        .message
+        .find(REMEDY_MARKER)
+        .unwrap_or(finding.message.len());
+    finding.message.insert_str(at, &note);
+}
+
 /// The pull-up effect lint. `never_up` names the nets of rails the rail model
 /// says never come up.
 #[must_use]
@@ -337,6 +373,8 @@ pub fn pullup_effect_lint<S: BuildHasher>(
         if !only_passive_company(board, net.id, &loads) {
             continue;
         }
+        let first_new = report.findings.len();
+        let dnp = dnp_resistor_refs(board, net.id);
         if loads.is_empty() {
             let (_, r_eff) = thevenin(&pulls);
             // The conductance round trip can land a hair under the value the
@@ -349,9 +387,12 @@ pub fn pullup_effect_lint<S: BuildHasher>(
                         .push(abstention(&net.name, &pulls, &unjudged));
                 }
             }
-            continue;
+        } else {
+            report.findings.extend(judge(&net.name, &pulls, &loads));
         }
-        report.findings.extend(judge(&net.name, &pulls, &loads));
+        for f in &mut report.findings[first_new..] {
+            note_uncounted_dnp(f, &dnp);
+        }
     }
     report
 }
@@ -469,6 +510,38 @@ mod tests {
             1,
             "an open-drain output cannot push high: still judged"
         );
+    }
+
+    /// A do-not-populate resistor is not a pull-up: it neither rescues a bad
+    /// fitted one (here a second, DNP 10k to the receiver's own 5 V rail) nor is
+    /// judged itself, and the finding says it was left out. A line whose only
+    /// resistor is DNP has no pull-up to judge (the missing-pull-up checks cover
+    /// that), so it stays silent here.
+    #[test]
+    fn a_dnp_resistor_is_not_counted_and_the_finding_says_so() {
+        let mut b = switch_board(3, 2, "10k");
+        let mut spare = resistor("R9", "10k", 5, 3);
+        spare.dnp = true;
+        b.components.push(spare);
+        let f = run(&b);
+        assert_eq!(f.len(), 1, "{f:?}");
+        let msg = &f[0].message;
+        assert!(
+            msg.contains("R9 on this line is marked do-not-populate"),
+            "{msg}"
+        );
+        assert!(msg.contains("R1") && msg.contains("3.3 V"), "{msg}");
+        assert!(
+            msg.find("R9").unwrap() < msg.find(REMEDY_MARKER).unwrap(),
+            "the note sits ahead of the remedy: {msg}"
+        );
+
+        let mut only_dnp = switch_board(3, 3, "10k");
+        only_dnp.components.retain(|c| c.reference != "R1");
+        let mut lone = resistor("R9", "10k", 5, 2);
+        lone.dnp = true;
+        only_dnp.components.push(lone);
+        assert!(run(&only_dnp).is_empty());
     }
 
     /// A pull-up to a rail the board never powers holds the line at 0 V.

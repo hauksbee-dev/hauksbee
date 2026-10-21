@@ -337,6 +337,15 @@ pub enum LintCheck {
 /// rather than two strings that can silently drift apart.
 pub const DNP_PULLUP_MESSAGE_MARKER: &str = "do-not-populate";
 
+/// The phrase that marks the policy-fitted variant of a DNP pull-up finding.
+///
+/// That is the variant where this run fits DNP parts, so the resistor exists in
+/// the analysed board but not on the assembled one. The other DNP variant (the
+/// default policy, where the resistor is already left out) does not say it. The
+/// plain renderer keys its explanation off this substring; shared for the same
+/// no-drift reason as [`DNP_PULLUP_MESSAGE_MARKER`].
+pub const DNP_FITTED_NOTE_MARKER: &str = "this run fits DNP parts";
+
 /// The phrase that marks an SD pull-up finding as the SPI-wired-socket
 /// variant.
 ///
@@ -1321,6 +1330,10 @@ struct PullupScan {
     /// default fit policy assumes DNP parts get placed: as assembled the line
     /// still floats, so the finding names the part instead of clearing.
     dnp_ref: Option<String>,
+    /// A pull-up exists in the layout but is do-not-populate and left out of the
+    /// assembled board (the default policy): it must not count as a pull-up, and
+    /// the finding names it so a reader sees why the line is judged bare.
+    absent_ref: Option<String>,
     /// A resistor sits where a pull-up would but its VALUE cannot be parsed (an
     /// MPN or blank field, routine in Altium/EAGLE extraction): the net can be
     /// judged in neither direction.
@@ -1335,7 +1348,9 @@ struct PullupScan {
 fn pullup_scan(board: &ExtractedBoard, net_id: i64, min_ohms: Option<f64>) -> PullupScan {
     let mut scan = PullupScan::default();
     for (c, _) in members(board, net_id) {
-        if !AssemblyState::of(c).is_present() || !(is_resistor(c) || is_resistor_array(c)) {
+        let state = AssemblyState::of(c);
+        let absent = matches!(state, AssemblyState::DnpAbsent(_));
+        if !(state.is_present() || absent) || !(is_resistor(c) || is_resistor_array(c)) {
             continue;
         }
         let parsed = parse_ohms(&c.value);
@@ -1349,7 +1364,9 @@ fn pullup_scan(board: &ExtractedBoard, net_id: i64, min_ohms: Option<f64>) -> Pu
             if far_is_ground || !net_is_raillike(board, oid) {
                 continue;
             }
-            if min_ohms.is_some() && parsed.is_none() {
+            if absent {
+                scan.absent_ref.get_or_insert_with(|| c.reference.clone());
+            } else if min_ohms.is_some() && parsed.is_none() {
                 scan.unjudgeable = true;
             } else if crate::dnp::fitted_from_dnp_policy(c) {
                 scan.dnp_ref.get_or_insert_with(|| c.reference.clone());
@@ -1493,6 +1510,38 @@ const fn pullup_regime(ends: &BusEnds) -> Option<(Severity, &'static str)> {
     }
 }
 
+/// The message of a missing-pull-up finding when the line has a resistor that
+/// is do-not-populate, or `None` when it has none.
+///
+/// `absent` is a resistor the assembled board leaves out (the default policy);
+/// `policy_fitted` is one this run fits only because the fit policy assumes DNP
+/// parts get placed. Neither counts as a pull-up on the built board, so the
+/// finding names the part: a reader who sees the resistor drawn on the line
+/// must not be told it is missing. `note` is the check's own reason the line
+/// needs one. `subject` reads "I2C SDA" or "SD card CMD".
+fn dnp_pullup_message(
+    subject: &str,
+    net: &str,
+    absent: Option<&str>,
+    policy_fitted: Option<&str>,
+    note: &str,
+) -> Option<String> {
+    if let Some(part) = absent {
+        return Some(format!(
+            "{subject} net '{net}' has no fitted pull-up to a rail: {part} is the only \
+             pull-up and is marked {DNP_PULLUP_MESSAGE_MARKER}, so it is not counted and as \
+             built the line floats ({note})"
+        ));
+    }
+    policy_fitted.map(|part| {
+        format!(
+            "{subject} net '{net}' relies on {part} for its pull-up, but {part} is marked \
+             {DNP_PULLUP_MESSAGE_MARKER}: as assembled, the line floats \
+             ({DNP_FITTED_NOTE_MARKER}, so other results may look fine)"
+        )
+    })
+}
+
 fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
     for net in &board.nets {
         if net.id == 0 || is_unconnected_net(&net.name) {
@@ -1570,27 +1619,38 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
         }
         let active_devices = active_refs.len();
 
-        let Some((sev, note)) = pullup_regime(&BusEnds {
+        let regime = pullup_regime(&BusEnds {
             via_module_socket,
             exits_to_connector,
             via_dnp_end,
             active_devices,
+        });
+        // A pull-up that is do-not-populate is not a pull-up on the built board.
+        // Where the regime would otherwise abstain (a single on-board device
+        // and no header), its presence in the layout is the evidence that the
+        // designer meant the line to be pulled up, so it is reported at Low.
+        let Some((sev, note)) = regime.or_else(|| {
+            scan.absent_ref.is_some().then_some((
+                Severity::Low,
+                "only one device sits on the bus, so the pull-up may be fitted elsewhere",
+            ))
         }) else {
             // A single on-board device with no header and no pull: ambiguous,
             // skip rather than risk a false positive.
             continue;
         };
 
-        if let Some(dnp_ref) = scan.dnp_ref {
+        if let Some(message) = dnp_pullup_message(
+            &format!("I2C {role}"),
+            &net.name,
+            scan.absent_ref.as_deref(),
+            scan.dnp_ref.as_deref(),
+            note,
+        ) {
             report.findings.push(LintFinding {
                 check: LintCheck::MissingI2cPullup,
                 severity: sev,
-                message: format!(
-                    "I2C {role} net '{}' relies on {dnp_ref} for its pull-up, but {dnp_ref} \
-                     is marked {DNP_PULLUP_MESSAGE_MARKER}: as assembled, the line floats \
-                     (this run fits DNP parts, so other results may look fine)",
-                    net.name
-                ),
+                message,
                 refs: present_refs(&mem),
                 nets: vec![net.name.clone()],
             });
@@ -1930,6 +1990,7 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
         let PullupScan {
             fitted: mut has_pullup,
             dnp_ref: mut dnp_pullup_ref,
+            absent_ref: mut absent_pullup_ref,
             mut unjudgeable,
         } = scan_for_pullup(net.id);
         let mut has_socket = false;
@@ -2010,6 +2071,9 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                             unjudgeable |= far.unjudgeable;
                             if dnp_pullup_ref.is_none() {
                                 dnp_pullup_ref = far.dnp_ref;
+                            }
+                            if absent_pullup_ref.is_none() {
+                                absent_pullup_ref = far.absent_ref;
                             }
                             for (fc, _fp) in members(board, oid) {
                                 if !AssemblyState::of(fc).is_present() || is_test_point_or_hole(fc)
@@ -2146,23 +2210,25 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
             }
         };
 
-        // A pull-up that exists in the layout but is DNP (and present in
-        // simulation only because the default fit policy assumes it will be
-        // placed) is its own finding AT THE SAME SEVERITY the absent-part
-        // case earns: the board as assembled floats either way, and a
-        // policy flag that exists as a simulation convenience must not
-        // decide whether CI gates on a fab-real defect.
-        if let Some(dnp_ref) = dnp_pullup_ref {
+        // A pull-up that exists in the layout but is DNP, whether left out of
+        // the analysis or present in simulation only because the fit policy
+        // assumes it will be placed, is its own finding AT THE SAME SEVERITY
+        // the absent-part case earns: the board as assembled floats either
+        // way, and a policy flag that exists as a simulation convenience must
+        // not decide whether CI gates on a fab-real defect. The finding names
+        // the part, so a reader who sees a resistor drawn on the line is not
+        // told it is missing.
+        if let Some(message) = dnp_pullup_message(
+            &format!("SD card {role}"),
+            &net.name,
+            absent_pullup_ref.as_deref(),
+            dnp_pullup_ref.as_deref(),
+            why,
+        ) {
             report.findings.push(LintFinding {
                 check: LintCheck::MissingSdPullup,
                 severity: sev,
-                message: format!(
-                    "SD card {role} net '{}' relies on {dnp_ref} for its pull-up, but \
-                     {dnp_ref} is marked {DNP_PULLUP_MESSAGE_MARKER}: as assembled, the \
-                     line floats (this run fits DNP parts, so other results \
-                     may look fine)",
-                    net.name
-                ),
+                message,
                 refs,
                 nets: vec![net.name.clone()],
             });
@@ -3123,6 +3189,101 @@ mod i2c_pullup_source_tests {
             Vec::<Severity>::new()
         );
     }
+
+    /// A live master on the two lines, so the far end of `two_wire` is a second
+    /// active device and the bus is a judged on-board bus.
+    fn master() -> Component {
+        part(
+            "U1",
+            "MCU",
+            "",
+            "QFN-40",
+            vec![named("1", 1, "SDA"), named("2", 2, "SCL")],
+        )
+    }
+
+    /// The `pullups()` pair with the references in `dnp` marked do-not-populate.
+    fn pullups_dnp(dnp: &[&str]) -> Vec<Component> {
+        let mut rs = pullups();
+        for r in &mut rs {
+            r.dnp = dnp.contains(&r.reference.as_str());
+        }
+        rs
+    }
+
+    /// The `missing_i2c_pullup` findings as (net, severity, message).
+    fn i2c_detail(b: &ExtractedBoard) -> Vec<(String, Severity, String)> {
+        b.net_lint()
+            .of_check(LintCheck::MissingI2cPullup)
+            .map(|f| (f.nets[0].clone(), f.severity, f.message.clone()))
+            .collect()
+    }
+
+    /// A line whose only pull-up is do-not-populate has no pull-up on the built
+    /// board: it is reported, at the severity a missing pull-up earns, and the
+    /// message names the DNP resistor instead of reading as a bare omission.
+    #[test]
+    fn a_dnp_only_pullup_is_not_a_pullup_and_the_finding_says_so() {
+        let b = two_wire(master(), pullups_dnp(&["R1", "R2"]));
+        let found = i2c_detail(&b);
+        assert_eq!(found.len(), 2, "SDA and SCL: {found:?}");
+        for (net, sev, msg) in &found {
+            assert_eq!(*sev, Severity::Medium, "{net}: {msg}");
+            assert!(msg.contains("do-not-populate"), "{msg}");
+            let part = if net == "SDA" { "R1" } else { "R2" };
+            assert!(msg.contains(part), "{msg}");
+            assert!(
+                !msg.contains(crate::DNP_FITTED_NOTE_MARKER),
+                "default policy leaves the part out; it does not fit it: {msg}"
+            );
+        }
+        // The same board with the resistors fitted is clean.
+        assert!(i2c_findings(&two_wire(master(), pullups_dnp(&[]))).is_empty());
+    }
+
+    /// One fitted pull-up and one DNP: only the line left without a fitted
+    /// pull-up is reported.
+    #[test]
+    fn a_dnp_pullup_beside_a_fitted_one_leaves_only_the_bare_line() {
+        let b = two_wire(master(), pullups_dnp(&["R2"]));
+        let found = i2c_detail(&b);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].0, "SCL");
+        assert!(found[0].2.contains("R2"), "{}", found[0].2);
+    }
+
+    /// A single live device with a DNP pull-up used to be silent as an
+    /// "ambiguous" bus. The pull-up drawn in the layout shows the line was meant
+    /// to be pulled up, so it is a Low finding naming the part.
+    #[test]
+    fn a_single_device_with_only_a_dnp_pullup_is_a_low_finding() {
+        let mut ic = part(
+            "U3",
+            "SPARE",
+            "",
+            "SOIC-8",
+            vec![named("1", 1, "SDA"), named("2", 2, "SCL")],
+        );
+        ic.dnp = true;
+        let found = i2c_detail(&two_wire(ic.clone(), pullups_dnp(&["R1", "R2"])));
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found.iter().all(|f| f.1 == Severity::Low), "{found:?}");
+        assert!(found.iter().all(|f| f.2.contains("do-not-populate")));
+        // With no pull-up drawn at all the bus stays the ambiguous, silent case.
+        assert!(i2c_findings(&two_wire(ic, Vec::new())).is_empty());
+    }
+
+    /// A DNP pull-up on a bus that ends at a module socket stays the Low note,
+    /// and the note now names the unfitted resistor.
+    #[test]
+    fn a_dnp_pullup_on_a_module_socket_bus_keeps_the_low_regime() {
+        let found = i2c_detail(&two_wire(socket(false), pullups_dnp(&["R1", "R2"])));
+        assert_eq!(found.len(), 2, "{found:?}");
+        for (_, sev, msg) in &found {
+            assert_eq!(*sev, Severity::Low);
+            assert!(msg.contains("do-not-populate") && msg.contains("module socket"));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3305,6 +3466,18 @@ mod sd_pullup_tests {
         let f = cmd_findings(&honoured);
         assert_eq!(f.len(), 1, "honoured DNP: the line has no pull-up at all");
         assert_eq!(f[0].0, Severity::Medium);
+        // The message names the resistor that is drawn but not fitted, and does
+        // not claim this run fits it (the default policy leaves it out).
+        assert!(
+            f[0].1.contains("R11") && f[0].1.contains("do-not-populate"),
+            "the finding names the unfitted part: {}",
+            f[0].1
+        );
+        assert!(
+            !f[0].1.contains(crate::DNP_FITTED_NOTE_MARKER),
+            "{}",
+            f[0].1
+        );
 
         let mut fitted = make();
         fitted

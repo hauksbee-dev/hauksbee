@@ -19,7 +19,8 @@ use serde::Serialize;
 
 use hauksbee_extract::{
     DrcReport, LintCheck, NetLintReport, Severity, SiCheck, SiFinding, SiReport, SiSeverity,
-    CHECK_BEFORE_ORDERING, DNP_PULLUP_MESSAGE_MARKER, SPI_PULLUP_MESSAGE_MARKER,
+    CHECK_BEFORE_ORDERING, DNP_FITTED_NOTE_MARKER, DNP_PULLUP_MESSAGE_MARKER,
+    SPI_PULLUP_MESSAGE_MARKER,
 };
 
 use hauksbee_ir::units::{format_amps, format_celsius, format_gap_mm, format_volts, format_watts};
@@ -1631,9 +1632,14 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
             LintCheck::MissingI2cPullup | LintCheck::MissingSdPullup
                 if f.message.contains(DNP_PULLUP_MESSAGE_MARKER) =>
             {
+                let why = if f.message.contains(DNP_FITTED_NOTE_MARKER) {
+                    "The design contains the pull-up, but the part is marked do-not-populate, so the boards that come back from assembly do not have it fitted. This run fits DNP parts, which is why other results can look healthy while the real line floats."
+                } else {
+                    "The design contains the pull-up, but the part is marked do-not-populate, so the boards that come back from assembly do not have it fitted and it is not counted here. The line floats unless something else defines its level."
+                };
                 (
                     f.message.clone(),
-                    "The design contains the pull-up, but the part is marked do-not-populate, so the boards that come back from assembly do not have it fitted. This run fits DNP parts, which is why other results can look healthy while the real line floats.".to_string(),
+                    why.to_string(),
                     "Either fit the resistor in this build (remove the DNP mark, or name it as fitted), or, if leaving it off is deliberate, document what else defines the line's level.".to_string(),
                 )
             }
