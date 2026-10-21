@@ -2049,7 +2049,15 @@ pub const MATCH_PATTERN_RULE: &str = "Anchor the pattern at the START only, neve
 pub fn without_end_anchor(pattern: &str) -> Option<&str> {
     let bare = pattern.strip_suffix('$')?;
     let slashes = bare.bytes().rev().take_while(|b| *b == b'\\').count();
-    (slashes % 2 == 0).then_some(bare)
+    if slashes % 2 != 0 {
+        return None;
+    }
+    // `^PART|$`: the end anchor was a whole alternative ("or the name ends here"),
+    // and the `|` it leaves behind would be an empty alternative matching every value.
+    let alternative = bare
+        .strip_suffix('|')
+        .filter(|head| head.bytes().rev().take_while(|b| *b == b'\\').count() % 2 == 0);
+    Some(alternative.unwrap_or(bare))
 }
 
 /// The rating keys that apply to `kind` ([`rating_applies`]): the ones validation
