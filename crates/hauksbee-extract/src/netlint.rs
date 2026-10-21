@@ -743,6 +743,10 @@ pub fn is_connector_like(c: &Component) -> bool {
     let r = c.reference.to_ascii_uppercase();
     let lib = c.lib_id.to_ascii_lowercase();
     let fp = c.footprint.to_ascii_lowercase();
+    // A chip that sits in a socket, or whose designator reads as a switch
+    // (`SW1` on an analog-switch IC), is still the chip: the footprint's
+    // "socket" and the designator's "SW" are not evidence it is a connector.
+    let chip = || is_socketed_chip(c) || (r.starts_with("SW") && crate::is_active_ic(c));
     // Reference-prefix conventions.
     if r.starts_with('J')
         || r.starts_with("CN")
@@ -750,7 +754,7 @@ pub fn is_connector_like(c: &Component) -> bool {
         || r.starts_with("TP")
         || r.starts_with("MH")
         || r.starts_with("MK")
-        || r.starts_with("SW") // a button is not a bus terminator
+        || (r.starts_with("SW") && !chip()) // a button is not a bus terminator
         || r == "POWER"
         || r.starts_with("IOH")
         || r.starts_with("IOL")
@@ -785,7 +789,7 @@ pub fn is_connector_like(c: &Component) -> bool {
             .any(|word| word == "som")
         || val.contains("sodimm")
         || val.contains("header")
-        || val.contains("socket")
+        || (val.contains("socket") && !chip())
     {
         return true;
     }
@@ -795,7 +799,7 @@ pub fn is_connector_like(c: &Component) -> bool {
         || fp.contains("connector")
         || fp.contains("uext")
         || fp.contains("pinhead")
-        || fp.contains("socket")
+        || (fp.contains("socket") && !chip())
         || fp.contains("sodimm")
         || fp.contains("df40")
         || fp.contains("df12")
@@ -808,6 +812,42 @@ pub fn is_connector_like(c: &Component) -> bool {
         // them from an IC body (`LGA-12_2x2mm`); a bare `_2x` substring did not.
         || is_pin_array_package(&c.footprint)
         || is_module_socket(c)
+}
+
+/// An IC that plugs into a socket (a DIP or PLCC part in a socket footprint) or
+/// otherwise reads as a connector by its footprint alone: the record itself says
+/// it is a chip. Decided by the symbol, value, part number and pin roles, not by
+/// the footprint name: an active IC (see [`crate::is_active_ic`]) on a footprint
+/// that lands an IC package, or one with supply and ground pins and a part-number
+/// value, and in neither case a pin row, a connector symbol or a module-socket
+/// footprint.
+fn is_socketed_chip(c: &Component) -> bool {
+    if !crate::is_active_ic(c) || is_pin_array_package(&c.footprint) || is_module_socket(c) {
+        return false;
+    }
+    let lib = c.lib_id.to_ascii_lowercase();
+    if ["connector", "conn:", "header", "pinhead", "pinsocket"]
+        .iter()
+        .any(|k| lib.contains(k))
+    {
+        return false;
+    }
+    let pads: std::collections::HashSet<&str> = c.pins.iter().map(|p| p.number.as_str()).collect();
+    if hauksbee_models::refdes::lands_an_ic_package(&c.footprint, pads.len()) {
+        return true;
+    }
+    let named = |names: &[&str]| {
+        c.pins.iter().any(|p| {
+            let f = p.function.to_ascii_uppercase();
+            names.iter().any(|n| f.starts_with(n))
+        })
+    };
+    let part_number = c.value.chars().any(|ch| ch.is_ascii_digit())
+        && c.value.chars().any(|ch| ch.is_ascii_alphabetic())
+        && c.value.chars().filter(char::is_ascii_alphanumeric).count() >= 4;
+    part_number
+        && named(&["VCC", "VDD", "VIN", "V+", "AVDD", "DVDD", "VBAT"])
+        && named(&["GND", "VSS", "AGND", "V-"])
 }
 
 /// Fewest distinct pads a layout footprint needs before its row shape alone

@@ -109,7 +109,7 @@ pub(crate) fn is_probable_mcu(comp: &Component) -> bool {
     if !AssemblyState::of(comp).is_present() {
         return false; // not assembled (or identity refused) -> electrically absent
     }
-    if !is_active_ic_refdes(&comp.reference) {
+    if !is_active_ic_refdes(&comp.reference) && !hauksbee_extract::is_active_ic(comp) {
         return false;
     }
     // KiCad puts MCU symbols in libraries named `MCU_*` (e.g.

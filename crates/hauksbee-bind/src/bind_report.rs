@@ -176,6 +176,12 @@ pub struct BindReport {
     pub supply_groups: Vec<crate::rail_owner::SupplyGroup>,
     /// Orderable-variant selections, keyed by the index of the row they bound.
     pub selections: std::collections::BTreeMap<usize, hauksbee_models::variants::Selection>,
+    /// References of parts that are active ICs by what their record says (symbol,
+    /// package, part number, pad count) though the designator does not read as
+    /// one (`S1`, `SW2`). They count as active ICs wherever the designator
+    /// prefix does, so an IC drawn under a switch-like designator is still
+    /// offered for a model.
+    pub identity_ics: std::collections::BTreeSet<String>,
 }
 
 /// One unresolved (open-circuit) part and where its pins land, so the scheduler
@@ -735,7 +741,9 @@ impl BindSummary {
             if is_mcu {
                 mcu_bound = true;
             }
-            let active_ic = is_mcu || is_active_ic_ref(&row.reference);
+            let active_ic = is_mcu
+                || is_active_ic_ref(&row.reference)
+                || report.identity_ics.contains(&row.reference);
             let unresolved = matches!(row.outcome, BindOutcome::Unresolved { .. });
 
             // A part counts toward the critical denominator if it is an active IC

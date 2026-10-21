@@ -721,6 +721,11 @@ pub fn bind_board_driven(
         if let Some(selection) = res.selection.clone() {
             report.selections.insert(report.rows.len(), selection);
         }
+        if hauksbee_extract::is_active_ic(comp)
+            && !hauksbee_models::matcher::is_active_ic_ref(&comp.reference)
+        {
+            report.identity_ics.insert(comp.reference.clone());
+        }
         report.push(BindRow {
             reference: comp.reference.clone(),
             value: comp.value.clone(),
@@ -1739,7 +1744,7 @@ fn part_identity_key(comp: &Component) -> String {
     } else {
         format!("={reference}")
     };
-    let active = hauksbee_models::matcher::is_active_ic_ref(reference);
+    let active = hauksbee_extract::is_active_ic(comp);
     let mut key = format!(
         "{class}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1d",
         u8::from(active),

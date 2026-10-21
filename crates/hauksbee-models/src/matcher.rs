@@ -140,7 +140,7 @@ impl CompiledEntry {
                 | ComponentKind::Nmos
                 | ComponentKind::Pmos
         );
-        if package_only && discrete && is_active_ic_ref(field(q.reference.as_ref())) {
+        if package_only && discrete && q.is_active_ic() {
             return false;
         }
         lib_ok
@@ -437,6 +437,30 @@ pub struct ComponentQuery {
     pub pads: Vec<String>,
     /// Reference designator (e.g. `"R1"`), used only in diagnostics.
     pub reference: Option<String>,
+}
+
+impl ComponentQuery {
+    /// Whether the part is an active IC: by designator (`U`, `IC`, `MCU`), or by
+    /// what its symbol, footprint, part number and pad count say when the
+    /// designator reads as something else (`S1`, `SW2`).
+    #[must_use]
+    pub fn is_active_ic(&self) -> bool {
+        let text = |f: &Option<String>| f.as_deref().unwrap_or("").to_string();
+        let (lib_id, value, footprint) =
+            (text(&self.lib_id), text(&self.value), text(&self.footprint));
+        crate::refdes::is_active_ic_part(&crate::refdes::PartIdentity {
+            reference: self.reference.as_deref().unwrap_or(""),
+            lib_id: &lib_id,
+            value: &value,
+            footprint: &footprint,
+            mpn: self.mpn.as_deref(),
+            pads: self
+                .pads
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+        })
+    }
 }
 
 pub use crate::refdes::{is_active_ic_ref, is_tool_generated_ref};
