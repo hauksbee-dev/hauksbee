@@ -21,6 +21,7 @@
 //! the agent's sandbox ([`crate::ds_toolkit`]), and the replay scores saved
 //! cards with them.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fmt::Write as _;
 
@@ -924,7 +925,7 @@ fn boot_straps(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
 }
 
 /// The pin-table column for the package the board (or, failing that, the card) is for.
-fn board_column<'a>(entry: &ModelEntry, facts: &'a Facts) -> Option<&'a Column> {
+fn board_column<'a>(entry: &ModelEntry, facts: &'a Facts) -> Option<Cow<'a, Column>> {
     if facts.pin_columns.is_empty() || entry.pins.is_empty() {
         return None;
     }
@@ -945,8 +946,15 @@ fn board_column<'a>(entry: &ModelEntry, facts: &'a Facts) -> Option<&'a Column> 
                 .as_ref()
                 .and_then(|s| s.pinout.first().map(|p| p.package.clone()))
         });
+    if let Some(board) = facts.board.as_ref().filter(|b| !b.pads.is_empty()) {
+        // The board's own pads: a table without the exposed pad still fits.
+        let numbers: Vec<&str> = board.pads.iter().map(|(p, _)| p.as_str()).collect();
+        return pin_table::choose_for_board(&facts.pin_columns, package.as_deref(), &numbers).ok();
+    }
     let pads = facts.board.as_ref().and_then(Board::pad_count).or(card_max);
-    pin_table::choose(&facts.pin_columns, package.as_deref(), pads).ok()
+    pin_table::choose(&facts.pin_columns, package.as_deref(), pads)
+        .ok()
+        .map(Cow::Borrowed)
 }
 
 /// Remedy 2: the pad map against the datasheet's column for this package.

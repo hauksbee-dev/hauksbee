@@ -23,6 +23,7 @@
 //! The helpers only read the sandbox (and `ds page --render` writes a PNG into
 //! it); none touches the network.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -381,7 +382,7 @@ fn chosen_column<'a>(
     facts: &'a Facts,
     package: Option<&str>,
     pads: Option<usize>,
-) -> Result<&'a Column, String> {
+) -> Result<Cow<'a, Column>, String> {
     // An explicit --package or --pads asks about that column, not the board's.
     let board = facts
         .board
@@ -399,7 +400,50 @@ fn chosen_column<'a>(
             facts.pin_columns.len()
         ));
     }
-    pin_table::choose(&facts.pin_columns, package, pads)
+    board.filter(|b| !b.pads.is_empty()).map_or_else(
+        || pin_table::choose(&facts.pin_columns, package, pads).map(Cow::Borrowed),
+        |b| {
+            // The board's own pads: a table without the exposed pad still fits.
+            let numbers: Vec<&str> = b.pads.iter().map(|(p, _)| p.as_str()).collect();
+            pin_table::choose_for_board(&facts.pin_columns, package, &numbers)
+        },
+    )
+}
+
+/// `ds pins`: the pin-table column for one package, with how it was chosen.
+fn pins(dir: &Path, package: Option<&str>, pads: Option<usize>) -> Result<String> {
+    let facts = facts_from_dir(dir);
+    if facts.pin_columns.is_empty() {
+        bail!("no pin table was read from this PDF; read the pinout pages (`ds toc`)");
+    }
+    match chosen_column(&facts, package, pads) {
+        Ok(c) => {
+            let mut out = format!("# {} column ({} pads)", c.label, c.max_pad());
+            if c.label.starts_with(pin_table::SINGLE_TABLE) {
+                out.push_str(
+                    "; the datasheet's pin table names no package, so this is read as \
+                     the board's package",
+                );
+            }
+            if matches!(c, Cow::Owned(_)) {
+                out.push_str(
+                    "; the table leaves the exposed pad unnumbered, so the board's extra \
+                     pad is mapped to EP",
+                );
+            }
+            let missing = c.missing();
+            if !missing.is_empty() {
+                let _ = write!(out, "; pads not read: {missing:?} (check the PDF)");
+            }
+            out.push('\n');
+            out.push_str(&c.tsv());
+            Ok(out)
+        }
+        Err(e) => Ok(format!(
+            "{e}\n{}",
+            read(&dir.join(PINS_DIR), "index.md").unwrap_or_default()
+        )),
+    }
 }
 
 const USAGE: &str = "ds: datasheet helpers (read-only, offline)
@@ -442,30 +486,11 @@ pub fn main(dir: &Path, args: &[String]) -> Result<String> {
             flag("--kind").as_deref(),
         ),
         "page" => page(dir, rest),
-        "pins" => {
-            let facts = facts_from_dir(dir);
-            if facts.pin_columns.is_empty() {
-                bail!("no pin table was read from this PDF; read the pinout pages (`ds toc`)");
-            }
-            let pads = flag("--pads").map(|n| n.parse::<usize>()).transpose()?;
-            let package = flag("--package");
-            match chosen_column(&facts, package.as_deref(), pads) {
-                Ok(c) => {
-                    let mut out = format!("# {} column ({} pads)", c.label, c.max_pad());
-                    let missing = c.missing();
-                    if !missing.is_empty() {
-                        let _ = write!(out, "; pads not read: {missing:?} (check the PDF)");
-                    }
-                    out.push('\n');
-                    out.push_str(&c.tsv());
-                    Ok(out)
-                }
-                Err(e) => Ok(format!(
-                    "{e}\n{}",
-                    read(&dir.join(PINS_DIR), "index.md").unwrap_or_default()
-                )),
-            }
-        }
+        "pins" => pins(
+            dir,
+            flag("--package").as_deref(),
+            flag("--pads").map(|n| n.parse::<usize>()).transpose()?,
+        ),
         "board" => Ok(read(dir, BOARD_FILE).unwrap_or_else(|| {
             "No board part for this run (a single-PDF extraction): match the card to the \
              part number, and to every package the datasheet orders it in."
