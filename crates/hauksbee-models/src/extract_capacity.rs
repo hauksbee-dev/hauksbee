@@ -11,18 +11,37 @@
 //! `extract_messages` and are shown by the CLI and the app alike.
 //!
 //! Parallelism does not change the total usage, it only compresses it into
-//! fewer windows, so the 5-hour window is what bounds the pool: the pool is the
-//! largest one whose run still fits the headroom left plus what refills while
-//! it runs ([`recommend`]). Where the plan cannot be read the pool is a
-//! conservative [`JOBS_UNKNOWN`], never a guess dressed up as a reading.
+//! fewer windows, so the 5-hour window bounds the pool from above: the ceiling
+//! is the largest pool whose run still fits the headroom left plus what refills
+//! while it runs ([`recommend`]), and never above [`JOBS_DEFAULT`] (the burst a
+//! service takes without refusing has not been measured for any backend, so the
+//! default does not pretend to know). Where the plan cannot be read the ceiling
+//! is a conservative [`JOBS_UNKNOWN`], never a guess dressed up as a reading.
+//! The ceiling is not the pool: a batch ramps up to it ([`RAMP_START`], one
+//! more every [`RAMP_EVERY`] while nothing is refused) and, after the service
+//! rate-limits and the pool is halved, grows back one at a time once it has been
+//! quiet for [`REGROW_AFTER`]. Usage headroom can only ever lower the ceiling.
+
+use std::time::Duration;
 
 use crate::datasheet::Backend;
 use crate::extract_config::Resolved;
 use crate::extract_plan::Reading;
 use crate::extract_usage::Billing;
 
-/// The most agents ever run at once, whatever the headroom.
+/// The most agents `--jobs` may ask for at once, whatever the headroom.
 pub const JOBS_CAP: usize = 8;
+/// The ceiling when `--jobs` is not given.
+///
+/// No backend has a measured concurrency figure yet: a codex plan refused eight
+/// agents started together, so the default is what it is known to carry.
+pub const JOBS_DEFAULT: usize = 4;
+/// Agents started together when a batch begins; the pool ramps up from here.
+pub const RAMP_START: usize = 2;
+/// While nothing is refused, one more agent is let in this often.
+pub const RAMP_EVERY: Duration = Duration::from_secs(10);
+/// After a rate-limit refusal, the quiet stretch before the pool grows by one.
+pub const REGROW_AFTER: Duration = Duration::from_secs(60);
 /// The pool when the plan's headroom cannot be read.
 pub const JOBS_UNKNOWN: usize = 2;
 /// The pool for a metered (API key) backend, which has no plan to protect.
@@ -136,9 +155,9 @@ pub enum Warning {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Plan {
     pub parts: usize,
-    /// How many agents will run at once.
+    /// The most agents that will run at once (the pool ramps up to this).
     pub jobs: usize,
-    /// The highest safe number for the headroom.
+    /// The default ceiling for the headroom and the backend.
     pub recommended: usize,
     /// `--jobs` asked for something other than the recommendation.
     pub overridden: bool,
@@ -188,7 +207,7 @@ pub fn plan(
     requested: Option<usize>,
     assume_yes: bool,
 ) -> Plan {
-    let cap = cpus.clamp(1, JOBS_CAP);
+    let cap = cpus.clamp(1, JOBS_DEFAULT);
     let known = match (headroom, prior) {
         (Headroom::Plan(r), Some(p)) if r.session.is_some() || r.week.is_some() => Some((r, p)),
         _ => None,
@@ -285,6 +304,28 @@ fn count(n: usize) -> f64 {
     f64::from(u32::try_from(n).unwrap_or(u32::MAX))
 }
 
+/// The pool one step up from `limit` towards `ceiling`; never above it.
+#[must_use]
+pub fn grown(limit: usize, ceiling: usize) -> usize {
+    limit.saturating_add(1).min(ceiling)
+}
+
+/// The pool a batch begins with, for a planned `ceiling`.
+#[must_use]
+pub fn ramp_start(ceiling: usize) -> usize {
+    ceiling.clamp(1, RAMP_START)
+}
+
+/// How a batch's pool moved: planned ceiling, most agents running at once,
+/// the pool at the end, and the rate-limit refusals met on the way.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PoolStats {
+    pub planned: usize,
+    pub peak: usize,
+    pub last: usize,
+    pub rate_limits: usize,
+}
+
 /// Half the pool, for a backend that is rate limiting; never below 1.
 #[must_use]
 pub const fn halve(jobs: usize) -> usize {
@@ -318,10 +359,14 @@ mod tests {
     }
 
     #[test]
-    fn plenty_of_headroom_runs_the_highest_safe_pool() {
+    fn plenty_of_headroom_runs_up_to_the_default_ceiling() {
         // 38 Luna parts: ~30 points of the 5-hour window, ~1.7 of the week.
         let p = plan(38, reading(10.0, 20.0), Some(CODEX_LUNA), 8, None, false);
-        assert_eq!((p.jobs, p.recommended), (JOBS_CAP, JOBS_CAP), "{p:?}");
+        assert_eq!(
+            (p.jobs, p.recommended),
+            (JOBS_DEFAULT, JOBS_DEFAULT),
+            "{p:?}"
+        );
         assert!(p.warnings.is_empty() && !p.pause, "{p:?}");
         let Basis::Known {
             session_use,
@@ -348,11 +393,11 @@ mod tests {
         // so less of the window refills during the run; a pool that fits is
         // smaller than the cap, and the whole run overruns what is left now.
         let p = plan(20, reading(0.0, 0.0), Some(CODEX_SOL), 8, None, false);
-        assert!(p.recommended < JOBS_CAP, "{p:?}");
+        assert!(p.recommended < JOBS_DEFAULT, "{p:?}");
         assert!(p.pause, "{p:?}");
         // 6 Sol parts = 36 points fits with a full pool.
         let small = plan(6, reading(40.0, 0.0), Some(CODEX_SOL), 8, None, false);
-        assert_eq!(small.recommended, 6, "{small:?}");
+        assert_eq!(small.recommended, JOBS_DEFAULT, "{small:?}");
         assert!(!small.pause);
     }
 
@@ -473,7 +518,10 @@ mod tests {
     #[test]
     fn jobs_overrides_the_recommendation_and_is_bounded() {
         let p = plan(38, reading(0.0, 0.0), Some(CODEX_LUNA), 8, Some(3), false);
-        assert_eq!((p.jobs, p.recommended, p.overridden), (3, 8, true));
+        assert_eq!(
+            (p.jobs, p.recommended, p.overridden),
+            (3, JOBS_DEFAULT, true)
+        );
         let p = plan(38, reading(0.0, 0.0), Some(CODEX_LUNA), 8, Some(99), false);
         assert_eq!(p.jobs, JOBS_CAP);
     }
@@ -528,6 +576,26 @@ mod tests {
             4,
             "never raised past the current pool"
         );
+    }
+
+    #[test]
+    fn the_default_ceiling_is_four_however_many_cpus_and_asking_goes_higher() {
+        let p = plan(38, reading(0.0, 0.0), Some(CODEX_LUNA), 64, None, false);
+        assert_eq!(p.jobs, 4, "{p:?}");
+        let p = plan(38, Headroom::Metered, None, 64, None, false);
+        assert_eq!(p.jobs, JOBS_METERED);
+        let asked = plan(38, reading(0.0, 0.0), Some(CODEX_LUNA), 64, Some(7), false);
+        assert_eq!((asked.jobs, asked.recommended), (7, 4), "{asked:?}");
+    }
+
+    #[test]
+    fn a_pool_ramps_from_a_couple_and_grows_one_step_to_its_ceiling() {
+        assert_eq!(
+            (ramp_start(8), ramp_start(4), ramp_start(2), ramp_start(1)),
+            (2, 2, 2, 1)
+        );
+        assert_eq!((grown(2, 4), grown(3, 4), grown(4, 4)), (3, 4, 4));
+        assert_eq!(grown(5, 4), 4, "a lowered ceiling pulls it down, never up");
     }
 
     #[test]

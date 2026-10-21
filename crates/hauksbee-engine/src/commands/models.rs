@@ -2059,7 +2059,8 @@ pub fn extract_unmodelled(
     let (drafted, failed) = (tally.drafted, tally.failed_names());
     let summary = words::batch_summary(drafted, kept, no_datasheet.len(), &failed);
     println!("\n{summary}");
-    write_batch_record(&out_dir, &plan_lines[0], &summary, tally.jobs);
+    println!("{}", words::pool_line(&tally.pool));
+    write_batch_record(&out_dir, &plan_lines[0], &summary, &tally.pool);
     let rerun = rerun_command(board_path, overrides, kinds, template, opts, &supply_dir);
     write_supply_report(&no_datasheet, &tally.needs, &supply_dir, &out_dir, &rerun);
     say_recheck(board_path, template.out_dir.as_deref());
@@ -2139,10 +2140,15 @@ fn plan_batch(
 
 /// Save the batch's record (plan, outcome, pool, and every backend call's
 /// tokens and plan readings) as `batch-summary.txt` in `out_dir`.
-fn write_batch_record(out_dir: &Path, planned: &str, summary: &str, jobs: (usize, usize)) {
+fn write_batch_record(
+    out_dir: &Path,
+    planned: &str,
+    summary: &str,
+    pool: &hauksbee_models::extract_capacity::PoolStats,
+) {
     use hauksbee_models::{extract_messages as words, extract_usage};
     let calls = extract_usage::batch_calls();
-    let record = words::batch_record(planned, summary, jobs, &calls);
+    let record = words::batch_record(planned, summary, pool, &calls);
     let file = out_dir.join(words::BATCH_RECORD_FILE);
     match std::fs::create_dir_all(out_dir).and_then(|()| std::fs::write(&file, record)) {
         Ok(()) => println!("The usage record is saved as {}", file.display()),

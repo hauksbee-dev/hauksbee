@@ -726,18 +726,22 @@ fn plan_batch(
 /// run leaves its usage record beside the cards.
 #[cfg(unix)]
 #[test]
-fn the_preflight_line_names_the_cost_and_the_highest_safe_pool() {
+fn the_preflight_line_names_the_cost_and_the_pool_ceiling() {
     let dir = tempfile::tempdir().unwrap();
     let run = plan_batch(dir.path(), 10, 20, &["--model", "gpt-6-luna", "--yes"]);
     let all = text_of(&run);
     assert!(
-        all.contains("2 parts, about 2% of your 5-hour window and 0.1% of your weekly; running 2 agents in parallel (highest safe)"),
+        all.contains("2 parts, about 2% of your 5-hour window and 0.1% of your weekly; running up to 2 agents at once (fewer if the service rate-limits)"),
         "{all}"
     );
     assert!(!all.contains("warning:"), "{all}");
     let record = std::fs::read_to_string(dir.path().join("drafts/batch-summary.txt")).unwrap();
     assert!(record.contains("plan: 2 parts, about 2%"), "{record}");
-    assert!(record.contains("agents: 2 throughout"), "{record}");
+    assert!(
+        record.contains("agents: up to 2 planned, peak ")
+            && record.contains("no rate-limit refusals"),
+        "{record}"
+    );
     assert!(record.contains("usage:"), "{record}");
 }
 
@@ -754,7 +758,7 @@ fn jobs_overrides_the_recommendation_and_the_line_still_says_so() {
     );
     let all = text_of(&run);
     assert!(
-        all.contains("running 1 agent in parallel (as asked; the highest safe is 2)"),
+        all.contains("running 1 agent at a time (as asked; the default is 2)"),
         "{all}"
     );
 }
@@ -797,7 +801,7 @@ fn an_unreadable_plan_runs_a_conservative_pool_and_says_so() {
     let (run, _) = draft_batch(dir.path(), &[], "echo opamp");
     let all = text_of(&run);
     assert!(
-        all.contains("plan headroom unknown; running 2 agents in parallel (conservative)"),
+        all.contains("plan headroom unknown; running up to 2 agents at once (conservative; fewer if the service rate-limits)"),
         "{all}"
     );
 }
