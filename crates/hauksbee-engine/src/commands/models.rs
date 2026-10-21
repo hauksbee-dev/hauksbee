@@ -1896,70 +1896,244 @@ fn say_datasheet_doubts(ready: &[&UnmodelledPart]) -> usize {
     said
 }
 
+/// What the library remembers of earlier attempts, and how to read it for one
+/// batch: the ledger, the clock, the settings the attempts are keyed by, and
+/// whether `--retry-failed` (or `--force`) ignores it.
+struct Memory<'a> {
+    ledger: hauksbee_models::extract_attempts::Ledger,
+    now: u64,
+    ignore: bool,
+    /// The inputs an attempt on this part would have, as they stand now.
+    inputs: &'a dyn Fn(&UnmodelledPart) -> hauksbee_models::extract_attempts::Inputs,
+}
+
+/// How the offered parts divide.
+struct Triage<'a> {
+    /// Parts to fetch a datasheet for and draft.
+    work: Vec<&'a UnmodelledPart>,
+    /// Parts that already have a card.
+    kept: usize,
+    /// Parts for hand supply without an attempt this time.
+    missing: Vec<(String, Missing)>,
+    /// Parts left out because they failed before with these very inputs.
+    skipped: usize,
+}
+
 /// Split the offered parts into those to work on and those that already have a
 /// card in the target library. A kept card is reported (with its own reason
 /// when it is an identity-only abstention), not re-extracted, not a failure. A
-/// part with no datasheet link is worked on when the backend can search the web
-/// for it or a PDF has been supplied for it; otherwise it is a part with no
-/// datasheet, listed at the end with how to supply one, exactly like one whose
-/// link failed.
+/// part the library remembers failing with these very inputs is skipped, and
+/// one whose datasheet search found nothing within the last week is not searched
+/// again (it stays on the hand-supply list); `--retry-failed` and any change of
+/// input lift both. A part with no datasheet link is worked on when the backend
+/// can search the web for it or a PDF has been supplied for it; otherwise it is
+/// a part with no datasheet, listed at the end with how to supply one, exactly
+/// like one whose link failed.
 fn triage<'a>(
     parts: &'a [UnmodelledPart],
     out_dir: &Path,
     force: bool,
     backend: hauksbee_models::datasheet::Backend,
     supplied: &[PathBuf],
-) -> (Vec<&'a UnmodelledPart>, usize, Vec<(String, Missing)>) {
+    memory: &Memory<'_>,
+) -> Triage<'a> {
+    use hauksbee_models::extract_attempts::Verdict;
     use hauksbee_models::extract_messages as words;
-    let mut kept = 0;
-    let mut work = Vec::new();
-    let mut missing = Vec::new();
+    let mut out = Triage {
+        work: Vec::new(),
+        kept: 0,
+        missing: Vec::new(),
+        skipped: 0,
+    };
     for p in parts {
         let card = (!force)
             .then(|| words::existing_card(out_dir, &p.part))
             .flatten();
         if let Some(card) = card {
             println!("{}", words::has_card(&p.part, &card));
-            kept += 1;
-        } else if p.datasheet.is_some()
-            || backend.can_search()
-            || hauksbee_models::datasheet_discovery::supplied_pdf(supplied, &p.part, &p.aliases)
-                .is_some()
-        {
-            work.push(p);
+            out.kept += 1;
+            continue;
+        }
+        let verdict = if memory.ignore {
+            Verdict::Try
         } else {
-            println!("{}", words::no_datasheet(&p.part, backend));
-            missing.push((
-                p.part.clone(),
-                Missing {
-                    why: format!(
-                        "the board gives no datasheet link and {} cannot search the web",
-                        backend.name()
-                    ),
-                    tried: Vec::new(),
-                },
-            ));
+            memory.ledger.verdict(&(memory.inputs)(p), memory.now)
+        };
+        match verdict {
+            Verdict::SkipFailed { reason, ago } => {
+                println!("{}", words::skipped_failed(&p.part, &reason, &ago));
+                out.skipped += 1;
+            }
+            Verdict::SkipNoDatasheet { reason, ago } => {
+                println!("{}", words::skipped_search(&p.part, &ago));
+                out.missing.push((
+                    p.part.clone(),
+                    Missing {
+                        why: format!("{reason} (searched {ago}; --retry-failed searches again)"),
+                        tried: Vec::new(),
+                    },
+                ));
+            }
+            Verdict::Try => {
+                if p.datasheet.is_some()
+                    || backend.can_search()
+                    || hauksbee_models::datasheet_discovery::supplied_pdf(
+                        supplied, &p.part, &p.aliases,
+                    )
+                    .is_some()
+                {
+                    out.work.push(p);
+                } else {
+                    println!("{}", words::no_datasheet(&p.part, backend));
+                    out.missing.push((
+                        p.part.clone(),
+                        Missing {
+                            why: format!(
+                                "the board gives no datasheet link and {} cannot search the web",
+                                backend.name()
+                            ),
+                            tried: Vec::new(),
+                        },
+                    ));
+                }
+            }
         }
     }
-    (work, kept, missing)
+    out
 }
+
+/// What an attempt on `p` would be keyed by: the datasheet links the board
+/// names (a local file by its contents), a PDF someone supplied or an earlier
+/// fetch kept (by contents), the settings, the card kind asked for and the
+/// version.
+fn attempt_inputs(
+    p: &UnmodelledPart,
+    kind: String,
+    supplied: &[PathBuf],
+    settings: &AttemptSettings,
+) -> hauksbee_models::extract_attempts::Inputs {
+    use hauksbee_models::extract_attempts::{fingerprint, Inputs};
+    let sources = p
+        .datasheet
+        .iter()
+        .chain(&p.more_datasheets)
+        .map(|s| {
+            if s.starts_with("http") {
+                s.clone()
+            } else {
+                fingerprint(Path::new(s)).map_or_else(|| s.clone(), |sha| format!("file:{sha}"))
+            }
+        })
+        .collect();
+    let supplied =
+        hauksbee_models::datasheet_discovery::supplied_pdf(supplied, &p.part, &p.aliases)
+            .and_then(|pdf| fingerprint(&pdf));
+    Inputs {
+        part: p.part.clone(),
+        sources,
+        supplied,
+        backend: settings.0.clone(),
+        model: settings.1.clone(),
+        effort: settings.2.clone(),
+        kind,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    }
+}
+
+/// Write what this batch learned to the library's ledger: a part that was saved
+/// is forgotten; one that failed, or found no datasheet, is remembered with the
+/// inputs it had (as they stand now, after the attempt). What is only the
+/// service's trouble is not remembered.
+fn remember_attempts(
+    out_dir: &Path,
+    work: &[&UnmodelledPart],
+    tally: &extract_batch::Tally,
+    inputs: &dyn Fn(&UnmodelledPart) -> hauksbee_models::extract_attempts::Inputs,
+) {
+    use hauksbee_models::extract_attempts::{now, Ended, Ledger};
+    let at = now();
+    let part = |name: &str| work.iter().find(|p| p.part == name).copied();
+    let result = Ledger::update(out_dir, |ledger| {
+        for name in &tally.drafted_names {
+            ledger.forget(name);
+        }
+        for (name, why) in &tally.failed {
+            if let Some(p) = part(name) {
+                ledger.record(&inputs(p), Ended::Failed, why, at);
+            }
+        }
+        for (name, missing) in &tally.no_datasheet {
+            if let Some(p) = part(name) {
+                ledger.record(&inputs(p), Ended::NoDatasheet, &missing.why, at);
+            }
+        }
+    });
+    if let Err(e) = result {
+        eprintln!(
+            "could not save the record of failed attempts in {}: {e}",
+            out_dir.display()
+        );
+    }
+}
+
+/// Exit status when a batch ends with some part failed and some saved.
+/// Documented with the other codes in `hauksbee models extract --help`.
+pub const EXIT_BATCH_PARTIAL: i32 = 4;
+
+/// A batch in which at least one extraction ran and was refused. Not a hard
+/// error: what was saved is kept. It carries its own exit status
+/// ([`BatchFailed::exit_code`]).
+#[derive(Debug)]
+pub struct BatchFailed {
+    /// How many cards this batch saved.
+    pub saved: usize,
+    /// What to say (see [`hauksbee_models::extract_messages::batch_failed`]).
+    pub message: String,
+}
+
+impl BatchFailed {
+    /// `4` ([`EXIT_BATCH_PARTIAL`]) when some parts were saved and some failed;
+    /// `1` when nothing was saved and something failed.
+    #[must_use]
+    pub const fn exit_code(&self) -> i32 {
+        if self.saved > 0 {
+            EXIT_BATCH_PARTIAL
+        } else {
+            1
+        }
+    }
+}
+
+impl std::fmt::Display for BatchFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for BatchFailed {}
 
 /// `hauksbee models extract --unmodelled <board>`: draft every unmodelled part.
 ///
 /// Covers each connected active part the board leaves unmodelled, from the
 /// datasheet it names (or `--datasheet PART=SOURCE`), after one consent for the
 /// batch, `opts.jobs` parts at a time. A part that fails is reported and the
-/// batch carries on; the command fails at the end if any extraction did, so a
-/// script never mistakes a partial batch for a whole. A part nothing could be
-/// fetched for is not such a failure: it is listed at the end (and in
-/// `supply-by-hand.txt` beside the cards) with the way to supply it, and a batch
-/// whose only misses are those exits 0.
+/// batch carries on. A part nothing could be fetched for is not a failure: it
+/// is listed at the end (and in `supply-by-hand.txt` beside the cards) with the
+/// way to supply it. A part that failed on an earlier batch with these very
+/// inputs is skipped (`opts.retry_failed` tries it again), see
+/// [`hauksbee_models::extract_attempts`].
+///
+/// The exit status says how it went: 0 when every part attempted was saved or
+/// listed for hand supply (or already had a card, or was skipped); 4
+/// ([`EXIT_BATCH_PARTIAL`]) when some were saved and some failed; 1 when parts
+/// failed and none was saved, or on a hard error (unreadable board, bad
+/// settings, no consent).
 ///
 /// # Errors
 ///
 /// Returns an error if the board cannot be read, an override is malformed, the
 /// settings are invalid, consent is needed but stdin is not a terminal, or any
-/// part's extraction failed.
+/// part's extraction failed (a [`BatchFailed`], which sets the exit status).
 pub fn extract_unmodelled(
     board_path: &Path,
     overrides: &[String],
@@ -1981,13 +2155,7 @@ pub fn extract_unmodelled(
         .clone()
         .unwrap_or_else(datasheet::default_out_dir);
     let normalized = crate::board_input::from_path(board_path)?;
-    let extra: Vec<&Path> = template
-        .out_dir
-        .as_deref()
-        .filter(|d| hauksbee_models::holds_cards(d))
-        .into_iter()
-        .collect();
-    let lib = ModelLibrary::builtin_with_user_dirs(&extra);
+    let lib = library_with_out_dir(template.out_dir.as_deref());
     let board_dir = board_path.parent().unwrap_or_else(|| Path::new("."));
     let plan = unmodelled_parts(&normalized.board, &lib, board_dir, overrides)?;
     let parts = &plan.parts;
@@ -2000,35 +2168,37 @@ pub fn extract_unmodelled(
     let resolved = datasheet::resolve_settings(template)?;
     let backend = resolved.backend;
     let datasheets = out_dir.join("datasheets");
-    // Where a person's `<part>.pdf` files are picked up: the folder they name,
-    // then the one fetched sheets are kept in.
-    let mut supplied: Vec<PathBuf> = opts.datasheet_dir.iter().cloned().collect();
-    if !supplied.contains(&datasheets) {
-        supplied.push(datasheets.clone());
-    }
+    let supplied = supplied_dirs(opts, &datasheets);
     let supply_dir = supplied[0].clone();
-    let (work, kept, unreachable) = triage(parts, &out_dir, template.force, backend, &supplied);
+    let settings = attempt_settings(&resolved);
+    let inputs = |p: &UnmodelledPart| attempt_inputs(p, kind_of(p), &supplied, &settings);
+    let memory = Memory {
+        ledger: hauksbee_models::extract_attempts::Ledger::load(&out_dir),
+        now: hauksbee_models::extract_attempts::now(),
+        ignore: opts.retry_failed || template.force,
+        inputs: &inputs,
+    };
+    let Triage {
+        work,
+        kept,
+        missing: unreachable,
+        skipped,
+    } = triage(parts, &out_dir, template.force, backend, &supplied, &memory);
+    let modules = module_like_parts(parts);
     if work.is_empty() {
-        println!("{}", words::batch_summary(0, kept, unreachable.len(), &[]));
+        println!(
+            "{}",
+            words::batch_summary(0, kept, unreachable.len(), skipped, &[])
+        );
         let rerun = rerun_command(board_path, overrides, kinds, template, opts, &supply_dir);
-        write_supply_report(&unreachable, &[], &supply_dir, &out_dir, &rerun);
+        write_supply_report(&unreachable, &modules, &[], &supply_dir, &out_dir, &rerun);
         return Ok(());
     }
-    let doubted = say_datasheet_doubts(&work);
-    let searching = count_searches(&work, &supplied);
-    let may_search = backend.can_search()
-        && work
-            .iter()
-            .any(|p| p.datasheet.as_deref().is_none_or(|d| d.starts_with("http")));
-    let (plan, plan_lines, watch) = plan_batch(&resolved, work.len(), opts.jobs, assume_yes);
-    let mut question = words::batch_question(work.len(), searching, doubted);
-    if plan.needs_confirmation() && !assume_yes {
-        question.push_str(words::PLAN_QUESTION_SUFFIX);
-    }
-    let notice = may_search.then_some(words::SEARCH_NOTICE);
-    if !extract_consent(template, assume_yes, &question, notice, &plan_lines)? {
+    let Some((plan, plan_lines, watch)) =
+        confirm_batch(&work, &supplied, &resolved, template, opts, assume_yes)?
+    else {
         return Ok(());
-    }
+    };
     let (http, searcher, hosts) = (
         CurlHttp::default(),
         AgentSearcher { resolved },
@@ -2042,7 +2212,7 @@ pub fn extract_unmodelled(
         hosts: &hosts,
         read_text: datasheet::pdf_text,
     };
-    let mut tally = extract_batch::draft_parts(
+    let tally = extract_batch::draft_parts(
         &work,
         &acquirer,
         template,
@@ -2054,20 +2224,164 @@ pub fn extract_unmodelled(
             ..opts.clone()
         },
     );
+    let ending = Ending {
+        board_path,
+        overrides,
+        kinds,
+        template,
+        opts,
+        supply_dir: &supply_dir,
+        out_dir: &out_dir,
+        modules: &modules,
+        kept,
+        skipped,
+        planned: &plan_lines[0],
+    };
+    finish_batch(&ending, &work, tally, unreachable, &inputs)
+}
+
+/// The built-in and user models, plus `out_dir` when it already holds cards.
+fn library_with_out_dir(out_dir: Option<&Path>) -> ModelLibrary {
+    let extra: Vec<&Path> = out_dir
+        .filter(|d| hauksbee_models::holds_cards(d))
+        .into_iter()
+        .collect();
+    ModelLibrary::builtin_with_user_dirs(&extra)
+}
+
+/// Where a person's `<part>.pdf` files are picked up: the folder they name,
+/// then the one fetched sheets are kept in.
+fn supplied_dirs(opts: &BatchOptions, datasheets: &Path) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = opts.datasheet_dir.iter().cloned().collect();
+    if !dirs.iter().any(|d| d == datasheets) {
+        dirs.push(datasheets.to_path_buf());
+    }
+    dirs
+}
+
+/// The backend, model and effort an attempt is keyed by.
+type AttemptSettings = (String, String, String);
+
+fn attempt_settings(resolved: &hauksbee_models::extract_config::Resolved) -> AttemptSettings {
+    (
+        resolved.backend.name().to_string(),
+        resolved.model().to_string(),
+        resolved.effort().unwrap_or_default().to_string(),
+    )
+}
+
+/// The decision, the lines said before consent, and what the batch watches.
+type Planned = (
+    hauksbee_models::extract_capacity::Plan,
+    Vec<String>,
+    Option<extract_batch::PlanWatch>,
+);
+
+/// Before a batch sends anything: the doubts about board links, the plan, and
+/// the one consent. `None` when the person declined.
+fn confirm_batch(
+    work: &[&UnmodelledPart],
+    supplied: &[PathBuf],
+    resolved: &hauksbee_models::extract_config::Resolved,
+    template: &hauksbee_models::datasheet::Args,
+    opts: &BatchOptions,
+    assume_yes: bool,
+) -> anyhow::Result<Option<Planned>> {
+    use hauksbee_models::extract_messages as words;
+    let doubted = say_datasheet_doubts(work);
+    let searching = count_searches(work, supplied);
+    let may_search = resolved.backend.can_search()
+        && work
+            .iter()
+            .any(|p| p.datasheet.as_deref().is_none_or(|d| d.starts_with("http")));
+    let (plan, plan_lines, watch) = plan_batch(resolved, work.len(), opts.jobs, assume_yes);
+    let mut question = words::batch_question(work.len(), searching, doubted);
+    if plan.needs_confirmation() && !assume_yes {
+        question.push_str(words::PLAN_QUESTION_SUFFIX);
+    }
+    let notice = may_search.then_some(words::SEARCH_NOTICE);
+    if !extract_consent(template, assume_yes, &question, notice, &plan_lines)? {
+        return Ok(None);
+    }
+    Ok(Some((plan, plan_lines, watch)))
+}
+
+/// What the end of a `--unmodelled` batch reports from.
+struct Ending<'a> {
+    board_path: &'a Path,
+    overrides: &'a [String],
+    kinds: &'a [String],
+    template: &'a hauksbee_models::datasheet::Args,
+    opts: &'a BatchOptions,
+    supply_dir: &'a Path,
+    out_dir: &'a Path,
+    /// Parts whose board words read as a module.
+    modules: &'a [String],
+    /// Parts that already had a card.
+    kept: usize,
+    /// Parts left out because they failed before with these inputs.
+    skipped: usize,
+    /// The plan line, for the saved record.
+    planned: &'a str,
+}
+
+/// The end of a batch: remember what it learned, say the tally, save the
+/// record and the hand-supply list, and turn failures into the error that sets
+/// the exit status.
+fn finish_batch(
+    end: &Ending<'_>,
+    work: &[&UnmodelledPart],
+    mut tally: extract_batch::Tally,
+    unreachable: Vec<(String, Missing)>,
+    inputs: &dyn Fn(&UnmodelledPart) -> hauksbee_models::extract_attempts::Inputs,
+) -> anyhow::Result<()> {
+    use hauksbee_models::extract_messages as words;
+    remember_attempts(end.out_dir, work, &tally, inputs);
     let mut no_datasheet = unreachable;
     no_datasheet.append(&mut tally.no_datasheet);
     let (drafted, failed) = (tally.drafted, tally.failed_names());
-    let summary = words::batch_summary(drafted, kept, no_datasheet.len(), &failed);
+    let summary = words::batch_summary(drafted, end.kept, no_datasheet.len(), end.skipped, &failed);
     println!("\n{summary}");
     println!("{}", words::pool_line(&tally.pool));
-    write_batch_record(&out_dir, &plan_lines[0], &summary, &tally.pool);
-    let rerun = rerun_command(board_path, overrides, kinds, template, opts, &supply_dir);
-    write_supply_report(&no_datasheet, &tally.needs, &supply_dir, &out_dir, &rerun);
-    say_recheck(board_path, template.out_dir.as_deref());
+    write_batch_record(end.out_dir, end.planned, &summary, &tally.pool);
+    let rerun = rerun_command(
+        end.board_path,
+        end.overrides,
+        end.kinds,
+        end.template,
+        end.opts,
+        end.supply_dir,
+    );
+    write_supply_report(
+        &no_datasheet,
+        end.modules,
+        &tally.needs,
+        end.supply_dir,
+        end.out_dir,
+        &rerun,
+    );
+    say_recheck(end.board_path, end.template.out_dir.as_deref());
     if !failed.is_empty() {
-        anyhow::bail!("{}", words::batch_failed(drafted, &failed));
+        return Err(anyhow::Error::new(BatchFailed {
+            saved: drafted,
+            message: words::batch_failed(drafted, &failed),
+        }));
     }
     Ok(())
+}
+
+/// The parts whose board footprint or description reads as a module.
+fn module_like_parts(parts: &[UnmodelledPart]) -> Vec<String> {
+    parts
+        .iter()
+        .filter(|p| {
+            hauksbee_models::extract_messages::looks_like_module(
+                &p.footprints,
+                p.description.as_deref(),
+            )
+        })
+        .map(|p| p.part.clone())
+        .collect()
 }
 
 /// How many parts the batch will have to search the web for: those the board
@@ -2161,6 +2475,7 @@ fn write_batch_record(
 /// removed once nothing is outstanding).
 fn write_supply_report(
     missing: &[(String, Missing)],
+    modules: &[String],
     needs: &[Need],
     supply_dir: &Path,
     out_dir: &Path,
@@ -2168,7 +2483,7 @@ fn write_supply_report(
 ) {
     use hauksbee_models::extract_messages as words;
     let file = out_dir.join(words::SUPPLY_FILE);
-    let report = words::supply_report(missing, needs, supply_dir, out_dir, rerun);
+    let report = words::supply_report(missing, modules, needs, supply_dir, out_dir, rerun);
     if report.is_empty() {
         let _ = std::fs::remove_file(&file);
         return;
@@ -4211,5 +4526,143 @@ mcu_label = "test part"
             unknown.contains("unknown kind 'widget'") && unknown.contains("opamp"),
             "{unknown}"
         );
+    }
+    /// The exit status of a batch with failures: 4 when some cards were saved
+    /// (the failures are partial), 1 when none were; it reaches the process
+    /// through the shared error mapping.
+    #[test]
+    fn a_batch_with_failures_exits_4_when_some_were_saved_else_1() {
+        let partial = anyhow::Error::new(super::BatchFailed {
+            saved: 3,
+            message: "1 of the extractions failed: A".into(),
+        });
+        let none = anyhow::Error::new(super::BatchFailed {
+            saved: 0,
+            message: "1 of the extractions failed: A".into(),
+        });
+        assert_eq!(crate::commands::run::error_exit_code(&partial), 4);
+        assert_eq!(crate::commands::run::error_exit_code(&none), 1);
+        assert_eq!(partial.to_string(), "1 of the extractions failed: A");
+        assert_ne!(
+            super::EXIT_BATCH_PARTIAL,
+            crate::result::EXIT_INVALID_FOR_ANALYSIS,
+            "kept clear of the refusal code"
+        );
+    }
+
+    fn named(part: &str) -> super::UnmodelledPart {
+        super::UnmodelledPart {
+            datasheet: Some("https://example.com/a.pdf".into()),
+            ..super::UnmodelledPart::empty(part)
+        }
+    }
+
+    /// What a repeat batch does with each remembered part, and what lifts it.
+    #[test]
+    fn triage_skips_what_failed_before_and_lifts_it_on_retry_or_new_inputs() {
+        use hauksbee_models::datasheet::Backend;
+        use hauksbee_models::extract_attempts::{Ended, Inputs, Ledger};
+        let dir = tempfile::tempdir().unwrap();
+        let parts = [named("FAILED1"), named("NOSHEET1"), named("FRESH1")];
+        let settings = ("codex".to_string(), "m1".to_string(), "high".to_string());
+        let inputs_with = |model: &str| {
+            let settings = (settings.0.clone(), model.to_string(), settings.2.clone());
+            move |p: &super::UnmodelledPart| super::attempt_inputs(p, String::new(), &[], &settings)
+        };
+        let now = 10 * 86_400;
+        let mut ledger = Ledger::default();
+        let before = inputs_with("m1");
+        ledger.record(
+            &before(&parts[0]),
+            Ended::Failed,
+            "validator refused",
+            now - 86_400,
+        );
+        ledger.record(
+            &before(&parts[1]),
+            Ended::NoDatasheet,
+            "search found nothing",
+            now - 86_400,
+        );
+        let go = |ignore: bool, inputs: &dyn Fn(&super::UnmodelledPart) -> Inputs| {
+            let memory = super::Memory {
+                ledger: ledger.clone(),
+                now,
+                ignore,
+                inputs,
+            };
+            super::triage(&parts, dir.path(), false, Backend::Codex, &[], &memory)
+        };
+        let same = go(false, &before);
+        let names = |t: &super::Triage<'_>| -> Vec<String> {
+            t.work.iter().map(|p| p.part.clone()).collect()
+        };
+        assert_eq!(
+            names(&same),
+            ["FRESH1"],
+            "only the part with no history is sent"
+        );
+        assert_eq!(same.skipped, 1);
+        assert_eq!(same.missing.len(), 1, "the no-datasheet part stays listed");
+        assert_eq!(same.missing[0].0, "NOSHEET1");
+        assert!(
+            same.missing[0].1.why.contains("search found nothing")
+                && same.missing[0].1.why.contains("1 day ago"),
+            "{}",
+            same.missing[0].1.why
+        );
+        let retried = go(true, &before);
+        assert_eq!(
+            names(&retried),
+            ["FAILED1", "NOSHEET1", "FRESH1"],
+            "--retry-failed"
+        );
+        assert_eq!((retried.skipped, retried.missing.len()), (0, 0));
+        let other_model = inputs_with("m2");
+        assert_eq!(
+            names(&go(false, &other_model)).len(),
+            3,
+            "a different model retries everything by itself"
+        );
+    }
+
+    /// A search that found nothing is believed for a week and no longer.
+    #[test]
+    fn triage_searches_again_once_a_week_has_passed() {
+        use hauksbee_models::datasheet::Backend;
+        use hauksbee_models::extract_attempts::{Ended, Ledger, NO_DATASHEET_DAYS};
+        let dir = tempfile::tempdir().unwrap();
+        let parts = [named("NOSHEET1")];
+        let settings = ("codex".to_string(), "m1".to_string(), "high".to_string());
+        let inputs =
+            |p: &super::UnmodelledPart| super::attempt_inputs(p, String::new(), &[], &settings);
+        let mut ledger = Ledger::default();
+        ledger.record(&inputs(&parts[0]), Ended::NoDatasheet, "nothing", 0);
+        let at = |days: u64| {
+            let memory = super::Memory {
+                ledger: ledger.clone(),
+                now: days * 86_400,
+                ignore: false,
+                inputs: &inputs,
+            };
+            super::triage(&parts, dir.path(), false, Backend::Codex, &[], &memory)
+        };
+        assert_eq!(at(NO_DATASHEET_DAYS - 1).work.len(), 0);
+        assert_eq!(at(NO_DATASHEET_DAYS).work.len(), 1);
+    }
+
+    /// A supplied PDF is a changed input: its contents, not its presence.
+    #[test]
+    fn a_supplied_datasheet_changes_a_parts_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = named("PART1");
+        let settings = (String::new(), String::new(), String::new());
+        let supplied = [dir.path().to_path_buf()];
+        let key = || super::attempt_inputs(&p, String::new(), &supplied, &settings).key();
+        let none = key();
+        std::fs::write(dir.path().join("PART1.pdf"), b"%PDF-1.4 one").unwrap();
+        let one = key();
+        std::fs::write(dir.path().join("PART1.pdf"), b"%PDF-1.4 two").unwrap();
+        assert!(none != one && one != key());
     }
 }

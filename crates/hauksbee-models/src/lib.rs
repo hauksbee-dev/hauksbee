@@ -64,6 +64,7 @@ pub mod datasheet_fetch;
 pub mod derating;
 pub mod ds_toolkit;
 pub mod extract_admission;
+pub mod extract_attempts;
 pub mod extract_cache;
 pub mod extract_capacity;
 pub mod extract_config;
