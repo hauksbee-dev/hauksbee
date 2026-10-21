@@ -107,7 +107,10 @@ impl LintFinding {
             LintCheck::UnroutedPad => {
                 self.severity == Severity::Low && self.message.starts_with(ZONES_NOT_FILLED_PREFIX)
             }
-            LintCheck::OperatingEnvelope | LintCheck::DeviceDecode | LintCheck::DcOverstress => {
+            LintCheck::OperatingEnvelope
+            | LintCheck::DeviceDecode
+            | LintCheck::DcOverstress
+            | LintCheck::PullupIneffective => {
                 self.severity == Severity::Low && self.message.contains(ABSTENTION_MARKER)
             }
             _ => false,
@@ -310,6 +313,20 @@ pub enum LintCheck {
     /// drafted from that file would describe the wrong part. Low severity and
     /// non-gating. Produced by the engine-layer `datasheet_field` check.
     DatasheetMismatch,
+    /// A pull-up resistor that is present but cannot do its job: its rail never
+    /// comes up, or it leaves the line below the receiver's guaranteed
+    /// input-high level (VIH) because the rail is too low or the resistor too
+    /// large for the input's leakage. When a limit the check needs is not
+    /// stated, it says it abstained. Produced by the engine-layer
+    /// `pullup_effect` check.
+    PullupIneffective,
+    /// A digital-audio bus (I2S, left-justified, TDM) wired against its own
+    /// roles: two transmit pins on one data line, or a data line with no
+    /// transmitter, a bit clock wired to a frame clock, a clock nothing or two
+    /// parts drive, or a master clock a part requires and nothing connects.
+    /// Fires only when every non-passive pin on the net has a known audio role.
+    /// Produced by the engine-layer `audio_bus` check.
+    AudioBusWiring,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -346,12 +363,86 @@ pub fn model_card_file_in(message: &str) -> Option<&str> {
         .filter(|file| !file.is_empty())
 }
 
+/// The I2C speed class a bus is judged at (UM10204 Table 10).
+///
+/// A static lint cannot see the firmware's clock, so the class comes from what
+/// the board says: a bus net named for its speed (`I2C_400K_SDA`, `SCL_FM+`).
+/// A bus that names none is judged as standard mode and the finding says so,
+/// because standard mode has the loosest rise-time budget and cannot fault a bus
+/// that runs faster than the board claims.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum I2cMode {
+    /// Standard mode, 100 kHz: 1000 ns rise budget, 3 mA sink.
+    Standard,
+    /// Fast mode, 400 kHz: 300 ns rise budget, 3 mA sink.
+    Fast,
+    /// Fast-mode plus, 1 MHz: 120 ns rise budget, 20 mA sink.
+    FastPlus,
+}
+
+impl I2cMode {
+    /// The class a net or part name states, `None` when it states none.
+    #[must_use]
+    pub fn from_hint(text: &str) -> Option<Self> {
+        let upper = text.to_ascii_uppercase();
+        let tokens: Vec<&str> = upper
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '+' || c == '.'))
+            .filter(|t| !t.is_empty())
+            .collect();
+        let has = |t: &str| tokens.contains(&t);
+        if [
+            "FM+", "FMP", "FMPLUS", "FASTPLUS", "1M", "1MHZ", "1000K", "1000KHZ",
+        ]
+        .iter()
+        .any(|t| has(t))
+            || (has("FAST") && has("PLUS"))
+        {
+            Some(Self::FastPlus)
+        } else if ["FAST", "400K", "400KHZ", "0.4M"].iter().any(|t| has(t)) {
+            Some(Self::Fast)
+        } else if ["STD", "STANDARD", "100K", "100KHZ"].iter().any(|t| has(t)) {
+            Some(Self::Standard)
+        } else {
+            None
+        }
+    }
+
+    /// The most current (A) a bus driver of this class sinks at VOL = 0.4 V.
+    #[must_use]
+    pub const fn sink_limit_a(self) -> f64 {
+        match self {
+            Self::Standard | Self::Fast => 3.0e-3,
+            Self::FastPlus => 20.0e-3,
+        }
+    }
+
+    /// The longest 30%..70% rise time (s) of this class.
+    #[must_use]
+    pub const fn rise_limit_s(self) -> f64 {
+        match self {
+            Self::Standard => 1000.0e-9,
+            Self::Fast => 300.0e-9,
+            Self::FastPlus => 120.0e-9,
+        }
+    }
+
+    /// The class, with its clock, as a message names it.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Standard => "standard-mode (100 kHz)",
+            Self::Fast => "fast-mode (400 kHz)",
+            Self::FastPlus => "fast-mode plus (1 MHz)",
+        }
+    }
+}
+
 impl LintCheck {
     /// Every variant, for exhaustiveness-style tests in downstream crates
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 38] = [
+    pub const ALL: [Self; 40] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -390,6 +481,8 @@ impl LintCheck {
         Self::RailUnpowered,
         Self::ControlHeldOff,
         Self::DatasheetMismatch,
+        Self::PullupIneffective,
+        Self::AudioBusWiring,
     ];
 
     #[must_use]
@@ -433,6 +526,8 @@ impl LintCheck {
             Self::RailUnpowered => "rail_unpowered",
             Self::ControlHeldOff => "control_held_off",
             Self::DatasheetMismatch => "datasheet_mismatch",
+            Self::PullupIneffective => "pullup_ineffective",
+            Self::AudioBusWiring => "audio_bus_wiring",
         }
     }
 }

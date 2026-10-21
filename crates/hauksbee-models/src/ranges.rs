@@ -221,6 +221,21 @@ pub const ROWS: &[Row] = &[
         "a thermal resistance",
     ),
     row("*temp_c", "C", Span, (-273.15, 500.0), "a temperature"),
+    // Pin ratings the board checks read from a card.
+    row(
+        "iol_a",
+        "A",
+        NonNegative,
+        (100e-6, 1.0),
+        "an open-drain output's low-level sink rating",
+    ),
+    row(
+        "iih_a",
+        "A",
+        NonNegative,
+        (1e-12, 10e-3),
+        "a logic input's high-level leakage",
+    ),
     // Every other field spelled with a unit suffix.
     row("*_v|*_volts", "V", Magnitude, (1e-6, 1e4), ""),
     row("*_a|*_ma|*_ua", "A", Magnitude, (1e-12, 1e4), ""),

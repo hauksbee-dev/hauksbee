@@ -3888,7 +3888,9 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         | LintCheck::PowerPinWiring
         | LintCheck::RailUnpowered
         | LintCheck::ControlHeldOff
-        | LintCheck::I2cBusLoading => supply_fix_hint(check),
+        | LintCheck::I2cBusLoading
+        | LintCheck::PullupIneffective
+        | LintCheck::AudioBusWiring => supply_fix_hint(check),
     })
 }
 
@@ -3908,6 +3910,12 @@ const fn supply_fix_hint(check: LintCheck) -> &'static str {
         }
         LintCheck::ControlHeldOff => {
             "Return the pull resistor to the part's supply rail instead of ground, or drive the pin from a GPIO or a supervisor."
+        }
+        LintCheck::PullupIneffective => {
+            "Pull the line up to the receiver's own supply rail (at least its VIH), use a smaller resistor if its input leakage drops the level, or add a level shifter."
+        }
+        LintCheck::AudioBusWiring => {
+            "Wire each audio pin to the net carrying its own role (BCLK to BCLK, LRCLK to LRCLK, one part's data out to the other's data in), keep exactly one clock master, and connect MCLK where the codec needs it."
         }
         _ => {
             "Re-pick the pull-ups so the sink current stays under 3 mA (R > (Vrail - 0.4 V) / 3 mA) and the rise time fits the bus speed; 2.2k-4.7k suits most 3.3 V buses."

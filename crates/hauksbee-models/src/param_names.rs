@@ -71,6 +71,15 @@ const UNIVERSAL: &[&str] = &[
     "auto_bind",
     "auto_bind_family",
     "auto_bind_pin_summary",
+    // Read by the board checks: the open-drain sink rating of an I2C pin
+    // (`bus_loading`), the high-level input leakage of a logic input
+    // (`pullup_effect`), and the audio-bus facts of an I2S/TDM part
+    // (`audio_bus`).
+    "iol_a",
+    "iih_a",
+    "i2s_clock_role",
+    "mclk_required",
+    "dout_hiz",
 ];
 
 /// The SPICE junction params shared by the diode and the MOSFET body diode.

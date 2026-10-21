@@ -132,6 +132,9 @@ pub struct LogicLoad {
     pub vil: f64,
     pub vih: f64,
     pub vcc: f64,
+    /// The input's high-level leakage (A, `iih_a` on the card), when the card
+    /// states it.
+    pub leak_a: Option<f64>,
 }
 
 /// Every declared logic input on `net`, with its VIL/VIH at its own supply.
@@ -153,6 +156,7 @@ pub fn loads_on_net(
             vil: i.band.0,
             vih: i.band.1,
             vcc: i.vcc,
+            leak_a: super::plausible_param(&m, "iih_a").filter(|a| *a >= 0.0),
         };
         let inputs = powered_inputs(board, c, &m, rail_v).into_iter();
         inputs
@@ -163,6 +167,42 @@ pub fn loads_on_net(
     super::resolved_components(board, lib)
         .flat_map(on_net)
         .collect()
+}
+
+/// The declared logic inputs on `net` whose band cannot be read: the net is
+/// theirs, but the card gives no VIL/VIH for their supply or the supply is not
+/// resolved. `(reference, role)` pairs; the inputs [`loads_on_net`] leaves out
+/// because their limits are unknown, not because their supply is off.
+pub(crate) fn unjudged_inputs_on_net(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    net: &str,
+    rail_v: &dyn Fn(&str) -> Option<f64>,
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for (c, m) in super::resolved_components(board, lib) {
+        let net_of = |role: &str| {
+            let id = super::envelope::role_net_id(c, &m, role)?;
+            board.net(id).map(|n| n.name.clone())
+        };
+        for role in input_roles(&m) {
+            if net_of(role).as_deref() != Some(net) {
+                continue;
+            }
+            let supply_v = m
+                .level_rail_of(role)
+                .and_then(&net_of)
+                .and_then(|rail| rail_v(&rail));
+            // Off is not unknown: an unpowered part has no input to judge.
+            if supply_v.is_some_and(|v| v < POWERED_V) {
+                continue;
+            }
+            if supply_v.is_none_or(|v| m.input_band_at(v).is_none()) {
+                out.push((c.reference.clone(), role.to_string()));
+            }
+        }
+    }
+    out
 }
 
 /// One part's undefined inputs.
