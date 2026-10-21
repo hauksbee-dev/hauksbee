@@ -488,7 +488,7 @@ fn anchor_findings(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
     let Ok(re) = Regex::new(&format!("(?i){pattern}")) else {
         return Vec::new();
     };
-    let Some(label) = family_label(entry, facts) else {
+    let Some(label) = family_label(entry, facts, false) else {
         return Vec::new();
     };
     let (family, count) = label;
@@ -508,16 +508,33 @@ fn anchor_findings(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
             "footprint_re '{pattern}' is anchored to one library's full footprint name and \
              matches neither '{family}-{count}' nor '{family}{count}', so any other library's \
              spelling of the same package would not bind: use the package-family form, e.g. \
-             '(?i){family}[-_ ]?{count}(?:[-_ ]|$)'"
+             '{}'",
+            family_pattern(entry, facts).unwrap_or_default()
         ),
     }]
 }
 
-/// The package family and pad count the card is read for.
-fn family_label(entry: &ModelEntry, facts: &Facts) -> Option<(&'static str, usize)> {
+/// A `footprint_re` for the card's package family in any library's spelling,
+/// e.g. `(?i)QFN[-_ ]?32(?:[-_ ]|$)`.
+pub(crate) fn family_pattern(entry: &ModelEntry, facts: &Facts) -> Option<String> {
+    let (family, count) = family_label(entry, facts, true)?;
+    Some(format!("(?i){family}[-_ ]?{count}(?:[-_ ]|$)"))
+}
+
+/// The package family and pad count the card is read for. `board_too` also
+/// reads the board's own footprint, for a pattern that missed it (no other
+/// name then says which package the card is for).
+fn family_label(
+    entry: &ModelEntry,
+    facts: &Facts,
+    board_too: bool,
+) -> Option<(&'static str, usize)> {
     let mut names: Vec<String> = Vec::new();
     names.extend(bound_package(entry, facts, &[]));
     names.extend(entry.pin_package.clone());
+    if board_too {
+        names.extend(facts.board.as_ref().map(|b| b.footprint.clone()));
+    }
     names.iter().find_map(|n| {
         let spelled = n
             .rsplit(':')

@@ -4098,7 +4098,7 @@ fn role_node_map_guessed(
     pin_rules: &hauksbee_models::PinRuleTable,
 ) -> (HashMap<String, NodeId>, Vec<String>, Option<String>) {
     let (mut m, kind) = (role_node_map(comp, model, node_of), model.kind);
-    let (mut guesses, mut clash, pad_count) = (Vec::new(), None, comp.pins.len());
+    let (mut guesses, mut clash, pad_count) = (Vec::new(), None, comp.distinct_pad_count());
     let canon = |r: &str| role_from_pinfunction(kind, r).unwrap_or_else(|| r.to_ascii_lowercase());
     let standard = hauksbee_models::validation::pin_standard(model);
     for pin in &comp.pins {
@@ -4185,7 +4185,7 @@ pub fn role_pads(
     let Some(&net) = role_nets(comp, model, pin_rules).get(role) else {
         return Vec::new();
     };
-    let (kind, pad_count) = (model.kind, comp.pins.len());
+    let (kind, pad_count) = (model.kind, comp.distinct_pad_count());
     let own_role = |pin: &hauksbee_extract::Pin| {
         let named = pad_role_sources(pin, &model.pins, Some(kind))
             .into_iter()
@@ -11847,6 +11847,32 @@ style = "i2c_pointer"
                 "{footprint} must not take the SOT-23 pad order"
             );
         }
+    }
+
+    /// A TO-252 whose tab is a fourth pad numbered 2 (and a mechanical pad with
+    /// no number) is a three-pad part: the three-terminal rule reads it.
+    #[test]
+    fn a_tab_sharing_a_lead_number_does_not_hide_the_three_terminal_rule() {
+        let lib = ModelLibrary::builtin();
+        let model = make_entry(
+            "fixture",
+            ComponentKind::Nmos,
+            "",
+            hauksbee_models::Params::default(),
+            std::collections::BTreeMap::new(),
+        );
+        let part = |pads: &[(&str, i64)]| {
+            let mut c = comp("Q1", "FIXTURE");
+            c.footprint = "Package_TO_SOT_SMD:TO-252-3_TabPin2".into();
+            c.pins = pins_on(pads);
+            role_nets(&c, &model, lib.pin_rules())
+        };
+        let roles = part(&[("1", 1), ("2", 2), ("3", 3), ("2", 2), ("", 4)]);
+        assert_eq!(roles.get("gate"), Some(&1), "{roles:?}");
+        assert_eq!(roles.get("drain"), Some(&2), "{roles:?}");
+        assert_eq!(roles.get("source"), Some(&3), "{roles:?}");
+        // A fourth numbered pad is a four-pad part, which no rule reads.
+        assert!(part(&[("1", 1), ("2", 2), ("3", 3), ("4", 4)]).is_empty());
     }
 
     #[test]

@@ -261,7 +261,9 @@ impl Acquirer<'_> {
                 |why| Err(format!("not tried: its host was skipped earlier ({why})")),
             );
             match outcome {
-                Ok(ready) => return Outcome::Ready(ready),
+                Ok(ready) => {
+                    return self.board_link_or_better(want, url, ready, &mut tried, say);
+                }
                 Err(why) => {
                     let next = if at + 1 < links.len() {
                         "trying the board's next link".to_string()
@@ -291,6 +293,57 @@ impl Acquirer<'_> {
             return Outcome::NoDatasheet(Missing { why, tried });
         };
         self.discover(want, searcher, &why_search, &mut tried, say)
+    }
+
+    /// The board's link that downloaded, unless its PDF has a text layer that
+    /// never prints the part, an alias or the family (measured: SP3012-06UTG
+    /// linked to TI's TPD1E05U06 sheet, and the draft from it was an
+    /// identity-only abstention after two agent runs of 0.4M input tokens).
+    /// With a searcher the part's own sheet is looked for first; when none is
+    /// found, the board's link stands as the author chose it.
+    fn board_link_or_better(
+        &self,
+        want: &Wanted,
+        url: &str,
+        ready: Ready,
+        tried: &mut Vec<Tried>,
+        say: &mut dyn FnMut(String),
+    ) -> Outcome {
+        use crate::extract_messages as words;
+        let Some(searcher) = self.searcher else {
+            return Outcome::Ready(ready);
+        };
+        let text = (self.read_text)(&ready.pdf);
+        let Err(why) = datasheet::vouches_for(&want.part, &want.aliases, &text) else {
+            return Outcome::Ready(ready);
+        };
+        if !why.contains(words::NOT_NAMED) {
+            return Outcome::Ready(ready);
+        }
+        say(words::board_link_names_another_part(&want.part, url, &why));
+        tried.push(Tried {
+            url: url.to_string(),
+            why,
+        });
+        // The search's failures remove the file they downloaded under the
+        // same name, so the board's copy is set aside and put back.
+        let aside = ready.pdf.with_extension("board.pdf");
+        if std::fs::copy(&ready.pdf, &aside).is_err() {
+            return Outcome::Ready(ready);
+        }
+        let why_search = format!("the board's link {url} is not this part's datasheet");
+        match self.discover(want, searcher, &why_search, tried, say) {
+            found @ Outcome::Ready(_) => {
+                let _ = std::fs::remove_file(&aside);
+                found
+            }
+            Outcome::NoDatasheet(_) => {
+                if std::fs::rename(&aside, &ready.pdf).is_err() {
+                    let _ = std::fs::remove_file(&aside);
+                }
+                Outcome::Ready(ready)
+            }
+        }
     }
 
     fn supplied_pdf(&self, want: &Wanted) -> Option<PathBuf> {
@@ -767,6 +820,51 @@ mod tests {
         let http = site(vec![("https://ti.example/ds.pdf", 200, pdf_bytes())]);
         let (out, _) = acquire(&http, Some(&Failing), Some("https://ti.example/ds.pdf"));
         assert!(matches!(out, Outcome::Ready(_)), "{out:?}");
+    }
+
+    /// SP3012-06UTG (2026-10-21): the board linked TI's TPD1E05U06 sheet, which
+    /// never prints the part. The part's own sheet is searched for first; the
+    /// board's link is kept when nothing better is found.
+    #[test]
+    fn a_board_link_that_never_names_the_part_is_replaced_by_one_that_does() {
+        let own = sheet("LM358B");
+        let other = sheet("TPD1E05U06");
+        let board_link = "https://board.example/ds.pdf".to_string();
+        let run = |board: Vec<u8>, searcher: &dyn Searcher| {
+            let http = site(vec![
+                ("https://board.example/ds.pdf", 200, board),
+                ("https://ti.example/lm358b.pdf", 200, sheet("LM358B")),
+            ]);
+            let dir = tempfile::tempdir().unwrap();
+            let mut lines = Vec::new();
+            let outcome = Acquirer {
+                http: &http,
+                searcher: Some(searcher),
+                dir: dir.path(),
+                supplied: &[],
+                hosts: &HostLedger::default(),
+                read_text: |p| String::from_utf8_lossy(&std::fs::read(p).unwrap()).into_owned(),
+            }
+            .acquire(&want(), std::slice::from_ref(&board_link), &mut |l| {
+                lines.push(l);
+            });
+            let Outcome::Ready(ready) = outcome else {
+                panic!("expected a datasheet, got {outcome:?}");
+            };
+            (std::fs::read(&ready.pdf).unwrap(), lines)
+        };
+        let (got, lines) = run(other.clone(), &Said("URL: https://ti.example/lm358b.pdf"));
+        assert_eq!(got, own);
+        assert!(
+            lines.iter().any(|l| l.contains("never prints")),
+            "{lines:?}"
+        );
+        // Nothing better found: the board's link stands, as its author chose it.
+        let (got, _) = run(other.clone(), &Said("NOT FOUND: only distributors list it"));
+        assert_eq!(got, other);
+        // A sheet that prints the part is not searched around.
+        let (got, _) = run(own.clone(), &Failing);
+        assert_eq!(got, own);
     }
 
     /// A part with no link and an API backend (no searcher) is skipped with a

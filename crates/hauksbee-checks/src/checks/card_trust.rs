@@ -78,11 +78,24 @@ fn card_of(board: &ExtractedBoard, lib: &ModelLibrary, comp: &Component) -> Card
             ))
         })
         .collect();
+    // The footprint's pad count is of every pad, wired or not, as `models extract`
+    // counts it: a part with unconnected pads is not a smaller package.
     let bound = hauksbee_models::card_coverage::Board {
         refdes: comp.reference.clone(),
         value: comp.value.clone(),
         footprint: comp.footprint.clone(),
-        pads: pads.clone(),
+        pads: comp
+            .pins
+            .iter()
+            .map(|p| {
+                let net = p
+                    .net
+                    .filter(|n| *n != 0)
+                    .and_then(|n| board.net(n))
+                    .map_or_else(|| "(unconnected)".to_string(), |n| n.name.clone());
+                (p.number.clone(), net)
+            })
+            .collect(),
     };
     doubts.extend(
         trust::entry_problems(&model)
@@ -261,5 +274,64 @@ tier = "{tier}"
             found[0].message
         );
         assert!(found[0].severity != Severity::Low);
+    }
+
+    /// A QFN-8-1EP card (pads 1..=8 and the exposed pad 9) bound to a footprint
+    /// of `lead_pads` leads plus an exposed pad numbered 9 and repeated
+    /// `ep_copies` times (thermal vias, paste), plus one unnumbered mechanical pad.
+    fn pad_map_doubts(lead_pads: usize, ep_copies: usize, unwired_lead: bool) -> Vec<String> {
+        let mut text = card("datasheet-derived", "");
+        text = text.replace(
+            "\"1\" = \"vdd\"\n\"2\" = \"gnd\"\n",
+            "\"1\" = \"vdd\"\n\"2\" = \"gnd\"\n\"3\" = \"in3\"\n\"4\" = \"in4\"\n\"5\" = \"in5\"\n\"6\" = \"in6\"\n\"7\" = \"in7\"\n\"8\" = \"in8\"\n\"9\" = \"ep\"\n",
+        );
+        let lib = library("padmap", &text, true);
+        let numbers: Vec<String> = (1..=lead_pads)
+            .map(|n| n.to_string())
+            .chain((0..ep_copies).map(|_| "9".to_string()))
+            .chain(std::iter::once(String::new()))
+            .collect();
+        // Pads 2 and 9 are ground, an unwired lead is on no net, the rest are signals.
+        let net = |n: &str| match n {
+            "2" | "9" => 1,
+            "8" if unwired_lead => 0,
+            _ => 2,
+        };
+        let pads: Vec<(&str, i64)> = numbers.iter().map(|n| (n.as_str(), net(n))).collect();
+        let mut u1 = part("U1", "DR_PART", &pads);
+        u1.footprint = "Package_DFN_QFN:QFN-8-1EP_3x3mm_P0.5mm_EP1.5x1.5mm_ThermalVias".into();
+        let b = board(&[(1, "GND"), (2, "+3V3")], vec![u1.clone()]);
+        match card_of(&b, &lib, &u1) {
+            Card::Drafted(d) => d.doubts.into_iter().map(|d| d.reason).collect(),
+            _ => panic!("the fixture card is a drafted one"),
+        }
+    }
+
+    #[test]
+    fn an_exposed_pad_repeated_for_its_thermal_vias_is_one_pad() {
+        // 8 leads + EP "9" printed 12 times + an unnumbered pad: 9 distinct pads.
+        let doubts = pad_map_doubts(8, 12, false);
+        assert!(
+            doubts.iter().all(|d| !d.contains("pad map is read from")),
+            "{doubts:?}"
+        );
+        // A lead left unconnected is still a pad of the footprint.
+        let doubts = pad_map_doubts(8, 12, true);
+        assert!(
+            doubts.iter().all(|d| !d.contains("pad map is read from")),
+            "{doubts:?}"
+        );
+    }
+
+    #[test]
+    fn a_footprint_of_more_distinct_pads_than_the_card_has_is_still_another_package() {
+        // 12 leads: the card's 9 pins really are another package's.
+        let doubts = pad_map_doubts(12, 12, false);
+        assert!(
+            doubts
+                .iter()
+                .any(|d| d.contains("12 pads") || d.contains("13 pads")),
+            "{doubts:?}"
+        );
     }
 }
