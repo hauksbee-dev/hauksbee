@@ -23,6 +23,13 @@
 //!   without a master clock) and `dout_hiz` (true when the data output
 //!   tri-states outside its slot, the TDM idiom) on the card.
 //!
+//! * A net whose NAME plainly states one bus signal (`I2S_BCLK`, `MCLK`,
+//!   `SAI1_FS_A`; see [`hauksbee_models::audio_roles::net_signal`]) landing on
+//!   a pad whose card role is a different bus signal is swapped wiring, said
+//!   even when the net also holds pins the check cannot classify. A data net
+//!   against a data pad is not compared (a net name does not say which end
+//!   transmits).
+//!
 //! ## What keeps it silent
 //!
 //! The check fires on a net only when every non-passive pin on it has a known
@@ -39,7 +46,7 @@ use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity, REMEDY_MARKER,
 };
-use hauksbee_models::audio_roles::{audio_pads, AudioRole};
+use hauksbee_models::audio_roles::{audio_pads, net_signal, AudioRole};
 use hauksbee_models::{ModelEntry, ModelLibrary};
 
 use hauksbee_bind::binder::power_rail_voltage;
@@ -329,6 +336,72 @@ fn judge_data(
     None
 }
 
+/// The audio-bus class of a role, for comparing a net's stated signal with a
+/// pad's: all data directions are one class.
+const fn class_of_role(role: AudioRole) -> AudioRole {
+    if role.is_data() {
+        AudioRole::Data
+    } else {
+        role
+    }
+}
+
+/// A net named for one bus signal with a pad of a different bus signal on it.
+fn swapped_by_name(
+    board: &ExtractedBoard,
+    parts: &HashMap<String, AudioPart>,
+    net: &hauksbee_extract::Net,
+) -> Option<LintFinding> {
+    let stated = class_of_role(net_signal(&net.name)?);
+    let mut wrong: Vec<(&Component, &str, AudioRole)> = Vec::new();
+    for (c, p) in board.net_members(net.id) {
+        if !AssemblyState::of(c).is_present() || is_passive(c) {
+            continue;
+        }
+        let Some(role) = parts.get(&c.reference).and_then(|x| x.pads.get(&p.number)) else {
+            continue;
+        };
+        let already = wrong
+            .iter()
+            .any(|(w, pad, _)| w.reference == c.reference && *pad == p.number);
+        if class_of_role(*role) != stated && !already {
+            wrong.push((c, &p.number, *role));
+        }
+    }
+    let first = wrong.first()?;
+    let pads: Vec<String> = wrong
+        .iter()
+        .map(|(c, pad, role)| {
+            format!(
+                "{} pad {pad} (the {} on its card)",
+                c.reference,
+                role.label()
+            )
+        })
+        .collect();
+    let mut refs: Vec<String> = Vec::new();
+    for (c, _, _) in &wrong {
+        if !refs.contains(&c.reference) {
+            refs.push(c.reference.clone());
+        }
+    }
+    Some(finding(
+        Severity::Medium,
+        format!(
+            "'{}' is named for the {} but {} sits on it: the wiring looks swapped, so the bus \
+             cannot run unless the net name is the one that is wrong. {REMEDY_MARKER}Move {} to \
+             the net that carries its own signal (check the codec's pin table against the \
+             controller's), or rename the net if the pad really is wired as intended.",
+            net.name,
+            stated.label(),
+            pads.join(" and "),
+            first.0.reference,
+        ),
+        refs,
+        &net.name,
+    ))
+}
+
 /// A codec that needs MCLK with its master-clock pad connected to nothing.
 fn missing_mclk(
     board: &ExtractedBoard,
@@ -393,10 +466,12 @@ pub fn audio_bus_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRepo
         {
             continue;
         }
-        let Some(ms) = members(board, &parts, net.id) else {
-            continue;
-        };
-        report.findings.extend(judge(&net.name, &ms, &parts));
+        let judged = members(board, &parts, net.id).and_then(|ms| judge(&net.name, &ms, &parts));
+        // The roles-disagree finding already says it; the name is the fallback
+        // for a net the roles cannot judge.
+        report
+            .findings
+            .extend(judged.or_else(|| swapped_by_name(board, &parts, net)));
     }
     for comp in &board.components {
         if AssemblyState::of(comp).is_present() {
@@ -727,5 +802,90 @@ unlocked_by = "validated behavior"
             ..part("R5", "33", &[("1", 12), ("2", 16)])
         });
         assert!(dout(&b, &lib).is_empty(), "a series resistor: abstain");
+    }
+
+    #[test]
+    fn a_net_named_for_one_signal_with_another_signals_pad_fires_even_beside_unknown_pins() {
+        let lib = cards("", "", "", "swap");
+        // U2's BCLK pad (1) on the LRCLK net and U2's LRCLK pad on the BCLK net:
+        // an unclassified MCU pin on both nets keeps the roles check silent.
+        let mut b = audio_board(&[
+            ("U1", "CTL", CTL_WIRES),
+            ("U2", "CODEC", [11, 10, 12, 13, 14]),
+        ]);
+        for net in [10, 11] {
+            let mut mcu = part("U9", "SOMEMCU", &[]);
+            mcu.reference = format!("U9{net}");
+            mcu.pins = vec![Pin {
+                number: "7".into(),
+                net: Some(net),
+                ..Default::default()
+            }];
+            b.components.push(mcu);
+        }
+        let f = run(&b, &lib);
+        let on = |n: &str| f.iter().filter(|f| f.nets == [n]).collect::<Vec<_>>();
+        assert_eq!(on("I2S_BCLK").len(), 1, "{f:?}");
+        assert_eq!(on("I2S_LRCLK").len(), 1, "{f:?}");
+        let bclk = on("I2S_BCLK")[0];
+        assert_eq!(bclk.severity, Severity::Medium);
+        assert!(
+            bclk.message.contains("U2 pad 2") && bclk.message.contains("frame clock"),
+            "{}",
+            bclk.message
+        );
+        assert_eq!(bclk.check, LintCheck::AudioBusWiring);
+    }
+
+    #[test]
+    fn the_roles_finding_is_not_doubled_by_the_name_finding() {
+        // All pins classified: the roles check says it once.
+        let lib = cards("", "", "", "swap2");
+        let b = audio_board(&[
+            ("U1", "CTL", CTL_WIRES),
+            ("U2", "CODEC", [10, 10, 12, 13, 14]),
+        ]);
+        let f = run(&b, &lib);
+        assert_eq!(
+            f.iter().filter(|f| f.nets == ["I2S_BCLK"]).count(),
+            1,
+            "{f:?}"
+        );
+    }
+
+    #[test]
+    fn a_net_with_a_generic_or_matching_name_is_silent() {
+        let lib = cards("", "", "", "swap3");
+        let mut b = audio_board(&[
+            ("U1", "CTL", CTL_WIRES),
+            ("U2", "CODEC", [11, 10, 12, 13, 14]),
+        ]);
+        // An unclassified pin on both nets keeps the roles check silent, so
+        // only the name could speak; generic names say nothing about the bus.
+        for net in [10, 11] {
+            let mut mcu = part("U9", "SOMEMCU", &[]);
+            mcu.reference = format!("U9{net}");
+            mcu.pins = vec![Pin {
+                number: "7".into(),
+                net: Some(net),
+                ..Default::default()
+            }];
+            b.components.push(mcu);
+        }
+        b.nets[2].name = "CLK_A".into();
+        b.nets[3].name = "CLK_B".into();
+        assert!(run(&b, &lib).is_empty(), "{:?}", run(&b, &lib));
+        // Data nets are not compared by direction: U2's DOUT on the DIN net.
+        let b = audio_board(&[
+            ("U1", "CTL", CTL_WIRES),
+            ("U2", "CODEC", [10, 11, 13, 12, 14]),
+        ]);
+        assert!(
+            run(&b, &lib)
+                .iter()
+                .all(|f| !f.message.contains("looks swapped")),
+            "{:?}",
+            run(&b, &lib)
+        );
     }
 }

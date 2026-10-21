@@ -7,7 +7,11 @@
 //! (`max_adc_source_impedance_ohms`, against the parallel resistance of the
 //! resistors on the pin's net).
 //!
-//! Both are deliberately under-reporting. The LM339/LM393 datasheets guarantee
+//! A third rule reads the MCU card's structured pin capability
+//! (`[models.pin_capability.adc]`): an analogue source wired to a pad the
+//! card does not list as an ADC input is [`adc_capability_flags`]'s finding.
+//!
+//! The first two are deliberately under-reporting. The LM339/LM393 datasheets guarantee
 //! the output state while at least ONE input stays inside the range, so only a
 //! whole channel above the ceiling is a violation; and the parallel resistance
 //! is a LOWER bound on the net's true Thevenin resistance (it takes every far
@@ -181,9 +185,311 @@ pub fn analog_input_lint(
 ) -> NetLintReport {
     let st = super::BoardStatics::of(board, lib);
     let findings = flags(board, &st, volts, None).into_iter().map(|(f, _)| f);
-    NetLintReport {
-        findings: findings.collect(),
+    let mut findings: Vec<LintFinding> = findings.collect();
+    findings.extend(adc_capability_flags(board, &st, volts));
+    NetLintReport { findings }
+}
+
+// ── An analogue source on a pad that is not an ADC input ─────────────────────
+
+/// Pad roles that can be a general-purpose pin whose analogue function is only
+/// one of several: `pa3`, `gpio4`, `io13`, `p0_12`, `d5`, `a0`, with the
+/// alternate functions the card appends after the port name.
+fn is_gpio_role(role: &str) -> bool {
+    let r = role.trim().to_ascii_lowercase();
+    let head = r.split('_').next().unwrap_or("");
+    let numbered = |prefix: &str| {
+        head.strip_prefix(prefix)
+            .is_some_and(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()))
+    };
+    let port_pin = head.len() >= 3
+        && head.starts_with('p')
+        && head.as_bytes()[1].is_ascii_lowercase()
+        && head[2..].chars().all(|c| c.is_ascii_digit());
+    port_pin
+        || ["gpio", "io", "gp", "d", "a", "p"]
+            .iter()
+            .any(|p| numbered(p))
+}
+
+/// Alternate functions that are themselves analogue or analogue-adjacent: a
+/// pad that carries one is not held to the ADC list (a comparator input, a
+/// reference, a DAC or op-amp pin, a touch or capacitive-sense channel).
+fn has_analog_function(role: &str) -> bool {
+    role.to_ascii_lowercase().split('_').any(|t| {
+        [
+            "ain", "adc", "comp", "cmp", "dac", "aref", "vref", "opamp", "opa", "touch", "tsc",
+            "cap", "lcd", "sense",
+        ]
+        .iter()
+        .any(|a| t.starts_with(a))
+    })
+}
+
+/// How the net feeding a pad is an analogue source.
+struct Source {
+    /// The part(s) that make it one, for the message.
+    what: String,
+    refs: Vec<String>,
+}
+
+/// A potentiometer or trimmer, by designator or footprint.
+fn is_pot(comp: &Component) -> bool {
+    let prefix: String = comp
+        .reference
+        .chars()
+        .take_while(char::is_ascii_alphabetic)
+        .collect::<String>()
+        .to_ascii_uppercase();
+    let fp = format!("{} {}", comp.footprint, comp.lib_id).to_ascii_lowercase();
+    matches!(prefix.as_str(), "RV" | "VR" | "POT" | "TRIM")
+        || ["potentiometer", "trimmer", "trimpot"]
+            .iter()
+            .any(|w| fp.contains(w))
+}
+
+/// Whether `pin` is the wiper of the three-pad potentiometer `comp`.
+fn is_wiper(comp: &Component, pin: &hauksbee_extract::Pin) -> bool {
+    let f = pin.function.to_ascii_lowercase();
+    f == "w" || f == "wiper" || (f.is_empty() && comp.pins.len() == 3 && pin.number == "2")
+}
+
+/// The pin roles of an analogue sensor's output, by card: a part whose card
+/// says its pad is an analogue output (a temperature sensor's `aout`).
+fn is_analog_out_role(role: &str) -> bool {
+    matches!(
+        role.trim().to_ascii_lowercase().as_str(),
+        "aout" | "analog_out" | "analogout" | "ao" | "vtemp" | "temp_out" | "sensor_out"
+    )
+}
+
+/// The analogue source driving `net_id`, other than the pads of `skip`.
+///
+/// Three shapes: a potentiometer wiper; a part whose card names the pad an
+/// analogue output; and a resistor divider between a supply and ground (an
+/// NTC thermistor divider, a battery sense), where the net holds nothing but
+/// the resistors, capacitors and the reading pad. A series resistor (the
+/// anti-alias filter in front of an ADC) is followed once.
+fn source_of(
+    cx: &Ctx,
+    st: &super::BoardStatics<'_>,
+    net_id: i64,
+    skip: &str,
+    hop: bool,
+    mcu_vdd: Option<f64>,
+) -> Option<Source> {
+    let board = cx.board;
+    let members = board.net_members(net_id);
+    let others: Vec<_> = members
+        .iter()
+        .filter(|(c, _)| c.reference != skip)
+        .collect();
+    for (c, p) in &others {
+        if is_pot(c) && is_wiper(c, p) {
+            return Some(Source {
+                what: format!("the wiper of potentiometer {}", c.reference),
+                refs: vec![c.reference.clone()],
+            });
+        }
+        let role = st
+            .parts(board)
+            .find(|(pc, _)| pc.reference == c.reference)
+            .and_then(|(_, m)| m.pins.get(&p.number).map(|r| (m.kind, r.clone())));
+        if let Some((kind, r)) = role {
+            let source_kind = matches!(
+                kind,
+                hauksbee_models::ComponentKind::Digital | hauksbee_models::ComponentKind::Adc
+            );
+            if source_kind && is_analog_out_role(&r) {
+                return Some(Source {
+                    what: format!("the analogue output '{r}' of {}", c.reference),
+                    refs: vec![c.reference.clone()],
+                });
+            }
+        }
     }
+    // A divider: resistors to a positive supply and to ground, nothing active.
+    let (mut tops, mut bots, mut series) = (Vec::new(), Vec::new(), Vec::new());
+    for (c, p) in &others {
+        if hauksbee_extract::is_capacitor(c) || hauksbee_extract::is_test_point_or_hole(c) {
+            continue;
+        }
+        let ohms = super::bus_loading::resistor_ohms(c)?;
+        let far = c.pins.iter().find(|q| q.number != p.number)?.net?;
+        let far_name = &board.net(far)?.name;
+        if super::is_ground_name(far_name) {
+            bots.push((c.reference.clone(), ohms));
+        } else if hauksbee_models::netclass::is_positive_supply(far_name) {
+            tops.push((c.reference.clone(), ohms, far_name.clone()));
+        } else {
+            series.push((c, far));
+        }
+    }
+    if tops.is_empty() || bots.is_empty() {
+        // One series resistor in front of the pad: look at its far side.
+        let [(rs, far)] = series.as_slice() else {
+            return None;
+        };
+        let alone = tops.is_empty() && bots.is_empty();
+        if !hop || !alone {
+            return None;
+        }
+        return source_of(cx, st, *far, &rs.reference, false, mcu_vdd);
+    }
+    if !series.is_empty() {
+        return None;
+    }
+    let par = |v: Vec<f64>| 1.0 / v.iter().map(|o| 1.0 / o).sum::<f64>();
+    let (r_top, r_bot) = (
+        par(tops.iter().map(|t| t.1).collect()),
+        par(bots.iter().map(|b| b.1).collect()),
+    );
+    let ratio = r_bot / (r_top + r_bot);
+    let rail = tops[0].2.clone();
+    let rail_v = (cx.v)(&rail).or_else(|| hauksbee_bind::binder::power_rail_voltage(&rail));
+    // A tap that sits at a clean logic level is a digital read of a divided
+    // rail (a USB-VBUS-present sense), not an analogue measurement. A USB
+    // VBUS rail is a presence sense whatever the divider; a rail or MCU
+    // supply of unknown level falls back to the ratio alone.
+    let logic_level = |tap: f64, vdd: f64| tap >= 0.7 * vdd || tap <= 0.3 * vdd;
+    let digital = rail.to_ascii_uppercase().contains("VBUS")
+        || match (rail_v, mcu_vdd) {
+            (Some(rv), Some(vdd)) => logic_level(rv * ratio, vdd),
+            _ => !(0.15..=0.85).contains(&ratio),
+        };
+    if digital {
+        return None;
+    }
+    let mut refs: Vec<String> = tops.iter().map(|t| t.0.clone()).collect();
+    refs.extend(bots.iter().map(|b| b.0.clone()));
+    Some(Source {
+        what: format!(
+            "the tap of a resistor divider ({} from '{rail}', {} to ground)",
+            refs[..tops.len()].join("||"),
+            refs[tops.len()..].join("||"),
+        ),
+        refs,
+    })
+}
+
+/// The supply voltage of `c`, from the net on its first supply pad.
+fn supply_of(cx: &Ctx, c: &Component, m: &ModelEntry) -> Option<f64> {
+    m.pins.iter().find_map(|(pad, role)| {
+        let power = hauksbee_models::pin_roles::power_pin(role, m.kind)?;
+        (power.kind == hauksbee_models::pin_roles::PowerKind::Supply && power.base).then_some(())?;
+        let pin = c.pins.iter().find(|p| &p.number == pad)?;
+        let name = &cx.board.net(pin.net?)?.name;
+        (cx.v)(name).or_else(|| hauksbee_bind::binder::power_rail_voltage(name))
+    })
+}
+
+/// The ADC-capable pads of `m` that nothing on `c` uses, as a message lists them.
+fn adc_alternatives(c: &Component, m: &ModelEntry, board: &ExtractedBoard) -> String {
+    let Some(adc) = &m.pin_capability.adc else {
+        return String::new();
+    };
+    let used = |pad: &str| {
+        c.pins
+            .iter()
+            .filter(|p| p.number == pad)
+            .filter_map(|p| p.net)
+            .filter(|&id| id != 0)
+            .filter_map(|id| board.net(id))
+            .any(|n| !super::is_unconnected_net(&n.name))
+    };
+    let list = |free_only: bool| -> Vec<String> {
+        adc.pads
+            .iter()
+            .filter(|(pad, _)| !free_only || !used(pad))
+            .map(|(pad, ch)| {
+                let role = m.pins.get(pad).map_or("", String::as_str);
+                format!("{} (pad {pad}, {ch})", role.to_ascii_uppercase())
+            })
+            .collect()
+    };
+    let (free, all) = (list(true), list(false));
+    if all.is_empty() {
+        return String::new();
+    }
+    let (shown, which) = if free.is_empty() {
+        (all, "")
+    } else {
+        (free, "unused ")
+    };
+    let more = shown.len().saturating_sub(8);
+    let text = shown.into_iter().take(8).collect::<Vec<_>>().join(", ");
+    let tail = if more > 0 {
+        format!(" and {more} more")
+    } else {
+        String::new()
+    };
+    format!("The card's {which}ADC-capable pads are {text}{tail}.")
+}
+
+/// An analogue source wired to an MCU pad that its card does not list as an ADC
+/// input (`[models.pin_capability.adc]`): the reading is a digital level and
+/// firmware can never convert it.
+fn adc_capability_flags(
+    board: &ExtractedBoard,
+    st: &super::BoardStatics<'_>,
+    v: &dyn Fn(&str) -> Option<f64>,
+) -> Vec<LintFinding> {
+    let cx = Ctx { board, v };
+    let mut out = Vec::new();
+    for (c, m) in st.parts(board) {
+        if m.kind != hauksbee_models::ComponentKind::Mcu || !m.adc_declared() {
+            continue;
+        }
+        let vdd = supply_of(&cx, c, m);
+        for pin in &c.pins {
+            let (Some(net_id), Some(role)) = (pin.net.filter(|&n| n != 0), m.pins.get(&pin.number))
+            else {
+                continue;
+            };
+            if m.adc_channel(&pin.number).is_some()
+                || !is_gpio_role(role)
+                || has_analog_function(role)
+            {
+                continue;
+            }
+            let Some(net) = board.net(net_id) else {
+                continue;
+            };
+            // A net that also reaches an ADC pad (of this or another MCU) is read.
+            let reads = board.net_members(net_id).iter().any(|(oc, op)| {
+                st.parts(board).any(|(pc, pm)| {
+                    pc.reference == oc.reference && pm.adc_channel(&op.number).is_some()
+                })
+            });
+            if reads || super::is_unconnected_net(&net.name) {
+                continue;
+            }
+            let Some(src) = source_of(&cx, st, net_id, &c.reference, true, vdd) else {
+                continue;
+            };
+            let mut refs = vec![c.reference.clone()];
+            refs.extend(src.refs);
+            out.push(LintFinding {
+                check: LintCheck::OperatingEnvelope,
+                severity: Severity::Medium,
+                message: format!(
+                    "{} pad {} ({}, net '{}') reads {}, but its card lists no ADC channel on that \
+                     pad, so firmware can only read it as a digital level and never convert it. {} \
+                     {REMEDY_MARKER}Move the signal to an ADC-capable pad of {}.",
+                    c.reference,
+                    pin.number,
+                    role.to_ascii_uppercase(),
+                    net.name,
+                    src.what,
+                    adc_alternatives(c, m, board),
+                    c.reference,
+                ),
+                refs,
+                nets: vec![net.name.clone()],
+            });
+        }
+    }
+    out
 }
 
 /// The same flags as run evidence, for the CI report: the path that keeps a
@@ -360,5 +666,143 @@ mod tests {
                 );
             }
         }
+    }
+    /// (label, pad the divider tap or wiper feeds, parts on the net besides
+    /// the MCU, findings expected). `ATmega328P` DIP: pad 4 is PD2 (no ADC),
+    /// pad 23 is PC0 (ADC0).
+    const CAPABILITY_ROWS: &[(&str, &str, Source3, usize)] = &[
+        (
+            "divider tap on a non-ADC pad",
+            "4",
+            Source3::Divider(10_000),
+            1,
+        ),
+        (
+            "divider tap on an ADC pad",
+            "23",
+            Source3::Divider(10_000),
+            0,
+        ),
+        ("pot wiper on a non-ADC pad", "4", Source3::Wiper, 1),
+        ("pot wiper on an ADC pad", "23", Source3::Wiper, 0),
+        (
+            "one series resistor then a divider",
+            "4",
+            Source3::SeriesDivider,
+            1,
+        ),
+        (
+            "equal 100k/1k tap is a logic level",
+            "4",
+            Source3::Divider(1_000),
+            0,
+        ),
+    ];
+
+    // A divider from a VBUS rail (a USB-present sense, here 5 V) is not an
+    // analogue measurement whatever its ratio: abstain.
+    #[test]
+    fn a_vbus_sense_or_unknown_rail_divider_is_not_an_analogue_read() {
+        let lib = ModelLibrary::builtin();
+        for rail in ["VBUSR", "USB_VBUS", "VBUS"] {
+            let mut b = capability_board("4", Source3::Divider(10_000), false);
+            b.nets[1].name = rail.into();
+            let r = analog_input_lint(&b, &lib, &|_| None);
+            assert!(
+                r.findings
+                    .iter()
+                    .all(|f| !f.message.contains("lists no ADC")),
+                "{rail}: {r:?}"
+            );
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum Source3 {
+        /// Top resistor 10 k from +3V3, bottom resistor of this many ohms to ground.
+        Divider(u32),
+        Wiper,
+        SeriesDivider,
+    }
+
+    fn capability_board(pad: &str, src: Source3, alt_adc: bool) -> ExtractedBoard {
+        let mut parts = vec![part(
+            "U1",
+            "ATmega328P",
+            &[("7", 2), ("8", 1), ("20", 2), ("22", 1), (pad, 3)],
+        )];
+        match src {
+            Source3::Divider(bottom) => {
+                parts.push(part("R1", "10k", &[("1", 2), ("2", 3)]));
+                parts.push(part("R2", &format!("{bottom}"), &[("1", 3), ("2", 1)]));
+            }
+            Source3::Wiper => parts.push(part("RV1", "10k", &[("1", 2), ("2", 3), ("3", 1)])),
+            Source3::SeriesDivider => {
+                parts[0].pins.retain(|p| p.number != pad);
+                parts[0].pins.push(hauksbee_extract::Pin {
+                    number: pad.into(),
+                    net: Some(4),
+                    ..Default::default()
+                });
+                parts.push(part("R3", "1k", &[("1", 4), ("2", 3)]));
+                parts.push(part("R1", "10k", &[("1", 2), ("2", 3)]));
+                parts.push(part("R2", "10k", &[("1", 3), ("2", 1)]));
+            }
+        }
+        if alt_adc {
+            parts[0].pins.push(hauksbee_extract::Pin {
+                number: "24".into(),
+                net: Some(3),
+                ..Default::default()
+            });
+        }
+        board(&[(1, "GND"), (2, "+3V3"), (3, "SENSE"), (4, "PIN")], parts)
+    }
+
+    // A card that lists its ADC pads says every other pad of its map is not
+    // one: an analogue source on such a pad can only be read as a digital level.
+    #[test]
+    fn analogue_source_on_a_pad_with_no_adc_channel_is_flagged() {
+        let lib = ModelLibrary::builtin();
+        for (label, pad, src, n) in CAPABILITY_ROWS {
+            let b = capability_board(pad, *src, false);
+            let got: Vec<_> = analog_input_lint(&b, &lib, &|_| None)
+                .findings
+                .into_iter()
+                .filter(|f| f.message.contains("lists no ADC channel"))
+                .collect();
+            assert_eq!(got.len(), *n, "{label}: {got:?}");
+            for f in &got {
+                for want in ["U1 pad 4", "PD2_INT0", "ADC-capable pads", "PC0_ADC0"] {
+                    assert!(f.message.contains(want), "{label}: {}", f.message);
+                }
+            }
+        }
+    }
+
+    // The same net also reaching an ADC pad is read, not misrouted.
+    #[test]
+    fn a_net_that_also_reaches_an_adc_pad_is_silent() {
+        let b = capability_board("4", Source3::Divider(10_000), true);
+        let r = analog_input_lint(&b, &ModelLibrary::builtin(), &|_| None);
+        assert!(
+            r.findings
+                .iter()
+                .all(|f| !f.message.contains("lists no ADC")),
+            "{r:?}"
+        );
+    }
+
+    // A pad whose role itself is analogue (the AVR comparator input) is never held to the list.
+    #[test]
+    fn an_analogue_function_pad_is_not_held_to_the_adc_list() {
+        let b = capability_board("12", Source3::Divider(10_000), false);
+        let r = analog_input_lint(&b, &ModelLibrary::builtin(), &|_| None);
+        assert!(
+            r.findings
+                .iter()
+                .all(|f| !f.message.contains("lists no ADC")),
+            "{r:?}"
+        );
     }
 }

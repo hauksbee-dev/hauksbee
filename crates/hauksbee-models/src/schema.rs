@@ -124,6 +124,12 @@ pub struct ModelEntry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub straps: Vec<StrapPin>,
 
+    /// `[models.pin_capability]`: which pads can serve a given peripheral
+    /// function, as structured data a board check can read (today the pads that
+    /// can be an ADC input, with the channel each one is). MCU cards only.
+    #[serde(default, skip_serializing_if = "PinCapability::is_empty")]
+    pub pin_capability: PinCapability,
+
     /// Optional declarative behavioural model (pins/pulls, FSM, averaged
     /// converter, expression laws) for power ICs the SPICE-level kinds cannot
     /// express. See [`crate::behavioral`].
@@ -222,6 +228,63 @@ pub struct SupplyOutput {
     pub max: f64,
     /// Where the range comes from: the source path(s) and the datasheet rows.
     pub basis: String,
+}
+
+/// `[models.pin_capability]`: the peripheral functions the pads can serve.
+///
+/// A table is a COMPLETE statement about the package it sits on: a table that
+/// is present says which pads have the function and that every other pad of the
+/// card's `[models.pins]` does not. A card with no table says nothing, and a
+/// check that reads it abstains. Each table carries the datasheet table and
+/// page it was read from (`basis`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PinCapability {
+    /// `[models.pin_capability.adc]`: the pads wired to an ADC input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adc: Option<AdcPins>,
+}
+
+impl PinCapability {
+    /// No capability table is declared.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.adc.is_none()
+    }
+}
+
+/// The ADC-capable pads of an MCU package (see [`PinCapability::adc`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdcPins {
+    /// The datasheet table and page the pad list is read from, and anything a
+    /// firmware author needs beside it (a channel set that is unusable while a
+    /// radio is on).
+    pub basis: String,
+    /// Pad number to the ADC channel on it (`ADC1_IN5`, `AIN2`, `ADC0`). A pad
+    /// listed here is an analogue input; a pad of `[models.pins]` not listed is
+    /// not one. A part with no ADC declares the table empty.
+    #[serde(default)]
+    pub pads: BTreeMap<String, String>,
+}
+
+impl ModelEntry {
+    /// Whether the card says which of its pads are ADC inputs.
+    #[must_use]
+    pub const fn adc_declared(&self) -> bool {
+        self.pin_capability.adc.is_some()
+    }
+
+    /// The ADC channel on `pad`, where the card lists the pad as one.
+    #[must_use]
+    pub fn adc_channel(&self, pad: &str) -> Option<&str> {
+        self.pin_capability
+            .adc
+            .as_ref()?
+            .pads
+            .get(pad)
+            .map(String::as_str)
+    }
 }
 
 /// A supply pin a board may leave open (see [`ModelEntry::optional_supplies`]).

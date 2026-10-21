@@ -74,6 +74,16 @@ reset_pull_up_ohms = 30000.0
 "27" = "pc4_adc4_sda"
 "28" = "pc5_adc5_scl"
 
+[models.pin_capability.adc]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 1 Pin Configurations Figure 1-1 (PDF p.12) and 1.1.7-1.1.9 (PDF p.14) (28-pin PDIP, pins 23-28 PC0-PC5)"
+[models.pin_capability.adc.pads]
+"23" = "ADC0"
+"24" = "ADC1"
+"25" = "ADC2"
+"26" = "ADC3"
+"27" = "ADC4"
+"28" = "ADC5"
+
 # ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020): sec. 1.1.5 p.13
 # (PC6/RESET: low longer than the minimum pulse resets; with RSTDISBL unprogrammed, the factory
 # default per Table 28-7 p.291, PC6 is the reset input); Table 30-1 p.323: RRST Reset Pull-up
@@ -182,6 +192,18 @@ reset_pull_up_ohms = 30000.0
 "32" = "pd2_int0"
 "33" = "gnd4"      # VQFN/MLF exposed pad
 
+[models.pin_capability.adc]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 1 Pin Configurations Figure 1-1 (PDF p.12) and 1.1.7-1.1.9 (PDF p.14) (32 TQFP / 32 VQFN, pins 19 ADC6, 22 ADC7, 23-28 PC0-PC5)"
+[models.pin_capability.adc.pads]
+"19" = "ADC6"
+"22" = "ADC7"
+"23" = "ADC0"
+"24" = "ADC1"
+"25" = "ADC2"
+"26" = "ADC3"
+"27" = "ADC4"
+"28" = "ADC5"
+
 # ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020): sec. 1.1.5 p.13
 # (PC6/RESET: low longer than the minimum pulse resets; with RSTDISBL unprogrammed, the factory
 # default per Table 28-7 p.291, PC6 is the reset input); Table 30-1 p.323: RRST Reset Pull-up
@@ -278,6 +300,16 @@ reset_pull_up_ohms = 30000.0
 "27" = "pd1_txd"
 "28" = "pd2_int0"
 "29" = "gnd3"      # QFN/MLF bottom pad
+
+[models.pin_capability.adc]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 1 Pin Configurations Figure 1-1 (PDF p.12) and 1.1.7-1.1.9 (PDF p.14) (28 VQFN, pads 19-24 PC0-PC5)"
+[models.pin_capability.adc.pads]
+"19" = "ADC0"
+"20" = "ADC1"
+"21" = "ADC2"
+"22" = "ADC3"
+"23" = "ADC4"
+"24" = "ADC5"
 
 # ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020): sec. 1.1.5 p.13
 # (PC6/RESET: low longer than the minimum pulse resets; with RSTDISBL unprogrammed, the factory
@@ -382,6 +414,18 @@ default_clock_hz = 8000000
 "30" = "pd0_rxd"
 "31" = "pd1_txd"
 "32" = "pd2_int0"
+
+[models.pin_capability.adc]
+basis = "Atmel ATmega48/V/88/V/168/V Datasheet Complete Atmel-2545W-11/2016, section 5 Pin Configurations Figures 5-1 to 5-4 (PDF pp.16-19): ADC0-ADC5 on PC0-PC5, ADC6 and ADC7 on the 32-pin packages only"
+[models.pin_capability.adc.pads]
+"19" = "ADC6"
+"22" = "ADC7"
+"23" = "ADC0"
+"24" = "ADC1"
+"25" = "ADC2"
+"26" = "ADC3"
+"27" = "ADC4"
+"28" = "ADC5"
 
 # ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020): sec. 1.1.5 p.13
 # (PC6/RESET: low longer than the minimum pulse resets; with RSTDISBL unprogrammed, the factory
@@ -646,6 +690,20 @@ backend = "none:samd21"
 "32" = "pa31_swdio"
 "33" = "gnd3"        # exposed pad, tied inside to GND and GNDANA
 
+[models.pin_capability.adc]
+basis = "Microchip SAM D21/DA1 Complete Data Sheet DS40001882L, Table 7-1 PORT Function Multiplexing (PDF p.28, column of the E 32-pin package): the ADC AIN[n] column; the AC AIN column is a comparator, not the ADC"
+[models.pin_capability.adc.pads]
+"3" = "AIN0"
+"4" = "AIN1"
+"5" = "AIN4"
+"6" = "AIN5"
+"7" = "AIN6"
+"8" = "AIN7"
+"11" = "AIN16"
+"12" = "AIN17"
+"13" = "AIN18"
+"14" = "AIN19"
+
 # SAM D21/DA1 Family Complete Data Sheet DS40001882L: sec. 16.6.2.7 Reset Controller p.139: "The external
 # reset is generated when pulling the RESET pin low. This pin has an internal pull-up, and does not need
 # to be driven externally during normal operation."
@@ -816,6 +874,18 @@ default_clock_hz = 8000000
 # rather than reporting the pad as unmodelled.
 "TH" = "gnd5"
 
+[models.pin_capability.adc]
+basis = "Atmel ATmega1284P datasheet, section 1 Pin Configurations (PDF pp.13-14): PA7:0 are ADC7:0, pins 30-37 of the 44-lead TQFP"
+[models.pin_capability.adc.pads]
+"30" = "ADC7"
+"31" = "ADC6"
+"32" = "ADC5"
+"33" = "ADC4"
+"34" = "ADC3"
+"35" = "ADC2"
+"36" = "ADC1"
+"37" = "ADC0"
+
 # Atmel-42719C-ATmega1284P_Datasheet_Complete-10/2016: Table 29-2 Common DC characteristics
 # (pp.409-410; the RRST row, Reset Pull-up Resistor 30-60 kOhm, is on p.410). Reset pad 4 on the 44-lead packages.
 [[models.straps]]
@@ -925,6 +995,18 @@ default_clock_hz = 8000000
 "43" = "pb3_oc0a_ain1"
 "44" = "pb4_ss_oc0b"
 "TH" = "gnd5"
+
+[models.pin_capability.adc]
+basis = "Atmel ATmega1284P datasheet, section 1 Pin Configurations (PDF pp.13-14): PA7:0 are ADC7:0, pins 30-37 of the 44-lead TQFP"
+[models.pin_capability.adc.pads]
+"30" = "ADC7"
+"31" = "ADC6"
+"32" = "ADC5"
+"33" = "ADC4"
+"34" = "ADC3"
+"35" = "ADC2"
+"36" = "ADC1"
+"37" = "ADC0"
 
 [models.ratings]
 # Table 29-1 Absolute Maximum Ratings, shared with the P.
@@ -1130,6 +1212,19 @@ default_clock_hz = 16000000
 # the same node, which is exactly what the regulator makes them not.
 "24" = "raw"
 
+[models.pin_capability.adc]
+basis = "Atmel-7766J-USB-ATmega16U4/32U4-Datasheet_04/2016, section 1 Pin Configurations Figure 1-1 (PDF p.3) and the port F pin list (PDF p.307): ADC0, ADC1, ADC4-ADC7 on PF0, PF1, PF4-PF7; ADC8-ADC13 on PD4, PD6, PD7, PB4, PB5, PB6; the pad to port map is this card's [models.pins] (SparkFun Pro Micro)"
+[models.pin_capability.adc.pads]
+"7" = "ADC8"
+"9" = "ADC10"
+"11" = "ADC11"
+"12" = "ADC12"
+"13" = "ADC13"
+"17" = "ADC7"
+"18" = "ADC6"
+"19" = "ADC5"
+"20" = "ADC4"
+
 # The module powers itself from its own USB connector (UVCC through F1 and D2
 # to the RAW rail, then the MIC5219 regulator U2), and VCC is that regulator's
 # OUTPUT on the header (a pad the host board may use, or leave open or on a
@@ -1230,6 +1325,22 @@ default_clock_hz = 8000000
 "43" = "gnd4"
 "44" = "avcc2"
 
+[models.pin_capability.adc]
+basis = "Atmel-7766J-USB-ATmega16U4/32U4-Datasheet_04/2016, section 1 Pin Configurations Figure 1-1 (PDF p.3) and the port F pin list (PDF p.307): ADC0, ADC1, ADC4-ADC7 on PF0, PF1, PF4-PF7; ADC8-ADC13 on PD4, PD6, PD7, PB4, PB5, PB6"
+[models.pin_capability.adc.pads]
+"25" = "ADC8"
+"26" = "ADC9"
+"27" = "ADC10"
+"28" = "ADC11"
+"29" = "ADC12"
+"30" = "ADC13"
+"36" = "ADC7"
+"37" = "ADC6"
+"38" = "ADC5"
+"39" = "ADC4"
+"40" = "ADC1"
+"41" = "ADC0"
+
 # ATmega16U4/32U4 datasheet Atmel-7766J-USB-ATmega16U4/32U4-Datasheet_04/2016: Table 29-1 DC
 # Characteristics, p.384, RRST Reset Pull-up Resistor 30-60 kOhm.
 [[models.straps]]
@@ -1328,6 +1439,14 @@ default_clock_hz = 8000000
 "7" = "pb2_sck_scl_adc1"
 "8" = "vcc"
 
+[models.pin_capability.adc]
+basis = "Atmel ATtiny25/45/85 datasheet 2586Q-AVR-08/2013, section 1 Pin Configurations Figure 1-1 (PDF p.2): ADC0 on PB5, ADC1 on PB2, ADC2 on PB4, ADC3 on PB3 (8-pin PDIP/SOIC)"
+[models.pin_capability.adc.pads]
+"1" = "ADC0"
+"2" = "ADC3"
+"3" = "ADC2"
+"7" = "ADC1"
+
 # ATtiny25/45/85 datasheet 2586Q-AVR-08/2013: Table 21-1 DC Characteristics p.161, RRST Reset
 # Pull-up Resistor 30-60 kOhm (VCC = 5.5 V, input low). With the RSTDISBL fuse unprogrammed (its
 # factory default, p.148) PB5 is the reset input; programmed, it is an I/O pad.
@@ -1380,6 +1499,14 @@ default_clock_hz = 8000000
 "12" = "pb1_miso"
 "14" = "pb2_sck_scl_adc1"
 "15" = "vcc"
+
+[models.pin_capability.adc]
+basis = "Atmel ATtiny25/45/85 datasheet 2586Q-AVR-08/2013, section 1 Pin Configurations Figure 1-1 (PDF p.2): ADC0 on PB5, ADC1 on PB2, ADC2 on PB4, ADC3 on PB3 (20-pad QFN/MLF)"
+[models.pin_capability.adc.pads]
+"1" = "ADC0"
+"2" = "ADC3"
+"5" = "ADC2"
+"14" = "ADC1"
 
 # ATtiny25/45/85 datasheet 2586Q-AVR-08/2013: Table 21-1 DC Characteristics p.161, RRST Reset
 # Pull-up Resistor 30-60 kOhm (VCC = 5.5 V, input low). With the RSTDISBL fuse unprogrammed (its
@@ -1562,6 +1689,18 @@ internal_clock = "internal 8 MHz HSI RC oscillator"
 "38" = "pb7_i2c1_sda"
 "44" = "boot0"     # BOOT0 strapping pin (LQFP-48 pin 44; RM0008 boot config)
 "48" = "vdd4"      # VDDA
+
+[models.pin_capability.adc]
+basis = "STMicroelectronics STM32F103x8/xB datasheet (medium-density), Table 5 pin definitions (PDF pp.28-29), LQFP48/UFQFPN48 column: PA0-PA7 pins 10-12, 14-17 are ADC12_IN0-IN7 (pin 13 PA3 is IN3 but not in [models.pins]) and PB0 pin 18 is ADC12_IN8; both ADC1 and ADC2 reach every channel; PC13-PC15, PA8-PA10 and PB6/PB7 carry no ADC channel"
+[models.pin_capability.adc.pads]
+"10" = "ADC12_IN0"
+"11" = "ADC12_IN1"
+"12" = "ADC12_IN2"
+"14" = "ADC12_IN4"
+"15" = "ADC12_IN5"
+"16" = "ADC12_IN6"
+"17" = "ADC12_IN7"
+"18" = "ADC12_IN8"
 
 [models.ratings]
 max_pin_current_a = 0.025  # 25 mA abs max per I/O pin
@@ -2048,6 +2187,15 @@ backend = "qemu:esp32"
 "35" = "p01_txd"    # TXD0 (UART0 TX, GPIO1)
 "34" = "p03_rxd"    # RXD0 (UART0 RX, GPIO3)
 
+[models.pin_capability.adc]
+basis = "Espressif ESP32-WROOM-32E Datasheet v2.1, Table 3 Pin Definitions (PDF p.11): pad to GPIO to ADC channel. Lists the pads of [models.pins] only; GPIO5 (pad 29) and the UART pads carry no ADC channel. ADC2 channels are not usable while the Wi-Fi driver runs (ESP-IDF note, not in the datasheet)"
+[models.pin_capability.adc.pads]
+"14" = "ADC2_CH5"
+"23" = "ADC2_CH3"
+"24" = "ADC2_CH2"
+"25" = "ADC2_CH1"
+"26" = "ADC2_CH0"
+
 # ESP32-WROOM-32E & WROOM-32UE Datasheet v2.1: Table 3 Pin Definitions p.11, EN pad 3 "High: On; enables the
 # chip. Low: Off; the chip shuts down. Note: Do not leave the pin floating." Figure 7 ESP32-WROOM-32E Schematics
 # p.37 shows CHIP_PU wired straight to module pad 3 with no pull-up or RC on the module; sec. 9 p.39 asks for
@@ -2146,6 +2294,14 @@ backend = "qemu:esp32"
 "41" = "p01_txd"
 "40" = "p03_rxd"
 
+[models.pin_capability.adc]
+basis = "Espressif ESP32 Datasheet v5.3, Table 2-1 Pin Overview (PDF p.14) and Table 4-6 Peripheral Pin Configurations (PDF p.46): MTDI/GPIO12 ADC2_CH5, MTDO/GPIO15 ADC2_CH3, GPIO2 ADC2_CH2, GPIO0 ADC2_CH1; GPIO5 and the UART pads carry none. ADC2 is not usable while Wi-Fi runs (ESP-IDF note)"
+[models.pin_capability.adc.pads]
+"18" = "ADC2_CH5"
+"21" = "ADC2_CH3"
+"22" = "ADC2_CH2"
+"23" = "ADC2_CH1"
+
 # Same die and strap table as esp32_wroom (same citations).
 [[models.straps]]
 role = "gpio0"
@@ -2216,6 +2372,12 @@ backend = "qemu:esp32"
 "28" = "gpio9"      # DISPLAY_RES (board net RES); driven high by display init
 "41" = "p01_txd"    # U0TXD (UART0 TX)
 "40" = "p03_rxd"    # U0RXD (UART0 RX)
+
+[models.pin_capability.adc]
+basis = "Espressif ESP32-PICO Series Datasheet v1.4, Table 2 Pin Description of ESP32-PICO-D4 (PDF pp.13-14): IO2 pad 22 ADC2_CH2, IO0 pad 23 ADC2_CH1; IO9 and the UART pads carry none. ADC2 is not usable while Wi-Fi runs (ESP-IDF note)"
+[models.pin_capability.adc.pads]
+"22" = "ADC2_CH2"
+"23" = "ADC2_CH1"
 
 # Ref: ESP32-PICO-D4 datasheet v1.7, sec "Strapping Pins" (inherits ESP32 TRM
 # v5.1 strap table). The package-internal flash straps are not listed (fixed by
@@ -2309,6 +2471,11 @@ must_not_float_roles = "en"
 "26" = "gpio45"
 "16" = "gpio46"
 
+[models.pin_capability.adc]
+basis = "Espressif ESP32-S3-WROOM-1/-1U Datasheet v1.8, Table 3-1 Pin Definitions (PDF p.11): IO3 pad 15 ADC1_CH2; IO0, IO45 and IO46 carry no ADC channel"
+[models.pin_capability.adc.pads]
+"15" = "ADC1_CH2"
+
 # ESP32-S3-WROOM-1 & WROOM-1U Datasheet v1.8: Table 3-1 Pin Definitions p.11, EN pad 3 "High: on, enables the
 # chip. Low: off, the chip powers off. Note: Do not leave the EN pin floating." Figure 8-1 ESP32-S3-WROOM-1
 # Schematics p.39 shows CHIP_PU wired straight to module pad 3 with no pull-up on the module; sec. 9 p.41
@@ -2394,6 +2561,11 @@ must_not_float_roles = "en"
 "51" = "gpio45"
 "52" = "gpio46"
 
+[models.pin_capability.adc]
+basis = "Espressif ESP32-S3 Datasheet v2.2, Table 2-8 Analog Functions (PDF p.24): pin 8 GPIO3 ADC1_CH2; GPIO0, GPIO45 and GPIO46 carry no ADC channel"
+[models.pin_capability.adc.pads]
+"8" = "ADC1_CH2"
+
 # ESP32-S3 Series Datasheet v2.2: Table 2-10 Analog Pins p.28, CHIP_PU pin 4 "High: on, enables the chip
 # (powered up). Low: off, disables the chip (powered down). Note: Do not leave the CHIP_PU pin floating."
 # Table 2-1 Pin Overview p.16 lists CHIP_PU with no reset-time pull (GPIO0 beside it shows WPU).
@@ -2465,6 +2637,10 @@ footprint_re = '(?i)ESP32[-_]?S2[-_]?WRO(OM|VER)'
 "39" = "gpio45"
 "40" = "gpio46"
 
+[models.pin_capability.adc]
+basis = "Espressif ESP32-S2-WROOM Datasheet v1.5, Table 2 Pin Definitions (PDF p.10): the pads of [models.pins] (IO0 pad 3, IO45 pad 39, IO46 pad 40) carry no ADC channel"
+[models.pin_capability.adc.pads]
+
 # Ref: ESP32-S2 Technical Reference Manual v1.2, Table "Strapping Pins";
 # ESP32-S2 datasheet v1.4 sec 2.4.
 [[models.straps]]
@@ -2506,6 +2682,10 @@ footprint_re = '(?i)(^|:)V?QFN[-_]?56([-_]1EP)?[-_]7x7mm[-_]P0\.4mm'
 "5"  = "gpio0"
 "50" = "gpio45"
 "55" = "gpio46"
+
+[models.pin_capability.adc]
+basis = "Espressif ESP32-S2 Datasheet v1.9, Table 2-8 Analog Functions (PDF p.21): the pads of [models.pins] (GPIO0 pad 5, GPIO45, GPIO46) carry no ADC channel (the first is pin 6 GPIO1 ADC1_CH0)"
+[models.pin_capability.adc.pads]
 
 # Same strap table and citations as esp32s2_wroom.
 [[models.straps]]
@@ -2576,6 +2756,12 @@ backend = "qemu:esp32c3"
 "31" = "p021_txd"   # TXD0 on GPIO21
 "30" = "p020_rxd"   # RXD0 on GPIO20
 
+[models.pin_capability.adc]
+basis = "Espressif ESP32-C3-MINI-1 Datasheet v2.2, Table 3-1 Pin Definitions (PDF p.11): IO2 pad 5 ADC1_CH2, IO4 pad 18 ADC1_CH4; IO8, IO9, IO20, IO21 carry none"
+[models.pin_capability.adc.pads]
+"5" = "ADC1_CH2"
+"18" = "ADC1_CH4"
+
 [models.ratings]
 max_pin_current_a = 0.04
 max_current_a = 0.4
@@ -2636,6 +2822,11 @@ backend = "qemu:esp32c3"
 "16" = "gpio2"
 "7"  = "gpio8"
 "8"  = "gpio9"
+
+[models.pin_capability.adc]
+basis = "Espressif ESP32-C3-WROOM-02 Datasheet v1.7, Table 3-1 Pin Definitions (PDF p.11): IO2 pad 16 ADC1_CH2; IO8, IO9 carry none"
+[models.pin_capability.adc.pads]
+"16" = "ADC1_CH2"
 
 [models.ratings]
 max_pin_current_a = 0.04
@@ -2698,6 +2889,11 @@ backend = "qemu:esp32c3"
 "15" = "gpio9"
 "28" = "p021_txd"
 "27" = "p020_rxd"
+
+[models.pin_capability.adc]
+basis = "Espressif ESP32-C3 Datasheet v2.4, Table 2-6 Analog Functions (PDF p.21): pin 6 GPIO2 ADC1_CH2; GPIO8, GPIO9, GPIO20, GPIO21 carry none"
+[models.pin_capability.adc.pads]
+"6" = "ADC1_CH2"
 
 [models.ratings]
 max_pin_current_a = 0.04
@@ -2834,6 +3030,17 @@ backend = "none:esp32c6"
 "52" = "gnd21"
 "53" = "gnd22"
 
+[models.pin_capability.adc]
+basis = "Espressif ESP32-C6-MINI-1 Datasheet, Table 3-1 Pin Definitions (PDF p.11): ADC1_CH0-CH6 on IO0-IO6; no other pad carries an ADC channel"
+[models.pin_capability.adc.pads]
+"5" = "ADC1_CH2"
+"6" = "ADC1_CH3"
+"9" = "ADC1_CH4"
+"10" = "ADC1_CH5"
+"12" = "ADC1_CH0"
+"13" = "ADC1_CH1"
+"15" = "ADC1_CH6"
+
 # ESP32-C6-MINI-1 & MINI-1U Datasheet v1.5: Table 3-1 Pin Definitions p.11 (continued), EN pad 8 "High: on,
 # enables the chip. Low: off, the chip powers off. Note: Do not leave the EN pin floating." Figure 8-1
 # ESP32-C6-MINI-1 Schematics p.38 shows CHIP_EN wired straight to module pad 8 with no pull-up on the module.
@@ -2898,6 +3105,10 @@ internal_clock = "internal 64 MHz HFINT RC oscillator"
 "4"  = "p014"       # blink
 "5"  = "p006_txd"   # UART TXD
 "6"  = "p008_rxd"   # UART RXD
+
+[models.pin_capability.adc]
+basis = "Nordic nRF52840 Product Specification v1.7, aQFN73 pin assignments (PDF pp.578-579): the analogue inputs are AIN0 P0.02, AIN1 P0.03, AIN2 P0.04, AIN3 P0.05, AIN4 P0.28, AIN5 P0.29, AIN6 P0.30, AIN7 P0.31; P0.06, P0.08, P0.13 and P0.14, the pads of [models.pins], are not among them"
+[models.pin_capability.adc.pads]
 
 # In High Voltage mode (supply on VDDH only, VDD not connected to any supply)
 # VDD is the REG0 regulator's OUTPUT, decoupled on the board and free to feed
@@ -3103,6 +3314,14 @@ internal_clock = "internal ring oscillator (ROSC)"
 "56" = "qspi_ss"
 "57" = "gnd"
 
+[models.pin_capability.adc]
+basis = "Raspberry Pi RP2040 Datasheet, Table 615 GPIO pins (PDF p.613-614): GPIO26-GPIO29 are ADC0-ADC3, pads 38-41; every other GPIO has no ADC channel"
+[models.pin_capability.adc.pads]
+"38" = "ADC0"
+"39" = "ADC1"
+"40" = "ADC2"
+"41" = "ADC3"
+
 # Same executable scope and boot strap as the identity entry (tested for equality).
 # Mapping XIN/XOUT does not make the backend enforce external-crystal presence.
 [[models.straps]]
@@ -3247,6 +3466,13 @@ backend = "renode:rp2040"
 "40" = "vbus"        # micro-USB 5 V
 
 # ─────────────────────────────────────────────────────────────────────────────
+
+[models.pin_capability.adc]
+basis = "Raspberry Pi Pico Datasheet (build date 03/07/2026), Figure 2 pinout of the Pico Rev3 board (PDF p.5): physical pin 31 GP26 ADC0, pin 32 GP27 ADC1, pin 34 GP28 ADC2; ADC3 (GP29) is wired to VSYS/3 on the board and is not on the header"
+[models.pin_capability.adc.pads]
+"31" = "ADC0"
+"32" = "ADC1"
+"34" = "ADC2"
 
 [[models]]
 id = "daisy_seed"
