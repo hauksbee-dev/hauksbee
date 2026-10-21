@@ -40,7 +40,7 @@ use super::{is_ground_name, is_unconnected_net};
 use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use hauksbee_models::refdes::{designator, RefClass};
 use hauksbee_models::value::parse_value;
@@ -50,6 +50,7 @@ use hauksbee_models::{
 };
 
 use super::envelope::{role_net_id, RailRange, RailResolver};
+use super::floating_inputs::{control_lint_covers, Classifier, Hold, Weak, WeakKind};
 use hauksbee_bind::binder::resolve;
 use hauksbee_extract::assembly::AssemblyState;
 
@@ -70,6 +71,16 @@ pub fn strap_lint_with_drives(
 ) -> NetLintReport {
     let statics = super::BoardStatics::of(board, lib);
     let rails = RailResolver::new(board, &statics, solved);
+    let models: BTreeMap<&str, ModelEntry> = super::resolved_components(board, lib)
+        .map(|(c, m)| (c.reference.as_str(), m))
+        .collect();
+    let senses = BTreeSet::new();
+    let classify = Classifier {
+        board,
+        models: &models,
+        senses: &senses,
+        strict: true,
+    };
     let mut report = NetLintReport::default();
     for comp in &board.components {
         // The three-state contract: only a present part's strap table runs.
@@ -95,51 +106,27 @@ pub fn strap_lint_with_drives(
             // skip; the prior, conservative behaviour. But a pin with NO internal
             // pull (STM32 BOOT0) left floating is genuinely undefined at reset:
             // that is the fault, not a non-event. This is the boot-mode latch the
-            // firmware cannot override.
-            if is_unconnected_net(&net.name) || net_is_isolated_to(board, net_id, comp) {
-                if let (StrapInternalPull::None, Some(selector)) =
-                    (strap.internal_pull, strap.only_with.as_deref())
+            // firmware cannot override. A net held only by parts that set a level
+            // some of the time (a button to one rail, a header pin, an MCU pad
+            // that is high impedance at reset) may float just the same.
+            let hold = strap_hold(&classify, comp, &pad_num, &net.name);
+            let no_pull = strap.internal_pull == StrapInternalPull::None;
+            // Where an internal pull settles a bare pin, only a net with nothing
+            // else on it (the prior behaviour) is reported as left open.
+            let floats = match &hold {
+                Hold::Floats => no_pull || strap_net_is_bare(board, net_id, comp),
+                Hold::MayFloat(_) => no_pull,
+                Hold::Defined => false,
+            };
+            if floats {
+                if no_pull
+                    && !strap_is_reported_elsewhere(board, comp, model, strap, &hold, &pad_num)
                 {
-                    // A mode-qualifying strap: its float matters only when the
-                    // board can select the mode it qualifies.
-                    if selector_is_drivable(board, comp, model, selector) {
-                        report.findings.push(LintFinding {
-                            check: LintCheck::StrapPin,
-                            severity: Severity::Medium,
-                            message: format!(
-                                "{} strap pin {} ({}) is left floating (net '{}' has no pull resistor and \
-                                 the pin has no internal pull), and the board can drive the {} boot \
-                                 strap: the level this pin must hold in that mode is undefined at reset ({})",
-                                comp.reference,
-                                pad_num,
-                                strap.role,
-                                net.name,
-                                selector,
-                                strap.note
-                            ),
-                            refs: vec![comp.reference.clone()],
-                            nets: vec![net.name.clone()],
-                        });
+                    if let Some(finding) =
+                        floating_finding(board, (comp, model), strap, (&pad_num, &net.name), &hold)
+                    {
+                        report.findings.push(finding);
                     }
-                } else if strap.internal_pull == StrapInternalPull::None {
-                    // High (vs the wrong-pull arm's Medium): a wrong static pull at
-                    // least boots *deterministically* wrong, so it is caught on the
-                    // first power-up at the bench. A float boots correctly often
-                    // enough to pass the bench yet fail intermittently in the field
-                    // (humidity, EMI, a probe), a latent, unrecoverable failure
-                    // that survives bring-up, which is the more dangerous outcome.
-                    report.findings.push(LintFinding {
-                        check: LintCheck::StrapPin,
-                        severity: Severity::High,
-                        message: format!(
-                            "{} strap pin {} ({}) is left floating (net '{}' has no pull resistor and \
-                             the pin has no internal pull): the boot level is undefined at reset, so the \
-                             part may enter the bootloader instead of the application ({})",
-                            comp.reference, pad_num, strap.role, net.name, strap.note
-                        ),
-                        refs: vec![comp.reference.clone()],
-                        nets: vec![net.name.clone()],
-                    });
                 }
                 continue;
             }
@@ -155,6 +142,150 @@ pub fn strap_lint_with_drives(
         }
     }
     report
+}
+
+/// True when the only thing on the strap net is its own part: nothing could
+/// define a level, with or without an internal pull to settle it.
+fn strap_net_is_bare(board: &ExtractedBoard, net_id: i64, mcu: &Component) -> bool {
+    board
+        .net_members(net_id)
+        .iter()
+        .all(|(c, _)| c.reference == mcu.reference)
+}
+
+/// What holds the net of a strap's pad.
+fn strap_hold(classify: &Classifier<'_>, comp: &Component, pad: &str, net_name: &str) -> Hold {
+    if is_unconnected_net(net_name) {
+        return Hold::Floats;
+    }
+    comp.pins
+        .iter()
+        .find(|p| p.number == pad)
+        .map_or(Hold::Defined, |p| classify.hold(comp, p))
+}
+
+/// A non-boot strap row (reset, enable) the model-driven control checks
+/// already judge: the extract lint's named control pin alone on its net, or a
+/// card role the card says must not float whose net holds nothing but parts
+/// that cannot hold a level. Only an MCU pad as the holder is new here.
+fn strap_is_reported_elsewhere(
+    board: &ExtractedBoard,
+    comp: &Component,
+    model: &ModelEntry,
+    strap: &StrapPin,
+    hold: &Hold,
+    pad: &str,
+) -> bool {
+    if strap.boot_select {
+        return false;
+    }
+    let Some(pin) = comp.pins.iter().find(|p| p.number == pad) else {
+        return false;
+    };
+    if control_lint_covers(board, comp, pin) {
+        return true;
+    }
+    let required = model
+        .params
+        .get_str("must_not_float_roles")
+        .unwrap_or_default()
+        .split(',')
+        .any(|r| r.trim() == strap.role);
+    let gpio = matches!(hold, Hold::MayFloat(w) if w.iter().any(|w| w.kind == WeakKind::Gpio));
+    required && !gpio
+}
+
+/// The finding for a strap with no internal pull that nothing holds, or `None`
+/// when a mode-qualifying strap's mode is unreachable on this board.
+fn floating_finding(
+    board: &ExtractedBoard,
+    (comp, model): (&Component, &ModelEntry),
+    strap: &StrapPin,
+    (pad_num, net_name): (&str, &str),
+    hold: &Hold,
+) -> Option<LintFinding> {
+    let (severity, selector) = match strap.only_with.as_deref() {
+        // A mode-qualifying strap: its float matters only when the board can
+        // select the mode it qualifies.
+        Some(selector) => {
+            if !selector_is_drivable(board, comp, model, selector) {
+                return None;
+            }
+            (Severity::Medium, Some(selector))
+        }
+        // High (vs the wrong-pull arm's Medium): a wrong static pull at least
+        // boots *deterministically* wrong, so it is caught on the first
+        // power-up at the bench. A float boots correctly often enough to pass
+        // the bench yet fail intermittently in the field (humidity, EMI, a
+        // probe), a latent, unrecoverable failure that survives bring-up, which
+        // is the more dangerous outcome.
+        None => (Severity::High, None),
+    };
+    let message = match (hold, selector) {
+        (Hold::MayFloat(weak), _) => {
+            let holders = weak.iter().map(|w| w.label.as_str()).collect::<Vec<_>>().join(", ");
+            let when = strap_when_open(weak);
+            let fix = pull_fix(board, comp, model, strap, net_name);
+            let why = selector.map_or_else(
+                || "so the level it needs is undefined at reset and the part may boot wrong (for a boot strap, enter the bootloader instead of the application)".to_string(),
+                |sel| format!("and the board can drive the {sel} boot strap, so the level this pin must hold in that mode is undefined at reset"),
+            );
+            format!(
+                "{} strap pin {pad_num} ({}) may float: net '{net_name}' is held only by {holders}, none of which sets a level while {when}, and the pin has no internal pull, {why} ({}). {fix}",
+                comp.reference, strap.role, strap.note
+            )
+        }
+        (_, Some(sel)) => format!(
+            "{} strap pin {pad_num} ({}) is left floating (net '{net_name}' has no pull resistor and the pin has no internal pull), and the board can drive the {sel} boot strap: the level this pin must hold in that mode is undefined at reset ({})",
+            comp.reference, strap.role, strap.note
+        ),
+        (_, None) => format!(
+            "{} strap pin {pad_num} ({}) is left floating (net '{net_name}' has no pull resistor and the pin has no internal pull): the boot level is undefined at reset, so the part may enter the bootloader instead of the application ({})",
+            comp.reference, strap.role, strap.note
+        ),
+    };
+    Some(LintFinding {
+        check: LintCheck::StrapPin,
+        severity,
+        message,
+        refs: vec![comp.reference.clone()],
+        nets: vec![net_name.to_string()],
+    })
+}
+
+/// When a strap net's weak holders let go, in words.
+fn strap_when_open(weak: &[Weak]) -> String {
+    let kinds: BTreeSet<&str> = weak
+        .iter()
+        .map(|w| match w.kind {
+            WeakKind::Switch => "no button or switch is closed",
+            WeakKind::Connector => "nothing is plugged in",
+            WeakKind::Gpio => "the driving MCU is in reset and its pad is high-impedance",
+            WeakKind::Sink => "the transistor is off",
+        })
+        .collect();
+    kinds.into_iter().collect::<Vec<_>>().join(" or while ")
+}
+
+/// The pull that fixes a floating strap: a 10 kOhm resistor to the level the
+/// strap needs at reset.
+fn pull_fix(
+    board: &ExtractedBoard,
+    comp: &Component,
+    model: &ModelEntry,
+    strap: &StrapPin,
+    net_name: &str,
+) -> String {
+    let vdd = role_net_id(comp, model, "vdd")
+        .and_then(|id| board.net(id))
+        .map_or_else(|| "its supply".to_string(), |n| format!("'{}'", n.name));
+    match strap.level {
+        StrapLevel::High => format!("Add a 10 kOhm pull-up to {vdd} on '{net_name}'"),
+        StrapLevel::Low => format!("Add a 10 kOhm pull-down to GND on '{net_name}'"),
+        StrapLevel::Defined => format!(
+            "Add a 10 kOhm pull-up to {vdd} or pull-down to GND on '{net_name}', whichever level the application needs at reset"
+        ),
+    }
 }
 
 /// Whether the board can put the boot-select strap `selector` of `comp` into its
@@ -236,6 +367,16 @@ fn strap_site(
 /// read as the same silence.
 #[must_use]
 pub fn strap_coverage(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<String> {
+    let models: BTreeMap<&str, ModelEntry> = super::resolved_components(board, lib)
+        .map(|(c, m)| (c.reference.as_str(), m))
+        .collect();
+    let senses = BTreeSet::new();
+    let classify = Classifier {
+        board,
+        models: &models,
+        senses: &senses,
+        strict: true,
+    };
     let mut lines = Vec::new();
     for comp in &board.components {
         let Some(part) = AssemblyState::of(comp).fitted() else {
@@ -254,8 +395,16 @@ pub fn strap_coverage(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<String>
                     Err(why) => return format!("{} NOT checked ({why})", strap.role),
                 };
                 let name = board.net(net_id).map_or("?", |n| n.name.as_str());
-                let depth = if is_unconnected_net(name) || net_is_isolated_to(board, net_id, comp) {
+                let hold = strap_hold(&classify, comp, &pad, name);
+                let bare = strap_net_is_bare(board, net_id, comp);
+                let depth = if hold == Hold::Floats
+                    && (bare || strap.internal_pull == StrapInternalPull::None)
+                {
                     "unconnected, float check only"
+                } else if matches!(hold, Hold::MayFloat(_))
+                    && strap.internal_pull == StrapInternalPull::None
+                {
+                    "held only by parts that may let go (button, header, MCU pad), may-float check"
                 } else if strap.boot_select && strap.level != StrapLevel::Defined {
                     "clock source and pull bias checked"
                 } else {
@@ -1002,19 +1151,6 @@ fn judge_divider(
 use hauksbee_ir::units::{format_series, format_volts};
 use hauksbee_models::netclass::may_be_supply as is_rail_name;
 
-/// True when the only thing on `net_id` is `mcu` itself, no resistor, no other
-/// component, nothing that could define a level. Such a strap net is floating
-/// just as surely as a `KiCad` `unconnected-*` net, even if it carries a real name.
-/// A net with ANY other member (a pull resistor, a header, a jumper, another
-/// driver) is NOT isolated, so a jumper-selectable BOOT0 (a resistor to a 3-pin
-/// header, as on dev boards) never trips this, only a genuinely dangling pin.
-fn net_is_isolated_to(board: &ExtractedBoard, net_id: i64, mcu: &Component) -> bool {
-    board
-        .net_members(net_id)
-        .iter()
-        .all(|(c, _)| c.reference == mcu.reference)
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::test_support::{board, part};
@@ -1334,6 +1470,63 @@ vih = [0.0, 2.0]
                 ),
                 &[(Low, &["cannot judge divider", "R2 value 'XYZ'"])],
             ),
+            // A net held only by parts that set a level some of the time may float.
+            (
+                "BOOT0 on a button to the rail only",
+                strap_board(
+                    "+3V3",
+                    "/BOOT0",
+                    vec![test_mcu(), part("SW1", "SW_Push", &[("1", 3), ("2", 2)])],
+                ),
+                &[(
+                    High,
+                    &["may float", "SW1 pin 1", "pull-down to GND on '/BOOT0'"],
+                )],
+            ),
+            (
+                "BOOT0 on a header pin only",
+                strap_board(
+                    "+3V3",
+                    "/BOOT0",
+                    vec![test_mcu(), part("J2", "Conn_01x01", &[("1", 3)])],
+                ),
+                &[(High, &["may float", "J2 pin 1", "nothing is plugged in"])],
+            ),
+            (
+                "BOOT0 driven only by another MCU pad",
+                strap_board(
+                    "+3V3",
+                    "/BOOT0",
+                    vec![test_mcu(), part("U5", "ATmega328P", &[("5", 3)])],
+                ),
+                &[(High, &["may float", "U5 pin 5", "high-impedance"])],
+            ),
+            (
+                "BOOT0 button with its pull-down",
+                strap_board(
+                    "+3V3",
+                    "/BOOT0",
+                    vec![
+                        test_mcu(),
+                        part("SW1", "SW_Push", &[("1", 3), ("2", 2)]),
+                        pull("R1", "10k", 1),
+                    ],
+                ),
+                &[],
+            ),
+            (
+                "BOOT0 on a capacitor and a test point only",
+                strap_board(
+                    "+3V3",
+                    "/BOOT0",
+                    vec![
+                        test_mcu(),
+                        part("C1", "100n", &[("1", 3), ("2", 1)]),
+                        part("TP1", "TestPoint", &[("1", 3)]),
+                    ],
+                ),
+                &[(High, &["floating"])],
+            ),
             // STM32F103's card has no sourced BOOT0 thresholds: abstain, visibly.
             (
                 "no thresholds",
@@ -1564,6 +1757,44 @@ vih = [0.0, 2.0]
             .findings
             .iter()
             .any(|f| f.message.contains("were NOT checked")));
+    }
+
+    /// The ESP32 chip enable has no internal pull (datasheet: do not leave it
+    /// floating). An MCU pad that is high impedance at reset is not a pull;
+    /// a button or header alone is the model-control lint's finding, not this one.
+    #[test]
+    fn an_enable_held_only_by_another_mcu_pad_may_float_but_a_pull_up_holds_it() {
+        let none = BTreeMap::new();
+        let module = || {
+            let mut c = part("U3", "ESP32-S3-WROOM-1-N8R8", &[("2", 2), ("3", 3)]);
+            c.footprint = "RF_Module:ESP32-S3-WROOM-1".into();
+            c
+        };
+        let run = |extra: Vec<Component>| {
+            let mut parts = vec![module()];
+            parts.extend(extra);
+            strap_lint_with_drives(&strap_board("+3V3", "/EN", parts), &library(), &none)
+        };
+        let gpio = run(vec![part("U5", "ATmega328P", &[("5", 3)])]);
+        let found: Vec<_> = gpio.of_check(LintCheck::StrapPin).collect();
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert_eq!(found[0].severity, High);
+        for needle in ["may float", "U5 pin 5", "pull-up to '+3V3'"] {
+            assert!(
+                found[0].message.contains(needle),
+                "{needle}: {}",
+                found[0].message
+            );
+        }
+        // A pull-up holds it; a button alone is left to the model-control lint.
+        assert_eq!(
+            run(vec![pull("R1", "10k", 2)])
+                .of_check(LintCheck::StrapPin)
+                .count(),
+            0
+        );
+        let button = part("SW1", "SW_Push", &[("1", 3), ("2", 1)]);
+        assert_eq!(run(vec![button]).of_check(LintCheck::StrapPin).count(), 0);
     }
 
     /// A mode-qualifying strap (ESP32-C3 GPIO8: any level in SPI boot, high for
