@@ -660,6 +660,96 @@ basis = "Absolute Maximum Ratings, IN+ row""#,
         );
     }
 
+    /// A sense input's printed range is a measurement window, never a supply
+    /// range: a card that carries it as a `supply_range` is refused at load, so
+    /// it cannot pose as the pin's (or the part's) rail. The pin's real
+    /// ground-referenced rating is an `input_tolerance` row, which the check
+    /// honours the same way as for any other input.
+    #[test]
+    fn a_sense_input_range_is_not_a_supply_range_but_its_tolerance_row_is_honoured() {
+        let card = |envelope: &str| {
+            format!(
+                r#"
+[[models]]
+id = "shunt_mon"
+kind = "digital"
+description = "sense-input fixture"
+[models.match]
+value_re = "^SHUNT_MON$"
+[models.params]
+identity_only = true
+warning = "identity only"
+unlocked_by = "validated behavior"
+[models.pins]
+"1" = "vcc"
+"2" = "gnd"
+"3" = "isense"
+{envelope}"#
+            )
+        };
+        let board = |rail: &str| {
+            format!(
+                r#"(kicad_pcb (version 20221018) (generator pcbnew)
+  (net 0 "") (net 1 "GND") (net 2 "{rail}") (net 4 "+3V3")
+  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 100 100)
+    (property "Reference" "U4" (at 0 0)) (property "Value" "SHUNT_MON" (at 0 2))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 4 "+3V3"))
+    (pad "2" smd rect (at 0 1) (size 1 1) (layers "F.Cu") (net 1 "GND"))
+    (pad "3" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 2 "{rail}"))))"#
+            )
+        };
+        let load = |tag: &str, source: &str| {
+            let dir = std::env::temp_dir().join(format!(
+                "hauksbee_back_power_sense_{tag}_{}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("models.toml"), source).unwrap();
+            let mut lib = ModelLibrary::empty();
+            let errors = lib.load_user_dir(&dir);
+            (lib, errors)
+        };
+        let count = |lib: &ModelLibrary, rail: &str| {
+            let parsed = ExtractedBoard::from_kicad_pcb(&board(rail)).expect("parse");
+            back_power_lint(&parsed, lib)
+                .of_check(LintCheck::BackPower)
+                .count()
+        };
+
+        let as_supply = card(
+            r#"[[models.envelope]]
+kind = "supply_range"
+pin = "isense"
+min_v = -0.3
+max_v = 0.3
+abs_max_v = 0.5
+basis = "Absolute Maximum Ratings, sense row""#,
+        );
+        let (_, errors) = load("supply", &as_supply);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.to_string().contains("sense or measurement input")),
+            "a sense input rated as a supply is refused, got {errors:?}"
+        );
+
+        let tolerant = card(
+            r#"[[models.envelope]]
+kind = "input_tolerance"
+pins = ["isense"]
+max_v = 26.0
+abs_max_v = 28.0
+basis = "Recommended Operating Conditions, sense input to GND""#,
+        );
+        let (lib, errors) = load("tolerance", &tolerant);
+        assert!(errors.is_empty(), "tolerance card loads: {errors:?}");
+        assert_eq!(count(&lib, "+5V"), 0, "5 V is inside the sense rating");
+        assert_eq!(count(&lib, "+48V"), 1, "48 V is above the sense rating");
+        let (bare, errors) = load("bare", &card(""));
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(count(&bare, "+5V"), 1, "no rating: the clamp rule holds");
+    }
+
     /// A finding on a part whose card is a user-supplied file names that file,
     /// so the fix can say where the `input_tolerance` row goes; a built-in
     /// model names none (the user does not edit it in place).

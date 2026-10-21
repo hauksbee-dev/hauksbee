@@ -571,6 +571,17 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 p.require(has_role_ci(entry, pin), || {
                     not_a_role("operating envelope pin", pin)
                 });
+                // A sense or measurement input's range is a measurement window,
+                // not a rail the board supplies: reading it as a supply range
+                // lets a shunt's full scale pose as the part's own supply.
+                p.require(!crate::pin_roles::is_sense_input_role(pin), || {
+                    format!(
+                        "operating envelope supply_range on '{pin}', a sense or measurement \
+                         input: a supply_range is for a pin the board supplies. Rate the \
+                         input's ground-referenced maximum with an input_tolerance row, or \
+                         leave it unrated"
+                    )
+                });
                 let ordered = min_v.is_finite() && max_v.is_finite() && min_v < max_v;
                 p.require(ordered, || {
                     format!(
@@ -2884,6 +2895,24 @@ mod tests {
         rejects(&fixture(&row("VCC = 3.3 V")), "must name a temperature");
         let twice = row("TA = 25 °C") + "\n[[envelope]]\nkind = \"supply_range\"\n";
         rejects(&fixture(&(twice + &row("TA=25°C"))), "once per channel");
+    }
+
+    #[test]
+    fn a_sense_input_is_never_rated_as_a_supply() {
+        let fixture = |pin: &str| -> ModelEntry {
+            toml::from_str(&format!(
+                "id = \"e\"\nkind = \"digital\"\n[params]\nidentity_only = true\nwarning = \"w\"\n\
+                 unlocked_by = \"u\"\n[pins]\n\"1\" = \"vcc\"\n\"2\" = \"{pin}\"\n\
+                 [[envelope]]\nkind = \"supply_range\"\npin = \"{pin}\"\nmin_v = -0.3\n\
+                 max_v = 0.3\nabs_max_v = 0.5\nbasis = \"Absolute Maximum Ratings, sense row\""
+            ))
+            .unwrap()
+        };
+        for pin in ["isense", "vsense_a", "sns", "imon", "ain0"] {
+            rejects(&fixture(pin), "sense or measurement input");
+        }
+        // An amplifier's differential input keeps its ground-referenced rating.
+        accepts(&fixture("in_plus"));
     }
 
     #[test]

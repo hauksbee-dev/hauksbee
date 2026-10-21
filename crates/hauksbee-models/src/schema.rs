@@ -1391,7 +1391,10 @@ pub enum OperatingEnvelope {
 ///
 /// The absolute maximum (else the recommended maximum) of every `supply_range`
 /// row on that pin and every `input_tolerance` row listing it. `None` when the
-/// card rates the pin only through its supply.
+/// card rates the pin only through its supply. A `supply_range` row on a sense
+/// or measurement input ([`crate::pin_roles::is_sense_input_role`]) is a
+/// measurement window, not a ground-referenced pin rating, so it is not read;
+/// an `input_tolerance` row on such a pin is.
 #[must_use]
 pub fn declared_pin_ceiling_v(envelope: &[OperatingEnvelope], role: &str) -> Option<f64> {
     let ceiling = |e: &OperatingEnvelope| match e {
@@ -1400,7 +1403,9 @@ pub fn declared_pin_ceiling_v(envelope: &[OperatingEnvelope], role: &str) -> Opt
             max_v,
             abs_max_v,
             ..
-        } if pin.eq_ignore_ascii_case(role) => Some(abs_max_v.unwrap_or(*max_v)),
+        } if pin.eq_ignore_ascii_case(role) && !crate::pin_roles::is_sense_input_role(role) => {
+            Some(abs_max_v.unwrap_or(*max_v))
+        }
         OperatingEnvelope::InputTolerance {
             pins,
             max_v,
@@ -1844,7 +1849,50 @@ impl ParamValue {
 
 #[cfg(test)]
 mod tests {
-    use super::{AboveDomainBehavior, CurrentProgram, ModelSourceSpec, Params, Ratings};
+    use super::{
+        declared_pin_ceiling_v, AboveDomainBehavior, CurrentProgram, EnvelopeSeverity,
+        ModelSourceSpec, OperatingEnvelope, Params, Ratings,
+    };
+
+    fn supply_range(pin: &str, max_v: f64, abs_max_v: f64) -> OperatingEnvelope {
+        OperatingEnvelope::SupplyRange {
+            pin: pin.into(),
+            min_v: -0.3,
+            max_v,
+            abs_max_v: Some(abs_max_v),
+            severity: EnvelopeSeverity::default(),
+            basis: "Absolute Maximum Ratings".into(),
+            abs_max_basis: String::new(),
+            note: String::new(),
+            conditions: String::new(),
+        }
+    }
+
+    /// A sense input's `supply_range` is a measurement window, not a pin
+    /// ceiling: only an `input_tolerance` row rates that pin. A signal pin that
+    /// is no sense input still takes its `supply_range` as its ceiling.
+    #[test]
+    fn a_sense_inputs_supply_range_is_not_its_pin_ceiling() {
+        let envelope = [
+            supply_range("isense", 0.3, 0.5),
+            supply_range("in_plus", 40.0, 42.0),
+        ];
+        assert_eq!(declared_pin_ceiling_v(&envelope, "isense"), None);
+        assert_eq!(declared_pin_ceiling_v(&envelope, "in_plus"), Some(42.0));
+        let tolerant = [
+            supply_range("isense", 0.3, 0.5),
+            OperatingEnvelope::InputTolerance {
+                pins: vec!["isense".into()],
+                max_v: 26.0,
+                abs_max_v: Some(28.0),
+                severity: EnvelopeSeverity::default(),
+                basis: "Recommended Operating Conditions".into(),
+                abs_max_basis: String::new(),
+                note: String::new(),
+            },
+        ];
+        assert_eq!(declared_pin_ceiling_v(&tolerant, "isense"), Some(28.0));
+    }
 
     #[test]
     fn ratings_reject_unknown_keys_and_the_key_guide_names_every_field() {

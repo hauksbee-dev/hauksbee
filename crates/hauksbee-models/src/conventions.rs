@@ -508,7 +508,11 @@ fn switch(entry: &ModelEntry) -> Vec<Derived> {
         .chain(shutdown())
         .find_map(|r| Some((r, read(r, "max", "A")?)));
     let supply = entry.envelope.iter().filter_map(|e| match e {
-        OperatingEnvelope::SupplyRange { max_v, .. } => Some(*max_v),
+        OperatingEnvelope::SupplyRange { pin, max_v, .. }
+            if !crate::pin_roles::is_sense_input_role(pin) =>
+        {
+            Some(*max_v)
+        }
         _ => None,
     });
     let supply = supply

@@ -689,9 +689,20 @@ pub fn role_agrees(role: &str, printed: &str, kind: ComponentKind) -> bool {
         .filter(|(_, n)| n.chars().all(|c| c.is_ascii_digit()))
         .map_or_else(|| r.clone(), |(b, _)| pin_table::norm(b));
     let family = |s: &str| crate::pin_roles::power_pin(s, kind).map(|p| (p.kind, p.family));
+    // A printed name cut short by a narrow cell or a page break (`VDD_SEN` for
+    // `VDD_SENSE`) is no evidence of disagreement. A cut counts only inside an
+    // alphabetic word, never at a digit: `GPIO1` for `gpio12` is a different pad.
+    let cut = |t: &str, full: &str| {
+        t.len() >= 3
+            && full.starts_with(t)
+            && t.ends_with(|c: char| c.is_ascii_alphabetic())
+            && full[t.len()..].starts_with(|c: char| c.is_ascii_alphabetic())
+    };
     tokens.iter().any(|t| {
         *t == r
             || *t == bare
+            || cut(t, &r)
+            || cut(t, &bare)
             || (family(&r).is_some() && family(&r) == family(t))
             || (family(&bare).is_some() && family(&bare) == family(&numbered(t)))
             || (matches!(r.as_str(), "nc" | "dnc") && t.starts_with("nc"))
@@ -887,6 +898,24 @@ mod tests {
         assert!(!role_agrees("vdd", "PE2", k));
     }
 
+    /// A pin-table cell cut short (a narrow column, a wrapped heading) is not a
+    /// disagreement with the full role, but a different pad number or a
+    /// different name still is.
+    #[test]
+    fn a_truncated_printed_name_still_agrees_with_its_role() {
+        let k = ComponentKind::Vreg;
+        assert!(role_agrees("vdd_sense", "VDD_SEN", k));
+        assert!(role_agrees("pgood", "PGOO", k));
+        assert!(role_agrees("enable", "ENAB/", k));
+        assert!(role_agrees("feedback", "FEEDB", k));
+        // Not a cut: a digit decides the pad, and a short stub names nothing.
+        assert!(!role_agrees("gpio12", "GPIO1", k));
+        assert!(!role_agrees("pe2", "PE3", k));
+        assert!(!role_agrees("sense", "SE", k));
+        assert!(!role_agrees("pgood", "FB", k));
+        assert!(!role_agrees("fb", "PGOOD", k));
+    }
+
     const LDO: &str = r#"
 [[models]]
 id = "ldo"
@@ -898,6 +927,48 @@ value_re = "(?i)^TLV70033$"
 2 = "gnd"
 3 = "out"
 "#;
+
+    /// The pad cross-check abstains on a printed name the table cut short, and
+    /// still refuses the card when a pad really carries another name.
+    #[test]
+    fn a_cut_short_pin_table_name_is_not_a_wrong_pad() {
+        let card = entry(
+            r#"
+[[models]]
+id = "pg_ldo"
+kind = "vreg"
+[models.match]
+value_re = "(?i)^PGLDO$"
+[models.pins]
+1 = "in"
+2 = "gnd"
+3 = "pgood"
+4 = "enable"
+"#,
+        );
+        let facts = |printed: [&str; 4]| {
+            let mut col = Column {
+                label: "SOT".into(),
+                ..Column::default()
+            };
+            for (i, name) in printed.iter().enumerate() {
+                col.pads.insert((i + 1).to_string(), ((*name).into(), 4));
+            }
+            Facts {
+                part: "PGLDO".into(),
+                pin_columns: vec![col],
+                ..Facts::default()
+            }
+        };
+        let pad_findings = |printed| {
+            findings(&card, &facts(printed))
+                .into_iter()
+                .filter(|f| f.check == "pins")
+                .count()
+        };
+        assert_eq!(pad_findings(["IN", "GND", "PGOO", "ENAB/"]), 0);
+        assert_eq!(pad_findings(["IN", "GND", "FB", "NC"]), 1);
+    }
 
     #[test]
     fn missing_groups_and_wrong_pads_are_reported() {
