@@ -4878,7 +4878,7 @@ fn helper_files(ws: &Workspace) -> String {
         );
     }
     format!(
-        "\n\nPrecomputed in your working directory: {}.",
+        "\n\nPrecomputed in your working directory (your current directory: use these relative paths): {}.",
         files.join(", ")
     )
 }
