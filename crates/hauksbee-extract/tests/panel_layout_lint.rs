@@ -197,3 +197,129 @@ fn a_single_copy_has_no_panel_note() {
     assert_eq!(open_pads(&findings).len(), 1, "{findings:?}");
     assert!(panel_notes(&findings).is_empty(), "{findings:?}");
 }
+
+/// One copy of a circuit in two clusters: R1/D1 on the SIG1 track and R2/D2 on
+/// the SIG2 track, 20 mm apart. `join_vcc` / `join_gnd` draw the track that
+/// ties the clusters on that net.
+fn clustered_copy(ox: f64, join_vcc: bool, join_gnd: bool) -> String {
+    let mut out = String::new();
+    for (cluster, oy, sig) in [(1, 0.0, "SIG1"), (2, 20.0, "SIG2")] {
+        let sig_net = cluster + 3;
+        let (oy2, x4) = (oy + 6.0, ox + 4.0);
+        let _ = write!(
+            out,
+            r#"  (footprint "lib:R" (layer "F.Cu") (at {ox} {oy})
+    (property "Reference" "R{cluster}") (property "Value" "10k")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VCC"))
+    (pad "2" smd rect (at 4 0) (size 1 1) (layers "F.Cu") (net {sig_net} "{sig}")))
+  (footprint "lib:LED" (layer "F.Cu") (at {ox} {oy2})
+    (property "Reference" "D{cluster}") (property "Value" "LED")
+    (pad "1" smd rect (at 4 0) (size 1 1) (layers "F.Cu") (net {sig_net} "{sig}"))
+    (pad "2" smd rect (at 8 0) (size 1 1) (layers "F.Cu") (net 2 "GND")))
+  (segment (start {x4} {oy}) (end {x4} {oy2}) (width 0.25) (layer "F.Cu") (net {sig_net}))
+"#
+        );
+    }
+    let mut join = |on: bool, from: (f64, f64), to: (f64, f64), net: u8| {
+        if on {
+            let _ = writeln!(
+                out,
+                "  (segment (start {} {}) (end {} {}) (width 0.25) (layer \"F.Cu\") (net {net}))",
+                from.0, from.1, to.0, to.1
+            );
+        }
+    };
+    join(join_vcc, (ox, 0.0), (ox, 20.0), 1);
+    join(join_gnd, (ox + 8.0, 6.0), (ox + 8.0, 26.0), 2);
+    out
+}
+
+fn clustered_panel(copies: usize, with: impl Fn(usize) -> (bool, bool)) -> String {
+    let mut text = String::from(
+        r#"(kicad_pcb (version 20221018) (generator pcbnew)
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+  (net 0 "")
+  (net 1 "VCC")
+  (net 2 "GND")
+  (net 4 "SIG1")
+  (net 5 "SIG2")
+"#,
+    );
+    for k in 0..copies {
+        let (vcc, gnd) = with(k);
+        #[allow(clippy::cast_precision_loss)] // a handful of copies
+        text.push_str(&clustered_copy(k as f64 * PITCH, vcc, gnd));
+    }
+    text.push_str(")\n");
+    text
+}
+
+/// Every copy of a panel is unrouted between its two clusters, the VCC and GND
+/// ties missing in each. The clusters are themselves repeated across the
+/// copies, which must not make each look like a whole copy: every copy has two
+/// open connections of its own.
+#[test]
+fn the_same_cut_in_every_copy_is_reported_in_each() {
+    let findings = lint(&clustered_panel(4, |_| (false, false)));
+    let open = open_pads(&findings);
+    assert_eq!(open.len(), 8, "{findings:?}");
+    for net in ["VCC", "GND"] {
+        assert_eq!(
+            open.iter().filter(|f| f.nets == [net]).count(),
+            4,
+            "one {net} gap per copy: {open:?}"
+        );
+    }
+    assert_eq!(panel_notes(&findings).len(), 1, "{findings:?}");
+}
+
+/// The same panel with the VCC tie drawn in every copy: only GND is open.
+#[test]
+fn a_cut_clustered_copy_reports_only_the_net_it_lacks() {
+    let findings = lint(&clustered_panel(4, |_| (true, false)));
+    let open = open_pads(&findings);
+    assert_eq!(open.len(), 4, "{findings:?}");
+    assert!(open.iter().all(|f| f.nets == ["GND"]), "{open:?}");
+}
+
+/// Routed clustered copies are quiet apart from the panel note, and one copy
+/// cut among them is the one finding.
+#[test]
+fn clustered_copies_routed_are_quiet_and_one_cut_is_found() {
+    let findings = lint(&clustered_panel(4, |_| (true, true)));
+    assert!(open_pads(&findings).is_empty(), "{findings:?}");
+    assert_eq!(panel_notes(&findings).len(), 1, "{findings:?}");
+    let findings = lint(&clustered_panel(4, |k| (k != 2, true)));
+    let open = open_pads(&findings);
+    assert_eq!(open.len(), 1, "{findings:?}");
+    assert_eq!(open[0].nets, ["VCC"]);
+    assert!(open[0].message.contains("near (6"), "{}", open[0].message);
+}
+
+/// Footprints with no real designator (`REF**`) share a pad name without being
+/// copies of anything. Two of them on a net, one joined to the rest and one
+/// not, is an open connection, not a panel.
+#[test]
+fn unannotated_footprints_do_not_make_a_panel() {
+    let text = r#"(kicad_pcb (version 20221018) (generator pcbnew)
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+  (net 0 "")
+  (net 1 "GND")
+  (footprint "lib:H" (layer "F.Cu") (at 0 0)
+    (property "Reference" "H1") (property "Value" "HOLE")
+    (pad "1" smd rect (at 0 0) (size 1.6 1.6) (layers "F.Cu") (net 1 "GND")))
+  (footprint "lib:Fid" (layer "F.Cu") (at 10 0)
+    (property "Reference" "REF**") (property "Value" "Fid")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "GND")))
+  (footprint "lib:Fid" (layer "F.Cu") (at 40 0)
+    (property "Reference" "REF**") (property "Value" "Fid")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "GND")))
+  (segment (start 0 0) (end 10 0) (width 0.25) (layer "F.Cu") (net 1))
+)
+"#;
+    let findings = lint(text);
+    let open = open_pads(&findings);
+    assert_eq!(open.len(), 1, "{findings:?}");
+    assert!(open[0].message.contains("near (40"), "{}", open[0].message);
+    assert!(panel_notes(&findings).is_empty(), "{findings:?}");
+}

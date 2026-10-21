@@ -219,8 +219,8 @@ pub fn copper_connectivity(doc: &forge_sexpr::Document) -> Option<CopperConnecti
         routed: (0..items.len()).any(|i| live(i) && items[i].kind != Some(ItemKind::Pad)),
         ..CopperConnectivity::default()
     };
-    let panel = PanelMap::build(items, &live, &mut dsu);
     let mut split_nets: Vec<String> = Vec::new();
+    let mut most_copies = 0;
     let mut net_ids: Vec<i64> = by_net.keys().copied().collect();
     net_ids.sort_unstable();
     for net in net_ids {
@@ -247,9 +247,10 @@ pub fn copper_connectivity(doc: &forge_sexpr::Document) -> Option<CopperConnecti
         let main_pads = pads_of(&islands[0].1);
         // On a panel, copies of one circuit are told apart from a copy that
         // is itself broken: only the latter is an open connection.
-        let judged = panel.judge(items, &islands);
-        if judged.set_aside {
+        let judged = judge_panel(items, &islands);
+        if judged.set_aside() {
             split_nets.push(nets.name_of(net));
+            most_copies = most_copies.max(judged.copies);
         }
         for (index, (_, members)) in islands.iter().enumerate().skip(1) {
             if judged.skip.contains(&index) {
@@ -272,7 +273,7 @@ pub fn copper_connectivity(doc: &forge_sexpr::Document) -> Option<CopperConnecti
                 main_pads: judged
                     .main_of
                     .get(&index)
-                    .map_or_else(|| main_pads.clone(), |m| pads_of(m)),
+                    .map_or_else(|| main_pads.clone(), |&m| pads_of(&islands[m].1)),
                 x: quantize_mm(x),
                 y: quantize_mm(y),
             });
@@ -293,125 +294,116 @@ pub fn copper_connectivity(doc: &forge_sexpr::Document) -> Option<CopperConnecti
     split_nets.dedup();
     if !split_nets.is_empty() {
         out.panel = Some(PanelCopies {
-            copies: panel.copies,
+            copies: most_copies,
             split_nets,
         });
     }
     Some(out)
 }
 
-/// Which footprints sit in one of several repeated copies of a circuit.
-///
-/// A panel repeats designators and net names, so a name alone cannot say
-/// which pad belongs to which copy. Copper can: footprints that share an
-/// island of any net are one copy, and copies with the same set of
-/// designators are repeats of each other.
-struct PanelMap {
-    /// Footprint ordinal -> id of the copy it is in.
-    copy_of: HashMap<usize, usize>,
-    /// How many copies the most repeated circuit has.
-    copies: usize,
-}
-
 /// What the panel makes of one net's islands.
 #[derive(Default)]
 struct PanelVerdict {
-    /// Island indices that are a whole copy of the net, not an open connection.
+    /// Island indices that are another copy's piece of the net, not an open
+    /// connection: the first piece of each copy but the net's main island.
     skip: HashSet<usize>,
-    /// Island index -> the island it is compared against, when that is not
-    /// the net's largest island overall (it is the largest in its own copy).
-    main_of: HashMap<usize, Vec<usize>>,
-    /// Something was set aside.
-    set_aside: bool,
+    /// Island index -> the island of its own copy it is compared against.
+    main_of: HashMap<usize, usize>,
+    /// How many copies of the net the islands fall into; 1 when the net is
+    /// not repeated.
+    copies: usize,
 }
 
-impl PanelMap {
-    fn build(items: &[ItemMeta], live: &dyn Fn(usize) -> bool, dsu: &mut Dsu) -> Self {
-        let mut refs: HashMap<usize, &str> = HashMap::new();
-        let mut first_in: HashMap<usize, usize> = HashMap::new();
-        let mut groups = Dsu::new(items.iter().map(|m| m.footprint + 1).max().unwrap_or(0));
-        for (i, m) in items.iter().enumerate() {
-            if m.kind != Some(ItemKind::Pad) || !live(i) {
-                continue;
-            }
-            refs.insert(m.footprint, m.owner.as_str());
-            let first = *first_in.entry(dsu.find(i)).or_insert(m.footprint);
-            groups.union(first, m.footprint);
-        }
-        let mut copies: HashMap<usize, Vec<usize>> = HashMap::new();
-        for &fp in refs.keys() {
-            copies.entry(groups.find(fp)).or_default().push(fp);
-        }
-        // A copy is a group of two or more parts whose designators another
-        // group repeats exactly. A lone part says nothing about repetition.
-        let mut shapes: HashMap<Vec<&str>, Vec<usize>> = HashMap::new();
-        for (id, fps) in &copies {
-            let mut names: Vec<&str> = fps.iter().map(|fp| refs[fp]).collect();
-            names.sort_unstable();
-            if fps.len() >= 2 && names.iter().all(|n| !n.is_empty()) {
-                shapes.entry(names).or_default().push(*id);
-            }
-        }
-        let mut copy_of = HashMap::new();
-        let mut most = 0;
-        for ids in shapes.values().filter(|ids| ids.len() >= 2) {
-            most = most.max(ids.len());
-            for id in ids {
-                for &fp in &copies[id] {
-                    copy_of.insert(fp, *id);
-                }
-            }
-        }
-        Self {
-            copy_of,
-            copies: most,
-        }
+impl PanelVerdict {
+    /// The net is one same-named net across several copies.
+    const fn set_aside(&self) -> bool {
+        self.copies >= 2
     }
+}
 
-    /// Judge one net's islands, largest first. Inside a copy a second island
-    /// is a missing connection. Between copies it is the panel, and so is an
-    /// island that is a whole copy of the net though its parts did not
-    /// group with the rest.
-    fn judge(&self, items: &[ItemMeta], islands: &[(usize, Vec<usize>)]) -> PanelVerdict {
-        let mut verdict = PanelVerdict::default();
-        let copy_of_island = |members: &[usize]| {
-            members
-                .iter()
-                .map(|&i| &items[i])
-                .filter(|m| m.kind == Some(ItemKind::Pad))
-                .find_map(|m| self.copy_of.get(&m.footprint).copied())
-        };
-        let copy: Vec<Option<usize>> = islands.iter().map(|(_, m)| copy_of_island(m)).collect();
-        if copy.iter().all(Option::is_none) {
-            return verdict;
-        }
-        let mut by_copy: HashMap<usize, Vec<usize>> = HashMap::new();
-        let mut whole: HashSet<Vec<String>> = HashSet::new();
-        for (index, id) in copy.iter().enumerate() {
-            if let Some(id) = id {
-                by_copy.entry(*id).or_default().push(index);
-            }
-        }
-        for indices in by_copy.values() {
-            // The copy's own largest island is the rest of its net.
-            verdict.skip.insert(indices[0]);
-            if indices.len() == 1 {
-                whole.insert(island_pads(items, &islands[indices[0]].1));
-            } else {
-                for &index in &indices[1..] {
-                    verdict.main_of.insert(index, islands[indices[0]].1.clone());
-                }
-            }
-        }
-        for (index, id) in copy.iter().enumerate() {
-            let pads = island_pads(items, &islands[index].1);
-            if id.is_none() && !pads.is_empty() && whole.contains(&pads) {
+/// One copy's share of a net while its islands are being sorted into copies.
+struct CopyOfNet {
+    /// The copy's first, largest island.
+    main: usize,
+    /// Pad name -> the footprint that has it in this copy.
+    pads: HashMap<String, usize>,
+    /// Where the copy's islands anchor.
+    anchors: Vec<(f64, f64)>,
+}
+
+/// Sort one net's islands, largest first, into the copies of a panel.
+///
+/// A panel repeats designators and net names, so `KiCad` joins a net across
+/// the copies and draws ratsnest between them. A pad name tells which copy an
+/// island is in only against another island: two islands holding the same
+/// `REF.PAD` on different footprints cannot be one copy's, and an island
+/// sharing none of a copy's pads can be. That reads only the net's own
+/// islands, never how the rest of the copy is routed, so a copy with many
+/// connections open is judged as a copy with one.
+///
+/// Each island joins the nearest copy it does not clash with, or starts a new
+/// copy when it clashes with them all. The first island of each copy is the
+/// rest of that copy's net and is set aside as the panel's; the others are
+/// open connections inside their copy. A net whose pad names never repeat is
+/// one copy, and every island after the first is an open connection.
+fn judge_panel(items: &[ItemMeta], islands: &[(usize, Vec<usize>)]) -> PanelVerdict {
+    let mut verdict = PanelVerdict {
+        copies: 1,
+        ..PanelVerdict::default()
+    };
+    let keys: Vec<Vec<(String, usize)>> = islands
+        .iter()
+        .map(|(_, members)| island_pad_keys(items, members))
+        .collect();
+    let mut first_seen: HashMap<&str, usize> = HashMap::new();
+    let repeated = keys.iter().flatten().any(|(name, footprint)| {
+        *first_seen.entry(name.as_str()).or_insert(*footprint) != *footprint
+    });
+    if !repeated {
+        return verdict;
+    }
+    let clashes = |copy: &CopyOfNet, island: &[(String, usize)]| {
+        island
+            .iter()
+            .any(|(name, footprint)| copy.pads.get(name).is_some_and(|f| f != footprint))
+    };
+    let mut copies: Vec<CopyOfNet> = Vec::new();
+    for (index, (_, members)) in islands.iter().enumerate() {
+        let anchor = island_anchor(items, members);
+        let nearest = copies
+            .iter()
+            .enumerate()
+            .filter(|(_, copy)| !clashes(copy, &keys[index]))
+            .map(|(at, copy)| {
+                let gap = copy
+                    .anchors
+                    .iter()
+                    .map(|a| (a.0 - anchor.0).hypot(a.1 - anchor.1))
+                    .fold(f64::INFINITY, f64::min);
+                (at, gap)
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(at, _)| at);
+        let at = nearest.unwrap_or_else(|| {
+            copies.push(CopyOfNet {
+                main: index,
+                pads: HashMap::new(),
+                anchors: Vec::new(),
+            });
+            if index > 0 {
                 verdict.skip.insert(index);
             }
+            copies.len() - 1
+        });
+        let copy = &mut copies[at];
+        if copy.main != index {
+            verdict.main_of.insert(index, copy.main);
         }
-        verdict.set_aside = !verdict.skip.is_empty();
-        verdict
+        copy.pads.extend(keys[index].iter().cloned());
+        copy.anchors.push(anchor);
     }
+    verdict.copies = copies.len();
+    verdict
 }
 
 /// The required pads of an island, as sorted, deduplicated `REF.PAD` names.
@@ -421,6 +413,22 @@ fn island_pads(items: &[ItemMeta], members: &[usize]) -> Vec<String> {
         .map(|&i| &items[i])
         .filter(|m| m.required)
         .map(|m| format!("{}.{}", m.owner, m.pad))
+        .collect();
+    pads.sort();
+    pads.dedup();
+    pads
+}
+
+/// The required pads of an island as (`REF.PAD`, footprint ordinal), sorted and
+/// deduplicated. The ordinal tells two parts of one designator apart, as a
+/// panel repeats them. A footprint with no real designator (blank, `REF**`, `R?`)
+/// is left out: unnamed parts share a name without being copies of anything.
+fn island_pad_keys(items: &[ItemMeta], members: &[usize]) -> Vec<(String, usize)> {
+    let mut pads: Vec<(String, usize)> = members
+        .iter()
+        .map(|&i| &items[i])
+        .filter(|m| m.required && !m.owner.is_empty() && !m.owner.ends_with(['*', '?']))
+        .map(|m| (format!("{}.{}", m.owner, m.pad), m.footprint))
         .collect();
     pads.sort();
     pads.dedup();
