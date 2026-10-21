@@ -393,6 +393,22 @@ pub struct Component {
 }
 
 impl Component {
+    /// How many distinct pad numbers the footprint has.
+    ///
+    /// A footprint repeats a number for one electrical pad (an exposed pad's
+    /// thermal vias and paste apertures, a TO-263 tab sharing the centre lead's
+    /// number) and gives a mechanical pad no number at all; neither is another
+    /// pin of the part. Anything comparing a footprint's pad count to a package's
+    /// pin count or a rule's `pad_count` uses this, not `pins.len()`.
+    #[must_use]
+    pub fn distinct_pad_count(&self) -> usize {
+        let numbers: std::collections::HashSet<&str> = (self.pins.iter())
+            .map(|p| p.number.trim())
+            .filter(|n| !n.is_empty())
+            .collect();
+        numbers.len()
+    }
+
     /// Whether the input this part came from does not carry values at all, as
     /// opposed to the designer having left one unset.
     ///

@@ -520,7 +520,9 @@ pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
                 out.push(format!(
                     "param '{name}' equals the {column} of characteristic '{row_name}', which \
                      prints no typ: a nominal is the typ, or the midpoint (min + max) / 2 of a \
-                     row printing both, never a one-sided bound"
+                     row printing both, never a one-sided bound. If you derived the value from \
+                     printed rows, start the row's basis with \"derived:\" and say how; if the \
+                     datasheet gives no nominal, drop the param and add an `unknown` record"
                 ));
             }
         }

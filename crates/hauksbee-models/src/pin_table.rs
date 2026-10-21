@@ -201,7 +201,15 @@ fn is_pad_number(s: &str) -> bool {
 fn is_name_header(s: &str) -> bool {
     matches!(
         s.trim_end_matches(':').to_ascii_lowercase().as_str(),
-        "name" | "pin" | "number" | "names" | "no." | "terminal" | "signal"
+        "name" | "pin" | "number" | "names" | "no." | "terminal" | "signal" | "symbol" | "symbols"
+    )
+}
+
+/// A header that labels the pin-name column itself (not the pad numbers).
+fn is_name_column_header(s: &str) -> bool {
+    matches!(
+        s.trim_end_matches(':').to_ascii_lowercase().as_str(),
+        "name" | "names" | "symbol" | "symbols"
     )
 }
 
@@ -470,9 +478,12 @@ fn name_band(words: &[Word], heads: &[Header], names: &[&Word]) -> Option<(f64, 
             _ => clusters.push(vec![x]),
         }
     }
+    // A "Symbol" header (NXP) labels the name column as "Name" (TI) does; a
+    // table without one is told apart by the cluster that lines up with most rows,
+    // and its description column's first words can outnumber the real names.
     let header = names
         .iter()
-        .find(|n| n.text.eq_ignore_ascii_case("name") || n.text.eq_ignore_ascii_case("names"))
+        .find(|n| is_name_column_header(&n.text))
         .map(|n| n.xc());
     let best = clusters.iter().max_by(|a, b| {
         let score = |c: &Vec<(f64, f64, f64)>| {
@@ -707,6 +718,61 @@ mod tests {
         assert!(choose(&cols, None, Some(5)).is_ok());
         let tsv = Column::from_tsv("SOT", &sot.tsv());
         assert_eq!(tsv.pads, sot.pads);
+    }
+
+    /// NXP's layout (PCF8523 Table 5): Symbol, one Pin column per package,
+    /// Type, then a wrapped Description whose first words fall in a column of
+    /// their own. The names are the Symbol column's, not the Description's.
+    fn nxp_table() -> Vec<Word> {
+        let mut v = vec![
+            w(52.0, 417.0, 84.6, "Symbol"),
+            w(124.4, 417.0, 138.3, "Pin"),
+            w(356.4, 417.0, 376.7, "Type"),
+            w(409.7, 417.0, 459.1, "Description"),
+            w(124.4, 432.0, 142.4, "SO8"),
+            w(180.7, 432.0, 217.6, "HVSON8"),
+            w(238.0, 432.0, 258.0, "TSSOP14"),
+        ];
+        let rows = [
+            ("OSCI", "1", "1", "1", "input"),
+            ("OSCO", "2", "2", "2", "output"),
+            ("VBAT", "3", "3", "4", "supply"),
+            ("VSS", "4", "4", "5", "supply"),
+            ("SDA", "5", "5", "10", "input/output"),
+            ("SCL", "6", "6", "11", "input"),
+        ];
+        for ((name, a, b, c, kind), i) in rows.iter().zip(0u32..) {
+            let y = 26.0f64.mul_add(f64::from(i), 458.0);
+            v.push(w(52.0, y, 76.0, name));
+            v.push(w(124.3, y, 129.3, a));
+            v.push(w(180.6, y, 185.6, b));
+            v.push(w(242.8, y, 247.8, c));
+            v.push(w(356.4, y, 380.0, kind));
+            // The description's first words: more of them, in a chain, than names.
+            for k in 0..5u32 {
+                v.push(w(
+                    f64::from(k).mul_add(9.0, 409.7),
+                    y,
+                    f64::from(k).mul_add(9.0, 417.7),
+                    "word",
+                ));
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn a_symbol_header_names_the_name_column_not_the_description() {
+        let cols = columns(&[nxp_table()]);
+        let so8 = cols.iter().find(|c| c.label == "SO8").unwrap();
+        let names: Vec<_> = so8.pads.values().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            ["OSCI", "OSCO", "VBAT", "VSS", "SDA", "SCL"],
+            "{so8:?}"
+        );
+        let tssop = cols.iter().find(|c| c.label == "TSSOP14").unwrap();
+        assert_eq!(tssop.pads["10"].0, "SDA");
     }
 
     #[test]

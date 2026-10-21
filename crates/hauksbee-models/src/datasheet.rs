@@ -1069,6 +1069,20 @@ pub struct Rejected {
 }
 
 impl Rejected {
+    /// A tier whose redraft fails with exactly the error it was told to fix.
+    fn repeated(tool: &str, attempt: usize, e: &anyhow::Error, draft: String) -> Self {
+        Self {
+            tool: tool.to_string(),
+            attempts: attempt,
+            error: format!(
+                "attempt {attempt} fails with the same error as the attempt before, though that \
+                 error was quoted to the agent, so another redraft would repeat it: {e:#}"
+            ),
+            draft,
+            kept: None,
+        }
+    }
+
     /// A tier whose redraft repeats the draft it was told to fix.
     fn unchanged(tool: &str, attempt: usize, e: &anyhow::Error, draft: String) -> Self {
         Self {
@@ -4606,6 +4620,7 @@ fn validated_attempts_seeing(
     // them quoted; if that redraft fails, this one stands.
     let mut accepted: Option<String> = None;
     let mut previous_failure: Option<String> = None;
+    let mut previous_error: Option<String> = None;
     for attempt in 1..=retries + 1 {
         let started = Instant::now();
         announce_attempt(attempt, retries + 1, reply);
@@ -4677,8 +4692,19 @@ fn validated_attempts_seeing(
             Err(e) if previous_failure.as_deref() == Some(raw.trim()) => {
                 return Err(Rejected::unchanged(tool, attempt, &e, raw).into());
             }
+            // A redraft that differs from the last but fails with the very same
+            // message (measured: PCF8523's eight-pad disagreement, three
+            // agent runs of 0.6-1.2M input tokens each) did not act on it either. A one-word
+            // reply costs nothing to ask again, so only a drafted entry stops here.
+            Err(e)
+                if !matches!(reply, Reply::Word)
+                    && previous_error.as_deref() == Some(format!("{e:#}").as_str()) =>
+            {
+                return Err(Rejected::repeated(tool, attempt, &e, raw).into());
+            }
             Err(e) if attempt <= retries => {
                 previous_failure = Some(raw.trim().to_string());
+                previous_error = Some(format!("{e:#}"));
                 say!("[model-extract] attempt {attempt} failed: {e:#}; retrying with feedback...");
                 prompt = base_prompt.then(&format!(
                     "\n\n{}",
@@ -9012,6 +9038,31 @@ printf 'done' > last-message.txt
         assert!(!names_part(&reel, "BSS84"));
         reel[0].r#match.value_re = Some(pattern.as_str().into());
         assert!(names_part(&reel, "BSS84") && pattern.is_match("BSS84-7-F"));
+    }
+
+    /// PCF8523 (2026-10-21): three drafts that each differed by a few characters
+    /// failed the same eight-pad check, 0.6-1.2M input tokens apiece. A redraft
+    /// that fails with the error already quoted to it stops the tier.
+    #[test]
+    fn a_redraft_failing_with_the_same_error_stops_the_tier() {
+        let model = Reply::Model {
+            part: "Q",
+            kind: "diode",
+        };
+        let drafts = [
+            "[[models]]\nid = \"q\"\nkind = \"diode\"\nbroken = [\n",
+            "[[models]]\nid = \"q\"\nkind = \"diode\"\nbroken = [\n# redrafted\n",
+            "never reached",
+        ];
+        let mut calls = 0;
+        let err = validated_attempts(4, "p", model, ("codex", false), |_| {
+            calls += 1;
+            Ok(drafts[calls - 1].into())
+        })
+        .unwrap_err();
+        let rejected = err.downcast::<Rejected>().unwrap();
+        assert_eq!(calls, 2, "{rejected}");
+        assert!(rejected.error.contains("same error"), "{}", rejected.error);
     }
 
     /// Round 3: two package cards both drafted as `id = "max17048"`, and two

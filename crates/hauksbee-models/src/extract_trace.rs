@@ -19,6 +19,12 @@ use std::sync::Arc;
 /// How many run directories a trace root keeps; older ones are removed.
 pub const KEEP_RUNS: usize = 10;
 
+/// A run younger than this is never removed, however many runs there are.
+///
+/// A batch of 16 parts began 16 runs inside an hour, and a cap of ten deleted
+/// the traces of the six parts that ran first, the ones that had gone wrong.
+pub const GRACE: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
 /// One run's trace directory.
 #[derive(Debug)]
 pub struct Trace {
@@ -84,15 +90,16 @@ pub fn begin(out_dir: Option<&Path>, part: &str, keep: bool) -> Option<Arc<Trace
         dir = root.join(format!("{name}-{n}"));
     }
     std::fs::create_dir_all(&dir).ok()?;
-    prune(&root, KEEP_RUNS);
+    prune(&root, KEEP_RUNS, GRACE);
     Some(Arc::new(Trace {
         dir,
         calls: AtomicUsize::new(0),
     }))
 }
 
-/// Remove all but the `keep` most recently modified run directories.
-fn prune(root: &Path, keep: usize) {
+/// Remove all but the `keep` most recently modified run directories, sparing
+/// any modified within `grace`.
+fn prune(root: &Path, keep: usize, grace: std::time::Duration) {
     let mut runs: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(root)
         .into_iter()
         .flatten()
@@ -102,8 +109,11 @@ fn prune(root: &Path, keep: usize) {
         .collect();
     runs.sort();
     let excess = runs.len().saturating_sub(keep);
-    for (_, dir) in runs.into_iter().take(excess) {
-        let _ = std::fs::remove_dir_all(dir);
+    let now = std::time::SystemTime::now();
+    for (modified, dir) in runs.into_iter().take(excess) {
+        if now.duration_since(modified).unwrap_or_default() >= grace {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 }
 
@@ -154,10 +164,16 @@ mod tests {
             // Distinct modification times on coarse filesystems.
             std::thread::sleep(std::time::Duration::from_millis(15));
         }
-        let runs: Vec<_> = std::fs::read_dir(out.path().join("trace"))
-            .unwrap()
-            .collect();
-        assert_eq!(runs.len(), KEEP_RUNS);
+        let count = || std::fs::read_dir(out.path().join("trace")).unwrap().count();
+        // A batch's own runs are all still there: none is old enough to go.
+        assert_eq!(count(), KEEP_RUNS + 3);
+        // Once they are old, only the newest KEEP_RUNS stay.
+        prune(
+            &out.path().join("trace"),
+            KEEP_RUNS,
+            std::time::Duration::ZERO,
+        );
+        assert_eq!(count(), KEEP_RUNS);
         let t = begin(Some(out.path()), "Q", true).unwrap();
         t.record(&["claude".into()], "p", "e");
         t.record(&["claude".into()], "p2", "e2");

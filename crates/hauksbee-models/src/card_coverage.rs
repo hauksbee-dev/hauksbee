@@ -58,10 +58,23 @@ pub struct Board {
 }
 
 impl Board {
-    /// The board's pad count: its numeric pads, else every pad listed.
+    /// The footprint's distinct pad numbers, in the board's order. A footprint
+    /// repeats a number for one electrical pad (an exposed pad's thermal vias
+    /// and paste apertures, a TO-263 tab sharing the centre lead's number), and
+    /// leaves an unnumbered (mechanical) pad's name empty: neither is another pin.
+    #[must_use]
+    pub fn distinct_pads(&self) -> Vec<&str> {
+        let mut seen = std::collections::HashSet::new();
+        (self.pads.iter().map(|(pad, _)| pad.trim()))
+            .filter(|pad| !pad.is_empty() && seen.insert(*pad))
+            .collect()
+    }
+
+    /// The board's pad count: its distinct pad numbers, else the count the
+    /// footprint's name says.
     #[must_use]
     pub fn pad_count(&self) -> Option<usize> {
-        let n = self.pads.len();
+        let n = self.distinct_pads().len();
         (n > 0).then_some(n).or_else(|| {
             crate::package::pin_count(&self.footprint).and_then(|n| usize::try_from(n).ok())
         })
@@ -80,8 +93,12 @@ impl Board {
         );
         if !self.pads.is_empty() {
             out.push_str("\n| pad | net |\n|---|---|\n");
+            // A pad number repeated on one net (thermal vias) is one row.
+            let mut seen = std::collections::HashSet::new();
             for (pad, net) in &self.pads {
-                let _ = writeln!(out, "| {pad} | {net} |");
+                if seen.insert((pad, net)) {
+                    let _ = writeln!(out, "| {pad} | {net} |");
+                }
             }
         }
         out
@@ -676,10 +693,8 @@ fn pad_count_problem(
         return None;
     }
     let total = board.pad_count()?;
-    let numeric = board
-        .pads
-        .iter()
-        .filter(|(p, _)| p.chars().all(|c| c.is_ascii_digit()))
+    let numeric = (board.distinct_pads().into_iter())
+        .filter(|p| p.chars().all(|c| c.is_ascii_digit()))
         .count();
     let numeric = if numeric == 0 { total } else { numeric };
     let package = crate::validation::pin_package(entry)
@@ -769,14 +784,25 @@ fn binding(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
             want.insert(0, b.value.clone());
         }
         if re_matches(rules.footprint_re.as_deref(), &b.footprint) == Some(false) {
+            let pattern = rules.footprint_re.as_deref().unwrap_or("");
+            // Measured: a doubled backslash (`P0\\\\.5mm`) matched a literal backslash, and
+            // the fix that followed drew the next warning, a round later.
+            let doubled = if pattern.contains("\\\\") {
+                "; a doubled backslash matches a literal backslash (in a TOML basic string \
+                 write `\\\\.` for a dot, or use a '...' literal string and a single one)"
+            } else {
+                ""
+            };
+            let family = crate::card_scope::family_pattern(entry, facts)
+                .map(|p| format!(", e.g. '{p}'"))
+                .unwrap_or_default();
             out.push(Finding {
                 severity: Severity::Warn,
                 check: "binding",
                 message: format!(
-                    "footprint_re '{}' does not match the board footprint '{}', so the card \
-                     would not bind this part: widen it (or drop it when one pinout serves every \
-                     package)",
-                    rules.footprint_re.as_deref().unwrap_or(""),
+                    "footprint_re '{pattern}' does not match the board footprint '{}', so the \
+                     card would not bind this part: widen it to the package family{family} (or \
+                     drop it when one pinout serves every package){doubled}",
                     b.footprint
                 ),
             });
@@ -1237,5 +1263,104 @@ value_re = "(?i)^PGLDO$"
             pads: vec![("1".into(), "VIN".into()), ("5".into(), "+3V3".into())],
         };
         assert_eq!(Board::from_markdown(&b.markdown()), b);
+    }
+    /// TUSB8041 (2026-10-21): a QFN-64-1EP footprint with 43 thermal-via and
+    /// paste sub-pads numbered like the exposed pad counted 107 pads against a
+    /// 64-lead card with its exposed pad, and the agent asked for the footprint
+    /// to be "corrected".
+    fn qfn64_board(ep_copies: usize) -> Board {
+        let mut pads: Vec<(String, String)> = (1..=64)
+            .map(|n| (n.to_string(), format!("SIG{n}")))
+            .collect();
+        pads.extend((0..ep_copies).map(|_| ("65".to_string(), "GND".to_string())));
+        // A mechanical pad has no number.
+        pads.push((String::new(), "GND".into()));
+        Board {
+            refdes: "U2".into(),
+            value: "TUSB8041RGCR".into(),
+            footprint: "Package_DFN_QFN:QFN-64-1EP_9x9mm_P0.5mm_EP6x6mm_ThermalVias".into(),
+            pads,
+        }
+    }
+
+    fn card_with_pads(count: usize) -> ModelEntry {
+        let mut e = ModelEntry {
+            id: "tusb8041rgcr".into(),
+            ..ModelEntry::default()
+        };
+        e.pins = (1..=count)
+            .map(|n| (n.to_string(), format!("p{n}")))
+            .collect();
+        e
+    }
+
+    #[test]
+    fn a_repeated_exposed_pad_number_is_one_pad() {
+        let board = qfn64_board(43);
+        assert_eq!(board.pads.len(), 64 + 43 + 1);
+        assert_eq!(board.pad_count(), Some(65));
+        assert_eq!(board.distinct_pads().len(), 65);
+        assert!(
+            board.markdown().contains("pads: 65\n"),
+            "{}",
+            board.markdown()
+        );
+        // The card with its exposed pad, and the one without it, both fit.
+        for count in [65, 64] {
+            let found = bound_pad_problem(&card_with_pads(count), &board);
+            assert!(found.is_none(), "{count} pins: {found:?}");
+        }
+        // A card read from another package's column still does not.
+        let found = bound_pad_problem(&card_with_pads(48), &board)
+            .expect("a 48-pin card on a 65-pad footprint");
+        assert!(found.message.contains("has 65 pads"), "{}", found.message);
+    }
+
+    #[test]
+    fn board_markdown_lists_a_repeated_pad_once_per_net() {
+        let board = qfn64_board(43);
+        let text = board.markdown();
+        assert_eq!(text.matches("| 65 | GND |").count(), 1, "{text}");
+        let back = Board::from_markdown(&text);
+        assert_eq!(back.pad_count(), Some(65));
+        // The same number on two nets keeps both rows: the board disagrees with itself.
+        let mut split = qfn64_board(2);
+        split.pads.push(("65".into(), "VCC".into()));
+        let text = split.markdown();
+        assert!(
+            text.contains("| 65 | GND |") && text.contains("| 65 | VCC |"),
+            "{text}"
+        );
+    }
+    /// CY7C65215 (2026-10-21): a doubled backslash in `footprint_re` was flagged
+    /// as not matching, the fix drew the anchored-scope warning a round later.
+    /// The first warning names the family form and the doubled backslash.
+    #[test]
+    fn a_footprint_re_that_misses_names_the_family_form_and_a_doubled_backslash() {
+        let mut entry = ModelEntry {
+            id: "cy7c65215".into(),
+            ..ModelEntry::default()
+        };
+        entry.r#match.footprint_re =
+            Some(r"^Package_DFN_QFN:QFN-32-1EP_5x5mm_P0\\.5mm_EP3\\.45x3\\.45mm$".into());
+        let facts = Facts {
+            board: Some(Board {
+                footprint: "Package_DFN_QFN:QFN-32-1EP_5x5mm_P0.5mm_EP3.45x3.45mm".into(),
+                ..Board::default()
+            }),
+            ..Facts::default()
+        };
+        let message = binding(&entry, &facts)
+            .into_iter()
+            .find(|f| f.message.starts_with("footprint_re"))
+            .expect("a pattern that misses the footprint is flagged")
+            .message;
+        assert!(message.contains("doubled backslash"), "{message}");
+        assert!(message.contains("QFN[-_ ]?32"), "{message}");
+        // A pattern that matches draws neither.
+        entry.r#match.footprint_re = Some("(?i)QFN[-_ ]?32(?:[-_ ]|$)".into());
+        assert!(binding(&entry, &facts)
+            .iter()
+            .all(|f| !f.message.starts_with("footprint_re")));
     }
 }

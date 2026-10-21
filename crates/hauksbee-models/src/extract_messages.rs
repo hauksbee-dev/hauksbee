@@ -114,6 +114,15 @@ pub fn link_failed(part: &str, url: &str, why: &str, next: &str) -> String {
     format!("{part}: the board's datasheet link {url} did not download: {why}; {next}")
 }
 
+/// A board link that downloaded but is some other part's datasheet.
+#[must_use]
+pub fn board_link_names_another_part(part: &str, url: &str, why: &str) -> String {
+    format!(
+        "{part}: the board's datasheet link {url} downloaded, but {why}; looking for the \
+         part's own datasheet (the board's link is kept if none is found)"
+    )
+}
+
 /// A found datasheet hauksbee will not use.
 #[must_use]
 pub fn doubted(part: &str, url: &str, why: &str) -> String {
