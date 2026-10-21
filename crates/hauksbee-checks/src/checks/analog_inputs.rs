@@ -339,12 +339,15 @@ fn source_of(
     let rail = tops[0].2.clone();
     let rail_v = (cx.v)(&rail).or_else(|| hauksbee_bind::binder::power_rail_voltage(&rail));
     // A tap that sits at a clean logic level is a digital read of a divided
-    // rail (a USB-VBUS-present sense), not an analogue measurement.
+    // rail (a USB-VBUS-present sense), not an analogue measurement. A USB
+    // VBUS rail is a presence sense whatever the divider; a rail or MCU
+    // supply of unknown level falls back to the ratio alone.
     let logic_level = |tap: f64, vdd: f64| tap >= 0.7 * vdd || tap <= 0.3 * vdd;
-    let digital = match (rail_v, mcu_vdd) {
-        (Some(rv), Some(vdd)) => logic_level(rv * ratio, vdd),
-        _ => !(0.15..=0.85).contains(&ratio),
-    };
+    let digital = rail.to_ascii_uppercase().contains("VBUS")
+        || match (rail_v, mcu_vdd) {
+            (Some(rv), Some(vdd)) => logic_level(rv * ratio, vdd),
+            _ => !(0.15..=0.85).contains(&ratio),
+        };
     if digital {
         return None;
     }
@@ -662,6 +665,19 @@ mod tests {
         ("one series resistor then a divider", "4", Source3::SeriesDivider, 1),
         ("equal 100k/1k tap is a logic level", "4", Source3::Divider(1_000), 0),
     ];
+
+    // A divider from a VBUS rail (a USB-present sense, here 5 V) is not an
+    // analogue measurement whatever its ratio: abstain.
+    #[test]
+    fn a_vbus_sense_or_unknown_rail_divider_is_not_an_analogue_read() {
+        let lib = ModelLibrary::builtin();
+        for rail in ["VBUSR", "USB_VBUS", "VBUS"] {
+            let mut b = capability_board("4", Source3::Divider(10_000), false);
+            b.nets[1].name = rail.into();
+            let r = analog_input_lint(&b, &lib, &|_| None);
+            assert!(r.findings.iter().all(|f| !f.message.contains("lists no ADC")), "{rail}: {r:?}");
+        }
+    }
 
     #[derive(Clone, Copy)]
     enum Source3 {

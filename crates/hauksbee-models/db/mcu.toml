@@ -1690,6 +1690,18 @@ internal_clock = "internal 8 MHz HSI RC oscillator"
 "44" = "boot0"     # BOOT0 strapping pin (LQFP-48 pin 44; RM0008 boot config)
 "48" = "vdd4"      # VDDA
 
+[models.pin_capability.adc]
+basis = "STMicroelectronics STM32F103x8/xB datasheet (medium-density), Table 5 pin definitions (PDF pp.28-29), LQFP48/UFQFPN48 column: PA0-PA7 pins 10-12, 14-17 are ADC12_IN0-IN7 (pin 13 PA3 is IN3 but not in [models.pins]) and PB0 pin 18 is ADC12_IN8; both ADC1 and ADC2 reach every channel; PC13-PC15, PA8-PA10 and PB6/PB7 carry no ADC channel"
+[models.pin_capability.adc.pads]
+"10" = "ADC12_IN0"
+"11" = "ADC12_IN1"
+"12" = "ADC12_IN2"
+"14" = "ADC12_IN4"
+"15" = "ADC12_IN5"
+"16" = "ADC12_IN6"
+"17" = "ADC12_IN7"
+"18" = "ADC12_IN8"
+
 [models.ratings]
 max_pin_current_a = 0.025  # 25 mA abs max per I/O pin
 max_current_a = 0.15
