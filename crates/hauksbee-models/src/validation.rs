@@ -676,6 +676,8 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         }
     }
 
+    check_pin_capability(entry, &mut p);
+
     // A pin map is a stated fact even on an identity-only card.
     p.0.extend(merged_unit_roles(entry));
     check_pinout(entry, &mut p);
@@ -1802,6 +1804,41 @@ fn feedback_node(name: &str) -> bool {
     let keys = pin_name_keys(name);
     let output = |k: &String| matches!(k.as_str(), "out" | "output" | "vo" | "os" | "sense");
     keys.iter().any(|k| matches!(k.as_str(), "fb" | "adj")) && !keys.iter().any(output)
+}
+
+/// `[models.pin_capability]`: an MCU card's structured capability tables.
+///
+/// The table is a complete statement, so it is held to the same pad map the
+/// card's pins use: every listed pad must exist there, must not be a supply or
+/// ground pad, and a channel is named for each; the basis cites the datasheet.
+fn check_pin_capability(entry: &ModelEntry, p: &mut Problems) {
+    let Some(adc) = &entry.pin_capability.adc else {
+        return;
+    };
+    p.require(entry.kind == ComponentKind::Mcu, || {
+        "[models.pin_capability] belongs on an mcu card".into()
+    });
+    p.require(!adc.basis.trim().is_empty(), || {
+        "[models.pin_capability.adc] needs a basis citing the datasheet table and page".into()
+    });
+    for (pad, channel) in &adc.pads {
+        let Some(role) = entry.pins.get(pad) else {
+            p.push(format!(
+                "[models.pin_capability.adc] pad '{pad}' is not a pad of [models.pins]"
+            ));
+            continue;
+        };
+        p.require(!channel.trim().is_empty(), || {
+            format!("[models.pin_capability.adc] pad '{pad}' needs its ADC channel name")
+        });
+        let r = role.trim().to_ascii_lowercase();
+        let supply = crate::pin_roles::power_pin(&r, entry.kind).is_some();
+        p.require(!supply, || {
+            format!(
+                "[models.pin_capability.adc] pad '{pad}' is the supply or ground role '{role}', not an ADC input"
+            )
+        });
+    }
 }
 
 /// `[models.pins]` against the pin-table column of the card's own package
