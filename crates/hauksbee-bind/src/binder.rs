@@ -7910,7 +7910,11 @@ fn bind_mcu(
             .envelope
             .iter()
             .filter_map(|e| match e {
-                hauksbee_models::OperatingEnvelope::SupplyRange { min_v, .. } => Some(*min_v),
+                hauksbee_models::OperatingEnvelope::SupplyRange { pin, min_v, .. }
+                    if !hauksbee_models::pin_roles::is_sense_input_role(pin) =>
+                {
+                    Some(*min_v)
+                }
                 _ => None,
             })
             .reduce(f64::min),

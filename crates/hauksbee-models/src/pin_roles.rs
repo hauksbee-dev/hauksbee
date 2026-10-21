@@ -114,6 +114,41 @@ pub fn power_pin(role: &str, kind: ComponentKind) -> Option<PowerPin> {
     })
 }
 
+/// Whether `role` names a sense or measurement input (`sense`, `isense`, `sns`,
+/// `imon`, `vmon`, `meas`, `ain0`).
+///
+/// That is a shunt-sense pin, a monitor or an ADC channel: anything the part
+/// reads rather than runs from.
+///
+/// A sense input's printed range is a measurement window (a shunt's full scale,
+/// a differential span, an ADC's input range), not a rail the board supplies.
+/// So a `supply_range` row on such a pin is refused by card validation, and a
+/// check that reads a pin's rating ignores one: only an `input_tolerance` row,
+/// which states a ground-referenced ceiling whatever the supply, speaks for the
+/// pin. A supply or return role is never a sense input, and neither are the bare
+/// differential inputs `in_plus`/`in_minus` of an amplifier or comparator.
+#[must_use]
+pub fn is_sense_input_role(role: &str) -> bool {
+    let r = role.trim().to_ascii_lowercase();
+    if r.is_empty()
+        || supply_re().is_match(&r)
+        || return_re().is_match(&r)
+        || r.contains("gnd")
+        || r.contains("vss")
+    {
+        return false;
+    }
+    let (word, _) = r.split_once('_').unwrap_or((r.as_str(), ""));
+    let measure = |w: &str| {
+        let w = w.trim_end_matches(|c: char| c.is_ascii_digit());
+        w.contains("sense")
+            || w.contains("sns")
+            || w == "sens"
+            || matches!(w, "imon" | "vmon" | "mon" | "meas" | "ain" | "adcin")
+    };
+    measure(word) || r.split('_').any(measure)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,6 +157,33 @@ mod tests {
         power_pin(role, ComponentKind::Digital)
             .filter(|p| p.kind == PowerKind::Supply)
             .map(|p| (p.family, p.base))
+    }
+
+    #[test]
+    fn sense_and_measurement_inputs_are_named_by_their_role() {
+        for role in [
+            "sense",
+            "isense",
+            "vsense",
+            "vsense_a",
+            "sense_p",
+            "sns",
+            "isns",
+            "imon",
+            "vmon",
+            "meas",
+            "ain0",
+            "sense2",
+            "Vbat_sense",
+        ] {
+            assert!(is_sense_input_role(role), "{role}");
+        }
+        for role in [
+            "vcc", "vdd", "gnd", "sensgnd", "in_plus", "in_minus", "en", "fb", "out", "cs", "csb",
+            "sda", "scl", "ctrl", "sw", "vbus", "",
+        ] {
+            assert!(!is_sense_input_role(role), "{role}");
+        }
     }
 
     #[test]

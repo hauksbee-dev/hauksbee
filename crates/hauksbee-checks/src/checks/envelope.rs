@@ -1104,6 +1104,7 @@ fn envelope_lint_with_tolerance(
     ambient_c: Option<f64>,
 ) -> NetLintReport {
     let resolver = RailResolver::new(board, st, solved);
+    let ties = tied_nets(board);
     let mut report = NetLintReport::default();
     let mut abstained_nets = BTreeSet::new();
     let mut starved: BTreeMap<i64, Vec<Starved>> = BTreeMap::new();
@@ -1261,6 +1262,19 @@ fn envelope_lint_with_tolerance(
                     let (Some(lower_net), Some(upper_net)) = (net_of(lower), net_of(upper)) else {
                         continue;
                     };
+                    // Two pins on ONE net (an EN tied to its own IN, VCCA and
+                    // VCCB on one rail) are at the same level by construction:
+                    // the order holds with equality, and comparing the net's
+                    // tolerance band with itself (max above min) is no order
+                    // violation. A fitted net tie or zero-ohm link joins nets
+                    // the same way.
+                    if lower_net.id == upper_net.id
+                        || ties
+                            .get(&lower_net.id)
+                            .is_some_and(|group| group.contains(&upper_net.id))
+                    {
+                        continue;
+                    }
                     let mut known = Vec::new();
                     for net in [lower_net, upper_net] {
                         match resolver.range(net.id) {
@@ -2764,6 +2778,74 @@ basis = "Recommended Operating Conditions, VCCA <= VCCB note"
             .expect("3.465 V is not <= 2.85 V");
         assert!(finding.message.contains("3.465"));
         assert!(finding.message.contains("2.85 V"));
+    }
+
+    /// An enable pin tied to its own regulator input (the normal always-on
+    /// wiring) sits on one net: its `en <= in` order holds with equality and
+    /// the net's tolerance band is not a violation of itself. The same order
+    /// still fires when EN is on a different, higher rail, and it is silent
+    /// again when a zero-ohm link ties the two nets into one level.
+    #[test]
+    fn a_pin_on_the_same_net_as_its_rail_is_not_a_rail_order_finding() {
+        let card = r#"
+[[models]]
+id = "en_part"
+kind = "digital"
+description = "identity-only enable fixture"
+[models.match]
+value_re = "^EN_PART$"
+[models.params]
+identity_only = true
+warning = "identity only"
+unlocked_by = "validated behavior"
+[models.pins]
+"1" = "in"
+"2" = "en"
+"3" = "gnd"
+[[models.envelope]]
+kind = "rail_order"
+lower = "en"
+upper = "in"
+basis = "Absolute Maximum Ratings, EN must not exceed IN"
+"#;
+        let lib = library("en_order", card);
+        let findings = |nets: &[(i64, &str)], parts: Vec<Component>| {
+            envelope_lint(&board(nets, parts), &lib)
+                .of_check(LintCheck::OperatingEnvelope)
+                .count()
+        };
+        let nets = [(1, "GND"), (2, "+5V"), (3, "+3V3")];
+        let regulator = |en_net: i64| {
+            part(
+                "U1",
+                "EN_PART",
+                vec![pin("1", 2), pin("2", en_net), pin("3", 1)],
+            )
+        };
+        assert_eq!(
+            findings(&nets, vec![regulator(2)]),
+            0,
+            "EN on the IN net is normal"
+        );
+        assert_eq!(
+            findings(&nets, vec![regulator(3)]),
+            0,
+            "EN on a lower rail satisfies en <= in"
+        );
+        let high = [(1, "GND"), (2, "+3V3"), (3, "+5V")];
+        assert_eq!(
+            findings(&high, vec![regulator(3)]),
+            1,
+            "EN on a rail above IN is still a rail-order finding"
+        );
+        let mut tie = part("R9", "0R", vec![pin("1", 2), pin("2", 4)]);
+        tie.lib_id = "Device:R".into();
+        let tied = [(1, "GND"), (2, "+5V"), (3, "+3V3"), (4, "EN_PRE")];
+        assert_eq!(
+            findings(&tied, vec![regulator(4), tie]),
+            0,
+            "a zero-ohm link makes EN and IN one level"
+        );
     }
 
     const ROWS_CARD: &str = r#"
