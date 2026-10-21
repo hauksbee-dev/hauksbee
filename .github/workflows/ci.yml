@@ -41,9 +41,8 @@ env:
 # was dropped to get there; the native jobs no longer wait for the Linux tests.
 #
 # Rust cache policy:
-# - linux-ci is shared by the Linux Rust gates and saved by the clippy job only,
-#   so the cache holds one coherent build rather than whichever job finished
-#   first;
+# - linux-ci is shared by the Linux Rust gates (the cache key also hashes each
+#   job's environment, so jobs with different env keep separate entries);
 # - workspace crates are retained, so the same Hauksbee graph is not rebuilt
 #   from zero for clippy, no-default, docs, and both full-test shards;
 # - the clippy job runs the last failed tests before broad compilation, so a
@@ -172,7 +171,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: linux-ci
-          save-if: false
           add-job-id-key: false
           cache-on-failure: true
           cache-workspace-crates: true
@@ -205,7 +203,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: linux-ci
-          save-if: false
           add-job-id-key: false
           cache-on-failure: true
           cache-workspace-crates: true
@@ -524,7 +521,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: linux-ci
-          save-if: false
           add-job-id-key: false
           cache-on-failure: true
           cache-workspace-crates: true
@@ -564,7 +560,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: linux-ci
-          save-if: false
           add-job-id-key: false
           cache-on-failure: true
           cache-workspace-crates: true
@@ -663,7 +658,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: linux-ci
-          save-if: false
           add-job-id-key: false
           cache-on-failure: true
           cache-workspace-crates: true
@@ -693,7 +687,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: linux-ci
-          save-if: false
           add-job-id-key: false
           cache-on-failure: true
           cache-workspace-crates: true
@@ -742,7 +735,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: linux-ci
-          save-if: false
           add-job-id-key: false
           cache-on-failure: true
           cache-workspace-crates: true
@@ -775,7 +767,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: linux-ci
-          save-if: false
           add-job-id-key: false
           cache-on-failure: true
           cache-workspace-crates: true
