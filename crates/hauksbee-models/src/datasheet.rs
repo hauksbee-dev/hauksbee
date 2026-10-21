@@ -4103,6 +4103,57 @@ fn transient_backend_error(e: &anyhow::Error) -> bool {
     !text.contains("usage limit") && TRANSIENT_BACKEND.iter().any(|p| text.contains(p))
 }
 
+/// One short reason for a transient backend error, for the progress line. The
+/// error may hold codex's whole JSON event stream: the last `error` or
+/// `turn.failed` message is the reason, else the first line. A 429 is named as
+/// such, and a long reason is cut at 160 characters. The full error stays in
+/// the logs and in the final failure.
+fn short_backend_reason(e: &str) -> String {
+    let reason = last_event_message(e)
+        .unwrap_or_else(|| e.lines().next().unwrap_or_default().trim().to_string());
+    if reason.contains("429") {
+        return "rate limited (429 Too Many Requests)".into();
+    }
+    if reason.chars().count() > 160 {
+        let cut: String = reason.chars().take(160).collect();
+        return format!("{cut}...");
+    }
+    reason
+}
+
+/// The message of the last `"type":"error"` or `turn.failed` event in `text`.
+fn last_event_message(text: &str) -> Option<String> {
+    const ERROR: &str = "\"type\":\"error\",\"message\":\"";
+    const MESSAGE: &str = "\"message\":\"";
+    let errors = text.match_indices(ERROR).map(|(i, _)| i + ERROR.len());
+    let failed = text.match_indices("\"turn.failed\"").filter_map(|(i, _)| {
+        let rest = &text[i..];
+        let next_event = rest[1..].find("\"type\":\"").map_or(rest.len(), |n| n + 1);
+        let at = rest[..next_event].find(MESSAGE)?;
+        Some(i + at + MESSAGE.len())
+    });
+    // The latest event starts last, so the largest start is the last message.
+    errors
+        .chain(failed)
+        .max()
+        .and_then(|start| json_string_body(&text[start..]))
+}
+
+/// The text of a JSON string whose body starts at the head of `s`, up to its
+/// closing quote; `None` if it never closes.
+fn json_string_body(s: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(out),
+            '\\' => out.push(chars.next()?),
+            c => out.push(c),
+        }
+    }
+    None
+}
+
 /// `call`, re-run after each of `delays` while it fails on a transient backend
 /// error; the last failure, or any other, is returned as is.
 fn with_backoff<T>(delays: &[Duration], mut call: impl FnMut() -> Result<T>) -> Result<T> {
@@ -4113,8 +4164,9 @@ fn with_backoff<T>(delays: &[Duration], mut call: impl FnMut() -> Result<T>) -> 
                     progress::note_rate_limit();
                 }
                 say!(
-                    "[model-extract] transient backend error ({e:#}); waiting {}s before \
+                    "[model-extract] transient backend error ({}); waiting {}s before \
                      try {} of {}",
+                    short_backend_reason(&format!("{e:#}")),
                     delay.as_secs(),
                     n + 2,
                     delays.len() + 1
@@ -5257,11 +5309,10 @@ pub(crate) fn launch_agent(
             }
             cmd.args(a.profile.is_none().then_some("--ignore-user-config"))
                 .args(["--ignore-rules", "-c", "skills.include_instructions=false"]);
-            if cache_on {
-                // The date and time ahead of the prompt would end a cache hit at the
-                // first line; the model needs neither to read a datasheet.
-                cmd.args(["-c", "include_environment_context_time=false"]);
-            }
+            // Codex 0.159.0 has no setting to drop the date and time ahead of the
+            // prompt (`include_environment_context_time` is rejected as
+            // unrecognised), so they still lead it and would end a cache hit at the
+            // first line; the model needs neither to read a datasheet.
             for feature in CODEX_DISABLED_FEATURES {
                 cmd.args(["--disable", feature]);
             }
@@ -7556,7 +7607,6 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             // A profile opts into the operator's codex config: no --ignore-user-config.
             expected.extend(["--ephemeral", "--ignore-rules", "-c"].map(Into::into));
             expected.push("skills.include_instructions=false".into());
-            expected.extend(["-c", "include_environment_context_time=false"].map(Into::into));
             for feature in CODEX_DISABLED_FEATURES {
                 expected.extend(["--disable".into(), (*feature).into()]);
             }
@@ -7764,7 +7814,6 @@ printf 'done' > last-message.txt
             "ARG --ignore-user-config",
             "ARG --ignore-rules",
             "ARG --skip-git-repo-check",
-            "ARG include_environment_context_time=false",
             "ARG --output-last-message",
         ] {
             assert!(fork.contains(kept), "the fork keeps {kept}: {fork}");
@@ -8590,6 +8639,25 @@ printf 'done' > last-message.txt
             card("mic_3v3", "(?i)^MIC5205-3\\.3"),
         ];
         assert_eq!(ambiguous_cards(&own, "MIC5205"), None);
+    }
+
+    /// The progress line names one short reason, not codex's whole event stream.
+    #[test]
+    fn a_backend_error_is_shown_as_one_short_reason() {
+        let stream = "codex exited with status exit status: 1: {\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Codex is ignoring 1 unrecognized configuration setting.\"}} | {\"type\":\"turn.started\"} | {\"type\":\"error\",\"message\":\"exceeded retry limit, last status: 429 Too Many Requests\"} | {\"type\":\"turn.failed\",\"error\":{\"message\":\"exceeded retry limit, last status: 429 Too Many Requests\"}}";
+        assert_eq!(
+            short_backend_reason(stream),
+            "rate limited (429 Too Many Requests)"
+        );
+        let plain =
+            "codex exited with status 1: {\"type\":\"error\",\"message\":\"stream disconnected\"}";
+        assert_eq!(short_backend_reason(plain), "stream disconnected");
+        let failed = "codex exited with status 1: {\"type\":\"turn.failed\",\"error\":{\"message\":\"boom 500\"}}";
+        assert_eq!(short_backend_reason(failed), "boom 500");
+        assert_eq!(short_backend_reason("first line\nsecond"), "first line");
+        let cut = short_backend_reason(&"x".repeat(300));
+        assert_eq!(cut.chars().count(), 163);
+        assert!(cut.ends_with("..."));
     }
 
     /// Round 3: codex's "Reconnecting... 5/5 (workspace routing discovery
