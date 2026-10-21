@@ -3,7 +3,7 @@
 //!
 //! A whole board is dozens of parts, each a web search, a download and an
 //! agent run that is mostly waiting, so they run side by side. The stages are
-//! pipelined (see [`super::extract_stages`]): getting each part's datasheet (the
+//! pipelined (see `super::extract_stages`): getting each part's datasheet (the
 //! search and the download) runs on its own bounded downloader pool, outside the
 //! agent pool, all parts at once; a part enters the agent pool only when its
 //! datasheet is ready, the biggest datasheet first; a part nothing could be
@@ -19,7 +19,7 @@
 //! headroom (when the observed usage says the 5-hour window will not last),
 //! never raised.
 //!
-//! Sessions start through a gate ([`BatchGate`]): their starts are spaced
+//! Sessions start through a gate (`BatchGate`): their starts are spaced
 //! (`hauksbee_models::extract_admission`), and a session whose first request is
 //! refused waits a few jittered seconds with its agent place given up, so the
 //! refusal costs the place nothing. Each part is its own unit of work and ends
