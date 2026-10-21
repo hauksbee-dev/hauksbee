@@ -381,6 +381,16 @@ fn mcu_needs(entry: &ModelEntry, text: &str, out: &mut Vec<Need>) {
             look: "Absolute maximum ratings / I/O static characteristics",
         });
     }
+    if text.trim().is_empty() || lower.contains("adc") || lower.contains("analog-to-digital") {
+        out.push(Need {
+            key: "adc_pins".into(),
+            ask: "[models.pin_capability.adc] listing every pad of [models.pins] that is an \
+                  ADC input with its channel (a part with no ADC: an empty table), basis \
+                  citing the pin-definition table and page"
+                .into(),
+            look: "Pin definitions / analog function table",
+        });
+    }
     if has(&|r| r.starts_with("vcap")) {
         out.push(Need {
             key: "supply_outputs:vcap".into(),
@@ -481,6 +491,7 @@ fn has_field(entry: &ModelEntry, need: &Need) -> bool {
         }),
         ("backend", _) => entry.params.get_str("backend").is_some(),
         ("straps", _) => !entry.straps.is_empty(),
+        ("adc_pins", _) => entry.adc_declared(),
         ("rail_order", _) => entry
             .envelope
             .iter()

@@ -396,6 +396,9 @@ fn adc_alternatives(c: &Component, m: &ModelEntry, board: &ExtractedBoard) -> St
             .collect()
     };
     let (free, all) = (list(true), list(false));
+    if all.is_empty() {
+        return String::new();
+    }
     let (shown, which) = if free.is_empty() {
         (all, "")
     } else {
@@ -647,5 +650,95 @@ mod tests {
                 );
             }
         }
+    }
+    /// (label, pad the divider tap or wiper feeds, parts on the net besides
+    /// the MCU, findings expected). ATmega328P DIP: pad 4 is PD2 (no ADC),
+    /// pad 23 is PC0 (ADC0).
+    const CAPABILITY_ROWS: &[(&str, &str, Source3, usize)] = &[
+        ("divider tap on a non-ADC pad", "4", Source3::Divider(10_000), 1),
+        ("divider tap on an ADC pad", "23", Source3::Divider(10_000), 0),
+        ("pot wiper on a non-ADC pad", "4", Source3::Wiper, 1),
+        ("pot wiper on an ADC pad", "23", Source3::Wiper, 0),
+        ("one series resistor then a divider", "4", Source3::SeriesDivider, 1),
+        ("equal 100k/1k tap is a logic level", "4", Source3::Divider(1_000), 0),
+    ];
+
+    #[derive(Clone, Copy)]
+    enum Source3 {
+        /// Top resistor 10 k from +3V3, bottom resistor of this many ohms to ground.
+        Divider(u32),
+        Wiper,
+        SeriesDivider,
+    }
+
+    fn capability_board(pad: &str, src: Source3, alt_adc: bool) -> ExtractedBoard {
+        let mut parts = vec![part(
+            "U1",
+            "ATmega328P",
+            &[("7", 2), ("8", 1), ("20", 2), ("22", 1), (pad, 3)],
+        )];
+        match src {
+            Source3::Divider(bottom) => {
+                parts.push(part("R1", "10k", &[("1", 2), ("2", 3)]));
+                parts.push(part("R2", &format!("{bottom}"), &[("1", 3), ("2", 1)]));
+            }
+            Source3::Wiper => parts.push(part("RV1", "10k", &[("1", 2), ("2", 3), ("3", 1)])),
+            Source3::SeriesDivider => {
+                parts[0].pins.retain(|p| p.number != pad);
+                parts[0].pins.push(hauksbee_extract::Pin {
+                    number: pad.into(),
+                    net: Some(4),
+                    ..Default::default()
+                });
+                parts.push(part("R3", "1k", &[("1", 4), ("2", 3)]));
+                parts.push(part("R1", "10k", &[("1", 2), ("2", 3)]));
+                parts.push(part("R2", "10k", &[("1", 3), ("2", 1)]));
+            }
+        }
+        if alt_adc {
+            parts[0].pins.push(hauksbee_extract::Pin {
+                number: "24".into(),
+                net: Some(3),
+                ..Default::default()
+            });
+        }
+        board(&[(1, "GND"), (2, "+3V3"), (3, "SENSE"), (4, "PIN")], parts)
+    }
+
+    // A card that lists its ADC pads says every other pad of its map is not
+    // one: an analogue source on such a pad can only be read as a digital level.
+    #[test]
+    fn analogue_source_on_a_pad_with_no_adc_channel_is_flagged() {
+        let lib = ModelLibrary::builtin();
+        for (label, pad, src, n) in CAPABILITY_ROWS {
+            let b = capability_board(pad, *src, false);
+            let got: Vec<_> = analog_input_lint(&b, &lib, &|_| None)
+                .findings
+                .into_iter()
+                .filter(|f| f.message.contains("lists no ADC channel"))
+                .collect();
+            assert_eq!(got.len(), *n, "{label}: {got:?}");
+            for f in &got {
+                for want in ["U1 pad 4", "PD2_INT0", "ADC-capable pads", "PC0_ADC0"] {
+                    assert!(f.message.contains(want), "{label}: {}", f.message);
+                }
+            }
+        }
+    }
+
+    // The same net also reaching an ADC pad is read, not misrouted.
+    #[test]
+    fn a_net_that_also_reaches_an_adc_pad_is_silent() {
+        let b = capability_board("4", Source3::Divider(10_000), true);
+        let r = analog_input_lint(&b, &ModelLibrary::builtin(), &|_| None);
+        assert!(r.findings.iter().all(|f| !f.message.contains("lists no ADC")), "{r:?}");
+    }
+
+    // A pad whose role itself is analogue (the AVR comparator input) is never held to the list.
+    #[test]
+    fn an_analogue_function_pad_is_not_held_to_the_adc_list() {
+        let b = capability_board("12", Source3::Divider(10_000), false);
+        let r = analog_input_lint(&b, &ModelLibrary::builtin(), &|_| None);
+        assert!(r.findings.iter().all(|f| !f.message.contains("lists no ADC")), "{r:?}");
     }
 }

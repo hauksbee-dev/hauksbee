@@ -785,6 +785,33 @@ measurements):
 | 1N4148 (D)   | Vf 0.688 V @ 10.1 mA          | Vf max 1.0 V @ 10 mA (real ~0.7 V) |
 | AMS1117-3.3  | Vout 3.300 V @ 33 mA load     | 3.300 V (3.201..3.399 V)         |
 
+## Pin capability: which pads are ADC inputs
+
+An MCU card may state which pads of its `[models.pins]` are analogue-to-digital
+inputs, as data a board check reads (`analog_inputs.rs`, an analogue source on a pad
+with no ADC channel):
+
+```toml
+[models.pin_capability.adc]
+basis = "Datasheet <part> <version>, Table <n> pin definitions (PDF p.<n>)"
+[models.pin_capability.adc.pads]
+"23" = "ADC0"      # pad number to the ADC channel on it
+"24" = "ADC1"
+```
+
+The table is a complete statement about the card's own package: a pad listed has
+that channel, and every other pad of `[models.pins]` has none. A part whose pad map
+holds only some of the package's pads (a module card that names the strap and UART
+pads) lists the ADC ones among those, and the rest of the package is not judged. A
+card with no table says nothing and the check abstains. The `basis` cites the
+datasheet table and page the pad list was read from; a table written from memory or
+from another package's pin map is a wrong card, not a missing one, so read the pad
+and channel off the pin-definition table of the card's own package. Validation
+(`validation.rs`, `check_pin_capability`) requires an `mcu` card, a basis, pads that
+exist in `[models.pins]`, none of them a supply or ground role, and a channel for
+each. `card_coverage` lists the table (`adc_pins`) among an MCU card's needs when
+the datasheet mentions an ADC.
+
 ## Package variants and fuse hold current
 
 A part number whose suffix names a smaller package must not inherit the larger

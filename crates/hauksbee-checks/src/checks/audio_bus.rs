@@ -851,7 +851,18 @@ unlocked_by = "validated behavior"
             ("U1", "CTL", CTL_WIRES),
             ("U2", "CODEC", [11, 10, 12, 13, 14]),
         ]);
-        // Generic names say nothing about the bus.
+        // An unclassified pin on both nets keeps the roles check silent, so
+        // only the name could speak; generic names say nothing about the bus.
+        for net in [10, 11] {
+            let mut mcu = part("U9", "SOMEMCU", &[]);
+            mcu.reference = format!("U9{net}");
+            mcu.pins = vec![Pin {
+                number: "7".into(),
+                net: Some(net),
+                ..Default::default()
+            }];
+            b.components.push(mcu);
+        }
         b.nets[2].name = "CLK_A".into();
         b.nets[3].name = "CLK_B".into();
         assert!(run(&b, &lib).is_empty(), "{:?}", run(&b, &lib));
