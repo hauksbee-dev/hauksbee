@@ -491,10 +491,12 @@ struct ModelsExtractArgs {
     /// board's own Datasheet field.
     #[arg(long, value_name = "PART=PDF-OR-URL", requires = "unmodelled")]
     datasheet: Vec<String>,
-    /// With --unmodelled: how many parts to extract at once (1 to 8). Left out,
-    /// the highest number your plan's headroom can carry is used and said
-    /// before the run. Each part's lines are prefixed with its name; --jobs 1
-    /// is the plain serial loop with the live spinner.
+    /// With --unmodelled: the most parts to extract at once (1 to 8). Left out,
+    /// up to 4 (fewer if your plan's headroom cannot carry that) and said
+    /// before the run. The batch starts a couple, adds one every few seconds
+    /// while the service is not refusing, and backs off when it rate-limits.
+    /// Each part's lines are prefixed with its name; --jobs 1 is the plain
+    /// serial loop with the live spinner.
     #[arg(
         long,
         value_name = "N",

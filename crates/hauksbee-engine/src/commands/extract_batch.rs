@@ -5,9 +5,13 @@
 //! agent run that is mostly waiting, so they run side by side. How many is
 //! worked out from the plan's headroom (`hauksbee_models::extract_capacity`)
 //! unless `--jobs N` says; `--jobs 1` is the plain serial loop with the
-//! spinner. The pool only ever shrinks during a run: halved when the backend
-//! rate limits, lowered when the observed usage says the 5-hour window will not
-//! last. Each part is its own unit of work and ends in exactly one of three
+//! spinner. The pool is paced, because the limit that bites is how many agents
+//! hit the service at once, not the plan's headroom: it starts a couple, adds
+//! one every `ramp_every` while nothing is refused, up to the planned ceiling;
+//! halves when the backend rate limits (at most once per `backoff_every`); and
+//! grows back one at a time after `regrow_after` without a refusal. Only the
+//! ceiling is lowered by the plan's headroom (when the observed usage says the
+//! 5-hour window will not last), never raised. Each part is its own unit of work and ends in exactly one of three
 //! ways, and the tally counts them apart:
 //!
 //! - **drafted**: a card was written;
@@ -63,6 +67,10 @@ pub struct BatchOptions {
     pub progress_every: Duration,
     /// The shortest time between two halvings of the pool for rate limiting.
     pub backoff_every: Duration,
+    /// While nothing is refused, how often one more agent is let in.
+    pub ramp_every: Duration,
+    /// After a refusal, the quiet stretch before the pool grows by one.
+    pub regrow_after: Duration,
     /// Refine the plan's cost during the run (`None`: say nothing of the plan).
     pub watch: Option<PlanWatch>,
     /// The newest plan reading ([`hauksbee_models::extract_plan::latest_reading`]).
@@ -76,6 +84,8 @@ impl Default for BatchOptions {
             datasheet_dir: None,
             progress_every: Duration::from_secs(30),
             backoff_every: Duration::from_secs(30),
+            ramp_every: capacity::RAMP_EVERY,
+            regrow_after: capacity::REGROW_AFTER,
             watch: None,
             reading: extract_plan::latest_reading,
         }
@@ -92,8 +102,8 @@ pub struct Tally {
     pub failed: Vec<(String, String)>,
     /// Questions an agent asked that nobody was there to answer.
     pub needs: Vec<Need>,
-    /// The pool the batch began with and the one it ended with.
-    pub jobs: (usize, usize),
+    /// How the pool moved: planned ceiling, peak running, final, refusals.
+    pub pool: capacity::PoolStats,
 }
 
 impl Tally {
@@ -155,36 +165,74 @@ impl Console {
     }
 }
 
-/// How many jobs may run at once, which only ever goes down.
+/// Time since some fixed start (injectable so pacing can be tested).
+type Clock<'a> = &'a (dyn Fn() -> Duration + Sync);
+
+/// How a pool paces itself.
+#[derive(Debug, Clone, Copy)]
+struct Pacing {
+    backoff_every: Duration,
+    ramp_every: Duration,
+    regrow_after: Duration,
+}
+
+/// What the pool remembers between moves.
+struct Moves {
+    last_halved: Option<Duration>,
+    /// When the pool last changed or a refusal was last seen: growth waits a
+    /// full interval after it.
+    last_event: Duration,
+    /// A refusal has been seen, so growth waits `regrow_after` not `ramp_every`.
+    refused: bool,
+}
+
+/// How many jobs may run at once: it starts small and ramps up to a ceiling,
+/// halves when the backend rate limits and grows back after a quiet stretch.
+/// The ceiling itself only ever goes down.
 struct Pool<'a> {
-    start: usize,
+    /// The ceiling the batch was planned with.
+    planned: usize,
+    ceiling: AtomicUsize,
     limit: AtomicUsize,
     active: Mutex<usize>,
     turn: Condvar,
+    peak: AtomicUsize,
+    refusals: AtomicUsize,
     /// The rate-limit refusals seen when last looked.
     seen: AtomicUsize,
     hits: &'a (dyn Fn() -> usize + Sync),
-    last_halved: Mutex<Option<Instant>>,
-    backoff_every: Duration,
+    moves: Mutex<Moves>,
+    pacing: Pacing,
+    clock: Clock<'a>,
     say: &'a (dyn Fn(&str) + Sync),
 }
 
 impl<'a> Pool<'a> {
     fn new(
-        start: usize,
-        backoff_every: Duration,
+        ceiling: usize,
+        pacing: Pacing,
+        clock: Clock<'a>,
         hits: &'a (dyn Fn() -> usize + Sync),
         say: &'a (dyn Fn(&str) + Sync),
     ) -> Self {
+        let ceiling = ceiling.max(1);
         Self {
-            start,
-            limit: AtomicUsize::new(start),
+            planned: ceiling,
+            ceiling: AtomicUsize::new(ceiling),
+            limit: AtomicUsize::new(capacity::ramp_start(ceiling)),
             active: Mutex::new(0),
             turn: Condvar::new(),
+            peak: AtomicUsize::new(0),
+            refusals: AtomicUsize::new(0),
             seen: AtomicUsize::new(hits()),
             hits,
-            last_halved: Mutex::new(None),
-            backoff_every,
+            moves: Mutex::new(Moves {
+                last_halved: None,
+                last_event: clock(),
+                refused: false,
+            }),
+            pacing,
+            clock,
             say,
         }
     }
@@ -193,42 +241,101 @@ impl<'a> Pool<'a> {
         self.limit.load(Ordering::SeqCst)
     }
 
-    /// Lower the pool to `to` (never raise it); true when it went down.
+    fn ceiling(&self) -> usize {
+        self.ceiling.load(Ordering::SeqCst)
+    }
+
+    fn stats(&self) -> capacity::PoolStats {
+        capacity::PoolStats {
+            planned: self.planned,
+            peak: self.peak.load(Ordering::SeqCst),
+            last: self.limit(),
+            rate_limits: self.refusals.load(Ordering::SeqCst),
+        }
+    }
+
+    fn moves(&self) -> std::sync::MutexGuard<'_, Moves> {
+        self.moves.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Lower the ceiling (and the pool with it) to `to`, never raise either;
+    /// true when the ceiling went down.
     fn lower_to(&self, to: usize, wording: fn(usize, usize) -> String) -> bool {
         let to = to.max(1);
-        let from = self.limit.fetch_min(to, Ordering::SeqCst);
+        let _moves = self.moves();
+        let from = self.ceiling.fetch_min(to, Ordering::SeqCst);
+        self.limit.fetch_min(to, Ordering::SeqCst);
         if to < from {
             (self.say)(&wording(from, to));
         }
         to < from
     }
 
-    /// The backend refused for rate limiting: run half as many from now on, at
-    /// most once per `backoff_every` however many refusals arrive together.
-    fn rate_limited(&self) {
-        let mut last = self
+    /// The backend refused `times` for rate limiting: run half as many from
+    /// now on, at most once per `backoff_every` however many refusals arrive
+    /// together. Every refusal restarts the quiet stretch before regrowing.
+    fn rate_limited(&self, times: usize) {
+        self.refusals.fetch_add(times, Ordering::SeqCst);
+        let mut moves = self.moves();
+        let now = (self.clock)();
+        moves.refused = true;
+        moves.last_event = now;
+        if moves
             .last_halved
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if last.is_some_and(|t| t.elapsed() < self.backoff_every) {
+            .is_some_and(|t| now.saturating_sub(t) < self.pacing.backoff_every)
+        {
             return;
         }
-        if self.lower_to(capacity::halve(self.limit()), words::rate_limited) {
-            *last = Some(Instant::now());
+        let from = self.limit();
+        let to = capacity::halve(from);
+        if to < from {
+            self.limit.store(to, Ordering::SeqCst);
+            (self.say)(&words::rate_limited(from, to));
+            moves.last_halved = Some(now);
         }
     }
 
     /// Notice rate-limit refusals the backend layer has counted since last time.
     fn poll(&self) {
         let now = (self.hits)();
-        if now > self.seen.swap(now, Ordering::SeqCst) {
-            self.rate_limited();
+        let before = self.seen.swap(now, Ordering::SeqCst);
+        if now > before {
+            self.rate_limited(now - before);
         }
+    }
+
+    /// Let one more agent in when the pool is below its ceiling and has been
+    /// quiet for a full interval: `ramp_every` while nothing has been refused,
+    /// `regrow_after` once something has.
+    fn grow(&self) {
+        let mut moves = self.moves();
+        let (limit, ceiling) = (self.limit(), self.ceiling());
+        if limit >= ceiling {
+            return;
+        }
+        let wait = if moves.refused {
+            self.pacing.regrow_after
+        } else {
+            self.pacing.ramp_every
+        };
+        let now = (self.clock)();
+        if now.saturating_sub(moves.last_event) < wait {
+            return;
+        }
+        let to = capacity::grown(limit, ceiling);
+        self.limit.store(to, Ordering::SeqCst);
+        moves.last_event = now;
+        if moves.refused {
+            (self.say)(&words::pool_regrew(limit, to));
+        }
+        drop(moves);
+        self.turn.notify_all();
     }
 
     /// Wait for a place in the pool.
     fn enter(&self) {
         self.poll();
+        self.grow();
         let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
         while *active >= self.limit() {
             active = self
@@ -236,8 +343,11 @@ impl<'a> Pool<'a> {
                 .wait_timeout(active, Duration::from_millis(100))
                 .unwrap_or_else(PoisonError::into_inner)
                 .0;
+            self.poll();
+            self.grow();
         }
         *active += 1;
+        self.peak.fetch_max(*active, Ordering::SeqCst);
     }
 
     fn leave(&self) {
@@ -274,7 +384,7 @@ fn schedule<T: Send>(
     announce: &(dyn Fn(usize, usize, usize) + Sync),
 ) -> Vec<Option<T>> {
     let slots: Vec<Mutex<Option<T>>> = (0..count).map(|_| Mutex::new(None)).collect();
-    let workers = pool.start.clamp(1, MAX_JOBS).min(lanes.len().max(1));
+    let workers = pool.planned.clamp(1, MAX_JOBS).min(lanes.len().max(1));
     if workers == 1 {
         for at in lanes.into_iter().flatten() {
             let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(at)));
@@ -382,7 +492,7 @@ fn run_part(
                 let why = format!("{e:#}");
                 if capacity::is_rate_limited(&why) {
                     if let Some(pool) = pool {
-                        pool.rate_limited();
+                        pool.rate_limited(1);
                     }
                 }
                 console.complain(&p.part, &format!("{}: {why}", p.part));
@@ -396,9 +506,11 @@ fn run_part(
     })
 }
 
-/// Get a verified datasheet for each part and draft its card, `jobs` at a time
-/// (the pool can shrink during the run, never grow). A part that fails is
-/// reported and the batch carries on.
+/// Draft a card for each part, up to `jobs` at a time.
+///
+/// The pool ramps up to that, halves when the backend rate limits and grows
+/// back after a quiet stretch. A part that fails is reported and the batch
+/// carries on.
 pub fn draft_parts(
     work: &[&UnmodelledPart],
     acquirer: &Acquirer<'_>,
@@ -422,13 +534,20 @@ pub fn draft_parts(
     }
     let say_pool = |text: &str| console.say("", text);
     let hits = progress::rate_limit_hits;
-    let pool = Pool::new(start, opts.backoff_every, &hits, &say_pool);
+    let origin = Instant::now();
+    let clock = || origin.elapsed();
+    let pacing = Pacing {
+        backoff_every: opts.backoff_every,
+        ramp_every: opts.ramp_every,
+        regrow_after: opts.regrow_after,
+    };
+    let pool = Pool::new(start, pacing, &clock, &hits, &say_pool);
     let announce = |done: usize, total: usize, running: usize| {
         let plan = opts.watch.and_then(|w| {
             let now = (opts.reading)()?.session?;
             let (per, observed) =
                 capacity::refined_per_part(w.prior_session, w.start_session, Some(now), done);
-            let lowered = capacity::relimit(total - done, now, per, pool.limit());
+            let lowered = capacity::relimit(total - done, now, per, pool.ceiling());
             pool.lower_to(lowered, words::window_tight);
             Some(words::plan_now(now, per, observed))
         });
@@ -466,7 +585,7 @@ pub fn draft_parts(
         }
     }
     let mut tally = Tally {
-        jobs: (start, pool.limit()),
+        pool: pool.stats(),
         ..Tally::default()
     };
     for (p, run) in work.iter().zip(ran) {
@@ -511,8 +630,23 @@ mod tests {
 
     fn silent(_: &str) {}
 
+    fn zero_clock() -> Duration {
+        Duration::ZERO
+    }
+
+    fn pacing(backoff: u64, ramp: u64, regrow: u64) -> Pacing {
+        Pacing {
+            backoff_every: Duration::from_secs(backoff),
+            ramp_every: Duration::from_secs(ramp),
+            regrow_after: Duration::from_secs(regrow),
+        }
+    }
+
+    /// A pool already at its full size, for the scheduling tests.
     fn test_pool(n: usize) -> Pool<'static> {
-        Pool::new(n, Duration::ZERO, &no_hits, &silent)
+        let pool = Pool::new(n, pacing(0, 0, 0), &zero_clock, &no_hits, &silent);
+        pool.limit.store(n, Ordering::SeqCst);
+        pool
     }
 
     fn fake_parts(n: usize) -> Vec<UnmodelledPart> {
@@ -532,7 +666,7 @@ mod tests {
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
     /// A backend that answers 429 halves the pool; the refusals are failed
-    /// extractions, not lost, and the pool never grows back.
+    /// extractions, not lost, and within the quiet interval the pool stays down.
     #[test]
     fn a_rate_limited_backend_halves_the_pool_and_the_run_carries_on() {
         use hauksbee_models::datasheet_fetch::{CurlHttp, HostLedger};
@@ -563,10 +697,18 @@ mod tests {
         let opts = BatchOptions {
             backoff_every: Duration::from_secs(60),
             progress_every: Duration::from_secs(60),
+            ramp_every: Duration::from_secs(60),
+            regrow_after: Duration::from_secs(60),
             ..BatchOptions::default()
         };
         let tally = draft_parts(&work, &acquirer, &template, &kind_of, &extract, 4, &opts);
-        assert_eq!(tally.jobs, (4, 2), "halved once, debounced after");
+        let pool = tally.pool;
+        assert_eq!(
+            (pool.planned, pool.last, pool.rate_limits),
+            (4, 1, 1),
+            "started at 2, halved once on P0's 429, no regrowth inside the interval"
+        );
+        assert!(pool.peak <= 2, "never above the ramp's start: {pool:?}");
         assert_eq!(tally.drafted, 7);
         assert_eq!(tally.failed.len(), 1);
         assert!(tally.failed[0].1.contains("429"));
@@ -580,7 +722,8 @@ mod tests {
         let hits = AtomicUsize::new(0);
         let read = || hits.load(Ordering::SeqCst);
         let say = |t: &str| said.lock().unwrap().push(t.to_string());
-        let pool = Pool::new(8, Duration::from_secs(60), &read, &say);
+        let pool = Pool::new(8, pacing(60, 10, 60), &zero_clock, &read, &say);
+        pool.limit.store(8, Ordering::SeqCst);
         pool.poll();
         assert_eq!(pool.limit(), 8, "no refusals, no change");
         hits.fetch_add(3, Ordering::SeqCst);
@@ -591,7 +734,13 @@ mod tests {
         assert_eq!(pool.limit(), 4, "a burst inside the interval halves once");
         assert_eq!(said.lock().unwrap().len(), 1);
         assert!(said.lock().unwrap()[0].contains("running 4 agents instead of 8"));
-        assert!(!pool.lower_to(6, words::window_tight), "never raised");
+        assert!(
+            pool.lower_to(6, words::window_tight),
+            "headroom lowers the ceiling"
+        );
+        assert!(!pool.lower_to(7, words::window_tight), "never raised");
+        assert_eq!(pool.limit(), 4, "a ceiling above the pool leaves it be");
+        assert_eq!(pool.stats().rate_limits, 4, "every refusal is counted");
     }
 
     /// The progress line carries the plan's state, and a window that is
@@ -626,6 +775,7 @@ mod tests {
         let opts = BatchOptions {
             progress_every: Duration::from_millis(400),
             backoff_every: Duration::from_secs(60),
+            ramp_every: Duration::ZERO,
             watch: Some(PlanWatch {
                 start_session: Some(40.0),
                 prior_session: 0.8,
@@ -635,7 +785,7 @@ mod tests {
         };
         let tally = draft_parts(&work, &acquirer, &template, &kind_of, &extract, 4, &opts);
         assert_eq!(tally.drafted, 12);
-        assert!(tally.jobs.1 < 4, "pool was lowered: {:?}", tally.jobs);
+        assert!(tally.pool.last < 4, "pool was lowered: {:?}", tally.pool);
     }
 
     #[test]
@@ -798,6 +948,7 @@ mod tests {
             let opts = BatchOptions {
                 jobs: Some(jobs),
                 progress_every: Duration::from_secs(60),
+                ramp_every: Duration::ZERO,
                 ..BatchOptions::default()
             };
             let started = Instant::now();
@@ -825,6 +976,208 @@ mod tests {
             "4 jobs {fast:?} should be well under half of serial {slow:?}"
         );
         assert!(slow >= Duration::from_millis(7 * 250), "{slow:?}");
+    }
+
+    /// A pool on a fake clock (seconds) with a settable count of refusals.
+    struct Fake {
+        secs: AtomicUsize,
+        hits: AtomicUsize,
+        said: Mutex<Vec<String>>,
+    }
+
+    impl Fake {
+        fn new() -> Self {
+            Self {
+                secs: AtomicUsize::new(0),
+                hits: AtomicUsize::new(0),
+                said: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn at(&self, secs: usize) {
+            self.secs.store(secs, Ordering::SeqCst);
+        }
+
+        fn refuse(&self, n: usize) {
+            self.hits.fetch_add(n, Ordering::SeqCst);
+        }
+    }
+
+    /// Run `f` with a pool of `ceiling` on the fake clock: backoff 30 s, ramp
+    /// every 10 s, regrow after 60 s quiet.
+    fn with_fake_pool(ceiling: usize, f: impl FnOnce(&Pool<'_>, &Fake)) {
+        let fake = Fake::new();
+        let clock = || Duration::from_secs(fake.secs.load(Ordering::SeqCst) as u64);
+        let hits = || fake.hits.load(Ordering::SeqCst);
+        let say = |t: &str| fake.said.lock().unwrap().push(t.to_string());
+        let pool = Pool::new(ceiling, pacing(30, 10, 60), &clock, &hits, &say);
+        f(&pool, &fake);
+    }
+
+    #[test]
+    fn the_pool_starts_with_a_couple_and_ramps_up_one_per_interval_to_the_ceiling() {
+        with_fake_pool(4, |pool, fake| {
+            assert_eq!(pool.limit(), 2, "a couple at the start, not all at once");
+            let mut seen = vec![];
+            for t in [0, 9, 10, 15, 19, 20, 29, 30, 60, 600] {
+                fake.at(t);
+                pool.grow();
+                seen.push((t, pool.limit()));
+            }
+            assert_eq!(
+                seen,
+                [
+                    (0, 2),
+                    (9, 2),
+                    (10, 3),
+                    (15, 3),
+                    (19, 3),
+                    (20, 4),
+                    (29, 4),
+                    (30, 4),
+                    (60, 4),
+                    (600, 4)
+                ],
+                "one more per 10 s, never above the ceiling"
+            );
+            assert!(fake.said.lock().unwrap().is_empty(), "the ramp is silent");
+        });
+        with_fake_pool(2, |pool, fake| {
+            fake.at(1000);
+            pool.grow();
+            assert_eq!(pool.limit(), 2, "a ceiling of the start size does not move");
+        });
+        with_fake_pool(1, |pool, _| assert_eq!(pool.limit(), 1));
+    }
+
+    #[test]
+    fn a_rate_limit_halves_the_pool_at_most_once_per_backoff_interval() {
+        with_fake_pool(8, |pool, fake| {
+            pool.limit.store(8, Ordering::SeqCst);
+            fake.at(5);
+            fake.refuse(3);
+            pool.poll();
+            assert_eq!(pool.limit(), 4);
+            fake.at(20);
+            fake.refuse(1);
+            pool.poll();
+            assert_eq!(
+                pool.limit(),
+                4,
+                "inside the 30 s backoff: no second halving"
+            );
+            fake.at(36);
+            fake.refuse(1);
+            pool.poll();
+            assert_eq!(pool.limit(), 2, "after the interval it halves again");
+            assert_eq!(pool.stats().rate_limits, 5);
+            assert_eq!(fake.said.lock().unwrap().len(), 2);
+            // Never below one.
+            for t in [100, 200, 300] {
+                fake.at(t);
+                pool.rate_limited(1);
+            }
+            assert_eq!(pool.limit(), 1);
+        });
+    }
+
+    #[test]
+    fn the_pool_grows_back_one_at_a_time_after_a_quiet_stretch_never_above_the_ceiling() {
+        with_fake_pool(4, |pool, fake| {
+            fake.at(30);
+            pool.grow();
+            fake.at(40);
+            pool.grow();
+            assert_eq!(pool.limit(), 4);
+            fake.at(100);
+            fake.refuse(2);
+            pool.poll();
+            assert_eq!(pool.limit(), 2, "halved");
+            fake.at(159);
+            pool.grow();
+            assert_eq!(pool.limit(), 2, "59 s quiet is not enough");
+            fake.at(160);
+            pool.grow();
+            assert_eq!(pool.limit(), 3, "60 s quiet: one more");
+            pool.grow();
+            assert_eq!(pool.limit(), 3, "one step per quiet interval");
+            // A new refusal inside the interval restarts the quiet stretch.
+            fake.at(200);
+            fake.refuse(1);
+            pool.poll();
+            assert_eq!(pool.limit(), 1, "halved again (3 to 1) after the backoff");
+            fake.at(259);
+            pool.grow();
+            assert_eq!(pool.limit(), 1);
+            for t in [260, 320, 380, 440, 500, 900] {
+                fake.at(t);
+                pool.grow();
+            }
+            assert_eq!(pool.limit(), 4, "back to, and never past, the ceiling");
+            let said = fake.said.lock().unwrap().clone();
+            assert!(
+                said.iter()
+                    .any(|l| l == "[batch] the backend has stopped rate limiting; running 3 agents instead of 2 again"),
+                "{said:?}"
+            );
+            assert_eq!(pool.stats().rate_limits, 3);
+        });
+    }
+
+    #[test]
+    fn headroom_only_lowers_the_ceiling_and_the_ramp_respects_it() {
+        with_fake_pool(4, |pool, fake| {
+            assert!(pool.lower_to(3, words::window_tight));
+            assert_eq!((pool.ceiling(), pool.limit()), (3, 2));
+            assert!(!pool.lower_to(4, words::window_tight), "never raised");
+            for t in [10, 20, 30, 40] {
+                fake.at(t);
+                pool.grow();
+            }
+            assert_eq!(pool.limit(), 3, "ramps to the lowered ceiling and stops");
+            assert!(pool.lower_to(2, words::window_tight));
+            assert_eq!(
+                (pool.ceiling(), pool.limit()),
+                (2, 2),
+                "pulls the pool down"
+            );
+            fake.at(1000);
+            pool.grow();
+            assert_eq!(pool.limit(), 2);
+        });
+    }
+
+    /// Four agents' starts are spread by the ramp, not all at the same moment:
+    /// the third cannot begin before one interval, the fourth before two.
+    #[test]
+    fn agents_start_staggered_while_nothing_is_refused() {
+        let origin = Instant::now();
+        let clock = || origin.elapsed();
+        let pool = Pool::new(4, pacing(30, 0, 60), &clock, &no_hits, &silent);
+        let pool = Pool {
+            pacing: Pacing {
+                ramp_every: Duration::from_millis(150),
+                ..pool.pacing
+            },
+            ..pool
+        };
+        let starts = Mutex::new(Vec::new());
+        schedule(
+            4,
+            (0..4).map(|i| vec![i]).collect(),
+            &pool,
+            Duration::from_secs(60),
+            &|_| {
+                starts.lock().unwrap().push(origin.elapsed());
+                std::thread::sleep(Duration::from_millis(500));
+            },
+            &|_, _, _| {},
+        );
+        let mut starts = starts.into_inner().unwrap();
+        starts.sort();
+        assert!(starts[2] >= Duration::from_millis(150), "{starts:?}");
+        assert!(starts[3] >= Duration::from_millis(300), "{starts:?}");
+        assert_eq!(pool.stats().peak, 4);
     }
 
     /// A job that panics is a gap, not the end of the batch.

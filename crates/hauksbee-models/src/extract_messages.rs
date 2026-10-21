@@ -8,7 +8,7 @@
 
 use crate::datasheet::Backend;
 use crate::datasheet_discovery::Missing;
-use crate::extract_capacity::{Basis, Plan, Warning};
+use crate::extract_capacity::{Basis, Plan, PoolStats, Warning, RAMP_START};
 use crate::extract_usage::{totals, CallRecord};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -173,28 +173,58 @@ pub fn preflight(plan: &Plan) -> String {
         plan.parts,
         if plan.parts == 1 { "" } else { "s" }
     );
-    let jobs = agents(plan.jobs);
-    let how = if plan.overridden {
-        format!("(as asked; the highest safe is {})", plan.recommended)
-    } else {
-        "(highest safe)".to_string()
-    };
+    let jobs = pool_phrase(plan.jobs);
+    let how = pool_note(plan);
     match plan.basis {
         Basis::Known {
             session_use,
             week_use,
             ..
         } => format!(
-            "{parts}, about {} of your 5-hour window and {} of your weekly; running {jobs} in parallel {how}",
+            "{parts}, about {} of your 5-hour window and {} of your weekly; running {jobs} {how}",
             pct(session_use),
             pct(week_use)
         ),
         Basis::Metered => format!(
-            "{parts}, billed per call through your API key (no plan to run out of); running {jobs} in parallel {how}"
+            "{parts}, billed per call through your API key (no plan to run out of); running {jobs} {how}"
         ),
-        Basis::Unknown => format!(
-            "{parts}, plan headroom unknown; running {jobs} in parallel (conservative)"
-        ),
+        Basis::Unknown => {
+            format!("{parts}, plan headroom unknown; running {jobs} {how}")
+        }
+    }
+}
+
+/// How many agents run at once, as the most the pool will reach.
+fn pool_phrase(jobs: usize) -> String {
+    if jobs <= 1 {
+        "1 agent at a time".to_string()
+    } else {
+        format!("up to {} at once", agents(jobs))
+    }
+}
+
+/// What the pool does on the way: ramps up, backs off, and why it is that size.
+fn pool_note(plan: &Plan) -> String {
+    let moves = match (plan.jobs > RAMP_START, plan.jobs > 1) {
+        (true, _) => "ramping up; fewer if the service rate-limits",
+        (false, true) => "fewer if the service rate-limits",
+        (false, false) => "",
+    };
+    let why = if plan.overridden {
+        format!("as asked; the default is {}", plan.recommended)
+    } else if matches!(plan.basis, Basis::Unknown) {
+        "conservative".to_string()
+    } else {
+        String::new()
+    };
+    let parts: Vec<String> = [why, moves.to_string()]
+        .into_iter()
+        .filter(|t| !t.is_empty())
+        .collect();
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("({})", parts.join("; "))
     }
 }
 
@@ -243,6 +273,34 @@ pub fn rate_limited(from: usize, to: usize) -> String {
     format!(
         "[batch] the backend is rate limiting; running {} instead of {from} from now on",
         agents(to)
+    )
+}
+
+/// The pool grows back one step after a quiet stretch with no rate limiting.
+#[must_use]
+pub fn pool_regrew(from: usize, to: usize) -> String {
+    format!(
+        "[batch] the backend has stopped rate limiting; running {} instead of {from} again",
+        agents(to)
+    )
+}
+
+/// The one line of the end tally on how the pool moved: the ceiling it was
+/// planned to, the most agents that really ran at once, where it ended, and how
+/// often the service refused.
+#[must_use]
+pub fn pool_line(pool: &PoolStats) -> String {
+    if pool.planned <= 1 {
+        return "agents: 1 at a time".to_string();
+    }
+    let refused = match pool.rate_limits {
+        0 => "no rate-limit refusals".to_string(),
+        1 => "1 rate-limit refusal (429)".to_string(),
+        n => format!("{n} rate-limit refusals (429)"),
+    };
+    format!(
+        "agents: up to {} planned, peak {} at once, finished with {}; {refused}",
+        pool.planned, pool.peak, pool.last
     )
 }
 
@@ -345,19 +403,11 @@ pub const BATCH_RECORD_FILE: &str = "batch-summary.txt";
 pub fn batch_record(
     planned: &str,
     summary: &str,
-    jobs: (usize, usize),
+    pool: &PoolStats,
     calls: &[CallRecord],
 ) -> String {
     let mut out = format!("plan: {planned}\n{summary}\n");
-    if jobs.1 < jobs.0 {
-        let _ = writeln!(
-            out,
-            "agents: started with {}, finished with {} (the pool shrank during the run)",
-            jobs.0, jobs.1
-        );
-    } else {
-        let _ = writeln!(out, "agents: {} throughout", jobs.0);
-    }
+    let _ = writeln!(out, "{}", pool_line(pool));
     out.push_str(&usage_record(calls));
     out
 }
@@ -677,16 +727,25 @@ mod tests {
         let p = plan(38, known, Some(CODEX_LUNA), 6, None, false);
         assert_eq!(
             preflight(&p),
-            "38 parts, about 30% of your 5-hour window and 2% of your weekly; running 6 agents in parallel (highest safe)"
+            "38 parts, about 30% of your 5-hour window and 2% of your weekly; running up to 4 agents at once (ramping up; fewer if the service rate-limits)"
         );
-        let asked = plan(38, known, Some(CODEX_LUNA), 6, Some(3), false);
+        assert!(!preflight(&p).contains("highest safe"));
+        let asked = plan(38, known, Some(CODEX_LUNA), 6, Some(6), false);
         assert!(
-            preflight(&asked).contains("3 agents in parallel (as asked; the highest safe is 6)")
+            preflight(&asked).contains(
+                "up to 6 agents at once (as asked; the default is 4; ramping up; fewer if the service rate-limits)"
+            ),
+            "{}",
+            preflight(&asked)
+        );
+        let serial = plan(38, known, Some(CODEX_LUNA), 6, Some(1), false);
+        assert!(
+            preflight(&serial).ends_with("running 1 agent at a time (as asked; the default is 4)")
         );
         let unknown = plan(1, Headroom::Unknown, None, 6, None, false);
         assert_eq!(
             preflight(&unknown),
-            "1 part, plan headroom unknown; running 1 agent in parallel (conservative)"
+            "1 part, plan headroom unknown; running 1 agent at a time (conservative)"
         );
         let metered = plan(10, Headroom::Metered, None, 8, None, false);
         assert!(
@@ -763,20 +822,54 @@ mod tests {
 
     #[test]
     fn the_batch_record_says_how_the_pool_moved_and_carries_the_usage() {
-        let shrank = batch_record("3 parts, plan", "Batch: 3 drafted", (4, 2), &[]);
+        let moved = PoolStats {
+            planned: 4,
+            peak: 4,
+            last: 2,
+            rate_limits: 3,
+        };
+        let shrank = batch_record("3 parts, plan", "Batch: 3 drafted", &moved, &[]);
         assert!(
             shrank.starts_with("plan: 3 parts, plan\nBatch: 3 drafted\n"),
             "{shrank}"
         );
         assert!(
-            shrank.contains("started with 4, finished with 2"),
+            shrank.contains(
+                "agents: up to 4 planned, peak 4 at once, finished with 2; 3 rate-limit refusals (429)"
+            ),
             "{shrank}"
         );
         assert!(
             shrank.contains("no backend calls were recorded"),
             "{shrank}"
         );
-        assert!(batch_record("p", "s", (4, 4), &[]).contains("agents: 4 throughout"));
+        let calm = PoolStats {
+            planned: 4,
+            peak: 3,
+            last: 4,
+            rate_limits: 0,
+        };
+        assert!(batch_record("p", "s", &calm, &[]).contains(
+            "agents: up to 4 planned, peak 3 at once, finished with 4; no rate-limit refusals"
+        ));
+        let one = PoolStats {
+            rate_limits: 1,
+            ..moved
+        };
+        assert!(pool_line(&one).ends_with("1 rate-limit refusal (429)"));
+        assert_eq!(
+            pool_line(&PoolStats {
+                planned: 1,
+                peak: 1,
+                last: 1,
+                rate_limits: 0
+            }),
+            "agents: 1 at a time"
+        );
+        assert_eq!(
+            pool_regrew(2, 3),
+            "[batch] the backend has stopped rate limiting; running 3 agents instead of 2 again"
+        );
     }
 
     /// One wording for every way of having no datasheet.
