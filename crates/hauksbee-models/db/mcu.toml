@@ -1660,9 +1660,10 @@ internal_clock = "internal 8 MHz HSI RC oscillator"
 # pins the hauksbee demo board wires are named with GPIO/ADC roles; power and
 # the rest carry their port role so the binder can stamp drivers when wired.
 # Roles use the "p<port><bit>" convention the binder's gpio_of_role parses.
-"1"  = "pc13"      # onboard LED (blue pill), active-low to 3V3 in HW
-"2"  = "pc14"
-"3"  = "pc15"
+"1"  = "vbat"      # LQFP-48 pin 1 = VBAT, pins 2-4 = PC13-PC15 (ST DS5319 Rev 20, LQFP48 pinout figure)
+"2"  = "pc13"      # onboard LED (blue pill), active-low to 3V3 in HW
+"3"  = "pc14"
+"4"  = "pc15"
 "5"  = "osc_in"    # HSE crystal / external-clock input
 "6"  = "osc_out"   # HSE crystal oscillator output
 "8"  = "vss"
