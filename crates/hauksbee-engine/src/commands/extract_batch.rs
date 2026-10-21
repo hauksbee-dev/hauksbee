@@ -456,6 +456,8 @@ pub fn draft_parts(
         },
         &announce,
     );
+    // The parts' shared codex base sessions are no longer needed.
+    hauksbee_models::extract_cache::codex::release_bases();
     if concurrent {
         progress::set_concurrent(false);
         let cost = hauksbee_models::extract_usage::summary();

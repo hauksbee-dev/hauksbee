@@ -22,6 +22,7 @@ use super::{
     required_params_for_kind, run_and_record, Workspace, ENVELOPE_RULES, EXTRACTION_RULES,
     PIN_ROLE_GUIDANCE, RATINGS_RULES, SOURCE_QUANTITY_GUIDANCE,
 };
+use crate::extract_cache::Prompt;
 use crate::extract_config::Resolved;
 use crate::extract_harness as harness;
 use crate::extract_progress as progress;
@@ -349,19 +350,22 @@ fn unmodelled_levels(card: &Table) -> Option<String> {
     })
 }
 
-/// The brief of one section agent; `known` is what the identity agent wrote.
-fn prompt(part: &str, kind: &str, section: &str, known: &str) -> String {
-    let base = behavioral_family_base_kind(kind).unwrap_or(kind);
-    let (lower, re) = (part.to_lowercase(), regex::escape(&part.to_uppercase()));
+/// What one section agent owns, the topics it reads, its image allowance and the
+/// guidance for its keys: `(owns, topics, images, guide)`.
+fn section_brief(
+    kind: &str,
+    base: &str,
+    section: &str,
+) -> (String, &'static str, &'static str, String) {
     let roles = format!(
         "PIN ROLE NAMES for kind=\"{base}\": {}",
         pin_roles_for_kind(kind)
     );
-    let (owns, topics, images, guide) = match section {
+    match section {
         "identity" => (
             format!(
-                "`id = \"{lower}\"`, `kind = \"{base}\"`, `[models.match]` (`value_re = '(?i)^{re}'`: {}), \
-                 `[models.pins]` and `[[models.source.pinout]]`",
+                "`id` (as given under THE PART), `kind = \"{base}\"`, `[models.match]` (`value_re` \
+                 as given under THE PART: {}), `[models.pins]` and `[[models.source.pinout]]`",
                 crate::validation::MATCH_PATTERN_RULE
             ),
             "pin functions or package pinout, ordering or package information",
@@ -424,13 +428,28 @@ fn prompt(part: &str, kind: &str, section: &str, known: &str) -> String {
                 behavioral_hint_for_kind(kind),
             ),
         ),
-    };
+    }
+}
+
+/// The brief of one section agent; `known` is what the identity agent wrote.
+/// The rules for the section and kind are the base (the same for every part of
+/// the kind); the part, its id and match line and the identity agent's keys are
+/// the tail.
+fn prompt(part: &str, kind: &str, section: &str, known: &str) -> Prompt {
+    let base = behavioral_family_base_kind(kind).unwrap_or(kind);
+    let (lower, re) = (part.to_lowercase(), regex::escape(&part.to_uppercase()));
+    let (owns, topics, images, guide) = section_brief(kind, base, section);
     let known = if known.is_empty() {
         String::new()
     } else {
         format!(
             "\n\nThe identity agent wrote these keys (do not repeat them):\n```toml\n{known}```"
         )
+    };
+    let given = if section == NAMES[0] {
+        format!("\n`id = \"{lower}\"` and `value_re = '(?i)^{re}'`.")
+    } else {
+        String::new()
     };
     // The switching agent's rows are compact: a full-card example would teach the long shape.
     let examples = format_examples_for_kind(kind);
@@ -442,16 +461,18 @@ fn prompt(part: &str, kind: &str, section: &str, known: &str) -> String {
         )
     });
     let finish = if section == "switching" { "" } else { FINISH };
-    format!(
-        "You are one of the agents drafting the Hauksbee model card for {part} (kind `{kind}`). \
+    let text = format!(
+        "You are one of the agents drafting the Hauksbee model card for the part named under \
+         THE PART after these instructions (kind `{kind}`). \
          YOUR SECTION: {section}. Write `model.toml` as a `[[models]]` entry holding ONLY these \
          keys: {owns}. Leave every other key to the other agents. Do not run `hauksbee models \
          lint`: a fragment fails it.{finish}\n\n\
          Your context is small. Start from `page-index.md` and open only the pages on {topics}: \
          `pages/page-NNN.txt` first, `page-NNN.png` (about 5k tokens each) only for a table whose \
          text columns are scrambled.{images} Never open `datasheet.pdf` or `datasheet.txt` whole. \
-         Omit what the datasheet does not state.{known}\n\n{guide}\n\n{example}"
-    )
+         Omit what the datasheet does not state.\n\n{guide}\n\n{example}"
+    );
+    Prompt::new(text, format!("\n\nTHE PART: {part}{given}{known}"))
 }
 
 /// Draft the card: identity first, then every other section at once, each
@@ -471,7 +492,7 @@ pub(super) fn draft(
         let fork = ws.fork()?;
         let at = serde_json::json!({"stage": format!("section {name}"), "agent": fork.label(), "attempt": 1, "attempts": 1});
         progress::event("stage", at);
-        let brief = prompt(part, kind, name, known) + &harness::page_list(fork.path());
+        let brief = prompt(part, kind, name, known).then(&harness::page_list(fork.path()));
         // A stopped or failed agent keeps whatever it already wrote.
         if let Err(e) = run_and_record(resolved, &brief, &fork, budget, billing) {
             say!("[model-extract] the {name} section agent ended early: {e:#}");
@@ -581,6 +602,20 @@ fn finished(files: &[(u32, String)]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_section_agents_rules_are_shared_between_parts_of_a_kind() {
+        for name in NAMES {
+            let a = prompt("SN74LVC1T45", "digital", name, "");
+            let b = prompt("TXB0101", "digital", name, "");
+            assert_eq!(a.base, b.base, "{name}");
+            assert!(!a.base.contains("SN74LVC1T45") && a.tail.contains("SN74LVC1T45"));
+        }
+        let identity = prompt("TXB0101", "digital", NAMES[0], "");
+        assert!(
+            identity.tail.contains("id = \"txb0101\"") && identity.tail.contains("(?i)^TXB0101")
+        );
+    }
+
     use super::*;
 
     const IDENTITY: &str =
@@ -703,18 +738,20 @@ mod tests {
         let full = super::super::build_prompt("SN74LVC1T45", "digital", "");
         let known = document(entry(IDENTITY, &mut Vec::new()).unwrap());
         for name in NAMES {
-            let brief = prompt("SN74LVC1T45", "digital", name, &known);
+            let brief = prompt("SN74LVC1T45", "digital", name, &known).full();
             assert!(brief.contains(&format!("YOUR SECTION: {name}")) && brief.len() < full.len());
             let own = name == "identity";
             assert_eq!(brief.contains("PIN NUMBERING"), own, "{name}");
             assert_eq!(brief.contains("confidence.txt"), own, "{name}");
         }
-        let later = prompt("SN74LVC1T45", "digital", "electrical", &known);
+        let later = prompt("SN74LVC1T45", "digital", "electrical", &known).full();
         assert!(later.contains("do not repeat them") && later.contains("\"1\" = \"vcca\""));
-        assert!(!prompt("X1", "digital", "ratings", "").contains("do not repeat them"));
+        assert!(!prompt("X1", "digital", "ratings", "")
+            .full()
+            .contains("do not repeat them"));
         // The switching table's rows have one owner.
         assert!(later.contains("belong to the switching agent"));
-        let timing = prompt("X1", "digital", "switching", &known);
+        let timing = prompt("X1", "digital", "switching", &known).full();
         assert!(
             timing.contains("switching-characteristics")
                 && !timing.contains("[models.logic]")
@@ -948,7 +985,7 @@ vol = { max = 0.55, unit = "V", conditions = "IOL = 24 mA; VI = VIL; VCCA = 3 V;
             let name = serde_json::to_value(kind).unwrap();
             let name = name.as_str().unwrap();
             let full = super::super::build_prompt("X1", name, "");
-            let ratings_brief = prompt("X1", name, "ratings", "");
+            let ratings_brief = prompt("X1", name, "ratings", "").full();
             let accepted: Vec<&str> = crate::schema::Ratings::keys()
                 .filter(|k| validation_accepts(kind, k))
                 .collect();
@@ -969,7 +1006,7 @@ vol = { max = 0.55, unit = "V", conditions = "IOL = 24 mA; VI = VIL; VCCA = 3 V;
 
     #[test]
     fn one_wording_for_the_scalar_of_a_tagged_rating() {
-        let brief = prompt("X1", "diode", "ratings", "");
+        let brief = prompt("X1", "diode", "ratings", "").full();
         assert_eq!(
             brief.matches(standard_condition!()).count(),
             2,
