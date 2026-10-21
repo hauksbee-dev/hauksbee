@@ -457,7 +457,9 @@ id = "rp2040_extracted"
             .file_name()
             .unwrap();
         assert!(
-            cd.to_string_lossy().starts_with("hauksbee-extract-check-"),
+            // This process's own slot sandbox (stable per slot, so prompts cache).
+            cd.to_string_lossy()
+                .starts_with(&format!("hauksbee-extract-p{}-s", std::process::id())),
             "{argv:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
