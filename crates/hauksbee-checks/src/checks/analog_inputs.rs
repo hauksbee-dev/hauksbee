@@ -206,7 +206,10 @@ fn is_gpio_role(role: &str) -> bool {
         && head.starts_with('p')
         && head.as_bytes()[1].is_ascii_lowercase()
         && head[2..].chars().all(|c| c.is_ascii_digit());
-    port_pin || ["gpio", "io", "gp", "d", "a", "p"].iter().any(|p| numbered(p))
+    port_pin
+        || ["gpio", "io", "gp", "d", "a", "p"]
+            .iter()
+            .any(|p| numbered(p))
 }
 
 /// Alternate functions that are themselves analogue or analogue-adjacent: a
@@ -214,9 +217,12 @@ fn is_gpio_role(role: &str) -> bool {
 /// reference, a DAC or op-amp pin, a touch or capacitive-sense channel).
 fn has_analog_function(role: &str) -> bool {
     role.to_ascii_lowercase().split('_').any(|t| {
-        ["ain", "adc", "comp", "cmp", "dac", "aref", "vref", "opamp", "opa", "touch", "tsc", "cap", "lcd", "sense"]
-            .iter()
-            .any(|a| t.starts_with(a))
+        [
+            "ain", "adc", "comp", "cmp", "dac", "aref", "vref", "opamp", "opa", "touch", "tsc",
+            "cap", "lcd", "sense",
+        ]
+        .iter()
+        .any(|a| t.starts_with(a))
     })
 }
 
@@ -274,7 +280,10 @@ fn source_of(
 ) -> Option<Source> {
     let board = cx.board;
     let members = board.net_members(net_id);
-    let others: Vec<_> = members.iter().filter(|(c, _)| c.reference != skip).collect();
+    let others: Vec<_> = members
+        .iter()
+        .filter(|(c, _)| c.reference != skip)
+        .collect();
     for (c, p) in &others {
         if is_pot(c) && is_wiper(c, p) {
             return Some(Source {
@@ -408,11 +417,13 @@ fn adc_alternatives(c: &Component, m: &ModelEntry, board: &ExtractedBoard) -> St
         (free, "unused ")
     };
     let more = shown.len().saturating_sub(8);
-    let mut text = shown.into_iter().take(8).collect::<Vec<_>>().join(", ");
-    if more > 0 {
-        text.push_str(&format!(" and {more} more"));
-    }
-    format!("The card's {which}ADC-capable pads are {text}.")
+    let text = shown.into_iter().take(8).collect::<Vec<_>>().join(", ");
+    let tail = if more > 0 {
+        format!(" and {more} more")
+    } else {
+        String::new()
+    };
+    format!("The card's {which}ADC-capable pads are {text}{tail}.")
 }
 
 /// An analogue source wired to an MCU pad that its card does not list as an ADC
@@ -441,7 +452,9 @@ fn adc_capability_flags(
             {
                 continue;
             }
-            let Some(net) = board.net(net_id) else { continue };
+            let Some(net) = board.net(net_id) else {
+                continue;
+            };
             // A net that also reaches an ADC pad (of this or another MCU) is read.
             let reads = board.net_members(net_id).iter().any(|(oc, op)| {
                 st.parts(board).any(|(pc, pm)| {
@@ -655,15 +668,35 @@ mod tests {
         }
     }
     /// (label, pad the divider tap or wiper feeds, parts on the net besides
-    /// the MCU, findings expected). ATmega328P DIP: pad 4 is PD2 (no ADC),
+    /// the MCU, findings expected). `ATmega328P` DIP: pad 4 is PD2 (no ADC),
     /// pad 23 is PC0 (ADC0).
     const CAPABILITY_ROWS: &[(&str, &str, Source3, usize)] = &[
-        ("divider tap on a non-ADC pad", "4", Source3::Divider(10_000), 1),
-        ("divider tap on an ADC pad", "23", Source3::Divider(10_000), 0),
+        (
+            "divider tap on a non-ADC pad",
+            "4",
+            Source3::Divider(10_000),
+            1,
+        ),
+        (
+            "divider tap on an ADC pad",
+            "23",
+            Source3::Divider(10_000),
+            0,
+        ),
         ("pot wiper on a non-ADC pad", "4", Source3::Wiper, 1),
         ("pot wiper on an ADC pad", "23", Source3::Wiper, 0),
-        ("one series resistor then a divider", "4", Source3::SeriesDivider, 1),
-        ("equal 100k/1k tap is a logic level", "4", Source3::Divider(1_000), 0),
+        (
+            "one series resistor then a divider",
+            "4",
+            Source3::SeriesDivider,
+            1,
+        ),
+        (
+            "equal 100k/1k tap is a logic level",
+            "4",
+            Source3::Divider(1_000),
+            0,
+        ),
     ];
 
     // A divider from a VBUS rail (a USB-present sense, here 5 V) is not an
@@ -675,7 +708,12 @@ mod tests {
             let mut b = capability_board("4", Source3::Divider(10_000), false);
             b.nets[1].name = rail.into();
             let r = analog_input_lint(&b, &lib, &|_| None);
-            assert!(r.findings.iter().all(|f| !f.message.contains("lists no ADC")), "{rail}: {r:?}");
+            assert!(
+                r.findings
+                    .iter()
+                    .all(|f| !f.message.contains("lists no ADC")),
+                "{rail}: {r:?}"
+            );
         }
     }
 
@@ -747,7 +785,12 @@ mod tests {
     fn a_net_that_also_reaches_an_adc_pad_is_silent() {
         let b = capability_board("4", Source3::Divider(10_000), true);
         let r = analog_input_lint(&b, &ModelLibrary::builtin(), &|_| None);
-        assert!(r.findings.iter().all(|f| !f.message.contains("lists no ADC")), "{r:?}");
+        assert!(
+            r.findings
+                .iter()
+                .all(|f| !f.message.contains("lists no ADC")),
+            "{r:?}"
+        );
     }
 
     // A pad whose role itself is analogue (the AVR comparator input) is never held to the list.
@@ -755,6 +798,11 @@ mod tests {
     fn an_analogue_function_pad_is_not_held_to_the_adc_list() {
         let b = capability_board("12", Source3::Divider(10_000), false);
         let r = analog_input_lint(&b, &ModelLibrary::builtin(), &|_| None);
-        assert!(r.findings.iter().all(|f| !f.message.contains("lists no ADC")), "{r:?}");
+        assert!(
+            r.findings
+                .iter()
+                .all(|f| !f.message.contains("lists no ADC")),
+            "{r:?}"
+        );
     }
 }

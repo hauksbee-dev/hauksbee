@@ -371,7 +371,13 @@ fn swapped_by_name(
     let first = wrong.first()?;
     let pads: Vec<String> = wrong
         .iter()
-        .map(|(c, pad, role)| format!("{} pad {pad} (the {} on its card)", c.reference, role.label()))
+        .map(|(c, pad, role)| {
+            format!(
+                "{} pad {pad} (the {} on its card)",
+                c.reference,
+                role.label()
+            )
+        })
         .collect();
     let mut refs: Vec<String> = Vec::new();
     for (c, _, _) in &wrong {
@@ -460,8 +466,7 @@ pub fn audio_bus_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRepo
         {
             continue;
         }
-        let judged = members(board, &parts, net.id)
-            .and_then(|ms| judge(&net.name, &ms, &parts));
+        let judged = members(board, &parts, net.id).and_then(|ms| judge(&net.name, &ms, &parts));
         // The roles-disagree finding already says it; the name is the fallback
         // for a net the roles cannot judge.
         report
@@ -841,7 +846,11 @@ unlocked_by = "validated behavior"
             ("U2", "CODEC", [10, 10, 12, 13, 14]),
         ]);
         let f = run(&b, &lib);
-        assert_eq!(f.iter().filter(|f| f.nets == ["I2S_BCLK"]).count(), 1, "{f:?}");
+        assert_eq!(
+            f.iter().filter(|f| f.nets == ["I2S_BCLK"]).count(),
+            1,
+            "{f:?}"
+        );
     }
 
     #[test]
@@ -872,7 +881,9 @@ unlocked_by = "validated behavior"
             ("U2", "CODEC", [10, 11, 13, 12, 14]),
         ]);
         assert!(
-            run(&b, &lib).iter().all(|f| !f.message.contains("looks swapped")),
+            run(&b, &lib)
+                .iter()
+                .all(|f| !f.message.contains("looks swapped")),
             "{:?}",
             run(&b, &lib)
         );

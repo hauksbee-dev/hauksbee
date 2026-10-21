@@ -94,8 +94,7 @@ fn is_trailing_port(token: &str) -> bool {
     let digits = token.trim_start_matches(|c: char| c.is_ascii_alphabetic());
     let word = &token[..token.len() - digits.len()];
     let numbered = !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit());
-    (numbered && word.len() <= 1)
-        || (numbered && matches!(word, "port" | "ch" | "slot"))
+    (numbered && (word.len() <= 1 || matches!(word, "port" | "ch" | "slot")))
         || matches!(token, "a" | "b" | "c" | "d")
 }
 
@@ -177,9 +176,14 @@ pub fn net_signal(net: &str) -> Option<AudioRole> {
     let owned = tokens_of(&lower);
     let tokens: Vec<&str> = owned.iter().map(String::as_str).collect();
     let context = |t: &&str| {
-        ["i2s", "sai", "pcm", "tdm", "aud", "audio", "codec", "dac", "adc"]
-            .iter()
-            .any(|b| t.strip_prefix(b).is_some_and(|r| r.chars().all(|c| c.is_ascii_digit())))
+        [
+            "i2s", "sai", "pcm", "tdm", "aud", "audio", "codec", "dac", "adc",
+        ]
+        .iter()
+        .any(|b| {
+            t.strip_prefix(b)
+                .is_some_and(|r| r.chars().all(|c| c.is_ascii_digit()))
+        })
     };
     let has_bus_word = tokens.iter().any(context);
     let bare: Vec<&str> = tokens.iter().copied().filter(|t| !context(t)).collect();
