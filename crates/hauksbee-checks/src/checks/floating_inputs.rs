@@ -33,12 +33,12 @@
 //!
 //! ## What holds a net's level
 //!
-//! [`Classifier`] is the one answer to "what holds this net's level", shared
-//! with the strap check. A net is [`Hold::Defined`] when a rail, a ground, a
+//! `Classifier` is the one answer to "what holds this net's level", shared
+//! with the strap check. A net is `Hold::Defined` when a rail, a ground, a
 //! resistor to either (one hop through a signal net is followed), a driver or
 //! any part the classifier cannot show to be weak is on it. It is
-//! [`Hold::Floats`] when nothing but capacitors, test points and other inputs
-//! are on it. It is [`Hold::MayFloat`] when the only holders are parts that set
+//! `Hold::Floats` when nothing but capacitors, test points and other inputs
+//! are on it. It is `Hold::MayFloat` when the only holders are parts that set
 //! a level only some of the time: a push button or switch to one rail, a
 //! connector pin (nothing while unplugged), an NPN collector or N-channel drain
 //! (it only pulls low, and only when on) and, in strict mode, an MCU pad (high

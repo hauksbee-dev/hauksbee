@@ -495,24 +495,16 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
         .findings
         .extend(envelope::envelope_lint(board, lib).findings);
     lint_tick(12);
-    report
-        .findings
-        .extend(contention::contention_lint(board, lib).findings);
-    report
-        .findings
-        .extend(back_power::back_power_lint(board, lib).findings);
-    report
-        .findings
-        .extend(datasheet_field::datasheet_field_lint(board).findings);
-    report
-        .findings
-        .extend(bus_loading::bus_loading_lint(board, lib).findings);
-    report
-        .findings
-        .extend(regulator_cout::regulator_cout_lint(board, lib).findings);
-    report
-        .findings
-        .extend(power_pins::power_pin_lint(board, lib).findings);
+    for findings in [
+        contention::contention_lint(board, lib).findings,
+        back_power::back_power_lint(board, lib).findings,
+        datasheet_field::datasheet_field_lint(board).findings,
+        bus_loading::bus_loading_lint(board, lib).findings,
+        regulator_cout::regulator_cout_lint(board, lib).findings,
+        power_pins::power_pin_lint(board, lib).findings,
+    ] {
+        report.findings.extend(findings);
+    }
     report
         .findings
         .extend(power_state_findings(board, lib, &report));

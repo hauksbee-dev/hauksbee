@@ -7,10 +7,10 @@
 //! a P-channel load switch) has a second state: the rail is off, the rest is
 //! on. Two faults live only there.
 //!
-//! * [`LintCheck::PowerDomainBackfeed`]: a part with every supply off while a
+//! * `LintCheck::PowerDomainBackfeed`: a part with every supply off while a
 //!   signal pin is pulled up to, or driven from, a rail that stays on. The
 //!   pin's protection clamp conducts into the unpowered chip and half-wakes it.
-//! * [`LintCheck::PowerDomainBusLockup`]: an I2C bus whose pull-ups sit on the
+//! * `LintCheck::PowerDomainBusLockup`: an I2C bus whose pull-ups sit on the
 //!   gated rail while powered devices still use the bus, or an unpowered device
 //!   clamping a bus that powered devices still use.
 //!
@@ -39,7 +39,7 @@
 //! signals.
 //!
 //! A pin the card rates for a voltage whatever the supply (a `supply_range` or
-//! `input_tolerance` row, [`declared_pin_ceiling_v`]) is silent: the card has
+//! `input_tolerance` row, `declared_pin_ceiling_v`) is silent: the card has
 //! said the pin is built for it.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
