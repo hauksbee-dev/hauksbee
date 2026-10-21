@@ -6404,7 +6404,7 @@ pub struct DraftCheck {
 /// Everything the drafting loop would say about `raw` against `facts`; what `ds check` prints.
 ///
 /// Exactly the harness's own steps in its own order, through the same functions
-/// ([`Reply::complete`], then [`Reply::assess`]): the agent is shown every
+/// (`Reply::complete`, then `Reply::assess`): the agent is shown every
 /// refusal and warning the post-session validator will find, while it can fix it.
 #[must_use]
 pub fn check_draft(
