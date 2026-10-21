@@ -177,7 +177,7 @@ fn unmodelled_batch_drafts_a_card_the_next_run_binds() {
     assert!(
         all.contains("XNOSHEET7: the board gives no datasheet; searching the web")
             && all.contains("no datasheet for XNOSHEET7: the web search found no usable datasheet")
-            && all.contains("Batch: 1 drafted, 1 without a datasheet")
+            && all.contains("Batch: 1 saved, 1 for hand supply")
             && !all.contains("extractions failed"),
         "{all}"
     );
@@ -485,8 +485,7 @@ fn an_identity_only_card_already_in_the_library_is_reported_not_failed() {
         "{all}"
     );
     assert!(
-        all.contains("Batch: 0 drafted, 1 already had a card")
-            && !all.contains("extractions failed"),
+        all.contains("Batch: 0 saved, 1 already had a card") && !all.contains("extractions failed"),
         "{all}"
     );
     assert!(run.status.success(), "a kept card is not a failure:\n{all}");
@@ -509,16 +508,128 @@ fn a_failed_extraction_exits_non_zero_and_is_not_counted_as_no_datasheet() {
     let dir = tempfile::tempdir().unwrap();
     let (run, out) = draft_batch_with(dir.path(), &[], "echo opamp", "echo nothing written");
     let all = text_of(&run);
-    assert!(!run.status.success(), "{all}");
+    assert_eq!(
+        run.status.code(),
+        Some(1),
+        "something failed and nothing was saved: exit 1\n{all}"
+    );
     assert!(
         all.contains("1 of the extractions failed: XOPAMP1-TR")
-            && all.contains("Batch: 0 drafted, 1 without a datasheet, 1 failed (XOPAMP1-TR)"),
+            && all.contains("Batch: 0 saved, 1 for hand supply, 1 failed (XOPAMP1-TR)"),
         "{all}"
     );
     let saved = std::fs::read_to_string(out.join("supply-by-hand.txt")).unwrap();
     assert!(
         saved.contains("XNOSHEET7") && !saved.contains("XOPAMP1-TR"),
         "{saved}"
+    );
+}
+
+/// Some parts saved and some failed is its own exit status (4), not the 1 of a
+/// batch where nothing could be done; the tally uses the same three words.
+#[cfg(unix)]
+#[test]
+fn a_partly_saved_batch_exits_4_and_says_saved_for_hand_supply_and_failed() {
+    let dir = tempfile::tempdir().unwrap();
+    // The fake agent's one card fits only XOPAMP1-TR. XNOSHEET7 is given a
+    // supplied PDF, so it is extracted, and refused by validation.
+    let supply = dir.path().join("pdfs");
+    std::fs::create_dir_all(&supply).unwrap();
+    std::fs::copy(stub_pdf(dir.path()), supply.join("xnosheet7.pdf")).unwrap();
+    let dir_arg = supply.display().to_string();
+    let (run, out) = draft_batch(dir.path(), &["--datasheet-dir", &dir_arg], "echo opamp");
+    let all = text_of(&run);
+    assert_eq!(run.status.code(), Some(4), "{all}");
+    assert!(
+        all.contains("Batch: 1 saved, 1 failed (XNOSHEET7)")
+            && all
+                .contains("1 of the extractions failed: XNOSHEET7 (1 others were saved and kept)"),
+        "{all}"
+    );
+    assert!(out.join("XOPAMP1-TR.toml").is_file(), "{all}");
+}
+
+/// Hand supply is not a failure: a batch whose only misses are parts without a
+/// datasheet exits 0 (and says so in the same words).
+#[cfg(unix)]
+#[test]
+fn a_batch_with_only_hand_supply_misses_exits_0() {
+    let dir = tempfile::tempdir().unwrap();
+    let (run, _) = draft_batch(dir.path(), &[], "echo opamp");
+    let all = text_of(&run);
+    assert_eq!(run.status.code(), Some(0), "{all}");
+    assert!(all.contains("Batch: 1 saved, 1 for hand supply"), "{all}");
+}
+
+/// A part that failed is not sent to the model again on the next board with the
+/// same inputs; `--retry-failed` sends it; a part whose search found nothing is
+/// not searched again but stays on the hand-supply list.
+#[cfg(unix)]
+#[test]
+fn a_failed_part_is_not_sent_again_unless_asked_or_its_inputs_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let (run, out) = draft_batch_with(dir.path(), &[], "echo opamp", "echo nothing written");
+    let all = text_of(&run);
+    assert_eq!(run.status.code(), Some(1), "{all}");
+    let ledger = std::fs::read_to_string(out.join("extract-attempts.json")).unwrap();
+    assert!(
+        ledger.contains("XOPAMP1-TR") && ledger.contains("XNOSHEET7"),
+        "{ledger}"
+    );
+
+    // The next board in the same library: the same two parts, nothing sent.
+    let (run, out) = draft_batch_with(dir.path(), &[], "echo opamp", "echo nothing written");
+    let all = text_of(&run);
+    assert_eq!(run.status.code(), Some(0), "skips are not failures:\n{all}");
+    assert!(
+        all.contains("XOPAMP1-TR: skipped, it failed earlier today")
+            && all.contains("--retry-failed")
+            && all.contains("XNOSHEET7: not searching again")
+            && all.contains("Batch: 0 saved, 1 for hand supply, 1 skipped (failed before)"),
+        "{all}"
+    );
+    assert!(
+        !all.contains("searching the web") && !all.contains("[model-extract]"),
+        "nothing was sent:\n{all}"
+    );
+    let listed = std::fs::read_to_string(out.join("supply-by-hand.txt")).unwrap();
+    assert!(
+        listed.contains("XNOSHEET7"),
+        "still listed for hand supply:\n{listed}"
+    );
+
+    // A different model is a different input: tried again by itself.
+    let (run, _) = draft_batch_with(
+        dir.path(),
+        &["--model", "another-model"],
+        "echo opamp",
+        "cp CARD model.toml; echo done",
+    );
+    let all = text_of(&run);
+    assert!(
+        !all.contains("skipped, it failed") && all.contains("XOPAMP1-TR: drafted"),
+        "{all}"
+    );
+    assert_eq!(run.status.code(), Some(0), "{all}");
+}
+
+/// `--retry-failed` lifts the skip without any change of input.
+#[cfg(unix)]
+#[test]
+fn retry_failed_sends_the_remembered_part_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let (run, _) = draft_batch_with(dir.path(), &[], "echo opamp", "echo nothing written");
+    assert_eq!(run.status.code(), Some(1), "{}", text_of(&run));
+    let (run, out) = draft_batch(dir.path(), &["--retry-failed"], "echo opamp");
+    let all = text_of(&run);
+    assert!(
+        !all.contains("skipped, it failed") && out.join("XOPAMP1-TR.toml").is_file(),
+        "{all}"
+    );
+    let ledger = std::fs::read_to_string(out.join("extract-attempts.json")).unwrap();
+    assert!(
+        !ledger.contains("XOPAMP1-TR"),
+        "a part that is saved is forgotten:\n{ledger}"
     );
 }
 
@@ -675,10 +786,7 @@ fn jobs_four_drafts_the_same_cards_with_prefixed_lines() {
     let all = text_of(&run);
     assert!(run.status.success(), "{all}");
     assert!(out.join("XOPAMP1-TR.toml").is_file(), "{all}");
-    assert!(
-        all.contains("Batch: 1 drafted, 1 without a datasheet"),
-        "{all}"
-    );
+    assert!(all.contains("Batch: 1 saved, 1 for hand supply"), "{all}");
     assert!(
         all.lines()
             .filter(|l| l.contains("searching the web"))

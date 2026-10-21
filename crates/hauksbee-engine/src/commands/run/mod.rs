@@ -352,6 +352,10 @@ pub fn error_exit_code(error: &anyhow::Error) -> i32 {
     if let Some(error) = error.downcast_ref::<crate::binder::IdentityRefusal>() {
         return error.exit_code();
     }
+    // `models extract --unmodelled` with some cards saved and some parts failed.
+    if let Some(error) = error.downcast_ref::<crate::commands::models::BatchFailed>() {
+        return error.exit_code();
+    }
     // A missing emulator means nothing ran, so nothing was judged: the same
     // inconclusive exit `hauksbee-ci` gives it, never the failure code.
     if error
