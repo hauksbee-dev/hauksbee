@@ -26,8 +26,9 @@ use std::fmt::Write as _;
 
 use hauksbee_ir::evidence::ModelUncertainty;
 
+use crate::card_trust::Problem;
 use crate::pin_table::{self, Column};
-use crate::schema::{ComponentKind, ModelEntry, OperatingEnvelope};
+use crate::schema::{ComponentKind, Doubt, DoubtArea, ModelEntry, OperatingEnvelope};
 
 /// How a finding is fed back: an error blocks the draft, a warning asks for
 /// one redraft and is then accepted.
@@ -526,6 +527,7 @@ fn printed_on(need: &Need, pages: &[String]) -> Option<usize> {
 pub fn findings(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
     let mut out = binding(entry, facts);
     out.extend(pins(entry, facts));
+    out.extend(trust_findings(entry, facts));
     let text = facts.pages.join("\n");
     // Without the datasheet's text there is nothing to say a field is there
     // to read, so a missing group is no finding.
@@ -603,6 +605,7 @@ pub fn reply_findings(entries: &[ModelEntry], facts: &Facts) -> Vec<Finding> {
     for e in rest {
         let mut more = crate::card_scope::entry_findings(e, facts);
         more.extend(crate::card_provenance::findings(e, &pages));
+        more.extend(trust_findings(e, facts));
         for f in &mut more {
             f.message = format!("[[models]] '{}': {}", e.id, f.message);
         }
@@ -621,6 +624,132 @@ pub fn current_reply_findings(entries: &[ModelEntry]) -> Vec<Finding> {
             .as_ref()
             .map(|f| reply_findings(entries, f))
             .unwrap_or_default()
+    })
+}
+
+/// The `check` name a [`crate::card_trust::Problem`] is reported under.
+const fn trust_check(area: DoubtArea) -> &'static str {
+    match area {
+        DoubtArea::Card => "trust-card",
+        DoubtArea::Pins => "trust-pins",
+        DoubtArea::Envelope => "trust-envelope",
+    }
+}
+
+/// Remedy 4: the drafted-card mistakes behind false alarms.
+///
+/// See [`crate::card_trust`]: a pad count that is not the footprint's, a power or
+/// return role on a pad the board wires as a signal, a split-supply op-amp limit
+/// written as absolute numbers, a shunt monitor's sense input capped at its supply.
+#[must_use]
+pub fn trust_problems(entry: &ModelEntry, facts: &Facts) -> Vec<crate::card_trust::Problem> {
+    let mut out = crate::card_trust::entry_problems(entry);
+    if let Some(board) = &facts.board {
+        out.extend(crate::card_trust::board_problems(entry, &board.pads));
+        out.extend(pad_count_problem(entry, board, Some(facts)));
+    }
+    out
+}
+
+fn trust_findings(entry: &ModelEntry, facts: &Facts) -> Vec<Finding> {
+    trust_problems(entry, facts)
+        .into_iter()
+        .map(|p| Finding {
+            severity: Severity::Warn,
+            check: trust_check(p.area),
+            message: p.message,
+        })
+        .collect()
+}
+
+/// The pin count of the package column the card chose against the pad count of
+/// the footprint it binds: a card read from the six-pin column, bound to an
+/// eight-pad part, has every pad shifted.
+fn pad_count_problem(
+    entry: &ModelEntry,
+    board: &Board,
+    facts: Option<&Facts>,
+) -> Option<crate::card_trust::Problem> {
+    if entry.pins.is_empty()
+        || re_matches(entry.r#match.footprint_re.as_deref(), &board.footprint) == Some(false)
+    {
+        return None;
+    }
+    let total = board.pad_count()?;
+    let numeric = board
+        .pads
+        .iter()
+        .filter(|(p, _)| p.chars().all(|c| c.is_ascii_digit()))
+        .count();
+    let numeric = if numeric == 0 { total } else { numeric };
+    let package = crate::validation::pin_package(entry)
+        .map(str::to_owned)
+        .or_else(|| {
+            let source = entry.source.as_ref()?;
+            source.pinout.first().map(|p| p.package.clone())
+        });
+    let column = package
+        .as_deref()
+        .zip(facts)
+        .and_then(|(p, f)| pin_table::choose(&f.pin_columns, Some(p), None).ok());
+    let card_max = entry
+        .pins
+        .keys()
+        .filter_map(|p| p.parse::<usize>().ok())
+        .max();
+    let (chosen, from) = column.map_or_else(
+        || card_max.map(|n| (n, "its highest pad".to_string())),
+        |c| Some((c.max_pad(), format!("the {} column", c.label))),
+    )?;
+    (!crate::card_trust::pad_counts_agree(chosen, numeric, total)).then(|| {
+        crate::card_trust::Problem {
+            area: DoubtArea::Card,
+            message: format!(
+                "the card's pad map is read from {from} ({chosen} pins) but the footprint '{}' \
+                 has {total} pads: the pins belong to another package. Read the pin-table column \
+                 for this footprint's package (`ds pins --package` prints each), or gate the card \
+                 with footprint_re",
+                board.footprint
+            ),
+        }
+    })
+}
+
+/// The bind-time form of the pad-count check: with no datasheet to hand, the
+/// card's highest pad against the pads of the footprint it is bound to.
+#[must_use]
+pub fn bound_pad_problem(entry: &ModelEntry, board: &Board) -> Option<Problem> {
+    pad_count_problem(entry, board, None)
+}
+
+/// What a drafted card left unconfirmed, for its `[[models.source.doubt]]` rows:
+/// every trust problem still on it, and a pad map that disagrees with the
+/// datasheet's column.
+#[must_use]
+pub fn doubts(entry: &ModelEntry, facts: &Facts) -> Vec<Doubt> {
+    let mut out: Vec<Doubt> = trust_problems(entry, facts)
+        .iter()
+        .map(Problem::doubt)
+        .collect();
+    out.extend(pins(entry, facts).into_iter().map(|f| Doubt {
+        area: DoubtArea::Pins,
+        reason: f.message,
+    }));
+    out
+}
+
+/// [`doubts`] of each entry against the facts [`with_facts`] holds, keyed by id.
+#[must_use]
+pub fn current_doubts(entries: &[ModelEntry]) -> Vec<(String, Vec<Doubt>)> {
+    FACTS.with(|c| {
+        let facts = c.borrow();
+        entries
+            .iter()
+            .map(|e| {
+                let found = facts.as_ref().map(|f| doubts(e, f)).unwrap_or_default();
+                (e.id.clone(), found)
+            })
+            .collect()
     })
 }
 

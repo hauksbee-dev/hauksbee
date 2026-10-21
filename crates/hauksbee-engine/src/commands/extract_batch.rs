@@ -3,7 +3,7 @@
 //!
 //! A whole board is dozens of parts, each a web search, a download and an
 //! agent run that is mostly waiting, so they run side by side. The stages are
-//! pipelined (see [`super::extract_stages`]): getting each part's datasheet (the
+//! pipelined (see `super::extract_stages`): getting each part's datasheet (the
 //! search and the download) runs on its own bounded downloader pool, outside the
 //! agent pool, all parts at once; a part enters the agent pool only when its
 //! datasheet is ready, the biggest datasheet first; a part nothing could be
@@ -19,17 +19,18 @@
 //! headroom (when the observed usage says the 5-hour window will not last),
 //! never raised.
 //!
-//! Sessions start through a gate ([`BatchGate`]): their starts are spaced
+//! Sessions start through a gate (`BatchGate`): their starts are spaced
 //! (`hauksbee_models::extract_admission`), and a session whose first request is
 //! refused waits a few jittered seconds with its agent place given up, so the
 //! refusal costs the place nothing. Each part is its own unit of work and ends
 //! in exactly one of three ways, and the tally counts them apart:
 //!
-//! - **drafted**: a card was written;
-//! - **no datasheet**: none could be obtained (nothing was sent), listed at the
-//!   end for the person to supply;
+//! - **drafted** (said "saved" in the tally): a card was written;
+//! - **no datasheet** ("for hand supply"): none could be obtained (nothing was
+//!   sent), listed at the end for the person to supply;
 //! - **failed**: the extraction itself ran and was refused (the model, the
-//!   validator). Only these make the command exit non-zero.
+//!   validator). Only these make the command exit non-zero (see
+//!   `models::BatchFailed` for which code).
 //!
 //! Safety of the shared output library: two parts whose card (and downloaded
 //! datasheet) would be the same file name run one after the other in the same
@@ -91,6 +92,9 @@ pub struct BatchOptions {
     pub warm_ahead: bool,
     /// Refine the plan's cost during the run (`None`: say nothing of the plan).
     pub watch: Option<PlanWatch>,
+    /// Try parts again that the library remembers failing (or finding no
+    /// datasheet) with these very inputs (`--retry-failed`).
+    pub retry_failed: bool,
     /// The newest plan reading ([`hauksbee_models::extract_plan::latest_reading`]).
     pub reading: fn() -> Option<Reading>,
 }
@@ -106,6 +110,7 @@ impl Default for BatchOptions {
             regrow_after: capacity::REGROW_AFTER,
             warm_ahead: true,
             watch: None,
+            retry_failed: false,
             reading: extract_plan::latest_reading,
         }
     }
@@ -115,6 +120,8 @@ impl Default for BatchOptions {
 #[derive(Debug, Default)]
 pub struct Tally {
     pub drafted: usize,
+    /// The parts a card was written for, in board order.
+    pub drafted_names: Vec<String>,
     /// Parts nothing could be fetched for, with every link tried.
     pub no_datasheet: Vec<(String, Missing)>,
     /// Parts whose extraction ran and failed, with the error.
@@ -756,7 +763,10 @@ fn tally_of(
             continue;
         };
         match run.ended {
-            Ended::Drafted => tally.drafted += 1,
+            Ended::Drafted => {
+                tally.drafted += 1;
+                tally.drafted_names.push(p.part.clone());
+            }
             Ended::NoDatasheet(m) => tally.no_datasheet.push((p.part.clone(), m)),
             Ended::Failed(why) => tally.failed.push((p.part.clone(), why)),
         }

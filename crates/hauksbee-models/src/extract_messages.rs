@@ -501,22 +501,108 @@ pub fn has_card(part: &str, card: &ExistingCard) -> String {
     )
 }
 
-/// The closing line of a batch. `no_datasheet` is its own count: parts nothing
-/// could be fetched for are not extraction failures, and are listed separately
-/// ([`supply_report`]).
+/// The closing line of a batch.
+///
+/// It uses the three words the exit status is read by: parts `saved` (a card
+/// was written), parts `for hand supply` (no datasheet could be obtained,
+/// listed by [`supply_report`]; nothing was sent for them) and parts that `failed` (the extraction ran and was refused). `kept` parts
+/// already had a card, and `skipped` ones failed on an earlier batch with these
+/// very inputs and were not sent again; neither is a failure of this run.
 #[must_use]
-pub fn batch_summary(drafted: usize, kept: usize, no_datasheet: usize, failed: &[&str]) -> String {
-    let mut bits = vec![format!("{drafted} drafted")];
+pub fn batch_summary(
+    saved: usize,
+    kept: usize,
+    hand_supply: usize,
+    skipped: usize,
+    failed: &[&str],
+) -> String {
+    let mut bits = vec![format!("{saved} saved")];
     if kept > 0 {
         bits.push(format!("{kept} already had a card"));
     }
-    if no_datasheet > 0 {
-        bits.push(format!("{no_datasheet} without a datasheet"));
+    if hand_supply > 0 {
+        bits.push(format!("{hand_supply} for hand supply"));
+    }
+    if skipped > 0 {
+        bits.push(format!("{skipped} skipped (failed before)"));
     }
     if !failed.is_empty() {
         bits.push(format!("{} failed ({})", failed.len(), failed.join(", ")));
     }
     format!("Batch: {}", bits.join(", "))
+}
+
+/// A part left out because the library remembers it failing on these inputs.
+#[must_use]
+pub fn skipped_failed(part: &str, reason: &str, ago: &str) -> String {
+    format!(
+        "{part}: skipped, it failed {ago} with this same datasheet, model and hauksbee version \
+         ({reason}); --retry-failed tries it again, and a new datasheet or a different model \
+         does so by itself"
+    )
+}
+
+/// A part whose datasheet search is not repeated because the last one, with
+/// these inputs, found nothing a few days ago.
+#[must_use]
+pub fn skipped_search(part: &str, ago: &str) -> String {
+    format!(
+        "{part}: not searching again, the last search {ago} found no datasheet; it stays on the \
+         list for hand supply. --retry-failed searches anyway, and a datasheet you supply is \
+         picked up by itself"
+    )
+}
+
+/// The marker [`crate::datasheet::vouches_for`] puts in its reason when a PDF
+/// never prints the part's name (a test keeps the two in step).
+pub const NOT_NAMED: &str = "never prints";
+
+/// Whether the board's own words say the part is a module, not a bare chip.
+///
+/// Footprints and description are read for a ready-made module, carrier or
+/// breakout board, whose datasheet is then usually the module's own or its main
+/// chip's.
+#[must_use]
+pub fn looks_like_module(footprints: &[String], description: Option<&str>) -> bool {
+    const WORDS: [&str; 9] = [
+        "module",
+        "breakout",
+        "carrier",
+        "dev board",
+        "devboard",
+        "dev kit",
+        "devkit",
+        "development board",
+        "evaluation board",
+    ];
+    footprints
+        .iter()
+        .map(String::as_str)
+        .chain(description)
+        .map(str::to_ascii_lowercase)
+        .any(|text| WORDS.iter().any(|w| text.contains(w)))
+}
+
+/// The plain-words hint for a part that may be a module: which datasheet names
+/// it. `None` when neither the PDF found nor the board points that way.
+fn module_hint(part: &str, missing: &Missing, module_like: bool) -> Option<String> {
+    let not_named =
+        missing.why.contains(NOT_NAMED) || missing.tried.iter().any(|t| t.why.contains(NOT_NAMED));
+    let ask = "supply the module's own datasheet, or the datasheet of the main chip on it, \
+               under the name below";
+    if not_named {
+        Some(format!(
+            "the PDF that was found does not name {part}. If {part} is a module or carrier \
+             board, {ask}"
+        ))
+    } else {
+        module_like.then(|| {
+            format!(
+                "{part} looks like a module or carrier board, which a chip's datasheet may not \
+                 name. If no sheet does, {ask}"
+            )
+        })
+    }
 }
 
 /// The error a batch with failures ends in.
@@ -525,7 +611,7 @@ pub fn batch_failed(drafted: usize, failed: &[&str]) -> String {
     let partial = if drafted == 0 {
         String::new()
     } else {
-        format!(" ({drafted} others were drafted and kept)")
+        format!(" ({drafted} others were saved and kept)")
     };
     format!(
         "{} of the extractions failed: {}{partial}",
@@ -554,11 +640,13 @@ pub fn supplied_name(part: &str) -> String {
 /// and why it failed, then each question an agent asked that nobody was there
 /// to answer. `datasheet_dir` is where `<part>.pdf` files are picked up on a
 /// rerun and `rerun` is the one command that reruns the batch with them; both
-/// are named exactly. Printed at the end of a batch and saved beside the cards
-/// ([`SUPPLY_FILE`]).
+/// are named exactly. `modules` names the parts whose board footprint or
+/// description reads as a module ([`looks_like_module`]). Printed at the end of
+/// a batch and saved beside the cards ([`SUPPLY_FILE`]).
 #[must_use]
 pub fn supply_report(
     missing: &[(String, Missing)],
+    modules: &[String],
     needs: &[Need],
     datasheet_dir: &Path,
     out_dir: &Path,
@@ -578,6 +666,10 @@ pub fn supply_report(
             let _ = writeln!(out, "  {part}: {}", m.why);
             for t in &m.tried {
                 let _ = writeln!(out, "      tried {}: {}", t.url, t.why);
+            }
+            let module_like = modules.iter().any(|m| m.eq_ignore_ascii_case(part));
+            if let Some(hint) = module_hint(part, m, module_like) {
+                let _ = writeln!(out, "      hint: {hint}");
             }
             let _ = writeln!(
                 out,
@@ -675,7 +767,7 @@ mod tests {
             ("TPS7A".to_string(), missing("no link", &[])),
         ];
         let rerun = "hauksbee models extract --unmodelled b.kicad_pcb --datasheet-dir /d --yes";
-        let text = supply_report(&miss, &[], Path::new("/d"), Path::new("/out"), rerun);
+        let text = supply_report(&miss, &[], &[], Path::new("/d"), Path::new("/out"), rerun);
         for want in [
             "2 part(s) have no datasheet",
             "LM358: the board's link could not be downloaded",
@@ -695,7 +787,14 @@ mod tests {
             part: "U 1".into(),
             question: "which variant is fitted?".into(),
         }];
-        let text = supply_report(&[], &needs, Path::new("/d"), Path::new("/out"), "rerun");
+        let text = supply_report(
+            &[],
+            &[],
+            &needs,
+            Path::new("/d"),
+            Path::new("/out"),
+            "rerun",
+        );
         assert!(
             text.contains("U 1: needs: which variant is fitted?"),
             "{text}"
@@ -710,7 +809,7 @@ mod tests {
     #[test]
     fn nothing_outstanding_is_an_empty_list_and_progress_reads_plainly() {
         assert_eq!(
-            supply_report(&[], &[], Path::new("/d"), Path::new("/o"), "r"),
+            supply_report(&[], &[], &[], Path::new("/d"), Path::new("/o"), "r"),
             ""
         );
         assert_eq!(progress(3, 10, 4), "[batch] 3 of 10 parts done, 4 running");
@@ -917,12 +1016,108 @@ mod tests {
     #[test]
     fn a_batch_summary_separates_drafts_kept_cards_skips_and_failures() {
         assert_eq!(
-            batch_summary(2, 1, 3, &["A", "B"]),
-            "Batch: 2 drafted, 1 already had a card, 3 without a datasheet, 2 failed (A, B)"
+            batch_summary(2, 1, 3, 4, &["A", "B"]),
+            "Batch: 2 saved, 1 already had a card, 3 for hand supply, 4 skipped (failed before), \
+             2 failed (A, B)"
         );
-        assert_eq!(batch_summary(4, 0, 0, &[]), "Batch: 4 drafted");
-        assert!(batch_failed(2, &["A"]).contains("2 others were drafted and kept"));
+        assert_eq!(batch_summary(4, 0, 0, 0, &[]), "Batch: 4 saved");
+        assert!(batch_failed(2, &["A"]).contains("2 others were saved and kept"));
         assert!(!batch_failed(0, &["A"]).contains("others"));
+    }
+
+    /// The marker the module hint reads is the one the vouching check writes.
+    #[test]
+    fn the_not_named_marker_is_what_the_vouching_check_says() {
+        let text = "Some other chip. ".repeat(60);
+        let why = crate::datasheet::vouches_for("ACME-MOD9", &[], &text).unwrap_err();
+        assert!(why.contains(NOT_NAMED), "{why}");
+    }
+
+    #[test]
+    fn a_module_is_told_to_supply_its_own_or_its_main_chips_datasheet() {
+        let named_other = (
+            "ACME-MOD9".to_string(),
+            missing(
+                "no downloaded candidate could be verified as its datasheet",
+                &[(
+                    "https://v.example/chip.pdf",
+                    "the PDF never prints ACME-MOD9",
+                )],
+            ),
+        );
+        let bare = ("LM358".to_string(), missing("no link", &[]));
+        let text = supply_report(
+            &[named_other, bare],
+            &[],
+            &[],
+            Path::new("/d"),
+            Path::new("/o"),
+            "r",
+        );
+        assert!(
+            text.contains("the PDF that was found does not name ACME-MOD9")
+                && text.contains("module's own datasheet, or the datasheet of the main chip"),
+            "{text}"
+        );
+        assert_eq!(
+            text.matches("hint:").count(),
+            1,
+            "a bare chip gets none:\n{text}"
+        );
+    }
+
+    #[test]
+    fn a_part_that_looks_like_a_module_gets_the_hint_without_a_wrong_pdf() {
+        let miss = [("X1".to_string(), missing("no link", &[]))];
+        let text = supply_report(
+            &miss,
+            &["x1".to_string()],
+            &[],
+            Path::new("/d"),
+            Path::new("/o"),
+            "r",
+        );
+        assert!(
+            text.contains("X1 looks like a module or carrier board")
+                && text.contains("module's own datasheet"),
+            "{text}"
+        );
+        let plain = supply_report(&miss, &[], &[], Path::new("/d"), Path::new("/o"), "r");
+        assert!(!plain.contains("hint:"), "{plain}");
+    }
+
+    #[test]
+    fn modules_are_told_by_the_boards_own_words() {
+        let fp = |s: &str| vec![s.to_string()];
+        assert!(looks_like_module(&fp("Module:Some_Dev_Board"), None));
+        assert!(looks_like_module(
+            &fp("Package_SO:SOIC-8"),
+            Some("Wi-Fi breakout board")
+        ));
+        assert!(looks_like_module(&[], Some("Sensor carrier")));
+        assert!(!looks_like_module(
+            &fp("Package_SO:SOIC-8_3.9x4.9mm"),
+            Some("Dual op-amp")
+        ));
+        assert!(!looks_like_module(&[], None));
+    }
+
+    #[test]
+    fn a_skip_says_why_and_how_to_force_it() {
+        let failed = skipped_failed("LM358", "the validator refused", "3 days ago");
+        assert!(
+            failed.starts_with("LM358: skipped, it failed 3 days ago")
+                && failed.contains("--retry-failed")
+                && failed.contains("a new datasheet or a different model"),
+            "{failed}"
+        );
+        let search = skipped_search("X1", "earlier today");
+        assert!(
+            search.contains("not searching again")
+                && search.contains("hand supply")
+                && search.contains("--retry-failed"),
+            "{search}"
+        );
     }
 
     /// An identity-only card in the library is found, with its own reason.

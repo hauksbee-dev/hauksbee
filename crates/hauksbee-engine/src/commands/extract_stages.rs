@@ -6,8 +6,8 @@
 //! batch is a pipeline instead:
 //!
 //! 1. **Fetch**: every part's datasheet is searched for and downloaded on its own
-//!    small pool of downloader threads ([`capacity::DOWNLOADERS`], no more than
-//!    [`capacity::PER_HOST`] fetches to one host at a time), all parts at once,
+//!    small pool of downloader threads (`capacity::DOWNLOADERS`, no more than
+//!    `capacity::PER_HOST` fetches to one host at a time), all parts at once,
 //!    parts with a datasheet named on the board first. When a datasheet lands, a
 //!    part whose kind is not known is named right there (two at a time at most),
 //!    overlapping the other downloads, and the shared sessions the drafting forks
@@ -20,7 +20,7 @@
 //! A lane of parts that would write the same file (see `extract_batch::lanes`) is
 //! not split: it runs as one job in one place, serially, the old way.
 //!
-//! Everything outside is injected ([`Stages`], and the clock in `Ctx`), so the
+//! Everything outside is injected (`Stages`, and the clock in `Ctx`), so the
 //! ordering, the overlap and the pacing are tested without a network, a model or
 //! a sleep.
 

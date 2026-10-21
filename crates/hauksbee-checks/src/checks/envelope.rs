@@ -124,6 +124,12 @@ pub(crate) fn role_net_id(comp: &Component, model: &ModelEntry, role: &str) -> O
         })
 }
 
+/// Whether a card's output range is a span the output can be SET across, not a
+/// regulation band: a rail never regulates over a spread this wide.
+fn is_span(range: RailRange) -> bool {
+    range.min_v > 0.0 && range.max_v > range.min_v * 1.25
+}
+
 fn model_output_range(model: &ModelEntry) -> Option<RailRange> {
     match (
         model.params.get_f64("vout_setpoint_low"),
@@ -595,7 +601,14 @@ fn regulator_ranges(
                 *sources.entry(divider.sensed).or_default() += 1;
                 dividers.push(divider);
             }
-            if let Some(range) = range.filter(|_| sensed.is_none_or(|n| n != net_id)) {
+            // An adjustable part's card states the span its output CAN be set across
+            // (a buck's 0.9 to 6 V); that is no level of any rail it drives, and with
+            // no divider read it must not pose as one.
+            let capability = range.is_some_and(|r| adjustable(model).is_some() && is_span(r));
+            if let Some(range) = range
+                .filter(|_| sensed.is_none_or(|n| n != net_id))
+                .filter(|_| !capability)
+            {
                 ranges.insert(net_id, range);
                 *sources.entry(net_id).or_default() += 1;
             }
@@ -1127,6 +1140,17 @@ fn envelope_lint_with_tolerance(
                 } => {
                     let Some(net) = net_of(pin) else { continue };
                     let net_id = net.id;
+                    // An op-amp or comparator card prints its limits as the V+ to V-
+                    // span. On the negative supply pin of a single-supply design
+                    // (V- on ground) the span is the single-supply case: the
+                    // split-supply figures for that pin are no limit on ground.
+                    if matches!(model.kind, ComponentKind::Opamp | ComponentKind::Comparator)
+                        && hauksbee_models::card_trust::is_negative_supply_role(pin)
+                        && *max_v <= 0.0
+                        && is_ground(&net.name)
+                    {
+                        continue;
+                    }
                     let range = match resolver.range(net_id) {
                         RailKnowledge::Known(range) => range,
                         knowledge => {
@@ -2606,6 +2630,111 @@ dropout_v = 3.0
         for (v, got) in volts.iter().zip(members) {
             assert_eq!(fires(&BoardStatics::of(&b, &lib), *v), got, "{v} V");
         }
+    }
+
+    /// An op-amp card prints its limits as the V+ to V- span. Its negative supply
+    /// pin on ground is the single-supply case, so the split-supply figures
+    /// for that pin are no limit on ground; the same pin on a rail is still judged.
+    #[test]
+    fn an_opamps_negative_supply_pin_on_ground_is_the_single_supply_case() {
+        let card = r#"
+[[models]]
+id = "oa_split"
+kind = "opamp"
+description = "split-supply op amp"
+[models.match]
+value_re = "^OA_SPLIT$"
+[models.params]
+identity_only = true
+warning = "identity only"
+unlocked_by = "validated behavior"
+[models.pins]
+"1" = "vcc"
+"2" = "vee"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 4.5
+max_v = 36.0
+basis = "Recommended Operating Conditions, V+ row"
+[[models.envelope]]
+kind = "supply_range"
+pin = "vee"
+min_v = -18.0
+max_v = -2.25
+basis = "Recommended Operating Conditions, V- row"
+"#;
+        let lib = library("opamp_split", card);
+        let findings = |low_rail: &str| {
+            let b = board(
+                &[(1, "+12V"), (2, low_rail)],
+                vec![part("U1", "OA_SPLIT", vec![pin("1", 1), pin("2", 2)])],
+            );
+            envelope_lint(&b, &lib)
+                .findings
+                .into_iter()
+                .filter(|f| f.check == LintCheck::OperatingEnvelope)
+                .count()
+        };
+        assert_eq!(findings("GND"), 0, "V- on ground is a single supply");
+        assert_eq!(findings("+5V"), 1, "V- on a positive rail is still wrong");
+    }
+
+    /// An adjustable regulator's card states the span its output can be set across
+    /// (a buck's 0.9 to 6 V). With no feedback divider on the board that span is no
+    /// level of the rail it drives, so no rail range is taken from it; a fixed
+    /// regulator's tight band still is.
+    #[test]
+    fn an_adjustable_parts_setting_span_is_not_a_rail_level() {
+        let card = |low: f64, high: f64, fb: bool| {
+            let feedback = if fb {
+                "[models.behavioral.converter.feedback]\npin = \"fb\"\nvref_v = 0.5\n"
+            } else {
+                ""
+            };
+            format!(
+                r#"
+[[models]]
+id = "span_buck"
+kind = "vreg"
+description = "span fixture"
+[models.match]
+value_re = "^SPAN_BUCK$"
+[models.params]
+vout_setpoint_low = {low}
+vout_setpoint_high = {high}
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "fb"
+"4" = "out"
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "out"
+in_pin = "in"
+vout_setpoint = 3.3
+{feedback}"#
+            )
+        };
+        let b = board(
+            &[(1, "GND"), (2, "VIN"), (3, "FB"), (4, "OUT")],
+            vec![part(
+                "U1",
+                "SPAN_BUCK",
+                vec![pin("1", 2), pin("2", 1), pin("3", 3), pin("4", 4)],
+            )],
+        );
+        let regulated = |low, high| {
+            let lib = library("span", &card(low, high, true));
+            BoardStatics::of(&b, &lib)
+                .rails(&b)
+                .regulators
+                .get(&4)
+                .copied()
+        };
+        assert_eq!(regulated(0.9, 6.0), None, "a setting span is no rail level");
+        let tight = regulated(3.2, 3.4).expect("a regulation band is");
+        assert!((tight.min_v - 3.2).abs() < 1e-9 && (tight.max_v - 3.4).abs() < 1e-9);
     }
 
     /// The statics belong to their exact board: a feedback resistor changed

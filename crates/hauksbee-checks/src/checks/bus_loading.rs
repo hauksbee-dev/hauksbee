@@ -84,7 +84,7 @@ const C_TRACE_F: f64 = 20.0e-12;
 /// Is this net an I2C data/clock line by name? Token-exact SDA/SCL match with
 /// the common index/alt prefixes ("SDA1", "ASDA"), mirroring the extract
 /// layer's presence check so the two checks agree on what an I2C net is.
-fn is_i2c_net(name: &str) -> bool {
+pub(crate) fn is_i2c_net(name: &str) -> bool {
     let n = name.trim();
     let leaf = n.rsplit('/').next().unwrap_or(n).to_ascii_uppercase();
     leaf.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| {

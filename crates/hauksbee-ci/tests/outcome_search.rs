@@ -27,6 +27,15 @@ fn board(r2: &str, rb: &str) -> String {
         .collect();
     let sot = "Package_TO_SOT_SMD:SOT-23-5";
     let mut parts = comp("U1", sot, "LMV7219", 10, u1) + &comp("U2", sot, "74LVC1G04", 20, u2);
+    // The ramp comes in through a header, as on a real board: a comparator
+    // input with nothing else on its net is open, and the static check says so.
+    parts += &comp(
+        "J1",
+        "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical",
+        "Conn_01x02",
+        30,
+        pad(1, "VIN") + &pad(2, "GND"),
+    );
     for (i, (r, val, a, b)) in [
         ("R1", "820k", "VCC", "TH"),
         ("R2", r2, "TH", "GND"),
