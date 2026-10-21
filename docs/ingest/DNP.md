@@ -56,6 +56,16 @@ do-not-populate: DNP parts are left out of the simulation, matching the board fi
 
 A board with no DNP parts prints nothing about DNP.
 
+One exception to "leave it out" under the default: a plug-in module (a compute
+module, SoM or dev board, told by an `A<n>` or `MOD` designator, a module or
+SODIMM symbol or footprint, or a `SoM` value, with six or more connected pads) that
+is marked DNP because it is bought separately, and whose connector or socket is
+fitted. The socket carries at least half of the module's nets, so the module is
+treated as plugged in and printed as `fitted:    A101 (...), DNP plug-in module on a
+fitted socket, treated as plugged in (--no-fit to leave it out)`. A module whose
+socket is itself DNP, or that no fitted connector shares nets with, stays open, and
+`--no-fit A101` leaves it out whatever its socket.
+
 ## Choosing something else
 
 Per part, on the command line:

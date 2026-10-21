@@ -11,6 +11,7 @@ use hauksbee_engine::binder::{bind_board, no_processor_message, FitRemedy};
 use hauksbee_extract::dnp::{DnpPolicy, DnpReason};
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
+use std::fmt::Write as _;
 
 /// A board with a DNP processor and a DNP 0R link between the two grounds.
 const DNP_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
@@ -277,4 +278,104 @@ fn the_no_processor_message_tells_each_surface_its_own_fix() {
     let none = no_processor_message(&[], &[], FitRemedy::Cli);
     assert!(!none.contains("--fit"), "{none}");
     assert!(none.contains("models resolve"), "{none}");
+}
+
+/// A compute-module board: the module `A1` is bought separately and marked
+/// DNP, and plugs into the header `J1` that the board does fit. The pad lists
+/// are built from `nets` so a case can change which side is fitted.
+fn module_board(module_dnp: bool, socket_dnp: bool, socket: (&str, &str, &str)) -> String {
+    let (socket_ref, socket_fp, socket_value) = socket;
+    let nets = ["GND", "+3V3", "SDA", "SCL", "TX", "RX", "EN"];
+    let mut net_defs = String::new();
+    for (i, n) in nets.iter().enumerate() {
+        writeln!(net_defs, "  (net {} \"{n}\")", i + 1).unwrap();
+    }
+    let pads = |dx: f64| -> String {
+        let mut out = String::new();
+        for (i, n) in nets.iter().enumerate() {
+            writeln!(
+                out,
+                "    (pad {} thru_hole circle (at {dx} {i}) (net {} \"{n}\"))",
+                i + 1,
+                i + 1
+            )
+            .unwrap();
+        }
+        out
+    };
+    let dnp = |on: bool| if on { "    (attr dnp)\n" } else { "" };
+    format!(
+        "(kicad_pcb (version 20171130) (host pcbnew 5.1.0)\n  (net 0 \"\")\n{net_defs}\
+         \n  (module Module:Compute_Module (layer F.Cu)\n    (at 100 100)\n{}\
+         \x20   (fp_text reference A1 (at 0 0) (layer F.SilkS))\n\
+         \x20   (fp_text value ComputeModule (at 0 2) (layer F.Fab))\n{}  )\n\
+         \n  (module {socket_fp} (layer F.Cu)\n    (at 100 100)\n{}\
+         \x20   (fp_text reference {socket_ref} (at 0 0) (layer F.SilkS))\n\
+         \x20   (fp_text value {socket_value} (at 0 2) (layer F.Fab))\n{}  )\n\
+         \n  (module Resistor_SMD:R_0402_1005Metric (layer F.Cu)\n    (at 120 100)\n\
+         \x20   (fp_text reference R1 (at 0 0) (layer F.SilkS))\n\
+         \x20   (fp_text value 10k (at 0 2) (layer F.Fab))\n\
+         \x20   (pad 1 smd rect (at 0 0) (net 2 \"+3V3\"))\n\
+         \x20   (pad 2 smd rect (at 1 0) (net 3 \"SDA\"))\n  )\n)\n",
+        dnp(module_dnp),
+        pads(0.0),
+        dnp(socket_dnp),
+        pads(1.0),
+    )
+}
+
+const HEADER: (&str, &str, &str) = (
+    "J1",
+    "Connector_PinSocket_2.54mm:PinSocket_1x07_P2.54mm_Vertical",
+    "Conn_01x07",
+);
+
+fn module_decision(
+    module_dnp: bool,
+    socket_dnp: bool,
+    socket: (&str, &str, &str),
+) -> (ExtractedBoard, hauksbee_extract::dnp::DnpDecision) {
+    let mut b = ExtractedBoard::from_auto(&module_board(module_dnp, socket_dnp, socket))
+        .expect("parse board");
+    let d = b.apply_dnp_policy(DnpPolicy::Honour, &[], &[]).unwrap();
+    (b, d)
+}
+
+#[test]
+fn a_dnp_plug_in_module_on_a_fitted_socket_counts_as_fitted() {
+    let (b, d) = module_decision(true, false, HEADER);
+    assert_eq!(d.fitted.len(), 1, "{d:?}");
+    assert_eq!(d.fitted[0].reference, "A1");
+    assert_eq!(d.fitted[0].reason, DnpReason::SocketedModule);
+    assert!(
+        !b.component("A1").unwrap().dnp,
+        "the module is in the circuit"
+    );
+    assert!(d.left_open.is_empty(), "{d:?}");
+}
+
+#[test]
+fn a_dnp_module_whose_socket_is_also_dnp_stays_out() {
+    let (b, d) = module_decision(true, true, HEADER);
+    assert!(d.fitted.is_empty(), "{d:?}");
+    assert!(b.component("A1").unwrap().dnp);
+}
+
+#[test]
+fn a_dnp_module_with_no_fitted_socket_stays_out() {
+    // The same nets, but the part sharing them is a logic chip, not a socket.
+    let chip = ("U9", "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm", "74HC595");
+    let (b, d) = module_decision(true, false, chip);
+    assert!(d.fitted.is_empty(), "{d:?}");
+    assert!(b.component("A1").unwrap().dnp);
+}
+
+#[test]
+fn naming_the_module_open_overrides_the_socket_rule() {
+    let mut b = ExtractedBoard::from_auto(&module_board(true, false, HEADER)).unwrap();
+    let d = b
+        .apply_dnp_policy(DnpPolicy::Honour, &[], &["A1".to_string()])
+        .unwrap();
+    assert!(d.fitted.is_empty(), "{d:?}");
+    assert_eq!(d.left_open[0].reason, DnpReason::NamedOpen);
 }

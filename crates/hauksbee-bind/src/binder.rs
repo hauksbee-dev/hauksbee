@@ -13749,3 +13749,63 @@ style = "i2c_pointer"
         }
     }
 }
+
+#[cfg(test)]
+mod identity_ic_tests {
+    use super::bind_board;
+    use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
+    use hauksbee_models::ModelLibrary;
+
+    fn part(reference: &str, value: &str, lib_id: &str, footprint: &str, pads: i64) -> Component {
+        Component {
+            reference: reference.into(),
+            value: value.into(),
+            lib_id: lib_id.into(),
+            footprint: footprint.into(),
+            pins: (1..=pads)
+                .map(|n| Pin {
+                    number: n.to_string(),
+                    net: Some(n),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    /// A chip drawn under a switch-like designator is recorded as an active IC
+    /// by identity; a tactile button, and a chip whose designator already says
+    /// IC, are not recorded (the designator rule covers the latter).
+    #[test]
+    fn the_report_records_chips_whose_designator_does_not_say_ic() {
+        let board = ExtractedBoard {
+            name: "b".into(),
+            nets: (1..=8).map(|n| Net::new(n, format!("N{n}"))).collect(),
+            components: vec![
+                part(
+                    "S1",
+                    "TS3A5017",
+                    "Analog_Switch:TS3A5017",
+                    "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm",
+                    8,
+                ),
+                part(
+                    "SW2",
+                    "SW_Push",
+                    "Switch:SW_Push",
+                    "Button_Switch_SMD:SW_SPST_TL3342",
+                    2,
+                ),
+                part("U3", "74HC00", "74xx:74HC00", "Package_SO:SOIC-14", 8),
+            ],
+        };
+        let bound = bind_board(&board, &ModelLibrary::builtin());
+        let ids: Vec<&str> = bound
+            .report
+            .identity_ics
+            .iter()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(ids, ["S1"]);
+    }
+}

@@ -133,9 +133,11 @@ pub fn connected_pads(c: &Component) -> usize {
 
 pub use hauksbee_models::refdes::designator as ref_designator;
 
-/// A plug-in module (compute module, SoM, dev board) by what its record says:
-/// an `A<n>` assembly or `MOD` designator, a symbol or footprint naming a module,
-/// SoM or SODIMM, or a `SoM` value. Not an IC package and not a connector.
+/// Whether a record is a plug-in module (compute module, `SoM`, dev board).
+///
+/// Judged by what the record says: an `A<n>` assembly or `MOD` designator, a
+/// symbol or footprint naming a module, `SoM` or SODIMM, or a `SoM` value. Not
+/// an IC package and not a connector.
 #[must_use]
 pub fn is_plugin_module(c: &Component) -> bool {
     let r = ref_designator(&c.reference);
@@ -149,7 +151,8 @@ pub fn is_plugin_module(c: &Component) -> bool {
         .to_ascii_lowercase()
         .split(|ch: char| !ch.is_ascii_alphanumeric())
         .any(|w| w == "som");
-    let chip_package = hauksbee_models::refdes::lands_an_ic_package(&c.footprint, connected_pads(c));
+    let chip_package =
+        hauksbee_models::refdes::lands_an_ic_package(&c.footprint, connected_pads(c));
     !chip_package
         && (assembly_ref
             || r.starts_with("MOD")
@@ -159,11 +162,12 @@ pub fn is_plugin_module(c: &Component) -> bool {
             || som_value)
 }
 
-/// Whether this record is an active IC: a `U`/`IC`/`MCU` designator, or a record
-/// whose symbol, footprint, part number and pad count say it is a chip though its
-/// designator reads as something else (`S1`, `SW2`). The one answer for "offer
-/// this part for extraction" and for the checks that treat ICs apart from
-/// connectors and passives.
+/// Whether this record is an active IC.
+///
+/// A `U`/`IC`/`MCU` designator, or a record whose symbol, footprint, part number
+/// and pad count say it is a chip though its designator reads as something else
+/// (`S1`, `SW2`). The one answer for "offer this part for extraction" and for the
+/// checks that treat ICs apart from connectors and passives.
 #[must_use]
 pub fn is_active_ic(c: &Component) -> bool {
     let pads: std::collections::HashSet<&str> = c
@@ -664,5 +668,69 @@ mod tests {
             .properties
             .push((crate::DUPLICATE_REFERENCE_CONFLICT_KEY.into(), "two".into()));
         assert_eq!(classify_two_terminal(&refused), PartClass::Unknown);
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::{is_active_ic, is_plugin_module};
+    use crate::testutil::{part, pin};
+    use crate::Component;
+
+    fn comp(reference: &str, value: &str, lib_id: &str, footprint: &str, pads: usize) -> Component {
+        let pins = (1..=pads)
+            .map(|n| pin(&n.to_string(), Some(i64::try_from(n).unwrap())))
+            .collect();
+        part(reference, value, lib_id, footprint, pins)
+    }
+
+    #[test]
+    fn an_ic_under_an_s_designator_is_active_and_a_button_is_not() {
+        let ic = comp(
+            "S1",
+            "TS5A3159",
+            "Analog_Switch:TS5A3159",
+            "Package_TO_SOT_SMD:SOT-23-6",
+            6,
+        );
+        assert!(is_active_ic(&ic));
+        let button = comp(
+            "S2",
+            "SW_Push",
+            "Switch:SW_Push",
+            "Button_Switch_SMD:SW_SPST_TL3342",
+            4,
+        );
+        assert!(!is_active_ic(&button));
+        assert!(
+            is_active_ic(&comp("U7", "", "", "", 0)),
+            "designator rule kept"
+        );
+    }
+
+    #[test]
+    fn a_manufacturer_part_number_property_counts_as_identity() {
+        let mut c = comp("S9", "X", "Device:Foo", "Custom:Pkg", 8);
+        assert!(!is_active_ic(&c));
+        c.properties.push(("MPN".into(), "MAX4617".into()));
+        assert!(is_active_ic(&c));
+    }
+
+    #[test]
+    fn a_module_is_told_from_a_chip_and_a_connector_by_its_record() {
+        let cm = comp("A1", "CM4", "Module:RPi_CM4", "Module:CM4", 8);
+        assert!(is_plugin_module(&cm));
+        let som = comp("U9", "iMX SoM", "Device:Foo", "Custom:Board", 8);
+        assert!(is_plugin_module(&som));
+        let chip = comp("U1", "TPS", "Regulator:TPS", "Package_SO:SOIC-8", 8);
+        assert!(!is_plugin_module(&chip));
+        let header = comp(
+            "J1",
+            "Conn",
+            "Connector:Conn",
+            "Connector_PinHeader:PinHeader",
+            8,
+        );
+        assert!(!is_plugin_module(&header));
     }
 }

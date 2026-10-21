@@ -197,7 +197,7 @@ pub enum DnpReason {
     /// not a missing one. Fitting both would put two copies of one part on
     /// the same nets.
     AlternativeFootprint,
-    /// A plug-in module (compute module, SoM, dev board) that mates with a
+    /// A plug-in module (compute module, `SoM`, dev board) that mates with a
     /// fitted connector or socket on the board, marked DNP because it is bought
     /// separately. The socket is fitted hardware's interface, so under the
     /// default policy the module is treated as plugged in unless the board
@@ -550,22 +550,7 @@ impl ExtractedBoard {
             } else if no_fit.contains(&comp.reference) {
                 DnpReason::NamedOpen
             } else {
-                match policy {
-                    DnpPolicy::Honour if modules.contains(&comp.reference) => {
-                        DnpReason::SocketedModule
-                    }
-                    DnpPolicy::Honour => DnpReason::HonouredPolicy,
-                    DnpPolicy::FitAll => DnpReason::Policy,
-                    DnpPolicy::FitExceptLinks => {
-                        if is_zero_ohm_link(comp) {
-                            DnpReason::ZeroOhmLink
-                        } else if alternatives.contains(&comp.reference) {
-                            DnpReason::AlternativeFootprint
-                        } else {
-                            DnpReason::Policy
-                        }
-                    }
-                }
+                policy_reason(policy, comp, &alternatives, &modules)
             };
             let part = DnpPart {
                 reference: comp.reference.clone(),
@@ -583,8 +568,7 @@ impl ExtractedBoard {
                     // assumption, not an assembly fact; mark it so
                     // presence-class lints can tell the two apart. A NamedFit
                     // is the user's own build decision and stays unmarked.
-                    if comp.dnp && matches!(reason, DnpReason::Policy | DnpReason::SocketedModule)
-                    {
+                    if comp.dnp && matches!(reason, DnpReason::Policy | DnpReason::SocketedModule) {
                         comp.properties
                             .push((DNP_FITTED_KEY.to_string(), "policy".to_string()));
                     }
@@ -603,10 +587,34 @@ impl ExtractedBoard {
     }
 }
 
+/// The reason a DNP part the user did not name is fitted or left open under
+/// `policy`.
+fn policy_reason(
+    policy: DnpPolicy,
+    comp: &Component,
+    alternatives: &std::collections::BTreeSet<String>,
+    modules: &std::collections::BTreeSet<String>,
+) -> DnpReason {
+    match policy {
+        DnpPolicy::Honour if modules.contains(&comp.reference) => DnpReason::SocketedModule,
+        DnpPolicy::Honour => DnpReason::HonouredPolicy,
+        DnpPolicy::FitAll => DnpReason::Policy,
+        DnpPolicy::FitExceptLinks => {
+            if is_zero_ohm_link(comp) {
+                DnpReason::ZeroOhmLink
+            } else if alternatives.contains(&comp.reference) {
+                DnpReason::AlternativeFootprint
+            } else {
+                DnpReason::Policy
+            }
+        }
+    }
+}
+
 /// References of DNP plug-in modules that mate with a fitted connector or
 /// socket on the board.
 ///
-/// A compute module, SoM or dev board is bought separately and plugged into its
+/// A compute module, `SoM` or dev board is bought separately and plugged into its
 /// socket, so the assembly BOM marks it DNP while the socket is fitted. Leaving
 /// it out deletes the board's host: its pins vanish from the pull-up, back-power
 /// and bus checks and the loads it drives look unpowered. A DNP part qualifies
@@ -626,7 +634,8 @@ fn socketed_modules(components: &[Component]) -> std::collections::BTreeSet<Stri
             .filter(|&n| n != 0)
             .collect()
     };
-    let socketlike = |c: &Component| crate::is_connector_like(c) && !crate::is_test_point_or_hole(c);
+    let socketlike =
+        |c: &Component| crate::is_connector_like(c) && !crate::is_test_point_or_hole(c);
     let mut out = BTreeSet::new();
     for module in components.iter().filter(|c| c.dnp) {
         if socketlike(module) || !crate::part_class::is_plugin_module(module) {

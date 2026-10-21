@@ -682,4 +682,38 @@ mod tests {
             assert!(is_active_ic_ref(real), "{real}");
         }
     }
+
+    /// A footprint-only card for a discrete semiconductor never speaks for a
+    /// chip, whatever the chip's designator: an Eagle auto-named `U$1` that
+    /// lands a QFP is an IC by what its record says, so the MOSFET card for a
+    /// generic power package is refused for it, while a real transistor under the
+    /// same kind of designator keeps matching.
+    #[test]
+    fn a_footprint_only_discrete_card_is_refused_for_a_chip_under_any_designator() {
+        let card = entry(
+            ComponentKind::Nmos,
+            MatchRules {
+                footprint_re: Some("sot-23|qfp".to_string()),
+                ..Default::default()
+            },
+        );
+        let chip = ComponentQuery {
+            reference: Some("U$1".to_string()),
+            value: Some("ATSAMD51J".to_string()),
+            footprint: Some("Package_QFP:TQFP-64_10x10mm_P0.5mm".to_string()),
+            pads: (1..=64).map(|n| n.to_string()).collect(),
+            ..Default::default()
+        };
+        assert!(chip.is_active_ic());
+        assert!(!card.matches(&chip), "a 64-pad QFP is not a MOSFET");
+        let fet = ComponentQuery {
+            reference: Some("Q$3".to_string()),
+            value: Some("BSS138".to_string()),
+            footprint: Some("Package_TO_SOT_SMD:SOT-23".to_string()),
+            pads: ["1", "2", "3"].map(String::from).to_vec(),
+            ..Default::default()
+        };
+        assert!(!fet.is_active_ic());
+        assert!(card.matches(&fet));
+    }
 }

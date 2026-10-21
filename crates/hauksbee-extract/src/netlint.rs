@@ -846,6 +846,16 @@ fn is_socketed_chip(c: &Component) -> bool {
     {
         return false;
     }
+    // A value that names a part family (`24Cxx`) or counts pins (`PIC_18_PINS`)
+    // describes the socket's target, not a chip sitting in it.
+    let value = c.value.to_ascii_lowercase();
+    if value.contains("xx")
+        || value
+            .split(|ch: char| !ch.is_ascii_alphanumeric())
+            .any(|w| w == "pin" || w == "pins")
+    {
+        return false;
+    }
     let pads: std::collections::HashSet<&str> = c.pins.iter().map(|p| p.number.as_str()).collect();
     if hauksbee_models::refdes::lands_an_ic_package(&c.footprint, pads.len()) {
         return true;
@@ -4068,5 +4078,113 @@ mod placeholder_jumper_exemption_tests {
             2,
             "real unset passives must keep firing"
         );
+    }
+}
+
+#[cfg(test)]
+mod socketed_chip_tests {
+    use super::is_connector_like;
+    use crate::testutil::{part, pin};
+    use crate::Component;
+
+    fn chip(reference: &str, value: &str, lib_id: &str, footprint: &str, pads: usize) -> Component {
+        let pins = (1..=pads)
+            .map(|n| pin(&n.to_string(), Some(i64::try_from(n).unwrap())))
+            .collect();
+        part(reference, value, lib_id, footprint, pins)
+    }
+
+    /// A DIP chip plugged into a socket footprint, and an analog-switch IC
+    /// drawn as `SW1`, are chips: their footprint's "socket" and their
+    /// designator's "SW" are not evidence of a connector.
+    #[test]
+    fn a_chip_in_a_socket_or_under_a_switch_designator_is_not_a_connector() {
+        let socketed = chip(
+            "U3",
+            "ATtiny85",
+            "MCU_Microchip_ATtiny:ATtiny85-20P",
+            "Package_DIP:DIP-8_W7.62mm_Socket",
+            8,
+        );
+        assert!(!is_connector_like(&socketed), "socketed DIP chip");
+        let analog_switch = chip(
+            "SW1",
+            "TS3A5017",
+            "Analog_Switch:TS3A5017",
+            "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm",
+            16,
+        );
+        assert!(!is_connector_like(&analog_switch), "SW1 analog-switch IC");
+        let socket_value = chip(
+            "IC2",
+            "74HC595 socket",
+            "74xx:74HC595",
+            "Package_DIP:DIP-16_W7.62mm",
+            16,
+        );
+        assert!(
+            !is_connector_like(&socket_value),
+            "chip with socket in its value"
+        );
+    }
+
+    /// A programmer's target socket drawn as `U5` with a value that names the
+    /// family or counts pins is the socket, not a chip in it.
+    #[test]
+    fn a_target_socket_valued_by_family_or_pin_count_stays_a_socket() {
+        let eeprom = chip(
+            "U1",
+            "24Cxx",
+            "Device:Foo",
+            "Package_DIP:DIP-8_W7.62mm_Socket_LongPads",
+            8,
+        );
+        assert!(is_connector_like(&eeprom), "24Cxx target socket");
+        let pic = chip(
+            "U5",
+            "PIC_18_PINS",
+            "Device:Foo",
+            "Package_DIP:DIP-18_W7.62mm_Socket_LongPads",
+            18,
+        );
+        assert!(is_connector_like(&pic), "PIC_18_PINS target socket");
+    }
+
+    /// The same words on a part that is a socket, a button or a header still
+    /// read as connectors.
+    #[test]
+    fn real_sockets_buttons_and_headers_stay_connector_like() {
+        let socket = chip(
+            "XU1",
+            "DIP-8 socket",
+            "Connector_Generic:Conn_02x04_Odd_Even",
+            "Package_DIP:DIP-8_W7.62mm_Socket",
+            8,
+        );
+        assert!(is_connector_like(&socket), "an empty IC socket");
+        let header = chip(
+            "P1",
+            "Conn_01x08",
+            "Connector_Generic:Conn_01x08",
+            "Connector_PinSocket_2.54mm:PinSocket_1x08_P2.54mm_Vertical",
+            8,
+        );
+        assert!(is_connector_like(&header), "a pin socket");
+        let button = chip(
+            "SW2",
+            "SW_Push",
+            "Switch:SW_Push",
+            "Button_Switch_SMD:SW_SPST_TL3342",
+            2,
+        );
+        assert!(is_connector_like(&button), "a push button");
+        let dip_switch = chip(
+            "SW3",
+            "SW_DIP_x04",
+            "Switch:SW_DIP_x04",
+            "Button_Switch_THT:SW_DIP_SPSTx04_Slide_9.78x12.34mm_W7.62mm_P2.54mm",
+            8,
+        );
+        assert!(is_connector_like(&dip_switch), "a DIP switch");
     }
 }
