@@ -492,6 +492,7 @@ fn an_identity_only_card_already_in_the_library_is_reported_not_failed() {
     assert!(run.status.success(), "a kept card is not a failure:\n{all}");
 }
 
+#[cfg(unix)]
 fn text_of(run: &std::process::Output) -> String {
     format!(
         "{}{}",
