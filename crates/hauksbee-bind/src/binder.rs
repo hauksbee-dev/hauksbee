@@ -7769,6 +7769,55 @@ fn unpowerable_mcu_card(
     ))
 }
 
+/// Whether the first function a pad's name lists (`GPIO4` of
+/// `GPIO4/ADC2_CH0/TOUCH0`) is the GPIO `role` stands for, as opposed to the
+/// pad only listing that GPIO among its alternates (`GPI34/ADC1_CH6/RTC_GPIO4`
+/// is GPIO34, whose RTC channel is numbered 4).
+fn pad_names_its_gpio(function: &str, role: &str, module: bool) -> bool {
+    let first = function
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_uppercase();
+    role_from_mcu_pinfunction_token(&first)
+        .and_then(|r| gpio_of_role(&r, module))
+        .is_some_and(|pb| gpio_of_role(role, module) == Some(pb))
+}
+
+/// The role that owns each port pin when several roles reach it: a pad naming
+/// the GPIO as its own function beats one that only lists it among its
+/// alternates, and the first role by name settles a tie. `by_role` is in name
+/// order, so the owner never depends on hash order.
+fn port_pin_owners<'a>(
+    by_role: &[(&'a String, NodeId)],
+    role_primary: &HashMap<String, bool>,
+    module: bool,
+) -> HashMap<(char, u8), &'a str> {
+    let primary = |r: &str| role_primary.get(r).copied().unwrap_or(false);
+    let mut owners: HashMap<(char, u8), &str> = HashMap::new();
+    for &(role, node) in by_role {
+        if node.is_ground() {
+            continue;
+        }
+        let port_bit = gpio_of_role(role, module).or_else(|| apin_gpio_of_role(role, module));
+        if let Some(pb) = port_bit {
+            let owner = owners.entry(pb).or_insert(role.as_str());
+            if !primary(owner) && primary(role) {
+                *owner = role.as_str();
+            }
+        }
+    }
+    owners
+}
+
+/// The roles of `role_nets` with their nets, in role-name order.
+fn roles_by_name(role_nets: &HashMap<String, NodeId>) -> Vec<(&String, NodeId)> {
+    let mut by_role: Vec<_> = role_nets.iter().map(|(r, &n)| (r, n)).collect();
+    by_role.sort_unstable_by(|a, b| a.0.cmp(b.0));
+    by_role
+}
+
 fn bind_mcu(
     comp: &Component,
     model: &ModelEntry,
@@ -7806,11 +7855,18 @@ fn bind_mcu(
 
     let mut pad_roles = HashMap::new();
     let mut role_nets = HashMap::new();
+    // Whether the pad that supplied each role names that GPIO as its primary
+    // function, not as one of its alternates (see `pad_names_its_gpio`).
+    let mut role_primary: HashMap<String, bool> = HashMap::new();
     for pin in &comp.pins {
         if let Some(role) = effective_pins.get(&pin.number) {
             pad_roles.insert(pin.number.clone(), role.clone());
             if let Some(node) = node_of(pin.net) {
                 role_nets.insert(role.clone(), node);
+                role_primary.insert(
+                    role.clone(),
+                    pad_names_its_gpio(&pin.function, role, module),
+                );
             }
         }
     }
@@ -7832,7 +7888,11 @@ fn bind_mcu(
     let mut gpio_drivers = HashMap::new();
     let mut adc_nets = HashMap::new();
     let mut adc_pin = HashMap::new();
-    for (role, &node) in &role_nets {
+    // Roles in name order, never hash order: two roles reaching one port pin
+    // would otherwise race for it (see `port_pin_owners`).
+    let by_role = roles_by_name(&role_nets);
+    let port_pin_owner = port_pin_owners(&by_role, &role_primary, module);
+    for (role, node) in by_role {
         if node.is_ground() {
             continue;
         }
@@ -7848,7 +7908,9 @@ fn bind_mcu(
         // analog-capable ones (that dual bind is the point of the promotion
         // design). `gpio_of_role` covers ordinary digital roles;
         // `apin_gpio_of_role` recovers the port pin behind an analog role.
-        let port_bit = gpio_of_role(role, module).or_else(|| apin_gpio_of_role(role, module));
+        let port_bit = gpio_of_role(role, module)
+            .or_else(|| apin_gpio_of_role(role, module))
+            .filter(|pb| port_pin_owner.get(pb).is_some_and(|o| *o == role.as_str()));
         if let Some((port, bit)) = port_bit {
             // Record this ADC channel's OWN port pin (if it is an analog pin that
             // also has a digital port pin) so the scheduler can tell a genuine
@@ -12585,6 +12647,67 @@ style = "i2c_pointer"
         assert!(bound.mcus[0].clock.external_present());
         let bound = bind_board(&stm32_clock_board(true), &lib);
         assert!(!bound.mcus[0].clock.external_present());
+    }
+
+    /// An ESP32 module drawn as the Olimex ESP32-PoE does: pad 26 is GPIO4 and
+    /// pad 6 is GPIO34 whose pin name lists its RTC channel `RTC_GPIO4`, so both
+    /// pads read as port pin 04. The roles were walked in hash order, so which
+    /// pad got the driver (and so which net the checks examined for GPIO4)
+    /// changed from run to run on the same file.
+    #[test]
+    fn two_pads_reaching_one_port_pin_give_it_to_the_same_pad_every_run() {
+        let lib = ModelLibrary::builtin();
+        let named = |number: &str, function: &str, net: i64| {
+            let mut p = pin(number, net);
+            p.function = function.to_string();
+            p
+        };
+        let mut module = comp("U6", "ESP32-WROOM-32E");
+        module.footprint = "RF_Module:ESP32-WROOM-32".to_string();
+        module.pins = vec![
+            named("1", "GND", 3),
+            named("2", "3V3", 4),
+            named("6", "GPI34/ADC1_CH6/RTC_GPIO4", 1),
+            named("26", "GPIO4/ADC2_CH0/TOUCH0/RTC_GPIO10/HSPIHD", 2),
+        ];
+        let board = ExtractedBoard {
+            name: "gpio-collision".to_string(),
+            nets: vec![
+                net(1, "GPI34_BUT1"),
+                net(2, "GPIO4_U1TXD"),
+                net(3, "GND"),
+                net(4, "+3V3"),
+            ],
+            components: vec![module],
+        };
+        let runs: Vec<Vec<((char, u8), String)>> = (0..40)
+            .map(|_| {
+                let bound = bind_board(&board, &lib);
+                assert_eq!(bound.mcus.len(), 1, "the module binds as an MCU");
+                let net_name = |n: NodeId| {
+                    bound
+                        .net_nodes
+                        .iter()
+                        .find(|(_, &node)| node == n)
+                        .map(|(name, _)| name.clone())
+                        .unwrap_or_default()
+                };
+                let mut drivers: Vec<_> = (bound.mcus[0].gpio_drivers.iter())
+                    .map(|(&pb, d)| (pb, net_name(d.net)))
+                    .collect();
+                drivers.sort();
+                drivers
+            })
+            .collect();
+        for run in &runs {
+            assert_eq!(run, &runs[0], "the pins driven must not vary between runs");
+        }
+        // The pad that names GPIO4 as its own function owns port pin 04.
+        assert!(
+            runs[0].contains(&(('0', 4), "GPIO4_U1TXD".to_string())),
+            "{:?}",
+            runs[0]
+        );
     }
 
     /// STM32F103 on `OSC_IN`/`OSC_OUT` (nets 1/2) with `extra` parts, ground net 3.
