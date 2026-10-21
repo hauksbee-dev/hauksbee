@@ -5309,10 +5309,12 @@ pub(crate) fn launch_agent(
             }
             cmd.args(a.profile.is_none().then_some("--ignore-user-config"))
                 .args(["--ignore-rules", "-c", "skills.include_instructions=false"]);
-            // Codex 0.159.0 has no setting to drop the date and time ahead of the
-            // prompt (`include_environment_context_time` is rejected as
-            // unrecognised), so they still lead it and would end a cache hit at the
-            // first line; the model needs neither to read a datasheet.
+            if cache_on {
+                // The environment block (date, working directory) ahead of the prompt
+                // would end a cache hit at the first line; the model needs neither to
+                // read a datasheet, and its files are named relative to where it runs.
+                cmd.args(["-c", "include_environment_context=false"]);
+            }
             for feature in CODEX_DISABLED_FEATURES {
                 cmd.args(["--disable", feature]);
             }
@@ -7607,6 +7609,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             // A profile opts into the operator's codex config: no --ignore-user-config.
             expected.extend(["--ephemeral", "--ignore-rules", "-c"].map(Into::into));
             expected.push("skills.include_instructions=false".into());
+            expected.extend(["-c", "include_environment_context=false"].map(Into::into));
             for feature in CODEX_DISABLED_FEATURES {
                 expected.extend(["--disable".into(), (*feature).into()]);
             }
@@ -7814,6 +7817,7 @@ printf 'done' > last-message.txt
             "ARG --ignore-user-config",
             "ARG --ignore-rules",
             "ARG --skip-git-repo-check",
+            "ARG include_environment_context=false",
             "ARG --output-last-message",
         ] {
             assert!(fork.contains(kept), "the fork keeps {kept}: {fork}");
@@ -7840,7 +7844,7 @@ printf 'done' > last-message.txt
         let fresh = calls().pop().unwrap();
         assert!(fresh.contains("ARG --ephemeral\n") && !fresh.contains("ARG fork"));
         assert!(fresh.contains("SHARED BASE RULES") && fresh.contains("PART THREE TAIL"));
-        assert!(!fresh.contains("include_environment_context_time"));
+        assert!(!fresh.contains("include_environment_context=false"));
         std::env::set_var(crate::extract_cache::ENV_CACHE, "force");
 
         // A prompt with no shared base, a profile or danger-full-access never forks.
