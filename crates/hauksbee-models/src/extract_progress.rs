@@ -180,8 +180,41 @@ pub fn snapshot() -> (String, u64) {
 /// prefixed with the part its thread is working on ([`with_label`]), so lines
 /// from different parts stay attributable and never interleave mid-line.
 pub fn say(line: &str) {
+    if CAPTURE
+        .with(|c| {
+            c.borrow_mut()
+                .as_mut()
+                .map(|lines| lines.push(line.to_string()))
+        })
+        .is_some()
+    {
+        return;
+    }
     let _s = erased();
     eprintln!("{}", labelled(line));
+}
+
+thread_local! {
+    static CAPTURE: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+}
+
+/// Run `f`, collecting what [`say`] would print on this thread: `(result, lines said)`.
+///
+/// For a caller that reports what a step did (the repairs the harness makes to a
+/// draft) rather than narrating it.
+pub fn capture<T>(f: impl FnOnce() -> T) -> (T, Vec<String>) {
+    struct Restore(Option<Vec<String>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CAPTURE.with(|c| *c.borrow_mut() = self.0.take());
+        }
+    }
+    let outer = CAPTURE.with(|c| c.borrow_mut().replace(Vec::new()));
+    let restore = Restore(outer);
+    let result = f();
+    let said = CAPTURE.with(|c| c.borrow_mut().take()).unwrap_or_default();
+    drop(restore);
+    (result, said)
 }
 
 pub fn out(text: &str) {

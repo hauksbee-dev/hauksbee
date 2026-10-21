@@ -31,6 +31,38 @@ use crate::extract_progress::event;
 pub const NOTES: &str = "notes.md";
 pub const CONFIDENCE: &str = "confidence.txt";
 pub const PREVIOUS: &str = "previous.toml";
+/// Every lint warning an in-session `ds check` has shown the agent, one JSON
+/// string a line: what the post-session validator may treat as already seen.
+pub const SEEN_WARNINGS: &str = "ds-check-seen.jsonl";
+
+/// Record `warnings` as shown to the agent by `ds check` in the sandbox `dir`.
+pub fn record_seen_warnings(dir: &Path, warnings: &[String]) {
+    use std::io::Write as _;
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join(SEEN_WARNINGS))
+    else {
+        return;
+    };
+    for w in warnings {
+        let _ = writeln!(file, "{}", Value::String(w.clone()));
+    }
+}
+
+/// The warnings `ds check` has shown the agent in `dir` since [`forget_seen_warnings`].
+#[must_use]
+pub fn seen_warnings(dir: &Path) -> std::collections::BTreeSet<String> {
+    let text = std::fs::read_to_string(dir.join(SEEN_WARNINGS)).unwrap_or_default();
+    text.lines()
+        .filter_map(|l| serde_json::from_str::<String>(l).ok())
+        .collect()
+}
+
+/// Start a tier with nothing seen: its agent has not been shown what an earlier one was.
+pub fn forget_seen_warnings(dir: &Path) {
+    let _ = std::fs::remove_file(dir.join(SEEN_WARNINGS));
+}
 
 /// Told to the agent that takes over from one stopped at its context budget
 /// before it wrote `model.toml` (a stopped agent that did write one has that

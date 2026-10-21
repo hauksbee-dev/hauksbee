@@ -483,16 +483,10 @@ pub fn main(dir: &Path, args: &[String]) -> Result<String> {
             let part = part_field(dir, "part").unwrap_or_default();
             let kind = part_field(dir, "kind").unwrap_or_default();
             let facts = facts_from_dir(dir);
-            let problems = crate::datasheet::check_draft(&raw, &part, &kind, &facts);
-            Ok(if problems.is_empty() {
-                "ds check: clean".to_string()
-            } else {
-                let mut out = format!("ds check: {} finding(s)\n", problems.len());
-                for p in problems {
-                    let _ = writeln!(out, "- {p}");
-                }
-                out
-            })
+            let verdict = crate::datasheet::check_draft(&raw, &part, &kind, &facts);
+            // What this showed the agent: a later warning the same words are not news.
+            crate::extract_harness::record_seen_warnings(dir, &verdict.warnings);
+            Ok(render_check(&verdict))
         }
         // Not on the agent's list: builds a sandbox's files outside a run, to
         // replay saved drafts and score page selection.
@@ -520,6 +514,37 @@ pub fn main(dir: &Path, args: &[String]) -> Result<String> {
         "help" | "--help" | "-h" => Ok(USAGE.to_string()),
         other => bail!("unknown ds command '{other}'\n{USAGE}"),
     }
+}
+
+/// `ds check`'s report: each refusal and warning as a finding, then the repairs
+/// the harness makes to the card itself.
+fn render_check(verdict: &crate::datasheet::DraftCheck) -> String {
+    let mut findings: Vec<String> = verdict
+        .refusal
+        .iter()
+        .map(|e| format!("error (the draft is refused): {e}"))
+        .collect();
+    findings.extend(verdict.warnings.iter().map(|w| format!("warning: {w}")));
+    let mut out = if findings.is_empty() {
+        "ds check: clean".to_string()
+    } else {
+        let mut out = format!("ds check: {} finding(s)\n", findings.len());
+        for f in &findings {
+            let _ = writeln!(out, "- {f}");
+        }
+        out
+    };
+    if !verdict.repairs.is_empty() {
+        let _ = write!(
+            out,
+            "\nthe harness rewrites the card itself before checking it, and the findings above are \
+             on the rewritten card; write these into model.toml to stop it:\n"
+        );
+        for r in &verdict.repairs {
+            let _ = writeln!(out, "- {r}");
+        }
+    }
+    out
 }
 
 fn find(dir: &Path, rest: &[String]) -> Result<String> {
@@ -678,5 +703,34 @@ mod tests {
         assert!(list.contains("supply_range:in"), "{list}");
         assert!(list.contains("enable"), "{list}");
         assert!(main(dir.path(), &["nonsense".to_string()]).is_err());
+    }
+
+    /// `ds check` runs the harness's validator on the sandbox's card and records the
+    /// warnings it showed, which the post-session loop then treats as seen.
+    #[test]
+    fn check_shows_the_harness_verdict_and_records_the_warnings_it_showed() {
+        let dir = tempfile::tempdir().unwrap();
+        write_run_files(dir.path(), "Q", "diode", None);
+        let card = (
+            "[[models]]\nid = \"q\"\nkind = \"diode\"\ndescription = \"d\"\n[models.params]\n\
+             identity_only = true\nwarning = \"w\"\nunlocked_by = \"u\"\n[models.pins]\n\"1\" = \"anode\"\n\
+             \"2\" = \"cathode\"\n[models.source]\ntier = \"datasheet-derived\"\n\
+             uncertainty = [{ status = \"unknown\", parameter = \"model\", reason = \"none\" }]\n\
+             [[models.source.characteristic]]\nparameter = \"PD power dissipation\"\nmax = 250.0\n\
+             unit = \"mW\"\nconditions = \"TA = 25 °C\"\nbasis = \"b\"\n"
+        ).to_string();
+        std::fs::write(dir.path().join("model.toml"), card).unwrap();
+        let out = main(dir.path(), &["check".to_string()]).unwrap();
+        assert!(
+            out.contains("finding(s)") && out.contains("prints a rating"),
+            "{out}"
+        );
+        let seen = crate::extract_harness::seen_warnings(dir.path());
+        assert!(
+            seen.iter().any(|w| w.contains("prints a rating")),
+            "{seen:?}"
+        );
+        crate::extract_harness::forget_seen_warnings(dir.path());
+        assert!(crate::extract_harness::seen_warnings(dir.path()).is_empty());
     }
 }

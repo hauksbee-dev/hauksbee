@@ -2437,8 +2437,8 @@ WHERE TO LOOK AND HOW TO READ IT:
 }
 
 /// Drop the end anchor ([`crate::validation::MATCH_PATTERN_RULE`]) from each match
-/// pattern of `table`; the `(key, pattern)` pairs rewritten.
-fn unanchor_match(table: &mut toml_edit::Table) -> Vec<(&'static str, String)> {
+/// pattern of `table`; the `(key, written pattern, rewritten pattern)` triples.
+fn unanchor_match(table: &mut toml_edit::Table) -> Vec<(&'static str, String, String)> {
     let mut rewritten = Vec::new();
     let Some(rules) = table
         .get_mut("match")
@@ -2449,9 +2449,10 @@ fn unanchor_match(table: &mut toml_edit::Table) -> Vec<(&'static str, String)> {
     for key in ["value_re", "mpn_re"] {
         let text = rules.get(key).and_then(toml_edit::Item::as_str);
         let bare = text.and_then(crate::validation::without_end_anchor);
-        if let Some(bare) = bare.filter(|b| !b.is_empty()).map(str::to_string) {
+        if let (Some(written), Some(bare)) = (text, bare.filter(|b| !b.is_empty())) {
+            let (written, bare) = (written.to_string(), bare.to_string());
             rules.insert(key, toml_edit::value(bare.clone()));
-            rewritten.push((key, bare));
+            rewritten.push((key, written, bare));
         }
     }
     rewritten
@@ -3349,9 +3350,10 @@ impl Reply<'_> {
             // A match pattern anchored at the end binds only the bare name; a variant's
             // pattern is its own to anchor.
             if original.variant.is_none() {
-                for (key, bare) in unanchor_match(table) {
+                for (key, written, bare) in unanchor_match(table) {
                     say!(
-                        "[model-extract] {}: {key} loses its end anchor ({bare}): {}",
+                        "[model-extract] {}: {key} {written} ends with an end anchor; \
+                         rewritten to {bare}: {}",
                         original.id,
                         crate::validation::MATCH_PATTERN_RULE
                     );
@@ -3472,6 +3474,16 @@ impl Reply<'_> {
                 out
             })
             .unwrap_or_default()
+    }
+
+    /// The one validator of a drafted card, the same for the post-session loop
+    /// ([`validated_attempts`]) and the in-session `ds check` ([`check_draft`]), so
+    /// the agent is shown every refusal and warning while it can still fix it: the
+    /// refusal `raw` draws, else (when `lint`) the warnings a passing card still draws.
+    /// `raw` is the completed reply ([`Self::complete`]).
+    fn assess(self, raw: &str, lint: bool) -> Result<Vec<String>> {
+        self.check(raw)?;
+        Ok(if lint { self.warnings(raw) } else { Vec::new() })
     }
 
     fn check(self, raw: &str) -> Result<()> {
@@ -3929,7 +3941,8 @@ fn run_tier(
     let mut last_draft = None::<String>;
     let table = reply.table();
     let edit_in_place = !table.is_empty();
-    let raw = validated_attempts(
+    harness::forget_seen_warnings(ws.path());
+    let raw = validated_attempts_seeing(
         resolved.retries,
         &prompt,
         reply,
@@ -3992,6 +4005,7 @@ fn run_tier(
             last_draft = Some(draft.clone());
             Ok(draft)
         },
+        || harness::seen_warnings(ws.path()),
     );
     raw.map(|raw| (raw, timed_out))
 }
@@ -4389,8 +4403,24 @@ fn validated_attempts(
     retries: usize,
     base_prompt: impl Into<Prompt>,
     reply: Reply<'_>,
+    tool: (&str, bool),
+    fetch: impl FnMut(&Prompt) -> Result<String>,
+) -> Result<String> {
+    validated_attempts_seeing(retries, base_prompt, reply, tool, fetch, Default::default)
+}
+
+/// [`validated_attempts`], where `seen` yields the lint warnings the agent has
+/// already been shown in-session (`ds check` runs the same validator, see
+/// [`Reply::assess`]). A warning it was shown and left in the card made no
+/// progress, so a redraft would only repeat the session: the card is kept with it
+/// instead, and a redraft quotes only the warnings the agent had not seen.
+fn validated_attempts_seeing(
+    retries: usize,
+    base_prompt: impl Into<Prompt>,
+    reply: Reply<'_>,
     (tool, edit_in_place): (&str, bool),
     mut fetch: impl FnMut(&Prompt) -> Result<String>,
+    seen: impl Fn() -> std::collections::BTreeSet<String>,
 ) -> Result<String> {
     let base_prompt: Prompt = base_prompt.into();
     // A retry's feedback joins the tail only, so the base stays the cacheable prefix.
@@ -4439,26 +4469,20 @@ fn validated_attempts(
             raw.len(),
             started.elapsed().as_secs_f64()
         );
-        let checked = reply.check(&raw);
+        let checked = reply.assess(&raw, accepted.is_none() && attempt <= retries);
         let error = checked.as_ref().err().map(harness::reason);
         progress::event(
             "validator",
             serde_json::json!({"ok": error.is_none(), "error": error}),
         );
         match checked {
-            Ok(()) => {
-                let warnings = if accepted.is_none() && attempt <= retries {
-                    reply.warnings(&raw)
-                } else {
-                    Vec::new()
-                };
+            Ok(warnings) => {
                 if warnings.is_empty() {
                     return Ok(raw);
                 }
-                say!(
-                    "[model-extract] attempt {attempt} draws {} lint warning(s); redrafting with them",
-                    warnings.len()
-                );
+                let Some(warnings) = unseen_warnings(warnings, &seen(), attempt) else {
+                    return Ok(raw);
+                };
                 let note = format!(
                     "the draft passes validation, but the model lint warns about it:\n- {}",
                     warnings.join("\n- ")
@@ -4498,6 +4522,33 @@ fn validated_attempts(
         }
     }
     unreachable!("the loop returns or bails on its last attempt")
+}
+
+/// The warnings a redraft should quote: those `shown` has not already put in front of
+/// the agent. `None` when every one was shown and left in the card, so a redraft would
+/// make no progress and the card stands as written (said, with the warnings).
+fn unseen_warnings(
+    warnings: Vec<String>,
+    shown: &std::collections::BTreeSet<String>,
+    attempt: usize,
+) -> Option<Vec<String>> {
+    let (left, warnings): (Vec<String>, Vec<String>) =
+        warnings.into_iter().partition(|w| shown.contains(w));
+    if warnings.is_empty() {
+        say!(
+            "[model-extract] attempt {attempt} keeps {} lint warning(s) the agent was shown by \
+             `ds check` and left, so a redraft would make no progress: {}",
+            left.len(),
+            left.join(" | ")
+        );
+        return None;
+    }
+    say!(
+        "[model-extract] attempt {attempt} draws {} new lint warning(s); redrafting with them: {}",
+        warnings.len(),
+        warnings.join(" | ")
+    );
+    Some(warnings)
 }
 
 /// Is a failed reply visibly only a classification or another tiny fragment?
@@ -6193,43 +6244,52 @@ pub fn base_kind_name(kind: &str) -> Option<&'static str> {
     behavioral_family_base_kind(kind)
 }
 
+/// What `ds check` shows about a draft: the validator's verdict on it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DraftCheck {
+    /// The validation error that refuses the draft, if one does.
+    pub refusal: Option<String>,
+    /// The lint warnings, binding, pin-table and coverage findings a passing
+    /// draft still draws (what makes the harness redraft it).
+    pub warnings: Vec<String>,
+    /// What the harness rewrites in the draft itself before it checks it (a
+    /// missing model-error record, a match pattern's end anchor, derived params):
+    /// the verdict above is on the rewritten card.
+    pub repairs: Vec<String>,
+}
+
 /// Everything the drafting loop would say about `raw` against `facts`; what `ds check` prints.
 ///
-/// The validation error that refuses it, else the lint warnings and every
-/// binding, pin-table and coverage finding. Empty when the draft is clean.
+/// Exactly the harness's own steps in its own order, through the same functions
+/// ([`Reply::complete`], then [`Reply::assess`]): the agent is shown every
+/// refusal and warning the post-session validator will find, while it can fix it.
 #[must_use]
 pub fn check_draft(
     raw: &str,
     part: &str,
     kind: &str,
     facts: &crate::card_coverage::Facts,
-) -> Vec<String> {
-    let checked =
-        crate::card_coverage::with_facts(facts.clone(), || parse_and_validate_all(raw, part, kind));
-    match checked {
-        Err(e) => vec![format!("error (the draft is refused): {e:#}")],
-        Ok(all) => {
-            let entry = &all[0];
-            let mut out: Vec<String> = crate::param_names::source_warnings(entry)
-                .into_iter()
-                .map(|w| format!("warning: {w}"))
-                .collect();
-            out.extend(crate::ranges::problems(entry).iter().map(|p| {
-                format!(
-                    "range: {} = {} is outside what this field ever holds: recheck the row's \
-                     unit and column",
-                    p.place, p.value
-                )
-            }));
-            out.extend(
-                crate::card_coverage::reply_findings(&all, facts)
-                    .into_iter()
-                    .filter(|f| f.severity == crate::card_coverage::Severity::Warn)
-                    .map(|f| format!("{}: {}", f.check, f.message)),
-            );
-            out
+) -> DraftCheck {
+    let reply = Reply::Model { part, kind };
+    crate::card_coverage::with_facts(facts.clone(), || {
+        let (completed, said) = progress::capture(|| reply.complete(raw.to_string()));
+        let repairs = said
+            .iter()
+            .map(|l| l.trim_start_matches("[model-extract] ").to_string())
+            .collect();
+        match reply.assess(&completed, true) {
+            Err(e) => DraftCheck {
+                refusal: Some(format!("{e:#}")),
+                warnings: Vec::new(),
+                repairs,
+            },
+            Ok(warnings) => DraftCheck {
+                refusal: None,
+                warnings,
+                repairs,
+            },
         }
-    }
+    })
 }
 
 /// Cards in one reply that a board could not tell apart: a repeated id (the
@@ -7140,6 +7200,171 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
         assert_eq!(seen.borrow().len(), 2);
         let out = run(Ok("not a card".into())).unwrap();
         assert_eq!(out, model.complete(bad.clone()));
+    }
+
+    /// The card LM62460 drafted (ramp-20261021): a start-anchored `mpn_re`, and a
+    /// `value_re` whose `$` sits inside a group. The run's log said its `mpn_re`
+    /// "loses its end anchor ((?i)^LM62460)", quoting the already-rewritten pattern,
+    /// which read as a false positive on a start-anchored pattern.
+    #[test]
+    fn a_start_anchored_pattern_is_not_reported_and_a_rewrite_names_both_patterns() {
+        let card = |value_re: &str, mpn_re: &str| {
+            format!("[[models]]\nid = \"lm62460qrphrq1\"\nkind = \"diode\"\n[models.match]\nvalue_re = '{value_re}'\nmpn_re = '{mpn_re}'\n{MODEL_SOURCE}")
+        };
+        let model = Reply::Model {
+            part: "LM62460QRPHRQ1",
+            kind: "diode",
+        };
+        let said = |raw: String| progress::capture(|| model.complete(raw));
+        // The patterns the draft kept, as in the trace: nothing is rewritten or said.
+        let kept = card("(?i)^(?:LM62460QRPHRQ|LM62460$)", "(?i)^LM62460");
+        let (done, lines) = said(kept.clone());
+        assert_eq!(done, kept);
+        assert!(lines.iter().all(|l| !l.contains("anchor")), "{lines:?}");
+        // The same draft with its `mpn_re` end-anchored: rewritten, and the line
+        // quotes what was written and what it became.
+        let (done, lines) = said(card("(?i)^(?:LM62460QRPHRQ|LM62460$)", "(?i)^LM62460$"));
+        // (the rewrite writes the key's string in TOML's other quoting, hence the parse)
+        let patterns = |toml: &str| {
+            let db: crate::schema::DbFile = toml::from_str(toml).expect("card parses");
+            let m = db.models[0].r#match.clone();
+            (m.value_re, m.mpn_re)
+        };
+        assert_eq!(patterns(&done), patterns(&kept));
+        let line = lines
+            .iter()
+            .find(|l| l.contains("anchor"))
+            .unwrap_or_else(|| panic!("{lines:?}"));
+        assert!(
+            line.contains("mpn_re (?i)^LM62460$ ends with an end anchor")
+                && line.contains("rewritten to (?i)^LM62460:"),
+            "{line}"
+        );
+        // An end anchor that was a whole alternative leaves no empty alternative
+        // (`^LM62460|` would bind every value).
+        assert_eq!(
+            crate::validation::without_end_anchor("(?i)^LM62460[-_ ]|$"),
+            Some("(?i)^LM62460[-_ ]")
+        );
+        assert_eq!(
+            crate::validation::without_end_anchor(r"^A\|$"),
+            Some(r"^A\|")
+        );
+        assert_eq!(crate::validation::without_end_anchor("(?i)^LM62460"), None);
+        assert_eq!(crate::validation::without_end_anchor(r"^LM\$"), None);
+    }
+
+    /// `ds check` is the harness's validator: its refusal and warnings are the
+    /// ones the post-session loop acts on, for a refused card, a card the harness
+    /// rewrites into a passing one, and one that draws a warning.
+    #[test]
+    fn ds_check_reports_what_the_post_session_validator_finds() {
+        let facts = crate::card_coverage::Facts::default();
+        let model = Reply::Model {
+            part: "Q",
+            kind: "diode",
+        };
+        let diode = |rows: &str| {
+            format!("[[models]]\nid = \"q\"\nkind = \"diode\"\ndescription = \"d\"\n[models.params]\nidentity_only = true\nwarning = \"w\"\nunlocked_by = \"u\"\n[models.pins]\n\"1\" = \"anode\"\n\"2\" = \"cathode\"\n{MODEL_SOURCE}{rows}")
+        };
+        let row = "[[models.source.characteristic]]\nparameter = \"PD power dissipation\"\nmax = 250.0\nunit = \"mW\"\nconditions = \"TA = 25 °C\"\nbasis = \"b\"\n";
+        let vf = "[[models.source.characteristic]]\nparameter = \"VF forward voltage\"\nmax = 0.9\nunit = \"V\"\nconditions = \"IF = 10 mA\"\nbasis = \"b\"\n";
+        for raw in [
+            diode(row),
+            diode(&format!("{row}rating = \"max_power_w\"\n")),
+            diode(vf),
+            "kind = \"diode\"".to_string(),
+        ] {
+            let seen = crate::card_coverage::with_facts(facts.clone(), || {
+                model.assess(&model.complete(raw.clone()), true)
+            });
+            let shown = check_draft(&raw, "Q", "diode", &facts);
+            assert_eq!(
+                shown.refusal,
+                seen.as_ref().err().map(|e| format!("{e:#}")),
+                "{raw}"
+            );
+            assert_eq!(shown.warnings, seen.unwrap_or_default(), "{raw}");
+        }
+        // The warning the lint test feeds back is shown in-session too, and the
+        // harness's repair of an identity-only abstention its rows make needless is
+        // reported as a repair, on a card that is not refused.
+        let shown = check_draft(&diode(row), "Q", "diode", &facts);
+        assert!(
+            shown.warnings.iter().any(|w| w.contains("prints a rating")),
+            "{shown:?}"
+        );
+        let shown = check_draft(&diode(vf), "Q", "diode", &facts);
+        assert!(
+            shown.refusal.is_none() && !shown.repairs.is_empty(),
+            "{shown:?}"
+        );
+        // An end-anchored `value_re` is a repair the agent is told of while it can write it itself.
+        let anchored = diode(row).replace(
+            "[models.pins]",
+            "[models.match]\nvalue_re = '^Q$'\n[models.pins]",
+        );
+        let shown = check_draft(&anchored, "Q", "diode", &facts);
+        assert!(
+            shown
+                .repairs
+                .iter()
+                .any(|r| r.contains("^Q$") && r.contains("rewritten to ^Q")),
+            "{shown:?}"
+        );
+    }
+
+    /// A warning the agent was shown by `ds check` and left in the card is not
+    /// redrafted (the redraft would repeat the session); one it had not seen still is,
+    /// quoting only the unseen.
+    #[test]
+    fn a_warning_the_agent_was_shown_and_left_is_not_redrafted() {
+        let card = |extra: &str| {
+            format!("[[models]]\nid = \"q\"\nkind = \"diode\"\ndescription = \"d\"\n[models.params]\nidentity_only = true\nwarning = \"w\"\nunlocked_by = \"u\"\n[models.pins]\n\"1\" = \"anode\"\n\"2\" = \"cathode\"\n{MODEL_SOURCE}[[models.source.characteristic]]\nparameter = \"PD power dissipation\"\nmax = 250.0\nunit = \"mW\"\nconditions = \"TA = 25 °C\"\nbasis = \"b\"\n{extra}")
+        };
+        let (bad, good) = (card(""), card("rating = \"max_power_w\"\n"));
+        let model = Reply::Model {
+            part: "Q",
+            kind: "diode",
+        };
+        let warnings =
+            crate::card_coverage::with_facts(crate::card_coverage::Facts::default(), || {
+                model.assess(&model.complete(bad.clone()), true).unwrap()
+            });
+        assert!(!warnings.is_empty());
+        let run = |seen: std::collections::BTreeSet<String>| {
+            let prompts = std::cell::RefCell::new(Vec::new());
+            let out = validated_attempts_seeing(
+                1,
+                "BASE",
+                model,
+                ("t", false),
+                |p| {
+                    prompts.borrow_mut().push(p.to_string());
+                    Ok(if prompts.borrow().len() == 1 {
+                        bad.clone()
+                    } else {
+                        good.clone()
+                    })
+                },
+                || seen.clone(),
+            )
+            .unwrap();
+            (out, prompts.into_inner())
+        };
+        // Shown in-session and still there: one agent run, the card kept as written.
+        let (out, prompts) = run(warnings.iter().cloned().collect());
+        assert_eq!(prompts.len(), 1, "{prompts:?}");
+        assert_eq!(out, model.complete(bad.clone()));
+        // Not shown: redrafted, as before.
+        let (out, prompts) = run(std::collections::BTreeSet::default());
+        assert_eq!(prompts.len(), 2);
+        assert!(out.contains("rating = \"max_power_w\""));
+        // Some shown: the redraft quotes only the ones that were not.
+        let seen = std::iter::once(warnings[0].clone()).collect();
+        let (_, prompts) = run(seen);
+        let quoted = prompts.get(1).map_or(0, |p| p.matches("\n- ").count());
+        assert_eq!(quoted, warnings.len() - 1, "{warnings:?}");
     }
 
     /// Completion writes a tagged rating's scalar from its 25 °C row, whatever
