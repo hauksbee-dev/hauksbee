@@ -14,6 +14,14 @@ describe('frontend release gates', () => {
   ) as PackageManifest
   const workflow = readFileSync(join(repository, '.github/workflows/ci.yml'), 'utf8')
 
+  const jobBlock = (job: string): string => {
+    const start = workflow.indexOf(`\n  ${job}:\n`)
+    expect(start).toBeGreaterThan(-1)
+    const rest = workflow.slice(start + 3)
+    const nextJob = rest.search(/^ {2}[a-z][a-z0-9-]*:\n/m)
+    return nextJob === -1 ? rest : rest.slice(0, nextJob)
+  }
+
   test('package scripts expose the unit and end-to-end suites', () => {
     expect(manifest.scripts?.['test:unit']).toBe('bun test')
     expect(manifest.scripts?.['test:e2e']).toBe('bun run tests/e2e/run.ts')
@@ -78,15 +86,30 @@ describe('frontend release gates', () => {
     expect(workflow).not.toContain(
       'cargo clippy -p hauksbee-engine --no-default-features --all-targets',
     )
-    for (const job of ['macos', 'windows']) {
-      const start = workflow.indexOf(`  ${job}:`)
-      expect(start).toBeGreaterThan(-1)
-      const rest = workflow.slice(start + 3)
-      const nextJob = rest.search(/^ {2}[a-z][a-z0-9-]*:\n/m)
-      const block = nextJob === -1 ? rest : rest.slice(0, nextJob)
-      expect(block).toContain('needs: [plan, test]')
+    // Native gates start with the Linux jobs, not after them: they share no
+    // artifact with the Linux tests, so waiting only added the Linux wall time.
+    for (const job of [
+      'macos',
+      'windows-tests',
+      'windows-flows',
+      'windows-release',
+    ]) {
+      const block = jobBlock(job)
+      expect(block).toContain('needs: plan')
       expect(block).toContain("needs.plan.outputs.full == 'true'")
-      expect(block).toContain("needs.test.result == 'success'")
+      expect(block).not.toContain('needs.test')
+    }
+    // The original check name survives as a rollup over every Windows job.
+    const rollup = jobBlock('windows')
+    expect(rollup).toContain(
+      'needs: [plan, windows-tests, windows-flows, windows-release]',
+    )
+    expect(rollup).toContain(
+      'name: native Windows tests, release binary, and drag-and-drop front door',
+    )
+    // Linux gates likewise hang off the plan alone.
+    for (const job of ['no-default-engine', 'test', 'docs', 'gpl-free-check']) {
+      expect(jobBlock(job)).toContain('needs: plan\n')
     }
   })
 

@@ -51,9 +51,14 @@ class WindowsPortContract(unittest.TestCase):
     def test_ci_runs_native_engine_ci_and_mcu_tests_with_warnings_denied(self) -> None:
         ci = read(".github/workflows/ci.yml")
         self.assertRegex(ci, r"runs-on:\s*windows-latest")
+        # The native tests run sharded; the shards partition one command, so
+        # together they run each test of the three crates exactly once.
         self.assertIn(
-            "cargo test -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu", ci
+            "cargo nextest run -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu", ci
         )
+        self.assertIn("--no-fail-fast --all-targets", ci)
+        self.assertIn("--partition count:${{ matrix.shard }}/4", ci)
+        self.assertRegex(ci, r"shard:\s*\[1, 2, 3, 4\]")
         self.assertIn("--no-default-features --features renode,qemu", ci)
         self.assertIn("RUSTFLAGS: -D warnings", ci)
 
