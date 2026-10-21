@@ -9,7 +9,7 @@
 //!
 //! A third rule reads the MCU card's structured pin capability
 //! (`[models.pin_capability.adc]`): an analogue source wired to a pad the
-//! card does not list as an ADC input is [`adc_capability_flags`]'s finding.
+//! card does not list as an ADC input is `adc_capability_flags`'s finding.
 //!
 //! The first two are deliberately under-reporting. The LM339/LM393 datasheets guarantee
 //! the output state while at least ONE input stays inside the range, so only a
