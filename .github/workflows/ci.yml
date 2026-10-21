@@ -220,26 +220,21 @@ jobs:
         shell: bash
         run: cargo test ${{ matrix.packages }}
 
-  # Native macOS runs the same crate shards as the Linux test job, one runner
-  # per shard, because the job is compile-bound; the rollup below keeps the
-  # original check name.
-  macos-tests:
-    name: native macOS tests (${{ matrix.suite }})
+  # One macOS job, not shards: GitHub's macOS arm64 pool is capacity-constrained
+  # and a second concurrent macOS job was repeatedly never acquired (cancelled
+  # after ~15 minutes in the queue), which costs more than sharding saves.
+  macos:
+    name: native macOS workspace candidate gate
     needs: plan
     if: needs.plan.outputs.full == 'true'
     runs-on: macos-latest
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.plan.outputs.test_matrix) }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: macos-ci-${{ matrix.suite }}
-          # The runner image's preinstalled rustc moves between roll-outs; the
-          # toolchain that builds is pinned by rust-toolchain.toml, which is
-          # already part of the key, so keep the key stable across images.
+          shared-key: macos-ci
+          # (stable across runner images, as above)
           add-rust-environment-hash-key: false
           add-job-id-key: false
           cache-on-failure: true
@@ -251,22 +246,8 @@ jobs:
           key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/hauksbee-engine/assets/scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
       - name: install the immutable simavr build prerequisite
         run: scripts/setup-ci-simavr.sh
-      - name: cargo test (native macOS ${{ matrix.suite }})
-        run: cargo test ${{ matrix.packages }}
-
-  macos:
-    name: native macOS workspace candidate gate
-    needs: [plan, macos-tests]
-    if: always() && needs.plan.outputs.full == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: require every native macOS shard
-        env:
-          TESTS: ${{ needs.macos-tests.result }}
-        run: |
-          echo "tests=$TESTS"
-          [[ "$TESTS" == "success" ]]
+      - name: cargo test (native macOS workspace)
+        run: cargo test --workspace
 
   # The native Windows gate is parallel jobs (six test shards, the flows, the release build) and one rollup that keeps the
   # original check name. None of them waits on the Linux tests (they share no

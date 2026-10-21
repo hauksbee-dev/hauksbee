@@ -89,7 +89,7 @@ describe('frontend release gates', () => {
     // Native gates start with the Linux jobs, not after them: they share no
     // artifact with the Linux tests, so waiting only added the Linux wall time.
     for (const job of [
-      'macos-tests',
+      'macos',
       'windows-tests',
       'windows-flows',
       'windows-release',
@@ -99,8 +99,7 @@ describe('frontend release gates', () => {
       expect(block).toContain("needs.plan.outputs.full == 'true'")
       expect(block).not.toContain('needs.test')
     }
-    // The original check names survive as rollups over the sharded jobs.
-    expect(jobBlock('macos')).toContain('needs: [plan, macos-tests]')
+    // The original check name survives as a rollup over the sharded Windows jobs.
     const rollup = jobBlock('windows')
     expect(rollup).toContain(
       'needs: [plan, windows-tests, windows-flows, windows-release]',
@@ -171,7 +170,7 @@ describe('frontend release gates', () => {
     expect(installer).toContain('Version: $SIMAVR_TAG')
     expect(installer).toContain('refusing to overwrite or trust an unidentified library')
     expect(installer).not.toContain('git clone --depth 1 --branch "$SIMAVR_TAG"')
-    for (const job of ['clippy', 'test', 'macos-tests', 'docs', 'scenario-qc']) {
+    for (const job of ['clippy', 'test', 'macos', 'docs', 'scenario-qc']) {
       const start = workflow.indexOf(`  ${job}:`)
       expect(start).toBeGreaterThan(-1)
       const rest = workflow.slice(start + 3)
