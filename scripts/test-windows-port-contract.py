@@ -57,8 +57,11 @@ class WindowsPortContract(unittest.TestCase):
             "cargo nextest run -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu", ci
         )
         self.assertIn("--no-fail-fast --all-targets", ci)
-        self.assertIn("--partition count:${{ matrix.shard }}/4", ci)
-        self.assertRegex(ci, r"shard:\s*\[1, 2, 3, 4\]")
+        shards = re.search(r"shard:\s*\[([0-9, ]+)\]", ci)
+        self.assertIsNotNone(shards)
+        count = len(shards.group(1).split(","))
+        self.assertEqual(shards.group(1), ", ".join(str(n) for n in range(1, count + 1)))
+        self.assertIn(f"--partition count:${{{{ matrix.shard }}}}/{count}", ci)
         self.assertIn("--no-default-features --features renode,qemu", ci)
         self.assertIn("RUSTFLAGS: -D warnings", ci)
 

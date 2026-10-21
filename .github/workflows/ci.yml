@@ -223,17 +223,23 @@ jobs:
         shell: bash
         run: cargo test ${{ matrix.packages }}
 
-  macos:
-    name: native macOS workspace candidate gate
+  # Native macOS runs the same crate shards as the Linux test job, one runner
+  # per shard, because the job is compile-bound; the rollup below keeps the
+  # original check name.
+  macos-tests:
+    name: native macOS tests (${{ matrix.suite }})
     needs: plan
     if: needs.plan.outputs.full == 'true'
     runs-on: macos-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.test_matrix) }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: macos-ci
+          shared-key: macos-ci-${{ matrix.suite }}
           add-job-id-key: false
           cache-on-failure: true
           cache-workspace-crates: true
@@ -244,15 +250,29 @@ jobs:
           key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/hauksbee-engine/assets/scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
       - name: install the immutable simavr build prerequisite
         run: scripts/setup-ci-simavr.sh
-      - name: cargo test (native macOS workspace)
-        run: cargo test --workspace
+      - name: cargo test (native macOS ${{ matrix.suite }})
+        run: cargo test ${{ matrix.packages }}
 
-  # The native Windows gate is four parallel jobs and one rollup that keeps the
+  macos:
+    name: native macOS workspace candidate gate
+    needs: [plan, macos-tests]
+    if: always() && needs.plan.outputs.full == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: require every native macOS shard
+        env:
+          TESTS: ${{ needs.macos-tests.result }}
+        run: |
+          echo "tests=$TESTS"
+          [[ "$TESTS" == "success" ]]
+
+  # The native Windows gate is parallel jobs (six test shards, the flows, the release build) and one rollup that keeps the
   # original check name. None of them waits on the Linux tests (they share no
   # artifact), so the longest of them, not the sum, sets the wall time. Every
   # command of the former single job still runs, in the same feature shapes.
   windows-tests:
-    name: native Windows tests (engine, CI, mcu) shard ${{ matrix.shard }}/4
+    name: native Windows tests (engine, CI, mcu) shard ${{ matrix.shard }}/6
     needs: plan
     if: needs.plan.outputs.full == 'true'
     runs-on: windows-latest
@@ -260,7 +280,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     env:
       # The Windows artifact is permissive-only. If avr leaks into the feature
       # graph, build.rs must fail rather than finding an accidental runner copy.
@@ -283,7 +303,7 @@ jobs:
         shell: pwsh
         run: .\scripts\install-sims-windows.ps1
       # `-j 1` is Windows-runner load management, not a smaller test set: every
-      # test still runs, one at a time, and the four shards together run each
+      # test still runs, one at a time, and the six shards together run each
       # test exactly once (`--partition count:` splits the whole listed set).
       # Several of these tests spawn a whole emulator (Renode's .NET host,
       # QEMU) as a child process, and on this 4-core runner two Renode
@@ -292,9 +312,9 @@ jobs:
       # sensor_attach's cold leg in the v0.1.0-beta.1 release run) while the
       # same co-sims pass one at a time. corpus-gate.yml serializes its
       # emulator suites for the same reason. The shards run on separate
-      # machines, so serial per runner still finishes in a quarter of the time.
-      - name: native engine, CI, and emulator-lifecycle tests (shard ${{ matrix.shard }}/4)
-        run: cargo nextest run -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --no-fail-fast --all-targets --no-default-features --features renode,qemu -j 1 --partition count:${{ matrix.shard }}/4
+      # machines, so serial per runner still finishes in a sixth of the time.
+      - name: native engine, CI, and emulator-lifecycle tests (shard ${{ matrix.shard }}/6)
+        run: cargo nextest run -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --no-fail-fast --all-targets --no-default-features --features renode,qemu -j 1 --partition count:${{ matrix.shard }}/6
 
   windows-flows:
     name: native Windows process-tree and required firmware-through-emulator flows
@@ -430,7 +450,7 @@ jobs:
     timeout-minutes: 5
     steps:
       # Rollup under the original check name, so anything that requires that
-      # name still sees one verdict covering all four Windows jobs.
+      # name still sees one verdict covering every Windows job.
       - name: require every native Windows job
         env:
           TESTS: ${{ needs.windows-tests.result }}
