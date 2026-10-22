@@ -1827,12 +1827,15 @@ fn check_peripheral_limits(entry: &ModelEntry, p: &mut Problems) {
 /// card's pins use: every listed pad must exist there, must not be a supply or
 /// ground pad, and a channel is named for each; the basis cites the datasheet.
 fn check_pin_capability(entry: &ModelEntry, p: &mut Problems) {
+    if !entry.pin_capability.is_empty() {
+        p.require(entry.kind == ComponentKind::Mcu, || {
+            "[models.pin_capability] belongs on an mcu card".into()
+        });
+    }
+    check_xtal_int_caps(entry, p);
     let Some(adc) = &entry.pin_capability.adc else {
         return;
     };
-    p.require(entry.kind == ComponentKind::Mcu, || {
-        "[models.pin_capability] belongs on an mcu card".into()
-    });
     p.require(!adc.basis.trim().is_empty(), || {
         "[models.pin_capability.adc] needs a basis citing the datasheet table and page".into()
     });
@@ -1852,6 +1855,53 @@ fn check_pin_capability(entry: &ModelEntry, p: &mut Problems) {
             format!(
                 "[models.pin_capability.adc] pad '{pad}' is the supply or ground role '{role}', not an ADC input"
             )
+        });
+    }
+}
+
+/// `[[models.pin_capability.xtal_int_caps]]`: each integrated-load-cap oscillator
+/// names two distinct pads of the card's own pad map (neither a supply or ground
+/// role), cites the datasheet, and gives a capacitance range that is ordered and
+/// in the span a load capacitor has.
+fn check_xtal_int_caps(entry: &ModelEntry, p: &mut Problems) {
+    for o in &entry.pin_capability.xtal_int_caps {
+        let name = &o.oscillator;
+        p.require(!name.trim().is_empty(), || {
+            "[[models.pin_capability.xtal_int_caps]] needs the oscillator's datasheet name".into()
+        });
+        p.require(!o.basis.trim().is_empty(), || {
+            format!("[[models.pin_capability.xtal_int_caps]] '{name}' needs a basis citing the datasheet table and page")
+        });
+        p.require(o.pads.len() == 2 && o.pads[0] != o.pads[1], || {
+            format!("[[models.pin_capability.xtal_int_caps]] '{name}' lists the two distinct pads the crystal connects to")
+        });
+        for pad in &o.pads {
+            let Some(role) = entry.pins.get(pad) else {
+                p.push(format!(
+                    "[[models.pin_capability.xtal_int_caps]] '{name}' pad '{pad}' is not a pad of [models.pins]"
+                ));
+                continue;
+            };
+            let r = role.trim().to_ascii_lowercase();
+            p.require(crate::pin_roles::power_pin(&r, entry.kind).is_none(), || {
+                format!("[[models.pin_capability.xtal_int_caps]] '{name}' pad '{pad}' is the supply or ground role '{role}', not a crystal pad")
+            });
+        }
+        let in_span = |v: f64| v.is_finite() && (0.5e-12..=100e-12).contains(&v);
+        for (key, v) in [("min_f", o.min_f), ("max_f", o.max_f)] {
+            if let Some(v) = v {
+                p.require(in_span(v), || {
+                    format!("[[models.pin_capability.xtal_int_caps]] '{name}' {key} = {v} is outside 0.5 pF to 100 pF: a capacitance in farads, per pad")
+                });
+            }
+        }
+        if let (Some(lo), Some(hi)) = (o.min_f, o.max_f) {
+            p.require(lo <= hi, || {
+                format!("[[models.pin_capability.xtal_int_caps]] '{name}' min_f exceeds max_f")
+            });
+        }
+        p.require(o.min_f.is_some() == o.max_f.is_some(), || {
+            format!("[[models.pin_capability.xtal_int_caps]] '{name}' gives both min_f and max_f or neither (integrated and tunable, no range printed)")
         });
     }
 }

@@ -192,8 +192,10 @@ struct Spread {
 #[derive(Debug, Clone, Copy)]
 enum DividerLaw {
     /// The error amplifier holds FB at `Vref` above ground: `Vref * (1 +
-    /// Rtop / Rbottom)`, Rtop from FB to the output.
-    Grounded,
+    /// Rtop / Rbottom) + Ifb * Rtop`, Rtop from FB to the output. `ifb_a` is
+    /// the card's feedback-pin current INTO the pin (its sign is the
+    /// datasheet's), which flows on through Rtop; 0 when the card states none.
+    Grounded { ifb_a: f64 },
     /// The LM317 class (no ground pin): `Vref` sits between OUT and ADJ, and
     /// the ADJ pin's own current flows on through Rbottom: `Vref * (1 +
     /// Rbottom / Rtop) + Iadj * Rbottom`.
@@ -249,7 +251,11 @@ fn sensed_net(
 fn adjustable(model: &ModelEntry) -> Option<(&str, f64, DividerLaw)> {
     let converter = model.behavioral.converter.as_ref();
     if let Some(feedback) = converter.and_then(|c| c.feedback.as_ref()) {
-        return Some((feedback.pin.as_str(), feedback.vref_v, DividerLaw::Grounded));
+        let ifb_a = model.params.get_f64("ifb_a").filter(|a| a.is_finite());
+        let law = DividerLaw::Grounded {
+            ifb_a: ifb_a.unwrap_or(0.0),
+        };
+        return Some((feedback.pin.as_str(), feedback.vref_v, law));
     }
     let regulator = model.kind == ComponentKind::Vreg
         && converter.is_none()
@@ -259,7 +265,10 @@ fn adjustable(model: &ModelEntry) -> Option<(&str, f64, DividerLaw)> {
         .into_iter()
         .find(|role| model.pins.values().any(|known| known == role))?;
     let law = if model.pins.values().any(|known| known == "gnd") {
-        DividerLaw::Grounded
+        let ifb_a = model.params.get_f64("ifb_a").filter(|a| a.is_finite());
+        DividerLaw::Grounded {
+            ifb_a: ifb_a.unwrap_or(0.0),
+        }
     } else {
         let iadj_a = model.params.get_f64("iadj_a").filter(|a| a.is_finite());
         DividerLaw::OutReferenced {
@@ -306,7 +315,7 @@ impl Divider {
     fn nominal_v(&self) -> f64 {
         let (top, bottom) = (leg_ohms(&self.top), leg_ohms(&self.bottom));
         match self.law {
-            DividerLaw::Grounded => self.vref_v * (1.0 + top / bottom),
+            DividerLaw::Grounded { ifb_a } => self.vref_v.mul_add(1.0 + top / bottom, ifb_a * top),
             DividerLaw::OutReferenced { iadj_a } => {
                 self.vref_v.mul_add(1.0 + bottom / top, iadj_a * bottom)
             }
@@ -318,7 +327,10 @@ impl Divider {
     fn top_for(&self, target_v: f64) -> Option<f64> {
         let bottom = leg_ohms(&self.bottom);
         let ohms = match self.law {
-            DividerLaw::Grounded => bottom * (target_v / self.vref_v - 1.0),
+            DividerLaw::Grounded { ifb_a } => {
+                // Vout = Vref + Rtop * (Vref / Rbottom + Ifb).
+                (target_v - self.vref_v) / (self.vref_v / bottom + ifb_a)
+            }
             DividerLaw::OutReferenced { iadj_a } => {
                 self.vref_v * bottom / iadj_a.mul_add(-bottom, target_v - self.vref_v)
             }
@@ -370,9 +382,15 @@ fn feedback_output_range(
     // The lowest and highest gain and offset the stated resistor tolerances
     // allow; with none stated they collapse to the nominal divider.
     let ((gain_lo, offset_lo), (gain_hi, offset_hi)) = match law {
-        DividerLaw::Grounded => (
-            (1.0 + top.low / bottom.high, 0.0),
-            (1.0 + top.high / bottom.low, 0.0),
+        DividerLaw::Grounded { ifb_a } => (
+            (
+                1.0 + top.low / bottom.high,
+                (ifb_a * top.low).min(ifb_a * top.high),
+            ),
+            (
+                1.0 + top.high / bottom.low,
+                (ifb_a * top.low).max(ifb_a * top.high),
+            ),
         ),
         DividerLaw::OutReferenced { iadj_a } => (
             (1.0 + bottom.low / top.high, iadj_a * bottom.low),
@@ -977,10 +995,11 @@ pub fn envelope_lint_with_drives(
 }
 
 /// A divider-set rail may differ from the level its name states by this
-/// fraction before the name and the divider are called inconsistent: the
-/// tolerance of a logic or USB rail (±10 %), wide enough that E24 and E96
-/// resistor rounding never trips it.
-const NAME_TOLERANCE: f64 = 0.10;
+/// fraction, on top of the reference and resistor tolerances the rail's range
+/// already carries, before the name and the divider are called inconsistent:
+/// wide enough that E24 and E96 resistor rounding and a designer's "3V3" for
+/// 3.25 V never trip it, narrow enough that a 3.0 V rail named 3V3 does.
+const NAME_TOLERANCE: f64 = 0.05;
 
 /// `1000` as `"1k"`, `100000` as `"100k"`, `30900` as `"30.9k"`.
 fn ohms_text(ohms: f64) -> String {
@@ -1059,7 +1078,13 @@ fn divider_name_findings(
             ohms_text(leg_ohms(&divider.bottom)),
         );
         let law = match divider.law {
-            DividerLaw::Grounded => format!("{} x (1 + {top} / {bottom})", format_volts(vref)),
+            DividerLaw::Grounded { ifb_a } if ifb_a.abs() < 1e-18 => {
+                format!("{} x (1 + {top} / {bottom})", format_volts(vref))
+            }
+            DividerLaw::Grounded { .. } => format!(
+                "{} x (1 + {top} / {bottom}) plus the feedback pin current through {top}",
+                format_volts(vref)
+            ),
             DividerLaw::OutReferenced { .. } => format!(
                 "{} x (1 + {bottom} / {top}) plus the ADJ pin current through {bottom}",
                 format_volts(vref)
@@ -2476,7 +2501,7 @@ dropout_v = 3.0
     /// reference at 5.0 V on a net named +3V3. The finding names the
     /// regulator, both resistors, the level, and the top value that would
     /// give the named level (280k). Legal controls: the divider that gives
-    /// 3.3 V, one inside the name's 10 % band, a name that states no voltage,
+    /// 3.3 V, one inside the name's 5 % band, a name that states no voltage,
     /// and a name that states another voltage the divider does match.
     #[test]
     fn a_divider_that_contradicts_its_rails_name_is_a_finding() {
@@ -2504,7 +2529,7 @@ dropout_v = 3.0
         assert!(low[0].message.contains("below"), "{}", low[0].message);
         for (top, rail) in [
             ("280k", "+3V3"),
-            ("300k", "+3V3"),
+            ("290k", "+3V3"),
             ("450k", "VCC"),
             ("450k", "VOUT"),
             ("450k", "+5V"),
@@ -2606,6 +2631,91 @@ dropout_v = 3.0
         assert_eq!(high.len(), 1, "{high:#?}");
         assert!(high[0].message.contains("5.01 V"), "{}", high[0].message);
         assert!(ldo("390").is_empty(), "{:#?}", ldo("390"));
+    }
+
+    /// How far off the name a divider may be: the rail's range carries the
+    /// reference and resistor tolerances, and only a range wholly outside the
+    /// name's 5 % band is a finding. 300k/50k sets 3.5 V on a 3V3 net (6 % off,
+    /// no tolerance stated) and fires; 262k/50k sets 3.12 V (5.5 % off) and fires
+    /// on a bare reference but not when the card's sourced reference interval
+    /// (0.485..0.515 V) reaches the band, and 1 % resistors reach it too.
+    #[test]
+    fn the_name_band_is_the_divider_tolerance_plus_the_reference_tolerance() {
+        let with_interval = BOOST_AND_LOAD.replace(
+            "vref_v = 0.5\n",
+            "vref_v = 0.5\n[models.source]\ntier = \"curated-library\"\n\
+             validation = \"physical-bounds-only\"\n[[models.source.uncertainty]]\n\
+             status = \"interval\"\nparameter = \"feedback_reference\"\nlow = 0.485\n\
+             high = 0.515\nunit = \"V\"\nkind = \"specification-limits\"\n\
+             basis = \"reference min/max\"\n",
+        );
+        let judged = |card: &str, top: &str, bottom: &str| {
+            let lib = library("namebandtol", card);
+            let parts = vec![
+                part(
+                    "U1",
+                    "FB_BOOST",
+                    vec![pin("1", 2), pin("2", 1), pin("3", 3), pin("4", 4)],
+                ),
+                resistor("R1", top, 3, 4),
+                resistor("R2", bottom, 3, 1),
+            ];
+            let b = board(&[(1, "GND"), (2, "VIN"), (3, "FB"), (4, "+3V3")], parts);
+            envelope_lint(&b, &lib)
+                .of_check(LintCheck::OperatingEnvelope)
+                .filter(|f| f.message.contains("its feedback divider"))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(judged(BOOST_AND_LOAD, "300k", "50k").len(), 1);
+        assert_eq!(judged(BOOST_AND_LOAD, "262k", "50k").len(), 1);
+        assert!(judged(&with_interval, "262k", "50k").is_empty());
+        assert!(judged(BOOST_AND_LOAD, "262k 1%", "50k 1%").is_empty());
+        // Far enough off that no tolerance explains it.
+        assert_eq!(judged(&with_interval, "200k", "50k").len(), 1);
+    }
+
+    /// A ground-referenced part whose card states the feedback pin's current
+    /// (`ifb_a`, into the pin) is judged at `Vref * (1 + Rtop/Rbot) + Ifb *
+    /// Rtop`: 280k/50k is the 3.3 V the net's name states with no bias current
+    /// (silent) and 3.86 V with 2 uA of it (fires, naming the bias term and the
+    /// top value, 233k, that gives 3.3 V with it).
+    #[test]
+    fn a_feedback_pin_bias_current_shifts_the_rail_by_its_drop_across_the_top_leg() {
+        let with_bias = BOOST_AND_LOAD.replace(
+            "vref_v = 0.5\n",
+            "vref_v = 0.5\n[models.params]\nifb_a = 2.0e-6\n",
+        );
+        let judged = |card: &str, top: &str| {
+            let lib = library("fbbias", card);
+            let parts = vec![
+                part(
+                    "U1",
+                    "FB_BOOST",
+                    vec![pin("1", 2), pin("2", 1), pin("3", 3), pin("4", 4)],
+                ),
+                resistor("R1", top, 3, 4),
+                resistor("R2", "50k", 3, 1),
+            ];
+            let b = board(&[(1, "GND"), (2, "VIN"), (3, "FB"), (4, "+3V3")], parts);
+            envelope_lint(&b, &lib)
+                .of_check(LintCheck::OperatingEnvelope)
+                .filter(|f| f.message.contains("its feedback divider"))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert!(judged(BOOST_AND_LOAD, "280k").is_empty());
+        let found = judged(&with_bias, "280k");
+        assert_eq!(found.len(), 1, "{found:#?}");
+        let msg = &found[0].message;
+        assert!(msg.contains("3.86 V"), "{msg}");
+        assert!(
+            msg.contains("plus the feedback pin current through 280k"),
+            "{msg}"
+        );
+        assert!(msg.contains("Make R1 about 233"), "{msg}");
+        // With the bias accounted for in the top leg, the rail is back on its name.
+        assert!(judged(&with_bias, "233k").is_empty());
     }
 
     /// Ensemble members on one board share its statics, yet each is judged at

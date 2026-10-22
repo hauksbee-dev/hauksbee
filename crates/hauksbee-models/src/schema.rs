@@ -245,20 +245,51 @@ pub struct SupplyOutput {
 /// card's `[models.pins]` does not. A card with no table says nothing, and a
 /// check that reads it abstains. Each table carries the datasheet table and
 /// page it was read from (`basis`).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PinCapability {
     /// `[models.pin_capability.adc]`: the pads wired to an ADC input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adc: Option<AdcPins>,
+    /// `[[models.pin_capability.xtal_int_caps]]`: the crystal oscillators whose
+    /// load capacitors are inside the chip, one entry per oscillator.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub xtal_int_caps: Vec<XtalIntCap>,
 }
 
 impl PinCapability {
     /// No capability table is declared.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.adc.is_none()
+        self.adc.is_none() && self.xtal_int_caps.is_empty()
     }
+}
+
+/// One crystal oscillator of an MCU whose load capacitors are on the die.
+///
+/// See [`PinCapability::xtal_int_caps`]. It names the pads the crystal hangs on
+/// and, when the datasheet gives it, the capacitance each pad carries.
+///
+/// A crystal on these pads needs no external load capacitors, so a board that
+/// fits none is right. The range is the capacitance on EACH pad to ground over
+/// the part's whole setting range (the pair is in series across the crystal); an
+/// entry with neither bound says the caps are integrated and tunable and the
+/// datasheet prints no range, which no check can judge a CL against.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct XtalIntCap {
+    /// The oscillator as the datasheet names it (`HFXO`, `LFXO`).
+    pub oscillator: String,
+    /// The two pads of `[models.pins]` the crystal connects to.
+    pub pads: Vec<String>,
+    /// Smallest on-die capacitance on each pad (farads), when the datasheet gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_f: Option<f64>,
+    /// Largest on-die capacitance on each pad (farads), when the datasheet gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_f: Option<f64>,
+    /// The datasheet table and page this is read from.
+    pub basis: String,
 }
 
 /// The ADC-capable pads of an MCU package (see [`PinCapability::adc`]).
@@ -281,6 +312,16 @@ impl ModelEntry {
     #[must_use]
     pub const fn adc_declared(&self) -> bool {
         self.pin_capability.adc.is_some()
+    }
+
+    /// The on-die crystal load capacitors of the oscillator `pad` belongs to,
+    /// where the card says that oscillator has them.
+    #[must_use]
+    pub fn xtal_int_caps_on(&self, pad: &str) -> Option<&XtalIntCap> {
+        self.pin_capability
+            .xtal_int_caps
+            .iter()
+            .find(|o| o.pads.iter().any(|p| p == pad))
     }
 
     /// The ADC channel on `pad`, where the card lists the pad as one.

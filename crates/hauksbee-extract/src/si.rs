@@ -168,8 +168,17 @@ impl ExtractedBoard {
     /// could not when one is not.
     #[must_use]
     pub fn si_checks(&self, pcb_text: Option<&str>) -> SiReport {
+        self.si_checks_with(pcb_text, &CrystalCards::new())
+    }
+
+    /// [`Self::si_checks`] with what the bound cards say about each crystal and
+    /// the oscillator pins that drive it (see [`CrystalFacts`]), keyed by the
+    /// crystal's reference. A crystal with no entry is judged from its value,
+    /// its part-number fields and the built-in tables alone.
+    #[must_use]
+    pub fn si_checks_with(&self, pcb_text: Option<&str>, cards: &CrystalCards) -> SiReport {
         let mut report = SiReport::default();
-        check_crystal_load_cap(self, &mut report);
+        check_crystal_load_cap_with(self, cards, &mut report);
 
         // Geometry checks need the layout s-expression.
         let root = pcb_text
@@ -276,40 +285,94 @@ fn parse_farads(v: &str) -> Option<f64> {
 //
 // Physics. A parallel-resonant crystal is specified for a particular load
 // capacitance CL; the board must present that CL across the crystal terminals
-// for it to run on frequency. The two external load caps C1, C2 (one per
-// terminal to ground) and the parasitic stray Cs combine as
-//     CL_board = (C1 * C2) / (C1 + C2) + Cstray
-// (the two caps are in series across the crystal because both return to ground;
-// the stray adds in parallel). A common rule of thumb folds the IC's own pin
-// capacitance into Cstray (~3-5 pF). If CL_board deviates from the crystal's
-// spec the oscillation frequency shifts by roughly
-//     df/f ~ -C1_motional / (2 * (C0 + CL)^... )
-// but the design-rule form used here is simpler: flag only when the *load
-// presented* is far enough from the *spec* that a normal crystal's pullability
-// (+-20..30 ppm trim, a few pF of CL slack) cannot absorb it, or when caps are
-// absent on a discrete oscillator that needs them.
+// for it to run on frequency. The two load caps (one per terminal to ground, each
+// plus any on-chip capacitance of the driver) are in series across the crystal and
+// the stray Cs adds in parallel:
+//     CL_board = ((C1 + Ci) * (C2 + Ci)) / (C1 + C2 + 2 Ci) + Cstray
+// Cstray folds in trace parasitics and the IC pin capacitance, taken as a band
+// (3-5 pF) unless the crystal carries its own figure (an overridable property).
 //
-// Reach / honesty. The crystal's CL spec is almost never in the netlist: most
-// boards put only the frequency in the value field ("12MHz", "8MHz"). We can
-// derive CL only from a value that states it ("12MHz 18pF", the way many
-// libraries write the ordering spec) or a recognised part-number value (a
-// small datasheet table below), and otherwise emit an INFO note carrying the computed CL_board with no
-// fire. RTC chips that integrate their own load caps (PCF8523, RV-8263, RV-3028)
-// are recognised and never flagged for "missing caps". This keeps the check at
-// zero false positives on the corpus, where almost every crystal is value="freq".
+// Judgement. The CL the crystal wants comes from its card (`CrystalFacts`), or
+// failing that its value ("12MHz 18pF"), a recognised part number, or the
+// 32.768 kHz class default. The edge of the board's CL band nearest that spec is
+// turned into a frequency pull with the exact series-resonance relation
+//     ppm = 1e6 * C1m/2 * |1/(C0 + CL_a) - 1/(C0 + CL_b)|
+// (C1m and C0 from the card, else conservative class defaults, said so in the
+// message) and flagged from `FLAG_PPM`, High from `HIGH_PPM` or when the load is
+// under half or over 1.6x the spec. The message names the caps that fit. A
+// driver with software-tuned on-chip caps and no printed range is not judged.
+//
+// Reach / honesty. Most boards put only the frequency in the value field, so with
+// no card and no stated CL the check emits an INFO note carrying the computed
+// CL_board and does not fire. RTC chips that integrate their own load caps are
+// recognised and never flagged for "missing caps".
 
 /// The stray capacitance assumed per oscillator (pF), folding PCB trace
-/// parasitics and the MCU/IC pin capacitance. 4 pF is the textbook midpoint
-/// (2-3 pF of short trace + ~1-2 pF pin); the error band is roughly +-3 pF,
-/// which is why the firing threshold is set wide (see `CL_TOLERANCE_PF`).
+/// parasitics and the MCU/IC pin capacitance: the textbook midpoint (2-3 pF of
+/// short trace + ~1-2 pF pin). Used to size the caps the message suggests.
 const CSTRAY_PF: f64 = 4.0;
 
-/// CL deviation (pF) beyond which the load is flagged. Set from the physics: a
-/// typical MHz crystal trims +-20..30 ppm, which for a CL near 18 pF corresponds
-/// to roughly +-4..6 pF of CL error before the frequency leaves the pullable
-/// band; combined with the +-3 pF stray-model error, we only fire past 8 pF of
-/// deviation so the model uncertainty can never produce the finding on its own.
+/// The band the board's real stray capacitance is assumed to sit in (pF). The
+/// judgement uses the edge nearest the crystal's CL, so a mismatch is reported
+/// only when no stray inside the band would make the board right.
+const STRAY_BAND_PF: (f64, f64) = (3.0, 5.0);
+
+/// A crystal component property that replaces the assumed stray band with the
+/// designer's own figure (pF, +-0.5 pF), e.g. from a layout extraction.
+pub const STRAY_PROPERTY: &str = "hauksbee_stray_cap_pf";
+
+/// The mismatch, as the frequency error it causes (ppm), past which the load is
+/// flagged Medium; past `HIGH_PPM` it is High. A typical crystal is specified
+/// +-20 ppm at 25 C with +-30 ppm over temperature, so 30 ppm of load error on
+/// its own uses up the whole tolerance a designer budgets for it.
+const FLAG_PPM: f64 = 30.0;
+const HIGH_PPM: f64 = 100.0;
+
+/// CL deviation (pF) beyond which a 32.768 kHz crystal that states no CL is
+/// flagged against the class's standard CL (its C1 is not known).
 const CL_TOLERANCE_PF: f64 = 8.0;
+
+/// Motional and shunt capacitance assumed for a crystal whose card states none.
+/// The figures sit on the low side of the datasheets (a small C1 and a large C0
+/// both shrink the pulling estimate), so an assumed figure under-reports the ppm
+/// rather than over-reports it. MHz AT-cut: C1 5 fF (catalogued parts print 5 to
+/// 20 fF), C0 5 pF (the Abracon ABM8G maximum). 32.768 kHz tuning fork: C1 2.5 fF
+/// (typically 2 to 4), C0 2 pF (the Abracon ABS07 maximum).
+const DEFAULT_C1_FF_MHZ: f64 = 5.0;
+const DEFAULT_C0_PF_MHZ: f64 = 5.0;
+const DEFAULT_C1_FF_WATCH: f64 = 2.5;
+const DEFAULT_C0_PF_WATCH: f64 = 2.0;
+
+/// What a driving IC's card says about the load capacitance built into an
+/// oscillator pin pair.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IntegratedCaps {
+    /// Capacitance (pF) the IC adds from EACH oscillator pin to ground.
+    Range {
+        lo_pf: f64,
+        hi_pf: f64,
+        basis: String,
+    },
+    /// The IC has on-chip load capacitance but prints no range for it (a tunable
+    /// bank), so the board's load cannot be computed.
+    Unspecified { basis: String },
+}
+
+/// What the bound cards say about one crystal and its driver.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CrystalFacts {
+    /// The crystal's specified load capacitance (pF) and its citation, from its card.
+    pub cl_pf: Option<(f64, String)>,
+    /// Shunt capacitance C0 (pF) from the card.
+    pub c0_pf: Option<f64>,
+    /// Motional capacitance C1 (fF) from the card.
+    pub c1_ff: Option<f64>,
+    /// The driving IC's integrated oscillator capacitance, when its card has one.
+    pub driver_caps: Option<IntegratedCaps>,
+}
+
+/// [`CrystalFacts`] by crystal reference designator.
+pub type CrystalCards = std::collections::BTreeMap<String, CrystalFacts>;
 
 /// A crystal whose datasheet CL spec we know, keyed by an uppercase substring of
 /// the value / part-number field. Only parts whose datasheet pins the CL are
@@ -403,6 +466,40 @@ fn known_crystal_cl(value: &str) -> Option<(f64, String)> {
         .map(|(_, cl, cite)| (*cl, (*cite).to_string()))
 }
 
+/// A crystal's CL from the part itself: its value, then its part-number
+/// properties (a stated CL or a recognised ordering code), then a property that
+/// is named for the load capacitance ("Load Capacitance" = "12pF" / "12").
+fn component_crystal_cl(c: &Component) -> Option<(f64, String)> {
+    if let Some(found) = known_crystal_cl(&c.value) {
+        return Some(found);
+    }
+    for (key, text) in &c.properties {
+        if crate::bom::is_mpn_property_key(key) {
+            if let Some((cl, cite)) = known_crystal_cl(text) {
+                return Some((cl, format!("{cite} (from the {key} property)")));
+            }
+        }
+        let k = key.to_ascii_lowercase();
+        if k.contains("load") || k == "cl" || k == "c_l" {
+            let t = text.to_ascii_lowercase();
+            let t = t.trim().trim_end_matches("pf").trim();
+            if let Ok(cl) = t.parse::<f64>() {
+                if (4.0..=50.0).contains(&cl) {
+                    return Some((cl, format!("the crystal's {key} property states {cl} pF")));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The crystal's specified CL: its card's first, else what the part states.
+fn crystal_spec_cl(c: &Component, facts: Option<&CrystalFacts>) -> Option<(f64, String)> {
+    facts
+        .and_then(|f| f.cl_pf.clone())
+        .or_else(|| component_crystal_cl(c))
+}
+
 /// The load capacitance a crystal's value field states: the number right
 /// before a `pF` unit ("12MHz 18pF", "Q12MHz/20pF/30ppm/2P", "16 MHz CL=12.5 pF").
 /// Only 4..=50 pF counts, the span every catalogued quartz CL option sits in,
@@ -474,7 +571,7 @@ pub fn crystal_sites(board: &ExtractedBoard) -> Vec<CrystalSite<'_>> {
                 crystal: x,
                 nets,
                 caps: nets.map(&direct_cap),
-                stated_cl_pf: known_crystal_cl(&x.value).map(|(cl, _)| cl),
+                stated_cl_pf: component_crystal_cl(x).map(|(cl, _)| cl),
             })
         })
         .collect()
@@ -563,7 +660,319 @@ fn crystal_signal_nets(board: &ExtractedBoard, xtal: &Component) -> Vec<i64> {
     nets
 }
 
+/// The stray band for one crystal: its own property when present, else the
+/// assumed band. The bool says whether it was overridden.
+fn stray_band(xtal: &Component) -> ((f64, f64), bool) {
+    let own = xtal
+        .properties
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(STRAY_PROPERTY))
+        .and_then(|(_, v)| v.trim().parse::<f64>().ok())
+        .filter(|s| (0.0..=30.0).contains(s));
+    own.map_or((STRAY_BAND_PF, false), |s| {
+        (((s - 0.5).max(0.0), s + 0.5), true)
+    })
+}
+
+/// The crystal figures the pull estimate needs, and where each came from.
+#[derive(Clone, Copy)]
+struct Pullability {
+    /// Motional capacitance (fF) and shunt capacitance (pF).
+    motional_ff: f64,
+    shunt_pf: f64,
+    motional_assumed: bool,
+    shunt_assumed: bool,
+}
+
+impl Pullability {
+    /// The card's figures, else the conservative defaults for the crystal's class.
+    fn of(facts: Option<&CrystalFacts>, watch: bool) -> Self {
+        let (default_motional, default_shunt) = if watch {
+            (DEFAULT_C1_FF_WATCH, DEFAULT_C0_PF_WATCH)
+        } else {
+            (DEFAULT_C1_FF_MHZ, DEFAULT_C0_PF_MHZ)
+        };
+        let motional = facts.and_then(|f| f.c1_ff);
+        let shunt = facts.and_then(|f| f.c0_pf);
+        Self {
+            motional_ff: motional.unwrap_or(default_motional),
+            shunt_pf: shunt.unwrap_or(default_shunt),
+            motional_assumed: motional.is_none(),
+            shunt_assumed: shunt.is_none(),
+        }
+    }
+
+    /// The frequency error (ppm) of running the crystal at load `cl_a` instead of
+    /// `cl_b` (pF): the series-resonance offset is `C1 / (2 (C0 + CL))`, so the
+    /// difference of the two offsets is the pull. Exact in CL (no linearisation).
+    fn pull_ppm(self, cl_a: f64, cl_b: f64) -> f64 {
+        let motional_pf = self.motional_ff / 1000.0;
+        1e6 * motional_pf / 2.0
+            * (1.0 / (self.shunt_pf + cl_a) - 1.0 / (self.shunt_pf + cl_b)).abs()
+    }
+}
+
+/// The nearest E12 value (pF) to `pf`.
+fn nearest_e12_pf(pf: f64) -> f64 {
+    const E12: [f64; 12] = [1.0, 1.2, 1.5, 1.8, 2.2, 2.7, 3.3, 3.9, 4.7, 5.6, 6.8, 8.2];
+    let decade = 10f64.powf(pf.log10().floor());
+    [decade / 10.0, decade, decade * 10.0]
+        .into_iter()
+        .flat_map(|d| E12.map(|e| e * d))
+        .min_by(|a, b| (a - pf).abs().total_cmp(&(b - pf).abs()))
+        .unwrap_or(pf)
+}
+
+/// The board side of a load judgement: external caps, on-chip caps and stray.
+struct LoadSite {
+    /// External capacitance on each terminal (pF).
+    ext: (f64, f64),
+    /// On-chip capacitance range on each pin (pF), `(0, 0)` when none.
+    int: (f64, f64),
+    /// Whether `int` comes from a driver card (so the message reports it).
+    on_chip: bool,
+    stray: (f64, f64),
+    /// The words for the stray band, saying whether it is assumed.
+    stray_note: String,
+    /// The words for the caps: "C1=27p, C2=27p" or "no external caps".
+    caps: String,
+    /// The words for the on-chip capacitance, with the card's basis.
+    on_chip_note: String,
+}
+
+impl LoadSite {
+    /// The site of `xtal` with `ext` external caps and the `driver`'s on-chip bank.
+    fn new(xtal: &Component, ext: (f64, f64), driver: &DriverCaps) -> Self {
+        let (stray, stray_own) = stray_band(xtal);
+        let int = driver.range.unwrap_or((0.0, 0.0));
+        let stray_note = if stray_own {
+            format!(
+                "{} pF stray (from the {STRAY_PROPERTY} property)",
+                band_text(stray)
+            )
+        } else {
+            format!(
+                "{} pF stray assumed (set the crystal's {STRAY_PROPERTY} property to your \
+                 layout's figure)",
+                band_text(stray)
+            )
+        };
+        let caps = if ext == (0.0, 0.0) && driver.range.is_some() {
+            "no external caps".to_string()
+        } else {
+            format!("C1={:.0}p, C2={:.0}p", ext.0, ext.1)
+        };
+        let on_chip_note = if driver.range.is_some() {
+            format!(", +{} pF on-chip per pin{}", band_text(int), driver.basis)
+        } else {
+            String::new()
+        };
+        Self {
+            ext,
+            int,
+            on_chip: driver.range.is_some(),
+            stray,
+            stray_note,
+            caps,
+            on_chip_note,
+        }
+    }
+
+    /// The board's CL band (pF).
+    fn band(&self) -> (f64, f64) {
+        let (a, b) = self.ext;
+        (
+            cl_series(a + self.int.0, b + self.int.0) + self.stray.0,
+            cl_series(a + self.int.1, b + self.int.1) + self.stray.1,
+        )
+    }
+
+    /// The edge of the band nearest `spec`, and the signed distance to it: positive
+    /// when the board is heavier than the spec, 0 inside the band.
+    fn nearest_edge(&self, spec: f64) -> (f64, f64) {
+        let (lo, hi) = self.band();
+        if spec < lo {
+            (lo, lo - spec)
+        } else if spec > hi {
+            (hi, hi - spec)
+        } else {
+            (spec, 0.0)
+        }
+    }
+
+    /// The same site with `cap` pF on each terminal.
+    const fn with_caps(&self, cap: f64) -> Self {
+        Self {
+            ext: (cap, cap),
+            int: self.int,
+            on_chip: self.on_chip,
+            stray: self.stray,
+            stray_note: String::new(),
+            caps: String::new(),
+            on_chip_note: String::new(),
+        }
+    }
+}
+
+/// "16.5-18.5" or "17.0" when the band is a point.
+fn band_text((lo, hi): (f64, f64)) -> String {
+    if (hi - lo).abs() < 0.05 {
+        format!("{lo:.1}")
+    } else {
+        format!("{lo:.1}-{hi:.1}")
+    }
+}
+
+/// Judge the board's load against the crystal's specified `spec_cl` (pF, with its
+/// citation): a finding with the ppm pull and the caps that fit, or an ok note.
+fn judge_against_spec(
+    site: &LoadSite,
+    (spec_cl, cite): &(f64, String),
+    pull: Pullability,
+) -> (SiSeverity, String) {
+    let (edge, miss_pf) = site.nearest_edge(*spec_cl);
+    let ppm = pull.pull_ppm(*spec_cl, edge);
+    let cl = band_text(site.band());
+    let (stray_note, on_chip) = (&site.stray_note, &site.on_chip_note);
+    if ppm < FLAG_PPM {
+        return (
+            SiSeverity::Info,
+            format!(
+                "board CL ~ {cl} pF ({stray_note}{on_chip}) vs spec {spec_cl:.1} pF [{cite}]: \
+                 {ppm:.0} ppm of pull at worst - ok"
+            ),
+        );
+    }
+    // Past HIGH_PPM, or a load under half / over 1.6x the spec (the pull saturates
+    // there; the oscillator stops starting instead).
+    let severe = ppm >= HIGH_PPM || edge < spec_cl * 0.5 || edge > spec_cl * 1.6;
+    let (pulled, weight) = if miss_pf > 0.0 {
+        ("low", "heavier")
+    } else {
+        ("high", "lighter")
+    };
+    let want = 2.0f64.mul_add(
+        spec_cl - site.stray.0.midpoint(site.stray.1),
+        -site.int.0.midpoint(site.int.1),
+    );
+    let fit = if want >= 1.0 {
+        let e12 = nearest_e12_pf(want);
+        format!(
+            "Caps that fit: C = 2 x (CL - stray) = {want:.1} pF each, nearest E12 {e12:.1} pF, \
+             giving CL {} pF.",
+            band_text(site.with_caps(e12).band())
+        )
+    } else {
+        "Caps that fit: none; the stray and on-chip capacitance alone already exceed the \
+         crystal's CL, so pick a crystal with a larger CL."
+            .to_string()
+    };
+    let (c1_src, c0_src) = (
+        if pull.motional_assumed {
+            "assumed"
+        } else {
+            "card"
+        },
+        if pull.shunt_assumed {
+            "assumed"
+        } else {
+            "card"
+        },
+    );
+    let caps = &site.caps;
+    (
+        if severe {
+            SiSeverity::High
+        } else {
+            SiSeverity::Medium
+        },
+        format!(
+            "board presents CL ~ {cl} pF ({caps}, {stray_note}{on_chip}) but the crystal specs \
+             CL = {spec_cl:.1} pF [{cite}]; the load is {:.1} pF {weight} than the spec even at the \
+             nearest end of the stray band, which pulls the frequency ~{ppm:.0} ppm {pulled} (C1 \
+             {:.1} fF {c1_src}, C0 {:.1} pF {c0_src}; a typical crystal is specified +-20 to \
+             30 ppm in all). {fit}",
+            miss_pf.abs(),
+            pull.motional_ff,
+            pull.shunt_pf,
+        ),
+    )
+}
+
+/// The note for a crystal whose CL is unknown: a 32.768 kHz fork far above its
+/// class's standard CL is a finding, anything else is the computed load as info.
+fn judge_without_spec(site: &LoadSite, watch: bool) -> (SiSeverity, String) {
+    let cl = band_text(site.band());
+    let (caps, stray_note, on_chip) = (&site.caps, &site.stray_note, &site.on_chip_note);
+    let int_mid = site.int.0.midpoint(site.int.1);
+    let mid_cl = cl_board_pf(site.ext.0 + int_mid, site.ext.1 + int_mid, CSTRAY_PF);
+    if watch && mid_cl > WATCH_CRYSTAL_CL_PF + CL_TOLERANCE_PF {
+        // A 32.768 kHz tuning fork with no stated CL: judge it against the class's
+        // standard CL with the tolerance a stated CL gets.
+        return (
+            SiSeverity::Medium,
+            format!(
+                "board presents CL ~ {mid_cl:.1} pF ({caps}, +{CSTRAY_PF:.0}p stray{on_chip}) on a \
+                 32.768 kHz crystal whose value states no CL, more than {CL_TOLERANCE_PF:.0} pF above \
+                 the {WATCH_CRYSTAL_CL_PF} pF standard CL of the class [{WATCH_CRYSTAL_CL_CITE}]. \
+                 A heavier load cuts the oscillator's gain margin (the critical gm grows with \
+                 (C0+CL)^2) and pulls the frequency low; the ppm error needs the crystal's motional \
+                 C1, which its datasheet rarely gives. Size the caps to the crystal's CL \
+                 (C = 2 x (CL - stray)), or state a higher CL in the value if the part has one."
+            ),
+        );
+    }
+    (
+        SiSeverity::Info,
+        format!(
+            "board presents CL ~ {cl} pF ({caps}, {stray_note}{on_chip}); \
+             crystal CL spec unknown from value, no judgement"
+        ),
+    )
+}
+
+/// What a crystal's driver contributes: the on-chip capacitance range per pin
+/// (when its card prints one), whether the driver integrates any, and the
+/// card's basis text.
+struct DriverCaps {
+    range: Option<(f64, f64)>,
+    tunable_unspecified: bool,
+    integrates: bool,
+    basis: String,
+}
+
+impl DriverCaps {
+    fn of(facts: Option<&CrystalFacts>, integrated_by_name: bool) -> Self {
+        let card = facts.and_then(|f| f.driver_caps.as_ref());
+        Self {
+            range: match card {
+                Some(IntegratedCaps::Range { lo_pf, hi_pf, .. }) => Some((*lo_pf, *hi_pf)),
+                _ => None,
+            },
+            tunable_unspecified: matches!(card, Some(IntegratedCaps::Unspecified { .. })),
+            integrates: card.is_some() || integrated_by_name,
+            basis: match card {
+                Some(
+                    IntegratedCaps::Range { basis, .. } | IntegratedCaps::Unspecified { basis },
+                ) => {
+                    format!(" [{basis}]")
+                }
+                None => String::new(),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
 fn check_crystal_load_cap(board: &ExtractedBoard, report: &mut SiReport) {
+    check_crystal_load_cap_with(board, &CrystalCards::new(), report);
+}
+
+fn check_crystal_load_cap_with(
+    board: &ExtractedBoard,
+    cards: &CrystalCards,
+    report: &mut SiReport,
+) {
     for xtal in &board.components {
         // Unassembled or identity-refused parts are not trusted crystals.
         if !crate::assembly::AssemblyState::of(xtal).is_present() || !is_crystal(xtal) {
@@ -582,6 +991,7 @@ fn check_crystal_load_cap(board: &ExtractedBoard, report: &mut SiReport) {
             // a placeholder, or something we cannot model. Skip.
             continue;
         }
+        let facts = cards.get(&xtal.reference);
 
         // Find a load cap on each terminal. The RP2040 series-resistor topology
         // puts the second cap on a `Net-(Cx-Pad1)` node bridged through the 1k
@@ -590,18 +1000,18 @@ fn check_crystal_load_cap(board: &ExtractedBoard, report: &mut SiReport) {
         let [c1, c2] = [sig_nets[0], sig_nets[1]]
             .map(|n| load_cap_on_net(board, n).or_else(|| load_cap_through_resistor(board, n)));
 
-        // Is the crystal driven by an RTC/IC that integrates its own caps? Then
-        // missing external caps is correct, not a finding.
-        let driver_integrates = sig_nets
+        // The driver's on-chip load capacitance: its card when it has one, else
+        // the built-in table of parts known to integrate theirs.
+        let by_name = sig_nets
             .iter()
             .flat_map(|&n| board.net_members(n))
             .any(|(c, _)| AssemblyState::of(c).is_present() && has_integrated_xtal_caps(&c.value));
+        let driver = DriverCaps::of(facts, by_name);
 
         let net_names: Vec<String> = sig_nets
             .iter()
             .filter_map(|id| board.net(*id).map(|n| n.name.clone()))
             .collect();
-
         let mut push = |severity, message: String| {
             report.findings.push(SiFinding {
                 check: SiCheck::CrystalLoadCap,
@@ -611,55 +1021,34 @@ fn check_crystal_load_cap(board: &ExtractedBoard, report: &mut SiReport) {
                 nets: net_names.clone(),
             });
         };
-        if let (Some(LoadCap::Pf(c1)), Some(LoadCap::Pf(c2))) = (c1, c2) {
-            let cl = cl_board_pf(c1, c2, CSTRAY_PF);
-            if let Some((spec, cite)) = known_crystal_cl(&xtal.value) {
-                let dev = (cl - spec).abs();
-                if dev > CL_TOLERANCE_PF {
-                    let sev = if cl < spec * 0.5 || cl > spec * 1.6 {
-                        SiSeverity::High
-                    } else {
-                        SiSeverity::Medium
-                    };
-                    push(
-                        sev,
-                        format!(
-                            "board presents CL ~ {cl:.1} pF (C1={c1:.0}p, C2={c2:.0}p, +{CSTRAY_PF:.0}p stray) \
-                             but the crystal specs CL = {spec:.0} pF [{cite}]; deviation {dev:.2} pF exceeds {CL_TOLERANCE_PF:.0} pF"
-                        ),
-                    );
-                } else {
-                    push(
-                        SiSeverity::Info,
-                        format!("board CL ~ {cl:.1} pF vs spec {spec:.0} pF (within {CL_TOLERANCE_PF:.0} pF) - ok"),
-                    );
-                }
-            } else if is_watch_crystal(&xtal.value) && cl > WATCH_CRYSTAL_CL_PF + CL_TOLERANCE_PF {
-                // A 32.768 kHz tuning fork with no stated CL: judge it against
-                // the class's standard CL with the tolerance a stated CL gets.
-                push(
-                    SiSeverity::Medium,
-                    format!(
-                        "board presents CL ~ {cl:.1} pF (C1={c1:.0}p, C2={c2:.0}p, +{CSTRAY_PF:.0}p stray) on a \
-                         32.768 kHz crystal whose value states no CL, more than {CL_TOLERANCE_PF:.0} pF above \
-                         the {WATCH_CRYSTAL_CL_PF} pF standard CL of the class [{WATCH_CRYSTAL_CL_CITE}]. \
-                         A heavier load cuts the oscillator's gain margin (the critical gm grows with \
-                         (C0+CL)^2) and pulls the frequency low; the ppm error needs the crystal's motional \
-                         C1, which its datasheet rarely gives. Size the caps to the crystal's CL \
-                         (C = 2 x (CL - stray)), or state a higher CL in the value if the part has one."
-                    ),
-                );
-            } else {
-                // CL spec unknown: report the computed load as info only.
-                push(
-                    SiSeverity::Info,
-                    format!(
-                        "board presents CL ~ {cl:.1} pF (C1={c1:.0}p, C2={c2:.0}p, +{CSTRAY_PF:.0}p stray); \
-                         crystal CL spec unknown from value, no judgement"
-                    ),
-                );
-            }
-        } else if !driver_integrates {
+
+        // The external caps: both found, or (with an on-chip range to stand in
+        // for them) both absent.
+        let ext = match (c1, c2) {
+            (Some(LoadCap::Pf(a)), Some(LoadCap::Pf(b))) => Some((a, b)),
+            (None, None) if driver.range.is_some() => Some((0.0, 0.0)),
+            _ => None,
+        };
+        if let (Some(ext), false) = (ext, driver.tunable_unspecified) {
+            let site = LoadSite::new(xtal, ext, &driver);
+            let watch = is_watch_crystal(&xtal.value);
+            let (severity, message) = crystal_spec_cl(xtal, facts).map_or_else(
+                || judge_without_spec(&site, watch),
+                |spec| judge_against_spec(&site, &spec, Pullability::of(facts, watch)),
+            );
+            push(severity, message);
+        } else if driver.tunable_unspecified {
+            // The driver's on-chip bank is software-tuned with no printed range,
+            // so the board's load cannot be computed: say so, judge nothing.
+            push(
+                SiSeverity::Info,
+                format!(
+                    "the driver integrates tunable load capacitance with no printed range{}; \
+                     the board's CL cannot be computed, no judgement",
+                    driver.basis
+                ),
+            );
+        } else if !driver.integrates {
             // A discrete MHz crystal with no load caps either way is a real
             // omission, but only fire when BOTH are absent (a single missing
             // cap is often the series-R topology we failed to trace, so stay

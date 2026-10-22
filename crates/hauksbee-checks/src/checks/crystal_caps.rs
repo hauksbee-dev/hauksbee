@@ -18,9 +18,84 @@
 
 use hauksbee_bind::binder::resolve;
 use hauksbee_extract::assembly::AssemblyState;
-use hauksbee_extract::si::crystal_sites;
-use hauksbee_extract::{ExtractedBoard, SiCheck, SiFinding, SiReport, SiSeverity};
+use hauksbee_extract::si::{crystal_sites, CrystalCards, CrystalFacts, IntegratedCaps};
+use hauksbee_extract::{is_resistor, ExtractedBoard, SiCheck, SiFinding, SiReport, SiSeverity};
 use hauksbee_models::{Confidence, ModelLibrary};
+
+/// What the bound cards say about every crystal on the board.
+///
+/// That is its own card's load capacitance (`cl_f`) and shunt/motional
+/// capacitance (`c0_f`, `c1_f`), and the on-chip load capacitance of the
+/// oscillator pins that drive it (`pin_capability.xtal_int_caps`). The
+/// extract-layer `crystal_load_cap` check judges the board against these.
+///
+/// The driver is found on either crystal net, or one series resistor away (the
+/// RP2040 damping-resistor topology).
+#[must_use]
+pub fn crystal_cards(board: &ExtractedBoard, lib: &ModelLibrary) -> CrystalCards {
+    let mut out = CrystalCards::new();
+    for site in crystal_sites(board) {
+        let mut facts = CrystalFacts::default();
+        if let Some(fitted) = AssemblyState::of(site.crystal).fitted() {
+            let res = resolve(lib, fitted);
+            if !matches!(res.confidence, Confidence::Guessed | Confidence::Unresolved) {
+                if let Some(m) = res.model.as_ref() {
+                    if let Some(cl) = m.params.get_f64("cl_f") {
+                        let cite = res.references.first().map_or_else(
+                            || format!("card '{}'", m.id),
+                            |r| format!("card '{}': {}, {}", m.id, r.title, r.locator),
+                        );
+                        facts.cl_pf = Some((cl * 1e12, cite));
+                    }
+                    facts.c0_pf = m.params.get_f64("c0_f").map(|f| f * 1e12);
+                    facts.c1_ff = m.params.get_f64("c1_f").map(|f| f * 1e15);
+                }
+            }
+        }
+        facts.driver_caps = driver_caps(board, lib, &site.nets);
+        if facts != CrystalFacts::default() {
+            out.insert(site.crystal.reference.clone(), facts);
+        }
+    }
+    out
+}
+
+/// The on-chip load capacitance the card of an IC on `nets` states for the
+/// oscillator pad it connects, if any.
+fn driver_caps(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    nets: &[i64; 2],
+) -> Option<IntegratedCaps> {
+    let mut candidates: Vec<i64> = nets.to_vec();
+    for &n in nets {
+        for (c, _) in board.net_members(n) {
+            if !AssemblyState::of(c).is_present() || !is_resistor(c) {
+                continue;
+            }
+            candidates.extend(c.pins.iter().filter_map(|p| p.net).filter(|id| *id != n));
+        }
+    }
+    candidates.iter().find_map(|&n| {
+        board.net_members(n).into_iter().find_map(|(c, pin)| {
+            let res = resolve(lib, AssemblyState::of(c).fitted()?);
+            if matches!(res.confidence, Confidence::Guessed | Confidence::Unresolved) {
+                return None;
+            }
+            let model = res.model?;
+            let cap = model.xtal_int_caps_on(&pin.number)?;
+            let basis = format!("card '{}' {}: {}", model.id, cap.oscillator, cap.basis);
+            Some(match (cap.min_f, cap.max_f) {
+                (Some(lo), Some(hi)) => IntegratedCaps::Range {
+                    lo_pf: lo * 1e12,
+                    hi_pf: hi * 1e12,
+                    basis,
+                },
+                _ => IntegratedCaps::Unspecified { basis },
+            })
+        })
+    })
+}
 
 /// How far past the card's range a load cap must sit before it is a finding
 /// (a factor on the maximum, its inverse on the minimum).
@@ -32,9 +107,17 @@ const CSTRAY_PF: f64 = 4.0;
 
 /// Append a finding for every crystal whose load caps sit far outside the
 /// C1/C2 range its driving IC's card states, when the crystal states no CL.
-pub fn append_crystal_caps(board: &ExtractedBoard, lib: &ModelLibrary, report: &mut SiReport) {
+pub fn append_crystal_caps(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    cards: &CrystalCards,
+    report: &mut SiReport,
+) {
     for site in crystal_sites(board) {
-        if site.stated_cl_pf.is_some() {
+        let card_cl = cards
+            .get(&site.crystal.reference)
+            .is_some_and(|f| f.cl_pf.is_some());
+        if site.stated_cl_pf.is_some() || card_cl {
             continue; // judged exactly against the crystal's own CL
         }
         let driver = site
@@ -126,7 +209,7 @@ mod tests {
 
     fn findings(b: &ExtractedBoard) -> Vec<SiFinding> {
         let mut r = SiReport::default();
-        append_crystal_caps(b, &ModelLibrary::builtin(), &mut r);
+        append_crystal_caps(b, &ModelLibrary::builtin(), &CrystalCards::new(), &mut r);
         r.findings
     }
 
@@ -159,5 +242,141 @@ mod tests {
             assert!(findings(&avr_xtal("16MHz", cap)).is_empty(), "{cap}");
         }
         assert!(findings(&avr_xtal("16MHz 18pF", "88p")).is_empty());
+    }
+
+    /// The crystal findings the engine path produces: cards built from the
+    /// library, then the extract-layer check judged with them.
+    fn engine_findings(b: &ExtractedBoard) -> Vec<SiFinding> {
+        let lib = ModelLibrary::builtin();
+        let cards = crystal_cards(b, &lib);
+        let mut report = b.si_checks_with(None, &cards);
+        append_crystal_caps(b, &lib, &cards, &mut report);
+        report
+            .findings
+            .into_iter()
+            .filter(|f| f.check == SiCheck::CrystalLoadCap && f.severity != SiSeverity::Info)
+            .collect()
+    }
+
+    /// A crystal `Y1` with `props`, on XIN/XOUT with `cap` to ground on each.
+    fn crystal_with(value: &str, props: &[(&str, &str)], cap: &str) -> ExtractedBoard {
+        let mut y1 = part("Y1", value, &[("1", 1), ("2", 2)]);
+        y1.footprint = "Crystal:Crystal_SMD_3215-2Pin".into();
+        y1.properties = props
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        board(
+            &[(1, "XIN"), (2, "XOUT"), (3, "GND")],
+            vec![
+                y1,
+                part("C1", cap, &[("1", 1), ("2", 3)]),
+                part("C2", cap, &[("1", 2), ("2", 3)]),
+            ],
+        )
+    }
+
+    /// The ABM8-272-T3 card (RP2040 reference crystal, CL 10 pF) is found by the
+    /// ordering code in the MPN property, whatever the value says: the Pico's
+    /// 15 pF pair is right for it and 34 pF is not.
+    #[test]
+    fn a_crystal_card_found_by_mpn_judges_the_caps() {
+        let mpn = [("MPN", "ABM8-272-T3")];
+        assert!(engine_findings(&crystal_with("12MHz", &mpn, "15p")).is_empty());
+        let f = engine_findings(&crystal_with("12MHz", &mpn, "34p"));
+        assert_eq!(f.len(), 1, "{f:?}");
+        for says in [
+            "CL = 10.0 pF",
+            "card 'abracon_abm8_272_t3'",
+            "C0 3.0 pF card",
+        ] {
+            assert!(f[0].message.contains(says), "{says:?} in {}", f[0].message);
+        }
+        // Another ordering code of the family is not this card: nothing to judge.
+        let other = [("MPN", "ABM8-8.000MHZ-B2-T")];
+        assert!(engine_findings(&crystal_with("8MHz", &other, "34p")).is_empty());
+    }
+
+    /// The extract layer's built-in table (for callers with no model library) and
+    /// the crystal cards must agree on every code they both know.
+    #[test]
+    fn the_builtin_cl_table_agrees_with_the_crystal_cards() {
+        let b = crystal_with("12MHz", &[("MPN", "ABM8-272-T3")], "15p");
+        let from_table = crystal_sites(&b)[0]
+            .stated_cl_pf
+            .expect("table knows ABM8-272");
+        let from_card = crystal_cards(&b, &ModelLibrary::builtin())["Y1"]
+            .cl_pf
+            .clone()
+            .expect("the card states CL")
+            .0;
+        assert!(
+            (from_table - from_card).abs() < 1e-9,
+            "{from_table} vs {from_card}"
+        );
+    }
+
+    /// The ABS07 32.768 kHz crystal is sold in several load capacitances and the
+    /// ordering code carries it: the blank code is 12.5 pF, `-9` is 9 pF. The
+    /// same 22 pF pair is right for the first and a mismatch for the second.
+    #[test]
+    fn the_abs07_ordering_code_picks_its_load_capacitance() {
+        let blank = [("MPN", "ABS07-32.768KHZ-T")];
+        let nine = [("MPN", "ABS07-32.768KHZ-9-T")];
+        assert!(engine_findings(&crystal_with("32.768kHz", &blank, "22p")).is_empty());
+        let f = engine_findings(&crystal_with("32.768kHz", &nine, "22p"));
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(f[0].message.contains("CL = 9.0 pF"), "{}", f[0].message);
+        let heavy = engine_findings(&crystal_with("32.768kHz", &blank, "56p"));
+        assert_eq!(heavy.len(), 1, "{heavy:?}");
+        assert!(
+            heavy[0].message.contains("CL = 12.5 pF"),
+            "{}",
+            heavy[0].message
+        );
+    }
+
+    /// An EFM32PG22 whose LFXO pads carry the 32.768 kHz crystal: the card says
+    /// the on-chip bank is 4 to 24.5 pF per pin, so a 12.5 pF crystal with no
+    /// external caps is right. The HFXO pads are tunable with no printed range,
+    /// so nothing is judged there, with or without external caps.
+    #[test]
+    fn a_driver_cards_on_chip_load_caps_are_read_from_the_card() {
+        let on_pads = |value: &str, pads: [&str; 2], cap: Option<&str>| {
+            let mut y1 = part("Y1", value, &[("1", 1), ("2", 2)]);
+            y1.footprint = "Crystal:Crystal_SMD_3215-2Pin".into();
+            let mut parts = vec![
+                part("U1", "EFM32PG22C200F512IM40", &[(pads[0], 1), (pads[1], 2)]),
+                y1,
+            ];
+            if let Some(cap) = cap {
+                parts.push(part("C1", cap, &[("1", 1), ("2", 3)]));
+                parts.push(part("C2", cap, &[("1", 2), ("2", 3)]));
+            }
+            board(&[(1, "XIN"), (2, "XOUT"), (3, "GND")], parts)
+        };
+        let cards = |b: &ExtractedBoard| crystal_cards(b, &ModelLibrary::builtin());
+        let lfxo = on_pads("32.768kHz 12.5pF", ["39", "40"], None);
+        match cards(&lfxo)["Y1"].driver_caps.clone() {
+            Some(IntegratedCaps::Range { lo_pf, hi_pf, .. }) => {
+                assert!((lo_pf - 4.0).abs() < 1e-9 && (hi_pf - 24.5).abs() < 1e-9);
+            }
+            other => panic!("LFXO range expected, got {other:?}"),
+        }
+        assert!(engine_findings(&lfxo).is_empty());
+        let hfxo = on_pads("12MHz 10pF", ["9", "10"], None);
+        assert!(matches!(
+            cards(&hfxo)["Y1"].driver_caps,
+            Some(IntegratedCaps::Unspecified { .. })
+        ));
+        assert!(engine_findings(&hfxo).is_empty());
+        assert!(engine_findings(&on_pads("12MHz 10pF", ["9", "10"], Some("39p"))).is_empty());
+        // Pads that are not an oscillator pair: no on-chip caps, judged as a
+        // discrete crystal (39 pF pair -> CL 22.5 pF against 10 pF).
+        let gpio = on_pads("12MHz 10pF", ["1", "2"], Some("39p"));
+        assert!(cards(&gpio)
+            .get("Y1")
+            .is_none_or(|f| f.driver_caps.is_none()));
+        assert_eq!(engine_findings(&gpio).len(), 1);
     }
 }
