@@ -7429,6 +7429,31 @@ boot_select = false
 internal_pull = "pull_up"
 note = "RESETn is active low with an internal 35-55 kOhm pull-up to DVDD; held low it keeps the part in reset"
 
+# Both crystal oscillators carry tunable load capacitors on the die, which the crystal
+# load-cap check reads. With no external caps the two pins in series reach at most
+# half the per-pin maximum, so a crystal above that needs external caps: for the LFXO
+# 24.5 / 2 = 12.25 pF, matching Table 4.12 note 2 (p.34): "Crystals with a load
+# capacitance of greater than 12 pF require external load capacitors".
+# HFXO: Rev. 1.4 section 3.3.2 Internal and External Oscillators (p.9): "a high
+# frequency crystal oscillator (HFXO) with integrated load capacitors, tunable in
+# small steps"; Table 4.11 (p.33) gives a 0.04 pF tuning step and a supported CL of
+# 10 pF and prints no capacitance range, so none is stated here.
+# LFXO: Table 4.12 (p.34): CLFXO_MIN 4 pF at CAPTUNE = 0 and CLFXO_MAX 24.5 pF at
+# CAPTUNE = 0x4F; note 5: each XTAL pin has a tuning cap and the crystal sees the two
+# in series. Pads: Table 6.3 (p.62) LFXO.LFXTAL_O on PD00 and LFXO.LFXTAL_I on PD01;
+# Table 6.2 (p.61) QFN40 numbers PD01 as pin 39 and PD00 as pin 40.
+[[models.pin_capability.xtal_int_caps]]
+oscillator = "HFXO"
+pads = ["9", "10"]
+basis = "EFM32PG22 Data Sheet Rev. 1.4, 3.3.2 Internal and External Oscillators (p.9): HFXO with integrated load capacitors, tunable in small steps; Table 4.11 (p.33): on-chip tuning step 0.04 pF, no range printed; Table 6.2 (p.60) QFN40 pins 9 HFXTAL_I and 10 HFXTAL_O"
+
+[[models.pin_capability.xtal_int_caps]]
+oscillator = "LFXO"
+pads = ["39", "40"]
+min_f = 4.0e-12
+max_f = 24.5e-12
+basis = "EFM32PG22 Data Sheet Rev. 1.4, Table 4.12 (p.34): on-chip tuning capacitor 4 pF at CAPTUNE = 0 (CLFXO_MIN) to 24.5 pF at CAPTUNE = 0x4F (CLFXO_MAX) on each XTAL pin (note 5: the crystal sees the two in series); Table 6.3 (p.62) LFXTAL_I on PD01, LFXTAL_O on PD00; Table 6.2 (p.61) QFN40 pins 39 and 40"
+
 [models.ratings]
 # Absolute Maximum Ratings.
 max_pin_current_a = 0.05   # 50 mA sink / 50 mA source per GPIO

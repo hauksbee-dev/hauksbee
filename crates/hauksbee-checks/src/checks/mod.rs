@@ -637,10 +637,11 @@ pub fn layout_lint(
 /// threaded into the text-based SI checks).
 #[must_use]
 pub fn engine_si(board: &ExtractedBoard, lib: &ModelLibrary, geo_text: Option<&str>) -> SiReport {
-    let mut report = board.si_checks(geo_text);
+    let cards = crystal_caps::crystal_cards(board, lib);
+    let mut report = board.si_checks_with(geo_text, &cards);
     ampacity::append_ampacity(board, lib, geo_text, &mut report);
     ripple::append_ripple(board, lib, &mut report);
-    crystal_caps::append_crystal_caps(board, lib, &mut report);
+    crystal_caps::append_crystal_caps(board, lib, &cards, &mut report);
     report
 }
 

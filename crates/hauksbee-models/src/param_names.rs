@@ -202,7 +202,18 @@ static ADC_WITH_BUS_LIMITS: std::sync::LazyLock<Vec<&'static str>> =
 #[must_use]
 pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
     match kind {
-        ComponentKind::Passive => &["ohms", "series_ohms", "value_override", "esr", "esl"],
+        ComponentKind::Passive => &[
+            "ohms",
+            "series_ohms",
+            "value_override",
+            "esr",
+            "esl",
+            // A crystal's specified load capacitance, shunt capacitance and
+            // motional capacitance (the crystal load-capacitor check reads them).
+            "cl_f",
+            "c0_f",
+            "c1_f",
+        ],
         ComponentKind::Diode => DIODE,
         ComponentKind::BjtNpn | ComponentKind::BjtPnp => BJT,
         ComponentKind::Nmos | ComponentKind::Pmos => MOSFET,
@@ -212,6 +223,11 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             // not the card's, so there is no `vout` on such an entry.
             "vref",
             "iadj_a",
+            // The feedback pin's own current INTO the pin (signed, as the
+            // datasheet prints it) on a ground-referenced adjustable part: it
+            // flows on through the divider's top resistor and shifts the rail
+            // by `ifb_a * Rtop`.
+            "ifb_a",
             "dropout_v",
             "iq_a",
             "cout_min_f",

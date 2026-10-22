@@ -812,6 +812,40 @@ exist in `[models.pins]`, none of them a supply or ground role, and a channel fo
 each. `card_coverage` lists the table (`adc_pins`) among an MCU card's needs when
 the datasheet mentions an ADC.
 
+## Pin capability: on-chip crystal load capacitors
+
+An MCU card states the load capacitance built into an oscillator pad pair, so the
+crystal check (`crystal_load_cap`, `docs/checks/SI_CHECKS.md`) can tell a crystal
+with no external caps that the chip loads from one that is missing them. With none
+fitted the bank reaches at most `max_f / 2` (the two pads in series), and a
+crystal with a larger CL is flagged as needing external caps:
+
+```toml
+[[models.pin_capability.xtal_int_caps]]
+oscillator = "LFXO"              # the oscillator's name in the datasheet
+pads = ["39", "40"]              # exactly two pads of [models.pins]: its XI and XO
+min_f = 4.0e-12                  # capacitance each pad has to ground, farads
+max_f = 24.5e-12
+basis = "Datasheet <part> <version>, Table <n> (PDF p.<n>): <what the row says>"
+```
+
+`min_f`/`max_f` are the per-pad range the datasheet prints (give both or neither).
+Leave them out when the bank is software-tuned and the datasheet prints no range:
+the check then judges nothing for that oscillator. Validation requires an `mcu`
+card, a basis, two distinct pads that exist in `[models.pins]` and are not supply or
+ground roles, and `0.5 pF <= min_f <= max_f <= 100 pF`.
+
+A crystal card (`passive_class = "crystal"`, matched by `mpn_re`) carries the
+crystal's own figures as params: `cl_f` (specified load capacitance), `c0_f`
+(shunt capacitance; the datasheet's maximum is the safe figure) and `c1_f`
+(motional capacitance, when printed). Each figure comes from the crystal's
+datasheet, which the card's `[models.source]` cites with its sha256.
+
+A ground-referenced adjustable regulator or converter card may state `ifb_a`, the
+feedback pin's own current *into* the pin (signed, as the datasheet prints it). It
+flows on through the divider's top resistor and moves the rail by `ifb_a * Rtop`,
+which the divider checks add to `Vref * (1 + Rtop/Rbottom)`.
+
 ## Peripheral limits: UART baud generators, ADC timing, bus clocks
 
 An MCU card may carry `[models.peripherals.uart]` and `[models.peripherals.adc]`
