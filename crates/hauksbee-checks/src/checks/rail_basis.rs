@@ -15,12 +15,14 @@
 //!   conditional on the entry;
 //! * a name-powered rail with nothing at all behind it (no entry, no fitted or
 //!   unfitted source, no series part bringing it in from a net that has one)
-//!   and parts drawing supply from it is a Low `rail_unpowered` note naming the
-//!   active ICs that rely on it first: the rail is a name on a net, not a
-//!   supply (and only on a board that takes power in somewhere else; a
-//!   fragment with no way in says nothing about its supply). A name on a net
-//!   proves nothing either way (an off-board feed the board does not draw, such
-//!   as pads or spring contacts, is possible), so it advises and does not gate;
+//!   and parts drawing supply from it is a Medium `rail_unpowered` finding
+//!   naming the active ICs that rely on it first: the rail is a name on a net,
+//!   not a supply, and a chip drawing from it is a real fault (only on a board
+//!   that takes power in somewhere else; a fragment with no way in says nothing
+//!   about its supply). It gates. A board that really is fed another way (pads,
+//!   spring contacts or pogo pins the design does not draw) overrules it with a
+//!   waiver for that rail, which the message quotes with the rail's name filled
+//!   in; the waived finding stays listed, never hidden;
 //! * every other name-powered rail is a verdict condition: assumed supplied
 //!   from off the board through the named connector, or held at its named
 //!   voltage though nothing modelled sources it. Never silent.
@@ -122,6 +124,23 @@ fn never_up_finding(rail: &RailBasis) -> LintFinding {
     }
 }
 
+/// A string as a TOML basic string.
+fn toml_str(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// The waiver that overrules a finding on `net`, as the one line to paste into
+/// `hauksbee-waivers.toml` (see `hauksbee_bind::waiver`: a reason and an expiry
+/// are required). `reason` and `until` are placeholders to fill in.
+fn waiver_line(net: &str) -> String {
+    let net = toml_str(net);
+    format!(
+        "waive = [{{ check = \"lint\", kind = \"rail_unpowered\", nets = [{net}], reason = \
+         \"<how this rail is fed>\", until = \"YYYY-MM-DD\" }}] (put the date it is next \
+         reviewed in place of YYYY-MM-DD)."
+    )
+}
+
 /// The finding for a rail held at its name's voltage with no source behind it.
 fn unsourced_finding(rail: &RailBasis) -> LintFinding {
     let net = rail.net();
@@ -138,12 +157,15 @@ fn unsourced_finding(rail: &RailBasis) -> LintFinding {
          diode, switch or link to a net that has one. The analysis held it at {volts} by its \
          name alone, so the result for {} {stays} on a supply that may not exist. \
          {REMEDY_MARKER}Bring '{net}' in on a connector or test point, or add the regulator or \
-         link that sources it (and fit it).",
+         link that sources it (and fit it). If the board really is fed another way (pads, spring \
+         contacts or pogo pins the design does not draw), overrule this finding in \
+         hauksbee-waivers.toml beside the board with {}",
         listed(drawn),
+        waiver_line(net),
     );
     LintFinding {
         check: LintCheck::RailUnpowered,
-        severity: Severity::Low,
+        severity: Severity::Medium,
         message,
         refs: drawn.iter().take(SHOWN).cloned().collect(),
         nets: rail.nets.clone(),
@@ -556,13 +578,13 @@ mod tests {
     fn unsourced(found: &[LintFinding]) -> Vec<&LintFinding> {
         found
             .iter()
-            .filter(|f| f.check == LintCheck::RailUnpowered && f.severity == Severity::Low)
+            .filter(|f| f.check == LintCheck::RailUnpowered && f.severity == Severity::Medium)
             .collect()
     }
 
     /// Faulty: +3V3 is only a name. No connector, regulator or link behind it,
     /// and an IC draws from it: the verdict would otherwise rest on a supply
-    /// that does not exist. A Low note (not the High never-comes-up finding), naming the IC first.
+    /// that does not exist. A gating Medium finding (not the High never-comes-up one), naming the IC first.
     #[test]
     fn a_named_rail_with_nothing_behind_it_and_an_ic_on_it_is_flagged() {
         let found = run(vec![
@@ -573,7 +595,7 @@ mod tests {
         ]);
         assert!(
             gating(&found).is_empty(),
-            "a note, not the High finding: {found:#?}"
+            "a Medium finding, not the High one: {found:#?}"
         );
         let g = unsourced(&found);
         assert_eq!(g.len(), 1, "{found:#?}");
@@ -585,12 +607,101 @@ mod tests {
         );
         assert!(!m.contains("never comes up"), "{m}");
         assert!(m.contains(REMEDY_MARKER) && m.contains("U2"), "{m}");
+        assert_eq!(g[0].severity, Severity::Medium);
         let [entered, held] = conditions(vec![usb(), sensor("U2", V3)]);
         assert!(
             entered.as_deref().is_none_or(|e| !e.contains("+3V3")),
             "the unsourced rail is not reported as entered: {entered:?}"
         );
         assert!(held.is_none(), "{held:?}");
+    }
+
+    /// The waiver line the message quotes, with the date filled in.
+    fn quoted_waiver(message: &str) -> String {
+        let at = message
+            .find("waive = [")
+            .expect("the message quotes a waiver");
+        let line = &message[at..];
+        let end = line.find("}]").expect("the quoted waiver closes") + 2;
+        line[..end].replace("YYYY-MM-DD", "2999-12-31")
+    }
+
+    fn waiver_file(name: &str, body: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("hb-rail-basis-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hauksbee-waivers.toml");
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    fn island_with_u6() -> Vec<LintFinding> {
+        run(vec![
+            usb(),
+            sensor("U2", V3),
+            part("D1", "LED", &[("1", V3), ("2", GND)]),
+        ])
+    }
+
+    /// The message gives the override at the moment of need: the line it quotes
+    /// loads through the real waiver loader, and a waiver written from it stops
+    /// the finding gating while it stays listed as waived.
+    #[test]
+    fn the_quoted_waiver_loads_and_waives_the_finding() {
+        let found = island_with_u6();
+        let f = unsourced(&found)[0].clone();
+        assert!(
+            f.message.contains("hauksbee-waivers.toml")
+                && f.message.contains(r#"nets = ["+3V3"]"#)
+                && f.message.contains(r#"kind = "rail_unpowered""#),
+            "{}",
+            f.message
+        );
+        let toml = quoted_waiver(&f.message);
+        let path = waiver_file("loads", &toml);
+        let today = hauksbee_ir::evidence::RunDate::from_epoch_days(20_663);
+        let mut set = hauksbee_bind::waiver::WaiverSet::load_at(&path, today)
+            .unwrap_or_else(|e| panic!("the quoted waiver must load: {e}\n{toml}"));
+        assert_eq!(set.len(), 1);
+        let (kept, waived) = set.partition("lint", found, |f| {
+            (
+                f.check.as_str().to_string(),
+                f.nets.clone(),
+                f.refs.clone(),
+                f.message.clone(),
+            )
+        });
+        assert!(
+            kept.iter().all(|k| k.severity != Severity::Medium),
+            "the waived finding no longer gates: {kept:#?}"
+        );
+        assert_eq!(waived.len(), 1, "it stays listed as waived");
+        assert_eq!(waived[0].kind, "rail_unpowered");
+        assert!(
+            waived[0].subject.contains("'+3V3'"),
+            "{}",
+            waived[0].subject
+        );
+        assert!(set.stale().is_empty());
+    }
+
+    /// A waiver for a different rail does not excuse this one.
+    #[test]
+    fn a_waiver_for_another_rail_leaves_the_finding_gating() {
+        let found = island_with_u6();
+        let toml = quoted_waiver(&unsourced(&found)[0].message).replace("+3V3", "+9V");
+        let path = waiver_file("other", &toml);
+        let today = hauksbee_ir::evidence::RunDate::from_epoch_days(20_663);
+        let mut set = hauksbee_bind::waiver::WaiverSet::load_at(&path, today).unwrap();
+        let (kept, waived) = set.partition("lint", found, |f| {
+            (
+                f.check.as_str().to_string(),
+                f.nets.clone(),
+                f.refs.clone(),
+                f.message.clone(),
+            )
+        });
+        assert!(waived.is_empty());
+        assert_eq!(unsourced(&kept).len(), 1);
     }
 
     /// Legal control: a fragment with no way in at all (a sub-circuit linted on
