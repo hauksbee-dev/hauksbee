@@ -2815,11 +2815,12 @@ fn role_from_mcu_pinfunction(function: &str) -> Option<String> {
 }
 
 /// The names a pad's printed function lists, whole string first. A GPIO name
-/// that follows an underscore (`RTC_GPIO4`, `LP_GPIO4`, `RTC_IO4`) is another
-/// domain's numbering of an I/O, not the pad's own GPIO: the ESP32 pad
-/// `GPI34/ADC1_CH6/RTC_GPIO4` is GPIO34, whose RTC channel is numbered 4. Such
-/// a name is never offered as a bare `GPIOn`; `ADC1_CHn` and `TOUCHn` name no
-/// GPIO either way.
+/// that follows an underscore (`RTC_GPIO4`, `LP_GPIO4`, `RTC_IO4`) is the
+/// low-power domain's numbering, which matches the pad's GPIO on some chips
+/// (ESP32-S3 RTC_GPIO4 is GPIO4, ESP32-C6 LP_GPIO4 is GPIO4) and not on others
+/// (the ESP32 pad `GPI34/ADC1_CH6/RTC_GPIO4` is GPIO34). The name alone can't
+/// tell which, so it is never offered as a bare `GPIOn`; those chips also print
+/// the plain `GPIOn` on the pad. `ADC1_CHn` and `TOUCHn` name no GPIO.
 fn pinfunction_tokens(upper: &str) -> Vec<String> {
     fn push(seg: &str, sep_before: Option<char>, tokens: &mut Vec<String>) {
         if seg.is_empty() || (sep_before == Some('_') && is_gpio_name(seg)) {
@@ -13376,9 +13377,10 @@ style = "i2c_pointer"
         }
     }
 
-    /// A prefixed function name never becomes a bare GPIO: the ESP32 pad
-    /// `GPI34/ADC1_CH6/RTC_GPIO4` is not GPIO4, and `ADC1_CH6` / `TOUCH0` /
-    /// `LP_IO3` name no GPIO of their own. Only the pad's own unprefixed name
+    /// A prefixed function name never becomes a bare GPIO: its number matches
+    /// the pad's GPIO on the ESP32-S3 and C6 but not on the ESP32, where the
+    /// pad `GPI34/ADC1_CH6/RTC_GPIO4` is GPIO34, so the name alone can't decide.
+    /// `ADC1_CH6` / `TOUCH0` name no GPIO. Only the pad's own unprefixed name
     /// (`GPIO4`, `IO36`, `PA9`) is its GPIO, wherever it sits in the list.
     #[test]
     fn a_prefixed_function_name_never_becomes_a_bare_gpio() {
