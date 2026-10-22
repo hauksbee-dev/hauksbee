@@ -27,7 +27,9 @@ const fn basis_of(check: LintCheck) -> Option<Basis> {
     // a drafted card, or a low-confidence card would raise gating findings of it.
     match check {
         LintCheck::OperatingEnvelope | LintCheck::BackPower => Some(Basis::Envelope),
-        LintCheck::PowerPinWiring | LintCheck::SupplyGroundSwapped => Some(Basis::Pins),
+        LintCheck::PowerPinWiring
+        | LintCheck::SupplyGroundSwapped
+        | LintCheck::SymbolCardPinMismatch => Some(Basis::Pins),
         // The card's thresholds, roles, strap levels or bus behaviour decide these
         // verdicts: a card the drafter was unsure of must not fail a run alone.
         LintCheck::StrapPin
@@ -41,7 +43,8 @@ const fn basis_of(check: LintCheck) -> Option<Basis> {
         | LintCheck::PullupIneffective
         | LintCheck::AudioBusWiring
         | LintCheck::PowerDomainBackfeed
-        | LintCheck::PowerDomainBusLockup => Some(Basis::Card),
+        | LintCheck::PowerDomainBusLockup
+        | LintCheck::PinMuxCapability => Some(Basis::Card),
         // Read from the schematic, the layout or the netlist alone.
         LintCheck::MissingI2cPullup
         | LintCheck::MissingSdPullup
@@ -68,7 +71,10 @@ const fn basis_of(check: LintCheck) -> Option<Basis> {
         | LintCheck::DiodeReversed
         | LintCheck::PolarisedCapReversed
         | LintCheck::RailUnpowered
-        | LintCheck::DatasheetMismatch => None,
+        | LintCheck::DatasheetMismatch
+        | LintCheck::SignalDirection
+        | LintCheck::DebugHeaderPinout
+        | LintCheck::SwitchShort => None,
     }
 }
 
