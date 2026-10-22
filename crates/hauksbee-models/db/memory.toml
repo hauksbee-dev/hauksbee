@@ -1,4 +1,309 @@
-# Official built-in part library: memory.
+# Official built-in part library: memory (I2C serial EEPROM).
 #
 # Cards here are written from vendor datasheets only (every value carries a basis and a source).
 # See target/launch/official-parts-20261022/ranking.md for the batch plan.
+#
+# Shape and executable subset follow the existing at24c64d_8pin card in digital.toml: the typed
+# `i2c_eeprom` peripheral answers at the fixed 7-bit address 0x50 (A2:A0 = 000). The device-address
+# strap pins (A0..A2) are not read, so a board that straps them answers elsewhere (SCHEMA GAP: the
+# i2c_eeprom kind has no address-strap input). Write-cycle timing, ACK polling and WP enforcement
+# are not modelled. Currents are datasheet MAXIMA at the worst listed condition, never typical.
+#
+# One card per distinct pin numbering (8-pin SOIC/TSSOP/UDFN/XDFN/PDIP versus 5-lead SOT23).
+# The VFBGA / TFBGA / CSP ball-map packages are NOT modelled: the datasheet figures number the balls
+# 1..8 in a top view, but a fitted ball footprint names them by grid reference, so a pad map keyed
+# by the printed numbers would bind on a guess.
+#
+# Register-level behaviour was cross-checked against the shape of Renode's GenericI2cEeprom
+# (MIT, Antmicro, renode-infrastructure src/Emulator/Peripherals/Peripherals/I2C); no code was copied
+# and every value below is from the vendor PDF named in the card's references.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AT24C02D 2-Kbit (256 x 8) I2C EEPROM, 8-lead SOIC / TSSOP / UDFN / PDIP.
+#
+# Source: Microchip (Atmel) "AT24C01D and AT24C02D I2C-Compatible (2-wire) Serial EEPROM 1-Kbit
+#   (128 x 8) or 2-Kbit (256 x 8) DATASHEET", Atmel-8871F-SEEPROM-AT24C01D-02D-Datasheet_012017.
+#   PDF page numbers equal printed page numbers.
+# A0/A1/A2/WP are pulled to GND internally when undriven (Table 1-1 note 1, p.2), so a floating
+# strap reads as logic 0 and no must-not-float role is declared.
+[[models]]
+id = "at24c02d_8pin"
+kind = "digital"
+description = "Microchip AT24C02D 2-Kbit I2C EEPROM, 8-lead SOIC/TSSOP/UDFN/PDIP (executable primary array)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-8871F-SEEPROM-AT24C01D-02D-Datasheet.pdf"
+title = "Microchip/Atmel AT24C01D and AT24C02D I2C-Compatible (2-wire) Serial EEPROM, Atmel-8871F-SEEPROM-AT24C01D-02D-Datasheet_012017 (revision F, January 2017)"
+locator = "Table 1-1 Pin Descriptions and package pinouts p.2; 4 Memory Organization and 4.1 Device Addressing, Table 4-1 and Table 4-2 p.7; 8.1 Absolute Maximum Ratings, Table 8-1 and Table 8-2 p.13; 9 Ordering Code Detail p.16; 10 Ordering Information p.17"
+sha256 = "397ff061aa7a4ae36864592813831e9386e9467f10049064d7f139f26be6475e"
+[[models.source.pinout]]
+package = "8-lead SOIC / 8-lead TSSOP / 8-pad UDFN / 8-lead PDIP"
+pins = { "1" = "A0", "2" = "A1", "3" = "A2", "4" = "GND", "5" = "SDA", "6" = "SCL", "7" = "WP", "8" = "VCC" }
+
+[models.match]
+# Ordering (p.16-17): AT24C02D-<pkg><grade>[-<carrier>]; SSHM = SOIC, XHM = TSSOP, MAHM = UDFN,
+# PUM = PDIP; -T/-B/-E carrier. The 5-lead SOT23 (-STUM) has its own pad map and card; the
+# 8-ball VFBGA (-CUM) is not modelled. Excludes AT24C01D (different density), AT24C02C, AT24C02
+# and AT24CS02 (serial-number part).
+value_re = "(?i)^AT24C02D(-(SSHM|XHM|MAHM|PUM)(-[TBE])?)?$"
+
+[models.params]
+warning = "primary 256-byte array at fixed address 0x50 (A2:A0 = 000) is executable; A0..A2 straps are not read (a board strapping them answers elsewhere), and WP enforcement, tWR write-cycle timing and ACK polling are not modelled; supply currents are datasheet maxima at the worst listed condition (VCC = 3.6 V, 1 MHz)"
+
+[models.pins]
+# Table 1-1 Pin Descriptions (p.2), identical for SOIC, TSSOP, UDFN and PDIP.
+"1" = "a0"
+"2" = "a1"
+"3" = "a2"
+"4" = "gnd"
+"5" = "sda"
+"6" = "scl"
+"7" = "wp"
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints temperature under bias (-55 to +125 C) and
+# storage temperature, not a junction limit, and no thermal resistance.
+max_voltage_v = 4.1   # 8.1 Absolute Maximum Ratings p.13: supply voltage with respect to ground -0.5 V to +4.10 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.7
+max_v = 3.6
+abs_max_v = 4.1
+basis = "Microchip/Atmel AT24C01D/02D Atmel-8871F, Table 8-2 DC Characteristics p.13 VCC 1.7 V to 3.6 V; 8.1 Absolute Maximum Ratings p.13, supply voltage with respect to ground +4.10 V"
+abs_max_basis = "Atmel-8871F 8.1 Absolute Maximum Ratings p.13, supply voltage with respect to ground -0.5 V to +4.10 V"
+
+[models.peripheral]
+kind = "i2c_eeprom"
+address = 80            # 1010 A2 A1 A0 with A2:A0 = 000 (4.1 Device Addressing, Table 4-1 p.7)
+size_bytes = 256        # 2-Kbit, 256 x 8 (first page of the datasheet)
+page_size = 8           # 32 pages of 8 bytes (4 Memory Organization p.7)
+word_address_bytes = 1  # one 8-bit word-address byte (Table 4-2 p.7)
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 1.7   # Table 8-2 p.13 VCC minimum
+idle_a = 0.8e-6              # Table 8-2 p.13 ISB max, VCC = 3.6 V
+read_a = 0.5e-3              # Table 8-2 p.13 ICC1 max, read at 1 MHz, VCC = 3.6 V
+write_a = 1.0e-3             # Table 8-2 p.13 ICC2 max, write at 1 MHz, VCC = 3.6 V
+
+[models.coverage]
+implements = ["i2c_primary_array", "i2c_random_read", "i2c_sequential_read", "i2c_page_write", "standby_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating", "supply_ranges", "absolute_ratings"]
+missing = ["address_strap_pins", "write_cycle_timing", "ack_polling", "write_protect_pin", "typical_supply_currents"]
+
+# AT24C02D 5-lead SOT23 (-STUM). The A2/A1/A0 pads are not bonded out; Table 4-1 p.7 states the
+# device answers only with the address bits at logic 0, so the fixed address 0x50 is the real one.
+[[models]]
+id = "at24c02d_sot23_5"
+kind = "digital"
+description = "Microchip AT24C02D 2-Kbit I2C EEPROM, 5-lead SOT23 (executable primary array at the fixed address 0x50)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-8871F-SEEPROM-AT24C01D-02D-Datasheet.pdf"
+title = "Microchip/Atmel AT24C01D and AT24C02D I2C-Compatible (2-wire) Serial EEPROM, Atmel-8871F-SEEPROM-AT24C01D-02D-Datasheet_012017 (revision F, January 2017)"
+locator = "5-lead SOT23 pinout p.2; 4.1 Device Addressing and Table 4-1 (SOT23 row) p.7; 8.1 Absolute Maximum Ratings, Table 8-1 and Table 8-2 p.13; 10 Ordering Information p.17 (AT24C02D-STUM-T, package 5TS1)"
+sha256 = "397ff061aa7a4ae36864592813831e9386e9467f10049064d7f139f26be6475e"
+[[models.source.pinout]]
+package = "5-lead SOT23"
+pins = { "1" = "SCL", "2" = "GND", "3" = "SDA", "4" = "VCC", "5" = "WP" }
+
+[models.match]
+# AT24C02D-STUM-T only (5TS1). A bare "AT24C02D" with no package suffix binds the 8-pin card unless
+# the footprint is a SOT-23-5, in which case this card scores higher (footprint rule matched).
+value_re = "(?i)^AT24C02D(-STUM(-T)?)?$"
+footprint_re = "(?i)SOT[-_ ]?23[-_ ]?5([^0-9]|$)"
+
+[models.params]
+warning = "primary 256-byte array at fixed address 0x50 is executable (the SOT23 has no address pins and answers only with A2:A0 = 000); WP enforcement, tWR write-cycle timing and ACK polling are not modelled; supply currents are datasheet maxima at the worst listed condition (VCC = 3.6 V, 1 MHz)"
+
+[models.pins]
+# 5-lead SOT23 package figure p.2 (Top View).
+"1" = "scl"
+"2" = "gnd"
+"3" = "sda"
+"4" = "vcc"
+"5" = "wp"
+
+[models.ratings]
+max_voltage_v = 4.1   # 8.1 Absolute Maximum Ratings p.13: supply voltage with respect to ground -0.5 V to +4.10 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.7
+max_v = 3.6
+abs_max_v = 4.1
+basis = "Microchip/Atmel AT24C01D/02D Atmel-8871F, Table 8-2 DC Characteristics p.13 VCC 1.7 V to 3.6 V; 8.1 Absolute Maximum Ratings p.13, supply voltage with respect to ground +4.10 V"
+abs_max_basis = "Atmel-8871F 8.1 Absolute Maximum Ratings p.13, supply voltage with respect to ground -0.5 V to +4.10 V"
+
+[models.peripheral]
+kind = "i2c_eeprom"
+address = 80            # SOT23 row of Table 4-1 p.7: 1010 000
+size_bytes = 256
+page_size = 8
+word_address_bytes = 1
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 1.7   # Table 8-2 p.13 VCC minimum
+idle_a = 0.8e-6              # Table 8-2 p.13 ISB max, VCC = 3.6 V
+read_a = 0.5e-3              # Table 8-2 p.13 ICC1 max, read at 1 MHz, VCC = 3.6 V
+write_a = 1.0e-3             # Table 8-2 p.13 ICC2 max, write at 1 MHz, VCC = 3.6 V
+
+[models.coverage]
+implements = ["i2c_primary_array", "i2c_random_read", "i2c_sequential_read", "i2c_page_write", "standby_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating", "supply_ranges", "absolute_ratings"]
+missing = ["write_cycle_timing", "ack_polling", "write_protect_pin", "typical_supply_currents"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AT24C32D 32-Kbit (4096 x 8) I2C EEPROM, 8-lead SOIC / TSSOP, 8-pad UDFN / XDFN.
+#
+# Source: Microchip "AT24C32D I2C-Compatible (2-Wire) Serial EEPROM 32-Kbit", DS20006047A (2018,
+#   obtained as the makerguides.com copy of the Microchip PDF because the Microchip site is not
+#   reachable by curl). PDF page numbers equal the printed DS20006047A page numbers.
+# A0/A1/A2/WP are pulled to GND internally when undriven (Table 2-1 note 2, p.5), so no
+# must-not-float role is declared.
+[[models]]
+id = "at24c32d_8pin"
+kind = "digital"
+description = "Microchip AT24C32D 32-Kbit I2C EEPROM, 8-lead SOIC/TSSOP, 8-pad UDFN/XDFN (executable primary array)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.makerguides.com/wp-content/uploads/2024/12/AT24C32D-datasheet.pdf"
+title = "Microchip AT24C32D I2C-Compatible (2-Wire) Serial EEPROM 32-Kbit Data Sheet, DS20006047A (2018)"
+locator = "1 Package Types p.4; Table 2-1 Pin Function Table p.5; 4.1 Absolute Maximum Ratings, Table 4-1 and Table 4-2 p.9; 4.5.1 Power-up Requirements p.11; 6 Memory Organization and 6.1 Device Addressing, Table 6-1 p.16; Product Identification System p.38"
+sha256 = "5d626a1bec7f0c525323f9251abaa890c37fe009036ffcef27218880c8251ca4"
+[[models.source.pinout]]
+package = "8-lead SOIC / 8-lead TSSOP / 8-pad UDFN / 8-pad XDFN"
+pins = { "1" = "A0", "2" = "A1", "3" = "A2", "4" = "GND", "5" = "SDA", "6" = "SCL", "7" = "WP", "8" = "VCC" }
+
+[models.match]
+# Ordering (p.38): AT24C32D-<pkg>HM-<carrier>; SSHM = SOIC, XHM = TSSOP, MAHM = UDFN,
+# MEHM = XDFN; -T/-B/-E carrier. The 5-lead SOT23 (-STUM) has its own card; the 8-ball VFBGA
+# (-CUM) is not modelled. Excludes AT24C32E (a different die and datasheet), AT24C32 and AT24CS32.
+value_re = "(?i)^AT24C32D(-(SSHM|XHM|MAHM|MEHM)(-[TBE])?)?$"
+
+[models.params]
+warning = "primary 4 KiB array at fixed address 0x50 (A2:A0 = 000) is executable; A0..A2 straps are not read (a board strapping them answers elsewhere), and WP enforcement, tWR write-cycle timing and ACK polling are not modelled; supply currents are datasheet maxima at VCC = 5.0 V, 400 kHz"
+
+[models.pins]
+# Table 2-1 Pin Function Table (p.5), SOIC / TSSOP / UDFN / XDFN columns.
+"1" = "a0"
+"2" = "a1"
+"3" = "a2"
+"4" = "gnd"
+"5" = "sda"
+"6" = "scl"
+"7" = "wp"
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints temperature under bias (-55 to +125 C) and
+# storage temperature, not a junction limit, and no thermal resistance.
+max_voltage_v = 6.25   # 4.1 Absolute Maximum Ratings p.9: VCC 6.25 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.7
+max_v = 5.5
+abs_max_v = 6.25
+basis = "Microchip AT24C32D DS20006047A, Table 4-1 DC and AC Operating Range p.9 VCC 1.7 V to 5.5 V; 4.1 Absolute Maximum Ratings p.9, VCC 6.25 V"
+abs_max_basis = "DS20006047A 4.1 Absolute Maximum Ratings p.9, VCC 6.25 V"
+
+[models.peripheral]
+kind = "i2c_eeprom"
+address = 80            # 1010 A2 A1 A0 with A2:A0 = 000 (6.1 Device Addressing, Table 6-1 p.16)
+size_bytes = 4096       # 32-Kbit, 4096 x 8: 128 pages of 32 bytes (6 Memory Organization p.16)
+page_size = 32
+word_address_bytes = 2  # two word-address bytes carrying a 12-bit address (6.1 p.16)
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 1.7   # Table 4-1 p.9 VCC minimum (Table 4-4 p.11: VPOR 1.5 V max)
+idle_a = 6.0e-6              # Table 4-2 p.9 ISB1 max, VCC = 5.0 V
+read_a = 1.0e-3              # Table 4-2 p.9 ICC1 max, read at 400 kHz, VCC = 5.0 V
+write_a = 3.0e-3             # Table 4-2 p.9 ICC2 max, write at 400 kHz, VCC = 5.0 V
+
+[models.coverage]
+implements = ["i2c_primary_array", "i2c_random_read", "i2c_sequential_read", "i2c_page_write", "standby_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating", "supply_ranges", "absolute_ratings"]
+missing = ["address_strap_pins", "write_cycle_timing", "ack_polling", "write_protect_pin", "typical_supply_currents"]
+
+# AT24C32D 5-lead SOT23 (-STUM). A2/A1/A0 are not bonded out; Table 6-1 p.16 fixes them at 0.
+[[models]]
+id = "at24c32d_sot23_5"
+kind = "digital"
+description = "Microchip AT24C32D 32-Kbit I2C EEPROM, 5-lead SOT23 (executable primary array at the fixed address 0x50)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.makerguides.com/wp-content/uploads/2024/12/AT24C32D-datasheet.pdf"
+title = "Microchip AT24C32D I2C-Compatible (2-Wire) Serial EEPROM 32-Kbit Data Sheet, DS20006047A (2018)"
+locator = "1 Package Types (5-lead SOT23) p.4; Table 2-1 Pin Function Table p.5; 4.1 Absolute Maximum Ratings, Table 4-1 and Table 4-2 p.9; 6.1 Device Addressing, Table 6-1 SOT23 row p.16; Product Identification System p.38 (AT24C32D-STUM-T, package 5TS1)"
+sha256 = "5d626a1bec7f0c525323f9251abaa890c37fe009036ffcef27218880c8251ca4"
+[[models.source.pinout]]
+package = "5-lead SOT23"
+pins = { "1" = "SCL", "2" = "GND", "3" = "SDA", "4" = "VCC", "5" = "WP" }
+
+[models.match]
+# AT24C32D-STUM-T only (5TS1). A bare "AT24C32D" binds the 8-pin card unless the footprint is a
+# SOT-23-5, in which case this card scores higher (footprint rule matched).
+value_re = "(?i)^AT24C32D(-STUM(-T)?)?$"
+footprint_re = "(?i)SOT[-_ ]?23[-_ ]?5([^0-9]|$)"
+
+[models.params]
+warning = "primary 4 KiB array at fixed address 0x50 is executable (the SOT23 has no address pins and answers only with A2:A0 = 000); WP enforcement, tWR write-cycle timing and ACK polling are not modelled; supply currents are datasheet maxima at VCC = 5.0 V, 400 kHz"
+
+[models.pins]
+# Table 2-1 (p.5) 5-lead SOT23 column.
+"1" = "scl"
+"2" = "gnd"
+"3" = "sda"
+"4" = "vcc"
+"5" = "wp"
+
+[models.ratings]
+max_voltage_v = 6.25   # 4.1 Absolute Maximum Ratings p.9: VCC 6.25 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.7
+max_v = 5.5
+abs_max_v = 6.25
+basis = "Microchip AT24C32D DS20006047A, Table 4-1 DC and AC Operating Range p.9 VCC 1.7 V to 5.5 V; 4.1 Absolute Maximum Ratings p.9, VCC 6.25 V"
+abs_max_basis = "DS20006047A 4.1 Absolute Maximum Ratings p.9, VCC 6.25 V"
+
+[models.peripheral]
+kind = "i2c_eeprom"
+address = 80            # SOT23 row of Table 6-1 p.16: 1010 000
+size_bytes = 4096
+page_size = 32
+word_address_bytes = 2
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 1.7   # Table 4-1 p.9 VCC minimum
+idle_a = 6.0e-6              # Table 4-2 p.9 ISB1 max, VCC = 5.0 V
+read_a = 1.0e-3              # Table 4-2 p.9 ICC1 max, read at 400 kHz, VCC = 5.0 V
+write_a = 3.0e-3             # Table 4-2 p.9 ICC2 max, write at 400 kHz, VCC = 5.0 V
+
+[models.coverage]
+implements = ["i2c_primary_array", "i2c_random_read", "i2c_sequential_read", "i2c_page_write", "standby_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating", "supply_ranges", "absolute_ratings"]
+missing = ["write_cycle_timing", "ack_polling", "write_protect_pin", "typical_supply_currents"]
