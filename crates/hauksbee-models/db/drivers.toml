@@ -171,7 +171,7 @@ status = "unknown"
 parameter = "motor_drive"
 reason = "the H-bridge outputs, the microstepping indexer (full to 1/32 step), the decay modes, the VREF trip law (VTRIP = 660 mV typ at VREF = 3.3 V, 100% current), the 3.3 V V3P3OUT regulator output, nFAULT and nHOME open-drain outputs, protection and timing are not modelled"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "logic_threshold_pins"
 reason = "7.5 prints VIL 0.7 V max and VIH 2.2 V min for the logic inputs; the DECAY pin has its own thresholds (0.8 V slow-decay max, 2 V fast-decay min) that a single level pair cannot carry"
 
@@ -299,7 +299,7 @@ status = "unknown"
 parameter = "motor_drive"
 reason = "the H-bridge outputs, the ISEN current regulation, the slow/fast decay drive table, dead time, nFAULT, protection and timing are not modelled"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "logic_threshold_pins"
 reason = "6.5 prints separate nSLEEP thresholds (VIL 0.5 V max, VIH 2.5 V min); the card carries the all-other-pins pair (VIL 0.7 V max, VIH 2 V min), which a single level pair cannot split from nSLEEP"
 
@@ -396,7 +396,7 @@ status = "unknown"
 parameter = "motor_drive"
 reason = "the H-bridge outputs, the ISEN current regulation, the slow/fast decay drive table, dead time, nFAULT, protection and timing are not modelled"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "logic_threshold_pins"
 reason = "6.5 prints separate nSLEEP thresholds (VIL 0.5 V max, VIH 2.5 V min); the card carries the all-other-pins pair (VIL 0.7 V max, VIH 2 V min), which a single level pair cannot split from nSLEEP"
 
@@ -494,7 +494,7 @@ status = "unknown"
 parameter = "motor_drive"
 reason = "the H-bridge outputs, the ISEN current regulation, the slow/fast decay drive table, dead time, nFAULT, protection and timing are not modelled"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "logic_threshold_pins"
 reason = "6.5 prints separate nSLEEP thresholds (VIL 0.5 V max, VIH 2.5 V min); the card carries the all-other-pins pair (VIL 0.7 V max, VIH 2 V min), which a single level pair cannot split from nSLEEP"
 
@@ -591,11 +591,11 @@ status = "unknown"
 parameter = "motor_drive"
 reason = "the H-bridge outputs and the H-SW control table (CW, CCW, short brake, stop, standby), the 0.5 Ohm on-resistance, dead time and thermal shutdown are not modelled"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "vm_minimum"
 reason = "the Pin Functions remarks print the motor supply as 2.5 V to 13.5 V while the Operating Range table prints VM 4.5 V min (output current limited to 0.4 A below 5 V); the card uses the Operating Range table"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "theta_ja"
 reason = "the only thermal figure is the IC-only thetaj-a = 160 C/W annotated on the PD-Ta target characteristics chart (p.6), not a Thermal Information table row"
 

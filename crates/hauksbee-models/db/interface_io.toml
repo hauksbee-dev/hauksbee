@@ -29,7 +29,7 @@ status = "unknown"
 parameter = "translation_timing"
 reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data rate, enable and disable times, Ioff, power-up transients, the 10 kOhm pull-up being disabled while OE is low, and the separate VCCB supply current are not modelled; only the DC pull-up drive, OE, the port-referenced input and output levels and the VCC isolation are"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
 
@@ -139,7 +139,7 @@ status = "unknown"
 parameter = "translation_timing"
 reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data rate, enable and disable times, Ioff, power-up transients, the 10 kOhm pull-up being disabled while OE is low, and the separate VCCB supply current are not modelled; only the DC pull-up drive, OE, the port-referenced input and output levels and the VCC isolation are"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
 
@@ -249,7 +249,7 @@ status = "unknown"
 parameter = "translation_timing"
 reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data rate, enable and disable times, Ioff, power-up transients, the 10 kOhm pull-up being disabled while OE is low, and the separate VCCB supply current are not modelled; only the DC pull-up drive, OE, the port-referenced input and output levels and the VCC isolation are"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
 
@@ -359,7 +359,7 @@ status = "unknown"
 parameter = "translation_timing"
 reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data rate, enable and disable times, Ioff, power-up transients, the 10 kOhm pull-up being disabled while OE is low, and the separate VCCB supply current are not modelled; only the DC pull-up drive, OE, the port-referenced input and output levels and the VCC isolation are"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
 
@@ -469,7 +469,7 @@ status = "unknown"
 parameter = "translation_timing"
 reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data rate, enable and disable times, Ioff, power-up transients, the 10 kOhm pull-up being disabled while OE is low, and the separate VCCB supply current are not modelled; only the DC pull-up drive, OE, the port-referenced input and output levels and the VCC isolation are"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
 
@@ -579,7 +579,7 @@ status = "unknown"
 parameter = "translation_timing"
 reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data rate, enable and disable times, Ioff, power-up transients, the 10 kOhm pull-up being disabled while OE is low, and the separate VCCB supply current are not modelled; only the DC pull-up drive, OE, the port-referenced input and output levels and the VCC isolation are"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
 
@@ -698,7 +698,7 @@ status = "unknown"
 parameter = "translation_timing"
 reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data rate, enable and disable times, Ioff, power-up transients, the 10 kOhm pull-up being disabled while OE is low, and the separate VCCB supply current are not modelled; only the DC pull-up drive, OE, the port-referenced input and output levels and the VCC isolation are"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
 
@@ -820,7 +820,7 @@ status = "unknown"
 parameter = "translation_timing"
 reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data rate, enable and disable times, Ioff, power-up transients, the 10 kOhm pull-up being disabled while OE is low, and the separate VCCB supply current are not modelled; only the DC pull-up drive, OE, the port-referenced input and output levels and the VCC isolation are"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
 
@@ -943,7 +943,7 @@ status = "unknown"
 parameter = "translation_timing"
 reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data rate, enable and disable times, Ioff, power-up transients, the 10 kOhm pull-up being disabled while OE is low, and the separate VCCB supply current are not modelled; only the DC pull-up drive, OE, the port-referenced input and output levels and the VCC isolation are"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
 
@@ -1068,7 +1068,7 @@ status = "unknown"
 parameter = "translation_timing"
 reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data rate, enable and disable times, Ioff, power-up transients, the 10 kOhm pull-up being disabled while OE is low, and the separate VCCB supply current are not modelled; only the DC pull-up drive, OE, the port-referenced input and output levels and the VCC isolation are"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
 
@@ -1189,7 +1189,7 @@ status = "unknown"
 parameter = "translation_timing"
 reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data rate, enable and disable times, Ioff, power-up transients, the 10 kOhm pull-up being disabled while OE is low, and the separate VCCB supply current are not modelled; only the DC pull-up drive, OE, the port-referenced input and output levels and the VCC isolation are"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
 
@@ -1309,7 +1309,7 @@ status = "unknown"
 parameter = "translation_timing"
 reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data rate, enable and disable times, Ioff, power-up transients, the 10 kOhm pull-up being disabled while OE is low, and the separate VCCB supply current are not modelled; only the DC pull-up drive, OE, the port-referenced input and output levels and the VCC isolation are"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
 
@@ -1431,7 +1431,7 @@ status = "unknown"
 parameter = "translation_timing"
 reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data rate, enable and disable times, Ioff, power-up transients, the 10 kOhm pull-up being disabled while OE is low, and the separate VCCB supply current are not modelled; only the DC pull-up drive, OE, the port-referenced input and output levels and the VCC isolation are"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
 
@@ -1553,7 +1553,7 @@ status = "unknown"
 parameter = "translation_timing"
 reason = "the one-shot edge accelerators (about 30 ns), propagation delay, data rate, enable and disable times, Ioff, power-up transients, the 10 kOhm pull-up being disabled while OE is low, and the separate VCCB supply current are not modelled; only the DC pull-up drive, OE, the port-referenced input and output levels and the VCC isolation are"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "io_port_input_thresholds"
 reason = "a card carries one input-threshold table per rail, so the table is the OE input band (0.65 x VCCA high, 0.35 x VCCA low); the A and B port I/O inputs print tighter bands (VIH = VCCI - 0.4 V or VCCI - 0.2 V, VIL = 0.15 V max) that the format cannot hold beside it"
 
@@ -1682,7 +1682,7 @@ status = "unknown"
 parameter = "enable_disable_timing"
 reason = "ten and tdis (OE to A or B), the output skew, the input and output leakage currents (II, Ioff, IOZ) and the delta-ICC supply increase are not modelled; only the DC function table, the supply-dependent input thresholds, the output levels, the propagation delay and the supply current are"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "vendor_family"
 reason = "a bare 74LVC245 or 74LVC245A value (no SN prefix) names the same function from any vendor; this card carries the Texas Instruments SN74LVC245A numbers, and other vendors print their own limits"
 
@@ -5244,7 +5244,7 @@ status = "unknown"
 parameter = "bus_timing"
 reason = "the 100 kHz I2C timing requirements (5.6), the switching delays tpv, tiv, tir (5.7) and the power-on-reset sequence (VPOR typ 1.3 V, max 2.4 V) are not modelled"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "extra_bytes"
 reason = "7.3.1 says data bytes after the first are ignored, but Figure 7-3 shows a second data byte (data 2) written to the port; the card updates the latch on every byte, the behaviour the figure shows"
 [[models.source.uncertainty]]
@@ -5575,7 +5575,7 @@ status = "unknown"
 parameter = "bus_timing"
 reason = "the 100 kHz I2C timing requirements (5.6), the switching delays tpv, tiv, tir (5.7) and the power-on-reset sequence (VPOR typ 1.3 V, max 2.4 V) are not modelled"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "extra_bytes"
 reason = "7.3.1 says data bytes after the first are ignored, but Figure 7-3 shows a second data byte (data 2) written to the port; the card updates the latch on every byte, the behaviour the figure shows"
 [[models.source.uncertainty]]
@@ -5906,7 +5906,7 @@ status = "unknown"
 parameter = "bus_timing"
 reason = "the 100 kHz I2C timing requirements (5.6), the switching delays tpv, tiv, tir (5.7) and the power-on-reset sequence (VPOR typ 1.3 V, max 2.4 V) are not modelled"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "extra_bytes"
 reason = "7.3.1 says data bytes after the first are ignored, but Figure 7-3 shows a second data byte (data 2) written to the port; the card updates the latch on every byte, the behaviour the figure shows"
 [[models.source.uncertainty]]
@@ -6244,7 +6244,7 @@ status = "unknown"
 parameter = "bus_timing"
 reason = "the 100 kHz I2C timing requirements (5.6), the switching delays tpv, tiv, tir (5.7) and the power-on-reset sequence (VPOR typ 1.3 V, max 2.4 V) are not modelled"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "extra_bytes"
 reason = "7.3.1 says data bytes after the first are ignored, but Figure 7-3 shows a second data byte (data 2) written to the port; the card updates the latch on every byte, the behaviour the figure shows"
 [[models.source.uncertainty]]
@@ -6583,7 +6583,7 @@ status = "unknown"
 parameter = "bus_timing"
 reason = "the 100 kHz I2C timing requirements (5.6), the switching delays tpv, tiv, tir (5.7) and the power-on-reset sequence (VPOR typ 1.3 V, max 2.4 V) are not modelled"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "extra_bytes"
 reason = "7.3.1 says data bytes after the first are ignored, but Figure 7-3 shows a second data byte (data 2) written to the port; the card updates the latch on every byte, the behaviour the figure shows"
 [[models.source.uncertainty]]
@@ -6922,7 +6922,7 @@ status = "unknown"
 parameter = "bus_timing"
 reason = "the 100 kHz I2C timing requirements (5.6), the switching delays tpv, tiv, tir (5.7) and the power-on-reset sequence (VPOR typ 1.3 V, max 2.4 V) are not modelled"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "extra_bytes"
 reason = "7.3.1 says data bytes after the first are ignored, but Figure 7-3 shows a second data byte (data 2) written to the port; the card updates the latch on every byte, the behaviour the figure shows"
 [[models.source.uncertainty]]
@@ -7253,7 +7253,7 @@ status = "unknown"
 parameter = "bus_timing"
 reason = "the 100 kHz I2C timing requirements (5.6), the switching delays tpv, tiv, tir (5.7) and the power-on-reset sequence (VPOR typ 1.3 V, max 2.4 V) are not modelled"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "extra_bytes"
 reason = "7.3.1 says data bytes after the first are ignored, but Figure 7-3 shows a second data byte (data 2) written to the port; the card updates the latch on every byte, the behaviour the figure shows"
 [[models.source.uncertainty]]
@@ -7584,7 +7584,7 @@ status = "unknown"
 parameter = "bus_timing"
 reason = "the 100 kHz I2C timing requirements (5.6), the switching delays tpv, tiv, tir (5.7) and the power-on-reset sequence (VPOR typ 1.3 V, max 2.4 V) are not modelled"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "extra_bytes"
 reason = "7.3.1 says data bytes after the first are ignored, but Figure 7-3 shows a second data byte (data 2) written to the port; the card updates the latch on every byte, the behaviour the figure shows"
 [[models.source.uncertainty]]
@@ -7915,7 +7915,7 @@ status = "unknown"
 parameter = "bus_timing"
 reason = "the 100 kHz I2C timing requirements (5.6), the switching delays tpv, tiv, tir (5.7) and the power-on-reset sequence (VPOR typ 1.3 V, max 2.4 V) are not modelled"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "extra_bytes"
 reason = "7.3.1 says data bytes after the first are ignored, but Figure 7-3 shows a second data byte (data 2) written to the port; the card updates the latch on every byte, the behaviour the figure shows"
 [[models.source.uncertainty]]
@@ -8254,7 +8254,7 @@ status = "unknown"
 parameter = "bus_timing"
 reason = "the 100 kHz I2C timing requirements (5.6), the switching delays tpv, tiv, tir (5.7) and the power-on-reset sequence (VPOR typ 1.3 V, max 2.4 V) are not modelled"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "extra_bytes"
 reason = "7.3.1 says data bytes after the first are ignored, but Figure 7-3 shows a second data byte (data 2) written to the port; the card updates the latch on every byte, the behaviour the figure shows"
 [[models.source.uncertainty]]
@@ -8593,7 +8593,7 @@ status = "unknown"
 parameter = "bus_timing"
 reason = "the 100 kHz I2C timing requirements (5.6), the switching delays tpv, tiv, tir (5.7) and the power-on-reset sequence (VPOR typ 1.3 V, max 2.4 V) are not modelled"
 [[models.source.uncertainty]]
-status = "assumed"
+status = "unknown"
 parameter = "extra_bytes"
 reason = "7.3.1 says data bytes after the first are ignored, but Figure 7-3 shows a second data byte (data 2) written to the port; the card updates the latch on every byte, the behaviour the figure shows"
 [[models.source.uncertainty]]
