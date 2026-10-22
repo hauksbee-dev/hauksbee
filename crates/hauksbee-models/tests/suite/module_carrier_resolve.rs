@@ -52,7 +52,8 @@ fn rp2040_package_map_preserves_identity_fallback_and_scope() {
             if full { "rp2040_qfn56" } else { "rp2040" },
             "{footprint:?}"
         );
-        assert_eq!(model.pins.len(), if full { 57 } else { 1 });
+        // The identity entry maps QSPI_SS and RUN, the two pads its straps name.
+        assert_eq!(model.pins.len(), if full { 57 } else { 2 });
         assert_eq!(
             model.params.get_str("backend"),
             identity.params.get_str("backend")

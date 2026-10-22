@@ -1612,6 +1612,28 @@ reset_pull_up_ohms = 25000.0
 "47" = "vss3"
 "48" = "vdd2"
 
+# ADC pads. STMicroelectronics STM32F072x8/xB datasheet DocID025004 Rev 5, Table 13 pin definitions
+# (datasheet pp.33-40), the single LQFP48/UFQFPN48 column: PA0 p.34, PA1-PA7 p.35, PB0/PB1 p.36 list
+# ADC_IN0..ADC_IN9 as additional functions; PC0-PC5 list ADC_IN10-15 but are not on the 48-pin
+# package (column '-'); no other pad has an ADC channel.
+# Cross-checked pad for pad against ST STM32_open_pin_data (BSD-3-Clause, STMicroelectronics/STM32_open_pin_data
+# on GitHub), file(s) mcu/STM32F072C(8-B)Tx.xml and ...Ux.xml; it agrees with the datasheet on every pad.
+# Datasheet read from target/launch/cards-datasheets/stm32f072-ds-rev5.pdf.
+
+[models.pin_capability.adc]
+basis = "STMicroelectronics STM32F072x8/xB datasheet DocID025004 Rev 5, Table 13 pin definitions (datasheet pp.33-40), LQFP48/UFQFPN48 column: PA0-PA7 pads 10-17 are ADC_IN0-IN7 (PA0 p.34, PA1-PA7 p.35), PB0 and PB1 pads 18 and 19 are ADC_IN8 and ADC_IN9 (p.36); PC0-PC5 (ADC_IN10-15) are not on the 48-pin package; every other pad has no ADC channel"
+[models.pin_capability.adc.pads]
+"10" = "ADC_IN0"
+"11" = "ADC_IN1"
+"12" = "ADC_IN2"
+"13" = "ADC_IN3"
+"14" = "ADC_IN4"
+"15" = "ADC_IN5"
+"16" = "ADC_IN6"
+"17" = "ADC_IN7"
+"18" = "ADC_IN8"
+"19" = "ADC_IN9"
+
 [models.ratings]
 # DS9826 Rev 6, Table 21 (voltage) and Table 22 (current): 25 mA per I/O,
 # 80 mA across all I/O pins.
@@ -1756,7 +1778,43 @@ backend = "renode:stm32f4"
 internal_clock = "internal 16 MHz HSI RC oscillator"
 
 [models.pins]
+"10" = "pa0"
+"11" = "pa1"
+"12" = "pa2"
+"13" = "pa3"
+"14" = "pa4"
+"15" = "pa5"
+"16" = "pa6"
+"17" = "pa7"
+"18" = "pb0"
+"19" = "pb1"
+# Pads 10-19 are the ADC1 inputs (PA0-PA7, PB0, PB1) named here so the ADC capability table below can
+# state them; STM32F401xB/xC datasheet DocID024738 Rev 10 (DS9716), Table 8, UQFN48 column. The rest of the
+# package's pads are deliberately not mapped.
 "44" = "boot0"   # BOOT0 strapping pin, UFQFPN48 pad 44 (verified vs the footprint)
+
+# ADC pads. STMicroelectronics STM32F401xB/xC datasheet DocID024738 Rev 10 (December 2017, DS9716), Table 8
+# pin definitions (datasheet pp.37-43), UQFN48 (= UFQFPN48) column: ADC1_IN0..ADC1_IN9 on PA0-PA7 (PA0-PA2 p.38,
+# PA3-PA7 p.39), PB0 and PB1 (p.39); PC0-PC5 carry ADC1_IN10-15 on the LQFP64/LQFP100 columns only (UQFN48
+# column '-'). No other pad has an ADC channel.
+# Cross-checked pad for pad against ST STM32_open_pin_data (BSD-3-Clause, STMicroelectronics/STM32_open_pin_data
+# on GitHub), file(s) mcu/STM32F401C(B-C)Ux.xml (identical to STM32F401C(D-E)Ux.xml); it agrees with the datasheet on every pad.
+# Datasheet read from target/launch/cards-datasheets/stm32f401xbxc-ds9716.pdf, fetched from
+# https://pdf.direnc.net/upload/stm32f401vct6-32-bit-flash-84mhz-mikrodenetleyici.pdf (st.com throttled).
+
+[models.pin_capability.adc]
+basis = "STMicroelectronics STM32F401xB/xC datasheet DocID024738 Rev 10 (DS9716), Table 8 pin definitions (datasheet pp.37-43), UQFN48 (UFQFPN48) column: PA0-PA7 pads 10-17 are ADC1_IN0-IN7 (PA0-PA2 p.38, PA3-PA7 p.39) and PB0/PB1 pads 18/19 are ADC1_IN8/IN9 (p.39); PC0-PC5 (ADC1_IN10-15) are not on this package; every other pad has no ADC channel"
+[models.pin_capability.adc.pads]
+"10" = "ADC1_IN0"
+"11" = "ADC1_IN1"
+"12" = "ADC1_IN2"
+"13" = "ADC1_IN3"
+"14" = "ADC1_IN4"
+"15" = "ADC1_IN5"
+"16" = "ADC1_IN6"
+"17" = "ADC1_IN7"
+"18" = "ADC1_IN8"
+"19" = "ADC1_IN9"
 
 # STM32F4 samples BOOT0 (with BOOT1=PB2) shortly after reset to pick the boot
 # memory. BOOT0=0 -> main flash (normal). BOOT0=1 -> system bootloader / SRAM.
@@ -1855,6 +1913,39 @@ level = "high"
 boot_select = false
 internal_pull = "pull_up"
 note = "NRST is active low with an embedded weak pull-up; held low it keeps the part in reset"
+
+# ADC pads, UFQFPN48 numbering (the numbering of the pad map above; the LQFP48 column of the same table
+# numbers pads 16-19, 23-29 and 35-47 differently and has no PC4 pad). STMicroelectronics STM32G474xB/xC/xE
+# datasheet DS12288 Rev 6, Table 12 pin definition (datasheet pp.57-72), UFQFPN48 column, additional-functions
+# column: ADCn_INm channels as printed ('ADC12_INm' = ADC1 and ADC2).
+# Cross-checked pad for pad against ST STM32_open_pin_data (BSD-3-Clause, STMicroelectronics/STM32_open_pin_data
+# on GitHub), file(s) mcu/STM32G474C(B-C-E)Ux.xml; it agrees with the datasheet on every pad.
+# Datasheet read from target/launch/cards-datasheets/stm32g474-ds12288.pdf.
+
+[models.pin_capability.adc]
+basis = "STMicroelectronics STM32G474xB/xC/xE datasheet DS12288 Rev 6, Table 12 pin definition (datasheet pp.57-72), UFQFPN48 column: pads 5 and 6 (PF0, PF1), 8-19 (PA0-PA7, PC4, PB0-PB2), 24-28 (PB11-PB15) and 30-31 (PA8, PA9) carry ADC channels, named as the datasheet prints them (ADC1/ADC2/ADC3/ADC4/ADC5 inputs); every other pad of the map has none. Numbering is the UFQFPN48 column, not LQFP48"
+[models.pin_capability.adc.pads]
+"5" = "ADC1_IN10"
+"6" = "ADC2_IN10"
+"8" = "ADC1_IN1/ADC2_IN1"
+"9" = "ADC1_IN2/ADC2_IN2"
+"10" = "ADC1_IN3"
+"11" = "ADC1_IN4"
+"12" = "ADC2_IN17"
+"13" = "ADC2_IN13"
+"14" = "ADC2_IN3"
+"15" = "ADC2_IN4"
+"16" = "ADC2_IN5"
+"17" = "ADC1_IN15/ADC3_IN12"
+"18" = "ADC1_IN12/ADC3_IN1"
+"19" = "ADC2_IN12"
+"24" = "ADC1_IN14/ADC2_IN14"
+"25" = "ADC1_IN11/ADC4_IN3"
+"26" = "ADC3_IN5"
+"27" = "ADC1_IN5/ADC4_IN4"
+"28" = "ADC2_IN15/ADC4_IN5"
+"30" = "ADC5_IN1"
+"31" = "ADC5_IN2"
 
 [models.ratings]
 max_pin_current_a = 0.02
@@ -2011,6 +2102,34 @@ boot_select = false
 internal_pull = "pull_up"
 note = "NRST is active low with a weak internal pull-up; held low it keeps the part in reset"
 
+# ADC pads. STMicroelectronics STM32F777xx/F778Ax/F779xx datasheet DS11243 Rev 8 (July 2025), Table 11 pin and
+# ball definitions (datasheet pp.66-85, ADC rows pp.69-71), LQFP100 column: PC0-PC3 (pads 15-18) and PA0-PA3 (22-25) carry
+# ADC1/2/3_INn, PA4-PA7 (28-31), PC4/PC5 (32, 33) and PB0/PB1 (34, 35) carry ADC1/2_INn only (PA4-PA7,
+# PC4, PC5, PB0, PB1 have no ADC3 channel).
+# Cross-checked pad for pad against ST STM32_open_pin_data (BSD-3-Clause, STMicroelectronics/STM32_open_pin_data
+# on GitHub), file(s) mcu/STM32F777VITx.xml (identical to STM32F767VITx.xml); it agrees with the datasheet on every pad.
+# Datasheet read from target/launch/cards-datasheets/stm32f777-ds11532.pdf (the file is DS11243 Rev 8).
+
+[models.pin_capability.adc]
+basis = "STMicroelectronics STM32F777xx/F778Ax/F779xx datasheet DS11243 Rev 8, Table 11 pin and ball definitions (datasheet pp.66-85, ADC rows pp.69-71), LQFP100 column: PC0-PC3 pads 15-18 and PA0-PA3 pads 22-25 are ADC1/ADC2/ADC3 inputs, PA4-PA7 pads 28-31, PC4/PC5 pads 32-33 and PB0/PB1 pads 34-35 are ADC1/ADC2 inputs; every other pad has no ADC channel (the ADC3 inputs on PF3-PF10 are not on the LQFP100 package)"
+[models.pin_capability.adc.pads]
+"15" = "ADC1_IN10/ADC2_IN10/ADC3_IN10"
+"16" = "ADC1_IN11/ADC2_IN11/ADC3_IN11"
+"17" = "ADC1_IN12/ADC2_IN12/ADC3_IN12"
+"18" = "ADC1_IN13/ADC2_IN13/ADC3_IN13"
+"22" = "ADC1_IN0/ADC2_IN0/ADC3_IN0"
+"23" = "ADC1_IN1/ADC2_IN1/ADC3_IN1"
+"24" = "ADC1_IN2/ADC2_IN2/ADC3_IN2"
+"25" = "ADC1_IN3/ADC2_IN3/ADC3_IN3"
+"28" = "ADC1_IN4/ADC2_IN4"
+"29" = "ADC1_IN5/ADC2_IN5"
+"30" = "ADC1_IN6/ADC2_IN6"
+"31" = "ADC1_IN7/ADC2_IN7"
+"32" = "ADC1_IN14/ADC2_IN14"
+"33" = "ADC1_IN15/ADC2_IN15"
+"34" = "ADC1_IN8/ADC2_IN8"
+"35" = "ADC1_IN9/ADC2_IN9"
+
 [models.ratings]
 max_pin_current_a = 0.025
 max_current_a = 0.32
@@ -2088,7 +2207,7 @@ internal_clock = "internal MSI/HSI16 RC oscillator"
 "28" = "pb5"
 "29" = "pb6"
 "30" = "pb7"
-"31" = "pb9"
+"31" = "pb9_boot0"  # PB9-BOOT0, a dedicated input-only pad shared with PB9 (DocID027973 Rev 5 Table 13, LQFP32 pin 31)
 "32" = "vss2"
 
 # STM32L011x3/x4 datasheet DocID027973 Rev 5 (the card's DS11152 basis): Table 12 Legend/abbreviations p.36, RST
@@ -2100,6 +2219,48 @@ level = "high"
 boot_select = false
 internal_pull = "pull_up"
 note = "NRST is active low with an embedded weak pull-up; held low it keeps the part in reset"
+
+# BOOT0, shared with PB9 (BOOT0 pin on category 1 devices only, RM0377 Rev 10 Table 4 footnote 1 and p.57). RM0377
+# Rev 10 sec 2.4 Table 4 "Boot modes" (p.56): with nBOOT_SEL = 0 the BOOT0 pin alone picks the boot area: pin 0 =
+# Flash program memory; pin 1 = system memory (nBOOT1 = 1) or embedded SRAM (nBOOT1 = 0). FLASH_OPTR bit 29 nBOOT_SEL
+# (p.110): "0: BOOT0 signal is defined by BOOT0 pin value (default mode)". The pin value is latched on the NRST rising
+# edge (p.57). STM32L011x3/x4 datasheet DocID027973 Rev 5: Table 13 (p.40) row PB9-BOOT0, LQFP32 pin 31, pin type I,
+# I/O structure B "Dedicated BOOT0 pin"; Table 12 legend (p.36): "Unless otherwise specified by a note, all I/Os are
+# set as floating inputs during and after reset", and the row carries no pull note, so nothing holds an undriven
+# BOOT0 net; sec 3.7 (p.24): "This pin is an input-only pin", sampled on the NRST rising edge when nBOOT_SEL is
+# reset; Table 50 (p.75) gives the BOOT0 pin VIL max 0.14 VDD. If nBOOT_SEL has been programmed to 1 the pin is
+# ignored (nBOOT0 decides), a deliberate non-default.
+[[models.straps]]
+role = "pb9_boot0"
+level = "low"
+boot_select = true
+internal_pull = "none"
+# BOOT0 pin thresholds, DocID027973 Rev 5 Table 50 I/O static characteristics p.75: VIL max 0.14 VDD, VIH min
+# 0.15 VDD + 0.56 V (both "guaranteed by characterization, not tested in production"; the other I/Os have
+# 0.3 VDD / 0.7 VDD, so a divider that is fine for them can still miss BOOT0's window).
+vil = [0.14, 0.0]
+vih = [0.15, 0.56]
+note = "BOOT0 low boots main flash; high enters the system bootloader or SRAM (nBOOT_SEL = 0, the default)"
+
+# ADC pads. STMicroelectronics STM32L011x3/x4 datasheet DocID027973 Rev 5, Table 13 pin definitions
+# (datasheet pp.37-40), LQFP32 column: PA0-PA4 (p.37) and PA5-PA7, PB0, PB1 (p.38) list ADC_IN0..ADC_IN9
+# as additional functions; no other pad has an ADC channel.
+# Cross-checked pad for pad against ST STM32_open_pin_data (BSD-3-Clause, STMicroelectronics/STM32_open_pin_data
+# on GitHub), file(s) mcu/STM32L011K(3-4)Tx.xml and STM32L021K4Tx.xml (identical); it agrees with the datasheet on every pad.
+
+[models.pin_capability.adc]
+basis = "STMicroelectronics STM32L011x3/x4 datasheet DocID027973 Rev 5, Table 13 pin definitions (datasheet pp.37-40), LQFP32 column: PA0-PA7 pads 6-13 are ADC_IN0-IN7 (PA0-PA4 p.37, PA5-PA7 p.38) and PB0/PB1 pads 14/15 are ADC_IN8/IN9 (p.38); every other pad has no ADC channel"
+[models.pin_capability.adc.pads]
+"6" = "ADC_IN0"
+"7" = "ADC_IN1"
+"8" = "ADC_IN2"
+"9" = "ADC_IN3"
+"10" = "ADC_IN4"
+"11" = "ADC_IN5"
+"12" = "ADC_IN6"
+"13" = "ADC_IN7"
+"14" = "ADC_IN8"
+"15" = "ADC_IN9"
 
 [models.ratings]
 max_pin_current_a = 0.016
@@ -3216,6 +3377,10 @@ internal_clock = "internal ring oscillator (ROSC)"
 # BOOTSEL mass-storage. The BOOTSEL button shorts it low through a series R.
 # Pad 56 = QSPI_SS verified vs rp2040_minimal and SparkFun Thing Plus RP2040.
 "56" = "qspi_ss"
+# Pad 26 = RUN (RP2040 datasheet build 3184e62-clean 2025-02-20, Table 619 Miscellaneous pins, datasheet p.613: RUN,
+# number 26, Digital In (FT), IOVDD domain, reset state Pull-Up, "Chip enable / reset"), the same pad as the
+# rp2040_qfn56 map below. The identity entry maps only the two pads it needs for straps.
+"26" = "run"
 
 # Ref: RP2040 Datasheet (build 2.21), sec 2.8.1.2 "Boot sequence" and sec 2.8.6
 # "Bootrom contents"; the GPIO_QSPI_SS pin must idle high (flash CS) for normal
@@ -3230,6 +3395,18 @@ boot_select = true   # held low at reset selects the USB bootloader (BOOTSEL)
 # strong enough to beat 50-80 kOhm (the BOOTSEL button's 1k) selects USB boot.
 internal_pull = "pull_up"
 note = "QSPI_SS (flash CS) high = boot from flash (normal); held low = USB BOOTSEL"
+
+# RUN (pad 26). RP2040 datasheet build 3184e62-clean (2025-02-20): sec 1.4.2 Pin Descriptions p.11, "Global
+# asynchronous reset pin. Reset when driven low, run when driven high. If no external reset is required, this pin can
+# be tied directly to IOVDD"; Table 619 Miscellaneous pins p.613: RUN, number 26, Digital In (FT), reset state Pull-Up,
+# "Chip enable / reset". Active low, with an internal pull-up, so an undriven RUN runs (not a floating-strap fault) and
+# only a pull-down held low keeps the chip in reset. Not a boot-select input.
+[[models.straps]]
+role = "run"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+note = "RUN is active low with an internal pull-up; held low it keeps the chip in reset"
 
 [models.coverage]
 implements = ["cortex_m0plus_firmware_execution", "boot_rom_to_main", "gpio_output_and_direction", "gpio_external_input", "uart0_tx", "virtual_clock_and_timers", "adc_external_channels_0_to_3", "i2c0_i2c1_controller_bridge", "shared_sio_register_state"]
@@ -3331,6 +3508,18 @@ level = "high"
 boot_select = true
 internal_pull = "pull_up"   # Table 348 p.304 PUE reset 1; see the identity entry
 note = "QSPI_SS (flash CS) high = boot from flash (normal); held low = USB BOOTSEL"
+
+# RUN (pad 26). RP2040 datasheet build 3184e62-clean (2025-02-20): sec 1.4.2 Pin Descriptions p.11, "Global
+# asynchronous reset pin. Reset when driven low, run when driven high. If no external reset is required, this pin can
+# be tied directly to IOVDD"; Table 619 Miscellaneous pins p.613: RUN, number 26, Digital In (FT), reset state Pull-Up,
+# "Chip enable / reset". Active low, with an internal pull-up, so an undriven RUN runs (not a floating-strap fault) and
+# only a pull-down held low keeps the chip in reset. Not a boot-select input.
+[[models.straps]]
+role = "run"
+level = "high"
+boot_select = false
+internal_pull = "pull_up"
+note = "RUN is active low with an internal pull-up; held low it keeps the chip in reset"
 
 # The on-chip core regulator's output, wired off-chip to DVDD. It comes up at
 # 1.1 V and firmware only changes it on purpose, so a board naming the net after
