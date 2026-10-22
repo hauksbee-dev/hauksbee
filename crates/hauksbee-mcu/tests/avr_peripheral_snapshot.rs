@@ -165,6 +165,86 @@ fn reserved_clkps_is_unknown_and_keeps_the_last_clock() {
     assert_eq!(mcu.frequency(), 16_000_000);
 }
 
+/// A firmware that never touches CLKPR.
+fn idle_image() -> Vec<u16> {
+    vec![0xCFFF] // rjmp .-2
+}
+
+/// DS40002061A p.46: "The device is shipped with the CKDIV8 Fuse programmed", so
+/// CLKPS resets to 0011 and a bare chip runs at fosc / 8. With the fuse stated
+/// as programmed the core starts at 2 MHz from a 16 MHz oscillator, the
+/// snapshot agrees, and no assumption is left to report.
+#[test]
+fn programmed_ckdiv8_starts_the_core_at_one_eighth() {
+    let mut mcu = AvrMcu::atmega328p_16mhz()
+        .expect("create MCU")
+        .with_ckdiv8_programmed(true);
+    assert_eq!(
+        mcu.frequency(),
+        2_000_000,
+        "follows CLKPR before any firmware"
+    );
+    let _keep = load(&mut mcu, &idle_image());
+    assert_eq!(mcu.read_data(0x61), Some(0x03));
+    mcu.run_micros(1_000).expect("run");
+    assert_eq!(mcu.frequency(), 2_000_000);
+    let snap = mcu.peripheral_config().expect("328P decodes");
+    close(&snap.clock().expect("clock").core_hz, 2e6);
+    assert!(mcu.clock_assumption().is_none());
+    // 1 ms at 2 MHz is 2000 cycles (plus instruction-boundary overshoot).
+    let before = mcu.current_cycle();
+    mcu.run_micros(1_000).expect("run a millisecond");
+    let ran = mcu.current_cycle() - before;
+    assert!((2_000..2_000 + 8).contains(&ran), "ran {ran} cycles");
+}
+
+/// The firmware's own CLKPR write (Table 9-17: CLKPS = 0000 is /1) overrides
+/// the fuse's reset value, and a machine reset brings the fuse value back.
+#[test]
+fn clkpr_write_overrides_the_fuse_and_reset_restores_it() {
+    let mut p = Vec::new();
+    write(&mut p, 0x61, 0x80);
+    write(&mut p, 0x61, 0x00);
+    p.push(0xCFFF);
+    let mut mcu = AvrMcu::atmega328p_16mhz()
+        .expect("create MCU")
+        .with_ckdiv8_programmed(true);
+    let _keep = load(&mut mcu, &p);
+    mcu.run_micros(1_000).expect("run");
+    assert_eq!(mcu.frequency(), 16_000_000);
+    mcu.reset().expect("reset");
+    assert_eq!(
+        mcu.frequency(),
+        2_000_000,
+        "CLKPS is 0011 again after reset"
+    );
+    let snap = mcu.peripheral_config().expect("328P decodes");
+    close(&snap.clock().expect("clock").core_hz, 2e6);
+}
+
+/// Unstated, the fuse is an ASSUMPTION (unprogrammed, the Arduino state) and the
+/// backend says so; stated as unprogrammed it is a fact and nothing is reported.
+/// Parts with no clock decode assume nothing.
+#[test]
+fn the_ckdiv8_assumption_is_reported_until_stated() {
+    let mcu = AvrMcu::atmega328p_16mhz().expect("create MCU");
+    let note = mcu.clock_assumption().expect("assumption reported");
+    assert!(
+        note.contains("CKDIV8") && note.contains("16000000"),
+        "{note}"
+    );
+    assert_eq!(mcu.frequency(), 16_000_000);
+
+    let stated = AvrMcu::atmega328p_16mhz()
+        .expect("create MCU")
+        .with_ckdiv8_programmed(false);
+    assert!(stated.clock_assumption().is_none());
+    assert_eq!(stated.frequency(), 16_000_000);
+
+    let other = AvrMcu::new("atmega2560", 16_000_000).expect("create MCU");
+    assert!(other.clock_assumption().is_none());
+}
+
 /// Parts without a verified register map decode nothing rather than guess.
 #[test]
 fn other_avr_parts_decode_nothing() {

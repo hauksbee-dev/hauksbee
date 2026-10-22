@@ -717,9 +717,21 @@ pub struct AvrMcu {
     /// [`Self::follow_clock`]), else the construction frequency.
     frequency_hz: u64,
 
+    /// The oscillator the board fits, in Hz: the frequency given at
+    /// construction, before any `CLKPR` division.
+    oscillator_hz: u64,
+
     /// The peripheral decode for this part (empty when no verified register map
     /// is known): see [`atmega48_328_decode`].
     decode: Vec<DecodeBlock>,
+
+    /// The `CKDIV8` fuse, when the caller stated it: `Some(true)` programmed
+    /// (the factory state, DS40002061A p.46: CLKPS resets to 0011, divide by 8),
+    /// `Some(false)` unprogrammed (CLKPS resets to 0000, as on a board whose
+    /// bootloader programmer cleared it). `None` is the default and an
+    /// ASSUMPTION: unprogrammed, the Arduino-board state, reported through
+    /// [`Mcu::clock_assumption`] so a verdict never hides it.
+    ckdiv8: Option<bool>,
 
     /// Ports whose IRQ hooks are currently registered.
     hooked_ports: Vec<char>,
@@ -795,8 +807,11 @@ fn is_atmega48_328_family(mcu_name: &str) -> bool {
 ///
 /// * Clock: `CLKPR` (0x61, CLKPS3:0 = bits 3:0, p.46); Table 9-17 (p.47): 0 to 8
 ///   divide by 1, 2, 4 ... 256, 9 to 15 are reserved and decode `Unknown`.
-///   `CLKPCE` (bit 7) is not part of the division. The CKDIV8 fuse is taken as
-///   unprogrammed (CLKPS resets to 0, p.46), which is how Arduino boards ship.
+///   `CLKPCE` (bit 7) is not part of the division. A bare factory chip ships
+///   with CKDIV8 PROGRAMMED (CLKPS resets to 0011, divide by 8, p.46); the
+///   fuse is taken as unprogrammed (CLKPS resets to 0, the Arduino-board state)
+///   unless [`AvrMcu::with_ckdiv8_programmed`] states it, and
+///   [`Mcu::clock_assumption`] reports the assumption.
 /// * USART0: UCSR0A 0xC0 (U2X0 bit 1), UCSR0B 0xC1 (UCSZ02 bit 2), UCSR0C 0xC2
 ///   (UMSEL0 7:6, USBS0 bit 3, UCSZ0 2:1), UBRR0 0xC4/0xC5 (UBRR0H holds
 ///   bits 11:8; pp.200-204). Baud, Table 20-1 (p.182): fosc / (16 (UBRR + 1))
@@ -814,6 +829,10 @@ fn is_atmega48_328_family(mcu_name: &str) -> bool {
 ///   prescaler 1, 4, 16, 64. SCL = fCPU / (16 + 2 TWBR x prescaler) (p.222).
 ///
 /// Timers and the ADC are not decoded.
+/// Data-space address of `CLKPR` on the ATmega48/88/168/328 (Register Summary,
+/// DS40002061A p.623).
+const CLKPR_ADDRESS: usize = 0x61;
+
 fn atmega48_328_decode(fosc: u64) -> Vec<DecodeBlock> {
     fn block(
         kind: BlockKind,
@@ -1027,11 +1046,13 @@ impl AvrMcu {
             state,
             callback_ptr,
             frequency_hz: frequency,
+            oscillator_hz: frequency,
             decode: if is_atmega48_328_family(mcu_name) {
                 atmega48_328_decode(frequency)
             } else {
                 Vec::new()
             },
+            ckdiv8: None,
             hooked_ports: Vec::new(),
             firmware_loaded: false,
             cycle_carry: 0,
@@ -1049,6 +1070,37 @@ impl AvrMcu {
     /// As [`Self::new`].
     pub fn atmega328p_16mhz() -> Result<Self> {
         Self::new("atmega328p", 16_000_000)
+    }
+
+    /// State the `CKDIV8` fuse. `frequency` given to [`Self::new`] is then the
+    /// oscillator, and a programmed fuse (the factory state of a bare chip,
+    /// DS40002061A p.46) starts the core at the oscillator divided by 8 because
+    /// `CLKPR` resets to `CLKPS = 0011`; an unprogrammed one starts at the
+    /// oscillator. Without this call the fuse is assumed unprogrammed and
+    /// [`Mcu::clock_assumption`] says so. A part with no verified clock decode
+    /// ignores the setting.
+    #[must_use]
+    pub fn with_ckdiv8_programmed(mut self, programmed: bool) -> Self {
+        self.ckdiv8 = Some(programmed);
+        self.apply_clkpr_reset();
+        self
+    }
+
+    /// Put `CLKPR` at its reset value for the fuse and follow it. The reset
+    /// value is `CLKPS = 0011` while CKDIV8 is programmed, else 0 (p.46).
+    fn apply_clkpr_reset(&mut self) {
+        if self.decode.is_empty() {
+            return;
+        }
+        let value = if self.ckdiv8 == Some(true) {
+            0x03
+        } else {
+            0x00
+        };
+        // SAFETY: `avr` is live, and `CLKPR`'s data-space address is below
+        // simavr's `ramend` on every part with a decode.
+        unsafe { *(*self.avr).data.add(CLKPR_ADDRESS) = value };
+        self.follow_clock();
     }
 
     /// Set the supply/reference rails in volts (defaults are 5V). The ADC
@@ -1326,6 +1378,8 @@ impl Mcu for AvrMcu {
             .flatten();
         self.entry_reached = false;
         self.pcs = crate::traits::PcSampler::default();
+        // The image starts from the fuse's CLKPR reset value.
+        self.apply_clkpr_reset();
         // Re-anchor the absolute run target (and drop any pending sub-cycle
         // carry) at the counter the freshly loaded image starts from, so a
         // reload doesn't inherit the previous image's timing remainders.
@@ -1346,6 +1400,8 @@ impl Mcu for AvrMcu {
         // killing the server. `avr_reset` also recovers a cpu_Crashed/Done
         // core (state back to cpu_Running) and zeroes `avr->cycle`.
         unsafe { ffi::avr_reset(self.avr) };
+        // `avr_reset` zeroed CLKPR; on silicon it comes back as the fuse says.
+        self.apply_clkpr_reset();
         // The cycle counter restarted, so the timing anchors must too.
         self.run_target = 0;
         self.cycle_carry = 0;
@@ -1458,6 +1514,19 @@ impl Mcu for AvrMcu {
 
     fn frequency(&self) -> u64 {
         self.frequency_hz
+    }
+
+    fn clock_assumption(&self) -> Option<String> {
+        if self.decode.is_empty() || self.ckdiv8.is_some() {
+            return None;
+        }
+        Some(format!(
+            "The CKDIV8 fuse is assumed unprogrammed (an Arduino-style board), so the core runs \
+             at the {} Hz oscillator until the firmware writes CLKPR. A bare factory chip ships \
+             with CKDIV8 programmed and starts at one eighth of that (DS40002061A p.46); state \
+             the fuse to model it.",
+            self.oscillator_hz
+        ))
     }
 
     fn peripheral_config(&mut self) -> Option<PeripheralConfig> {

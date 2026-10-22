@@ -1086,6 +1086,34 @@ pub struct StartupScale {
     pub mask: u32,
     /// Microseconds per count.
     pub us_per_count: f64,
+    /// Bits of the same register that multiply the delay when any is set
+    /// (RP2040 `XOSC_STARTUP.X4`, bit 20). Zero means no multiplier bit.
+    #[serde(default)]
+    pub multiplier_mask: u32,
+    /// The factor applied while a `multiplier_mask` bit is set.
+    #[serde(default = "StartupScale::no_multiplier")]
+    pub multiplier: f64,
+}
+
+impl StartupScale {
+    /// Serde default for [`Self::multiplier`]: the identity.
+    const fn no_multiplier() -> f64 {
+        1.0
+    }
+
+    /// The startup time in microseconds for the value `register` currently
+    /// holds: the masked count times the per-count time, times the multiplier
+    /// when its bit is set. The Renode readiness script computes the same
+    /// expression; this is the reference the tests pin it against.
+    #[must_use]
+    pub fn startup_us(&self, register: u32) -> f64 {
+        let base = f64::from(register & self.mask) * self.us_per_count;
+        if register & self.multiplier_mask != 0 {
+            base * self.multiplier
+        } else {
+            base
+        }
+    }
 }
 
 /// One `[[soc.clock_ready]]` entry: an oscillator or PLL whose ready bit rises
@@ -1294,7 +1322,7 @@ mod tests {
         assert_eq!(e.free_vars(), vec!["cfgr".to_string(), "hsi".to_string()]);
     }
 
-    /// RM0090 Rev 22 pp.164-168 (PLLCFGR, CFGR): HSI 16 MHz, PLLM = 16,
+    /// RM0090 Rev 22 pp.227-231 (s7.3.2 PLLCFGR, s7.3.3 CFGR): HSI 16 MHz, PLLM = 16,
     /// PLLN = 336, PLLP = /2, SYSCLK = PLL, HPRE = /1, PPRE1 = /4, PPRE2 = /2.
     /// VCO = 16 MHz x 336 / 16 = 336 MHz, SYSCLK = 168 MHz, APB1 = 42 MHz,
     /// APB2 = 84 MHz; timers x2 on both buses because the prescalers are not 1:
@@ -1376,7 +1404,7 @@ mod tests {
 
     #[test]
     fn reserved_encoding_is_unknown_not_a_guess() {
-        // SW = 0b11 is reserved on the F4 (RM0090 p.166).
+        // SW = 0b11 is reserved on the F4 (RM0090 Rev 22 p.231).
         let clock = decode_clock(&[f4_block()], &mut f4_image(0x0000_000C)).unwrap();
         let why = clock.core_hz.reason().expect("reserved SW must be unknown");
         assert!(why.contains("reserved"), "{why}");

@@ -58,7 +58,12 @@ fn entries_literal(config: &RenodeConfig) -> String {
     for e in &config.clock_ready {
         let scale = e.startup_scale.map_or_else(
             || "None".to_string(),
-            |s| format!("({}, {}, {:?})", s.register, s.mask, s.us_per_count),
+            |s| {
+                format!(
+                    "({}, {}, {:?}, {}, {:?})",
+                    s.register, s.mask, s.us_per_count, s.multiplier_mask, s.multiplier
+                )
+            },
         );
         let needs: Vec<String> = e
             .needs
@@ -133,7 +138,10 @@ def ready(p, name):
             return False
     su = e['su']
     if e['scale'] is not None:
-        su = (p.ReadDoubleWord(e['scale'][0]) & e['scale'][1]) * e['scale'][2]
+        r = p.ReadDoubleWord(e['scale'][0])
+        su = (r & e['scale'][1]) * e['scale'][2]
+        if (r & e['scale'][3]) != 0:
+            su = su * e['scale'][4]
     return now_us() - t >= su
 
 def on_read(p, pname, offset, value):
@@ -455,7 +463,7 @@ impl RenodeBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::periph_snapshot::{ClockNeed, ClockReady, RegisterCondition};
+    use crate::periph_snapshot::{ClockNeed, ClockReady, RegisterCondition, StartupScale};
 
     fn config_with(ready: Vec<ClockReady>) -> RenodeConfig {
         let mut c = crate::renode::RenodeConfig::stm32f103();
@@ -509,5 +517,40 @@ mod tests {
         assert!(s.contains("'su': 2000.0"), "{s}");
         assert!(s.contains("'needs': [('hse', (4, 65536, 65536))]"), "{s}");
         assert!(readiness_script(&c, true).contains("b.hkb_ext = True"));
+    }
+
+    /// The RP2040 XOSC delay: `STARTUP.DELAY` counts of 256 crystal cycles,
+    /// times 4 while `STARTUP.X4` (bit 20) is set. The script must carry both
+    /// the multiplier bit and the factor, and apply them to the live register.
+    #[test]
+    fn script_carries_the_startup_multiplier() {
+        let c = config_with(vec![ClockReady {
+            peripheral: "xosc".into(),
+            name: "xosc".into(),
+            enable_register: 0,
+            enable_mask: 0xFF_F000,
+            enable_value: Some(0xFA_B000),
+            ready_register: 4,
+            ready_mask: 0x8000_0000,
+            requires_external: true,
+            startup_us: 1003.0,
+            startup_scale: Some(StartupScale {
+                register: 0x0C,
+                mask: 0x3FFF,
+                us_per_count: 256.0 / 12.0,
+                multiplier_mask: 0x10_0000,
+                multiplier: 4.0,
+            }),
+            needs: vec![],
+        }]);
+        let s = readiness_script(&c, true);
+        assert!(
+            s.contains("'scale': (12, 16383, 21.333333333333332, 1048576, 4.0)"),
+            "{s}"
+        );
+        assert!(
+            s.contains("e['scale'][3]") && s.contains("e['scale'][4]"),
+            "{s}"
+        );
     }
 }

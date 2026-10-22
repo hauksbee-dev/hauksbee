@@ -313,9 +313,9 @@ command = "sysbus.timer14 Frequency {hz}"
 # ── OSCILLATOR READINESS ──────────────────────────────────────────────────────
 # RCC_CR (RM0008 s7.3.1, pp.99-100): HSEON bit 16, HSERDY bit 17, PLLON bit 24,
 # PLLRDY bit 25. HSERDY never rises on a board with no crystal; the PLL waits
-# for HSE only while CFGR.PLLSRC selects it. DS5319 rev 20 gives a typical 2 ms
-# HSE startup and a 200 us maximum PLL lock time (carried from the descriptor's
-# previous inline model).
+# for HSE only while CFGR.PLLSRC selects it. DS5319 Rev 20 gives a typical 2 ms
+# HSE startup (Table 22, tSU(HSE), pdf p.52; typical, not a maximum, and it
+# varies with the crystal) and a 200 us maximum PLL lock time (tLOCK, pdf p.56).
 [[soc.clock_ready]]
 peripheral = "rcc"
 name = "hse"

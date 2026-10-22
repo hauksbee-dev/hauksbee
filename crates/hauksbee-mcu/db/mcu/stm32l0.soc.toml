@@ -114,31 +114,36 @@ controllers = []
 
 # ── CLOCK TREE (decoded from the live registers) ──────────────────────────────
 # RM0377 Rev 10 s7.3: RCC_CR @ +0x00 (pp.181-183), RCC_ICSCR @ +0x04 (p.184),
-# RCC_CFGR @ +0x0C (pp.185-186).
+# RCC_CFGR @ +0x0C (pp.185-187; SWS and HPRE are on p.187).
 #   MSIRANGE (ICSCR 15:13): 0 65.536 kHz, 1 131.072 kHz, 2 262.144 kHz,
 #     3 524.288 kHz, 4 1.048 MHz, 5 2.097 MHz (reset), 6 4.194 MHz; 7 reserved.
 #   SWS/SW (CFGR 3:2 / 1:0): 00 MSI, 01 HSI16, 10 HSE, 11 PLL.
-#   HSI16DIVEN (CR bit 3): HSI16 divided by 4 (p.182).
+#   HSI16DIVEN (CR bit 3): HSI16 divided by 4 (p.182). Figure 17 (p.171) puts
+#     the divider ("/1,4") before the HSI16 node, so the divided clock is what
+#     feeds the PLLSRC mux, the SYSCLK mux and the USART/LPUART/I2C kernel muxes.
+#     The hardware status bit is HSI16DIVF (bit 4), which lags a write; the
+#     enable bit is used here because it is what firmware sets.
 #   PLLSRC (CFGR bit 16): 0 HSI16, 1 HSE. PLLMUL (21:18): x3 x4 x6 x8 x12 x16
 #     x24 x32 x48 (p.186); PLLDIV (23:22): 01 /2, 10 /3, 11 /4, 00 not allowed
 #     (p.185).
 #   HPRE (7:4): 0xxx /1, 1000 /2 ... 1011 /16, 1100 /64 ... 1111 /512.
 #   PPRE1 (10:8), PPRE2 (13:11): 0xx /1, 100 /2 ... 111 /16.
 # Timer clock = the APB clock if its prescaler is 1, else twice it (p.172).
-# The PLL source taken from HSI16 is not divided by HSI16DIVEN here: the manual
-# text does not say (the clock-tree figure would). The HSE value is the Nucleo
-# 8 MHz; a board with another crystal needs that value passed in.
+# `hsi` is therefore the HSI16 node after the divider, and every consumer below
+# (PLL input, SYSCLK, `clk_hsi` in the USART kernel-clock muxes) uses it. The
+# HSE value is the Nucleo 8 MHz; a board with another crystal needs that value
+# passed in.
 [[soc.decode]]
 kind = "clock"
 name = "rcc"
 registers = { cr = 0x40021000, icscr = 0x40021004, cfgr = 0x4002100C }
 vars = [
     ["msi", "pick(bits(icscr, 15, 13), 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304)"],
-    ["hsi", "16000000"],
+    ["hsi", "16000000 / if(bit(cr, 3), 4, 1)"],
     ["hse", "8000000"],
     ["pll_in", "if(bit(cfgr, 16), hse, hsi)"],
     ["pll_out", "pll_in * pick(bits(cfgr, 21, 18), 3, 4, 6, 8, 12, 16, 24, 32, 48) / pick(bits(cfgr, 23, 22) - 1, 2, 3, 4)"],
-    ["sysclk", "pick(bits(cfgr, 3, 2), msi, if(bit(cr, 3), hsi / 4, hsi), hse, pll_out)"],
+    ["sysclk", "pick(bits(cfgr, 3, 2), msi, hsi, hse, pll_out)"],
     ["hclk", "sysclk / pick(bits(cfgr, 7, 4), 1, 1, 1, 1, 1, 1, 1, 1, 2, 4, 8, 16, 64, 128, 256, 512)"],
     ["pclk1_div", "pick(bits(cfgr, 10, 8), 1, 1, 1, 1, 2, 4, 8, 16)"],
     ["pclk1", "hclk / pclk1_div"],
@@ -179,8 +184,8 @@ command = "sysbus.timer22 Frequency {hz}"
 
 # ── OSCILLATOR READINESS ──────────────────────────────────────────────────────
 # RCC_CR (RM0377 s7.3.1, pp.181-183): HSEON bit 16, HSERDY bit 17, PLLON bit 24,
-# PLLRDY bit 25. HSE startup 2 ms (DS10685 p.81, tSU(HSE)); PLL lock 160 us
-# maximum (DS10685 p.86, tLOCK). The PLL waits for HSE only while CFGR.PLLSRC
+# PLLRDY bit 25. HSE startup 2 ms (DS10690 Rev 7 p.81, tSU(HSE)); PLL lock 160 us
+# maximum (DS10690 Rev 7 p.86, tLOCK). The PLL waits for HSE only while CFGR.PLLSRC
 # selects it.
 [[soc.clock_ready]]
 peripheral = "rcc"

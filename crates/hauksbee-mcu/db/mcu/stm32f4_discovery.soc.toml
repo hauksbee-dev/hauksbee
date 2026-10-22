@@ -106,16 +106,17 @@ controllers = ["i2c1"]
 controllers = ["spi2", "spi3"]
 
 # ── CLOCK TREE (decoded from the live registers) ──────────────────────────────
-# RM0090 Rev 22 s6.3: RCC_CR @ +0x00 (pp.162-163), RCC_PLLCFGR @ +0x04
-# (pp.164-165), RCC_CFGR @ +0x08 (pp.166-168).
+# RM0090 Rev 22 chapter 7 (RCC for STM32F405/407/415/417; chapter 6 is the
+# F42x/F43x variant): RCC_CR @ +0x00 (s7.3.1, p.225), RCC_PLLCFGR @ +0x04
+# (s7.3.2, p.227), RCC_CFGR @ +0x08 (s7.3.3, p.229; SWS table p.231).
 #   SWS (3:2): 00 HSI, 01 HSE, 10 PLL (11 not applicable).
 #   PLLSRC (PLLCFGR bit 22): 0 HSI, 1 HSE. PLLM (5:0), PLLN (14:6),
 #   PLLP (17:16): 00 /2, 01 /4, 10 /6, 11 /8.
 #   f(VCO) = f(in) x PLLN / PLLM, f(PLL out) = f(VCO) / PLLP.
 #   HPRE (7:4): 0xxx /1, 1000 /2 ... 1011 /16, 1100 /64 ... 1111 /512.
 #   PPRE1 (12:10), PPRE2 (15:13): 0xx /1, 100 /2 ... 111 /16.
-# Timer clock = APB clock if its prescaler is 1, otherwise x2 (RM0090 s6.2,
-# Figure 21 notes). HSI is 16 MHz (s6.2.2). The HSE value is the Discovery
+# Timer clock = APB clock if its prescaler is 1, otherwise x2 (RM0090 s7.2,
+# Figure 21 p.217, notes p.218). HSI is 16 MHz (s7.2.2, p.219). The HSE value is the Discovery
 # board's 8 MHz crystal; a board with another crystal needs that value passed in.
 [[soc.decode]]
 kind = "clock"
@@ -190,7 +191,7 @@ var = "tim_apb1"
 command = "sysbus.timer14 Frequency {hz}"
 
 # ── OSCILLATOR READINESS ──────────────────────────────────────────────────────
-# RCC_CR (RM0090 s6.3.1, pp.162-163): HSEON bit 16, HSERDY bit 17, PLLON bit 24,
+# RCC_CR (RM0090 s7.3.1, p.225): HSEON bit 16, HSERDY bit 17, PLLON bit 24,
 # PLLRDY bit 25. Renode's STM32F4_RCC raises HSERDY and PLLRDY the instant the
 # enable bit is set, crystal or not; this model replaces that. HSE startup is
 # 2 ms typical (DS8626 Rev 12, p.103, tSU(HSE)); PLL lock is 300 us maximum at a
@@ -219,7 +220,7 @@ needs = [{ entry = "hse", when = { register = 0x04, mask = 0x400000, value = 0x4
 # ── PERIPHERAL SNAPSHOT DECODE ────────────────────────────────────────────────
 # USART (RM0090 s30.3.4 Equation 1, p.973: baud = fCK / (8 x (2 - OVER8) x
 # USARTDIV); BRR @ +0x08 (p.1005: mantissa 15:4, fraction 3:0, with fraction
-# bit 3 unused when OVER8 = 1), CR1 @ +0x0C (p.1005: M bit 12, OVER8 bit 15),
+# bit 3 unused when OVER8 = 1), CR1 @ +0x0C (M bit 12, OVER8 bit 15: p.1006),
 # CR2 @ +0x10 (p.1008: STOP 13:12). With OVER8 = 0 that is fCK / BRR; with
 # OVER8 = 1 it is fCK / (8 x mantissa + BRR[2:0]). Memory map: Table 1, pp.66-67.
 # USART1 and USART6 are on APB2, USART2/3 on APB1.

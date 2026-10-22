@@ -631,6 +631,16 @@ pub trait Mcu {
         None
     }
 
+    /// A clock-tree fact this backend had to ASSUME because nothing the user
+    /// supplied determines it (for example an AVR's `CKDIV8` fuse, which no
+    /// firmware image carries), as a whole sentence for the report, or `None`
+    /// when nothing was assumed. The same coverage-honesty contract as
+    /// [`Mcu::timing_limitation`]: a green time-based result is read together
+    /// with the assumption underneath it.
+    fn clock_assumption(&self) -> Option<String> {
+        None
+    }
+
     /// Whether this backend gates the part's external-oscillator readiness
     /// (HSE, a crystal-fed PLL, XOSC) on the board really having a crystal, so
     /// a firmware wait loop on `HSERDY` stalls on a board without one as it

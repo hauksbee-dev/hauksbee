@@ -436,11 +436,14 @@ auto_reload_register = 0x2C
 # must be 0), which is fCK / (8 x BRR[15:4] + BRR[2:0]). Registers (Table 112,
 # p.765): CR1 +0x00 (M0 bit 12, OVER8 bit 15, M1 bit 28; p.744-745), CR2 +0x04
 # (STOP 13:12, p.749: 00 1, 01 0.5, 10 2, 11 1.5), BRR +0x0C. Word length
-# M[1:0]: 00 = 8 bits, 01 = 9, 10 = 7 (p.744). Only USART1 has a selectable
-# kernel clock: RCC_CFGR3 @ +0x30 USART1SW[1:0] (p.132-133): 00 PCLK (default),
-# 01 SYSCLK, 10 LSE (32.768 kHz), 11 HSI.
+# M[1:0]: 00 = 8 bits, 01 = 9, 10 = 7 (p.744). USART1 and USART2 have a
+# selectable kernel clock in RCC_CFGR3 @ +0x30 (register p.132, fields p.133):
+# USART1SW[1:0] and USART2SW[17:16] (USART2SW is "available only on STM32F07x
+# and STM32F09x", which includes this F072): 00 PCLK (default), 01 SYSCLK,
+# 10 LSE (32.768 kHz), 11 HSI. USART3SW[19:18] exists only on the F09x, so
+# USART3 and USART4 stay on PCLK.
 #
-# SPI (s28.9.1, pp.815-816): CR1 +0x00, BR[2:0] bits 5:3 gives fPCLK / 2^(BR+1),
+# SPI (s28.9.1, p.815): CR1 +0x00, BR[2:0] bits 5:3 gives fPCLK / 2^(BR+1),
 # CPOL bit 1, CPHA bit 0.
 #
 # Timers: PSC +0x28 (16 bits), ARR +0x2C (16 bits, TIM2 32 bits: pp.395, 462-463,
@@ -459,9 +462,9 @@ vars = [
 [[soc.decode]]
 kind = "uart"
 name = "usart2"
-registers = { cr1 = 0x40004400, cr2 = 0x40004404, brr = 0x4000440C }
+registers = { cr1 = 0x40004400, cr2 = 0x40004404, brr = 0x4000440C, cfgr3 = 0x40021030 }
 vars = [
-    ["baud", "(clk_pclk) / if(bit(cr1, 15), bits(brr, 15, 4) * 8 + bits(brr, 2, 0), bits(brr, 15, 0))"],
+    ["baud", "(pick(bits(cfgr3, 17, 16), clk_pclk, clk_sysclk, 32768, clk_hsi)) / if(bit(cr1, 15), bits(brr, 15, 4) * 8 + bits(brr, 2, 0), bits(brr, 15, 0))"],
     ["data_bits", "pick(bit(cr1, 12) + 2 * bit(cr1, 28), 8, 9, 7)"],
     ["stop_bits", "pick(bits(cr2, 13, 12), 1, 0.5, 2, 1.5)"],
 ]

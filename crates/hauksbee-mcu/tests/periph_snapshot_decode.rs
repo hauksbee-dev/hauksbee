@@ -205,6 +205,26 @@ fn f072_usart1_follows_its_clock_switch() {
     }
 }
 
+/// USART2SW (RCC_CFGR3 17:16, RM0091 p.133, "available only on STM32F07x and
+/// STM32F09x"): 00 PCLK, 01 SYSCLK, 10 LSE, 11 HSI, independent of USART1SW.
+/// With PCLK 24 MHz, SYSCLK 48 MHz, HSI 8 MHz and BRR 0x100 (256) the baud is
+/// the selected clock / 256. USART3 has no switch on the F072 (USART3SW is
+/// F09x only), so it stays on PCLK whatever bits 19:18 hold.
+#[test]
+fn f072_usart2_follows_its_clock_switch() {
+    for (sw, fck) in [(0u32, 24e6), (1, 48e6), (2, 32768.0), (3, 8e6)] {
+        // USART1SW stays 00 (PCLK) while USART2SW moves.
+        let mut regs = f072_regs(sw << 16);
+        regs.extend([(0x4000_440C, 0x100), (0x4000_4400, 0), (0x4000_4404, 0)]);
+        regs.extend([(0x4001_380C, 0x100), (0x4001_3800, 0), (0x4001_3804, 0)]);
+        regs.extend([(0x4000_480C, 0x100), (0x4000_4800, 0), (0x4000_4804, 0)]);
+        let p = decode(&RenodeConfig::stm32f072(), &regs);
+        close(&uart(&p, "usart2").baud, fck / 256.0);
+        close(&uart(&p, "usart1").baud, 24e6 / 256.0);
+        close(&uart(&p, "usart3").baud, 24e6 / 256.0);
+    }
+}
+
 /// Word length is M1:M0 (RM0091 p.744): 01 = 9 bits, 10 = 7 bits, and the
 /// reserved 11 stays unknown instead of being guessed.
 #[test]
@@ -231,12 +251,14 @@ fn f072_word_length_encodings() {
 fn f072_unreadable_register_only_poisons_its_dependants() {
     let mut regs = f072_regs(0);
     regs.retain(|(a, _)| *a != F072_CFGR3);
+    regs.extend([(0x4000_4800, 0), (0x4000_4804, 0), (0x4000_480C, 0xD0)]);
     regs.extend([(0x4000_440C, 0xD0), (0x4000_4400, 0), (0x4000_4404, 0)]);
     regs.extend([(0x4001_380C, 0xD0), (0x4001_3800, 0), (0x4001_3804, 0)]);
     let p = decode(&RenodeConfig::stm32f072(), &regs);
-    // USART1 needs CFGR3 for its kernel clock; USART2 does not.
+    // USART1 and USART2 need CFGR3 for their kernel clocks; USART3 does not.
     assert!(uart(&p, "usart1").baud.is_unknown());
-    close(&uart(&p, "usart2").baud, 24e6 / 208.0);
+    assert!(uart(&p, "usart2").baud.is_unknown());
+    close(&uart(&p, "usart3").baud, 24e6 / 208.0);
     close(&p.clock().expect("clock").core_hz, 48e6);
 }
 
@@ -248,6 +270,7 @@ fn f072_reset_state_and_zero_divider() {
         (F072_CR, 0x83),
         (F072_CFGR, 0),
         (F072_CFGR2, 0),
+        (F072_CFGR3, 0),
         (0x4000_440C, 0),
         (0x4000_4400, 0),
         (0x4000_4404, 0),
@@ -313,6 +336,59 @@ fn l0_pll_16mhz_usart_spi_timers() {
 fn l0_usart2_follows_ccipr() {
     for (sel, fck) in [(0u32, 16e6), (1, 16e6), (2, 16e6), (3, 32768.0)] {
         let mut regs = l0_regs(sel << 2);
+        regs.extend([(0x4000_440C, 64), (0x4000_4400, 0), (0x4000_4404, 0)]);
+        let p = decode(&RenodeConfig::stm32l0(), &regs);
+        close(&uart(&p, "usart2").baud, fck / 64.0);
+    }
+}
+
+/// HSI16DIVEN (RCC_CR bit 3, RM0377 p.182) divides HSI16 by 4 before the HSI16
+/// node of Figure 17 (p.171), so the divided clock is what the SYSCLK mux, the
+/// PLLSRC mux and the USART kernel mux see.
+const L0_HSI16DIVEN: u32 = 1 << 3;
+
+/// SYSCLK straight from HSI16 (SW = SWS = 01): 16 MHz, or 4 MHz with the divider.
+#[test]
+fn l0_hsi16diven_divides_sysclk() {
+    for (cr, want) in [(0x83u32, 16e6), (0x83 | L0_HSI16DIVEN, 4e6)] {
+        let regs = vec![
+            (L0_CR, cr),
+            (L0_ICSCR, 5 << 13),
+            (L0_CFGR, (1 << 2) | 1),
+            (L0_CCIPR, 0),
+        ];
+        let p = decode(&RenodeConfig::stm32l0(), &regs);
+        close(&p.clock().expect("clock").core_hz, want);
+    }
+}
+
+/// PLL fed by HSI16 (PLLSRC = 0), x4 (code 1 at 21:18) and /2 (code 01 at
+/// 23:22), SW = SWS = 3: 16 x 4 / 2 = 32 MHz undivided; with HSI16DIVEN the
+/// PLL input is 4 MHz, so 4 x 4 / 2 = 8 MHz.
+#[test]
+fn l0_hsi16diven_divides_the_pll_input() {
+    let cfgr = (1 << 18) | (1 << 22) | (3 << 2) | 3;
+    for (cr, want) in [(0x83u32, 32e6), (0x83 | L0_HSI16DIVEN, 8e6)] {
+        let regs = vec![
+            (L0_CR, cr),
+            (L0_ICSCR, 5 << 13),
+            (L0_CFGR, cfgr),
+            (L0_CCIPR, 0),
+        ];
+        let p = decode(&RenodeConfig::stm32l0(), &regs);
+        close(&p.clock().expect("clock").core_hz, want);
+    }
+}
+
+/// USART2SEL = 10 (HSI16, p.209) takes the divided HSI16: with HSI16DIVEN a
+/// BRR of 64 gives 4e6 / 64 instead of 16e6 / 64. The PLL setting of the
+/// surrounding image (HSE-fed, 16 MHz) does not matter for this kernel clock.
+#[test]
+fn l0_usart_hsi16_kernel_clock_is_divided() {
+    for (cr, fck) in [(0x83u32, 16e6), (0x83 | L0_HSI16DIVEN, 4e6)] {
+        let mut regs = l0_regs(0b10 << 2);
+        regs.retain(|(a, _)| *a != L0_CR);
+        regs.push((L0_CR, cr));
         regs.extend([(0x4000_440C, 64), (0x4000_4400, 0), (0x4000_4404, 0)]);
         let p = decode(&RenodeConfig::stm32l0(), &regs);
         close(&uart(&p, "usart2").baud, fck / 64.0);
@@ -434,4 +510,31 @@ fn block_names_are_unique_per_kind() {
             );
         }
     }
+}
+
+// ── RP2040 XOSC startup (RP2040 datasheet s2.16.3, s2.16.7) ──────────────
+
+/// STARTUP.DELAY (bits 13:0) counts 256 crystal cycles and STARTUP.X4 (bit 20)
+/// "multiplies the startup_delay by 4". At the reference design's 12 MHz one
+/// count is 256 / 12 = 21.333 us: the pico-sdk's DELAY = 47 is 1002.7 us, the
+/// hardware reset value 0xC4 (196) is 4181.3 us, and X4 quadruples either.
+#[test]
+fn rp2040_xosc_startup_includes_x4() {
+    let config = RenodeConfig::rp2040();
+    let xosc = config
+        .clock_ready
+        .iter()
+        .find(|e| e.name == "xosc")
+        .expect("xosc readiness entry");
+    let scale = xosc.startup_scale.expect("programmable startup delay");
+    let x4 = 1u32 << 20;
+    let near = |got: f64, want: f64| {
+        assert!((got - want).abs() < 1e-6, "expected {want}, got {got}");
+    };
+    near(scale.startup_us(47), 47.0 * 256.0 / 12.0);
+    near(scale.startup_us(0xC4), 196.0 * 256.0 / 12.0);
+    near(scale.startup_us(47 | x4), 4.0 * 47.0 * 256.0 / 12.0);
+    near(scale.startup_us(0xC4 | x4), 4.0 * 196.0 * 256.0 / 12.0);
+    // Bits outside DELAY and X4 (bit 14 and above, other than X4) change nothing.
+    near(scale.startup_us(47 | (1 << 14)), 47.0 * 256.0 / 12.0);
 }

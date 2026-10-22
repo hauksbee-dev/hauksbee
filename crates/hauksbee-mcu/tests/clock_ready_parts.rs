@@ -89,7 +89,7 @@ fn check_part(part: &str, config: fn() -> RenodeConfig, elf: &str, hse_us: u64, 
 }
 
 // Startup and lock times are the descriptors' cited datasheet numbers:
-// F4 DS8626 p.103/p.106 (2 ms, 300 us), L0 DS10685 p.81/p.86 (2 ms, 160 us),
+// F4 DS8626 p.103/p.106 (2 ms, 300 us), L0 DS10690 Rev 7 p.81/p.86 (2 ms, 160 us),
 // F072 DS9826 p.68/p.74 (2 ms, 200 us), G4 DS12288 p.117/p.123 (2 ms, 40 us).
 #[test]
 fn stm32f4_crystal_gates_hse_and_pll() {
