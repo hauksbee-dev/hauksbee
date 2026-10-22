@@ -372,10 +372,12 @@ export function TransportBar({
             hover. It wrapped the toolbar at 1440 once the asked-for text
             joined it. Only a rate the loop CANNOT reach is worth more of the
             bar, because that one changes what the user should conclude. A
-            phone has no room for it at all. */}
-        {running && realtimeFactor !== null && Number.isFinite(realtimeFactor) && (
+            phone has no room for it at all, so it is not rendered there (a
+            CSS-hidden node would still sit in the bar, zero-sized and outside
+            every clip box, whenever the advancing-status grace flips running). */}
+        {!phone && running && realtimeFactor !== null && Number.isFinite(realtimeFactor) && (
           <span
-            className="text-[11px] tnum max-sm:hidden"
+            className="text-[11px] tnum"
             data-testid="transport-rate"
             title={[
               `Running at ${speedText(realtimeFactor)} real time (measured over a rolling window).`,
