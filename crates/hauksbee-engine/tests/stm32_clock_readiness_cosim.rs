@@ -46,7 +46,7 @@ fn board_text(with_crystal: bool) -> String {
     (at 100 100)
     (fp_text reference U1 (at 0 0) (layer F.SilkS))
     (fp_text value STM32F103C8T6 (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at -3 0) (net 6 "PLL_READY"))
+    (pad 2 smd rect (at -3 0) (net 6 "PLL_READY"))
     (pad 5 smd rect (at -3 1) (net 3 "OSC_IN"))
     (pad 6 smd rect (at -3 2) (net 4 "OSC_OUT"))
     (pad 8 smd rect (at -3 3) (net 1 "GND"))
