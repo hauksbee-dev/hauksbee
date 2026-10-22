@@ -14,6 +14,7 @@
 //! The argument surface is defined with `clap` (derive API): `--help`/`-h`,
 //! usage-on-error, and did-you-mean suggestions all come for free.
 
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -116,6 +117,22 @@ enum Command {
     #[allow(clippy::doc_markdown)]
     #[command(verbatim_doc_comment)]
     Init(InitArgs),
+
+    /// Add one assertion to a spec from one command line, checked before it is written.
+    ///
+    /// Say what you saw or what you expect and the assertion is appended to the
+    /// spec, after the same checks `hauksbee-ci check` makes (a field the kind
+    /// does not have, a value of the wrong type, a net the board lacks). With
+    /// --observe the numbers come from one nominal run instead of from you.
+    ///
+    /// Examples:
+    ///   hauksbee-ci add ci/blink.toml toggle net=D13 freq_hz=5 tolerance=0.2
+    ///   hauksbee-ci add ci/blink.toml toggle net=D13 --observe
+    ///   hauksbee-ci add ci/blink.toml uart contains="hauksbee-demo v1"
+    // clap prints this doc as --help, where backticks would be pasted into a shell.
+    #[allow(clippy::doc_markdown)]
+    #[command(verbatim_doc_comment)]
+    Add(AddArgs),
 
     /// List the assertion kinds, or show one with its fields and an example.
     ///
@@ -349,6 +366,55 @@ struct InitArgs {
     /// and write no file (the web app seeds its Power supplies from this).
     #[arg(long, conflicts_with = "out")]
     json: bool,
+
+    /// The firmware image (.elf or .hex) to boot once and propose assertions
+    /// from. Needs --suggest-asserts.
+    #[arg(
+        long,
+        value_name = "IMAGE",
+        requires = "suggest_asserts",
+        conflicts_with = "json"
+    )]
+    firmware: Option<PathBuf>,
+
+    /// Boot --firmware once and append what it did to the starter spec as
+    /// commented assertions: the UART text it printed, the entry point it
+    /// reached, and the rate of every net that toggled. Uncomment the ones you
+    /// want, or edit a number to say what you expect instead.
+    #[arg(long, requires = "firmware", conflicts_with = "json")]
+    suggest_asserts: bool,
+
+    /// How long to run the firmware for --suggest-asserts (default 1000 ms,
+    /// enough to time a blink).
+    #[arg(long, value_name = "MS", requires = "suggest_asserts")]
+    duration_ms: Option<f64>,
+}
+
+#[derive(Parser)]
+struct AddArgs {
+    /// The spec to add the assertion to.
+    #[arg(value_name = "SPEC")]
+    spec: PathBuf,
+
+    /// The assertion kind (`hauksbee-ci explain` lists them).
+    #[arg(value_name = "KIND")]
+    kind: String,
+
+    /// The assertion's fields as key=value (`hauksbee-ci explain KIND` lists
+    /// them), for example net=D13 freq_hz=5.
+    // Same as the `Add` variant: this is --help text, not rustdoc.
+    #[allow(clippy::doc_markdown)]
+    #[arg(value_name = "KEY=VALUE")]
+    fields: Vec<String>,
+
+    /// Take the numbers you leave out from one nominal run of the spec, by the
+    /// same margins the app uses (toggle and voltage).
+    #[arg(long)]
+    observe: bool,
+
+    /// Check the assertion and print the TOML it would add; write nothing.
+    #[arg(long)]
+    dry_run: bool,
 }
 
 fn main() -> ExitCode {
@@ -361,6 +427,7 @@ fn main() -> ExitCode {
         Command::Run(args) => cmd_run(args),
         Command::Check(args) => cmd_check(args),
         Command::Init(args) => cmd_init(args),
+        Command::Add(args) => cmd_add(&args),
         Command::Explain(args) => cmd_explain(&args),
         Command::Lint(args) => cmd_lint(&args),
         Command::Measure(args) => cmd_measure(&args),
@@ -727,6 +794,42 @@ fn cmd_init(args: InitArgs) -> ExitCode {
             )
         });
     }
+    if let (Some(firmware), true) = (&args.firmware, args.suggest_asserts) {
+        return report(
+            hauksbee_ci::init::init_observing(
+                &board,
+                args.out.as_deref(),
+                hauksbee_ci::init::Observe {
+                    firmware,
+                    duration_ms: args.duration_ms,
+                },
+            )
+            .map(|found| {
+                let path = found.path.display();
+                let mut msg = format!("wrote starter spec to {path}\n");
+                if let Some(why) = &found.warning {
+                    let _ = writeln!(
+                        msg,
+                        "the firmware run did not finish, so nothing was proposed:\n  {why}"
+                    );
+                } else if found.proposed.is_empty() {
+                    msg.push_str("the run showed nothing to assert on\n");
+                } else {
+                    msg.push_str("proposed (commented at the end of the file):\n");
+                    for line in &found.proposed {
+                        let _ = writeln!(msg, "  {line}");
+                    }
+                }
+                let _ = write!(
+                    msg,
+                    "uncomment the ones you want, then run:  hauksbee-ci run {path}\n\
+                     or add one directly:  hauksbee-ci add {path} <kind> key=value"
+                );
+                msg
+            })
+            .map_err(anyhow::Error::from),
+        );
+    }
     report(
         hauksbee_ci::init::init_to(&board, args.out.as_deref())
             .map(|path| {
@@ -751,6 +854,35 @@ fn cmd_init(args: InitArgs) -> ExitCode {
                 )
             })
             .map_err(anyhow::Error::from),
+    )
+}
+
+/// `hauksbee-ci add <spec> <kind> key=value...`: one assertion into a spec.
+fn cmd_add(args: &AddArgs) -> ExitCode {
+    report(
+        hauksbee_ci::add::add_assertion(
+            &args.spec,
+            &args.kind,
+            &args.fields,
+            hauksbee_ci::add::AddOptions {
+                observe: args.observe,
+                dry_run: args.dry_run,
+            },
+        )
+        .map(|added| {
+            let verb = if added.wrote {
+                "added to"
+            } else {
+                "would add to"
+            };
+            format!(
+                "{verb} {}: {}\n\n{}",
+                added.path.display(),
+                added.label,
+                added.block.trim_end()
+            )
+        })
+        .map_err(anyhow::Error::msg),
     )
 }
 

@@ -539,7 +539,7 @@ against that analytic envelope (`crates/hauksbee-ci/tests/tolerance.rs`).
 ### Assertions: `[[assert]]`
 
 At least one is required (a check with no assertions passes vacuously, so the
-loader rejects it). Each has a `kind` from a closed set of nineteen. The field
+loader rejects it). Each has a `kind` from a closed set of twenty-three. The field
 reference for each kind is in the product, so it is not repeated here:
 
 ```bash
@@ -568,6 +568,10 @@ drift from the code.
 | `uart` | firmware serial output contains a string or matches a regex | |
 | `toggle` | a net toggles at `freq_hz`, or at least `min_toggles` times | |
 | `pulse_width` | the first complete pulse on a net has a set width | |
+| `reaches` | the firmware executes a named function (within `deadline_ms`), or is not parked in one at the end of the run | [Asserts from observations](#asserts-from-observations) |
+| `bus` | the firmware talks to an I2C address (ACKed, at least `min_transactions` times) or sends an SPI frame containing given bytes | [Asserts from observations](#asserts-from-observations) |
+| `resets` | the MCU resets at most `max_resets` times, optionally counting one `cause` | [Asserts from observations](#asserts-from-observations) |
+| `uart_baud` | the serial port the firmware set up runs at the expected baud, within a tolerance | [Asserts from observations](#asserts-from-observations) |
 | `boot_coverage` | the firmware drives a control net to a level within a deadline of reset | [Boot coverage](#boot-coverage-watching-the-firmware-define-a-hi-z-control-net) |
 | `protection_trip` | a battery or e-fuse protection cutoff fired, or must not have | [TRANSIENTS.md](../checks/TRANSIENTS.md) |
 | `peripheral` | an attached device's end-of-run state, by `id` and `field` | [PERIPHERALS.md](../cosim/PERIPHERALS.md) |
@@ -575,6 +579,43 @@ drift from the code.
 | `model_coverage` | enough of the board bound to a real device model | |
 | `hwtrace` | the simulation agrees with a scope trace you captured | [add-a-hardware-trace.md](../extending/add-a-hardware-trace.md) |
 | `logic_level`, `fires`, `increases`, `decreases` | an intended outcome holds across operating conditions | [Outcome search](#outcome-search-say-what-the-board-is-for) |
+
+#### Asserts from observations
+
+You rarely need to type a number you can see. Wherever a value has been
+observed, it becomes an assertion in one step:
+
+```bash
+# Boot the firmware once and propose assertions from what it did (UART text,
+# entry point, the rate of every net that toggled), commented out in the spec:
+hauksbee-ci init my_board.kicad_pcb --firmware fw.hex --suggest-asserts
+# Uncomment the lines you mean, or edit a number to say what you expect instead.
+
+# Add one assertion to a spec in one line; the fields are checked before anything is written.
+hauksbee-ci add my_board.toml toggle net=D13 freq_hz=5
+# Leave the numbers out and take them from one nominal run, by the app's margins:
+hauksbee-ci add my_board.toml toggle net=D13 --observe
+hauksbee-ci add my_board.toml uart contains="hauksbee-demo v1" --dry-run
+```
+
+`--suggest-asserts` and `add` share the scaffold writer with the app: in the
+Live Sim, "Assert this" on a scope trace or a printed serial line opens the
+check with the observed value filled in and says where it came from, and
+"Assert what I expected" leaves the number to you and says, before you add it,
+whether it would fail on what was seen. A poll-backend run (Renode, QEMU) cannot
+time a pulse shorter than its sampling chunk, so the scaffold declares
+`[timing] min_pulse_us` from the run's own coverage; see
+[Timing coverage](#timing-coverage-timing).
+
+`bus`, `resets` and `uart_baud` judge the bench record of what the MCU did,
+which the co-simulation backend reports per run. Until a run supplies that
+record they are validated and accepted in a spec but report INVALID with
+"needs bench data" rather than a verdict, so they never pass vacuously. A
+`reaches` check without `not_parked_in` or `deadline_ms` judges the entry point
+the run already reports. Each kind's field defaults come from the same
+catalogue the app reads (`default_from`), so the CLI, the app and these docs
+cannot disagree on a kind's name or fields. The prior art this follows is in
+[ASSERT_FROM_OBSERVATION.md](ASSERT_FROM_OBSERVATION.md).
 
 What `explain` does not say, per kind:
 

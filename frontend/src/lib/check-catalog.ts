@@ -13,7 +13,7 @@ import { CATALOG_BLOCK } from './web-actions'
 // here is pure except the fetch, the cache and the host context.
 
 export interface DefaultFrom {
-  source: 'measured' | 'measured_peak' | 'rating' | 'card_logic_levels' | 'first_uart_line' | 'constant'
+  source: 'measured' | 'measured_peak' | 'rating' | 'card_logic_levels' | 'first_uart_line' | 'constant' | 'bench'
   pct?: number
   factor?: number
   key?: string
@@ -88,7 +88,7 @@ export const KIND_GROUPS: ReadonlyArray<readonly [string, readonly string[]]> = 
   ['Voltages', ['voltage', 'rail_window', 'logic_level', 'protection_trip']],
   ['Timing', ['toggle', 'pulse_width', 'fires', 'increases', 'decreases']],
   ['Currents and heat', ['max_current', 'max_temp', 'no_faults']],
-  ['Firmware', ['uart', 'boot_coverage', 'peripheral']],
+  ['Firmware', ['uart', 'uart_baud', 'reaches', 'resets', 'bus', 'boot_coverage', 'peripheral']],
   ['Small-signal', ['phase_margin', 'ac_gain']],
   ['Coverage', ['model_coverage', 'hwtrace']],
 ]
@@ -186,6 +186,10 @@ export function needMet(need: string, spec: SpecFacts): boolean {
     case 'search': return /^\s*\[search\]/m.test(spec.toml)
     case 'supply': return /^\s*kind\s*=\s*"battery"/m.test(spec.toml)
     case 'peripheral': return /^\s*\[\[(?:peripheral|sensor)\]\]/m.test(spec.toml)
+    // The bench record (what the co-sim saw on the buses, resets and UART clock)
+    // is a run product, not something a spec can carry: the engine says "needs
+    // bench data" and these kinds wait for it.
+    case 'bench': return false
     default: return false
   }
 }
@@ -331,6 +335,19 @@ export function badNumbers(entry: CatalogKind, draft: Draft): CatalogField[] {
     && !blank(draft[f.key]) && !Number.isFinite(Number(draft[f.key])))
 }
 
+/** Periods a toggle check needs in its run to time an edge-to-edge rate. */
+export const TOGGLE_PERIODS = 5
+
+/** The run length in ms a check needs when the spec's own is shorter, or null
+ *  when the kind and values name none: a blink rate needs its periods in the run
+ *  (the engine refuses to time one from fewer), so adding "5 Hz" to a 200 ms
+ *  spec would fail on a window the check itself never asked for. */
+export function runWindowMs(kind: string, draft: Draft): number | null {
+  if (kind !== 'toggle') return null
+  const hz = Number(draft.freq_hz)
+  return Number.isFinite(hz) && hz > 0 ? Math.ceil((TOGGLE_PERIODS * 1000) / hz / 100) * 100 : null
+}
+
 /** The `[[assert]]` table for a draft: filled fields only, in the catalogue's order. */
 export function assertBlock(entry: CatalogKind, draft: Draft): string {
   let out = `[[assert]]\nkind = ${tomlString(entry.kind)}\n`
@@ -345,13 +362,17 @@ export function assertBlock(entry: CatalogKind, draft: Draft): string {
 }
 
 /** The queued request for a draft: the exact table, nothing guessed. */
-export const requestFor = (entry: CatalogKind, draft: Draft): BoardRequest =>
-  ({ type: 'assert', kind: entry.kind, toml: assertBlock(entry, draft) })
+export function requestFor(entry: CatalogKind, draft: Draft, minRunMs: number | null = null): BoardRequest {
+  const run = Math.max(runWindowMs(entry.kind, draft) ?? 0, minRunMs ?? 0)
+  return { type: 'assert', kind: entry.kind, toml: assertBlock(entry, draft), ...(run > 0 ? { run_ms: String(run) } : {}) }
+}
 
 export interface Reading {
   value: number | null
   min: number | null
   max: number | null
+  /** The text a text-judging kind (`uart`) is read against, when it is that kind. */
+  text?: string | null
 }
 
 export interface DefaultSources {
@@ -359,6 +380,12 @@ export interface DefaultSources {
   /** The rail the net is, from the supply list or its name. */
   nominal: number | null
   ratings: ComponentRatings | undefined
+  /** The first line the firmware printed, when a run has been seen. */
+  firstUartLine?: string | null
+  /** Values read off the bench record, by the catalogue's `bench` key. */
+  bench?: Readonly<Record<string, string | number>>
+  /** Where `reading` came from, in words ("the simulated value" when absent). */
+  origin?: string
 }
 
 const round3 = (x: number) => Number(x.toFixed(3))
@@ -375,7 +402,7 @@ export function resolveDefault(
       if (base === null || base === undefined) return null
       const pct = from.pct ?? 0
       const moved = pct === 0 ? base : base + (pct < 0 ? -1 : 1) * Math.abs(base) * Math.abs(pct) / 100
-      const how = src.reading?.value != null ? 'the simulated value' : 'the rail\'s nominal voltage'
+      const how = src.reading?.value != null ? src.origin ?? 'the simulated value' : 'the rail\'s nominal voltage'
       return { value: String(round3(moved)), note: pct === 0 ? `from ${how}` : `${pct > 0 ? '+' : '-'}${Math.abs(pct)} % of ${how}` }
     }
     case 'measured_peak': {
@@ -393,9 +420,16 @@ export function resolveDefault(
     }
     case 'constant':
       return from.value === undefined ? null : { value: String(from.value), note: 'a usual starting value' }
+    case 'first_uart_line': {
+      const line = src.firstUartLine?.trim()
+      return line ? { value: line, note: 'the first line the firmware printed' } : null
+    }
+    case 'bench': {
+      const seen = from.key === undefined ? undefined : src.bench?.[from.key]
+      return seen === undefined ? null : { value: String(seen), note: 'from the bench record of this run' }
+    }
     default:
-      // Logic levels are read from the cards by the engine when the field is empty;
-      // the first printed line has no source outside a running firmware.
+      // Logic levels are read from the cards by the engine when the field is empty.
       return null
   }
 }
@@ -482,7 +516,171 @@ export function wouldFail(kind: string, draft: Draft, reading: Reading): boolean
       const tol = num('tolerance') ?? 0.25
       return reading.value === null || f === null || f === 0 ? null : Math.abs(reading.value - f) / f > tol
     }
+    case 'uart': {
+      // The same substring test the engine runs on the UART text.
+      const wanted = draft.contains ?? ''
+      return blank(wanted) || reading.text == null ? null : !reading.text.includes(wanted)
+    }
     default: return null
+  }
+}
+
+// ── Observations: from something already on screen to a check ───────────
+//
+// A scope trace or a printed UART line is a measurement the user is already
+// looking at. "Assert this" turns it into the check that says "it keeps doing
+// that"; "Assert what I expected" opens the same check with the numbers left
+// for the user, and the observation shown beside them so a wrong expectation
+// reads "would FAIL today" before it is added. The kinds, fields and defaults
+// are the catalogue's; this section only reads the observation.
+
+export interface TracePoint { t: number; v: number }
+
+/** What the app was looking at when the user asked: a trace, or one UART line. */
+export type Observation =
+  | { kind: 'trace'; net: string; points: readonly TracePoint[] }
+  | { kind: 'uart'; mcu?: string; line: string; transcript: string }
+
+/** A level swing under this is a rail with ripple, not a signal that toggles. */
+const TOGGLE_SWING_V = 0.5
+
+export interface TraceFacts {
+  lo: number
+  hi: number
+  last: number
+  /** Level changes counted with hysteresis (30 % to 70 % of the swing). */
+  edges: number
+  rising: number
+  /** The rate, when at least two full periods were seen; null otherwise. */
+  hz: number | null
+}
+
+/** The facts a trace states: its range, whether it toggles and how fast. Null
+ *  for a trace with fewer than two samples. Mirrors the engine's edge count: a
+ *  rate needs two full periods, fewer edges are only counted. */
+export function traceFacts(points: readonly TracePoint[]): TraceFacts | null {
+  if (points.length < 2) return null
+  let lo = Infinity
+  let hi = -Infinity
+  for (const { v } of points) { lo = Math.min(lo, v); hi = Math.max(hi, v) }
+  const last = points[points.length - 1].v
+  const swing = hi - lo
+  if (!Number.isFinite(swing)) return null
+  if (swing < TOGGLE_SWING_V) return { lo, hi, last, edges: 0, rising: 0, hz: null }
+  const high = lo + 0.7 * swing
+  const low = lo + 0.3 * swing
+  let state: 'high' | 'low' | null = null
+  let edges = 0
+  const risings: number[] = []
+  for (const { t, v } of points) {
+    if (v >= high && state !== 'high') {
+      if (state !== null) { edges += 1; risings.push(t) }
+      state = 'high'
+    } else if (v <= low && state !== 'low') {
+      if (state !== null) edges += 1
+      state = 'low'
+    }
+  }
+  const span = risings.length >= 3 ? risings[risings.length - 1] - risings[0] : 0
+  return { lo, hi, last, edges, rising: risings.length, hz: span > 0 ? (risings.length - 1) / span : null }
+}
+
+export type AssertMode = 'as_seen' | 'expected'
+
+/** What an editor opened from an observation holds and shows. */
+export interface ObservedEditor {
+  /** Words for the preview strip: "In this trace" / "In this output". */
+  origin: string
+  reading: Reading
+  unit: string
+  /** Shown in place of a number, for an observation that is not one. */
+  note?: string
+  /** Fields set from the observation (the as-seen mode), with where each came from. */
+  seed: Prefill
+  /** Whether the reading also pre-fills the catalogue's measured fields. */
+  fillReading: boolean
+  /** One plain sentence of what was seen. */
+  seen: string
+}
+
+const ROUND4 = (x: number) => Number(x.toPrecision(4))
+
+/** The catalogue kind an observation is asserted with. */
+export function observationKind(obs: Observation): string {
+  if (obs.kind === 'uart') return 'uart'
+  const facts = traceFacts(obs.points)
+  return facts && facts.edges >= 1 ? 'toggle' : 'voltage'
+}
+
+/** The editor contents for an observation; null when it holds nothing to assert
+ *  (a trace with under two samples, a blank UART line). */
+export function observed(obs: Observation, mode: AssertMode): ObservedEditor | null {
+  const fillReading = mode === 'as_seen'
+  if (obs.kind === 'uart') {
+    const line = obs.line.trim()
+    // Nothing printed yet is still something to expect: the user types the text.
+    if (line === '' && fillReading) return null
+    const seed: Prefill = { values: {}, notes: {} }
+    if (fillReading) {
+      seed.values.contains = line
+      seed.notes.contains = /\d{3,}/.test(line)
+        ? 'the line you picked; it holds a number that may change from run to run, so keep the fixed part'
+        : 'the line you picked'
+    }
+    if (obs.mcu) seed.values.mcu = obs.mcu
+    const lines = obs.transcript.split('\n').filter(l => l.trim() !== '').length
+    return {
+      origin: 'In this output', unit: '', fillReading, seed,
+      reading: { value: null, min: null, max: null, text: obs.transcript },
+      note: `${lines} line${lines === 1 ? '' : 's'} printed so far`,
+      seen: line === '' ? 'Nothing printed yet' : `${obs.mcu ?? 'The firmware'} printed "${line}"`,
+    }
+  }
+  const facts = traceFacts(obs.points)
+  if (!facts) return null
+  const name = displayNet(obs.net)
+  const seed: Prefill = { values: {}, notes: {} }
+  if (facts.edges >= 1) {
+    if (facts.hz !== null) {
+      return {
+        origin: 'In this trace', unit: 'Hz', fillReading, seed,
+        reading: { value: ROUND4(facts.hz), min: null, max: null },
+        seen: `${name} toggles at ${ROUND4(facts.hz)} Hz`,
+      }
+    }
+    // Too short to time a rate: count the edges, with the slack the engine's own
+    // scaffold uses, and say so.
+    if (fillReading) {
+      seed.values.min_toggles = String(Math.max(1, Math.floor(facts.edges * 0.8)))
+      seed.notes.min_toggles = `${facts.edges} edge${facts.edges === 1 ? '' : 's'} seen, too few to time a rate`
+    }
+    return {
+      origin: 'In this trace', unit: 'Hz', fillReading: false, seed,
+      reading: { value: null, min: null, max: null },
+      note: `${facts.edges} edge${facts.edges === 1 ? '' : 's'}, too few to time a rate`,
+      seen: `${name} changed level ${facts.edges} time${facts.edges === 1 ? '' : 's'}`,
+    }
+  }
+  return {
+    origin: 'In this trace', unit: 'V', fillReading, seed,
+    reading: { value: ROUND4(facts.last), min: ROUND4(facts.lo), max: ROUND4(facts.hi) },
+    seen: `${name} sits at ${ROUND4(facts.last)} V`,
+  }
+}
+
+/** The offer an observation makes: the catalogue's entry for its kind, with the
+ *  reason when the spec cannot run it yet (a UART line needs firmware). */
+export function offerFromObservation(
+  obs: Observation, mode: AssertMode, kinds: readonly CatalogKind[], spec: SpecFacts,
+): Offer | null {
+  const entry = kinds.find(k => k.kind === observationKind(obs))
+  if (!entry) return null
+  const net = obs.kind === 'trace' ? obs.net : undefined
+  const words = entry.offer[obs.kind === 'trace' ? 'trace' : 'uart'] ?? entry.title
+  return {
+    kind: entry.kind, entry, net,
+    text: mode === 'expected' ? 'Assert what I expected' : speak(words, net),
+    blocked: blockedBy(entry, spec, kinds),
   }
 }
 

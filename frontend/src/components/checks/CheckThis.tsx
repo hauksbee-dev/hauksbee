@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { CatalogFields } from '../ConstraintEditor'
 import {
-  badNumbers, countAsserts, looksLikeSupply, measureAs, measureOn, missingRequired, offersForNet, offersForPart,
-  prefill, questionBlock, requestFor, specFacts, useCatalog, useCheckHost, wouldFail,
-  type CatalogKind, type CheckHost, type Draft, type MeasureResult, type Offer, type Reading,
+  badNumbers, countAsserts, looksLikeSupply, measureAs, measureOn, missingRequired, observed as observe,
+  offerFromObservation, offersForNet, offersForPart, prefill, questionBlock, requestFor, specFacts, useCatalog,
+  useCheckHost, wouldFail,
+  type AssertMode, type CatalogKind, type CheckHost, type Draft, type MeasureResult, type Observation,
+  type ObservedEditor, type Offer, type Reading,
 } from '../../lib/check-catalog'
 import type { BoardRequest } from '../../types/report'
 
@@ -36,10 +38,11 @@ type Preview =
   | { state: 'none' }
   | { state: 'pending' }
   | { state: 'error'; message: string }
-  | { state: 'ready'; reading: Reading; source: 'live' | 'simulated'; unit: string }
+  | { state: 'ready'; reading: Reading; source: 'live' | 'simulated' | 'observed'; unit: string; origin?: string; note?: string }
 
-function usePreview(host: CheckHost | null, offer: Offer, draft: Draft, live: number | null): Preview {
-  const as = measureAs(offer.kind)
+function usePreview(host: CheckHost | null, offer: Offer, draft: Draft, live: number | null, skip = false): Preview {
+  // An editor opened from an observation already holds the reading it judges.
+  const as = skip ? null : measureAs(offer.kind)
   const isVoltage = as === 'voltage'
   const useLive = isVoltage && live !== null && (offer.net ?? '') === draft.net
   const question = as ? questionBlock(as, draft) : null
@@ -84,8 +87,10 @@ function PreviewStrip({ preview, verdict, kind }: { preview: Preview; verdict: b
       )}
       {preview.state === 'ready' && (
         <>
-          <span>{preview.source === 'live' ? 'Right now' : 'In the simulation'}: </span>
-          {preview.reading.value !== null
+          <span>{preview.origin ?? (preview.source === 'live' ? 'Right now' : 'In the simulation')}: </span>
+          {preview.note !== undefined
+            ? <span data-testid="preview-note">{preview.note}</span>
+            : preview.reading.value !== null
             ? (
               <>
                 <b className="tnum" style={{ color: 'var(--silk)' }}>
@@ -112,9 +117,12 @@ function PreviewStrip({ preview, verdict, kind }: { preview: Preview; verdict: b
 }
 
 /** One expanded offer: fields, the preview and the add buttons. */
-export function OfferEditor({ offer, host, live, onAdd, onCollapse, defaultNets }: {
+export function OfferEditor({ offer, host, live, onAdd, onCollapse, defaultNets, observed }: {
   offer: Offer
   host: CheckHost | null
+  /** Opened from something already on screen (a trace, a printed line): the reading
+   *  it judges is that observation, not a fresh measurement. */
+  observed?: ObservedEditor
   /** Volts of the offer's net in a live frame, when there is one. */
   live: number | null
   onAdd: (request: BoardRequest, run: boolean) => void
@@ -133,23 +141,37 @@ export function OfferEditor({ offer, host, live, onAdd, onCollapse, defaultNets 
 
   // The first pass fills from what the name and the spec state; the measurement
   // then refines any field the user has not touched.
-  const preview = usePreview(host, offer, {
+  const measured = usePreview(host, offer, {
     net: edited.net ?? offer.net ?? '', ref: edited.ref ?? offer.ref ?? '',
     after_ms: edited.after_ms ?? '', level: edited.level ?? '',
-  }, live)
+  }, live, observed !== undefined)
+  const preview: Preview = observed
+    ? { state: 'ready', source: 'observed', reading: observed.reading, unit: observed.unit, origin: observed.origin, note: observed.note }
+    : measured
   const reading = preview.state === 'ready' ? preview.reading : null
-  const hasReading = reading !== null
-  const [rValue, rMin, rMax] = [reading?.value ?? null, reading?.min ?? null, reading?.max ?? null]
+  // What pre-fills the measured fields: the observation when asked to assert it,
+  // nothing when the user is saying what they expected.
+  const fillFrom = observed ? (observed.fillReading ? observed.reading : null) : reading
+  const hasReading = fillFrom !== null
+  const [rValue, rMin, rMax] = [fillFrom?.value ?? null, fillFrom?.min ?? null, fillFrom?.max ?? null]
+  const seed = observed?.seed
   const { toml: specToml, hasFirmware } = specFacts(host)
   const auto = useMemo(
     () => prefill(entry, subject, {
       reading: !hasReading ? null : { value: rValue, min: rMin, max: rMax }, nominal, ratings,
+      origin: observed ? observed.origin.replace('In this', 'this') : undefined,
     }, { toml: specToml, hasFirmware }),
     // `reading` is rebuilt every render; its three numbers are what matter.
-    [entry, subject, hasReading, rValue, rMin, rMax, nominal, ratings, specToml, hasFirmware],
+    [entry, subject, hasReading, rValue, rMin, rMax, nominal, ratings, specToml, hasFirmware, observed],
   )
-  const values: Draft = { ...auto.values, ...edited }
-  const notes = Object.fromEntries(Object.entries(auto.notes).filter(([k]) => !(k in edited)))
+  // A seeded count replaces the rate it stands in for ("freq_hz or min_toggles, not both").
+  const seeded = seed?.values ?? {}
+  const base: Draft = { ...auto.values, ...seeded }
+  if (seeded.min_toggles) base.freq_hz = ''
+  const values: Draft = { ...base, ...edited }
+  const notes = Object.fromEntries(
+    Object.entries({ ...auto.notes, ...(seed?.notes ?? {}) }).filter(([k]) => !(k in edited)),
+  )
   const verdict = reading ? wouldFail(offer.kind, values, reading) : null
 
   const missing = missingRequired(entry, values)
@@ -219,6 +241,15 @@ export function useAdder(host: CheckHost | null, fallback?: (request: BoardReque
       else if (Date.now() > stop) window.clearInterval(timer)
     }, 150)
   }
+}
+
+/** Carry out the one-click fix of a blocked offer: the firmware picker, or the
+ *  block the missing prerequisite names. */
+function applyFix(offer: Offer, adder: ReturnType<typeof useAdder>) {
+  const f = offer.blocked?.fix
+  if (!f) return
+  if (f.pickFirmware) document.querySelector<HTMLInputElement>('#firmware-file')?.click()
+  else if (f.toml) adder({ type: 'assert', kind: offer.blocked!.need!.need, toml: f.toml }, false)
 }
 
 function BlockedOffer({ offer, onFix }: { offer: Offer; onFix: () => void }) {
@@ -311,12 +342,7 @@ export function CheckThis({
   const rest = showAll ? [] : available.filter(o => !front.includes(o))
   const restHoldsOpen = rest.some(o => offerKey(o) === open)
   if (!kinds || available.length === 0) return null
-  const fix = (offer: Offer) => {
-    const f = offer.blocked?.fix
-    if (!f) return
-    if (f.pickFirmware) document.querySelector<HTMLInputElement>('#firmware-file')?.click()
-    else if (f.toml) adder({ type: 'assert', kind: offer.blocked!.need!.need, toml: f.toml }, false)
-  }
+  const fix = (offer: Offer) => applyFix(offer, adder)
 
   const row = (offer: Offer, primary: boolean) => {
     const key = offerKey(offer)
@@ -377,6 +403,112 @@ export function CheckThis({
               Open Checks
             </button>
           )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * "Assert this" / "Assert what I expected" for something the user is already
+ * looking at: a scope trace or a printed UART line.
+ *
+ * "Assert this" opens the check that says the board keeps doing what it just
+ * did, with the observed number or line filled in and the catalogue's own
+ * tolerance. "Assert what I expected" opens the same check with the numbers left
+ * for the user, and the observation beside them, so a wrong expectation reads
+ * "would FAIL today" before it is added. Adding queues one `[[assert]]` into the
+ * Checks view's single spec, like every other entry point.
+ *
+ * `observation` may be a function: it is read when a button is pressed, so a
+ * scope can hand over its live buffer without re-rendering on every sample.
+ * Renders nothing where there is no Checks view to add to (the standalone demo).
+ */
+export function AssertThis({ observation, compact = false, testIdSuffix = '' }: {
+  observation: Observation | (() => Observation | null)
+  /** One small line of two links, for a row in a list. */
+  compact?: boolean
+  /** Keeps test ids unique where several are on screen at once. */
+  testIdSuffix?: string
+}) {
+  const host = useCheckHost()
+  const kinds = useCatalog()
+  const adder = useAdder(host)
+  const [asked, setAsked] = useState<{ obs: Observation; mode: AssertMode } | null>(null)
+  const [added, setAdded] = useState(false)
+  const root = useRef<HTMLDivElement>(null)
+  const spec = specFacts(host)
+  const shown = useMemo(() => {
+    if (!asked || !kinds) return null
+    const offer = offerFromObservation(asked.obs, asked.mode, kinds, spec)
+    const seen = observe(asked.obs, asked.mode)
+    return offer && seen ? { offer, seen } : null
+    // `spec` is rebuilt each render; its two inputs are what matter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asked, kinds, spec.toml, spec.hasFirmware])
+  if (!host || !kinds) return null
+
+  const ask = (mode: AssertMode) => {
+    const obs = typeof observation === 'function' ? observation() : observation
+    setAdded(false)
+    setAsked(obs ? { obs, mode } : null)
+  }
+  const close = () => setAsked(null)
+  const link = (mode: AssertMode, label: string) => (
+    <button
+      type="button" data-testid={`${mode === 'as_seen' ? 'assert-this' : 'assert-expected'}${testIdSuffix}`}
+      aria-expanded={asked?.mode === mode}
+      className="hb-press cursor-pointer underline text-[10px]"
+      style={{ background: 'none', border: 'none', padding: 0, color: 'var(--copper-hi)' }}
+      onClick={() => (asked?.mode === mode ? close() : ask(mode))}
+    >
+      {label}
+    </button>
+  )
+  return (
+    <div ref={root} data-testid={`assert-this-box${testIdSuffix}`} className={compact ? 'flex flex-col gap-1' : 'flex flex-col gap-1.5'}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+        {link('as_seen', 'Assert this')}
+        {link('expected', 'Assert what I expected')}
+      </div>
+      {asked && shown === null && (
+        <div data-testid="assert-this-empty" role="status" className="text-[11px]" style={{ color: 'var(--silk-dim)' }}>
+          {asked.obs.kind === 'trace'
+            ? 'There is not enough of this trace yet to say what it does. Let it run a little and try again.'
+            : 'The firmware has not printed anything yet, so there is nothing to assert as seen. "Assert what I expected" lets you write the text yourself.'}
+        </div>
+      )}
+      {shown && (
+        <div className="flex flex-col gap-1.5">
+          <div data-testid="assert-seen" className="text-[11px]" style={{ color: 'var(--silk-dim)' }}>
+            {asked?.mode === 'expected' ? 'Seen: ' : 'Seen and asserted: '}{shown.seen.seen}
+          </div>
+          {shown.offer.blocked
+            ? <BlockedOffer offer={shown.offer} onFix={() => applyFix(shown.offer, adder)} />
+            : (
+              <OfferEditor
+                key={`${asked?.mode}|${shown.offer.kind}|${shown.offer.net ?? ''}`}
+                offer={shown.offer} host={host} defaultNets={host.nets} live={null}
+                observed={shown.seen}
+                onCollapse={close}
+                onAdd={(request, run) => {
+                  adder(request, run, shown.offer.kind)
+                  addedThisSession += 1
+                  setAdded(true)
+                  close()
+                }}
+              />
+            )}
+        </div>
+      )}
+      {added && !asked && (
+        <div data-testid="assert-added" role="status" className="text-[11px]" style={{ color: 'var(--ok)' }}>
+          Added to Checks.{' '}
+          <button type="button" data-testid="assert-added-open" className="underline cursor-pointer"
+            style={{ color: 'var(--copper-hi)', background: 'none', border: 'none', padding: 0 }}
+            onClick={() => host.openChecks()}>
+            Open Checks
+          </button>
         </div>
       )}
     </div>
