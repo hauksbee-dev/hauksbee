@@ -989,19 +989,19 @@ fn clock_held_off_past_reset(
 }
 
 /// One assembled resistor from the strap net to a rail (`up`) or to ground.
-struct Pull {
-    reference: String,
-    value: String,
-    far: i64,
-    up: bool,
+pub(super) struct Pull {
+    pub(super) reference: String,
+    pub(super) value: String,
+    pub(super) far: i64,
+    pub(super) up: bool,
     /// `None` when the value string does not parse to ohms.
-    ohms: Option<f64>,
+    pub(super) ohms: Option<f64>,
     /// Fractional tolerance when the part states one ("10k 1%", or a
     /// `Tolerance` property); zero when unknown.
-    tol: f64,
+    pub(super) tol: f64,
 }
 
-fn pulls_on(board: &ExtractedBoard, net_id: i64) -> Vec<Pull> {
+pub(super) fn pulls_on(board: &ExtractedBoard, net_id: i64) -> Vec<Pull> {
     let mut pulls = Vec::new();
     for (c, _) in board
         .net_members(net_id)

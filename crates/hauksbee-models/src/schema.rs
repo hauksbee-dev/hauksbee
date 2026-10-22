@@ -125,6 +125,20 @@ pub struct ModelEntry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub straps: Vec<StrapPin>,
 
+    /// `[[models.pin_bias]]`: non-strap pins the datasheet says need a pull
+    /// resistor or a defined idle level (an open-drain flag that needs a
+    /// pull-up, a bootloader UART RX that must idle high), each with the level,
+    /// an optional resistance range and the table it is read from. A boot
+    /// strap is [`Self::straps`], never a row here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pin_bias: Vec<PinBias>,
+
+    /// `[[models.supply_cap]]`: the least capacitance the datasheet requires
+    /// (or recommends) on a supply input or an output pin, to ground. Read by
+    /// the supply-capacitance check against the capacitors on that net.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supply_cap: Vec<SupplyCap>,
+
     /// `[models.pin_capability]`: which pads can serve a given peripheral
     /// function, as structured data a board check can read (today the pads that
     /// can be an ADC input, with the channel each one is). MCU cards only.
@@ -1253,6 +1267,148 @@ pub struct StrapPin {
     pub vil: Option<[f64; 2]>,
     #[serde(default)]
     pub vih: Option<[f64; 2]>,
+}
+
+/// One non-strap pin that needs a bias, straight from the part's datasheet
+/// (see [`ModelEntry::pin_bias`]).
+///
+/// `role` matches a value in [`ModelEntry::pins`]. A pin that is also a row of
+/// [`ModelEntry::straps`] is judged by the strap lint and refused here, so no
+/// pin has two owners.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PinBias {
+    /// Pin role, matching an entry in [`ModelEntry::pins`].
+    pub role: String,
+    /// The level the pin must sit at when nothing is actively driving it.
+    pub level: BiasLevel,
+    /// What satisfies the requirement: a pull resistor, or any defined level.
+    #[serde(default)]
+    pub needs: BiasNeed,
+    /// Smallest pull resistance the datasheet allows, ohms (a stronger pull
+    /// than this overloads the pin's driver).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_ohm: Option<f64>,
+    /// Largest pull resistance the datasheet allows, ohms (a weaker pull than
+    /// this does not hold the level against leakage or the line's capacitance).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_ohm: Option<f64>,
+    /// The pin may be left unconnected: the requirement applies only once
+    /// something is wired to it (an open-drain flag the design does not use).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub open_ok: bool,
+    /// The datasheet table or sentence, with page, the requirement is read from.
+    pub basis: String,
+    /// What the pin does and why the bias matters, for the finding's message.
+    #[serde(default)]
+    pub note: String,
+}
+
+/// The idle level a [`PinBias`] row requires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BiasLevel {
+    /// Pulled or held to the pin's I/O supply.
+    High,
+    /// Pulled or held to ground.
+    Low,
+}
+
+impl BiasLevel {
+    /// The word a message uses for the pull that makes this level.
+    #[must_use]
+    pub const fn pull_word(self) -> &'static str {
+        match self {
+            Self::High => "pull-up",
+            Self::Low => "pull-down",
+        }
+    }
+
+    /// The level opposite this one.
+    #[must_use]
+    pub const fn opposite(self) -> Self {
+        match self {
+            Self::High => Self::Low,
+            Self::Low => Self::High,
+        }
+    }
+}
+
+/// What satisfies a [`PinBias`] row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BiasNeed {
+    /// A resistor to the rail (high) or ground (low) on the pin's net: the
+    /// pin is an open-drain output or a receiver nothing else may leave
+    /// undefined, and a driver on the net does not stand in for the pull.
+    #[default]
+    Pull,
+    /// The pin must idle at the level, by a resistor of the right direction
+    /// or by a part that drives the net; an unconnected or release-able net
+    /// does not do.
+    Idle,
+}
+
+/// Which side of the part a [`SupplyCap`] row sits on, for the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapSide {
+    /// A supply input (a driver's motor supply, a regulator or load-switch input).
+    #[default]
+    Input,
+    /// An output (a regulator's or load switch's output).
+    Output,
+}
+
+impl CapSide {
+    /// The word a message uses for the pin.
+    #[must_use]
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Input => "input",
+            Self::Output => "output",
+        }
+    }
+}
+
+/// Whether the datasheet requires the capacitance or only recommends it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapGrade {
+    /// A stated minimum ("a minimum of 10 uF is required", a Recommended
+    /// Operating Conditions row): falling short is a fault.
+    #[default]
+    Required,
+    /// A recommendation ("10 uF is recommended"): falling short is a note.
+    Recommended,
+}
+
+/// The least capacitance a supply input or output pin wants, from the
+/// datasheet (see [`ModelEntry::supply_cap`]).
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SupplyCap {
+    /// Pin role of the supply or output pin; the capacitance is counted on its
+    /// net, to the part's ground.
+    pub role: String,
+    /// Input or output, for the message.
+    #[serde(default)]
+    pub side: CapSide,
+    /// Required or only recommended.
+    #[serde(default)]
+    pub grade: CapGrade,
+    /// Total capacitance on the pin's net to ground, farads.
+    pub min_f: f64,
+    /// When set, one capacitor on the net must itself reach this, farads: the
+    /// datasheet's bulk capacitor, which a pile of smaller decoupling parts is
+    /// not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_single_f: Option<f64>,
+    /// The datasheet table or sentence, with page, the value is read from.
+    pub basis: String,
+    /// What the capacitor is for and its type or voltage-rating conditions.
+    #[serde(default)]
+    pub note: String,
 }
 
 /// The internal (on-die) pull a strap pin has, which determines whether leaving

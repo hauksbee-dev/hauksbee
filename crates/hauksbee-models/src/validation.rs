@@ -677,6 +677,8 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     }
 
     check_pin_capability(entry, &mut p);
+    check_pin_bias(entry, &mut p);
+    check_supply_cap(entry, &mut p);
     check_peripheral_limits(entry, &mut p);
 
     // A pin map is a stated fact even on an identity-only card.
@@ -1821,6 +1823,100 @@ fn check_peripheral_limits(entry: &ModelEntry, p: &mut Problems) {
     }
 }
 
+/// `[[models.pin_bias]]`: each row names a real non-strap, non-power pin once,
+/// a resistance range that is a range, and the datasheet place it comes from.
+fn check_pin_bias(entry: &ModelEntry, p: &mut Problems) {
+    for (i, row) in entry.pin_bias.iter().enumerate() {
+        let r = &row.role;
+        p.require(has_role(entry, r), || {
+            not_a_role("[[models.pin_bias]] role", r)
+        });
+        p.require(!entry.straps.iter().any(|s| &s.role == r), || {
+            format!(
+                "[[models.pin_bias]] role '{r}' is a [[models.straps]] row: a boot strap is \
+                 judged by the strap lint, so state it there only"
+            )
+        });
+        p.require(crate::pin_roles::power_pin(r, entry.kind).is_none(), || {
+            format!("[[models.pin_bias]] role '{r}' is a supply or ground role, not a signal pin")
+        });
+        p.require(
+            !entry.pin_bias[..i].iter().any(|earlier| &earlier.role == r),
+            || format!("[[models.pin_bias]] states role '{r}' twice"),
+        );
+        p.require(!row.basis.trim().is_empty(), || {
+            format!("[[models.pin_bias]] '{r}' needs a basis citing the datasheet table and page")
+        });
+        for (name, v) in [("min_ohm", row.min_ohm), ("max_ohm", row.max_ohm)] {
+            if let Some(v) = v {
+                p.require(positive_finite(v) && v < 1e9, || {
+                    format!("[[models.pin_bias]] '{r}' {name} = {v} must be a positive resistance in ohms")
+                });
+            }
+        }
+        if let (Some(lo), Some(hi)) = (row.min_ohm, row.max_ohm) {
+            p.require(lo <= hi, || {
+                format!("[[models.pin_bias]] '{r}' min_ohm = {lo} must not exceed max_ohm = {hi}")
+            });
+        }
+    }
+}
+
+/// `[[models.supply_cap]]`: each row names a real pin once, a capacitance in
+/// farads inside the physical range, and the datasheet place it comes from; an
+/// output row on a regulator that already states `cout_min_f` or
+/// `cout_recommended_f` is refused so the requirement has one home.
+fn check_supply_cap(entry: &ModelEntry, p: &mut Problems) {
+    for (i, row) in entry.supply_cap.iter().enumerate() {
+        let r = &row.role;
+        p.require(has_role(entry, r), || {
+            not_a_role("[[models.supply_cap]] role", r)
+        });
+        p.require(
+            !entry.supply_cap[..i].iter().any(|earlier| {
+                &earlier.role == r && earlier.side == row.side && earlier.grade == row.grade
+            }),
+            || {
+                format!(
+                    "[[models.supply_cap]] states the {} of '{r}' twice at the same grade",
+                    row.side.word()
+                )
+            },
+        );
+        p.require(!row.basis.trim().is_empty(), || {
+            format!("[[models.supply_cap]] '{r}' needs a basis citing the datasheet table and page")
+        });
+        // A farad figure outside 1 pF..100 mF is a unit slip (`min_f = 10.0` for 10 uF).
+        let farads = |v: f64| positive_finite(v) && (1e-12..=0.1).contains(&v);
+        p.require(farads(row.min_f), || {
+            format!(
+                "[[models.supply_cap]] '{r}' min_f = {} must be a capacitance in farads between \
+                 1 pF and 100 mF (10 uF is 10e-6)",
+                row.min_f
+            )
+        });
+        if let Some(single) = row.min_single_f {
+            p.require(farads(single) && single <= row.min_f, || {
+                format!(
+                    "[[models.supply_cap]] '{r}' min_single_f = {single} must be a capacitance in \
+                     farads and no more than min_f = {}",
+                    row.min_f
+                )
+            });
+        }
+        let regulator_output = entry.kind == ComponentKind::Vreg
+            && row.side == crate::CapSide::Output
+            && (entry.params.0.contains_key("cout_min_f")
+                || entry.params.0.contains_key("cout_recommended_f"));
+        p.require(!regulator_output, || {
+            format!(
+                "[[models.supply_cap]] '{r}' output duplicates the card's cout_min_f / \
+                 cout_recommended_f: state the output capacitor once, there"
+            )
+        });
+    }
+}
+
 /// `[models.pin_capability]`: an MCU card's structured capability tables.
 ///
 /// The table is a complete statement, so it is held to the same pad map the
@@ -2530,6 +2626,138 @@ mod tests {
 
     fn accepts(e: &ModelEntry) {
         assert!(validate(e).is_ok(), "{:?}", validate(e));
+    }
+
+    /// A load-switch-shaped card: pads 1 in, 2 out, 3 gnd, 4 flg.
+    fn switch_card() -> ModelEntry {
+        let mut e = entry(ComponentKind::Digital, &[]);
+        pins(
+            &mut e,
+            &[("1", "in"), ("2", "out"), ("3", "gnd"), ("4", "flg")],
+        );
+        e.params.set_bool("identity_only", true);
+        e.params.set_str("warning", "identity only");
+        e.params.set_str("unlocked_by", "validated behavior");
+        e
+    }
+
+    fn cap_row(role: &str, side: crate::CapSide, min_f: f64) -> crate::SupplyCap {
+        crate::SupplyCap {
+            role: role.into(),
+            side,
+            grade: crate::CapGrade::Required,
+            min_f,
+            min_single_f: None,
+            basis: "fixture datasheet p.3".into(),
+            note: String::new(),
+        }
+    }
+
+    fn bias_row(role: &str) -> crate::PinBias {
+        crate::PinBias {
+            role: role.into(),
+            level: crate::BiasLevel::High,
+            needs: crate::BiasNeed::Pull,
+            min_ohm: None,
+            max_ohm: None,
+            open_ok: false,
+            basis: "fixture datasheet p.4".into(),
+            note: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_supply_cap_row_is_held_to_a_real_pin_a_sane_value_and_a_basis() {
+        let mut ok = switch_card();
+        ok.supply_cap = vec![
+            cap_row("in", crate::CapSide::Input, 1e-6),
+            cap_row("out", crate::CapSide::Output, 1e-7),
+        ];
+        accepts(&ok);
+
+        let mut ghost = switch_card();
+        ghost.supply_cap = vec![cap_row("vbulk", crate::CapSide::Input, 1e-6)];
+        rejects(&ghost, "[[models.supply_cap]] role");
+
+        let mut slip = switch_card();
+        slip.supply_cap = vec![cap_row("in", crate::CapSide::Input, 10.0)];
+        rejects(&slip, "10 uF is 10e-6");
+
+        let mut unsourced = switch_card();
+        let mut row = cap_row("in", crate::CapSide::Input, 1e-6);
+        row.basis = "  ".into();
+        unsourced.supply_cap = vec![row];
+        rejects(&unsourced, "needs a basis");
+
+        let mut twice = switch_card();
+        twice.supply_cap = vec![
+            cap_row("in", crate::CapSide::Input, 1e-6),
+            cap_row("in", crate::CapSide::Input, 2e-6),
+        ];
+        rejects(&twice, "twice at the same grade");
+
+        // Required and recommended figures for one pin are two statements.
+        let mut graded = switch_card();
+        let mut rec = cap_row("in", crate::CapSide::Input, 4.7e-5);
+        rec.grade = crate::CapGrade::Recommended;
+        graded.supply_cap = vec![cap_row("in", crate::CapSide::Input, 1e-7), rec];
+        accepts(&graded);
+
+        let mut single = switch_card();
+        let mut row = cap_row("in", crate::CapSide::Input, 1e-6);
+        row.min_single_f = Some(2e-6);
+        single.supply_cap = vec![row];
+        rejects(&single, "no more than min_f");
+    }
+
+    #[test]
+    fn a_regulator_output_is_stated_once_either_as_cout_or_as_a_supply_cap_row() {
+        let mut reg = en("out", &[("cout_min_f", 1e-6)], None);
+        pins(&mut reg, &[("1", "in"), ("2", "gnd"), ("3", "out")]);
+        reg.supply_cap = vec![cap_row("out", crate::CapSide::Output, 1e-6)];
+        rejects(&reg, "state the output capacitor once");
+        // The input side is not a cout figure, so it is still welcome.
+        reg.supply_cap = vec![cap_row("in", crate::CapSide::Input, 1e-6)];
+        let errs = validate(&reg).err().unwrap_or_default();
+        assert!(
+            errs.iter().all(|x| !x.message.contains("supply_cap")),
+            "{errs:?}"
+        );
+    }
+
+    #[test]
+    fn a_pin_bias_row_is_held_to_a_signal_pin_a_range_and_a_basis() {
+        let mut ok = switch_card();
+        let mut row = bias_row("flg");
+        row.min_ohm = Some(1e3);
+        row.max_ohm = Some(1e5);
+        ok.pin_bias = vec![row];
+        accepts(&ok);
+
+        let mut ghost = switch_card();
+        ghost.pin_bias = vec![bias_row("nfault")];
+        rejects(&ghost, "[[models.pin_bias]] role");
+
+        let mut supply = switch_card();
+        supply.pin_bias = vec![bias_row("gnd")];
+        rejects(&supply, "supply or ground role");
+
+        let mut backwards = switch_card();
+        let mut row = bias_row("flg");
+        row.min_ohm = Some(1e5);
+        row.max_ohm = Some(1e3);
+        backwards.pin_bias = vec![row];
+        rejects(&backwards, "must not exceed");
+
+        let mut unsourced = switch_card();
+        let mut row = bias_row("flg");
+        row.basis = String::new();
+        unsourced.pin_bias = vec![row];
+        rejects(&unsourced, "needs a basis");
+
+        let mut twice = switch_card();
+        twice.pin_bias = vec![bias_row("flg"), bias_row("flg")];
+        rejects(&twice, "twice");
     }
 
     /// A digital card with no logic and a bridge, switch-node or load-switch

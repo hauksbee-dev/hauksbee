@@ -3799,6 +3799,9 @@ fn back_power_fix_hint() -> &'static str {
 /// check, whose low-severity form (a single function committed to a pin-locked
 /// group) has a different honest remedy than the serious two-function contention.
 #[must_use]
+// An exhaustive match over every lint kind, so a new check cannot ship without a hint;
+// it grows by one arm per check and splitting it would only hide the table.
+#[allow(clippy::too_many_lines)]
 pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static str> {
     if let Some(hint) = severity_specific_fix_hint(check, severity) {
         return Some(hint);
@@ -3897,7 +3900,10 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         | LintCheck::PullupIneffective
         | LintCheck::AudioBusWiring
         | LintCheck::PowerDomainBackfeed
-        | LintCheck::PowerDomainBusLockup => supply_fix_hint(check),
+        | LintCheck::PowerDomainBusLockup
+        | LintCheck::RequiredPinBias
+        | LintCheck::SupplyCapacitance
+        | LintCheck::HoldUpDroop => supply_fix_hint(check),
     })
 }
 
@@ -3926,6 +3932,15 @@ const fn supply_fix_hint(check: LintCheck) -> &'static str {
         }
         LintCheck::PowerDomainBusLockup => {
             "Put the I2C pull-ups on a rail that stays on while any chip on the bus does, and power every chip on the bus together, or isolate the switched chip with a bus switch or buffer."
+        }
+        LintCheck::RequiredPinBias => {
+            "Add the pull resistor the datasheet requires on the pin (or turn the existing one round, or bring its value inside the stated range)."
+        }
+        LintCheck::SupplyCapacitance => {
+            "Add the input or output capacitance the datasheet requires between the net and ground, beside the pin."
+        }
+        LintCheck::HoldUpDroop => {
+            "Raise the bulk capacitor, lower the load, or raise the transformer voltage until the valley stays above the regulator's minimum input."
         }
         LintCheck::AudioBusWiring => {
             "Wire each audio pin to the net carrying its own role (BCLK to BCLK, LRCLK to LRCLK, one part's data out to the other's data in), keep exactly one clock master, and connect MCLK where the codec needs it."

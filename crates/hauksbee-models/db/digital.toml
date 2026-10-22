@@ -12631,6 +12631,25 @@ missing = ["h_bridge_drive", "current_regulation", "sleep_mode", "overcurrent_pr
 # VM draw is the operating-mode IVM (3 mA typ, 10 mA max, VM = 12 V); sleep is not
 # modelled. The H-bridge outputs and the current chopping itself are not stamped;
 # the ILIM law is a protection threshold, never attributed as a steady load.
+
+# VM bulk capacitance, TI DRV8870 SLVSCY8B (https://www.ti.com/lit/ds/symlink/drv8870.pdf, sha256 c8bf111e77305c75ca6bb7d6a926ac7660fcd013289e731d2277a7ea404059f3).
+[[models.supply_cap]]
+role = "vm"
+side = "input"
+grade = "required"
+min_f = 1.0e-7
+basis = "SLVSCY8B Pin Functions, VM (PDF p.3): \"Connect a 0.1-uF bypass capacitor to ground, as well as sufficient bulk capacitance, rated for the VM voltage\""
+note = "The bypass capacitor sits at the pin; the bulk capacitor absorbs the energy the motor returns when it brakes or reverses."
+
+[[models.supply_cap]]
+role = "vm"
+side = "input"
+grade = "recommended"
+min_f = 4.7e-5
+min_single_f = 4.7e-5
+basis = "SLVSCY8B 8.2 Typical Application (PDF p.11): VM bypassed by 0.1 uF and 47 uF; 9.1 Bulk Capacitance (PDF p.14): \"The data sheet generally provides a recommended value, but system-level testing is required to determine the appropriate sized bulk capacitor\""
+note = "The right size depends on the motor current, the supply's ability to source current and the braking method; 47 uF is the datasheet's starting value."
+
 [[models]]
 id = "drv8871_hsop8"
 kind = "digital"
@@ -12729,6 +12748,25 @@ missing = ["h_bridge_drive", "current_chopping", "sleep_mode", "overcurrent_prot
 # the awake figure. The USB transceiver, the UART/modem lines, the GPIO block, the
 # on-chip regulator that drives VDD from REGIN (3.45 V typ, 1 to 100 mA) and the
 # VBUS sense are NOT modelled: the UART outputs carry no stamped drive.
+
+# VM bulk capacitance, TI DRV8871 SLVSCY9B (https://www.ti.com/lit/ds/symlink/drv8871.pdf, sha256 09de551aa0c6d090fd14b000634cfd894d782a050eed13110fe2eb10f1b548bf).
+[[models.supply_cap]]
+role = "vm"
+side = "input"
+grade = "required"
+min_f = 1.0e-7
+basis = "SLVSCY9B Pin Functions, VM (PDF p.3): \"Connect a 0.1-uF bypass capacitor to ground, as well as sufficient bulk capacitance, rated for the VM voltage\""
+note = "The bypass capacitor sits at the pin; the bulk capacitor absorbs the energy the motor returns when it brakes or reverses."
+
+[[models.supply_cap]]
+role = "vm"
+side = "input"
+grade = "recommended"
+min_f = 4.7e-5
+min_single_f = 4.7e-5
+basis = "SLVSCY9B 8.2 Typical Application (PDF p.11): VM bypassed by 0.1 uF and 47 uF; 9.1 Bulk Capacitance (PDF p.14): \"The data sheet generally provides a recommended value, but system-level testing is required to determine the appropriate sized bulk capacitor\""
+note = "The right size depends on the motor current, the supply's ability to source current and the braking method; 47 uF is the datasheet's starting value."
+
 [[models]]
 id = "cp2104_qfn24"
 kind = "digital"
@@ -13627,6 +13665,33 @@ missing = ["gate_drive", "charge_pump", "dvdd_regulator", "vgls_regulator", "shu
 # (codex gpt-6-luna, --kind digital on the second run) and reviewed against the PDF: the three pin maps (Table 3), the limiting values (Table 28) and
 # the 250 nA typical standby current. Identity only: the clock, alarm and timer registers are not modelled. Hand edits: value_re and orderable_re
 # accept a board's BS / T / TS suffix; vih/vil are 0.7/0.3 x VDD at 3.3 V (the draft wrote a bare 0.7 V); supply_static_ua is the 250 nA standby draw (the draft used the 800 uA active bound).
+
+# VM capacitance and open-drain bias, TI DRV835x SLVSDY6A (https://www.ti.com/lit/ds/symlink/drv8353.pdf,
+# sha256 8bb3a1d29ec9ea079d0ef452a2a0c614511f37575756b11a03646d8a82ed758c).
+[[models.supply_cap]]
+role = "vm"
+side = "input"
+grade = "required"
+min_f = 1.0e-5
+basis = "SLVSDY6A Pin Functions, 40-Pin DRV8353 Devices (PDF p.7), VM: \"Connect a X5R or X7R, 0.1-uF, VM-rated ceramic and greater then or equal to 10-uF local capacitance between the VM and GND pins\""
+note = "This is the gate-driver supply; the 0.1 uF ceramic goes at the pin and at least 10 uF of local capacitance beside it. Section 10.1 Bulk Capacitance Sizing (PDF p.77) sizes the motor-supply bulk capacitor separately."
+
+[[models.pin_bias]]
+role = "nfault"
+level = "high"
+needs = "pull"
+open_ok = true
+basis = "SLVSDY6A Pin Functions, 40-Pin DRV8353 Devices (PDF p.7), nFAULT (OD): \"This pin is pulled logic low during a fault condition and requires an external pullup resistor\"; 7.3 Recommended Operating Conditions (PDF p.11): open-drain pullup voltage VOD 0 to 5.5 V, open-drain output current IOD 0 to 5 mA"
+note = "Without the pull-up nFAULT never reads high, so the controller sees a permanent fault or none."
+
+[[models.pin_bias]]
+role = "sdo"
+level = "high"
+needs = "pull"
+open_ok = true
+basis = "SLVSDY6A Pin Functions, 40-Pin DRV8353 Devices (PDF p.7), SDO (OD): \"Serial data output ... This pin requires an external pullup resistor\""
+note = "Without the pull-up SPI reads from the driver return zeros; a design that never reads the registers may leave SDO open."
+
 [[models]]
 id = "pcf8563_bs4"
 kind = "digital"

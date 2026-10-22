@@ -119,9 +119,10 @@ pub use pack::{Pack, PackError, PackManifest, PackRecord, PackStore, Provenance}
 pub use pin_rules::{InferredRole, PinRule, PinRuleTable};
 pub use profile::{LoadProfile, Segment};
 pub use schema::{
-    abs_max_citation, basis_names_abs_max, declared_pin_ceiling_v, ComponentKind, Doubt, DoubtArea,
-    EnvelopeSeverity, ModelCoverage, ModelEntry, ModelSourceReference, OperatingEnvelope, Params,
-    PeripheralPower, PeripheralSpec, StrapInternalPull, StrapLevel, StrapPin,
+    abs_max_citation, basis_names_abs_max, declared_pin_ceiling_v, BiasLevel, BiasNeed, CapGrade,
+    CapSide, ComponentKind, Doubt, DoubtArea, EnvelopeSeverity, ModelCoverage, ModelEntry,
+    ModelSourceReference, OperatingEnvelope, Params, PeripheralPower, PeripheralSpec, PinBias,
+    StrapInternalPull, StrapLevel, StrapPin, SupplyCap,
 };
 pub use sensor_spec::{
     Bus, Encoding, ProtocolStyle, RegisterSpec, Sensor, SensorSpec, SensorSpecError,

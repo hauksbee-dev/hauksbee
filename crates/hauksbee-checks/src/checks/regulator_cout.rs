@@ -41,7 +41,7 @@ use hauksbee_models::{ComponentKind, Confidence, ModelEntry, ModelLibrary};
 use super::envelope::role_net_id;
 
 /// `f` farads in the unit a reader expects for an output capacitor.
-fn farads(f: f64) -> String {
+pub(super) fn farads(f: f64) -> String {
     if f >= 1e-6 {
         let uf = format!("{:.2}", f * 1e6);
         format!("{} µF", uf.trim_end_matches('0').trim_end_matches('.'))
@@ -52,7 +52,7 @@ fn farads(f: f64) -> String {
 
 /// A part-per-billion slack, as in the binder: "10uF" parses one ulp short of
 /// a card's 10e-6, and a capacitor of exactly the stated value meets it.
-fn short_of(found: f64, need: f64) -> bool {
+pub(super) fn short_of(found: f64, need: f64) -> bool {
     found < need * (1.0 - 1e-9)
 }
 
@@ -113,7 +113,11 @@ impl CoutSpec {
 
 /// The fitted capacitors from the regulator output `out` to its return (its
 /// ground pin's net, or any ground-named net when it has none), each once.
-fn caps_across_output(board: &ExtractedBoard, out: i64, gnd: Option<i64>) -> Vec<&Component> {
+pub(super) fn caps_across_output(
+    board: &ExtractedBoard,
+    out: i64,
+    gnd: Option<i64>,
+) -> Vec<&Component> {
     let is_return = |id: i64| {
         gnd.map_or_else(
             || board.net(id).is_some_and(|n| is_ground(&n.name)),
@@ -141,7 +145,7 @@ fn caps_across_output(board: &ExtractedBoard, out: i64, gnd: Option<i64>) -> Vec
 /// unitless below 10 mF ("100n", "4u7"). "4.7uH" is not a capacitance, and a
 /// unitless "10k" or bare "4.7" is not one either: read as farads it would be
 /// thousands of them, and which unit a bare number meant is not known.
-fn capacitance(c: &Component) -> Option<f64> {
+pub(super) fn capacitance(c: &Component) -> Option<f64> {
     parse_value(c.value.trim())
         .filter(|v| v.unit.as_deref().map_or(v.si < 1e-2, |u| u == "F"))
         .map(|v| v.si)
