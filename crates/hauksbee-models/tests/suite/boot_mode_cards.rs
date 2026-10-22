@@ -1,0 +1,192 @@
+//! Every card that carries a boot-mode table must be internally consistent:
+//! each strap the table reads is a pad on the card with a threshold row and a
+//! citation, and the ROM-bootloader modes say what answers.
+//!
+//! The values themselves are checked against the vendor PDFs when the cards are
+//! written; this test only guards the shape the resolver depends on.
+
+use hauksbee_ir::boot::BootOutcome;
+use hauksbee_models::boot_mode::{PinLevel, RomProtocol};
+use hauksbee_models::schema::{DbFile, ModelEntry};
+
+fn cards() -> Vec<ModelEntry> {
+    let text = include_str!("../../db/mcu.toml");
+    toml::from_str::<DbFile>(text)
+        .expect("mcu.toml parses")
+        .models
+}
+
+fn with_boot() -> Vec<ModelEntry> {
+    cards()
+        .into_iter()
+        .filter(|c| !c.boot_modes.is_empty())
+        .collect()
+}
+
+#[test]
+fn the_families_the_package_covers_carry_a_boot_table() {
+    let have: Vec<String> = with_boot().into_iter().map(|c| c.id).collect();
+    for id in [
+        "stm32f103c8",
+        "stm32f072c",
+        "stm32f401c",
+        "stm32g474c",
+        "stm32l0x1k_lqfp32",
+        "esp32_wroom",
+        "esp32_qfn48",
+        "esp32_pico",
+        "esp32s3_wroom",
+        "esp32s3_qfn56",
+        "esp32c3_mini1",
+        "esp32c3_wroom02",
+        "esp32c3_qfn32",
+        "rp2040",
+        "rp2040_qfn56",
+    ] {
+        assert!(
+            have.iter().any(|h| h == id),
+            "{id} has no boot table: {have:?}"
+        );
+    }
+}
+
+#[test]
+fn every_strap_the_table_reads_is_a_pad_with_thresholds_and_a_citation() {
+    for card in with_boot() {
+        let pad_roles: Vec<&str> = card.pins.values().map(String::as_str).collect();
+        let id = &card.id;
+        for row in &card.boot_modes {
+            assert!(
+                !row.cite.trim().is_empty(),
+                "{id}: mode '{}' has no citation",
+                row.name
+            );
+            for role in row.when.keys() {
+                assert!(
+                    card.boot_inputs.iter().any(|i| &i.role == role),
+                    "{id}: mode '{}' reads '{role}' but boot_inputs has no row for it",
+                    row.name
+                );
+            }
+        }
+        for input in &card.boot_inputs {
+            assert!(
+                !input.cite.trim().is_empty(),
+                "{id}: '{}' has no citation",
+                input.role
+            );
+        }
+        // A strap with no pad on the card reads as unconnected (the silicon pull
+        // decides), which is how a module whose pad numbers are not yet known is
+        // carried. What must hold is that a ROM-bootloader mode can be reached
+        // by pins the card does have, or the table could never be exercised.
+        let reachable = card.boot_modes.iter().any(|m| {
+            m.outcome == BootOutcome::RomBootloader
+                && m.when.keys().all(|r| pad_roles.contains(&r.as_str()))
+        });
+        assert!(
+            reachable,
+            "{id}: no ROM-bootloader mode is reachable from pads the card has"
+        );
+        let latch = card.strap_latch.as_ref();
+        assert!(
+            latch.is_some_and(|l| !l.cite.trim().is_empty()),
+            "{id}: no strap_latch with a citation"
+        );
+    }
+}
+
+#[test]
+fn a_rom_bootloader_mode_says_what_answers() {
+    for card in with_boot() {
+        let runs_rom = card
+            .boot_modes
+            .iter()
+            .any(|m| m.outcome == BootOutcome::RomBootloader);
+        if !runs_rom || card.qemu_boot.is_some() {
+            // An emulated ROM (QEMU) answers for itself.
+            continue;
+        }
+        let rom = card.rom_bootloader.as_ref().unwrap_or_else(|| {
+            panic!(
+                "{}: a ROM-bootloader mode but no [models.rom_bootloader]",
+                card.id
+            )
+        });
+        assert!(
+            !rom.cite.trim().is_empty(),
+            "{}: rom_bootloader has no citation",
+            card.id
+        );
+        if rom.protocol == RomProtocol::StUsart {
+            assert!(rom.version.is_some(), "{}: no protocol version", card.id);
+            assert!(rom.product_id.is_some(), "{}: no product id", card.id);
+            for must in [0x00_u8, 0x01, 0x02] {
+                assert!(
+                    rom.commands.contains(&must),
+                    "{}: command list lacks Get/GetVersion/GetID (0x{must:02x})",
+                    card.id
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_stm32_f1_table_is_the_vendors_table_9() {
+    let f1 = cards().into_iter().find(|c| c.id == "stm32f103c8").unwrap();
+    let rows: Vec<(Vec<(String, PinLevel)>, BootOutcome)> = f1
+        .boot_modes
+        .iter()
+        .map(|m| {
+            (
+                m.when.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+                m.outcome,
+            )
+        })
+        .collect();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].1, BootOutcome::UserFlash);
+    assert_eq!(rows[1].1, BootOutcome::RomBootloader);
+    assert_eq!(rows[2].1, BootOutcome::Sram);
+    assert_eq!(f1.rom_bootloader.as_ref().unwrap().product_id, Some(0x0410));
+}
+
+#[test]
+fn the_esp32_download_mode_needs_gpio0_and_gpio2_low() {
+    let card = cards().into_iter().find(|c| c.id == "esp32_wroom").unwrap();
+    let download = card
+        .boot_modes
+        .iter()
+        .find(|m| m.outcome == BootOutcome::RomBootloader)
+        .expect("a download row");
+    assert_eq!(download.when.get("gpio0"), Some(&PinLevel::Low));
+    assert_eq!(download.when.get("gpio2"), Some(&PinLevel::Low));
+    let q = card.qemu_boot.as_ref().expect("qemu strap layout");
+    assert_eq!(q.device, "esp32.gpio");
+    // QEMU's own flash-boot constant (hw/xtensa/esp32.c).
+    assert_eq!(q.flash_boot, 0x12);
+    assert_eq!(q.bits.get("gpio0"), Some(&4));
+}
+
+#[test]
+fn rp2040_boots_the_usb_bootloader_when_qspi_ss_is_low() {
+    let card = cards()
+        .into_iter()
+        .find(|c| c.id == "rp2040_qfn56")
+        .unwrap();
+    let bootsel = card
+        .boot_modes
+        .iter()
+        .find(|m| m.outcome == BootOutcome::RomBootloader)
+        .expect("a BOOTSEL row");
+    assert_eq!(bootsel.when.get("qspi_ss"), Some(&PinLevel::Low));
+    assert_eq!(
+        card.rom_bootloader.as_ref().map(|r| r.protocol),
+        Some(RomProtocol::UsbOnly)
+    );
+    assert_eq!(
+        card.reset_input.as_ref().map(|r| r.role.as_str()),
+        Some("run")
+    );
+}

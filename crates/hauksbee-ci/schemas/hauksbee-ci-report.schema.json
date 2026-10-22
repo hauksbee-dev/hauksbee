@@ -371,6 +371,83 @@
         }
       ]
     },
+    "BootDecision": {
+      "description": "The boot mode the chip reached and why. Carried in the run JSON as\n`cosim.execution[].boot` and printed by the CLI.",
+      "properties": {
+        "caveats": {
+          "description": "Things the reader should weigh: a strap that moved between the solved\nstart-up point and reset release, a level taken from an internal pull.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cite": {
+          "description": "The vendor document and table the decision comes from.",
+          "type": "string"
+        },
+        "mode": {
+          "description": "The vendor's name for the mode (`System memory`, `SPI Boot`).",
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/definitions/BootOutcome"
+        },
+        "straps": {
+          "description": "Each strap pin the table reads, as the chip saw it.",
+          "items": {
+            "$ref": "#/definitions/StrapReading"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "description": "The whole finding in one sentence (see [`BootDecision::sentence`]).",
+          "type": "string"
+        },
+        "user_firmware_runs": {
+          "description": "Whether the application firmware ran, or was allowed to.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "outcome",
+        "mode",
+        "straps",
+        "user_firmware_runs",
+        "summary",
+        "cite"
+      ],
+      "type": "object"
+    },
+    "BootOutcome": {
+      "description": "Where the chip's reset sequence sends it.",
+      "oneOf": [
+        {
+          "const": "user_flash",
+          "description": "The application in the normal flash runs.",
+          "type": "string"
+        },
+        {
+          "const": "rom_bootloader",
+          "description": "The vendor's ROM bootloader (or download mode) runs; the user firmware\ndoes not.",
+          "type": "string"
+        },
+        {
+          "const": "sram",
+          "description": "The chip jumps into SRAM; user firmware runs only if something loaded\nit there.",
+          "type": "string"
+        },
+        {
+          "const": "held_in_reset",
+          "description": "The reset line is asserted, so the chip never starts.",
+          "type": "string"
+        },
+        {
+          "const": "undefined",
+          "description": "The strap levels fall in a combination the vendor marks reserved, or the\ncard has no row for them.",
+          "type": "string"
+        }
+      ]
+    },
     "CiJsonAssertion": {
       "description": "Published JSON shape for one evaluated assertion.\n\nKept separate from the runtime [`AssertResult`] because subject nets/refs\nare internal waiver keys, while the causal evidence map is part of the\nexternal contract. The committed schema is generated from this type via\n[`CiJsonReport`]: see `crates/hauksbee-ci/tests/ci_report_schema_drift.rs`.\n`why`, `waived`, `all_subjects` and `evidence` are the only fields a consumer\nmay find ABSENT rather than null.",
       "properties": {
@@ -929,6 +1006,17 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "boot": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BootDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The boot mode the board's straps selected and why, for a chip whose\ncard carries a boot table (hauksbee-ir's vocabulary)."
         },
         "clock_source": {
           "description": "Where the core's clock comes from, in words.",
@@ -1862,6 +1950,64 @@
             "value"
           ],
           "type": "object"
+        }
+      ]
+    },
+    "StrapReading": {
+      "description": "One strap pin as the chip saw it at reset release.",
+      "properties": {
+        "basis": {
+          "description": "Why the pin reads that level when the voltage alone does not say: an\ninternal pull on an undriven pad, or the net left unconnected.",
+          "type": "string"
+        },
+        "level": {
+          "$ref": "#/definitions/StrapReadingLevel"
+        },
+        "net": {
+          "description": "The board net on the pin, when it has one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pin": {
+          "description": "The pin's name for a reader (`BOOT0`, `GPIO0`).",
+          "type": "string"
+        },
+        "role": {
+          "description": "The pin role in the model card (`boot0`, `gpio0`).",
+          "type": "string"
+        },
+        "volts": {
+          "description": "The solved voltage on the pin, when the board defines one.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "role",
+        "pin",
+        "level"
+      ],
+      "type": "object"
+    },
+    "StrapReadingLevel": {
+      "description": "The level a strap pin was read at.",
+      "oneOf": [
+        {
+          "enum": [
+            "low",
+            "high"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "indeterminate",
+          "description": "Between the chip's low and high thresholds, or no voltage was solved.",
+          "type": "string"
         }
       ]
     },

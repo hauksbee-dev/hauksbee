@@ -186,6 +186,10 @@ pub struct BoundBoard {
     pub net_names: Vec<String>,
     pub digital: Vec<DigitalComponent>,
     pub mcus: Vec<McuBinding>,
+    /// MCU reference -> the boot-mode table of the card it bound to, for the
+    /// co-simulator to resolve against the solved board at reset release. Only
+    /// MCUs whose card carries boot-mode rows appear.
+    pub mcu_boot: HashMap<String, hauksbee_models::boot_mode::BootSpec>,
     /// Processors that were skipped because the board file marks them DNP, as
     /// (reference, value). Non-empty with an empty `mcus` means the board has
     /// no simulable processor for a reason the user can undo (`--fit`), which
@@ -547,6 +551,7 @@ pub fn bind_board_driven(
     let mut component_kinds: HashMap<String, String> = HashMap::new();
     let mut digital: Vec<DigitalComponent> = Vec::new();
     let mut mcus: Vec<McuBinding> = Vec::new();
+    let mut mcu_boot: HashMap<String, hauksbee_models::boot_mode::BootSpec> = HashMap::new();
     let mut dacs: Vec<DacBinding> = Vec::new();
     let mut peripherals: Vec<PeripheralBinding> = Vec::new();
     let input_sources: HashMap<String, hauksbee_ir::DeviceId> = HashMap::new();
@@ -684,6 +689,11 @@ pub fn bind_board_driven(
                         (&board.components, &level_nets),
                         lib.pin_rules(),
                     );
+                    if matches!(outcome, BindOutcome::Mcu { .. }) {
+                        if let Some(spec) = bound_card.boot_spec() {
+                            mcu_boot.insert(comp.reference.clone(), spec);
+                        }
+                    }
                     let rail = |n: Option<i64>| {
                         let id = node_of(n)?;
                         let name = circuit.node_name(id);
@@ -994,6 +1004,7 @@ pub fn bind_board_driven(
         net_names,
         digital,
         mcus,
+        mcu_boot,
         dnp_mcus,
         unsupported_mcus,
         component_kinds,

@@ -145,6 +145,24 @@ pub struct ModelEntry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub straps: Vec<StrapPin>,
 
+    /// `[models.strap_latch]`, `[models.reset_input]`, `[[models.boot_inputs]]`,
+    /// `[[models.boot_modes]]`, `[models.qemu_boot]`: the vendor's boot-mode
+    /// table, which the co-simulator resolves against the solved board at
+    /// reset release. See [`crate::boot_mode`]. The lint's `straps` above stay
+    /// as they are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strap_latch: Option<crate::boot_mode::StrapLatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_input: Option<crate::boot_mode::ResetInput>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boot_inputs: Vec<crate::boot_mode::BootInput>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boot_modes: Vec<crate::boot_mode::BootModeRow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qemu_boot: Option<crate::boot_mode::QemuBoot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rom_bootloader: Option<crate::boot_mode::RomBootloader>,
+
     /// `[models.pin_capability]`: which pads can serve a given peripheral
     /// function, as structured data a board check can read (today the pads that
     /// can be an ADC input, with the channel each one is). MCU cards only.
