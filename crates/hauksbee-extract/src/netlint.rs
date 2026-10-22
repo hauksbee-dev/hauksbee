@@ -2647,7 +2647,7 @@ fn uart_role(p: &Pin) -> Option<(bool, bool)> {
 }
 
 /// The UART role of a pin by its function name, for the engine-layer checks
-/// that share this reading: `Some((transmit, dedicated))`, see [`uart_role`].
+/// that share this reading: `Some((transmit, dedicated))`, see `uart_role`.
 #[must_use]
 pub fn uart_pin_role(p: &Pin) -> Option<(bool, bool)> {
     uart_role(p)
