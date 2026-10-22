@@ -206,3 +206,108 @@ fn reset_held_low_keeps_the_core_from_running() {
     assert!(!r.evidence.executed);
     assert!(!r.pll_high);
 }
+
+// --- ESP32 (Espressif QEMU): the machine's own ROM takes the strap path ---
+
+#[cfg(feature = "qemu")]
+mod esp32 {
+    use super::*;
+    use hauksbee_mcu::qemu::{is_available, QemuArch};
+
+    fn qemu_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    const BOARD: &str = include_str!("../../../testdata/boards/esp32_devkit_demo.kicad_pcb");
+
+    /// The devkit demo with GPIO0 (module pad 25) left open, or tied to ground
+    /// the way a held BOOT button ties it.
+    fn board(gpio0_grounded: bool) -> String {
+        if !gpio0_grounded {
+            return BOARD.to_string();
+        }
+        let anchor = "(pad 34 smd rect (at 3 2) (net 0 \"\"))";
+        assert!(BOARD.contains(anchor), "demo board changed");
+        BOARD.replace(
+            anchor,
+            &format!("(pad 25 smd rect (at 3 4) (net 1 \"GND\"))\n    {anchor}"),
+        )
+    }
+
+    struct Run {
+        evidence: ExecutionEvidence,
+        uart: String,
+        blink_edges: u32,
+    }
+
+    fn run(gpio0_grounded: bool) -> Option<Run> {
+        hauksbee_testkit::skip_if!(
+            !is_available(QemuArch::Xtensa) => None,
+            "Espressif QEMU (qemu-system-xtensa) not installed"
+        );
+        let fw = hauksbee_testkit::skip_none!(
+            crate::support::testdata("firmware/esp32_blinky/flash.bin") => None,
+            "esp32_blinky flash.bin not built"
+        );
+        let mut engine = HauksbeeEngine::from_board_file(
+            &board(gpio0_grounded),
+            Some(&fw),
+            "/boards/esp32_boot_straps.kicad_pcb",
+        )
+        .expect("build the ESP32 boot-strap engine");
+        engine.scheduler_mut().chunk_s = 5e-3;
+        let mut uart = Vec::new();
+        let mut blink_edges = 0;
+        let mut prev = false;
+        for _ in 0..300 {
+            let frame = engine.step(5e-3);
+            for bytes in frame.uart.values() {
+                uart.extend_from_slice(bytes);
+            }
+            let high = frame.net_voltages.get("GPIO4_BLINK").copied().unwrap_or(0.0) > 2.0;
+            if high != prev {
+                blink_edges += 1;
+            }
+            prev = high;
+        }
+        engine.scheduler_mut().refresh_execution_evidence();
+        let evidence = engine.scheduler().execution_evidence().first()?.clone();
+        Some(Run {
+            evidence,
+            uart: String::from_utf8_lossy(&uart).to_string(),
+            blink_edges,
+        })
+    }
+
+    #[test]
+    fn an_open_gpio0_boots_the_user_firmware() {
+        let _guard = qemu_test_lock();
+        let Some(r) = run(false) else { return };
+        let boot = r.evidence.boot.as_ref().expect("a boot decision is reported");
+        assert_eq!(boot.outcome, BootOutcome::UserFlash, "{}", boot.summary);
+        assert!(boot.user_firmware_runs);
+        assert!(r.uart.contains("hello from esp32"), "{:?}", r.uart);
+        assert!(r.blink_edges > 0);
+    }
+
+    #[test]
+    fn gpio0_held_low_enters_the_rom_download_mode_and_the_firmware_does_not_run() {
+        let _guard = qemu_test_lock();
+        let Some(r) = run(true) else { return };
+        let boot = r.evidence.boot.as_ref().expect("a boot decision is reported");
+        assert_eq!(boot.outcome, BootOutcome::RomBootloader, "{}", boot.summary);
+        assert!(!boot.user_firmware_runs);
+        assert!(boot.summary.contains("GPIO0 = 0.00 V"), "{}", boot.summary);
+        assert!(!r.evidence.executed, "{:?}", r.evidence);
+        assert!(!r.evidence.firmware_pass_eligible);
+        assert!(
+            !r.uart.contains("hello from esp32"),
+            "the user firmware's banner must not appear: {:?}",
+            r.uart
+        );
+        assert_eq!(r.blink_edges, 0, "the firmware's blink must not run");
+    }
+}

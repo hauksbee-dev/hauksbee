@@ -100,6 +100,9 @@ pub struct BootInput {
     pub vil: Option<[f64; 2]>,
     #[serde(default)]
     pub vih: Option<[f64; 2]>,
+    /// What else the pin does at the latch, or a caveat about its level.
+    #[serde(default)]
+    pub note: String,
     #[serde(default)]
     pub cite: String,
 }
@@ -172,8 +175,8 @@ pub struct QemuBoot {
     /// The property name.
     #[serde(default = "default_strap_property")]
     pub property: String,
-    /// The register value QEMU's own table calls flash boot. The board's driven
-    /// straps are overlaid on this value, so a board that drives nothing keeps
+    /// The register value QEMU's own table calls flash boot. The straps with a
+    /// defined level are overlaid on this value, so a pin with none keeps
     /// QEMU's default.
     pub flash_boot: u32,
     /// Strap role -> bit of the value.
@@ -187,13 +190,14 @@ fn default_strap_property() -> String {
 }
 
 impl QemuBoot {
-    /// The `strap_mode` value for the straps the board drives: the flash-boot
-    /// value with each driven role's bit set or cleared. Roles with no bit in
-    /// the table are ignored.
+    /// The `strap_mode` value for the strap levels in force: the flash-boot
+    /// value with each given role's bit set or cleared. A role with no defined
+    /// level keeps the machine's default bit; a role with no bit in the table
+    /// is ignored.
     #[must_use]
-    pub fn strap_value(&self, driven: &BTreeMap<String, PinLevel>) -> u32 {
+    pub fn strap_value(&self, levels: &BTreeMap<String, PinLevel>) -> u32 {
         let mut value = self.flash_boot;
-        for (role, level) in driven {
+        for (role, level) in levels {
             if let Some(&bit) = self.bits.get(role) {
                 match level {
                     PinLevel::High => value |= 1 << bit,
@@ -333,12 +337,18 @@ fn fit(row: &BootModeRow, levels: &BTreeMap<String, Option<PinLevel>>) -> Fit {
     }
 }
 
+/// Most unread roles [`select_mode`] enumerates; a card with more reads as
+/// indeterminate.
+const MAX_UNKNOWN_ROLES: usize = 10;
+
 /// The row the vendor's table selects for the levels read (first match wins).
 /// A role missing from `levels`, or mapped to `None`, has no defined level.
 ///
-/// When an undefined role keeps several rows possible the answer is
-/// [`Selection::Row`] only if every possible row leads to the same outcome;
-/// otherwise [`Selection::Indeterminate`].
+/// When undefined roles keep several rows possible, the answer is
+/// [`Selection::Row`] only if every way the undefined roles could fall (every
+/// high/low assignment) lands on a row with the same outcome; a way that lands
+/// on no row at all counts against it, because the vendor's table omits that
+/// combination. Otherwise the answer is [`Selection::Indeterminate`].
 #[must_use]
 pub fn select_mode<'a>(
     modes: &'a [BootModeRow],
@@ -352,11 +362,8 @@ pub fn select_mode<'a>(
             Fit::Match | Fit::Unknown => possible.push(row),
         }
     }
-    let Some(first) = possible.first() else {
+    if possible.is_empty() {
         return Selection::NoRow;
-    };
-    if possible.iter().all(|r| r.outcome == first.outcome) {
-        return Selection::Row(first);
     }
     let mut roles: Vec<String> = Vec::new();
     for row in &possible {
@@ -366,10 +373,35 @@ pub fn select_mode<'a>(
             }
         }
     }
-    Selection::Indeterminate {
+    let indeterminate = |roles: Vec<String>, rows: Vec<&'a BootModeRow>| Selection::Indeterminate {
         roles,
-        rows: possible,
+        rows,
+    };
+    if roles.len() > MAX_UNKNOWN_ROLES {
+        return indeterminate(roles, possible);
     }
+    let mut first_row: Option<&'a BootModeRow> = None;
+    for mask in 0..(1_u32 << roles.len()) {
+        let mut assigned = levels.clone();
+        for (i, role) in roles.iter().enumerate() {
+            let level = if (mask >> i) & 1 == 1 {
+                PinLevel::High
+            } else {
+                PinLevel::Low
+            };
+            assigned.insert(role.clone(), Some(level));
+        }
+        let landed = modes.iter().find(|r| fit(r, &assigned) == Fit::Match);
+        match (landed, first_row) {
+            (None, _) => return indeterminate(roles, possible),
+            (Some(row), None) => first_row = Some(row),
+            (Some(row), Some(first)) if row.outcome != first.outcome => {
+                return indeterminate(roles, possible);
+            }
+            (Some(_), Some(_)) => {}
+        }
+    }
+    first_row.map_or_else(|| indeterminate(roles, possible), Selection::Row)
 }
 
 /// `per_vdd * vdd + offset_v` for an affine threshold.
@@ -489,6 +521,21 @@ mod tests {
         let modes = vec![row("flash", &[("gpio0", PinLevel::High)], BootOutcome::UserFlash)];
         let sel = select_mode(&modes, &lv(&[("gpio0", Some(PinLevel::Low))]));
         assert_eq!(sel, Selection::NoRow);
+    }
+
+    #[test]
+    fn an_unread_pin_whose_other_state_has_no_row_is_indeterminate() {
+        // Only one state of gpio1 selects a row; the other has none.
+        let modes = vec![
+            row("flash", &[("gpio0", PinLevel::High)], BootOutcome::UserFlash),
+            row(
+                "spi download",
+                &[("gpio0", PinLevel::Low), ("gpio1", PinLevel::High)],
+                BootOutcome::RomBootloader,
+            ),
+        ];
+        let sel = select_mode(&modes, &lv(&[("gpio0", Some(PinLevel::Low)), ("gpio1", None)]));
+        assert!(matches!(sel, Selection::Indeterminate { .. }), "{sel:?}");
     }
 
     #[test]

@@ -124,9 +124,10 @@ pub struct Resolved {
     pub decision: BootDecision,
     /// Role -> level for the pins the table reads (undefined pins are `None`).
     pub levels: BTreeMap<String, Option<PinLevel>>,
-    /// The subset the board itself drives, which is what a QEMU strap value
-    /// overlays on the machine's default.
-    pub driven: BTreeMap<String, PinLevel>,
+    /// Every strap pin that has a defined level, whether the board drives it
+    /// or the silicon pull settles it: what a QEMU strap value overlays on the
+    /// machine's default.
+    pub latched: BTreeMap<String, PinLevel>,
 }
 
 /// Whether the reset pin reads as asserted, released or unknown.
@@ -177,15 +178,26 @@ pub fn resolve(spec: &BootSpec, snap: &BoardSnapshot<'_>) -> Option<Resolved> {
         return None;
     }
     let mut levels: BTreeMap<String, Option<PinLevel>> = BTreeMap::new();
-    let mut driven: BTreeMap<String, PinLevel> = BTreeMap::new();
+    let mut latched: BTreeMap<String, PinLevel> = BTreeMap::new();
     let mut reads: Vec<PinRead> = Vec::new();
     for role in table.strap_roles() {
         let read = read_pin(role, table.input(role), snap);
         levels.insert(role.to_string(), read.level);
-        if let (true, Some(level)) = (read.board_driven, read.level) {
-            driven.insert(role.to_string(), level);
+        if let Some(level) = read.level {
+            latched.insert(role.to_string(), level);
         }
         reads.push(read);
+    }
+    // Pins the table does not branch on can still change what a machine's own
+    // ROM does (a QEMU strap value carries every strap bit), so the ones with a
+    // defined level join the overlay.
+    for input in &spec.inputs {
+        if !levels.contains_key(&input.role) {
+            let read = read_pin(&input.role, Some(input), snap);
+            if let Some(level) = read.level {
+                latched.insert(input.role.clone(), level);
+            }
+        }
     }
     let cite_of = |row: &hauksbee_models::boot_mode::BootModeRow| row.cite.clone();
     let mut caveats: Vec<String> = reads
@@ -235,7 +247,7 @@ pub fn resolve(spec: &BootSpec, snap: &BoardSnapshot<'_>) -> Option<Resolved> {
     Some(Resolved {
         decision,
         levels,
-        driven,
+        latched,
     })
 }
 
@@ -349,11 +361,19 @@ pub fn plan_core(spec: &BootSpec, resolved: &Resolved) -> CorePlan {
     use hauksbee_mcu::boot_mode::{RomPersonality, StBootloaderInfo, StUsartBootloader};
     use hauksbee_models::boot_mode::RomProtocol;
     if let Some(q) = &spec.qemu {
-        return CorePlan::Emulated(Some(hauksbee_mcu::boot_mode::QemuStrapMode {
+        // The machine's own ROM takes the boot path the straps select. A board
+        // that boots from flash (or whose straps are undefined) leaves QEMU's
+        // default flash-boot value alone.
+        let strap = matches!(
+            resolved.decision.outcome,
+            BootOutcome::RomBootloader | BootOutcome::Sram
+        )
+        .then(|| hauksbee_mcu::boot_mode::QemuStrapMode {
             device: q.device.clone(),
             property: q.property.clone(),
-            value: q.strap_value(&resolved.driven),
-        }));
+            value: q.strap_value(&resolved.latched),
+        });
+        return CorePlan::Emulated(strap);
     }
     match resolved.decision.outcome {
         BootOutcome::RomBootloader | BootOutcome::Sram => {
@@ -519,6 +539,7 @@ mod tests {
             internal_pull: StrapInternalPull::None,
             vil: Some([0.0, 0.8]),
             vih: Some([0.0, 2.0]),
+            note: String::new(),
             cite: String::new(),
         };
         BootSpec {
@@ -618,7 +639,7 @@ mod tests {
             .unwrap();
         assert_eq!(r.decision.outcome, BootOutcome::Undefined);
         assert!(r.decision.caveats.iter().any(|c| c.contains("BOOT0")));
-        assert!(r.driven.is_empty() || !r.driven.contains_key("boot0"));
+        assert!(r.latched.is_empty() || !r.latched.contains_key("boot0"));
     }
 
     #[test]

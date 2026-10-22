@@ -2520,6 +2520,94 @@ missing = ["instruction_counted_timing", "unmodified_firmware_gpio_input", "nati
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Bare classic ESP32 chip, package unknown: identity only (see the family note).
+
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "chip_pu"
+note  = "The strapping pins are sampled when the chip leaves reset: the pin levels must be stable at least tSU = 0 ms before CHIP_PU is pulled high and held for tH = 1 ms (min) after CHIP_PU is high; the latched values are then held until power-down"
+cite  = "ESP32 Series Datasheet v5.3, section 3 'Boot Configurations', Table 3-2 and Figure 3-1, PDF pp.22-23"
+
+[models.reset_input]
+role = "en"                       # CHIP_PU. Only esp32_wroom has this role today (pad 3); the QFN cards need pad 9
+vil  = [0.0, 0.6]                 # VIL_nRST max 0.6 V (a constant, NOT a ratio of VDD, on ESP32)
+vih  = [0.75, 0.0]                # VIH_nRST min 0.75 x VDD
+cite = "ESP32 Series Datasheet v5.3, Table 5-3 'DC Characteristics (3.3 V, 25 C)', rows VIH_nRST and VIL_nRST, PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio0"
+pin = "GPIO0"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (GPIO0 Pull-up, bit value 1) PDF p.22; Table 5-3 VIL/VIH PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio2"
+pin = "GPIO2"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (GPIO2 Pull-down, bit value 0) PDF p.22; Table 5-3 VIL/VIH PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio12"
+pin = "MTDI (GPIO12)"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "MTDI is NOT a boot-mode pin: it selects the VDD_SDIO supply. MTDI = 0 (default): VDD_SDIO is powered directly from VDD3P3_RTC (typically 3.3 V). MTDI = 1 at the latch: VDD_SDIO comes from the internal 1.8 V LDO, so flash or PSRAM that is powered from VDD_SDIO and is a 3.3 V part is under-supplied on a board that pulls MTDI high. EFUSE_SDIO_FORCE = 1 overrides the pin (EFUSE_SDIO_TIEH then decides)"
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (MTDI Pull-down, 0) PDF p.22; section 3.2 'Internal LDO (VDD_SDIO) Voltage Control' PDF p.24; Table 5-3 PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio15"
+pin = "MTDO (GPIO15)"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "MTDO is not a boot-mode pin: MTDO = 1 (default) enables U0TXD boot-message printing, 0 disables it; MTDO with GPIO5 selects the SDIO-slave edge timing (Table 3-5)"
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (MTDO Pull-up, 1) PDF p.22; Table 3-4 and Table 3-5 PDF p.25; Table 5-3 PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio5"
+pin = "GPIO5"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO5 is not a boot-mode pin: with MTDO it selects the SDIO-slave edge timing (Table 3-5)"
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (GPIO5 Pull-up, 1) PDF p.22; Table 3-5 PDF p.25; Table 5-3 PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio4"                     # no card has this role yet (wroom calls pad 26 'p04'); needed only for the QEMU bit table
+pin = "GPIO4"
+internal_pull = "unknown"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "The datasheet lists no strapping row for GPIO4, but the TRM GPIO_STRAP_REG has a bit for it (bit 2). Its silicon pull at reset is not stated in either document"
+cite = "ESP32 Technical Reference Manual v5.8, Register 6.13 GPIO_STRAP_REG, PDF p.141; ESP32 Series Datasheet v5.3 Table 3-1 (no GPIO4 row) PDF p.22"
+
+[[models.boot_modes]]
+name = "SPI Boot Mode"
+when = { gpio0 = "high" }          # GPIO2: any value
+outcome = "user_flash"
+detail = "GPIO0 = 1 (the default, internal pull-up): SPI boot, the chip boots from SPI flash and user firmware runs. GPIO2 can be any value"
+cite = "ESP32 Series Datasheet v5.3, Table 3-3 'Chip Boot Mode Control', PDF p.23"
+
+[[models.boot_modes]]
+name = "Joint Download Boot Mode"
+when = { gpio0 = "low", gpio2 = "low" }
+outcome = "rom_bootloader"
+detail = "GPIO0 = 0 and GPIO2 = 0: Joint Download Boot, which supports SDIO Download Boot and UART Download Boot; the ROM runs the download loader and the user firmware does not run. On chip revision v3.0 and later, uart_download_dis = 1 permanently disables this mode"
+cite = "ESP32 Series Datasheet v5.3, Table 3-3 and its footnote 2, PDF p.23; section 3.1 uart_download_dis paragraph, PDF p.24"
+
+# --- QEMU (Espressif fork) strap_mode: layout equals GPIO_STRAP_REG (TRM Register 6.13) ---
+[models.qemu_boot]
+device = "esp32.gpio"
+property = "strap_mode"
+flash_boot = 0x12                   # QEMU's own ESP32_STRAP_MODE_FLASH_BOOT; straps with a defined level are overlaid on it
+bits = { gpio12 = 5, gpio0 = 4, gpio2 = 3, gpio4 = 2, gpio15 = 1, gpio5 = 0 }
+cite = "ESP32 TRM v5.8 Register 6.13 GPIO_STRAP_REG PDF p.141; Espressif QEMU include/hw/gpio/esp32_gpio.h (ESP32_STRAP_MODE_FLASH_BOOT 0x12, ESP32_STRAP_MODE_UART_BOOT 0x0f), hw/xtensa/esp32.c:156"
+
 [[models]]
 id = "esp32"
 kind = "mcu"
@@ -2558,6 +2646,8 @@ backend = "qemu:esp32"
 "22" = "gpio2"
 "34" = "gpio5"
 "18" = "gpio12"
+"9"  = "en"          # CHIP_PU (Table 2-1 pin 9): the reset the chip leaves to start
+"24" = "gpio4"       # Table 2-1 pin 24
 "21" = "gpio15"
 "41" = "p01_txd"
 "40" = "p03_rxd"
@@ -2605,6 +2695,93 @@ implements = ["xtensa_lx6_firmware_execution", "boot_to_application", "gpio_outp
 missing = ["instruction_counted_timing", "unmodified_firmware_gpio_input", "native_adc_peripheral", "unmodified_firmware_i2c_spi_observation", "watchdog_behavior", "silicon_power_current_profile", "silicon_timing_and_errata"]
 
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "chip_pu"
+note  = "The strapping pins are sampled when the chip leaves reset: the pin levels must be stable at least tSU = 0 ms before CHIP_PU is pulled high and held for tH = 1 ms (min) after CHIP_PU is high; the latched values are then held until power-down"
+cite  = "ESP32 Series Datasheet v5.3, section 3 'Boot Configurations', Table 3-2 and Figure 3-1, PDF pp.22-23"
+
+[models.reset_input]
+role = "en"                       # CHIP_PU. Only esp32_wroom has this role today (pad 3); the QFN cards need pad 9
+vil  = [0.0, 0.6]                 # VIL_nRST max 0.6 V (a constant, NOT a ratio of VDD, on ESP32)
+vih  = [0.75, 0.0]                # VIH_nRST min 0.75 x VDD
+cite = "ESP32 Series Datasheet v5.3, Table 5-3 'DC Characteristics (3.3 V, 25 C)', rows VIH_nRST and VIL_nRST, PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio0"
+pin = "GPIO0"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (GPIO0 Pull-up, bit value 1) PDF p.22; Table 5-3 VIL/VIH PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio2"
+pin = "GPIO2"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (GPIO2 Pull-down, bit value 0) PDF p.22; Table 5-3 VIL/VIH PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio12"
+pin = "MTDI (GPIO12)"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "MTDI is NOT a boot-mode pin: it selects the VDD_SDIO supply. MTDI = 0 (default): VDD_SDIO is powered directly from VDD3P3_RTC (typically 3.3 V). MTDI = 1 at the latch: VDD_SDIO comes from the internal 1.8 V LDO, so flash or PSRAM that is powered from VDD_SDIO and is a 3.3 V part is under-supplied on a board that pulls MTDI high. EFUSE_SDIO_FORCE = 1 overrides the pin (EFUSE_SDIO_TIEH then decides)"
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (MTDI Pull-down, 0) PDF p.22; section 3.2 'Internal LDO (VDD_SDIO) Voltage Control' PDF p.24; Table 5-3 PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio15"
+pin = "MTDO (GPIO15)"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "MTDO is not a boot-mode pin: MTDO = 1 (default) enables U0TXD boot-message printing, 0 disables it; MTDO with GPIO5 selects the SDIO-slave edge timing (Table 3-5)"
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (MTDO Pull-up, 1) PDF p.22; Table 3-4 and Table 3-5 PDF p.25; Table 5-3 PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio5"
+pin = "GPIO5"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO5 is not a boot-mode pin: with MTDO it selects the SDIO-slave edge timing (Table 3-5)"
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (GPIO5 Pull-up, 1) PDF p.22; Table 3-5 PDF p.25; Table 5-3 PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio4"                     # no card has this role yet (wroom calls pad 26 'p04'); needed only for the QEMU bit table
+pin = "GPIO4"
+internal_pull = "unknown"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "The datasheet lists no strapping row for GPIO4, but the TRM GPIO_STRAP_REG has a bit for it (bit 2). Its silicon pull at reset is not stated in either document"
+cite = "ESP32 Technical Reference Manual v5.8, Register 6.13 GPIO_STRAP_REG, PDF p.141; ESP32 Series Datasheet v5.3 Table 3-1 (no GPIO4 row) PDF p.22"
+
+[[models.boot_modes]]
+name = "SPI Boot Mode"
+when = { gpio0 = "high" }          # GPIO2: any value
+outcome = "user_flash"
+detail = "GPIO0 = 1 (the default, internal pull-up): SPI boot, the chip boots from SPI flash and user firmware runs. GPIO2 can be any value"
+cite = "ESP32 Series Datasheet v5.3, Table 3-3 'Chip Boot Mode Control', PDF p.23"
+
+[[models.boot_modes]]
+name = "Joint Download Boot Mode"
+when = { gpio0 = "low", gpio2 = "low" }
+outcome = "rom_bootloader"
+detail = "GPIO0 = 0 and GPIO2 = 0: Joint Download Boot, which supports SDIO Download Boot and UART Download Boot; the ROM runs the download loader and the user firmware does not run. On chip revision v3.0 and later, uart_download_dis = 1 permanently disables this mode"
+cite = "ESP32 Series Datasheet v5.3, Table 3-3 and its footnote 2, PDF p.23; section 3.1 uart_download_dis paragraph, PDF p.24"
+
+# --- QEMU (Espressif fork) strap_mode: layout equals GPIO_STRAP_REG (TRM Register 6.13) ---
+[models.qemu_boot]
+device = "esp32.gpio"
+property = "strap_mode"
+flash_boot = 0x12                   # QEMU's own ESP32_STRAP_MODE_FLASH_BOOT; straps with a defined level are overlaid on it
+bits = { gpio12 = 5, gpio0 = 4, gpio2 = 3, gpio4 = 2, gpio15 = 1, gpio5 = 0 }
+cite = "ESP32 TRM v5.8 Register 6.13 GPIO_STRAP_REG PDF p.141; Espressif QEMU include/hw/gpio/esp32_gpio.h (ESP32_STRAP_MODE_FLASH_BOOT 0x12, ESP32_STRAP_MODE_UART_BOOT 0x0f), hw/xtensa/esp32.c:156"
 
 [[models]]
 id = "esp32_pico"
@@ -2671,6 +2848,94 @@ note = "GPIO2 must be low or floating at reset"
 # pad numbering is LilyGO's, not Espressif's, so there is no pad map here: GPIO
 # roles come from the board's pin names ("IO36/SVP", "IO25"), which the binder
 # reads as gpio<n>. The core is the classic ESP32 die, as on esp32_pico.
+
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "chip_pu"
+note  = "The strapping pins are sampled when the chip leaves reset: the pin levels must be stable at least tSU = 0 ms before CHIP_PU is pulled high and held for tH = 1 ms (min) after CHIP_PU is high; the latched values are then held until power-down"
+cite  = "ESP32 Series Datasheet v5.3, section 3 'Boot Configurations', Table 3-2 and Figure 3-1, PDF pp.22-23"
+
+[models.reset_input]
+role = "en"                       # CHIP_PU. Only esp32_wroom has this role today (pad 3); the QFN cards need pad 9
+vil  = [0.0, 0.6]                 # VIL_nRST max 0.6 V (a constant, NOT a ratio of VDD, on ESP32)
+vih  = [0.75, 0.0]                # VIH_nRST min 0.75 x VDD
+cite = "ESP32 Series Datasheet v5.3, Table 5-3 'DC Characteristics (3.3 V, 25 C)', rows VIH_nRST and VIL_nRST, PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio0"
+pin = "GPIO0"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (GPIO0 Pull-up, bit value 1) PDF p.22; Table 5-3 VIL/VIH PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio2"
+pin = "GPIO2"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (GPIO2 Pull-down, bit value 0) PDF p.22; Table 5-3 VIL/VIH PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio12"
+pin = "MTDI (GPIO12)"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "MTDI is NOT a boot-mode pin: it selects the VDD_SDIO supply. MTDI = 0 (default): VDD_SDIO is powered directly from VDD3P3_RTC (typically 3.3 V). MTDI = 1 at the latch: VDD_SDIO comes from the internal 1.8 V LDO, so flash or PSRAM that is powered from VDD_SDIO and is a 3.3 V part is under-supplied on a board that pulls MTDI high. EFUSE_SDIO_FORCE = 1 overrides the pin (EFUSE_SDIO_TIEH then decides)"
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (MTDI Pull-down, 0) PDF p.22; section 3.2 'Internal LDO (VDD_SDIO) Voltage Control' PDF p.24; Table 5-3 PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio15"
+pin = "MTDO (GPIO15)"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "MTDO is not a boot-mode pin: MTDO = 1 (default) enables U0TXD boot-message printing, 0 disables it; MTDO with GPIO5 selects the SDIO-slave edge timing (Table 3-5)"
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (MTDO Pull-up, 1) PDF p.22; Table 3-4 and Table 3-5 PDF p.25; Table 5-3 PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio5"
+pin = "GPIO5"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO5 is not a boot-mode pin: with MTDO it selects the SDIO-slave edge timing (Table 3-5)"
+cite = "ESP32 Series Datasheet v5.3, Table 3-1 (GPIO5 Pull-up, 1) PDF p.22; Table 3-5 PDF p.25; Table 5-3 PDF p.52"
+
+[[models.boot_inputs]]
+role = "gpio4"                     # no card has this role yet (wroom calls pad 26 'p04'); needed only for the QEMU bit table
+pin = "GPIO4"
+internal_pull = "unknown"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "The datasheet lists no strapping row for GPIO4, but the TRM GPIO_STRAP_REG has a bit for it (bit 2). Its silicon pull at reset is not stated in either document"
+cite = "ESP32 Technical Reference Manual v5.8, Register 6.13 GPIO_STRAP_REG, PDF p.141; ESP32 Series Datasheet v5.3 Table 3-1 (no GPIO4 row) PDF p.22"
+
+[[models.boot_modes]]
+name = "SPI Boot Mode"
+when = { gpio0 = "high" }          # GPIO2: any value
+outcome = "user_flash"
+detail = "GPIO0 = 1 (the default, internal pull-up): SPI boot, the chip boots from SPI flash and user firmware runs. GPIO2 can be any value"
+cite = "ESP32 Series Datasheet v5.3, Table 3-3 'Chip Boot Mode Control', PDF p.23"
+
+[[models.boot_modes]]
+name = "Joint Download Boot Mode"
+when = { gpio0 = "low", gpio2 = "low" }
+outcome = "rom_bootloader"
+detail = "GPIO0 = 0 and GPIO2 = 0: Joint Download Boot, which supports SDIO Download Boot and UART Download Boot; the ROM runs the download loader and the user firmware does not run. On chip revision v3.0 and later, uart_download_dis = 1 permanently disables this mode"
+cite = "ESP32 Series Datasheet v5.3, Table 3-3 and its footnote 2, PDF p.23; section 3.1 uart_download_dis paragraph, PDF p.24"
+
+# --- QEMU (Espressif fork) strap_mode: layout equals GPIO_STRAP_REG (TRM Register 6.13) ---
+[models.qemu_boot]
+device = "esp32.gpio"
+property = "strap_mode"
+flash_boot = 0x12                   # QEMU's own ESP32_STRAP_MODE_FLASH_BOOT; straps with a defined level are overlaid on it
+bits = { gpio12 = 5, gpio0 = 4, gpio2 = 3, gpio4 = 2, gpio15 = 1, gpio5 = 0 }
+cite = "ESP32 TRM v5.8 Register 6.13 GPIO_STRAP_REG PDF p.141; Espressif QEMU include/hw/gpio/esp32_gpio.h (ESP32_STRAP_MODE_FLASH_BOOT 0x12, ESP32_STRAP_MODE_UART_BOOT 0x0f), hw/xtensa/esp32.c:156"
+
 [[models]]
 id = "lilygo_t_micro32"
 kind = "mcu"
@@ -2800,6 +3065,100 @@ max_voltage_v = 3.6
 implements = ["xtensa_lx7_machine_boot", "gpio_output_register_or_mailbox_observation_0_to_31", "uart_transport", "wall_bounded_virtual_time", "gpio_input_mailbox_contract_0_to_31", "adc_input_mailbox_contract", "i2c_spi_mailbox_contract"]
 missing = ["application_firmware_end_to_end_proof", "gpio_32_to_48_observation", "instruction_counted_timing", "unmodified_firmware_gpio_input", "native_adc_peripheral", "unmodified_firmware_i2c_spi_observation", "watchdog_behavior", "silicon_power_current_profile", "silicon_timing_and_errata"]
 
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "chip_pu"
+note  = "The strapping pins are latched at Chip Reset: the pin levels must be stable at least tSU = 0 ms before CHIP_PU is pulled high and held for tH = 3 ms (min) after CHIP_PU is high; the latched values are held until power-down"
+cite  = "ESP32-S3 Series Datasheet v2.2, section 3 'Boot Configurations', Table 3-2 and Figure 3-1, PDF pp.32-33"
+
+[models.reset_input]
+role = "en"                       # CHIP_PU: esp32s3_wroom pad 3, esp32s3_qfn56 pad 4 (Table 2-1 pin 4 = CHIP_PU)
+vil  = [0.25, 0.0]                # VIL_nRST max 0.25 x VDD
+vih  = [0.75, 0.0]                # VIH_nRST min 0.75 x VDD
+cite = "ESP32-S3 Series Datasheet v2.2, Table 5-4 'DC Characteristics (3.3 V, 25 C)', rows VIH_nRST and VIL_nRST, PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio0"
+pin = "GPIO0"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-1 (GPIO0 Weak pull-up, 1) PDF p.32; Table 5-4 VIL/VIH PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio46"
+pin = "GPIO46"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO46 also controls ROM-message printing to UART0 (TRM Table 8.3-1)"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-1 (GPIO46 Weak pull-down, 0) PDF p.32; Table 5-4 PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio45"
+pin = "GPIO45"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO45 is not a boot-mode pin: it selects the VDD_SPI voltage. GPIO45 = 0 (default, EFUSE_VDD_SPI_FORCE = 0): VDD_SPI is 3.3 V from VDD3P3_RTC. GPIO45 = 1: VDD_SPI is 1.8 V from the Flash Voltage Regulator, so a 3.3 V flash or PSRAM on VDD_SPI is under-supplied if the board pulls GPIO45 high. EFUSE_VDD_SPI_FORCE = 1 overrides the pin"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-1 (GPIO45 Weak pull-down, 0) PDF p.32; Table 3-4 'VDD_SPI Voltage Control' PDF p.34; Table 5-4 PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio3"
+pin = "GPIO3"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO3 is not a boot-mode pin: it selects the JTAG signal source; it has no internal pull resistors and its level must be set by the external circuit"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-1 (GPIO3 Floating) PDF p.32; section 3.4 'JTAG Signal Source Control' PDF p.34; Table 5-4 PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio1"
+pin = "GPIO1"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Not a strapping pin: read only by SPI Download Boot (GPIO1 = 1). Floating by default and high-impedance at reset, so its level must come from the board"
+cite = "ESP32-S3 TRM v1.8 Table 8.2-1 and footnote 2, PDF p.535; ESP32-S3 Series Datasheet v2.2 Table 5-4 VIL/VIH PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio2"
+pin = "GPIO2"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Not a strapping pin: read only by SPI Download Boot (GPIO2 = 0). Floating by default and high-impedance at reset, so its level must come from the board"
+cite = "ESP32-S3 TRM v1.8 Table 8.2-1 and footnote 2, PDF p.535; ESP32-S3 Series Datasheet v2.2 Table 5-4 VIL/VIH PDF p.65"
+
+[[models.boot_modes]]
+name = "SPI boot mode"
+when = { gpio0 = "high" }          # GPIO46: any value
+outcome = "user_flash"
+detail = "GPIO0 = 1 (the default, weak pull-up): SPI boot, the ROM bootloader loads and executes the program from SPI flash (normally the second-stage bootloader, then the application). GPIO46 can be any value"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-3 'Chip Boot Mode Control', PDF p.33; ESP32-S3 TRM v1.8 Table 8.2-1, PDF p.535"
+
+[[models.boot_modes]]
+name = "Joint download boot mode"
+when = { gpio0 = "low", gpio46 = "low" }
+outcome = "rom_bootloader"
+detail = "GPIO0 = 0 and GPIO46 = 0: Joint Download Boot, which supports USB Download Boot (USB-Serial-JTAG and USB-OTG) and UART Download Boot; the user firmware does not run unless it has been downloaded into SRAM"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-3 and footnote 2, PDF p.33; ESP32-S3 TRM v1.8 Table 8.2-1, PDF p.535"
+
+[[models.boot_modes]]
+name = "SPI download boot mode"
+when = { gpio0 = "low", gpio46 = "high", gpio1 = "high", gpio2 = "low" }   # gpio1 and gpio2 are NOT strapping pins and are on no card; needs those roles to match
+outcome = "rom_bootloader"
+detail = "GPIO0 = 0, GPIO46 = 1, GPIO1 = 1, GPIO2 = 0: SPI Download Boot, download over the SPI interface into flash or SRAM. GPIO1 and GPIO2 are not strapping pins but must be reserved; they are floating by default and high-impedance at reset. Only in the TRM, not the datasheet"
+cite = "ESP32-S3 TRM v1.8 Table 8.2-1 and footnote 2, PDF p.535"
+
+[models.qemu_boot]
+device = "esp32s3.gpio"
+property = "strap_mode"
+flash_boot = 0x04                   # QEMU's own ESP32S3_STRAP_MODE_FLASH_BOOT; straps with a defined level are overlaid on it
+bits = { gpio3 = 5, gpio45 = 4, gpio0 = 3, gpio46 = 2, gpio1 = 1, gpio2 = 0 }
+cite = "ESP32-S3 TRM v1.8 GPIO_STRAPPING bit list, PDF p.506; Espressif QEMU include/hw/gpio/esp32s3_gpio.h ESP32S3_STRAP_MODE_FLASH_BOOT 0x4. Bits 1:0 = GPIO1, GPIO2 confirmed by running the Espressif ROM in QEMU (0x06 -> SPI_DOWNLOAD_BOOT, 0x07 -> UART0_BOOT)"
+
 [[models]]
 id = "esp32s3_qfn56"
 kind = "mcu"
@@ -2828,6 +3187,8 @@ must_not_float_roles = "en"
 "8"  = "gpio3"
 "51" = "gpio45"
 "52" = "gpio46"
+"6"  = "gpio1"       # Table 2-1 pin 6 (SPI download strap)
+"7"  = "gpio2"       # Table 2-1 pin 7 (SPI download strap)
 
 [models.pin_capability.adc]
 basis = "Espressif ESP32-S3 Datasheet v2.2, Table 2-8 Analog Functions (PDF p.24): pin 8 GPIO3 ADC1_CH2; GPIO0, GPIO45 and GPIO46 carry no ADC channel"
@@ -2878,6 +3239,101 @@ missing = ["application_firmware_end_to_end_proof", "gpio_32_to_48_observation",
 # ESP32-S2, package unknown: identity only (see the family note). The earlier
 # single map (27/7/6) matched neither package: on the S2-WROOM pads 27/7/6 are
 # IO33/IO4/IO3, and on the bare QFN56 pad 27 is the VDD3P3_RTC_IO supply.
+
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "chip_pu"
+note  = "The strapping pins are latched at Chip Reset: the pin levels must be stable at least tSU = 0 ms before CHIP_PU is pulled high and held for tH = 3 ms (min) after CHIP_PU is high; the latched values are held until power-down"
+cite  = "ESP32-S3 Series Datasheet v2.2, section 3 'Boot Configurations', Table 3-2 and Figure 3-1, PDF pp.32-33"
+
+[models.reset_input]
+role = "en"                       # CHIP_PU: esp32s3_wroom pad 3, esp32s3_qfn56 pad 4 (Table 2-1 pin 4 = CHIP_PU)
+vil  = [0.25, 0.0]                # VIL_nRST max 0.25 x VDD
+vih  = [0.75, 0.0]                # VIH_nRST min 0.75 x VDD
+cite = "ESP32-S3 Series Datasheet v2.2, Table 5-4 'DC Characteristics (3.3 V, 25 C)', rows VIH_nRST and VIL_nRST, PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio0"
+pin = "GPIO0"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-1 (GPIO0 Weak pull-up, 1) PDF p.32; Table 5-4 VIL/VIH PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio46"
+pin = "GPIO46"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO46 also controls ROM-message printing to UART0 (TRM Table 8.3-1)"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-1 (GPIO46 Weak pull-down, 0) PDF p.32; Table 5-4 PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio45"
+pin = "GPIO45"
+internal_pull = "pull_down"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO45 is not a boot-mode pin: it selects the VDD_SPI voltage. GPIO45 = 0 (default, EFUSE_VDD_SPI_FORCE = 0): VDD_SPI is 3.3 V from VDD3P3_RTC. GPIO45 = 1: VDD_SPI is 1.8 V from the Flash Voltage Regulator, so a 3.3 V flash or PSRAM on VDD_SPI is under-supplied if the board pulls GPIO45 high. EFUSE_VDD_SPI_FORCE = 1 overrides the pin"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-1 (GPIO45 Weak pull-down, 0) PDF p.32; Table 3-4 'VDD_SPI Voltage Control' PDF p.34; Table 5-4 PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio3"
+pin = "GPIO3"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO3 is not a boot-mode pin: it selects the JTAG signal source; it has no internal pull resistors and its level must be set by the external circuit"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-1 (GPIO3 Floating) PDF p.32; section 3.4 'JTAG Signal Source Control' PDF p.34; Table 5-4 PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio1"
+pin = "GPIO1"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Not a strapping pin: read only by SPI Download Boot (GPIO1 = 1). Floating by default and high-impedance at reset, so its level must come from the board"
+cite = "ESP32-S3 TRM v1.8 Table 8.2-1 and footnote 2, PDF p.535; ESP32-S3 Series Datasheet v2.2 Table 5-4 VIL/VIH PDF p.65"
+
+[[models.boot_inputs]]
+role = "gpio2"
+pin = "GPIO2"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Not a strapping pin: read only by SPI Download Boot (GPIO2 = 0). Floating by default and high-impedance at reset, so its level must come from the board"
+cite = "ESP32-S3 TRM v1.8 Table 8.2-1 and footnote 2, PDF p.535; ESP32-S3 Series Datasheet v2.2 Table 5-4 VIL/VIH PDF p.65"
+
+[[models.boot_modes]]
+name = "SPI boot mode"
+when = { gpio0 = "high" }          # GPIO46: any value
+outcome = "user_flash"
+detail = "GPIO0 = 1 (the default, weak pull-up): SPI boot, the ROM bootloader loads and executes the program from SPI flash (normally the second-stage bootloader, then the application). GPIO46 can be any value"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-3 'Chip Boot Mode Control', PDF p.33; ESP32-S3 TRM v1.8 Table 8.2-1, PDF p.535"
+
+[[models.boot_modes]]
+name = "Joint download boot mode"
+when = { gpio0 = "low", gpio46 = "low" }
+outcome = "rom_bootloader"
+detail = "GPIO0 = 0 and GPIO46 = 0: Joint Download Boot, which supports USB Download Boot (USB-Serial-JTAG and USB-OTG) and UART Download Boot; the user firmware does not run unless it has been downloaded into SRAM"
+cite = "ESP32-S3 Series Datasheet v2.2, Table 3-3 and footnote 2, PDF p.33; ESP32-S3 TRM v1.8 Table 8.2-1, PDF p.535"
+
+[[models.boot_modes]]
+name = "SPI download boot mode"
+when = { gpio0 = "low", gpio46 = "high", gpio1 = "high", gpio2 = "low" }   # gpio1 and gpio2 are NOT strapping pins and are on no card; needs those roles to match
+outcome = "rom_bootloader"
+detail = "GPIO0 = 0, GPIO46 = 1, GPIO1 = 1, GPIO2 = 0: SPI Download Boot, download over the SPI interface into flash or SRAM. GPIO1 and GPIO2 are not strapping pins but must be reserved; they are floating by default and high-impedance at reset. Only in the TRM, not the datasheet"
+cite = "ESP32-S3 TRM v1.8 Table 8.2-1 and footnote 2, PDF p.535"
+
+[models.qemu_boot]
+device = "esp32s3.gpio"
+property = "strap_mode"
+flash_boot = 0x04                   # QEMU's own ESP32S3_STRAP_MODE_FLASH_BOOT; straps with a defined level are overlaid on it
+bits = { gpio3 = 5, gpio45 = 4, gpio0 = 3, gpio46 = 2, gpio1 = 1, gpio2 = 0 }
+cite = "ESP32-S3 TRM v1.8 GPIO_STRAPPING bit list, PDF p.506; Espressif QEMU include/hw/gpio/esp32s3_gpio.h ESP32S3_STRAP_MODE_FLASH_BOOT 0x4. Bits 1:0 = GPIO1, GPIO2 confirmed by running the Espressif ROM in QEMU (0x06 -> SPI_DOWNLOAD_BOOT, 0x07 -> UART0_BOOT)"
+
 [[models]]
 id = "esp32s2"
 kind = "mcu"
@@ -3069,6 +3525,89 @@ role = "gpio2"
 level = "high"
 note = "GPIO2 must be high at reset"
 
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "chip_pu"
+note  = "The strapping pins are latched at Chip Reset: the pin levels must be stable at least tSU = 0 ms before CHIP_EN is pulled high and held for tH = 3 ms (min) after CHIP_EN is high; the latched values are held until power-down"
+cite  = "ESP32-C3 Series Datasheet v2.4, section 3 'Boot Configurations', Table 3-2 and Figure 3-1, PDF pp.30-31"
+
+[models.reset_input]
+role = "en"                       # CHIP_EN: QFN32 pad 7; NO C3 card has this role yet
+vil  = [0.25, 0.0]                # VIL_nRST max 0.25 x VDD
+vih  = [0.75, 0.0]                # VIH_nRST min 0.75 x VDD
+cite = "ESP32-C3 Series Datasheet v2.4, Table 5-4 'DC Characteristics (3.3 V, 25 C)', rows VIH_nRST and VIL_nRST, PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio9"
+pin = "GPIO9"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-1 (GPIO9 Weak pull-up, 1) PDF p.30; Table 5-4 VIL/VIH PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio8"
+pin = "GPIO8"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO8 also controls ROM-message printing to UART0 (Table 3-4); it is floating by default"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-1 (GPIO8 Floating) PDF p.30; Table 3-4 PDF p.32; Table 5-4 PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio2"
+pin = "GPIO2"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Datasheet footnote: GPIO2 does not determine SPI Boot or Joint Download Boot, but it is recommended to pull it up due to glitches. The TRM makes GPIO2 matter only for SPI Download Boot (GPIO2 = 1)"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-1 (GPIO2 Floating) PDF p.30 and Table 3-3 footnote 2 PDF p.31; Table 5-4 PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio3"                     # no C3 card has this role yet (QFN32 pad 8)
+pin = "GPIO3"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Only used by SPI Download Boot; GPIO3 and GPIO2 are floating by default and high-impedance at reset"
+cite = "ESP32-C3 TRM v1.4, Table 7.2-1 footnote 3, PDF p.199; ESP32-C3 Series Datasheet v2.4 Table 5-4 PDF p.55"
+
+[[models.boot_modes]]
+name = "SPI boot mode"
+when = { gpio9 = "high" }          # GPIO8 any value; GPIO2 and GPIO3 do not matter
+outcome = "user_flash"
+detail = "GPIO9 = 1 (the default, weak pull-up): SPI boot, the ROM bootloader loads and executes the program from SPI flash. GPIO8 can be any value"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-3 PDF p.31; ESP32-C3 TRM v1.4 Table 7.2-1, PDF p.199"
+
+[[models.boot_modes]]
+name = "Joint download boot mode"
+when = { gpio9 = "low", gpio8 = "high" }
+outcome = "rom_bootloader"
+detail = "GPIO9 = 0 and GPIO8 = 1: Joint Download Boot, which supports USB-Serial-JTAG Download Boot and UART Download Boot; the user firmware does not run unless downloaded into SRAM. The datasheet row also shows GPIO2 = 1, but its footnote says GPIO2 does not determine this mode and the TRM marks it as a don't-care"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-3 and footnote 2, PDF p.31; ESP32-C3 TRM v1.4 Table 7.2-1, PDF p.199"
+
+[[models.boot_modes]]
+name = "SPI download boot mode"
+when = { gpio9 = "low", gpio8 = "low", gpio3 = "low", gpio2 = "high" }    # needs a gpio3 role on the card
+outcome = "rom_bootloader"
+detail = "GPIO9 = 0, GPIO8 = 0, GPIO3 = 0, GPIO2 = 1: SPI Download Boot, download over the SPI interface into flash or SRAM. GPIO3 and GPIO2 must be reserved for it. Only in the TRM, not the datasheet"
+cite = "ESP32-C3 TRM v1.4 Table 7.2-1 and footnote 3, PDF p.199"
+
+[[models.boot_modes]]
+name = "Invalid combination"
+when = { gpio9 = "low", gpio8 = "low", gpio2 = "low" }                    # GPIO3: don't care
+outcome = "undefined"
+detail = "GPIO9 = 0, GPIO8 = 0, GPIO2 = 0: the TRM calls this an Invalid Combination that can trigger unexpected behaviour and should be avoided. Row order: it sits after SPI Download so GPIO3/GPIO2 = (0,1) matches the download row first"
+cite = "ESP32-C3 TRM v1.4 Table 7.2-1 and footnote 4, PDF p.199"
+
+[models.qemu_boot]
+device = "esp32c3.gpio"
+property = "strap_mode"
+flash_boot = 0x08                   # QEMU's own ESP32C3_STRAP_MODE_FLASH_BOOT; straps with a defined level are overlaid on it
+bits = { gpio9 = 3, gpio8 = 2, gpio3 = 1, gpio2 = 0 }
+cite = "ESP32-C3 TRM v1.4 GPIO_STRAPPING bit list, PDF p.181; Espressif QEMU include/hw/gpio/esp32c3_gpio.h (FLASH_BOOT 0x8, UART_BOOT 0x2, USB_BOOT 0x0). ROM run in QEMU: 0x01 -> SPI_DOWNLOAD_BOOT, 0x04..0x07 -> DOWNLOAD(USB/UART0/1), 0x08..0x0f -> SPI_FAST_FLASH_BOOT"
+
 [[models]]
 id = "esp32c3_wroom02"
 kind = "mcu"
@@ -3129,6 +3668,89 @@ role = "gpio2"
 level = "high"
 note = "GPIO2 must be high at reset"
 
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "chip_pu"
+note  = "The strapping pins are latched at Chip Reset: the pin levels must be stable at least tSU = 0 ms before CHIP_EN is pulled high and held for tH = 3 ms (min) after CHIP_EN is high; the latched values are held until power-down"
+cite  = "ESP32-C3 Series Datasheet v2.4, section 3 'Boot Configurations', Table 3-2 and Figure 3-1, PDF pp.30-31"
+
+[models.reset_input]
+role = "en"                       # CHIP_EN: QFN32 pad 7; NO C3 card has this role yet
+vil  = [0.25, 0.0]                # VIL_nRST max 0.25 x VDD
+vih  = [0.75, 0.0]                # VIH_nRST min 0.75 x VDD
+cite = "ESP32-C3 Series Datasheet v2.4, Table 5-4 'DC Characteristics (3.3 V, 25 C)', rows VIH_nRST and VIL_nRST, PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio9"
+pin = "GPIO9"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-1 (GPIO9 Weak pull-up, 1) PDF p.30; Table 5-4 VIL/VIH PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio8"
+pin = "GPIO8"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO8 also controls ROM-message printing to UART0 (Table 3-4); it is floating by default"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-1 (GPIO8 Floating) PDF p.30; Table 3-4 PDF p.32; Table 5-4 PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio2"
+pin = "GPIO2"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Datasheet footnote: GPIO2 does not determine SPI Boot or Joint Download Boot, but it is recommended to pull it up due to glitches. The TRM makes GPIO2 matter only for SPI Download Boot (GPIO2 = 1)"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-1 (GPIO2 Floating) PDF p.30 and Table 3-3 footnote 2 PDF p.31; Table 5-4 PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio3"                     # no C3 card has this role yet (QFN32 pad 8)
+pin = "GPIO3"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Only used by SPI Download Boot; GPIO3 and GPIO2 are floating by default and high-impedance at reset"
+cite = "ESP32-C3 TRM v1.4, Table 7.2-1 footnote 3, PDF p.199; ESP32-C3 Series Datasheet v2.4 Table 5-4 PDF p.55"
+
+[[models.boot_modes]]
+name = "SPI boot mode"
+when = { gpio9 = "high" }          # GPIO8 any value; GPIO2 and GPIO3 do not matter
+outcome = "user_flash"
+detail = "GPIO9 = 1 (the default, weak pull-up): SPI boot, the ROM bootloader loads and executes the program from SPI flash. GPIO8 can be any value"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-3 PDF p.31; ESP32-C3 TRM v1.4 Table 7.2-1, PDF p.199"
+
+[[models.boot_modes]]
+name = "Joint download boot mode"
+when = { gpio9 = "low", gpio8 = "high" }
+outcome = "rom_bootloader"
+detail = "GPIO9 = 0 and GPIO8 = 1: Joint Download Boot, which supports USB-Serial-JTAG Download Boot and UART Download Boot; the user firmware does not run unless downloaded into SRAM. The datasheet row also shows GPIO2 = 1, but its footnote says GPIO2 does not determine this mode and the TRM marks it as a don't-care"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-3 and footnote 2, PDF p.31; ESP32-C3 TRM v1.4 Table 7.2-1, PDF p.199"
+
+[[models.boot_modes]]
+name = "SPI download boot mode"
+when = { gpio9 = "low", gpio8 = "low", gpio3 = "low", gpio2 = "high" }    # needs a gpio3 role on the card
+outcome = "rom_bootloader"
+detail = "GPIO9 = 0, GPIO8 = 0, GPIO3 = 0, GPIO2 = 1: SPI Download Boot, download over the SPI interface into flash or SRAM. GPIO3 and GPIO2 must be reserved for it. Only in the TRM, not the datasheet"
+cite = "ESP32-C3 TRM v1.4 Table 7.2-1 and footnote 3, PDF p.199"
+
+[[models.boot_modes]]
+name = "Invalid combination"
+when = { gpio9 = "low", gpio8 = "low", gpio2 = "low" }                    # GPIO3: don't care
+outcome = "undefined"
+detail = "GPIO9 = 0, GPIO8 = 0, GPIO2 = 0: the TRM calls this an Invalid Combination that can trigger unexpected behaviour and should be avoided. Row order: it sits after SPI Download so GPIO3/GPIO2 = (0,1) matches the download row first"
+cite = "ESP32-C3 TRM v1.4 Table 7.2-1 and footnote 4, PDF p.199"
+
+[models.qemu_boot]
+device = "esp32c3.gpio"
+property = "strap_mode"
+flash_boot = 0x08                   # QEMU's own ESP32C3_STRAP_MODE_FLASH_BOOT; straps with a defined level are overlaid on it
+bits = { gpio9 = 3, gpio8 = 2, gpio3 = 1, gpio2 = 0 }
+cite = "ESP32-C3 TRM v1.4 GPIO_STRAPPING bit list, PDF p.181; Espressif QEMU include/hw/gpio/esp32c3_gpio.h (FLASH_BOOT 0x8, UART_BOOT 0x2, USB_BOOT 0x0). ROM run in QEMU: 0x01 -> SPI_DOWNLOAD_BOOT, 0x04..0x07 -> DOWNLOAD(USB/UART0/1), 0x08..0x0f -> SPI_FAST_FLASH_BOOT"
+
 [[models]]
 id = "esp32c3_qfn32"
 kind = "mcu"
@@ -3155,6 +3777,8 @@ backend = "qemu:esp32c3"
 "6"  = "gpio2"
 "14" = "gpio8"
 "15" = "gpio9"
+"7"  = "en"          # CHIP_EN (Table 2-1 pin 7)
+"8"  = "gpio3"       # Table 2-1 pin 8 (SPI download strap)
 "28" = "p021_txd"
 "27" = "p020_rxd"
 
@@ -3215,6 +3839,90 @@ note = "GPIO2 must be high at reset"
 # lint scales VIL/VIH from the `vdd` role. No per-pin or package current rating
 # is set: Table 6-1 lists only VDD33, and Table 6-3 gives IOH/IOL as typical
 # drive strengths, not limits.
+
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "chip_pu"
+note  = "The strapping pins are latched at Chip Reset: the pin levels must be stable at least tSU = 0 ms before CHIP_EN is pulled high and held for tH = 3 ms (min) after CHIP_EN is high; the latched values are held until power-down"
+cite  = "ESP32-C3 Series Datasheet v2.4, section 3 'Boot Configurations', Table 3-2 and Figure 3-1, PDF pp.30-31"
+
+[models.reset_input]
+role = "en"                       # CHIP_EN: QFN32 pad 7; NO C3 card has this role yet
+vil  = [0.25, 0.0]                # VIL_nRST max 0.25 x VDD
+vih  = [0.75, 0.0]                # VIH_nRST min 0.75 x VDD
+cite = "ESP32-C3 Series Datasheet v2.4, Table 5-4 'DC Characteristics (3.3 V, 25 C)', rows VIH_nRST and VIL_nRST, PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio9"
+pin = "GPIO9"
+internal_pull = "pull_up"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-1 (GPIO9 Weak pull-up, 1) PDF p.30; Table 5-4 VIL/VIH PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio8"
+pin = "GPIO8"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO8 also controls ROM-message printing to UART0 (Table 3-4); it is floating by default"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-1 (GPIO8 Floating) PDF p.30; Table 3-4 PDF p.32; Table 5-4 PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio2"
+pin = "GPIO2"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Datasheet footnote: GPIO2 does not determine SPI Boot or Joint Download Boot, but it is recommended to pull it up due to glitches. The TRM makes GPIO2 matter only for SPI Download Boot (GPIO2 = 1)"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-1 (GPIO2 Floating) PDF p.30 and Table 3-3 footnote 2 PDF p.31; Table 5-4 PDF p.55"
+
+[[models.boot_inputs]]
+role = "gpio3"                     # no C3 card has this role yet (QFN32 pad 8)
+pin = "GPIO3"
+internal_pull = "none"
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "Only used by SPI Download Boot; GPIO3 and GPIO2 are floating by default and high-impedance at reset"
+cite = "ESP32-C3 TRM v1.4, Table 7.2-1 footnote 3, PDF p.199; ESP32-C3 Series Datasheet v2.4 Table 5-4 PDF p.55"
+
+[[models.boot_modes]]
+name = "SPI boot mode"
+when = { gpio9 = "high" }          # GPIO8 any value; GPIO2 and GPIO3 do not matter
+outcome = "user_flash"
+detail = "GPIO9 = 1 (the default, weak pull-up): SPI boot, the ROM bootloader loads and executes the program from SPI flash. GPIO8 can be any value"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-3 PDF p.31; ESP32-C3 TRM v1.4 Table 7.2-1, PDF p.199"
+
+[[models.boot_modes]]
+name = "Joint download boot mode"
+when = { gpio9 = "low", gpio8 = "high" }
+outcome = "rom_bootloader"
+detail = "GPIO9 = 0 and GPIO8 = 1: Joint Download Boot, which supports USB-Serial-JTAG Download Boot and UART Download Boot; the user firmware does not run unless downloaded into SRAM. The datasheet row also shows GPIO2 = 1, but its footnote says GPIO2 does not determine this mode and the TRM marks it as a don't-care"
+cite = "ESP32-C3 Series Datasheet v2.4, Table 3-3 and footnote 2, PDF p.31; ESP32-C3 TRM v1.4 Table 7.2-1, PDF p.199"
+
+[[models.boot_modes]]
+name = "SPI download boot mode"
+when = { gpio9 = "low", gpio8 = "low", gpio3 = "low", gpio2 = "high" }    # needs a gpio3 role on the card
+outcome = "rom_bootloader"
+detail = "GPIO9 = 0, GPIO8 = 0, GPIO3 = 0, GPIO2 = 1: SPI Download Boot, download over the SPI interface into flash or SRAM. GPIO3 and GPIO2 must be reserved for it. Only in the TRM, not the datasheet"
+cite = "ESP32-C3 TRM v1.4 Table 7.2-1 and footnote 3, PDF p.199"
+
+[[models.boot_modes]]
+name = "Invalid combination"
+when = { gpio9 = "low", gpio8 = "low", gpio2 = "low" }                    # GPIO3: don't care
+outcome = "undefined"
+detail = "GPIO9 = 0, GPIO8 = 0, GPIO2 = 0: the TRM calls this an Invalid Combination that can trigger unexpected behaviour and should be avoided. Row order: it sits after SPI Download so GPIO3/GPIO2 = (0,1) matches the download row first"
+cite = "ESP32-C3 TRM v1.4 Table 7.2-1 and footnote 4, PDF p.199"
+
+[models.qemu_boot]
+device = "esp32c3.gpio"
+property = "strap_mode"
+flash_boot = 0x08                   # QEMU's own ESP32C3_STRAP_MODE_FLASH_BOOT; straps with a defined level are overlaid on it
+bits = { gpio9 = 3, gpio8 = 2, gpio3 = 1, gpio2 = 0 }
+cite = "ESP32-C3 TRM v1.4 GPIO_STRAPPING bit list, PDF p.181; Espressif QEMU include/hw/gpio/esp32c3_gpio.h (FLASH_BOOT 0x8, UART_BOOT 0x2, USB_BOOT 0x0). ROM run in QEMU: 0x01 -> SPI_DOWNLOAD_BOOT, 0x04..0x07 -> DOWNLOAD(USB/UART0/1), 0x08..0x0f -> SPI_FAST_FLASH_BOOT"
+
 [[models]]
 id = "esp32c6_mini1"
 kind = "mcu"
@@ -3506,6 +4214,47 @@ missing = ["spi_external_slave", "pio", "adc_temperature_channel_4", "proven_two
 
 # The identity entry above retains pad56 when the package is absent or unknown.
 # Only this more specific match supplies the complete numeric pad map.
+
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "reset_release"
+note  = "RP2040 has NO hardware latch on the strap. After RUN is high and the chip leaves reset, processor 0 runs the bootrom, which checks whether the SPI CS pin (QSPI_SS) is tied low ('bootrom button') and skips flash boot if so. The pin is sampled once, by software, after the watchdog-scratch check and before the QSPI pins are set up; the pin's reset state is a pull-up"
+cite  = "RP2040 Datasheet, section 2.8.1 'Processor Controlled Boot Sequence', PDF p.130-131 (printed 129-130); Table 616 QSPI pins (QSPI_CSn, Pull-Up) PDF p.614 (printed 613)"
+
+[models.reset_input]
+role = "run"
+vil  = [0.0, 0.8]                  # IOVDD = 3.3 V row of Table 625: VIL max 0.8 V. (1.8 V row: 0.35 x IOVDD; 2.5 V row: 0.7 V)
+vih  = [0.0, 2.0]                  # IOVDD = 3.3 V row: VIH min 2 V. (1.8 V row: 0.65 x IOVDD; 2.5 V row: 1.7 V)
+cite = "RP2040 Datasheet, Table 619 'Miscellaneous pins' (RUN, pin 26, 'Digital In (FT)', Pull-Up, 'Chip enable / reset') PDF p.614 (printed 613); Table 625 'Digital IO characteristics - Standard and FT unless otherwise stated', VIH/VIL at IOVDD=3.3V, PDF p.616 (printed 615). RUN has no separate threshold row, so the generic digital-IO rows are applied"
+
+[[models.boot_inputs]]
+role = "qspi_ss"
+pin = "QSPI_SS (QSPI_CSn)"
+internal_pull = "pull_up"
+vil = [0.0, 0.8]                   # Table 625, IOVDD = 3.3 V
+vih = [0.0, 2.0]
+note = "Hardware design guide: QSPI_SS is connected to the flash and also has two resistors. R2 is a pull-up to 3.3 V (10 kohm, marked DNF/Do Not Fit on the reference schematic). R1 is a 1 kohm resistor in series with the header J2 labelled 'USB_BOOT' to ground: 'It is important to include resistor R1, as this allows the QSPI_SS pin to safely over-drive the applied pull-down when the RP2040 starts booting.' The guide shows a jumper header; it contains no push-button (BOOTSEL button) text"
+cite = "RP2040 Datasheet Table 616 'QSPI pins' (QSPI_CSn, pin 56, Pull-Up) PDF p.614 (printed 613); Table 625 PDF p.616 (printed 615); Hardware design with RP2040, section 2.2 'Flash storage', PDF p.10 (printed 9)"
+
+[[models.boot_modes]]
+name = "BOOTSEL (USB boot)"
+when = { qspi_ss = "low" }
+outcome = "rom_bootloader"
+detail = "QSPI_SS held low at boot: the bootrom skips flash boot and drops to USB device boot, where RP2040 appears as a USB Mass Storage Device (UF2 drag-and-drop programs the SPI flash or loads and runs code in SRAM; an extended PICOBOOT interface is also available). The user firmware in flash does not run. Needs the 12 MHz crystal or clock input the USB bootloader requires"
+cite = "RP2040 Datasheet, section 2.8.1, PDF p.131 (printed 130); section 1.4.2 'Pin Descriptions' Table 1 (XIN and XOUT row) PDF p.12 (printed 11); Hardware design with RP2040 section 2.2 'Flash storage' PDF p.10 (printed 9)"
+
+[[models.boot_modes]]
+name = "Flash boot"
+when = { qspi_ss = "high" }
+outcome = "user_flash"
+detail = "QSPI_SS not low: the bootrom sets up the QSPI pins, issues the XIP exit sequence, copies 256 bytes from SPI flash into SRAM5 and checks a CRC32; if the checksum passes it treats the bytes as a valid second stage and executes them from SRAM. If no valid image is found after 0.5 seconds of attempting to boot, the bootrom drops to USB device boot (the same USB mass-storage mode as BOOTSEL), so a blank or corrupt flash ends up in USB boot even with QSPI_SS high. Earlier, non-pin routes can pre-empt flash boot: a Rescue DP power-up halts, and watchdog scratch registers set to indicate pre-loaded SRAM code jump to that code"
+cite = "RP2040 Datasheet, section 2.8.1 'Processor Controlled Boot Sequence' and 2.8.1.2 'Flash Boot Sequence', PDF pp.130-131 (printed 129-130)"
+
+[models.rom_bootloader]
+protocol = "usb_only"
+cite = "RP2040 Datasheet, section 2.8 'Bootrom' (USB MSC class-compliant bootloader with UF2 support; PICOBOOT interface), PDF p.129 (printed 128); section 2.8.4 'USB Mass Storage Interface' PDF p.144 (printed 143)"
+
 [[models]]
 id = "rp2040_qfn56"
 kind = "mcu"
@@ -3652,6 +4401,46 @@ implements = ["cortex_m0plus_firmware_execution", "boot_rom_to_main", "gpio_outp
 missing = ["spi_external_slave", "pio", "adc_temperature_channel_4", "proven_two_core_firmware", "usb_device_controller", "dma_fidelity", "silicon_power_current_profile", "silicon_timing_and_errata", "missing_external_crystal_startup_validation"]
 
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+[models.strap_latch]
+event = "reset_release"
+note  = "RP2040 has NO hardware latch on the strap. After RUN is high and the chip leaves reset, processor 0 runs the bootrom, which checks whether the SPI CS pin (QSPI_SS) is tied low ('bootrom button') and skips flash boot if so. The pin is sampled once, by software, after the watchdog-scratch check and before the QSPI pins are set up; the pin's reset state is a pull-up"
+cite  = "RP2040 Datasheet, section 2.8.1 'Processor Controlled Boot Sequence', PDF p.130-131 (printed 129-130); Table 616 QSPI pins (QSPI_CSn, Pull-Up) PDF p.614 (printed 613)"
+
+[models.reset_input]
+role = "run"
+vil  = [0.0, 0.8]                  # IOVDD = 3.3 V row of Table 625: VIL max 0.8 V. (1.8 V row: 0.35 x IOVDD; 2.5 V row: 0.7 V)
+vih  = [0.0, 2.0]                  # IOVDD = 3.3 V row: VIH min 2 V. (1.8 V row: 0.65 x IOVDD; 2.5 V row: 1.7 V)
+cite = "RP2040 Datasheet, Table 619 'Miscellaneous pins' (RUN, pin 26, 'Digital In (FT)', Pull-Up, 'Chip enable / reset') PDF p.614 (printed 613); Table 625 'Digital IO characteristics - Standard and FT unless otherwise stated', VIH/VIL at IOVDD=3.3V, PDF p.616 (printed 615). RUN has no separate threshold row, so the generic digital-IO rows are applied"
+
+[[models.boot_inputs]]
+role = "qspi_ss"
+pin = "QSPI_SS (QSPI_CSn)"
+internal_pull = "pull_up"
+vil = [0.0, 0.8]                   # Table 625, IOVDD = 3.3 V
+vih = [0.0, 2.0]
+note = "Hardware design guide: QSPI_SS is connected to the flash and also has two resistors. R2 is a pull-up to 3.3 V (10 kohm, marked DNF/Do Not Fit on the reference schematic). R1 is a 1 kohm resistor in series with the header J2 labelled 'USB_BOOT' to ground: 'It is important to include resistor R1, as this allows the QSPI_SS pin to safely over-drive the applied pull-down when the RP2040 starts booting.' The guide shows a jumper header; it contains no push-button (BOOTSEL button) text"
+cite = "RP2040 Datasheet Table 616 'QSPI pins' (QSPI_CSn, pin 56, Pull-Up) PDF p.614 (printed 613); Table 625 PDF p.616 (printed 615); Hardware design with RP2040, section 2.2 'Flash storage', PDF p.10 (printed 9)"
+
+[[models.boot_modes]]
+name = "BOOTSEL (USB boot)"
+when = { qspi_ss = "low" }
+outcome = "rom_bootloader"
+detail = "QSPI_SS held low at boot: the bootrom skips flash boot and drops to USB device boot, where RP2040 appears as a USB Mass Storage Device (UF2 drag-and-drop programs the SPI flash or loads and runs code in SRAM; an extended PICOBOOT interface is also available). The user firmware in flash does not run. Needs the 12 MHz crystal or clock input the USB bootloader requires"
+cite = "RP2040 Datasheet, section 2.8.1, PDF p.131 (printed 130); section 1.4.2 'Pin Descriptions' Table 1 (XIN and XOUT row) PDF p.12 (printed 11); Hardware design with RP2040 section 2.2 'Flash storage' PDF p.10 (printed 9)"
+
+[[models.boot_modes]]
+name = "Flash boot"
+when = { qspi_ss = "high" }
+outcome = "user_flash"
+detail = "QSPI_SS not low: the bootrom sets up the QSPI pins, issues the XIP exit sequence, copies 256 bytes from SPI flash into SRAM5 and checks a CRC32; if the checksum passes it treats the bytes as a valid second stage and executes them from SRAM. If no valid image is found after 0.5 seconds of attempting to boot, the bootrom drops to USB device boot (the same USB mass-storage mode as BOOTSEL), so a blank or corrupt flash ends up in USB boot even with QSPI_SS high. Earlier, non-pin routes can pre-empt flash boot: a Rescue DP power-up halts, and watchdog scratch registers set to indicate pre-loaded SRAM code jump to that code"
+cite = "RP2040 Datasheet, section 2.8.1 'Processor Controlled Boot Sequence' and 2.8.1.2 'Flash Boot Sequence', PDF pp.130-131 (printed 129-130)"
+
+[models.rom_bootloader]
+protocol = "usb_only"
+cite = "RP2040 Datasheet, section 2.8 'Bootrom' (USB MSC class-compliant bootloader with UF2 support; PICOBOOT interface), PDF p.129 (printed 128); section 2.8.4 'USB Mass Storage Interface' PDF p.144 (printed 143)"
 
 [[models]]
 id = "rpi_pico"
