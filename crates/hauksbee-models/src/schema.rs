@@ -20,6 +20,7 @@ use hauksbee_ir::evidence::{
 };
 
 use crate::check::positive_finite;
+use crate::peripheral_limits::PeripheralLimits;
 use hauksbee_ir::units::format_volts;
 
 // ── Top-level file container ──────────────────────────────────────────────────
@@ -129,6 +130,13 @@ pub struct ModelEntry {
     /// can be an ADC input, with the channel each one is). MCU cards only.
     #[serde(default, skip_serializing_if = "PinCapability::is_empty")]
     pub pin_capability: PinCapability,
+
+    /// `[models.peripherals]`: the datasheet limits of the MCU's UART and ADC
+    /// (clock sources, baud generator, conversion timing, sampling front end),
+    /// each block with its source URL and a basis. MCU cards only; see
+    /// [`crate::peripheral_limits`].
+    #[serde(default, skip_serializing_if = "PeripheralLimits::is_empty")]
+    pub peripherals: PeripheralLimits,
 
     /// Optional declarative behavioural model (pins/pulls, FSM, averaged
     /// converter, expression laws) for power ICs the SPICE-level kinds cannot
