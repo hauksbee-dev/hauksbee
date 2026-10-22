@@ -205,18 +205,12 @@ frequency_hz = 8_000_000
 expected_e_machine = "EM_ARM"
 mcu_label = "STM32F103 (ARM Cortex-M3)"
 
-# WATCHDOG (measured). The inline platform's IWDG at 40 kHz does time out and
-# does reset: with a 50 ms reload never fed, the firmware's heartbeat stops at
-# the timeout and its boot marker flips a second time. But it resets ONCE, and
-# the core then stays quiet for the remaining 450 ms where the part would reboot
-# every 50 ms forever. So the first bite is real and anything the firmware would
-# have done on the reboots after it is not.
-watchdog_limitation = """\
-The STM32F103 independent watchdog fires and resets the core once in this \
-co-simulator, but the core does not resume afterwards: a part that would reboot \
-repeatedly under a starved watchdog goes quiet here instead, so only the FIRST \
-watchdog reset is represented on this run.\
-"""
+# WATCHDOG (re-measured 2026-10-22). The inline platform's IWDG at 40 kHz times out and
+# resets. It used to "fire once and go quiet" because Renode's Machine.Reset() ran no `reset`
+# macro, so VTOR/PC/SP went to 0 and the core halted ("PC does not lay in memory") on this
+# part, whose flash is at 0x08000000. The backend now registers a `reset` macro that reloads
+# the image, and a starved watchdog reboots the core every timeout. No limitation is stated
+# (testdata/firmware/watchdog, tests/renode_watchdog.rs).
 
 # TIMING (deliberate, bounded divergence; the long why is on the timer1..4
 # overrides in platform_repl above). SysTick and instruction timing are held to

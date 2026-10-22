@@ -105,6 +105,9 @@ pub struct McuBinding {
     /// RP2040's 3.3 V IOVDD and 1.1 V DVDD) has each pad judged against its
     /// own row rather than one part-wide floor.
     pub supply_floors: HashMap<String, f64>,
+    /// The card's pin drive strengths, drive-select register layout and
+    /// reset / brown-out thresholds. Empty when the card states none.
+    pub electrical: crate::mcu_electrical::McuElectrical,
 }
 
 /// One MCP4728 quad DAC discovered on the board.
@@ -7893,6 +7896,7 @@ fn bind_mcu(
     let mut gpio_drivers = HashMap::new();
     let mut adc_nets = HashMap::new();
     let mut adc_pin = HashMap::new();
+    let electrical = crate::mcu_electrical::McuElectrical::from_card(model);
     // Roles in name order, never hash order: two roles reaching one port pin
     // would otherwise race for it (see `port_pin_owners`).
     let by_role = roles_by_name(&role_nets);
@@ -7929,7 +7933,7 @@ fn bind_mcu(
                 node,
                 &net_name,
                 &format!("{}_{port}{bit}", comp.reference),
-                DEFAULT_RO,
+                electrical.initial_ohms(DEFAULT_RO),
             );
             // Start high-impedance: the firmware enables the driver by toggling
             // the pin (DDR + PORT writes surface as an output edge). Inertness
@@ -7986,6 +7990,7 @@ fn bind_mcu(
             })
             .reduce(f64::min),
         supply_floors: supply_floors(model),
+        electrical,
     });
     log_mcu_auto_decision(comp, model, derived_when_empty.as_ref())
 }

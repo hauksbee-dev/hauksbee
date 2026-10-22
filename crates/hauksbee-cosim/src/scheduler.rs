@@ -8832,6 +8832,7 @@ missing = ["measurement_registers"]
             supply_stand_in: None,
             min_supply_v: None,
             supply_floors: HashMap::new(),
+            electrical: Default::default(),
         }
     }
 
