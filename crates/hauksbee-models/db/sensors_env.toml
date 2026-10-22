@@ -2,3 +2,1388 @@
 #
 # Cards here are written from vendor datasheets only (every value carries a basis and a source).
 # See target/launch/official-parts-20261022/ranking.md for the batch plan.
+#
+# GENERATED-FREE: this file is hand-readable TOML; the CRC-8 expressions inside the sensor specs are long
+# arithmetic parity sums because evalexpr has no bit operations (verified against a reference CRC-8 in the
+# co-simulation tests, crates/hauksbee-cosim/tests/official_env1.rs).
+
+# SHT4x: Sensirion SHT40, SHT41 and SHT45 humidity and temperature sensors, 4-pad open-cavity DFN, I2C. Source: Sensirion SHT4x Datasheet
+# Version 7.3 (June 2026), sha256 8db4a43f17149b76811cfb504caaeca4ef844ddc710cb9b45905c51c7ddfe3c2. The same PDF covers the SHT43
+# (ISO17025-certified), which is NOT matched here: this batch builds the SHT40/41/45 only.
+# THREE CARDS, ONE PER ADDRESS. The ordering code letter after the dash sets the 7-bit I2C address (Table 11 position 7: A = 0x44, B = 0x45, C
+# = 0x46) and the three cards differ in nothing else, so they are an orderable-variant family (variant_of = sht4x) whose members are told
+# apart by the code. A board that names the part without a suffix (SHT40) cannot say its address: the family has one pinout, so the first
+# member (0x44) is bound as a flagged stand-in, never silently as the answer.
+# PINS. Section 5.4 p.17: 1 SDA, 2 SCL, 3 VDD, 4 VSS; the die pad is not connected to any pin, so no pad is mapped for it.
+# LEVELS. VIH 0.7 x VDD and VIL 0.3 x VDD (Table 4) are ratiometric and the card holds volts, so they are evaluated at the typical VDD = 3.3 V
+# and the printed ratios are kept as characteristic records (unit VDD). VOL 0.4 V max holds for VDD > 2.0 V.
+# BEHAVIOUR. The part answers measurement commands with six bytes: T high, T low, CRC-8, RH high, RH low, CRC-8 (section 4.3), ST = (T + 45) /
+# 175 x 65535 and SRH = (RH + 6) / 125 x 65535 (equations (1) and (2), section 4.6, with the printed 2^16 - 1 divisor), CRC-8 polynomial 0x31
+# initialised 0xFF (Table 7, CRC(0xBEEF) = 0x92). Both outputs follow the temperature_c and humidity_pct sensor inputs, latched when the
+# command is written. The nine measure and heater commands of Table 8 return a measurement; the heater's warming of the die is not modelled.
+# evalexpr has no bit operations, so the CRC is a generated arithmetic parity expression, checked in the co-simulation tests against a
+# reference CRC-8.
+# Cross-check only: Renode's SHT45 model (MIT, Antmicro) agrees on the command set (0xFD, 0xF6, 0xE0, the six heater codes, 0x89, 0x94), the
+# CRC parameters and the two conversion formulas; no Renode code is used.
+[[models]]
+id = "sht4x_44"
+kind = "digital"
+description = "Sensirion SHT40/SHT41/SHT45 humidity and temperature sensor, 4-pad DFN, I2C address 0x44 (ordering code letter A): VDD supply draw, logic levels and the command-framed measurement with CRC-8"
+variant_of = "sht4x"
+
+[models.match]
+value_re = "(?i)^SHT4[015](?:-[ABC]D1[BFP](?:-R[23])?)?$"
+
+[models.variant]
+orderable_re = "(?i)^SHT4[015]-AD1"
+orderable = ["SHT40-AD1B-R2", "SHT40-AD1B-R3", "SHT40-AD1F-R2", "SHT40-AD1P-R2", "SHT41-AD1B-R2", "SHT41-AD1B-R3", "SHT41-AD1F-R2", "SHT41-AD1P-R2", "SHT45-AD1B-R2", "SHT45-AD1F-R2", "SHT45-AD1B-R3"]
+package = "DFN-4"
+basis = "Table 11 nomenclature position 7 (A = I2C address 0x44) and Table 12 ordering options p.21-22"
+
+[models.params]
+warning = "source-bound: the idle VDD current (0.08 uA typ at 25 C), the logic levels (evaluated at the typical VDD = 3.3 V) and the I2C measurement protocol (T and RH conversions, CRC-8) are executable; the measurement duration and the NACK while busy, the serial number, general-call reset, the heater's self-heating of the die, the accuracy classes and the pull-up requirement are not represented"
+vih = 2.31      # derived: 0.7 x VDD (Table 4 p.9) evaluated at the Table 4 typical VDD = 3.3 V
+vil = 0.99      # derived: 0.3 x VDD (Table 4 p.9) evaluated at VDD = 3.3 V
+vol = { max = 0.4, unit = "V", conditions = "VDD > 2.0 V, Rpullup > 390 ohm (SDA, open drain)", basis = "Table 4 p.9, VOL, max column; below 2.0 V the limit is 0.2 x VDD" }
+supply_static_ua = 0.08   # Table 4 p.9, IDD idle state, 25 C, typ column
+supply_pin = "3"
+gnd_pin = "4"
+
+[models.pins]
+"1" = "sda"   # SDA, serial data, bidirectional (open drain, external pull-up required)
+"2" = "scl"   # SCL, serial clock input
+"3" = "vdd"   # VDD
+"4" = "gnd"   # VSS
+
+[models.ratings]
+theta_ja_c_per_w = 297.0   # Table 10 p.17, heater off, die pad NOT soldered (the layout Sensirion recommends); simulation values
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.08
+max_v = 3.6
+basis = "Sensirion SHT4x V7.3 Table 4 p.9, supply voltage VDD 1.08 V min / 3.3 V typ / 3.6 V max"
+
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "SHT4x"
+bus = "i2c"
+i2c_address = 0x44
+
+[[sensor.input]]
+name = "temperature_c"
+default = 25.0
+
+[[sensor.input]]
+name = "humidity_pct"
+default = 50.0
+
+# mode 0 = nothing to read (reset), 1 = a measurement is latched.
+[[sensor.state]]
+name = "mode"
+default = 0.0
+
+[[sensor.state]]
+name = "t_hi"
+default = 0.0
+
+[[sensor.state]]
+name = "t_lo"
+default = 0.0
+
+[[sensor.state]]
+name = "rh_hi"
+default = 0.0
+
+[[sensor.state]]
+name = "rh_lo"
+default = 0.0
+
+[[sensor.write_command]]
+name = "measure_high"
+match_mask = 0xFF
+match_value = 0xFD
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "measure_medium"
+match_mask = 0xFF
+match_value = 0xF6
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "measure_low"
+match_mask = 0xFF
+match_value = 0xE0
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "heater_200mw_1s"
+match_mask = 0xFF
+match_value = 0x39
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "heater_200mw_100ms"
+match_mask = 0xFF
+match_value = 0x32
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "heater_110mw_1s"
+match_mask = 0xFF
+match_value = 0x2F
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "heater_110mw_100ms"
+match_mask = 0xFF
+match_value = 0x24
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "heater_20mw_1s"
+match_mask = 0xFF
+match_value = 0x1E
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "heater_20mw_100ms"
+match_mask = 0xFF
+match_value = 0x15
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "soft_reset"
+match_mask = 0xFF
+match_value = 0x94
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "0.0"
+
+[sensor.read_frame]
+bytes = [
+  "if(mode == 1.0, t_hi, 255.0)",
+  "if(mode == 1.0, t_lo, 255.0)",
+  "if(mode == 1.0, (((1.0 + (floor(t_hi/128.0)%2.0) + (floor(t_hi/64.0)%2.0) + (floor(t_hi/8.0)%2.0) + (floor(t_hi/4.0)%2.0) + (floor(t_hi/2.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/16.0)%2.0) + (floor(t_lo/8.0)%2.0) + (t_lo%2.0))%2.0)*1.0 + ((0.0 + (floor(t_hi/128.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/8.0)%2.0) + (floor(t_hi/4.0)%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/32.0)%2.0) + (floor(t_lo/16.0)%2.0) + (floor(t_lo/2.0)%2.0))%2.0)*2.0 + ((0.0 + (floor(t_hi/32.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/8.0)%2.0) + (t_hi%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/32.0)%2.0) + (floor(t_lo/4.0)%2.0))%2.0)*4.0 + ((0.0 + (floor(t_hi/64.0)%2.0) + (floor(t_hi/32.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/2.0)%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/8.0)%2.0))%2.0)*8.0 + ((0.0 + (floor(t_hi/32.0)%2.0) + (floor(t_hi/8.0)%2.0) + (floor(t_hi/2.0)%2.0) + (t_hi%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/8.0)%2.0) + (t_lo%2.0))%2.0)*16.0 + ((0.0 + (floor(t_hi/128.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/8.0)%2.0) + (t_hi%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/8.0)%2.0) + (floor(t_lo/2.0)%2.0) + (t_lo%2.0))%2.0)*32.0 + ((0.0 + (floor(t_hi/32.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/2.0)%2.0) + (t_hi%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/16.0)%2.0) + (floor(t_lo/4.0)%2.0) + (floor(t_lo/2.0)%2.0))%2.0)*64.0 + ((1.0 + (floor(t_hi/64.0)%2.0) + (floor(t_hi/32.0)%2.0) + (floor(t_hi/4.0)%2.0) + (floor(t_hi/2.0)%2.0) + (t_hi%2.0) + (floor(t_lo/32.0)%2.0) + (floor(t_lo/8.0)%2.0) + (floor(t_lo/4.0)%2.0))%2.0)*128.0), 255.0)",
+  "if(mode == 1.0, rh_hi, 255.0)",
+  "if(mode == 1.0, rh_lo, 255.0)",
+  "if(mode == 1.0, (((1.0 + (floor(rh_hi/128.0)%2.0) + (floor(rh_hi/64.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (floor(rh_hi/4.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/16.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (rh_lo%2.0))%2.0)*1.0 + ((0.0 + (floor(rh_hi/128.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (floor(rh_hi/4.0)%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/32.0)%2.0) + (floor(rh_lo/16.0)%2.0) + (floor(rh_lo/2.0)%2.0))%2.0)*2.0 + ((0.0 + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/32.0)%2.0) + (floor(rh_lo/4.0)%2.0))%2.0)*4.0 + ((0.0 + (floor(rh_hi/64.0)%2.0) + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/8.0)%2.0))%2.0)*8.0 + ((0.0 + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (rh_lo%2.0))%2.0)*16.0 + ((0.0 + (floor(rh_hi/128.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (floor(rh_lo/2.0)%2.0) + (rh_lo%2.0))%2.0)*32.0 + ((0.0 + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/16.0)%2.0) + (floor(rh_lo/4.0)%2.0) + (floor(rh_lo/2.0)%2.0))%2.0)*64.0 + ((1.0 + (floor(rh_hi/64.0)%2.0) + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/4.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/32.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (floor(rh_lo/4.0)%2.0))%2.0)*128.0), 255.0)",
+]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.08   # Table 4 p.9, VDD min
+idle_a = 8e-08                # Table 4 p.9, idle state IDD typ at 25 C
+read_a = 0.00032              # Table 4 p.9, IDD while measuring, typ
+write_a = 0.00032
+
+[models.coverage]
+implements = ["pin_roles", "supply_range", "logic_levels_at_3v3_vdd", "idle_supply_current", "bus_coupled_active_current", "supply_voltage_gating", "i2c_address_0x44", "measure_commands_0xFD_0xF6_0xE0", "heater_commands_return_a_measurement", "soft_reset_0x94", "temperature_conversion_formula_2", "humidity_conversion_formula_1", "crc8_poly_0x31_init_0xFF", "sensor_input_temperature_c", "sensor_input_humidity_pct"]
+missing = ["measurement_duration_and_busy_nack", "serial_number_command_0x89", "i2c_general_call_reset", "heater_self_heating", "accuracy_and_repeatability_noise", "read_once_semantics", "thermal_model_of_die_temperature", "pullup_resistor_requirement", "absolute_pin_voltage_limit_supply_relative"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://sensirion.com/media/documents/33FD6951/6A7C10A0/HT_DS_Datasheet_SHT4x_V7.3.pdf"
+title = "Sensirion SHT4x Datasheet (SHT40, SHT41, SHT43, SHT45), Version 7.3, June 2026"
+locator = "Table 4 electrical specifications p.9; Table 5 timing and Table 6 absolute maximum ratings p.10; section 4.4 and Table 7 checksum p.11; Table 8 commands and section 4.6 conversion p.12; section 5.4 pin assignment and Table 10 thermal p.17; Table 11 nomenclature p.21; Table 12 ordering p.22"
+sha256 = "8db4a43f17149b76811cfb504caaeca4ef844ddc710cb9b45905c51c7ddfe3c2"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the card reproduces the conversion formulas, not the accuracy classes"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_static_ua"
+reason = "Table 4 prints the idle IDD typ 0.08 uA and max 1.0 uA at 25 C, and max 3.4 uA at 125 C; the typical is used"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "peripheral_power"
+reason = "read_a and write_a use the measurement-state IDD typ (320 uA, max 500 uA); the datasheet gives no per-transaction bus current"
+[[models.source.pinout]]
+package = "DFN-4 (open-cavity dual flat no-lead, 4 pads)"
+pins = { "1" = "SDA", "2" = "SCL", "3" = "VDD", "4" = "VSS" }
+
+[[models.source.characteristic]]
+parameter = "Supply voltage VDD"
+min = 1.08
+typ = 3.3
+max = 3.6
+unit = "V"
+conditions = "Table 4"
+basis = "Table 4 p.9, VDD, min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Power-up/down voltage VPOR"
+min = 0.6
+max = 1.08
+unit = "V"
+conditions = "static power supply"
+basis = "Table 4 p.9, VPOR, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Idle supply current"
+typ = 0.08
+max = 1.0
+unit = "uA"
+conditions = "idle state, 25 C"
+basis = "Table 4 p.9, IDD idle, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Idle supply current at 125 C"
+max = 3.4
+unit = "uA"
+conditions = "idle state, 125 C"
+basis = "Table 4 p.9, IDD idle, max column"
+
+[[models.source.characteristic]]
+parameter = "Power-up supply current"
+typ = 50.0
+unit = "uA"
+conditions = "power up"
+basis = "Table 4 p.9, IDD power up, typ column"
+
+[[models.source.characteristic]]
+parameter = "Measurement supply current"
+typ = 320.0
+max = 500.0
+unit = "uA"
+conditions = "while measuring, heater off"
+basis = "Table 4 p.9, IDD measurement, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Average supply current, high repeatability"
+typ = 2.2
+unit = "uA"
+conditions = "one measurement per second"
+basis = "Table 4 p.9, IDD average high repeatability, typ column"
+
+[[models.source.characteristic]]
+parameter = "Average supply current, medium repeatability"
+typ = 1.2
+unit = "uA"
+conditions = "one measurement per second"
+basis = "Table 4 p.9, IDD average medium repeatability, typ column"
+
+[[models.source.characteristic]]
+parameter = "Average supply current, low repeatability"
+typ = 0.4
+unit = "uA"
+conditions = "one measurement per second"
+basis = "Table 4 p.9, IDD average low repeatability, typ column"
+
+[[models.source.characteristic]]
+parameter = "Heater supply current, nominal 200 mW"
+typ = 60.0
+max = 100.0
+unit = "mA"
+conditions = "heater on"
+basis = "Table 4 p.9, IDD heater 200 mW, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Heater supply current, nominal 110 mW"
+typ = 33.0
+max = 55.0
+unit = "mA"
+conditions = "heater on"
+basis = "Table 4 p.9, IDD heater 110 mW, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Heater supply current, nominal 20 mW"
+typ = 6.0
+max = 10.0
+unit = "mA"
+conditions = "heater on"
+basis = "Table 4 p.9, IDD heater 20 mW, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "VIL low-level input voltage"
+max = 0.3
+unit = "VDD"
+conditions = "ratio of the supply, VDD = 1.08 V to 3.6 V"
+basis = "Table 4 p.9, VIL, max column (0.3 x VDD)"
+
+[[models.source.characteristic]]
+parameter = "VIH high-level input voltage"
+min = 0.7
+unit = "VDD"
+conditions = "ratio of the supply, VDD = 1.08 V to 3.6 V"
+basis = "Table 4 p.9, VIH, min column (0.7 x VDD)"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.2
+unit = "VDD"
+conditions = "VDD < 1.62 V with Rpullup > 820 ohm, and VDD = 1.62 V to 2.0 V with Rpullup > 390 ohm"
+basis = "Table 4 p.9, VOL, max column (0.2 x VDD)"
+
+[[models.source.characteristic]]
+parameter = "Pull-up resistor Rp"
+min = 820.0
+unit = "ohm"
+conditions = "VDD < 1.62 V"
+basis = "Table 4 p.9, Rp, min column"
+
+[[models.source.characteristic]]
+parameter = "Pull-up resistor Rp"
+min = 390.0
+unit = "ohm"
+conditions = "VDD >= 1.62 V"
+basis = "Table 4 p.9, Rp, min column"
+
+[[models.source.characteristic]]
+parameter = "Capacitive bus load Cb"
+max = 400.0
+unit = "pF"
+conditions = "Rp <= 820 ohm, fast mode"
+basis = "Table 4 p.9, Cb, max column"
+
+[[models.source.characteristic]]
+parameter = "Measurement duration, low repeatability"
+typ = 1.3
+max = 1.6
+unit = "ms"
+conditions = "including power-up time"
+basis = "Table 5 p.10, tMEAS,l, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Measurement duration, medium repeatability"
+typ = 3.7
+max = 4.5
+unit = "ms"
+conditions = "including power-up time"
+basis = "Table 5 p.10, tMEAS,m, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Measurement duration, high repeatability"
+typ = 6.9
+max = 8.3
+unit = "ms"
+conditions = "including power-up time"
+basis = "Table 5 p.10, tMEAS,h, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Power-up time"
+typ = 0.3
+max = 1.0
+unit = "ms"
+conditions = "after hard reset, VDD >= VPOR"
+basis = "Table 5 p.10, tPU, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Soft reset time"
+max = 1.0
+unit = "ms"
+conditions = "after the ACK of the soft reset command"
+basis = "Table 5 p.10, tSR, max column"
+
+[[models.source.characteristic]]
+parameter = "Voltage on any pin"
+min = -0.3
+unit = "V"
+conditions = "referenced to VSS; the upper limit is VDD + 0.3 V (supply-relative)"
+basis = "Table 6 p.10, maximum voltage on any pin, VSS - 0.3 V lower limit, min column"
+
+[[models.source.characteristic]]
+parameter = "Junction-to-ambient thermal resistance, heater off, die pad soldered"
+typ = 246.0
+unit = "K/W"
+conditions = "heater off, die pad soldered; simulation"
+basis = "Table 10 p.17, RthetaJA, typ column"
+rating = "theta_ja_c_per_w"
+package = "DFN-4"
+mounting = "die pad soldered"
+
+[[models.source.characteristic]]
+parameter = "Junction-to-ambient thermal resistance, heater off, die pad not soldered"
+typ = 297.0
+unit = "K/W"
+conditions = "heater off, die pad not soldered; simulation"
+basis = "Table 10 p.17, RthetaJA, typ column"
+rating = "theta_ja_c_per_w"
+package = "DFN-4"
+mounting = "die pad not soldered"
+
+
+[[models]]
+id = "sht4x_45"
+kind = "digital"
+description = "Sensirion SHT40/SHT41/SHT45 humidity and temperature sensor, 4-pad DFN, I2C address 0x45 (ordering code letter B): VDD supply draw, logic levels and the command-framed measurement with CRC-8"
+variant_of = "sht4x"
+
+[models.match]
+value_re = "(?i)^SHT4[015](?:-[ABC]D1[BFP](?:-R[23])?)?$"
+
+[models.variant]
+orderable_re = "(?i)^SHT4[015]-BD1"
+orderable = ["SHT40-BD1B-R2", "SHT40-BD1F-R2", "SHT40-BD1B-R3"]
+package = "DFN-4"
+basis = "Table 11 nomenclature position 7 (B = I2C address 0x45) and Table 12 ordering options p.21-22"
+
+[models.params]
+warning = "source-bound: the idle VDD current (0.08 uA typ at 25 C), the logic levels (evaluated at the typical VDD = 3.3 V) and the I2C measurement protocol (T and RH conversions, CRC-8) are executable; the measurement duration and the NACK while busy, the serial number, general-call reset, the heater's self-heating of the die, the accuracy classes and the pull-up requirement are not represented"
+vih = 2.31      # derived: 0.7 x VDD (Table 4 p.9) evaluated at the Table 4 typical VDD = 3.3 V
+vil = 0.99      # derived: 0.3 x VDD (Table 4 p.9) evaluated at VDD = 3.3 V
+vol = { max = 0.4, unit = "V", conditions = "VDD > 2.0 V, Rpullup > 390 ohm (SDA, open drain)", basis = "Table 4 p.9, VOL, max column; below 2.0 V the limit is 0.2 x VDD" }
+supply_static_ua = 0.08   # Table 4 p.9, IDD idle state, 25 C, typ column
+supply_pin = "3"
+gnd_pin = "4"
+
+[models.pins]
+"1" = "sda"   # SDA, serial data, bidirectional (open drain, external pull-up required)
+"2" = "scl"   # SCL, serial clock input
+"3" = "vdd"   # VDD
+"4" = "gnd"   # VSS
+
+[models.ratings]
+theta_ja_c_per_w = 297.0   # Table 10 p.17, heater off, die pad NOT soldered (the layout Sensirion recommends); simulation values
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.08
+max_v = 3.6
+basis = "Sensirion SHT4x V7.3 Table 4 p.9, supply voltage VDD 1.08 V min / 3.3 V typ / 3.6 V max"
+
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "SHT4x"
+bus = "i2c"
+i2c_address = 0x45
+
+[[sensor.input]]
+name = "temperature_c"
+default = 25.0
+
+[[sensor.input]]
+name = "humidity_pct"
+default = 50.0
+
+# mode 0 = nothing to read (reset), 1 = a measurement is latched.
+[[sensor.state]]
+name = "mode"
+default = 0.0
+
+[[sensor.state]]
+name = "t_hi"
+default = 0.0
+
+[[sensor.state]]
+name = "t_lo"
+default = 0.0
+
+[[sensor.state]]
+name = "rh_hi"
+default = 0.0
+
+[[sensor.state]]
+name = "rh_lo"
+default = 0.0
+
+[[sensor.write_command]]
+name = "measure_high"
+match_mask = 0xFF
+match_value = 0xFD
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "measure_medium"
+match_mask = 0xFF
+match_value = 0xF6
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "measure_low"
+match_mask = 0xFF
+match_value = 0xE0
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "heater_200mw_1s"
+match_mask = 0xFF
+match_value = 0x39
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "heater_200mw_100ms"
+match_mask = 0xFF
+match_value = 0x32
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "heater_110mw_1s"
+match_mask = 0xFF
+match_value = 0x2F
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "heater_110mw_100ms"
+match_mask = 0xFF
+match_value = 0x24
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "heater_20mw_1s"
+match_mask = 0xFF
+match_value = 0x1E
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "heater_20mw_100ms"
+match_mask = 0xFF
+match_value = 0x15
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "soft_reset"
+match_mask = 0xFF
+match_value = 0x94
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "0.0"
+
+[sensor.read_frame]
+bytes = [
+  "if(mode == 1.0, t_hi, 255.0)",
+  "if(mode == 1.0, t_lo, 255.0)",
+  "if(mode == 1.0, (((1.0 + (floor(t_hi/128.0)%2.0) + (floor(t_hi/64.0)%2.0) + (floor(t_hi/8.0)%2.0) + (floor(t_hi/4.0)%2.0) + (floor(t_hi/2.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/16.0)%2.0) + (floor(t_lo/8.0)%2.0) + (t_lo%2.0))%2.0)*1.0 + ((0.0 + (floor(t_hi/128.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/8.0)%2.0) + (floor(t_hi/4.0)%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/32.0)%2.0) + (floor(t_lo/16.0)%2.0) + (floor(t_lo/2.0)%2.0))%2.0)*2.0 + ((0.0 + (floor(t_hi/32.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/8.0)%2.0) + (t_hi%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/32.0)%2.0) + (floor(t_lo/4.0)%2.0))%2.0)*4.0 + ((0.0 + (floor(t_hi/64.0)%2.0) + (floor(t_hi/32.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/2.0)%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/8.0)%2.0))%2.0)*8.0 + ((0.0 + (floor(t_hi/32.0)%2.0) + (floor(t_hi/8.0)%2.0) + (floor(t_hi/2.0)%2.0) + (t_hi%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/8.0)%2.0) + (t_lo%2.0))%2.0)*16.0 + ((0.0 + (floor(t_hi/128.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/8.0)%2.0) + (t_hi%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/8.0)%2.0) + (floor(t_lo/2.0)%2.0) + (t_lo%2.0))%2.0)*32.0 + ((0.0 + (floor(t_hi/32.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/2.0)%2.0) + (t_hi%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/16.0)%2.0) + (floor(t_lo/4.0)%2.0) + (floor(t_lo/2.0)%2.0))%2.0)*64.0 + ((1.0 + (floor(t_hi/64.0)%2.0) + (floor(t_hi/32.0)%2.0) + (floor(t_hi/4.0)%2.0) + (floor(t_hi/2.0)%2.0) + (t_hi%2.0) + (floor(t_lo/32.0)%2.0) + (floor(t_lo/8.0)%2.0) + (floor(t_lo/4.0)%2.0))%2.0)*128.0), 255.0)",
+  "if(mode == 1.0, rh_hi, 255.0)",
+  "if(mode == 1.0, rh_lo, 255.0)",
+  "if(mode == 1.0, (((1.0 + (floor(rh_hi/128.0)%2.0) + (floor(rh_hi/64.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (floor(rh_hi/4.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/16.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (rh_lo%2.0))%2.0)*1.0 + ((0.0 + (floor(rh_hi/128.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (floor(rh_hi/4.0)%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/32.0)%2.0) + (floor(rh_lo/16.0)%2.0) + (floor(rh_lo/2.0)%2.0))%2.0)*2.0 + ((0.0 + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/32.0)%2.0) + (floor(rh_lo/4.0)%2.0))%2.0)*4.0 + ((0.0 + (floor(rh_hi/64.0)%2.0) + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/8.0)%2.0))%2.0)*8.0 + ((0.0 + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (rh_lo%2.0))%2.0)*16.0 + ((0.0 + (floor(rh_hi/128.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (floor(rh_lo/2.0)%2.0) + (rh_lo%2.0))%2.0)*32.0 + ((0.0 + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/16.0)%2.0) + (floor(rh_lo/4.0)%2.0) + (floor(rh_lo/2.0)%2.0))%2.0)*64.0 + ((1.0 + (floor(rh_hi/64.0)%2.0) + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/4.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/32.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (floor(rh_lo/4.0)%2.0))%2.0)*128.0), 255.0)",
+]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.08   # Table 4 p.9, VDD min
+idle_a = 8e-08                # Table 4 p.9, idle state IDD typ at 25 C
+read_a = 0.00032              # Table 4 p.9, IDD while measuring, typ
+write_a = 0.00032
+
+[models.coverage]
+implements = ["pin_roles", "supply_range", "logic_levels_at_3v3_vdd", "idle_supply_current", "bus_coupled_active_current", "supply_voltage_gating", "i2c_address_0x45", "measure_commands_0xFD_0xF6_0xE0", "heater_commands_return_a_measurement", "soft_reset_0x94", "temperature_conversion_formula_2", "humidity_conversion_formula_1", "crc8_poly_0x31_init_0xFF", "sensor_input_temperature_c", "sensor_input_humidity_pct"]
+missing = ["measurement_duration_and_busy_nack", "serial_number_command_0x89", "i2c_general_call_reset", "heater_self_heating", "accuracy_and_repeatability_noise", "read_once_semantics", "thermal_model_of_die_temperature", "pullup_resistor_requirement", "absolute_pin_voltage_limit_supply_relative"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://sensirion.com/media/documents/33FD6951/6A7C10A0/HT_DS_Datasheet_SHT4x_V7.3.pdf"
+title = "Sensirion SHT4x Datasheet (SHT40, SHT41, SHT43, SHT45), Version 7.3, June 2026"
+locator = "Table 4 electrical specifications p.9; Table 5 timing and Table 6 absolute maximum ratings p.10; section 4.4 and Table 7 checksum p.11; Table 8 commands and section 4.6 conversion p.12; section 5.4 pin assignment and Table 10 thermal p.17; Table 11 nomenclature p.21; Table 12 ordering p.22"
+sha256 = "8db4a43f17149b76811cfb504caaeca4ef844ddc710cb9b45905c51c7ddfe3c2"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the card reproduces the conversion formulas, not the accuracy classes"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_static_ua"
+reason = "Table 4 prints the idle IDD typ 0.08 uA and max 1.0 uA at 25 C, and max 3.4 uA at 125 C; the typical is used"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "peripheral_power"
+reason = "read_a and write_a use the measurement-state IDD typ (320 uA, max 500 uA); the datasheet gives no per-transaction bus current"
+[[models.source.pinout]]
+package = "DFN-4 (open-cavity dual flat no-lead, 4 pads)"
+pins = { "1" = "SDA", "2" = "SCL", "3" = "VDD", "4" = "VSS" }
+
+[[models.source.characteristic]]
+parameter = "Supply voltage VDD"
+min = 1.08
+typ = 3.3
+max = 3.6
+unit = "V"
+conditions = "Table 4"
+basis = "Table 4 p.9, VDD, min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Power-up/down voltage VPOR"
+min = 0.6
+max = 1.08
+unit = "V"
+conditions = "static power supply"
+basis = "Table 4 p.9, VPOR, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Idle supply current"
+typ = 0.08
+max = 1.0
+unit = "uA"
+conditions = "idle state, 25 C"
+basis = "Table 4 p.9, IDD idle, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Idle supply current at 125 C"
+max = 3.4
+unit = "uA"
+conditions = "idle state, 125 C"
+basis = "Table 4 p.9, IDD idle, max column"
+
+[[models.source.characteristic]]
+parameter = "Power-up supply current"
+typ = 50.0
+unit = "uA"
+conditions = "power up"
+basis = "Table 4 p.9, IDD power up, typ column"
+
+[[models.source.characteristic]]
+parameter = "Measurement supply current"
+typ = 320.0
+max = 500.0
+unit = "uA"
+conditions = "while measuring, heater off"
+basis = "Table 4 p.9, IDD measurement, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Average supply current, high repeatability"
+typ = 2.2
+unit = "uA"
+conditions = "one measurement per second"
+basis = "Table 4 p.9, IDD average high repeatability, typ column"
+
+[[models.source.characteristic]]
+parameter = "Average supply current, medium repeatability"
+typ = 1.2
+unit = "uA"
+conditions = "one measurement per second"
+basis = "Table 4 p.9, IDD average medium repeatability, typ column"
+
+[[models.source.characteristic]]
+parameter = "Average supply current, low repeatability"
+typ = 0.4
+unit = "uA"
+conditions = "one measurement per second"
+basis = "Table 4 p.9, IDD average low repeatability, typ column"
+
+[[models.source.characteristic]]
+parameter = "Heater supply current, nominal 200 mW"
+typ = 60.0
+max = 100.0
+unit = "mA"
+conditions = "heater on"
+basis = "Table 4 p.9, IDD heater 200 mW, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Heater supply current, nominal 110 mW"
+typ = 33.0
+max = 55.0
+unit = "mA"
+conditions = "heater on"
+basis = "Table 4 p.9, IDD heater 110 mW, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Heater supply current, nominal 20 mW"
+typ = 6.0
+max = 10.0
+unit = "mA"
+conditions = "heater on"
+basis = "Table 4 p.9, IDD heater 20 mW, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "VIL low-level input voltage"
+max = 0.3
+unit = "VDD"
+conditions = "ratio of the supply, VDD = 1.08 V to 3.6 V"
+basis = "Table 4 p.9, VIL, max column (0.3 x VDD)"
+
+[[models.source.characteristic]]
+parameter = "VIH high-level input voltage"
+min = 0.7
+unit = "VDD"
+conditions = "ratio of the supply, VDD = 1.08 V to 3.6 V"
+basis = "Table 4 p.9, VIH, min column (0.7 x VDD)"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.2
+unit = "VDD"
+conditions = "VDD < 1.62 V with Rpullup > 820 ohm, and VDD = 1.62 V to 2.0 V with Rpullup > 390 ohm"
+basis = "Table 4 p.9, VOL, max column (0.2 x VDD)"
+
+[[models.source.characteristic]]
+parameter = "Pull-up resistor Rp"
+min = 820.0
+unit = "ohm"
+conditions = "VDD < 1.62 V"
+basis = "Table 4 p.9, Rp, min column"
+
+[[models.source.characteristic]]
+parameter = "Pull-up resistor Rp"
+min = 390.0
+unit = "ohm"
+conditions = "VDD >= 1.62 V"
+basis = "Table 4 p.9, Rp, min column"
+
+[[models.source.characteristic]]
+parameter = "Capacitive bus load Cb"
+max = 400.0
+unit = "pF"
+conditions = "Rp <= 820 ohm, fast mode"
+basis = "Table 4 p.9, Cb, max column"
+
+[[models.source.characteristic]]
+parameter = "Measurement duration, low repeatability"
+typ = 1.3
+max = 1.6
+unit = "ms"
+conditions = "including power-up time"
+basis = "Table 5 p.10, tMEAS,l, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Measurement duration, medium repeatability"
+typ = 3.7
+max = 4.5
+unit = "ms"
+conditions = "including power-up time"
+basis = "Table 5 p.10, tMEAS,m, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Measurement duration, high repeatability"
+typ = 6.9
+max = 8.3
+unit = "ms"
+conditions = "including power-up time"
+basis = "Table 5 p.10, tMEAS,h, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Power-up time"
+typ = 0.3
+max = 1.0
+unit = "ms"
+conditions = "after hard reset, VDD >= VPOR"
+basis = "Table 5 p.10, tPU, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Soft reset time"
+max = 1.0
+unit = "ms"
+conditions = "after the ACK of the soft reset command"
+basis = "Table 5 p.10, tSR, max column"
+
+[[models.source.characteristic]]
+parameter = "Voltage on any pin"
+min = -0.3
+unit = "V"
+conditions = "referenced to VSS; the upper limit is VDD + 0.3 V (supply-relative)"
+basis = "Table 6 p.10, maximum voltage on any pin, VSS - 0.3 V lower limit, min column"
+
+[[models.source.characteristic]]
+parameter = "Junction-to-ambient thermal resistance, heater off, die pad soldered"
+typ = 246.0
+unit = "K/W"
+conditions = "heater off, die pad soldered; simulation"
+basis = "Table 10 p.17, RthetaJA, typ column"
+rating = "theta_ja_c_per_w"
+package = "DFN-4"
+mounting = "die pad soldered"
+
+[[models.source.characteristic]]
+parameter = "Junction-to-ambient thermal resistance, heater off, die pad not soldered"
+typ = 297.0
+unit = "K/W"
+conditions = "heater off, die pad not soldered; simulation"
+basis = "Table 10 p.17, RthetaJA, typ column"
+rating = "theta_ja_c_per_w"
+package = "DFN-4"
+mounting = "die pad not soldered"
+
+
+[[models]]
+id = "sht4x_46"
+kind = "digital"
+description = "Sensirion SHT40/SHT41/SHT45 humidity and temperature sensor, 4-pad DFN, I2C address 0x46 (ordering code letter C): VDD supply draw, logic levels and the command-framed measurement with CRC-8"
+variant_of = "sht4x"
+
+[models.match]
+value_re = "(?i)^SHT4[015](?:-[ABC]D1[BFP](?:-R[23])?)?$"
+
+[models.variant]
+orderable_re = "(?i)^SHT4[015]-CD1"
+orderable = ["SHT40-CD1B-R3"]
+package = "DFN-4"
+basis = "Table 11 nomenclature position 7 (C = I2C address 0x46) and Table 12 ordering options p.21-22"
+
+[models.params]
+warning = "source-bound: the idle VDD current (0.08 uA typ at 25 C), the logic levels (evaluated at the typical VDD = 3.3 V) and the I2C measurement protocol (T and RH conversions, CRC-8) are executable; the measurement duration and the NACK while busy, the serial number, general-call reset, the heater's self-heating of the die, the accuracy classes and the pull-up requirement are not represented"
+vih = 2.31      # derived: 0.7 x VDD (Table 4 p.9) evaluated at the Table 4 typical VDD = 3.3 V
+vil = 0.99      # derived: 0.3 x VDD (Table 4 p.9) evaluated at VDD = 3.3 V
+vol = { max = 0.4, unit = "V", conditions = "VDD > 2.0 V, Rpullup > 390 ohm (SDA, open drain)", basis = "Table 4 p.9, VOL, max column; below 2.0 V the limit is 0.2 x VDD" }
+supply_static_ua = 0.08   # Table 4 p.9, IDD idle state, 25 C, typ column
+supply_pin = "3"
+gnd_pin = "4"
+
+[models.pins]
+"1" = "sda"   # SDA, serial data, bidirectional (open drain, external pull-up required)
+"2" = "scl"   # SCL, serial clock input
+"3" = "vdd"   # VDD
+"4" = "gnd"   # VSS
+
+[models.ratings]
+theta_ja_c_per_w = 297.0   # Table 10 p.17, heater off, die pad NOT soldered (the layout Sensirion recommends); simulation values
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 1.08
+max_v = 3.6
+basis = "Sensirion SHT4x V7.3 Table 4 p.9, supply voltage VDD 1.08 V min / 3.3 V typ / 3.6 V max"
+
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "SHT4x"
+bus = "i2c"
+i2c_address = 0x46
+
+[[sensor.input]]
+name = "temperature_c"
+default = 25.0
+
+[[sensor.input]]
+name = "humidity_pct"
+default = 50.0
+
+# mode 0 = nothing to read (reset), 1 = a measurement is latched.
+[[sensor.state]]
+name = "mode"
+default = 0.0
+
+[[sensor.state]]
+name = "t_hi"
+default = 0.0
+
+[[sensor.state]]
+name = "t_lo"
+default = 0.0
+
+[[sensor.state]]
+name = "rh_hi"
+default = 0.0
+
+[[sensor.state]]
+name = "rh_lo"
+default = 0.0
+
+[[sensor.write_command]]
+name = "measure_high"
+match_mask = 0xFF
+match_value = 0xFD
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "measure_medium"
+match_mask = 0xFF
+match_value = 0xF6
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "measure_low"
+match_mask = 0xFF
+match_value = 0xE0
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "heater_200mw_1s"
+match_mask = 0xFF
+match_value = 0x39
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "heater_200mw_100ms"
+match_mask = 0xFF
+match_value = 0x32
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "heater_110mw_1s"
+match_mask = 0xFF
+match_value = 0x2F
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "heater_110mw_100ms"
+match_mask = 0xFF
+match_value = 0x24
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "heater_20mw_1s"
+match_mask = 0xFF
+match_value = 0x1E
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "heater_20mw_100ms"
+match_mask = 0xFF
+match_value = 0x15
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "1.0"
+t_hi = "floor((max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) / 256.0)"
+t_lo = "(max(0.0, min(65535.0, round((temperature_c + 45.0) * 65535.0 / 175.0)))) % 256.0"
+rh_hi = "floor((max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) / 256.0)"
+rh_lo = "(max(0.0, min(65535.0, round((humidity_pct + 6.0) * 65535.0 / 125.0)))) % 256.0"
+
+[[sensor.write_command]]
+name = "soft_reset"
+match_mask = 0xFF
+match_value = 0x94
+group_bytes = 1
+
+[sensor.write_command.update]
+mode = "0.0"
+
+[sensor.read_frame]
+bytes = [
+  "if(mode == 1.0, t_hi, 255.0)",
+  "if(mode == 1.0, t_lo, 255.0)",
+  "if(mode == 1.0, (((1.0 + (floor(t_hi/128.0)%2.0) + (floor(t_hi/64.0)%2.0) + (floor(t_hi/8.0)%2.0) + (floor(t_hi/4.0)%2.0) + (floor(t_hi/2.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/16.0)%2.0) + (floor(t_lo/8.0)%2.0) + (t_lo%2.0))%2.0)*1.0 + ((0.0 + (floor(t_hi/128.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/8.0)%2.0) + (floor(t_hi/4.0)%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/32.0)%2.0) + (floor(t_lo/16.0)%2.0) + (floor(t_lo/2.0)%2.0))%2.0)*2.0 + ((0.0 + (floor(t_hi/32.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/8.0)%2.0) + (t_hi%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/32.0)%2.0) + (floor(t_lo/4.0)%2.0))%2.0)*4.0 + ((0.0 + (floor(t_hi/64.0)%2.0) + (floor(t_hi/32.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/2.0)%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/8.0)%2.0))%2.0)*8.0 + ((0.0 + (floor(t_hi/32.0)%2.0) + (floor(t_hi/8.0)%2.0) + (floor(t_hi/2.0)%2.0) + (t_hi%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/8.0)%2.0) + (t_lo%2.0))%2.0)*16.0 + ((0.0 + (floor(t_hi/128.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/8.0)%2.0) + (t_hi%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/64.0)%2.0) + (floor(t_lo/8.0)%2.0) + (floor(t_lo/2.0)%2.0) + (t_lo%2.0))%2.0)*32.0 + ((0.0 + (floor(t_hi/32.0)%2.0) + (floor(t_hi/16.0)%2.0) + (floor(t_hi/2.0)%2.0) + (t_hi%2.0) + (floor(t_lo/128.0)%2.0) + (floor(t_lo/16.0)%2.0) + (floor(t_lo/4.0)%2.0) + (floor(t_lo/2.0)%2.0))%2.0)*64.0 + ((1.0 + (floor(t_hi/64.0)%2.0) + (floor(t_hi/32.0)%2.0) + (floor(t_hi/4.0)%2.0) + (floor(t_hi/2.0)%2.0) + (t_hi%2.0) + (floor(t_lo/32.0)%2.0) + (floor(t_lo/8.0)%2.0) + (floor(t_lo/4.0)%2.0))%2.0)*128.0), 255.0)",
+  "if(mode == 1.0, rh_hi, 255.0)",
+  "if(mode == 1.0, rh_lo, 255.0)",
+  "if(mode == 1.0, (((1.0 + (floor(rh_hi/128.0)%2.0) + (floor(rh_hi/64.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (floor(rh_hi/4.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/16.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (rh_lo%2.0))%2.0)*1.0 + ((0.0 + (floor(rh_hi/128.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (floor(rh_hi/4.0)%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/32.0)%2.0) + (floor(rh_lo/16.0)%2.0) + (floor(rh_lo/2.0)%2.0))%2.0)*2.0 + ((0.0 + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/32.0)%2.0) + (floor(rh_lo/4.0)%2.0))%2.0)*4.0 + ((0.0 + (floor(rh_hi/64.0)%2.0) + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/8.0)%2.0))%2.0)*8.0 + ((0.0 + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (rh_lo%2.0))%2.0)*16.0 + ((0.0 + (floor(rh_hi/128.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/8.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/64.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (floor(rh_lo/2.0)%2.0) + (rh_lo%2.0))%2.0)*32.0 + ((0.0 + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/16.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/128.0)%2.0) + (floor(rh_lo/16.0)%2.0) + (floor(rh_lo/4.0)%2.0) + (floor(rh_lo/2.0)%2.0))%2.0)*64.0 + ((1.0 + (floor(rh_hi/64.0)%2.0) + (floor(rh_hi/32.0)%2.0) + (floor(rh_hi/4.0)%2.0) + (floor(rh_hi/2.0)%2.0) + (rh_hi%2.0) + (floor(rh_lo/32.0)%2.0) + (floor(rh_lo/8.0)%2.0) + (floor(rh_lo/4.0)%2.0))%2.0)*128.0), 255.0)",
+]
+
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+
+[models.peripheral_power]
+supply_role = "vdd"
+return_role = "gnd"
+power_on_threshold_v = 1.08   # Table 4 p.9, VDD min
+idle_a = 8e-08                # Table 4 p.9, idle state IDD typ at 25 C
+read_a = 0.00032              # Table 4 p.9, IDD while measuring, typ
+write_a = 0.00032
+
+[models.coverage]
+implements = ["pin_roles", "supply_range", "logic_levels_at_3v3_vdd", "idle_supply_current", "bus_coupled_active_current", "supply_voltage_gating", "i2c_address_0x46", "measure_commands_0xFD_0xF6_0xE0", "heater_commands_return_a_measurement", "soft_reset_0x94", "temperature_conversion_formula_2", "humidity_conversion_formula_1", "crc8_poly_0x31_init_0xFF", "sensor_input_temperature_c", "sensor_input_humidity_pct"]
+missing = ["measurement_duration_and_busy_nack", "serial_number_command_0x89", "i2c_general_call_reset", "heater_self_heating", "accuracy_and_repeatability_noise", "read_once_semantics", "thermal_model_of_die_temperature", "pullup_resistor_requirement", "absolute_pin_voltage_limit_supply_relative"]
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://sensirion.com/media/documents/33FD6951/6A7C10A0/HT_DS_Datasheet_SHT4x_V7.3.pdf"
+title = "Sensirion SHT4x Datasheet (SHT40, SHT41, SHT43, SHT45), Version 7.3, June 2026"
+locator = "Table 4 electrical specifications p.9; Table 5 timing and Table 6 absolute maximum ratings p.10; section 4.4 and Table 7 checksum p.11; Table 8 commands and section 4.6 conversion p.12; section 5.4 pin assignment and Table 10 thermal p.17; Table 11 nomenclature p.21; Table 12 ordering p.22"
+sha256 = "8db4a43f17149b76811cfb504caaeca4ef844ddc710cb9b45905c51c7ddfe3c2"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval; the card reproduces the conversion formulas, not the accuracy classes"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "supply_static_ua"
+reason = "Table 4 prints the idle IDD typ 0.08 uA and max 1.0 uA at 25 C, and max 3.4 uA at 125 C; the typical is used"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "peripheral_power"
+reason = "read_a and write_a use the measurement-state IDD typ (320 uA, max 500 uA); the datasheet gives no per-transaction bus current"
+[[models.source.pinout]]
+package = "DFN-4 (open-cavity dual flat no-lead, 4 pads)"
+pins = { "1" = "SDA", "2" = "SCL", "3" = "VDD", "4" = "VSS" }
+
+[[models.source.characteristic]]
+parameter = "Supply voltage VDD"
+min = 1.08
+typ = 3.3
+max = 3.6
+unit = "V"
+conditions = "Table 4"
+basis = "Table 4 p.9, VDD, min/typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Power-up/down voltage VPOR"
+min = 0.6
+max = 1.08
+unit = "V"
+conditions = "static power supply"
+basis = "Table 4 p.9, VPOR, min/max columns"
+
+[[models.source.characteristic]]
+parameter = "Idle supply current"
+typ = 0.08
+max = 1.0
+unit = "uA"
+conditions = "idle state, 25 C"
+basis = "Table 4 p.9, IDD idle, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Idle supply current at 125 C"
+max = 3.4
+unit = "uA"
+conditions = "idle state, 125 C"
+basis = "Table 4 p.9, IDD idle, max column"
+
+[[models.source.characteristic]]
+parameter = "Power-up supply current"
+typ = 50.0
+unit = "uA"
+conditions = "power up"
+basis = "Table 4 p.9, IDD power up, typ column"
+
+[[models.source.characteristic]]
+parameter = "Measurement supply current"
+typ = 320.0
+max = 500.0
+unit = "uA"
+conditions = "while measuring, heater off"
+basis = "Table 4 p.9, IDD measurement, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Average supply current, high repeatability"
+typ = 2.2
+unit = "uA"
+conditions = "one measurement per second"
+basis = "Table 4 p.9, IDD average high repeatability, typ column"
+
+[[models.source.characteristic]]
+parameter = "Average supply current, medium repeatability"
+typ = 1.2
+unit = "uA"
+conditions = "one measurement per second"
+basis = "Table 4 p.9, IDD average medium repeatability, typ column"
+
+[[models.source.characteristic]]
+parameter = "Average supply current, low repeatability"
+typ = 0.4
+unit = "uA"
+conditions = "one measurement per second"
+basis = "Table 4 p.9, IDD average low repeatability, typ column"
+
+[[models.source.characteristic]]
+parameter = "Heater supply current, nominal 200 mW"
+typ = 60.0
+max = 100.0
+unit = "mA"
+conditions = "heater on"
+basis = "Table 4 p.9, IDD heater 200 mW, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Heater supply current, nominal 110 mW"
+typ = 33.0
+max = 55.0
+unit = "mA"
+conditions = "heater on"
+basis = "Table 4 p.9, IDD heater 110 mW, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Heater supply current, nominal 20 mW"
+typ = 6.0
+max = 10.0
+unit = "mA"
+conditions = "heater on"
+basis = "Table 4 p.9, IDD heater 20 mW, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "VIL low-level input voltage"
+max = 0.3
+unit = "VDD"
+conditions = "ratio of the supply, VDD = 1.08 V to 3.6 V"
+basis = "Table 4 p.9, VIL, max column (0.3 x VDD)"
+
+[[models.source.characteristic]]
+parameter = "VIH high-level input voltage"
+min = 0.7
+unit = "VDD"
+conditions = "ratio of the supply, VDD = 1.08 V to 3.6 V"
+basis = "Table 4 p.9, VIH, min column (0.7 x VDD)"
+
+[[models.source.characteristic]]
+parameter = "VOL low-level output voltage"
+max = 0.2
+unit = "VDD"
+conditions = "VDD < 1.62 V with Rpullup > 820 ohm, and VDD = 1.62 V to 2.0 V with Rpullup > 390 ohm"
+basis = "Table 4 p.9, VOL, max column (0.2 x VDD)"
+
+[[models.source.characteristic]]
+parameter = "Pull-up resistor Rp"
+min = 820.0
+unit = "ohm"
+conditions = "VDD < 1.62 V"
+basis = "Table 4 p.9, Rp, min column"
+
+[[models.source.characteristic]]
+parameter = "Pull-up resistor Rp"
+min = 390.0
+unit = "ohm"
+conditions = "VDD >= 1.62 V"
+basis = "Table 4 p.9, Rp, min column"
+
+[[models.source.characteristic]]
+parameter = "Capacitive bus load Cb"
+max = 400.0
+unit = "pF"
+conditions = "Rp <= 820 ohm, fast mode"
+basis = "Table 4 p.9, Cb, max column"
+
+[[models.source.characteristic]]
+parameter = "Measurement duration, low repeatability"
+typ = 1.3
+max = 1.6
+unit = "ms"
+conditions = "including power-up time"
+basis = "Table 5 p.10, tMEAS,l, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Measurement duration, medium repeatability"
+typ = 3.7
+max = 4.5
+unit = "ms"
+conditions = "including power-up time"
+basis = "Table 5 p.10, tMEAS,m, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Measurement duration, high repeatability"
+typ = 6.9
+max = 8.3
+unit = "ms"
+conditions = "including power-up time"
+basis = "Table 5 p.10, tMEAS,h, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Power-up time"
+typ = 0.3
+max = 1.0
+unit = "ms"
+conditions = "after hard reset, VDD >= VPOR"
+basis = "Table 5 p.10, tPU, typ/max columns"
+
+[[models.source.characteristic]]
+parameter = "Soft reset time"
+max = 1.0
+unit = "ms"
+conditions = "after the ACK of the soft reset command"
+basis = "Table 5 p.10, tSR, max column"
+
+[[models.source.characteristic]]
+parameter = "Voltage on any pin"
+min = -0.3
+unit = "V"
+conditions = "referenced to VSS; the upper limit is VDD + 0.3 V (supply-relative)"
+basis = "Table 6 p.10, maximum voltage on any pin, VSS - 0.3 V lower limit, min column"
+
+[[models.source.characteristic]]
+parameter = "Junction-to-ambient thermal resistance, heater off, die pad soldered"
+typ = 246.0
+unit = "K/W"
+conditions = "heater off, die pad soldered; simulation"
+basis = "Table 10 p.17, RthetaJA, typ column"
+rating = "theta_ja_c_per_w"
+package = "DFN-4"
+mounting = "die pad soldered"
+
+[[models.source.characteristic]]
+parameter = "Junction-to-ambient thermal resistance, heater off, die pad not soldered"
+typ = 297.0
+unit = "K/W"
+conditions = "heater off, die pad not soldered; simulation"
+basis = "Table 10 p.17, RthetaJA, typ column"
+rating = "theta_ja_c_per_w"
+package = "DFN-4"
+mounting = "die pad not soldered"
+
+
