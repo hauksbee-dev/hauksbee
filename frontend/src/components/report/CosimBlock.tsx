@@ -1,5 +1,9 @@
+import { useState } from 'react'
 import type { CosimView } from '../../lib/report-view'
+import type { CosimJob } from '../../hooks/useCosimJob'
 import { displayNet } from '../../lib/net-name'
+import { BenchScope } from './BenchScope'
+import { BenchStrip } from './BenchStrip'
 import { FindingCard, NoteBlock, SectionHeading } from './Findings'
 
 /** A collapsible strip of one-line qualifications about the run. */
@@ -30,17 +34,58 @@ function Detail({ title, tone = 'quiet', testId, lines }: {
 
 const cell = { borderBottom: '1px solid var(--rule)' }
 
-export function CosimBlock({ cosim: c, liveAvailable, onDriveLive, simMounted }: {
+/** The way to run a board whose MCU needs Renode or QEMU: a button, the job's
+ *  progress in simulated seconds, and the server's own words if it fails. */
+function EmulatorRun({ job }: { job: CosimJob }) {
+  const { state, start } = job
+  const running = state.phase === 'running'
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-3" data-testid="cosim-emulator">
+      <button
+        type="button"
+        data-testid="cosim-emulator-run"
+        onClick={start}
+        disabled={running}
+        className="hb-btn hb-press inline-flex items-center gap-1.5 px-3 text-[13px]"
+        style={{ height: 30, opacity: running ? 0.6 : 1 }}
+      >
+        {state.phase === 'failed' ? 'Try again on Renode/QEMU' : 'Run on Renode/QEMU'}
+      </button>
+      {state.phase === 'running' && (
+        <span className="text-[12px] tnum" role="status" data-testid="cosim-emulator-progress" style={{ color: 'var(--silk-dim)' }}>
+          {state.line}
+        </span>
+      )}
+      {state.phase === 'failed' && (
+        <span className="text-[12px]" role="alert" data-testid="cosim-emulator-error" style={{ color: 'var(--err-strong)' }}>
+          {state.error}
+        </span>
+      )}
+    </div>
+  )
+}
+
+export function CosimBlock({ cosim: c, liveAvailable, onDriveLive, simMounted, emulator }: {
   cosim: CosimView
   liveAvailable: boolean
   onDriveLive: () => void
   simMounted: boolean
+  /** The emulator job, when the page still holds the files to start it with. */
+  emulator?: CosimJob | null
 }) {
+  // The pin the reader is looking at: the chip last clicked, the lane it lights.
+  const [focusNet, setFocusNet] = useState<string | null>(null)
   return (
     <section className="mt-7" data-testid="cosim-section">
       <SectionHeading title="Firmware co-sim" verdict={c.ran ? c.ranLine : undefined} />
       {c.ran ? (
         <>
+          {c.bench && c.benchReport && (
+            <>
+              <BenchStrip view={c.bench} focusNet={focusNet} onFocus={setFocusNet} />
+              <BenchScope bench={c.benchReport} focusNet={focusNet} onFocus={setFocusNet} />
+            </>
+          )}
           <Detail title="Timing coverage" lines={c.timingLines} />
           {c.timingRefusals.length > 0 && (
             <div
@@ -71,7 +116,7 @@ export function CosimBlock({ cosim: c, liveAvailable, onDriveLive, simMounted }:
               </pre>
             </>
           )}
-          {c.gpio.length > 0 && (
+          {!c.bench && c.gpio.length > 0 && (
             <table className="w-full text-xs mt-1" style={{ borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
@@ -113,7 +158,10 @@ export function CosimBlock({ cosim: c, liveAvailable, onDriveLive, simMounted }:
           )}
         </>
       ) : (
-        c.notRanLines.map((line, i) => <NoteBlock key={i} tag="Co-sim not available">{line}</NoteBlock>)
+        <>
+          {c.notRanLines.map((line, i) => <NoteBlock key={i} tag="Co-sim not available">{line}</NoteBlock>)}
+          {c.externalBackend && emulator && <EmulatorRun job={emulator} />}
+        </>
       )}
     </section>
   )

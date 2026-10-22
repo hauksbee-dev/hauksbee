@@ -10,6 +10,9 @@
 // same `ReportView`, so they cannot disagree.
 
 import { labelFor } from './labels'
+import { benchView } from './bench-view'
+import type { BenchView } from './bench-view'
+import type { BenchReport } from '../types/bench'
 import type {
   CheckResult, ErrorBudget, ErrorBudgetWindow, EvidenceAssumption, EvidenceMap, FixFirst, JsonNote, ModelCoverageComponent,
   ModelCoverageSnapshot, ModelGroup, ModelOnPath, RefusalContract, RunResponse, WebCosimSection, WebFallbackWindow, WebFinding,
@@ -200,6 +203,12 @@ export interface CosimView {
   budgetLines: string[]
   uart: string
   gpio: WebGpioNet[]
+  /** The bench strip's chips and headlines; null when the run carries none. */
+  bench: BenchView | null
+  /** The raw observations behind `bench`, for the run view's lanes. */
+  benchReport: BenchReport | null
+  /** The MCU needs an emulator the synchronous analysis never runs. */
+  externalBackend: boolean
 }
 
 function cosimView(c: WebCosimSection, refusal: RefusalContract | null | undefined): CosimView {
@@ -217,6 +226,9 @@ function cosimView(c: WebCosimSection, refusal: RefusalContract | null | undefin
     budgetLines: c.error_budget ? summarizeErrorBudget(c.error_budget) : [],
     uart: c.uart_output,
     gpio: c.gpio_nets ?? [],
+    bench: c.bench ? benchView(c.bench) : null,
+    benchReport: c.bench ?? null,
+    externalBackend: !!c.external_backend,
   }
 }
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { buildBoardUpload, emptySupplemental, type SupplementalDesignFiles } from '../lib/board-upload'
-import type { WebReport } from '../types/report'
+import type { WebCosimSection, WebReport } from '../types/report'
 import type { SelectedComponent } from '../components/SelectionCard'
 import { analysisFailureMessage, precheckBoardFile } from '../lib/upload-guard'
 import { inspectZip, zipIsFirmwareOnly } from '../lib/zip-inspect'
@@ -124,6 +124,9 @@ export interface BoardSession {
   reanalyzeCurrent: () => void
   runSample: (s: SampleSpec) => void
   resetFlow: () => void
+  /** Swap the standing report's co-sim section for a fresher one (the emulator
+   *  job finished): everything else in the report stands as it was. */
+  replaceCosim: (section: WebCosimSection) => void
   /** Put a saved session's report back on screen with no file behind it. */
   restoreReport: (from: RestoredFrom & { report: WebReport; analyzedAt: number | null }) => void
   /** Set while the report on screen came from storage rather than a run. */
@@ -654,6 +657,7 @@ export function useBoardSession(opts: {
     reanalyzeCurrent: () => { if (!busy && lastBoardFile.current) void analyze(lastBoardFile.current, firmwareFile, schematicFile) },
     runSample: (s: SampleSpec) => void runSample(s),
     resetFlow,
+    replaceCosim: section => setReport(prev => (prev ? { ...prev, cosim: section } : prev)),
     restoreReport,
     restoredFrom,
     runEpoch,

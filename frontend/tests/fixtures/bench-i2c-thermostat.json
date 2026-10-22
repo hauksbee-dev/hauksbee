@@ -1,0 +1,520 @@
+{
+  "duration_s": 2.0,
+  "mcus": [
+    {
+      "mcu_ref": "U1",
+      "backend": "renode:stm32f103c8",
+      "core": "core_running",
+      "headline": "running",
+      "resets": 0,
+      "first_activity_s": 0.05,
+      "pins": [
+        {
+          "pin": "PA8",
+          "state": "pin_toggling",
+          "edges": 4,
+          "summary": "toggling 1.0 Hz, 50% duty",
+          "net": "HEATER_EN",
+          "freq_hz": 1.0,
+          "duty": 0.5,
+          "first_edge_s": 0.2,
+          "final_high": false,
+          "edge_samples": [
+            {
+              "t_s": 0.2,
+              "high": true
+            },
+            {
+              "t_s": 0.7,
+              "high": false
+            },
+            {
+              "t_s": 1.2,
+              "high": true
+            },
+            {
+              "t_s": 1.7,
+              "high": false
+            }
+          ]
+        },
+        {
+          "pin": "PB6",
+          "state": "pin_toggling",
+          "edges": 5230,
+          "summary": "toggling 40.0 kHz, 50% duty",
+          "net": "I2C_SCL",
+          "freq_hz": 40000.0,
+          "duty": 0.5,
+          "first_edge_s": 0.05,
+          "final_high": false,
+          "edge_samples": [
+            {
+              "t_s": 0.05,
+              "high": true
+            },
+            {
+              "t_s": 0.0500125,
+              "high": false
+            },
+            {
+              "t_s": 0.050025,
+              "high": true
+            },
+            {
+              "t_s": 0.0500375,
+              "high": false
+            },
+            {
+              "t_s": 0.05005,
+              "high": true
+            },
+            {
+              "t_s": 0.0500625,
+              "high": false
+            },
+            {
+              "t_s": 0.050075,
+              "high": true
+            },
+            {
+              "t_s": 0.0500875,
+              "high": false
+            },
+            {
+              "t_s": 0.0501,
+              "high": true
+            },
+            {
+              "t_s": 0.0501125,
+              "high": false
+            },
+            {
+              "t_s": 0.050125,
+              "high": true
+            },
+            {
+              "t_s": 0.0501375,
+              "high": false
+            },
+            {
+              "t_s": 0.05015,
+              "high": true
+            },
+            {
+              "t_s": 0.0501625,
+              "high": false
+            },
+            {
+              "t_s": 0.050175,
+              "high": true
+            },
+            {
+              "t_s": 0.0501875,
+              "high": false
+            },
+            {
+              "t_s": 0.0502,
+              "high": true
+            },
+            {
+              "t_s": 0.0502125,
+              "high": false
+            },
+            {
+              "t_s": 0.050225,
+              "high": true
+            },
+            {
+              "t_s": 0.0502375,
+              "high": false
+            },
+            {
+              "t_s": 0.05025,
+              "high": true
+            },
+            {
+              "t_s": 0.0502625,
+              "high": false
+            },
+            {
+              "t_s": 0.050275,
+              "high": true
+            },
+            {
+              "t_s": 0.0502875,
+              "high": false
+            },
+            {
+              "t_s": 0.0503,
+              "high": true
+            },
+            {
+              "t_s": 0.0503125,
+              "high": false
+            },
+            {
+              "t_s": 0.050325,
+              "high": true
+            },
+            {
+              "t_s": 0.0503375,
+              "high": false
+            },
+            {
+              "t_s": 0.05035,
+              "high": true
+            },
+            {
+              "t_s": 0.0503625,
+              "high": false
+            },
+            {
+              "t_s": 0.050375,
+              "high": true
+            },
+            {
+              "t_s": 0.0503875,
+              "high": false
+            },
+            {
+              "t_s": 0.0504,
+              "high": true
+            },
+            {
+              "t_s": 0.0504125,
+              "high": false
+            },
+            {
+              "t_s": 0.050425,
+              "high": true
+            },
+            {
+              "t_s": 0.0504375,
+              "high": false
+            },
+            {
+              "t_s": 0.05045,
+              "high": true
+            },
+            {
+              "t_s": 0.0504625,
+              "high": false
+            },
+            {
+              "t_s": 0.050475,
+              "high": true
+            },
+            {
+              "t_s": 0.0504875,
+              "high": false
+            },
+            {
+              "t_s": 0.0505,
+              "high": true
+            },
+            {
+              "t_s": 0.0505125,
+              "high": false
+            },
+            {
+              "t_s": 0.050525,
+              "high": true
+            },
+            {
+              "t_s": 0.0505375,
+              "high": false
+            },
+            {
+              "t_s": 0.05055,
+              "high": true
+            },
+            {
+              "t_s": 0.0505625,
+              "high": false
+            },
+            {
+              "t_s": 0.050575,
+              "high": true
+            },
+            {
+              "t_s": 0.0505875,
+              "high": false
+            },
+            {
+              "t_s": 0.0506,
+              "high": true
+            },
+            {
+              "t_s": 0.0506125,
+              "high": false
+            },
+            {
+              "t_s": 0.050625,
+              "high": true
+            },
+            {
+              "t_s": 0.0506375,
+              "high": false
+            },
+            {
+              "t_s": 0.05065,
+              "high": true
+            },
+            {
+              "t_s": 0.0506625,
+              "high": false
+            },
+            {
+              "t_s": 0.050675,
+              "high": true
+            },
+            {
+              "t_s": 0.0506875,
+              "high": false
+            },
+            {
+              "t_s": 0.0507,
+              "high": true
+            },
+            {
+              "t_s": 0.0507125,
+              "high": false
+            },
+            {
+              "t_s": 0.050725,
+              "high": true
+            },
+            {
+              "t_s": 0.0507375,
+              "high": false
+            }
+          ],
+          "samples_truncated": true
+        },
+        {
+          "pin": "PB7",
+          "state": "pin_toggling",
+          "edges": 1480,
+          "summary": "toggling 11.7 kHz, 67% duty",
+          "net": "I2C_SDA",
+          "freq_hz": 11700.0,
+          "duty": 0.67,
+          "first_edge_s": 0.05,
+          "final_high": true,
+          "edge_samples": [
+            {
+              "t_s": 0.05,
+              "high": false
+            },
+            {
+              "t_s": 0.05003,
+              "high": true
+            },
+            {
+              "t_s": 0.05006,
+              "high": true
+            },
+            {
+              "t_s": 0.05009,
+              "high": false
+            },
+            {
+              "t_s": 0.05012,
+              "high": true
+            },
+            {
+              "t_s": 0.05015,
+              "high": true
+            },
+            {
+              "t_s": 0.05018,
+              "high": false
+            },
+            {
+              "t_s": 0.05021,
+              "high": true
+            },
+            {
+              "t_s": 0.05024,
+              "high": true
+            },
+            {
+              "t_s": 0.05027,
+              "high": false
+            },
+            {
+              "t_s": 0.0503,
+              "high": true
+            },
+            {
+              "t_s": 0.05033,
+              "high": true
+            },
+            {
+              "t_s": 0.05036,
+              "high": false
+            },
+            {
+              "t_s": 0.05039,
+              "high": true
+            },
+            {
+              "t_s": 0.05042,
+              "high": true
+            },
+            {
+              "t_s": 0.05045,
+              "high": false
+            },
+            {
+              "t_s": 0.05048,
+              "high": true
+            },
+            {
+              "t_s": 0.05051,
+              "high": true
+            },
+            {
+              "t_s": 0.05054,
+              "high": false
+            },
+            {
+              "t_s": 0.05057,
+              "high": true
+            },
+            {
+              "t_s": 0.0506,
+              "high": true
+            },
+            {
+              "t_s": 0.05063,
+              "high": false
+            },
+            {
+              "t_s": 0.05066,
+              "high": true
+            },
+            {
+              "t_s": 0.05069,
+              "high": true
+            },
+            {
+              "t_s": 0.05072,
+              "high": false
+            },
+            {
+              "t_s": 0.05075,
+              "high": true
+            },
+            {
+              "t_s": 0.05078,
+              "high": true
+            },
+            {
+              "t_s": 0.05081,
+              "high": false
+            },
+            {
+              "t_s": 0.05084,
+              "high": true
+            },
+            {
+              "t_s": 0.05087,
+              "high": true
+            }
+          ],
+          "samples_truncated": true
+        }
+      ],
+      "uarts": [
+        {
+          "port": "UART",
+          "net": "UART_TX",
+          "baud_note": "baud not decoded yet",
+          "bytes": 31,
+          "printable_ratio": 0.97,
+          "first_line": "T=26.5C heater off",
+          "first_byte_s": 0.06
+        }
+      ]
+    }
+  ],
+  "bus_log": [
+    {
+      "t_s": 0.05,
+      "bus": "bus_i2c",
+      "device": "LM75",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "LM75 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.0502,
+      "bus": "bus_i2c",
+      "device": "LM75",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        26,
+        128
+      ],
+      "acked": true,
+      "summary": "LM75 0x48 read [0x1a 0x80] ACK"
+    },
+    {
+      "t_s": 0.55,
+      "bus": "bus_i2c",
+      "device": "LM75",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        26,
+        128
+      ],
+      "acked": true,
+      "summary": "LM75 0x48 read [0x1a 0x80] ACK"
+    },
+    {
+      "t_s": 1.05,
+      "bus": "bus_i2c",
+      "device": "EEPROM",
+      "addr": 80,
+      "read": false,
+      "bytes": [],
+      "acked": false,
+      "summary": "EEPROM 0x50 write NACK"
+    },
+    {
+      "t_s": 1.55,
+      "bus": "bus_i2c",
+      "device": "LM75",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        27,
+        0
+      ],
+      "acked": true,
+      "summary": "LM75 0x48 read [0x1b 0x00] ACK"
+    }
+  ],
+  "events": [
+    {
+      "t_s": 0.05,
+      "kind": "event_first_edge",
+      "mcu_ref": "U1",
+      "detail": "PB6 went low"
+    },
+    {
+      "t_s": 1.05,
+      "kind": "event_stall",
+      "mcu_ref": "U1",
+      "detail": "EEPROM 0x50 did not answer"
+    }
+  ]
+}

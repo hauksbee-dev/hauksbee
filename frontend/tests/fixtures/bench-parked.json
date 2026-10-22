@@ -1,0 +1,64 @@
+{
+  "duration_s": 1.0,
+  "mcus": [
+    {
+      "mcu_ref": "U1",
+      "backend": "renode:stm32f103c8",
+      "core": "core_trapped",
+      "headline": "parked at Error_Handler",
+      "park": {
+        "pc": 134222388,
+        "symbol": "Error_Handler",
+        "pc_samples": 64,
+        "distinct_pcs": 2,
+        "quiet_since_s": 0.0004
+      },
+      "resets": 2,
+      "first_activity_s": 0.0001,
+      "pins": [
+        {
+          "pin": "PC13",
+          "state": "pin_static_low",
+          "edges": 1,
+          "summary": "static low",
+          "net": "LED_PC13",
+          "first_edge_s": 0.0001,
+          "final_high": false,
+          "edge_samples": [
+            {
+              "t_s": 0.0001,
+              "high": false
+            }
+          ]
+        },
+        {
+          "pin": "PB0",
+          "state": "pin_input",
+          "edges": 0,
+          "summary": "input / Hi-Z",
+          "net": "BTN_USER"
+        }
+      ]
+    }
+  ],
+  "events": [
+    {
+      "t_s": 0.2,
+      "kind": "event_reset",
+      "mcu_ref": "U1",
+      "detail": "reset line pulsed"
+    },
+    {
+      "t_s": 0.4,
+      "kind": "event_watchdog_reset",
+      "mcu_ref": "U1",
+      "detail": "watchdog bit"
+    },
+    {
+      "t_s": 0.5,
+      "kind": "event_stall",
+      "mcu_ref": "U1",
+      "detail": "no output since 0.4 ms"
+    }
+  ]
+}

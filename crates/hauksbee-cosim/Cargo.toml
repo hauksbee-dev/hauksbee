@@ -40,6 +40,8 @@ evalexpr = { version = "=11.3.1", default-features = false }
 
 [dev-dependencies]
 hauksbee-testkit = { path = "../hauksbee-testkit" }
+# Independent VCD parser (MIT): reads back what the bench writer produced.
+vcd = "0.7"
 
 [lints]
 workspace = true

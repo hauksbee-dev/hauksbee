@@ -26,6 +26,8 @@ import { overlayHasContent, resultOverlay, vocabulary } from '../lib/result-link
 import type { ResultEntity } from '../lib/result-links'
 import { cliCommand } from '../lib/result-export'
 import { BoardMap } from './report/BoardMap'
+import { useCosimJob } from '../hooks/useCosimJob'
+import { buildBoardUpload } from '../lib/board-upload'
 
 // The Board view with a report in hand: the viewer as the hero surface (with
 // its toolbar and layers panel), the plain-language verdict, and the findings.
@@ -138,7 +140,7 @@ export function BoardView({
   shownKeyRef.current = shown?.key ?? null
   useEffect(() => setShown(null), [session.runEpoch])
   const resultLinks = useMemo<ResultLinkHandlers>(() => {
-    const go = (entity: ResultEntity) => {
+    const go = (entity: ResultEntity, opts?: { scroll?: boolean }) => {
       frameSeq.current += 1
       if (entity.kind === 'part') {
         const row = coverageFor(r.model_coverage, entity.ref)
@@ -157,7 +159,7 @@ export function BoardView({
         setSelectedNet(entity.net)
         setFrameTarget({ refs: [], nets: [entity.net], seq: frameSeq.current })
       }
-      centerInScroller(mapRef.current)
+      if (opts?.scroll !== false) centerInScroller(mapRef.current)
     }
     return {
     vocab: vocabulary(r),
@@ -226,6 +228,17 @@ export function BoardView({
     requestAnimationFrame(() => centerInScroller(moreRef.current))
   }, [])
   const canShow = !!boardUrl
+  // The emulator co-sim, for a board whose MCU the synchronous analysis cannot
+  // run. It is offered only while the page still holds the files the analysis
+  // used (a saved session or a server-preloaded board has none to send).
+  const cosimJob = useCosimJob({
+    upload: () => (boardFile
+      ? buildBoardUpload(boardFile, firmwareFile, session.schematicFile, session.supplementalFiles)
+      : null),
+    onDone: session.replaceCosim,
+    epoch: session.runEpoch,
+  })
+  const emulatorJob = boardFile && !restoredFrom ? cosimJob : null
   // What the engine's typed actions (next steps, a section's buttons) can do here.
   // A saved session has no files behind it, so it cannot open the model flow or
   // the evidence slots.
@@ -622,12 +635,15 @@ export function BoardView({
         )}
 
         {v.cosim && (
-          <CosimBlock
-            cosim={v.cosim}
-            liveAvailable={liveMode !== 'none'}
-            onDriveLive={onDriveLive}
-            simMounted={simMounted}
-          />
+          <ResultLinkContext.Provider value={resultLinks}>
+            <CosimBlock
+              cosim={v.cosim}
+              liveAvailable={liveMode !== 'none'}
+              onDriveLive={onDriveLive}
+              simMounted={simMounted}
+              emulator={emulatorJob}
+            />
+          </ResultLinkContext.Provider>
         )}
 
         {/* What else the run holds, each folded: the parts it had to guess at

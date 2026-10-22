@@ -25,6 +25,7 @@ pub mod engine;
 pub mod error_budget;
 pub mod execution;
 mod influence;
+pub mod observe;
 pub mod peripherals;
 pub mod regulation;
 pub mod responders;

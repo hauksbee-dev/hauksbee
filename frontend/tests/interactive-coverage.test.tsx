@@ -76,6 +76,7 @@ function session(report: WebReport): BoardSession {
     reanalyzeCurrent: noop,
     runSample: noop,
     resetFlow: noop,
+    replaceCosim: noop,
     restoreReport: noop,
     restoredFrom: null,
     runEpoch: 1,

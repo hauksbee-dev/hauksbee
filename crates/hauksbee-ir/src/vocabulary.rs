@@ -1001,6 +1001,10 @@ pub struct Vocabulary {
     /// (capabilities, coverage stages, model tiers, emulator backends and the
     /// words above) that reach a human surface.
     pub labels: crate::labels::LabelTable,
+    /// [`crate::observations::observation_kinds`]: the pin states, core states,
+    /// bus kinds, timeline events and probe-seed reasons a co-sim run is
+    /// described with.
+    pub observations: Vec<crate::observations::ObservationEntry>,
 }
 
 /// `explain verdicts`: every state, in display order.
@@ -1100,6 +1104,7 @@ pub fn vocabulary() -> Vocabulary {
         checks: checks(),
         glossary: crate::glossary::all(),
         labels: crate::labels::label_table(),
+        observations: crate::observations::observation_kinds(),
     }
 }
 

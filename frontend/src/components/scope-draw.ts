@@ -6,6 +6,8 @@
 // which is how one drawing serves a linear and a log sweep with no mode flag.
 
 import { cssToken, isLightTheme } from '../lib/theme-tokens'
+import { LANE_H, lanesBlockHeight, lanesExtent, paintDecoded, paintLanes } from './bench-draw'
+import type { DecodedItem, ScopeLane } from './bench-draw'
 
 export interface ScopeTrace {
   /** Drawn at the right-hand end of the trace. */
@@ -31,8 +33,33 @@ export interface ScopePlot {
   yFloor?: [number, number]
   /** Drawn centred in place of the plot; for "no probes attached" etc. */
   hint?: string | null
-  /** Moments to mark with a labelled vertical rule (the live scope's faults). */
-  markers?: { x: number; label: string }[]
+  /** Moments to mark with a labelled vertical rule (the live scope's faults, a
+   *  run's resets). `tone` picks the rule's colour: `err` (the default), `warn`,
+   *  or `note` for a moment that is information rather than trouble. */
+  markers?: { x: number; label: string; tone?: 'err' | 'warn' | 'note' }[]
+  /** Pins as digital lanes under the traces (bench-draw.ts). */
+  lanes?: ScopeLane[]
+  /** Decoded bus transactions on a protocol track under the lanes. */
+  decoded?: DecodedItem[]
+}
+
+/** The extra canvas height a plot's lanes and decoded track need under its
+ *  traces; a caller adds it to the height it gives the analogue part. */
+export function plotExtraHeight(plot: Pick<ScopePlot, 'lanes' | 'decoded'>): number {
+  return lanesBlockHeight(plot.lanes?.length ?? 0, !!plot.decoded && plot.decoded.length > 0)
+}
+
+/** Space above the plot, in CSS px (a click on a lane needs to know where lanes start). */
+export const SCOPE_PAD_T = 8
+
+/** Height of the label band a lanes-only plot keeps above its lanes for event
+ *  names (two staggered rows), so a label never sits on a waveform. */
+export const MARKER_BAND_H = 22
+
+/** The top pad for a plot, in CSS px: where its first lane or trace starts. */
+export function plotTopPad(plot: Pick<ScopePlot, 'traces' | 'markers'>): number {
+  const lanesOnly = !plot.traces.some(t => t.points.length > 0)
+  return SCOPE_PAD_T + (lanesOnly && (plot.markers?.length ?? 0) > 0 ? MARKER_BAND_H : 0)
 }
 
 /** CSS token for probe slot idx; used by the canvas beams AND the list dots. */
@@ -170,38 +197,51 @@ export function drawScope(ctx: CanvasRenderingContext2D, W: number, H: number, p
     return
   }
 
-  const PAD_R = 60
-  const PAD_T = 8
+  const lanes = plot.lanes ?? []
+  const decoded = plot.decoded ?? []
+  const laneBlock = plotExtraHeight(plot)
+  const PAD_T = plotTopPad(plot)
   const PAD_B = plot.xTick ? 28 : 20
-  const plotH = H - PAD_T - PAD_B
 
   const pts = plot.traces.flatMap(t => t.points)
-  if (pts.length === 0) return
-  const [xMin, xMax] = plot.xRange ?? [
-    Math.min(...pts.map(p => p.x)),
-    Math.max(...pts.map(p => p.x)),
-  ]
+  const analog = pts.length > 0
+  // A scope with nothing to draw stays blank; one with only lanes (the run
+  // view) has no volts axis at all, and its lanes start at the top.
+  if (!analog && laneBlock === 0) return
+  const plotH = analog ? Math.max(24, H - PAD_T - PAD_B - laneBlock) : 0
+  const lanesTop = PAD_T + plotH
+  const bottom = lanesTop + laneBlock
+  const [xMin, xMax] = plot.xRange ?? (analog
+    ? [Math.min(...pts.map(p => p.x)), Math.max(...pts.map(p => p.x))]
+    : lanesExtent(lanes))
   const xSpan = xMax - xMin || 1
 
   // Voltage (or dB, or degrees) range: autoscaled to CONTAIN every plotted
   // value, with headroom, ending on round ticks (see planYAxis).
-  let dataLo = Infinity
-  let dataHi = -Infinity
-  for (const p of pts) {
-    if (p.x < xMin || p.x > xMax) continue
-    dataLo = Math.min(dataLo, p.y)
-    dataHi = Math.max(dataHi, p.y)
+  let axis: YAxis | null = null
+  if (analog) {
+    let dataLo = Infinity
+    let dataHi = -Infinity
+    for (const p of pts) {
+      if (p.x < xMin || p.x > xMax) continue
+      dataLo = Math.min(dataLo, p.y)
+      dataHi = Math.max(dataHi, p.y)
+    }
+    axis = planYAxis(dataLo, dataHi, plot.yFloor)
+    if (!axis) return
   }
-  const axis = planYAxis(dataLo, dataHi, plot.yFloor)
-  if (!axis) return
-  const yMin = axis.lo
-  const yMax = axis.hi
+  const yMin = axis?.lo ?? 0
+  const yMax = axis?.hi ?? 1
 
   // The labels are measured BEFORE the left pad is fixed; see leftPadFor.
-  const yVals = axis.ticks
-  const yTicks = yVals.map(v => `${tickText(v, axis.step)}${plot.yUnit}`)
+  const yVals = axis?.ticks ?? []
+  const yTicks = axis ? yVals.map(v => `${tickText(v, axis.step)}${plot.yUnit}`) : []
   ctx.font = '9px JetBrains Mono, monospace'
-  const PAD_L = leftPadFor(ctx, yTicks, W)
+  const PAD_L = analog ? leftPadFor(ctx, yTicks, W) : 14
+  // The right gutter carries each trace's and each lane's name.
+  ctx.font = 'bold 9px JetBrains Mono, monospace'
+  const PAD_R = Math.min(W / 3, Math.max(60, ...lanes.map(l => ctx.measureText(l.label).width + 10)))
+  ctx.font = '9px JetBrains Mono, monospace'
   const plotW = W - PAD_L - PAD_R
 
   const xAt = (x: number) => PAD_L + ((x - xMin) / xSpan) * plotW
@@ -222,7 +262,8 @@ export function drawScope(ctx: CanvasRenderingContext2D, W: number, H: number, p
     ctx.stroke()
     ctx.fillText(yTicks[i], PAD_L - 4, yAt(gv) + 3)
   })
-  // Intermediate x ticks, so a value can be read off the curve.
+  // Intermediate x ticks, so a value can be read off the curve. They run down
+  // through the lanes too, so a lane's edge reads against the same time axis.
   const xTick = plot.xTick
   if (xTick) {
     ctx.textAlign = 'center'
@@ -231,7 +272,7 @@ export function drawScope(ctx: CanvasRenderingContext2D, W: number, H: number, p
       const px = xAt(gx)
       ctx.beginPath()
       ctx.moveTo(px, PAD_T)
-      ctx.lineTo(px, PAD_T + plotH)
+      ctx.lineTo(px, bottom)
       ctx.stroke()
       // On a phone the decades are 40px apart and the labels ran together into
       // one illegible word, so a label is drawn only when it has room.
@@ -250,23 +291,36 @@ export function drawScope(ctx: CanvasRenderingContext2D, W: number, H: number, p
   ctx.textAlign = 'center'
   ctx.fillText(plot.xLabel, PAD_L + plotW / 2, H - 4)
 
-  // Event rules under the traces: where in time something happened.
-  const markColor = cssToken('--err')
+  // Digital lanes, then the decoded track, under the analogue traces.
+  const frame = { left: PAD_L, right: PAD_L + plotW, top: lanesTop, t0: xMin, t1: xMax, xAt }
+  if (lanes.length > 0) paintLanes(ctx, frame, lanes)
+  if (decoded.length > 0) paintDecoded(ctx, { ...frame, top: lanesTop + lanes.length * LANE_H + 4 }, decoded)
+
+  // Event rules over everything: where in time something happened. Labels that
+  // would land on the previous one step down a row; a third row is not drawn
+  // (the rule still is).
   ctx.font = 'bold 9px JetBrains Mono, monospace'
   ctx.textAlign = 'left'
+  const rowRight = [-Infinity, -Infinity]
   for (const m of plot.markers ?? []) {
     if (m.x < xMin || m.x > xMax) continue
     const px = xAt(m.x)
-    ctx.strokeStyle = markColor
-    ctx.fillStyle = markColor
+    const color = cssToken(m.tone === 'note' ? '--silk-dim' : m.tone === 'warn' ? '--warn' : '--err')
+    ctx.strokeStyle = color
+    ctx.fillStyle = color
     ctx.lineWidth = 1
     ctx.setLineDash([3, 3])
     ctx.beginPath()
-    ctx.moveTo(px, PAD_T)
-    ctx.lineTo(px, PAD_T + plotH)
+    ctx.moveTo(px, SCOPE_PAD_T)
+    ctx.lineTo(px, bottom)
     ctx.stroke()
     ctx.setLineDash([])
-    ctx.fillText(m.label, Math.min(px + 3, PAD_L + plotW - ctx.measureText(m.label).width), PAD_T + 9)
+    const w = ctx.measureText(m.label).width
+    const x = Math.min(px + 3, PAD_L + plotW - w)
+    const row = rowRight.findIndex(r => x > r + 4)
+    if (row < 0) continue
+    rowRight[row] = x + w
+    ctx.fillText(m.label, x, SCOPE_PAD_T + 9 + row * 10)
   }
 
   // Traces: multi-pass phosphor bloom, at a fraction of the strength in light

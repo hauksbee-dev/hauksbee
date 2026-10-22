@@ -4,14 +4,18 @@ import type { BoardInfoMsg, SimFault, SimFrame } from '../types/protocol'
 import { CloseIcon, PlusIcon, EyeIcon, EyeOffIcon } from './Icons'
 import { displayNet } from '../lib/net-name'
 import { netReadoutText, readNet } from '../lib/net-state'
-import { drawScope, timeTickLabeler, traceToken } from './scope-draw'
+import { drawScope, plotExtraHeight, timeTickLabeler, traceToken } from './scope-draw'
 import type { ScopePlot } from './scope-draw'
+import { decodedItems, eventMarkers, liveLane } from '../lib/bench-view'
+import type { BenchEvent, BusTransaction } from '../types/bench'
 import { cssToken } from '../lib/theme-tokens'
 import { useDismissable } from '../hooks/useDismissable'
 
 // The live scope, under the board as part of the one working surface: a trace
-// per probed net, a dashed rule at the sim time of every fault, the probes the
-// session started with (and why), and a picker for more. The painting lives in
+// per probed net (a digital lane instead, for a net the analysis ties to an MCU
+// pin), a dashed rule at the sim time of every fault, the decoded bus track and
+// event rules from the analysis run, the probes the session started with (and
+// why), and a picker for more. The painting lives in
 // scope-draw.ts, shared with the deck panel. All colours are --scope-* /
 // --trace-* tokens; a probe's dot and its beam read the same --trace-N.
 
@@ -51,11 +55,17 @@ interface ProbeScopePanelProps {
   /** The frames the session retained, oldest first: a newly probed net starts
    *  from what they measured instead of from nothing. */
   retained?: SimFrame[]
+  /** Nets the analysis says an MCU pin drives: a probe on one is drawn as a
+   *  digital lane under the analogue traces instead of as a volt trace. */
+  digitalNets?: ReadonlySet<string>
+  /** Decoded bus transactions and timeline events from the analysis run. */
+  bus?: BusTransaction[]
+  events?: BenchEvent[]
 }
 
 export function ProbeScopePanel({
   boardInfo, frame, probes, probeReasons = {}, faults = [], onAddProbe, onRemoveProbe, exportRef, height = 170,
-  retained = [],
+  retained = [], digitalNets, bus, events,
 }: ProbeScopePanelProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const boxRef = useRef<HTMLDivElement>(null)
@@ -67,6 +77,10 @@ export function ProbeScopePanel({
   hiddenRef.current = hidden
   const faultsRef = useRef(faults)
   faultsRef.current = faults
+  const digitalRef = useRef(digitalNets)
+  digitalRef.current = digitalNets
+  const analysisRef = useRef({ bus, events })
+  analysisRef.current = { bus, events }
 
   // Accumulate samples
   useEffect(() => {
@@ -126,18 +140,28 @@ export function ProbeScopePanel({
     // Never below the newest sample: `lo + span` can round under it and would
     // drop the very point the window exists to show.
     const xHi = has ? Math.max(tMax, lo + span) : WINDOW_SECS
+    // A net an MCU pin drives is a lane, not a volt trace.
+    const digital = digitalRef.current
+    const isLane = (net: string) => !!digital?.has(net)
+    const { bus: busLog, events: runEvents } = analysisRef.current
     return {
-      traces: visible.map(net => ({
+      traces: visible.filter(net => !isLane(net)).map(net => ({
         label: displayNet(net),
         colorToken: traceToken(probes.indexOf(net)),
         points: (buffers.current.get(net) ?? []).map(s => ({ x: s.t, y: s.v })),
       })),
+      lanes: visible.filter(isLane).map(net =>
+        liveLane(displayNet(net), probes.indexOf(net), (buffers.current.get(net) ?? []).map(s => ({ t: s.t, v: s.v })))),
+      decoded: busLog && busLog.length > 0 ? decodedItems(busLog) : undefined,
       xLabel: live && has && tMax - tFirst > WINDOW_SECS ? `newest ${WINDOW_SECS} s of simulated time` : 'simulated time',
       yUnit: 'V',
       xTick: has ? timeTickLabeler(lo, xHi) : timeTickLabeler(0, WINDOW_SECS),
       xRange: has ? [lo, xHi] : undefined,
       yFloor: [0, 3.3],
-      markers: faultsRef.current.map(f => ({ x: f.t, label: f.component })),
+      markers: [
+        ...faultsRef.current.map(f => ({ x: f.t, label: f.component })),
+        ...eventMarkers(runEvents),
+      ],
       hint: probes.length === 0
         ? 'Probe a net to plot its voltage'
         : visible.length === 0 ? 'All traces hidden'
@@ -155,14 +179,19 @@ export function ProbeScopePanel({
       const box = boxRef.current
       if (!canvas || !box) return
       const dpr = window.devicePixelRatio || 1
+      const visible = probes.filter(p => !hiddenRef.current.has(p))
+      const plot = plotRef.current(visible, true)
+      // Digital lanes and the decoded track sit under the analogue part, which
+      // keeps the height it was given.
+      const full = height + plotExtraHeight(plot)
+      if (canvas.style.height !== `${full}px`) canvas.style.height = `${full}px`
       const w = Math.max(1, Math.round(box.clientWidth * dpr))
-      const h = Math.max(1, Math.round(height * dpr))
+      const h = Math.max(1, Math.round(full * dpr))
       if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h }
       const ctx = canvas.getContext('2d')
       if (!ctx) return
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      const visible = probes.filter(p => !hiddenRef.current.has(p))
-      drawScope(ctx, w / dpr, h / dpr, plotRef.current(visible, true))
+      drawScope(ctx, w / dpr, h / dpr, plot)
     }
     rafRef.current = requestAnimationFrame(draw)
     return () => cancelAnimationFrame(rafRef.current)
@@ -174,7 +203,8 @@ export function ProbeScopePanel({
       const W = 1400
       const lineH = 16
       const headH = header.length * lineH + 16
-      const plotH = 520
+      const plot = plotRef.current(probes, false)
+      const plotH = 520 + plotExtraHeight(plot)
       const c = document.createElement('canvas')
       c.width = W
       c.height = headH + plotH
@@ -186,7 +216,7 @@ export function ProbeScopePanel({
       ctx.textAlign = 'left'
       header.forEach((l, i) => ctx.fillText(l, 12, 18 + i * lineH))
       ctx.translate(0, headH)
-      drawScope(ctx, W, plotH, plotRef.current(probes, false))
+      drawScope(ctx, W, plotH, plot)
       return c
     },
   }), [probes])
@@ -214,6 +244,15 @@ export function ProbeScopePanel({
         }}
       >
         <canvas ref={canvasRef} aria-label="Scope traces of the probed nets" style={{ display: 'block', width: '100%', height }} />
+        {((bus?.length ?? 0) > 0 || (events?.length ?? 0) > 0) && (
+          <div
+            className="px-2 py-0.5 text-[10px]"
+            data-testid="scope-analysis-note"
+            style={{ borderTop: '1px solid var(--scope-edge)', color: 'var(--silk-dim)' }}
+          >
+            Bus decode and event markers: from the analysis run
+          </div>
+        )}
       </div>
 
       <div className="flex flex-col gap-1 sm:w-[230px] shrink-0 min-w-0">

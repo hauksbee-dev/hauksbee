@@ -35,6 +35,8 @@ use hauksbee_ir::NodeId;
 use hauksbee_mcu::I2cEvent;
 
 use super::{AsAny, BusActivity, Peripheral, TickCtx};
+use crate::observe::{RawBusTxn, TxnRecorder};
+use hauksbee_ir::observations::BusKind;
 
 /// A device that answers on the I2C bus at a fixed 7-bit address.
 pub trait I2cSlave: AsAny + Send {
@@ -123,6 +125,9 @@ pub struct I2cBus {
     /// binder or the attaching code knew them. Names where firmware's writes
     /// to this bus enter the board; see [`I2cBus::signal_nodes`].
     signal_nodes: Vec<NodeId>,
+    /// Every transaction the firmware drove on this bus, for the bench view's
+    /// bus log; see [`crate::observe`].
+    txns: TxnRecorder,
 }
 
 impl I2cBus {
@@ -136,6 +141,44 @@ impl I2cBus {
             slaves: Vec::new(),
             stop_pending: Vec::new(),
             powered: true,
+            txns: TxnRecorder::default(),
+        }
+    }
+
+    /// Stamp the transactions recorded from now on with the simulated time.
+    /// The scheduler calls this at the start of every chunk.
+    pub const fn set_observed_time(&mut self, t_s: f64) {
+        self.txns.set_time(t_s);
+    }
+
+    /// Take the transactions recorded since the last call (the bench view's
+    /// bus log). With `include_open` the in-flight one is closed and taken too.
+    pub fn take_transactions(&mut self, include_open: bool) -> Vec<RawBusTxn> {
+        self.txns.take(include_open)
+    }
+
+    /// Record one dispatched event into the transaction log.
+    fn record(&mut self, ev: &I2cEvent, acked: bool, reply: Option<u8>) {
+        match *ev {
+            I2cEvent::Start { addr, read } => {
+                self.txns
+                    .begin(BusKind::I2c, &self.id, Some(addr), read, acked);
+                // An unanswered address ends the leg: nothing else will land.
+                if !acked {
+                    self.txns.finish();
+                }
+            }
+            I2cEvent::Write { data, .. } => {
+                if let (Some(open), true) = (self.txns.open_mut(), acked) {
+                    open.bytes.push(data);
+                }
+            }
+            I2cEvent::Read { .. } => {
+                if let (Some(open), Some(byte)) = (self.txns.open_mut(), reply) {
+                    open.bytes.push(byte);
+                }
+            }
+            I2cEvent::Stop { .. } => self.txns.finish(),
         }
     }
 
@@ -201,6 +244,21 @@ impl I2cBus {
     /// closure the engine installs.
     #[allow(clippy::needless_pass_by_value)] // public API: callers in other crates pass owned events
     pub fn dispatch(&mut self, ev: I2cEvent) -> Option<u8> {
+        // Whether the device at a START's address will answer: it must exist and
+        // be powered. Captured before the event runs so the log shows the
+        // bridge's own decision.
+        let acked = match &ev {
+            I2cEvent::Start { addr, .. } => {
+                self.powered && self.slaves.iter().any(|s| s.address() == *addr)
+            }
+            _ => true,
+        };
+        let reply = self.dispatch_event(&ev);
+        self.record(&ev, acked, reply);
+        reply
+    }
+
+    fn dispatch_event(&mut self, ev: &I2cEvent) -> Option<u8> {
         if !self.powered {
             if matches!(ev, I2cEvent::Start { .. } | I2cEvent::Stop { .. }) {
                 self.active = None;
@@ -209,7 +267,7 @@ impl I2cBus {
             }
             return None;
         }
-        match ev {
+        match *ev {
             I2cEvent::Start { addr, read } => {
                 self.active = self
                     .slaves

@@ -72,6 +72,8 @@ use std::collections::HashMap;
 use hauksbee_ir::NodeId;
 
 use super::{AsAny, BusActivity, Peripheral, TickCtx};
+use crate::observe::{RawBusTxn, TxnRecorder};
+use hauksbee_ir::observations::BusKind;
 
 /// A device on the SPI bus that exchanges one byte per transfer.
 pub trait SpiSlave: AsAny + Send {
@@ -329,6 +331,9 @@ pub struct SpiBus {
     /// The board nodes the bus's signal pins (clock, data, chip select) sit
     /// on, when known; see [`SpiBus::signal_nodes`].
     signal_nodes: Vec<NodeId>,
+    /// Every chip-select frame the firmware drove, for the bench view's bus
+    /// log; see [`crate::observe`].
+    txns: TxnRecorder,
 }
 
 impl SpiBus {
@@ -348,6 +353,7 @@ impl SpiBus {
             selected: true,
             powered: true,
             signal_nodes: Vec::new(),
+            txns: TxnRecorder::default(),
         }
     }
 
@@ -439,11 +445,33 @@ impl SpiBus {
 
     /// Exchange one byte (body of the `on_spi` closure).
     pub fn transfer(&mut self, mosi: u8) -> u8 {
-        if self.powered {
+        let miso = if self.powered {
             self.slave.transfer(mosi)
         } else {
             0xff
+        };
+        if !self.txns.is_open() {
+            // Heuristic framing (no CS pin): the first byte opens the frame.
+            self.txns
+                .begin(BusKind::Spi, &self.id, None, false, self.powered);
         }
+        if let Some(open) = self.txns.open_mut() {
+            open.bytes.push(mosi);
+            open.reply.push(miso);
+        }
+        miso
+    }
+
+    /// Stamp the transactions recorded from now on with the simulated time.
+    /// The scheduler calls this at the start of every chunk.
+    pub const fn set_observed_time(&mut self, t_s: f64) {
+        self.txns.set_time(t_s);
+    }
+
+    /// Take the frames recorded since the last call (the bench view's bus
+    /// log). With `include_open` the in-flight frame is closed and taken too.
+    pub fn take_transactions(&mut self, include_open: bool) -> Vec<RawBusTxn> {
+        self.txns.take(include_open)
     }
 
     pub fn set_powered(&mut self, powered: bool) {
@@ -480,12 +508,15 @@ impl SpiBus {
     pub fn cs_assert(&mut self) {
         self.selected = true;
         self.slave.select();
+        self.txns
+            .begin(BusKind::Spi, &self.id, None, false, self.powered);
     }
 
     /// CS DEASSERTED (active-low rising edge): end the transaction.
     pub fn cs_deassert(&mut self) {
         self.selected = false;
         self.slave.deselect();
+        self.txns.finish();
     }
 
     /// A backend-surfaced CS deassert (`deselect` `SpiEvent`). Records that the
@@ -494,6 +525,7 @@ impl SpiBus {
         self.backend_deselect_seen = true;
         self.selected = false;
         self.slave.deselect();
+        self.txns.finish();
     }
 
     /// Deselect the slave (chip-select deassert). Called either from the
@@ -502,6 +534,7 @@ impl SpiBus {
     /// boundary for backends that don't surface CS.
     pub fn slave_deselect(&mut self) {
         self.slave.deselect();
+        self.txns.finish();
     }
 
     /// True if the active slave is partway through a transaction. See
