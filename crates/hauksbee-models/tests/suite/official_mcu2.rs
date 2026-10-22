@@ -1,6 +1,6 @@
 //! Official-parts batch mcu2: resolution and behaviour tests for the cards added in that batch.
 //!
-//! STM32F405/F407 (DS8626 Rev 12), ATSAMD21G18 (DS40001882L), ATmega2560 (DS40002211A).
+//! STM32F405/F407 (DS8626 Rev 12), ATSAMD21G18 (DS40001882L), `ATmega2560` (DS40002211A).
 //! The expected pads below are read from the datasheets' own pin tables and figures, not from
 //! the card text.
 
@@ -10,6 +10,15 @@ use hauksbee_models::{ComponentKind, StrapInternalPull, StrapLevel};
 /// The model for a part written as `value` with no footprint.
 fn mpn_only(value: &str) -> Option<ModelEntry> {
     resolve_part(value)
+}
+
+/// Assert a numeric card parameter within a relative 1e-9 of `want` (exact float equality is brittle).
+fn assert_param(m: &ModelEntry, key: &str, want: f64, what: &str) {
+    let got = param(m, key);
+    assert!(
+        (got - want).abs() <= 1e-9 * got.abs().max(want.abs()),
+        "{key} = {got}, expected {want}: {what}"
+    );
 }
 
 fn strap<'a>(m: &'a ModelEntry, role: &str) -> &'a hauksbee_models::StrapPin {
@@ -237,10 +246,11 @@ fn f4_boot_and_reset_straps() {
         );
         assert_eq!(rst.level, StrapLevel::High);
         assert!(!rst.boot_select);
-        assert_eq!(
-            param(&m, "reset_pull_up_ohms"),
+        assert_param(
+            &m,
+            "reset_pull_up_ohms",
             30_000.0,
-            "Table 51 RPU min 30 kOhm"
+            "Table 51 RPU min 30 kOhm",
         );
     }
 }
@@ -275,7 +285,7 @@ fn f4_ratings_envelope_and_levels_are_the_datasheet_figures() {
     assert!(m.envelope.iter().any(|e| matches!(
         e,
         OperatingEnvelope::InputTolerance { pins, max_v, .. }
-            if *max_v == 5.5 && pins.iter().any(|p| p == "boot0") && pins.iter().any(|p| p == "pa9")
+            if (*max_v - 5.5).abs() < 1e-9 && pins.iter().any(|p| p == "boot0") && pins.iter().any(|p| p == "pa9")
     )));
     // Thermal resistance per package, Table 98.
     for (part, theta) in [
@@ -291,9 +301,9 @@ fn f4_ratings_envelope_and_levels_are_the_datasheet_figures() {
             "{part}"
         );
     }
-    assert_eq!(param(&m, "xtal_cap_min_f"), 5.0e-12);
-    assert_eq!(param(&m, "xtal_cap_max_f"), 25.0e-12);
-    assert_eq!(param(&m, "default_clock_hz"), 16_000_000.0);
+    assert_param(&m, "xtal_cap_min_f", 5.0e-12, "");
+    assert_param(&m, "xtal_cap_max_f", 25.0e-12, "");
+    assert_param(&m, "default_clock_hz", 16_000_000.0, "");
     assert_eq!(m.params.get_str("backend"), Some("renode:stm32f4"));
     // VIH 0.7 VDD and VIL 0.3 VDD - 0.04 V at the 3.6 V end of the range.
     let vih = &m.levels["vih"];
@@ -434,15 +444,12 @@ fn samd21_straps_ratings_envelope_and_levels_are_the_datasheet_figures() {
         StrapInternalPull::PullUp
     );
     assert_eq!(m.straps.len(), 2);
-    assert_eq!(
-        param(&m, "reset_pull_up_ohms"),
-        20_000.0,
-        "Table 37-15 RPULL min"
-    );
-    assert_eq!(
-        param(&m, "default_clock_hz"),
+    assert_param(&m, "reset_pull_up_ohms", 20_000.0, "Table 37-15 RPULL min");
+    assert_param(
+        &m,
+        "default_clock_hz",
         1_000_000.0,
-        "OSC8M divided by 8 after reset"
+        "OSC8M divided by 8 after reset",
     );
     assert_eq!(m.params.get_str("backend"), Some("none:samd21"));
     assert!(
@@ -635,10 +642,11 @@ fn atmega2560_adc_pads_are_port_f_and_port_k() {
         assert_eq!(adc.pads.len(), 16, "{part}: ADC0-ADC15");
         assert_eq!(m.adc_channel(first), Some("ADC0"), "{part}: PF0");
         assert_eq!(m.adc_channel(last), Some("ADC15"), "{part}: PK7");
-        assert_eq!(
-            param(&m, "max_adc_source_impedance_ohms"),
+        assert_param(
+            &m,
+            "max_adc_source_impedance_ohms",
             10_000.0,
-            "26.6.1: about 10 kOhm or less"
+            "26.6.1: about 10 kOhm or less",
         );
     }
     let t = mpn_only("ATmega2560-16AU").unwrap();
@@ -664,22 +672,10 @@ fn atmega2560_reset_strap_and_clock_params_are_the_datasheet_figures() {
         // 31.1: VIL2 max 0.1 VCC and VIH2 min 0.9 VCC for the RESET pin.
         assert_eq!(rst.vil, Some([0.1, 0.0]));
         assert_eq!(rst.vih, Some([0.9, 0.0]));
-        assert_eq!(
-            param(&m, "reset_pull_up_ohms"),
-            30_000.0,
-            "RRST min 30 kOhm"
-        );
-        assert_eq!(
-            param(&m, "xtal_cap_min_f"),
-            12.0e-12,
-            "Tables 10-3 and 10-5"
-        );
-        assert_eq!(param(&m, "xtal_cap_max_f"), 22.0e-12);
-        assert_eq!(
-            param(&m, "default_clock_hz"),
-            1_000_000.0,
-            "10.3.1: 8 MHz RC / 8"
-        );
+        assert_param(&m, "reset_pull_up_ohms", 30_000.0, "RRST min 30 kOhm");
+        assert_param(&m, "xtal_cap_min_f", 12.0e-12, "Tables 10-3 and 10-5");
+        assert_param(&m, "xtal_cap_max_f", 22.0e-12, "");
+        assert_param(&m, "default_clock_hz", 1_000_000.0, "10.3.1: 8 MHz RC / 8");
         assert_eq!(m.params.get_str("backend"), Some("none:atmega2560"));
     }
 }

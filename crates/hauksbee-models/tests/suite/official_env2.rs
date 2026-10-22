@@ -45,15 +45,15 @@ fn write_default(spec: &SensorSpec, addr: u8) -> f64 {
 }
 
 /// The I2C address strap contract of a card: (required high, required low, role, low, high).
-fn strap(
-    m: &ModelEntry,
-) -> (
+type Strap = (
     Vec<String>,
     Vec<String>,
     Option<String>,
     Option<u8>,
     Option<u8>,
-) {
+);
+
+fn strap(m: &ModelEntry) -> Strap {
     let Some(PeripheralSpec::RegisterMap {
         required_high_roles,
         required_low_roles,

@@ -1,4 +1,4 @@
-//! Official discrete-active cards (db/discrete_active.toml): the 2N2222A / PN2222A,
+//! Official discrete-active cards (`db/discrete_active.toml`): the 2N2222A / PN2222A,
 //! BC337 and BC327 grades, MMBT3906, the TIP120-series Darlingtons, the S8550 in
 //! TO-92 and SOT-23, and the IRLZ44N / IRFZ44N / IRF3205 power MOSFETs. Each card
 //! must resolve by its ordering codes, carry the datasheet pin map and ratings, and

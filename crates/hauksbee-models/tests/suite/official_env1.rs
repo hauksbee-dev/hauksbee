@@ -16,6 +16,12 @@ fn assert_not_in(value: &str, family: &[&str]) {
     }
 }
 
+/// True when `got` is within 10 mV of `fraction` of the supply `vdd`.
+fn is_fraction_of(got: f64, fraction: f64, vdd: f64) -> bool {
+    let want = fraction * vdd;
+    (got - want).abs() < 0.01
+}
+
 fn register_map_address(value: &str) -> u8 {
     let m = expect_query(Some(value), Some(value), None);
     match m.peripheral {
@@ -62,8 +68,8 @@ fn sht4x_pins_levels_and_supply() {
     let m = expect_query(Some("SHT45-AD1B-R2"), Some("SHT45-AD1B-R2"), None);
     assert_pin_map(&m, "sht4x_44", &pins("1=sda 2=scl 3=vdd 4=gnd"));
     assert!(has_supply_range(&m, "vdd", (1.08, 3.6), None, "Table 4"));
-    assert!((param(&m, "vih") - 0.7 * 3.3).abs() < 0.01);
-    assert!((param(&m, "vil") - 0.3 * 3.3).abs() < 0.01);
+    assert!(is_fraction_of(param(&m, "vih"), 0.7, 3.3));
+    assert!(is_fraction_of(param(&m, "vil"), 0.3, 3.3));
     assert_eq!(m.params.get_str("supply_pin"), Some("3"));
     assert_eq!(m.params.get_str("gnd_pin"), Some("4"));
 }
@@ -109,8 +115,8 @@ fn htu21d_codes_resolve_to_its_card() {
     let m = expect_query(Some("HTU21D"), Some("HTU21D"), None);
     assert_pin_map(&m, "htu21d", &pins("1=sda 2=gnd 3=nc 4=nc 5=vdd 6=scl"));
     assert!(has_supply_range(&m, "vdd", (1.5, 3.6), Some(3.6), "p.3"));
-    assert!((param(&m, "vih") - 0.7 * 3.0).abs() < 0.01);
-    assert!((param(&m, "vil") - 0.3 * 3.0).abs() < 0.01);
+    assert!(is_fraction_of(param(&m, "vih"), 0.7, 3.0));
+    assert!(is_fraction_of(param(&m, "vil"), 0.3, 3.0));
     assert_eq!(m.params.get_str("supply_pin"), Some("5"));
     assert_eq!(m.params.get_str("gnd_pin"), Some("2"));
 }
@@ -136,7 +142,7 @@ fn sht21_codes_resolve_to_its_card() {
         Some(5.0),
         "Table 1"
     ));
-    assert!((param(&m, "vih") - 0.7 * 3.0).abs() < 0.01);
+    assert!(is_fraction_of(param(&m, "vih"), 0.7, 3.0));
     assert_eq!(m.params.get_str("supply_pin"), Some("5"));
 }
 
@@ -197,7 +203,7 @@ fn aht_pins_levels_and_supply() {
     ));
     assert_eq!(m.params.get_str("supply_pin"), Some("4"));
     assert_eq!(m.params.get_str("gnd_pin"), Some("5"));
-    assert!((param(&m, "vih") - 0.7 * 3.3).abs() < 0.01);
+    assert!(is_fraction_of(param(&m, "vih"), 0.7, 3.3));
 
     let m = expect_query(Some("AHT20"), Some("AHT20"), None);
     assert_pin_map(&m, "aht20", &pins("1=nc 2=vdd 3=scl 4=sda 5=gnd 6=nc"));
@@ -210,7 +216,7 @@ fn aht_pins_levels_and_supply() {
     ));
     assert_eq!(m.params.get_str("supply_pin"), Some("2"));
     assert_eq!(m.params.get_str("gnd_pin"), Some("5"));
-    assert!((param(&m, "vil") - 0.3 * 3.3).abs() < 0.01);
+    assert!(is_fraction_of(param(&m, "vil"), 0.3, 3.3));
 
     let m = expect_query(Some("AHT21"), Some("AHT21"), None);
     assert_pin_map(&m, "aht21", &pins("1=nc 2=vdd 3=scl 4=sda 5=gnd 6=nc"));
@@ -286,8 +292,8 @@ fn si7021_pins_levels_supply_and_thermal() {
         Some(4.2),
         "Table 1"
     ));
-    assert!((param(&m, "vih") - 0.7 * 3.3).abs() < 0.01);
-    assert!((param(&m, "vil") - 0.3 * 3.3).abs() < 0.01);
+    assert!(is_fraction_of(param(&m, "vih"), 0.7, 3.3));
+    assert!(is_fraction_of(param(&m, "vil"), 0.3, 3.3));
     assert_eq!(m.params.get_str("supply_pin"), Some("5"));
     assert_eq!(m.params.get_str("gnd_pin"), Some("2"));
     assert!((param(&m, "supply_static_ua") - 0.06).abs() < 1e-9);

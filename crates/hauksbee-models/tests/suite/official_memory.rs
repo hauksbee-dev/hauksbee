@@ -611,6 +611,10 @@ fn gigadevice_cards_bind_the_generation_that_was_read() {
         power: (50e-6, 20e-3, 25e-3, 8e-6),
         sha: g128,
     });
+}
+
+#[test]
+fn gigadevice_cards_reject_other_generations_and_option_codes() {
     let all = [
         "gd25q32c_8pin",
         "gd25q64c_8pin",
@@ -650,7 +654,6 @@ fn gigadevice_cards_bind_the_generation_that_was_read() {
 fn macronix_cards_split_density_and_pin_one_function() {
     let m64 = "f9841f0fdc919d257c602f62fe3a2fa9254c2bb89bd6585599fbd73c5367d30d";
     let m32 = "c34badd3067e5f29ccc790fbf9d0e37ccc4b29d7f9384cc830bf478b96f2822d";
-    let m128 = "66e38de394d725c668b469b65a9fb17604ce71b2356af516ed6cd923f3814744";
     for value in [
         "MX25L6433FM2I-08G",
         "MX25L6433FZNI-08Q",
@@ -715,6 +718,11 @@ fn macronix_cards_split_density_and_pin_one_function() {
         power: (50e-6, 17e-3, 15e-3, 20e-6),
         sha: m32,
     });
+}
+
+#[test]
+fn macronix_mx25l12835f_pad_7_is_reset_and_sop16_pad_1_is_sio3() {
+    let m128 = "66e38de394d725c668b469b65a9fb17604ce71b2356af516ed6cd923f3814744";
     // MX25L12835F: pad 7 is RESET#/SIO3 (not HOLD#) and the 16-pin pad 1 is DNU/SIO3.
     for value in [
         "MX25L12835FM2I-10G",
@@ -747,6 +755,10 @@ fn macronix_cards_split_density_and_pin_one_function() {
         power: (50e-6, 25e-3, 25e-3, 20e-6),
         sha: m128,
     });
+}
+
+#[test]
+fn macronix_cards_reject_other_densities_and_families() {
     let all = [
         "mx25l6433f_8pin",
         "mx25l6433f_sop16",

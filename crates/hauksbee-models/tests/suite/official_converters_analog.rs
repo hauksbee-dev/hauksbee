@@ -208,9 +208,9 @@ fn mcp4725_options_resolve_to_their_hard_wired_address_pair() {
                 .and_then(|st| st["default"].as_float())
                 .unwrap_or_else(|| panic!("{code}: state {name}"))
         };
-        assert_eq!(default_of("code"), 2048.0);
-        assert_eq!(default_of("ecode"), 2048.0);
-        assert_eq!(default_of("pd"), 0.0);
+        assert_close(default_of("code"), 2048.0, "code default");
+        assert_close(default_of("ecode"), 2048.0, "ecode default");
+        assert_close(default_of("pd"), 0.0, "pd default");
         let p = m.peripheral_power.as_ref().expect("peripheral_power");
         assert_eq!(p.supply_role, "vdd");
         assert_eq!(p.return_role, "vss");
@@ -469,7 +469,7 @@ fn mcp492x_siblings_do_not_resolve_to_each_others_cards() {
 }
 
 /// The one 8-pin pad map of every LM2904-family package (TI SLOS068AB Table 4-1).
-fn lm2904_pins() -> [(&'static str, &'static str); 8] {
+const fn lm2904_pins() -> [(&'static str, &'static str); 8] {
     [
         ("1", "out_a"),
         ("2", "in_minus_a"),
@@ -970,6 +970,124 @@ fn lm2902_classes_resolve_to_their_own_family_not_a_neighbour() {
     }
 }
 
+/// (ordering code, card id, `theta_ja`, abs-max supply, recommended supply range)
+type Lm386Case = (&'static str, &'static str, f64, Option<f64>, (f64, f64));
+
+const LM386_ORDERING_CASES: &[Lm386Case] = &[
+    ("LM386M-1", "lm386_soic8", 115.7, Some(15.0), (4.0, 12.0)),
+    ("LM386MX-1", "lm386_soic8", 115.7, Some(15.0), (4.0, 12.0)),
+    (
+        "LM386M-1/NOPB",
+        "lm386_soic8",
+        115.7,
+        Some(15.0),
+        (4.0, 12.0),
+    ),
+    (
+        "LM386M-1/NOPB.B",
+        "lm386_soic8",
+        115.7,
+        Some(15.0),
+        (4.0, 12.0),
+    ),
+    (
+        "LM386MX-1/NOPB",
+        "lm386_soic8",
+        115.7,
+        Some(15.0),
+        (4.0, 12.0),
+    ),
+    (
+        "LM386MX-1/NOPB.B",
+        "lm386_soic8",
+        115.7,
+        Some(15.0),
+        (4.0, 12.0),
+    ),
+    ("LM386MMX-1", "lm386_vssop8", 169.3, None, (4.0, 12.0)),
+    ("LM386MMX-1/NOPB", "lm386_vssop8", 169.3, None, (4.0, 12.0)),
+    (
+        "LM386MMX-1/NOPB.B",
+        "lm386_vssop8",
+        169.3,
+        None,
+        (4.0, 12.0),
+    ),
+    ("LM386N-1", "lm386_pdip8_n1", 53.4, Some(15.0), (4.0, 12.0)),
+    (
+        "LM386N-1/NOPB",
+        "lm386_pdip8_n1",
+        53.4,
+        Some(15.0),
+        (4.0, 12.0),
+    ),
+    (
+        "LM386N-1/NOPB.B",
+        "lm386_pdip8_n1",
+        53.4,
+        Some(15.0),
+        (4.0, 12.0),
+    ),
+    ("LM386N-3", "lm386_pdip8_n3", 53.4, Some(15.0), (4.0, 12.0)),
+    (
+        "LM386N-3/NOPB",
+        "lm386_pdip8_n3",
+        53.4,
+        Some(15.0),
+        (4.0, 12.0),
+    ),
+    (
+        "LM386N-3/NOPB.B",
+        "lm386_pdip8_n3",
+        53.4,
+        Some(15.0),
+        (4.0, 12.0),
+    ),
+    (
+        "LM386N-3/NOPBG4",
+        "lm386_pdip8_n3",
+        53.4,
+        Some(15.0),
+        (4.0, 12.0),
+    ),
+    (
+        "LM386N-3/NOPBG4.B",
+        "lm386_pdip8_n3",
+        53.4,
+        Some(15.0),
+        (4.0, 12.0),
+    ),
+    ("LM386N-4", "lm386_pdip8_n4", 53.4, Some(22.0), (5.0, 18.0)),
+    (
+        "LM386N-4/NOPB",
+        "lm386_pdip8_n4",
+        53.4,
+        Some(22.0),
+        (5.0, 18.0),
+    ),
+    (
+        "LM386N-4/NOPB.B",
+        "lm386_pdip8_n4",
+        53.4,
+        Some(22.0),
+        (5.0, 18.0),
+    ),
+    (
+        "LM386N-4/NOPBG4",
+        "lm386_pdip8_n4",
+        53.4,
+        Some(22.0),
+        (5.0, 18.0),
+    ),
+    (
+        "LM386N-4/NOPBG4.B",
+        "lm386_pdip8_n4",
+        53.4,
+        Some(22.0),
+        (5.0, 18.0),
+    ),
+];
+
 #[test]
 fn lm386_resolves_per_package_and_grade_with_the_pad_map() {
     use hauksbee_models::OperatingEnvelope::InputTolerance;
@@ -983,121 +1101,7 @@ fn lm386_resolves_per_package_and_grade_with_the_pad_map() {
         ("7", "bypass"),
         ("8", "gain8"),
     ];
-    // (ordering code, card id, theta_ja, abs-max supply, recommended supply range)
-    for (code, id, theta, vabs, range) in [
-        ("LM386M-1", "lm386_soic8", 115.7, Some(15.0), (4.0, 12.0)),
-        ("LM386MX-1", "lm386_soic8", 115.7, Some(15.0), (4.0, 12.0)),
-        (
-            "LM386M-1/NOPB",
-            "lm386_soic8",
-            115.7,
-            Some(15.0),
-            (4.0, 12.0),
-        ),
-        (
-            "LM386M-1/NOPB.B",
-            "lm386_soic8",
-            115.7,
-            Some(15.0),
-            (4.0, 12.0),
-        ),
-        (
-            "LM386MX-1/NOPB",
-            "lm386_soic8",
-            115.7,
-            Some(15.0),
-            (4.0, 12.0),
-        ),
-        (
-            "LM386MX-1/NOPB.B",
-            "lm386_soic8",
-            115.7,
-            Some(15.0),
-            (4.0, 12.0),
-        ),
-        ("LM386MMX-1", "lm386_vssop8", 169.3, None, (4.0, 12.0)),
-        ("LM386MMX-1/NOPB", "lm386_vssop8", 169.3, None, (4.0, 12.0)),
-        (
-            "LM386MMX-1/NOPB.B",
-            "lm386_vssop8",
-            169.3,
-            None,
-            (4.0, 12.0),
-        ),
-        ("LM386N-1", "lm386_pdip8_n1", 53.4, Some(15.0), (4.0, 12.0)),
-        (
-            "LM386N-1/NOPB",
-            "lm386_pdip8_n1",
-            53.4,
-            Some(15.0),
-            (4.0, 12.0),
-        ),
-        (
-            "LM386N-1/NOPB.B",
-            "lm386_pdip8_n1",
-            53.4,
-            Some(15.0),
-            (4.0, 12.0),
-        ),
-        ("LM386N-3", "lm386_pdip8_n3", 53.4, Some(15.0), (4.0, 12.0)),
-        (
-            "LM386N-3/NOPB",
-            "lm386_pdip8_n3",
-            53.4,
-            Some(15.0),
-            (4.0, 12.0),
-        ),
-        (
-            "LM386N-3/NOPB.B",
-            "lm386_pdip8_n3",
-            53.4,
-            Some(15.0),
-            (4.0, 12.0),
-        ),
-        (
-            "LM386N-3/NOPBG4",
-            "lm386_pdip8_n3",
-            53.4,
-            Some(15.0),
-            (4.0, 12.0),
-        ),
-        (
-            "LM386N-3/NOPBG4.B",
-            "lm386_pdip8_n3",
-            53.4,
-            Some(15.0),
-            (4.0, 12.0),
-        ),
-        ("LM386N-4", "lm386_pdip8_n4", 53.4, Some(22.0), (5.0, 18.0)),
-        (
-            "LM386N-4/NOPB",
-            "lm386_pdip8_n4",
-            53.4,
-            Some(22.0),
-            (5.0, 18.0),
-        ),
-        (
-            "LM386N-4/NOPB.B",
-            "lm386_pdip8_n4",
-            53.4,
-            Some(22.0),
-            (5.0, 18.0),
-        ),
-        (
-            "LM386N-4/NOPBG4",
-            "lm386_pdip8_n4",
-            53.4,
-            Some(22.0),
-            (5.0, 18.0),
-        ),
-        (
-            "LM386N-4/NOPBG4.B",
-            "lm386_pdip8_n4",
-            53.4,
-            Some(22.0),
-            (5.0, 18.0),
-        ),
-    ] {
+    for &(code, id, theta, vabs, range) in LM386_ORDERING_CASES {
         let m = ordering(code);
         assert_pin_map(&m, id, &pins);
         assert_eq!(m.ratings.theta_ja_c_per_w, Some(theta), "{code}");
@@ -1224,7 +1228,7 @@ fn max4466_siblings_do_not_resolve_to_its_cards() {
 }
 
 /// TLV9061 5-pin SOT-23 (DBV) pad map (TI SBOS839N Table 5-1).
-fn tlv9061_pins_sot23_5() -> [(&'static str, &'static str); 5] {
+const fn tlv9061_pins_sot23_5() -> [(&'static str, &'static str); 5] {
     [
         ("1", "out"),
         ("2", "vss"),
@@ -1235,7 +1239,7 @@ fn tlv9061_pins_sot23_5() -> [(&'static str, &'static str); 5] {
 }
 
 /// TLV9061 5-pin SC70 (DCK) pad map (TI SBOS839N Table 5-1).
-fn tlv9061_pins_sc70_5() -> [(&'static str, &'static str); 5] {
+const fn tlv9061_pins_sc70_5() -> [(&'static str, &'static str); 5] {
     [
         ("1", "in_plus"),
         ("2", "vss"),
@@ -1246,7 +1250,7 @@ fn tlv9061_pins_sc70_5() -> [(&'static str, &'static str); 5] {
 }
 
 /// TLV9061 5-pin X2SON (DPW) pad map (TI SBOS839N Table 5-1).
-fn tlv9061_pins_x2son_5() -> [(&'static str, &'static str); 5] {
+const fn tlv9061_pins_x2son_5() -> [(&'static str, &'static str); 5] {
     [
         ("1", "out"),
         ("2", "in_minus"),
@@ -1257,7 +1261,7 @@ fn tlv9061_pins_x2son_5() -> [(&'static str, &'static str); 5] {
 }
 
 /// The one 8-pin pad map of the TLV9062 D, DGK, PW and DDF packages (TI SBOS839N Table 5-3).
-fn tlv9062_pins_8() -> [(&'static str, &'static str); 8] {
+const fn tlv9062_pins_8() -> [(&'static str, &'static str); 8] {
     [
         ("1", "out_a"),
         ("2", "in_minus_a"),
@@ -1271,7 +1275,7 @@ fn tlv9062_pins_8() -> [(&'static str, &'static str); 8] {
 }
 
 /// The TLV9062 DSG WSON pad map: the 8-pin map plus the exposed pad, tied to V- (Figure 5-7).
-fn tlv9062_pins_dsg() -> [(&'static str, &'static str); 9] {
+const fn tlv9062_pins_dsg() -> [(&'static str, &'static str); 9] {
     [
         ("1", "out_a"),
         ("2", "in_minus_a"),
@@ -1286,7 +1290,7 @@ fn tlv9062_pins_dsg() -> [(&'static str, &'static str); 9] {
 }
 
 /// The TLV9064 D and PW 14-pin pad map (TI SBOS839N Table 5-5, SOIC and TSSOP column).
-fn tlv9064_pins_14() -> [(&'static str, &'static str); 14] {
+const fn tlv9064_pins_14() -> [(&'static str, &'static str); 14] {
     [
         ("1", "out_a"),
         ("2", "in_minus_a"),
@@ -1306,7 +1310,7 @@ fn tlv9064_pins_14() -> [(&'static str, &'static str); 14] {
 }
 
 /// The TLV9064 RUC X2QFN-14 pad map (TI SBOS839N Table 5-5, X2QFN column).
-fn tlv9064_pins_ruc() -> [(&'static str, &'static str); 14] {
+const fn tlv9064_pins_ruc() -> [(&'static str, &'static str); 14] {
     [
         ("1", "in_minus_a"),
         ("2", "in_plus_a"),
@@ -1327,7 +1331,7 @@ fn tlv9064_pins_ruc() -> [(&'static str, &'static str); 14] {
 
 /// The TLV9064 RTE WQFN-16 pad map: NC pads 6 and 7 and the exposed pad tied to V-
 /// (TI SBOS839N Table 5-5 WQFN column, Figure 5-12).
-fn tlv9064_pins_rte() -> [(&'static str, &'static str); 17] {
+const fn tlv9064_pins_rte() -> [(&'static str, &'static str); 17] {
     [
         ("1", "in_plus_a"),
         ("2", "vcc"),
@@ -1349,7 +1353,7 @@ fn tlv9064_pins_rte() -> [(&'static str, &'static str); 17] {
     ]
 }
 
-/// The electrical class shared by every TLV906x card: rail-to-rail in and out, 1.8 to 5.5 V.
+/// The electrical class shared by every `TLV906x` card: rail-to-rail in and out, 1.8 to 5.5 V.
 fn assert_tlv906x_class(m: &ModelEntry, theta: f64) {
     let code = &m.id;
     assert_eq!(m.ratings.theta_ja_c_per_w, Some(theta), "{code}");

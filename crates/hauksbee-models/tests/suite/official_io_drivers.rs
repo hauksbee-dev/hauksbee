@@ -6,6 +6,11 @@ fn resolve(value: &str, footprint: Option<&str>) -> hauksbee_models::Resolution 
     resolve_query(Some(value), None, footprint)
 }
 
+/// Relative comparison for card values read back from TOML (exact float equality is brittle).
+fn approx(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-9 * a.abs().max(b.abs())
+}
+
 const TXS0102_SHA: &str = "75397ef71b07af6e47b81441a502a224c59b6ac359083d71516465f0c885eaf7";
 const TXS0104E_SHA: &str = "88295316d8d520f1b967af2ce9c7dc4b7491c1e647968728b9690c6514fb7b41";
 const LVC245A_SHA: &str = "ad3e705aef834214404d6e1e38cb00f95fdb6f0d9807a784a6f58c4d060f13a3";
@@ -362,8 +367,7 @@ fn iod_exp_pin<'a>(model: &'a hauksbee_models::ModelEntry, pad: &str) -> &'a str
     model
         .pins
         .get(pad)
-        .map(String::as_str)
-        .unwrap_or_else(|| panic!("{} has no pad {pad}", model.id))
+        .map_or_else(|| panic!("{} has no pad {pad}", model.id), String::as_str)
 }
 
 /// Shared register-file assertions: I2C address 0x20 with the eight A2:A0 straps, the reset values
@@ -400,10 +404,11 @@ fn iod_exp_check_register_file(
         } else {
             0.0
         };
-        assert_eq!(
-            write.default, want,
+        assert!(
+            approx(write.default, want),
             "{} write register 0x{:02X}",
-            model.id, write.addr
+            model.id,
+            write.addr
         );
     }
     let iocon = spec
@@ -453,9 +458,9 @@ fn iod_exp_check_common(model: &hauksbee_models::ModelEntry, with_peripheral: bo
     if let Some(power) = &model.peripheral_power {
         assert_eq!(power.supply_role, "vdd");
         assert_eq!(power.return_role, "gnd");
-        assert_eq!(power.power_on_threshold_v, 1.8);
-        assert_eq!(power.read_a, 0.001);
-        assert_eq!(power.idle_a, 0.000001);
+        assert!(approx(power.power_on_threshold_v, 1.8));
+        assert!(approx(power.read_a, 0.001));
+        assert!(approx(power.idle_a, 1e-6));
     }
 }
 
@@ -657,9 +662,17 @@ fn iod_exp_mcp23s17_has_pin_maps_and_no_register_file() {
     iod_exp_check_common(&qfn, false);
 }
 
+/// Ordering code, footprint, expected card id and the (pad, role) pairs to check.
+type Mcp23008Case = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static [(&'static str, &'static str)],
+);
+
 #[test]
 fn iod_exp_mcp23008_resolves_per_package_with_its_own_pin_map() {
-    let cases: [(&str, &str, &str, &[(&str, &str)]); 3] = [
+    let cases: [Mcp23008Case; 3] = [
         (
             "MCP23008-E/SO",
             IOD_EXP_FP_18[0],
@@ -846,7 +859,7 @@ fn iod_exp_levels_ratings_and_envelope_follow_the_datasheet() {
             "{value}"
         );
         assert_eq!(model.levels["voh"], vec![[1.8, 1.1], [5.5, 4.8]], "{value}");
-        assert_eq!(model.params.get_f64("iih_a"), Some(0.000001), "{value}");
+        assert_eq!(model.params.get_f64("iih_a"), Some(1e-6), "{value}");
     }
     let model = iod_exp_model("MCP23017-E/SO", IOD_EXP_FP_28_LEADED[0]);
     let hauksbee_models::OperatingEnvelope::SupplyRange {
@@ -939,8 +952,7 @@ fn io_muxpwm_pin<'a>(model: &'a hauksbee_models::ModelEntry, pad: &str) -> &'a s
     model
         .pins
         .get(pad)
-        .map(String::as_str)
-        .unwrap_or_else(|| panic!("{} has no pad {pad}", model.id))
+        .map_or_else(|| panic!("{} has no pad {pad}", model.id), String::as_str)
 }
 
 /// The value on that footprint must not resolve to the named card (it may resolve to another card
@@ -1012,10 +1024,14 @@ fn io_muxpwm_check_card(card: &IoMuxpwmCard) {
     let power = model.peripheral_power.as_ref().expect("peripheral_power");
     assert_eq!(power.supply_role, card.supply_role, "{}", card.id);
     assert_eq!(power.return_role, "gnd", "{}", card.id);
-    assert_eq!(power.power_on_threshold_v, card.threshold_v, "{}", card.id);
-    assert_eq!(power.idle_a, card.idle_a, "{}", card.id);
-    assert_eq!(power.read_a, card.active_a, "{}", card.id);
-    assert_eq!(power.write_a, card.active_a, "{}", card.id);
+    assert!(
+        approx(power.power_on_threshold_v, card.threshold_v),
+        "{}",
+        card.id
+    );
+    assert!(approx(power.idle_a, card.idle_a), "{}", card.id);
+    assert!(approx(power.read_a, card.active_a), "{}", card.id);
+    assert!(approx(power.write_a, card.active_a), "{}", card.id);
 
     let spec = io_muxpwm_spec(&model).sensor;
     assert_eq!(spec.i2c_address, Some(card.address), "{}", card.id);
@@ -1042,6 +1058,7 @@ fn io_muxpwm_check_card(card: &IoMuxpwmCard) {
     }
 }
 
+#[allow(clippy::too_many_lines)] // flat data table; splitting would only scatter the rows
 fn io_muxpwm_pcf8574_cards() -> Vec<IoMuxpwmCard> {
     vec![
         IoMuxpwmCard {
@@ -1156,6 +1173,7 @@ fn io_muxpwm_pcf8574_cards() -> Vec<IoMuxpwmCard> {
     ]
 }
 
+#[allow(clippy::too_many_lines)] // flat data table; splitting would only scatter the rows
 fn io_muxpwm_pcf8574a_cards() -> Vec<IoMuxpwmCard> {
     vec![
         IoMuxpwmCard {
@@ -1497,7 +1515,11 @@ fn io_muxpwm_check_pcf_spec(card: &IoMuxpwmCard) {
         "{}",
         card.id
     );
-    assert!(spec.inputs.iter().all(|i| i.default == 1.0), "{}", card.id);
+    assert!(
+        spec.inputs.iter().all(|i| approx(i.default, 1.0)),
+        "{}",
+        card.id
+    );
     let states: Vec<&str> = spec.states.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(
         states,
@@ -1505,7 +1527,11 @@ fn io_muxpwm_check_pcf_spec(card: &IoMuxpwmCard) {
         "{}",
         card.id
     );
-    assert!(spec.states.iter().all(|s| s.default == 1.0), "{}", card.id);
+    assert!(
+        spec.states.iter().all(|s| approx(s.default, 1.0)),
+        "{}",
+        card.id
+    );
     assert!(
         spec.write_registers.is_empty() && spec.registers.is_empty(),
         "{}",
@@ -1543,7 +1569,7 @@ fn io_muxpwm_check_pcf_spec(card: &IoMuxpwmCard) {
         "{}: VOH is not in the datasheet",
         card.id
     );
-    assert!(model.levels.get("voh").is_none(), "{}", card.id);
+    assert!(!model.levels.contains_key("voh"), "{}", card.id);
     io_muxpwm_check_missing(
         &model,
         &[
@@ -1637,6 +1663,88 @@ fn io_muxpwm_cards_are_gated_by_package_footprint() {
     }
 }
 
+/// Reset values of the PCA9685 write registers and the write-only `ALL_LED` read-backs.
+fn io_muxpwm_check_pca9685_registers(
+    card: &IoMuxpwmCard,
+    spec: &hauksbee_models::sensor_spec::Sensor,
+) {
+    assert_eq!(spec.write_registers.len(), 71, "{}", card.id);
+    assert_eq!(spec.registers.len(), 75, "{}", card.id);
+    let write = |addr: u8| {
+        spec.write_registers
+            .iter()
+            .find(|w| w.addr == addr)
+            .unwrap_or_else(|| panic!("{} write register 0x{addr:02X}", card.id))
+    };
+    assert!(
+        approx(write(0x00).default, 17.0),
+        "{} MODE1 resets to 0x11",
+        card.id
+    );
+    assert_eq!(write(0x00).fields.len(), 7, "{}", card.id);
+    assert!(
+        approx(write(0x01).default, 4.0),
+        "{} MODE2 resets to 0x04",
+        card.id
+    );
+    assert_eq!(write(0x01).fields.len(), 4, "{}", card.id);
+    assert!(approx(write(0x02).default, 226.0), "{} SUBADR1", card.id);
+    assert!(approx(write(0x03).default, 228.0), "{} SUBADR2", card.id);
+    assert!(approx(write(0x04).default, 232.0), "{} SUBADR3", card.id);
+    assert!(approx(write(0x05).default, 224.0), "{} ALLCALLADR", card.id);
+    assert!(
+        approx(write(0xFE).default, 30.0),
+        "{} PRE_SCALE resets to 0x1E",
+        card.id
+    );
+    for led in 0..16u8 {
+        let base = 0x06 + 4 * led;
+        assert!(
+            approx(write(base).default, 0.0),
+            "{} LED{led}_ON_L",
+            card.id
+        );
+        assert!(
+            approx(write(base + 1).default, 0.0),
+            "{} LED{led}_ON_H",
+            card.id
+        );
+        assert!(
+            approx(write(base + 2).default, 0.0),
+            "{} LED{led}_OFF_L",
+            card.id
+        );
+        assert!(
+            approx(write(base + 3).default, 16.0),
+            "{} LED{led}_OFF_H: full-off set at reset",
+            card.id
+        );
+        for high in [base + 1, base + 3] {
+            let bits: Vec<[u8; 2]> = write(high).fields.iter().map(|f| f.bits).collect();
+            assert_eq!(
+                bits,
+                [[4, 4], [3, 0]],
+                "{} 0x{high:02X}: full flag and count",
+                card.id
+            );
+        }
+    }
+    // ALL_LED registers are write-only: they read back as zero. 0xFF is not a register.
+    for addr in 0xFAu8..=0xFD {
+        let reg = spec
+            .registers
+            .iter()
+            .find(|r| r.addr == addr)
+            .expect("ALL_LED read");
+        assert_eq!(
+            reg.r#const.as_deref(),
+            Some(&[0u8][..]),
+            "{} 0x{addr:02X}",
+            card.id
+        );
+    }
+}
+
 #[test]
 fn io_muxpwm_pca9685_cards_expose_the_reset_register_file() {
     let cards = io_muxpwm_pca9685_cards();
@@ -1663,68 +1771,7 @@ fn io_muxpwm_pca9685_cards_expose_the_reset_register_file() {
             "{}",
             card.id
         );
-        assert_eq!(spec.write_registers.len(), 71, "{}", card.id);
-        assert_eq!(spec.registers.len(), 75, "{}", card.id);
-        let write = |addr: u8| {
-            spec.write_registers
-                .iter()
-                .find(|w| w.addr == addr)
-                .unwrap_or_else(|| panic!("{} write register 0x{addr:02X}", card.id))
-        };
-        assert_eq!(
-            write(0x00).default,
-            17.0,
-            "{} MODE1 resets to 0x11",
-            card.id
-        );
-        assert_eq!(write(0x00).fields.len(), 7, "{}", card.id);
-        assert_eq!(write(0x01).default, 4.0, "{} MODE2 resets to 0x04", card.id);
-        assert_eq!(write(0x01).fields.len(), 4, "{}", card.id);
-        assert_eq!(write(0x02).default, 226.0, "{} SUBADR1", card.id);
-        assert_eq!(write(0x03).default, 228.0, "{} SUBADR2", card.id);
-        assert_eq!(write(0x04).default, 232.0, "{} SUBADR3", card.id);
-        assert_eq!(write(0x05).default, 224.0, "{} ALLCALLADR", card.id);
-        assert_eq!(
-            write(0xFE).default,
-            30.0,
-            "{} PRE_SCALE resets to 0x1E",
-            card.id
-        );
-        for led in 0..16u8 {
-            let base = 0x06 + 4 * led;
-            assert_eq!(write(base).default, 0.0, "{} LED{led}_ON_L", card.id);
-            assert_eq!(write(base + 1).default, 0.0, "{} LED{led}_ON_H", card.id);
-            assert_eq!(write(base + 2).default, 0.0, "{} LED{led}_OFF_L", card.id);
-            assert_eq!(
-                write(base + 3).default,
-                16.0,
-                "{} LED{led}_OFF_H: full-off set at reset",
-                card.id
-            );
-            for high in [base + 1, base + 3] {
-                let bits: Vec<[u8; 2]> = write(high).fields.iter().map(|f| f.bits).collect();
-                assert_eq!(
-                    bits,
-                    [[4, 4], [3, 0]],
-                    "{} 0x{high:02X}: full flag and count",
-                    card.id
-                );
-            }
-        }
-        // ALL_LED registers are write-only: they read back as zero. 0xFF is not a register.
-        for addr in 0xFAu8..=0xFD {
-            let reg = spec
-                .registers
-                .iter()
-                .find(|r| r.addr == addr)
-                .expect("ALL_LED read");
-            assert_eq!(
-                reg.r#const.as_deref(),
-                Some(&[0u8][..]),
-                "{} 0x{addr:02X}",
-                card.id
-            );
-        }
+        io_muxpwm_check_pca9685_registers(card, &spec);
         assert!(spec.registers.iter().all(|r| r.addr != 0xFF), "{}", card.id);
         assert!(
             spec.write_registers.iter().all(|w| w.addr != 0xFF),
@@ -1776,8 +1823,8 @@ fn io_muxpwm_check_mux_spec(card: &IoMuxpwmCard) {
     }
     assert_eq!(spec.states.len(), 1, "{}", card.id);
     assert_eq!(spec.states[0].name, "ctrl", "{}", card.id);
-    assert_eq!(
-        spec.states[0].default, 0.0,
+    assert!(
+        approx(spec.states[0].default, 0.0),
         "{}: all channels disabled at reset",
         card.id
     );
@@ -1823,7 +1870,7 @@ fn io_muxpwm_tca9548a_cards_resolve_with_a_control_register() {
         io_muxpwm_check_card(card);
         io_muxpwm_check_mux_spec(card);
         assert_eq!(card.address, 0x70);
-        assert_eq!(card.threshold_v, 1.65, "TCA9548A runs from 1.65 V");
+        assert!(approx(card.threshold_v, 1.65), "TCA9548A runs from 1.65 V");
     }
 }
 
@@ -1835,7 +1882,7 @@ fn io_muxpwm_pca9548a_cards_resolve_with_a_control_register() {
         io_muxpwm_check_card(card);
         io_muxpwm_check_mux_spec(card);
         assert_eq!(card.address, 0x70);
-        assert_eq!(card.threshold_v, 2.3, "PCA9548A runs from 2.3 V");
+        assert!(approx(card.threshold_v, 2.3), "PCA9548A runs from 2.3 V");
     }
 }
 
