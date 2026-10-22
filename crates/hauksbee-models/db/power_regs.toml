@@ -2,3 +2,1630 @@
 #
 # Cards here are written from vendor datasheets only (every value carries a basis and a source).
 # See target/launch/official-parts-20261022/ranking.md for the batch plan.
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# AMS1117 (Advanced Monolithic Systems), 1 A LDO. Source: the vendor sheet in the batch folder
+# (ds1117.pdf; no revision or date is printed, sha256 189a2651...). The vendor URL is http only and
+# its TLS handshake fails from the batch box, so the reference is the sha256-pinned local file.
+#
+# The 3-pin cards take the bare part number (the SOT-223 package) and the CD (TO-252) order codes.
+# The CS (8L SOIC) codes have their own cards: the SOIC numbers VIN on pad 4 and VOUT on 2, 3, 6, 7,
+# so reading one with the 3-pin map would put the input on an output pad. A bare AMS1117 on an
+# 8-pad footprint is refused by the package-fit check (3-pin map against 8 pads) and stays unmodelled.
+# -1.2 V is NOT carded: the sheet lists 1.5, 1.8, 2.5, 2.85, 3.3 and 5.0 V (and adjustable) and prints no
+# 1.2 V device anywhere, so there is nothing to source it from.
+# ams1117_3v3 and ams1117_5v (vreg.toml) are not mine; this file adds the CD and CS codes for them.
+# ═════════════════════════════════════════════════════════════════════════════
+
+[[models]]
+id = "ams1117_1v5"
+kind = "vreg"
+description = "AMS1117 1A LDO, 1.5V fixed, SOT-223 / TO-252 (bare and CD codes) (Advanced Monolithic Systems; the TI LM1117 has its own cards)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = ""
+title = "Advanced Monolithic Systems AMS1117 1A Low Dropout Voltage Regulator (ds1117.pdf as supplied in the batch datasheet folder; no revision or date is printed on the sheet)"
+locator = "Ordering Information and Pin Connections p.1; Absolute Maximum Ratings and Electrical Characteristics pp.2-3; Application Hints, Stability p.4"
+sha256 = "189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 1.455
+high = 1.545
+unit = "V"
+kind = "specification-limits"
+basis = "AMS1117-1.5 Electrical Characteristics p.2, output voltage 1.455 V min to 1.545 V max over the full operating temperature range (1.478 to 1.522 V at 25 C)"
+[[models.source.pinout]]
+package = "SOT-223 and TO-252, 3 pins"
+pins = { "1" = "Ground/Adjust", "2" = "VOUT", "3" = "VIN" }
+[[models.source.characteristic]]
+parameter = "VOUT output voltage, AMS1117-1.5"
+min = 1.478
+typ = 1.5
+max = 1.522
+unit = "V"
+conditions = "VIN = 3 V, IOUT = 0 mA, TJ = +25 °C"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VOUT output voltage over the full temperature range, AMS1117-1.5"
+min = 1.455
+typ = 1.5
+max = 1.545
+unit = "V"
+conditions = "VIN = 3 V, IOUT = 0 mA; the second printed row of the pair (boldface in the printed table, which applies over the full operating temperature range)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row (second line), min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VDO dropout voltage (VIN - VOUT)"
+typ = 1.1
+max = 1.3
+unit = "V"
+conditions = "dVOUT = dVREF = 1%, IOUT = 0.8 A (specified up to 0.8 A, higher for larger currents)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Dropout Voltage row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "IQ quiescent current"
+typ = 5
+max = 11
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Quiescent Current row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "Current limit"
+min = 900
+typ = 1100
+max = 1500
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Current Limit row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 90.0
+unit = "°C/W"
+conditions = "SOT-223 package; footnote: with the tab soldered to backside or internal-plane copper ϕJA can vary from 46 to >90 °C/W"
+package = "SOT-223"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Thermal Resistance, SOT-223 package ϕJA = 90 °C/W*"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 80.0
+unit = "°C/W"
+conditions = "TO-252 package"
+package = "TO-252"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Thermal Resistance, TO-252 package ϕJA = 80 °C/W"
+[[models.source.characteristic]]
+parameter = "Junction-to-case thermal resistance"
+max = 15
+unit = "°C/W"
+conditions = "All packages"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Thermal Resistance Junction-to-Case row, max column"
+
+[models.match]
+value_re = '(?i)^AMS1117(?:CD)?[-_]?1[._]?5$'
+
+[models.params]
+vout      = 1.5   # 1.455 / 1.5 / 1.545 V min / typ / max, VIN = 3 V, IOUT = 0 mA, TJ = 25 C, p.2
+dropout_v = 1.3     # VIN - VOUT max @ IOUT = 0.8 A, p.3 (1.1 V typ)
+# RECOMMENDATION, not a minimum. AMS1117 p.4 Stability: "The addition of 22µF solid tantalum on the output will ensure stability for all operating conditions."; no ESR window is tabulated.
+cout_recommended_f = 22.0e-6
+cout_recommended_type = "solid tantalum"
+iq_a      = 5.0e-3  # IQ typ @ VIN - VOUT = 1.5 V, p.3 (11 mA max)
+
+[models.pins]
+# AMS1117 PIN CONNECTIONS, 3 PIN FIXED/ADJUSTABLE VERSION (p.1): 1 Ground/Adjust, 2 VOUT, 3 VIN.
+# The TO-252 tab is the output (p.1); the SOT-223 tab is not described, so no fourth pad is mapped.
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 1.0          # 1 A output current, Features p.1
+max_voltage_v = 15.0         # Input Voltage, Absolute Maximum Ratings p.2
+max_junction_temp_c = 125.0  # TJ, control section and power transistor, p.2
+theta_ja_c_per_w = 90.0      # SOT-223 (80 for TO-252), Absolute Maximum Ratings p.2
+theta_jc_c_per_w = 15.0      # all packages, p.3
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.0
+max_v = 15.0
+abs_max_v = 15.0
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Input Voltage 15 V; no minimum operating input is printed (the dropout row needs VIN - VOUT up to 1.3 V)"
+
+[[models]]
+id = "ams1117cs_1v5"
+kind = "vreg"
+description = "AMS1117 1A LDO, 1.5V fixed, SO-8 (CS) (Advanced Monolithic Systems; the TI LM1117 has its own cards)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = ""
+title = "Advanced Monolithic Systems AMS1117 1A Low Dropout Voltage Regulator (ds1117.pdf as supplied in the batch datasheet folder; no revision or date is printed on the sheet)"
+locator = "Ordering Information and Pin Connections p.1; Absolute Maximum Ratings and Electrical Characteristics pp.2-3; Application Hints, Stability p.4"
+sha256 = "189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 1.455
+high = 1.545
+unit = "V"
+kind = "specification-limits"
+basis = "AMS1117-1.5 Electrical Characteristics p.2, output voltage 1.455 V min to 1.545 V max over the full operating temperature range (1.478 to 1.522 V at 25 C)"
+[[models.source.pinout]]
+package = "SO-8, 8 pins"
+pins = { "1" = "GND/ADJ", "2" = "VOUT", "3" = "VOUT", "4" = "VIN", "5" = "N/C", "6" = "VOUT", "7" = "VOUT", "8" = "N/C" }
+[[models.source.characteristic]]
+parameter = "VOUT output voltage, AMS1117-1.5"
+min = 1.478
+typ = 1.5
+max = 1.522
+unit = "V"
+conditions = "VIN = 3 V, IOUT = 0 mA, TJ = +25 °C"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VOUT output voltage over the full temperature range, AMS1117-1.5"
+min = 1.455
+typ = 1.5
+max = 1.545
+unit = "V"
+conditions = "VIN = 3 V, IOUT = 0 mA; the second printed row of the pair (boldface in the printed table, which applies over the full operating temperature range)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row (second line), min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VDO dropout voltage (VIN - VOUT)"
+typ = 1.1
+max = 1.3
+unit = "V"
+conditions = "dVOUT = dVREF = 1%, IOUT = 0.8 A (specified up to 0.8 A, higher for larger currents)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Dropout Voltage row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "IQ quiescent current"
+typ = 5
+max = 11
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Quiescent Current row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "Current limit"
+min = 900
+typ = 1100
+max = 1500
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Current Limit row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 160.0
+unit = "°C/W"
+conditions = "SO-8 package"
+package = "SOIC-8"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Thermal Resistance, SO-8 package ϕJA = 160 °C/W"
+[[models.source.characteristic]]
+parameter = "Junction-to-case thermal resistance"
+max = 15
+unit = "°C/W"
+conditions = "All packages"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Thermal Resistance Junction-to-Case row, max column"
+
+[models.match]
+value_re = '(?i)^AMS1117CS[-_]?1[._]?5$'
+
+[models.params]
+vout      = 1.5   # 1.455 / 1.5 / 1.545 V min / typ / max, VIN = 3 V, IOUT = 0 mA, TJ = 25 C, p.2
+dropout_v = 1.3     # VIN - VOUT max @ IOUT = 0.8 A, p.3 (1.1 V typ)
+# RECOMMENDATION, not a minimum. AMS1117 p.4 Stability: "The addition of 22µF solid tantalum on the output will ensure stability for all operating conditions."; no ESR window is tabulated.
+cout_recommended_f = 22.0e-6
+cout_recommended_type = "solid tantalum"
+iq_a      = 5.0e-3  # IQ typ @ VIN - VOUT = 1.5 V, p.3 (11 mA max)
+
+[models.pins]
+# AMS1117 8L SOIC Top View (p.1): 1 GND/ADJ, 2 VOUT, 3 VOUT, 4 VIN, 5 N/C, 6 VOUT, 7 VOUT, 8 N/C.
+"1" = "gnd"
+"2" = "out"
+"3" = "out"
+"4" = "in"
+"5" = "nc"
+"6" = "out"
+"7" = "out"
+"8" = "nc"
+
+[models.ratings]
+max_current_a = 1.0          # 1 A output current, Features p.1
+max_voltage_v = 15.0         # Input Voltage, Absolute Maximum Ratings p.2
+max_junction_temp_c = 125.0  # TJ, control section and power transistor, p.2
+theta_ja_c_per_w = 160.0      # SO-8, Absolute Maximum Ratings p.2
+theta_jc_c_per_w = 15.0      # all packages, p.3
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.0
+max_v = 15.0
+abs_max_v = 15.0
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Input Voltage 15 V; no minimum operating input is printed (the dropout row needs VIN - VOUT up to 1.3 V)"
+
+[[models]]
+id = "ams1117_1v8"
+kind = "vreg"
+description = "AMS1117 1A LDO, 1.8V fixed, SOT-223 / TO-252 (bare and CD codes) (Advanced Monolithic Systems; the TI LM1117 has its own cards)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = ""
+title = "Advanced Monolithic Systems AMS1117 1A Low Dropout Voltage Regulator (ds1117.pdf as supplied in the batch datasheet folder; no revision or date is printed on the sheet)"
+locator = "Ordering Information and Pin Connections p.1; Absolute Maximum Ratings and Electrical Characteristics pp.2-3; Application Hints, Stability p.4"
+sha256 = "189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 1.746
+high = 1.854
+unit = "V"
+kind = "specification-limits"
+basis = "AMS1117-1.8 Electrical Characteristics p.2, output voltage 1.746 V min to 1.854 V max over the full operating temperature range (1.773 to 1.827 V at 25 C)"
+[[models.source.pinout]]
+package = "SOT-223 and TO-252, 3 pins"
+pins = { "1" = "Ground/Adjust", "2" = "VOUT", "3" = "VIN" }
+[[models.source.characteristic]]
+parameter = "VOUT output voltage, AMS1117-1.8"
+min = 1.773
+typ = 1.8
+max = 1.827
+unit = "V"
+conditions = "VIN = 3.3 V, IOUT = 0 mA, TJ = +25 °C"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VOUT output voltage over the full temperature range, AMS1117-1.8"
+min = 1.746
+typ = 1.8
+max = 1.854
+unit = "V"
+conditions = "VIN = 3.3 V, IOUT = 0 mA; the second printed row of the pair (boldface in the printed table, which applies over the full operating temperature range)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row (second line), min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VDO dropout voltage (VIN - VOUT)"
+typ = 1.1
+max = 1.3
+unit = "V"
+conditions = "dVOUT = dVREF = 1%, IOUT = 0.8 A (specified up to 0.8 A, higher for larger currents)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Dropout Voltage row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "IQ quiescent current"
+typ = 5
+max = 11
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Quiescent Current row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "Current limit"
+min = 900
+typ = 1100
+max = 1500
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Current Limit row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 90.0
+unit = "°C/W"
+conditions = "SOT-223 package; footnote: with the tab soldered to backside or internal-plane copper ϕJA can vary from 46 to >90 °C/W"
+package = "SOT-223"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Thermal Resistance, SOT-223 package ϕJA = 90 °C/W*"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 80.0
+unit = "°C/W"
+conditions = "TO-252 package"
+package = "TO-252"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Thermal Resistance, TO-252 package ϕJA = 80 °C/W"
+[[models.source.characteristic]]
+parameter = "Junction-to-case thermal resistance"
+max = 15
+unit = "°C/W"
+conditions = "All packages"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Thermal Resistance Junction-to-Case row, max column"
+
+[models.match]
+value_re = '(?i)^AMS1117(?:CD)?[-_]?1[._]?8$'
+
+[models.params]
+vout      = 1.8   # 1.746 / 1.8 / 1.854 V min / typ / max, VIN = 3.3 V, IOUT = 0 mA, TJ = 25 C, p.2
+dropout_v = 1.3     # VIN - VOUT max @ IOUT = 0.8 A, p.3 (1.1 V typ)
+# RECOMMENDATION, not a minimum. AMS1117 p.4 Stability: "The addition of 22µF solid tantalum on the output will ensure stability for all operating conditions."; no ESR window is tabulated.
+cout_recommended_f = 22.0e-6
+cout_recommended_type = "solid tantalum"
+iq_a      = 5.0e-3  # IQ typ @ VIN - VOUT = 1.5 V, p.3 (11 mA max)
+
+[models.pins]
+# AMS1117 PIN CONNECTIONS, 3 PIN FIXED/ADJUSTABLE VERSION (p.1): 1 Ground/Adjust, 2 VOUT, 3 VIN.
+# The TO-252 tab is the output (p.1); the SOT-223 tab is not described, so no fourth pad is mapped.
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 1.0          # 1 A output current, Features p.1
+max_voltage_v = 15.0         # Input Voltage, Absolute Maximum Ratings p.2
+max_junction_temp_c = 125.0  # TJ, control section and power transistor, p.2
+theta_ja_c_per_w = 90.0      # SOT-223 (80 for TO-252), Absolute Maximum Ratings p.2
+theta_jc_c_per_w = 15.0      # all packages, p.3
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.0
+max_v = 15.0
+abs_max_v = 15.0
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Input Voltage 15 V; no minimum operating input is printed (the dropout row needs VIN - VOUT up to 1.3 V)"
+
+[[models]]
+id = "ams1117cs_1v8"
+kind = "vreg"
+description = "AMS1117 1A LDO, 1.8V fixed, SO-8 (CS) (Advanced Monolithic Systems; the TI LM1117 has its own cards)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = ""
+title = "Advanced Monolithic Systems AMS1117 1A Low Dropout Voltage Regulator (ds1117.pdf as supplied in the batch datasheet folder; no revision or date is printed on the sheet)"
+locator = "Ordering Information and Pin Connections p.1; Absolute Maximum Ratings and Electrical Characteristics pp.2-3; Application Hints, Stability p.4"
+sha256 = "189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 1.746
+high = 1.854
+unit = "V"
+kind = "specification-limits"
+basis = "AMS1117-1.8 Electrical Characteristics p.2, output voltage 1.746 V min to 1.854 V max over the full operating temperature range (1.773 to 1.827 V at 25 C)"
+[[models.source.pinout]]
+package = "SO-8, 8 pins"
+pins = { "1" = "GND/ADJ", "2" = "VOUT", "3" = "VOUT", "4" = "VIN", "5" = "N/C", "6" = "VOUT", "7" = "VOUT", "8" = "N/C" }
+[[models.source.characteristic]]
+parameter = "VOUT output voltage, AMS1117-1.8"
+min = 1.773
+typ = 1.8
+max = 1.827
+unit = "V"
+conditions = "VIN = 3.3 V, IOUT = 0 mA, TJ = +25 °C"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VOUT output voltage over the full temperature range, AMS1117-1.8"
+min = 1.746
+typ = 1.8
+max = 1.854
+unit = "V"
+conditions = "VIN = 3.3 V, IOUT = 0 mA; the second printed row of the pair (boldface in the printed table, which applies over the full operating temperature range)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row (second line), min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VDO dropout voltage (VIN - VOUT)"
+typ = 1.1
+max = 1.3
+unit = "V"
+conditions = "dVOUT = dVREF = 1%, IOUT = 0.8 A (specified up to 0.8 A, higher for larger currents)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Dropout Voltage row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "IQ quiescent current"
+typ = 5
+max = 11
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Quiescent Current row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "Current limit"
+min = 900
+typ = 1100
+max = 1500
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Current Limit row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 160.0
+unit = "°C/W"
+conditions = "SO-8 package"
+package = "SOIC-8"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Thermal Resistance, SO-8 package ϕJA = 160 °C/W"
+[[models.source.characteristic]]
+parameter = "Junction-to-case thermal resistance"
+max = 15
+unit = "°C/W"
+conditions = "All packages"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Thermal Resistance Junction-to-Case row, max column"
+
+[models.match]
+value_re = '(?i)^AMS1117CS[-_]?1[._]?8$'
+
+[models.params]
+vout      = 1.8   # 1.746 / 1.8 / 1.854 V min / typ / max, VIN = 3.3 V, IOUT = 0 mA, TJ = 25 C, p.2
+dropout_v = 1.3     # VIN - VOUT max @ IOUT = 0.8 A, p.3 (1.1 V typ)
+# RECOMMENDATION, not a minimum. AMS1117 p.4 Stability: "The addition of 22µF solid tantalum on the output will ensure stability for all operating conditions."; no ESR window is tabulated.
+cout_recommended_f = 22.0e-6
+cout_recommended_type = "solid tantalum"
+iq_a      = 5.0e-3  # IQ typ @ VIN - VOUT = 1.5 V, p.3 (11 mA max)
+
+[models.pins]
+# AMS1117 8L SOIC Top View (p.1): 1 GND/ADJ, 2 VOUT, 3 VOUT, 4 VIN, 5 N/C, 6 VOUT, 7 VOUT, 8 N/C.
+"1" = "gnd"
+"2" = "out"
+"3" = "out"
+"4" = "in"
+"5" = "nc"
+"6" = "out"
+"7" = "out"
+"8" = "nc"
+
+[models.ratings]
+max_current_a = 1.0          # 1 A output current, Features p.1
+max_voltage_v = 15.0         # Input Voltage, Absolute Maximum Ratings p.2
+max_junction_temp_c = 125.0  # TJ, control section and power transistor, p.2
+theta_ja_c_per_w = 160.0      # SO-8, Absolute Maximum Ratings p.2
+theta_jc_c_per_w = 15.0      # all packages, p.3
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.0
+max_v = 15.0
+abs_max_v = 15.0
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Input Voltage 15 V; no minimum operating input is printed (the dropout row needs VIN - VOUT up to 1.3 V)"
+
+[[models]]
+id = "ams1117_2v5"
+kind = "vreg"
+description = "AMS1117 1A LDO, 2.5V fixed, SOT-223 / TO-252 (bare and CD codes) (Advanced Monolithic Systems; the TI LM1117 has its own cards)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = ""
+title = "Advanced Monolithic Systems AMS1117 1A Low Dropout Voltage Regulator (ds1117.pdf as supplied in the batch datasheet folder; no revision or date is printed on the sheet)"
+locator = "Ordering Information and Pin Connections p.1; Absolute Maximum Ratings and Electrical Characteristics pp.2-3; Application Hints, Stability p.4"
+sha256 = "189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 2.425
+high = 2.575
+unit = "V"
+kind = "specification-limits"
+basis = "AMS1117-2.5 Electrical Characteristics p.2, output voltage 2.425 V min to 2.575 V max over the full operating temperature range (2.463 to 2.537 V at 25 C)"
+[[models.source.pinout]]
+package = "SOT-223 and TO-252, 3 pins"
+pins = { "1" = "Ground/Adjust", "2" = "VOUT", "3" = "VIN" }
+[[models.source.characteristic]]
+parameter = "VOUT output voltage, AMS1117-2.5"
+min = 2.463
+typ = 2.5
+max = 2.537
+unit = "V"
+conditions = "VIN = 4 V, IOUT = 0 mA, TJ = +25 °C"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VOUT output voltage over the full temperature range, AMS1117-2.5"
+min = 2.425
+typ = 2.5
+max = 2.575
+unit = "V"
+conditions = "VIN = 4 V, IOUT = 0 mA; the second printed row of the pair (boldface in the printed table, which applies over the full operating temperature range)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row (second line), min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VDO dropout voltage (VIN - VOUT)"
+typ = 1.1
+max = 1.3
+unit = "V"
+conditions = "dVOUT = dVREF = 1%, IOUT = 0.8 A (specified up to 0.8 A, higher for larger currents)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Dropout Voltage row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "IQ quiescent current"
+typ = 5
+max = 11
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Quiescent Current row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "Current limit"
+min = 900
+typ = 1100
+max = 1500
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Current Limit row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 90.0
+unit = "°C/W"
+conditions = "SOT-223 package; footnote: with the tab soldered to backside or internal-plane copper ϕJA can vary from 46 to >90 °C/W"
+package = "SOT-223"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Thermal Resistance, SOT-223 package ϕJA = 90 °C/W*"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 80.0
+unit = "°C/W"
+conditions = "TO-252 package"
+package = "TO-252"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Thermal Resistance, TO-252 package ϕJA = 80 °C/W"
+[[models.source.characteristic]]
+parameter = "Junction-to-case thermal resistance"
+max = 15
+unit = "°C/W"
+conditions = "All packages"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Thermal Resistance Junction-to-Case row, max column"
+
+[models.match]
+value_re = '(?i)^AMS1117(?:CD)?[-_]?2[._]?5$'
+
+[models.params]
+vout      = 2.5   # 2.425 / 2.5 / 2.575 V min / typ / max, VIN = 4 V, IOUT = 0 mA, TJ = 25 C, p.2
+dropout_v = 1.3     # VIN - VOUT max @ IOUT = 0.8 A, p.3 (1.1 V typ)
+# RECOMMENDATION, not a minimum. AMS1117 p.4 Stability: "The addition of 22µF solid tantalum on the output will ensure stability for all operating conditions."; no ESR window is tabulated.
+cout_recommended_f = 22.0e-6
+cout_recommended_type = "solid tantalum"
+iq_a      = 5.0e-3  # IQ typ @ VIN - VOUT = 1.5 V, p.3 (11 mA max)
+
+[models.pins]
+# AMS1117 PIN CONNECTIONS, 3 PIN FIXED/ADJUSTABLE VERSION (p.1): 1 Ground/Adjust, 2 VOUT, 3 VIN.
+# The TO-252 tab is the output (p.1); the SOT-223 tab is not described, so no fourth pad is mapped.
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 1.0          # 1 A output current, Features p.1
+max_voltage_v = 15.0         # Input Voltage, Absolute Maximum Ratings p.2
+max_junction_temp_c = 125.0  # TJ, control section and power transistor, p.2
+theta_ja_c_per_w = 90.0      # SOT-223 (80 for TO-252), Absolute Maximum Ratings p.2
+theta_jc_c_per_w = 15.0      # all packages, p.3
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.0
+max_v = 15.0
+abs_max_v = 15.0
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Input Voltage 15 V; no minimum operating input is printed (the dropout row needs VIN - VOUT up to 1.3 V)"
+
+[[models]]
+id = "ams1117cs_2v5"
+kind = "vreg"
+description = "AMS1117 1A LDO, 2.5V fixed, SO-8 (CS) (Advanced Monolithic Systems; the TI LM1117 has its own cards)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = ""
+title = "Advanced Monolithic Systems AMS1117 1A Low Dropout Voltage Regulator (ds1117.pdf as supplied in the batch datasheet folder; no revision or date is printed on the sheet)"
+locator = "Ordering Information and Pin Connections p.1; Absolute Maximum Ratings and Electrical Characteristics pp.2-3; Application Hints, Stability p.4"
+sha256 = "189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 2.425
+high = 2.575
+unit = "V"
+kind = "specification-limits"
+basis = "AMS1117-2.5 Electrical Characteristics p.2, output voltage 2.425 V min to 2.575 V max over the full operating temperature range (2.463 to 2.537 V at 25 C)"
+[[models.source.pinout]]
+package = "SO-8, 8 pins"
+pins = { "1" = "GND/ADJ", "2" = "VOUT", "3" = "VOUT", "4" = "VIN", "5" = "N/C", "6" = "VOUT", "7" = "VOUT", "8" = "N/C" }
+[[models.source.characteristic]]
+parameter = "VOUT output voltage, AMS1117-2.5"
+min = 2.463
+typ = 2.5
+max = 2.537
+unit = "V"
+conditions = "VIN = 4 V, IOUT = 0 mA, TJ = +25 °C"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VOUT output voltage over the full temperature range, AMS1117-2.5"
+min = 2.425
+typ = 2.5
+max = 2.575
+unit = "V"
+conditions = "VIN = 4 V, IOUT = 0 mA; the second printed row of the pair (boldface in the printed table, which applies over the full operating temperature range)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row (second line), min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VDO dropout voltage (VIN - VOUT)"
+typ = 1.1
+max = 1.3
+unit = "V"
+conditions = "dVOUT = dVREF = 1%, IOUT = 0.8 A (specified up to 0.8 A, higher for larger currents)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Dropout Voltage row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "IQ quiescent current"
+typ = 5
+max = 11
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Quiescent Current row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "Current limit"
+min = 900
+typ = 1100
+max = 1500
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Current Limit row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 160.0
+unit = "°C/W"
+conditions = "SO-8 package"
+package = "SOIC-8"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Thermal Resistance, SO-8 package ϕJA = 160 °C/W"
+[[models.source.characteristic]]
+parameter = "Junction-to-case thermal resistance"
+max = 15
+unit = "°C/W"
+conditions = "All packages"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Thermal Resistance Junction-to-Case row, max column"
+
+[models.match]
+value_re = '(?i)^AMS1117CS[-_]?2[._]?5$'
+
+[models.params]
+vout      = 2.5   # 2.425 / 2.5 / 2.575 V min / typ / max, VIN = 4 V, IOUT = 0 mA, TJ = 25 C, p.2
+dropout_v = 1.3     # VIN - VOUT max @ IOUT = 0.8 A, p.3 (1.1 V typ)
+# RECOMMENDATION, not a minimum. AMS1117 p.4 Stability: "The addition of 22µF solid tantalum on the output will ensure stability for all operating conditions."; no ESR window is tabulated.
+cout_recommended_f = 22.0e-6
+cout_recommended_type = "solid tantalum"
+iq_a      = 5.0e-3  # IQ typ @ VIN - VOUT = 1.5 V, p.3 (11 mA max)
+
+[models.pins]
+# AMS1117 8L SOIC Top View (p.1): 1 GND/ADJ, 2 VOUT, 3 VOUT, 4 VIN, 5 N/C, 6 VOUT, 7 VOUT, 8 N/C.
+"1" = "gnd"
+"2" = "out"
+"3" = "out"
+"4" = "in"
+"5" = "nc"
+"6" = "out"
+"7" = "out"
+"8" = "nc"
+
+[models.ratings]
+max_current_a = 1.0          # 1 A output current, Features p.1
+max_voltage_v = 15.0         # Input Voltage, Absolute Maximum Ratings p.2
+max_junction_temp_c = 125.0  # TJ, control section and power transistor, p.2
+theta_ja_c_per_w = 160.0      # SO-8, Absolute Maximum Ratings p.2
+theta_jc_c_per_w = 15.0      # all packages, p.3
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.0
+max_v = 15.0
+abs_max_v = 15.0
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Input Voltage 15 V; no minimum operating input is printed (the dropout row needs VIN - VOUT up to 1.3 V)"
+
+[[models]]
+id = "ams1117_2v85"
+kind = "vreg"
+description = "AMS1117 1A LDO, 2.85V fixed, SOT-223 / TO-252 (bare and CD codes) (Advanced Monolithic Systems; the TI LM1117 has its own cards)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = ""
+title = "Advanced Monolithic Systems AMS1117 1A Low Dropout Voltage Regulator (ds1117.pdf as supplied in the batch datasheet folder; no revision or date is printed on the sheet)"
+locator = "Ordering Information and Pin Connections p.1; Absolute Maximum Ratings and Electrical Characteristics pp.2-3; Application Hints, Stability p.4"
+sha256 = "189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 2.7645
+high = 2.9355
+unit = "V"
+kind = "specification-limits"
+basis = "AMS1117-2.85 Electrical Characteristics p.2, output voltage 2.7645 V min to 2.9355 V max over the full operating temperature range (2.808 to 2.892 V at 25 C)"
+[[models.source.pinout]]
+package = "SOT-223 and TO-252, 3 pins"
+pins = { "1" = "Ground/Adjust", "2" = "VOUT", "3" = "VIN" }
+[[models.source.characteristic]]
+parameter = "VOUT output voltage, AMS1117-2.85"
+min = 2.808
+typ = 2.85
+max = 2.892
+unit = "V"
+conditions = "VIN = 4.35 V, IOUT = 0 mA, TJ = +25 °C"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VOUT output voltage over the full temperature range, AMS1117-2.85"
+min = 2.7645
+typ = 2.85
+max = 2.9355
+unit = "V"
+conditions = "VIN = 4.35 V, IOUT = 0 mA; the second printed row of the pair (boldface in the printed table, which applies over the full operating temperature range)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row (second line), min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VDO dropout voltage (VIN - VOUT)"
+typ = 1.1
+max = 1.3
+unit = "V"
+conditions = "dVOUT = dVREF = 1%, IOUT = 0.8 A (specified up to 0.8 A, higher for larger currents)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Dropout Voltage row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "IQ quiescent current"
+typ = 5
+max = 11
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Quiescent Current row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "Current limit"
+min = 900
+typ = 1100
+max = 1500
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Current Limit row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 90.0
+unit = "°C/W"
+conditions = "SOT-223 package; footnote: with the tab soldered to backside or internal-plane copper ϕJA can vary from 46 to >90 °C/W"
+package = "SOT-223"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Thermal Resistance, SOT-223 package ϕJA = 90 °C/W*"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 80.0
+unit = "°C/W"
+conditions = "TO-252 package"
+package = "TO-252"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Thermal Resistance, TO-252 package ϕJA = 80 °C/W"
+[[models.source.characteristic]]
+parameter = "Junction-to-case thermal resistance"
+max = 15
+unit = "°C/W"
+conditions = "All packages"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Thermal Resistance Junction-to-Case row, max column"
+
+[models.match]
+value_re = '(?i)^AMS1117(?:CD)?[-_]?2[._]?85$'
+
+[models.params]
+vout      = 2.85   # 2.7645 / 2.85 / 2.9355 V min / typ / max, VIN = 4.35 V, IOUT = 0 mA, TJ = 25 C, p.2
+dropout_v = 1.3     # VIN - VOUT max @ IOUT = 0.8 A, p.3 (1.1 V typ)
+# RECOMMENDATION, not a minimum. AMS1117 p.4 Stability: "The addition of 22µF solid tantalum on the output will ensure stability for all operating conditions."; no ESR window is tabulated.
+cout_recommended_f = 22.0e-6
+cout_recommended_type = "solid tantalum"
+iq_a      = 5.0e-3  # IQ typ @ VIN - VOUT = 1.5 V, p.3 (11 mA max)
+
+[models.pins]
+# AMS1117 PIN CONNECTIONS, 3 PIN FIXED/ADJUSTABLE VERSION (p.1): 1 Ground/Adjust, 2 VOUT, 3 VIN.
+# The TO-252 tab is the output (p.1); the SOT-223 tab is not described, so no fourth pad is mapped.
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 1.0          # 1 A output current, Features p.1
+max_voltage_v = 15.0         # Input Voltage, Absolute Maximum Ratings p.2
+max_junction_temp_c = 125.0  # TJ, control section and power transistor, p.2
+theta_ja_c_per_w = 90.0      # SOT-223 (80 for TO-252), Absolute Maximum Ratings p.2
+theta_jc_c_per_w = 15.0      # all packages, p.3
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.0
+max_v = 15.0
+abs_max_v = 15.0
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Input Voltage 15 V; no minimum operating input is printed (the dropout row needs VIN - VOUT up to 1.3 V)"
+
+[[models]]
+id = "ams1117cs_2v85"
+kind = "vreg"
+description = "AMS1117 1A LDO, 2.85V fixed, SO-8 (CS) (Advanced Monolithic Systems; the TI LM1117 has its own cards)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = ""
+title = "Advanced Monolithic Systems AMS1117 1A Low Dropout Voltage Regulator (ds1117.pdf as supplied in the batch datasheet folder; no revision or date is printed on the sheet)"
+locator = "Ordering Information and Pin Connections p.1; Absolute Maximum Ratings and Electrical Characteristics pp.2-3; Application Hints, Stability p.4"
+sha256 = "189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 2.7645
+high = 2.9355
+unit = "V"
+kind = "specification-limits"
+basis = "AMS1117-2.85 Electrical Characteristics p.2, output voltage 2.7645 V min to 2.9355 V max over the full operating temperature range (2.808 to 2.892 V at 25 C)"
+[[models.source.pinout]]
+package = "SO-8, 8 pins"
+pins = { "1" = "GND/ADJ", "2" = "VOUT", "3" = "VOUT", "4" = "VIN", "5" = "N/C", "6" = "VOUT", "7" = "VOUT", "8" = "N/C" }
+[[models.source.characteristic]]
+parameter = "VOUT output voltage, AMS1117-2.85"
+min = 2.808
+typ = 2.85
+max = 2.892
+unit = "V"
+conditions = "VIN = 4.35 V, IOUT = 0 mA, TJ = +25 °C"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VOUT output voltage over the full temperature range, AMS1117-2.85"
+min = 2.7645
+typ = 2.85
+max = 2.9355
+unit = "V"
+conditions = "VIN = 4.35 V, IOUT = 0 mA; the second printed row of the pair (boldface in the printed table, which applies over the full operating temperature range)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row (second line), min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VDO dropout voltage (VIN - VOUT)"
+typ = 1.1
+max = 1.3
+unit = "V"
+conditions = "dVOUT = dVREF = 1%, IOUT = 0.8 A (specified up to 0.8 A, higher for larger currents)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Dropout Voltage row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "IQ quiescent current"
+typ = 5
+max = 11
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Quiescent Current row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "Current limit"
+min = 900
+typ = 1100
+max = 1500
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Current Limit row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 160.0
+unit = "°C/W"
+conditions = "SO-8 package"
+package = "SOIC-8"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Thermal Resistance, SO-8 package ϕJA = 160 °C/W"
+[[models.source.characteristic]]
+parameter = "Junction-to-case thermal resistance"
+max = 15
+unit = "°C/W"
+conditions = "All packages"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Thermal Resistance Junction-to-Case row, max column"
+
+[models.match]
+value_re = '(?i)^AMS1117CS[-_]?2[._]?85$'
+
+[models.params]
+vout      = 2.85   # 2.7645 / 2.85 / 2.9355 V min / typ / max, VIN = 4.35 V, IOUT = 0 mA, TJ = 25 C, p.2
+dropout_v = 1.3     # VIN - VOUT max @ IOUT = 0.8 A, p.3 (1.1 V typ)
+# RECOMMENDATION, not a minimum. AMS1117 p.4 Stability: "The addition of 22µF solid tantalum on the output will ensure stability for all operating conditions."; no ESR window is tabulated.
+cout_recommended_f = 22.0e-6
+cout_recommended_type = "solid tantalum"
+iq_a      = 5.0e-3  # IQ typ @ VIN - VOUT = 1.5 V, p.3 (11 mA max)
+
+[models.pins]
+# AMS1117 8L SOIC Top View (p.1): 1 GND/ADJ, 2 VOUT, 3 VOUT, 4 VIN, 5 N/C, 6 VOUT, 7 VOUT, 8 N/C.
+"1" = "gnd"
+"2" = "out"
+"3" = "out"
+"4" = "in"
+"5" = "nc"
+"6" = "out"
+"7" = "out"
+"8" = "nc"
+
+[models.ratings]
+max_current_a = 1.0          # 1 A output current, Features p.1
+max_voltage_v = 15.0         # Input Voltage, Absolute Maximum Ratings p.2
+max_junction_temp_c = 125.0  # TJ, control section and power transistor, p.2
+theta_ja_c_per_w = 160.0      # SO-8, Absolute Maximum Ratings p.2
+theta_jc_c_per_w = 15.0      # all packages, p.3
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.0
+max_v = 15.0
+abs_max_v = 15.0
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Input Voltage 15 V; no minimum operating input is printed (the dropout row needs VIN - VOUT up to 1.3 V)"
+
+[[models]]
+id = "ams1117_adj"
+kind = "vreg"
+description = "AMS1117 1A LDO, adjustable (1.25V reference), SOT-223 / TO-252 (bare and CD codes) (Advanced Monolithic Systems; the TI LM1117 has its own cards)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = ""
+title = "Advanced Monolithic Systems AMS1117 1A Low Dropout Voltage Regulator (ds1117.pdf as supplied in the batch datasheet folder; no revision or date is printed on the sheet)"
+locator = "Ordering Information and Pin Connections p.1; Absolute Maximum Ratings and Electrical Characteristics pp.2-3; Application Hints, Stability p.4"
+sha256 = "189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0"
+[[models.source.pinout]]
+package = "SOT-223 and TO-252, 3 pins"
+pins = { "1" = "Ground/Adjust", "2" = "VOUT", "3" = "VIN" }
+[[models.source.characteristic]]
+parameter = "VREF reference voltage"
+min = 1.232
+typ = 1.25
+max = 1.268
+unit = "V"
+conditions = "IOUT = 10 mA, TJ = +25 °C"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Reference Voltage row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VREF reference voltage over the full temperature range"
+min = 1.2125
+typ = 1.25
+max = 1.2875
+unit = "V"
+conditions = "IOUT = 10 mA, 1.5 V <= VIN - VOUT <= 12 V; the second printed row (boldface in the printed table, full operating temperature range)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Reference Voltage row (second line), min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "Minimum load current to maintain regulation"
+typ = 5
+max = 10
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Minimum Load Current row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "Adjust pin current IADJ"
+typ = 55
+max = 120
+unit = "uA"
+conditions = "IOUT = 10 mA, 1.5 V <= VIN - VOUT <= 12 V (typ at TJ = +25 °C; the max is the second printed line)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Adjust Pin Current row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "VDO dropout voltage (VIN - VOUT)"
+typ = 1.1
+max = 1.3
+unit = "V"
+conditions = "dVOUT = dVREF = 1%, IOUT = 0.8 A, the dropout row printed for the fixed versions"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Dropout Voltage row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "Current limit"
+min = 900
+typ = 1100
+max = 1500
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Current Limit row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 90.0
+unit = "°C/W"
+conditions = "SOT-223 package; footnote: with the tab soldered to backside or internal-plane copper ϕJA can vary from 46 to >90 °C/W"
+package = "SOT-223"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Thermal Resistance, SOT-223 package ϕJA = 90 °C/W*"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 80.0
+unit = "°C/W"
+conditions = "TO-252 package"
+package = "TO-252"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Thermal Resistance, TO-252 package ϕJA = 80 °C/W"
+[[models.source.characteristic]]
+parameter = "Junction-to-case thermal resistance"
+max = 15
+unit = "°C/W"
+conditions = "All packages"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Thermal Resistance Junction-to-Case row, max column"
+
+[models.match]
+value_re = '(?i)^AMS1117(?:CD)?(?:[-_]?ADJ)?$'
+
+[models.params]
+warning = "the bare AMS1117 part number is read as the ADJUSTABLE version: the rail is the board divider against a 1.25 V reference; if this board part is a fixed-voltage AMS1117 with its voltage omitted from the value, put the full part number (AMS1117-3.3) in the value"
+vref      = 1.25     # VREF typ, p.2 (1.232 min / 1.268 max at 25 C): a feedback reference, never an output voltage
+iadj_a    = 55.0e-6  # Adjust Pin Current typ (120 uA max), p.3
+dropout_v = 1.3      # VIN - VOUT max @ IOUT = 0.8 A, p.3 (1.1 V typ)
+# RECOMMENDATION, not a minimum. AMS1117 p.4 Stability: "The addition of 22µF solid tantalum on the output will ensure stability for all operating conditions."; no ESR window is tabulated.
+cout_recommended_f = 22.0e-6
+cout_recommended_type = "solid tantalum"
+
+[models.pins]
+# AMS1117 PIN CONNECTIONS, 3 PIN FIXED/ADJUSTABLE VERSION (p.1): 1 Ground/Adjust, 2 VOUT, 3 VIN.
+# The TO-252 tab is the output (p.1); the SOT-223 tab is not described, so no fourth pad is mapped.
+# Pin 1 is ADJ on this card (mapped fb: the board divider sets the rail).
+"1" = "fb"
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 1.0          # 1 A output current, Features p.1
+max_voltage_v = 15.0         # Input Voltage, Absolute Maximum Ratings p.2
+max_junction_temp_c = 125.0  # TJ, control section and power transistor, p.2
+theta_ja_c_per_w = 90.0      # SOT-223 (80 for TO-252), Absolute Maximum Ratings p.2
+theta_jc_c_per_w = 15.0      # all packages, p.3
+min_current_a = 0.01          # minimum load current to maintain regulation, 10 mA max, p.3 (5 mA typ)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.0
+max_v = 15.0
+abs_max_v = 15.0
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Input Voltage 15 V; no minimum operating input is printed (the dropout row needs VIN - VOUT up to 1.3 V)"
+
+[[models]]
+id = "ams1117cs_adj"
+kind = "vreg"
+description = "AMS1117 1A LDO, adjustable (1.25V reference), SO-8 (CS) (Advanced Monolithic Systems; the TI LM1117 has its own cards)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = ""
+title = "Advanced Monolithic Systems AMS1117 1A Low Dropout Voltage Regulator (ds1117.pdf as supplied in the batch datasheet folder; no revision or date is printed on the sheet)"
+locator = "Ordering Information and Pin Connections p.1; Absolute Maximum Ratings and Electrical Characteristics pp.2-3; Application Hints, Stability p.4"
+sha256 = "189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0"
+[[models.source.pinout]]
+package = "SO-8, 8 pins"
+pins = { "1" = "GND/ADJ", "2" = "VOUT", "3" = "VOUT", "4" = "VIN", "5" = "N/C", "6" = "VOUT", "7" = "VOUT", "8" = "N/C" }
+[[models.source.characteristic]]
+parameter = "VREF reference voltage"
+min = 1.232
+typ = 1.25
+max = 1.268
+unit = "V"
+conditions = "IOUT = 10 mA, TJ = +25 °C"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Reference Voltage row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VREF reference voltage over the full temperature range"
+min = 1.2125
+typ = 1.25
+max = 1.2875
+unit = "V"
+conditions = "IOUT = 10 mA, 1.5 V <= VIN - VOUT <= 12 V; the second printed row (boldface in the printed table, full operating temperature range)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Reference Voltage row (second line), min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "Minimum load current to maintain regulation"
+typ = 5
+max = 10
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Minimum Load Current row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "Adjust pin current IADJ"
+typ = 55
+max = 120
+unit = "uA"
+conditions = "IOUT = 10 mA, 1.5 V <= VIN - VOUT <= 12 V (typ at TJ = +25 °C; the max is the second printed line)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Adjust Pin Current row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "VDO dropout voltage (VIN - VOUT)"
+typ = 1.1
+max = 1.3
+unit = "V"
+conditions = "dVOUT = dVREF = 1%, IOUT = 0.8 A, the dropout row printed for the fixed versions"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Dropout Voltage row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "Current limit"
+min = 900
+typ = 1100
+max = 1500
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Current Limit row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 160.0
+unit = "°C/W"
+conditions = "SO-8 package"
+package = "SOIC-8"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Thermal Resistance, SO-8 package ϕJA = 160 °C/W"
+[[models.source.characteristic]]
+parameter = "Junction-to-case thermal resistance"
+max = 15
+unit = "°C/W"
+conditions = "All packages"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Thermal Resistance Junction-to-Case row, max column"
+
+[models.match]
+value_re = '(?i)^AMS1117CS(?:[-_]?ADJ)?$'
+
+[models.params]
+warning = "the bare AMS1117 part number is read as the ADJUSTABLE version: the rail is the board divider against a 1.25 V reference; if this board part is a fixed-voltage AMS1117 with its voltage omitted from the value, put the full part number (AMS1117-3.3) in the value"
+vref      = 1.25     # VREF typ, p.2 (1.232 min / 1.268 max at 25 C): a feedback reference, never an output voltage
+iadj_a    = 55.0e-6  # Adjust Pin Current typ (120 uA max), p.3
+dropout_v = 1.3      # VIN - VOUT max @ IOUT = 0.8 A, p.3 (1.1 V typ)
+# RECOMMENDATION, not a minimum. AMS1117 p.4 Stability: "The addition of 22µF solid tantalum on the output will ensure stability for all operating conditions."; no ESR window is tabulated.
+cout_recommended_f = 22.0e-6
+cout_recommended_type = "solid tantalum"
+
+[models.pins]
+# AMS1117 8L SOIC Top View (p.1): 1 GND/ADJ, 2 VOUT, 3 VOUT, 4 VIN, 5 N/C, 6 VOUT, 7 VOUT, 8 N/C.
+# Pin 1 is ADJ on this card (mapped fb: the board divider sets the rail).
+"1" = "fb"
+"2" = "out"
+"3" = "out"
+"4" = "in"
+"5" = "nc"
+"6" = "out"
+"7" = "out"
+"8" = "nc"
+
+[models.ratings]
+max_current_a = 1.0          # 1 A output current, Features p.1
+max_voltage_v = 15.0         # Input Voltage, Absolute Maximum Ratings p.2
+max_junction_temp_c = 125.0  # TJ, control section and power transistor, p.2
+theta_ja_c_per_w = 160.0      # SO-8, Absolute Maximum Ratings p.2
+theta_jc_c_per_w = 15.0      # all packages, p.3
+min_current_a = 0.01          # minimum load current to maintain regulation, 10 mA max, p.3 (5 mA typ)
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.0
+max_v = 15.0
+abs_max_v = 15.0
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Input Voltage 15 V; no minimum operating input is printed (the dropout row needs VIN - VOUT up to 1.3 V)"
+
+[[models]]
+id = "ams1117cs_3v3"
+kind = "vreg"
+description = "AMS1117 1A LDO, 3.3V fixed, SO-8 (CS) (Advanced Monolithic Systems; the TI LM1117 has its own cards)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = ""
+title = "Advanced Monolithic Systems AMS1117 1A Low Dropout Voltage Regulator (ds1117.pdf as supplied in the batch datasheet folder; no revision or date is printed on the sheet)"
+locator = "Ordering Information and Pin Connections p.1; Absolute Maximum Ratings and Electrical Characteristics pp.2-3; Application Hints, Stability p.4"
+sha256 = "189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.201
+high = 3.399
+unit = "V"
+kind = "specification-limits"
+basis = "AMS1117-3.3 Electrical Characteristics p.2, output voltage 3.201 V min to 3.399 V max over the full operating temperature range (3.251 to 3.349 V at 25 C)"
+[[models.source.pinout]]
+package = "SO-8, 8 pins"
+pins = { "1" = "GND/ADJ", "2" = "VOUT", "3" = "VOUT", "4" = "VIN", "5" = "N/C", "6" = "VOUT", "7" = "VOUT", "8" = "N/C" }
+[[models.source.characteristic]]
+parameter = "VOUT output voltage, AMS1117-3.3"
+min = 3.251
+typ = 3.3
+max = 3.349
+unit = "V"
+conditions = "VIN = 4.8 V, IOUT = 0 mA, TJ = +25 °C"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VOUT output voltage over the full temperature range, AMS1117-3.3"
+min = 3.201
+typ = 3.3
+max = 3.399
+unit = "V"
+conditions = "VIN = 4.8 V, IOUT = 0 mA; the second printed row of the pair (boldface in the printed table, which applies over the full operating temperature range)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row (second line), min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VDO dropout voltage (VIN - VOUT)"
+typ = 1.1
+max = 1.3
+unit = "V"
+conditions = "dVOUT = dVREF = 1%, IOUT = 0.8 A (specified up to 0.8 A, higher for larger currents)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Dropout Voltage row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "IQ quiescent current"
+typ = 5
+max = 11
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Quiescent Current row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "Current limit"
+min = 900
+typ = 1100
+max = 1500
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Current Limit row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 160.0
+unit = "°C/W"
+conditions = "SO-8 package"
+package = "SOIC-8"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Thermal Resistance, SO-8 package ϕJA = 160 °C/W"
+[[models.source.characteristic]]
+parameter = "Junction-to-case thermal resistance"
+max = 15
+unit = "°C/W"
+conditions = "All packages"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Thermal Resistance Junction-to-Case row, max column"
+
+[models.match]
+value_re = '(?i)^AMS1117CS[-_]?3[._]?3$'
+
+[models.params]
+vout      = 3.3   # 3.201 / 3.3 / 3.399 V min / typ / max, VIN = 4.8 V, IOUT = 0 mA, TJ = 25 C, p.2
+dropout_v = 1.3     # VIN - VOUT max @ IOUT = 0.8 A, p.3 (1.1 V typ)
+# RECOMMENDATION, not a minimum. AMS1117 p.4 Stability: "The addition of 22µF solid tantalum on the output will ensure stability for all operating conditions."; no ESR window is tabulated.
+cout_recommended_f = 22.0e-6
+cout_recommended_type = "solid tantalum"
+iq_a      = 5.0e-3  # IQ typ @ VIN - VOUT = 1.5 V, p.3 (11 mA max)
+
+[models.pins]
+# AMS1117 8L SOIC Top View (p.1): 1 GND/ADJ, 2 VOUT, 3 VOUT, 4 VIN, 5 N/C, 6 VOUT, 7 VOUT, 8 N/C.
+"1" = "gnd"
+"2" = "out"
+"3" = "out"
+"4" = "in"
+"5" = "nc"
+"6" = "out"
+"7" = "out"
+"8" = "nc"
+
+[models.ratings]
+max_current_a = 1.0          # 1 A output current, Features p.1
+max_voltage_v = 15.0         # Input Voltage, Absolute Maximum Ratings p.2
+max_junction_temp_c = 125.0  # TJ, control section and power transistor, p.2
+theta_ja_c_per_w = 160.0      # SO-8, Absolute Maximum Ratings p.2
+theta_jc_c_per_w = 15.0      # all packages, p.3
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.0
+max_v = 15.0
+abs_max_v = 15.0
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Input Voltage 15 V; no minimum operating input is printed (the dropout row needs VIN - VOUT up to 1.3 V)"
+
+[[models]]
+id = "ams1117cs_5v0"
+kind = "vreg"
+description = "AMS1117 1A LDO, 5.0V fixed, SO-8 (CS) (Advanced Monolithic Systems; the TI LM1117 has its own cards)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = ""
+title = "Advanced Monolithic Systems AMS1117 1A Low Dropout Voltage Regulator (ds1117.pdf as supplied in the batch datasheet folder; no revision or date is printed on the sheet)"
+locator = "Ordering Information and Pin Connections p.1; Absolute Maximum Ratings and Electrical Characteristics pp.2-3; Application Hints, Stability p.4"
+sha256 = "189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 4.85
+high = 5.15
+unit = "V"
+kind = "specification-limits"
+basis = "AMS1117-5.0 Electrical Characteristics p.2, output voltage 4.85 V min to 5.15 V max over the full operating temperature range (4.925 to 5.075 V at 25 C)"
+[[models.source.pinout]]
+package = "SO-8, 8 pins"
+pins = { "1" = "GND/ADJ", "2" = "VOUT", "3" = "VOUT", "4" = "VIN", "5" = "N/C", "6" = "VOUT", "7" = "VOUT", "8" = "N/C" }
+[[models.source.characteristic]]
+parameter = "VOUT output voltage, AMS1117-5.0"
+min = 4.925
+typ = 5.0
+max = 5.075
+unit = "V"
+conditions = "VIN = 6.5 V, IOUT = 0 mA, TJ = +25 °C"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VOUT output voltage over the full temperature range, AMS1117-5.0"
+min = 4.85
+typ = 5.0
+max = 5.15
+unit = "V"
+conditions = "VIN = 6.5 V, IOUT = 0 mA; the second printed row of the pair (boldface in the printed table, which applies over the full operating temperature range)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row (second line), min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VDO dropout voltage (VIN - VOUT)"
+typ = 1.1
+max = 1.3
+unit = "V"
+conditions = "dVOUT = dVREF = 1%, IOUT = 0.8 A (specified up to 0.8 A, higher for larger currents)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Dropout Voltage row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "IQ quiescent current"
+typ = 5
+max = 11
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Quiescent Current row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "Current limit"
+min = 900
+typ = 1100
+max = 1500
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Current Limit row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 160.0
+unit = "°C/W"
+conditions = "SO-8 package"
+package = "SOIC-8"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Thermal Resistance, SO-8 package ϕJA = 160 °C/W"
+[[models.source.characteristic]]
+parameter = "Junction-to-case thermal resistance"
+max = 15
+unit = "°C/W"
+conditions = "All packages"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Thermal Resistance Junction-to-Case row, max column"
+
+[models.match]
+value_re = '(?i)^AMS1117CS[-_]?5[._]?0$'
+
+[models.params]
+vout      = 5.0   # 4.85 / 5.0 / 5.15 V min / typ / max, VIN = 6.5 V, IOUT = 0 mA, TJ = 25 C, p.2
+dropout_v = 1.3     # VIN - VOUT max @ IOUT = 0.8 A, p.3 (1.1 V typ)
+# RECOMMENDATION, not a minimum. AMS1117 p.4 Stability: "The addition of 22µF solid tantalum on the output will ensure stability for all operating conditions."; no ESR window is tabulated.
+cout_recommended_f = 22.0e-6
+cout_recommended_type = "solid tantalum"
+iq_a      = 5.0e-3  # IQ typ @ VIN - VOUT = 1.5 V, p.3 (11 mA max)
+
+[models.pins]
+# AMS1117 8L SOIC Top View (p.1): 1 GND/ADJ, 2 VOUT, 3 VOUT, 4 VIN, 5 N/C, 6 VOUT, 7 VOUT, 8 N/C.
+"1" = "gnd"
+"2" = "out"
+"3" = "out"
+"4" = "in"
+"5" = "nc"
+"6" = "out"
+"7" = "out"
+"8" = "nc"
+
+[models.ratings]
+max_current_a = 1.0          # 1 A output current, Features p.1
+max_voltage_v = 15.0         # Input Voltage, Absolute Maximum Ratings p.2
+max_junction_temp_c = 125.0  # TJ, control section and power transistor, p.2
+theta_ja_c_per_w = 160.0      # SO-8, Absolute Maximum Ratings p.2
+theta_jc_c_per_w = 15.0      # all packages, p.3
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.0
+max_v = 15.0
+abs_max_v = 15.0
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Input Voltage 15 V; no minimum operating input is printed (the dropout row needs VIN - VOUT up to 1.3 V)"
+
+[[models]]
+id = "ams1117cd_3v3"
+kind = "vreg"
+description = "AMS1117CD-3.3 1A LDO, 3.3V fixed, TO-252 / DPAK (Advanced Monolithic Systems; the bare AMS1117-3.3 code is ams1117_3v3)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = ""
+title = "Advanced Monolithic Systems AMS1117 1A Low Dropout Voltage Regulator (ds1117.pdf as supplied in the batch datasheet folder; no revision or date is printed on the sheet)"
+locator = "Ordering Information and Pin Connections p.1; Absolute Maximum Ratings and Electrical Characteristics pp.2-3; Application Hints, Stability p.4"
+sha256 = "189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.201
+high = 3.399
+unit = "V"
+kind = "specification-limits"
+basis = "AMS1117-3.3 Electrical Characteristics p.2, output voltage 3.201 V min to 3.399 V max over the full operating temperature range (3.251 to 3.349 V at 25 C)"
+[[models.source.pinout]]
+package = "TO-252, 3 pins"
+pins = { "1" = "Ground/Adjust", "2" = "VOUT", "3" = "VIN" }
+[[models.source.characteristic]]
+parameter = "VOUT output voltage, AMS1117-3.3"
+min = 3.251
+typ = 3.3
+max = 3.349
+unit = "V"
+conditions = "VIN = 4.8 V, IOUT = 0 mA, TJ = +25 °C"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VOUT output voltage over the full temperature range, AMS1117-3.3"
+min = 3.201
+typ = 3.3
+max = 3.399
+unit = "V"
+conditions = "VIN = 4.8 V, IOUT = 0 mA; the second printed row of the pair (boldface in the printed table, which applies over the full operating temperature range)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row (second line), min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VDO dropout voltage (VIN - VOUT)"
+typ = 1.1
+max = 1.3
+unit = "V"
+conditions = "dVOUT = dVREF = 1%, IOUT = 0.8 A (specified up to 0.8 A, higher for larger currents)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Dropout Voltage row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "IQ quiescent current"
+typ = 5
+max = 11
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Quiescent Current row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "Current limit"
+min = 900
+typ = 1100
+max = 1500
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Current Limit row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 80.0
+unit = "°C/W"
+conditions = "TO-252 package"
+package = "TO-252"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Thermal Resistance, TO-252 package ϕJA = 80 °C/W"
+
+[models.match]
+value_re = '(?i)^AMS1117CD[-_]?3[._]?3$'
+
+[models.params]
+vout      = 3.3   # VIN = 4.8 V, IOUT = 0 mA, TJ = 25 C, p.2
+dropout_v = 1.3     # VIN - VOUT max @ IOUT = 0.8 A, p.3 (1.1 V typ)
+# RECOMMENDATION, not a minimum. AMS1117 p.4 Stability: "The addition of 22µF solid tantalum on the output will ensure stability for all operating conditions."; no ESR window is tabulated.
+cout_recommended_f = 22.0e-6
+cout_recommended_type = "solid tantalum"
+iq_a      = 5.0e-3  # IQ typ @ VIN - VOUT = 1.5 V, p.3 (11 mA max)
+
+[models.pins]
+# AMS1117 PIN CONNECTIONS, 3 PIN FIXED/ADJUSTABLE VERSION (p.1): 1 Ground/Adjust, 2 VOUT, 3 VIN; TO-252 FRONT VIEW, tab is output.
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 1.0          # 1 A output current, Features p.1
+max_voltage_v = 15.0         # Input Voltage, Absolute Maximum Ratings p.2
+max_junction_temp_c = 125.0  # TJ, p.2
+theta_ja_c_per_w = 80.0      # TO-252, Absolute Maximum Ratings p.2
+theta_jc_c_per_w = 15.0      # all packages, p.3
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.0
+max_v = 15.0
+abs_max_v = 15.0
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Input Voltage 15 V; no minimum operating input is printed"
+
+[[models]]
+id = "ams1117cd_5v0"
+kind = "vreg"
+description = "AMS1117CD-5.0 1A LDO, 5.0V fixed, TO-252 / DPAK (Advanced Monolithic Systems; the bare AMS1117-5.0 code is ams1117_5v)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+
+[[models.source.references]]
+url = ""
+title = "Advanced Monolithic Systems AMS1117 1A Low Dropout Voltage Regulator (ds1117.pdf as supplied in the batch datasheet folder; no revision or date is printed on the sheet)"
+locator = "Ordering Information and Pin Connections p.1; Absolute Maximum Ratings and Electrical Characteristics pp.2-3; Application Hints, Stability p.4"
+sha256 = "189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 4.85
+high = 5.15
+unit = "V"
+kind = "specification-limits"
+basis = "AMS1117-5.0 Electrical Characteristics p.2, output voltage 4.85 V min to 5.15 V max over the full operating temperature range (4.925 to 5.075 V at 25 C)"
+[[models.source.pinout]]
+package = "TO-252, 3 pins"
+pins = { "1" = "Ground/Adjust", "2" = "VOUT", "3" = "VIN" }
+[[models.source.characteristic]]
+parameter = "VOUT output voltage, AMS1117-5.0"
+min = 4.925
+typ = 5.0
+max = 5.075
+unit = "V"
+conditions = "VIN = 6.5 V, IOUT = 0 mA, TJ = +25 °C"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VOUT output voltage over the full temperature range, AMS1117-5.0"
+min = 4.85
+typ = 5.0
+max = 5.15
+unit = "V"
+conditions = "VIN = 6.5 V, IOUT = 0 mA; the second printed row of the pair (boldface in the printed table, which applies over the full operating temperature range)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Electrical Characteristics, Output Voltage row (second line), min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "VDO dropout voltage (VIN - VOUT)"
+typ = 1.1
+max = 1.3
+unit = "V"
+conditions = "dVOUT = dVREF = 1%, IOUT = 0.8 A (specified up to 0.8 A, higher for larger currents)"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Dropout Voltage row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "IQ quiescent current"
+typ = 5
+max = 11
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Quiescent Current row, typ/max columns"
+[[models.source.characteristic]]
+parameter = "Current limit"
+min = 900
+typ = 1100
+max = 1500
+unit = "mA"
+conditions = "VIN - VOUT = 1.5 V"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.3, Electrical Characteristics, Current Limit row, min/typ/max columns"
+[[models.source.characteristic]]
+parameter = "RθJA junction-to-ambient thermal resistance"
+rating = "theta_ja_c_per_w"
+max = 80.0
+unit = "°C/W"
+conditions = "TO-252 package"
+package = "TO-252"
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Thermal Resistance, TO-252 package ϕJA = 80 °C/W"
+
+[models.match]
+value_re = '(?i)^AMS1117CD[-_]?5[._]?0$'
+
+[models.params]
+vout      = 5.0   # VIN = 6.5 V, IOUT = 0 mA, TJ = 25 C, p.2
+dropout_v = 1.3     # VIN - VOUT max @ IOUT = 0.8 A, p.3 (1.1 V typ)
+# RECOMMENDATION, not a minimum. AMS1117 p.4 Stability: "The addition of 22µF solid tantalum on the output will ensure stability for all operating conditions."; no ESR window is tabulated.
+cout_recommended_f = 22.0e-6
+cout_recommended_type = "solid tantalum"
+iq_a      = 5.0e-3  # IQ typ @ VIN - VOUT = 1.5 V, p.3 (11 mA max)
+
+[models.pins]
+# AMS1117 PIN CONNECTIONS, 3 PIN FIXED/ADJUSTABLE VERSION (p.1): 1 Ground/Adjust, 2 VOUT, 3 VIN; TO-252 FRONT VIEW, tab is output.
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 1.0          # 1 A output current, Features p.1
+max_voltage_v = 15.0         # Input Voltage, Absolute Maximum Ratings p.2
+max_junction_temp_c = 125.0  # TJ, p.2
+theta_ja_c_per_w = 80.0      # TO-252, Absolute Maximum Ratings p.2
+theta_jc_c_per_w = 15.0      # all packages, p.3
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 0.0
+max_v = 15.0
+abs_max_v = 15.0
+basis = "AMS1117 datasheet (ds1117.pdf, no revision or date printed) p.2, Absolute Maximum Ratings, Input Voltage 15 V; no minimum operating input is printed"
