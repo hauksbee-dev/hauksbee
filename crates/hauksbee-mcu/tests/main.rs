@@ -22,6 +22,8 @@ mod avr_uart_flow;
 mod avr_watchdog;
 #[path = "child_reaping.rs"]
 mod child_reaping;
+#[path = "clock_ready_parts.rs"]
+mod clock_ready_parts;
 #[path = "clock_truth.rs"]
 mod clock_truth;
 #[path = "demo_firmware.rs"]

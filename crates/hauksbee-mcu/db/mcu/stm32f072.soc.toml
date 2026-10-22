@@ -56,12 +56,14 @@
 #       the firmware's poll loop; it answers them.
 #   ADC inputs 0..7        PROVEN END-TO-END on channel 0 and channel 3. See the
 #       [[soc.adc]] block below for the transcript.
-#   Timers / clocks        BOOT-ONLY. The platform's rcc is a Python stub that
-#       returns alternating values on every read, which is enough for firmware
-#       that pokes enable bits and never waits on a ready flag. Firmware that
-#       spins on an RCC ready bit (CubeMX HAL clock bring-up does) will hang.
-#       The F103 descriptor solves that with an inline platform; this one does
-#       not, because the walkthrough's firmware does not need it.
+#   Timers / clocks        FOLLOWS THE FIRMWARE'S CLOCK TREE. The stock rcc is a
+#       Python stub that returns alternating values on every read, which hangs any
+#       firmware that waits on a ready flag (CubeMX HAL clock bring-up does). The
+#       platform below replaces it with register storage (HSIRDY following HSION,
+#       SWS following SW, ...) and the generic [[soc.clock_ready]] model supplies
+#       HSERDY and PLLRDY from the board's crystal and elapsed virtual time. The
+#       [[soc.decode]] clock block reads RCC back after every slice and retunes
+#       the core, SysTick and every TIMx block (measured by clock_truth.rs).
 #   I2C bus-slave bridge   ABSENT, see [soc.i2c].
 #   SPI bus-slave bridge   ABSENT, see [soc.spi].
 [soc]
@@ -79,9 +81,49 @@ platform_repl = """
 // has to use.
 //
 // 8 MHz is the F072's RESET DEFAULT: the HSI is the system clock after reset
-// (RM0091 §6.2) and the walkthrough firmware enables no PLL.
+// (RM0091 §6.2). Firmware that brings up the PLL or the HSE is followed by the
+// clock decode below.
 
 using "platforms/cpus/stm32f072.repl"
+
+// RCC register storage, replacing the stock stub's script (RM0091 Rev 10 s6.4, pp.110-134). HSIRDY follows HSION,
+// SWS follows SW, the HSI14 and HSI48 ready bits follow their enable bits and
+// LSIRDY follows LSION. HSERDY (CR bit 17) and PLLRDY (CR bit 25) are read-only
+// and NOT stored: the generic [[soc.clock_ready]] model supplies them on every
+// read. Reset values: CR 0x83 (HSION, HSIRDY, HSITRIM 0x10), CSR 0x0C000000
+// (PINRSTF and PORRSTF), CR2 0x80 (HSI14TRIM 0x10).
+rcc:
+    script: '''
+if request.IsInit:
+    rccregs = [0] * (size / 4)
+    rccregs[0] = 0x83
+    rccregs[9] = 0x0C000000
+    rccregs[13] = 0x80
+elif request.IsRead:
+    request.Value = rccregs[request.Offset >> 2]
+elif request.IsWrite:
+    rccoff = request.Offset >> 2
+    rccval = request.Value
+    if rccoff == 0:
+        rccval = rccval & ~0x2000002
+        if rccval & 0x1:
+            rccval = rccval | 0x2
+        rccregs[rccoff] = rccval
+    elif rccoff == 1:
+        rccval = (rccval & 0xFFFFFFF3) | ((rccval & 0x3) << 2)
+        rccregs[rccoff] = rccval
+    elif rccoff == 9:
+        rccval = rccval & ~0x2
+        if rccval & 0x1: rccval = rccval | 0x2
+        rccregs[rccoff] = rccval
+    elif rccoff == 13:
+        rccval = rccval & ~0x20002
+        if rccval & 0x1: rccval = rccval | 0x2
+        if rccval & 0x10000: rccval = rccval | 0x20000
+        rccregs[rccoff] = rccval
+    else:
+        rccregs[rccoff] = rccval
+'''
 
 nvic:
     systickFrequency: 8000000
@@ -102,7 +144,7 @@ mcu_label = "STM32F072 (ARM Cortex-M0)"
 # starved-watchdog gate. GPIO/UART/ADC are live-proven below; timing and reboot
 # fidelity are not allowed to borrow that proof.
 watchdog_limitation = "STM32F072 watchdog expiry and reboot behavior have not been starved and measured; do not infer silicon-equivalent watchdog recovery"
-timing_limitation = "The reset-default 8 MHz declaration is load-checked, but the stock RCC is a stub and no two-sided clock-truth gate exists; HAL clock bring-up and firmware timing are not silicon-proven"
+timing_limitation = "The core, SysTick and every TIMx block follow the clock tree the firmware sets (HSI, HSE, PLL, HSI48, prescalers; clock_truth.rs measures it), but SYSCLK switches the instant SW is written where silicon waits for the source, SysTick CLKSOURCE=0 (HCLK/8) is not followed, and the HSE crystal is taken as 8 MHz"
 
 # One entry per GPIO port the platform registers. ODR at 0x14 and MODER at 0x00
 # are the STM32_GPIOPort layout, shared with the F4 family and NOT with the F1.
@@ -242,3 +284,140 @@ controllers = []
 # spi2/spi3 bridges. That makes this the cheapest capability to add next, and it
 # still needs the live test before it is claimed.
 controllers = []
+
+# ── CLOCK TREE (decoded from the live registers) ──────────────────────────────
+# RM0091 Rev 10 s6.4: RCC_CR @ +0x00 (pp.110-111), RCC_CFGR @ +0x04
+# (pp.111-114), RCC_CFGR2 @ +0x2C (p.132).
+#   SWS/SW (CFGR 3:2 / 1:0): 00 HSI, 01 HSE, 10 PLL, 11 HSI48 (p.114).
+#   PLLSRC (CFGR 16:15): 00 HSI/2, 01 HSI/PREDIV, 10 HSE/PREDIV, 11 HSI48/PREDIV
+#     (p.113; the 00 case is HSI/2 on F04x, F07x and F09x).
+#   PREDIV (CFGR2 3:0): divide by value + 1 (p.132).
+#   PLLMUL (CFGR 21:18): input x (value + 2), values 14 and 15 both x16 (p.113).
+#   HPRE (7:4): 0xxx /1, 1000 /2 ... 1011 /16, 1100 /64 ... 1111 /512 (p.114).
+#   PPRE (10:8): 0xx /1, 100 /2 ... 111 /16 (p.113).
+# Timer clock = PCLK if the APB prescaler is 1, else twice it (p.98). HSI is
+# 8 MHz and HSI48 48 MHz. The HSE value is the 8 MHz crystal; a board with
+# another crystal needs that value passed in.
+[[soc.decode]]
+kind = "clock"
+name = "rcc"
+registers = { cr = 0x40021000, cfgr = 0x40021004, cfgr2 = 0x4002102C }
+vars = [
+    ["hsi", "8000000"],
+    ["hse", "8000000"],
+    ["hsi48", "48000000"],
+    ["prediv", "bits(cfgr2, 3, 0) + 1"],
+    ["pll_in", "pick(bits(cfgr, 16, 15), hsi / 2, hsi / prediv, hse / prediv, hsi48 / prediv)"],
+    ["pll_out", "pll_in * (min(bits(cfgr, 21, 18), 14) + 2)"],
+    ["sysclk", "pick(bits(cfgr, 3, 2), hsi, hse, pll_out, hsi48)"],
+    ["hclk", "sysclk / pick(bits(cfgr, 7, 4), 1, 1, 1, 1, 1, 1, 1, 1, 2, 4, 8, 16, 64, 128, 256, 512)"],
+    ["pclk_div", "pick(bits(cfgr, 10, 8), 1, 1, 1, 1, 2, 4, 8, 16)"],
+    ["pclk", "hclk / pclk_div"],
+    ["tim_apb", "if(pclk_div == 1, pclk, pclk * 2)"],
+    ["core_hz", "hclk"],
+]
+
+[[soc.clock_targets]]
+var = "core_hz"
+command = "sysbus.cpu PerformanceInMips {mhz}"
+[[soc.clock_targets]]
+var = "core_hz"
+command = "sysbus.nvic Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb"
+command = "sysbus.timer1 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb"
+command = "sysbus.timer2 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb"
+command = "sysbus.timer3 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb"
+command = "sysbus.timer6 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb"
+command = "sysbus.timer7 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb"
+command = "sysbus.timer14 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb"
+command = "sysbus.timer15 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb"
+command = "sysbus.timer16 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb"
+command = "sysbus.timer17 Frequency {hz}"
+
+# ── OSCILLATOR READINESS ──────────────────────────────────────────────────────
+# RCC_CR (RM0091 pp.110-111): HSEON bit 16, HSERDY bit 17, PLLON bit 24, PLLRDY
+# bit 25. HSE startup 2 ms (DS9826 p.68, tSU(HSE)); PLL lock 200 us maximum
+# (DS9826 p.74, tLOCK). The PLL waits for HSE only while CFGR.PLLSRC[1:0] = 10.
+[[soc.clock_ready]]
+peripheral = "rcc"
+name = "hse"
+enable_register = 0x00
+enable_mask = 0x10000
+ready_register = 0x00
+ready_mask = 0x20000
+requires_external = true
+startup_us = 2000.0
+
+[[soc.clock_ready]]
+peripheral = "rcc"
+name = "pll"
+enable_register = 0x00
+enable_mask = 0x1000000
+ready_register = 0x00
+ready_mask = 0x2000000
+startup_us = 200.0
+needs = [{ entry = "hse", when = { register = 0x04, mask = 0x18000, value = 0x10000 } }]
+
+# Timer fixes (see `periph_snapshot::TimerFix`).
+[[soc.timer_fixes]]
+peripheral = "timer1"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer2"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer3"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer6"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer7"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer14"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer15"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer16"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer17"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C

@@ -38,7 +38,10 @@ PLL_TARGETS = \
     stm32l0_hsi_tim.elf stm32l0_msi6_systick.elf stm32l0_pll_systick.elf stm32l0_pll_tim.elf \
     stm32g4_hsi_tim.elf stm32g4_pll_systick.elf stm32g4_pll_tim.elf
 
-all: $(TARGETS)
+# External-clock readiness probes (ready_probe.c): HSERDY then PLLRDY markers.
+READY_TARGETS = stm32f4_ready_probe.elf stm32l0_ready_probe.elf stm32f072_ready_probe.elf stm32g4_ready_probe.elf
+
+all: $(TARGETS) $(READY_TARGETS)
 
 stm32f103_tick.elf: $(SRCS) stm32f103.ld
 	$(CC) $(CFLAGS) -mcpu=cortex-m3 -DPART_STM32F103 $(LDFLAGS) -T stm32f103.ld $(SRCS) -o $@
@@ -93,8 +96,14 @@ $(1)_$(2)_$(3).elf: pll_tick.c startup.c $$(PLL_LD_$(1))
 endef
 $(foreach t,$(PLL_TARGETS),$(eval $(call PLL_RULE,$(word 1,$(subst _, ,$(t))),$(word 2,$(subst _, ,$(t))),$(patsubst %.elf,%,$(word 3,$(subst _, ,$(t)))))))
 
+define READY_RULE
+$(1)_ready_probe.elf: ready_probe.c startup.c $$(PLL_LD_$(1))
+	$$(CC) $$(CFLAGS) -mcpu=$$(PLL_MCPU_$(1)) -D$$(PLL_DEF_$(1)) $$(LDFLAGS) -T $$(PLL_LD_$(1)) startup.c ready_probe.c -o $$@
+endef
+$(foreach p,stm32f4 stm32l0 stm32f072 stm32g4,$(eval $(call READY_RULE,$(p))))
+
 clean:
-	rm -f $(TARGETS)
+	rm -f $(TARGETS) $(READY_TARGETS)
 
 .PHONY: all clean
 
