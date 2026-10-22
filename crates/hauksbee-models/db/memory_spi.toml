@@ -2,3 +2,1758 @@
 #
 # Cards here are written from vendor datasheets only (every value carries a basis and a source).
 # See target/launch/official-parts-20261022/ranking.md for the batch plan.
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Winbond W25Q64JV 64-Mbit SPI NOR, 8-pin SOIC 208-mil (SS), WSON 6x5 / 8x6 (ZP, ZE), XSON 4x4 (XG).
+#
+# Source: Winbond W25Q64JV Revision J, March 27 2018. Executable standard-SPI subset only (same shape
+# as the existing w25q32jv_soic8 and w25q128jv_soic8 cards in digital.toml): Dual/Quad I/O, SFDP,
+# protection, busy timing, security registers and a fitted flash image are not modelled.
+# A value with no grade suffix binds as the -IQ/JQ device (the only device ID printed for the
+# JV valid part numbers, 11.1 PDF p.76); the -IM/JM grade answers 7017h (8.1 PDF p.22) and is not bound.
+# No must-not-float or float-tolerated role is declared: Rev J states no tie requirement and prints no internal pull-up for /HOLD, /WP or /CS.
+[[models]]
+id = "w25q64jv_soic8"
+kind = "digital"
+description = "Winbond W25Q64JV 64-Mbit SPI NOR, 8-pin SOIC 208-mil / WSON / XSON (executable standard-SPI subset)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.winbond.com/resource-files/w25q64jv%20revj%2003272018%20plus.pdf"
+title = "Winbond W25Q64JV 3V 64M-bit Serial Flash Memory with Dual, Quad SPI, Revision J, Publication Release Date March 27, 2018"
+locator = "3.1 to 3.3 pin and pad configuration (PDF p.6); 8.1 Device ID (PDF p.22); 9.1 Absolute Maximum Ratings and 9.2 Operating Ranges (PDF p.60); 9.4 DC Electrical Characteristics (PDF p.62); 11 Ordering Information (PDF p.75) and 11.1 Valid Part Numbers (PDF p.76)"
+sha256 = "452d906c3be0da077fd751a2b8aa062629caf6081f8dd1eda04880854ce7c8f9"
+[[models.source.pinout]]
+package = "8-pin SOIC 208-mil / 8-pad WSON / 8-pad XSON"
+pins = { "1" = "/CS", "2" = "DO (IO1)", "3" = "/WP (IO2)", "4" = "GND", "5" = "DI (IO0)", "6" = "CLK", "7" = "/HOLD or /RESET (IO3)", "8" = "VCC" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "array_contents"
+reason = "The fitted flash image is an assembly input; an unprovided image starts erased (0xFF)."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "standby_current"
+low = 0.0
+high = 0.000050
+unit = "A"
+kind = "specification-limits"
+basis = "9.4 DC Electrical Characteristics (PDF p.62) ICC1 standby current max 50 uA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_read_current"
+low = 0.0
+high = 0.020000
+unit = "A"
+kind = "specification-limits"
+basis = "9.4 (PDF p.62) ICC3 read current max, 104 MHz row, 20 mA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "program_or_erase_current"
+low = 0.0
+high = 0.025000
+unit = "A"
+kind = "specification-limits"
+basis = "9.4 (PDF p.62) ICC4 through ICC7 write/program/erase current max 25 mA; 0 A is the physical lower bound of a supply current"
+
+[models.match]
+# Package codes SS, ZP, ZE, XG (11 Ordering Information, PDF p.75) share this pad map; the 16-pin SF has its own
+# card, and the TFBGA (TB, TC) and WLCSP (BY) packages are not modelled. IQ/JQ only (the IM/JM grade has another JEDEC ID).
+# Excludes W25Q64FV, W25Q64JW (1.8 V), W25Q64DV and the other JV densities.
+value_re = "(?i)^W25Q64JV(?:(?:SS|ZP|ZE|XG)(?:IQ|JQ)?(?:-TR)?)?$"
+
+[models.params]
+warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
+
+[models.pins]
+# 3.3 Pin Description (PDF p.6), identical for SOIC 208-mil, WSON and XSON.
+"1" = "cs"
+"2" = "miso"   # DO (IO1)
+"3" = "wp_n"   # /WP (IO2)
+"4" = "gnd"
+"5" = "mosi"   # DI (IO0)
+"6" = "sck"
+"7" = "hold_n"   # /HOLD or /RESET (IO3)
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 4.6   # 9.1 Absolute Maximum Ratings (PDF p.60): supply voltage -0.6 V to 4.6 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 3.6
+abs_max_v = 4.6
+basis = "Winbond W25Q64JV Rev J, 9.2 Operating Ranges (PDF p.60): VCC 2.7 V to 3.0 V at FR = 104 MHz, 3.0 V to 3.6 V at FR = 133 MHz"
+abs_max_basis = "Winbond W25Q64JV Rev J, 9.1 Absolute Maximum Ratings (PDF p.60): supply voltage -0.6 V to 4.6 V"
+
+[models.peripheral]
+kind = "spi_nor_flash"
+size_bytes = 8388608   # 64 Mbit; density from the part name and the JEDEC density byte
+page_size = 256            # 256-byte program page (all Winbond datasheet feature lists)
+sector_size = 4096         # 4 KB sector erase
+jedec_id = [239, 64, 23]   # 8.1 Device ID table (PDF p.22): manufacturer EFh, W25Q64JV-IQ/JQ device ID 4017h
+spi_mode = 0
+cs_role = "cs"
+clk_role = "sck"
+mosi_role = "mosi"
+miso_role = "miso"
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.7   # 9.2 Operating Ranges (PDF p.60): VCC 2.7 V to 3.0 V at FR = 104 MHz, 3.0 V to 3.6 V at FR = 133 MHz
+idle_a = 0.000050            # 9.4 DC Electrical Characteristics (PDF p.62) ICC1 standby current max 50 uA
+read_a = 0.020               # 9.4 (PDF p.62) ICC3 read current max, 104 MHz row, 20 mA
+write_a = 0.025              # 9.4 (PDF p.62) ICC4 through ICC7 write/program/erase current max 25 mA
+low_power_a = 0.000015       # 9.4 (PDF p.62) ICC2 power-down current max 15 uA
+
+[models.coverage]
+implements = ["spi_standard_read", "spi_fast_read", "spi_jedec_id", "spi_page_program", "spi_sector_erase", "spi_chip_erase", "spi_power_down", "standby_current_max", "deep_power_down_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "security_registers", "fitted_array_image"]
+
+# Winbond W25Q64JV 16-pin SOIC 300-mil (package code SF): its own pad map (3.4 and 3.5, PDF p.7).
+# /RESET (pad 3) has an internal pull-up and "can be left floating" (3.5 note 3, PDF p.7; 7.x PDF p.12).
+[[models]]
+id = "w25q64jv_soic16"
+kind = "digital"
+description = "Winbond W25Q64JV 64-Mbit SPI NOR, 16-pin SOIC 300-mil (executable standard-SPI subset)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.winbond.com/resource-files/w25q64jv%20revj%2003272018%20plus.pdf"
+title = "Winbond W25Q64JV 3V 64M-bit Serial Flash Memory with Dual, Quad SPI, Revision J, Publication Release Date March 27, 2018"
+locator = "3.1 to 3.3 pin and pad configuration (PDF p.6); 8.1 Device ID (PDF p.22); 9.1 Absolute Maximum Ratings and 9.2 Operating Ranges (PDF p.60); 9.4 DC Electrical Characteristics (PDF p.62); 11 Ordering Information (PDF p.75) and 11.1 Valid Part Numbers (PDF p.76)"
+sha256 = "452d906c3be0da077fd751a2b8aa062629caf6081f8dd1eda04880854ce7c8f9"
+[[models.source.pinout]]
+package = "16-pin SOIC 300-mil"
+pins = { "1" = "/HOLD or /RESET (IO3)", "2" = "VCC", "3" = "/RESET", "4" = "N/C", "5" = "N/C", "6" = "N/C", "7" = "/CS", "8" = "DO (IO1)", "9" = "/WP (IO2)", "10" = "GND", "11" = "N/C", "12" = "N/C", "13" = "N/C", "14" = "N/C", "15" = "DI (IO0)", "16" = "CLK" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "array_contents"
+reason = "The fitted flash image is an assembly input; an unprovided image starts erased (0xFF)."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "standby_current"
+low = 0.0
+high = 0.000050
+unit = "A"
+kind = "specification-limits"
+basis = "9.4 DC Electrical Characteristics (PDF p.62) ICC1 standby current max 50 uA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_read_current"
+low = 0.0
+high = 0.020000
+unit = "A"
+kind = "specification-limits"
+basis = "9.4 (PDF p.62) ICC3 read current max, 104 MHz row, 20 mA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "program_or_erase_current"
+low = 0.0
+high = 0.025000
+unit = "A"
+kind = "specification-limits"
+basis = "9.4 (PDF p.62) ICC4 through ICC7 write/program/erase current max 25 mA; 0 A is the physical lower bound of a supply current"
+
+[models.match]
+# Package code SF (11.1 Valid Part Numbers, PDF p.76): W25Q64JVSFIQ and W25Q64JVSFJQ.
+value_re = "(?i)^W25Q64JVSF(?:IQ|JQ)?(?:-TR)?$"
+
+[models.params]
+warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
+float_tolerated_roles = "reset_n"
+float_tolerated_basis = "Rev J: /RESET has an internal pull-up and can be left floating (3.5 note 3, PDF p.7)"
+
+[models.pins]
+# 3.5 Pin Description SOIC 300-mil (PDF p.7).
+"1" = "hold_n"
+"2" = "vcc"
+"3" = "nc"
+"4" = "nc"
+"5" = "nc"
+"6" = "nc"
+"7" = "cs"
+"8" = "miso"
+"9" = "wp_n"
+"10" = "gnd"
+"11" = "nc"
+"12" = "nc"
+"13" = "nc"
+"14" = "nc"
+"15" = "mosi"
+"16" = "sck"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 4.6   # 9.1 Absolute Maximum Ratings (PDF p.60): supply voltage -0.6 V to 4.6 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 3.6
+abs_max_v = 4.6
+basis = "Winbond W25Q64JV Rev J, 9.2 Operating Ranges (PDF p.60): VCC 2.7 V to 3.0 V at FR = 104 MHz, 3.0 V to 3.6 V at FR = 133 MHz"
+abs_max_basis = "Winbond W25Q64JV Rev J, 9.1 Absolute Maximum Ratings (PDF p.60): supply voltage -0.6 V to 4.6 V"
+
+[models.peripheral]
+kind = "spi_nor_flash"
+size_bytes = 8388608   # 64 Mbit; density from the part name and the JEDEC density byte
+page_size = 256            # 256-byte program page (all Winbond datasheet feature lists)
+sector_size = 4096         # 4 KB sector erase
+jedec_id = [239, 64, 23]   # 8.1 Device ID table (PDF p.22): manufacturer EFh, W25Q64JV-IQ/JQ device ID 4017h
+spi_mode = 0
+cs_role = "cs"
+clk_role = "sck"
+mosi_role = "mosi"
+miso_role = "miso"
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.7   # 9.2 Operating Ranges (PDF p.60): VCC 2.7 V to 3.0 V at FR = 104 MHz, 3.0 V to 3.6 V at FR = 133 MHz
+idle_a = 0.000050            # 9.4 DC Electrical Characteristics (PDF p.62) ICC1 standby current max 50 uA
+read_a = 0.020               # 9.4 (PDF p.62) ICC3 read current max, 104 MHz row, 20 mA
+write_a = 0.025              # 9.4 (PDF p.62) ICC4 through ICC7 write/program/erase current max 25 mA
+low_power_a = 0.000015       # 9.4 (PDF p.62) ICC2 power-down current max 15 uA
+
+[models.coverage]
+implements = ["spi_standard_read", "spi_fast_read", "spi_jedec_id", "spi_page_program", "spi_sector_erase", "spi_chip_erase", "spi_power_down", "standby_current_max", "deep_power_down_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "security_registers", "fitted_array_image"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Winbond W25Q16JV 16-Mbit SPI NOR, 8-pin SOIC 150/208-mil (SN, SS), WSON 6x5 (ZP), USON 2x3 / 4x3 (UX, UU), XSON 4x4 (XG).
+#
+# Source: Winbond W25Q16JV Revision G, March 22 2018. Executable standard-SPI subset only (same shape as
+# w25q32jv_soic8). A value with no grade suffix binds as the -IQ/JQ device (device ID 4015h, 8.1 PDF p.20);
+# the -IM/JM grade answers 7015h and is not bound.
+# No must-not-float or float-tolerated role is declared: Rev G states no tie requirement and prints no internal pull-up for /HOLD, /WP or /CS.
+[[models]]
+id = "w25q16jv_soic8"
+kind = "digital"
+description = "Winbond W25Q16JV 16-Mbit SPI NOR, 8-pin SOIC / WSON / USON / XSON (executable standard-SPI subset)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.winbond.com/resource-files/w25q16jv%20spi%20revg%2003222018%20plus.pdf"
+title = "Winbond W25Q16JV 3V 16M-bit Serial Flash Memory with Dual/Quad SPI, Revision G, Publication Release Date March 22, 2018"
+locator = "3.1 to 3.3 pin and pad configuration (PDF p.6); 8.1 Device ID (PDF p.20); 10.1 Absolute Maximum Ratings and 10.2 Operating Ranges (PDF p.58); 10.4 DC Electrical Characteristics (PDF p.60); 12 Ordering Information (PDF p.72)"
+sha256 = "6d23cdf57fd63fc2c2de517707e293beaf70f3f47b424bf58510666294c04d82"
+[[models.source.pinout]]
+package = "8-pin SOIC / 8-pad WSON / 8-pad USON / 8-pad XSON"
+pins = { "1" = "/CS", "2" = "DO (IO1)", "3" = "/WP (IO2)", "4" = "GND", "5" = "DI (IO0)", "6" = "CLK", "7" = "/HOLD or /RESET (IO3)", "8" = "VCC" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "array_contents"
+reason = "The fitted flash image is an assembly input; an unprovided image starts erased (0xFF)."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "standby_current"
+low = 0.0
+high = 0.000050
+unit = "A"
+kind = "specification-limits"
+basis = "10.4 DC Electrical Characteristics (PDF p.60) ICC1 standby current max 50 uA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_read_current"
+low = 0.0
+high = 0.020000
+unit = "A"
+kind = "specification-limits"
+basis = "10.4 (PDF p.60) ICC3 read current max, 104 MHz row, 20 mA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "program_or_erase_current"
+low = 0.0
+high = 0.025000
+unit = "A"
+kind = "specification-limits"
+basis = "10.4 (PDF p.60) ICC4 through ICC7 write/program/erase current max 25 mA; 0 A is the physical lower bound of a supply current"
+
+[models.match]
+# Package codes SN, SS, ZP, UX, UU, XG (12 Ordering Information, PDF p.72) share this pad map; the WLCSP (BY) is not
+# modelled. IQ/JQ only. Excludes W25Q16DV/FV/JW and the other JV densities.
+value_re = "(?i)^W25Q16JV(?:(?:SN|SS|ZP|UX|UU|XG)(?:IQ|JQ)?(?:-TR)?)?$"
+
+[models.params]
+warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
+
+[models.pins]
+# 3.3 Pin Description (PDF p.6), identical for SOIC 150/208-mil, WSON, USON and XSON.
+"1" = "cs"
+"2" = "miso"
+"3" = "wp_n"
+"4" = "gnd"
+"5" = "mosi"
+"6" = "sck"
+"7" = "hold_n"
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 4.6   # 10.1 Absolute Maximum Ratings (PDF p.58): supply voltage -0.6 V to 4.6 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 3.6
+abs_max_v = 4.6
+basis = "Winbond W25Q16JV Rev G, 10.2 Operating Ranges (PDF p.58): VCC 2.7 V to 3.0 V at FR = 104 MHz, 3.0 V to 3.6 V at FR = 133 MHz"
+abs_max_basis = "Winbond W25Q16JV Rev G, 10.1 Absolute Maximum Ratings (PDF p.58): supply voltage -0.6 V to 4.6 V"
+
+[models.peripheral]
+kind = "spi_nor_flash"
+size_bytes = 2097152   # 16 Mbit; density from the part name and the JEDEC density byte
+page_size = 256            # 256-byte program page (all Winbond datasheet feature lists)
+sector_size = 4096         # 4 KB sector erase
+jedec_id = [239, 64, 21]   # 8.1 Device ID table (PDF p.20): manufacturer EFh, W25Q16JV-IQ/JQ device ID 4015h
+spi_mode = 0
+cs_role = "cs"
+clk_role = "sck"
+mosi_role = "mosi"
+miso_role = "miso"
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.7   # 10.2 Operating Ranges (PDF p.58): VCC 2.7 V to 3.0 V at FR = 104 MHz, 3.0 V to 3.6 V at FR = 133 MHz
+idle_a = 0.000050            # 10.4 DC Electrical Characteristics (PDF p.60) ICC1 standby current max 50 uA
+read_a = 0.020               # 10.4 (PDF p.60) ICC3 read current max, 104 MHz row, 20 mA
+write_a = 0.025              # 10.4 (PDF p.60) ICC4 through ICC7 write/program/erase current max 25 mA
+low_power_a = 0.000015       # 10.4 (PDF p.60) ICC2 power-down current max 15 uA
+
+[models.coverage]
+implements = ["spi_standard_read", "spi_fast_read", "spi_jedec_id", "spi_page_program", "spi_sector_erase", "spi_chip_erase", "spi_power_down", "standby_current_max", "deep_power_down_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "security_registers", "fitted_array_image"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GigaDevice GD25Q32C 32-Mbit SPI NOR, 8-pin SOP150/208, VSOP208, DIP8, USON8 (3x3, 3x4), WSON8 (6x5).
+#
+# Source: GigaDevice GD25Q32C datasheet, DS-00088 Rev4.1 (PDF page numbers equal printed page numbers).
+# Only -40 to +85 C grades (I, F) are bound: the datasheet prints DC characteristics only at 85 C, so the
+# J (105 C) and E (125 C) grades would inherit currents the sheet does not give for them.
+# "CS# must be driven high if chip is not selected. Please don't leave CS# floating" (p.5) is the only tie
+# requirement printed, so only cs is must-not-float; WP#/HOLD# have no stated requirement and are left undeclared.
+# Assumption: a bare family value (no generation or package letters) binds the C-generation 8-pin
+# card, as the existing gd25q16 card does for its family; the generation shows only in currents.
+[[models]]
+id = "gd25q32c_8pin"
+kind = "digital"
+description = "GigaDevice GD25Q32C 32-Mbit SPI NOR, 8-pin SOP / VSOP / DIP / USON / WSON (executable standard-SPI subset)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.gigadevice.com.cn/Public/Uploads/uploadfile/files/20220714/DS-00088-GD25Q32C-Rev4.1.pdf"
+title = "GigaDevice GD25Q32C 3.3V Uniform Sector Dual and Quad Serial Flash Datasheet, DS-00088 Rev4.1 (revision taken from the vendor file name; the PDF prints no revision on its pages)"
+locator = "2 General Description connection diagram and pin description (PDF p.5); 8.3 Absolute Maximum Ratings (PDF p.49); 8.5 DC Characteristics (PDF p.51); 9 Ordering Information and 9.1 Valid Part Numbers (PDF p.61-63); Read Device ID table (PDF p.15)"
+sha256 = "ce541db9d2d3efc21d9fb5e958ae2df481d5a9692fe42abf8f3a46ec8d627c38"
+[[models.source.pinout]]
+package = "8-lead SOP / VSOP / DIP / 8-pad USON / WSON"
+pins = { "1" = "CS#", "2" = "SO (IO1)", "3" = "WP# (IO2)", "4" = "VSS", "5" = "SI (IO0)", "6" = "SCLK", "7" = "HOLD# (IO3)", "8" = "VCC" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "array_contents"
+reason = "The fitted flash image is an assembly input; an unprovided image starts erased (0xFF)."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "standby_current"
+low = 0.0
+high = 0.000005
+unit = "A"
+kind = "specification-limits"
+basis = "8.5 DC Characteristics (PDF p.51) ICC1 standby current max 5 uA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_read_current"
+low = 0.0
+high = 0.020000
+unit = "A"
+kind = "specification-limits"
+basis = "8.5 (PDF p.51) ICC3 read current max at 120 MHz, 20 mA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "program_or_erase_current"
+low = 0.0
+high = 0.025000
+unit = "A"
+kind = "specification-limits"
+basis = "8.5 (PDF p.51) ICC4 through ICC8 program/erase current max 25 mA; 0 A is the physical lower bound of a supply current"
+
+[models.match]
+# Ordering (9 PDF p.61): GD25Q32C<pkg><grade>G<pack>; pkg T = SOP8 150mil, S = SOP8 208mil, V = VSOP8, P = DIP8,
+# H = USON8 3x3, N = USON8 3x4, W = WSON8 6x5; grade I or F; packing T/Y/R. TFBGA (Z, B) not modelled.
+# Excludes GD25Q32B/E, GD25Q16*, GD25Q64*.
+value_re = "(?i)^GD25Q32(?:C(?:[TSVPHNW][IF]G[TYR]?)?)?$"
+
+[models.params]
+warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
+must_not_float_roles = "cs"
+
+[models.pins]
+# Connection diagram and Pin Description (PDF p.5), identical for 8-lead SOP/VSOP/DIP and WSON/USON.
+"1" = "cs"
+"2" = "miso"
+"3" = "wp_n"
+"4" = "gnd"
+"5" = "mosi"
+"6" = "sck"
+"7" = "hold_n"
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 4.2   # 8.3 Absolute Maximum Ratings (PDF p.49): VCC -0.6 V to 4.2 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 3.6
+abs_max_v = 4.2
+basis = "GigaDevice GD25Q32C Rev4.1, 8.5 DC Characteristics (PDF p.51): T = -40 to 85 C, VCC = 2.7 V to 3.6 V"
+abs_max_basis = "GigaDevice GD25Q32C Rev4.1, 8.3 Absolute Maximum Ratings (PDF p.49): VCC -0.6 V to 4.2 V"
+
+[models.peripheral]
+kind = "spi_nor_flash"
+size_bytes = 4194304   # 32 Mbit; density from the part name and the JEDEC density byte
+page_size = 256            # 256-byte program page (all GigaDevice datasheet feature lists)
+sector_size = 4096         # 4 KB sector erase
+jedec_id = [200, 64, 22]   # Read Device ID table, 9FH returns C8 40 16 (PDF p.15)
+spi_mode = 0
+cs_role = "cs"
+clk_role = "sck"
+mosi_role = "mosi"
+miso_role = "miso"
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.7   # 8.5 DC Characteristics (PDF p.51): T = -40 to 85 C, VCC = 2.7 V to 3.6 V
+idle_a = 0.000005            # 8.5 DC Characteristics (PDF p.51) ICC1 standby current max 5 uA
+read_a = 0.020               # 8.5 (PDF p.51) ICC3 read current max at 120 MHz, 20 mA
+write_a = 0.025              # 8.5 (PDF p.51) ICC4 through ICC8 program/erase current max 25 mA
+low_power_a = 0.000005       # 8.5 (PDF p.51) ICC2 deep power-down current max 5 uA
+
+[models.coverage]
+implements = ["spi_standard_read", "spi_fast_read", "spi_jedec_id", "spi_page_program", "spi_sector_erase", "spi_chip_erase", "spi_power_down", "standby_current_max", "deep_power_down_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "security_registers", "fitted_array_image"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GigaDevice GD25Q64C 64-Mbit SPI NOR, 8-pin SOP208 (S), DIP8 (P), USON8 4x4 (Q), WSON8 6x5 (W) and 8x6 (Y).
+#
+# Source: GigaDevice GD25Q64C datasheet, DS-00111 Rev3.2 (PDF page numbers equal printed page numbers).
+# Only -40 to +85 C grades (I, F) are bound: the 105 C and 125 C DC characteristics are printed separately
+# (revision 3.0 note) and are not carried here. Only cs is must-not-float (p.5 note); WP#/HOLD# are undeclared.
+# Assumption: a bare family value (no generation or package letters) binds the C-generation 8-pin
+# card, as the existing gd25q16 card does for its family; the generation shows only in currents.
+[[models]]
+id = "gd25q64c_8pin"
+kind = "digital"
+description = "GigaDevice GD25Q64C 64-Mbit SPI NOR, 8-pin SOP / DIP / USON / WSON (executable standard-SPI subset)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.gigadevice.com.cn/Public/Uploads/uploadfile/files/20220714/DS-00111-GD25Q64C-Rev3.2.pdf"
+title = "GigaDevice GD25Q64C 3.3V Uniform Sector Dual and Quad Serial Flash Datasheet, DS-00111 Rev3.2 (revision taken from the vendor file name; the PDF prints no revision on its pages)"
+locator = "2 General Description connection diagram and pin description (PDF p.5); 8.3 Absolute Maximum Ratings (PDF p.50); 8.5 DC Characteristics (PDF p.52); 9 Ordering Information and 9.1 Valid Part Numbers (PDF p.62-63); Read Device ID table (PDF p.15)"
+sha256 = "5a1a318a367d3a2d1106054c7583551a12028b04ff1eaccd69cb2e8bd25ad18d"
+[[models.source.pinout]]
+package = "8-lead SOP / DIP / 8-pad USON / WSON"
+pins = { "1" = "CS#", "2" = "SO (IO1)", "3" = "WP# (IO2)", "4" = "VSS", "5" = "SI (IO0)", "6" = "SCLK", "7" = "HOLD# (IO3)", "8" = "VCC" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "array_contents"
+reason = "The fitted flash image is an assembly input; an unprovided image starts erased (0xFF)."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "standby_current"
+low = 0.0
+high = 0.000005
+unit = "A"
+kind = "specification-limits"
+basis = "8.5 DC Characteristics (PDF p.52) ICC1 standby current max 5 uA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_read_current"
+low = 0.0
+high = 0.020000
+unit = "A"
+kind = "specification-limits"
+basis = "8.5 (PDF p.52) ICC3 read current max at 120 MHz, 20 mA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "program_or_erase_current"
+low = 0.0
+high = 0.020000
+unit = "A"
+kind = "specification-limits"
+basis = "8.5 (PDF p.52) ICC4 through ICC8 program/erase current max 20 mA; 0 A is the physical lower bound of a supply current"
+
+[models.match]
+# Ordering (9 PDF p.62): GD25Q64C<pkg><grade><G|S><pack>; pkg S, P, Q, W, Y; grade I or F; G = green, S = green + SRP1.
+# The SOP16 (F) has its own card; TFBGA (Z) is not modelled. Excludes GD25Q64B/E and the other densities.
+value_re = "(?i)^GD25Q64(?:C(?:[SPQWY][IF][GS][TYR]?)?)?$"
+
+[models.params]
+warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
+must_not_float_roles = "cs"
+
+[models.pins]
+# Connection diagram and Pin Description (PDF p.5), identical for 8-lead SOP/DIP and WSON/USON.
+"1" = "cs"
+"2" = "miso"
+"3" = "wp_n"
+"4" = "gnd"
+"5" = "mosi"
+"6" = "sck"
+"7" = "hold_n"
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 4.2   # 8.3 Absolute Maximum Ratings (PDF p.50): VCC -0.6 V to 4.2 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 3.6
+abs_max_v = 4.2
+basis = "GigaDevice GD25Q64C Rev3.2, 8.5 DC Characteristics (PDF p.52): T = -40 to 85 C, VCC = 2.7 V to 3.6 V"
+abs_max_basis = "GigaDevice GD25Q64C Rev3.2, 8.3 Absolute Maximum Ratings (PDF p.50): VCC -0.6 V to 4.2 V"
+
+[models.peripheral]
+kind = "spi_nor_flash"
+size_bytes = 8388608   # 64 Mbit; density from the part name and the JEDEC density byte
+page_size = 256            # 256-byte program page (all GigaDevice datasheet feature lists)
+sector_size = 4096         # 4 KB sector erase
+jedec_id = [200, 64, 23]   # Read Device ID table, 9FH returns C8 40 17 (PDF p.15)
+spi_mode = 0
+cs_role = "cs"
+clk_role = "sck"
+mosi_role = "mosi"
+miso_role = "miso"
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.7   # 8.5 DC Characteristics (PDF p.52): T = -40 to 85 C, VCC = 2.7 V to 3.6 V
+idle_a = 0.000005            # 8.5 DC Characteristics (PDF p.52) ICC1 standby current max 5 uA
+read_a = 0.020               # 8.5 (PDF p.52) ICC3 read current max at 120 MHz, 20 mA
+write_a = 0.020              # 8.5 (PDF p.52) ICC4 through ICC8 program/erase current max 20 mA
+low_power_a = 0.000005       # 8.5 (PDF p.52) ICC2 deep power-down current max 5 uA
+
+[models.coverage]
+implements = ["spi_standard_read", "spi_fast_read", "spi_jedec_id", "spi_page_program", "spi_sector_erase", "spi_chip_erase", "spi_power_down", "standby_current_max", "deep_power_down_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "security_registers", "fitted_array_image"]
+
+# GigaDevice GD25Q64C 16-lead SOP 300-mil (package code F): its own pad map (connection diagram, PDF p.5).
+[[models]]
+id = "gd25q64c_sop16"
+kind = "digital"
+description = "GigaDevice GD25Q64C 64-Mbit SPI NOR, 16-lead SOP 300-mil (executable standard-SPI subset)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.gigadevice.com.cn/Public/Uploads/uploadfile/files/20220714/DS-00111-GD25Q64C-Rev3.2.pdf"
+title = "GigaDevice GD25Q64C 3.3V Uniform Sector Dual and Quad Serial Flash Datasheet, DS-00111 Rev3.2 (revision taken from the vendor file name; the PDF prints no revision on its pages)"
+locator = "2 General Description connection diagram and pin description (PDF p.5); 8.3 Absolute Maximum Ratings (PDF p.50); 8.5 DC Characteristics (PDF p.52); 9 Ordering Information and 9.1 Valid Part Numbers (PDF p.62-63); Read Device ID table (PDF p.15)"
+sha256 = "5a1a318a367d3a2d1106054c7583551a12028b04ff1eaccd69cb2e8bd25ad18d"
+[[models.source.pinout]]
+package = "16-lead SOP 300-mil"
+pins = { "1" = "HOLD# (IO3)", "2" = "VCC", "3" = "NC", "4" = "NC", "5" = "NC", "6" = "NC", "7" = "CS#", "8" = "SO (IO1)", "9" = "WP# (IO2)", "10" = "VSS", "11" = "NC", "12" = "NC", "13" = "NC", "14" = "NC", "15" = "SI (IO0)", "16" = "SCLK" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "array_contents"
+reason = "The fitted flash image is an assembly input; an unprovided image starts erased (0xFF)."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "standby_current"
+low = 0.0
+high = 0.000005
+unit = "A"
+kind = "specification-limits"
+basis = "8.5 DC Characteristics (PDF p.52) ICC1 standby current max 5 uA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_read_current"
+low = 0.0
+high = 0.020000
+unit = "A"
+kind = "specification-limits"
+basis = "8.5 (PDF p.52) ICC3 read current max at 120 MHz, 20 mA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "program_or_erase_current"
+low = 0.0
+high = 0.020000
+unit = "A"
+kind = "specification-limits"
+basis = "8.5 (PDF p.52) ICC4 through ICC8 program/erase current max 20 mA; 0 A is the physical lower bound of a supply current"
+
+[models.match]
+# Ordering (9 PDF p.62-63): GD25Q64CF<I|F><G|S><pack>.
+value_re = "(?i)^GD25Q64CF[IF][GS][TYR]?$"
+
+[models.params]
+warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
+must_not_float_roles = "cs"
+
+[models.pins]
+# 16-lead SOP connection diagram (PDF p.5).
+"1" = "hold_n"
+"2" = "vcc"
+"3" = "nc"
+"4" = "nc"
+"5" = "nc"
+"6" = "nc"
+"7" = "cs"
+"8" = "miso"
+"9" = "wp_n"
+"10" = "gnd"
+"11" = "nc"
+"12" = "nc"
+"13" = "nc"
+"14" = "nc"
+"15" = "mosi"
+"16" = "sck"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 4.2   # 8.3 Absolute Maximum Ratings (PDF p.50): VCC -0.6 V to 4.2 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 3.6
+abs_max_v = 4.2
+basis = "GigaDevice GD25Q64C Rev3.2, 8.5 DC Characteristics (PDF p.52): T = -40 to 85 C, VCC = 2.7 V to 3.6 V"
+abs_max_basis = "GigaDevice GD25Q64C Rev3.2, 8.3 Absolute Maximum Ratings (PDF p.50): VCC -0.6 V to 4.2 V"
+
+[models.peripheral]
+kind = "spi_nor_flash"
+size_bytes = 8388608   # 64 Mbit; density from the part name and the JEDEC density byte
+page_size = 256            # 256-byte program page (all GigaDevice datasheet feature lists)
+sector_size = 4096         # 4 KB sector erase
+jedec_id = [200, 64, 23]   # Read Device ID table, 9FH returns C8 40 17 (PDF p.15)
+spi_mode = 0
+cs_role = "cs"
+clk_role = "sck"
+mosi_role = "mosi"
+miso_role = "miso"
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.7   # 8.5 DC Characteristics (PDF p.52): T = -40 to 85 C, VCC = 2.7 V to 3.6 V
+idle_a = 0.000005            # 8.5 DC Characteristics (PDF p.52) ICC1 standby current max 5 uA
+read_a = 0.020               # 8.5 (PDF p.52) ICC3 read current max at 120 MHz, 20 mA
+write_a = 0.020              # 8.5 (PDF p.52) ICC4 through ICC8 program/erase current max 20 mA
+low_power_a = 0.000005       # 8.5 (PDF p.52) ICC2 deep power-down current max 5 uA
+
+[models.coverage]
+implements = ["spi_standard_read", "spi_fast_read", "spi_jedec_id", "spi_page_program", "spi_sector_erase", "spi_chip_erase", "spi_power_down", "standby_current_max", "deep_power_down_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "security_registers", "fitted_array_image"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GigaDevice GD25Q128E 128-Mbit SPI NOR, 8-pin SOP208 (S), USON8 4x4 (Q), WSON8 6x5 (W) and 8x6 (Y).
+#
+# Source: GigaDevice GD25Q128E datasheet Rev1.4, April 2024 (LCSC mirror; PDF page numbers equal printed page numbers).
+# Only -40 to +85 C grades (I, F) are bound. Notes 1 and 2 under Table 1 (p.5): CS# must be driven high, and an unused
+# WP# or HOLD# "must be driven high by the host, or an external pull-up resistor must be placed", so cs, wp_n and
+# hold_n are all must-not-float.
+# Assumption: a bare family value (no generation or package letters) binds the C-generation 8-pin
+# card, as the existing gd25q16 card does for its family; the generation shows only in currents.
+[[models]]
+id = "gd25q128e_8pin"
+kind = "digital"
+description = "GigaDevice GD25Q128E 128-Mbit SPI NOR, 8-pin SOP208 / USON / WSON (executable standard-SPI subset)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://atta.szlcsc.com/upload/public/pdf/source/20260812/FF17F39AEB36D924F62B7DEEF4BA9508.pdf"
+title = "GigaDevice GD25Q128E Uniform Sector Dual and Quad Serial Flash Datasheet, GD25Q128E-Rev1.4, April 2024 (LCSC mirror of the GigaDevice PDF)"
+locator = "2 General Descriptions connection diagram, Table 1 and Table 2 pin descriptions (PDF p.5-6); 8.3 Absolute Maximum Ratings (PDF p.40); 8.5 DC Characteristics (PDF p.42); 9 Ordering Information and 9.1 Valid Part Numbers (PDF p.53-54); Read Device ID table (PDF p.19-20)"
+sha256 = "eccb484055d9936b157ad7bf7eebce0a0e30e5ffd9385a197f0fa6fcb2b3c223"
+[[models.source.pinout]]
+package = "8-lead SOP / 8-pad USON / WSON"
+pins = { "1" = "CS#", "2" = "SO (IO1)", "3" = "WP# (IO2)", "4" = "VSS", "5" = "SI (IO0)", "6" = "SCLK", "7" = "HOLD#/RESET# (IO3)", "8" = "VCC" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "array_contents"
+reason = "The fitted flash image is an assembly input; an unprovided image starts erased (0xFF)."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "standby_current"
+low = 0.0
+high = 0.000050
+unit = "A"
+kind = "specification-limits"
+basis = "8.5 DC Characteristics (PDF p.42) ICC1 standby current max 50 uA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_read_current"
+low = 0.0
+high = 0.020000
+unit = "A"
+kind = "specification-limits"
+basis = "8.5 (PDF p.42) ICC3 read current max at 133 MHz, 20 mA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "program_or_erase_current"
+low = 0.0
+high = 0.025000
+unit = "A"
+kind = "specification-limits"
+basis = "8.5 (PDF p.42) ICC4 through ICC8 program/erase current max 25 mA; 0 A is the physical lower bound of a supply current"
+
+[models.match]
+# Ordering (9 PDF p.53): GD25Q128E<pkg><grade><G|S><pack>; pkg S, Q, W, Y; grade I or F. The SOP16 (F) has its
+# own card; TFBGA (B) is not modelled. Excludes GD25Q128B/C and the other densities.
+value_re = "(?i)^GD25Q128(?:E(?:[SQWY][IF][GS][TYR]?)?)?$"
+
+[models.params]
+warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
+must_not_float_roles = "cs,wp_n,hold_n"
+
+[models.pins]
+# Table 1 Pin Description for SOP8/DIP8/USON8/WSON8 (PDF p.5).
+"1" = "cs"
+"2" = "miso"
+"3" = "wp_n"
+"4" = "gnd"
+"5" = "mosi"
+"6" = "sck"
+"7" = "hold_n"
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 4.2   # 8.3 Absolute Maximum Ratings (PDF p.40): VCC -0.6 V to 4.2 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 3.6
+abs_max_v = 4.2
+basis = "GigaDevice GD25Q128E Rev1.4, 8.5 DC Characteristics (PDF p.42): T = -40 to 85 C, VCC = 2.7 V to 3.6 V"
+abs_max_basis = "GigaDevice GD25Q128E Rev1.4, 8.3 Absolute Maximum Ratings (PDF p.40): VCC -0.6 V to 4.2 V"
+
+[models.peripheral]
+kind = "spi_nor_flash"
+size_bytes = 16777216   # 128 Mbit; density from the part name and the JEDEC density byte
+page_size = 256            # 256-byte program page (all GigaDevice datasheet feature lists)
+sector_size = 4096         # 4 KB sector erase
+jedec_id = [200, 64, 24]   # Read Device ID table, 9FH returns C8 40 18 (PDF p.19-20)
+spi_mode = 0
+cs_role = "cs"
+clk_role = "sck"
+mosi_role = "mosi"
+miso_role = "miso"
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.7   # 8.5 DC Characteristics (PDF p.42): T = -40 to 85 C, VCC = 2.7 V to 3.6 V
+idle_a = 0.000050            # 8.5 DC Characteristics (PDF p.42) ICC1 standby current max 50 uA
+read_a = 0.020               # 8.5 (PDF p.42) ICC3 read current max at 133 MHz, 20 mA
+write_a = 0.025              # 8.5 (PDF p.42) ICC4 through ICC8 program/erase current max 25 mA
+low_power_a = 0.000008       # 8.5 (PDF p.42) ICC2 deep power-down current max 8 uA
+
+[models.coverage]
+implements = ["spi_standard_read", "spi_fast_read", "spi_jedec_id", "spi_page_program", "spi_sector_erase", "spi_chip_erase", "spi_power_down", "standby_current_max", "deep_power_down_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "security_registers", "fitted_array_image"]
+
+# GigaDevice GD25Q128E 16-lead SOP 300-mil (package code F). The valid part numbers for this package carry
+# the R or K option (RESET# pin, 9.1 PDF p.54): pad 3 is RESET# on those parts and DNU on the G/S options (Table 2
+# note 1, PDF p.6), so only the R/K ordering codes are bound here.
+[[models]]
+id = "gd25q128e_sop16"
+kind = "digital"
+description = "GigaDevice GD25Q128E 128-Mbit SPI NOR, 16-lead SOP 300-mil with RESET# on pad 3 (executable standard-SPI subset)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://atta.szlcsc.com/upload/public/pdf/source/20260812/FF17F39AEB36D924F62B7DEEF4BA9508.pdf"
+title = "GigaDevice GD25Q128E Uniform Sector Dual and Quad Serial Flash Datasheet, GD25Q128E-Rev1.4, April 2024 (LCSC mirror of the GigaDevice PDF)"
+locator = "2 General Descriptions connection diagram, Table 1 and Table 2 pin descriptions (PDF p.5-6); 8.3 Absolute Maximum Ratings (PDF p.40); 8.5 DC Characteristics (PDF p.42); 9 Ordering Information and 9.1 Valid Part Numbers (PDF p.53-54); Read Device ID table (PDF p.19-20)"
+sha256 = "eccb484055d9936b157ad7bf7eebce0a0e30e5ffd9385a197f0fa6fcb2b3c223"
+[[models.source.pinout]]
+package = "16-lead SOP 300-mil"
+pins = { "1" = "HOLD#/RESET# (IO3)", "2" = "VCC", "3" = "RESET#", "4" = "NC", "5" = "NC", "6" = "NC", "7" = "CS#", "8" = "SO (IO1)", "9" = "WP# (IO2)", "10" = "VSS", "11" = "NC", "12" = "NC", "13" = "NC", "14" = "NC", "15" = "SI (IO0)", "16" = "SCLK" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "array_contents"
+reason = "The fitted flash image is an assembly input; an unprovided image starts erased (0xFF)."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "standby_current"
+low = 0.0
+high = 0.000050
+unit = "A"
+kind = "specification-limits"
+basis = "8.5 DC Characteristics (PDF p.42) ICC1 standby current max 50 uA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_read_current"
+low = 0.0
+high = 0.020000
+unit = "A"
+kind = "specification-limits"
+basis = "8.5 (PDF p.42) ICC3 read current max at 133 MHz, 20 mA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "program_or_erase_current"
+low = 0.0
+high = 0.025000
+unit = "A"
+kind = "specification-limits"
+basis = "8.5 (PDF p.42) ICC4 through ICC8 program/erase current max 25 mA; 0 A is the physical lower bound of a supply current"
+
+[models.match]
+# Ordering (9 PDF p.53-54): GD25Q128EF<I|F><R|K><pack> (R = RESET# pin, K = RESET# pin + SRP1).
+value_re = "(?i)^GD25Q128EF[IF][RK][TYR]?$"
+
+[models.params]
+warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
+must_not_float_roles = "cs,wp_n,hold_n"
+
+[models.pins]
+# Table 2 Pin Description for SOP16 (PDF p.6).
+"1" = "hold_n"
+"2" = "vcc"
+"3" = "reset_n"
+"4" = "nc"
+"5" = "nc"
+"6" = "nc"
+"7" = "cs"
+"8" = "miso"
+"9" = "wp_n"
+"10" = "gnd"
+"11" = "nc"
+"12" = "nc"
+"13" = "nc"
+"14" = "nc"
+"15" = "mosi"
+"16" = "sck"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 4.2   # 8.3 Absolute Maximum Ratings (PDF p.40): VCC -0.6 V to 4.2 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 3.6
+abs_max_v = 4.2
+basis = "GigaDevice GD25Q128E Rev1.4, 8.5 DC Characteristics (PDF p.42): T = -40 to 85 C, VCC = 2.7 V to 3.6 V"
+abs_max_basis = "GigaDevice GD25Q128E Rev1.4, 8.3 Absolute Maximum Ratings (PDF p.40): VCC -0.6 V to 4.2 V"
+
+[models.peripheral]
+kind = "spi_nor_flash"
+size_bytes = 16777216   # 128 Mbit; density from the part name and the JEDEC density byte
+page_size = 256            # 256-byte program page (all GigaDevice datasheet feature lists)
+sector_size = 4096         # 4 KB sector erase
+jedec_id = [200, 64, 24]   # Read Device ID table, 9FH returns C8 40 18 (PDF p.19-20)
+spi_mode = 0
+cs_role = "cs"
+clk_role = "sck"
+mosi_role = "mosi"
+miso_role = "miso"
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.7   # 8.5 DC Characteristics (PDF p.42): T = -40 to 85 C, VCC = 2.7 V to 3.6 V
+idle_a = 0.000050            # 8.5 DC Characteristics (PDF p.42) ICC1 standby current max 50 uA
+read_a = 0.020               # 8.5 (PDF p.42) ICC3 read current max at 133 MHz, 20 mA
+write_a = 0.025              # 8.5 (PDF p.42) ICC4 through ICC8 program/erase current max 25 mA
+low_power_a = 0.000008       # 8.5 (PDF p.42) ICC2 deep power-down current max 8 uA
+
+[models.coverage]
+implements = ["spi_standard_read", "spi_fast_read", "spi_jedec_id", "spi_page_program", "spi_sector_erase", "spi_chip_erase", "spi_power_down", "standby_current_max", "deep_power_down_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "security_registers", "fitted_array_image"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Macronix MX25L6433F 64-Mbit SPI NOR, 8-pin SOP 200-mil (M2), 8-pad WSON 6x5 (ZN) and 8x6 (Z2).
+#
+# Source: Macronix MX25L6433F Rev 1.6, October 21 2016 (PINE64 copy of the Macronix PDF; PDF page numbers equal
+# printed page numbers). HOLD#/SIO3 carries an internal pull-up (Pin Description note 1, p.7), so it is
+# float-tolerated; WP#/SIO2 has no stated requirement in this revision and is left undeclared.
+# A bare "MX25L6433F" value binds this 8-pin card (the 16-pin SOP has its own ordering code).
+[[models]]
+id = "mx25l6433f_8pin"
+kind = "digital"
+description = "Macronix MX25L6433F 64-Mbit SPI NOR, 8-pin SOP 200-mil / WSON (executable standard-SPI subset)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://files.pine64.org/doc/datasheet/pinetime/MX25L6433F,%203V,%2064Mb,%20v1.6.pdf"
+title = "Macronix MX25L6433F 3V, 64M-BIT [x 1/x 2/x 4] CMOS MXSMIO (Serial Multi I/O) Flash Memory, P/N PM2130 Rev. 1.6, October 21, 2016 (PINE64 copy of the Macronix PDF)"
+locator = "3 Pin Configuration and 4 Pin Description (PDF p.7); 12-1 Absolute Maximum Ratings (PDF p.64); Table 17 DC Characteristics (PDF p.66); Table 9 ID Definitions (PDF p.49); 18 Ordering Information and 19 Part Name Description (PDF p.75-76)"
+sha256 = "f9841f0fdc919d257c602f62fe3a2fa9254c2bb89bd6585599fbd73c5367d30d"
+[[models.source.pinout]]
+package = "8-pin SOP 200-mil / 8-pad WSON"
+pins = { "1" = "CS#", "2" = "SO/SIO1", "3" = "WP#/SIO2", "4" = "GND", "5" = "SI/SIO0", "6" = "SCLK", "7" = "HOLD#/SIO3", "8" = "VCC" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "array_contents"
+reason = "The fitted flash image is an assembly input; an unprovided image starts erased (0xFF)."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "standby_current"
+low = 0.0
+high = 0.000050
+unit = "A"
+kind = "specification-limits"
+basis = "Table 17 DC Characteristics (PDF p.66) ISB1 VCC standby current max 50 uA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_read_current"
+low = 0.0
+high = 0.017000
+unit = "A"
+kind = "specification-limits"
+basis = "Table 17 (PDF p.66) ICC1 read current max, fQ = 133 MHz (4 x I/O read), 17 mA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "program_or_erase_current"
+low = 0.0
+high = 0.015000
+unit = "A"
+kind = "specification-limits"
+basis = "Table 17 (PDF p.66) ICC2 through ICC5 program/write-status/erase current max 15 mA; 0 A is the physical lower bound of a supply current"
+
+[models.match]
+# Ordering (18 PDF p.75, 19 PDF p.76): MX25L6433F<M2|ZN|Z2>I-08<G|Q>; the 24-ball TFBGA (XC) and WLCSP (BB) are not modelled.
+# Excludes MX25L6406E, MX25L6433F-adjacent densities (3233F, 12835F) and MX25L6435E.
+value_re = "(?i)^MX25L6433F(?:(?:M2|ZN|Z2)I-08[GQ])?$"
+
+[models.params]
+warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
+float_tolerated_roles = "hold_n"
+float_tolerated_basis = "Macronix MX25L6433F Rev 1.6 Pin Description note 1 (PDF p.7): the HOLD#/SIO3 pin has an internal pull-up that stays active while the pin is not physically connected"
+
+[models.pins]
+# 3 Pin Configuration (PDF p.7), identical for 8-pin SOP and 8-WSON.
+"1" = "cs"
+"2" = "miso"
+"3" = "wp_n"
+"4" = "gnd"
+"5" = "mosi"
+"6" = "sck"
+"7" = "hold_n"
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 4.6   # 12-1 Absolute Maximum Ratings (PDF p.64): VCC to ground potential -0.5 V to 4.6 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.65
+max_v = 3.6
+abs_max_v = 4.6
+basis = "Macronix MX25L6433F Rev 1.6, Features (PDF p.5) and Table 17 DC Characteristics (PDF p.66): VCC = 2.65 V to 3.6 V"
+abs_max_basis = "Macronix MX25L6433F Rev 1.6, 12-1 Absolute Maximum Ratings (PDF p.64): VCC to ground potential -0.5 V to 4.6 V"
+
+[models.peripheral]
+kind = "spi_nor_flash"
+size_bytes = 8388608   # 64 Mbit; density from the part name and the JEDEC density byte
+page_size = 256            # 256-byte program page (all Macronix datasheet feature lists)
+sector_size = 4096         # 4 KB sector erase
+jedec_id = [194, 32, 23]   # Table 9 ID Definitions (PDF p.49): RDID returns manufacturer C2h, memory type 20h, memory density 17h
+spi_mode = 0
+cs_role = "cs"
+clk_role = "sck"
+mosi_role = "mosi"
+miso_role = "miso"
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.65   # Features (PDF p.5) and Table 17 DC Characteristics (PDF p.66): VCC = 2.65 V to 3.6 V
+idle_a = 0.000050            # Table 17 DC Characteristics (PDF p.66) ISB1 VCC standby current max 50 uA
+read_a = 0.017               # Table 17 (PDF p.66) ICC1 read current max, fQ = 133 MHz (4 x I/O read), 17 mA
+write_a = 0.015              # Table 17 (PDF p.66) ICC2 through ICC5 program/write-status/erase current max 15 mA
+low_power_a = 0.000020       # Table 17 (PDF p.66) ISB2 deep power-down current max 20 uA
+
+[models.coverage]
+implements = ["spi_standard_read", "spi_fast_read", "spi_jedec_id", "spi_page_program", "spi_sector_erase", "spi_chip_erase", "spi_power_down", "standby_current_max", "deep_power_down_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "security_registers", "fitted_array_image"]
+
+# Macronix MX25L6433F 16-pin SOP 300-mil (M): its own pad map (3 Pin Configuration, PDF p.7).
+[[models]]
+id = "mx25l6433f_sop16"
+kind = "digital"
+description = "Macronix MX25L6433F 64-Mbit SPI NOR, 16-pin SOP 300-mil (executable standard-SPI subset)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://files.pine64.org/doc/datasheet/pinetime/MX25L6433F,%203V,%2064Mb,%20v1.6.pdf"
+title = "Macronix MX25L6433F 3V, 64M-BIT [x 1/x 2/x 4] CMOS MXSMIO (Serial Multi I/O) Flash Memory, P/N PM2130 Rev. 1.6, October 21, 2016 (PINE64 copy of the Macronix PDF)"
+locator = "3 Pin Configuration and 4 Pin Description (PDF p.7); 12-1 Absolute Maximum Ratings (PDF p.64); Table 17 DC Characteristics (PDF p.66); Table 9 ID Definitions (PDF p.49); 18 Ordering Information and 19 Part Name Description (PDF p.75-76)"
+sha256 = "f9841f0fdc919d257c602f62fe3a2fa9254c2bb89bd6585599fbd73c5367d30d"
+[[models.source.pinout]]
+package = "16-pin SOP 300-mil"
+pins = { "1" = "HOLD#/SIO3", "2" = "VCC", "3" = "NC", "4" = "NC", "5" = "NC", "6" = "NC", "7" = "CS#", "8" = "SO/SIO1", "9" = "WP#/SIO2", "10" = "GND", "11" = "NC", "12" = "NC", "13" = "NC", "14" = "NC", "15" = "SI/SIO0", "16" = "SCLK" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "array_contents"
+reason = "The fitted flash image is an assembly input; an unprovided image starts erased (0xFF)."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "standby_current"
+low = 0.0
+high = 0.000050
+unit = "A"
+kind = "specification-limits"
+basis = "Table 17 DC Characteristics (PDF p.66) ISB1 VCC standby current max 50 uA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_read_current"
+low = 0.0
+high = 0.017000
+unit = "A"
+kind = "specification-limits"
+basis = "Table 17 (PDF p.66) ICC1 read current max, fQ = 133 MHz (4 x I/O read), 17 mA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "program_or_erase_current"
+low = 0.0
+high = 0.015000
+unit = "A"
+kind = "specification-limits"
+basis = "Table 17 (PDF p.66) ICC2 through ICC5 program/write-status/erase current max 15 mA; 0 A is the physical lower bound of a supply current"
+
+[models.match]
+# Ordering (18 PDF p.75): MX25L6433FMI-08G and MX25L6433FMI-08Q.
+value_re = "(?i)^MX25L6433FMI-08[GQ]$"
+
+[models.params]
+warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
+float_tolerated_roles = "hold_n"
+float_tolerated_basis = "Macronix MX25L6433F Rev 1.6 Pin Description note 1 (PDF p.7): the HOLD#/SIO3 pin has an internal pull-up that stays active while the pin is not physically connected"
+
+[models.pins]
+# 16-pin SOP (300mil) pin configuration (PDF p.7).
+"1" = "hold_n"
+"2" = "vcc"
+"3" = "nc"
+"4" = "nc"
+"5" = "nc"
+"6" = "nc"
+"7" = "cs"
+"8" = "miso"
+"9" = "wp_n"
+"10" = "gnd"
+"11" = "nc"
+"12" = "nc"
+"13" = "nc"
+"14" = "nc"
+"15" = "mosi"
+"16" = "sck"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 4.6   # 12-1 Absolute Maximum Ratings (PDF p.64): VCC to ground potential -0.5 V to 4.6 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.65
+max_v = 3.6
+abs_max_v = 4.6
+basis = "Macronix MX25L6433F Rev 1.6, Features (PDF p.5) and Table 17 DC Characteristics (PDF p.66): VCC = 2.65 V to 3.6 V"
+abs_max_basis = "Macronix MX25L6433F Rev 1.6, 12-1 Absolute Maximum Ratings (PDF p.64): VCC to ground potential -0.5 V to 4.6 V"
+
+[models.peripheral]
+kind = "spi_nor_flash"
+size_bytes = 8388608   # 64 Mbit; density from the part name and the JEDEC density byte
+page_size = 256            # 256-byte program page (all Macronix datasheet feature lists)
+sector_size = 4096         # 4 KB sector erase
+jedec_id = [194, 32, 23]   # Table 9 ID Definitions (PDF p.49): RDID returns manufacturer C2h, memory type 20h, memory density 17h
+spi_mode = 0
+cs_role = "cs"
+clk_role = "sck"
+mosi_role = "mosi"
+miso_role = "miso"
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.65   # Features (PDF p.5) and Table 17 DC Characteristics (PDF p.66): VCC = 2.65 V to 3.6 V
+idle_a = 0.000050            # Table 17 DC Characteristics (PDF p.66) ISB1 VCC standby current max 50 uA
+read_a = 0.017               # Table 17 (PDF p.66) ICC1 read current max, fQ = 133 MHz (4 x I/O read), 17 mA
+write_a = 0.015              # Table 17 (PDF p.66) ICC2 through ICC5 program/write-status/erase current max 15 mA
+low_power_a = 0.000020       # Table 17 (PDF p.66) ISB2 deep power-down current max 20 uA
+
+[models.coverage]
+implements = ["spi_standard_read", "spi_fast_read", "spi_jedec_id", "spi_page_program", "spi_sector_erase", "spi_chip_erase", "spi_power_down", "standby_current_max", "deep_power_down_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "security_registers", "fitted_array_image"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Macronix MX25L3233F 32-Mbit SPI NOR, 8-pin SOP 150/200-mil (M1, M2), 8-land USON 4x3 (ZB), WSON 6x5 (ZN), XSON 4x4 (ZC).
+#
+# Source: Macronix MX25L3233F Rev 1.7, February 19 2021 (PDF page numbers equal printed page numbers).
+# HOLD#/SIO3 and WP#/SIO2 carry internal pull-ups (Pin Description note 1, p.7), so both are float-tolerated.
+# A bare "MX25L3233F" value binds this 8-pin card.
+[[models]]
+id = "mx25l3233f_8pin"
+kind = "digital"
+description = "Macronix MX25L3233F 32-Mbit SPI NOR, 8-pin SOP / USON / WSON / XSON (executable standard-SPI subset)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.macronix.com/Lists/Datasheet/Attachments/8933/MX25L3233F,%203V,%2032Mb,%20v1.7.pdf"
+title = "Macronix MX25L3233F 3V, 32M-BIT [x 1/x 2/x 4] CMOS MXSMIO (Serial Multi I/O) Flash Memory, P/N PM2113 Rev. 1.7, February 19, 2021"
+locator = "3 Pin Configuration and 4 Pin Description (PDF p.7); Absolute Maximum Ratings (PDF p.65); Table 17 DC Characteristics (PDF p.67); Table 9 ID Definitions (PDF p.50); 18 Ordering Information and 19 Part Name Description (PDF p.76-77)"
+sha256 = "c34badd3067e5f29ccc790fbf9d0e37ccc4b29d7f9384cc830bf478b96f2822d"
+[[models.source.pinout]]
+package = "8-pin SOP / 8-land USON / 8-pad WSON / 8-land XSON"
+pins = { "1" = "CS#", "2" = "SO/SIO1", "3" = "WP#/SIO2", "4" = "GND", "5" = "SI/SIO0", "6" = "SCLK", "7" = "HOLD#/SIO3", "8" = "VCC" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "array_contents"
+reason = "The fitted flash image is an assembly input; an unprovided image starts erased (0xFF)."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "standby_current"
+low = 0.0
+high = 0.000050
+unit = "A"
+kind = "specification-limits"
+basis = "Table 17 DC Characteristics (PDF p.67) ISB1 VCC standby current max 50 uA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_read_current"
+low = 0.0
+high = 0.017000
+unit = "A"
+kind = "specification-limits"
+basis = "Table 17 (PDF p.67) ICC1 read current max, fQ = 133 MHz (4 x I/O read), 17 mA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "program_or_erase_current"
+low = 0.0
+high = 0.015000
+unit = "A"
+kind = "specification-limits"
+basis = "Table 17 (PDF p.67) ICC2 through ICC5 program/write-status/erase current max 15 mA; 0 A is the physical lower bound of a supply current"
+
+[models.match]
+# Ordering (18 PDF p.76, 19 PDF p.77): MX25L3233F<M1|M2|ZB|ZN|ZC>I-08<G|Q>. Excludes MX25L3206E, MX25L3273F and other densities.
+value_re = "(?i)^MX25L3233F(?:(?:M1|M2|ZB|ZN|ZC)I-08[GQ])?$"
+
+[models.params]
+warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
+float_tolerated_roles = "hold_n,wp_n"
+float_tolerated_basis = "Macronix MX25L3233F Rev 1.7 Pin Description note 1 (PDF p.7): the HOLD#/SIO3 and WP#/SIO2 pins have an internal pull-up that stays active while the pin is not physically connected"
+
+[models.pins]
+# 3 Pin Configuration (PDF p.7), identical for the 8-pin SOP, USON, WSON and XSON packages.
+"1" = "cs"
+"2" = "miso"
+"3" = "wp_n"
+"4" = "gnd"
+"5" = "mosi"
+"6" = "sck"
+"7" = "hold_n"
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 4.6   # Absolute Maximum Ratings (PDF p.65): VCC to ground potential -0.5 V to 4.6 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.65
+max_v = 3.6
+abs_max_v = 4.6
+basis = "Macronix MX25L3233F Rev 1.7, Features (PDF p.5): VCC = 2.65 V to 3.6 V for read, erase and program"
+abs_max_basis = "Macronix MX25L3233F Rev 1.7, Absolute Maximum Ratings (PDF p.65): VCC to ground potential -0.5 V to 4.6 V"
+
+[models.peripheral]
+kind = "spi_nor_flash"
+size_bytes = 4194304   # 32 Mbit; density from the part name and the JEDEC density byte
+page_size = 256            # 256-byte program page (all Macronix datasheet feature lists)
+sector_size = 4096         # 4 KB sector erase
+jedec_id = [194, 32, 22]   # Table 9 ID Definitions (PDF p.50): RDID returns manufacturer C2h, memory type 20h, memory density 16h
+spi_mode = 0
+cs_role = "cs"
+clk_role = "sck"
+mosi_role = "mosi"
+miso_role = "miso"
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.65   # Features (PDF p.5): VCC = 2.65 V to 3.6 V for read, erase and program
+idle_a = 0.000050            # Table 17 DC Characteristics (PDF p.67) ISB1 VCC standby current max 50 uA
+read_a = 0.017               # Table 17 (PDF p.67) ICC1 read current max, fQ = 133 MHz (4 x I/O read), 17 mA
+write_a = 0.015              # Table 17 (PDF p.67) ICC2 through ICC5 program/write-status/erase current max 15 mA
+low_power_a = 0.000020       # Table 17 (PDF p.67) ISB2 deep power-down current max 20 uA
+
+[models.coverage]
+implements = ["spi_standard_read", "spi_fast_read", "spi_jedec_id", "spi_page_program", "spi_sector_erase", "spi_chip_erase", "spi_power_down", "standby_current_max", "deep_power_down_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "security_registers", "fitted_array_image"]
+
+# Macronix MX25L3233F 16-pin SOP 300-mil (M): its own pad map (3 Pin Configuration, PDF p.7).
+[[models]]
+id = "mx25l3233f_sop16"
+kind = "digital"
+description = "Macronix MX25L3233F 32-Mbit SPI NOR, 16-pin SOP 300-mil (executable standard-SPI subset)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.macronix.com/Lists/Datasheet/Attachments/8933/MX25L3233F,%203V,%2032Mb,%20v1.7.pdf"
+title = "Macronix MX25L3233F 3V, 32M-BIT [x 1/x 2/x 4] CMOS MXSMIO (Serial Multi I/O) Flash Memory, P/N PM2113 Rev. 1.7, February 19, 2021"
+locator = "3 Pin Configuration and 4 Pin Description (PDF p.7); Absolute Maximum Ratings (PDF p.65); Table 17 DC Characteristics (PDF p.67); Table 9 ID Definitions (PDF p.50); 18 Ordering Information and 19 Part Name Description (PDF p.76-77)"
+sha256 = "c34badd3067e5f29ccc790fbf9d0e37ccc4b29d7f9384cc830bf478b96f2822d"
+[[models.source.pinout]]
+package = "16-pin SOP 300-mil"
+pins = { "1" = "HOLD#/SIO3", "2" = "VCC", "3" = "NC", "4" = "NC", "5" = "NC", "6" = "NC", "7" = "CS#", "8" = "SO/SIO1", "9" = "WP#/SIO2", "10" = "GND", "11" = "NC", "12" = "NC", "13" = "NC", "14" = "NC", "15" = "SI/SIO0", "16" = "SCLK" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "array_contents"
+reason = "The fitted flash image is an assembly input; an unprovided image starts erased (0xFF)."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "standby_current"
+low = 0.0
+high = 0.000050
+unit = "A"
+kind = "specification-limits"
+basis = "Table 17 DC Characteristics (PDF p.67) ISB1 VCC standby current max 50 uA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_read_current"
+low = 0.0
+high = 0.017000
+unit = "A"
+kind = "specification-limits"
+basis = "Table 17 (PDF p.67) ICC1 read current max, fQ = 133 MHz (4 x I/O read), 17 mA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "program_or_erase_current"
+low = 0.0
+high = 0.015000
+unit = "A"
+kind = "specification-limits"
+basis = "Table 17 (PDF p.67) ICC2 through ICC5 program/write-status/erase current max 15 mA; 0 A is the physical lower bound of a supply current"
+
+[models.match]
+# Ordering (18 PDF p.76): MX25L3233FMI-08G.
+value_re = "(?i)^MX25L3233FMI-08G$"
+
+[models.params]
+warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
+float_tolerated_roles = "hold_n,wp_n"
+float_tolerated_basis = "Macronix MX25L3233F Rev 1.7 Pin Description note 1 (PDF p.7): the HOLD#/SIO3 and WP#/SIO2 pins have an internal pull-up that stays active while the pin is not physically connected"
+
+[models.pins]
+# 16-pin SOP (300mil) pin configuration (PDF p.7).
+"1" = "hold_n"
+"2" = "vcc"
+"3" = "nc"
+"4" = "nc"
+"5" = "nc"
+"6" = "nc"
+"7" = "cs"
+"8" = "miso"
+"9" = "wp_n"
+"10" = "gnd"
+"11" = "nc"
+"12" = "nc"
+"13" = "nc"
+"14" = "nc"
+"15" = "mosi"
+"16" = "sck"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 4.6   # Absolute Maximum Ratings (PDF p.65): VCC to ground potential -0.5 V to 4.6 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.65
+max_v = 3.6
+abs_max_v = 4.6
+basis = "Macronix MX25L3233F Rev 1.7, Features (PDF p.5): VCC = 2.65 V to 3.6 V for read, erase and program"
+abs_max_basis = "Macronix MX25L3233F Rev 1.7, Absolute Maximum Ratings (PDF p.65): VCC to ground potential -0.5 V to 4.6 V"
+
+[models.peripheral]
+kind = "spi_nor_flash"
+size_bytes = 4194304   # 32 Mbit; density from the part name and the JEDEC density byte
+page_size = 256            # 256-byte program page (all Macronix datasheet feature lists)
+sector_size = 4096         # 4 KB sector erase
+jedec_id = [194, 32, 22]   # Table 9 ID Definitions (PDF p.50): RDID returns manufacturer C2h, memory type 20h, memory density 16h
+spi_mode = 0
+cs_role = "cs"
+clk_role = "sck"
+mosi_role = "mosi"
+miso_role = "miso"
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.65   # Features (PDF p.5): VCC = 2.65 V to 3.6 V for read, erase and program
+idle_a = 0.000050            # Table 17 DC Characteristics (PDF p.67) ISB1 VCC standby current max 50 uA
+read_a = 0.017               # Table 17 (PDF p.67) ICC1 read current max, fQ = 133 MHz (4 x I/O read), 17 mA
+write_a = 0.015              # Table 17 (PDF p.67) ICC2 through ICC5 program/write-status/erase current max 15 mA
+low_power_a = 0.000020       # Table 17 (PDF p.67) ISB2 deep power-down current max 20 uA
+
+[models.coverage]
+implements = ["spi_standard_read", "spi_fast_read", "spi_jedec_id", "spi_page_program", "spi_sector_erase", "spi_chip_erase", "spi_power_down", "standby_current_max", "deep_power_down_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "security_registers", "fitted_array_image"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Macronix MX25L12835F 128-Mbit SPI NOR, 8-pin SOP 200-mil (M2), 8-pad WSON 6x5 (ZN) and 8x6 (Z2).
+#
+# Source: Macronix MX25L12835F Rev 1.7, August 11 2025 (PDF page numbers equal printed page numbers).
+# Pad 7 is RESET#/SIO3 (not HOLD#): the role is reset_n. RESET#/SIO3 and WP#/SIO2 carry internal pull-ups
+# (Pin Description note 1, p.7), so both are float-tolerated. A bare "MX25L12835F" value binds this 8-pin card.
+[[models]]
+id = "mx25l12835f_8pin"
+kind = "digital"
+description = "Macronix MX25L12835F 128-Mbit SPI NOR, 8-pin SOP 200-mil / WSON (executable standard-SPI subset)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.macronix.com/Lists/Datasheet/Attachments/9173/MX25L12835F,%203V,%20128Mb,%20v1.7.pdf"
+title = "Macronix MX25L12835F 3V, 128M-BIT [x 1/x 2/x 4] CMOS MXSMIO (Serial Multi I/O) Flash Memory, P/N PM1795 Rev. 1.7, August 11, 2025"
+locator = "3 Pin Configurations and 4 Pin Description (PDF p.7); Table 14 Absolute Maximum Ratings (PDF p.82); Table 16 DC Characteristics (PDF p.84); Table 6 ID Definitions (PDF p.26); 17 Ordering Information and 18 Part Name Description (PDF p.91-92)"
+sha256 = "66e38de394d725c668b469b65a9fb17604ce71b2356af516ed6cd923f3814744"
+[[models.source.pinout]]
+package = "8-pin SOP 200-mil / 8-pad WSON"
+pins = { "1" = "CS#", "2" = "SO/SIO1", "3" = "WP#/SIO2", "4" = "GND", "5" = "SI/SIO0", "6" = "SCLK", "7" = "RESET#/SIO3", "8" = "VCC" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "array_contents"
+reason = "The fitted flash image is an assembly input; an unprovided image starts erased (0xFF)."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "standby_current"
+low = 0.0
+high = 0.000050
+unit = "A"
+kind = "specification-limits"
+basis = "Table 16 DC Characteristics (PDF p.84) ISB1 VCC standby current max 50 uA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_read_current"
+low = 0.0
+high = 0.025000
+unit = "A"
+kind = "specification-limits"
+basis = "Table 16 (PDF p.84) ICC1 read current max, f = 133 MHz (4 x I/O read), 25 mA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "program_or_erase_current"
+low = 0.0
+high = 0.025000
+unit = "A"
+kind = "specification-limits"
+basis = "Table 16 (PDF p.84) ICC4 and ICC5 sector/block/chip erase current max 25 mA (ICC2 program 20 mA, ICC3 write status 12 mA); 0 A is the physical lower bound of a supply current"
+
+[models.match]
+# Ordering (17 PDF p.91, 18 PDF p.92): MX25L12835F<M2|ZN|Z2>I-10G. Excludes MX25L12805D, MX25L12873F and other densities.
+value_re = "(?i)^MX25L12835F(?:(?:M2|ZN|Z2)I-10G)?$"
+
+[models.params]
+warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
+float_tolerated_roles = "reset_n,wp_n"
+float_tolerated_basis = "Macronix MX25L12835F Rev 1.7 Pin Description note 1 (PDF p.7): the RESET#, RESET#/SIO3 and WP#/SIO2 pins have an internal pull-up that stays active while the pin is not physically connected"
+
+[models.pins]
+# 3 Pin Configurations (PDF p.7), identical for 8-pin SOP and 8-WSON.
+"1" = "cs"
+"2" = "miso"
+"3" = "wp_n"
+"4" = "gnd"
+"5" = "mosi"
+"6" = "sck"
+"7" = "reset_n"
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 4.0   # Table 14 Absolute Maximum Ratings (PDF p.82): VCC to ground potential -0.5 V to 4.0 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 3.6
+abs_max_v = 4.0
+basis = "Macronix MX25L12835F Rev 1.7, Table 16 DC Characteristics (PDF p.84): VCC = 2.7 V to 3.6 V"
+abs_max_basis = "Macronix MX25L12835F Rev 1.7, Table 14 Absolute Maximum Ratings (PDF p.82): VCC to ground potential -0.5 V to 4.0 V"
+
+[models.peripheral]
+kind = "spi_nor_flash"
+size_bytes = 16777216   # 128 Mbit; density from the part name and the JEDEC density byte
+page_size = 256            # 256-byte program page (all Macronix datasheet feature lists)
+sector_size = 4096         # 4 KB sector erase
+jedec_id = [194, 32, 24]   # Table 6 ID Definitions (PDF p.26): RDID returns manufacturer C2h, memory type 20h, memory density 18h
+spi_mode = 0
+cs_role = "cs"
+clk_role = "sck"
+mosi_role = "mosi"
+miso_role = "miso"
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.7   # Table 16 DC Characteristics (PDF p.84): VCC = 2.7 V to 3.6 V
+idle_a = 0.000050            # Table 16 DC Characteristics (PDF p.84) ISB1 VCC standby current max 50 uA
+read_a = 0.025               # Table 16 (PDF p.84) ICC1 read current max, f = 133 MHz (4 x I/O read), 25 mA
+write_a = 0.025              # Table 16 (PDF p.84) ICC4 and ICC5 sector/block/chip erase current max 25 mA (ICC2 program 20 mA, ICC3 write status 12 mA)
+low_power_a = 0.000020       # Table 16 (PDF p.84) ISB2 deep power-down current max 20 uA
+
+[models.coverage]
+implements = ["spi_standard_read", "spi_fast_read", "spi_jedec_id", "spi_page_program", "spi_sector_erase", "spi_chip_erase", "spi_power_down", "standby_current_max", "deep_power_down_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "security_registers", "fitted_array_image"]
+
+# Macronix MX25L12835F 16-pin SOP 300-mil (M): pad 1 is DNU/SIO3 and pad 3 is RESET# (3 Pin Configurations, PDF p.7).
+# Note 2 under the pin description: with 1I/O or 2I/O the DNU/SIO3 pad cannot connect to GND and is
+# recommended to connect to VCC or float.
+[[models]]
+id = "mx25l12835f_sop16"
+kind = "digital"
+description = "Macronix MX25L12835F 128-Mbit SPI NOR, 16-pin SOP 300-mil (executable standard-SPI subset)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.macronix.com/Lists/Datasheet/Attachments/9173/MX25L12835F,%203V,%20128Mb,%20v1.7.pdf"
+title = "Macronix MX25L12835F 3V, 128M-BIT [x 1/x 2/x 4] CMOS MXSMIO (Serial Multi I/O) Flash Memory, P/N PM1795 Rev. 1.7, August 11, 2025"
+locator = "3 Pin Configurations and 4 Pin Description (PDF p.7); Table 14 Absolute Maximum Ratings (PDF p.82); Table 16 DC Characteristics (PDF p.84); Table 6 ID Definitions (PDF p.26); 17 Ordering Information and 18 Part Name Description (PDF p.91-92)"
+sha256 = "66e38de394d725c668b469b65a9fb17604ce71b2356af516ed6cd923f3814744"
+[[models.source.pinout]]
+package = "16-pin SOP 300-mil"
+pins = { "1" = "DNU/SIO3", "2" = "VCC", "3" = "RESET#", "4" = "NC", "5" = "NC", "6" = "NC", "7" = "CS#", "8" = "SO/SIO1", "9" = "WP#/SIO2", "10" = "GND", "11" = "NC", "12" = "NC", "13" = "NC", "14" = "NC", "15" = "SI/SIO0", "16" = "SCLK" }
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "array_contents"
+reason = "The fitted flash image is an assembly input; an unprovided image starts erased (0xFF)."
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "standby_current"
+low = 0.0
+high = 0.000050
+unit = "A"
+kind = "specification-limits"
+basis = "Table 16 DC Characteristics (PDF p.84) ISB1 VCC standby current max 50 uA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "active_read_current"
+low = 0.0
+high = 0.025000
+unit = "A"
+kind = "specification-limits"
+basis = "Table 16 (PDF p.84) ICC1 read current max, f = 133 MHz (4 x I/O read), 25 mA; 0 A is the physical lower bound of a supply current"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "program_or_erase_current"
+low = 0.0
+high = 0.025000
+unit = "A"
+kind = "specification-limits"
+basis = "Table 16 (PDF p.84) ICC4 and ICC5 sector/block/chip erase current max 25 mA (ICC2 program 20 mA, ICC3 write status 12 mA); 0 A is the physical lower bound of a supply current"
+
+[models.match]
+# Ordering (17 PDF p.91): MX25L12835FMI-10G.
+value_re = "(?i)^MX25L12835FMI-10G$"
+
+[models.params]
+warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an erased initial array; Quad/Dual I/O, SFDP, protection, busy timing, security registers and a fitted flash image are not modeled"
+float_tolerated_roles = "reset_n,wp_n,sio3"
+float_tolerated_basis = "Macronix MX25L12835F Rev 1.7 Pin Description note 1 (PDF p.7): the RESET#, RESET#/SIO3 and WP#/SIO2 pins have an internal pull-up that stays active while the pin is not physically connected; the DNU/SIO3 pad is recommended to connect to VCC or float (note 2)"
+
+[models.pins]
+# 16-pin SOP (300mil) pin configuration (PDF p.7).
+"1" = "sio3"
+"2" = "vcc"
+"3" = "reset_n"
+"4" = "nc"
+"5" = "nc"
+"6" = "nc"
+"7" = "cs"
+"8" = "miso"
+"9" = "wp_n"
+"10" = "gnd"
+"11" = "nc"
+"12" = "nc"
+"13" = "nc"
+"14" = "nc"
+"15" = "mosi"
+"16" = "sck"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 4.0   # Table 14 Absolute Maximum Ratings (PDF p.82): VCC to ground potential -0.5 V to 4.0 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 3.6
+abs_max_v = 4.0
+basis = "Macronix MX25L12835F Rev 1.7, Table 16 DC Characteristics (PDF p.84): VCC = 2.7 V to 3.6 V"
+abs_max_basis = "Macronix MX25L12835F Rev 1.7, Table 14 Absolute Maximum Ratings (PDF p.82): VCC to ground potential -0.5 V to 4.0 V"
+
+[models.peripheral]
+kind = "spi_nor_flash"
+size_bytes = 16777216   # 128 Mbit; density from the part name and the JEDEC density byte
+page_size = 256            # 256-byte program page (all Macronix datasheet feature lists)
+sector_size = 4096         # 4 KB sector erase
+jedec_id = [194, 32, 24]   # Table 6 ID Definitions (PDF p.26): RDID returns manufacturer C2h, memory type 20h, memory density 18h
+spi_mode = 0
+cs_role = "cs"
+clk_role = "sck"
+mosi_role = "mosi"
+miso_role = "miso"
+
+[models.peripheral_power]
+supply_role = "vcc"
+return_role = "gnd"
+power_on_threshold_v = 2.7   # Table 16 DC Characteristics (PDF p.84): VCC = 2.7 V to 3.6 V
+idle_a = 0.000050            # Table 16 DC Characteristics (PDF p.84) ISB1 VCC standby current max 50 uA
+read_a = 0.025               # Table 16 (PDF p.84) ICC1 read current max, f = 133 MHz (4 x I/O read), 25 mA
+write_a = 0.025              # Table 16 (PDF p.84) ICC4 and ICC5 sector/block/chip erase current max 25 mA (ICC2 program 20 mA, ICC3 write status 12 mA)
+low_power_a = 0.000020       # Table 16 (PDF p.84) ISB2 deep power-down current max 20 uA
+
+[models.coverage]
+implements = ["spi_standard_read", "spi_fast_read", "spi_jedec_id", "spi_page_program", "spi_sector_erase", "spi_chip_erase", "spi_power_down", "standby_current_max", "deep_power_down_current_max", "read_current_max", "write_current_max", "bus_coupled_active_current", "supply_voltage_gating"]
+missing = ["spi_dual_quad_io", "sfdp", "busy_timing", "protection_registers", "security_registers", "fitted_array_image"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Microchip 23LC1024 1-Mbit serial SRAM (23A1024 is the 1.7-2.2 V sibling and is not bound).
+#
+# Source: Microchip "23A1024/23LC1024 1Mbit SPI Serial SRAM with SDI and SQI Interface", DS20005142C
+# (LCSC mirror of the Microchip PDF; Microchip's own site is not reachable by curl).
+# There is no honest SRAM peripheral kind, so the card carries identity, pin map, supply envelope, input levels
+# and absolute ratings only; the SRAM array and its SPI commands are not simulated (SCHEMA GAP).
+[[models]]
+id = "23lc1024_8pin"
+kind = "digital"
+description = "Microchip 23LC1024 1-Mbit SPI/SDI/SQI serial SRAM, 2.5 V to 5.5 V, 8-lead SOIC/TSSOP/PDIP (identity, pins, levels and ratings only)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://datasheet.lcsc.com/datasheet/pdf/25b4e65b6e863627443e253948a0279a.pdf"
+title = "Microchip 23A1024/23LC1024 1Mbit SPI Serial SRAM with SDI and SQI Interface, DS20005142C (2012-2015), LCSC mirror"
+locator = "Device Selection Table and Pin Function Table p.1; 1.0 Electrical Characteristics, Absolute Maximum Ratings and Table 1-1 DC Characteristics p.2; 3.0 Pin Descriptions, Table 3-1 and Figure 3-1 p.12; Product Identification System p.29"
+sha256 = "21929095a86c4d296060a8ceb8363baab17bdb5633ab8492d8fe0259f2595d22"
+[[models.source.pinout]]
+package = "8-lead SOIC / TSSOP / PDIP"
+pins = { "1" = "CS", "2" = "SO/SIO1", "3" = "SIO2", "4" = "VSS", "5" = "SI/SIO0", "6" = "SCK", "7" = "HOLD/SIO3", "8" = "VCC" }
+
+[models.match]
+# Ordering (Product Identification System, p.29): 23LC1024[T]-<I|E>/<SN|ST|P>. Excludes 23A1024 (1.7 V to 2.2 V) and 23LC512/23K256.
+value_re = "(?i)^23LC1024T?(-[IE]/(SN|ST|P))?$"
+
+[models.params]
+warning = "identity, pin map, supply envelope, input levels and absolute ratings only: the SRAM array and its SPI/SDI/SQI commands are not simulated and standby and read currents are not modelled"
+must_not_float_roles = "sio2,hold_n"
+
+[models.pins]
+# Table 3-1 Pin Function Table (p.12), SOIC/PDIP/TSSOP.
+"1" = "cs"
+"2" = "miso"
+"3" = "sio2"
+"4" = "gnd"
+"5" = "mosi"
+"6" = "sck"
+"7" = "hold_n"
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 6.5   # Microchip DS20005142C 1.0 Electrical Characteristics, Absolute Maximum Ratings p.2: VCC 6.5 V
+
+[models.levels]
+# Table 1-1 D002/D003 (p.2): VIH = 0.7 x VCC; VIL = 0.1 x VCC for the 23LC1024; points are derived as products at VCC = 2.5 V and 5.5 V (derived)
+vih = [[2.5, 1.750], [5.5, 3.850]]
+vil = [[2.5, 0.250], [5.5, 0.550]]
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.5
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Microchip DS20005142C Table 1-1 DC Characteristics p.2 D001 VCC 2.5 V to 5.5 V for the 23LC1024; Absolute Maximum Ratings p.2 VCC 6.5 V"
+abs_max_basis = "Microchip DS20005142C 1.0 Electrical Characteristics, Absolute Maximum Ratings p.2: VCC 6.5 V"
+
+[models.coverage]
+implements = ["supply_ranges", "absolute_ratings", "logic_levels"]
+missing = ["sram_array_behavior", "spi_sram_commands", "standby_current_max", "read_current_max"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Microchip 23LC512 512-Kbit serial SRAM (23A512 is the 1.7-2.2 V sibling and is not bound).
+#
+# Source: Microchip "23A512/23LC512 512-Kbit SPI Serial SRAM with SDI and SQI Interface", DS20005155C.
+# Identity, pin map, supply envelope, input levels and absolute ratings only (no SRAM peripheral kind; SCHEMA GAP).
+[[models]]
+id = "23lc512_8pin"
+kind = "digital"
+description = "Microchip 23LC512 512-Kbit SPI/SDI/SQI serial SRAM, 2.5 V to 5.5 V, 8-lead SOIC/TSSOP/PDIP (identity, pins, levels and ratings only)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/23A512-23LC512-512-Kbit-SPI-Serial-SRAM-with-SDI-and-SQI-Interface-20005155C.pdf"
+title = "Microchip 23A512/23LC512 512-Kbit SPI Serial SRAM with SDI and SQI Interface, DS20005155C"
+locator = "Device Selection Table and Pin Function Table p.1; 1.0 Electrical Characteristics, Absolute Maximum Ratings and Table 1-1 DC Characteristics p.2; 3.0 Pin Descriptions, Table 3-1 and Figure 3-1 p.12; Product Identification System p.30"
+sha256 = "a268829a2ccd77a37c80938dc0439959f7ad5f58a4a8718b60943ff83a73d864"
+[[models.source.pinout]]
+package = "8-lead SOIC / TSSOP / PDIP"
+pins = { "1" = "CS", "2" = "SO/SIO1", "3" = "SIO2", "4" = "VSS", "5" = "SI/SIO0", "6" = "SCK", "7" = "HOLD/SIO3", "8" = "VCC" }
+
+[models.match]
+# Ordering (Product Identification System, p.30): 23LC512[T]-<I|E>/<SN|ST|P>. Excludes 23A512 (1.7 V to 2.2 V) and 23LC1024/23K256.
+value_re = "(?i)^23LC512T?(-[IE]/(SN|ST|P))?$"
+
+[models.params]
+warning = "identity, pin map, supply envelope, input levels and absolute ratings only: the SRAM array and its SPI/SDI/SQI commands are not simulated and standby and read currents are not modelled"
+must_not_float_roles = "sio2,hold_n"
+
+[models.pins]
+# Table 3-1 Pin Function Table (p.12), SOIC/PDIP/TSSOP.
+"1" = "cs"
+"2" = "miso"
+"3" = "sio2"
+"4" = "gnd"
+"5" = "mosi"
+"6" = "sck"
+"7" = "hold_n"
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 6.5   # Microchip DS20005155C 1.0 Electrical Characteristics, Absolute Maximum Ratings p.2: VCC 6.5 V
+
+[models.levels]
+# Table 1-1 D002/D003 (p.2): VIH = 0.7 x VCC; VIL = 0.1 x VCC for the 23LC512; points are derived as products at VCC = 2.5 V and 5.5 V (derived)
+vih = [[2.5, 1.750], [5.5, 3.850]]
+vil = [[2.5, 0.250], [5.5, 0.550]]
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.5
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Microchip DS20005155C Table 1-1 DC Characteristics p.2 D001 VCC 2.5 V to 5.5 V for the 23LC512; Absolute Maximum Ratings p.2 VCC 6.5 V"
+abs_max_basis = "Microchip DS20005155C 1.0 Electrical Characteristics, Absolute Maximum Ratings p.2: VCC 6.5 V"
+
+[models.coverage]
+implements = ["supply_ranges", "absolute_ratings", "logic_levels"]
+missing = ["sram_array_behavior", "spi_sram_commands", "standby_current_max", "read_current_max"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Microchip 23K256 256-Kbit serial SRAM (23A256 is the 1.5-1.95 V sibling and is not bound).
+#
+# Source: Microchip "23A256/23K256 256K SPI Bus Low-Power Serial SRAM", DS22100F. Pin 3 is a no-connect on
+# this part (no SQI). Identity, pin map, supply envelope, input levels and absolute ratings only (no SRAM
+# peripheral kind; SCHEMA GAP). The datasheet prints no tie requirement for HOLD or the NC pad, so none is declared.
+[[models]]
+id = "23k256_8pin"
+kind = "digital"
+description = "Microchip 23K256 256-Kbit SPI serial SRAM, 2.7 V to 3.6 V, 8-lead PDIP/SOIC/TSSOP (identity, pins, levels and ratings only)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://ww1.microchip.com/downloads/en/DeviceDoc/22100F.pdf"
+title = "Microchip 23A256/23K256 256K SPI Bus Low-Power Serial SRAM Data Sheet, DS22100F"
+locator = "Device Selection Table, Features, Pin Function Table and Package Types p.1; 1.0 Electrical Characteristics, Absolute Maximum Ratings and Table 1-1 DC Characteristics p.2; 2.0 Pin Descriptions, Table 2-1 p.13; Product Identification System p.25"
+sha256 = "b35c23fd09f38f12f033d809ced3caca1a7c5e40813c52cabe7a7307e178584f"
+[[models.source.pinout]]
+package = "8-lead SOIC / TSSOP / PDIP"
+pins = { "1" = "CS", "2" = "SO", "3" = "NC", "4" = "VSS", "5" = "SI", "6" = "SCK", "7" = "HOLD", "8" = "VCC" }
+
+[models.match]
+# Ordering (Product Identification System, p.25): 23K256[T]-<I|E>/<P|SN|ST>. Excludes 23A256 (1.5 V to 1.95 V) and 23LC256/23LC512.
+value_re = "(?i)^23K256T?(-[IE]/(SN|ST|P))?$"
+
+[models.params]
+warning = "identity, pin map, supply envelope, input levels and absolute ratings only: the SRAM array and its SPI commands are not simulated and standby and read currents are not modelled"
+must_not_float_roles = "hold_n"
+
+[models.pins]
+# Package Types figure (p.1) and Table 2-1 (p.13), PDIP/SOIC/TSSOP.
+"1" = "cs"
+"2" = "miso"
+"3" = "nc"
+"4" = "gnd"
+"5" = "mosi"
+"6" = "sck"
+"7" = "hold_n"
+"8" = "vcc"
+
+[models.ratings]
+# max_junction_temp_c is left absent: the sheet prints no junction limit and no thermal resistance.
+max_voltage_v = 4.5   # Microchip DS22100F 1.0 Electrical Characteristics, Absolute Maximum Ratings p.2: VCC 4.5 V
+
+[models.levels]
+# Table 1-1 D002/D003 (p.2): VIH = 0.7 x VCC; VIL = 0.2 x VCC (I-temp; 0.15 x VCC for E-temp) for the 23K256; points are derived as products at VCC = 2.7 V and 3.6 V (derived)
+vih = [[2.7, 1.890], [3.6, 2.520]]
+vil = [[2.7, 0.540], [3.6, 0.720]]
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 3.6
+abs_max_v = 4.5
+basis = "Microchip DS22100F Table 1-1 DC Characteristics p.2 D001 VCC 2.7 V to 3.6 V for the 23K256 (I, E-temp); Absolute Maximum Ratings p.2 VCC 4.5 V"
+abs_max_basis = "Microchip DS22100F 1.0 Electrical Characteristics, Absolute Maximum Ratings p.2: VCC 4.5 V"
+
+[models.coverage]
+implements = ["supply_ranges", "absolute_ratings", "logic_levels"]
+missing = ["sram_array_behavior", "spi_sram_commands", "standby_current_max", "read_current_max"]
