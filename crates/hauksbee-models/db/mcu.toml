@@ -280,6 +280,49 @@ basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002
 "26" = "ADC3"
 "27" = "ADC4"
 "28" = "ADC5"
+[models.pin_capability.spi_sck]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) Port B alternate functions (PB5 SCK) and Table 21-3 (p.211) USART in MSPIM mode (XCKn is SCK; PD4 XCK per Table 14-9 p.97); the USART's SPI mode is master only (Table 21-3 gives it no slave role), so that pad never serves an SPI slave; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+master_only = ["6"]
+[models.pin_capability.spi_sck.pads]
+"6" = "XCK0 (USART0 MSPIM clock)"
+"19" = "SCK"
+[models.pin_capability.spi_mosi]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) (PB3 MOSI) and Table 21-3 (p.211) USART in MSPIM mode (TxDn is MOSI; PD1 TXD per Table 14-9 p.97); the USART's SPI mode is master only (Table 21-3 gives it no slave role), so that pad never serves an SPI slave; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+master_only = ["3"]
+[models.pin_capability.spi_mosi.pads]
+"3" = "TXD0 (USART0 MSPIM data out)"
+"17" = "MOSI"
+[models.pin_capability.spi_miso]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) (PB4 MISO) and Table 21-3 (p.211) USART in MSPIM mode (RxDn is MISO; PD0 RXD per Table 14-9 p.97); the USART's SPI mode is master only (Table 21-3 gives it no slave role), so that pad never serves an SPI slave; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+master_only = ["2"]
+[models.pin_capability.spi_miso.pads]
+"2" = "RXD0 (USART0 MSPIM data in)"
+"18" = "MISO"
+[models.pin_capability.i2c_sda]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-6 (p.94) Port C alternate functions (PC4 SDA, 2-wire serial bus data); hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_sda.pads]
+"27" = "SDA"
+[models.pin_capability.i2c_scl]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-6 (p.94) Port C alternate functions (PC5 SCL, 2-wire serial bus clock); hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_scl.pads]
+"28" = "SCL"
+[models.pin_capability.uart_tx]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-9 (p.97) Port D alternate functions (PD1 TXD, USART output pin); the part has one USART; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_tx.pads]
+"3" = "TXD0"
+[models.pin_capability.uart_rx]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-9 (p.97) Port D alternate functions (PD0 RXD, USART input pin); the part has one USART; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_rx.pads]
+"2" = "RXD0"
+[models.pin_capability.pwm]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) PB1 OC1A, PB2 OC1B, PB3 OC2A and Table 14-9 (p.97) PD6 OC0A, PD5 OC0B, PD3 OC2B: the timer output-compare pins; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.pwm.pads]
+"5" = "OC2B"
+"11" = "OC0B"
+"12" = "OC0A"
+"15" = "OC1A"
+"16" = "OC1B"
+"17" = "OC2A"
 
 # ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020): sec. 1.1.5 p.13
 # (PC6/RESET: low longer than the minimum pulse resets; with RSTDISBL unprogrammed, the factory
@@ -597,6 +640,49 @@ basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002
 "26" = "ADC3"
 "27" = "ADC4"
 "28" = "ADC5"
+[models.pin_capability.spi_sck]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) Port B alternate functions (PB5 SCK) and Table 21-3 (p.211) USART in MSPIM mode (XCKn is SCK; PD4 XCK per Table 14-9 p.97); the USART's SPI mode is master only (Table 21-3 gives it no slave role), so that pad never serves an SPI slave; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+master_only = ["2"]
+[models.pin_capability.spi_sck.pads]
+"2" = "XCK0 (USART0 MSPIM clock)"
+"17" = "SCK"
+[models.pin_capability.spi_mosi]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) (PB3 MOSI) and Table 21-3 (p.211) USART in MSPIM mode (TxDn is MOSI; PD1 TXD per Table 14-9 p.97); the USART's SPI mode is master only (Table 21-3 gives it no slave role), so that pad never serves an SPI slave; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+master_only = ["31"]
+[models.pin_capability.spi_mosi.pads]
+"15" = "MOSI"
+"31" = "TXD0 (USART0 MSPIM data out)"
+[models.pin_capability.spi_miso]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) (PB4 MISO) and Table 21-3 (p.211) USART in MSPIM mode (RxDn is MISO; PD0 RXD per Table 14-9 p.97); the USART's SPI mode is master only (Table 21-3 gives it no slave role), so that pad never serves an SPI slave; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+master_only = ["30"]
+[models.pin_capability.spi_miso.pads]
+"16" = "MISO"
+"30" = "RXD0 (USART0 MSPIM data in)"
+[models.pin_capability.i2c_sda]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-6 (p.94) Port C alternate functions (PC4 SDA, 2-wire serial bus data); hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_sda.pads]
+"27" = "SDA"
+[models.pin_capability.i2c_scl]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-6 (p.94) Port C alternate functions (PC5 SCL, 2-wire serial bus clock); hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_scl.pads]
+"28" = "SCL"
+[models.pin_capability.uart_tx]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-9 (p.97) Port D alternate functions (PD1 TXD, USART output pin); the part has one USART; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_tx.pads]
+"31" = "TXD0"
+[models.pin_capability.uart_rx]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-9 (p.97) Port D alternate functions (PD0 RXD, USART input pin); the part has one USART; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_rx.pads]
+"30" = "RXD0"
+[models.pin_capability.pwm]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) PB1 OC1A, PB2 OC1B, PB3 OC2A and Table 14-9 (p.97) PD6 OC0A, PD5 OC0B, PD3 OC2B: the timer output-compare pins; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.pwm.pads]
+"1" = "OC2B"
+"9" = "OC0B"
+"10" = "OC0A"
+"13" = "OC1A"
+"14" = "OC1B"
+"15" = "OC2A"
 
 # ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020): sec. 1.1.5 p.13
 # (PC6/RESET: low longer than the minimum pulse resets; with RSTDISBL unprogrammed, the factory
@@ -901,6 +987,49 @@ basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002
 "22" = "ADC3"
 "23" = "ADC4"
 "24" = "ADC5"
+[models.pin_capability.spi_sck]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) Port B alternate functions (PB5 SCK) and Table 21-3 (p.211) USART in MSPIM mode (XCKn is SCK; PD4 XCK per Table 14-9 p.97); the USART's SPI mode is master only (Table 21-3 gives it no slave role), so that pad never serves an SPI slave; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+master_only = ["2"]
+[models.pin_capability.spi_sck.pads]
+"2" = "XCK0 (USART0 MSPIM clock)"
+"15" = "SCK"
+[models.pin_capability.spi_mosi]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) (PB3 MOSI) and Table 21-3 (p.211) USART in MSPIM mode (TxDn is MOSI; PD1 TXD per Table 14-9 p.97); the USART's SPI mode is master only (Table 21-3 gives it no slave role), so that pad never serves an SPI slave; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+master_only = ["27"]
+[models.pin_capability.spi_mosi.pads]
+"13" = "MOSI"
+"27" = "TXD0 (USART0 MSPIM data out)"
+[models.pin_capability.spi_miso]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) (PB4 MISO) and Table 21-3 (p.211) USART in MSPIM mode (RxDn is MISO; PD0 RXD per Table 14-9 p.97); the USART's SPI mode is master only (Table 21-3 gives it no slave role), so that pad never serves an SPI slave; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+master_only = ["26"]
+[models.pin_capability.spi_miso.pads]
+"14" = "MISO"
+"26" = "RXD0 (USART0 MSPIM data in)"
+[models.pin_capability.i2c_sda]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-6 (p.94) Port C alternate functions (PC4 SDA, 2-wire serial bus data); hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_sda.pads]
+"23" = "SDA"
+[models.pin_capability.i2c_scl]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-6 (p.94) Port C alternate functions (PC5 SCL, 2-wire serial bus clock); hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.i2c_scl.pads]
+"24" = "SCL"
+[models.pin_capability.uart_tx]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-9 (p.97) Port D alternate functions (PD1 TXD, USART output pin); the part has one USART; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_tx.pads]
+"27" = "TXD0"
+[models.pin_capability.uart_rx]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-9 (p.97) Port D alternate functions (PD0 RXD, USART input pin); the part has one USART; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.uart_rx.pads]
+"26" = "RXD0"
+[models.pin_capability.pwm]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), Table 14-3 (p.91) PB1 OC1A, PB2 OC1B, PB3 OC2A and Table 14-9 (p.97) PD6 OC0A, PD5 OC0B, PD3 OC2B: the timer output-compare pins; hardware peripheral only, a software (bit-banged) implementation can use any pad"
+[models.pin_capability.pwm.pads]
+"1" = "OC2B"
+"7" = "OC0B"
+"8" = "OC0A"
+"11" = "OC1A"
+"12" = "OC1B"
+"13" = "OC2A"
 
 # ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020): sec. 1.1.5 p.13
 # (PC6/RESET: low longer than the minimum pulse resets; with RSTDISBL unprogrammed, the factory

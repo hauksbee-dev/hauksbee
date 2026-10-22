@@ -13,7 +13,7 @@
 //! Long-form how-and-why: docs/how-and-why/hauksbee-models/schema.md.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use hauksbee_ir::evidence::{
     ModelIntervalKind, ModelSourceTier, ModelUncertainty, ModelValidation,
@@ -21,6 +21,7 @@ use hauksbee_ir::evidence::{
 
 use crate::check::positive_finite;
 use crate::peripheral_limits::PeripheralLimits;
+use hauksbee_ir::pin_functions::PeripheralFunction;
 use hauksbee_ir::units::format_volts;
 
 // ── Top-level file container ──────────────────────────────────────────────────
@@ -293,14 +294,88 @@ pub struct PinCapability {
     /// load capacitors are inside the chip, one entry per oscillator.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub xtal_int_caps: Vec<XtalIntCap>,
+    /// `[models.pin_capability.spi_sck]`: the pads a hardware SPI clock can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spi_sck: Option<FunctionPads>,
+    /// `[models.pin_capability.spi_mosi]`: the pads a hardware SPI data-out can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spi_mosi: Option<FunctionPads>,
+    /// `[models.pin_capability.spi_miso]`: the pads a hardware SPI data-in can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spi_miso: Option<FunctionPads>,
+    /// `[models.pin_capability.i2c_sda]`: the pads a hardware I2C data line can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub i2c_sda: Option<FunctionPads>,
+    /// `[models.pin_capability.i2c_scl]`: the pads a hardware I2C clock can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub i2c_scl: Option<FunctionPads>,
+    /// `[models.pin_capability.uart_tx]`: the pads a hardware UART transmit can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uart_tx: Option<FunctionPads>,
+    /// `[models.pin_capability.uart_rx]`: the pads a hardware UART receive can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uart_rx: Option<FunctionPads>,
+    /// `[models.pin_capability.pwm]`: the pads a timer's PWM output can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pwm: Option<FunctionPads>,
 }
 
 impl PinCapability {
     /// No capability table is declared.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.adc.is_none() && self.xtal_int_caps.is_empty()
+        self.adc.is_none()
+            && self.spi_sck.is_none()
+            && self.spi_mosi.is_none()
+            && self.spi_miso.is_none()
+            && self.i2c_sda.is_none()
+            && self.i2c_scl.is_none()
+            && self.uart_tx.is_none()
+            && self.uart_rx.is_none()
+            && self.pwm.is_none()
+            && self.xtal_int_caps.is_empty()
     }
+
+    /// The table for `function`, when the card declares one.
+    #[must_use]
+    pub const fn table(&self, function: PeripheralFunction) -> Option<&FunctionPads> {
+        match function {
+            PeripheralFunction::SpiSck => self.spi_sck.as_ref(),
+            PeripheralFunction::SpiMosi => self.spi_mosi.as_ref(),
+            PeripheralFunction::SpiMiso => self.spi_miso.as_ref(),
+            PeripheralFunction::I2cSda => self.i2c_sda.as_ref(),
+            PeripheralFunction::I2cScl => self.i2c_scl.as_ref(),
+            PeripheralFunction::UartTx => self.uart_tx.as_ref(),
+            PeripheralFunction::UartRx => self.uart_rx.as_ref(),
+            PeripheralFunction::Pwm => self.pwm.as_ref(),
+        }
+    }
+}
+
+/// The pads of an MCU package that can carry one hardware peripheral function
+/// (see [`PinCapability::table`]).
+///
+/// Like the ADC table it is a complete statement about the package. A pad listed
+/// can carry the function, through the instance named beside it; a pad of
+/// `[models.pins]` not listed cannot, in hardware. A software (bit-banged)
+/// implementation is not covered by it. A part whose pins reach any pad through a
+/// routing matrix (an `ESP32` GPIO matrix, an `RP2040` PIO) declares no table for
+/// the function.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FunctionPads {
+    /// The datasheet table and page the pad list is read from.
+    pub basis: String,
+    /// Pad number to the peripheral instance and signal on it (`SPI1_SCK`,
+    /// `SCK`, `OC1A`). A function the package has no pad for declares the table
+    /// empty.
+    #[serde(default)]
+    pub pads: BTreeMap<String, String>,
+    /// The listed pads that serve the function only when the part is the bus
+    /// master (the pads of a USART's SPI mode, which has no slave role). A
+    /// bus whose master is another part never uses one.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub master_only: BTreeSet<String>,
 }
 
 /// One crystal oscillator of an MCU whose load capacitors are on the die.
