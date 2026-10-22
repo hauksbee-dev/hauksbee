@@ -2814,15 +2814,41 @@ fn role_from_mcu_pinfunction(function: &str) -> Option<String> {
     Some(role)
 }
 
+/// The names a pad's printed function lists, whole string first. A GPIO name
+/// that follows an underscore (`RTC_GPIO4`, `LP_GPIO4`, `RTC_IO4`) is the
+/// low-power domain's numbering, which matches the pad's GPIO on some chips
+/// (ESP32-S3 RTC_GPIO4 is GPIO4, ESP32-C6 LP_GPIO4 is GPIO4) and not on others
+/// (the ESP32 pad `GPI34/ADC1_CH6/RTC_GPIO4` is GPIO34). The name alone can't
+/// tell which, so it is never offered as a bare `GPIOn`; those chips also print
+/// the plain `GPIOn` on the pad. `ADC1_CHn` and `TOUCHn` name no GPIO.
 fn pinfunction_tokens(upper: &str) -> Vec<String> {
+    fn push(seg: &str, sep_before: Option<char>, tokens: &mut Vec<String>) {
+        if seg.is_empty() || (sep_before == Some('_') && is_gpio_name(seg)) {
+            return;
+        }
+        tokens.push(seg.to_string());
+    }
     let mut tokens = vec![upper.to_string()];
-    tokens.extend(
-        upper
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .filter(|t| !t.is_empty())
-            .map(str::to_string),
-    );
+    let mut prev_sep: Option<char> = None;
+    let mut seg_start = 0usize;
+    for (i, c) in upper.char_indices() {
+        if !c.is_ascii_alphanumeric() {
+            push(&upper[seg_start..i], prev_sep, &mut tokens);
+            seg_start = i + c.len_utf8();
+            prev_sep = Some(c);
+        }
+    }
+    push(&upper[seg_start..], prev_sep, &mut tokens);
     tokens
+}
+
+/// `GPIO4` or `IO4`: a bare GPIO number with nothing else in the name.
+fn is_gpio_name(seg: &str) -> bool {
+    let digits = seg
+        .strip_prefix("GPIO")
+        .or_else(|| seg.strip_prefix("IO"))
+        .unwrap_or("");
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
 fn role_from_mcu_pinfunction_token(token: &str) -> Option<String> {
@@ -13348,6 +13374,36 @@ style = "i2c_pointer"
         }
         for token in ["IO64", "IOREF", "P2.01", "P0.32"] {
             assert_eq!(role_from_mcu_pinfunction_token(token), None, "{token}");
+        }
+    }
+
+    /// A prefixed function name never becomes a bare GPIO: its number matches
+    /// the pad's GPIO on the ESP32-S3 and C6 but not on the ESP32, where the
+    /// pad `GPI34/ADC1_CH6/RTC_GPIO4` is GPIO34, so the name alone can't decide.
+    /// `ADC1_CH6` / `TOUCH0` name no GPIO. Only the pad's own unprefixed name
+    /// (`GPIO4`, `IO36`, `PA9`) is its GPIO, wherever it sits in the list.
+    #[test]
+    fn a_prefixed_function_name_never_becomes_a_bare_gpio() {
+        for (function, want) in [
+            ("GPI34/ADC1_CH6/RTC_GPIO4", None),
+            ("ADC1_CH6/RTC_GPIO4", None),
+            ("RTC_GPIO4", None),
+            ("LP_GPIO4", None),
+            ("LP_IO3", None),
+            ("ADC1_CH6", None),
+            ("TOUCH0", None),
+            ("TOUCH0/RTC_GPIO10", None),
+            ("GPIO4/ADC2_CH0/TOUCH0/RTC_GPIO10/HSPIHD", Some("gpio4")),
+            ("RTC_GPIO10/GPIO4", Some("gpio4")),
+            ("ADC2_CH0 GPIO4", Some("gpio4")),
+            ("IO36/SVP", Some("gpio36")),
+            ("PA9/USART1_TX", Some("pa9_txd")),
+        ] {
+            assert_eq!(
+                role_from_mcu_pinfunction(function).as_deref(),
+                want,
+                "{function}"
+            );
         }
     }
 
