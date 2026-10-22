@@ -812,6 +812,29 @@ exist in `[models.pins]`, none of them a supply or ground role, and a channel fo
 each. `card_coverage` lists the table (`adc_pins`) among an MCU card's needs when
 the datasheet mentions an ADC.
 
+### Other peripheral tables
+
+The same section holds one table per hardware peripheral function, for the board
+check `pin_mux.rs` (a bus wired to pads that cannot carry it): `spi_sck`, `spi_mosi`,
+`spi_miso`, `i2c_sda`, `i2c_scl`, `uart_tx`, `uart_rx` and `pwm` (the keys are
+`hauksbee_ir::pin_functions::PeripheralFunction`).
+
+```toml
+[models.pin_capability.i2c_sda]
+basis = "Datasheet <part> <version>, Table <n> alternate functions (PDF p.<n>)"
+[models.pin_capability.i2c_sda.pads]
+"27" = "SDA"        # pad number to the instance and signal on it (SPI1_SCK, OC1A)
+```
+
+Each is a complete statement about the package, like the ADC table: a pad listed can
+carry the function in hardware, and every other pad of `[models.pins]` cannot. A
+software (bit-banged) bus is not covered. A part whose pins reach any pad through a
+routing matrix (an ESP32 GPIO matrix, an RP2040 PIO) declares no table for the
+function. A mode of another peripheral that the datasheet states can carry the
+function (the ATmega328P USART's SPI mode for SPI) belongs in the table with its
+instance named. Validation is the ADC table's: an `mcu` card, a basis, pads that exist
+in `[models.pins]` and none a supply or ground role.
+
 ## Peripheral limits: UART baud generators, ADC timing, bus clocks
 
 An MCU card may carry `[models.peripherals.uart]` and `[models.peripherals.adc]`

@@ -3862,12 +3862,6 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::GroundIsland => {
             "Join the net to the board ground (same ground symbol, a net tie, or a 0 ohm link), or name it as a deliberately separate domain."
         }
-        LintCheck::UnwiredConnector => {
-            "Wire the connector to the circuit it serves (check for a mismatched net label), or remove it."
-        }
-        LintCheck::LedReversed => {
-            "Turn the LED round so its anode faces the positive rail and its cathode ground."
-        }
         LintCheck::FloatingInput => {
             "Tie each unused CMOS input high or low (directly or through a resistor), or drive it; a no-connect flag does not define its level."
         }
@@ -3876,9 +3870,6 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         }
         LintCheck::UnlimitedBaseDrive => {
             "Add a series resistor (a few kilohms) between the driver and the transistor base."
-        }
-        LintCheck::CapNoDcPath => {
-            "Add a bias or bleed resistor from the node to a rail or ground, or remove the capacitor."
         }
         LintCheck::FloatingGate => {
             "Add a pull-up or pull-down resistor (about 100 kilohms) on the gate or select, to the level that is safe at power-up."
@@ -3898,6 +3889,23 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         | LintCheck::AudioBusWiring
         | LintCheck::PowerDomainBackfeed
         | LintCheck::PowerDomainBusLockup => supply_fix_hint(check),
+        LintCheck::SignalDirection
+        | LintCheck::DebugHeaderPinout
+        | LintCheck::SwitchShort
+        | LintCheck::PinMuxCapability
+        | LintCheck::SymbolCardPinMismatch
+        | LintCheck::LedReversed
+        | LintCheck::UnwiredConnector
+        | LintCheck::CapNoDcPath => wiring_fix_hint(check),
+    })
+}
+
+/// Fix hints for the wiring checks: a net against its pins' directions, a debug
+/// header out of order, a switch across a supply, a bus on a pad that cannot carry
+/// it, a symbol that disagrees with its card, a reversed LED, an unwired
+/// connector and a capacitor with no DC path.
+const fn wiring_fix_hint(check: LintCheck) -> &'static str {
+    match check {
         LintCheck::SignalDirection => {
             "Rewire so each net has one driver and a listener (TX to RX, an output to the other part's input), or add the missing driver."
         }
@@ -3910,10 +3918,20 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::PinMuxCapability => {
             "Move the net to a pin the card lists for that function, or confirm the firmware bit-bangs it."
         }
-        LintCheck::SymbolCardPinMismatch => {
+        LintCheck::LedReversed => {
+            "Turn the LED round so its anode faces the positive rail and its cathode ground."
+        }
+        LintCheck::UnwiredConnector => {
+            "Wire the connector to the circuit it serves (check for a mismatched net label), or remove it."
+        }
+        LintCheck::CapNoDcPath => {
+            "Add a bias or bleed resistor from the node to a rail or ground, or remove the capacitor."
+        }
+        // Only the wiring checks are routed here.
+        _ => {
             "Compare the symbol and the card against the datasheet pin table for this package and correct whichever is wrong."
         }
-    })
+    }
 }
 
 /// Fix hints for the supply-side checks: a held-off regulator, a miswired IC

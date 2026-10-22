@@ -59,7 +59,12 @@ enum Dir {
 /// The direction a schematic pin's electrical type states, `None` for a pin
 /// that is passive, power, untyped or of a type this check does not read.
 fn symbol_dir(kind: &str) -> Option<Dir> {
-    match kind.trim().to_ascii_lowercase().replace(['-', ' '], "_").as_str() {
+    match kind
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['-', ' '], "_")
+        .as_str()
+    {
         "output" | "out" => Some(Dir::Out),
         "input" | "in" => Some(Dir::In),
         "bidirectional" | "io" => Some(Dir::Bidi),
@@ -87,16 +92,24 @@ fn card_dir(model: &ModelEntry, pad: &str) -> Option<Dir> {
             if logic.sense.contains_key(&role) {
                 return Some(Dir::Bidi);
             }
-            if logic.outputs.iter().any(|o| *o == role) {
-                let tri = logic
+            if logic.outputs.contains(&role) {
+                let tri = logic.tristate.keys().any(|g| {
+                    logic
+                        .expand_tristate_group(g)
+                        .is_ok_and(|n| n.contains(&role))
+                });
+                // A group that cannot be read is a part that may release.
+                let unreadable = logic
                     .tristate
                     .keys()
-                    .any(|g| logic.expand_tristate_group(g).is_ok_and(|n| n.contains(&role)));
-                // A group that cannot be read is a part that may release.
-                let unreadable = logic.tristate.keys().any(|g| logic.expand_tristate_group(g).is_err());
-                return Some(if tri || unreadable { Dir::Open } else { Dir::Out });
+                    .any(|g| logic.expand_tristate_group(g).is_err());
+                return Some(if tri || unreadable {
+                    Dir::Open
+                } else {
+                    Dir::Out
+                });
             }
-            logic.inputs.iter().any(|i| *i == role).then_some(Dir::In)
+            logic.inputs.contains(&role).then_some(Dir::In)
         }
         ComponentKind::Mcu if is_port_role(&role) => Some(Dir::Bidi),
         _ => None,
@@ -141,11 +154,9 @@ fn classify(comp: &Component, pin: &Pin, model: Option<&ModelEntry>) -> Member {
     let dir = match (symbol, card) {
         (Some(s), Some(c)) if s == c => Some(s),
         // The symbol only says "may do either": the card's statement stands.
-        (Some(Dir::Bidi), Some(c)) => Some(c),
-        (Some(_), Some(_)) => None,
+        (Some(Dir::Bidi) | None, Some(c)) => Some(c),
         (Some(s), None) => Some(s),
-        (None, Some(c)) => Some(c),
-        (None, None) => None,
+        (Some(_), Some(_)) | (None, None) => None,
     };
     let dir = match (dir, uart_pin_role(pin)) {
         // A bidirectional pad whose whole name is a UART line is that line.
@@ -165,6 +176,81 @@ enum Fault {
     NoDriver,
 }
 
+/// The pins of a net as words, `U1.2 (TXD) [output]`.
+fn describe(pins: &[(&Component, &Pin, Dir)]) -> Vec<String> {
+    pins.iter()
+        .map(|(c, p, d)| {
+            let name = if p.function.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", p.function.trim())
+            };
+            let kind = match d {
+                Dir::Out => "output",
+                Dir::Open => "open-drain or tri-state",
+                Dir::In => "input",
+                Dir::Bidi => "bidirectional",
+            };
+            format!("{}.{}{name} [{kind}]", c.reference, p.number)
+        })
+        .collect()
+}
+
+/// The two nets-of-fault lists of a pair of parts: no-listener nets, no-driver nets.
+type PairFaults = BTreeMap<(String, String), (Vec<String>, Vec<String>)>;
+
+/// The finding for one faulty net; a pair of parts faulted both ways is crossed.
+fn finding(
+    fault: &Fault,
+    name: String,
+    refs: Vec<String>,
+    listed: &[String],
+    pairs: &PairFaults,
+) -> LintFinding {
+    let pair = match refs.as_slice() {
+        [a, b] => pairs.get(&(a.clone(), b.clone())),
+        _ => None,
+    };
+    let crossed = pair.filter(|(outs, ins)| !outs.is_empty() && !ins.is_empty());
+    let crossed_note = crossed.map_or_else(String::new, |(outs, ins)| {
+        format!(
+            " {} and {} are wired this way on both {} and {}: the two buses are crossed, \
+             and swapping the pair of connections at one end fixes both",
+            refs[0],
+            refs[1],
+            hauksbee_ir::vocabulary::names_summary(outs),
+            hauksbee_ir::vocabulary::names_summary(ins),
+        )
+    });
+    let listed = hauksbee_ir::vocabulary::names_summary(listed);
+    let message = match fault {
+        Fault::NoListener => format!(
+            "net '{name}' joins only outputs and nothing that reads it: {listed}. The \
+             parts drive the same wire and neither hears the other, so the signal never \
+             arrives (an output must go to the other side's input, TX to RX); wire each \
+             output to the matching input pin.{crossed_note}"
+        ),
+        Fault::NoDriver => format!(
+            "net '{name}' joins only inputs and nothing that drives it: {listed}. No \
+             output, bidirectional or open-drain pin, connector or pull resistor sets its \
+             level, so the inputs float and read nothing real; wire each input to the \
+             output that is meant to drive it (RX to the other side's TX), or tie the \
+             line to a defined level.{crossed_note}"
+        ),
+    };
+    LintFinding {
+        check: LintCheck::SignalDirection,
+        severity: if crossed.is_some() {
+            Severity::High
+        } else {
+            Severity::Medium
+        },
+        message,
+        refs,
+        nets: vec![name],
+    }
+}
+
 /// Flag every signal net that joins pins of two or more parts and cannot carry
 /// a signal: it has drivers and no reader, or readers and no driver.
 #[must_use]
@@ -182,7 +268,7 @@ pub fn signal_direction_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetL
         }
     }
     // Per pair of parts: the nets of each fault, to tell a crossed pair.
-    let mut pairs: BTreeMap<(String, String), (Vec<String>, Vec<String>)> = BTreeMap::new();
+    let mut pairs = PairFaults::new();
     let mut found = Vec::new();
     for (id, members) in &by_net {
         let Some(net) = board.net(*id) else { continue };
@@ -221,70 +307,13 @@ pub fn signal_direction_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetL
                 Fault::NoDriver => entry.1.push(net.name.clone()),
             }
         }
-        let listed: Vec<String> = pins
-            .iter()
-            .map(|(c, p, d)| {
-                let name = if p.function.trim().is_empty() {
-                    String::new()
-                } else {
-                    format!(" ({})", p.function.trim())
-                };
-                let kind = match d {
-                    Dir::Out => "output",
-                    Dir::Open => "open-drain or tri-state",
-                    Dir::In => "input",
-                    Dir::Bidi => "bidirectional",
-                };
-                format!("{}.{}{name} [{kind}]", c.reference, p.number)
-            })
-            .collect();
+        let listed = describe(&pins);
         found.push((fault, net.name.clone(), refs, listed));
     }
     for (fault, name, refs, listed) in found {
-        let pair = match refs.as_slice() {
-            [a, b] => pairs.get(&(a.clone(), b.clone())),
-            _ => None,
-        };
-        let crossed = pair.filter(|(outs, ins)| !outs.is_empty() && !ins.is_empty());
-        let crossed_note = crossed.map_or_else(String::new, |(outs, ins)| {
-            format!(
-                " {} and {} are wired this way on both {} and {}: the two buses are crossed, \
-                 and swapping the pair of connections at one end fixes both",
-                refs[0],
-                refs[1],
-                hauksbee_ir::vocabulary::names_summary(outs),
-                hauksbee_ir::vocabulary::names_summary(ins),
-            )
-        });
-        let listed = hauksbee_ir::vocabulary::names_summary(&listed);
-        let (severity, message) = match fault {
-            Fault::NoListener => (
-                if crossed.is_some() { Severity::High } else { Severity::Medium },
-                format!(
-                    "net '{name}' joins only outputs and nothing that reads it: {listed}. The \
-                     parts drive the same wire and neither hears the other, so the signal never \
-                     arrives (an output must go to the other side's input, TX to RX); wire each \
-                     output to the matching input pin.{crossed_note}"
-                ),
-            ),
-            Fault::NoDriver => (
-                if crossed.is_some() { Severity::High } else { Severity::Medium },
-                format!(
-                    "net '{name}' joins only inputs and nothing that drives it: {listed}. No \
-                     output, bidirectional or open-drain pin, connector or pull resistor sets its \
-                     level, so the inputs float and read nothing real; wire each input to the \
-                     output that is meant to drive it (RX to the other side's TX), or tie the \
-                     line to a defined level.{crossed_note}"
-                ),
-            ),
-        };
-        report.findings.push(LintFinding {
-            check: LintCheck::SignalDirection,
-            severity,
-            message,
-            refs,
-            nets: vec![name],
-        });
+        report
+            .findings
+            .push(finding(&fault, name, refs, &listed, &pairs));
     }
     report
 }
@@ -366,8 +395,14 @@ mod tests {
         assert!(run(
             &[(1, "A"), (2, "B")],
             vec![
-                ic("U1", &[("1", 1, "OUT", "output"), ("2", 2, "TXD", "bidirectional")]),
-                ic("U2", &[("1", 1, "IN", "input"), ("2", 2, "RXD", "bidirectional")]),
+                ic(
+                    "U1",
+                    &[("1", 1, "OUT", "output"), ("2", 2, "TXD", "bidirectional")]
+                ),
+                ic(
+                    "U2",
+                    &[("1", 1, "IN", "input"), ("2", 2, "RXD", "bidirectional")]
+                ),
             ],
         )
         .is_empty());
@@ -419,8 +454,11 @@ mod tests {
         )
         .is_empty());
         // One part alone, a supply name, a part not fitted, a bus transceiver.
-        assert!(run(&nets, vec![ic("U1", &[("1", 1, "A", "input"), ("2", 1, "B", "input")])])
-            .is_empty());
+        assert!(run(
+            &nets,
+            vec![ic("U1", &[("1", 1, "A", "input"), ("2", 1, "B", "input")])]
+        )
+        .is_empty());
         assert!(run(
             &nets,
             vec![
@@ -436,7 +474,13 @@ mod tests {
             &nets,
             vec![
                 ic("U1", &[("1", 1, "TXD", "bidirectional")]),
-                ic("U2", &[("1", 1, "RXD", "bidirectional"), ("2", 1, "CANH", "passive")]),
+                ic(
+                    "U2",
+                    &[
+                        ("1", 1, "RXD", "bidirectional"),
+                        ("2", 1, "CANH", "passive")
+                    ]
+                ),
             ],
         )
         .is_empty());

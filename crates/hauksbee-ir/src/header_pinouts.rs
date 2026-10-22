@@ -230,15 +230,12 @@ pub fn header(id: &str) -> Option<&'static StandardHeader> {
 }
 
 /// The standard headers with `pin_count` pins that a whole word of `words` names.
-pub fn headers_named<'a>(
+pub fn headers_named(
     pin_count: usize,
-    words: &'a [String],
-) -> impl Iterator<Item = &'static StandardHeader> + 'a {
+    words: &[String],
+) -> impl Iterator<Item = &'static StandardHeader> + '_ {
     STANDARD_HEADERS.iter().filter(move |h| {
-        h.pin_count == pin_count
-            && h.name_words
-                .iter()
-                .any(|w| words.iter().any(|x| x == w))
+        h.pin_count == pin_count && h.name_words.iter().any(|w| words.iter().any(|x| x == w))
     })
 }
 
@@ -263,7 +260,10 @@ mod tests {
             assert!(h.source.sha256.bytes().all(|b| b.is_ascii_hexdigit()));
             assert!(h.source.url.starts_with("https://"), "{}", h.id);
             assert!(!h.source.location.is_empty() && !h.name_words.is_empty());
-            assert!(h.name_words.iter().all(|w| w.chars().all(char::is_alphanumeric)));
+            assert!(h
+                .name_words
+                .iter()
+                .all(|w| w.chars().all(char::is_alphanumeric)));
         }
         let mut ids: Vec<_> = STANDARD_HEADERS.iter().map(|h| h.id).collect();
         ids.sort_unstable();
@@ -283,7 +283,10 @@ mod tests {
         let swd = header("arm_cortex_swd_10").unwrap();
         assert_eq!(swd.pins_of(HeaderSignal::Ground), ["3", "5", "9"]);
         assert_eq!(swd.signal_at("10"), Some(HeaderSignal::Reset));
-        assert_eq!(header("avr_isp_10").unwrap().pins_of(HeaderSignal::Sck), ["7"]);
+        assert_eq!(
+            header("avr_isp_10").unwrap().pins_of(HeaderSignal::Sck),
+            ["7"]
+        );
         assert!(header("uart_4").is_none());
     }
 

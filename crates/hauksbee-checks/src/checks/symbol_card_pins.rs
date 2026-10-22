@@ -119,13 +119,16 @@ mod tests {
 
     const NETS: [(i64, &str); 4] = [(1, "GND"), (2, "XA"), (3, "XB"), (4, "+5V")];
 
-    /// An ATmega328P (DIP-28 card: pad 9 `pb6_xtal1`, pad 10 `pb7_xtal2`,
+    /// An `ATmega328P` (DIP-28 card: pad 9 `pb6_xtal1`, pad 10 `pb7_xtal2`,
     /// pad 7 `vcc`, pad 8 `gnd`) with the symbol's pin names given.
     fn mcu(names: &[(&str, &str, i64)]) -> hauksbee_extract::Component {
         let mut u = part(
             "U1",
             "ATmega328P",
-            &names.iter().map(|(n, _, net)| (*n, *net)).collect::<Vec<_>>(),
+            &names
+                .iter()
+                .map(|(n, _, net)| (*n, *net))
+                .collect::<Vec<_>>(),
         );
         for (pin, (_, function, _)) in u.pins.iter_mut().zip(names) {
             pin.function = (*function).into();
@@ -173,7 +176,12 @@ mod tests {
         ]))
         .is_empty());
         // Generic or unknown names state no function.
-        assert!(run(mcu(&[("9", "PB6", 2), ("10", "OSC32_OUT", 3), ("2", "D0", 1)])).is_empty());
+        assert!(run(mcu(&[
+            ("9", "PB6", 2),
+            ("10", "OSC32_OUT", 3),
+            ("2", "D0", 1)
+        ]))
+        .is_empty());
         // A pad the card does not name, and a pin with no name at all.
         assert!(run(mcu(&[("99", "XTAL1", 2), ("9", "", 3)])).is_empty());
         // Names the table keeps out because they depend on the reader's side.

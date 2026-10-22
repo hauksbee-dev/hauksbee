@@ -100,24 +100,7 @@ pub fn switch_short_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintR
         };
         let name = |id: i64| board.net(id).map_or_else(String::new, |n| n.name.clone());
         let (na, nb) = (name(a), name(b));
-        let message = if is_ground(&na) != is_ground(&nb) {
-            let (rail, ground) = if is_ground(&na) { (b, a) } else { (a, b) };
-            let (n_rail, n_ground) = (name(rail), name(ground));
-            let Some(v) = stated_rail(&n_rail) else {
-                continue;
-            };
-            if !is_sourced(board, lib, rail, sw) {
-                continue;
-            }
-            format!(
-                "{} is a switch between the {v:.1} V rail '{n_rail}' and ground '{n_ground}' with \
-                 nothing in series: pressed, it shorts the rail to ground, so its source collapses \
-                 (a regulator trips or overheats, a battery or USB bus is shorted). If it is meant \
-                 to pull a signal to ground, it must act on a signal pin that has its own pull-up \
-                 resistor, not on a supply rail",
-                sw.reference
-            )
-        } else {
+        let message = if is_ground(&na) == is_ground(&nb) {
             let (Some(va), Some(vb)) = (stated_rail(&na), stated_rail(&nb)) else {
                 continue;
             };
@@ -134,6 +117,23 @@ pub fn switch_short_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintR
                  regulator is damaged. Switch one rail's source (an enable or a load switch), or \
                  use a break-before-make selector, or put a resistor in series if only a sense \
                  level is wanted",
+                sw.reference
+            )
+        } else {
+            let (rail, ground) = if is_ground(&na) { (b, a) } else { (a, b) };
+            let (n_rail, n_ground) = (name(rail), name(ground));
+            let Some(v) = stated_rail(&n_rail) else {
+                continue;
+            };
+            if !is_sourced(board, lib, rail, sw) {
+                continue;
+            }
+            format!(
+                "{} is a switch between the {v:.1} V rail '{n_rail}' and ground '{n_ground}' with \
+                 nothing in series: pressed, it shorts the rail to ground, so its source collapses \
+                 (a regulator trips or overheats, a battery or USB bus is shorted). If it is meant \
+                 to pull a signal to ground, it must act on a signal pin that has its own pull-up \
+                 resistor, not on a supply rail",
                 sw.reference
             )
         };
@@ -224,6 +224,34 @@ mod tests {
             "{}",
             found[0].message
         );
+    }
+
+    /// The reset or strap line a button serves must be held by a pull resistor
+    /// when the part has none of its own: reported by the control-input checks,
+    /// asserted here at the one surface every check shares.
+    #[test]
+    fn a_button_alone_on_a_reset_pin_with_no_internal_pull_is_flagged_and_a_pull_up_fixes_it() {
+        // ESP32-WROOM-32 pad 3 is EN (no internal pull), pad 2 3V3, pad 1 GND.
+        let module = || part("U1", "ESP32-WROOM-32", &[("1", GND), ("2", V3), ("3", SIG)]);
+        let net_names = [(GND, "GND"), (V3, "+3V3"), (SIG, "EN")];
+        let lib = ModelLibrary::builtin();
+        let on_en = |parts: Vec<Component>| {
+            let found = super::super::engine_lint(&board(&net_names, parts), &lib).findings;
+            found
+                .into_iter()
+                .filter(|f| f.nets.iter().any(|n| n == "EN") && f.refs.iter().any(|r| r == "U1"))
+                .collect::<Vec<_>>()
+        };
+        let button = || switch("SW1", &[("1", SIG), ("2", GND)]);
+        let bare = on_en(vec![source_on(V3, "U2"), module(), button()]);
+        assert!(!bare.is_empty(), "a button alone leaves EN floating");
+        let pulled = on_en(vec![
+            source_on(V3, "U2"),
+            module(),
+            button(),
+            part("R1", "10k", &[("1", SIG), ("2", V3)]),
+        ]);
+        assert!(pulled.is_empty(), "{pulled:#?}");
     }
 
     #[test]

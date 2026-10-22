@@ -78,6 +78,9 @@
 //!   (FTDI 6-pin, AVR ISP 6/10, ARM Cortex 10-pin) whose pins carry other
 //!   signals than the standard pin order (the board's TX on the cable's TX pin,
 //!   MOSI/MISO exchanged, supply on a ground pin). Pinouts: `hauksbee_ir::header_pinouts`.
+//! - [`pin_mux`]: a bus wired to MCU pads that cannot carry it: SPI, I2C, UART
+//!   or PWM where the card's `[models.pin_capability.<function>]` table lists
+//!   other pads (the intent read from a partner part's pin and the net name).
 //! - [`datasheet_field`]: a part's `Datasheet` field whose file name clearly
 //!   names a different device or logic family, so a model drafted from it
 //!   would describe the wrong part (a low-severity, non-gating note).
@@ -145,6 +148,7 @@ pub mod mcu_coverage;
 pub mod model_controls;
 pub mod node_drive;
 pub mod open_paths;
+pub mod pin_mux;
 pub mod power_pins;
 pub mod power_states;
 pub mod pullup_effect;
@@ -498,6 +502,48 @@ fn power_state_findings(
     found
 }
 
+/// The wiring checks that read the nets and the cards together: a switch
+/// across a supply, a net wired against its pins' directions, a symbol that
+/// disagrees with its card, a debug header in the wrong order, and a bus on a
+/// pad that cannot carry it. The direction check gives way to the findings
+/// already in `report` on the same nets.
+fn extend_with_wiring_checks(
+    report: &mut NetLintReport,
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+) {
+    report
+        .findings
+        .extend(switch_short::switch_short_lint(board, lib).findings);
+    // A net the contention, floating-input or UART checks already report is
+    // theirs: the direction check says it again only for the nets they skip.
+    let direction: Vec<_> = signal_direction::signal_direction_lint(board, lib)
+        .findings
+        .into_iter()
+        .filter(|f| {
+            !report.findings.iter().any(|r| {
+                matches!(
+                    r.check,
+                    LintCheck::OutputContention
+                        | LintCheck::FloatingInput
+                        | LintCheck::FloatingControlPin
+                        | LintCheck::PinFunction
+                ) && f.nets.iter().any(|n| r.nets.contains(n))
+            })
+        })
+        .collect();
+    report.findings.extend(direction);
+    report
+        .findings
+        .extend(symbol_card_pins::symbol_card_pin_lint(board, lib).findings);
+    report
+        .findings
+        .extend(debug_header::debug_header_lint(board, lib).findings);
+    report
+        .findings
+        .extend(pin_mux::pin_mux_lint(board, lib).findings);
+}
+
 /// One [`engine_lint`] pass over `board` as it stands.
 fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = board.net_lint();
@@ -577,33 +623,7 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     report
         .findings
         .extend(node_drive::node_drive_lint(board, lib).findings);
-    report
-        .findings
-        .extend(switch_short::switch_short_lint(board, lib).findings);
-    // A net the contention, floating-input or UART checks already report is
-    // theirs: the direction check says it again only for the nets they skip.
-    let direction: Vec<_> = signal_direction::signal_direction_lint(board, lib)
-        .findings
-        .into_iter()
-        .filter(|f| {
-            !report.findings.iter().any(|r| {
-                matches!(
-                    r.check,
-                    LintCheck::OutputContention
-                        | LintCheck::FloatingInput
-                        | LintCheck::FloatingControlPin
-                        | LintCheck::PinFunction
-                ) && f.nets.iter().any(|n| r.nets.contains(n))
-            })
-        })
-        .collect();
-    report.findings.extend(direction);
-    report
-        .findings
-        .extend(symbol_card_pins::symbol_card_pin_lint(board, lib).findings);
-    report
-        .findings
-        .extend(debug_header::debug_header_lint(board, lib).findings);
+    extend_with_wiring_checks(&mut report, board, lib);
     report
         .findings
         .extend(dc_stress::dc_stress_at_corners(board, lib, bound).findings);

@@ -501,7 +501,11 @@ pub fn regulator_enable_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetL
     // The self-fed enable is judged on every regulator and load switch card,
     // simple or not; a pin the open-pin judgement reports is reported once.
     for comp in &board.components {
-        if report.findings.iter().any(|f| f.refs == [comp.reference.clone()]) {
+        if report
+            .findings
+            .iter()
+            .any(|f| f.refs == [comp.reference.clone()])
+        {
             continue;
         }
         if let Some(finding) = self_fed_enable(board, comp, &models) {
@@ -674,16 +678,20 @@ fn self_fed_enable(
              series parts, and nothing else on it can drive it"
         )
     };
-    let fix = match input.map(name) {
-        Some(inp) => format!(
-            "Tie {label} to the input '{inp}', or pull it up to '{inp}' through 10k-100k, or \
-             drive it from a GPIO or supervisor."
-        ),
-        None => format!(
-            "Tie {label} to the part's input rail, or pull it up to that rail through 10k-100k, \
-             or drive it from a GPIO or supervisor."
-        ),
-    };
+    let fix = input.map(name).map_or_else(
+        || {
+            format!(
+                "Tie {label} to the part's input rail, or pull it up to that rail through \
+                 10k-100k, or drive it from a GPIO or supervisor."
+            )
+        },
+        |inp| {
+            format!(
+                "Tie {label} to the input '{inp}', or pull it up to '{inp}' through 10k-100k, \
+                 or drive it from a GPIO or supervisor."
+            )
+        },
+    );
     let mut nets = vec![en_name];
     if !nets.contains(&out_name) {
         nets.push(out_name.clone());

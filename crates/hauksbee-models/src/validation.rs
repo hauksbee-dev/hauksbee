@@ -17,6 +17,7 @@ use crate::schema::{
 };
 use crate::sensor_spec::{Bus, SensorSpec};
 use hauksbee_ir::evidence::ModelUncertainty;
+use hauksbee_ir::pin_functions::PeripheralFunction;
 use hauksbee_ir::units::format_amps;
 use thiserror::Error;
 
@@ -1827,30 +1828,68 @@ fn check_peripheral_limits(entry: &ModelEntry, p: &mut Problems) {
 /// card's pins use: every listed pad must exist there, must not be a supply or
 /// ground pad, and a channel is named for each; the basis cites the datasheet.
 fn check_pin_capability(entry: &ModelEntry, p: &mut Problems) {
-    let Some(adc) = &entry.pin_capability.adc else {
+    if entry.pin_capability.is_empty() {
         return;
-    };
+    }
     p.require(entry.kind == ComponentKind::Mcu, || {
         "[models.pin_capability] belongs on an mcu card".into()
     });
-    p.require(!adc.basis.trim().is_empty(), || {
-        "[models.pin_capability.adc] needs a basis citing the datasheet table and page".into()
+    if let Some(adc) = &entry.pin_capability.adc {
+        check_capability_table(
+            entry,
+            p,
+            "adc",
+            &adc.basis,
+            &adc.pads,
+            "ADC channel",
+            "an ADC input",
+        );
+    }
+    for function in PeripheralFunction::ALL {
+        if let Some(t) = entry.pin_capability.table(function) {
+            let what = format!("a {} pad", function.key());
+            check_capability_table(
+                entry,
+                p,
+                function.key(),
+                &t.basis,
+                &t.pads,
+                "peripheral instance",
+                &what,
+            );
+        }
+    }
+}
+
+/// One `[models.pin_capability.<table>]`: a basis, and pads that exist in the
+/// card's pad map, are not supply or ground pads, and each name what they carry.
+fn check_capability_table(
+    entry: &ModelEntry,
+    p: &mut Problems,
+    table: &str,
+    basis: &str,
+    pads: &BTreeMap<String, String>,
+    names: &str,
+    what: &str,
+) {
+    p.require(!basis.trim().is_empty(), || {
+        format!("[models.pin_capability.{table}] needs a basis citing the datasheet table and page")
     });
-    for (pad, channel) in &adc.pads {
+    for (pad, name) in pads {
         let Some(role) = entry.pins.get(pad) else {
             p.push(format!(
-                "[models.pin_capability.adc] pad '{pad}' is not a pad of [models.pins]"
+                "[models.pin_capability.{table}] pad '{pad}' is not a pad of [models.pins]"
             ));
             continue;
         };
-        p.require(!channel.trim().is_empty(), || {
-            format!("[models.pin_capability.adc] pad '{pad}' needs its ADC channel name")
+        p.require(!name.trim().is_empty(), || {
+            format!("[models.pin_capability.{table}] pad '{pad}' needs its {names} name")
         });
         let r = role.trim().to_ascii_lowercase();
         let supply = crate::pin_roles::power_pin(&r, entry.kind).is_some();
         p.require(!supply, || {
             format!(
-                "[models.pin_capability.adc] pad '{pad}' is the supply or ground role '{role}', not an ADC input"
+                "[models.pin_capability.{table}] pad '{pad}' is the supply or ground role '{role}', not {what}"
             )
         });
     }

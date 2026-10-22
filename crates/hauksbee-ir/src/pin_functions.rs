@@ -208,9 +208,152 @@ pub fn functions_named(name: &str) -> BTreeSet<PinFunction> {
     found
 }
 
+/// A peripheral function a pad can be wired to inside an MCU: the keys of a
+/// card's `[models.pin_capability.<key>]` tables.
+///
+/// These are directional where the peripheral is: `UartTx` is the MCU's own
+/// transmit pin. [`peripheral_functions_named`] reads only the names whose
+/// meaning is the same from either side of the wire; a UART's direction is
+/// decided by the other end, not by what a net is called.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PeripheralFunction {
+    /// SPI clock.
+    SpiSck,
+    /// SPI controller-out data.
+    SpiMosi,
+    /// SPI controller-in data.
+    SpiMiso,
+    /// I2C data.
+    I2cSda,
+    /// I2C clock.
+    I2cScl,
+    /// UART transmit.
+    UartTx,
+    /// UART receive.
+    UartRx,
+    /// A timer's PWM output.
+    Pwm,
+}
+
+impl PeripheralFunction {
+    /// Every function, for the drift tests and for a surface that lists them.
+    pub const ALL: [Self; 8] = [
+        Self::SpiSck,
+        Self::SpiMosi,
+        Self::SpiMiso,
+        Self::I2cSda,
+        Self::I2cScl,
+        Self::UartTx,
+        Self::UartRx,
+        Self::Pwm,
+    ];
+
+    /// The table key on a card (`spi_sck`).
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::SpiSck => "spi_sck",
+            Self::SpiMosi => "spi_mosi",
+            Self::SpiMiso => "spi_miso",
+            Self::I2cSda => "i2c_sda",
+            Self::I2cScl => "i2c_scl",
+            Self::UartTx => "uart_tx",
+            Self::UartRx => "uart_rx",
+            Self::Pwm => "pwm",
+        }
+    }
+
+    /// The words a reader sees for this function.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::SpiSck => "SPI clock (SCK)",
+            Self::SpiMosi => "SPI data out (MOSI)",
+            Self::SpiMiso => "SPI data in (MISO)",
+            Self::I2cSda => "I2C data (SDA)",
+            Self::I2cScl => "I2C clock (SCL)",
+            Self::UartTx => "UART transmit (TX)",
+            Self::UartRx => "UART receive (RX)",
+            Self::Pwm => "hardware PWM output",
+        }
+    }
+}
+
+/// The peripheral functions the net or pin name `name` states.
+///
+/// Only functions that read the same from either side of the wire (SPI, I2C and
+/// PWM words) are read. `TX`/`RX` are not read here: whose transmit a name means is
+/// the writer's viewpoint, so a UART is decided by [`names_a_uart`] and the
+/// part on the other end.
+///
+/// ```
+/// use hauksbee_ir::pin_functions::{peripheral_functions_named, PeripheralFunction};
+/// assert!(peripheral_functions_named("SPI_SCK").contains(&PeripheralFunction::SpiSck));
+/// assert!(peripheral_functions_named("FAN_PWM").contains(&PeripheralFunction::Pwm));
+/// assert!(peripheral_functions_named("CLK").is_empty());
+/// ```
+#[must_use]
+pub fn peripheral_functions_named(name: &str) -> BTreeSet<PeripheralFunction> {
+    const WORDS: &[(&str, PeripheralFunction)] = &[
+        ("sck", PeripheralFunction::SpiSck),
+        ("sclk", PeripheralFunction::SpiSck),
+        ("mosi", PeripheralFunction::SpiMosi),
+        ("copi", PeripheralFunction::SpiMosi),
+        ("miso", PeripheralFunction::SpiMiso),
+        ("cipo", PeripheralFunction::SpiMiso),
+        ("sda", PeripheralFunction::I2cSda),
+        ("scl", PeripheralFunction::I2cScl),
+        ("pwm", PeripheralFunction::Pwm),
+    ];
+    let lower = name.to_ascii_lowercase();
+    lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter_map(|w| WORDS.iter().find(|(k, _)| *k == w).map(|(_, f)| *f))
+        .collect()
+}
+
+/// Whether `name` names a serial port by a whole word (`UART`, `USART`, `TXD`,
+/// `RXD`, `TX`, `RX`), in whatever notation. It says a UART is meant, not which
+/// way: see [`peripheral_functions_named`].
+///
+/// ```
+/// use hauksbee_ir::pin_functions::names_a_uart;
+/// assert!(names_a_uart("DEBUG_UART_TX") && names_a_uart("RXD1"));
+/// assert!(!names_a_uart("TXEN") && !names_a_uart("MOSI"));
+/// ```
+#[must_use]
+pub fn names_a_uart(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| {
+        let bare = w.trim_end_matches(|c: char| c.is_ascii_digit());
+        matches!(bare, "uart" | "usart" | "tx" | "rx" | "txd" | "rxd")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn peripheral_names_are_read_by_whole_word() {
+        use PeripheralFunction as P;
+        let named = |n: &str| {
+            peripheral_functions_named(n)
+                .into_iter()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(named("SPI1_MOSI"), [P::SpiMosi]);
+        assert_eq!(named("~{SCK}"), [P::SpiSck]);
+        assert_eq!(named("I2C_SDA"), [P::I2cSda]);
+        assert_eq!(named("/LED_PWM"), [P::Pwm]);
+        assert!(named("CLK").is_empty() && named("SDATA").is_empty() && named("TX").is_empty());
+        assert!(names_a_uart("UART0_RX") && names_a_uart("TXD") && !names_a_uart("RXEN"));
+        let mut keys: Vec<_> = P::ALL.iter().map(|f| f.key()).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), P::ALL.len());
+        assert!(P::ALL.iter().all(|f| !f.label().is_empty()));
+    }
 
     fn named(name: &str) -> Vec<PinFunction> {
         functions_named(name).into_iter().collect()
@@ -256,10 +399,14 @@ mod tests {
     #[test]
     fn a_name_that_states_no_listed_function_reads_as_none() {
         for name in [
-            "", "PA4", "GPIO7", "EN", "1", "EP", "pd0_rxd", "MOSI", "TX", "OSC32_IN", "XTAL", "VIN",
-            "VOUT", "SDATA", "SCLK",
+            "", "PA4", "GPIO7", "EN", "1", "EP", "pd0_rxd", "MOSI", "TX", "OSC32_IN", "XTAL",
+            "VIN", "VOUT", "SDATA", "SCLK",
         ] {
-            assert!(functions_named(name).is_empty(), "{name}: {:?}", named(name));
+            assert!(
+                functions_named(name).is_empty(),
+                "{name}: {:?}",
+                named(name)
+            );
         }
     }
 

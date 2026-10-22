@@ -54,7 +54,10 @@ fn named_header(comp: &Component) -> Option<&'static StandardHeader> {
     if pins.len() != comp.pins.len() || comp.lib_id.to_ascii_lowercase().contains("top_bottom") {
         return None;
     }
-    let name = words(&format!("{} {} {}", comp.value, comp.lib_id, comp.footprint));
+    let name = words(&format!(
+        "{} {} {}",
+        comp.value, comp.lib_id, comp.footprint
+    ));
     let mut found = headers_named(pins.len(), &name);
     let one = found.next()?;
     found.next().is_none().then_some(one)
@@ -62,14 +65,14 @@ fn named_header(comp: &Component) -> Option<&'static StandardHeader> {
 
 /// Nets one hop of two-pin resistor away from `net`, with `net` itself: a
 /// series resistor on a programming line does not change what the line is.
-fn series_nets(board: &ExtractedBoard, net: i64) -> Vec<i64> {
+pub(super) fn series_nets(board: &ExtractedBoard, net: i64) -> Vec<i64> {
     let mut nets = vec![net];
     for c in &board.components {
         let is_resistor = c.reference.to_ascii_uppercase().starts_with('R') && c.pins.len() == 2;
         if !is_resistor || AssemblyState::of(c).fitted().is_none() {
             continue;
         }
-        let [a, b] = [c.pins[0].net, c.pins[1].net];
+        let (a, b) = (c.pins[0].net, c.pins[1].net);
         for (here, far) in [(a, b), (b, a)] {
             if here == Some(net) {
                 if let Some(far) = far.filter(|f| *f != 0 && !nets.contains(f)) {
@@ -240,10 +243,9 @@ pub fn debug_header_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintR
         let mut nets = Vec::new();
         let mut power = false;
         for pin in &comp.pins {
-            let (Some(net), Some(expected)) = (
-                pin.net.filter(|id| *id != 0),
-                header.signal_at(&pin.number),
-            ) else {
+            let (Some(net), Some(expected)) =
+                (pin.net.filter(|id| *id != 0), header.signal_at(&pin.number))
+            else {
                 continue;
             };
             let fault = match expected {
@@ -299,7 +301,11 @@ pub fn debug_header_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintR
         }
         report.findings.push(LintFinding {
             check: LintCheck::DebugHeaderPinout,
-            severity: if power { Severity::High } else { Severity::Medium },
+            severity: if power {
+                Severity::High
+            } else {
+                Severity::Medium
+            },
             message: format!(
                 "{} is the {} but is not wired to its pinout: {}. An adapter plugged into it \
                  meets the wrong signals on those pins, so it will not connect{}. Reorder the \
@@ -353,7 +359,10 @@ mod tests {
         (1..=n)
             .map(|i| {
                 let number = i.to_string();
-                let net = pads.iter().find(|(p, _)| *p == number).map_or(0, |(_, n)| *n);
+                let net = pads
+                    .iter()
+                    .find(|(p, _)| *p == number)
+                    .map_or(0, |(_, n)| *n);
                 (number, net)
             })
             .collect()
@@ -367,7 +376,9 @@ mod tests {
             ..part(
                 "J1",
                 value,
-                &all.iter().map(|(p, n)| (p.as_str(), *n)).collect::<Vec<_>>(),
+                &all.iter()
+                    .map(|(p, n)| (p.as_str(), *n))
+                    .collect::<Vec<_>>(),
             )
         }
     }
@@ -434,28 +445,28 @@ mod tests {
 
     #[test]
     fn an_avr_isp_header_with_mosi_and_miso_exchanged_is_flagged() {
-        let isp = |m1, m4| {
-            Component {
-                lib_id: "Connector_Generic:Conn_02x03_Odd_Even".into(),
-                ..part(
-                    "J2",
-                    "AVR_ISP",
-                    &[
-                        ("1", m1),
-                        ("2", V5),
-                        ("3", SCK),
-                        ("4", m4),
-                        ("5", RST),
-                        ("6", GND),
-                    ],
-                )
-            }
+        let isp = |m1, m4| Component {
+            lib_id: "Connector_Generic:Conn_02x03_Odd_Even".into(),
+            ..part(
+                "J2",
+                "AVR_ISP",
+                &[
+                    ("1", m1),
+                    ("2", V5),
+                    ("3", SCK),
+                    ("4", m4),
+                    ("5", RST),
+                    ("6", GND),
+                ],
+            )
         };
         let found = run(vec![isp(MOSI, MISO)]);
         assert_eq!(found.len(), 1, "{found:#?}");
         assert_eq!(found[0].severity, Severity::Medium);
         assert!(
-            found[0].message.contains("pin 1 is MISO in the standard but net 'MOSI' carries MOSI (it belongs on pin 4)"),
+            found[0].message.contains(
+                "pin 1 is MISO in the standard but net 'MOSI' carries MOSI (it belongs on pin 4)"
+            ),
             "{}",
             found[0].message
         );
@@ -508,9 +519,11 @@ mod tests {
         let mut nets = NETS.to_vec();
         nets.push((9, "NET_A"));
         let bare = header("FTDI", &[("1", 9), ("4", 9), ("5", 9)]);
-        assert!(debug_header_lint(&board(&nets, vec![bare]), &ModelLibrary::builtin())
-            .findings
-            .is_empty());
+        assert!(
+            debug_header_lint(&board(&nets, vec![bare]), &ModelLibrary::builtin())
+                .findings
+                .is_empty()
+        );
         // Both a transmit and a receive pin on the net: nothing definite.
         let mut both = mcu();
         both.pins[1].net = Some(TX);
