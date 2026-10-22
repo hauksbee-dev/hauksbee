@@ -385,17 +385,28 @@ fn series_bridges(
 
 /// Whether series parts join `rail` within [`FEED_HOPS`] hops to a net `source`
 /// accepts, walking from the rail back toward the source against each diode's
-/// direction.
-fn fed_through(rail: &BTreeSet<i64>, bridges: &[Bridge], source: impl Fn(i64) -> bool) -> bool {
+/// direction (with it, for a `negative` rail).
+fn fed_through(
+    rail: &BTreeSet<i64>,
+    bridges: &[Bridge],
+    negative: bool,
+    source: impl Fn(i64) -> bool,
+) -> bool {
     let mut seen: BTreeSet<i64> = rail.clone();
     let mut frontier: Vec<i64> = rail.iter().copied().collect();
     for _ in 0..FEED_HOPS {
         let mut next = Vec::new();
         for bridge in bridges {
-            if !bridge.to.iter().any(|n| frontier.contains(n)) {
+            // A negative rail is fed against the diode's conduction direction.
+            let (rail_side, source_side) = if negative {
+                (&bridge.from, &bridge.to)
+            } else {
+                (&bridge.to, &bridge.from)
+            };
+            if !rail_side.iter().any(|n| frontier.contains(n)) {
                 continue;
             }
-            for &n in &bridge.from {
+            for &n in source_side {
                 if seen.insert(n) {
                     if source(n) {
                         return true;
@@ -594,6 +605,17 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
             names.insert(0, first.clone());
         }
         basis.nets = names;
+        // A diode passes current from its anode to its cathode, so it feeds a
+        // positive rail from its cathode side. A negative rail (-12V) is fed
+        // the other way round: the source sits on the cathode and the rail on
+        // the anode. `blocks` is the electrode that, on the rail, makes the
+        // diode a load or a block instead of a feed.
+        let negative = leg.as_ref().is_some_and(|(_, v)| *v < 0.0);
+        let blocks = if negative {
+            Polarity::Cathode
+        } else {
+            Polarity::Anode
+        };
         for c in &board.components {
             let on: Vec<_> = (c.pins.iter())
                 .filter(|p| p.net.is_some_and(|n| ids.contains(&n)))
@@ -676,8 +698,7 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
                             // A diode feeds only its cathode's net (an
                             // electrode nothing names may be either).
                             ComponentKind::Diode => {
-                                on.iter().any(|p| polarity(p, Some(m)) != Polarity::Anode)
-                                    && into_rail()
+                                on.iter().any(|p| polarity(p, Some(m)) != blocks) && into_rail()
                             }
                             ComponentKind::BjtNpn
                             | ComponentKind::BjtPnp
@@ -690,9 +711,7 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
                     } else if two && is_led(c) {
                         // An LED's anode is never a rail's source.
                         false
-                    } else if is_diode(c, None)
-                        && on.iter().all(|p| polarity(p, None) == Polarity::Anode)
-                    {
+                    } else if is_diode(c, None) && on.iter().all(|p| polarity(p, None) == blocks) {
                         // A diode with no card, its anode on the rail: it
                         // draws from the rail, it does not feed it.
                         false
@@ -763,7 +782,8 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
             && !basis.supply_loads.is_empty()
         {
             let bridges = bridges.get_or_init(|| series_bridges(board, lib, kinds, &grounded));
-            basis.fed_through = fed_through(ids, bridges, |id| {
+            let negative = basis.volts.is_some_and(|v| v < 0.0);
+            basis.fed_through = fed_through(ids, bridges, negative, |id| {
                 entry_nets.contains(&id)
                     || strong.contains(&id)
                     || rail_sourced.contains(&id)

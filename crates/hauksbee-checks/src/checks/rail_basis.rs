@@ -832,6 +832,8 @@ mod tests {
     const BAT: i64 = 9;
     const BOOST: i64 = 10;
     const MID: i64 = 11;
+    const NEG: i64 = 12;
+    const NEG_IN: i64 = 13;
 
     fn nets2() -> Vec<(i64, &'static str)> {
         let mut n = nets();
@@ -840,6 +842,8 @@ mod tests {
             (BAT, "VBAT_RAW"),
             (BOOST, "+12V_BOOST"),
             (MID, "MID"),
+            (NEG, "-12V"),
+            (NEG_IN, "NEG_IN"),
         ]);
         n
     }
@@ -935,6 +939,33 @@ mod tests {
             usb(),
             diode("D1", "SS14", SYS, VBUS),
             sensor("U2", SYS),
+        ]);
+        assert_eq!(unsourced(&found).len(), 1, "{found:#?}");
+    }
+
+    /// Legal control: a negative rail (-12V) behind a reverse-protection diode
+    /// from its connector. Current flows from the cathode (connector side) to
+    /// the anode (board rail), the opposite way round to a positive rail.
+    #[test]
+    fn a_negative_rail_behind_a_polarity_diode_from_a_connector_is_powered() {
+        let found = run2(vec![
+            usb(),
+            part("J3", "Conn_01x02", &[("1", NEG_IN), ("2", GND)]),
+            diode("D1", "1N5819", NEG, NEG_IN),
+            sensor("U2", NEG),
+        ]);
+        assert!(unsourced(&found).is_empty(), "{found:#?}");
+    }
+
+    /// Faulty: the same negative rail with the diode turned the other way
+    /// blocks the connector's feed, so the rail is only a name.
+    #[test]
+    fn a_negative_rail_behind_a_reversed_diode_is_still_unsourced() {
+        let found = run2(vec![
+            usb(),
+            part("J3", "Conn_01x02", &[("1", NEG_IN), ("2", GND)]),
+            diode("D1", "1N5819", NEG_IN, NEG),
+            sensor("U2", NEG),
         ]);
         assert_eq!(unsourced(&found).len(), 1, "{found:#?}");
     }
