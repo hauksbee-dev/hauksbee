@@ -582,17 +582,24 @@ fn soc_inspection_states_the_clock_cross_check_and_the_watchdog_fidelity() {
         "an absent timing limitation is a CLAIM and must be printed as one:\n{out}"
     );
 
-    // And the descriptor that DOES declare one (the F103's deliberate
-    // TIMx-at-72MHz divergence) must have its own sentence quoted verbatim.
+    // The F103 used to declare one (TIMx at the post-PLL 72 MHz while the core
+    // stayed at the 8 MHz reset default). Its clock tree is now followed from
+    // the live RCC registers and its TIMx fix is clock-truth gated, so the
+    // divergence is gone: the old sentence must not be printed any more, and
+    // the silence is printed as the claim it is.
     let f103_path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hauksbee-mcu/db/mcu/stm32f103.soc.toml");
     let out = lint_exits(&f103_path, 0);
     assert!(
+        !out.contains("TIMx timer blocks run at the post-PLL 72 MHz"),
+        "the retired F103 divergence sentence must not be printed:\n{out}"
+    );
+    assert!(
         out.contains(
-            "timing: The STM32F103 TIMx timer blocks run at the post-PLL 72 MHz in this \
-             co-simulator while the core and SysTick run at the 8 MHz reset default"
+            "timing: this part claims a firmware delay costs the virtual time it costs \
+             on silicon (measured by the clock-truth gate)"
         ),
-        "the F103's own timing sentence, verbatim:\n{out}"
+        "the F103 now claims clock-truth fidelity:\n{out}"
     );
 }
 

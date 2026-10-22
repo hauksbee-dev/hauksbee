@@ -73,6 +73,24 @@ fn qemu_descriptors_equal_constructors() {
     }
 }
 
+/// A QEMU descriptor can carry `[[soc.decode]]` blocks as data, which the
+/// backend reads over the gdbstub for the peripheral snapshot. A bad block is
+/// refused with the same named error as on a Renode part.
+#[test]
+fn qemu_descriptor_carries_and_validates_decode_blocks() {
+    let good = format!(
+        "{ESP32}\n[[soc.decode]]\nkind = \"clock\"\nname = \"clk\"\nregisters = {{ ctl = 0x3FF48000 }}\nvars = [[\"core_hz\", \"bits(ctl, 7, 0) * 1000000\"]]\n"
+    );
+    let cfg = QemuConfig::from_soc_toml(&good).expect("decode block loads");
+    assert_eq!(cfg.decode.len(), 1);
+    assert_eq!(cfg.decode[0].name, "clk");
+    let bad = format!(
+        "{ESP32}\n[[soc.decode]]\nkind = \"clock\"\nname = \"clk\"\nregisters = {{ ctl = 0x3FF48000 }}\nvars = [[\"core_hz\", \"bits(missing, 7, 0)\"]]\n"
+    );
+    let err = QemuConfig::from_soc_toml(&bad).unwrap_err();
+    assert!(matches!(err, SocError::Decode(_)), "got: {err}");
+}
+
 /// The FE310's `post_load_setup` (the bring-up footgun) survives the round trip:
 /// this is a field the plan example predated, and losing it would silently
 /// break FE310 boot.
@@ -122,7 +140,6 @@ fn stm32f103_descriptor_ships_the_hal_boot_platform_inline() {
         "dma1: DMA.STM32G0DMA @ sysbus 0x40020000",
         "iwdg: Timers.STM32_IndependentWatchdog @ sysbus 0x40003000",
         "bitbandPeripherals: Miscellaneous.BitBanding @ sysbus <0x42000000, +0x2000000>",
-        "frequency: 72000000",
     ] {
         assert!(c.platform.contains(needle), "platform must carry {needle}");
     }
@@ -130,26 +147,29 @@ fn stm32f103_descriptor_ships_the_hal_boot_platform_inline() {
     // "stm32f1"; the `using` line keeps it firing for the inline form.
     assert!(c.platform.to_ascii_lowercase().contains("stm32f1"));
 
-    let clock = c
-        .clock_control
-        .as_ref()
-        .expect("STM32F103 must declare its clock-control bridge");
-    assert!(clock.presence_command.contains("{present}"));
-    assert!(clock.tick_command.contains("{micros}"));
-    assert_eq!(
-        c.clone()
-            .with_external_clock_present(true)
-            .extra_setup
-            .last()
-            .map(String::as_str),
-        Some("sysbus.rcc WriteDoubleWord 0x3FC 1")
-    );
-    assert_eq!(
-        c.with_external_clock_present(false)
-            .extra_setup
-            .last()
-            .map(String::as_str),
-        Some("sysbus.rcc WriteDoubleWord 0x3FC 0")
+    // The crystal-dependent oscillators are gated by the generic readiness
+    // table, not by per-part Python: HSE needs a crystal, the PLL needs HSE
+    // only when HSE is its source.
+    let hse = c
+        .clock_ready
+        .iter()
+        .find(|e| e.name == "hse")
+        .expect("STM32F103 must declare HSE readiness");
+    assert!(hse.requires_external);
+    let pll = c
+        .clock_ready
+        .iter()
+        .find(|e| e.name == "pll")
+        .expect("STM32F103 must declare PLL readiness");
+    assert!(pll
+        .needs
+        .iter()
+        .any(|n| n.entry == "hse" && n.when.is_some()));
+    assert!(
+        c.decode
+            .iter()
+            .any(|b| b.kind == hauksbee_mcu::periph_snapshot::BlockKind::Clock),
+        "STM32F103 must declare a clock decode block"
     );
 }
 
@@ -299,35 +319,42 @@ fn zero_width_port_is_named() {
 }
 
 #[test]
-fn clock_control_templates_are_required() {
-    for (body, field, placeholder) in [
-        (
-            "[soc.clock_control]\npresence_command = \"clock SetPresent 1\"\ntick_command = \"clock Tick {micros}\"",
-            "presence_command",
-            "{present}",
-        ),
-        (
-            "[soc.clock_control]\npresence_command = \"clock SetPresent {present}\"\ntick_command = \"clock Tick 10\"",
-            "tick_command",
-            "{micros}",
-        ),
-    ] {
-        let src = format!(
-            "{}\n{body}",
-            renode_descriptor(ONE_PORT, "", "", "EM_ARM", "renode")
-        );
-        let err = RenodeConfig::from_soc_toml(&src).unwrap_err();
-        assert!(
-            matches!(
-                err,
-                SocError::ClockControlTemplate {
-                    field: actual_field,
-                    placeholder: actual_placeholder,
-                } if actual_field == field && actual_placeholder == placeholder
-            ),
-            "got: {err}"
-        );
-    }
+fn decode_blocks_are_validated() {
+    let base = renode_descriptor(ONE_PORT, "", "", "EM_ARM", "renode");
+    let bad_expr = format!(
+        "{base}\n[[soc.decode]]\nkind = \"clock\"\nname = \"rcc\"\nregisters = {{ cr = 0x40021000 }}\nvars = [[\"core\", \"bits(cr, 3\"]]"
+    );
+    let err = RenodeConfig::from_soc_toml(&bad_expr).unwrap_err();
+    assert!(matches!(err, SocError::Decode(_)), "got: {err}");
+
+    let unknown_name = format!(
+        "{base}\n[[soc.decode]]\nkind = \"clock\"\nname = \"rcc\"\nregisters = {{ cr = 0x40021000 }}\nvars = [[\"core\", \"bits(missing, 3, 0)\"]]"
+    );
+    let err = RenodeConfig::from_soc_toml(&unknown_name).unwrap_err();
+    assert!(matches!(err, SocError::Decode(_)), "got: {err}");
+}
+
+#[test]
+fn clock_tables_are_validated_against_the_decode_blocks() {
+    let base = renode_descriptor(ONE_PORT, "", "", "EM_ARM", "renode");
+    let clock = "[[soc.decode]]\nkind = \"clock\"\nname = \"rcc\"\nregisters = { cr = 0x40021000 }\nvars = [[\"core\", \"bits(cr, 3, 0)\"]]";
+    let unknown_var = format!(
+        "{base}\n{clock}\n[[soc.clock_targets]]\nvar = \"nope\"\ncommand = \"sysbus.cpu PerformanceInMips {{mhz}}\""
+    );
+    let err = RenodeConfig::from_soc_toml(&unknown_var).unwrap_err();
+    assert!(matches!(err, SocError::ClockTable(_)), "got: {err}");
+
+    let no_placeholder = format!(
+        "{base}\n{clock}\n[[soc.clock_targets]]\nvar = \"core\"\ncommand = \"sysbus.cpu PerformanceInMips 8\""
+    );
+    let err = RenodeConfig::from_soc_toml(&no_placeholder).unwrap_err();
+    assert!(matches!(err, SocError::ClockTable(_)), "got: {err}");
+
+    let unknown_need = format!(
+        "{base}\n[[soc.clock_ready]]\nperipheral = \"rcc\"\nname = \"pll\"\nenable_register = 0\nenable_mask = 1\nready_register = 0\nready_mask = 2\nstartup_us = 10.0\nneeds = [{{ entry = \"hse\" }}]"
+    );
+    let err = RenodeConfig::from_soc_toml(&unknown_need).unwrap_err();
+    assert!(matches!(err, SocError::ClockTable(_)), "got: {err}");
 }
 
 #[test]

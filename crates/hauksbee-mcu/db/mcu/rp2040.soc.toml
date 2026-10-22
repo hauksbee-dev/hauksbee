@@ -228,3 +228,42 @@ controllers = ["i2c0", "i2c1"]
 # reproduction. Fixing this means either the upstream model dispatching to its
 # registered peripheral, or a pin-level SPI bridge on the hauksbee side.
 controllers = []
+
+# ── CRYSTAL READINESS ─────────────────────────────────────────────────────────
+# The vendored RP2040XOSC model (rp2040/peripherals/rp2040_xosc.cs) raises
+# STATUS.STABLE the instant CTRL.ENABLE = 0xFAB is written, crystal or not
+# ("simulation have always stable clock"). On silicon STABLE rises only after
+# STARTUP.DELAY x 256 crystal cycles have been seen from a crystal that is
+# there (RP2040 datasheet s2.16.3 "Startup Delay": "how many clock cycles must
+# be seen from the crystal before it can be used. This is specified in
+# multiples of 256"), so a board with no crystal on XIN/XOUT never leaves the
+# SDK's `while (!(xosc_hw->status & XOSC_STATUS_STABLE_BITS))` loop in
+# `runtime_init`. This entry replaces the instant flag with that behaviour:
+#   CTRL     @ +0x00, ENABLE bits 23:12 (0xFAB enable, 0xD1E disable)
+#   STATUS   @ +0x04, STABLE bit 31
+#   STARTUP  @ +0x0C, DELAY bits 13:0 (reset 0xC4), in units of 256 crystal
+#            periods; 12 MHz reference-design crystal -> 256/12 us per count.
+#            X4 (bit 20) "multiplies the startup_delay by 4", so the decode
+#            includes it (`multiplier_mask` / `multiplier` below).
+# (XOSC: CTRL, STATUS and STARTUP register tables, RP2040 datasheet s2.16.7.)
+# What the numbers rest on: the datasheet gives 12 MHz only as the reference
+# design's crystal (s2.16.3), so 256/12 = 21.33 us per count assumes that
+# crystal. `startup_us` is the fallback used only without `startup_scale`; the
+# value 1003 is the pico-sdk's DELAY = 47 (about 1 ms: 47 x 21.33 us), NOT the
+# hardware reset value 0xC4, which would be 196 x 21.33 = about 4.18 ms. With
+# the scale present the time actually applied is the live DELAY (and X4) the
+# firmware wrote, falling back to the reset value only if it never writes
+# STARTUP.
+# The PLLs are not gated: the vendored RP2040PLL locks instantly and its lock
+# time is not modelled.
+[[soc.clock_ready]]
+peripheral = "xosc"
+name = "xosc"
+enable_register = 0x00
+enable_mask = 0xFFF000
+enable_value = 0xFAB000
+ready_register = 0x04
+ready_mask = 0x80000000
+requires_external = true
+startup_us = 1003.0
+startup_scale = { register = 0x0C, mask = 0x3FFF, us_per_count = 21.333333333333332, multiplier_mask = 0x100000, multiplier = 4.0 }

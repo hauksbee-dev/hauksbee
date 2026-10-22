@@ -619,15 +619,44 @@ pub trait Mcu {
     ///   host-speed dependent even though the cont→stop window itself is now
     ///   measured as the host span from sending QMP `cont` to sending `stop`
     ///   (see [`Mcu::clock_host_paced`]).
-    /// - `renode:stm32f103` deliberately clocks its `TIMx` blocks at the
-    ///   post-PLL 72 MHz against an 8 MHz reset-default core, so a bare-metal
-    ///   `TIMx` time base runs 9x fast (stated in the descriptor).
+    /// - A Renode part whose descriptor declares no clock tree (no
+    ///   `[[soc.decode]]` clock block) keeps its reset-default clock whatever
+    ///   the firmware configures; the descriptor states that.
     ///
     /// The string is a whole sentence rendered verbatim on the batch surfaces
     /// and TUI. The synchronous web report does not run the external backends
     /// that emit it.
     fn timing_limitation(&self) -> Option<String> {
         None
+    }
+
+    /// The peripheral configuration the firmware has programmed, decoded from
+    /// the core's live registers: the clock tree and every UART, SPI, I2C,
+    /// timer and ADC block the descriptor declares a decode for. Anything the
+    /// registers do not determine is `Unknown`, never a guess. `None` when this
+    /// backend has no decode data for the part.
+    fn peripheral_config(&mut self) -> Option<crate::periph_snapshot::PeripheralConfig> {
+        None
+    }
+
+    /// A clock-tree fact this backend had to ASSUME because nothing the user
+    /// supplied determines it (for example an AVR's `CKDIV8` fuse, which no
+    /// firmware image carries), as a whole sentence for the report, or `None`
+    /// when nothing was assumed. The same coverage-honesty contract as
+    /// [`Mcu::timing_limitation`]: a green time-based result is read together
+    /// with the assumption underneath it.
+    fn clock_assumption(&self) -> Option<String> {
+        None
+    }
+
+    /// Whether this backend gates the part's external-oscillator readiness
+    /// (HSE, a crystal-fed PLL, XOSC) on the board really having a crystal, so
+    /// a firmware wait loop on `HSERDY` stalls on a board without one as it
+    /// does on silicon. `false` when readiness is not modelled, in which case
+    /// the oscillator-ready bits report whatever the emulator's stock model
+    /// does.
+    fn external_clock_modelled(&self) -> bool {
+        false
     }
 
     /// Whether this core's simulated time is credited from HOST wall-clock

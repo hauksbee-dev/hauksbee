@@ -9,6 +9,7 @@
 //! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/avr.md.
 
 use crate::ffi;
+use crate::periph_snapshot::{BlockKind, DecodeBlock, PeripheralConfig, RegisterReader};
 use crate::traits::{
     I2cCb, I2cEvent, InputResponderBatchCb, InputResponderCb, InputResponderDirectionCb, Mcu,
     McuState, PinChangeCb, PinDrive, PinId, SpiCb, SpiEvent, UartCb,
@@ -711,8 +712,26 @@ pub struct AvrMcu {
     /// Reclaimed in `Drop`.
     callback_ptr: *mut std::os::raw::c_void,
 
-    /// Clock frequency in Hz.
+    /// The clock the system runs at now, in Hz: the oscillator divided by the
+    /// firmware's `CLKPR` setting where the part's decode is known (see
+    /// [`Self::follow_clock`]), else the construction frequency.
     frequency_hz: u64,
+
+    /// The oscillator the board fits, in Hz: the frequency given at
+    /// construction, before any `CLKPR` division.
+    oscillator_hz: u64,
+
+    /// The peripheral decode for this part (empty when no verified register map
+    /// is known): see [`atmega48_328_decode`].
+    decode: Vec<DecodeBlock>,
+
+    /// The `CKDIV8` fuse, when the caller stated it: `Some(true)` programmed
+    /// (the factory state, DS40002061A p.46: CLKPS resets to 0011, divide by 8),
+    /// `Some(false)` unprogrammed (CLKPS resets to 0000, as on a board whose
+    /// bootloader programmer cleared it). `None` is the default and an
+    /// ASSUMPTION: unprogrammed, the Arduino-board state, reported through
+    /// [`Mcu::clock_assumption`] so a verdict never hides it.
+    ckdiv8: Option<bool>,
 
     /// Ports whose IRQ hooks are currently registered.
     hooked_ports: Vec<char>,
@@ -769,6 +788,152 @@ fn path_cstr(path: &Path) -> Result<CString> {
 const fn cycle_budget(us: u64, freq: u64, carry: u64) -> (u64, u64) {
     let total = us * freq + carry;
     (total / 1_000_000, total % 1_000_000)
+}
+
+/// The ATmega48A/PA/88A/PA/168A/PA/328/P share one datasheet and one register
+/// map (Microchip DS40002061A, "Data Sheet Complete"), so one decode serves the
+/// family. Other AVR parts have no verified map here and decode nothing.
+fn is_atmega48_328_family(mcu_name: &str) -> bool {
+    ["atmega48", "atmega88", "atmega168", "atmega328"]
+        .iter()
+        .any(|p| mcu_name.starts_with(p))
+}
+
+/// Peripheral decode for the ATmega48/88/168/328 family, `fosc` being the
+/// oscillator the board fits. All addresses are data-space addresses (I/O
+/// address + 0x20 where the manual gives both) from the Register Summary,
+/// DS40002061A p.621-623. The expressions use the language of
+/// [`crate::periph_snapshot`].
+///
+/// * Clock: `CLKPR` (0x61, CLKPS3:0 = bits 3:0, p.46); Table 9-17 (p.47): 0 to 8
+///   divide by 1, 2, 4 ... 256, 9 to 15 are reserved and decode `Unknown`.
+///   `CLKPCE` (bit 7) is not part of the division. A bare factory chip ships
+///   with CKDIV8 PROGRAMMED (CLKPS resets to 0011, divide by 8, p.46); the
+///   fuse is taken as unprogrammed (CLKPS resets to 0, the Arduino-board state)
+///   unless [`AvrMcu::with_ckdiv8_programmed`] states it, and
+///   [`Mcu::clock_assumption`] reports the assumption.
+/// * USART0: UCSR0A 0xC0 (U2X0 bit 1), UCSR0B 0xC1 (UCSZ02 bit 2), UCSR0C 0xC2
+///   (UMSEL0 7:6, USBS0 bit 3, UCSZ0 2:1), UBRR0 0xC4/0xC5 (UBRR0H holds
+///   bits 11:8; pp.200-204). Baud, Table 20-1 (p.182): fosc / (16 (UBRR + 1))
+///   asynchronous normal, fosc / (8 (UBRR + 1)) with U2X0, fosc / (2 (UBRR + 1))
+///   in master SPI mode (UMSEL0 = 11, p.205 Table 21-1). Synchronous USART
+///   (UMSEL0 = 01) is `Unknown`: its clock is the XCK pin, driven by this chip
+///   only when the pin is an output. Character size, Table 20-11 (p.203):
+///   UCSZ02:0 of 000 to 011 are 5 to 8 bits, 111 is 9, the rest reserved. Stop
+///   bits, Table 20-10 (p.203): 1 or 2.
+/// * SPI: SPCR 0x4C (CPOL bit 3, CPHA bit 2, MSTR bit 4, SPR1:0), SPSR 0x4D
+///   (SPI2X bit 0; pp.176-177). SCK, Table 19-5 (p.177): 4, 16, 64, 128 with
+///   SPI2X clear and 2, 8, 32, 64 with it set. A slave takes SCK from the
+///   master, so it is `Unknown`.
+/// * TWI: TWBR 0xB8, TWSR 0xB9 (TWPS 1:0, pp.239-241). TWSR description:
+///   prescaler 1, 4, 16, 64. SCL = fCPU / (16 + 2 TWBR x prescaler) (p.222).
+///
+/// Timers and the ADC are not decoded.
+/// Data-space address of `CLKPR` on the ATmega48/88/168/328 (Register Summary,
+/// DS40002061A p.623).
+const CLKPR_ADDRESS: usize = 0x61;
+
+fn atmega48_328_decode(fosc: u64) -> Vec<DecodeBlock> {
+    fn block(
+        kind: BlockKind,
+        name: &str,
+        regs: &[(&str, u32)],
+        vars: &[(&str, &str)],
+    ) -> DecodeBlock {
+        DecodeBlock {
+            kind,
+            name: name.to_string(),
+            registers: regs.iter().map(|(n, a)| ((*n).to_string(), *a)).collect(),
+            vars: vars
+                .iter()
+                .map(|(n, e)| ((*n).to_string(), (*e).to_string()))
+                .collect(),
+        }
+    }
+    let fosc_expr = fosc.to_string();
+    vec![
+        block(
+            BlockKind::Clock,
+            "clkpr",
+            &[("clkpr", 0x61)],
+            &[
+                ("fosc", &fosc_expr),
+                (
+                    "core_hz",
+                    "fosc / pick(bits(clkpr, 3, 0), 1, 2, 4, 8, 16, 32, 64, 128, 256)",
+                ),
+            ],
+        ),
+        block(
+            BlockKind::Uart,
+            "usart0",
+            &[
+                ("ucsr0a", 0xC0),
+                ("ucsr0b", 0xC1),
+                ("ucsr0c", 0xC2),
+                ("ubrr0", 0xC4),
+            ],
+            &[
+                (
+                    "baud",
+                    "clk_core_hz / (pick(bits(ucsr0c, 7, 6), 16 - 8 * bit(ucsr0a, 1), 1 / 0, 1 / 0, 2) * (bits(ubrr0, 11, 0) + 1))",
+                ),
+                (
+                    "data_bits",
+                    "pick(bit(ucsr0b, 2) * 4 + bits(ucsr0c, 2, 1), 5, 6, 7, 8, 1 / 0, 1 / 0, 1 / 0, 9)",
+                ),
+                ("stop_bits", "1 + bit(ucsr0c, 3)"),
+            ],
+        ),
+        block(
+            BlockKind::Spi,
+            "spi",
+            &[("spcr", 0x4C), ("spsr", 0x4D)],
+            &[
+                (
+                    "sck_hz",
+                    "if(bit(spcr, 4), clk_core_hz / pick(bits(spcr, 1, 0) + 4 * bit(spsr, 0), 4, 16, 64, 128, 2, 8, 32, 64), 1 / 0)",
+                ),
+                ("cpol", "bit(spcr, 3)"),
+                ("cpha", "bit(spcr, 2)"),
+            ],
+        ),
+        block(
+            BlockKind::I2c,
+            "twi",
+            &[("twbr", 0xB8), ("twsr", 0xB9)],
+            &[(
+                "scl_hz",
+                "clk_core_hz / (16 + 2 * bits(twbr, 7, 0) * pick(bits(twsr, 1, 0), 1, 4, 16, 64))",
+            )],
+        ),
+    ]
+}
+
+/// The simavr data space as a [`RegisterReader`]: a 32-bit little-endian word
+/// is four consecutive data bytes, read straight from the `data[]` array so no
+/// I/O side effect (a `UDR` read, say) fires. `None` past the end of SRAM.
+struct DataSpace {
+    avr: *mut ffi::avr_t,
+}
+
+impl RegisterReader for DataSpace {
+    fn read_u32(&mut self, address: u32) -> Option<u32> {
+        // SAFETY: `avr` is the live instance owned by the `AvrMcu` that built
+        // this reader, and the reader does not outlive the borrow of it.
+        unsafe {
+            let ramend = u32::from((*self.avr).ramend);
+            if address.checked_add(3)? > ramend {
+                return None;
+            }
+            let data = (*self.avr).data;
+            let mut word = 0u32;
+            for i in 0..4u32 {
+                word |= u32::from(*data.add((address + i) as usize)) << (8 * i);
+            }
+            Some(word)
+        }
+    }
 }
 
 impl AvrMcu {
@@ -881,6 +1046,13 @@ impl AvrMcu {
             state,
             callback_ptr,
             frequency_hz: frequency,
+            oscillator_hz: frequency,
+            decode: if is_atmega48_328_family(mcu_name) {
+                atmega48_328_decode(frequency)
+            } else {
+                Vec::new()
+            },
+            ckdiv8: None,
             hooked_ports: Vec::new(),
             firmware_loaded: false,
             cycle_carry: 0,
@@ -898,6 +1070,37 @@ impl AvrMcu {
     /// As [`Self::new`].
     pub fn atmega328p_16mhz() -> Result<Self> {
         Self::new("atmega328p", 16_000_000)
+    }
+
+    /// State the `CKDIV8` fuse. `frequency` given to [`Self::new`] is then the
+    /// oscillator, and a programmed fuse (the factory state of a bare chip,
+    /// DS40002061A p.46) starts the core at the oscillator divided by 8 because
+    /// `CLKPR` resets to `CLKPS = 0011`; an unprogrammed one starts at the
+    /// oscillator. Without this call the fuse is assumed unprogrammed and
+    /// [`Mcu::clock_assumption`] says so. A part with no verified clock decode
+    /// ignores the setting.
+    #[must_use]
+    pub fn with_ckdiv8_programmed(mut self, programmed: bool) -> Self {
+        self.ckdiv8 = Some(programmed);
+        self.apply_clkpr_reset();
+        self
+    }
+
+    /// Put `CLKPR` at its reset value for the fuse and follow it. The reset
+    /// value is `CLKPS = 0011` while CKDIV8 is programmed, else 0 (p.46).
+    fn apply_clkpr_reset(&mut self) {
+        if self.decode.is_empty() {
+            return;
+        }
+        let value = if self.ckdiv8 == Some(true) {
+            0x03
+        } else {
+            0x00
+        };
+        // SAFETY: `avr` is live, and `CLKPR`'s data-space address is below
+        // simavr's `ramend` on every part with a decode.
+        unsafe { *(*self.avr).data.add(CLKPR_ADDRESS) = value };
+        self.follow_clock();
     }
 
     /// Set the supply/reference rails in volts (defaults are 5V). The ADC
@@ -1090,6 +1293,51 @@ impl AvrMcu {
         unsafe { (*self.avr).cycle }
     }
 
+    /// One byte of the AVR data space (registers, I/O, SRAM) at `address`, read
+    /// straight from simavr's `data[]` array with no I/O side effect. `None`
+    /// past the end of SRAM.
+    #[must_use]
+    pub fn read_data(&self, address: u16) -> Option<u8> {
+        // SAFETY: `avr` is live for the lifetime of `self`, and the index is
+        // bounded by simavr's own `ramend`.
+        unsafe {
+            if address > (*self.avr).ramend {
+                return None;
+            }
+            Some(*(*self.avr).data.add(usize::from(address)))
+        }
+    }
+
+    /// Make the simulated clock the one the firmware configured. simavr does
+    /// not implement `CLKPR`, so a firmware that divides the system clock (the
+    /// usual `clock_prescale_set` low-power idiom) would otherwise keep running
+    /// at the oscillator rate and every delay, baud rate and timer period it
+    /// then measures would be too fast. Reads the part's decoded clock and, if
+    /// it changed, retunes both the cycles-per-microsecond budget and simavr's
+    /// own `frequency` field (which its UART baud conversion uses). A part with
+    /// no verified decode keeps the construction frequency.
+    fn follow_clock(&mut self) {
+        if self.decode.is_empty() {
+            return;
+        }
+        let mut reader = DataSpace { avr: self.avr };
+        let core = crate::periph_snapshot::decode_clock(&self.decode, &mut reader)
+            .and_then(|c| c.core_hz.known());
+        // A reserved CLKPS code is not a clock: keep the last known one.
+        let Some(hz) = core else { return };
+        // The decode is exact for the divisors in Table 9-17, so the value is a
+        // whole number of Hz; round to nearest to absorb float division.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // positive, below 2^32
+        let hz = hz.round() as u64;
+        if hz == 0 || hz == self.frequency_hz {
+            return;
+        }
+        if let Ok(field) = u32::try_from(hz) {
+            unsafe { (*self.avr).frequency = field };
+            self.frequency_hz = hz;
+        }
+    }
+
     /// Record an unserviced-watchdog reboot, loudly the first time.
     ///
     /// Loud on the first one and counted thereafter, the discipline
@@ -1130,6 +1378,8 @@ impl Mcu for AvrMcu {
             .flatten();
         self.entry_reached = false;
         self.pcs = crate::traits::PcSampler::default();
+        // The image starts from the fuse's CLKPR reset value.
+        self.apply_clkpr_reset();
         // Re-anchor the absolute run target (and drop any pending sub-cycle
         // carry) at the counter the freshly loaded image starts from, so a
         // reload doesn't inherit the previous image's timing remainders.
@@ -1150,6 +1400,8 @@ impl Mcu for AvrMcu {
         // killing the server. `avr_reset` also recovers a cpu_Crashed/Done
         // core (state back to cpu_Running) and zeroes `avr->cycle`.
         unsafe { ffi::avr_reset(self.avr) };
+        // `avr_reset` zeroed CLKPR; on silicon it comes back as the fuse says.
+        self.apply_clkpr_reset();
         // The cycle counter restarted, so the timing anchors must too.
         self.run_target = 0;
         self.cycle_carry = 0;
@@ -1250,14 +1502,39 @@ impl Mcu for AvrMcu {
         // absorbs the instruction-boundary overshoot the same way the carry
         // absorbs the fraction: together the guest clock tracks freq·t with
         // at most one instruction of error, never accumulating.
+        self.follow_clock();
         let (cycles, carry) = cycle_budget(us, self.frequency_hz, self.cycle_carry);
         self.cycle_carry = carry;
         self.run_cycles(cycles)?;
+        // A prescaler write in this slice takes effect for the next one (the
+        // slice is the clock's resolution); `frequency()` then reports it.
+        self.follow_clock();
         Ok(())
     }
 
     fn frequency(&self) -> u64 {
         self.frequency_hz
+    }
+
+    fn clock_assumption(&self) -> Option<String> {
+        if self.decode.is_empty() || self.ckdiv8.is_some() {
+            return None;
+        }
+        Some(format!(
+            "The CKDIV8 fuse is assumed unprogrammed (an Arduino-style board), so the core runs \
+             at the {} Hz oscillator until the firmware writes CLKPR. A bare factory chip ships \
+             with CKDIV8 programmed and starts at one eighth of that (DS40002061A p.46); state \
+             the fuse to model it.",
+            self.oscillator_hz
+        ))
+    }
+
+    fn peripheral_config(&mut self) -> Option<PeripheralConfig> {
+        if self.decode.is_empty() {
+            return None;
+        }
+        let mut reader = DataSpace { avr: self.avr };
+        Some(PeripheralConfig::decode(&self.decode, &mut reader))
     }
 
     fn current_cycle(&self) -> u64 {

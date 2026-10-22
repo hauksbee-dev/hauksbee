@@ -197,8 +197,11 @@ fn a_faithful_backend_with_no_reboots_says_nothing_on_any_surface() {
 /// wording the same gap differently is the failure this mirroring exists to
 /// avoid.
 ///
-/// **A known timing bias** (`timing_limitations`): the F103's `TIMx` blocks run
-/// at the post-PLL 72 MHz against the 8 MHz reset-default core.
+/// **A known timing bias** (`timing_limitations`): the F103 no longer has one
+/// (its clock tree is followed from the RCC registers), so the surface is driven
+/// by the shipped F103 descriptor with a timing sentence injected through
+/// `HAUKSBEE_MCU_DIR`, which exercises the same plumbing a part that does
+/// declare one (F7, F072, G4, L0) uses.
 ///
 /// The F103's independent watchdog used to be the other case here ("arms and
 /// never fires"); it bites now (`renode_watchdog.rs`), so the same run must carry
@@ -218,6 +221,22 @@ fn known_backend_limitations_reach_all_four_surfaces() {
     let fw = repo("testdata/firmware/stm32_blinky/blinky.elf");
     hauksbee_testkit::skip_if!(!fw.exists(), "blinky.elf not built");
 
+    // The shipped F103 descriptor plus a declared timing limitation, as an
+    // override directory (`HAUKSBEE_MCU_DIR` beats the built-ins).
+    let override_dir =
+        std::env::temp_dir().join(format!("hauksbee-timing-surface-{}", std::process::id()));
+    std::fs::create_dir_all(&override_dir).expect("mkdir");
+    let stock = std::fs::read_to_string(repo("crates/hauksbee-mcu/db/mcu/stm32f103.soc.toml"))
+        .expect("read the F103 descriptor");
+    let with_timing = stock.replacen(
+        "\n[soc]\n",
+        "\n[soc]\ntiming_limitation = \"The STM32F103 TIMx test limitation: injected so the \
+         timing surface is exercised.\"\n",
+        1,
+    );
+    assert_ne!(with_timing, stock, "the injection must land");
+    std::fs::write(override_dir.join("stm32f103.soc.toml"), with_timing).expect("write override");
+
     let args = |extra: &[&str]| {
         let mut a = vec![
             "run",
@@ -229,13 +248,17 @@ fn known_backend_limitations_reach_all_four_surfaces() {
             "0.05",
         ];
         a.extend_from_slice(extra);
-        Command::new(bin()).args(&a).output().expect("binary runs")
+        Command::new(bin())
+            .env("HAUKSBEE_MCU_DIR", &override_dir)
+            .args(&a)
+            .output()
+            .expect("binary runs")
     };
 
     // (field, "no limitation found" message, substring the sentence must carry)
     let cases = [(
         "timing_limitations",
-        "the F103 declares a TIMx timing limitation, so it must be stated",
+        "the (injected) F103 timing limitation must be stated",
         "TIMx",
     )];
 
@@ -284,4 +307,5 @@ fn known_backend_limitations_reach_all_four_surfaces() {
         let plain = String::from_utf8_lossy(&args(&["--plain"]).stdout).to_string();
         assert!(plain.contains(&line), "{field}: {plain}");
     }
+    let _ = std::fs::remove_dir_all(&override_dir);
 }

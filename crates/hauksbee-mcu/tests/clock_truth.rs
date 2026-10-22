@@ -168,6 +168,62 @@ fn gate(part: &str, cfg: RenodeConfig, elf_name: &str, pin: PinId) {
     );
 }
 
+/// Tolerance for the CONFIGURED-clock variants below. Tighter than the
+/// reset-default gate's 5%: the backend decodes the very registers the image
+/// wrote, so a 1% budget leaves only the 1 ms poll quantization (0.2%), the
+/// integer-MHz `PerformanceInMips` rounding and one-slice retune latency.
+const CONFIGURED_TOLERANCE: f64 = 0.01;
+
+/// Measure a firmware that CONFIGURES its clock tree (`pll_tick.c`) and assert
+/// the simulated rate matches silicon. A fixed-rate emulator fails these by the
+/// ratio of the configured clock to the reset-default one (F4 PLL: 10.5x).
+fn configured_gate(part: &str, cfg: RenodeConfig, elf_name: &str, pin: PinId) {
+    let Some(ratio) = measured_ratio(part, cfg, elf_name, pin, HALF_PERIOD_MS) else {
+        return;
+    };
+    println!("clock_truth: {part} {elf_name}: ratio {ratio:.4}");
+    assert!(
+        (ratio - 1.0).abs() <= CONFIGURED_TOLERANCE,
+        "{part} running {elf_name}: simulated time runs at {ratio:.4}x the \
+         part's real rate. The backend did not follow the clock tree the \
+         firmware configured: check the descriptor's [[soc.decode]] clock \
+         block and [[soc.clock_targets]] against the reference manual."
+    );
+}
+
+macro_rules! configured_clock_tests {
+    ($($name:ident: $part:literal, $cfg:expr, $elf:literal, $port:literal, $bit:literal;)*) => {$(
+        #[test]
+        fn $name() {
+            configured_gate($part, $cfg, $elf, PinId { port: $port, bit: $bit });
+        }
+    )*};
+}
+
+// SysTick and TIM2 images for every part whose clock tree the descriptors
+// decode. Each image derives its tick from the clock it configured using only
+// numbers in the reference manual (see `pll_tick.c`), so the half-period is a
+// bench quantity: 100 ms on a scope. PLLs run from the internal oscillators so
+// no crystal is needed.
+configured_clock_tests! {
+    stm32f103_pll_systick_matches_silicon: "renode:stm32f103", RenodeConfig::stm32f103(), "stm32f103_pll_systick.elf", 'C', 13;
+    stm32f103_pll_tim2_matches_silicon: "renode:stm32f103", RenodeConfig::stm32f103(), "stm32f103_pll_tim.elf", 'C', 13;
+    stm32f103_hsi_tim2_matches_silicon: "renode:stm32f103", RenodeConfig::stm32f103(), "stm32f103_hsi_tim.elf", 'C', 13;
+    stm32f4_pll_systick_matches_silicon: "renode:stm32f4_discovery", RenodeConfig::stm32f4_discovery(), "stm32f4_pll_systick.elf", 'D', 12;
+    stm32f4_pll_tim2_matches_silicon: "renode:stm32f4_discovery", RenodeConfig::stm32f4_discovery(), "stm32f4_pll_tim.elf", 'D', 12;
+    stm32f4_hsi_tim2_matches_silicon: "renode:stm32f4_discovery", RenodeConfig::stm32f4_discovery(), "stm32f4_hsi_tim.elf", 'D', 12;
+    stm32f072_hsi_systick_matches_silicon: "renode:stm32f072", RenodeConfig::stm32f072(), "stm32f072_hsi_systick.elf", 'C', 6;
+    stm32f072_pll_systick_matches_silicon: "renode:stm32f072", RenodeConfig::stm32f072(), "stm32f072_pll_systick.elf", 'C', 6;
+    stm32f072_pll_tim2_matches_silicon: "renode:stm32f072", RenodeConfig::stm32f072(), "stm32f072_pll_tim.elf", 'C', 6;
+    stm32l0_msi_range6_systick_matches_silicon: "renode:stm32l0", RenodeConfig::stm32l0(), "stm32l0_msi6_systick.elf", 'A', 5;
+    stm32l0_pll_systick_matches_silicon: "renode:stm32l0", RenodeConfig::stm32l0(), "stm32l0_pll_systick.elf", 'A', 5;
+    stm32l0_pll_tim2_matches_silicon: "renode:stm32l0", RenodeConfig::stm32l0(), "stm32l0_pll_tim.elf", 'A', 5;
+    stm32l0_hsi_tim2_matches_silicon: "renode:stm32l0", RenodeConfig::stm32l0(), "stm32l0_hsi_tim.elf", 'A', 5;
+    stm32g4_pll_systick_matches_silicon: "renode:stm32g4", RenodeConfig::stm32g4(), "stm32g4_pll_systick.elf", 'A', 5;
+    stm32g4_pll_tim2_matches_silicon: "renode:stm32g4", RenodeConfig::stm32g4(), "stm32g4_pll_tim.elf", 'A', 5;
+    stm32g4_hsi_tim2_matches_silicon: "renode:stm32g4", RenodeConfig::stm32g4(), "stm32g4_hsi_tim.elf", 'A', 5;
+}
+
 /// STM32F103 on its reset-default 8 MHz HSI. Was 9.00x fast: the stock
 /// platform's `systickFrequency: 72000000` against an 8 MHz part.
 #[test]

@@ -12,6 +12,8 @@ mod avr_hex_flash_bounds;
 mod avr_mcu_tests;
 #[path = "avr_new_parts.rs"]
 mod avr_new_parts;
+#[path = "avr_peripheral_snapshot.rs"]
+mod avr_peripheral_snapshot;
 #[path = "avr_run_clock.rs"]
 mod avr_run_clock;
 #[path = "avr_twi_ack_gate.rs"]
@@ -22,6 +24,8 @@ mod avr_uart_flow;
 mod avr_watchdog;
 #[path = "child_reaping.rs"]
 mod child_reaping;
+#[path = "clock_ready_parts.rs"]
+mod clock_ready_parts;
 #[path = "clock_truth.rs"]
 mod clock_truth;
 #[path = "demo_firmware.rs"]
@@ -32,6 +36,8 @@ mod esp_qemu_install;
 mod firmware_arch_gate;
 #[path = "host_serial_pty.rs"]
 mod host_serial_pty;
+#[path = "periph_snapshot_decode.rs"]
+mod periph_snapshot_decode;
 #[path = "qemu_bus_mailbox.rs"]
 mod qemu_bus_mailbox;
 #[path = "qemu_clock_truth.rs"]
