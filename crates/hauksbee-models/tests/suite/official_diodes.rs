@@ -1,7 +1,7 @@
 //! Official-parts batch diodes: resolution and behaviour tests for the cards added in that batch.
 //!
 //! The cards live in `db/discrete_diodes.toml`: BZT52C and BZX84-C Zeners, MBR0530/MBR0540/
-//! MBR120xSF and B5817W-B5819W Schottkys, SMAJ/SMBJ/SMCJ TVS diodes, ESD5Z and PESD5V0S1BL ESD
+//! `MBR120xSF` and B5817W-B5819W Schottkys, SMAJ/SMBJ/SMCJ TVS diodes, ESD5Z and PESD5V0S1BL ESD
 //! diodes. A resolved card drops its cited rows, so the row-level checks read the file as written.
 
 use super::{expect_model, param, resolve_part};
@@ -31,17 +31,11 @@ fn row<'a>(m: &'a ModelEntry, parameter: &str, conditions: &str) -> &'a Characte
 
 /// The part number a card is ordered as, from its id.
 fn ordering_name(id: &str) -> String {
-    if let Some(code) = id.strip_prefix("bzx84_c") {
-        format!("BZX84-C{}", code.to_uppercase())
-    } else if id.starts_with("sm") {
-        id.replace('_', ".").to_uppercase()
-    } else if id.starts_with("esd5z") {
-        id.replace("esd5z", "ESD5Z")
-            .replace('_', ".")
-            .to_uppercase()
-    } else {
-        id.to_uppercase()
-    }
+    // TVS and ESD ids spell a decimal point as an underscore (`smaj5_0a` is SMAJ5.0A).
+    id.strip_prefix("bzx84_c").map_or_else(
+        || id.replace('_', ".").to_uppercase(),
+        |code| format!("BZX84-C{}", code.to_uppercase()),
+    )
 }
 
 #[test]
@@ -302,7 +296,7 @@ fn esd5z_diodes_clamp_on_vc_and_keep_their_sheet_capacitance() {
         let m = expect_model(v);
         assert_eq!(m.id, id, "{v}");
         assert!((param(&m, "bv") - vbr).abs() < 1e-9);
-        assert!(cd.mul_add(-1e-12, param(&m, "cjo")).abs() < 1e-18);
+        assert!(f64::mul_add(cd, -1e-12, param(&m, "cjo")).abs() < 1e-18);
         assert_eq!(m.ratings.max_voltage_v, Some(vrwm));
         // Reverse current at IPP: VBR + rs * IPP + n Vt ln(IPP / IBV) is the printed VC max.
         let clamp = VT.mul_add(
