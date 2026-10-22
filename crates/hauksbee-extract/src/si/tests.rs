@@ -645,11 +645,37 @@ fn a_drivers_on_chip_load_caps_are_part_of_the_board_cl() {
         )])
     };
     // No external caps: band 4/4 + 3 = 5 pF to 24.5/24.5 + 5 = 17.25 pF.
-    let mut inside = xtal_on_driver("EFM32PG22C200F512IM40");
-    set_value(&mut inside, "Y1", "32.768kHz 12.5pF");
-    let r = crystal_findings(&inside, &facts(lfxo.clone()));
-    assert!(fired(&r).is_empty(), "{r:?}");
-    assert!(r[0].message.contains("- ok"), "{}", r[0].message);
+    // A crystal of 12 pF or less is reachable by the bank alone: silent (the
+    // bank reaches half its 24.5 pF maximum, 12.25 pF).
+    for value in ["32.768kHz 9pF", "32.768kHz 12pF"] {
+        let mut inside = xtal_on_driver("EFM32PG22C200F512IM40");
+        set_value(&mut inside, "Y1", value);
+        let r = crystal_findings(&inside, &facts(lfxo.clone()));
+        assert!(fired(&r).is_empty(), "{value}: {r:?}");
+        assert!(r[0].message.contains("- ok"), "{}", r[0].message);
+    }
+    // A 12.5 pF crystal is past that reach (EFM32PG22 Table 4.12 note 2: above
+    // 12 pF needs external load capacitors): it fires and says what to do.
+    let mut over = xtal_on_driver("EFM32PG22C200F512IM40");
+    set_value(&mut over, "Y1", "32.768kHz 12.5pF");
+    let r = crystal_findings(&over, &facts(lfxo.clone()));
+    assert_eq!(fired(&r).len(), 1, "{r:?}");
+    for says in [
+        "no external caps",
+        "reaches at most 12.25 pF",
+        "needs external load capacitors",
+    ] {
+        assert!(r[0].message.contains(says), "{says:?} in {}", r[0].message);
+    }
+    // With external caps the bank is no longer alone: the same crystal is not
+    // flagged for its reach.
+    let mut padded = xtal_board("32.768kHz 12.5pF", "10p", "10p");
+    set_value(&mut padded, "Y1", "32.768kHz 12.5pF");
+    let r = crystal_findings(&padded, &facts(lfxo.clone()));
+    assert!(
+        r.iter().all(|f| !f.message.contains("reaches at most")),
+        "{r:?}"
+    );
     // A CL the on-chip bank cannot reach is a finding, naming the card.
     let mut beyond = xtal_on_driver("EFM32PG22C200F512IM40");
     set_value(&mut beyond, "Y1", "16MHz 30pF");

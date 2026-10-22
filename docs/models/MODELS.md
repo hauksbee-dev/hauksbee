@@ -816,7 +816,9 @@ the datasheet mentions an ADC.
 
 An MCU card states the load capacitance built into an oscillator pad pair, so the
 crystal check (`crystal_load_cap`, `docs/checks/SI_CHECKS.md`) can tell a crystal
-with no external caps that the chip loads from one that is missing them:
+with no external caps that the chip loads from one that is missing them. With none
+fitted the bank reaches at most `max_f / 2` (the two pads in series), and a
+crystal with a larger CL is flagged as needing external caps:
 
 ```toml
 [[models.pin_capability.xtal_int_caps]]

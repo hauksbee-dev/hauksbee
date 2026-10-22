@@ -800,6 +800,12 @@ impl LoadSite {
         }
     }
 
+    /// The largest CL (pF) the on-chip bank can present on its own, when the site
+    /// has an on-chip range and no external caps: the per-pin maximum over two.
+    fn bank_only_reach(&self) -> Option<f64> {
+        (self.on_chip && self.ext == (0.0, 0.0)).then(|| self.int.1 / 2.0)
+    }
+
     /// The same site with `cap` pF on each terminal.
     const fn with_caps(&self, cap: f64) -> Self {
         Self {
@@ -830,10 +836,32 @@ fn judge_against_spec(
     (spec_cl, cite): &(f64, String),
     pull: Pullability,
 ) -> (SiSeverity, String) {
-    let (edge, miss_pf) = site.nearest_edge(*spec_cl);
-    let ppm = pull.pull_ppm(*spec_cl, edge);
     let cl = band_text(site.band());
     let (stray_note, on_chip) = (&site.stray_note, &site.on_chip_note);
+    // With no external caps the crystal sees only the on-chip bank, two pins in
+    // series: half the per-pin maximum. A larger CL cannot be reached however the
+    // bank is tuned (EFM32PG22 Table 4.12 note 2: "greater than 12 pF require
+    // external load capacitors").
+    if let Some(reach) = site.bank_only_reach().filter(|reach| spec_cl > reach) {
+        let caps = &site.caps;
+        let severity = if *spec_cl > reach * 1.6 {
+            SiSeverity::High
+        } else {
+            SiSeverity::Medium
+        };
+        return (
+            severity,
+            format!(
+                "board presents CL ~ {cl} pF ({caps}, {stray_note}{on_chip}) but the crystal \
+                 specs CL = {spec_cl:.1} pF [{cite}]; with no external caps the driver's on-chip \
+                 bank alone reaches at most {reach:.2} pF (half its per-pin maximum, the two \
+                 pins in series), so this crystal needs external load capacitors in parallel \
+                 with the on-chip ones, or a crystal with CL of {reach:.0} pF or less."
+            ),
+        );
+    }
+    let (edge, miss_pf) = site.nearest_edge(*spec_cl);
+    let ppm = pull.pull_ppm(*spec_cl, edge);
     if ppm < FLAG_PPM {
         return (
             SiSeverity::Info,

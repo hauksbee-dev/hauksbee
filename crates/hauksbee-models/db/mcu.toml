@@ -6036,9 +6036,11 @@ boot_select = false
 internal_pull = "pull_up"
 note = "RESETn is active low with an internal 35-55 kOhm pull-up to DVDD; held low it keeps the part in reset"
 
-# Both crystal oscillators carry their load capacitors on the die, so a crystal on
-# these pads needs no external caps and a board that fits none is right (the crystal
-# load-cap check reads these tables and never calls the missing caps a fault).
+# Both crystal oscillators carry tunable load capacitors on the die, which the crystal
+# load-cap check reads. With no external caps the two pins in series reach at most
+# half the per-pin maximum, so a crystal above that needs external caps: for the LFXO
+# 24.5 / 2 = 12.25 pF, matching Table 4.12 note 2 (p.34): "Crystals with a load
+# capacitance of greater than 12 pF require external load capacitors".
 # HFXO: Rev. 1.4 section 3.3.2 Internal and External Oscillators (p.9): "a high
 # frequency crystal oscillator (HFXO) with integrated load capacitors, tunable in
 # small steps"; Table 4.11 (p.33) gives a 0.04 pF tuning step and a supported CL of

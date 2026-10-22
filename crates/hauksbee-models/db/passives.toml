@@ -956,8 +956,12 @@ cl_f = 10.0e-12
 c0_f = 3.0e-12
 
 [models.pins]
+# Four pads: the crystal sits between pads 1 and 3, pads 2 and 4 are ground
+# (Mechanical Dimensions, p.4 of 9).
 "1" = "a"
-"2" = "b"
+"2" = "gnd"
+"3" = "b"
+"4" = "gnd"
 
 [models.source]
 tier = "curated-library"
@@ -965,7 +969,7 @@ validation = "physical-bounds-only"
 [[models.source.references]]
 url = "https://abracon.com/datasheets/ABM8-272-T3.pdf"
 title = "Abracon ABM8-272-T3 datasheet, Rev B, 16 Sept 2024 (also RP2040 datasheet Table 257)"
-locator = "Key Electrical Specifications table: Load capacitance (CL) 10 pF; Shunt capacitance (C0) 3.0 pF max"
+locator = "Key Electrical Specifications table: Load capacitance (CL) 10 pF; Shunt capacitance (C0) 3.0 pF max; Mechanical Dimensions p.4: pads 1 and 3 crystal, pads 2 and 4 ground"
 sha256 = "aead22b6bd9d6f8ad4472352f70fce3ade633e90b9772ba80fabe8fd0856ae91"
 
 # ─────────────────────────────────────────────────────────────────────────────

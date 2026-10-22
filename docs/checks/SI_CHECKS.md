@@ -110,9 +110,12 @@ either crystal net or one series resistor away.
 
 - A printed range adds in parallel to each external cap (`series(C1 + Ci, C2 +
   Ci) + stray`, over the range), and with no external caps the crystal is
-  judged against the on-chip bank alone: a 32.768 kHz crystal with no caps on an
-  MCU that integrates 4-24.5 pF per pin is silent when its CL is inside that
-  range and a finding when it is outside.
+  judged against the on-chip bank alone. The two pins are in series, so the bank
+  reaches at most half its per-pin maximum: on an MCU that integrates 4-24.5 pF
+  per pin a 32.768 kHz crystal with no caps is silent when its CL is 12.25 pF or
+  less and a finding above that, which needs external caps (the EFM32PG22
+  datasheet says the same, Table 4.12 note 2: above 12 pF requires external load
+  capacitors). The limit is derived from the card's range, not a separate field.
 - A tunable bank with no printed range cannot be computed: info, no judgement,
   with or without external caps.
 - RTCs and other parts without a card are recognised by name as before

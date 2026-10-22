@@ -337,8 +337,9 @@ mod tests {
     }
 
     /// An EFM32PG22 whose LFXO pads carry the 32.768 kHz crystal: the card says
-    /// the on-chip bank is 4 to 24.5 pF per pin, so a 12.5 pF crystal with no
-    /// external caps is right. The HFXO pads are tunable with no printed range,
+    /// the on-chip bank is 4 to 24.5 pF per pin, so the bank alone reaches 12.25
+    /// pF: a crystal of 12 pF or less with no external caps is right, a 12.5 pF
+    /// one needs external caps. The HFXO pads are tunable with no printed range,
     /// so nothing is judged there, with or without external caps.
     #[test]
     fn a_driver_cards_on_chip_load_caps_are_read_from_the_card() {
@@ -363,7 +364,17 @@ mod tests {
             }
             other => panic!("LFXO range expected, got {other:?}"),
         }
-        assert!(engine_findings(&lfxo).is_empty());
+        // Table 4.12 note 2: a crystal above 12 pF needs external load caps, so a
+        // 12.5 pF crystal with none fires; one of 9 or 12 pF is silent.
+        let f = engine_findings(&lfxo);
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(f[0].message.contains("reaches at most 12.25 pF"));
+        for ok in ["32.768kHz 9pF", "32.768kHz 12pF"] {
+            assert!(
+                engine_findings(&on_pads(ok, ["39", "40"], None)).is_empty(),
+                "{ok}"
+            );
+        }
         let hfxo = on_pads("12MHz 10pF", ["9", "10"], None);
         assert!(matches!(
             cards(&hfxo)["Y1"].driver_caps,

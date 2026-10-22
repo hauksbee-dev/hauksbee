@@ -270,11 +270,12 @@ impl PinCapability {
 /// See [`PinCapability::xtal_int_caps`]. It names the pads the crystal hangs on
 /// and, when the datasheet gives it, the capacitance each pad carries.
 ///
-/// A crystal on these pads needs no external load capacitors, so a board that
-/// fits none is right. The range is the capacitance on EACH pad to ground over
-/// the part's whole setting range (the pair is in series across the crystal); an
-/// entry with neither bound says the caps are integrated and tunable and the
-/// datasheet prints no range, which no check can judge a CL against.
+/// The range is the capacitance on EACH pad to ground over the part's whole
+/// setting range (the pair is in series across the crystal), so with no external
+/// caps the bank reaches at most `max_f / 2`; a crystal with a larger CL needs
+/// external load capacitors, which the crystal check flags. An entry with
+/// neither bound says the caps are integrated and tunable and the datasheet
+/// prints no range, which no check can judge a CL against.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct XtalIntCap {
