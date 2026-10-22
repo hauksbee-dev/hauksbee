@@ -3016,7 +3016,7 @@ fn input_sha256(path: &Path) -> (Option<String>, Option<String>) {
 
 fn active_connected_component(comp: &hauksbee_extract::Component) -> bool {
     !comp.dnp
-        && hauksbee_models::matcher::is_active_ic_ref(&comp.reference)
+        && hauksbee_extract::is_active_ic(comp)
         && comp
             .pins
             .iter()

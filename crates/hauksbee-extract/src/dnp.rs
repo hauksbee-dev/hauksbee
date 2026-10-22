@@ -197,6 +197,12 @@ pub enum DnpReason {
     /// not a missing one. Fitting both would put two copies of one part on
     /// the same nets.
     AlternativeFootprint,
+    /// A plug-in module (compute module, `SoM`, dev board) that mates with a
+    /// fitted connector or socket on the board, marked DNP because it is bought
+    /// separately. The socket is fitted hardware's interface, so under the
+    /// default policy the module is treated as plugged in unless the board
+    /// marks the socket itself DNP.
+    SocketedModule,
 }
 
 impl DnpReason {
@@ -210,6 +216,9 @@ impl DnpReason {
             Self::HonouredPolicy => "marked not-fitted in the source, left open",
             Self::AlternativeFootprint => {
                 "DNP alternative footprint of a fitted part on the same nets, left open"
+            }
+            Self::SocketedModule => {
+                "DNP plug-in module on a fitted socket, treated as plugged in (--no-fit to leave it out)"
             }
         }
     }
@@ -225,6 +234,7 @@ impl DnpReason {
             Self::ZeroOhmLink => "zero-ohm-link",
             Self::HonouredPolicy => "honoured-policy",
             Self::AlternativeFootprint => "alternative-footprint",
+            Self::SocketedModule => "socketed-module",
         }
     }
 
@@ -240,6 +250,7 @@ impl DnpReason {
             "zero-ohm-link" => Some(Self::ZeroOhmLink),
             "honoured-policy" => Some(Self::HonouredPolicy),
             "alternative-footprint" => Some(Self::AlternativeFootprint),
+            "socketed-module" => Some(Self::SocketedModule),
             _ => None,
         }
     }
@@ -519,6 +530,11 @@ impl ExtractedBoard {
             comp.dnp = source_marks_absent(comp);
         }
         let alternatives = alternative_footprints(&self.components);
+        let modules = if policy == DnpPolicy::Honour {
+            socketed_modules(&self.components)
+        } else {
+            std::collections::BTreeSet::new()
+        };
         for comp in &mut self.components {
             // An explicit `no_fit` is also the assembly-variant seam: the
             // layout may describe the superset of placements and carry no DNP
@@ -534,19 +550,7 @@ impl ExtractedBoard {
             } else if no_fit.contains(&comp.reference) {
                 DnpReason::NamedOpen
             } else {
-                match policy {
-                    DnpPolicy::Honour => DnpReason::HonouredPolicy,
-                    DnpPolicy::FitAll => DnpReason::Policy,
-                    DnpPolicy::FitExceptLinks => {
-                        if is_zero_ohm_link(comp) {
-                            DnpReason::ZeroOhmLink
-                        } else if alternatives.contains(&comp.reference) {
-                            DnpReason::AlternativeFootprint
-                        } else {
-                            DnpReason::Policy
-                        }
-                    }
-                }
+                policy_reason(policy, comp, &alternatives, &modules)
             };
             let part = DnpPart {
                 reference: comp.reference.clone(),
@@ -559,12 +563,12 @@ impl ExtractedBoard {
             comp.properties
                 .retain(|(key, _)| key != DNP_REASON_KEY && key != DNP_FITTED_KEY);
             match reason {
-                DnpReason::Policy | DnpReason::NamedFit => {
+                DnpReason::Policy | DnpReason::NamedFit | DnpReason::SocketedModule => {
                     // A policy fit of a source-DNP part is a simulation
                     // assumption, not an assembly fact; mark it so
                     // presence-class lints can tell the two apart. A NamedFit
                     // is the user's own build decision and stays unmarked.
-                    if comp.dnp && reason == DnpReason::Policy {
+                    if comp.dnp && matches!(reason, DnpReason::Policy | DnpReason::SocketedModule) {
                         comp.properties
                             .push((DNP_FITTED_KEY.to_string(), "policy".to_string()));
                     }
@@ -581,6 +585,86 @@ impl ExtractedBoard {
         }
         Ok(decision)
     }
+}
+
+/// The reason a DNP part the user did not name is fitted or left open under
+/// `policy`.
+fn policy_reason(
+    policy: DnpPolicy,
+    comp: &Component,
+    alternatives: &std::collections::BTreeSet<String>,
+    modules: &std::collections::BTreeSet<String>,
+) -> DnpReason {
+    match policy {
+        DnpPolicy::Honour if modules.contains(&comp.reference) => DnpReason::SocketedModule,
+        DnpPolicy::Honour => DnpReason::HonouredPolicy,
+        DnpPolicy::FitAll => DnpReason::Policy,
+        DnpPolicy::FitExceptLinks => {
+            if is_zero_ohm_link(comp) {
+                DnpReason::ZeroOhmLink
+            } else if alternatives.contains(&comp.reference) {
+                DnpReason::AlternativeFootprint
+            } else {
+                DnpReason::Policy
+            }
+        }
+    }
+}
+
+/// References of DNP plug-in modules that mate with a fitted connector or
+/// socket on the board.
+///
+/// A compute module, `SoM` or dev board is bought separately and plugged into its
+/// socket, so the assembly BOM marks it DNP while the socket is fitted. Leaving
+/// it out deletes the board's host: its pins vanish from the pull-up, back-power
+/// and bus checks and the loads it drives look unpowered. A DNP part qualifies
+/// when
+/// - it is a module by what its record says (`part_class::is_plugin_module`),
+///   not a connector, test point or IC package, with six or more connected pads;
+/// - a fitted connector or socket shares at least half of its connected nets
+///   (two at least), which is the interface it plugs into;
+/// - no connector or socket sharing its nets is itself marked DNP: the board
+///   then says the socket is empty.
+fn socketed_modules(components: &[Component]) -> std::collections::BTreeSet<String> {
+    use std::collections::BTreeSet;
+    let nets = |c: &Component| -> BTreeSet<i64> {
+        c.pins
+            .iter()
+            .filter_map(|p| p.net)
+            .filter(|&n| n != 0)
+            .collect()
+    };
+    let socketlike =
+        |c: &Component| crate::is_connector_like(c) && !crate::is_test_point_or_hole(c);
+    let mut out = BTreeSet::new();
+    for module in components.iter().filter(|c| c.dnp) {
+        if socketlike(module) || !crate::part_class::is_plugin_module(module) {
+            continue;
+        }
+        let own = nets(module);
+        if own.len() < 6 || crate::part_class::connected_pads(module) < 6 {
+            continue;
+        }
+        let shared = |c: &Component| nets(c).intersection(&own).count();
+        let enough = |n: usize| n >= 2 && n * 2 >= own.len();
+        let sockets: Vec<&Component> = components
+            .iter()
+            .filter(|c| c.reference != module.reference && socketlike(c) && enough(shared(c)))
+            .collect();
+        // Together the fitted sockets must cover half the module's nets (a
+        // module with two edge connectors is split across both).
+        let covered: BTreeSet<i64> = sockets
+            .iter()
+            .filter(|c| !c.dnp)
+            .flat_map(|c| nets(c))
+            .filter(|n| own.contains(n))
+            .collect();
+        let any_dnp_socket = sockets.iter().any(|c| c.dnp);
+        if !any_dnp_socket && enough(covered.len()) {
+            out.insert(module.reference.clone());
+        }
+    }
+    out
 }
 
 /// References of DNP parts that are alternative footprints of a fitted part:

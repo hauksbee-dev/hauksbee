@@ -140,7 +140,7 @@ impl CompiledEntry {
                 | ComponentKind::Nmos
                 | ComponentKind::Pmos
         );
-        if package_only && discrete && is_active_ic_ref(field(q.reference.as_ref())) {
+        if package_only && discrete && q.is_active_ic() {
             return false;
         }
         lib_ok
@@ -439,6 +439,30 @@ pub struct ComponentQuery {
     pub reference: Option<String>,
 }
 
+impl ComponentQuery {
+    /// Whether the part is an active IC: by designator (`U`, `IC`, `MCU`), or by
+    /// what its symbol, footprint, part number and pad count say when the
+    /// designator reads as something else (`S1`, `SW2`).
+    #[must_use]
+    pub fn is_active_ic(&self) -> bool {
+        let text = |f: &Option<String>| f.as_deref().unwrap_or("").to_string();
+        let (lib_id, value, footprint) =
+            (text(&self.lib_id), text(&self.value), text(&self.footprint));
+        crate::refdes::is_active_ic_part(&crate::refdes::PartIdentity {
+            reference: self.reference.as_deref().unwrap_or(""),
+            lib_id: &lib_id,
+            value: &value,
+            footprint: &footprint,
+            mpn: self.mpn.as_deref(),
+            pads: self
+                .pads
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+        })
+    }
+}
+
 pub use crate::refdes::{is_active_ic_ref, is_tool_generated_ref};
 
 /// Longest text field a library match reads.
@@ -657,5 +681,39 @@ mod tests {
         for real in ["U1", "U12", "IC3", "MCU1", "U$"] {
             assert!(is_active_ic_ref(real), "{real}");
         }
+    }
+
+    /// A footprint-only card for a discrete semiconductor never speaks for a
+    /// chip, whatever the chip's designator: an Eagle auto-named `U$1` that
+    /// lands a QFP is an IC by what its record says, so the MOSFET card for a
+    /// generic power package is refused for it, while a real transistor under the
+    /// same kind of designator keeps matching.
+    #[test]
+    fn a_footprint_only_discrete_card_is_refused_for_a_chip_under_any_designator() {
+        let card = entry(
+            ComponentKind::Nmos,
+            MatchRules {
+                footprint_re: Some("sot-23|qfp".to_string()),
+                ..Default::default()
+            },
+        );
+        let chip = ComponentQuery {
+            reference: Some("U$1".to_string()),
+            value: Some("ATSAMD51J".to_string()),
+            footprint: Some("Package_QFP:TQFP-64_10x10mm_P0.5mm".to_string()),
+            pads: (1..=64).map(|n| n.to_string()).collect(),
+            ..Default::default()
+        };
+        assert!(chip.is_active_ic());
+        assert!(!card.matches(&chip), "a 64-pad QFP is not a MOSFET");
+        let fet = ComponentQuery {
+            reference: Some("Q$3".to_string()),
+            value: Some("BSS138".to_string()),
+            footprint: Some("Package_TO_SOT_SMD:SOT-23".to_string()),
+            pads: ["1", "2", "3"].map(String::from).to_vec(),
+            ..Default::default()
+        };
+        assert!(!fet.is_active_ic());
+        assert!(card.matches(&fet));
     }
 }

@@ -65,7 +65,7 @@ mod netlist;
 pub mod netname;
 pub mod odbpp;
 mod part_class;
-pub use part_class::{is_plain_inductor, is_plain_resistor};
+pub use part_class::{is_active_ic, is_plain_inductor, is_plain_resistor, is_plugin_module};
 mod pcb;
 pub mod placement;
 mod protel_ascii;

@@ -13,6 +13,14 @@
 //! * the same rail with an off-board entry, or a fitted part that may source
 //!   it, is a non-gating note naming the unfitted part, and the pass is
 //!   conditional on the entry;
+//! * a name-powered rail with nothing at all behind it (no entry, no fitted or
+//!   unfitted source, no series part bringing it in from a net that has one)
+//!   and parts drawing supply from it is a Low `rail_unpowered` note naming the
+//!   active ICs that rely on it first: the rail is a name on a net, not a
+//!   supply (and only on a board that takes power in somewhere else; a
+//!   fragment with no way in says nothing about its supply). A name on a net
+//!   proves nothing either way (an off-board feed the board does not draw, such
+//!   as pads or spring contacts, is possible), so it advises and does not gate;
 //! * every other name-powered rail is a verdict condition: assumed supplied
 //!   from off the board through the named connector, or held at its named
 //!   voltage though nothing modelled sources it. Never silent.
@@ -114,6 +122,34 @@ fn never_up_finding(rail: &RailBasis) -> LintFinding {
     }
 }
 
+/// The finding for a rail held at its name's voltage with no source behind it.
+fn unsourced_finding(rail: &RailBasis) -> LintFinding {
+    let net = rail.net();
+    let volts = rail.volts.map_or_else(String::new, format_volts);
+    let drawn = if rail.active_loads.is_empty() {
+        &rail.supply_loads
+    } else {
+        &rail.active_loads
+    };
+    let stays = if drawn.len() == 1 { "relies" } else { "rely" };
+    let message = format!(
+        "'{net}' is named for {volts} but nothing on the board brings it in: no connector, test \
+         point or battery on it, no regulator or other part that can drive it, and no fuse, \
+         diode, switch or link to a net that has one. The analysis held it at {volts} by its \
+         name alone, so the result for {} {stays} on a supply that may not exist. \
+         {REMEDY_MARKER}Bring '{net}' in on a connector or test point, or add the regulator or \
+         link that sources it (and fit it).",
+        listed(drawn),
+    );
+    LintFinding {
+        check: LintCheck::RailUnpowered,
+        severity: Severity::Low,
+        message,
+        refs: drawn.iter().take(SHOWN).cloned().collect(),
+        nets: rail.nets.clone(),
+    }
+}
+
 /// The note for an unfitted source on a rail that may still be powered.
 fn unfitted_note(rail: &RailBasis) -> LintFinding {
     let net = rail.net();
@@ -178,6 +214,8 @@ pub fn rail_basis_findings(bases: &RailBases) -> NetLintReport {
             findings.push(never_up_finding(rail));
         } else if !rail.unfitted.is_empty() && rail.volts.is_some() {
             findings.push(unfitted_note(rail));
+        } else if rail.unsourced() {
+            findings.push(unsourced_finding(rail));
         }
     }
     if !bases.any_powered && !bases.active_parts.is_empty() {
@@ -211,7 +249,11 @@ pub fn rail_conditions(
     let mut held = Vec::new();
     // A rail nothing fitted draws from or may drive (an unused header pin, a
     // net with only capacitors) carries no result worth a condition.
-    let matters = |r: &&RailBasis| !(r.never_up() || (r.loads.is_empty() && r.feeds.is_empty()));
+    // One already reported as a finding (it never comes up, or has no source at
+    // all) is not repeated as a condition.
+    let matters = |r: &&RailBasis| {
+        !(r.never_up() || r.unsourced() || (r.loads.is_empty() && r.feeds.is_empty()))
+    };
     for rail in bases.rails.iter().filter(matters) {
         let Some(v) = rail.volts else { continue };
         let own = if rail.unfitted.is_empty() {
@@ -265,6 +307,7 @@ mod tests {
     const AV: i64 = 4;
     const SDA: i64 = 5;
     const EXT: i64 = 6;
+    const RAW: i64 = 7;
 
     fn nets() -> Vec<(i64, &'static str)> {
         vec![
@@ -274,6 +317,7 @@ mod tests {
             (AV, "+3V3A"),
             (SDA, "SDA"),
             (EXT, "VEXT"),
+            (RAW, "RAW_IN"),
         ]
     }
 
@@ -507,6 +551,132 @@ mod tests {
             src,
         ]);
         assert!(gating(&found).is_empty(), "{found:#?}");
+    }
+
+    fn unsourced(found: &[LintFinding]) -> Vec<&LintFinding> {
+        found
+            .iter()
+            .filter(|f| f.check == LintCheck::RailUnpowered && f.severity == Severity::Low)
+            .collect()
+    }
+
+    /// Faulty: +3V3 is only a name. No connector, regulator or link behind it,
+    /// and an IC draws from it: the verdict would otherwise rest on a supply
+    /// that does not exist. A Low note (not the High never-comes-up finding), naming the IC first.
+    #[test]
+    fn a_named_rail_with_nothing_behind_it_and_an_ic_on_it_is_flagged() {
+        let found = run(vec![
+            usb(),
+            sensor("U2", V3),
+            part("D1", "LED", &[("1", V3), ("2", GND)]),
+            part("C1", "1u", &[("1", V3), ("2", GND)]),
+        ]);
+        assert!(
+            gating(&found).is_empty(),
+            "a note, not the High finding: {found:#?}"
+        );
+        let g = unsourced(&found);
+        assert_eq!(g.len(), 1, "{found:#?}");
+        assert_eq!(g[0].refs, ["U2"], "the IC is named, not the LED");
+        let m = &g[0].message;
+        assert!(
+            m.contains("'+3V3' is named for 3.3 V but nothing on the board brings it in"),
+            "{m}"
+        );
+        assert!(!m.contains("never comes up"), "{m}");
+        assert!(m.contains(REMEDY_MARKER) && m.contains("U2"), "{m}");
+        let [entered, held] = conditions(vec![usb(), sensor("U2", V3)]);
+        assert!(
+            entered.as_deref().is_none_or(|e| !e.contains("+3V3")),
+            "the unsourced rail is not reported as entered: {entered:?}"
+        );
+        assert!(held.is_none(), "{held:?}");
+    }
+
+    /// Legal control: a fragment with no way in at all (a sub-circuit linted on
+    /// its own, or a minimal test board) says nothing about where its supply
+    /// comes from: silent.
+    #[test]
+    fn a_board_with_no_power_entry_at_all_is_not_flagged() {
+        let found = run(vec![sensor("U2", V3)]);
+        assert!(
+            found.iter().all(|f| f.check != LintCheck::RailUnpowered),
+            "{found:#?}"
+        );
+    }
+
+    /// Legal control: a bias or reference level named for its voltage (a
+    /// divider-derived 1.65 V) feeding op-amp inputs is a signal, not a supply
+    /// nothing sources: silent.
+    #[test]
+    fn a_named_level_that_only_feeds_signal_pins_is_not_a_rail() {
+        let mut amp = part("U2", "OPA340", &[("3", V3), ("2", SDA), ("4", GND)]);
+        let usb = usb();
+        amp.pins[0].function = "IN+".into();
+        amp.pins[0].kind = "input".into();
+        let found = run(vec![usb, amp]);
+        assert!(
+            found.iter().all(|f| f.check != LintCheck::RailUnpowered),
+            "{found:#?}"
+        );
+    }
+
+    /// Legal control: the pin that carries a chip's own core regulator out for
+    /// decoupling (`VDDCORE`) is sourced by the chip, not a supply input nothing
+    /// feeds.
+    #[test]
+    fn a_core_regulator_decoupling_pin_is_not_an_unsourced_rail() {
+        let mut mcu = part("U2", "ATSAMD21G18", &[("1", V3), ("2", GND)]);
+        mcu.pins[0].function = "VDDCORE".into();
+        mcu.pins[0].kind = "power_in".into();
+        let found = run(vec![usb(), mcu, part("C1", "1u", &[("1", V3), ("2", GND)])]);
+        assert!(
+            found.iter().all(|f| f.check != LintCheck::RailUnpowered),
+            "{found:#?}"
+        );
+    }
+
+    /// Legal control: a connector on the rail brings it in; the rail is a
+    /// stated condition, not a finding.
+    #[test]
+    fn a_named_rail_with_a_connector_is_not_flagged() {
+        let found = run(vec![
+            part("J2", "Conn_01x02", &[("1", V3), ("2", GND)]),
+            sensor("U2", V3),
+        ]);
+        assert!(
+            found.iter().all(|f| f.check != LintCheck::RailUnpowered),
+            "{found:#?}"
+        );
+    }
+
+    /// Legal control: the rail comes in through a fuse from a connector net
+    /// whose name states no voltage. The fuse carries the connector's supply,
+    /// so nothing is flagged.
+    #[test]
+    fn a_rail_fed_through_a_fuse_from_a_connector_is_not_flagged() {
+        let found = run(vec![
+            part("J2", "Conn_01x02", &[("1", RAW), ("2", GND)]),
+            part("F1", "500mA", &[("1", RAW), ("2", V3)]),
+            sensor("U2", V3),
+        ]);
+        assert!(
+            found.iter().all(|f| f.check != LintCheck::RailUnpowered),
+            "{found:#?}"
+        );
+    }
+
+    /// Legal control: a resistor divider is not a way in: a fitted 10k from the
+    /// connector net does not make the rail sourced.
+    #[test]
+    fn a_pull_resistor_to_a_connector_net_is_not_a_supply() {
+        let found = run(vec![
+            part("J2", "Conn_01x02", &[("1", RAW), ("2", GND)]),
+            usb(),
+            part("R5", "10k", &[("1", RAW), ("2", V3)]),
+            sensor("U2", V3),
+        ]);
+        assert_eq!(unsourced(&found).len(), 1, "{found:#?}");
     }
 
     /// Faulty: every rail of the board is gone (its only supply net shorted

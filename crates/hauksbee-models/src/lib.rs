@@ -812,8 +812,8 @@ impl ModelLibrary {
         // text echoed back in `query` and the variant selection. So the memo is keyed
         // by the designator's class, and the caller's own text is put back on a hit:
         // a board of N parts that differ only by designator costs one library scan.
-        let class_ref = q.reference.as_deref().map(|r| {
-            if matcher::is_active_ic_ref(r) {
+        let class_ref = q.reference.as_ref().map(|_| {
+            if q.is_active_ic() {
                 "U".to_string()
             } else {
                 "R".to_string()

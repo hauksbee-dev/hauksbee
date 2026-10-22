@@ -70,9 +70,42 @@ pub struct RailBasis {
     /// Fitted parts that draw from it (anything but capacitors, resistors and
     /// inductors).
     pub loads: Vec<String>,
+    /// The loads whose pin on the rail is a supply input (a `power_in` pin or
+    /// one named `VDD`, `VCC`, ... in the schematic or the part's card), not a
+    /// signal such as a reference or bias input, and not the pin of an internal
+    /// regulator's output (`VDDCORE`, `VCAP`).
+    pub supply_loads: Vec<String>,
+    /// The supply loads that are active ICs by what their record says (see
+    /// [`hauksbee_extract::is_active_ic`]).
+    pub active_loads: Vec<String>,
+    /// Power comes into the board somewhere: an off-board entry sits on a net
+    /// that is powered or named for a voltage. A fragment with no way in at all
+    /// (a sub-circuit linted on its own) says nothing about where its supply
+    /// comes from.
+    pub board_powered_in: bool,
+    /// Fitted series parts (a fuse, diode, switch, ferrite, link) join the rail,
+    /// within a few hops, to a net an off-board entry or a modelled source is
+    /// on. Only filled for a rail that has no entry, feed or unfitted source of
+    /// its own.
+    pub fed_through: bool,
 }
 
 impl RailBasis {
+    /// The analysis holds the rail at its name's voltage though nothing on the
+    /// board sources it, on a board that takes power in elsewhere: no entry, no fitted part that may drive it, no
+    /// unfitted source (that is [`Self::never_up`]'s case), no series part
+    /// bringing it in from a net that has one, and fitted parts draw from it.
+    #[must_use]
+    pub const fn unsourced(&self) -> bool {
+        self.volts.is_some()
+            && self.board_powered_in
+            && self.unfitted.is_empty()
+            && self.entries.is_empty()
+            && self.feeds.is_empty()
+            && !self.fed_through
+            && !self.supply_loads.is_empty()
+    }
+
     /// The rail never comes up on the real board: only unfitted parts would
     /// power it, nothing fitted may, nothing brings it in from off the board,
     /// and fitted parts draw from it.
@@ -130,6 +163,18 @@ fn supply_input_name(function: &str) -> bool {
     ]
     .iter()
     .any(|p| f.starts_with(p))
+}
+
+/// A pin that carries an internal regulator's output out for decoupling
+/// (`VDDCORE`, `VCORE`, `VCAP`, `VDDREG`), named like a supply but sourced by the
+/// chip itself, or a reference input (`VREF`), which is a level to compare
+/// against and not a supply.
+fn regulator_output_name(function: &str) -> bool {
+    let f = function.trim().to_ascii_uppercase();
+    f.starts_with("VREF")
+        || ["CORE", "VCAP", "VREG", "DECOUP"]
+            .iter()
+            .any(|k| f.contains(k))
 }
 
 /// The pin function base (`VOUT_2` -> `VOUT`).
@@ -216,6 +261,74 @@ fn is_series_link(lib: &ModelLibrary, c: &Component) -> bool {
         || is_plain_inductor(c)
         || inductor_designator
         || (is_plain_resistor(c) && ohms.is_some_and(|o| o <= SERIES_OHMS))
+}
+
+/// How many series parts away a rail may be fed from.
+const FEED_HOPS: usize = 3;
+
+/// The nets each fitted series part joins: a ferrite, inductor or low-ohm link,
+/// or any other part of at most three connected pads that is not a capacitor,
+/// resistor, LED or off-board entry (a fuse, diode, switch, jumper, pass FET).
+/// Ground is left out; a part that touches fewer than two other nets joins
+/// nothing.
+fn series_bridges(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    kinds: &HashMap<String, String>,
+    grounded: &dyn Fn(i64) -> bool,
+) -> Vec<Vec<i64>> {
+    let mut out = Vec::new();
+    for c in &board.components {
+        if !AssemblyState::of(c).is_present() || is_entry(c, kinds) {
+            continue;
+        }
+        let pads: BTreeSet<&str> = (c.pins.iter())
+            .filter(|p| p.net.is_some_and(|n| n != 0))
+            .map(|p| p.number.as_str())
+            .collect();
+        let series = is_series_link(lib, c)
+            || (pads.len() <= 3
+                && !(is_capacitor(c) || is_plain_resistor(c) || is_led(c) || is_plain_inductor(c)));
+        if !series {
+            continue;
+        }
+        let nets: BTreeSet<i64> = (c.pins.iter())
+            .filter_map(|p| p.net)
+            .filter(|n| !grounded(*n))
+            .collect();
+        if nets.len() >= 2 {
+            out.push(nets.into_iter().collect());
+        }
+    }
+    out
+}
+
+/// Whether series parts join `rail` within [`FEED_HOPS`] hops to a net `source`
+/// accepts.
+fn fed_through(rail: &BTreeSet<i64>, bridges: &[Vec<i64>], source: impl Fn(i64) -> bool) -> bool {
+    let mut seen: BTreeSet<i64> = rail.clone();
+    let mut frontier: Vec<i64> = rail.iter().copied().collect();
+    for _ in 0..FEED_HOPS {
+        let mut next = Vec::new();
+        for bridge in bridges {
+            if !bridge.iter().any(|n| frontier.contains(n)) {
+                continue;
+            }
+            for &n in bridge {
+                if seen.insert(n) {
+                    if source(n) {
+                        return true;
+                    }
+                    next.push(n);
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+    false
 }
 
 /// A rail to judge: its nets, and the leg that powers it by name (net, volts).
@@ -336,7 +449,9 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
         groups.push((ids, None));
     }
 
+    let board_powered_in = entry_nets.iter().any(|n| power_ish(*n));
     let mut rails = Vec::new();
+    let bridges: std::cell::OnceCell<Vec<Vec<i64>>> = std::cell::OnceCell::new();
     for (ids, leg) in groups {
         let mut basis = RailBasis {
             nets: Vec::new(),
@@ -345,6 +460,10 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
             unfitted: Vec::new(),
             feeds: Vec::new(),
             loads: Vec::new(),
+            supply_loads: Vec::new(),
+            active_loads: Vec::new(),
+            board_powered_in,
+            fed_through: false,
         };
         let mut names: Vec<String> = ids
             .iter()
@@ -469,6 +588,20 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
                         basis.feeds.push(c.reference.clone());
                     } else if !(is_capacitor(c) || is_plain_resistor(c) || is_plain_inductor(c)) {
                         basis.loads.push(c.reference.clone());
+                        let draws = on.iter().any(|p| {
+                            let role = model.as_ref().and_then(|m| m.pins.get(&p.number));
+                            p.kind.starts_with("power_in")
+                                || [Some(p.function.as_str()), role.map(String::as_str)]
+                                    .into_iter()
+                                    .flatten()
+                                    .any(supply_input_name)
+                        }) && !on.iter().all(|p| regulator_output_name(&p.function));
+                        if draws {
+                            basis.supply_loads.push(c.reference.clone());
+                            if hauksbee_extract::is_active_ic(c) {
+                                basis.active_loads.push(c.reference.clone());
+                            }
+                        }
                     }
                 }
             }
@@ -476,7 +609,28 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
         // An unpowered rail matters here only when an unfitted part would
         // have powered it.
         if leg.is_some() || !basis.unfitted.is_empty() {
-            for list in [&mut basis.entries, &mut basis.feeds, &mut basis.loads] {
+            if leg.is_some()
+                && basis.unfitted.is_empty()
+                && basis.entries.is_empty()
+                && basis.feeds.is_empty()
+                && !basis.supply_loads.is_empty()
+            {
+                let bridges = bridges.get_or_init(|| series_bridges(board, lib, kinds, &grounded));
+                basis.fed_through = fed_through(&ids, bridges, |id| {
+                    entry_nets.contains(&id)
+                        || nets
+                            .node
+                            .get(&id)
+                            .is_some_and(|n| domains.fed_by_driver(*n))
+                });
+            }
+            for list in [
+                &mut basis.entries,
+                &mut basis.feeds,
+                &mut basis.loads,
+                &mut basis.supply_loads,
+                &mut basis.active_loads,
+            ] {
                 list.sort_by_key(|r| crate::bind_report::natural_ref_key(r));
                 list.dedup();
             }
