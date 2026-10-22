@@ -3,6 +3,7 @@ import type { ChemistryWire, PowerSupplyWire, UsbSpecWire } from '../../types/pr
 import type { WebReport } from '../../types/report'
 import { machineFindings } from '../../lib/result-links'
 import { labelFor } from '../../lib/labels'
+import type { BenchReport } from '../../types/bench'
 
 // What Live Sim takes over from the analysis on screen, so it continues that
 // analysis instead of starting cold: the checks spec's supplies and duration,
@@ -95,6 +96,76 @@ export function readSpec(toml: string | null | undefined): {
   return { supplies, durationS: (ms ?? 100) / 1000, assertNets }
 }
 
+// ── The nets a person clips a probe to first ─────────────────────────────
+
+const RAIL_NAME = /^[/~]?(?:[a-z]?gnd|vss|vdd|vcc|vbus|vbat|vin|[+-]\d)/i
+
+/** Nets an indicator sits on: a part that is an LED (by library id, value or
+ *  designator), the net a series resistor ties to it, and any net named for one. */
+export function indicatorNets(report: WebReport): Set<string> {
+  const leds = new Set<string>()
+  const parts = report.model_coverage?.components ?? []
+  // An LED's other leg sits on a rail, and a rail is not an indicator.
+  const supplies = new Set((report.supplies ?? []).map(s => s.net))
+  const rail = (n: string) => RAIL_NAME.test(n) || supplies.has(n)
+  for (const c of parts) {
+    const isLed = /\bLED\b/i.test(`${c.lib_id} ${c.value} ${c.footprint}`) || /^LED\d*$/i.test(c.reference)
+    if (isLed) for (const p of c.pins) if (p.net && !rail(p.net)) leds.add(p.net)
+  }
+  // The MCU rarely drives the LED itself: a resistor sits between the two.
+  for (const c of parts) {
+    if (!/^R\d/i.test(c.reference) || c.pins.length !== 2) continue
+    const [a, b] = [c.pins[0].net, c.pins[1].net]
+    if (a && b && leds.has(a) !== leds.has(b)) {
+      const other = leds.has(a) ? b : a
+      if (!rail(other)) leds.add(other)
+    }
+  }
+  for (const n of report.nets ?? []) if (/(^|[^a-z])led/i.test(n)) leds.add(n)
+  return leds
+}
+
+const TOKEN_END = String.raw`(?:$|[^a-z0-9])`
+const TOKEN_START = String.raw`(?:^|[^a-z0-9])`
+const named = (words: string[]) => new RegExp(`${TOKEN_START}(?:${words.join('|')})\\d*${TOKEN_END}`, 'i')
+const I2C_LINE = named(['scl', 'sda'])
+const SPI_LINE = named(['sck', 'sclk', 'mosi', 'miso'])
+const RESET_LINE = /^[/~]?(?:n?rst|nreset|reset|rst_?n|n_?rst)(?:$|[^a-z0-9])/i
+
+/** The probes the bench report suggests, in the order a person reaches for
+ *  them: pins that toggle (an indicator first), the serial transmit line, the
+ *  bus lines of any bus that carried traffic, the reset line of a board that
+ *  restarted. Each carries the reason, in the label table's words. */
+export function benchSeeds(report: WebReport, bench: BenchReport | null | undefined): SeedProbe[] {
+  if (!bench) return []
+  const out: SeedProbe[] = []
+  const add = (net: string | null | undefined, why: string) => {
+    if (net && !out.some(p => p.net === net)) out.push({ net, why })
+  }
+  const indicators = indicatorNets(report)
+  const pins = bench.mcus.flatMap(m => m.pins)
+  const toggling = pins.filter(p => p.state === 'pin_toggling' && p.net)
+  const sorted = [...toggling.filter(p => indicators.has(p.net!)), ...toggling.filter(p => !indicators.has(p.net!))]
+  for (const p of sorted) {
+    add(p.net, `${labelFor(indicators.has(p.net!) ? 'probe_seed_led' : 'probe_seed_pwm')}: ${p.pin}, ${p.summary}`)
+  }
+  for (const u of bench.mcus.flatMap(m => m.uarts ?? [])) add(u.net, `${labelFor('probe_seed_uart_tx')}: ${u.port}`)
+  const nets = report.nets ?? []
+  const kinds = new Set((bench.bus_log ?? []).map(t => t.bus))
+  const busLines = [
+    ...(kinds.has('bus_i2c') ? nets.filter(n => I2C_LINE.test(n)) : []),
+    ...(kinds.has('bus_spi') ? nets.filter(n => SPI_LINE.test(n)) : []),
+  ]
+  for (const n of busLines) add(n, labelFor('probe_seed_bus'))
+  const restarted = bench.mcus.some(m => m.resets > 0)
+    || (bench.events ?? []).some(e => e.kind === 'event_reset' || e.kind === 'event_watchdog_reset')
+  if (restarted) for (const n of nets.filter(n => RESET_LINE.test(n))) add(n, labelFor('probe_seed_reset'))
+  return out
+}
+
+/** Bench seeds kept ahead of the findings' nets: the outputs, before the rest. */
+const MAX_BENCH_SEEDS = 4
+
 export function seedFrom(report: WebReport | null | undefined, specToml: string | null | undefined): SimSeed {
   const spec = readSpec(specToml)
   const probes: SeedProbe[] = []
@@ -102,6 +173,7 @@ export function seedFrom(report: WebReport | null | undefined, specToml: string 
     if (!probes.some(p => p.net === net)) probes.push({ net, why })
   }
   for (const net of spec.assertNets) add(net, 'a check names it')
+  if (report) for (const s of benchSeeds(report, report.cosim?.ran ? report.cosim.bench : null).slice(0, MAX_BENCH_SEEDS)) add(s.net, s.why)
   if (report) for (const f of machineFindings(report)) for (const net of f.nets ?? []) add(net, 'a finding names it')
   const cosim = report?.cosim?.ran ? report.cosim : null
   const toggles = (cosim?.gpio_nets ?? [])

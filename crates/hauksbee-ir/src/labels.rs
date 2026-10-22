@@ -923,6 +923,14 @@ fn raw_entries() -> Vec<Label> {
     for e in crate::glossary::all() {
         out.push(row(&term_id(e.term), GROUP_TERM, e.label, Some(e.short)));
     }
+    for e in crate::observations::observation_kinds() {
+        out.push(row(
+            e.id,
+            crate::observations::GROUP_OBSERVATION,
+            e.label,
+            Some(e.meaning),
+        ));
+    }
     for &(kind, part, chip) in BACKENDS {
         let kind_label = BACKEND_KINDS
             .iter()

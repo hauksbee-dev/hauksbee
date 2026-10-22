@@ -365,6 +365,14 @@ pub struct WebFirmwareCoverage {
     /// Per-MCU execution evidence, the same rows the CLI `--json` carries.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub execution: Vec<crate::execution::ExecutionEvidence>,
+    /// What the run looked like from the bench: per-pin state, where each core
+    /// is parked, serial lines, bus transactions and the event timeline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bench: Option<hauksbee_ir::observations::BenchReport>,
+    /// True when the board's MCU needs an emulator (Renode, QEMU) that the
+    /// synchronous analysis never runs: the page offers to run it as a job.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub external_backend: bool,
 }
 
 type WebCosimCoverage = WebFirmwareCoverage;
@@ -392,33 +400,51 @@ impl WebFirmwareAnalysis {
             .get_mut("cosim")
             .and_then(serde_json::Value::as_object_mut)
         {
-            if !self.coverage.timing_coverage.is_empty() {
-                cosim.insert(
-                    "timing_coverage".to_string(),
-                    serde_json::to_value(&self.coverage.timing_coverage)?,
-                );
-            }
-            if !self.coverage.timing_refusals.is_empty() {
-                cosim.insert(
-                    "timing_refusals".to_string(),
-                    serde_json::to_value(&self.coverage.timing_refusals)?,
-                );
-            }
-            if !self.coverage.fallback_windows.is_empty() {
-                cosim.insert(
-                    "fallback_windows".to_string(),
-                    serde_json::to_value(&self.coverage.fallback_windows)?,
-                );
-            }
-            if !self.coverage.execution.is_empty() {
-                cosim.insert(
-                    "execution".to_string(),
-                    serde_json::to_value(&self.coverage.execution)?,
-                );
-            }
+            insert_coverage_fields(cosim, &self.coverage)?;
         }
         Ok(value)
     }
+}
+
+/// Put the additive coverage keys into a serialised `cosim` object.
+fn insert_coverage_fields(
+    cosim: &mut serde_json::Map<String, serde_json::Value>,
+    coverage: &WebFirmwareCoverage,
+) -> Result<(), serde_json::Error> {
+    if !coverage.timing_coverage.is_empty() {
+        cosim.insert(
+            "timing_coverage".to_string(),
+            serde_json::to_value(&coverage.timing_coverage)?,
+        );
+    }
+    if !coverage.timing_refusals.is_empty() {
+        cosim.insert(
+            "timing_refusals".to_string(),
+            serde_json::to_value(&coverage.timing_refusals)?,
+        );
+    }
+    if !coverage.fallback_windows.is_empty() {
+        cosim.insert(
+            "fallback_windows".to_string(),
+            serde_json::to_value(&coverage.fallback_windows)?,
+        );
+    }
+    if !coverage.execution.is_empty() {
+        cosim.insert(
+            "execution".to_string(),
+            serde_json::to_value(&coverage.execution)?,
+        );
+    }
+    if let Some(bench) = &coverage.bench {
+        cosim.insert("bench".to_string(), serde_json::to_value(bench)?);
+    }
+    if coverage.external_backend {
+        cosim.insert(
+            "external_backend".to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
+    Ok(())
 }
 
 /// Evidence inputs captured before the co-sim scheduler is dropped. Keeping
@@ -2034,6 +2060,10 @@ fn analyze_with_firmware_context(
             return (report, coverage);
         }
     };
+    let external_backend = cosim_bound
+        .mcus
+        .iter()
+        .any(|m| is_external_backend(&m.backend));
     let (mut cosim, cosim_evidence) = run_web_cosim_with_bound(
         &norm.board,
         cosim_bound,
@@ -2042,11 +2072,15 @@ fn analyze_with_firmware_context(
         &resolved.bytes,
         &drc,
         tie_qualification.as_ref(),
+        &WebCosimWindow::QUICK,
     );
-    let coverage = cosim_evidence
+    let mut coverage = cosim_evidence
         .as_ref()
         .map(|captured| captured.coverage.clone())
         .unwrap_or_default();
+    // The quick report never runs an emulator; say so as data, so the page can
+    // offer to run it as a job instead of parsing the explanation.
+    coverage.external_backend = external_backend && cosim_evidence.is_none();
     // Whether the evidence pass below parked the headline on run-level
     // invalidity; the fault fold must not demote that to a warning headline
     // (serious beats invalid beats warning).
@@ -2556,10 +2590,44 @@ fn run_web_cosim(
         fw_bytes,
         drc,
         tie_qualification,
+        &WebCosimWindow::QUICK,
     )
 }
 
+/// Whether a bound MCU's backend is an external emulator.
+fn is_external_backend(backend: &str) -> bool {
+    backend.starts_with("renode:") || backend.starts_with("qemu:")
+}
+
+/// How long, and how finely, a web co-sim runs.
+struct WebCosimWindow<'a> {
+    /// Simulated seconds to run.
+    seconds: f64,
+    /// The stepping frame, in seconds.
+    frame_dt: f64,
+    /// Whether a board whose MCU runs in Renode or QEMU is run, rather than
+    /// refused with the reason the quick report cannot host an emulator.
+    external_ok: bool,
+    /// Called after each frame with the simulated seconds so far.
+    on_frame: Option<&'a (dyn Fn(f64) + Sync)>,
+}
+
+impl WebCosimWindow<'static> {
+    /// The synchronous report's window: 200 one-millisecond frames, in-process
+    /// cores only, so it fits a request budget.
+    const QUICK: Self = Self {
+        seconds: 0.2,
+        frame_dt: 0.001,
+        external_ok: false,
+        on_frame: None,
+    };
+}
+
 #[allow(clippy::too_many_lines, reason = "linear: stage, step, honesty notes")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the stages of one run, plus its window"
+)]
 fn run_web_cosim_with_bound(
     board: &ExtractedBoard,
     bound: crate::binder::BoundBoard,
@@ -2568,21 +2636,26 @@ fn run_web_cosim_with_bound(
     fw_bytes: &[u8],
     drc: &hauksbee_extract::DrcReport,
     tie_qualification: Option<&hauksbee_extract::DrcTieQualification>,
+    window: &WebCosimWindow<'_>,
 ) -> (WebCosimSection, Option<WebCosimEvidence>) {
     use crate::plain::plain_faults;
     use crate::stress::FaultEvent;
     use hauksbee_frontdoor_api::engine::Engine;
     use std::io::Write;
 
-    /// Simulated window this synchronous report runs, mirroring `run_headless`'s
-    /// short fixed window. Named here because the external-emulator refusal
-    /// below quotes it: the honest reason that path is skipped is that 0.2 s
-    /// of simulated time is less than such a chip's boot ROM needs, so the
-    /// user would be shown a processor that has not started.
-    const SECONDS: f64 = 0.2;
-    /// `SECONDS` in 1 kHz frames. An integer count, so the step count does not
-    /// hinge on float accumulation (summing 1 ms steps also stops after 200).
-    const FRAMES: u32 = 200;
+    // The window's length. The external-emulator refusal below quotes it: the
+    // honest reason that path is skipped is that 0.2 s of simulated time is
+    // less than such a chip's boot ROM needs, so the user would be shown a
+    // processor that has not started.
+    let seconds = window.seconds;
+    // The window in whole frames. An integer count, so the step count does not
+    // hinge on float accumulation.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a frame count: positive, and far below u32::MAX"
+    )]
+    let frames = (window.seconds / window.frame_dt).round() as u32;
 
     // No MCU => firmware drives nothing. Inspect the bound board before paying
     // for a temp file / engine build, and say so plainly.
@@ -2600,9 +2673,10 @@ fn run_web_cosim_with_bound(
     let external_mcus: Vec<_> = bound
         .mcus
         .iter()
-        .filter(|m| m.backend.starts_with("renode:") || m.backend.starts_with("qemu:"))
+        .filter(|m| is_external_backend(&m.backend))
         .collect();
-    if !external_mcus.is_empty() {
+    let has_external = !external_mcus.is_empty();
+    if has_external && !window.external_ok {
         let selected = external_mcus
             .iter()
             .map(|m| {
@@ -2618,7 +2692,7 @@ fn run_web_cosim_with_bound(
             "This board selects at least one MCU that requires an external emulator: \
              {selected}. The synchronous web run cannot execute only a subset of the \
              selected cores and present it as whole-board firmware evidence. This quick \
-             report simulates only a {SECONDS:.1} s window, and a chip like this one \
+             report simulates only a {seconds:.1} s window, and a chip like this one \
              spends several simulated seconds in its boot ROM before your code starts, \
              so the report would show a processor that has not booted yet. Running it \
              long enough is a job of tens of wall-clock seconds, which is why it is not \
@@ -2705,15 +2779,22 @@ fn run_web_cosim_with_bound(
         0
     };
 
-    // Short fixed window mirroring run_headless: 1 kHz frame cadence.
-    let frame_dt = 1.0 / 1000.0;
+    // The quick window mirrors run_headless: 1 kHz frames. An emulator job runs
+    // the CLI's coarse frame, with the scheduler's chunk matched to it.
+    let frame_dt = window.frame_dt;
+    if has_external {
+        engine.scheduler_mut().chunk_s = frame_dt;
+    }
     let mut last_uart: Vec<u8> = Vec::new();
     let mut faults: Vec<FaultEvent> = Vec::new();
-    hauksbee_ir::progress::will_simulate(f64::from(FRAMES) * frame_dt);
-    hauksbee_ir::progress::begin(hauksbee_ir::progress::Stage::Simulate, u64::from(FRAMES));
-    for _ in 0..FRAMES {
+    hauksbee_ir::progress::will_simulate(f64::from(frames) * frame_dt);
+    hauksbee_ir::progress::begin(hauksbee_ir::progress::Stage::Simulate, u64::from(frames));
+    for i in 0..frames {
         hauksbee_ir::progress::advance_in(hauksbee_ir::progress::Stage::Simulate, 1);
         let frame = engine.step(frame_dt);
+        if let Some(on_frame) = window.on_frame {
+            on_frame(f64::from(i + 1) * frame_dt);
+        }
         // Concatenate per-MCU UART in a STABLE (sorted-by-MCU-key) order, plain
         // `values()` is HashMap iteration order, so a multi-MCU board's merged
         // uart_output would interleave nondeterministically run-to-run. Mirrors
@@ -3074,6 +3155,8 @@ fn run_web_cosim_with_bound(
             timing_refusals,
             fallback_windows,
             execution: sched.execution_evidence().to_vec(),
+            bench: Some(sched.bench_report()),
+            external_backend: false,
         },
     };
     let substituted = !captured.scoped_substitutions.is_empty();
@@ -3094,6 +3177,73 @@ fn run_web_cosim_with_bound(
         },
         Some(captured),
     )
+}
+
+/// Simulated seconds an emulator co-sim job runs. The synchronous report's
+/// 0.2 s is shorter than such a chip's boot ROM; two seconds lets the core boot
+/// and run several periods of an ordinary blink or heartbeat loop.
+const COSIM_JOB_SECONDS: f64 = 2.0;
+/// The emulator job's stepping frame, the CLI's coarse external-emulator frame.
+const COSIM_JOB_FRAME_S: f64 = 0.01;
+
+/// Run the firmware co-sim for a design upload on whatever backend its MCU needs.
+///
+/// That includes Renode and QEMU, which the synchronous analysis refuses.
+/// Answers the finished `cosim` section as JSON (the same shape the report's
+/// `cosim` carries, with the bench view), reporting progress as it goes.
+///
+/// # Errors
+///
+/// Returns a user-facing sentence when the upload has no firmware, cannot be
+/// read or bound, or the firmware cannot be loaded.
+pub fn run_cosim_job(
+    upload: hauksbee_frontdoor_api::frontdoor::DesignUpload,
+    progress: hauksbee_frontdoor_api::frontdoor::CosimProgress,
+) -> Result<String, String> {
+    let Some(firmware) = upload.firmware.clone() else {
+        return Err("the co-sim needs a firmware image alongside the board".to_string());
+    };
+    let name = upload.board.name.clone();
+    let prepared = crate::web_design::prepare_typed(upload)
+        .map_err(crate::web_design::PrepareFailure::into_message)?;
+    let resolved = crate::firmware_input::resolve_firmware_bytes(&firmware.name, &firmware.bytes)?;
+    let static_bound = prepared.bind()?;
+    let cosim_bound = prepared.bind()?;
+    // The static pass supplies the DRC shorts the co-sim bridges in, as the
+    // synchronous report does.
+    let (_, drc) = analyze_normalized_with_context(
+        &name,
+        &prepared.norm,
+        prepared.ties.as_ref(),
+        &prepared.lib,
+        Some(&static_bound),
+        &prepared.supporting_artifacts,
+    );
+    let tie_qualification = prepared.ties.as_ref().map(|ties| ties.qualify(&drc));
+    let on_frame = move |done: f64| progress(done, COSIM_JOB_SECONDS);
+    let window = WebCosimWindow {
+        seconds: COSIM_JOB_SECONDS,
+        frame_dt: COSIM_JOB_FRAME_S,
+        external_ok: true,
+        on_frame: Some(&on_frame),
+    };
+    on_frame(0.0);
+    let (section, evidence) = run_web_cosim_with_bound(
+        &prepared.norm.board,
+        cosim_bound,
+        &name,
+        &resolved.name,
+        &resolved.bytes,
+        &drc,
+        tie_qualification.as_ref(),
+        &window,
+    );
+    let coverage = evidence.map(|e| e.coverage).unwrap_or_default();
+    let mut value = serde_json::to_value(&section).map_err(|e| e.to_string())?;
+    if let Some(cosim) = value.as_object_mut() {
+        insert_coverage_fields(cosim, &coverage).map_err(|e| e.to_string())?;
+    }
+    serde_json::to_string(&value).map_err(|e| e.to_string())
 }
 
 /// The single line at the top of the web report.

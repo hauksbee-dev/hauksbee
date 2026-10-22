@@ -140,6 +140,7 @@ pub fn build_cosim_json(
         activity_summary,
         timing_coverage: sched.timing_coverage(),
         execution: sched.execution_evidence().to_vec(),
+        bench: Some(sched.bench_report()),
         timing_refusals: sched.timing_refusals().to_vec(),
         analog_valid,
         failed_windows,
@@ -348,6 +349,38 @@ fn probe_csv_header(probes: &[String]) -> String {
     csv
 }
 
+/// What the run writes out beyond its summary (`--vcd`, `--bus-log`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ObserveOutputs<'a> {
+    /// Where to write the run as a VCD waveform: every MCU pin, the serial
+    /// lines, the decoded bus tracks and the event markers.
+    pub vcd: Option<&'a Path>,
+    /// Print every bus and serial transaction in time order.
+    pub bus_log: bool,
+}
+
+/// A titled table of nets with their voltage range and toggle counts.
+fn print_net_table(title: &str, rows: &[(&String, &crate::scheduler::NetStat, u64)], limit: usize) {
+    println!("\n{title}");
+    println!(
+        "┌────────────────────────────┬──────────┬──────────┬──────────┐\n\
+         │ Net                        │ min (V)  │ max (V)  │ toggles  │\n\
+         ├────────────────────────────┼──────────┼──────────┼──────────┤"
+    );
+    for (name, st, toggles) in rows.iter().take(limit) {
+        let min_v = if st.min_v.is_finite() { st.min_v } else { 0.0 };
+        let max_v = if st.max_v.is_finite() { st.max_v } else { 0.0 };
+        println!(
+            "│ {:<26} │ {:>8.3} │ {:>8.3} │ {:>8} │",
+            truncate(name, 26),
+            min_v,
+            max_v,
+            toggles
+        );
+    }
+    println!("└────────────────────────────┴──────────┴──────────┴──────────┘");
+}
+
 /// What a finished headless co-sim run delivered: its faults plus the honest
 /// wall-clock accounting (`hauksbee run` must report the rate it ACHIEVED,
 /// never a rate it did not).
@@ -444,6 +477,7 @@ pub fn run_headless(
     probes: &[String],
     probe_csv: Option<&Path>,
     chunk_us: Option<f64>,
+    observe: ObserveOutputs<'_>,
 ) -> anyhow::Result<HeadlessRun> {
     use crate::FaultEvent;
     use hauksbee_frontdoor_api::engine::Engine;
@@ -581,24 +615,39 @@ pub fn run_headless(
             sched.stats.len()
         );
         let rows = nets_by_activity(&sched.stats, &toggle_counts);
-        println!("\nmost active nets:");
-        println!(
-            "┌────────────────────────────┬──────────┬──────────┬──────────┐\n\
-             │ Net                        │ min (V)  │ max (V)  │ toggles  │\n\
-             ├────────────────────────────┼──────────┼──────────┼──────────┤"
-        );
-        for (name, st, toggles) in rows.iter().take(15) {
-            let min_v = if st.min_v.is_finite() { st.min_v } else { 0.0 };
-            let max_v = if st.max_v.is_finite() { st.max_v } else { 0.0 };
+        // The bench view: what each pin, serial port and bus did, in the
+        // words a person at a bench would use. A board with no MCU has no
+        // pins to describe, so it keeps the net table.
+        let bench = sched.bench_report();
+        if bench.mcus.is_empty() {
+            print_net_table("most active nets:", &rows, 15);
+        } else {
             println!(
-                "│ {:<26} │ {:>8.3} │ {:>8.3} │ {:>8} │",
-                truncate(name, 26),
-                min_v,
-                max_v,
-                toggles
+                "\n{}",
+                hauksbee_cosim::observe::bench::render_text(&bench).trim_end()
             );
+            if observe.bus_log {
+                println!(
+                    "\n{}",
+                    hauksbee_cosim::observe::bench::render_bus_log(&bench).trim_end()
+                );
+            }
+            // Nets that moved without being an MCU pin (a clock generator, a
+            // modelled oscillator): a few, so they are not lost.
+            let pin_nets: std::collections::HashSet<&str> = bench
+                .mcus
+                .iter()
+                .flat_map(|m| m.pins.iter().filter_map(|p| p.net.as_deref()))
+                .collect();
+            let others: Vec<_> = rows
+                .iter()
+                .filter(|(name, _, toggles)| *toggles > 0 && !pin_nets.contains(name.as_str()))
+                .copied()
+                .collect();
+            if !others.is_empty() {
+                print_net_table("other active nets:", &others, 5);
+            }
         }
-        println!("└────────────────────────────┴──────────┴──────────┴──────────┘");
 
         // Analog-fidelity line: if any chunk failed to converge, say so
         // and where, so the default text mode never presents held-stale voltages
@@ -744,6 +793,26 @@ pub fn run_headless(
                 last_uart.len(),
                 s.trim_end()
             );
+        }
+    }
+
+    if quiet && observe.bus_log {
+        eprintln!("--bus-log: under --json the log is in cosim.bench.bus_log");
+    }
+    if let Some(path) = observe.vcd {
+        let sched = engine.scheduler();
+        if sched.mcu_identities().is_empty() {
+            eprintln!(
+                "warning: --vcd {} was not written: no MCU ran, so there are no pins to record",
+                path.display()
+            );
+        } else {
+            std::fs::write(path, sched.bench_vcd()).map_err(|e| {
+                anyhow::anyhow!("writing the VCD waveform to {}: {e}", path.display())
+            })?;
+            if !quiet {
+                eprintln!("wrote the run's waveform (VCD) to {}", path.display());
+            }
         }
     }
 

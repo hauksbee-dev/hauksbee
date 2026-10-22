@@ -80,6 +80,7 @@ pub fn capture_manifest(
         cfg.models_dir.clone(),
         cfg.ac_csv.clone(),
         cfg.probe_csv.clone(),
+        cfg.vcd.clone(),
     ]
     .into_iter()
     .flatten()
@@ -132,6 +133,8 @@ fn manifest_options(cfg: &RunConfig) -> std::collections::BTreeMap<String, serde
         ("port".into(), serde_json::json!(cfg.port)),
         ("probe".into(), serde_json::json!(cfg.probe)),
         ("probe_csv".into(), serde_json::json!(cfg.probe_csv)),
+        ("vcd".into(), serde_json::json!(cfg.vcd)),
+        ("bus_log".into(), serde_json::json!(cfg.bus_log)),
         ("report".into(), serde_json::json!(cfg.report)),
         ("resources".into(), serde_json::json!(cfg.resources)),
         ("sarif".into(), serde_json::json!(cfg.sarif)),

@@ -442,6 +442,69 @@
         }
       ]
     },
+    "BenchEvent": {
+      "description": "A dashed marker on the timeline.",
+      "properties": {
+        "detail": {
+          "description": "One line: `reset line pulsed`, `first byte: hello`.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/EventKind"
+        },
+        "mcu_ref": {
+          "type": "string"
+        },
+        "t_s": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "t_s",
+        "kind",
+        "mcu_ref",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "BenchReport": {
+      "description": "The whole bench view of a run: what the pins, the serial port, the buses\nand the reset line did, in time order.",
+      "properties": {
+        "bus_log": {
+          "items": {
+            "$ref": "#/definitions/BusTransaction"
+          },
+          "type": "array"
+        },
+        "duration_s": {
+          "description": "Simulated seconds the run covered.",
+          "format": "double",
+          "type": "number"
+        },
+        "events": {
+          "items": {
+            "$ref": "#/definitions/BenchEvent"
+          },
+          "type": "array"
+        },
+        "mcus": {
+          "items": {
+            "$ref": "#/definitions/McuBench"
+          },
+          "type": "array"
+        },
+        "truncated": {
+          "description": "True when the recorder hit its memory cap: counts stay exact, the\nwaveform and log are cut short.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "duration_s",
+        "mcus"
+      ],
+      "type": "object"
+    },
     "BindSummary": {
       "description": "The bind report, summarised by role rather than a single flat percentage.\n\n\"How many parts resolved\" is the wrong unit when the 17% that did not are the\nentire active circuit. The honest metrics are: did the MCU and the active\npower ICs bind, and which active-path parts are open?",
       "properties": {
@@ -522,6 +585,84 @@
         "reference",
         "net",
         "state"
+      ],
+      "type": "object"
+    },
+    "BusKind": {
+      "description": "Which bus a transaction crossed.",
+      "enum": [
+        "bus_i2c",
+        "bus_spi",
+        "bus_uart"
+      ],
+      "type": "string"
+    },
+    "BusTransaction": {
+      "description": "One decoded bus transaction, as a logic analyser's protocol decoder\nshows it.",
+      "properties": {
+        "acked": {
+          "description": "I2C: whether the address byte was acknowledged. SPI: whether the device\nwas powered and answered.",
+          "type": "boolean"
+        },
+        "addr": {
+          "description": "I2C 7-bit address.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "bus": {
+          "$ref": "#/definitions/BusKind"
+        },
+        "bytes": {
+          "description": "I2C: the bytes written or read. SPI: the bytes on MOSI. UART: the line.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "device": {
+          "description": "The board part (or spec peripheral id) that answered, or that was\naddressed and did not.",
+          "type": "string"
+        },
+        "read": {
+          "description": "True when the firmware read from the device.",
+          "type": "boolean"
+        },
+        "reply": {
+          "description": "SPI only: the bytes the device returned on MISO.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "description": "The transaction in words: `LM75 0x48 write [0x00] ACK`.",
+          "type": "string"
+        },
+        "t_s": {
+          "description": "Simulated time the transaction started (chunk resolution on poll\nbackends).",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "t_s",
+        "bus",
+        "device",
+        "read",
+        "bytes",
+        "acked",
+        "summary"
       ],
       "type": "object"
     },
@@ -654,6 +795,36 @@
         "detail"
       ],
       "type": "object"
+    },
+    "CoreState": {
+      "description": "Where the core ended the run.",
+      "oneOf": [
+        {
+          "const": "core_running",
+          "description": "Still doing things at the end of the run.",
+          "type": "string"
+        },
+        {
+          "const": "core_parked",
+          "description": "Sitting in a tight loop with no output since the loop began.",
+          "type": "string"
+        },
+        {
+          "const": "core_trapped",
+          "description": "Parked in a curated trap symbol ([`TRAP_SYMBOLS`]).",
+          "type": "string"
+        },
+        {
+          "const": "core_faulted",
+          "description": "A fault handler was entered or the core crashed.",
+          "type": "string"
+        },
+        {
+          "const": "core_unknown",
+          "description": "The backend cannot say.",
+          "type": "string"
+        }
+      ]
     },
     "CosimAdcDrop": {
       "description": "One dropped ADC injection channel (see [`CosimJson::adc_dropped`]).",
@@ -807,6 +978,17 @@
         "backend": {
           "description": "The actual backend string from `BindOutcome::Mcu { backend }`.",
           "type": "string"
+        },
+        "bench": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BenchReport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the run looked like from the bench: per-pin state (static or\ntoggling at f with duty), where each core is parked, the serial lines,\nthe I2C and SPI transactions with their acknowledgements, and the event\ntimeline (resets, stalls, faults). The same view the CLI prints and the\napp strip draws. Absent when no MCU ran."
         },
         "driver_contention": {
           "description": "Runtime driver contention: nets where the firmware configured an MCU\npin as a push-pull OUTPUT while an enabled modelled push-pull output\nwas already driving (the model-vs-MCU case the static output-contention\nlint documents as out of its reach). Waveforms touching these nets are\nuntrustworthy from `t_s` on. One entry per offending net. Empty (and\nomitted) on a healthy run.",
@@ -1460,6 +1642,23 @@
       ],
       "type": "object"
     },
+    "EdgeSample": {
+      "description": "One level change of a pin: seconds of simulated time and the new level.",
+      "properties": {
+        "high": {
+          "type": "boolean"
+        },
+        "t_s": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "t_s",
+        "high"
+      ],
+      "type": "object"
+    },
     "EntityKind": {
       "description": "What results the assumption taints.\n\nScope is the input to the on-path decision: the causal-path traversal\ncompares an assertion's subject nets and refs against these, and only\nassumptions that match land in an [`EvidenceMap`].",
       "oneOf": [
@@ -1556,6 +1755,18 @@
         "tolerance"
       ],
       "type": "object"
+    },
+    "EventKind": {
+      "description": "What kind of moment a timeline marker is.",
+      "enum": [
+        "event_reset",
+        "event_watchdog_reset",
+        "event_stall",
+        "event_first_uart_byte",
+        "event_first_edge",
+        "event_fault"
+      ],
+      "type": "string"
     },
     "EvidenceMap": {
       "description": "What one assertion rests on: the artifacts, models, parameters and\nassumptions on its causal path, its error budget, and the derived status.\n\n`status`, the assertion it is a status OF, and the id list it was derived\nfrom are all private, and there is one constructor. What that guarantees,\nexactly: a status cannot disagree with the assumptions it was handed, and no\nproducer, renderer or sibling crate can move the three apart afterwards.\n`Undermined` maps onto the run's existing invalid-for-analysis outcome, which\nwaivers already refuse to flip green, so the only routes back to a clean\nverdict are closing the assumption or acknowledging it in the open.\n\nConstruction requires the opaque result of [`CausalPathIndex::traverse`]. A\ncaller cannot hand over an arbitrary empty slice and mint `Clean`; an unknown\nnet is an error, while a known net with no on-path assumptions is clean.\n\nLike [`Assumption`], and for the same reason, the type does not implement\n`Deserialize`. A serialized map carries assumption *ids*, not kinds, so a\nstatus could not be re-derived on the way back in even in principle: the kinds\nlive in the run's registry, a different part of the document. A permissive\n`Deserialize` would therefore be a laundering route with no compensating\ncheck, and deleting the `assumptions` key from a hand-edited report would read\nback `Clean` over a real gap. A consumer that has the registry and wants the\nanswer calls [`EvidenceMap::derive_status`] on it, which is the only honest\nway to get one.\n\n```\nuse hauksbee_ir::evidence::{Assumption, CausalPathIndex, EvidenceMap,\n    EvidenceRegistry, EvidenceStatus, NetScope, RunDate};\n\nlet today = RunDate::from_epoch_days(20_666); // 2026-08-01\nlet open = Assumption::open_part(\"U2\", \"XC6206\", \"no model matched\");\nlet registry = EvidenceRegistry::new(vec![open]).unwrap();\nlet graph = CausalPathIndex::from_net_parts([(\"3V3\", [\"U2\"].as_slice()),\n    (\"VBUS\", [\"J1\"].as_slice())]).unwrap();\nlet on_3v3 = graph.traverse(&NetScope::new([\"3V3\"], None).unwrap(), &registry).unwrap();\nlet map = EvidenceMap::from_traversal(\"3V3 stays above 3.1 V\", on_3v3,\n    &registry, today).unwrap();\nassert_eq!(map.status(), EvidenceStatus::Undermined);\nassert_eq!(map.assumptions()[0].as_str(), \"open-part:U2\");\n\nlet on_vbus = graph.traverse(&NetScope::new([\"VBUS\"], None).unwrap(), &registry).unwrap();\nlet clean = EvidenceMap::from_traversal(\"VBUS stays below 5.5 V\", on_vbus,\n    &registry, today).unwrap();\nassert_eq!(clean.status(), EvidenceStatus::Clean);\nassert!(clean.assumptions().is_empty());\n```",
@@ -2128,6 +2339,69 @@
       ],
       "type": "string"
     },
+    "McuBench": {
+      "description": "The bench view of one MCU.",
+      "properties": {
+        "backend": {
+          "type": "string"
+        },
+        "core": {
+          "$ref": "#/definitions/CoreState"
+        },
+        "first_activity_s": {
+          "description": "Simulated time of the first pin edge or UART byte.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "headline": {
+          "description": "One line: `running`, `parked at Error_Handler`, `restarted 2 times`.",
+          "type": "string"
+        },
+        "mcu_ref": {
+          "type": "string"
+        },
+        "park": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ParkSite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pins": {
+          "items": {
+            "$ref": "#/definitions/PinRow"
+          },
+          "type": "array"
+        },
+        "resets": {
+          "description": "Resets seen (reset-line pulses and watchdog bites).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uarts": {
+          "items": {
+            "$ref": "#/definitions/UartRow"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "mcu_ref",
+        "backend",
+        "core",
+        "headline",
+        "resets",
+        "pins"
+      ],
+      "type": "object"
+    },
     "ModelGroup": {
       "description": "The models of one evidence map that share a model, source and confidence.",
       "properties": {
@@ -2577,6 +2851,151 @@
         "parameter"
       ],
       "type": "object"
+    },
+    "ParkSite": {
+      "description": "Where a parked core sits.",
+      "properties": {
+        "distinct_pcs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pc": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pc_samples": {
+          "description": "Program-counter samples taken and how many distinct values they held.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "quiet_since_s": {
+          "description": "Simulated time of the last output (pin edge or UART byte); the core has\nproduced none since.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "symbol": {
+          "description": "The ELF function containing `pc`, when the image has a symbol table.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "pc",
+        "pc_samples",
+        "distinct_pcs"
+      ],
+      "type": "object"
+    },
+    "PinRow": {
+      "description": "One row of the bench view: a pin the board wires to a net.",
+      "properties": {
+        "duty": {
+          "description": "Fraction of the observed time spent high, for a toggling pin (0..1).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "edge_samples": {
+          "description": "The first [`MAX_EDGE_SAMPLES`] edges, for the app's lanes.",
+          "items": {
+            "$ref": "#/definitions/EdgeSample"
+          },
+          "type": "array"
+        },
+        "edges": {
+          "description": "Transitions seen.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "final_high": {
+          "description": "Level at the end of the run, when known.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "first_edge_s": {
+          "description": "Simulated time of the first edge.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "freq_hz": {
+          "description": "Toggle rate (full cycles per second), for a toggling pin with at least\nthree edges.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "net": {
+          "description": "The board net it drives, when it is wired to one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pin": {
+          "description": "The pin as the firmware names it (`PC13`, `PB5`).",
+          "type": "string"
+        },
+        "samples_truncated": {
+          "description": "True when `edge_samples` is shorter than `edges`.",
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/definitions/PinState"
+        },
+        "summary": {
+          "description": "The row in words: `toggling 5.0 Hz, 50% duty`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pin",
+        "state",
+        "edges",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "PinState": {
+      "description": "What one MCU pin did over the run.",
+      "oneOf": [
+        {
+          "const": "pin_static_high",
+          "description": "Driven high, no transitions after the first.",
+          "type": "string"
+        },
+        {
+          "const": "pin_static_low",
+          "description": "Driven low, no transitions after the first.",
+          "type": "string"
+        },
+        {
+          "const": "pin_toggling",
+          "description": "Driven, changing level.",
+          "type": "string"
+        },
+        {
+          "const": "pin_input",
+          "description": "Never driven by the firmware: an input or released (Hi-Z).",
+          "type": "string"
+        }
+      ]
     },
     "Refusal": {
       "description": "The C5.3 refusal contract.\n\nExit 3 means the requested claim could not be made; it is neither a finding\nnor a malformed-input error.  Every renderer carries these same four answers\nso a refusal is actionable and does not discard work that remains valid.",
@@ -3107,6 +3526,67 @@
         "id",
         "kind",
         "statement"
+      ],
+      "type": "object"
+    },
+    "UartRow": {
+      "description": "One serial port's output.",
+      "properties": {
+        "baud": {
+          "description": "The baud rate the firmware configured. `None` until the peripheral\nsnapshot decodes it; `baud_note` says so.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "baud_note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "first_byte_s": {
+          "description": "Simulated time the first byte arrived (chunk resolution).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "first_line": {
+          "description": "The first line the firmware printed, trimmed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "net": {
+          "description": "The board net the TX pin drives, when the binder knows it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "port": {
+          "description": "Always `UART` today; a port name when the backend names ports.",
+          "type": "string"
+        },
+        "printable_ratio": {
+          "description": "Fraction of bytes that are printable text or whitespace (0..1).",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "port",
+        "bytes",
+        "printable_ratio"
       ],
       "type": "object"
     },

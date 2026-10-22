@@ -156,6 +156,18 @@ pub type SchematicLiveLauncher = Arc<
 /// Launch Live Sim from the same complete bundle used by report and Checks.
 pub type DesignLiveLauncher = Arc<dyn Fn(DesignUpload) -> Result<LiveLaunch, String> + Send + Sync>;
 
+/// Reports a running co-sim job's progress: simulated seconds done so far, and
+/// the run's total.
+pub type CosimProgress = Arc<dyn Fn(f64, f64) + Send + Sync>;
+
+/// Run the firmware co-sim for an upload on an external emulator.
+///
+/// Renode and QEMU are never waited for by the synchronous analysis. This
+/// answers the finished `cosim` section as JSON, or the reason it could not
+/// run. Progress goes to the [`CosimProgress`] as the run advances.
+pub type CosimJobRunner =
+    Arc<dyn Fn(DesignUpload, CosimProgress) -> Result<String, String> + Send + Sync>;
+
 /// Report optional-dependency status as JSON.
 pub type DepsStatus = Arc<dyn Fn() -> String + Send + Sync>;
 
@@ -228,4 +240,5 @@ pub struct ToolHooks {
     pub deps_status: DepsStatus,
     pub install: DepInstaller,
     pub datasheet: DatasheetHooks,
+    pub cosim_job: CosimJobRunner,
 }

@@ -1288,6 +1288,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "toml",
+ "vcd",
  "zip",
 ]
 
@@ -3435,6 +3436,12 @@ dependencies = [
  "outref",
  "vsimd",
 ]
+
+[[package]]
+name = "vcd"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4505774fc84de82eb04caa74d859342b0daa376f4c6df45149593245dd62c004"
 
 [[package]]
 name = "version_check"

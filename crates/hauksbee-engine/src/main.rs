@@ -1195,6 +1195,17 @@ struct RunArgs {
     #[arg(long, value_name = "FILE", help_heading = "Advanced / analyses")]
     probe_csv: Option<PathBuf>,
 
+    /// Write a `--headless` run as a VCD waveform: every MCU pin, the serial
+    /// lines, decoded I2C and SPI tracks and a timeline of resets, stalls and
+    /// faults. Open it in GTKWave, Surfer or PulseView.
+    #[arg(long, value_name = "FILE", help_heading = "Advanced / analyses")]
+    vcd: Option<PathBuf>,
+
+    /// List every I2C, SPI and serial transaction of a `--headless` run in time
+    /// order, with the address, the bytes and whether the device acknowledged.
+    #[arg(long, help_heading = "Advanced / analyses")]
+    bus_log: bool,
+
     /// Solver chunk width for a headless or interactive co-sim, in
     /// microseconds.
     ///
@@ -1443,6 +1454,7 @@ fn invalidate_run_artifacts_after_parse_error(args: &[String], error: &clap::Err
                 "--asbuilt",
                 "--ac-csv",
                 "--probe-csv",
+                "--vcd",
             ]
             .into_iter()
             .filter_map(|flag| artifact_flag_value(args, flag)),
@@ -1845,6 +1857,8 @@ fn run_config(
         ac_loop: a.ac_loop,
         probe: a.probe,
         probe_csv: a.probe_csv,
+        vcd: a.vcd,
+        bus_log: a.bus_log,
         chunk_us: a.chunk_us,
         serial_attach: a.serial_attach,
         serial_transport: a.serial_transport.into(),

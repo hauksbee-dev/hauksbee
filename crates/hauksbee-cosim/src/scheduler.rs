@@ -578,6 +578,11 @@ pub struct Scheduler {
     /// bound net. Unlike `stats`, this consumes the ordered edge log and cannot
     /// lose a pulse that returns to its starting level within one analog chunk.
     firmware_edge_toggles: HashMap<String, u64>,
+    /// The bench recorder: pin edges with times, serial lines, bus
+    /// transactions, reset pulses. See [`crate::observe`].
+    observer: crate::observe::Observer,
+    /// Function symbols of the firmware ELF, to name where a parked core sits.
+    firmware_symbols: Option<crate::observe::symbols::SymbolTable>,
     /// Net-attached / output peripherals (controls, VCD sinks), ticked each
     /// chunk around the analog solve.
     pub peripherals: PeripheralSet,
@@ -1563,6 +1568,8 @@ impl Scheduler {
             micros_carry: 0.0,
             stats: HashMap::new(),
             firmware_edge_toggles: HashMap::new(),
+            observer: crate::observe::Observer::default(),
+            firmware_symbols: firmware.and_then(crate::observe::symbols::SymbolTable::from_elf),
             peripherals: PeripheralSet::new(),
             i2c_buses: Vec::new(),
             spi_buses: Vec::new(),
@@ -3529,6 +3536,16 @@ impl Scheduler {
         self.last_chunk_edges.clear();
         self.last_replay_microticks = 0;
 
+        // The bench recorder stamps each bus transaction with the chunk it
+        // began in; tell every bridge what time this chunk starts at.
+        let chunk_t0 = self.sim_time;
+        for bus in &self.i2c_buses {
+            bus.lock_or_recover().set_observed_time(chunk_t0);
+        }
+        for bus in &self.spi_buses {
+            bus.lock_or_recover().set_observed_time(chunk_t0);
+        }
+
         // Nets currently driven by ANY MCU's enabled GPIO driver, for the plain
         // digital-input sync below: an enabled driver is real drive evidence
         // even though pin-driver legs are excluded from the static
@@ -3557,6 +3574,17 @@ impl Scheduler {
             // for the analog PWL side. Exact on simavr, coarse on poll backends
             // (flagged by `cycle_exact`).
             let cyc_start = m.core.current_cycle();
+            // Bench recorder: the reset line as the previous chunk solved it.
+            let reset_v = m
+                .rails
+                .reset_nodes
+                .iter()
+                .filter_map(|&n| self.node_volts.get(n).copied())
+                .filter(|v| v.is_finite())
+                .reduce(f64::min);
+            self.observer.ensure_mcu(mi, &m.binding.reference);
+            self.observer
+                .record_reset_level(mi, chunk_t0, reset_v, m.logic_high_v);
             if let Err(e) = m.core.run_micros(micros) {
                 // The MCU backend refused to advance (a crashed core, a
                 // transport error, a HALT). The firmware side of this chunk did
@@ -3585,6 +3613,20 @@ impl Scheduler {
             m.uart_bytes += bytes.len() as u64;
             for edge in &edge_log {
                 *m.pin_toggles.entry((edge.port, edge.bit)).or_default() += 1;
+            }
+            self.observer.record_chunk(
+                mi,
+                chunk_t0,
+                chunk,
+                (cyc_start, cyc_end),
+                &edge_log,
+                &bytes,
+            );
+            // In-process cores answer the watchdog count for free; the
+            // emulators are asked once, after the run.
+            if !backend_is_external(&m.binding.backend) {
+                self.observer
+                    .record_watchdog(mi, chunk_t0, m.core.watchdog_resets(), true);
             }
             if !bytes.is_empty() {
                 uart.entry(mcu_ref.clone()).or_default().extend(bytes);
@@ -3637,6 +3679,9 @@ impl Scheduler {
                 .collect();
             self.sync_configured_outputs(mi, configured, &edge_pins);
         }
+
+        // Bench recorder: the bus transactions this chunk's firmware drove.
+        self.drain_bus_transactions(false);
 
         // 1c. Sub-chunk pulse honesty: a GPIO pulse that rose and fell inside
         // THIS chunk is invisible to every tick-evaluated sequential part on its
@@ -5503,6 +5548,97 @@ impl Scheduler {
             })
             .collect();
         self.execution.sort_by(|a, b| a.mcu_ref.cmp(&b.mcu_ref));
+        self.finalize_observation();
+    }
+
+    /// Move every completed (and, at the end of a run, in-flight) bus
+    /// transaction from the bridges into the recorder.
+    fn drain_bus_transactions(&mut self, include_open: bool) {
+        let mut txns = Vec::new();
+        for bus in &self.i2c_buses {
+            txns.extend(bus.lock_or_recover().take_transactions(include_open));
+        }
+        for bus in &self.spi_buses {
+            txns.extend(bus.lock_or_recover().take_transactions(include_open));
+        }
+        if !txns.is_empty() {
+            txns.sort_by(|a, b| a.t_s.total_cmp(&b.t_s));
+            self.observer.push_bus(txns);
+        }
+    }
+
+    /// End-of-run bookkeeping for the bench recorder: close in-flight bus
+    /// transactions and book the emulators' watchdog reboots (their count is
+    /// only read here, so the event carries no time).
+    fn finalize_observation(&mut self) {
+        self.drain_bus_transactions(true);
+        let t = self.sim_time;
+        for (mi, m) in self.mcus.iter().enumerate() {
+            if backend_is_external(&m.binding.backend) {
+                self.observer.ensure_mcu(mi, &m.binding.reference);
+                self.observer
+                    .record_watchdog(mi, t, m.core.watchdog_resets(), false);
+            }
+        }
+    }
+
+    /// What the bench recorder needs from the scheduler to name things: each
+    /// MCU's pin nets, serial net, execution evidence and ELF symbols.
+    #[must_use]
+    pub fn bench_contexts(&self) -> Vec<crate::observe::bench::McuContext> {
+        self.mcus
+            .iter()
+            .map(|m| {
+                let net_name = |n: NodeId| self.circuit.node_name(n).to_string();
+                crate::observe::bench::McuContext {
+                    mcu_ref: m.binding.reference.clone(),
+                    backend: m.binding.backend.clone(),
+                    pin_nets: m
+                        .binding
+                        .gpio_drivers
+                        .iter()
+                        .map(|(&pin, d)| (pin, net_name(d.net)))
+                        .collect(),
+                    uart_net: m
+                        .binding
+                        .role_nets
+                        .iter()
+                        .filter(|(role, net)| is_uart_tx_net_role(role) && !net.is_ground())
+                        .map(|(_, &net)| net_name(net))
+                        .min(),
+                    configured_outputs: m.configured_outputs.iter().copied().collect(),
+                    evidence: self
+                        .execution
+                        .iter()
+                        .find(|e| e.mcu_ref == m.binding.reference)
+                        .cloned(),
+                    symbols: self.firmware_symbols.clone(),
+                }
+            })
+            .collect()
+    }
+
+    /// The bench view of the run so far: what each pin, serial port and bus did.
+    /// Call [`Scheduler::refresh_execution_evidence`] first so the core state
+    /// and the in-flight bus transactions are final.
+    #[must_use]
+    pub fn bench_report(&self) -> hauksbee_ir::observations::BenchReport {
+        crate::observe::bench::build_report(&self.observer, &self.bench_contexts())
+    }
+
+    /// The bench recorder, for exporters.
+    #[must_use]
+    pub const fn observer(&self) -> &crate::observe::Observer {
+        &self.observer
+    }
+
+    /// The run as a VCD waveform: MCU pins, serial lines, decoded bus tracks
+    /// and event markers. See [`crate::observe::timeline`].
+    #[must_use]
+    pub fn bench_vcd(&self) -> String {
+        let contexts = self.bench_contexts();
+        let report = crate::observe::bench::build_report(&self.observer, &contexts);
+        crate::observe::timeline::render_vcd(&self.observer, &contexts, &report)
     }
 
     /// Per-MCU execution evidence from the last
@@ -5786,6 +5922,7 @@ impl Scheduler {
             *st = NetStat::default();
         }
         self.firmware_edge_toggles.clear();
+        self.observer = crate::observe::Observer::default();
         self.frame_peak_current.clear();
         self.frame_v_extremes.clear();
         self.step_series.clear();
@@ -8227,6 +8364,18 @@ const fn pin_drive(update: crate::responders::InputDrive) -> hauksbee_mcu::PinDr
 /// role (`pd1_txd`, `p01_txd`, `pd3_txd1`).
 fn is_uart_tx_role(role: &str) -> bool {
     role.to_ascii_lowercase().contains("_txd")
+}
+
+/// Whether a pin role names a UART transmit signal in any vendor spelling:
+/// `pd1_txd`, `pa9_usart1_tx`, `uart0_tx`, `gpio16_txd0`, `d1_tx`.
+fn is_uart_tx_net_role(role: &str) -> bool {
+    role.to_ascii_lowercase().split('_').any(|word| {
+        word.strip_prefix("tx").is_some_and(|rest| {
+            rest.trim_start_matches('d')
+                .chars()
+                .all(|c| c.is_ascii_digit())
+        })
+    })
 }
 
 /// Whether a pin role carries one of the peripheral-signal `tokens` as a whole

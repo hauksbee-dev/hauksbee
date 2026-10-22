@@ -1,0 +1,169 @@
+{
+  "duration_s": 2.0,
+  "mcus": [
+    {
+      "mcu_ref": "U1",
+      "backend": "renode:stm32f103c8",
+      "core": "core_running",
+      "headline": "running",
+      "resets": 0,
+      "first_activity_s": 0.01,
+      "pins": [
+        {
+          "pin": "PC13",
+          "state": "pin_toggling",
+          "edges": 20,
+          "summary": "toggling 5.0 Hz, 50% duty",
+          "net": "LED_PC13",
+          "freq_hz": 5.0,
+          "duty": 0.5,
+          "first_edge_s": 0.01,
+          "final_high": false,
+          "edge_samples": [
+            {
+              "t_s": 0.01,
+              "high": true
+            },
+            {
+              "t_s": 0.11,
+              "high": false
+            },
+            {
+              "t_s": 0.21,
+              "high": true
+            },
+            {
+              "t_s": 0.31,
+              "high": false
+            },
+            {
+              "t_s": 0.41,
+              "high": true
+            },
+            {
+              "t_s": 0.51,
+              "high": false
+            },
+            {
+              "t_s": 0.61,
+              "high": true
+            },
+            {
+              "t_s": 0.71,
+              "high": false
+            },
+            {
+              "t_s": 0.81,
+              "high": true
+            },
+            {
+              "t_s": 0.91,
+              "high": false
+            },
+            {
+              "t_s": 1.01,
+              "high": true
+            },
+            {
+              "t_s": 1.11,
+              "high": false
+            },
+            {
+              "t_s": 1.21,
+              "high": true
+            },
+            {
+              "t_s": 1.31,
+              "high": false
+            },
+            {
+              "t_s": 1.41,
+              "high": true
+            },
+            {
+              "t_s": 1.51,
+              "high": false
+            },
+            {
+              "t_s": 1.61,
+              "high": true
+            },
+            {
+              "t_s": 1.71,
+              "high": false
+            },
+            {
+              "t_s": 1.81,
+              "high": true
+            },
+            {
+              "t_s": 1.91,
+              "high": false
+            }
+          ]
+        },
+        {
+          "pin": "PA5",
+          "state": "pin_static_high",
+          "edges": 1,
+          "summary": "static high",
+          "net": "BUZZER_EN",
+          "first_edge_s": 0.008,
+          "final_high": true,
+          "edge_samples": [
+            {
+              "t_s": 0.008,
+              "high": true
+            }
+          ]
+        },
+        {
+          "pin": "PB0",
+          "state": "pin_input",
+          "edges": 0,
+          "summary": "input / Hi-Z",
+          "net": "BTN_USER"
+        },
+        {
+          "pin": "PB1",
+          "state": "pin_static_low",
+          "edges": 1,
+          "summary": "static low",
+          "first_edge_s": 0.009,
+          "final_high": false,
+          "edge_samples": [
+            {
+              "t_s": 0.009,
+              "high": false
+            }
+          ]
+        }
+      ],
+      "uarts": [
+        {
+          "port": "UART",
+          "net": "UART_TX",
+          "baud": 115200.0,
+          "bytes": 24,
+          "printable_ratio": 1.0,
+          "first_line": "blinky: boot ok",
+          "first_byte_s": 0.012
+        }
+      ]
+    }
+  ],
+  "events": [
+    {
+      "t_s": 0.008,
+      "kind": "event_first_edge",
+      "mcu_ref": "U1",
+      "detail": "PA5 went high"
+    },
+    {
+      "t_s": 0.012,
+      "kind": "event_first_uart_byte",
+      "mcu_ref": "U1",
+      "detail": "first byte: b"
+    }
+  ]
+}

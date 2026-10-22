@@ -1084,6 +1084,13 @@ pub struct CosimJson {
     /// timing is clock-truth gated.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub timing_limitations: Vec<CosimTimingLimitation>,
+    /// What the run looked like from the bench: per-pin state (static or
+    /// toggling at f with duty), where each core is parked, the serial lines,
+    /// the I2C and SPI transactions with their acknowledgements, and the event
+    /// timeline (resets, stalls, faults). The same view the CLI prints and the
+    /// app strip draws. Absent when no MCU ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bench: Option<hauksbee_ir::observations::BenchReport>,
 }
 
 /// One backend watchdog-fidelity gap (see [`CosimJson::watchdog_limitations`]).

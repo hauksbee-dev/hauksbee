@@ -60,6 +60,7 @@ pub fn deps_hooks() -> hauksbee_frontdoor_api::frontdoor::ToolHooks {
         deps_status: Arc::new(crate::deps::deps_json),
         install: Arc::new(|id, progress| crate::deps::install_dep(id, progress)),
         datasheet: crate::webextract::hooks(),
+        cosim_job: Arc::new(crate::frontdoor::run_cosim_job),
     }
 }
 

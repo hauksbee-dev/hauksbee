@@ -908,3 +908,80 @@ async fn a_panicking_streamed_analysis_ends_in_one_error_frame() {
     assert!(resp.contains("event: error"), "{resp}");
     assert!(!resp.contains("event: done"), "{resp}");
 }
+
+/// Read the `job_id` out of a start response.
+fn job_id(resp: &str) -> String {
+    resp.split("\"job_id\":\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap_or_else(|| panic!("no job id in {resp}"))
+        .to_string()
+}
+
+/// Poll `GET /api/cosim-run/<id>` until the answer contains `needle`.
+async fn poll_job(addr: std::net::SocketAddr, id: &str, needle: &str) -> String {
+    let mut last = String::new();
+    for _ in 0..300 {
+        last = support::http(addr, &get_req(&format!("/api/cosim-run/{id}")), b"").await;
+        if last.contains(needle) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    last
+}
+
+/// The emulator co-sim runs as a job: POST starts it and answers a job id, the
+/// status route reports progress while it runs and then the finished section; a
+/// second start while one runs is refused; a failing run reports its reason.
+#[tokio::test]
+async fn cosim_job_reports_progress_then_the_section_and_refuses_a_second_start() {
+    let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let gate = release.clone();
+    let runner: frontdoor::CosimJobRunner = Arc::new(move |upload, progress| {
+        if upload.board.name == "bad.kicad_pcb" {
+            return Err("this MCU is not supported".to_string());
+        }
+        progress(1.0, 4.0);
+        while !gate.load(std::sync::atomic::Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        Ok(format!(
+            "{{\"ran\":true,\"bench\":{{\"board_len\":{}}}}}",
+            upload.board.bytes.len()
+        ))
+    });
+    let addr = support::spawn_router(frontdoor::cosim_job_routes(runner)).await;
+
+    let boundary = "----hauksbee-cosim-job-boundary";
+    let start = |name: &'static str| {
+        let body = multipart_body(boundary, &[("board", name, b"board-bytes")]);
+        (multipart_post("/api/cosim-run", boundary, body.len()), body)
+    };
+    let (req, body) = start("ok.kicad_pcb");
+    let resp = support::http(addr, &req, &body).await;
+    assert!(resp.contains("200 OK"), "{resp}");
+    let id = job_id(&resp);
+
+    // While it runs: progress, and a second start is refused with its reason.
+    let running = poll_job(addr, &id, "\"progress_s\":1.0").await;
+    assert!(running.contains("\"state\":\"running\""), "{running}");
+    assert!(running.contains("\"total_s\":4.0"), "{running}");
+    let (req2, body2) = start("again.kicad_pcb");
+    let refused = support::http(addr, &req2, &body2).await;
+    assert!(refused.contains("409"), "{refused}");
+    assert!(refused.contains("still running"), "{refused}");
+
+    release.store(true, std::sync::atomic::Ordering::Relaxed);
+    let done = poll_job(addr, &id, "\"state\":\"done\"").await;
+    assert!(done.contains("\"state\":\"done\""), "{done}");
+    assert!(done.contains("\"board_len\":11"), "{done}");
+
+    // A refused run reports why; an unknown id is a 404.
+    let (req3, body3) = start("bad.kicad_pcb");
+    let id3 = job_id(&support::http(addr, &req3, &body3).await);
+    let failed = poll_job(addr, &id3, "\"state\":\"failed\"").await;
+    assert!(failed.contains("this MCU is not supported"), "{failed}");
+    let missing = support::http(addr, &get_req("/api/cosim-run/nope"), b"").await;
+    assert!(missing.contains("404"), "{missing}");
+}

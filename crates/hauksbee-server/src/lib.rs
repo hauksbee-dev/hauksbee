@@ -414,7 +414,8 @@ fn unified_router(parts: RouterParts) -> Router {
     if let Some(tools) = tools {
         router = router
             .merge(frontdoor::deps_routes(tools.deps_status, tools.install))
-            .merge(frontdoor::datasheet_routes(tools.datasheet));
+            .merge(frontdoor::datasheet_routes(tools.datasheet))
+            .merge(frontdoor::cosim_job_routes(tools.cosim_job));
     }
     // `/api/startup`: the frontend reads this once on load to decide whether to
     // show the drop zone (serve) or a preloaded board's report (run --serve).

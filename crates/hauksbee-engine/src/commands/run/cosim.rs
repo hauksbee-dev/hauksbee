@@ -130,6 +130,10 @@ fn execute_and_collect_observations(
         &probes,
         cfg.probe_csv.as_deref(),
         cfg.chunk_us,
+        crate::reports::cosim::ObserveOutputs {
+            vcd: cfg.vcd.as_deref(),
+            bus_log: cfg.bus_log,
+        },
     )?;
     let achieved_factor = headless.realtime_factor();
     let wall_s = headless.wall_s;

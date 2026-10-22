@@ -5,7 +5,7 @@
 
 import type {
   DepInfo, DepsEnvironment, ExtractBackendsConfig, ExtractReady, ExtractSettings, LiveLaunchResponse, LiveStatus,
-  ModelSaveResult, RunResponse, ScaffoldResponse, SensorCatalogEntry, Startup, WebReport,
+  ModelSaveResult, RunResponse, ScaffoldResponse, SensorCatalogEntry, Startup, WebCosimSection, WebReport,
 } from '../types/report'
 import type { ClientMessage, ServerMessage } from '../types/protocol'
 import { buildBoardUpload, type SupplementalDesignFiles } from './board-upload'
@@ -332,6 +332,94 @@ export const api = {
     const res = await fetch(`/boards/${encodeURIComponent(fileName)}`)
     return res.ok ? new Uint8Array(await res.arrayBuffer()) : null
   },
+}
+
+// ── The emulator co-sim job ──────────────────────────────────────────────────
+// A board whose MCU needs Renode or QEMU is never run by the synchronous
+// analysis (booting an emulator takes seconds, not milliseconds). The page
+// starts it as a job with the same multipart body the analysis used, and polls.
+
+/** What the server says about a co-sim job. */
+export interface CosimJobStatus {
+  state: 'running' | 'done' | 'failed'
+  /** Simulated seconds done so far, and the run's total. */
+  progress_s?: number
+  total_s?: number
+  /** The finished co-sim section, when `state` is `done`. */
+  section?: WebCosimSection
+  error?: string
+}
+
+/** How often a running job is asked how far it is. */
+export const COSIM_POLL_MS = 1500
+
+/** The words for a job's progress: `Booting the emulator ... 3.2 / 10 s simulated`. */
+export function cosimProgressLine(progressS?: number, totalS?: number): string {
+  if (progressS === undefined || !Number.isFinite(progressS) || progressS <= 0) return 'Booting the emulator ...'
+  const done = progressS.toFixed(1)
+  return totalS !== undefined && Number.isFinite(totalS) && totalS > 0
+    ? `Booting the emulator ... ${done} / ${Number(totalS.toPrecision(3))} s simulated`
+    : `Booting the emulator ... ${done} s simulated`
+}
+
+/** Read a job answer, preferring the server's own words over the bare status. */
+async function jobAnswer<T>(res: Response): Promise<T> {
+  const text = await res.text()
+  let body: (T & { error?: string }) | null = null
+  try { body = JSON.parse(text) as T & { error?: string } } catch { /* not JSON */ }
+  if (!res.ok) throw new Error(body?.error ?? (text.trim().slice(0, 400) || statusLine(res)))
+  if (body === null) throw new Error(text.trim().slice(0, 400) || 'the server returned an empty or non-JSON response')
+  return body
+}
+
+/** Start the job; the answer is its id. */
+export async function startCosimJob(upload: FormData, signal?: AbortSignal): Promise<string> {
+  const res = await fetch('/api/cosim-run', { method: 'POST', body: upload, signal })
+  const { job_id } = await jobAnswer<{ job_id?: string }>(res)
+  if (!job_id) throw new Error('the server did not name the co-sim job it started')
+  return job_id
+}
+
+/** Ask how a job is doing. */
+export async function cosimJobStatus(jobId: string, signal?: AbortSignal): Promise<CosimJobStatus> {
+  return jobAnswer<CosimJobStatus>(await fetch(`/api/cosim-run/${encodeURIComponent(jobId)}`, { signal }))
+}
+
+/** Start a job and follow it to the end: progress goes to `onProgress`, the
+ *  finished section is the answer, and a failed job throws its own error text.
+ *  `sleep` is injectable so a test does not wait out the polling interval. */
+export async function runCosimJob(
+  upload: FormData,
+  opts: {
+    signal?: AbortSignal
+    onProgress?: (progressS: number | undefined, totalS: number | undefined) => void
+    intervalMs?: number
+    sleep?: (ms: number, signal?: AbortSignal) => Promise<void>
+  } = {},
+): Promise<WebCosimSection> {
+  const { signal, onProgress, intervalMs = COSIM_POLL_MS, sleep = abortableSleep } = opts
+  const id = await startCosimJob(upload, signal)
+  onProgress?.(undefined, undefined)
+  for (;;) {
+    await sleep(intervalMs, signal)
+    if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
+    const status = await cosimJobStatus(id, signal)
+    if (status.state === 'done') {
+      if (!status.section) throw new Error('the co-sim job finished without a result')
+      return status.section
+    }
+    if (status.state === 'failed') throw new Error(status.error || 'the co-sim job failed')
+    onProgress?.(status.progress_s, status.total_s)
+  }
+}
+
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new DOMException('aborted', 'AbortError')); return }
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve() }, ms)
+    const onAbort = () => { clearTimeout(timer); reject(new DOMException('aborted', 'AbortError')) }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 // ── The live socket ──────────────────────────────────────────────────────────

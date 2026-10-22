@@ -9,7 +9,6 @@
 //! firmware drives can be logged without touching them.
 
 use std::collections::HashMap;
-use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -17,45 +16,23 @@ use hauksbee_bind::digital::LogicLevels;
 use hauksbee_ir::NodeId;
 use hauksbee_models::ModelEntry;
 
+use crate::observe::vcd::{Value, VarKind, VcdWriter};
+
 use super::{Peripheral, TickCtx};
 
-/// One logged net: its node, VCD identifier code, and last decided level.
+/// One logged net: its node and last decided level.
 struct LoggedNet {
     name: String,
     node: NodeId,
-    code: String,
     level: bool,
     initialized: bool,
 }
 
-/// A recorded value change: (`time_ps`, code, level).
+/// A recorded value change: (`time_ps`, net index, level).
 struct Change {
     t_ps: u64,
-    code: String,
+    net: usize,
     level: bool,
-}
-
-/// Map a net index to a unique VCD identifier code. VCD identifier codes are
-/// strings of printable ASCII (33..=126); a single char only spans 92 usable
-/// glyphs (we exclude `"` and `$`, which delimit VCD tokens), so nets past the
-/// 92nd MUST roll over to multi-character codes. This is a bijective base-92
-/// numeral over that alphabet: indices 0..92 are one char, 92..(92+92²) are two,
-/// and so on, every index gets a distinct code, none ever collides on `!`.
-fn vcd_code(index: usize) -> String {
-    const EXCLUDED: [char; 2] = ['"', '$'];
-    let alphabet: Vec<char> = ('!'..='~').filter(|c| !EXCLUDED.contains(c)).collect();
-    let k = alphabet.len();
-    let mut n = index;
-    let mut out = Vec::new();
-    loop {
-        out.push(alphabet[n % k]);
-        n /= k;
-        if n == 0 {
-            break;
-        }
-        n -= 1; // bijective: no leading "zero" digit
-    }
-    out.iter().rev().collect()
 }
 
 /// VCD transition logger over a chosen set of nets.
@@ -76,11 +53,9 @@ impl VcdSink {
     pub fn new(id: &str, nets: Vec<(String, NodeId)>, path: Option<PathBuf>) -> Self {
         let logged = nets
             .into_iter()
-            .enumerate()
-            .map(|(i, (name, node))| LoggedNet {
+            .map(|(name, node)| LoggedNet {
                 name,
                 node,
-                code: vcd_code(i),
                 level: false,
                 initialized: false,
             })
@@ -114,18 +89,13 @@ impl VcdSink {
     /// Transitions recorded for a named net.
     #[must_use]
     pub fn transitions_for(&self, net: &str) -> usize {
-        let Some(code) = self
-            .nets
-            .iter()
-            .find(|n| n.name == net)
-            .map(|n| n.code.clone())
-        else {
+        let Some(index) = self.nets.iter().position(|n| n.name == net) else {
             return 0;
         };
         // Count changes after the initial t=0 dump.
         self.changes
             .iter()
-            .filter(|c| c.code == code)
+            .filter(|c| c.net == index)
             .count()
             .saturating_sub(1) // drop the initial value dump
     }
@@ -133,28 +103,19 @@ impl VcdSink {
     /// Render the VCD document as a string (gtkwave-compatible).
     #[must_use]
     pub fn render(&self) -> String {
-        let mut s = String::new();
-        s.push_str("$date hauksbee $end\n");
-        s.push_str("$version hauksbee-vcd-sink $end\n");
-        s.push_str("$timescale 1ps $end\n");
-        s.push_str("$scope module hauksbee $end\n");
-        for n in &self.nets {
-            // 1-bit wire per net.
-            let _ = writeln!(s, "$var wire 1 {} {} $end", n.code, sanitize(&n.name));
-        }
-        s.push_str("$upscope $end\n");
-        s.push_str("$enddefinitions $end\n");
-
-        // Group changes by timestamp in order.
-        let mut last_t = u64::MAX;
+        let mut w = VcdWriter::new("hauksbee-vcd-sink").with_date("hauksbee");
+        w.begin_scope("hauksbee");
+        // 1-bit wire per net.
+        let ids: Vec<_> = self
+            .nets
+            .iter()
+            .map(|n| w.var_ident(VarKind::Bit, &n.name))
+            .collect();
+        w.end_scope();
         for c in &self.changes {
-            if c.t_ps != last_t {
-                let _ = writeln!(s, "#{}", c.t_ps);
-                last_t = c.t_ps;
-            }
-            let _ = writeln!(s, "{}{}", if c.level { '1' } else { '0' }, c.code);
+            w.change(c.t_ps, ids[c.net], Value::Bit(c.level));
         }
-        s
+        w.render()
     }
 
     /// Create the output's parent directory if it is not there.
@@ -200,18 +161,6 @@ impl VcdSink {
     }
 }
 
-fn sanitize(name: &str) -> String {
-    name.chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
 impl Peripheral for VcdSink {
     peripheral_identity!("vcd_sink");
 
@@ -220,7 +169,7 @@ impl Peripheral for VcdSink {
         // Sample at the end of this chunk.
         let t_ps = ((ctx.t + ctx.dt) * 1e12).round() as u64;
         self.last_t_ps = t_ps;
-        for n in &mut self.nets {
+        for (index, n) in self.nets.iter_mut().enumerate() {
             let v = ctx.volts(n.node);
             let level = self.thresholds.decide(v, n.level);
             if !n.initialized {
@@ -229,14 +178,14 @@ impl Peripheral for VcdSink {
                 n.initialized = true;
                 self.changes.push(Change {
                     t_ps: 0,
-                    code: n.code.clone(),
+                    net: index,
                     level,
                 });
             } else if level != n.level {
                 n.level = level;
                 self.changes.push(Change {
                     t_ps,
-                    code: n.code.clone(),
+                    net: index,
                     level,
                 });
             }
@@ -255,6 +204,7 @@ impl Peripheral for VcdSink {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::observe::vcd::vcd_code;
     use hauksbee_ir::Circuit;
 
     #[test]

@@ -1,0 +1,3236 @@
+{
+  "duration_s": 0.5000000000000003,
+  "mcus": [
+    {
+      "mcu_ref": "U1",
+      "backend": "renode:stm32f103",
+      "core": "core_running",
+      "headline": "running",
+      "resets": 0,
+      "first_activity_s": 0.005,
+      "pins": [
+        {
+          "pin": "PA8",
+          "net": "FLAG",
+          "state": "pin_static_low",
+          "edges": 0,
+          "summary": "configured as an output, never changed"
+        },
+        {
+          "pin": "PA9",
+          "state": "pin_static_low",
+          "edges": 0,
+          "summary": "configured as an output, never changed"
+        },
+        {
+          "pin": "PB6",
+          "net": "SCL",
+          "state": "pin_static_high",
+          "edges": 1,
+          "first_edge_s": 0.005,
+          "final_high": true,
+          "summary": "static high, set at 5.0 ms",
+          "edge_samples": [
+            {
+              "t_s": 0.005,
+              "high": true
+            }
+          ]
+        },
+        {
+          "pin": "PB7",
+          "net": "SDA",
+          "state": "pin_static_high",
+          "edges": 1,
+          "first_edge_s": 0.005,
+          "final_high": true,
+          "summary": "static high, set at 5.0 ms",
+          "edge_samples": [
+            {
+              "t_s": 0.005,
+              "high": true
+            }
+          ]
+        }
+      ],
+      "uarts": [
+        {
+          "port": "UART",
+          "baud_note": "the baud rate is not read from the peripheral on this backend",
+          "bytes": 438,
+          "printable_ratio": 1.0,
+          "first_line": "stm32 i2c thermostat ready",
+          "first_byte_s": 0.0
+        }
+      ]
+    }
+  ],
+  "bus_log": [
+    {
+      "t_s": 0.0,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.0,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.0,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        115,
+        116,
+        109,
+        51,
+        50,
+        32,
+        105,
+        50,
+        99,
+        32,
+        116,
+        104,
+        101,
+        114,
+        109,
+        111,
+        115,
+        116,
+        97,
+        116,
+        32,
+        114,
+        101,
+        97,
+        100,
+        121
+      ],
+      "acked": true,
+      "summary": "U1 UART \"stm32 i2c thermostat ready\""
+    },
+    {
+      "t_s": 0.0,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.005,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.005,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.005,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.01,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.01,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.01,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.015,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.015,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.015,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.02,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.02,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.02,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.030000000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.030000000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.030000000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.035,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.035,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.035,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.04,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.04,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.04,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.045,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.045,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.045,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.05499999999999999,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.05499999999999999,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.05499999999999999,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.05999999999999999,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.05999999999999999,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.05999999999999999,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.06499999999999999,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.06499999999999999,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.06499999999999999,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.06999999999999999,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.06999999999999999,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.06999999999999999,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.075,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.075,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.075,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.085,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.085,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.085,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.09000000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.09000000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.09000000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.09500000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.09500000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.09500000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.10000000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.10000000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.10000000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.10500000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.10500000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.10500000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.11500000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.11500000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.11500000000000003,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.12000000000000004,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.12000000000000004,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.12000000000000004,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.12500000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.12500000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.12500000000000003,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.13000000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.13000000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.13000000000000003,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.14000000000000004,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.14000000000000004,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.14000000000000004,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.14500000000000005,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.14500000000000005,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.14500000000000005,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.15000000000000005,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.15000000000000005,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.15000000000000005,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.15500000000000005,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.15500000000000005,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.15500000000000005,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.16000000000000006,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.16000000000000006,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.16000000000000006,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.17000000000000007,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.17000000000000007,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.17000000000000007,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.17500000000000007,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.17500000000000007,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.17500000000000007,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.18000000000000008,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.18000000000000008,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.18000000000000008,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.18500000000000008,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.18500000000000008,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.18500000000000008,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.1950000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.1950000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.1950000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.2000000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.2000000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.2000000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.2050000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.2050000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.2050000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.2100000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.2100000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.2100000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.2150000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.2150000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.2150000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.22500000000000012,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.22500000000000012,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.22500000000000012,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.23000000000000012,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.23000000000000012,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.23000000000000012,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.23500000000000013,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.23500000000000013,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.23500000000000013,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.24000000000000013,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.24000000000000013,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.24000000000000013,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.2500000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.2500000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.2500000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.2550000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.2550000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.2550000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.2600000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.2600000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.2600000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.2650000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.2650000000000001,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.2650000000000001,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.27000000000000013,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.27000000000000013,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.27000000000000013,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.28000000000000014,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.28000000000000014,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.28000000000000014,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.28500000000000014,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.28500000000000014,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.28500000000000014,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.29000000000000015,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.29000000000000015,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.29000000000000015,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.29500000000000015,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.29500000000000015,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.29500000000000015,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.30500000000000016,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.30500000000000016,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.30500000000000016,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.31000000000000016,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.31000000000000016,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.31000000000000016,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.31500000000000017,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.31500000000000017,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.31500000000000017,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.3200000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.3200000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.3200000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.3250000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.3250000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.3250000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.3350000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.3350000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.3350000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.3400000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.3400000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.3400000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.3450000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.3450000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.3450000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.3500000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.3500000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.3500000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.3600000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.3600000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.3600000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.3650000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.3650000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.3650000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.3700000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.3700000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.3700000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.3750000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.3750000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.3750000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.3800000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.3800000000000002,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.3800000000000002,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.39000000000000024,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.39000000000000024,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.39000000000000024,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.39500000000000024,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.39500000000000024,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.39500000000000024,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.40000000000000024,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.40000000000000024,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.40000000000000024,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.40500000000000025,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.40500000000000025,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.40500000000000025,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.41000000000000025,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.41000000000000025,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.41000000000000025,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.42000000000000026,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.42000000000000026,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.42000000000000026,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.42500000000000027,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.42500000000000027,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.42500000000000027,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.43000000000000027,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.43000000000000027,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.43000000000000027,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.4350000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.4350000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.4350000000000003,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.4450000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.4450000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.4450000000000003,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.4500000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.4500000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.4500000000000003,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.4550000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.4550000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.4550000000000003,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.4600000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.4600000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.4600000000000003,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.4650000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.4650000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.4650000000000003,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.4750000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.4750000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.4750000000000003,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.4800000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.4800000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.4800000000000003,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.4850000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.4850000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.4850000000000003,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    },
+    {
+      "t_s": 0.4900000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": false,
+      "bytes": [
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 write [0x00] ACK"
+    },
+    {
+      "t_s": 0.4900000000000003,
+      "bus": "bus_i2c",
+      "device": "U2",
+      "addr": 72,
+      "read": true,
+      "bytes": [
+        25,
+        0
+      ],
+      "acked": true,
+      "summary": "U2 0x48 read [0x19 0x00] ACK"
+    },
+    {
+      "t_s": 0.4900000000000003,
+      "bus": "bus_uart",
+      "device": "U1",
+      "read": false,
+      "bytes": [
+        50,
+        53,
+        67
+      ],
+      "acked": true,
+      "summary": "U1 UART \"25C\""
+    }
+  ],
+  "events": [
+    {
+      "t_s": 0.0,
+      "kind": "event_first_uart_byte",
+      "mcu_ref": "U1",
+      "detail": "first serial output: \"stm32 i2c thermostat ready\""
+    },
+    {
+      "t_s": 0.005,
+      "kind": "event_first_edge",
+      "mcu_ref": "U1",
+      "detail": "PB6 went high"
+    }
+  ]
+}

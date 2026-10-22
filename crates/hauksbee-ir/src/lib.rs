@@ -21,6 +21,7 @@ pub mod evidence;
 pub mod glossary;
 pub mod labels;
 mod models;
+pub mod observations;
 pub mod order;
 pub mod peripheral_limits;
 pub mod progress;

@@ -21,6 +21,8 @@ mod behavioral_faults;
 mod behavioral_framework;
 #[path = "behavioral_vreg_rail.rs"]
 mod behavioral_vreg_rail;
+#[path = "bench_observability.rs"]
+mod bench_observability;
 #[path = "binder_correctness.rs"]
 mod binder_correctness;
 #[path = "binder_gpio_promotion.rs"]
