@@ -3242,6 +3242,8 @@ warning = "standard-SPI read/program/erase/JEDEC behavior is executable with an 
 must_not_float_roles = "hold_n"
 float_tolerated_roles = "wp_n"
 float_tolerated_basis = "Rev G §4.3 and Status Register Protect table (p.15): with SRP=SRL=0, the factory default, \"/WP pin has no control\"; no internal pull-up is specified, and with QE=1 the pin is IO2"
+# Bus-clock limits, read by the co-simulation bus-speed check (hauksbee_ir::peripheral_limits).
+max_sclk_hz = { max = 133000000.0, unit = "Hz", conditions = "FR, all instructions except Read Data (03h), VCC = 3.0 V to 3.6 V; 104 MHz at VCC = 2.7 V to 3.0 V; Read Data (03h) fR is 50 MHz", basis = "Winbond W25Q32JV Revision G (Mar 27, 2018), section 9.6 AC Electrical Characteristics, FR 133 MHz / 104 MHz and fR 50 MHz (p.63); operating ranges section 9.2 supply-voltage row" }
 
 [models.pins]
 # Section 3.3 Pin Description.
@@ -4314,6 +4316,9 @@ supply_static_ua = 3.6     # "3.6 uA @ 1 Hz humidity, pressure and temperature",
                            # between the VDD and VDDIO domains.
 supply_pin = "8"           # VDD
 gnd_pin    = "1"           # GND
+# Bus-clock limits, read by the co-simulation bus-speed check (hauksbee_ir::peripheral_limits).
+max_sclk_hz = { max = 10000000.0, unit = "Hz", conditions = "SPI clock input frequency F_spi, 0 to 10 MHz; 3- and 4-wire SPI", basis = "Bosch BME280 data sheet BST-BME280-DS001-24 (revision 1.24, Feb 2024), Table 34 SPI timings, F_spi max 10 MHz (p.37); key features (p.2): SPI up to 10 MHz" }
+i2c_max_hz = { max = 3400000.0, unit = "Hz", conditions = "I2C High Speed mode; Standard and Fast modes are supported as well", basis = "Bosch BME280 data sheet BST-BME280-DS001-24 (revision 1.24), key features (p.2): I2C up to 3.4 MHz; Table 33 I2C timings (p.36) lists S&F and HS mode" }
 
 [models.pins]
 # Table 35 Pin description, LGA-8. NOTE THE NUMBERING DIRECTION: the datasheet's
@@ -9491,6 +9496,8 @@ vil   = 0.4      # VIL max, SDA and SCL
 supply_static_ua = 640.0   # Section 6.5 IQ typ, VSENSE = 0 V (750 uA max at 25 C)
 supply_pin = "6"           # VS
 gnd_pin    = "7"           # GND
+# Bus-clock limits, read by the co-simulation bus-speed check (hauksbee_ir::peripheral_limits).
+i2c_max_hz = { max = 2940000.0, unit = "Hz", conditions = "I2C high-speed mode; fast mode is 400 kHz max, the minimum in both is 1 kHz", basis = "TI INA228 SLYS021A (Jan 2021, rev May 2022), section 6.6 Timing Requirements (I2C), I2C BUS (HIGH-SPEED MODE) F(SCL) max 2940 kHz (p.7)" }
 
 [models.pins]
 # Table 5-1 Pin Functions, DGS (VSSOP-10), all 10 pins.
@@ -9699,6 +9706,8 @@ warning = "configuration registers (WREG/RREG, canonical command bytes only) are
 # pull stated; Section 9.1.3 (p.47): "Do not float unused digital inputs ...
 # Tie the RESET pin to DVDD if the RESET pin is not used."
 must_not_float_roles = "reset_n"
+# Bus-clock limits, read by the co-simulation bus-speed check (hauksbee_ir::peripheral_limits).
+i2c_max_hz = { max = 1000000.0, unit = "Hz", conditions = "I2C fast-mode plus; fast mode is 400 kHz max, standard mode 100 kHz max", basis = "TI ADS122C04 SBAS751B (Oct 2017, rev Oct 2018), section 6.6 I2C Timing Requirements, FAST-MODE PLUS fSCL max 1000 kHz (p.8)" }
 
 [models.pins]
 # Pin Functions table, TSSOP-16 (PW) column.
@@ -9919,6 +9928,8 @@ warning = "configuration registers (WREG/RREG, canonical command bytes only) are
 # pull stated; Section 9.1.3 (p.47): "Do not float unused digital inputs ...
 # Tie the RESET pin to DVDD if the RESET pin is not used."
 must_not_float_roles = "reset_n"
+# Bus-clock limits, read by the co-simulation bus-speed check (hauksbee_ir::peripheral_limits).
+i2c_max_hz = { max = 1000000.0, unit = "Hz", conditions = "I2C fast-mode plus; fast mode is 400 kHz max, standard mode 100 kHz max", basis = "TI ADS122C04 SBAS751B (Oct 2017, rev Oct 2018), section 6.6 I2C Timing Requirements, FAST-MODE PLUS fSCL max 1000 kHz (p.8)" }
 
 [models.pins]
 # Pin Functions table, WQFN-16 (RTE) column.
@@ -10179,6 +10190,8 @@ mpn_re = "(?i)^AT24C64D(-(SSHM|XHM|MAHM|CUM)(-[TBE])?)?$"
 
 [models.params]
 warning = "primary 8 KiB array at fixed address 0x50 (A2:A0 = 000) is executable; A0..A2 straps are not read (a board strapping them answers elsewhere), and WP enforcement, tWR write-cycle timing and ACK polling are not modelled; supply currents are datasheet maxima at 5 V"
+# Bus-clock limits, read by the co-simulation bus-speed check (hauksbee_ir::peripheral_limits).
+i2c_max_hz = { max = 1000000.0, unit = "Hz", conditions = "Fast Mode Plus, VCC = 2.5 V to 5.5 V; Fast Mode (VCC = 1.7 V to 5.5 V) is 400 kHz max", basis = "Microchip AT24C64D data sheet DS20005937D, section 4.4 AC Characteristics, Table 4-3, Clock Frequency SCL fSCL: 400 kHz Fast Mode, 1000 kHz Fast Mode Plus (p.10)" }
 
 [models.pins]
 # Table 2-1 Pin Function Table (all packages).
@@ -12205,6 +12218,8 @@ supply_static_ua = 700.0   # quiescent current typ (1 mA max); power-down 6 uA t
 supply_pin = "5"           # VS
 gnd_pin    = "6"           # GND
 warning = "logic thresholds are evaluated at VS = 3.3 V (0.7 x VS / 0.3 x VS); on another supply rail they scale"
+# Bus-clock limits, read by the co-simulation bus-speed check (hauksbee_ir::peripheral_limits).
+i2c_max_hz = { max = 2560000.0, unit = "Hz", conditions = "I2C high-speed mode; fast mode is 0.4 MHz max, the minimum in both is 0.001 MHz", basis = "TI INA219 SBOS448G (Aug 2008, rev Dec 2015), section 7.6 Bus Timing Diagram Definitions, f(SCL) SCL operating frequency, high-speed mode max 2.56 MHz (p.6)" }
 
 [models.pins]
 # Section 6, D (SOIC) column of the Pin Functions table and the D top view.

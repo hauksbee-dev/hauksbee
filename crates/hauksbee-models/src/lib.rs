@@ -86,6 +86,7 @@ pub mod output_load;
 pub mod pack;
 pub mod package;
 pub mod param_names;
+pub mod peripheral_limits;
 pub mod pin_roles;
 pub mod pin_rules;
 pub mod pin_table;

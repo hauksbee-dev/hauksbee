@@ -74,6 +74,203 @@ reset_pull_up_ohms = 30000.0
 "27" = "pc4_adc4_sda"
 "28" = "pc5_adc5_scl"
 
+# Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 20 (USART0). Printed page numbers.
+[models.peripherals.uart]
+source = "https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/ATmega48A-PA-88A-PA-168A-PA-328-P-DS-DS40002061B.pdf"
+source_sha256 = "b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e"
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 20 USART0: Table 20-1 (p.182), Tables 20-2 and 20-3 (p.194), Table 20-7 (pp.198-199)"
+
+[[models.peripherals.uart.clock_sources]]
+name = "system clock (fOSC)"
+basis = "Table 20-1 note (p.182): fOSC is the System Oscillator clock frequency; the datasheet states no separate UART clock limit"
+
+[models.peripherals.uart.baud]
+formula = "BAUD = fOSC / (S * (UBRRn + 1)), S = 16 (U2Xn = 0) or 8 (U2Xn = 1); UBRRn in 0-4095"
+divisor_offset = 1.0
+fraction_bits = 0
+register_bits = 12
+oversampling = [16, 8]
+basis = "Table 20-1 (p.182): asynchronous normal and double speed equations; UBRRn = contents of UBRRnH and UBRRnL, range 0-4095; section 20.3.2 (p.182) U2Xn halves the divisor from 16 to 8"
+
+[[models.peripherals.uart.max_baud]]
+oversampling = 16
+baud_hz = 1000000.0
+condition = "fOSC = 16 MHz, U2Xn = 0, UBRRn = 0 (fOSC / 16)"
+basis = "Table 20-7 (p.199), fosc = 16.0000 MHz column, Max. row: 1 Mbps"
+
+[[models.peripherals.uart.max_baud]]
+oversampling = 8
+baud_hz = 2000000.0
+condition = "fOSC = 16 MHz, U2Xn = 1, UBRRn = 0 (fOSC / 8)"
+basis = "Table 20-7 (p.199), fosc = 16.0000 MHz column, Max. row: 2 Mbps"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 7
+oversampling = 16
+total_error_min_pct = -6.8
+total_error_max_pct = 6.67
+recommended_receiver_error_pct = 3.0
+basis = "Table 20-2 (p.194), D = 5 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 8
+oversampling = 16
+total_error_min_pct = -5.88
+total_error_max_pct = 5.79
+recommended_receiver_error_pct = 2.5
+basis = "Table 20-2 (p.194), D = 6 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 9
+oversampling = 16
+total_error_min_pct = -5.19
+total_error_max_pct = 5.11
+recommended_receiver_error_pct = 2.0
+basis = "Table 20-2 (p.194), D = 7 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 16
+total_error_min_pct = -4.54
+total_error_max_pct = 4.58
+recommended_receiver_error_pct = 2.0
+basis = "Table 20-2 (p.194), D = 8 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 16
+total_error_min_pct = -4.19
+total_error_max_pct = 4.14
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-2 (p.194), D = 9 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 12
+oversampling = 16
+total_error_min_pct = -3.83
+total_error_max_pct = 3.78
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-2 (p.194), D = 10 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 7
+oversampling = 8
+total_error_min_pct = -5.88
+total_error_max_pct = 5.66
+recommended_receiver_error_pct = 2.5
+basis = "Table 20-3 (p.194), D = 5 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 8
+oversampling = 8
+total_error_min_pct = -5.08
+total_error_max_pct = 4.92
+recommended_receiver_error_pct = 2.0
+basis = "Table 20-3 (p.194), D = 6 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 9
+oversampling = 8
+total_error_min_pct = -4.48
+total_error_max_pct = 4.35
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-3 (p.194), D = 7 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 8
+total_error_min_pct = -4.0
+total_error_max_pct = 3.9
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-3 (p.194), D = 8 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 8
+total_error_min_pct = -3.61
+total_error_max_pct = 3.53
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-3 (p.194), D = 9 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 12
+oversampling = 8
+total_error_min_pct = -3.3
+total_error_max_pct = 3.23
+recommended_receiver_error_pct = 1.0
+basis = "Table 20-3 (p.194), D = 10 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+# Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 24 (ADC) and section 29.8 Table 29-15 (ADC Characteristics). Printed page numbers.
+[models.peripherals.adc]
+source = "https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/ATmega48A-PA-88A-PA-168A-PA-328-P-DS-DS40002061B.pdf"
+source_sha256 = "b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e"
+resolution_bits = [10]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 24 ADC: features (p.246), section 24.4 (p.249), Table 24-1 (p.251), section 24.6.1 (p.253), Table 24-5 (p.259), Table 29-15 (p.319)"
+
+[models.peripherals.adc.clock]
+source = "system clock divided by the ADPS[2:0] prescaler"
+prescalers = [2, 4, 8, 16, 32, 64, 128]
+min_hz = 50000.0
+max_hz = 1000000.0
+full_resolution_min_hz = 50000.0
+full_resolution_max_hz = 200000.0
+basis = "Table 24-5 (p.259): ADPS 000 and 001 both divide by 2, then 4, 8, 16, 32, 64, 128; Table 29-15 (p.319) Clock Frequency 50 kHz min, 1000 kHz max; section 24.4 (p.249): 50 kHz to 200 kHz for maximum resolution, higher is allowed for lower resolution"
+
+[[models.peripherals.adc.conversions]]
+mode = "normal"
+resolution_bits = 10
+sample_cycles = [1.5]
+total_cycles = 13.0
+basis = "Table 24-1 (p.251) ADC Conversion Time, 'Normal conversions, single ended': sample and hold at 1.5 cycles from start of conversion, conversion time 13 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "first_after_enable"
+resolution_bits = 10
+sample_cycles = [13.5]
+total_cycles = 25.0
+basis = "Table 24-1 (p.251) ADC Conversion Time, 'First conversion': sample and hold at 13.5 cycles from start of conversion, conversion time 25 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "auto_triggered"
+resolution_bits = 10
+sample_cycles = [2.0]
+total_cycles = 13.5
+basis = "Table 24-1 (p.251) ADC Conversion Time, 'Auto Triggered conversions': sample and hold at 2.0 cycles from start of conversion, conversion time 13.5 cycles"
+
+[[models.peripherals.adc.max_sample_rate]]
+resolution_bits = 10
+max_hz = 15000.0
+condition = "maximum resolution (ADC clock 50-200 kHz)"
+basis = "section 24 features (p.246): 'Up to 15kSPS at Maximum Resolution'; section 24.4 (p.249)"
+
+[[models.peripherals.adc.max_sample_rate]]
+max_hz = 76900.0
+condition = "reduced resolution, ADC clock above 200 kHz"
+basis = "section 24 features (p.246): 'Up to 76.9kSPS'; section 24.4 (p.249) allows an ADC clock above 200 kHz for resolution below 10 bits"
+
+[models.peripherals.adc.input]
+sample_cap_f = 1.4e-11
+input_series_ohms_min = 1000.0
+input_series_ohms_max = 100000.0
+max_source_ohms = 10000.0
+basis = "Figure 24-8 (p.253): series 1..100 kOhm into CS/H = 14 pF; section 24.6.1 (p.253): optimised for an output impedance of approximately 10 kOhm or less"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 200000.0
+abs_error_lsb = 2.0
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 200 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error"
+basis = "Table 29-15 (p.319) ADC Characteristics, Absolute accuracy, Typ column (the Max column is blank)"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 1000000.0
+abs_error_lsb = 4.5
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 1000 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error"
+basis = "Table 29-15 (p.319) ADC Characteristics, Absolute accuracy, Typ column (the Max column is blank)"
+
 [models.pin_capability.adc]
 basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 1 Pin Configurations Figure 1-1 (PDF p.12) and 1.1.7-1.1.9 (PDF p.14) (28-pin PDIP, pins 23-28 PC0-PC5)"
 [models.pin_capability.adc.pads]
@@ -192,6 +389,203 @@ reset_pull_up_ohms = 30000.0
 "32" = "pd2_int0"
 "33" = "gnd4"      # VQFN/MLF exposed pad
 
+# Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 20 (USART0). Printed page numbers.
+[models.peripherals.uart]
+source = "https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/ATmega48A-PA-88A-PA-168A-PA-328-P-DS-DS40002061B.pdf"
+source_sha256 = "b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e"
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 20 USART0: Table 20-1 (p.182), Tables 20-2 and 20-3 (p.194), Table 20-7 (pp.198-199)"
+
+[[models.peripherals.uart.clock_sources]]
+name = "system clock (fOSC)"
+basis = "Table 20-1 note (p.182): fOSC is the System Oscillator clock frequency; the datasheet states no separate UART clock limit"
+
+[models.peripherals.uart.baud]
+formula = "BAUD = fOSC / (S * (UBRRn + 1)), S = 16 (U2Xn = 0) or 8 (U2Xn = 1); UBRRn in 0-4095"
+divisor_offset = 1.0
+fraction_bits = 0
+register_bits = 12
+oversampling = [16, 8]
+basis = "Table 20-1 (p.182): asynchronous normal and double speed equations; UBRRn = contents of UBRRnH and UBRRnL, range 0-4095; section 20.3.2 (p.182) U2Xn halves the divisor from 16 to 8"
+
+[[models.peripherals.uart.max_baud]]
+oversampling = 16
+baud_hz = 1000000.0
+condition = "fOSC = 16 MHz, U2Xn = 0, UBRRn = 0 (fOSC / 16)"
+basis = "Table 20-7 (p.199), fosc = 16.0000 MHz column, Max. row: 1 Mbps"
+
+[[models.peripherals.uart.max_baud]]
+oversampling = 8
+baud_hz = 2000000.0
+condition = "fOSC = 16 MHz, U2Xn = 1, UBRRn = 0 (fOSC / 8)"
+basis = "Table 20-7 (p.199), fosc = 16.0000 MHz column, Max. row: 2 Mbps"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 7
+oversampling = 16
+total_error_min_pct = -6.8
+total_error_max_pct = 6.67
+recommended_receiver_error_pct = 3.0
+basis = "Table 20-2 (p.194), D = 5 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 8
+oversampling = 16
+total_error_min_pct = -5.88
+total_error_max_pct = 5.79
+recommended_receiver_error_pct = 2.5
+basis = "Table 20-2 (p.194), D = 6 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 9
+oversampling = 16
+total_error_min_pct = -5.19
+total_error_max_pct = 5.11
+recommended_receiver_error_pct = 2.0
+basis = "Table 20-2 (p.194), D = 7 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 16
+total_error_min_pct = -4.54
+total_error_max_pct = 4.58
+recommended_receiver_error_pct = 2.0
+basis = "Table 20-2 (p.194), D = 8 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 16
+total_error_min_pct = -4.19
+total_error_max_pct = 4.14
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-2 (p.194), D = 9 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 12
+oversampling = 16
+total_error_min_pct = -3.83
+total_error_max_pct = 3.78
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-2 (p.194), D = 10 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 7
+oversampling = 8
+total_error_min_pct = -5.88
+total_error_max_pct = 5.66
+recommended_receiver_error_pct = 2.5
+basis = "Table 20-3 (p.194), D = 5 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 8
+oversampling = 8
+total_error_min_pct = -5.08
+total_error_max_pct = 4.92
+recommended_receiver_error_pct = 2.0
+basis = "Table 20-3 (p.194), D = 6 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 9
+oversampling = 8
+total_error_min_pct = -4.48
+total_error_max_pct = 4.35
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-3 (p.194), D = 7 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 8
+total_error_min_pct = -4.0
+total_error_max_pct = 3.9
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-3 (p.194), D = 8 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 8
+total_error_min_pct = -3.61
+total_error_max_pct = 3.53
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-3 (p.194), D = 9 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 12
+oversampling = 8
+total_error_min_pct = -3.3
+total_error_max_pct = 3.23
+recommended_receiver_error_pct = 1.0
+basis = "Table 20-3 (p.194), D = 10 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+# Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 24 (ADC) and section 29.8 Table 29-15 (ADC Characteristics). Printed page numbers.
+[models.peripherals.adc]
+source = "https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/ATmega48A-PA-88A-PA-168A-PA-328-P-DS-DS40002061B.pdf"
+source_sha256 = "b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e"
+resolution_bits = [10]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 24 ADC: features (p.246), section 24.4 (p.249), Table 24-1 (p.251), section 24.6.1 (p.253), Table 24-5 (p.259), Table 29-15 (p.319)"
+
+[models.peripherals.adc.clock]
+source = "system clock divided by the ADPS[2:0] prescaler"
+prescalers = [2, 4, 8, 16, 32, 64, 128]
+min_hz = 50000.0
+max_hz = 1000000.0
+full_resolution_min_hz = 50000.0
+full_resolution_max_hz = 200000.0
+basis = "Table 24-5 (p.259): ADPS 000 and 001 both divide by 2, then 4, 8, 16, 32, 64, 128; Table 29-15 (p.319) Clock Frequency 50 kHz min, 1000 kHz max; section 24.4 (p.249): 50 kHz to 200 kHz for maximum resolution, higher is allowed for lower resolution"
+
+[[models.peripherals.adc.conversions]]
+mode = "normal"
+resolution_bits = 10
+sample_cycles = [1.5]
+total_cycles = 13.0
+basis = "Table 24-1 (p.251) ADC Conversion Time, 'Normal conversions, single ended': sample and hold at 1.5 cycles from start of conversion, conversion time 13 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "first_after_enable"
+resolution_bits = 10
+sample_cycles = [13.5]
+total_cycles = 25.0
+basis = "Table 24-1 (p.251) ADC Conversion Time, 'First conversion': sample and hold at 13.5 cycles from start of conversion, conversion time 25 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "auto_triggered"
+resolution_bits = 10
+sample_cycles = [2.0]
+total_cycles = 13.5
+basis = "Table 24-1 (p.251) ADC Conversion Time, 'Auto Triggered conversions': sample and hold at 2.0 cycles from start of conversion, conversion time 13.5 cycles"
+
+[[models.peripherals.adc.max_sample_rate]]
+resolution_bits = 10
+max_hz = 15000.0
+condition = "maximum resolution (ADC clock 50-200 kHz)"
+basis = "section 24 features (p.246): 'Up to 15kSPS at Maximum Resolution'; section 24.4 (p.249)"
+
+[[models.peripherals.adc.max_sample_rate]]
+max_hz = 76900.0
+condition = "reduced resolution, ADC clock above 200 kHz"
+basis = "section 24 features (p.246): 'Up to 76.9kSPS'; section 24.4 (p.249) allows an ADC clock above 200 kHz for resolution below 10 bits"
+
+[models.peripherals.adc.input]
+sample_cap_f = 1.4e-11
+input_series_ohms_min = 1000.0
+input_series_ohms_max = 100000.0
+max_source_ohms = 10000.0
+basis = "Figure 24-8 (p.253): series 1..100 kOhm into CS/H = 14 pF; section 24.6.1 (p.253): optimised for an output impedance of approximately 10 kOhm or less"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 200000.0
+abs_error_lsb = 2.0
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 200 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error"
+basis = "Table 29-15 (p.319) ADC Characteristics, Absolute accuracy, Typ column (the Max column is blank)"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 1000000.0
+abs_error_lsb = 4.5
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 1000 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error"
+basis = "Table 29-15 (p.319) ADC Characteristics, Absolute accuracy, Typ column (the Max column is blank)"
+
 [models.pin_capability.adc]
 basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 1 Pin Configurations Figure 1-1 (PDF p.12) and 1.1.7-1.1.9 (PDF p.14) (32 TQFP / 32 VQFN, pins 19 ADC6, 22 ADC7, 23-28 PC0-PC5)"
 [models.pin_capability.adc.pads]
@@ -300,6 +694,203 @@ reset_pull_up_ohms = 30000.0
 "27" = "pd1_txd"
 "28" = "pd2_int0"
 "29" = "gnd3"      # QFN/MLF bottom pad
+
+# Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 20 (USART0). Printed page numbers.
+[models.peripherals.uart]
+source = "https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/ATmega48A-PA-88A-PA-168A-PA-328-P-DS-DS40002061B.pdf"
+source_sha256 = "b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e"
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 20 USART0: Table 20-1 (p.182), Tables 20-2 and 20-3 (p.194), Table 20-7 (pp.198-199)"
+
+[[models.peripherals.uart.clock_sources]]
+name = "system clock (fOSC)"
+basis = "Table 20-1 note (p.182): fOSC is the System Oscillator clock frequency; the datasheet states no separate UART clock limit"
+
+[models.peripherals.uart.baud]
+formula = "BAUD = fOSC / (S * (UBRRn + 1)), S = 16 (U2Xn = 0) or 8 (U2Xn = 1); UBRRn in 0-4095"
+divisor_offset = 1.0
+fraction_bits = 0
+register_bits = 12
+oversampling = [16, 8]
+basis = "Table 20-1 (p.182): asynchronous normal and double speed equations; UBRRn = contents of UBRRnH and UBRRnL, range 0-4095; section 20.3.2 (p.182) U2Xn halves the divisor from 16 to 8"
+
+[[models.peripherals.uart.max_baud]]
+oversampling = 16
+baud_hz = 1000000.0
+condition = "fOSC = 16 MHz, U2Xn = 0, UBRRn = 0 (fOSC / 16)"
+basis = "Table 20-7 (p.199), fosc = 16.0000 MHz column, Max. row: 1 Mbps"
+
+[[models.peripherals.uart.max_baud]]
+oversampling = 8
+baud_hz = 2000000.0
+condition = "fOSC = 16 MHz, U2Xn = 1, UBRRn = 0 (fOSC / 8)"
+basis = "Table 20-7 (p.199), fosc = 16.0000 MHz column, Max. row: 2 Mbps"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 7
+oversampling = 16
+total_error_min_pct = -6.8
+total_error_max_pct = 6.67
+recommended_receiver_error_pct = 3.0
+basis = "Table 20-2 (p.194), D = 5 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 8
+oversampling = 16
+total_error_min_pct = -5.88
+total_error_max_pct = 5.79
+recommended_receiver_error_pct = 2.5
+basis = "Table 20-2 (p.194), D = 6 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 9
+oversampling = 16
+total_error_min_pct = -5.19
+total_error_max_pct = 5.11
+recommended_receiver_error_pct = 2.0
+basis = "Table 20-2 (p.194), D = 7 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 16
+total_error_min_pct = -4.54
+total_error_max_pct = 4.58
+recommended_receiver_error_pct = 2.0
+basis = "Table 20-2 (p.194), D = 8 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 16
+total_error_min_pct = -4.19
+total_error_max_pct = 4.14
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-2 (p.194), D = 9 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 12
+oversampling = 16
+total_error_min_pct = -3.83
+total_error_max_pct = 3.78
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-2 (p.194), D = 10 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 7
+oversampling = 8
+total_error_min_pct = -5.88
+total_error_max_pct = 5.66
+recommended_receiver_error_pct = 2.5
+basis = "Table 20-3 (p.194), D = 5 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 8
+oversampling = 8
+total_error_min_pct = -5.08
+total_error_max_pct = 4.92
+recommended_receiver_error_pct = 2.0
+basis = "Table 20-3 (p.194), D = 6 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 9
+oversampling = 8
+total_error_min_pct = -4.48
+total_error_max_pct = 4.35
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-3 (p.194), D = 7 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 8
+total_error_min_pct = -4.0
+total_error_max_pct = 3.9
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-3 (p.194), D = 8 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 8
+total_error_min_pct = -3.61
+total_error_max_pct = 3.53
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-3 (p.194), D = 9 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 12
+oversampling = 8
+total_error_min_pct = -3.3
+total_error_max_pct = 3.23
+recommended_receiver_error_pct = 1.0
+basis = "Table 20-3 (p.194), D = 10 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+# Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 24 (ADC) and section 29.8 Table 29-15 (ADC Characteristics). Printed page numbers.
+[models.peripherals.adc]
+source = "https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/ATmega48A-PA-88A-PA-168A-PA-328-P-DS-DS40002061B.pdf"
+source_sha256 = "b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e"
+resolution_bits = [10]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 24 ADC: features (p.246), section 24.4 (p.249), Table 24-1 (p.251), section 24.6.1 (p.253), Table 24-5 (p.259), Table 29-15 (p.319)"
+
+[models.peripherals.adc.clock]
+source = "system clock divided by the ADPS[2:0] prescaler"
+prescalers = [2, 4, 8, 16, 32, 64, 128]
+min_hz = 50000.0
+max_hz = 1000000.0
+full_resolution_min_hz = 50000.0
+full_resolution_max_hz = 200000.0
+basis = "Table 24-5 (p.259): ADPS 000 and 001 both divide by 2, then 4, 8, 16, 32, 64, 128; Table 29-15 (p.319) Clock Frequency 50 kHz min, 1000 kHz max; section 24.4 (p.249): 50 kHz to 200 kHz for maximum resolution, higher is allowed for lower resolution"
+
+[[models.peripherals.adc.conversions]]
+mode = "normal"
+resolution_bits = 10
+sample_cycles = [1.5]
+total_cycles = 13.0
+basis = "Table 24-1 (p.251) ADC Conversion Time, 'Normal conversions, single ended': sample and hold at 1.5 cycles from start of conversion, conversion time 13 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "first_after_enable"
+resolution_bits = 10
+sample_cycles = [13.5]
+total_cycles = 25.0
+basis = "Table 24-1 (p.251) ADC Conversion Time, 'First conversion': sample and hold at 13.5 cycles from start of conversion, conversion time 25 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "auto_triggered"
+resolution_bits = 10
+sample_cycles = [2.0]
+total_cycles = 13.5
+basis = "Table 24-1 (p.251) ADC Conversion Time, 'Auto Triggered conversions': sample and hold at 2.0 cycles from start of conversion, conversion time 13.5 cycles"
+
+[[models.peripherals.adc.max_sample_rate]]
+resolution_bits = 10
+max_hz = 15000.0
+condition = "maximum resolution (ADC clock 50-200 kHz)"
+basis = "section 24 features (p.246): 'Up to 15kSPS at Maximum Resolution'; section 24.4 (p.249)"
+
+[[models.peripherals.adc.max_sample_rate]]
+max_hz = 76900.0
+condition = "reduced resolution, ADC clock above 200 kHz"
+basis = "section 24 features (p.246): 'Up to 76.9kSPS'; section 24.4 (p.249) allows an ADC clock above 200 kHz for resolution below 10 bits"
+
+[models.peripherals.adc.input]
+sample_cap_f = 1.4e-11
+input_series_ohms_min = 1000.0
+input_series_ohms_max = 100000.0
+max_source_ohms = 10000.0
+basis = "Figure 24-8 (p.253): series 1..100 kOhm into CS/H = 14 pF; section 24.6.1 (p.253): optimised for an output impedance of approximately 10 kOhm or less"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 200000.0
+abs_error_lsb = 2.0
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 200 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error"
+basis = "Table 29-15 (p.319) ADC Characteristics, Absolute accuracy, Typ column (the Max column is blank)"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 1000000.0
+abs_error_lsb = 4.5
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 1000 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error"
+basis = "Table 29-15 (p.319) ADC Characteristics, Absolute accuracy, Typ column (the Max column is blank)"
 
 [models.pin_capability.adc]
 basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 1 Pin Configurations Figure 1-1 (PDF p.12) and 1.1.7-1.1.9 (PDF p.14) (28 VQFN, pads 19-24 PC0-PC5)"
@@ -874,6 +1465,198 @@ default_clock_hz = 8000000
 # rather than reporting the pad as unmodelled.
 "TH" = "gnd5"
 
+# Microchip ATmega164A/PA/324A/PA/644A/PA/1284/P Data Sheet Complete DS40002070A (2018), USART. Printed page numbers.
+[models.peripherals.uart]
+source = "https://ww1.microchip.com/downloads/en/DeviceDoc/ATmega164A_PA-324A_PA-644A_PA-1284_P_Data-Sheet-40002070A.pdf"
+source_sha256 = "30593f7a6c60a4b87b76b06b2d41f7c3cb9e0755c6d04cda32c779580be094fe"
+basis = "Microchip ATmega164A/PA/324A/PA/644A/PA/1284/P Data Sheet Complete DS40002070A (2018), USART: Table 19-1 (p.178), Table 19-2 and Table 19-3 (p.191), and Table 19-12 (p.201)"
+
+[[models.peripherals.uart.clock_sources]]
+name = "system clock (fOSC)"
+basis = "Table 19-1 note (p.178): fOSC is the System Oscillator clock frequency; the datasheet states no separate UART clock limit"
+
+[models.peripherals.uart.baud]
+formula = "BAUD = fOSC / (S * (UBRRn + 1)), S = 16 (U2Xn = 0) or 8 (U2Xn = 1); UBRRn in 0-4095"
+divisor_offset = 1.0
+fraction_bits = 0
+register_bits = 12
+oversampling = [16, 8]
+basis = "Table 19-1 (p.178): asynchronous normal and double speed equations; UBRRn = contents of UBRRnH and UBRRnL, (0-4095); the double speed section: U2Xn reduces the divisor of the baud rate divider from 16 to 8"
+
+[[models.peripherals.uart.max_baud]]
+oversampling = 16
+baud_hz = 1000000.0
+condition = "fOSC = 16 MHz, U2Xn = 0, UBRRn = 0 (fOSC / 16)"
+basis = "Table 19-12 (p.201), fosc = 16.0000 MHz column, U2Xn = 0, Max. row: 1 Mbps"
+
+[[models.peripherals.uart.max_baud]]
+oversampling = 8
+baud_hz = 2000000.0
+condition = "fOSC = 16 MHz, U2Xn = 1, UBRRn = 0 (fOSC / 8)"
+basis = "Table 19-12 (p.201), fosc = 16.0000 MHz column, U2Xn = 1, Max. row: 2 Mbps"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 7
+oversampling = 16
+total_error_min_pct = -6.8
+total_error_max_pct = 6.67
+recommended_receiver_error_pct = 3.0
+basis = "Table 19-2 (p.191), D = 5 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 8
+oversampling = 16
+total_error_min_pct = -5.88
+total_error_max_pct = 5.79
+recommended_receiver_error_pct = 2.5
+basis = "Table 19-2 (p.191), D = 6 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 9
+oversampling = 16
+total_error_min_pct = -5.19
+total_error_max_pct = 5.11
+recommended_receiver_error_pct = 2.0
+basis = "Table 19-2 (p.191), D = 7 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 16
+total_error_min_pct = -4.54
+total_error_max_pct = 4.58
+recommended_receiver_error_pct = 2.0
+basis = "Table 19-2 (p.191), D = 8 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 16
+total_error_min_pct = -4.19
+total_error_max_pct = 4.14
+recommended_receiver_error_pct = 1.5
+basis = "Table 19-2 (p.191), D = 9 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 12
+oversampling = 16
+total_error_min_pct = -3.83
+total_error_max_pct = 3.78
+recommended_receiver_error_pct = 1.5
+basis = "Table 19-2 (p.191), D = 10 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 7
+oversampling = 8
+total_error_min_pct = -5.88
+total_error_max_pct = 5.66
+recommended_receiver_error_pct = 2.5
+basis = "Table 19-3 (p.191), D = 5 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 8
+oversampling = 8
+total_error_min_pct = -5.08
+total_error_max_pct = 4.92
+recommended_receiver_error_pct = 2.0
+basis = "Table 19-3 (p.191), D = 6 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 9
+oversampling = 8
+total_error_min_pct = -4.48
+total_error_max_pct = 4.35
+recommended_receiver_error_pct = 1.5
+basis = "Table 19-3 (p.191), D = 7 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 8
+total_error_min_pct = -4.0
+total_error_max_pct = 3.9
+recommended_receiver_error_pct = 1.5
+basis = "Table 19-3 (p.191), D = 8 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 8
+total_error_min_pct = -3.61
+total_error_max_pct = 3.53
+recommended_receiver_error_pct = 1.5
+basis = "Table 19-3 (p.191), D = 9 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 12
+oversampling = 8
+total_error_min_pct = -3.3
+total_error_max_pct = 3.23
+recommended_receiver_error_pct = 1.0
+basis = "Table 19-3 (p.191), D = 10 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+# Microchip ATmega164A/PA/324A/PA/644A/PA/1284/P Data Sheet Complete DS40002070A (2018), section 23 (ADC) and section 28.8 Table 28-17 (single ended channels). Printed page numbers.
+[models.peripherals.adc]
+source = "https://ww1.microchip.com/downloads/en/DeviceDoc/ATmega164A_PA-324A_PA-644A_PA-1284_P_Data-Sheet-40002070A.pdf"
+source_sha256 = "30593f7a6c60a4b87b76b06b2d41f7c3cb9e0755c6d04cda32c779580be094fe"
+resolution_bits = [10]
+basis = "Microchip ATmega164A/PA/324A/PA/644A/PA/1284/P Data Sheet Complete DS40002070A (2018), ADC: features section 23.1 (p.243), section 23.5 (p.246), Table 23-1 (p.248), section 23.7.1 (pp.250-251), Table 23-5 (p.259), Table 28-17 (p.338)"
+
+[models.peripherals.adc.clock]
+source = "system clock divided by the ADPS[2:0] prescaler"
+prescalers = [2, 4, 8, 16, 32, 64, 128]
+min_hz = 50000.0
+max_hz = 1000000.0
+full_resolution_min_hz = 50000.0
+full_resolution_max_hz = 200000.0
+basis = "Table 23-5 (p.259): ADPS 000 and 001 both divide by 2, then 4, 8, 16, 32, 64, 128; Table 28-17 (p.338) Clock Frequency, single ended conversion: 50 kHz min, 1000 kHz max; section 23.5 (p.246): 50 kHz to 200 kHz for maximum resolution, higher is allowed for lower resolution"
+
+[[models.peripherals.adc.conversions]]
+mode = "first_after_enable"
+resolution_bits = 10
+sample_cycles = [14.5]
+total_cycles = 25.0
+basis = "Table 23-1 (p.248) ADC conversion time, 'First conversion': sample and hold at 14.5 cycles from start of conversion, conversion time 25 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "normal"
+resolution_bits = 10
+sample_cycles = [1.5]
+total_cycles = 13.0
+basis = "Table 23-1 (p.248) ADC conversion time, 'Normal conversions, single ended': sample and hold at 1.5 cycles from start of conversion, conversion time 13 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "auto_triggered"
+resolution_bits = 10
+sample_cycles = [2.0]
+total_cycles = 13.5
+basis = "Table 23-1 (p.248) ADC conversion time, 'Auto Triggered conversions': sample and hold at 2 cycles from start of conversion, conversion time 13.5 cycles"
+
+[[models.peripherals.adc.max_sample_rate]]
+resolution_bits = 10
+max_hz = 15000.0
+condition = "maximum resolution (ADC clock 50-200 kHz)"
+basis = "section 23.1 Features (p.243): 'Up to 15kSPS at maximum resolution'; section 23.5 (p.246)"
+
+[models.peripherals.adc.input]
+sample_cap_f = 1.4e-11
+input_series_ohms_min = 1000.0
+input_series_ohms_max = 100000.0
+max_source_ohms = 10000.0
+basis = "Figure 23-8 (p.251): series 1..100 kOhm into CS/H = 14 pF; section 23.7.1 (p.250): optimised for an output impedance of approximately 10 kOhm or less"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 200000.0
+abs_error_lsb = 1.9
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 200 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error; the datasheet marks the values as guidelines only"
+basis = "Table 28-17 (p.338) ADC characteristics, Absolute accuracy, Typ column"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 1000000.0
+abs_error_lsb = 3.25
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 1000 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error; the datasheet marks the values as guidelines only"
+basis = "Table 28-17 (p.338) ADC characteristics, Absolute accuracy, Typ column"
+
 [models.pin_capability.adc]
 basis = "Atmel ATmega1284P datasheet, section 1 Pin Configurations (PDF pp.13-14): PA7:0 are ADC7:0, pins 30-37 of the 44-lead TQFP"
 [models.pin_capability.adc.pads]
@@ -995,6 +1778,198 @@ default_clock_hz = 8000000
 "43" = "pb3_oc0a_ain1"
 "44" = "pb4_ss_oc0b"
 "TH" = "gnd5"
+
+# Microchip ATmega164A/PA/324A/PA/644A/PA/1284/P Data Sheet Complete DS40002070A (2018), USART. Printed page numbers.
+[models.peripherals.uart]
+source = "https://ww1.microchip.com/downloads/en/DeviceDoc/ATmega164A_PA-324A_PA-644A_PA-1284_P_Data-Sheet-40002070A.pdf"
+source_sha256 = "30593f7a6c60a4b87b76b06b2d41f7c3cb9e0755c6d04cda32c779580be094fe"
+basis = "Microchip ATmega164A/PA/324A/PA/644A/PA/1284/P Data Sheet Complete DS40002070A (2018), USART: Table 19-1 (p.178), Table 19-2 and Table 19-3 (p.191), and Table 19-12 (p.201)"
+
+[[models.peripherals.uart.clock_sources]]
+name = "system clock (fOSC)"
+basis = "Table 19-1 note (p.178): fOSC is the System Oscillator clock frequency; the datasheet states no separate UART clock limit"
+
+[models.peripherals.uart.baud]
+formula = "BAUD = fOSC / (S * (UBRRn + 1)), S = 16 (U2Xn = 0) or 8 (U2Xn = 1); UBRRn in 0-4095"
+divisor_offset = 1.0
+fraction_bits = 0
+register_bits = 12
+oversampling = [16, 8]
+basis = "Table 19-1 (p.178): asynchronous normal and double speed equations; UBRRn = contents of UBRRnH and UBRRnL, (0-4095); the double speed section: U2Xn reduces the divisor of the baud rate divider from 16 to 8"
+
+[[models.peripherals.uart.max_baud]]
+oversampling = 16
+baud_hz = 1000000.0
+condition = "fOSC = 16 MHz, U2Xn = 0, UBRRn = 0 (fOSC / 16)"
+basis = "Table 19-12 (p.201), fosc = 16.0000 MHz column, U2Xn = 0, Max. row: 1 Mbps"
+
+[[models.peripherals.uart.max_baud]]
+oversampling = 8
+baud_hz = 2000000.0
+condition = "fOSC = 16 MHz, U2Xn = 1, UBRRn = 0 (fOSC / 8)"
+basis = "Table 19-12 (p.201), fosc = 16.0000 MHz column, U2Xn = 1, Max. row: 2 Mbps"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 7
+oversampling = 16
+total_error_min_pct = -6.8
+total_error_max_pct = 6.67
+recommended_receiver_error_pct = 3.0
+basis = "Table 19-2 (p.191), D = 5 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 8
+oversampling = 16
+total_error_min_pct = -5.88
+total_error_max_pct = 5.79
+recommended_receiver_error_pct = 2.5
+basis = "Table 19-2 (p.191), D = 6 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 9
+oversampling = 16
+total_error_min_pct = -5.19
+total_error_max_pct = 5.11
+recommended_receiver_error_pct = 2.0
+basis = "Table 19-2 (p.191), D = 7 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 16
+total_error_min_pct = -4.54
+total_error_max_pct = 4.58
+recommended_receiver_error_pct = 2.0
+basis = "Table 19-2 (p.191), D = 8 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 16
+total_error_min_pct = -4.19
+total_error_max_pct = 4.14
+recommended_receiver_error_pct = 1.5
+basis = "Table 19-2 (p.191), D = 9 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 12
+oversampling = 16
+total_error_min_pct = -3.83
+total_error_max_pct = 3.78
+recommended_receiver_error_pct = 1.5
+basis = "Table 19-2 (p.191), D = 10 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 7
+oversampling = 8
+total_error_min_pct = -5.88
+total_error_max_pct = 5.66
+recommended_receiver_error_pct = 2.5
+basis = "Table 19-3 (p.191), D = 5 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 8
+oversampling = 8
+total_error_min_pct = -5.08
+total_error_max_pct = 4.92
+recommended_receiver_error_pct = 2.0
+basis = "Table 19-3 (p.191), D = 6 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 9
+oversampling = 8
+total_error_min_pct = -4.48
+total_error_max_pct = 4.35
+recommended_receiver_error_pct = 1.5
+basis = "Table 19-3 (p.191), D = 7 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 8
+total_error_min_pct = -4.0
+total_error_max_pct = 3.9
+recommended_receiver_error_pct = 1.5
+basis = "Table 19-3 (p.191), D = 8 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 8
+total_error_min_pct = -3.61
+total_error_max_pct = 3.53
+recommended_receiver_error_pct = 1.5
+basis = "Table 19-3 (p.191), D = 9 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 12
+oversampling = 8
+total_error_min_pct = -3.3
+total_error_max_pct = 3.23
+recommended_receiver_error_pct = 1.0
+basis = "Table 19-3 (p.191), D = 10 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+# Microchip ATmega164A/PA/324A/PA/644A/PA/1284/P Data Sheet Complete DS40002070A (2018), section 23 (ADC) and section 28.8 Table 28-17 (single ended channels). Printed page numbers.
+[models.peripherals.adc]
+source = "https://ww1.microchip.com/downloads/en/DeviceDoc/ATmega164A_PA-324A_PA-644A_PA-1284_P_Data-Sheet-40002070A.pdf"
+source_sha256 = "30593f7a6c60a4b87b76b06b2d41f7c3cb9e0755c6d04cda32c779580be094fe"
+resolution_bits = [10]
+basis = "Microchip ATmega164A/PA/324A/PA/644A/PA/1284/P Data Sheet Complete DS40002070A (2018), ADC: features section 23.1 (p.243), section 23.5 (p.246), Table 23-1 (p.248), section 23.7.1 (pp.250-251), Table 23-5 (p.259), Table 28-17 (p.338)"
+
+[models.peripherals.adc.clock]
+source = "system clock divided by the ADPS[2:0] prescaler"
+prescalers = [2, 4, 8, 16, 32, 64, 128]
+min_hz = 50000.0
+max_hz = 1000000.0
+full_resolution_min_hz = 50000.0
+full_resolution_max_hz = 200000.0
+basis = "Table 23-5 (p.259): ADPS 000 and 001 both divide by 2, then 4, 8, 16, 32, 64, 128; Table 28-17 (p.338) Clock Frequency, single ended conversion: 50 kHz min, 1000 kHz max; section 23.5 (p.246): 50 kHz to 200 kHz for maximum resolution, higher is allowed for lower resolution"
+
+[[models.peripherals.adc.conversions]]
+mode = "first_after_enable"
+resolution_bits = 10
+sample_cycles = [14.5]
+total_cycles = 25.0
+basis = "Table 23-1 (p.248) ADC conversion time, 'First conversion': sample and hold at 14.5 cycles from start of conversion, conversion time 25 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "normal"
+resolution_bits = 10
+sample_cycles = [1.5]
+total_cycles = 13.0
+basis = "Table 23-1 (p.248) ADC conversion time, 'Normal conversions, single ended': sample and hold at 1.5 cycles from start of conversion, conversion time 13 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "auto_triggered"
+resolution_bits = 10
+sample_cycles = [2.0]
+total_cycles = 13.5
+basis = "Table 23-1 (p.248) ADC conversion time, 'Auto Triggered conversions': sample and hold at 2 cycles from start of conversion, conversion time 13.5 cycles"
+
+[[models.peripherals.adc.max_sample_rate]]
+resolution_bits = 10
+max_hz = 15000.0
+condition = "maximum resolution (ADC clock 50-200 kHz)"
+basis = "section 23.1 Features (p.243): 'Up to 15kSPS at maximum resolution'; section 23.5 (p.246)"
+
+[models.peripherals.adc.input]
+sample_cap_f = 1.4e-11
+input_series_ohms_min = 1000.0
+input_series_ohms_max = 100000.0
+max_source_ohms = 10000.0
+basis = "Figure 23-8 (p.251): series 1..100 kOhm into CS/H = 14 pF; section 23.7.1 (p.250): optimised for an output impedance of approximately 10 kOhm or less"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 200000.0
+abs_error_lsb = 1.9
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 200 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error; the datasheet marks the values as guidelines only"
+basis = "Table 28-17 (p.338) ADC characteristics, Absolute accuracy, Typ column"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 1000000.0
+abs_error_lsb = 3.25
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 1000 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error; the datasheet marks the values as guidelines only"
+basis = "Table 28-17 (p.338) ADC characteristics, Absolute accuracy, Typ column"
 
 [models.pin_capability.adc]
 basis = "Atmel ATmega1284P datasheet, section 1 Pin Configurations (PDF pp.13-14): PA7:0 are ADC7:0, pins 30-37 of the 44-lead TQFP"
@@ -1151,6 +2126,203 @@ basis = "Arduino Nano 3.0 reference design: 3V3 = FT232RL 3V3OUT, 3.0/3.3/3.6 V 
 # header: the two pins are named, and nothing pretends to know what is between
 # them. The RX/TX LEDs (PB0, PD5) and the USB connector are likewise off-map,
 # and the clock is the card's `default_clock_hz` (the Nano's own 16 MHz crystal).
+# Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 20 (USART0). Printed page numbers.
+[models.peripherals.uart]
+source = "https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/ATmega48A-PA-88A-PA-168A-PA-328-P-DS-DS40002061B.pdf"
+source_sha256 = "b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e"
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 20 USART0: Table 20-1 (p.182), Tables 20-2 and 20-3 (p.194), Table 20-7 (pp.198-199)"
+
+[[models.peripherals.uart.clock_sources]]
+name = "system clock (fOSC)"
+basis = "Table 20-1 note (p.182): fOSC is the System Oscillator clock frequency; the datasheet states no separate UART clock limit"
+
+[models.peripherals.uart.baud]
+formula = "BAUD = fOSC / (S * (UBRRn + 1)), S = 16 (U2Xn = 0) or 8 (U2Xn = 1); UBRRn in 0-4095"
+divisor_offset = 1.0
+fraction_bits = 0
+register_bits = 12
+oversampling = [16, 8]
+basis = "Table 20-1 (p.182): asynchronous normal and double speed equations; UBRRn = contents of UBRRnH and UBRRnL, range 0-4095; section 20.3.2 (p.182) U2Xn halves the divisor from 16 to 8"
+
+[[models.peripherals.uart.max_baud]]
+oversampling = 16
+baud_hz = 1000000.0
+condition = "fOSC = 16 MHz, U2Xn = 0, UBRRn = 0 (fOSC / 16)"
+basis = "Table 20-7 (p.199), fosc = 16.0000 MHz column, Max. row: 1 Mbps"
+
+[[models.peripherals.uart.max_baud]]
+oversampling = 8
+baud_hz = 2000000.0
+condition = "fOSC = 16 MHz, U2Xn = 1, UBRRn = 0 (fOSC / 8)"
+basis = "Table 20-7 (p.199), fosc = 16.0000 MHz column, Max. row: 2 Mbps"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 7
+oversampling = 16
+total_error_min_pct = -6.8
+total_error_max_pct = 6.67
+recommended_receiver_error_pct = 3.0
+basis = "Table 20-2 (p.194), D = 5 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 8
+oversampling = 16
+total_error_min_pct = -5.88
+total_error_max_pct = 5.79
+recommended_receiver_error_pct = 2.5
+basis = "Table 20-2 (p.194), D = 6 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 9
+oversampling = 16
+total_error_min_pct = -5.19
+total_error_max_pct = 5.11
+recommended_receiver_error_pct = 2.0
+basis = "Table 20-2 (p.194), D = 7 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 16
+total_error_min_pct = -4.54
+total_error_max_pct = 4.58
+recommended_receiver_error_pct = 2.0
+basis = "Table 20-2 (p.194), D = 8 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 16
+total_error_min_pct = -4.19
+total_error_max_pct = 4.14
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-2 (p.194), D = 9 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 12
+oversampling = 16
+total_error_min_pct = -3.83
+total_error_max_pct = 3.78
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-2 (p.194), D = 10 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 7
+oversampling = 8
+total_error_min_pct = -5.88
+total_error_max_pct = 5.66
+recommended_receiver_error_pct = 2.5
+basis = "Table 20-3 (p.194), D = 5 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 8
+oversampling = 8
+total_error_min_pct = -5.08
+total_error_max_pct = 4.92
+recommended_receiver_error_pct = 2.0
+basis = "Table 20-3 (p.194), D = 6 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 9
+oversampling = 8
+total_error_min_pct = -4.48
+total_error_max_pct = 4.35
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-3 (p.194), D = 7 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 8
+total_error_min_pct = -4.0
+total_error_max_pct = 3.9
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-3 (p.194), D = 8 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 8
+total_error_min_pct = -3.61
+total_error_max_pct = 3.53
+recommended_receiver_error_pct = 1.5
+basis = "Table 20-3 (p.194), D = 9 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 12
+oversampling = 8
+total_error_min_pct = -3.3
+total_error_max_pct = 3.23
+recommended_receiver_error_pct = 1.0
+basis = "Table 20-3 (p.194), D = 10 (data + parity bits), start + D + 1 stop bit; 'Max Total Error' and 'Recommended Max Receiver Error'"
+
+# Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 24 (ADC) and section 29.8 Table 29-15 (ADC Characteristics). Printed page numbers.
+[models.peripherals.adc]
+source = "https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/ATmega48A-PA-88A-PA-168A-PA-328-P-DS-DS40002061B.pdf"
+source_sha256 = "b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e"
+resolution_bits = [10]
+basis = "Microchip ATmega48A/PA/88A/PA/168A/PA/328/P Data Sheet Complete DS40002061B (2020), section 24 ADC: features (p.246), section 24.4 (p.249), Table 24-1 (p.251), section 24.6.1 (p.253), Table 24-5 (p.259), Table 29-15 (p.319)"
+
+[models.peripherals.adc.clock]
+source = "system clock divided by the ADPS[2:0] prescaler"
+prescalers = [2, 4, 8, 16, 32, 64, 128]
+min_hz = 50000.0
+max_hz = 1000000.0
+full_resolution_min_hz = 50000.0
+full_resolution_max_hz = 200000.0
+basis = "Table 24-5 (p.259): ADPS 000 and 001 both divide by 2, then 4, 8, 16, 32, 64, 128; Table 29-15 (p.319) Clock Frequency 50 kHz min, 1000 kHz max; section 24.4 (p.249): 50 kHz to 200 kHz for maximum resolution, higher is allowed for lower resolution"
+
+[[models.peripherals.adc.conversions]]
+mode = "normal"
+resolution_bits = 10
+sample_cycles = [1.5]
+total_cycles = 13.0
+basis = "Table 24-1 (p.251) ADC Conversion Time, 'Normal conversions, single ended': sample and hold at 1.5 cycles from start of conversion, conversion time 13 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "first_after_enable"
+resolution_bits = 10
+sample_cycles = [13.5]
+total_cycles = 25.0
+basis = "Table 24-1 (p.251) ADC Conversion Time, 'First conversion': sample and hold at 13.5 cycles from start of conversion, conversion time 25 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "auto_triggered"
+resolution_bits = 10
+sample_cycles = [2.0]
+total_cycles = 13.5
+basis = "Table 24-1 (p.251) ADC Conversion Time, 'Auto Triggered conversions': sample and hold at 2.0 cycles from start of conversion, conversion time 13.5 cycles"
+
+[[models.peripherals.adc.max_sample_rate]]
+resolution_bits = 10
+max_hz = 15000.0
+condition = "maximum resolution (ADC clock 50-200 kHz)"
+basis = "section 24 features (p.246): 'Up to 15kSPS at Maximum Resolution'; section 24.4 (p.249)"
+
+[[models.peripherals.adc.max_sample_rate]]
+max_hz = 76900.0
+condition = "reduced resolution, ADC clock above 200 kHz"
+basis = "section 24 features (p.246): 'Up to 76.9kSPS'; section 24.4 (p.249) allows an ADC clock above 200 kHz for resolution below 10 bits"
+
+[models.peripherals.adc.input]
+sample_cap_f = 1.4e-11
+input_series_ohms_min = 1000.0
+input_series_ohms_max = 100000.0
+max_source_ohms = 10000.0
+basis = "Figure 24-8 (p.253): series 1..100 kOhm into CS/H = 14 pF; section 24.6.1 (p.253): optimised for an output impedance of approximately 10 kOhm or less"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 200000.0
+abs_error_lsb = 2.0
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 200 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error"
+basis = "Table 29-15 (p.319) ADC Characteristics, Absolute accuracy, Typ column (the Max column is blank)"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 1000000.0
+abs_error_lsb = 4.5
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 1000 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error"
+basis = "Table 29-15 (p.319) ADC Characteristics, Absolute accuracy, Typ column (the Max column is blank)"
+
 [[models]]
 id = "pro_micro"
 kind = "mcu"
@@ -1211,6 +2383,197 @@ default_clock_hz = 16000000
 # named `vcc`: tying it to the VCC role would tell the solver the two pins are
 # the same node, which is exactly what the regulator makes them not.
 "24" = "raw"
+
+# Atmel ATmega16U4/32U4 datasheet 7766J (04/2016), USART. Printed page numbers.
+[models.peripherals.uart]
+source = "https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-7766-8-bit-AVR-ATmega16U4-32U4_Datasheet.pdf"
+source_sha256 = "8e8c81dd4119062397bc08d677e7033d7abb4292628414c4e6e0a234cc53203a"
+basis = "Atmel ATmega16U4/32U4 datasheet 7766J (04/2016), USART: Table 18-1 (p.191), Table 18-2 and Table 18-3 (p.203), and Table 18-6 (p.208)"
+
+[[models.peripherals.uart.clock_sources]]
+name = "system clock (fOSC)"
+basis = "Table 18-1 note (p.191): fOSC is the System Oscillator clock frequency; the datasheet states no separate UART clock limit"
+
+[models.peripherals.uart.baud]
+formula = "BAUD = fOSC / (S * (UBRRn + 1)), S = 16 (U2Xn = 0) or 8 (U2Xn = 1); UBRRn in 0-4095"
+divisor_offset = 1.0
+fraction_bits = 0
+register_bits = 12
+oversampling = [16, 8]
+basis = "Table 18-1 (p.191): asynchronous normal and double speed equations; UBRRn = contents of UBRRnH and UBRRnL, (0-4095); the double speed section: U2Xn reduces the divisor of the baud rate divider from 16 to 8"
+
+[[models.peripherals.uart.max_baud]]
+oversampling = 16
+baud_hz = 921600.0
+condition = "fOSC = 14.7456 MHz, U2Xn = 0, UBRRn = 0 (fOSC / 16)"
+basis = "Table 18-6 (p.208), fosc = 14.7456 MHz column, U2Xn = 0, Max. row: 921.6 kbps (the datasheet lists no 16 MHz column)"
+
+[[models.peripherals.uart.max_baud]]
+oversampling = 8
+baud_hz = 1843200.0
+condition = "fOSC = 14.7456 MHz, U2Xn = 1, UBRRn = 0 (fOSC / 8)"
+basis = "Table 18-6 (p.208), fosc = 14.7456 MHz column, U2Xn = 1, Max. row: 1.8432 Mbps (the datasheet lists no 16 MHz column)"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 7
+oversampling = 16
+total_error_min_pct = -6.8
+total_error_max_pct = 6.67
+recommended_receiver_error_pct = 3.0
+basis = "Table 18-2 (p.203), D = 5 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 8
+oversampling = 16
+total_error_min_pct = -5.88
+total_error_max_pct = 5.79
+recommended_receiver_error_pct = 2.5
+basis = "Table 18-2 (p.203), D = 6 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 9
+oversampling = 16
+total_error_min_pct = -5.19
+total_error_max_pct = 5.11
+recommended_receiver_error_pct = 2.0
+basis = "Table 18-2 (p.203), D = 7 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 16
+total_error_min_pct = -4.54
+total_error_max_pct = 4.58
+recommended_receiver_error_pct = 2.0
+basis = "Table 18-2 (p.203), D = 8 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 16
+total_error_min_pct = -4.19
+total_error_max_pct = 4.14
+recommended_receiver_error_pct = 1.5
+basis = "Table 18-2 (p.203), D = 9 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 12
+oversampling = 16
+total_error_min_pct = -3.83
+total_error_max_pct = 3.78
+recommended_receiver_error_pct = 1.5
+basis = "Table 18-2 (p.203), D = 10 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 7
+oversampling = 8
+total_error_min_pct = -5.88
+total_error_max_pct = 5.66
+recommended_receiver_error_pct = 2.5
+basis = "Table 18-3 (p.203), D = 5 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 8
+oversampling = 8
+total_error_min_pct = -5.08
+total_error_max_pct = 4.92
+recommended_receiver_error_pct = 2.0
+basis = "Table 18-3 (p.203), D = 6 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 9
+oversampling = 8
+total_error_min_pct = -4.48
+total_error_max_pct = 4.35
+recommended_receiver_error_pct = 1.5
+basis = "Table 18-3 (p.203), D = 7 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 8
+total_error_min_pct = -4.0
+total_error_max_pct = 3.9
+recommended_receiver_error_pct = 1.5
+basis = "Table 18-3 (p.203), D = 8 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 8
+total_error_min_pct = -3.61
+total_error_max_pct = 3.53
+recommended_receiver_error_pct = 1.5
+basis = "Table 18-3 (p.203), D = 9 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 12
+oversampling = 8
+total_error_min_pct = -3.3
+total_error_max_pct = 3.23
+recommended_receiver_error_pct = 1.0
+basis = "Table 18-3 (p.203), D = 10 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+# Atmel ATmega16U4/32U4 datasheet 7766J (04/2016), section 24 (ADC) and section 29 Table 29-7 (ADC Characteristics). Printed page numbers. The ADHSM bit allows a higher ADC clock at the expense of power, and the datasheet gives no upper clock limit in Table 29-7, so none is recorded.
+[models.peripherals.adc]
+source = "https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-7766-8-bit-AVR-ATmega16U4-32U4_Datasheet.pdf"
+source_sha256 = "8e8c81dd4119062397bc08d677e7033d7abb4292628414c4e6e0a234cc53203a"
+resolution_bits = [10]
+basis = "Atmel ATmega16U4/32U4 datasheet 7766J (04/2016), ADC: features (p.297), section 24.4 (p.300), Table 24-1 (p.302), section 24.7.1 (pp.305-306), Table 24-5 (p.316), Table 29-7 (p.390)"
+
+[models.peripherals.adc.clock]
+source = "system clock divided by the ADPS[2:0] prescaler"
+prescalers = [2, 4, 8, 16, 32, 64, 128]
+min_hz = 50000.0
+full_resolution_min_hz = 50000.0
+full_resolution_max_hz = 200000.0
+basis = "Table 24-5 (p.316): ADPS 000 and 001 both divide by 2, then 4, 8, 16, 32, 64, 128; section 24.4 (p.300): an input clock between 50 kHz and 200 kHz gives maximum resolution, a higher clock is allowed for lower resolution, and ADHSM allows an increased clock"
+
+[[models.peripherals.adc.conversions]]
+mode = "first_after_enable"
+resolution_bits = 10
+sample_cycles = [14.5]
+total_cycles = 25.0
+basis = "Table 24-1 (p.302) ADC conversion time, 'First Conversion': sample and hold at 14.5 cycles from start of conversion, conversion time 25 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "normal"
+resolution_bits = 10
+sample_cycles = [1.5]
+total_cycles = 13.0
+basis = "Table 24-1 (p.302) ADC conversion time, 'Normal Conversion, Single Ended': sample and hold at 1.5 cycles from start of conversion, conversion time 13 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "auto_triggered"
+resolution_bits = 10
+sample_cycles = [2.0]
+total_cycles = 13.5
+basis = "Table 24-1 (p.302) ADC conversion time, 'Auto Triggered Conversion': sample and hold at 2 cycles from start of conversion, conversion time 13.5 cycles"
+
+[[models.peripherals.adc.max_sample_rate]]
+resolution_bits = 10
+max_hz = 15000.0
+condition = "maximum resolution (ADC clock 50-200 kHz)"
+basis = "section 24 features (p.297): 'Up to 15kSPS at Maximum Resolution'"
+
+[models.peripherals.adc.input]
+sample_cap_f = 1.4e-11
+input_series_ohms_min = 1000.0
+input_series_ohms_max = 100000.0
+max_source_ohms = 10000.0
+basis = "Figure 24-9 (p.306): series 1..100 kOhm into CS/H = 14 pF; section 24.7.1 (p.306): optimised for an output impedance of approximately 10 kOhm or less"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 200000.0
+abs_error_lsb = 2.0
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 200 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error; TUE, single ended"
+basis = "Table 29-7 (p.390) ADC characteristics, Absolute accuracy, Typ column"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 200000.0
+abs_error_lsb = 3.0
+column = "max"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 200 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error; TUE, single ended"
+basis = "Table 29-7 (p.390) ADC characteristics, Absolute accuracy, Max column"
 
 [models.pin_capability.adc]
 basis = "Atmel-7766J-USB-ATmega16U4/32U4-Datasheet_04/2016, section 1 Pin Configurations Figure 1-1 (PDF p.3) and the port F pin list (PDF p.307): ADC0, ADC1, ADC4-ADC7 on PF0, PF1, PF4-PF7; ADC8-ADC13 on PD4, PD6, PD7, PB4, PB5, PB6; the pad to port map is this card's [models.pins] (SparkFun Pro Micro)"
@@ -1325,6 +2688,197 @@ default_clock_hz = 8000000
 "43" = "gnd4"
 "44" = "avcc2"
 
+# Atmel ATmega16U4/32U4 datasheet 7766J (04/2016), USART. Printed page numbers.
+[models.peripherals.uart]
+source = "https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-7766-8-bit-AVR-ATmega16U4-32U4_Datasheet.pdf"
+source_sha256 = "8e8c81dd4119062397bc08d677e7033d7abb4292628414c4e6e0a234cc53203a"
+basis = "Atmel ATmega16U4/32U4 datasheet 7766J (04/2016), USART: Table 18-1 (p.191), Table 18-2 and Table 18-3 (p.203), and Table 18-6 (p.208)"
+
+[[models.peripherals.uart.clock_sources]]
+name = "system clock (fOSC)"
+basis = "Table 18-1 note (p.191): fOSC is the System Oscillator clock frequency; the datasheet states no separate UART clock limit"
+
+[models.peripherals.uart.baud]
+formula = "BAUD = fOSC / (S * (UBRRn + 1)), S = 16 (U2Xn = 0) or 8 (U2Xn = 1); UBRRn in 0-4095"
+divisor_offset = 1.0
+fraction_bits = 0
+register_bits = 12
+oversampling = [16, 8]
+basis = "Table 18-1 (p.191): asynchronous normal and double speed equations; UBRRn = contents of UBRRnH and UBRRnL, (0-4095); the double speed section: U2Xn reduces the divisor of the baud rate divider from 16 to 8"
+
+[[models.peripherals.uart.max_baud]]
+oversampling = 16
+baud_hz = 921600.0
+condition = "fOSC = 14.7456 MHz, U2Xn = 0, UBRRn = 0 (fOSC / 16)"
+basis = "Table 18-6 (p.208), fosc = 14.7456 MHz column, U2Xn = 0, Max. row: 921.6 kbps (the datasheet lists no 16 MHz column)"
+
+[[models.peripherals.uart.max_baud]]
+oversampling = 8
+baud_hz = 1843200.0
+condition = "fOSC = 14.7456 MHz, U2Xn = 1, UBRRn = 0 (fOSC / 8)"
+basis = "Table 18-6 (p.208), fosc = 14.7456 MHz column, U2Xn = 1, Max. row: 1.8432 Mbps (the datasheet lists no 16 MHz column)"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 7
+oversampling = 16
+total_error_min_pct = -6.8
+total_error_max_pct = 6.67
+recommended_receiver_error_pct = 3.0
+basis = "Table 18-2 (p.203), D = 5 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 8
+oversampling = 16
+total_error_min_pct = -5.88
+total_error_max_pct = 5.79
+recommended_receiver_error_pct = 2.5
+basis = "Table 18-2 (p.203), D = 6 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 9
+oversampling = 16
+total_error_min_pct = -5.19
+total_error_max_pct = 5.11
+recommended_receiver_error_pct = 2.0
+basis = "Table 18-2 (p.203), D = 7 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 16
+total_error_min_pct = -4.54
+total_error_max_pct = 4.58
+recommended_receiver_error_pct = 2.0
+basis = "Table 18-2 (p.203), D = 8 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 16
+total_error_min_pct = -4.19
+total_error_max_pct = 4.14
+recommended_receiver_error_pct = 1.5
+basis = "Table 18-2 (p.203), D = 9 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 12
+oversampling = 16
+total_error_min_pct = -3.83
+total_error_max_pct = 3.78
+recommended_receiver_error_pct = 1.5
+basis = "Table 18-2 (p.203), D = 10 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 7
+oversampling = 8
+total_error_min_pct = -5.88
+total_error_max_pct = 5.66
+recommended_receiver_error_pct = 2.5
+basis = "Table 18-3 (p.203), D = 5 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 8
+oversampling = 8
+total_error_min_pct = -5.08
+total_error_max_pct = 4.92
+recommended_receiver_error_pct = 2.0
+basis = "Table 18-3 (p.203), D = 6 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 9
+oversampling = 8
+total_error_min_pct = -4.48
+total_error_max_pct = 4.35
+recommended_receiver_error_pct = 1.5
+basis = "Table 18-3 (p.203), D = 7 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 8
+total_error_min_pct = -4.0
+total_error_max_pct = 3.9
+recommended_receiver_error_pct = 1.5
+basis = "Table 18-3 (p.203), D = 8 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 8
+total_error_min_pct = -3.61
+total_error_max_pct = 3.53
+recommended_receiver_error_pct = 1.5
+basis = "Table 18-3 (p.203), D = 9 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 12
+oversampling = 8
+total_error_min_pct = -3.3
+total_error_max_pct = 3.23
+recommended_receiver_error_pct = 1.0
+basis = "Table 18-3 (p.203), D = 10 (data + parity bits), start + D + 1 stop bit; maximum total error and recommended maximum receiver error"
+
+# Atmel ATmega16U4/32U4 datasheet 7766J (04/2016), section 24 (ADC) and section 29 Table 29-7 (ADC Characteristics). Printed page numbers. The ADHSM bit allows a higher ADC clock at the expense of power, and the datasheet gives no upper clock limit in Table 29-7, so none is recorded.
+[models.peripherals.adc]
+source = "https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-7766-8-bit-AVR-ATmega16U4-32U4_Datasheet.pdf"
+source_sha256 = "8e8c81dd4119062397bc08d677e7033d7abb4292628414c4e6e0a234cc53203a"
+resolution_bits = [10]
+basis = "Atmel ATmega16U4/32U4 datasheet 7766J (04/2016), ADC: features (p.297), section 24.4 (p.300), Table 24-1 (p.302), section 24.7.1 (pp.305-306), Table 24-5 (p.316), Table 29-7 (p.390)"
+
+[models.peripherals.adc.clock]
+source = "system clock divided by the ADPS[2:0] prescaler"
+prescalers = [2, 4, 8, 16, 32, 64, 128]
+min_hz = 50000.0
+full_resolution_min_hz = 50000.0
+full_resolution_max_hz = 200000.0
+basis = "Table 24-5 (p.316): ADPS 000 and 001 both divide by 2, then 4, 8, 16, 32, 64, 128; section 24.4 (p.300): an input clock between 50 kHz and 200 kHz gives maximum resolution, a higher clock is allowed for lower resolution, and ADHSM allows an increased clock"
+
+[[models.peripherals.adc.conversions]]
+mode = "first_after_enable"
+resolution_bits = 10
+sample_cycles = [14.5]
+total_cycles = 25.0
+basis = "Table 24-1 (p.302) ADC conversion time, 'First Conversion': sample and hold at 14.5 cycles from start of conversion, conversion time 25 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "normal"
+resolution_bits = 10
+sample_cycles = [1.5]
+total_cycles = 13.0
+basis = "Table 24-1 (p.302) ADC conversion time, 'Normal Conversion, Single Ended': sample and hold at 1.5 cycles from start of conversion, conversion time 13 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "auto_triggered"
+resolution_bits = 10
+sample_cycles = [2.0]
+total_cycles = 13.5
+basis = "Table 24-1 (p.302) ADC conversion time, 'Auto Triggered Conversion': sample and hold at 2 cycles from start of conversion, conversion time 13.5 cycles"
+
+[[models.peripherals.adc.max_sample_rate]]
+resolution_bits = 10
+max_hz = 15000.0
+condition = "maximum resolution (ADC clock 50-200 kHz)"
+basis = "section 24 features (p.297): 'Up to 15kSPS at Maximum Resolution'"
+
+[models.peripherals.adc.input]
+sample_cap_f = 1.4e-11
+input_series_ohms_min = 1000.0
+input_series_ohms_max = 100000.0
+max_source_ohms = 10000.0
+basis = "Figure 24-9 (p.306): series 1..100 kOhm into CS/H = 14 pF; section 24.7.1 (p.306): optimised for an output impedance of approximately 10 kOhm or less"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 200000.0
+abs_error_lsb = 2.0
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 200 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error; TUE, single ended"
+basis = "Table 29-7 (p.390) ADC characteristics, Absolute accuracy, Typ column"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 200000.0
+abs_error_lsb = 3.0
+column = "max"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 200 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error; TUE, single ended"
+basis = "Table 29-7 (p.390) ADC characteristics, Absolute accuracy, Max column"
+
 [models.pin_capability.adc]
 basis = "Atmel-7766J-USB-ATmega16U4/32U4-Datasheet_04/2016, section 1 Pin Configurations Figure 1-1 (PDF p.3) and the port F pin list (PDF p.307): ADC0, ADC1, ADC4-ADC7 on PF0, PF1, PF4-PF7; ADC8-ADC13 on PD4, PD6, PD7, PB4, PB5, PB6"
 [models.pin_capability.adc.pads]
@@ -1410,6 +2964,72 @@ default_clock_hz = 8000000
 max_pin_current_a = 0.04  # 21.1 Absolute Maximum Ratings, DC current per I/O pin 40.0 mA
 max_current_a = 0.2       # DC current VCC and GND pins, 200.0 mA
 max_voltage_v = 6.0       # Maximum Operating Voltage 6.0 V
+# Atmel ATtiny25/45/85 datasheet 2586Q-AVR-08/2013, section 17 (ADC) and section 21 Table 21-8 (ADC Characteristics, Single Ended Channels). Printed page numbers. The part has no UART (USI only), so there is no uart table.
+[models.peripherals.adc]
+source = "https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-2586-AVR-8-bit-Microcontroller-ATtiny25-ATtiny45-ATtiny85_Datasheet.pdf"
+source_sha256 = "0e3fa6a7d608de9b4403cf9fc12867a529cc891ab6a83f9be9ed0db595480837"
+resolution_bits = [10]
+basis = "Atmel ATtiny25/45/85 datasheet 2586Q-AVR-08/2013, ADC: features section 17.1 (p.122), section 17.5 (p.125), Table 17-1 (p.127), section 17.8 (p.129), Table 17-5 (p.136), Table 21-8 (p.167)"
+
+[models.peripherals.adc.clock]
+source = "system clock divided by the ADPS[2:0] prescaler"
+prescalers = [2, 4, 8, 16, 32, 64, 128]
+min_hz = 50000.0
+max_hz = 1000000.0
+full_resolution_min_hz = 50000.0
+full_resolution_max_hz = 200000.0
+basis = "Table 17-5 (p.136): ADPS 000 and 001 both divide by 2, then 4, 8, 16, 32, 64, 128; Table 21-8 (p.167) Clock Frequency: 50 kHz min, 1000 kHz max; section 17.5 (p.125): 50 kHz to 200 kHz for maximum resolution, and 'It is not recommended to use a higher input clock frequency than 1 MHz'"
+
+[[models.peripherals.adc.conversions]]
+mode = "first_after_enable"
+resolution_bits = 10
+sample_cycles = [13.5]
+total_cycles = 25.0
+basis = "Table 17-1 (p.127) ADC conversion time, 'First conversion': sample and hold at 13.5 cycles from start of conversion, conversion time 25 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "normal"
+resolution_bits = 10
+sample_cycles = [1.5]
+total_cycles = 13.0
+basis = "Table 17-1 (p.127) ADC conversion time, 'Normal conversions': sample and hold at 1.5 cycles from start of conversion, conversion time 13 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "auto_triggered"
+resolution_bits = 10
+sample_cycles = [2.0]
+total_cycles = 13.5
+basis = "Table 17-1 (p.127) ADC conversion time, 'Auto Triggered conversions': sample and hold at 2 cycles from start of conversion, conversion time 13.5 cycles"
+
+[[models.peripherals.adc.max_sample_rate]]
+resolution_bits = 10
+max_hz = 15000.0
+condition = "maximum resolution (ADC clock 50-200 kHz)"
+basis = "section 17.1 Features (p.122): 'Up to 15 kSPS at Maximum Resolution'"
+
+[models.peripherals.adc.input]
+sample_cap_f = 1.4e-11
+input_series_ohms_min = 1000.0
+input_series_ohms_max = 100000.0
+max_source_ohms = 10000.0
+basis = "Figure 17-8 (p.129): series 1..100 kOhm into CS/H = 14 pF; section 17.8 (p.129): optimised for an output impedance of approximately 10 kOhm or less"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 200000.0
+abs_error_lsb = 2.0
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 200 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error"
+basis = "Table 21-8 (p.167) ADC characteristics, Absolute accuracy, Typ column"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 1000000.0
+abs_error_lsb = 3.0
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 1000 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error"
+basis = "Table 21-8 (p.167) ADC characteristics, Absolute accuracy, Typ column"
+
 
 [[models]]
 id = "attiny85_8pin"
@@ -1438,6 +3058,72 @@ default_clock_hz = 8000000
 "6" = "pb1_miso"
 "7" = "pb2_sck_scl_adc1"
 "8" = "vcc"
+
+# Atmel ATtiny25/45/85 datasheet 2586Q-AVR-08/2013, section 17 (ADC) and section 21 Table 21-8 (ADC Characteristics, Single Ended Channels). Printed page numbers. The part has no UART (USI only), so there is no uart table.
+[models.peripherals.adc]
+source = "https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-2586-AVR-8-bit-Microcontroller-ATtiny25-ATtiny45-ATtiny85_Datasheet.pdf"
+source_sha256 = "0e3fa6a7d608de9b4403cf9fc12867a529cc891ab6a83f9be9ed0db595480837"
+resolution_bits = [10]
+basis = "Atmel ATtiny25/45/85 datasheet 2586Q-AVR-08/2013, ADC: features section 17.1 (p.122), section 17.5 (p.125), Table 17-1 (p.127), section 17.8 (p.129), Table 17-5 (p.136), Table 21-8 (p.167)"
+
+[models.peripherals.adc.clock]
+source = "system clock divided by the ADPS[2:0] prescaler"
+prescalers = [2, 4, 8, 16, 32, 64, 128]
+min_hz = 50000.0
+max_hz = 1000000.0
+full_resolution_min_hz = 50000.0
+full_resolution_max_hz = 200000.0
+basis = "Table 17-5 (p.136): ADPS 000 and 001 both divide by 2, then 4, 8, 16, 32, 64, 128; Table 21-8 (p.167) Clock Frequency: 50 kHz min, 1000 kHz max; section 17.5 (p.125): 50 kHz to 200 kHz for maximum resolution, and 'It is not recommended to use a higher input clock frequency than 1 MHz'"
+
+[[models.peripherals.adc.conversions]]
+mode = "first_after_enable"
+resolution_bits = 10
+sample_cycles = [13.5]
+total_cycles = 25.0
+basis = "Table 17-1 (p.127) ADC conversion time, 'First conversion': sample and hold at 13.5 cycles from start of conversion, conversion time 25 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "normal"
+resolution_bits = 10
+sample_cycles = [1.5]
+total_cycles = 13.0
+basis = "Table 17-1 (p.127) ADC conversion time, 'Normal conversions': sample and hold at 1.5 cycles from start of conversion, conversion time 13 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "auto_triggered"
+resolution_bits = 10
+sample_cycles = [2.0]
+total_cycles = 13.5
+basis = "Table 17-1 (p.127) ADC conversion time, 'Auto Triggered conversions': sample and hold at 2 cycles from start of conversion, conversion time 13.5 cycles"
+
+[[models.peripherals.adc.max_sample_rate]]
+resolution_bits = 10
+max_hz = 15000.0
+condition = "maximum resolution (ADC clock 50-200 kHz)"
+basis = "section 17.1 Features (p.122): 'Up to 15 kSPS at Maximum Resolution'"
+
+[models.peripherals.adc.input]
+sample_cap_f = 1.4e-11
+input_series_ohms_min = 1000.0
+input_series_ohms_max = 100000.0
+max_source_ohms = 10000.0
+basis = "Figure 17-8 (p.129): series 1..100 kOhm into CS/H = 14 pF; section 17.8 (p.129): optimised for an output impedance of approximately 10 kOhm or less"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 200000.0
+abs_error_lsb = 2.0
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 200 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error"
+basis = "Table 21-8 (p.167) ADC characteristics, Absolute accuracy, Typ column"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 1000000.0
+abs_error_lsb = 3.0
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 1000 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error"
+basis = "Table 21-8 (p.167) ADC characteristics, Absolute accuracy, Typ column"
 
 [models.pin_capability.adc]
 basis = "Atmel ATtiny25/45/85 datasheet 2586Q-AVR-08/2013, section 1 Pin Configurations Figure 1-1 (PDF p.2): ADC0 on PB5, ADC1 on PB2, ADC2 on PB4, ADC3 on PB3 (8-pin PDIP/SOIC)"
@@ -1499,6 +3185,72 @@ default_clock_hz = 8000000
 "12" = "pb1_miso"
 "14" = "pb2_sck_scl_adc1"
 "15" = "vcc"
+
+# Atmel ATtiny25/45/85 datasheet 2586Q-AVR-08/2013, section 17 (ADC) and section 21 Table 21-8 (ADC Characteristics, Single Ended Channels). Printed page numbers. The part has no UART (USI only), so there is no uart table.
+[models.peripherals.adc]
+source = "https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-2586-AVR-8-bit-Microcontroller-ATtiny25-ATtiny45-ATtiny85_Datasheet.pdf"
+source_sha256 = "0e3fa6a7d608de9b4403cf9fc12867a529cc891ab6a83f9be9ed0db595480837"
+resolution_bits = [10]
+basis = "Atmel ATtiny25/45/85 datasheet 2586Q-AVR-08/2013, ADC: features section 17.1 (p.122), section 17.5 (p.125), Table 17-1 (p.127), section 17.8 (p.129), Table 17-5 (p.136), Table 21-8 (p.167)"
+
+[models.peripherals.adc.clock]
+source = "system clock divided by the ADPS[2:0] prescaler"
+prescalers = [2, 4, 8, 16, 32, 64, 128]
+min_hz = 50000.0
+max_hz = 1000000.0
+full_resolution_min_hz = 50000.0
+full_resolution_max_hz = 200000.0
+basis = "Table 17-5 (p.136): ADPS 000 and 001 both divide by 2, then 4, 8, 16, 32, 64, 128; Table 21-8 (p.167) Clock Frequency: 50 kHz min, 1000 kHz max; section 17.5 (p.125): 50 kHz to 200 kHz for maximum resolution, and 'It is not recommended to use a higher input clock frequency than 1 MHz'"
+
+[[models.peripherals.adc.conversions]]
+mode = "first_after_enable"
+resolution_bits = 10
+sample_cycles = [13.5]
+total_cycles = 25.0
+basis = "Table 17-1 (p.127) ADC conversion time, 'First conversion': sample and hold at 13.5 cycles from start of conversion, conversion time 25 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "normal"
+resolution_bits = 10
+sample_cycles = [1.5]
+total_cycles = 13.0
+basis = "Table 17-1 (p.127) ADC conversion time, 'Normal conversions': sample and hold at 1.5 cycles from start of conversion, conversion time 13 cycles"
+
+[[models.peripherals.adc.conversions]]
+mode = "auto_triggered"
+resolution_bits = 10
+sample_cycles = [2.0]
+total_cycles = 13.5
+basis = "Table 17-1 (p.127) ADC conversion time, 'Auto Triggered conversions': sample and hold at 2 cycles from start of conversion, conversion time 13.5 cycles"
+
+[[models.peripherals.adc.max_sample_rate]]
+resolution_bits = 10
+max_hz = 15000.0
+condition = "maximum resolution (ADC clock 50-200 kHz)"
+basis = "section 17.1 Features (p.122): 'Up to 15 kSPS at Maximum Resolution'"
+
+[models.peripherals.adc.input]
+sample_cap_f = 1.4e-11
+input_series_ohms_min = 1000.0
+input_series_ohms_max = 100000.0
+max_source_ohms = 10000.0
+basis = "Figure 17-8 (p.129): series 1..100 kOhm into CS/H = 14 pF; section 17.8 (p.129): optimised for an output impedance of approximately 10 kOhm or less"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 200000.0
+abs_error_lsb = 2.0
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 200 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error"
+basis = "Table 21-8 (p.167) ADC characteristics, Absolute accuracy, Typ column"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 1000000.0
+abs_error_lsb = 3.0
+column = "typ"
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 1000 kHz; absolute accuracy including INL, DNL, quantization, gain and offset error"
+basis = "Table 21-8 (p.167) ADC characteristics, Absolute accuracy, Typ column"
 
 [models.pin_capability.adc]
 basis = "Atmel ATtiny25/45/85 datasheet 2586Q-AVR-08/2013, section 1 Pin Configurations Figure 1-1 (PDF p.2): ADC0 on PB5, ADC1 on PB2, ADC2 on PB4, ADC3 on PB3 (20-pad QFN/MLF)"
@@ -1690,6 +3442,215 @@ internal_clock = "internal 8 MHz HSI RC oscillator"
 "38" = "pb7_i2c1_sda"
 "44" = "boot0"     # BOOT0 strapping pin (LQFP-48 pin 44; RM0008 boot config)
 "48" = "vdd4"      # VDDA
+
+# RM0008 Rev 20 chapter 27 (USART) and STM32F103x8/xB datasheet DS5319 Rev 19. Printed page numbers.
+[models.peripherals.uart]
+source = "https://www.stmcu.jp/wp/wp-content/uploads/2017/08/RM0008_Rev20.pdf"
+source_sha256 = "097bc47ab8aa0c5d4a68f836dbab95c5b9acb2b0c8116a2959307743204b5097"
+basis = "RM0008 Rev 20 section 27.3.4 (p.798) and Tables 192-194 (pp.799-800); STM32F103x8/xB datasheet DS5319 Rev 19 section 2.3.17 (p.19), Table 9 (p.38)"
+also_from = [{ url = "https://www.stmcu.jp/wp/wp-content/uploads/2017/08/DS5319_Rev19.pdf", sha256 = "daf9ebe5299018a3cfa37f660ce9517b49010167d57d892c1e2164e65d98461f" }]
+
+[[models.peripherals.uart.clock_sources]]
+name = "PCLK2"
+instances = ["USART1"]
+max_hz = 72000000.0
+basis = "RM0008 Rev 20 section 27.3.4 (p.798): fCK is PCLK2 for USART1; STM32F103x8/xB datasheet DS5319 Rev 19 Table 9 (p.38): fPCLK2 max 72 MHz"
+
+[[models.peripherals.uart.clock_sources]]
+name = "PCLK1"
+instances = ["USART2", "USART3"]
+max_hz = 36000000.0
+basis = "RM0008 Rev 20 section 27.3.4 (p.798): fCK is PCLK1 for USART2-5; STM32F103x8/xB datasheet DS5319 Rev 19 Table 9 (p.38): fPCLK1 max 36 MHz"
+
+[models.peripherals.uart.baud]
+formula = "Tx/Rx baud = fCK / (16 * USARTDIV); USART_BRR = 12-bit DIV_Mantissa . 4-bit DIV_Fraction"
+divisor_offset = 0.0
+fraction_bits = 4
+register_bits = 16
+oversampling = [16]
+basis = "RM0008 Rev 20 section 27.3.4 (p.798): baud = fCK / (16*USARTDIV), USARTDIV an unsigned fixed point number coded in USART_BRR (examples: mantissa 27, fraction 12/16 gives 27.75)"
+
+[[models.peripherals.uart.max_baud]]
+instances = ["USART1"]
+oversampling = 16
+baud_hz = 4500000.0
+condition = "fPCLK2 = 72 MHz, USARTDIV = 1"
+basis = "RM0008 Rev 20 Table 192 (p.799) row 10 (4500 kbps, USARTDIV 1 at 72 MHz, NA at 36 MHz) and note 'only USART1 is clocked with PCLK2 (72 MHz max)'; STM32F103x8/xB datasheet DS5319 Rev 19 section 2.3.17 (p.19): one USART up to 4.5 Mbit/s"
+
+[[models.peripherals.uart.max_baud]]
+instances = ["USART2", "USART3"]
+oversampling = 16
+baud_hz = 2250000.0
+condition = "fPCLK1 = 36 MHz, USARTDIV = 1"
+basis = "RM0008 Rev 20 Table 192 (p.799) row 9 (2250 kbps, USARTDIV 1 at 36 MHz); STM32F103x8/xB datasheet DS5319 Rev 19 section 2.3.17 (p.19): the other interfaces up to 2.25 Mbit/s"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 16
+fractional_divisor = false
+noise_flag_is_error = true
+total_error_min_pct = -3.75
+total_error_max_pct = 3.75
+basis = "RM0008 Rev 20 Table 193 (p.800), M bit = 0 (10-bit frame), NF is an error; DIV_Fraction is 0; a tolerance on the total clock system deviation, either sign"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 16
+fractional_divisor = false
+noise_flag_is_error = false
+total_error_min_pct = -4.375
+total_error_max_pct = 4.375
+basis = "RM0008 Rev 20 Table 193 (p.800), M bit = 0 (10-bit frame), NF is don't care; DIV_Fraction is 0; a tolerance on the total clock system deviation, either sign"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 16
+fractional_divisor = false
+noise_flag_is_error = true
+total_error_min_pct = -3.41
+total_error_max_pct = 3.41
+basis = "RM0008 Rev 20 Table 193 (p.800), M bit = 1 (11-bit frame), NF is an error; DIV_Fraction is 0; a tolerance on the total clock system deviation, either sign"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 16
+fractional_divisor = false
+noise_flag_is_error = false
+total_error_min_pct = -3.97
+total_error_max_pct = 3.97
+basis = "RM0008 Rev 20 Table 193 (p.800), M bit = 1 (11-bit frame), NF is don't care; DIV_Fraction is 0; a tolerance on the total clock system deviation, either sign"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 16
+fractional_divisor = true
+noise_flag_is_error = true
+total_error_min_pct = -3.33
+total_error_max_pct = 3.33
+basis = "RM0008 Rev 20 Table 194 (p.800), M bit = 0 (10-bit frame), NF is an error; DIV_Fraction is different from 0; a tolerance on the total clock system deviation, either sign"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 10
+oversampling = 16
+fractional_divisor = true
+noise_flag_is_error = false
+total_error_min_pct = -3.88
+total_error_max_pct = 3.88
+basis = "RM0008 Rev 20 Table 194 (p.800), M bit = 0 (10-bit frame), NF is don't care; DIV_Fraction is different from 0; a tolerance on the total clock system deviation, either sign"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 16
+fractional_divisor = true
+noise_flag_is_error = true
+total_error_min_pct = -3.03
+total_error_max_pct = 3.03
+basis = "RM0008 Rev 20 Table 194 (p.800), M bit = 1 (11-bit frame), NF is an error; DIV_Fraction is different from 0; a tolerance on the total clock system deviation, either sign"
+
+[[models.peripherals.uart.receiver_tolerance]]
+frame_bits = 11
+oversampling = 16
+fractional_divisor = true
+noise_flag_is_error = false
+total_error_min_pct = -3.53
+total_error_max_pct = 3.53
+basis = "RM0008 Rev 20 Table 194 (p.800), M bit = 1 (11-bit frame), NF is don't care; DIV_Fraction is different from 0; a tolerance on the total clock system deviation, either sign"
+
+# STM32F103x8/xB datasheet DS5319 Rev 19 section 5.3.18 (12-bit ADC characteristics) and RM0008 Rev 20. Printed page numbers.
+[models.peripherals.adc]
+source = "https://www.stmcu.jp/wp/wp-content/uploads/2017/08/DS5319_Rev19.pdf"
+source_sha256 = "daf9ebe5299018a3cfa37f660ce9517b49010167d57d892c1e2164e65d98461f"
+resolution_bits = [12]
+basis = "STM32F103x8/xB datasheet DS5319 Rev 19 section 5.3.18 Table 47 (p.74), Equation 1 and Tables 48-49 (p.75), Table 50 (p.76); RM0008 Rev 20 RCC_CFGR ADCPRE (p.102), ADC_SMPR1/2 SMPx (p.244)"
+also_from = [{ url = "https://www.stmcu.jp/wp/wp-content/uploads/2017/08/RM0008_Rev20.pdf", sha256 = "097bc47ab8aa0c5d4a68f836dbab95c5b9acb2b0c8116a2959307743204b5097" }]
+
+[models.peripherals.adc.clock]
+source = "PCLK2 divided by the RCC_CFGR ADCPRE prescaler"
+prescalers = [2, 4, 6, 8]
+min_hz = 600000.0
+max_hz = 14000000.0
+basis = "RM0008 Rev 20 RCC_CFGR bits 15:14 ADCPRE (p.102): 00 /2, 01 /4, 10 /6, 11 /8 of PCLK2; STM32F103x8/xB datasheet DS5319 Rev 19 Table 47 (p.74): fADC 0.6 MHz min, 14 MHz max"
+
+[[models.peripherals.adc.conversions]]
+mode = "normal"
+resolution_bits = 12
+sample_cycles = [1.5, 7.5, 13.5, 28.5, 41.5, 55.5, 71.5, 239.5]
+cycles_after_sample = 12.5
+basis = "RM0008 Rev 20 ADC_SMPR1/2 SMPx[2:0] (p.244): 1.5, 7.5, 13.5, 28.5, 41.5, 55.5, 71.5, 239.5 cycles; STM32F103x8/xB datasheet DS5319 Rev 19 Table 47 (p.74): tCONV = tS for sampling + 12.5 successive approximation cycles (14 to 252 cycles)"
+
+[[models.peripherals.adc.max_sample_rate]]
+resolution_bits = 12
+max_hz = 1000000.0
+condition = "fADC = 14 MHz"
+basis = "STM32F103x8/xB datasheet DS5319 Rev 19 Table 47 (p.74): fS sampling rate 0.05 MHz min, 1 MHz max (specified by design)"
+
+[models.peripherals.adc.input]
+sample_cap_f = 8e-12
+input_series_ohms_max = 1000.0
+max_source_ohms = 50000.0
+basis = "STM32F103x8/xB datasheet DS5319 Rev 19 Table 47 (p.74): CADC internal sample and hold capacitor 8 pF max, RADC sampling switch resistance 1 kOhm max, RAIN external input impedance 50 kOhm max (see Equation 1 and Table 48)"
+
+[[models.peripherals.adc.input.max_source_by_sample_time]]
+sample_cycles = 1.5
+max_ohms = 400.0
+adc_clock_hz = 14000000.0
+basis = "STM32F103x8/xB datasheet DS5319 Rev 19 Table 48 (p.75) RAIN max for fADC = 14 MHz, Ts = 1.5 cycles: 0.4 kOhm (error below 1/4 LSB, Equation 1)"
+
+[[models.peripherals.adc.input.max_source_by_sample_time]]
+sample_cycles = 7.5
+max_ohms = 5900.0
+adc_clock_hz = 14000000.0
+basis = "STM32F103x8/xB datasheet DS5319 Rev 19 Table 48 (p.75) RAIN max for fADC = 14 MHz, Ts = 7.5 cycles: 5.9 kOhm (error below 1/4 LSB, Equation 1)"
+
+[[models.peripherals.adc.input.max_source_by_sample_time]]
+sample_cycles = 13.5
+max_ohms = 11400.0
+adc_clock_hz = 14000000.0
+basis = "STM32F103x8/xB datasheet DS5319 Rev 19 Table 48 (p.75) RAIN max for fADC = 14 MHz, Ts = 13.5 cycles: 11.4 kOhm (error below 1/4 LSB, Equation 1)"
+
+[[models.peripherals.adc.input.max_source_by_sample_time]]
+sample_cycles = 28.5
+max_ohms = 25200.0
+adc_clock_hz = 14000000.0
+basis = "STM32F103x8/xB datasheet DS5319 Rev 19 Table 48 (p.75) RAIN max for fADC = 14 MHz, Ts = 28.5 cycles: 25.2 kOhm (error below 1/4 LSB, Equation 1)"
+
+[[models.peripherals.adc.input.max_source_by_sample_time]]
+sample_cycles = 41.5
+max_ohms = 37200.0
+adc_clock_hz = 14000000.0
+basis = "STM32F103x8/xB datasheet DS5319 Rev 19 Table 48 (p.75) RAIN max for fADC = 14 MHz, Ts = 41.5 cycles: 37.2 kOhm (error below 1/4 LSB, Equation 1)"
+
+[[models.peripherals.adc.input.max_source_by_sample_time]]
+sample_cycles = 55.5
+max_ohms = 50000.0
+adc_clock_hz = 14000000.0
+basis = "STM32F103x8/xB datasheet DS5319 Rev 19 Table 48 (p.75) RAIN max for fADC = 14 MHz, Ts = 55.5 cycles: 50 kOhm (error below 1/4 LSB, Equation 1)"
+
+[[models.peripherals.adc.input.max_source_by_sample_time]]
+sample_cycles = 71.5
+adc_clock_hz = 14000000.0
+basis = "STM32F103x8/xB datasheet DS5319 Rev 19 Table 48 (p.75) RAIN max for fADC = 14 MHz, Ts = 71.5 cycles: NA (error below 1/4 LSB, Equation 1)"
+
+[[models.peripherals.adc.input.max_source_by_sample_time]]
+sample_cycles = 239.5
+adc_clock_hz = 14000000.0
+basis = "STM32F103x8/xB datasheet DS5319 Rev 19 Table 48 (p.75) RAIN max for fADC = 14 MHz, Ts = 239.5 cycles: NA (error below 1/4 LSB, Equation 1)"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 12
+adc_clock_hz = 14000000.0
+abs_error_lsb = 2.0
+column = "max"
+condition = "total unadjusted error, fPCLK2 = 56 MHz, fADC = 14 MHz, RAIN < 10 kOhm, VDDA = 3 V to 3.6 V, TA = 25 C, after ADC calibration"
+basis = "STM32F103x8/xB datasheet DS5319 Rev 19 Table 49 (p.75) ET max"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 12
+adc_clock_hz = 14000000.0
+abs_error_lsb = 5.0
+column = "max"
+condition = "total unadjusted error, fPCLK2 = 56 MHz, fADC = 14 MHz, RAIN < 10 kOhm, VDDA = 2.4 V to 3.6 V, after ADC calibration"
+basis = "STM32F103x8/xB datasheet DS5319 Rev 19 Table 50 (p.76) ET max"
 
 [models.pin_capability.adc]
 basis = "STMicroelectronics STM32F103x8/xB datasheet (medium-density), Table 5 pin definitions (PDF pp.28-29), LQFP48/UFQFPN48 column: PA0-PA7 pins 10-12, 14-17 are ADC12_IN0-IN7 (pin 13 PA3 is IN3 but not in [models.pins]) and PB0 pin 18 is ADC12_IN8; both ADC1 and ADC2 reach every channel; PC13-PC15, PA8-PA10 and PB6/PB7 carry no ADC channel"
@@ -3217,6 +5178,65 @@ internal_clock = "internal ring oscillator (ROSC)"
 # Pad 56 = QSPI_SS verified vs rp2040_minimal and SparkFun Thing Plus RP2040.
 "56" = "qspi_ss"
 
+# RP2040 Datasheet (build 3184e62, 2025-02-20). Printed page numbers (PDF page = printed + 1). The PL011 states no receiver tolerance table, so none is recorded.
+[models.peripherals.uart]
+source = "https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf"
+source_sha256 = "be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c"
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20), section 4.2 UART: introduction (p.418), section 4.2.3.1 clock signals (p.420), section 4.2.3.2.1 (p.421); section 2.15.3.1 Table 205 (p.183)"
+
+[[models.peripherals.uart.clock_sources]]
+name = "clk_peri (UARTCLK)"
+max_hz = 133000000.0
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) Table 205 (p.183): clk_peri nominal 12 - 125 MHz, and the note that clk_sys (and clk_peri) have a maximum frequency of 133 MHz across all process, voltage and temperature variations; section 4.2.3.1 (p.420): FUARTCLK must be no more than 5/3 times FPCLK"
+
+[models.peripherals.uart.baud]
+formula = "Baud Rate Divisor = UARTCLK / (16 * Baud Rate) = UARTIBRD (16-bit integer) + UARTFBRD (6-bit fraction) / 64"
+divisor_offset = 0.0
+fraction_bits = 6
+register_bits = 22
+oversampling = [16]
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.2.3.2.1 Fractional baud rate divider (p.421): a 22-bit divisor of a 16-bit integer and a 6-bit fractional part; section 4.2.3.1 (p.420): FUARTCLK(min) >= 16 x baud(max)"
+
+[[models.peripherals.uart.max_baud]]
+oversampling = 16
+baud_hz = 7800000.0
+condition = "UARTCLK = 125 MHz (UARTCLK / 16, UART mode)"
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.2.1 Overview (p.418): 'Supports a maximum baud rate of UARTCLK / 16 in UART mode (7.8 Mbaud at 125MHz)'"
+
+# RP2040 Datasheet (build 3184e62, 2025-02-20). Printed page numbers. No prescaler or selectable sample time is stated, so none is recorded.
+[models.peripherals.adc]
+source = "https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf"
+source_sha256 = "be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c"
+resolution_bits = [12]
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20), section 4.9 ADC and Temperature Sensor: overview (p.557), section 4.9.2 (p.559), section 4.9.3 Table 566 (p.562); Table 205 (p.183); Table 627 (p.616)"
+
+[models.peripherals.adc.clock]
+source = "clk_adc, an independent clock with no prescaler in the ADC block"
+required_hz = 48000000.0
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) Table 205 (p.183): clk_adc 'ADC reference clock. Must be 48MHz.'; section 4.9 overview (p.557): 500ksps using an independent 48MHz clock"
+
+[[models.peripherals.adc.conversions]]
+mode = "normal"
+resolution_bits = 12
+total_cycles = 96.0
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9.2 (p.559): 96 cycles of clk_adc per conversion (96 x 1/48MHz = 2 us per sample); CS.READY goes high after 96 cycles"
+
+[[models.peripherals.adc.max_sample_rate]]
+resolution_bits = 12
+max_hz = 500000.0
+condition = "clk_adc = 48 MHz, one conversion per 96 cycles"
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9 overview (p.557) and section 4.9.2 (p.559): 500 ksps"
+
+[models.peripherals.adc.input]
+sample_cap_f = 1e-12
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9.2 (p.559): 'when sampling, it places about 1pF across the input'; the effective impedance even at 500ksps is over 100 kOhm (Table 627 RIN_ADC min 100 kOhm, p.616); no source-impedance limit is stated"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 12
+enob_bits = 8.7
+condition = "typical ENOB at 250 ksps, 997 Hz input, room temperature, across 3 typical, 3 fast and 3 slow corner devices (min 8.6, max 8.8)"
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9.3 Tables 565-566 (pp.561-562); Table 627 ENOB 8.7 bits (p.616)"
+
 # Ref: RP2040 Datasheet (build 2.21), sec 2.8.1.2 "Boot sequence" and sec 2.8.6
 # "Bootrom contents"; the GPIO_QSPI_SS pin must idle high (flash CS) for normal
 # boot. Held low at reset selects the USB bootloader.
@@ -3314,6 +5334,65 @@ internal_clock = "internal ring oscillator (ROSC)"
 "55" = "qspi_sd1"
 "56" = "qspi_ss"
 "57" = "gnd"
+
+# RP2040 Datasheet (build 3184e62, 2025-02-20). Printed page numbers (PDF page = printed + 1). The PL011 states no receiver tolerance table, so none is recorded.
+[models.peripherals.uart]
+source = "https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf"
+source_sha256 = "be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c"
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20), section 4.2 UART: introduction (p.418), section 4.2.3.1 clock signals (p.420), section 4.2.3.2.1 (p.421); section 2.15.3.1 Table 205 (p.183)"
+
+[[models.peripherals.uart.clock_sources]]
+name = "clk_peri (UARTCLK)"
+max_hz = 133000000.0
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) Table 205 (p.183): clk_peri nominal 12 - 125 MHz, and the note that clk_sys (and clk_peri) have a maximum frequency of 133 MHz across all process, voltage and temperature variations; section 4.2.3.1 (p.420): FUARTCLK must be no more than 5/3 times FPCLK"
+
+[models.peripherals.uart.baud]
+formula = "Baud Rate Divisor = UARTCLK / (16 * Baud Rate) = UARTIBRD (16-bit integer) + UARTFBRD (6-bit fraction) / 64"
+divisor_offset = 0.0
+fraction_bits = 6
+register_bits = 22
+oversampling = [16]
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.2.3.2.1 Fractional baud rate divider (p.421): a 22-bit divisor of a 16-bit integer and a 6-bit fractional part; section 4.2.3.1 (p.420): FUARTCLK(min) >= 16 x baud(max)"
+
+[[models.peripherals.uart.max_baud]]
+oversampling = 16
+baud_hz = 7800000.0
+condition = "UARTCLK = 125 MHz (UARTCLK / 16, UART mode)"
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.2.1 Overview (p.418): 'Supports a maximum baud rate of UARTCLK / 16 in UART mode (7.8 Mbaud at 125MHz)'"
+
+# RP2040 Datasheet (build 3184e62, 2025-02-20). Printed page numbers. No prescaler or selectable sample time is stated, so none is recorded.
+[models.peripherals.adc]
+source = "https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf"
+source_sha256 = "be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c"
+resolution_bits = [12]
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20), section 4.9 ADC and Temperature Sensor: overview (p.557), section 4.9.2 (p.559), section 4.9.3 Table 566 (p.562); Table 205 (p.183); Table 627 (p.616)"
+
+[models.peripherals.adc.clock]
+source = "clk_adc, an independent clock with no prescaler in the ADC block"
+required_hz = 48000000.0
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) Table 205 (p.183): clk_adc 'ADC reference clock. Must be 48MHz.'; section 4.9 overview (p.557): 500ksps using an independent 48MHz clock"
+
+[[models.peripherals.adc.conversions]]
+mode = "normal"
+resolution_bits = 12
+total_cycles = 96.0
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9.2 (p.559): 96 cycles of clk_adc per conversion (96 x 1/48MHz = 2 us per sample); CS.READY goes high after 96 cycles"
+
+[[models.peripherals.adc.max_sample_rate]]
+resolution_bits = 12
+max_hz = 500000.0
+condition = "clk_adc = 48 MHz, one conversion per 96 cycles"
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9 overview (p.557) and section 4.9.2 (p.559): 500 ksps"
+
+[models.peripherals.adc.input]
+sample_cap_f = 1e-12
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9.2 (p.559): 'when sampling, it places about 1pF across the input'; the effective impedance even at 500ksps is over 100 kOhm (Table 627 RIN_ADC min 100 kOhm, p.616); no source-impedance limit is stated"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 12
+enob_bits = 8.7
+condition = "typical ENOB at 250 ksps, 997 Hz input, room temperature, across 3 typical, 3 fast and 3 slow corner devices (min 8.6, max 8.8)"
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9.3 Tables 565-566 (pp.561-562); Table 627 ENOB 8.7 bits (p.616)"
 
 [models.pin_capability.adc]
 basis = "Raspberry Pi RP2040 Datasheet, Table 615 GPIO pins (PDF p.613-614): GPIO26-GPIO29 are ADC0-ADC3, pads 38-41; every other GPIO has no ADC channel"
@@ -3467,6 +5546,65 @@ backend = "renode:rp2040"
 "40" = "vbus"        # micro-USB 5 V
 
 # ─────────────────────────────────────────────────────────────────────────────
+
+# RP2040 Datasheet (build 3184e62, 2025-02-20). Printed page numbers (PDF page = printed + 1). The PL011 states no receiver tolerance table, so none is recorded.
+[models.peripherals.uart]
+source = "https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf"
+source_sha256 = "be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c"
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20), section 4.2 UART: introduction (p.418), section 4.2.3.1 clock signals (p.420), section 4.2.3.2.1 (p.421); section 2.15.3.1 Table 205 (p.183)"
+
+[[models.peripherals.uart.clock_sources]]
+name = "clk_peri (UARTCLK)"
+max_hz = 133000000.0
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) Table 205 (p.183): clk_peri nominal 12 - 125 MHz, and the note that clk_sys (and clk_peri) have a maximum frequency of 133 MHz across all process, voltage and temperature variations; section 4.2.3.1 (p.420): FUARTCLK must be no more than 5/3 times FPCLK"
+
+[models.peripherals.uart.baud]
+formula = "Baud Rate Divisor = UARTCLK / (16 * Baud Rate) = UARTIBRD (16-bit integer) + UARTFBRD (6-bit fraction) / 64"
+divisor_offset = 0.0
+fraction_bits = 6
+register_bits = 22
+oversampling = [16]
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.2.3.2.1 Fractional baud rate divider (p.421): a 22-bit divisor of a 16-bit integer and a 6-bit fractional part; section 4.2.3.1 (p.420): FUARTCLK(min) >= 16 x baud(max)"
+
+[[models.peripherals.uart.max_baud]]
+oversampling = 16
+baud_hz = 7800000.0
+condition = "UARTCLK = 125 MHz (UARTCLK / 16, UART mode)"
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.2.1 Overview (p.418): 'Supports a maximum baud rate of UARTCLK / 16 in UART mode (7.8 Mbaud at 125MHz)'"
+
+# RP2040 Datasheet (build 3184e62, 2025-02-20). Printed page numbers. No prescaler or selectable sample time is stated, so none is recorded.
+[models.peripherals.adc]
+source = "https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf"
+source_sha256 = "be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c"
+resolution_bits = [12]
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20), section 4.9 ADC and Temperature Sensor: overview (p.557), section 4.9.2 (p.559), section 4.9.3 Table 566 (p.562); Table 205 (p.183); Table 627 (p.616)"
+
+[models.peripherals.adc.clock]
+source = "clk_adc, an independent clock with no prescaler in the ADC block"
+required_hz = 48000000.0
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) Table 205 (p.183): clk_adc 'ADC reference clock. Must be 48MHz.'; section 4.9 overview (p.557): 500ksps using an independent 48MHz clock"
+
+[[models.peripherals.adc.conversions]]
+mode = "normal"
+resolution_bits = 12
+total_cycles = 96.0
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9.2 (p.559): 96 cycles of clk_adc per conversion (96 x 1/48MHz = 2 us per sample); CS.READY goes high after 96 cycles"
+
+[[models.peripherals.adc.max_sample_rate]]
+resolution_bits = 12
+max_hz = 500000.0
+condition = "clk_adc = 48 MHz, one conversion per 96 cycles"
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9 overview (p.557) and section 4.9.2 (p.559): 500 ksps"
+
+[models.peripherals.adc.input]
+sample_cap_f = 1e-12
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9.2 (p.559): 'when sampling, it places about 1pF across the input'; the effective impedance even at 500ksps is over 100 kOhm (Table 627 RIN_ADC min 100 kOhm, p.616); no source-impedance limit is stated"
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 12
+enob_bits = 8.7
+condition = "typical ENOB at 250 ksps, 997 Hz input, room temperature, across 3 typical, 3 fast and 3 slow corner devices (min 8.6, max 8.8)"
+basis = "RP2040 Datasheet (build 3184e62, 2025-02-20) section 4.9.3 Tables 565-566 (pp.561-562); Table 627 ENOB 8.7 bits (p.616)"
 
 [models.pin_capability.adc]
 basis = "Raspberry Pi Pico Datasheet (build date 03/07/2026), Figure 2 pinout of the Pico Rev3 board (PDF p.5): physical pin 31 GP26 ADC0, pin 32 GP27 ADC1, pin 34 GP28 ADC2; ADC3 (GP29) is wired to VSYS/3 on the board and is not on the header"

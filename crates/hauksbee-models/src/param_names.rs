@@ -176,6 +176,24 @@ const DIGITAL_FROM: usize = 9; // `supply_pin`
 const DAC_TO: usize = 11; // through `gnd_pin`
 const ADC_TO: usize = 19; // everything before `supply_cpd_pf`
 
+/// A vocabulary slice plus the bus-limit names, which are spelled once in
+/// `hauksbee_ir::peripheral_limits` and so are joined here rather than retyped.
+fn with_bus_limits(base: &[&'static str]) -> Vec<&'static str> {
+    base.iter()
+        .copied()
+        .chain(hauksbee_ir::peripheral_limits::BUS_LIMIT_PARAMS)
+        .collect()
+}
+
+/// The digital vocabulary plus the datasheet bus-clock limits
+/// (`max_sclk_hz`, `i2c_max_hz`) a peripheral card carries.
+static DIGITAL_WITH_BUS_LIMITS: std::sync::LazyLock<Vec<&'static str>> =
+    std::sync::LazyLock::new(|| with_bus_limits(&CONVERTER_AND_DIGITAL[DIGITAL_FROM..]));
+
+/// The ADC vocabulary plus the same bus-clock limits (an I2C or SPI ADC).
+static ADC_WITH_BUS_LIMITS: std::sync::LazyLock<Vec<&'static str>> =
+    std::sync::LazyLock::new(|| with_bus_limits(&CONVERTER_AND_DIGITAL[..ADC_TO]));
+
 /// The parameter names this kind's consumers read, beyond `UNIVERSAL`.
 ///
 /// A kind with an empty slice carries no numeric physics at all (a connector
@@ -279,11 +297,11 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             "latch_hold",
         ],
         ComponentKind::AnalogSwitch => &["ron", "ron_s0", "ron_s1", "roff", "vth"],
-        ComponentKind::Digital => &CONVERTER_AND_DIGITAL[DIGITAL_FROM..],
+        ComponentKind::Digital => &DIGITAL_WITH_BUS_LIMITS[..],
         // A shift register is the digital vocabulary plus its stage count.
         ComponentKind::ShiftRegister => &CONVERTER_AND_DIGITAL[SHIFT_REGISTER_FROM..],
         ComponentKind::Dac => &CONVERTER_AND_DIGITAL[..DAC_TO],
-        ComponentKind::Adc => &CONVERTER_AND_DIGITAL[..ADC_TO],
+        ComponentKind::Adc => &ADC_WITH_BUS_LIMITS[..],
         ComponentKind::Mcu => &[
             "backend",
             "module",

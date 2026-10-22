@@ -22,6 +22,7 @@ pub mod glossary;
 pub mod labels;
 mod models;
 pub mod order;
+pub mod peripheral_limits;
 pub mod progress;
 pub mod run_record;
 mod source;

@@ -812,6 +812,46 @@ exist in `[models.pins]`, none of them a supply or ground role, and a channel fo
 each. `card_coverage` lists the table (`adc_pins`) among an MCU card's needs when
 the datasheet mentions an ADC.
 
+## Peripheral limits: UART baud generators, ADC timing, bus clocks
+
+An MCU card may carry `[models.peripherals.uart]` and `[models.peripherals.adc]`
+tables, the printed limits the co-simulation fidelity checks compare firmware
+settings against (baud error against the datasheet's receiver tolerance, ADC clock
+and source-impedance windows, conversion rate). Every block names the `source` PDF
+(https URL plus `source_sha256`) and a `basis` that cites the table, section and
+printed page; so does every row inside it. A value the datasheet does not print is
+left out, never filled in.
+
+```toml
+[models.peripherals.uart.baud]
+formula = "BAUD = fOSC / (S * (UBRRn + 1))"
+divisor_offset = 1.0     # baud = f_clk / (oversampling * (register / 2^fraction_bits + offset))
+fraction_bits = 0
+register_bits = 12
+oversampling = [16, 8]
+basis = "Table 20-1 (p.182) ..."
+
+[[models.peripherals.adc.accuracy]]
+resolution_bits = 10
+adc_clock_hz = 200000.0
+abs_error_lsb = 2.0
+column = "typ"          # the printed column, so a typical figure is never read as a limit
+condition = "VREF = 4 V, VCC = 4 V, ADC clock = 200 kHz"
+basis = "Table 29-15 (p.319) ..."
+```
+
+A conversion states its duration one way, `total_cycles` or `cycles_after_sample`.
+The block is valid on `mcu` cards only. Slave peripherals (sensors, memories) state
+their bus clock ceilings as ordinary printed rows in `[models.params]`:
+`max_sclk_hz` for an SPI clock and `i2c_max_hz` for the fastest I2C mode, each with
+`conditions` and a `basis`. The formulas (baud divisor and error, conversion rate,
+RC settling, the STM32 source-resistance equation) and the vocabulary (table names,
+parameter names, conversion modes) are defined once in
+`hauksbee_ir::peripheral_limits`, and a drift test fails if another crate spells
+them. Cards filled so far: ATmega328P and ATmega1284/P, ATmega32U4, ATtiny85
+(ADC only) and their module carriers, STM32F103C8 and RP2040. The tables are
+validated by `peripheral_limits.rs` in `hauksbee-models`.
+
 ## Package variants and fuse hold current
 
 A part number whose suffix names a smaller package must not inherit the larger

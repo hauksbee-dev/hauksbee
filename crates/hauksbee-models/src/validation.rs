@@ -677,6 +677,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     }
 
     check_pin_capability(entry, &mut p);
+    check_peripheral_limits(entry, &mut p);
 
     // A pin map is a stated fact even on an identity-only card.
     p.0.extend(merged_unit_roles(entry));
@@ -1804,6 +1805,20 @@ fn feedback_node(name: &str) -> bool {
     let keys = pin_name_keys(name);
     let output = |k: &String| matches!(k.as_str(), "out" | "output" | "vo" | "os" | "sense");
     keys.iter().any(|k| matches!(k.as_str(), "fb" | "adj")) && !keys.iter().any(output)
+}
+
+/// `[models.peripherals]`: an MCU card's UART and ADC limit tables, each held to
+/// a datasheet URL, a basis naming table and page, and positive finite numbers.
+fn check_peripheral_limits(entry: &ModelEntry, p: &mut Problems) {
+    if entry.peripherals.is_empty() {
+        return;
+    }
+    p.require(entry.kind == ComponentKind::Mcu, || {
+        "[models.peripherals] belongs on an mcu card".into()
+    });
+    for problem in entry.peripherals.problems() {
+        p.push(problem);
+    }
 }
 
 /// `[models.pin_capability]`: an MCU card's structured capability tables.
