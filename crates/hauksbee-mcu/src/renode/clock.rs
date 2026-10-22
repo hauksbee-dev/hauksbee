@@ -267,7 +267,10 @@ pub(super) fn install_readiness(
     let path = write_script(&script)?;
     let mut install = || -> Result<()> {
         monitor
-            .run(&format!("python \"exec(open('{}').read())\"", path.display()))
+            .run(&format!(
+                "python \"exec(open('{}').read())\"",
+                path.display()
+            ))
             .context("loading the clock-readiness model")?;
         let ok = monitor
             .run("python \"import __builtin__ as b; print(b.hkb_ok)\"")
@@ -499,7 +502,10 @@ mod tests {
         ]);
         let s = readiness_script(&c, false);
         assert!(s.contains("b.hkb_ext = False"), "{s}");
-        assert!(s.contains("'hse': {'p': 'rcc', 'en_reg': 0, 'en_mask': 65536"), "{s}");
+        assert!(
+            s.contains("'hse': {'p': 'rcc', 'en_reg': 0, 'en_mask': 65536"),
+            "{s}"
+        );
         assert!(s.contains("'su': 2000.0"), "{s}");
         assert!(s.contains("'needs': [('hse', (4, 65536, 65536))]"), "{s}");
         assert!(readiness_script(&c, true).contains("b.hkb_ext = True"));

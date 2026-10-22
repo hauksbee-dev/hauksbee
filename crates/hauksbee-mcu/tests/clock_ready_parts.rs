@@ -93,23 +93,47 @@ fn check_part(part: &str, config: fn() -> RenodeConfig, elf: &str, hse_us: u64, 
 // F072 DS9826 p.68/p.74 (2 ms, 200 us), G4 DS12288 p.117/p.123 (2 ms, 40 us).
 #[test]
 fn stm32f4_crystal_gates_hse_and_pll() {
-    check_part("stm32f4", RenodeConfig::stm32f4_discovery, "stm32f4_ready_probe.elf", 2_000, 300);
+    check_part(
+        "stm32f4",
+        RenodeConfig::stm32f4_discovery,
+        "stm32f4_ready_probe.elf",
+        2_000,
+        300,
+    );
 }
 
 #[test]
 fn stm32l0_crystal_gates_hse_and_pll() {
-    check_part("stm32l0", RenodeConfig::stm32l0, "stm32l0_ready_probe.elf", 2_000, 160);
+    check_part(
+        "stm32l0",
+        RenodeConfig::stm32l0,
+        "stm32l0_ready_probe.elf",
+        2_000,
+        160,
+    );
 }
 
 /// With a crystal the F072 reaches both markers: the old RCC stub hung.
 #[test]
 fn stm32f072_crystal_gates_hse_and_pll_and_does_not_hang() {
-    check_part("stm32f072", RenodeConfig::stm32f072, "stm32f072_ready_probe.elf", 2_000, 200);
+    check_part(
+        "stm32f072",
+        RenodeConfig::stm32f072,
+        "stm32f072_ready_probe.elf",
+        2_000,
+        200,
+    );
 }
 
 #[test]
 fn stm32g4_crystal_gates_hse_and_pll() {
-    check_part("stm32g4", RenodeConfig::stm32g4, "stm32g4_ready_probe.elf", 2_000, 40);
+    check_part(
+        "stm32g4",
+        RenodeConfig::stm32g4,
+        "stm32g4_ready_probe.elf",
+        2_000,
+        40,
+    );
 }
 
 /// RP2040: the pico-sdk image blocks in `xosc_init` without a crystal, so GP25
@@ -149,10 +173,22 @@ fn rp2040_crystal_gates_xosc_stable() {
 
     let (edge, text) = run(true);
     let edge = edge.expect("GP25 must toggle with a crystal fitted");
-    assert!(edge >= 1_000, "boot cannot finish inside the 1 ms XOSC startup: {edge} us");
-    assert!(text.contains("main reached"), "the SDK must reach main: {text:?}");
+    assert!(
+        edge >= 1_000,
+        "boot cannot finish inside the 1 ms XOSC startup: {edge} us"
+    );
+    assert!(
+        text.contains("main reached"),
+        "the SDK must reach main: {text:?}"
+    );
 
     let (edge, text) = run(false);
-    assert_eq!(edge, None, "no crystal: runtime_init must stay blocked in xosc_init");
-    assert!(text.is_empty(), "no crystal: nothing may reach the UART, got {text:?}");
+    assert_eq!(
+        edge, None,
+        "no crystal: runtime_init must stay blocked in xosc_init"
+    );
+    assert!(
+        text.is_empty(),
+        "no crystal: nothing may reach the UART, got {text:?}"
+    );
 }

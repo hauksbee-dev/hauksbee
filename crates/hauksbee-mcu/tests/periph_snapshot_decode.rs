@@ -115,7 +115,14 @@ fn f4_pll_168mhz_and_peripherals() {
     close(&s.sck_hz, 42e6 / 8.0);
     close(&s.cpol, 1.0);
     close(&s.cpha, 1.0);
-    close(&p.i2cs().iter().find(|i| i.name == "i2c1").expect("i2c1").scl_hz, 420e3);
+    close(
+        &p.i2cs()
+            .iter()
+            .find(|i| i.name == "i2c1")
+            .expect("i2c1")
+            .scl_hz,
+        420e3,
+    );
     // TIM2 on the x2 APB1 timer clock: 84 MHz / 42000 = 2 kHz, 1000 ticks = 0.5 s.
     let t = timer(&p, "tim2");
     close(&t.tick_hz, 2000.0);
@@ -147,8 +154,8 @@ fn f072_pll_48mhz_usart_spi_timers() {
     regs.extend([
         // USART1 on PCLK (USART1SW = 00), OVER8 = 0: BRR 208 gives 24e6 / 208.
         (0x4001_380C, 0xD0), // BRR at +0x0C
-        (0x4001_3800, 0),        // CR1
-        (0x4001_3804, 0),        // CR2
+        (0x4001_3800, 0),    // CR1
+        (0x4001_3804, 0),    // CR2
         // USART2: OVER8 = 1, BRR = 26 << 4 | 0 gives 24e6 / (8 x 26).
         (0x4000_440C, 0x1A0),
         (0x4000_4400, 1 << 15),
@@ -202,7 +209,12 @@ fn f072_usart1_follows_its_clock_switch() {
 /// reserved 11 stays unknown instead of being guessed.
 #[test]
 fn f072_word_length_encodings() {
-    for (cr1, want) in [(0u32, Some(8.0)), (1 << 12, Some(9.0)), (1 << 28, Some(7.0)), ((1 << 12) | (1 << 28), None)] {
+    for (cr1, want) in [
+        (0u32, Some(8.0)),
+        (1 << 12, Some(9.0)),
+        (1 << 28, Some(7.0)),
+        ((1 << 12) | (1 << 28), None),
+    ] {
         let mut regs = f072_regs(0);
         regs.extend([(0x4000_440C, 0xD0), (0x4000_4400, cr1), (0x4000_4404, 0)]);
         let p = decode(&RenodeConfig::stm32f072(), &regs);
@@ -310,7 +322,12 @@ fn l0_usart2_follows_ccipr() {
 /// MSI (reset) clock: ICSCR MSIRANGE = 5 is 2.097152 MHz (p.184).
 #[test]
 fn l0_reset_state_is_msi() {
-    let regs = vec![(L0_CR, 0x300), (L0_ICSCR, 5 << 13), (L0_CFGR, 0), (L0_CCIPR, 0)];
+    let regs = vec![
+        (L0_CR, 0x300),
+        (L0_ICSCR, 5 << 13),
+        (L0_CFGR, 0),
+        (L0_CCIPR, 0),
+    ];
     let p = decode(&RenodeConfig::stm32l0(), &regs);
     close(&p.clock().expect("clock").core_hz, 2_097_152.0);
 }
@@ -384,7 +401,12 @@ fn g4_pll_84mhz_usart_prescaler_spi_timers() {
 fn g4_usart1_follows_ccipr() {
     for (sel, fck) in [(0u32, 84e6), (1, 84e6), (2, 16e6), (3, 32768.0)] {
         let mut regs = g4_regs(sel);
-        regs.extend([(0x4001_380C, 64), (0x4001_3800, 0), (0x4001_3804, 0), (0x4001_382C, 0)]);
+        regs.extend([
+            (0x4001_380C, 64),
+            (0x4001_3800, 0),
+            (0x4001_3804, 0),
+            (0x4001_382C, 0),
+        ]);
         let p = decode(&RenodeConfig::stm32g4(), &regs);
         close(&uart(&p, "usart1").baud, fck / 64.0);
     }

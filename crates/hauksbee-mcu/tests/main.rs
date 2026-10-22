@@ -12,6 +12,8 @@ mod avr_hex_flash_bounds;
 mod avr_mcu_tests;
 #[path = "avr_new_parts.rs"]
 mod avr_new_parts;
+#[path = "avr_peripheral_snapshot.rs"]
+mod avr_peripheral_snapshot;
 #[path = "avr_run_clock.rs"]
 mod avr_run_clock;
 #[path = "avr_twi_ack_gate.rs"]

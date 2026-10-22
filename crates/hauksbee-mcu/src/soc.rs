@@ -713,6 +713,7 @@ impl crate::renode::RenodeConfig {
 #[cfg(feature = "qemu")]
 mod qemu_schema {
     use super::SocError;
+    use crate::periph_snapshot::DecodeBlock;
     use crate::qemu::{GpioBank, InputOnlyPins, QemuArch, QemuConfig};
 
     #[derive(Debug, serde::Deserialize)]
@@ -744,6 +745,9 @@ mod qemu_schema {
         pub i2c: QemuBusTable,
         #[serde(default)]
         pub input_only: Vec<InputOnlyPins>,
+        /// `[[soc.decode]]`: register decode blocks read over the gdbstub.
+        #[serde(default)]
+        pub decode: Vec<DecodeBlock>,
     }
 
     #[derive(Debug, Default, serde::Deserialize)]
@@ -773,6 +777,7 @@ mod qemu_schema {
 
             super::validate_ports(self.banks.iter().map(|b| (b.letter, b.width)))?;
             super::validate_controllers("i2c", &self.i2c.buses)?;
+            crate::periph_snapshot::validate_blocks(&self.decode)?;
 
             Ok(QemuConfig {
                 arch,
@@ -785,6 +790,7 @@ mod qemu_schema {
                 gpio_qom_path: self.gpio_qom_path,
                 i2c_buses: self.i2c.buses,
                 input_only: self.input_only,
+                decode: self.decode,
             })
         }
     }

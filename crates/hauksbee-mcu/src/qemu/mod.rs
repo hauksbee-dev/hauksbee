@@ -326,6 +326,13 @@ pub struct QemuConfig {
     /// peripheral the backend cannot see. From `[[soc.input_only]]`.
     #[serde(default)]
     pub input_only: Vec<InputOnlyPins>,
+    /// `[[soc.decode]]`: the configuration registers the firmware writes and
+    /// how to read a clock tree, UART baud, SPI mode, ... back out of them over
+    /// the gdbstub, for [`Mcu::peripheral_config`]. Empty (every shipped QEMU
+    /// descriptor today: no verified register map for these parts is vendored)
+    /// means the configuration is not decoded.
+    #[serde(default)]
+    pub decode: Vec<crate::periph_snapshot::DecodeBlock>,
 }
 
 /// One port's input-only pads (`[[soc.input_only]]` in a `*.soc.toml`).
@@ -1689,6 +1696,21 @@ impl Mcu for QemuBackend {
     /// report sees the trade.
     fn watchdog_limitation(&self) -> Option<String> {
         Some(WATCHDOG_LIMITATION.to_string())
+    }
+
+    fn peripheral_config(&mut self) -> Option<crate::periph_snapshot::PeripheralConfig> {
+        if self.config.decode.is_empty() {
+            return None;
+        }
+        let blocks = self.config.decode.clone();
+        // Reads are only valid while the guest is stopped, which it is between
+        // run windows (the GPIO fallback reads rely on the same).
+        let gdb = self.gdb.as_mut()?;
+        let mut reader = |address: u32| gdb.read_u32(address).ok();
+        Some(crate::periph_snapshot::PeripheralConfig::decode(
+            &blocks,
+            &mut reader,
+        ))
     }
 
     /// Backend-wide like the watchdog statement: wall-clock pacing is how this

@@ -176,11 +176,15 @@ fn lex(src: &str) -> Result<Vec<Tok>, ExprError> {
         let c = bytes[i] as char;
         if c.is_whitespace() {
             i += 1;
-        } else if c.is_ascii_digit() || (c == '.' && bytes.get(i + 1).is_some_and(u8::is_ascii_digit)) {
+        } else if c.is_ascii_digit()
+            || (c == '.' && bytes.get(i + 1).is_some_and(u8::is_ascii_digit))
+        {
             let start = i;
             if c == '0' && matches!(bytes.get(i + 1), Some(b'x' | b'X')) {
                 i += 2;
-                while i < bytes.len() && ((bytes[i] as char).is_ascii_hexdigit() || bytes[i] == b'_') {
+                while i < bytes.len()
+                    && ((bytes[i] as char).is_ascii_hexdigit() || bytes[i] == b'_')
+                {
                     i += 1;
                 }
                 let digits: String = src[start + 2..i].chars().filter(|c| *c != '_').collect();
@@ -216,7 +220,9 @@ fn lex(src: &str) -> Result<Vec<Tok>, ExprError> {
             }
         } else if c.is_ascii_alphabetic() || c == '_' {
             let start = i;
-            while i < bytes.len() && ((bytes[i] as char).is_ascii_alphanumeric() || bytes[i] == b'_') {
+            while i < bytes.len()
+                && ((bytes[i] as char).is_ascii_alphanumeric() || bytes[i] == b'_')
+            {
                 i += 1;
             }
             out.push(Tok::Ident(src[start..i].to_string()));
@@ -440,10 +446,7 @@ fn as_word(v: f64, what: &str) -> Result<u64, ExprError> {
 
 #[allow(clippy::cast_precision_loss)] // bit fields are at most 32 bits wide, exact in f64
 #[allow(clippy::float_cmp)] // truth tests compare against the exact 0.0/1.0 this evaluator produces
-fn eval_node(
-    n: &Node,
-    lookup: &dyn Fn(&str) -> Result<f64, ExprError>,
-) -> Result<f64, ExprError> {
+fn eval_node(n: &Node, lookup: &dyn Fn(&str) -> Result<f64, ExprError>) -> Result<f64, ExprError> {
     let truth = |b: bool| if b { 1.0 } else { 0.0 };
     match n {
         Node::Num(v) => Ok(*v),
@@ -485,7 +488,11 @@ fn eval_node(
                     return err(format!("bits({hi}, {lo}) is not a field of a 64-bit word"));
                 }
                 let width = hi - lo + 1;
-                let mask = if width == 64 { u64::MAX } else { (1u64 << width) - 1 };
+                let mask = if width == 64 {
+                    u64::MAX
+                } else {
+                    (1u64 << width) - 1
+                };
                 Ok(((v >> lo) & mask) as f64)
             }
             "bit" => {
@@ -632,7 +639,12 @@ pub const CLOCK_PREFIX: &str = "clk_";
 pub fn validate_blocks(blocks: &[DecodeBlock]) -> Result<(), DecodeError> {
     let first_clock = blocks.iter().find(|b| b.kind == BlockKind::Clock);
     let clock_vars: Vec<String> = first_clock
-        .map(|c| c.vars.iter().map(|(n, _)| format!("{CLOCK_PREFIX}{n}")).collect())
+        .map(|c| {
+            c.vars
+                .iter()
+                .map(|(n, _)| format!("{CLOCK_PREFIX}{n}"))
+                .collect()
+        })
         .unwrap_or_default();
     for (i, block) in blocks.iter().enumerate() {
         if blocks[..i]
@@ -711,13 +723,10 @@ impl BlockSnapshot {
     /// answers instead of panicking.
     #[must_use]
     pub fn get(&self, name: &str) -> Decoded<f64> {
-        self.values
-            .iter()
-            .find(|(n, _)| n == name)
-            .map_or_else(
-                || Decoded::Unknown(format!("{} does not decode `{name}`", self.name)),
-                |(_, v)| v.clone(),
-            )
+        self.values.iter().find(|(n, _)| n == name).map_or_else(
+            || Decoded::Unknown(format!("{} does not decode `{name}`", self.name)),
+            |(_, v)| v.clone(),
+        )
     }
 }
 
@@ -922,7 +931,10 @@ fn first_clock(blocks: &[DecodeBlock]) -> usize {
 
 /// The clock tree alone: the registers of the first clock block, decoded. The
 /// retune loop calls this every chunk, so it reads only that block.
-pub fn decode_clock(blocks: &[DecodeBlock], reader: &mut dyn RegisterReader) -> Option<ClockConfig> {
+pub fn decode_clock(
+    blocks: &[DecodeBlock],
+    reader: &mut dyn RegisterReader,
+) -> Option<ClockConfig> {
     let block = blocks.iter().find(|b| b.kind == BlockKind::Clock)?;
     let snap = decode_block(block, &[], reader);
     Some(ClockConfig {
@@ -940,7 +952,11 @@ fn decode_block(
     let mut scope: BTreeMap<String, Decoded<f64>> = outer.iter().cloned().collect();
     for (name, address) in &block.registers {
         let value = reader.read_u32(*address).map_or_else(
-            || Decoded::Unknown(format!("register {name} at 0x{address:08X} could not be read")),
+            || {
+                Decoded::Unknown(format!(
+                    "register {name} at 0x{address:08X} could not be read"
+                ))
+            },
             |w| Decoded::Known(f64::from(w)),
         );
         scope.insert(name.clone(), value);
@@ -1196,7 +1212,10 @@ pub fn validate_clock_tables(
         if !clock_vars.contains(&t.var.as_str()) {
             return Err(ClockTableError::UnknownTargetVar(t.var.clone()));
         }
-        if !["{hz}", "{khz}", "{mhz}"].iter().any(|p| t.command.contains(p)) {
+        if !["{hz}", "{khz}", "{mhz}"]
+            .iter()
+            .any(|p| t.command.contains(p))
+        {
             return Err(ClockTableError::NoPlaceholder(t.var.clone()));
         }
     }
@@ -1258,8 +1277,14 @@ mod tests {
         assert!(Expr::parse("1 +").is_err());
         assert!(Expr::parse("(1").is_err());
         assert!(Expr::parse("1 2").is_err());
-        assert!(Expr::parse("nope(1)").unwrap_err().0.contains("unknown function"));
-        assert!(Expr::parse("bits(1, 2)").unwrap_err().0.contains("3 argument"));
+        assert!(Expr::parse("nope(1)")
+            .unwrap_err()
+            .0
+            .contains("unknown function"));
+        assert!(Expr::parse("bits(1, 2)")
+            .unwrap_err()
+            .0
+            .contains("3 argument"));
         assert!(ev("1 / 0").unwrap_err().0.contains("division by zero"));
     }
 
@@ -1406,10 +1431,16 @@ mod tests {
         ));
         let mut b = f4_block();
         b.vars.push(("oops".into(), "1 +".into()));
-        assert!(matches!(validate_blocks(&[b]), Err(DecodeError::BadExpr { .. })));
+        assert!(matches!(
+            validate_blocks(&[b]),
+            Err(DecodeError::BadExpr { .. })
+        ));
         let mut b = f4_block();
         b.vars.push(("cr".into(), "1".into()));
-        assert!(matches!(validate_blocks(&[b]), Err(DecodeError::Duplicate { .. })));
+        assert!(matches!(
+            validate_blocks(&[b]),
+            Err(DecodeError::Duplicate { .. })
+        ));
         assert!(matches!(
             validate_blocks(&[f4_block(), f4_block()]),
             Err(DecodeError::DuplicateBlock { .. })

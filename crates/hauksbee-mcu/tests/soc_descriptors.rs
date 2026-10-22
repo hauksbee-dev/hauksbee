@@ -73,6 +73,24 @@ fn qemu_descriptors_equal_constructors() {
     }
 }
 
+/// A QEMU descriptor can carry `[[soc.decode]]` blocks as data, which the
+/// backend reads over the gdbstub for the peripheral snapshot. A bad block is
+/// refused with the same named error as on a Renode part.
+#[test]
+fn qemu_descriptor_carries_and_validates_decode_blocks() {
+    let good = format!(
+        "{ESP32}\n[[soc.decode]]\nkind = \"clock\"\nname = \"clk\"\nregisters = {{ ctl = 0x3FF48000 }}\nvars = [[\"core_hz\", \"bits(ctl, 7, 0) * 1000000\"]]\n"
+    );
+    let cfg = QemuConfig::from_soc_toml(&good).expect("decode block loads");
+    assert_eq!(cfg.decode.len(), 1);
+    assert_eq!(cfg.decode[0].name, "clk");
+    let bad = format!(
+        "{ESP32}\n[[soc.decode]]\nkind = \"clock\"\nname = \"clk\"\nregisters = {{ ctl = 0x3FF48000 }}\nvars = [[\"core_hz\", \"bits(missing, 7, 0)\"]]\n"
+    );
+    let err = QemuConfig::from_soc_toml(&bad).unwrap_err();
+    assert!(matches!(err, SocError::Decode(_)), "got: {err}");
+}
+
 /// The FE310's `post_load_setup` (the bring-up footgun) survives the round trip:
 /// this is a field the plan example predated, and losing it would silently
 /// break FE310 boot.
@@ -143,7 +161,10 @@ fn stm32f103_descriptor_ships_the_hal_boot_platform_inline() {
         .iter()
         .find(|e| e.name == "pll")
         .expect("STM32F103 must declare PLL readiness");
-    assert!(pll.needs.iter().any(|n| n.entry == "hse" && n.when.is_some()));
+    assert!(pll
+        .needs
+        .iter()
+        .any(|n| n.entry == "hse" && n.when.is_some()));
     assert!(
         c.decode
             .iter()
