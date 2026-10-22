@@ -403,6 +403,60 @@ fn foreign_copper_on_an_open_jumper_or_an_ordinary_footprint_is_still_a_short() 
     assert_short(&ordinary, "A", "GND");
 }
 
+/// A three-pad solder jumper (centre pad 2 on GND) whose pads 1 and 2 are
+/// bridged: pad 1 (A) and pad 2 (GND) share copper, pad 3 (B) sits a clearance
+/// away. `footprint` names the part; `track_b_onto_pad1` adds a B track that
+/// ends on pad 1, a foreign contact the bridge does not excuse.
+fn bridged_12_jumper(footprint: &str, track_b_onto_pad1: bool) -> String {
+    let track = if track_b_onto_pad1 {
+        r#"(segment (start 19.5 17.0) (end 19.5 19.9) (width 0.25) (layer "F.Cu") (net 2))"#
+    } else {
+        ""
+    };
+    format!(
+        r#"
+  (footprint "{footprint}" (layer "F.Cu") (at 20 20)
+    (property "Reference" "JP1" (at 0 0))
+    (property "Value" "Bridged12" (at 0 1))
+    (attr smd)
+    (pad "1" smd rect (at -0.5 0) (size 1.0 1.6) (layers "F.Cu") (net 1))
+    (pad "2" smd rect (at 0.5 0) (size 1.0 1.6) (layers "F.Cu") (net 3))
+    (pad "3" smd rect (at 1.8 0) (size 1.0 1.6) (layers "F.Cu") (net 2))
+  )
+  {track}
+"#
+    )
+}
+
+#[test]
+fn a_bridged_pair_on_a_three_pad_solder_jumper_is_a_tie_not_a_short() {
+    // Pads 1 (A) and 2 (GND) share copper by design; pad 3 (B) is clear of
+    // both. Only the bridged pair is excused.
+    let report = drc(&bridged_12_jumper(
+        "Jumper:SolderJumper-3_P1.3mm_Bridged12_Pad1.0x1.5mm",
+        false,
+    ));
+    assert_eq!(report.short_count(), 0, "{:?}", report.findings);
+}
+
+#[test]
+fn foreign_copper_on_the_unbridged_pad_of_a_three_pad_jumper_is_still_a_short() {
+    // The bridge excuses A/GND only. A B track ending on pad 1 is a B/A short,
+    // and the same overlapping pads in an ordinary footprint are a short too.
+    let foreign = drc(&bridged_12_jumper(
+        "Jumper:SolderJumper-3_P1.3mm_Bridged12_Pad1.0x1.5mm",
+        true,
+    ));
+    assert!(foreign.short_count() >= 1, "{:?}", foreign.findings);
+    assert_short(&foreign, "A", "B");
+    let ordinary = drc(&bridged_12_jumper(
+        "Connector_PinHeader:PinHeader_1x03",
+        false,
+    ));
+    assert!(ordinary.short_count() >= 1, "{:?}", ordinary.findings);
+    assert_short(&ordinary, "A", "GND");
+}
+
 #[test]
 fn kicad_10_keyhole_antipad_keeps_the_isolated_pad_silent() {
     let report = ExtractedBoard::drc(KICAD_10_KEYHOLE_ANTIPAD_BOARD).expect("drc runs");

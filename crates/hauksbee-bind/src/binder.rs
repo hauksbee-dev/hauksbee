@@ -458,6 +458,9 @@ pub fn bind_board_driven(
     // Nets that are a regulator-shaped part's output: a convention-guessed
     // magnitude (bare `VCC` = 5 V) must not be stamped on one.
     let regulator_outputs = regulator_output_nets(board);
+    // A switching converter's switch node is pulsed between the rails and is
+    // not a rail, whatever its name says: see `switch_node_nets`.
+    let switch_nodes = switch_node_nets(board, lib, facts);
     // A separate circuit's own ground is its reference: see
     // `island_reference_grounds`.
     let island_grounds = facts.map_or_else(
@@ -527,6 +530,10 @@ pub fn bind_board_driven(
                     net.name
                 ));
                 report.push(row);
+            } else if switch_nodes.contains(&net.id) {
+                // Not a rail: no ideal source is stamped on it, and the
+                // inductor that joins it to the output is not a short between
+                // two rails of different voltage.
             } else if let Some(v) = power_rail_voltage(&net.name)
                 .or_else(|| power_out_nets.get(&net.id).copied())
                 .or_else(|| module_supply_nets.get(&net.id).copied())
@@ -4298,7 +4305,7 @@ fn role_node_map_pins(
 /// Each source's role for a pad, in precedence order: the pin-function, the card's
 /// pads, a kind-aware electrode letter (C: cathode on a diode, collector on a BJT)
 /// and an Eagle P$1/P$2 ordinal re-reading the card's pads.
-fn pad_role_sources(
+pub(crate) fn pad_role_sources(
     pin: &hauksbee_extract::Pin,
     pins: &std::collections::BTreeMap<String, String>,
     kind: Option<ComponentKind>,
@@ -8607,6 +8614,77 @@ fn regulator_output_nets(board: &ExtractedBoard) -> HashMap<i64, String> {
         for pin in comp.pins.iter().filter(|p| is_out(p)) {
             if let Some(net_id) = pin.net.filter(|n| *n != 0) {
                 out.insert(net_id, format!("{} ({})", comp.reference, comp.value));
+            }
+        }
+    }
+    out
+}
+
+/// Whether a pin name is a switching converter's switch node (`SW`, `SW1`,
+/// `LX`, `PH`, `SW_2`).
+fn is_switch_pin_name(name: &str) -> bool {
+    let f = name.trim().to_ascii_lowercase();
+    let f = f.split(['_', '/']).next().unwrap_or(&f);
+    let stem = f.trim_end_matches(|c: char| c.is_ascii_digit());
+    matches!(stem, "sw" | "lx" | "ph" | "swout" | "vsw")
+}
+
+/// Nets that are a switching converter's switch node: the net on a fitted
+/// regulator part's switch pin (`sw`, `lx`, `ph`), judged by its card's pin
+/// role, or by the pin's own name when the part has no card.
+///
+/// The node swings between the input and ground at the switching frequency and
+/// the inductor carries its average to the output. It is not a supply rail even
+/// when its name states a voltage (`+5V_SW`), and the inductor between it and
+/// the output rail is a filter, not a short between two rails of different
+/// voltage. A part is read as a converter only when it has a switch pin AND an
+/// input pin, so an analog switch or a load switch's `SW` pin is not caught.
+fn switch_node_nets(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    facts: Option<&BoardFacts>,
+) -> std::collections::HashSet<i64> {
+    let mut out = std::collections::HashSet::new();
+    for (index, comp) in board.components.iter().enumerate() {
+        let Some(part) = AssemblyState::of(comp).fitted() else {
+            continue;
+        };
+        let found = part_facts(facts, index, lib, part);
+        let model = found.resolution.model.as_ref();
+        let switch_pads: Vec<&str> = match model {
+            Some(m) if m.kind == ComponentKind::Vreg => m
+                .pins
+                .iter()
+                .filter(|(_, role)| is_switch_pin_name(role))
+                .map(|(pad, _)| pad.as_str())
+                .collect(),
+            Some(_) => continue,
+            None => {
+                let has_input = comp.pins.iter().any(|p| {
+                    matches!(
+                        p.function.trim().to_ascii_uppercase().as_str(),
+                        "IN" | "VIN" | "VI" | "PVIN" | "AVIN"
+                    )
+                });
+                if !has_input {
+                    continue;
+                }
+                comp.pins
+                    .iter()
+                    .filter(|p| is_switch_pin_name(&p.function))
+                    .map(|p| p.number.as_str())
+                    .collect()
+            }
+        };
+        for pad in switch_pads {
+            let net = comp
+                .pins
+                .iter()
+                .find(|p| p.number == pad)
+                .and_then(|p| p.net)
+                .filter(|id| *id != 0);
+            if let Some(id) = net {
+                out.insert(id);
             }
         }
     }

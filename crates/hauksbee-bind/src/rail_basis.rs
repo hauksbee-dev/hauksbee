@@ -266,17 +266,76 @@ fn is_series_link(lib: &ModelLibrary, c: &Component) -> bool {
 /// How many series parts away a rail may be fed from.
 const FEED_HOPS: usize = 3;
 
+/// Which electrode of a diode a pin is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Polarity {
+    Anode,
+    Cathode,
+    Unknown,
+}
+
+/// Which electrode of a diode `pin` is: the schematic's pin name first, then
+/// the card's pad map (`binder::pad_role_sources`, which also reads the
+/// electrode letters of a lettered pad). Unknown when neither says.
+fn polarity(pin: &hauksbee_extract::Pin, model: Option<&hauksbee_models::ModelEntry>) -> Polarity {
+    let name = pin
+        .function
+        .trim()
+        .to_ascii_lowercase()
+        .trim_end_matches(|c: char| c.is_ascii_digit() || c == '_')
+        .to_string();
+    let by_name = |n: &str| match n {
+        "a" | "anode" => Polarity::Anode,
+        "k" | "c" | "cathode" | "kathode" => Polarity::Cathode,
+        _ => Polarity::Unknown,
+    };
+    let named = by_name(&name);
+    if named != Polarity::Unknown {
+        return named;
+    }
+    let Some(m) = model.filter(|m| m.kind == ComponentKind::Diode) else {
+        return Polarity::Unknown;
+    };
+    crate::binder::pad_role_sources(pin, &m.pins, Some(m.kind))
+        .into_iter()
+        .flatten()
+        .find_map(
+            |role| match by_name(role.trim_end_matches(|c: char| c.is_ascii_digit())) {
+                Polarity::Unknown => None,
+                known => Some(known),
+            },
+        )
+        .unwrap_or(Polarity::Unknown)
+}
+
+/// A diode or rectifier by what the part is: its card says diode, or (with no
+/// card) its designator does.
+fn is_diode(c: &Component, model: Option<&hauksbee_models::ModelEntry>) -> bool {
+    model.map_or_else(
+        || designator(&c.reference).starts_with('D') && !is_led(c),
+        |m| m.kind == ComponentKind::Diode,
+    )
+}
+
+/// A part that joins nets: current may pass from every net in `from` to every
+/// net in `to`. A plain series part lists the same nets both ways.
+struct Bridge {
+    from: Vec<i64>,
+    to: Vec<i64>,
+}
+
 /// The nets each fitted series part joins: a ferrite, inductor or low-ohm link,
 /// or any other part of at most three connected pads that is not a capacitor,
 /// resistor, LED or off-board entry (a fuse, diode, switch, jumper, pass FET).
 /// Ground is left out; a part that touches fewer than two other nets joins
-/// nothing.
+/// nothing. A diode whose electrodes are known passes power from its anode to
+/// its cathode only: a diode pointing at a source blocks it.
 fn series_bridges(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     kinds: &HashMap<String, String>,
     grounded: &dyn Fn(i64) -> bool,
-) -> Vec<Vec<i64>> {
+) -> Vec<Bridge> {
     let mut out = Vec::new();
     for c in &board.components {
         if !AssemblyState::of(c).is_present() || is_entry(c, kinds) {
@@ -296,25 +355,58 @@ fn series_bridges(
             .filter_map(|p| p.net)
             .filter(|n| !grounded(*n))
             .collect();
-        if nets.len() >= 2 {
-            out.push(nets.into_iter().collect());
+        if nets.len() < 2 {
+            continue;
         }
+        let model = library_resolution(lib, c).model;
+        if is_diode(c, model.as_ref()) {
+            let on = |want: Polarity| -> Vec<i64> {
+                let ids: BTreeSet<i64> = (c.pins.iter())
+                    .filter(|p| polarity(p, model.as_ref()) == want)
+                    .filter_map(|p| p.net)
+                    .filter(|n| !grounded(*n))
+                    .collect();
+                ids.into_iter().collect()
+            };
+            let (from, to) = (on(Polarity::Anode), on(Polarity::Cathode));
+            if !from.is_empty() && !to.is_empty() {
+                out.push(Bridge { from, to });
+                continue;
+            }
+        }
+        let all: Vec<i64> = nets.into_iter().collect();
+        out.push(Bridge {
+            from: all.clone(),
+            to: all,
+        });
     }
     out
 }
 
 /// Whether series parts join `rail` within [`FEED_HOPS`] hops to a net `source`
-/// accepts.
-fn fed_through(rail: &BTreeSet<i64>, bridges: &[Vec<i64>], source: impl Fn(i64) -> bool) -> bool {
+/// accepts, walking from the rail back toward the source against each diode's
+/// direction (with it, for a `negative` rail).
+fn fed_through(
+    rail: &BTreeSet<i64>,
+    bridges: &[Bridge],
+    negative: bool,
+    source: impl Fn(i64) -> bool,
+) -> bool {
     let mut seen: BTreeSet<i64> = rail.clone();
     let mut frontier: Vec<i64> = rail.iter().copied().collect();
     for _ in 0..FEED_HOPS {
         let mut next = Vec::new();
         for bridge in bridges {
-            if !bridge.iter().any(|n| frontier.contains(n)) {
+            // A negative rail is fed against the diode's conduction direction.
+            let (rail_side, source_side) = if negative {
+                (&bridge.from, &bridge.to)
+            } else {
+                (&bridge.to, &bridge.from)
+            };
+            if !rail_side.iter().any(|n| frontier.contains(n)) {
                 continue;
             }
-            for &n in bridge {
+            for &n in source_side {
                 if seen.insert(n) {
                     if source(n) {
                         return true;
@@ -329,6 +421,44 @@ fn fed_through(rail: &BTreeSet<i64>, bridges: &[Vec<i64>], source: impl Fn(i64) 
         frontier = next;
     }
     false
+}
+
+/// Nets a fitted part sources on the evidence of its own pins: a `power_out`
+/// pin, a card's supply output or regulator output, or an `OUT` pin on a part
+/// that also has an `IN` pin (a converter no card models). Off-board entries
+/// are left out; they are counted on their own.
+fn strong_source_nets(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    kinds: &HashMap<String, String>,
+) -> HashSet<i64> {
+    let mut out = HashSet::new();
+    for c in &board.components {
+        if !AssemblyState::of(c).is_present() || is_entry(c, kinds) {
+            continue;
+        }
+        let model = library_resolution(lib, c).model;
+        let has_in = c
+            .pins
+            .iter()
+            .any(|p| matches!(function_base(&p.function).as_str(), "IN" | "VIN" | "VI"));
+        for p in &c.pins {
+            let Some(net) = p.net.filter(|n| *n != 0) else {
+                continue;
+            };
+            let role = model.as_ref().and_then(|m| m.pins.get(&p.number));
+            let card_out = model.as_ref().zip(role).is_some_and(|(m, role)| {
+                m.supply_outputs.iter().any(|s| s.role == *role)
+                    || (m.kind == ComponentKind::Vreg && output_role(role))
+            });
+            let named_out =
+                has_in && matches!(function_base(&p.function).as_str(), "OUT" | "VOUT" | "VO");
+            if p.kind.starts_with("power_out") || card_out || named_out {
+                out.insert(net);
+            }
+        }
+    }
+    out
 }
 
 /// A rail to judge: its nets, and the leg that powers it by name (net, volts).
@@ -451,7 +581,7 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
 
     let board_powered_in = entry_nets.iter().any(|n| power_ish(*n));
     let mut rails = Vec::new();
-    let bridges: std::cell::OnceCell<Vec<Vec<i64>>> = std::cell::OnceCell::new();
+    let mut rail_ids: Vec<BTreeSet<i64>> = Vec::new();
     for (ids, leg) in groups {
         let mut basis = RailBasis {
             nets: Vec::new(),
@@ -475,6 +605,17 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
             names.insert(0, first.clone());
         }
         basis.nets = names;
+        // A diode passes current from its anode to its cathode, so it feeds a
+        // positive rail from its cathode side. A negative rail (-12V) is fed
+        // the other way round: the source sits on the cathode and the rail on
+        // the anode. `blocks` is the electrode that, on the rail, makes the
+        // diode a load or a block instead of a feed.
+        let negative = leg.as_ref().is_some_and(|(_, v)| *v < 0.0);
+        let blocks = if negative {
+            Polarity::Cathode
+        } else {
+            Polarity::Anode
+        };
         for c in &board.components {
             let on: Vec<_> = (c.pins.iter())
                 .filter(|p| p.net.is_some_and(|n| ids.contains(&n)))
@@ -554,14 +695,10 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
                             ComponentKind::Passive => {
                                 m.passive_class != Some(PassiveClass::Capacitor) && into_rail()
                             }
-                            // A diode feeds only its cathode's net.
+                            // A diode feeds only its cathode's net (an
+                            // electrode nothing names may be either).
                             ComponentKind::Diode => {
-                                on.iter().any(|p| {
-                                    m.pins.get(&p.number).is_none_or(|r| {
-                                        let r = r.to_ascii_lowercase();
-                                        r.starts_with('k') || r.starts_with('c')
-                                    })
-                                }) && into_rail()
+                                on.iter().any(|p| polarity(p, Some(m)) != blocks) && into_rail()
                             }
                             ComponentKind::BjtNpn
                             | ComponentKind::BjtPnp
@@ -573,6 +710,10 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
                         }
                     } else if two && is_led(c) {
                         // An LED's anode is never a rail's source.
+                        false
+                    } else if is_diode(c, None) && on.iter().all(|p| polarity(p, None) == blocks) {
+                        // A diode with no card, its anode on the rail: it
+                        // draws from the rail, it does not feed it.
                         false
                     } else if two {
                         // A resistor, inductor or diode with no model feeds a
@@ -609,21 +750,6 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
         // An unpowered rail matters here only when an unfitted part would
         // have powered it.
         if leg.is_some() || !basis.unfitted.is_empty() {
-            if leg.is_some()
-                && basis.unfitted.is_empty()
-                && basis.entries.is_empty()
-                && basis.feeds.is_empty()
-                && !basis.supply_loads.is_empty()
-            {
-                let bridges = bridges.get_or_init(|| series_bridges(board, lib, kinds, &grounded));
-                basis.fed_through = fed_through(&ids, bridges, |id| {
-                    entry_nets.contains(&id)
-                        || nets
-                            .node
-                            .get(&id)
-                            .is_some_and(|n| domains.fed_by_driver(*n))
-                });
-            }
             for list in [
                 &mut basis.entries,
                 &mut basis.feeds,
@@ -634,7 +760,38 @@ pub fn rail_bases(board: &ExtractedBoard, lib: &ModelLibrary, bound: &BoundBoard
                 list.sort_by_key(|r| crate::bind_report::natural_ref_key(r));
                 list.dedup();
             }
+            rail_ids.push(ids);
             rails.push(basis);
+        }
+    }
+    // A rail with nothing of its own behind it may still be fed through
+    // series parts and diodes from a net something sources: an off-board entry,
+    // a modelled driver, a part's supply output, or another rail that has an
+    // entry or a fitted source (a diode-OR of two feeds, a converter output).
+    let strong = strong_source_nets(board, lib, kinds);
+    let rail_sourced: HashSet<i64> = (rails.iter().zip(&rail_ids))
+        .filter(|(r, _)| !r.entries.is_empty() || !r.feeds.is_empty())
+        .flat_map(|(_, ids)| ids.iter().copied())
+        .collect();
+    let bridges: std::cell::OnceCell<Vec<Bridge>> = std::cell::OnceCell::new();
+    for (basis, ids) in rails.iter_mut().zip(&rail_ids) {
+        if basis.volts.is_some()
+            && basis.unfitted.is_empty()
+            && basis.entries.is_empty()
+            && basis.feeds.is_empty()
+            && !basis.supply_loads.is_empty()
+        {
+            let bridges = bridges.get_or_init(|| series_bridges(board, lib, kinds, &grounded));
+            let negative = basis.volts.is_some_and(|v| v < 0.0);
+            basis.fed_through = fed_through(ids, bridges, negative, |id| {
+                entry_nets.contains(&id)
+                    || strong.contains(&id)
+                    || rail_sourced.contains(&id)
+                    || nets
+                        .node
+                        .get(&id)
+                        .is_some_and(|n| domains.fed_by_driver(*n))
+            });
         }
     }
     RailBases {

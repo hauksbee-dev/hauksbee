@@ -803,6 +803,14 @@ impl<'a> RailResolver<'a> {
                 .is_some_and(|n| !is_ground(&n.name) && power_rail_voltage(&n.name).is_some())
     }
 
+    /// True when the board takes its power from a battery: a battery connector,
+    /// holder or a charger's battery pin sits on it. A rail whose level is only
+    /// its name's band is then a guess about a converter's output or a cell's
+    /// state of charge, not about a fixed supply, so it cannot gate.
+    fn battery_fed(&self) -> bool {
+        !self.rails.batteries.is_empty()
+    }
+
     /// The part that drives a net whose level is only its name's band, where
     /// that part is a converter with no stated output: the name is then
     /// contradicted by nothing yet confirmed by nothing either, since the
@@ -1228,16 +1236,26 @@ fn envelope_lint_with_tolerance(
                         severity = at_most(severity, Severity::Low);
                         unknown_driver_note(&net.name, nominal, driver)
                     } else if assumed {
-                        let cap = if nominal_inside && !above_abs_max {
+                        // A name-derived level is an assumption. On a
+                        // battery-fed board the rail's real level is whatever
+                        // the converter or cell behind it makes it, so the
+                        // name cannot gate there.
+                        let battery = resolver.battery_fed();
+                        let cap = if (nominal_inside && !above_abs_max) || battery {
                             Severity::Low
                         } else {
                             Severity::Medium
                         };
                         severity = at_most(severity, cap);
+                        let why = if battery {
+                            "this board is battery-fed and no regulator or solved run \
+                             states this rail's level"
+                        } else {
+                            "no regulator, battery or solved run states this rail's level"
+                        };
                         format!(
                             " The range is assumed: ±5 % around the {} the net name \
-                             implies, since no regulator, battery or solved run states this \
-                             rail's level; confirm the real supply tolerance.",
+                             implies, since {why}; confirm the real supply tolerance.",
                             format_volts(nominal)
                         )
                     } else if declared_only && nominal_inside && !above_abs_max {
@@ -1492,6 +1510,11 @@ fn supply_abs_max_findings(
         let driver = resolver.unknown_driver(net_id);
         let (severity, level) = if driver.is_some() {
             (Severity::Low, " (the ±5 % band its name implies)")
+        } else if assumed && resolver.battery_fed() {
+            (
+                Severity::Low,
+                " (the ±5 % band its name implies; the board is battery-fed and no regulator or run states it)",
+            )
         } else if assumed {
             (
                 Severity::Medium,
@@ -2101,6 +2124,43 @@ basis = "Recommended Operating Conditions, VDD row"
         let over = one("+5V");
         assert_eq!(over.severity, Severity::Medium, "{}", over.message);
         assert!(!over.message.contains("Tie "), "{}", over.message);
+    }
+
+    /// A rail whose level is only its name's band gates (Medium) when nothing
+    /// else says what the board runs from, but never on a battery-fed board:
+    /// there the converter or cell behind the rail sets its level, so the name
+    /// is a guess and the finding is a non-gating note that says so.
+    #[test]
+    fn name_assumed_band_does_not_gate_on_a_battery_fed_board() {
+        let lib = library("assumed_battery", MARGIN_CARD);
+        let run = |battery: bool| {
+            let mut parts = vec![part("U1", "MARGIN_PART", vec![pin("1", 2), pin("2", 1)])];
+            if battery {
+                parts.push(part(
+                    "BT1",
+                    "Battery holder",
+                    vec![pin("1", 3), pin("2", 1)],
+                ));
+            }
+            let b = board(&[(1, "GND"), (2, "+5V"), (3, "CELL")], parts);
+            let report = envelope_lint(&b, &lib);
+            report
+                .of_check(LintCheck::OperatingEnvelope)
+                .filter(|f| f.refs == ["U1"])
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let fixed = run(false);
+        assert_eq!(fixed.len(), 1, "{fixed:?}");
+        assert_eq!(fixed[0].severity, Severity::Medium, "{}", fixed[0].message);
+        let battery = run(true);
+        assert_eq!(battery.len(), 1, "{battery:?}");
+        assert_eq!(battery[0].severity, Severity::Low, "{}", battery[0].message);
+        assert!(
+            battery[0].message.contains("battery-fed"),
+            "{}",
+            battery[0].message
+        );
     }
 
     /// The window and the absolute maximum are different tables of the sheet. A
