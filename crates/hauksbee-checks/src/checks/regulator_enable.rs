@@ -33,7 +33,7 @@
 //! `control_held_off`'s, which judges the divider against the internal pull.
 //!
 //! A second fault needs no card statement about the open pin: an enable whose
-//! only source is the device's own output (see [`self_fed_enable`]). The
+//! only source is the device's own output (see `self_fed_enable`). The
 //! output is 0 V until the part is on, so an on-high enable wired to it, or to
 //! any net downstream of it through resistors, ferrites, diodes or another
 //! regulator, can never rise and the part can never start. It is judged for
