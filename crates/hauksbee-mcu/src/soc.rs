@@ -455,6 +455,10 @@ mod renode_schema {
         /// Oscillator and PLL readiness gating (`[[soc.clock_ready]]`).
         #[serde(default)]
         pub clock_ready: Vec<ClockReady>,
+        /// Timers whose update flag must latch with the interrupt masked
+        /// (`[[soc.timer_fixes]]`).
+        #[serde(default)]
+        pub timer_fixes: Vec<crate::periph_snapshot::TimerFix>,
         // `PortMap` (letter/peripheral/odr_offset/width) already derives
         // Deserialize, so `[[soc.ports]]` maps straight onto it; the existing
         // derive does the mechanical parsing.
@@ -670,6 +674,7 @@ mod renode_schema {
                 decode: self.decode,
                 clock_targets: self.clock_targets,
                 clock_ready: self.clock_ready,
+                timer_fixes: self.timer_fixes,
                 external_clock: None,
                 i2c_controllers: self.i2c.controllers,
                 spi_controllers: self.spi.controllers,

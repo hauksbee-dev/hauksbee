@@ -825,3 +825,63 @@ ready_register = 0x00
 ready_mask = 0x2000000
 startup_us = 40.0
 needs = [{ entry = "hse", when = { register = 0x0C, mask = 0x3, value = 0x3 } }]
+
+# Renode's timer departs from silicon in two ways a polled time base hits (see
+# `periph_snapshot::TimerFix`): UIF latches only while TIMx_DIER.UIE is set
+# (silicon: always, RM0090 Rev 22 p.631), and the counter wraps after ARR ticks
+# instead of ARR + 1 (RM0090 s18.3.2 p.589).
+[[soc.timer_fixes]]
+peripheral = "timer1"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer2"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer3"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer4"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer5"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer6"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer7"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer8"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer15"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer16"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer17"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C

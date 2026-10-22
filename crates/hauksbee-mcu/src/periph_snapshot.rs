@@ -974,6 +974,38 @@ fn decode_block(
 
 // ── Clock targets and readiness (descriptor schema shared by backends) ─
 
+/// One `[[soc.timer_fixes]]` entry: a timer whose emulation departs from
+/// silicon in two ways that every polled time base runs into.
+///
+/// 1. The update flag latches only while the update-interrupt enable is set.
+///    Silicon sets UIF on every update event (RM0090 Rev 22 p.631, TIM2 to TIM5
+///    TIMx_SR bit 0: "set by hardware on an update event"); TIMx_DIER UIE only
+///    gates the interrupt request. Firmware that polls UIF with the interrupt
+///    masked never sees it. The backend keeps the enable bit set inside the
+///    emulator and shows the firmware its own value on reads.
+/// 2. The counter wraps after ARR ticks, not ARR + 1. Silicon counts from 0 to
+///    the auto-reload value and then restarts from 0 (RM0090 Rev 22 s18.3.2
+///    p.589, TIM2 to TIM5 upcounting mode: "counts from 0 to the auto-reload
+///    value (content of the TIMx_ARR register), then restarts from 0 and
+///    generates a counter overflow event"), so the update period is ARR + 1
+///    ticks. The backend writes ARR + 1 to the emulator and shows the firmware
+///    its own value on reads. A value of 0xFFFF or more is left alone (the
+///    field may be 16 bits wide, and the error is below 2e-5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimerFix {
+    /// The Renode peripheral name, e.g. `timer2`.
+    pub peripheral: String,
+    /// Offset of the interrupt-enable register (TIMx_DIER, +0x0C).
+    pub enable_register: u32,
+    /// The update-interrupt-enable bit (UIE, bit 0).
+    pub enable_mask: u32,
+    /// Offset of the auto-reload register (TIMx_ARR, +0x2C), when the
+    /// emulated period is short by one tick.
+    #[serde(default)]
+    pub auto_reload_register: Option<u32>,
+}
+
 /// One `[[soc.clock_targets]]` entry: when the decoded clock variable `var`
 /// changes, the backend runs `command` with the new value substituted.
 ///

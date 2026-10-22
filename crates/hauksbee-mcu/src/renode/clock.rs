@@ -156,15 +156,46 @@ def on_write(pname, offset, value):
             else:
                 b.hkb_on.pop(n, None)
 
+def uf_write(pname, offset, value):
+    for (p, reg, mask, arr) in UF:
+        if p != pname:
+            continue
+        if reg == offset:
+            b.hkb_fw[(pname, reg)] = value
+            return (value | mask) & 0xFFFFFFFF
+        if arr is not None and arr == offset:
+            b.hkb_fw[(pname, arr)] = value
+            if value < 0xFFFF:
+                return value + 1
+    return value
+
+def uf_read(pname, offset, value):
+    for (p, reg, mask, arr) in UF:
+        if p != pname:
+            continue
+        if reg == offset:
+            fw = b.hkb_fw.get((pname, reg), 0)
+            return ((value & ~mask) | (fw & mask)) & 0xFFFFFFFF
+        if arr is not None and arr == offset:
+            return b.hkb_fw.get((pname, arr), value)
+    return value
+
 def rd(a):
     return b.hkb_bus.ReadDoubleWord(a)
 
 b.hkb_rdy_read = on_read
 b.hkb_rdy_write = on_write
+b.hkb_uf_write = uf_write
+b.hkb_uf_read = uf_read
+b.hkb_fw = {}
 b.hkb_rd = rd
 b.hkb_ok = 1
 ";
-    format!("{head}{}{body}", entries_literal(config))
+    format!(
+        "{head}{}{}{body}",
+        entries_literal(config),
+        timer_fixes_literal(config)
+    )
 }
 
 /// Write `script` to a fresh temp file and return its path.
@@ -195,6 +226,24 @@ fn write_script(script: &str) -> Result<PathBuf> {
     bail!("could not allocate a temporary file for the Renode clock model")
 }
 
+/// The `UF` list of (peripheral, enable register, enable mask, auto-reload
+/// register) timer fixes.
+fn timer_fixes_literal(config: &RenodeConfig) -> String {
+    let mut out = String::from("UF = [\n");
+    for u in &config.timer_fixes {
+        out.push_str(&format!(
+            "    ('{}', {}, {}, {}),\n",
+            u.peripheral,
+            u.enable_register,
+            u.enable_mask,
+            u.auto_reload_register
+                .map_or_else(|| "None".to_string(), |r| r.to_string())
+        ));
+    }
+    out.push_str("]\n");
+    out
+}
+
 /// Load the readiness model and attach its hooks to every peripheral the
 /// descriptor names. Returns the temp file to delete on drop, or `None` when
 /// the descriptor has no `[[soc.clock_ready]]` entries.
@@ -208,7 +257,10 @@ pub(super) fn install_readiness(
     monitor: &mut Monitor,
     config: &RenodeConfig,
 ) -> Result<Option<PathBuf>> {
-    if config.clock_ready.is_empty() && clock_addresses(config).is_empty() {
+    if config.clock_ready.is_empty()
+        && config.timer_fixes.is_empty()
+        && clock_addresses(config).is_empty()
+    {
         return Ok(None);
     }
     let script = readiness_script(config, config.external_clock.unwrap_or(true));
@@ -237,6 +289,28 @@ pub(super) fn install_readiness(
             monitor.run(&format!(
                 "sysbus SetHookBeforePeripheralWrite sysbus.{p} \"import __builtin__ as b; \
                  b.hkb_rdy_write('{p}', offset, value)\""
+            ))?;
+        }
+        for u in &config.timer_fixes {
+            let p = u.peripheral.as_str();
+            // The enable bit is forced on inside the emulator from the start;
+            // the hooks below keep it on across firmware writes and show the
+            // firmware its own value on reads.
+            monitor.run(&format!(
+                "sysbus.{p} WriteDoubleWord {} {}",
+                u.enable_register, u.enable_mask
+            ))?;
+            if seen.contains(&p) {
+                continue;
+            }
+            seen.push(p);
+            monitor.run(&format!(
+                "sysbus SetHookAfterPeripheralRead sysbus.{p} \"import __builtin__ as b; \
+                 value = b.hkb_uf_read('{p}', offset, value)\""
+            ))?;
+            monitor.run(&format!(
+                "sysbus SetHookBeforePeripheralWrite sysbus.{p} \"import __builtin__ as b; \
+                 value = b.hkb_uf_write('{p}', offset, value)\""
             ))?;
         }
         Ok(())

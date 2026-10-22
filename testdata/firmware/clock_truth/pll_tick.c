@@ -17,7 +17,7 @@
  *     CORE_HZ / 1000 ticks are exactly 1 ms of real time on silicon.
  *   - TIMER images (-DTICK_TIM): TIM2 counts TIM_HZ, the timer input clock the
  *     manual defines (x1 when the APB prescaler is 1, x2 otherwise), and a
- *     prescaler of TIM_HZ / 1000 - 1 makes the counter tick at exactly 1 kHz.
+ *     prescaler of TIM_HZ / 10000 - 1 makes the counter tick at exactly 10 kHz.
  *
  * Either way HALF_PERIOD_MS = 100 ms between edges is a bench quantity: a scope
  * on the pin reads 100 ms. Each image is built WITHOUT any vendor SDK and
@@ -263,11 +263,15 @@ int main(void) {
     clock_init();
 
 #if defined(TICK_TIM)
-    /* TIM2 counts TIM_HZ / (PSC + 1) = 1 kHz; ARR = HALF_PERIOD_MS - 1 makes the
-     * update event (UIF, SR bit 0) arrive every HALF_PERIOD_MS milliseconds. */
+    /* TIM2 counts TIM_HZ / (PSC + 1) = 10 kHz (PSC is a 16-bit register, so a
+     * 1 kHz tick would overflow it from TIM_HZ >= 65.5 MHz); the counter counts
+     * 0..ARR, ARR + 1 ticks per update event, so ARR = 10 * HALF_PERIOD_MS - 1
+     * makes the update event (UIF, SR bit 0) arrive every HALF_PERIOD_MS
+     * milliseconds. DIER is left at its reset value (0): the update FLAG still
+     * sets on silicon, which is what a polled time base relies on. */
     tim_clock_on();
-    TIM_PSC = (TIM_HZ / 1000UL) - 1UL;
-    TIM_ARR = HALF_PERIOD_MS - 1UL;
+    TIM_PSC = (TIM_HZ / 10000UL) - 1UL;
+    TIM_ARR = (10UL * HALF_PERIOD_MS) - 1UL;
     TIM_EGR = 1UL; /* load PSC/ARR now */
     TIM_SR = 0;
     TIM_CR1 = 1UL; /* CEN */

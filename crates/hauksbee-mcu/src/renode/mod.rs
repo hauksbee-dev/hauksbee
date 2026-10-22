@@ -39,7 +39,7 @@ pub use process::{find_renode, is_available, RenodeProcess};
 use crate::external::{
     adc_count, builtin_configs, free_ports, poll_state_mcu_methods, I2cTxn, PollState, UartSocket,
 };
-use crate::periph_snapshot::{ClockReady, ClockTarget, DecodeBlock};
+use crate::periph_snapshot::{ClockReady, ClockTarget, DecodeBlock, TimerFix};
 use crate::traits::{I2cCb, I2cEvent, Mcu, McuState, PinId, SpiCb, SpiEvent};
 use anyhow::{bail, Context, Result};
 use monitor::Monitor;
@@ -325,6 +325,10 @@ pub struct RenodeConfig {
     /// after the startup time and, for a crystal, only when the board has one.
     #[serde(default)]
     pub clock_ready: Vec<ClockReady>,
+    /// `[[soc.timer_fixes]]`: timers whose emulation only latches the update
+    /// flag while the interrupt is enabled, which silicon does not.
+    #[serde(default)]
+    pub timer_fixes: Vec<TimerFix>,
     /// Whether the bound board has an external clock source (crystal or
     /// oscillator) at the part's clock pins: `Some` once the binder has said so
     /// ([`Self::with_external_clock_present`]), `None` when no board is bound,

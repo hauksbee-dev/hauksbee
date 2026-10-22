@@ -418,3 +418,78 @@ vars = [
     ["tick_hz", "clk_tim_apb1 / (bits(psc, 15, 0) + 1)"],
     ["period_s", "(bits(arr, 15, 0) + 1) / tick_hz"],
 ]
+
+# Renode's timer departs from silicon in two ways a polled time base hits (see
+# `periph_snapshot::TimerFix`): UIF latches only while TIMx_DIER.UIE is set
+# (silicon: always, RM0090 Rev 22 p.631), and the counter wraps after ARR ticks
+# instead of ARR + 1 (RM0090 s18.3.2 p.589).
+[[soc.timer_fixes]]
+peripheral = "timer1"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer2"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer3"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer4"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer5"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer6"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer7"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer8"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer9"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer10"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer11"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer12"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer13"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer14"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
