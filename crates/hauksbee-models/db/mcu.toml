@@ -4679,10 +4679,65 @@ basis = "ST STM32G474xB/xC/xE DS12288, general operating conditions VDD 1.71 V t
 implements = ["cortex_m4_firmware_execution", "boot_to_main", "gpio_output_and_direction", "gpio_external_input", "gpio_internal_pulls", "uart_tx", "virtual_clock_and_systick", "adc_injection"]
 missing = ["dma_transfers", "fdcan_frames", "i2c_controller_bridge", "spi_controller_bridge", "clock_tree", "watchdog_reboot_continuation", "instruction_exact_timing", "silicon_power_current_profile", "silicon_timing_and_errata"]
 
-# STM32G474 LQFP48. Same die as the UFQFPN48 card above, but DS12288 Rev 6 Table 12 (pp.57-72) gives LQFP48
-# its own column: pads 1-15, 20-22 and 30-34 agree with UFQFPN48, from pad 16 on the two differ (LQFP48 has
-# no PC4, PC6, PC10 or PC11 pad, and pads 19, 23, 35 and 47 are VSSA/VSS). Pad map read from that column
-# (UFQFPN48 pads 17-19, 24-28, 36-38 and 41-47 sit one pad lower or higher in LQFP48). No exposed pad.
+# ─────────────────────────────────────────────────────────────────────────────
+# STM32F767/F777/F779 (LQFP100). Co-simulates on the stock Renode F746 platform
+# widened to 512 KB SRAM with UART7/UART8 (db/mcu/stm32f7.soc.toml). Pad map
+# derived from the TR-9 mainboard (U1, STM32F777VIT, a symbol with unnamed
+# pads) by its pad nets: 12 crystal oscillator, 14 NRST, 20/21 VREF/VDDA,
+# 22/23/25 ADC nets on PA0/PA1/PA3, 28 DAC (PA4), 37/38 UART7 RX/TX (PE7/PE8),
+# 46/47 USART3 (PB10/PB11), 48/73 VCAP, 52-54 SPI2 (PB13-15), 68/69 USART1
+# (PA9/PA10), 70/71 USB (PA11/PA12), 72/76 SWDIO/SWCLK, 83 SD_CMD (PD2),
+# 86/87 USART2 (PD5/PD6), 92/93 I2C1 (PB6/PB7), 94 BOOT0.
+
+# Boot-mode table (BOOT STRAPS package): the pins that select the boot source, the
+# vendor's table, and where each value comes from.
+# Boot source = PB8-BOOT0 pin only when option bit nSWBOOT0 = 1 (FLASH_OPTR bit 26); with nSWBOOT0 = 0 the nBOOT0 option
+# bit (bit 27) is used instead. BOOT_LOCK (FLASH_SEC1R bit 16) = 1 forces main flash. nBOOT1 = FLASH_OPTR bit 23.
+# FACTORY DEFAULT modelled: FLASH_OPTR 0xFFEF F8AA (nBOOT1 = 1, nBOOT0 = 1, nSWBOOT0 = 1), FLASH_SEC1R 0xFF00 FF00
+# (BOOT_LOCK = 0), so the PB8 pin selects and nBOOT1 = 1.
+[models.strap_latch]
+event = "reset_release"
+note  = "the BOOT0 pin (PB8) is latched, together with the nBOOT1 option bit, on the 4th edge of the internal startup clock source after reset release, and re-sampled when exiting Standby; model state is the factory default nSWBOOT0 = 1, nBOOT1 = 1, BOOT_LOCK = 0; PB8 reverts to analog mode once reset is released"
+cite  = "RM0440 Rev 6, section 2.6.1 'Boot configuration', Table 5 and text, PDF p.90-91; OPTR production value PDF p.110; FLASH_SEC1R production value PDF p.114"
+
+[models.reset_input]
+role = "reset"
+vil  = [0.3, 0.0]
+vih  = [0.7, 0.0]
+cite = "DS12288 Rev 6 (STM32G474xB/xC/xE), Table 58 'NRST pin characteristics', PDF p.133: VIL(NRST) max 0.3xVDD, VIH(NRST) min 0.7xVDD; PG10-NRST pad 7 (UFQFPN48 and LQFP48), Table 12 PDF p.58"
+
+[[models.boot_inputs]]
+role = "pb8_boot0"
+internal_pull = "unknown"
+vil = [0.3, 0.0]
+vih = [0.7, 0.0]
+cite = "DS12288 Rev 6, Table 54 'I/O static characteristics', PDF p.128, row 'All except FT_c' (VIL max 0.3xVDD, VIH min 0.7xVDD); PB8-BOOT0 pin type FT_f (not FT_c), Table 12 PDF p.71, pad 46 (UFQFPN48; 45 on LQFP48). Mode: input during the reset phase, RM0440 Rev 6 PDF p.91 (no pull stated)"
+
+[[models.boot_modes]]
+name = "main flash"
+when = { pb8_boot0 = "low" }
+outcome = "user_flash"
+detail = "factory option bits (BOOT_LOCK = 0, nSWBOOT0 = 1) with the BOOT0 pin low: main Flash memory is selected as boot area (nBOOT1 is a don't-care); user firmware runs"
+cite = "RM0440 Rev 6, Table 5 row 'BOOT_LOCK 0, nBOOT1 X, nBOOT0 X, BOOT0 pin 0, nSWBOOT0 1', PDF p.90"
+
+[[models.boot_modes]]
+name = "system memory (factory nBOOT1 = 1)"
+when = { pb8_boot0 = "high" }
+outcome = "rom_bootloader"
+detail = "factory option bits (BOOT_LOCK = 0, nBOOT1 = 1, nSWBOOT0 = 1) with the BOOT0 pin high: system memory (ST bootloader, 0x1FFF0000) is the boot area; user firmware does not run"
+cite = "RM0440 Rev 6, Table 5 row 'BOOT_LOCK 0, nBOOT1 1, nBOOT0 X, BOOT0 pin 1, nSWBOOT0 1', PDF p.90; AN2606 Rev 70 Table 2 Pattern 14, PDF p.34-36"
+
+[models.rom_bootloader]
+protocol = "st_usart"
+version = 0x31
+product_id = 0x0469
+commands = [0x00, 0x01, 0x02, 0x11, 0x21, 0x31, 0x44, 0x63, 0x73, 0x82, 0x92]
+port = "USART1 PA9 (TX) / PA10 (RX), USART2 PA2/PA3 or USART3 PC10/PC11, 8E1"
+cite = "AN3155 Rev 18; AN2606 Rev 70 Table 3 (USART V3.1), Table 117 PDF p.279 (pins), Table 226 (PID 0x469). The Get command list and version byte are derived, not printed per device."
+
+# UNLISTED ON PURPOSE (G4): (a) SRAM1 rows (nBOOT1 = 0 with BOOT0 pin high) need nBOOT1 = 0, not the factory state.
+# (b) nSWBOOT0 = 0 rows (BOOT0 comes from the nBOOT0 option bit, pin ignored). (c) BOOT_LOCK = 1 row (forces main flash
+# whatever the pin). (d) Dual-bank / BFB2 and "both banks empty" rows of AN2606 Pattern 14: not a pin function.
 [[models]]
 id = "stm32g474c_lqfp48"
 kind = "mcu"
