@@ -76,6 +76,8 @@ pub const GROUP_ARTIFACT_KIND: &str = "artifact_kind";
 pub const GROUP_USB_PROFILE: &str = "usb_profile";
 /// The `group` of a battery chemistry.
 pub const GROUP_BATTERY_CHEMISTRY: &str = "battery_chemistry";
+/// The `group` of a boot outcome (what the chip's reset sequence reached).
+pub const GROUP_BOOT_OUTCOME: &str = "boot_outcome";
 
 /// One row: an id, its short label and, optionally, a one-line explanation
 /// for a tooltip.
@@ -885,6 +887,9 @@ fn raw_entries() -> Vec<Label> {
         }
     }
     out.extend(run_setup_rows());
+    for (id, label, explain) in crate::boot::outcome_rows() {
+        out.push(row(id, GROUP_BOOT_OUTCOME, label, Some(explain)));
+    }
     for &(c, label, explain) in MATCH_CONFIDENCE {
         let id = serde_json::to_value(c)
             .ok()

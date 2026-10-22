@@ -16,6 +16,7 @@ mod api_backend;
 mod avr_package_and_clock_cards;
 mod bat54_family;
 mod bjt_regex_polarity;
+mod boot_mode_cards;
 mod bridge_dac_mcu_cards;
 mod codex_behavioral_fixture;
 mod codex_prompt_delivery;

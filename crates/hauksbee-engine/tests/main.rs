@@ -98,6 +98,8 @@ mod dc_overstress;
 mod deck_sim_http;
 #[path = "declarative_sensor_cosim.rs"]
 mod declarative_sensor_cosim;
+#[path = "boot_straps_cosim.rs"]
+mod boot_straps_cosim;
 #[path = "diode_fallback.rs"]
 mod diode_fallback;
 #[path = "dnp_processor.rs"]

@@ -845,8 +845,24 @@ impl QemuBackend {
     /// When the image is missing, fails the arch or bootloader check, cannot be
     /// converted from ELF, or QEMU dies or does not answer on its QMP or UART
     /// socket. A gdbstub that cannot attach is not an error.
-    #[allow(clippy::too_many_lines)] // one linear spawn-and-handshake sequence
     pub fn new(config: QemuConfig, flash_image: &Path) -> Result<Self> {
+        Self::new_with_strap(config, flash_image, None)
+    }
+
+    /// [`Self::new`] with the chip's boot-strap pins set: the machine latches
+    /// `strap` as the levels its strapping pins held at reset, so a board that
+    /// holds GPIO0 low boots the ROM downloader exactly as the silicon would.
+    /// `None` leaves QEMU's own default (a normal flash boot).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
+    #[allow(clippy::too_many_lines)] // one linear spawn-and-handshake sequence
+    pub fn new_with_strap(
+        config: QemuConfig,
+        flash_image: &Path,
+        strap: Option<&crate::boot_mode::QemuStrapMode>,
+    ) -> Result<Self> {
         if !flash_image.exists() {
             bail!(
                 "ESP32 firmware not found: {}. Pass the app .elf your build \
@@ -894,13 +910,14 @@ impl QemuBackend {
 
         let [qmp_port, gdb_port, uart_port] = free_ports()?;
 
-        let mut process = QemuProcess::spawn(
+        let mut process = QemuProcess::spawn_with_strap(
             config.arch,
             &config.machine,
             &boot_image,
             config.icount_shift,
             qmp_port,
             uart_port,
+            strap,
         )?;
         // Tell QEMU to also expose a gdbstub. We pass it as part of spawn? The
         // process builder set QMP/serial; the gdbstub is added via QMP after

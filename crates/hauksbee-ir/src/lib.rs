@@ -15,6 +15,7 @@
 //! tour) and docs/how-and-why/hauksbee-ir/lib.md (this module's deep-dive).
 
 mod bexpr;
+pub mod boot;
 pub mod debug;
 pub mod docs_url;
 pub mod evidence;

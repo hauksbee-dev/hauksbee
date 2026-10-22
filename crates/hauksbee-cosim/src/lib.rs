@@ -22,6 +22,7 @@
 //! as `hauksbee-engine` does; nothing in this crate links an emulator itself.
 
 pub mod engine;
+pub mod boot;
 pub mod error_budget;
 pub mod execution;
 mod influence;

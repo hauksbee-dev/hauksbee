@@ -50,6 +50,7 @@ macro_rules! standard_condition {
 
 pub mod audio_roles;
 pub mod behavioral;
+pub mod boot_mode;
 pub mod card_coverage;
 pub mod card_provenance;
 pub mod card_scope;

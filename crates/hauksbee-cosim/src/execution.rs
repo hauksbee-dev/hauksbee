@@ -108,6 +108,10 @@ pub struct ExecutionEvidence {
     /// Why the run is not eligible, one sentence per reason; empty when it is.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blockers: Vec<String>,
+    /// The boot mode the board's straps selected and why, for a chip whose
+    /// card carries a boot table (hauksbee-ir's vocabulary).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot: Option<hauksbee_ir::boot::BootDecision>,
 }
 
 /// Board-side readings for one MCU, gathered by the scheduler.
@@ -209,6 +213,7 @@ impl ExecutionEvidence {
             executed,
             firmware_pass_eligible: blockers.is_empty(),
             blockers,
+            boot: None,
         }
     }
 }

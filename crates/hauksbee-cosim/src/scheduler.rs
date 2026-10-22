@@ -386,6 +386,9 @@ struct LiveMcu {
     pin_toggles: std::collections::BTreeMap<(char, u8), u64>,
     /// Reset line and supply pads, watched across the run.
     rails: crate::execution::RailWatch,
+    /// Boot-strap resolution and reset gating, for a chip whose card carries a
+    /// boot table.
+    boot: Option<crate::boot::BootState>,
 }
 
 /// Scheduler-side analogue projection of one edge-synchronous parallel
@@ -1381,6 +1384,7 @@ impl Scheduler {
             dacs,
             peripherals,
             report,
+            mcu_boot,
             ..
         } = bound;
 
@@ -1442,6 +1446,14 @@ impl Scheduler {
         let mut clock_fuse_findings = Vec::new();
         let mut clock_assumptions = Vec::new();
         let mut idle_mcus = Vec::new();
+        // What each chip's boot straps select, read off the board's start-up
+        // DC point (empty for a firmware-less run and for cards without a
+        // boot table).
+        let mut boot_plan = if firmware.is_some() {
+            crate::boot::plan_boots(&mcus, &mcu_boot, &circuit, &opts)
+        } else {
+            HashMap::new()
+        };
         for binding in mcus {
             let evidence_subject = mcu_subjects
                 .next()
@@ -1487,8 +1499,23 @@ impl Scheduler {
                 eprintln!("WARNING: {guess}");
                 clock_assumptions.push(guess);
             }
-            let core = instantiate_mcu(&binding, firmware, &clock)?;
-            live.push(core_with_hooks(core, binding));
+            let boot = boot_plan.remove(&binding.reference).and_then(|resolved| {
+                mcu_boot
+                    .get(&binding.reference)
+                    .map(|spec| (spec.clone(), resolved))
+            });
+            let (core, boot_state) = match boot {
+                None => (instantiate_mcu(&binding, firmware, &clock)?, None),
+                Some((spec, resolved)) => {
+                    let (core, state) = crate::boot::build_core(&spec, &resolved, |strap| {
+                        instantiate_mcu_with_strap(&binding, firmware, &clock, strap)
+                    })?;
+                    (core, Some(state))
+                }
+            };
+            let mut live_mcu = core_with_hooks(core, binding);
+            live_mcu.boot = boot_state;
+            live.push(live_mcu);
         }
 
         // Build the MCU-bit-banged 74HC595 chain controllers. For each
@@ -1732,26 +1759,8 @@ impl Scheduler {
     /// the per-chunk sync separately treats any net with an ENABLED gpio
     /// driver as driven (see `run_chunk`), so an MCU-to-MCU GPIO link syncs.
     fn rebuild_digital_in_evidence(&mut self) {
-        let mut pin_legs: std::collections::HashSet<u32> = std::collections::HashSet::new();
-        for m in &self.mcus {
-            for drv in m.binding.gpio_drivers.values() {
-                pin_legs.insert(drv.vsource.0);
-                pin_legs.insert(drv.resistor.0);
-            }
-        }
-        let mut evidence: HashMap<u32, Vec<u32>> = HashMap::new();
-        for (i, d) in (0u32..).zip(&self.circuit.devices) {
-            if pin_legs.contains(&i) {
-                continue;
-            }
-            for n in d.nodes() {
-                if n == NodeId::GROUND {
-                    continue;
-                }
-                evidence.entry(n.0).or_default().push(i);
-            }
-        }
-        self.digital_in_evidence = evidence;
+        let bindings: Vec<&McuBinding> = self.mcus.iter().map(|m| &m.binding).collect();
+        self.digital_in_evidence = drive_evidence_for(&self.circuit, &bindings);
     }
 
     /// Build and attach the MCP4728 DAC slaves discovered by the binder. One
@@ -3557,7 +3566,24 @@ impl Scheduler {
             // for the analog PWL side. Exact on simavr, coarse on poll backends
             // (flagged by `cycle_exact`).
             let cyc_start = m.core.current_cycle();
-            if let Err(e) = m.core.run_micros(micros) {
+            // A chip held in reset does not run: its core waits, and the
+            // straps are read again when reset releases.
+            let held = m.boot.as_mut().is_some_and(|b| {
+                let name = |n: NodeId| self.circuit.node_name(n).to_string();
+                let driven = |n: NodeId| {
+                    net_has_drive_evidence(&self.digital_in_evidence, &self.circuit.devices, n.0)
+                };
+                let snap = crate::boot::BoardSnapshot {
+                    role_nets: &m.binding.role_nets,
+                    volts: &self.node_volts,
+                    vdd: m.logic_high_v,
+                    net_name: &name,
+                    driven: &driven,
+                };
+                b.hold_core(&snap, self.sim_time, f64::from(u32::try_from(micros).unwrap_or(u32::MAX)) * 1e-6)
+            });
+            let run = if held { Ok(()) } else { m.core.run_micros(micros) };
+            if let Err(e) = run {
                 // The MCU backend refused to advance (a crashed core, a
                 // transport error, a HALT). The firmware side of this chunk did
                 // not run, so folding the subsequent solve as a normal quiet
@@ -4207,23 +4233,7 @@ impl Scheduler {
     /// The circuit's DC operating point as it stands (node voltages, indexed by
     /// node), or `None` when the solve does not converge.
     fn solve_initial_rail_view(&self) -> Option<Vec<f64>> {
-        let mut circuit = self.circuit.clone();
-        circuit.temp_c = self.opts.temperature_c;
-        let mut ws = Workspace::new(&circuit);
-        let seed = ws.x.clone();
-        dc_operating_point_seeded(&mut ws, &circuit, &self.opts, Some(&seed)).ok()?;
-        let (x, layout) = (&ws.x, &ws.layout);
-        Some(
-            (0..circuit.node_count())
-                .map(|node| {
-                    u32::try_from(node)
-                        .ok()
-                        .map(NodeId)
-                        .and_then(|n| layout.node(n))
-                        .map_or(0.0, |i| x[i])
-                })
-                .collect(),
-        )
+        dc_node_volts(&self.circuit, &self.opts)
     }
 
     /// Stand each net an ideal DC source (or a configured supply's source)
@@ -5492,14 +5502,18 @@ impl Scheduler {
                     supply_v: m.rails.supply_v(),
                     clock: m.binding.clock.clone(),
                 };
-                crate::execution::ExecutionEvidence::new(
+                let mut evidence = crate::execution::ExecutionEvidence::new(
                     &m.binding.reference,
                     &m.binding.backend,
                     m.core.execution_probe(),
                     m.uart_bytes,
                     &m.pin_toggles,
                     board,
-                )
+                );
+                if let Some(boot) = &m.boot {
+                    crate::boot::annotate(&mut evidence, boot);
+                }
+                evidence
             })
             .collect();
         self.execution.sort_by(|a, b| a.mcu_ref.cmp(&b.mcu_ref));
@@ -7436,6 +7450,17 @@ fn instantiate_mcu(
     firmware: Option<&std::path::Path>,
     clock: &AvrClockPlan,
 ) -> anyhow::Result<Box<dyn Mcu + Send>> {
+    instantiate_mcu_with_strap(binding, firmware, clock, None)
+}
+
+/// [`instantiate_mcu`] with the board's boot-strap levels handed to a backend
+/// that latches them itself (Espressif's QEMU).
+fn instantiate_mcu_with_strap(
+    binding: &McuBinding,
+    firmware: Option<&std::path::Path>,
+    clock: &AvrClockPlan,
+    strap: Option<&hauksbee_mcu::boot_mode::QemuStrapMode>,
+) -> anyhow::Result<Box<dyn Mcu + Send>> {
     let backend = binding.backend.as_str();
 
     // Backstop: validate the path before it reaches ANY native loader (simavr
@@ -7453,7 +7478,7 @@ fn instantiate_mcu(
         Some(BackendId::Renode(part)) => {
             instantiate_renode(part, binding.clock.external_present())?
         }
-        Some(BackendId::Qemu(part)) => instantiate_qemu(part, firmware)?,
+        Some(BackendId::Qemu(part)) => instantiate_qemu(part, firmware, strap)?,
         Some(BackendId::None(family)) => {
             // The binder recognized the MCU family but knows no emulator models
             // it (e.g. ESP32-S2). Refuse rather than run the firmware on a
@@ -7499,6 +7524,7 @@ fn instantiate_mcu(
 fn instantiate_qemu(
     part: &str,
     firmware: Option<&std::path::Path>,
+    strap: Option<&hauksbee_mcu::boot_mode::QemuStrapMode>,
 ) -> anyhow::Result<Box<dyn Mcu + Send>> {
     use hauksbee_mcu::QemuBackend;
     let config = resolve_qemu_config(part)?;
@@ -7509,7 +7535,7 @@ fn instantiate_qemu(
              also works)"
         )
     })?;
-    Ok(Box::new(QemuBackend::new(config, flash)?))
+    Ok(Box::new(QemuBackend::new_with_strap(config, flash, strap)?))
 }
 
 /// Resolve a `qemu:<part>` token to a `QemuConfig` through the descriptor
@@ -7539,7 +7565,8 @@ fn resolve_qemu_config(part: &str) -> anyhow::Result<hauksbee_mcu::QemuConfig> {
 fn instantiate_qemu(
     _part: &str,
     _firmware: Option<&std::path::Path>,
-) -> anyhow::Result<Box<dyn Mcu + Send>> {
+    _strap: Option<&hauksbee_mcu::boot_mode::QemuStrapMode>,
+) ->anyhow::Result<Box<dyn Mcu + Send>> {
     anyhow::bail!(
         "this build of hauksbee-engine was compiled without the `qemu` feature; \
          rebuild with --features qemu to run ESP32 firmware"
@@ -7609,10 +7636,70 @@ fn supply_floor_nodes(binding: &McuBinding) -> HashMap<NodeId, f64> {
     floors
 }
 
+/// The circuit's DC operating point (node voltages, indexed by node), or `None`
+/// when the solve does not converge.
+pub(crate) fn dc_node_volts(circuit: &Circuit, opts: &SolverOptions) -> Option<Vec<f64>> {
+    let mut circuit = circuit.clone();
+    circuit.temp_c = opts.temperature_c;
+    let mut ws = Workspace::new(&circuit);
+    let seed = ws.x.clone();
+    dc_operating_point_seeded(&mut ws, &circuit, opts, Some(&seed)).ok()?;
+    let (x, layout) = (&ws.x, &ws.layout);
+    Some(
+        (0..circuit.node_count())
+            .map(|node| {
+                u32::try_from(node)
+                    .ok()
+                    .map(NodeId)
+                    .and_then(|n| layout.node(n))
+                    .map_or(0.0, |i| x[i])
+            })
+            .collect(),
+    )
+}
+
+/// Net -> the devices touching it that are not an MCU pin's own driver legs:
+/// the index [`net_has_drive_evidence`] reads.
+pub(crate) fn drive_evidence_for(
+    circuit: &Circuit,
+    mcus: &[&McuBinding],
+) -> HashMap<u32, Vec<u32>> {
+    let mut pin_legs: HashSet<u32> = HashSet::new();
+    for m in mcus {
+        for drv in m.gpio_drivers.values() {
+            pin_legs.insert(drv.vsource.0);
+            pin_legs.insert(drv.resistor.0);
+        }
+    }
+    let mut evidence: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (i, d) in (0u32..).zip(&circuit.devices) {
+        if pin_legs.contains(&i) {
+            continue;
+        }
+        for n in d.nodes() {
+            if n == NodeId::GROUND {
+                continue;
+            }
+            evidence.entry(n.0).or_default().push(i);
+        }
+    }
+    evidence
+}
+
+/// [`is_direct_supply_role`] for a role that may carry a domain number.
+pub(crate) fn is_direct_supply_role_name(role: &str) -> bool {
+    is_direct_supply_role(role)
+        || is_direct_supply_role(role.trim_end_matches(|c: char| c.is_ascii_digit()))
+}
+
 /// Whether `net` has real drive evidence: a non-pin device with live
 /// resistance under [`WEAK_DIGITAL_DRIVE_OHMS`], or any non-R/C device. A
 /// floating net's ~0 V solve is the pins' own 1 GΩ legs talking.
-fn net_has_drive_evidence(evidence: &HashMap<u32, Vec<u32>>, devices: &[Device], net: u32) -> bool {
+pub(crate) fn net_has_drive_evidence(
+    evidence: &HashMap<u32, Vec<u32>>,
+    devices: &[Device],
+    net: u32,
+) -> bool {
     evidence.get(&net).is_some_and(|devs| {
         devs.iter().any(|&di| match devices.get(di as usize) {
             Some(Device::Resistor { ohms, .. }) => *ohms < WEAK_DIGITAL_DRIVE_OHMS,
@@ -8321,13 +8408,14 @@ fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMc
         i2c_events: Arc::new(AtomicU64::new(0)),
         spi_events: Arc::new(AtomicU64::new(0)),
         pin_toggles: std::collections::BTreeMap::new(),
+        boot: None,
         rails,
     }
 }
 
 /// GPIO logic-high voltage by backend: STM32-class parts and the ESP32 family
 /// are 3.3 V rails, the classic AVR parts are 5 V.
-fn logic_high_for_backend(backend: &str) -> f64 {
+pub(crate) fn logic_high_for_backend(backend: &str) -> f64 {
     if backend_is_external(backend) {
         3.3
     } else {
@@ -8881,6 +8969,7 @@ missing = ["measurement_registers"]
             dacs: Vec::new(),
             peripherals: Vec::new(),
             latching_switches: false,
+            mcu_boot: HashMap::new(),
             report: hauksbee_bind::bind_report::BindReport::default(),
         }
     }

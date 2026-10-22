@@ -55,6 +55,7 @@ pub mod ffi {
 pub mod avr;
 pub mod avr_fuses;
 pub mod backend_id;
+pub mod boot_mode;
 pub mod children;
 pub mod elf;
 #[cfg(any(feature = "renode", feature = "qemu"))]
