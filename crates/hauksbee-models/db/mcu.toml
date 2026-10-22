@@ -5442,12 +5442,13 @@ kind = "mcu"
 description = "Espressif ESP32 classic module (WROOM-32 / WROVER)"
 
 [models.match]
-# ESP-WROOM-32 / ESP32-WROOM-32(E/D/U/-N4/-N8/-N16) / ESP32-WROVER modules. The
+# ESP-WROOM-32 / ESP32-WROOM-32(E/D/U/-N4/-N8/-N16) / ESP32-WROVER modules (not the
+# ESP32-WROOM-DA, whose pinout differs: datasheet v0.7 Table 2). The
 # trailing flash/PSRAM/revision suffixes (e.g. "ESP32-WROOM-32E-N4" on the
 # Olimex EVB rev L) must all match the same strap table, so the suffix is left
 # open after "32". The value names the module, so it fixes the pad map. A bare
 # "ESP32"/"ESP32-D0WD" value is a QFN chip: see esp32 / esp32_qfn48 below.
-value_re = "(?i)^(ESP[-_ ]?WROOM[-_ ]?32|ESP32[-_ ]?WRO(OM|VER)[-_ ]?32?.*)$"
+value_re = "(?i)^(ESP[-_ ]?WROOM[-_ ]?32|ESP32[-_ ]?WROOM[-_ ]?32.*|ESP32[-_ ]?WROVER.*)$"
 # No mpn_re: match rules are ANDed, so an mpn_re would reject the common case
 # of a board whose ESP32 carries no MPN property (Olimex EVB, most KiCad libs).
 
@@ -7179,6 +7180,451 @@ basis = "ESP32-C6-MINI-1 & MINI-1U Datasheet v1.5, Table 6-2 VDD33 3.0-3.6 V; Ta
 # Table 4-3: GPIO9 = 1 selects SPI boot whatever GPIO8 is; GPIO9 = 0 with
 # GPIO8 = 1 selects joint download boot. Table 4-1: GPIO9 has a weak pull-up,
 # GPIO8 floats (it matters only for download boot, so no level is asserted).
+[[models.straps]]
+role = "gpio9"
+level = "high"
+boot_select = true   # latches SPI-vs-download boot
+internal_pull = "pull_up"   # Table 4-1: GPIO9 default weak pull-up
+# Table 6-3: VIL max 0.25 x VDD, VIH min 0.75 x VDD.
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO9 (BOOT) high = SPI boot (normal); low with GPIO8 high = download boot"
+
+[models.coverage]
+implements = ["pad_map", "supply_envelope", "boot_strap_levels"]
+missing = ["firmware_cosim_core", "gpio_behaviour", "uart", "usb_serial_jtag", "pin_and_package_current_ratings"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ESP32-S3-MINI-1 / -1U module (65 pads; -N8 / -N4R2 / -H4R2 variants).
+# Source: Espressif ESP32-S3-MINI-1 & MINI-1U Datasheet v1.7, Table 3-1 Pin
+# Definitions (PDF pp.11-12), Table 6-1/6-2/6-3 (VDD33 maximum 3.6 V, recommended
+# 3.0-3.6 V, VIH min 0.75 x VDD, VIL max 0.25 x VDD). One pad map for the -1 and
+# the -1U (same table). The pad numbers are the module's, NOT the bare chip's or
+# the WROOM-1's: the WROOM-1 numbers the same GPIOs on other pads, so a card for
+# either does not describe this footprint (see the PAD MAPS ARE PER PACKAGE note
+# above). tests/suite/module_pad_tables/esp32_s3_mini_1.tsv is the datasheet table
+# this map is checked against pad by pad.
+[[models]]
+id = "esp32s3_mini1"
+kind = "mcu"
+description = "Espressif ESP32-S3-MINI-1/-1U module, 65 pads"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.espressif.com/sites/default/files/documentation/esp32-s3-mini-1_mini-1u_datasheet_en.pdf"
+title = "Espressif ESP32-S3-MINI-1 & MINI-1U Datasheet v1.7"
+locator = "Table 3-1 Pin Definitions (PDF pp.11-12); Table 6-1 Absolute Maximum Ratings; Table 6-2 Recommended Operating Conditions; Table 6-3 DC Characteristics; Section 4 Boot Configurations"
+sha256 = "4d4b7f1c17b484c627aaa0f806566c48a6124a8e466c6d21d99210e6eacdef04"
+
+[models.match]
+value_re = "(?i)^ESP32[-_ ]?S3[-_ ]?MINI[-_ ]?1(U|/U)?([-_ ]?(N\\d+(R\\d+)?|H\\d+R\\d+))?$"
+
+[models.params]
+backend = "qemu:esp32s3"
+# Table 3-1: EN (pad 45) "Low: off, the chip powers off. Note: Do not leave the
+# EN pin floating." The module has no pull on it.
+must_not_float_roles = "en"
+
+[models.pins]
+# Table 3-1 Pin Definitions. GND = 1, 2, 42, 43, 46-65; IO26 (pad 26) is used by
+# the embedded PSRAM on the -N4R2 variants (note b) and cannot be used there.
+"1" = "gnd"           # GND
+"2" = "gnd2"          # GND
+"3" = "vdd"           # 3V3
+"4" = "gpio0"         # IO0
+"5" = "gpio1"         # IO1
+"6" = "gpio2"         # IO2
+"7" = "gpio3"         # IO3
+"8" = "gpio4"         # IO4
+"9" = "gpio5"         # IO5
+"10" = "gpio6"        # IO6
+"11" = "gpio7"        # IO7
+"12" = "gpio8"        # IO8
+"13" = "gpio9"        # IO9
+"14" = "gpio10"       # IO10
+"15" = "gpio11"       # IO11
+"16" = "gpio12"       # IO12
+"17" = "gpio13"       # IO13
+"18" = "gpio14"       # IO14
+"19" = "gpio15"       # IO15
+"20" = "gpio16"       # IO16
+"21" = "gpio17"       # IO17
+"22" = "gpio18"       # IO18
+"23" = "gpio19"       # IO19
+"24" = "gpio20"       # IO20
+"25" = "gpio21"       # IO21
+"26" = "gpio26"       # IO26
+"27" = "gpio47"       # IO47
+"28" = "gpio33"       # IO33
+"29" = "gpio34"       # IO34
+"30" = "gpio48"       # IO48
+"31" = "gpio35"       # IO35
+"32" = "gpio36"       # IO36
+"33" = "gpio37"       # IO37
+"34" = "gpio38"       # IO38
+"35" = "gpio39"       # IO39
+"36" = "gpio40"       # IO40
+"37" = "gpio41"       # IO41
+"38" = "gpio42"       # IO42
+"39" = "gpio43_txd0"  # TXD0
+"40" = "gpio44_rxd0"  # RXD0
+"41" = "gpio45"       # IO45
+"42" = "gnd3"         # GND
+"43" = "gnd4"         # GND
+"44" = "gpio46"       # IO46
+"45" = "en"           # EN
+"46" = "gnd5"         # GND
+"47" = "gnd6"         # GND
+"48" = "gnd7"         # GND
+"49" = "gnd8"         # GND
+"50" = "gnd9"         # GND
+"51" = "gnd10"        # GND
+"52" = "gnd11"        # GND
+"53" = "gnd12"        # GND
+"54" = "gnd13"        # GND
+"55" = "gnd14"        # GND
+"56" = "gnd15"        # GND
+"57" = "gnd16"        # GND
+"58" = "gnd17"        # GND
+"59" = "gnd18"        # GND
+"60" = "gnd19"        # GND
+"61" = "gnd20"        # GND
+"62" = "gnd21"        # GND
+"63" = "gnd22"        # GND
+"64" = "gnd23"        # GND
+"65" = "gnd24"        # GND
+
+[models.pin_capability.adc]
+basis = "Espressif ESP32-S3-MINI-1 & MINI-1U Datasheet v1.7, Table 3-1 Pin Definitions (PDF pp.11-12): IO1-IO10 ADC1_CH0-CH9, IO11-IO20 ADC2_CH0-CH9"
+[models.pin_capability.adc.pads]
+"5" = "ADC1_CH0"
+"6" = "ADC1_CH1"
+"7" = "ADC1_CH2"
+"8" = "ADC1_CH3"
+"9" = "ADC1_CH4"
+"10" = "ADC1_CH5"
+"11" = "ADC1_CH6"
+"12" = "ADC1_CH7"
+"13" = "ADC1_CH8"
+"14" = "ADC1_CH9"
+"15" = "ADC2_CH0"
+"16" = "ADC2_CH1"
+"17" = "ADC2_CH2"
+"18" = "ADC2_CH3"
+"19" = "ADC2_CH4"
+"20" = "ADC2_CH5"
+"21" = "ADC2_CH6"
+"22" = "ADC2_CH7"
+"23" = "ADC2_CH8"
+"24" = "ADC2_CH9"
+
+# Table 3-1: EN (pad 45) "High: on, enables the chip. Low: off". Chapter 8 module
+# schematic: CHIP_PU is wired straight to the module pad with no pull-up on it.
+[[models.straps]]
+role = "en"
+level = "high"
+boot_select = false
+internal_pull = "none"
+note = "EN (CHIP_PU) high = chip enabled, low = chip off; the module has no on-board pull on EN, so an undriven net floats"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 3.6
+basis = "ESP32-S3-MINI-1 & MINI-1U Datasheet v1.7, Table 6-1 Absolute Maximum Ratings (VDD33 -0.3 to 3.6 V) and Table 6-2 Recommended Operating Conditions (VDD33 3.0 / 3.3 / 3.6 V)"
+
+# Section 4 Boot Configurations (excerpt of the ESP32-S3 Series Datasheet): chip
+# boot mode from GPIO0 and GPIO46, VDD_SPI voltage from GPIO45. The module maps
+# the chip's GPIOn to pad IOn (Table 3-1), so the roles are the chip's.
+[[models.straps]]
+role = "gpio0"
+level = "high"
+boot_select = true   # latches SPI-vs-download boot; unrecoverable in firmware
+# Table 6-3: VIL max 0.25 x VDD, VIH min 0.75 x VDD.
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO0 high = SPI boot (normal); low with GPIO46=0 = download boot"
+
+[[models.straps]]
+role = "gpio46"
+level = "low"
+note = "GPIO46 must be low or floating at reset (joins GPIO0 to pick boot mode)"
+
+[[models.straps]]
+role = "gpio45"
+level = "defined"
+note = "GPIO45 selects VDD_SPI flash voltage (low = 3.3 V default); must be defined"
+
+[models.ratings]
+max_voltage_v = 3.6   # Table 6-1, VDD33 -0.3 to 3.6 V
+
+[models.coverage]
+implements = ["xtensa_lx7_machine_boot", "gpio_output_register_or_mailbox_observation_0_to_31", "uart_transport", "wall_bounded_virtual_time", "gpio_input_mailbox_contract_0_to_31", "adc_input_mailbox_contract", "i2c_spi_mailbox_contract"]
+missing = ["application_firmware_end_to_end_proof", "gpio_32_to_48_observation", "instruction_counted_timing", "unmodified_firmware_gpio_input", "native_adc_peripheral", "unmodified_firmware_i2c_spi_observation", "watchdog_behavior", "silicon_power_current_profile", "silicon_timing_and_errata"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ESP32-S2-MINI-1 / -1U module (65 pads; -N4 / -N4R2 and end-of-life -H4 variants, datasheet v1.6 Tables 1-2 p.10).
+# Source: Espressif ESP32-S2-MINI-1 & MINI-1U Datasheet v1.6, Table 3 Pin
+# Definitions (PDF pp.11-12), Tables 9-11 (VDD33 maximum 3.6 V, recommended
+# 3.0-3.6 V, VIH min 0.75 x VDD, VIL max 0.25 x VDD). No co-sim core exists for
+# the S2 (as on esp32s2_wroom); lint, strap, envelope and rating checks read the
+# pad map. tests/suite/module_pad_tables/esp32_s2_mini_1.tsv is the datasheet
+# table this map is checked against pad by pad.
+[[models]]
+id = "esp32s2_mini1"
+kind = "mcu"
+description = "Espressif ESP32-S2-MINI-1/-1U module, 65 pads (structure only, no co-sim core)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.espressif.com/sites/default/files/documentation/esp32-s2-mini-1_esp32-s2-mini-1u_datasheet_en.pdf"
+title = "Espressif ESP32-S2-MINI-1 & MINI-1U Datasheet v1.6"
+locator = "Table 3 Pin Definitions (PDF pp.11-12); Table 9 Absolute Maximum Ratings; Table 10 Recommended Operating Conditions; Table 11 DC Characteristics; Section 3.3 Strapping Pins"
+sha256 = "06999476c9d1dede2e6828384dc79aa1e7935059e0fc8349e51f0c962fcfa882"
+
+[models.match]
+value_re = "(?i)^ESP32[-_ ]?S2[-_ ]?MINI[-_ ]?1(U|/U)?([-_ ]?(N\\d+(R\\d+)?|H\\d+))?$"
+
+[models.params]
+must_not_float_roles = "en"
+
+[models.pins]
+# Table 3 Pin Definitions. GND = 1, 2, 30, 42, 43, 46-65; NC = 27; IO26 (pad 26)
+# is used by the embedded PSRAM on the -N4R2 variants (note 2).
+"1" = "gnd"           # GND
+"2" = "gnd2"          # GND
+"3" = "vdd"           # 3V3
+"4" = "gpio0"         # IO0
+"5" = "gpio1"         # IO1
+"6" = "gpio2"         # IO2
+"7" = "gpio3"         # IO3
+"8" = "gpio4"         # IO4
+"9" = "gpio5"         # IO5
+"10" = "gpio6"        # IO6
+"11" = "gpio7"        # IO7
+"12" = "gpio8"        # IO8
+"13" = "gpio9"        # IO9
+"14" = "gpio10"       # IO10
+"15" = "gpio11"       # IO11
+"16" = "gpio12"       # IO12
+"17" = "gpio13"       # IO13
+"18" = "gpio14"       # IO14
+"19" = "gpio15"       # IO15
+"20" = "gpio16"       # IO16
+"21" = "gpio17"       # IO17
+"22" = "gpio18"       # IO18
+"23" = "gpio19"       # IO19
+"24" = "gpio20"       # IO20
+"25" = "gpio21"       # IO21
+"26" = "gpio26"       # IO26
+"27" = "nc"           # NC
+"28" = "gpio33"       # IO33
+"29" = "gpio34"       # IO34
+"30" = "gnd3"         # GND
+"31" = "gpio35"       # IO35
+"32" = "gpio36"       # IO36
+"33" = "gpio37"       # IO37
+"34" = "gpio38"       # IO38
+"35" = "gpio39"       # IO39
+"36" = "gpio40"       # IO40
+"37" = "gpio41"       # IO41
+"38" = "gpio42"       # IO42
+"39" = "gpio43_txd0"  # TXD0
+"40" = "gpio44_rxd0"  # RXD0
+"41" = "gpio45"       # IO45
+"42" = "gnd4"         # GND
+"43" = "gnd5"         # GND
+"44" = "gpio46"       # IO46
+"45" = "en"           # EN
+"46" = "gnd6"         # GND
+"47" = "gnd7"         # GND
+"48" = "gnd8"         # GND
+"49" = "gnd9"         # GND
+"50" = "gnd10"        # GND
+"51" = "gnd11"        # GND
+"52" = "gnd12"        # GND
+"53" = "gnd13"        # GND
+"54" = "gnd14"        # GND
+"55" = "gnd15"        # GND
+"56" = "gnd16"        # GND
+"57" = "gnd17"        # GND
+"58" = "gnd18"        # GND
+"59" = "gnd19"        # GND
+"60" = "gnd20"        # GND
+"61" = "gnd21"        # GND
+"62" = "gnd22"        # GND
+"63" = "gnd23"        # GND
+"64" = "gnd24"        # GND
+"65" = "gnd25"        # GND
+
+[models.pin_capability.adc]
+basis = "Espressif ESP32-S2-MINI-1 & MINI-1U Datasheet v1.6, Table 3 Pin Definitions (PDF pp.11-12): IO1-IO10 ADC1_CH0-CH9, IO11-IO20 ADC2_CH0-CH9"
+[models.pin_capability.adc.pads]
+"5" = "ADC1_CH0"
+"6" = "ADC1_CH1"
+"7" = "ADC1_CH2"
+"8" = "ADC1_CH3"
+"9" = "ADC1_CH4"
+"10" = "ADC1_CH5"
+"11" = "ADC1_CH6"
+"12" = "ADC1_CH7"
+"13" = "ADC1_CH8"
+"14" = "ADC1_CH9"
+"15" = "ADC2_CH0"
+"16" = "ADC2_CH1"
+"17" = "ADC2_CH2"
+"18" = "ADC2_CH3"
+"19" = "ADC2_CH4"
+"20" = "ADC2_CH5"
+"21" = "ADC2_CH6"
+"22" = "ADC2_CH7"
+"23" = "ADC2_CH8"
+"24" = "ADC2_CH9"
+
+# Table 3: EN (pad 45) "High: on, enables the chip. Low: off. Do not leave the EN
+# pin floating."
+[[models.straps]]
+role = "en"
+level = "high"
+boot_select = false
+internal_pull = "none"
+note = "EN (CHIP_PU) high = chip enabled, low = chip off; the module has no on-board pull on EN, so an undriven net floats"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 3.6
+basis = "ESP32-S2-MINI-1 & MINI-1U Datasheet v1.6, Table 9 Absolute Maximum Ratings (VDD33 -0.3 to 3.6 V) and Table 10 Recommended Operating Conditions (VDD33 3.0 / 3.3 / 3.6 V)"
+
+# Section 3.3 Strapping Pins: chip boot mode from GPIO0 and GPIO46, VDD_SPI
+# voltage from GPIO45, ROM message printing from GPIO46.
+[[models.straps]]
+role = "gpio0"
+level = "high"
+boot_select = true   # latches SPI-vs-download boot
+# Table 11: VIL max 0.25 x VDD, VIH min 0.75 x VDD.
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO0 high = SPI boot (normal); low = download boot"
+
+[[models.straps]]
+role = "gpio46"
+level = "low"
+note = "GPIO46 must be low or floating at reset"
+
+[[models.straps]]
+role = "gpio45"
+level = "defined"
+note = "GPIO45 selects VDD_SPI flash voltage; must be defined"
+
+[models.ratings]
+max_voltage_v = 3.6   # Table 9, VDD33 -0.3 to 3.6 V
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ESP32-C6-WROOM-1 / -1U module (29 pads).
+# Source: Espressif ESP32-C6-WROOM-1 & WROOM-1U Datasheet v1.4, Table 3-1 Pin
+# Definitions (PDF p.11), Tables 4-1/4-3 (boot straps), 6-1/6-2/6-3 (VDD33
+# maximum 3.6 V, recommended 3.0-3.6 V, VIH min 0.75 x VDD, VIL max 0.25 x VDD).
+# The WROOM-1 numbers the GPIOs on other pads than the MINI-1 (esp32c6_mini1),
+# so it needs its own map. No co-sim core exists for the ESP32-C6 (as on
+# esp32c6_mini1). tests/suite/module_pad_tables/esp32_c6_wroom_1.tsv is the
+# datasheet table this map is checked against pad by pad.
+[[models]]
+id = "esp32c6_wroom1"
+kind = "mcu"
+description = "Espressif ESP32-C6-WROOM-1/-1U module, 29 pads (structure only, no co-sim core)"
+
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.espressif.com/sites/default/files/documentation/esp32-c6-wroom-1_wroom-1u_datasheet_en.pdf"
+title = "Espressif ESP32-C6-WROOM-1 & WROOM-1U Datasheet v1.4"
+locator = "Table 3-1 Pin Definitions (PDF p.11); Table 4-1 Default Configuration of Strapping Pins; Table 4-3 Chip Boot Mode Control; Table 6-1 Absolute Maximum Ratings; Table 6-2 Recommended Operating Conditions; Table 6-3 DC Characteristics"
+sha256 = "163020762fa6d499e0c611c5a13e78ad9d4720b421c6bc5e14e16fc748862b73"
+
+[models.match]
+value_re = "(?i)^ESP32[-_ ]?C6[-_ ]?WROOM[-_ ]?1(U|/U)?([-_ ]?(N\\d+|H\\d+))?$"
+
+[models.params]
+backend = "none:esp32c6"
+
+[models.pins]
+# Table 3-1 Pin Definitions. GND = 1, 28 and the exposed pad (29); NC = 22.
+"1" = "gnd"           # GND
+"2" = "vdd"           # 3V3
+"3" = "en"            # EN
+"4" = "gpio4"         # IO4
+"5" = "gpio5"         # IO5
+"6" = "gpio6"         # IO6
+"7" = "gpio7"         # IO7
+"8" = "gpio0"         # IO0
+"9" = "gpio1"         # IO1
+"10" = "gpio8"        # IO8
+"11" = "gpio10"       # IO10
+"12" = "gpio11"       # IO11
+"13" = "gpio12"       # IO12
+"14" = "gpio13"       # IO13
+"15" = "gpio9"        # IO9
+"16" = "gpio18"       # IO18
+"17" = "gpio19"       # IO19
+"18" = "gpio20"       # IO20
+"19" = "gpio21"       # IO21
+"20" = "gpio22"       # IO22
+"21" = "gpio23"       # IO23
+"22" = "nc"           # NC
+"23" = "gpio15"       # IO15
+"24" = "gpio17_rxd0"  # RXD0
+"25" = "gpio16_txd0"  # TXD0
+"26" = "gpio3"        # IO3
+"27" = "gpio2"        # IO2
+"28" = "gnd2"         # GND
+"29" = "gnd3"         # GND
+
+[models.pin_capability.adc]
+basis = "Espressif ESP32-C6-WROOM-1 & WROOM-1U Datasheet v1.4, Table 3-1 Pin Definitions (PDF p.11): ADC1_CH0-CH6 on IO0-IO6; no other pad carries an ADC channel"
+[models.pin_capability.adc.pads]
+"4" = "ADC1_CH4"
+"5" = "ADC1_CH5"
+"6" = "ADC1_CH6"
+"8" = "ADC1_CH0"
+"9" = "ADC1_CH1"
+"26" = "ADC1_CH3"
+"27" = "ADC1_CH2"
+
+# Table 3-1: EN (pad 3) "High: on, enables the chip. Low: off, the chip powers
+# off. Note: Do not leave the EN pin floating."
+[[models.straps]]
+role = "en"
+level = "high"
+boot_select = false
+internal_pull = "none"
+note = "EN (CHIP_PU) high = chip enabled, low = chip off; the module has no on-board pull on EN, so an undriven net floats"
+
+[models.ratings]
+max_voltage_v = 3.6       # Table 6-1, VDD33 -0.3 to 3.6 V
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 3.0
+max_v = 3.6
+abs_max_v = 3.6
+basis = "ESP32-C6-WROOM-1 & WROOM-1U Datasheet v1.4, Table 6-2 VDD33 3.0-3.6 V; Table 6-1 VDD33 max 3.6 V"
+
+# Table 4-3: GPIO9 = 1 selects SPI boot whatever GPIO8 is; GPIO9 = 0 with GPIO8 = 1
+# selects joint download boot. Table 4-1: GPIO9 has a weak pull-up, GPIO8 floats.
 [[models.straps]]
 role = "gpio9"
 level = "high"

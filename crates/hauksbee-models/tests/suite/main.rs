@@ -28,6 +28,7 @@ mod declared_coverage;
 mod digital_pin_maps;
 mod diode_1n4148_packages;
 mod docs_generated;
+mod espressif_module_pad_tables;
 mod exact_override_tiebreak;
 mod external_five_coverage;
 mod extract_model_choice;

@@ -1587,6 +1587,43 @@ mod tests {
         );
     }
 
+    /// The ESP32-S3-MINI-1 module's pads, wired the way its datasheet
+    /// (Table 3-1) numbers them: 3V3 on pad 3, ground on pads 1, 2, 42, 43 and
+    /// 46-65. `supply` and `ground` are the nets put on those pads.
+    fn s3_mini_pads(supply: i64, ground: i64) -> Vec<(String, i64)> {
+        let mut pads = vec![("3".to_string(), supply)];
+        for gnd in [1, 2, 42, 43].into_iter().chain(46..=65) {
+            pads.push((gnd.to_string(), ground));
+        }
+        pads
+    }
+
+    fn s3_mini_findings(pads: &[(String, i64)]) -> Vec<LintFinding> {
+        let refs: Vec<(&str, i64)> = pads.iter().map(|(p, n)| (p.as_str(), *n)).collect();
+        let u = part("U1", "ESP32-S3-MINI-1", &refs);
+        power_pin_lint(&board(&NETS, vec![u, load()]), &ModelLibrary::builtin()).findings
+    }
+
+    /// A module's footprint pads are the module's, not the chip's: with the
+    /// module card's pad map a 3V3 symbol pin landed on a ground pad of the
+    /// footprint leaves the supply pad open, and the correctly wired module
+    /// stays silent. (A supply pad put on ground is left to the envelope check,
+    /// the card's `supply_range` row judges it.)
+    #[test]
+    fn a_module_with_its_supply_on_a_ground_pad_is_caught_by_its_pad_map() {
+        let good = s3_mini_findings(&s3_mini_pads(V33, GND));
+        assert!(good.is_empty(), "{good:#?}");
+
+        // The 3V3 net lands on pad 2 (a ground pad of the MINI-1; the WROOM-1
+        // has its 3V3 there) and pad 3, the module's real 3V3 pad, is unwired.
+        let mut swapped = s3_mini_pads(V33, GND);
+        swapped.remove(0);
+        swapped.iter_mut().find(|(p, _)| p == "2").unwrap().1 = V33;
+        let found = s3_mini_findings(&swapped);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        says(&found[0], &["no supply", "pad 3 (VDD)"]);
+    }
+
     /// The other tables of supply roles are subsets of the one vocabulary.
     #[test]
     fn the_checks_role_lists_agree_with_the_vocabulary() {

@@ -20,6 +20,24 @@ use std::collections::{BTreeMap, HashMap};
 use hauksbee_bind::mcu_clock::{ClockKind, McuClock};
 use hauksbee_mcu::ExecutionProbe;
 
+use crate::observe::symbols::SymbolTable;
+
+/// Samples a parked-loop verdict needs before it is trusted.
+pub const PARK_MIN_SAMPLES: u64 = 16;
+/// A loop this tight (distinct program counters) is a park, not a program.
+pub const PARK_MAX_DISTINCT_PCS: u64 = 3;
+/// Lower-case fragments of function names that wait for a clock or oscillator
+/// (`SystemInit`, `HAL_RCC_OscConfig`, `SystemClock_Config`, an RP2040 `xosc`).
+const CLOCK_WAIT_MARKS: [&str; 7] = [
+    "clock",
+    "oscconfig",
+    "systeminit",
+    "rcc",
+    "pll",
+    "hserdy",
+    "xosc",
+];
+
 /// The sentence every surface (CLI text, `--plain`, `--json` notes, stderr,
 /// the web front door) uses when a run shows no evidence the firmware ran.
 pub const NO_EXECUTION_MESSAGE: &str = "co-sim saw no evidence the firmware executed (entry \
@@ -64,6 +82,34 @@ impl Observed {
     }
 }
 
+/// Where in start-up a core stalled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StallPhase {
+    /// Parked in a tight loop and `main` was never reached.
+    BeforeMain,
+    /// Parked in a function that waits for a clock or oscillator.
+    ClockWait,
+}
+
+/// An early stall: the core sat in a tight loop at start-up, so it never ran
+/// the firmware's own behaviour, whatever else the run recorded.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+pub struct Stall {
+    pub phase: StallPhase,
+    /// Program counter the core was parked at.
+    pub pc: u32,
+    /// Function containing `pc`, when the firmware ELF has symbols.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    /// One sentence saying where the core stuck and what to look at.
+    pub detail: String,
+}
+
+/// How the blocker for a firmware stalled on a missing external oscillator
+/// begins; the boot annotation recognises it by this.
+pub const EXTERNAL_CLOCK_STALL_PREFIX: &str = "the board fits no crystal or oscillator";
+
 /// Evidence that the firmware executed on one MCU during the run.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, schemars::JsonSchema)]
 pub struct ExecutionEvidence {
@@ -99,8 +145,13 @@ pub struct ExecutionEvidence {
     pub clock_valid: Observed,
     /// Where the core's clock comes from, in words.
     pub clock_source: String,
+    /// Set when the core stalled early (stuck before `main`, or in a clock
+    /// wait): such a run is not "executed" unless the firmware also produced
+    /// UART or GPIO output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stall: Option<Stall>,
     /// Any positive evidence the firmware ran: entry reached, UART bytes, or a
-    /// GPIO toggle.
+    /// GPIO toggle. False for an early stall with no output of its own.
     pub executed: bool,
     /// Executed, no fault, not held in reset, supply not invalid and clock not
     /// broken. Only an eligible MCU's firmware behaviour can count as a pass.
@@ -112,6 +163,13 @@ pub struct ExecutionEvidence {
     /// card carries a boot table (hauksbee-ir's vocabulary).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boot: Option<hauksbee_ir::boot::BootDecision>,
+    /// The firmware is probably waiting for an external oscillator the board
+    /// does not fit (see [`BoardReadings::external_clock_modelled`]). The
+    /// sentence is in [`Self::blockers`]; this flag lets the bench view say it
+    /// in its one-line headline, so it is not repeated on the wire.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub stalled_on_external_clock: bool,
 }
 
 /// Board-side readings for one MCU, gathered by the scheduler.
@@ -123,6 +181,11 @@ pub struct BoardReadings {
     pub supply_v: Option<f64>,
     /// The clock the board gives the core, from the binder.
     pub clock: McuClock,
+    /// Whether the backend gates the part's external-oscillator readiness on
+    /// the board really fitting a crystal ([`hauksbee_mcu::Mcu::external_clock_modelled`]),
+    /// so a firmware wait on the oscillator stalls on a board without one as on
+    /// silicon. Without it a missing crystal is invisible in the run.
+    pub external_clock_modelled: bool,
 }
 
 impl ExecutionEvidence {
@@ -136,6 +199,29 @@ impl ExecutionEvidence {
         pin_toggles: &BTreeMap<(char, u8), u64>,
         board: BoardReadings,
     ) -> Self {
+        Self::with_symbols(
+            mcu_ref,
+            backend,
+            probe,
+            uart_bytes,
+            pin_toggles,
+            board,
+            None,
+        )
+    }
+
+    /// [`Self::new`], naming the function a stalled core sits in from the
+    /// firmware ELF's symbols.
+    #[must_use]
+    pub fn with_symbols(
+        mcu_ref: &str,
+        backend: &str,
+        probe: ExecutionProbe,
+        uart_bytes: u64,
+        pin_toggles: &BTreeMap<(char, u8), u64>,
+        board: BoardReadings,
+        symbols: Option<&SymbolTable>,
+    ) -> Self {
         let reached_entry = Observed::from_option(probe.reached_entry);
         let gpio_toggles: BTreeMap<String, u64> = pin_toggles
             .iter()
@@ -145,9 +231,19 @@ impl ExecutionEvidence {
         // A boot ROM that logs on the same UART talks before (and without) the
         // image, so its bytes are not firmware output.
         let firmware_uart = uart_bytes > 0 && !probe.boot_rom_console;
-        let executed = reached_entry == Observed::Yes || firmware_uart || !gpio_toggles.is_empty();
+        let firmware_output = firmware_uart || !gpio_toggles.is_empty();
+        let stall = stall_of(&probe, reached_entry, symbols);
+        // A core parked at start-up has not run the firmware's behaviour; only
+        // output of its own (UART or a driven pin) shows it got further.
+        let executed = if stall.is_some() {
+            firmware_output
+        } else {
+            reached_entry == Observed::Yes || firmware_output
+        };
         let mut blockers = Vec::new();
-        if !executed {
+        if let Some(stall) = &stall {
+            blockers.push(stall.detail.clone());
+        } else if !executed {
             blockers.push(match reached_entry {
                 Observed::No => format!(
                     "the core never reached {} and produced no UART or GPIO activity",
@@ -193,6 +289,25 @@ impl ExecutionEvidence {
                 clock.detail
             ));
         }
+        // On silicon the firmware's wait for the external oscillator never ends
+        // when nothing is fitted; the emulator reproduces that, and the run
+        // then shows a core that never got to `main` and nothing else. Say why.
+        let stalled_on_external_clock =
+            !executed && board.external_clock_modelled && !clock.external_present();
+        if stalled_on_external_clock {
+            blockers.push(format!(
+                "{EXTERNAL_CLOCK_STALL_PREFIX} on the part's external clock pins \
+                 ({}), and this backend models oscillator readiness as silicon does, so \
+                 firmware that waits for the external oscillator to become ready (an SDK \
+                 start-up loop, an HSE or XOSC ready flag) stalls here: fit the crystal \
+                 or oscillator the part's reference design uses",
+                if clock.detail.is_empty() {
+                    "nothing is bound to them"
+                } else {
+                    &clock.detail
+                }
+            ));
+        }
         Self {
             mcu_ref: mcu_ref.to_string(),
             backend: backend.to_string(),
@@ -205,6 +320,7 @@ impl ExecutionEvidence {
             faults: probe.faults,
             uart_bytes,
             gpio_toggles,
+            stall,
             reset_held: board.reset_held,
             supply_valid: board.supply_valid,
             supply_v: board.supply_v,
@@ -214,8 +330,57 @@ impl ExecutionEvidence {
             firmware_pass_eligible: blockers.is_empty(),
             blockers,
             boot: None,
+            stalled_on_external_clock,
         }
     }
+}
+
+/// Whether the core is parked in a tight loop early in start-up, and where.
+fn stall_of(
+    probe: &ExecutionProbe,
+    reached_entry: Observed,
+    symbols: Option<&SymbolTable>,
+) -> Option<Stall> {
+    let pc = probe.last_pc?;
+    if probe.pc_samples < PARK_MIN_SAMPLES || probe.distinct_pcs > PARK_MAX_DISTINCT_PCS {
+        return None;
+    }
+    let symbol = symbols.and_then(|s| s.lookup(pc)).map(str::to_string);
+    let at = symbol.as_ref().map_or_else(
+        || format!("0x{pc:08x}"),
+        |name| format!("{name} (0x{pc:08x})"),
+    );
+    let entry = probe.entry_symbol.as_deref().unwrap_or("main");
+    let in_clock_wait = symbol.as_deref().is_some_and(|name| {
+        let lower = name.to_ascii_lowercase();
+        CLOCK_WAIT_MARKS.iter().any(|mark| lower.contains(mark))
+    });
+    let (phase, detail) = if in_clock_wait {
+        (
+            StallPhase::ClockWait,
+            format!(
+                "stalled in a clock wait at {at}: the core is spinning on a clock or oscillator \
+                 that never became ready; check the crystal, its load capacitors and the \
+                 oscillator pins"
+            ),
+        )
+    } else if reached_entry == Observed::No {
+        (
+            StallPhase::BeforeMain,
+            format!(
+                "stalled before {entry} at {at}: the core is parked in a tight loop and never \
+                 reached the firmware's entry point"
+            ),
+        )
+    } else {
+        return None;
+    };
+    Some(Stall {
+        phase,
+        pc,
+        symbol,
+        detail,
+    })
 }
 
 /// Whether the board supplies the core's clock, and where it comes from, in words.
@@ -243,6 +408,19 @@ fn clock_reading(clock: &McuClock) -> (Observed, String) {
     }
 }
 
+/// One sentence per MCU that stalled early, `"U1: stalled before main at ..."`,
+/// for the surfaces that explain a quiet run.
+#[must_use]
+pub fn stall_notes(rows: &[ExecutionEvidence]) -> Vec<String> {
+    rows.iter()
+        .filter_map(|e| {
+            e.stall
+                .as_ref()
+                .map(|stall| format!("{}: {}", e.mcu_ref, stall.detail))
+        })
+        .collect()
+}
+
 /// The one-line execution statement every text surface prints for a row.
 #[must_use]
 pub fn execution_evidence_line(e: &ExecutionEvidence) -> String {
@@ -255,19 +433,22 @@ pub fn execution_evidence_line(e: &ExecutionEvidence) -> String {
         || e.supply_valid.as_str().to_string(),
         |v| format!("{} ({v:.3} V)", e.supply_valid.as_str()),
     );
+    let verdict = match (&e.stall, e.firmware_pass_eligible, e.executed) {
+        (Some(stall), _, _) => match stall.phase {
+            StallPhase::BeforeMain => "STALLED BEFORE MAIN, not executed",
+            StallPhase::ClockWait => "STALLED IN A CLOCK WAIT, not executed",
+        },
+        (None, true, _) => "executed",
+        (None, false, true) => "executed, NOT a firmware pass",
+        (None, false, false) => "NO EVIDENCE OF EXECUTION",
+    };
     format!(
         "{} ({}): {}; reached {}: {}; {}; {} PC samples ({} distinct); faults: {}; \
          UART {} bytes; GPIO {} toggles on {} pins; reset held: {}; supply valid: {}; \
          clock valid: {}",
         e.mcu_ref,
         e.backend,
-        if e.firmware_pass_eligible {
-            "executed"
-        } else if e.executed {
-            "executed, NOT a firmware pass"
-        } else {
-            "NO EVIDENCE OF EXECUTION"
-        },
+        verdict,
         e.entry_symbol.as_deref().unwrap_or("entry"),
         e.reached_entry.as_str(),
         instructions,
@@ -435,6 +616,7 @@ mod tests {
             supply_valid,
             supply_v: Some(3.3),
             clock: McuClock::default(),
+            external_clock_modelled: false,
         }
     }
 
@@ -482,6 +664,46 @@ mod tests {
             board(Observed::Unknown, Observed::Unknown),
         );
         assert!(e.executed && e.firmware_pass_eligible, "{e:?}");
+    }
+
+    /// A core that never reached `main` on a board with no crystal, on a backend
+    /// that gates oscillator readiness, is reported as waiting for the
+    /// oscillator; with readiness not modelled, or a crystal fitted, or `main`
+    /// reached, it is not.
+    #[test]
+    fn a_core_that_never_started_without_a_crystal_is_reported_as_waiting_for_it() {
+        let run = |reached: bool, modelled: bool, clock: McuClock| {
+            ExecutionEvidence::new(
+                "U1",
+                "renode:rp2040",
+                probe(Some(reached), &[]),
+                0,
+                &BTreeMap::new(),
+                BoardReadings {
+                    clock,
+                    external_clock_modelled: modelled,
+                    ..board(Observed::No, Observed::Yes)
+                },
+            )
+        };
+        let e = run(false, true, McuClock::default());
+        assert!(
+            e.stalled_on_external_clock && !e.firmware_pass_eligible,
+            "{e:?}"
+        );
+        assert!(
+            e.blockers
+                .iter()
+                .any(|b| b.starts_with(EXTERNAL_CLOCK_STALL_PREFIX)),
+            "{e:?}"
+        );
+        assert!(!run(false, false, McuClock::default()).stalled_on_external_clock);
+        assert!(!run(true, true, McuClock::default()).stalled_on_external_clock);
+        let crystal = McuClock {
+            kind: ClockKind::Crystal,
+            ..McuClock::default()
+        };
+        assert!(!run(false, true, crystal).stalled_on_external_clock);
     }
 
     #[test]
@@ -646,5 +868,107 @@ mod tests {
         assert_eq!(mixed.supply_valid(None, None, 3.3), Observed::No);
         mixed.observe(&[3.3, 1.1]);
         assert_eq!(mixed.supply_valid(None, None, 3.3), Observed::Unknown);
+    }
+
+    fn parked(reached: Option<bool>, pc: u32) -> ExecutionProbe {
+        ExecutionProbe {
+            pc_samples: 64,
+            distinct_pcs: 1,
+            last_pc: Some(pc),
+            ..probe(reached, &[])
+        }
+    }
+
+    fn table() -> SymbolTable {
+        SymbolTable::from_image(&crate::observe::symbols::test_image(&[
+            ("Reset_Handler", 0x0800_0100, 0x20),
+            ("HAL_RCC_OscConfig", 0x0800_0200, 0x80),
+            ("main", 0x0800_0400, 0x40),
+        ]))
+        .unwrap()
+    }
+
+    fn stalled(p: ExecutionProbe, uart: u64) -> ExecutionEvidence {
+        ExecutionEvidence::with_symbols(
+            "U1",
+            "renode:stm32f103",
+            p,
+            uart,
+            &BTreeMap::new(),
+            board(Observed::No, Observed::Yes),
+            Some(&table()),
+        )
+    }
+
+    #[test]
+    fn a_core_stuck_before_main_is_stalled_not_executed() {
+        let e = stalled(parked(Some(false), 0x0800_0108), 0);
+        let stall = e.stall.as_ref().expect("stalled");
+        assert_eq!(stall.phase, StallPhase::BeforeMain);
+        assert_eq!(stall.symbol.as_deref(), Some("Reset_Handler"));
+        assert!(!e.executed && !e.firmware_pass_eligible, "{e:?}");
+        assert!(
+            e.blockers[0].contains("before main at Reset_Handler"),
+            "{e:?}"
+        );
+        assert!(execution_evidence_line(&e).contains("STALLED BEFORE MAIN, not executed"));
+    }
+
+    #[test]
+    fn a_core_waiting_on_a_clock_names_where_even_after_reset_handler() {
+        for reached in [Some(false), Some(true)] {
+            let e = stalled(parked(reached, 0x0800_0210), 0);
+            let stall = e.stall.as_ref().expect("stalled");
+            assert_eq!(stall.phase, StallPhase::ClockWait, "{reached:?}");
+            assert!(stall.detail.contains("HAL_RCC_OscConfig"), "{stall:?}");
+            assert!(!e.executed, "{e:?}");
+            assert!(execution_evidence_line(&e).contains("STALLED IN A CLOCK WAIT"));
+        }
+    }
+
+    #[test]
+    fn a_stall_without_symbols_still_reports_the_address() {
+        let e = ExecutionEvidence::new(
+            "U1",
+            "renode:stm32f103",
+            parked(Some(false), 0x0800_0108),
+            0,
+            &BTreeMap::new(),
+            board(Observed::No, Observed::Yes),
+        );
+        let stall = e.stall.as_ref().expect("stalled");
+        assert!(
+            stall.symbol.is_none() && stall.detail.contains("0x08000108"),
+            "{stall:?}"
+        );
+    }
+
+    #[test]
+    fn output_of_its_own_keeps_a_later_stall_executed_but_not_a_pass() {
+        let e = stalled(parked(Some(true), 0x0800_0210), 12);
+        assert!(e.stall.is_some() && e.executed, "{e:?}");
+        assert!(!e.firmware_pass_eligible, "{e:?}");
+    }
+
+    #[test]
+    fn a_quiet_firmware_parked_in_main_is_not_a_stall() {
+        let e = stalled(parked(Some(true), 0x0800_0410), 0);
+        assert!(
+            e.stall.is_none() && e.executed && e.firmware_pass_eligible,
+            "{e:?}"
+        );
+        // Too few samples, or a core that is still moving, is not a park.
+        let few = ExecutionProbe {
+            pc_samples: 4,
+            ..parked(Some(false), 0x0800_0108)
+        };
+        assert!(stalled(few, 0).stall.is_none());
+        let moving = ExecutionProbe {
+            distinct_pcs: 40,
+            ..parked(Some(false), 0x0800_0108)
+        };
+        assert!(stalled(moving, 0).stall.is_none());
+        // A backend that cannot say whether main was reached claims nothing.
+        assert!(stalled(parked(None, 0x0800_0108), 0).stall.is_none());
     }
 }

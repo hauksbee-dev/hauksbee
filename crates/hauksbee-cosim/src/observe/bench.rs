@@ -16,15 +16,17 @@ use hauksbee_ir::observations::{
 
 use super::symbols::SymbolTable;
 use super::{fmt_duration, fmt_hz, McuObs, Observer, PinTrace, RawBusTxn};
-use crate::execution::ExecutionEvidence;
+use crate::execution::{ExecutionEvidence, PARK_MAX_DISTINCT_PCS, PARK_MIN_SAMPLES};
 
-/// Samples a parked-loop verdict needs before it is trusted.
-const PARK_MIN_SAMPLES: u64 = 16;
-/// A loop this tight (distinct program counters) is a park, not a program.
-const PARK_MAX_DISTINCT_PCS: u64 = 3;
 /// A core is quiet only if its last output is older than this fraction of the
 /// run (and at least two chunks).
 const QUIET_FRACTION: f64 = 0.25;
+
+/// The headline words for a core that never started because the firmware is
+/// waiting for an external oscillator the board does not fit (the full sentence
+/// is the execution evidence's blocker).
+const STALLED_ON_CLOCK: &str =
+    "no sign the firmware ran: no crystal or oscillator fitted, so the wait for the external oscillator never ends";
 
 /// What the scheduler knows about one MCU that the recorder does not.
 #[derive(Debug, Clone, Default)]
@@ -193,9 +195,24 @@ fn core_state(
             format!("faulted: {}", ev.faults.join(", ")),
         );
     }
+    if let Some(stall) = &ev.stall {
+        return (
+            CoreState::Parked,
+            Some(ParkSite {
+                pc: stall.pc,
+                symbol: stall.symbol.clone(),
+                pc_samples: ev.pc_samples,
+                distinct_pcs: ev.distinct_pcs,
+                quiet_since_s: obs.last_activity_s,
+            }),
+            stall.detail.clone(),
+        );
+    }
     let Some(pc) = ev.last_pc else {
         let words = if ev.executed {
             "running"
+        } else if ev.stalled_on_external_clock {
+            STALLED_ON_CLOCK
         } else {
             "no sign the firmware ran"
         };
@@ -240,14 +257,21 @@ fn core_state(
             || "never produced output".to_string(),
             |t| format!("quiet since {}", fmt_duration(t)),
         );
+        let why = if !ev.executed && ev.stalled_on_external_clock {
+            format!("; {STALLED_ON_CLOCK}")
+        } else {
+            String::new()
+        };
         return (
             CoreState::Parked,
             Some(site()),
-            format!("parked at {at} ({since})"),
+            format!("parked at {at} ({since}){why}"),
         );
     }
     if ev.executed {
         (CoreState::Running, None, "running".into())
+    } else if ev.stalled_on_external_clock {
+        (CoreState::Unknown, None, STALLED_ON_CLOCK.into())
     } else {
         (CoreState::Unknown, None, "no sign the firmware ran".into())
     }
@@ -592,6 +616,7 @@ mod tests {
             supply_valid: crate::execution::Observed::Yes,
             supply_v: Some(3.3),
             clock: hauksbee_bind::mcu_clock::McuClock::default(),
+            external_clock_modelled: false,
         };
         ExecutionEvidence::new(
             "U1",

@@ -1641,6 +1641,25 @@ pub struct StrapPin {
     pub vil: Option<[f64; 2]>,
     #[serde(default)]
     pub vih: Option<[f64; 2]>,
+    /// Role of the supply pin the thresholds scale on and a pull-up fix names.
+    /// Set it to the IO supply (`vddio`, `iovdd`) when the datasheet's
+    /// power-domain table puts this pad on an IO rail, not the core `vdd`: a
+    /// strap is read at the rail its pad is powered from. Without it the pad's
+    /// `[models.level_rails]` rail applies, else `vcc`/`vdd`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supply: Option<String>,
+}
+
+impl StrapPin {
+    /// The supply role this strap's `vil`/`vih` scale on: its own `supply`, else
+    /// the rail its pad is read at, else the core `vdd`.
+    #[must_use]
+    pub fn supply_role<'a>(&'a self, model: &'a ModelEntry) -> &'a str {
+        self.supply
+            .as_deref()
+            .or_else(|| model.level_rail_of(&self.role))
+            .unwrap_or("vdd")
+    }
 }
 
 /// The internal (on-die) pull a strap pin has, which determines whether leaving

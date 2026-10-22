@@ -2092,6 +2092,13 @@ pub struct BatchFailed {
 }
 
 impl BatchFailed {
+    /// Whether the batch saved some cards (exit status 4): partial success, not
+    /// a failure of the whole.
+    #[must_use]
+    pub const fn is_partial(&self) -> bool {
+        self.saved > 0
+    }
+
     /// `4` ([`EXIT_BATCH_PARTIAL`]) when some parts were saved and some failed;
     /// `1` when nothing was saved and something failed.
     #[must_use]
@@ -2362,6 +2369,7 @@ fn finish_batch(
     );
     say_recheck(end.board_path, end.template.out_dir.as_deref());
     if !failed.is_empty() {
+        println!("\n{}", words::exit_status_note(drafted, &failed));
         return Err(anyhow::Error::new(BatchFailed {
             saved: drafted,
             message: words::batch_failed(drafted, &failed),
@@ -2376,6 +2384,7 @@ fn module_like_parts(parts: &[UnmodelledPart]) -> Vec<String> {
         .iter()
         .filter(|p| {
             hauksbee_models::extract_messages::looks_like_module(
+                &p.part,
                 &p.footprints,
                 p.description.as_deref(),
             )

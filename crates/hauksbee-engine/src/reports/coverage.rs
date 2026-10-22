@@ -521,6 +521,7 @@ mod tests {
                 supply_valid: crate::execution::Observed::Yes,
                 supply_v: Some(3.3),
                 clock: hauksbee_bind::mcu_clock::McuClock::default(),
+                external_clock_modelled: false,
             },
         )
     }

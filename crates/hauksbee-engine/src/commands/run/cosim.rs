@@ -141,6 +141,7 @@ fn execute_and_collect_observations(
     let achieved_factor = headless.realtime_factor();
     let wall_s = headless.wall_s;
     let faults = headless.faults;
+    let uart_output = headless.uart_output;
 
     // Co-sim honesty summary: total net toggles, UART activity, and
     // any chip substitution detected at build time. Built from the SAME run
@@ -150,6 +151,7 @@ fn execute_and_collect_observations(
     let cosim = crate::reports::cosim::build_cosim_json(engine, uart_seen)?.map(|mut c| {
         c.wall_s = wall_s;
         c.realtime_factor = achieved_factor;
+        c.set_uart_output(&uart_output);
         c
     });
     let total_toggles = cosim.as_ref().map_or(0, |c| c.total_toggles);
@@ -480,6 +482,9 @@ fn emit_report(
     let failed_chunk_count = observations.analog.failed_chunk_count;
     let fallback_chunk_count = observations.analog.fallback_chunk_count;
     let zero_activity = observations.activity.zero;
+    // A core parked at start-up (before main, or waiting on a clock) is
+    // reported with where, beside the generic no-execution sentence.
+    let stall_notes = crate::execution::stall_notes(engine.scheduler().execution_evidence());
     let strict_refusal = &observations.activity.strict_refusal;
     let held_high_boot_nets = &observations.activity.boot_advisory.held_high_control_nets;
     let has_boot_advisory = !held_high_boot_nets.is_empty();
@@ -525,6 +530,9 @@ fn emit_report(
             jr.push_coverage_note(crate::execution::NO_PROCESSOR_MESSAGE);
         } else if zero_activity {
             jr.push_coverage_note(crate::execution::NO_EXECUTION_MESSAGE);
+        }
+        for stall in &stall_notes {
+            jr.push_coverage_note(format!("co-sim: {stall}"));
         }
         for blocker in &observations.activity.pass_blockers {
             jr.push_coverage_note(format!("firmware executed but is not a pass: {blocker}"));
@@ -629,6 +637,11 @@ fn emit_report(
             report.heads_up.push(crate::plain::HeadsUp::note(
                 crate::execution::NO_EXECUTION_MESSAGE,
             ));
+        }
+        for stall in &stall_notes {
+            report
+                .heads_up
+                .push(crate::plain::HeadsUp::note(format!("co-sim: {stall}")));
         }
         for blocker in &observations.activity.pass_blockers {
             report.heads_up.push(crate::plain::HeadsUp::note(format!(
