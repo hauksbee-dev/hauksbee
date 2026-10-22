@@ -2646,6 +2646,13 @@ fn uart_role(p: &Pin) -> Option<(bool, bool)> {
     Some((tx, function_tokens(&p.function).count() == 1))
 }
 
+/// The UART role of a pin by its function name, for the engine-layer checks
+/// that share this reading: `Some((transmit, dedicated))`, see [`uart_role`].
+#[must_use]
+pub fn uart_pin_role(p: &Pin) -> Option<(bool, bool)> {
+    uart_role(p)
+}
+
 /// A bus transceiver (a part with a `CANH`/`CANL` bus pin): its `TXD` is
 /// the input the controller transmits into and its `RXD` an output, whatever
 /// direction an untyped symbol gives them, so its pins carry no UART role.

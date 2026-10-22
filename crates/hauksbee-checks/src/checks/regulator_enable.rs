@@ -31,6 +31,14 @@
 //! (`en_open = "on"`, an internal pull toward on), is not judged here: an
 //! unknown is never read as off. A pull-down that holds such a pin off is
 //! `control_held_off`'s, which judges the divider against the internal pull.
+//!
+//! A second fault needs no card statement about the open pin: an enable whose
+//! only source is the device's own output (see [`self_fed_enable`]). The
+//! output is 0 V until the part is on, so an on-high enable wired to it, or to
+//! any net downstream of it through resistors, ferrites, diodes or another
+//! regulator, can never rise and the part can never start. It is judged for
+//! every regulator and load switch card with an enable and an output pad, and
+//! only when nothing else on that downstream island can set the level.
 
 use std::collections::HashMap;
 
@@ -206,7 +214,7 @@ fn role_is_port(role: &str) -> bool {
 /// `TACTILE`, `PUSHBUTTON`, `BTN`): boards label a reset button with refs
 /// like `RESET` that read as a resistor by prefix alone. Whole words only, so
 /// a battery `Contact` is not a tactile switch.
-fn is_switch(o: &Component) -> bool {
+pub(super) fn is_switch(o: &Component) -> bool {
     if RefClass::of(&o.reference) == RefClass::Switch {
         return true;
     }
@@ -490,7 +498,211 @@ pub fn regulator_enable_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetL
             report.findings.push(finding);
         }
     }
+    // The self-fed enable is judged on every regulator and load switch card,
+    // simple or not; a pin the open-pin judgement reports is reported once.
+    for comp in &board.components {
+        if report.findings.iter().any(|f| f.refs == [comp.reference.clone()]) {
+            continue;
+        }
+        if let Some(finding) = self_fed_enable(board, comp, &models) {
+            report.findings.push(finding);
+        }
+    }
     report
+}
+
+/// How one pin on a net of the output's downstream island reads.
+enum Island {
+    /// A load, a capacitor or a return: it sets no level of its own.
+    Load,
+    /// A series part carrying the island on to this net.
+    Carries(i64),
+    /// Anything that might source a level: the island is not judged.
+    Source,
+}
+
+/// The far end of a two-pin series part `o` entered at `q`: a return or a
+/// dangling end is a load, any other net is carried on.
+fn series_far(board: &ExtractedBoard, (o, q): (&Component, &Pin), net: i64) -> Island {
+    let others: Vec<Option<i64>> = o
+        .pins
+        .iter()
+        .filter(|p| p.number != q.number)
+        .map(|p| p.net.filter(|id| *id != 0))
+        .collect();
+    let [far] = others.as_slice() else {
+        return Island::Source;
+    };
+    match *far {
+        None => Island::Load,
+        Some(id) if id == net => Island::Load,
+        Some(id) if board.net(id).is_some_and(|n| is_ground(&n.name)) => Island::Load,
+        Some(id) => Island::Carries(id),
+    }
+}
+
+fn island_member(board: &ExtractedBoard, (o, q): (&Component, &Pin), net: i64) -> Island {
+    if is_test_point_or_hole(o) || is_capacitor(o) {
+        return Island::Load;
+    }
+    if o.pins.len() == 2 {
+        match RefClass::of(&o.reference) {
+            RefClass::Resistor if resistor_ohms(o).is_some() => {
+                return series_far(board, (o, q), net);
+            }
+            RefClass::FerriteBead | RefClass::Inductor => return series_far(board, (o, q), net),
+            RefClass::Diode => {
+                // Conducts from its anode only: a diode into the island is a source.
+                let f = q.function.trim().to_ascii_uppercase();
+                return if matches!(f.as_str(), "A" | "ANODE") {
+                    series_far(board, (o, q), net)
+                } else {
+                    Island::Source
+                };
+            }
+            _ => {}
+        }
+    }
+    match q.kind.trim().to_ascii_lowercase().as_str() {
+        "power_in" | "input" => Island::Load,
+        _ => Island::Source,
+    }
+}
+
+/// The nets downstream of `out` through series parts and other regulators fed
+/// from them, when every pin on them reads as a load (see [`Island`]). `None`
+/// when anything on them might source a level, or a record is refused.
+fn output_island(
+    board: &ExtractedBoard,
+    (reg, out): (&Component, i64),
+    models: &HashMap<&str, ModelEntry>,
+) -> Option<std::collections::BTreeSet<i64>> {
+    let mut island = std::collections::BTreeSet::from([out]);
+    let mut queue = vec![out];
+    while let Some(net) = queue.pop() {
+        for (o, q) in board.net_members(net) {
+            match AssemblyState::of(o) {
+                AssemblyState::DnpAbsent(_) => continue,
+                AssemblyState::IdentityUnknown(_) => return None,
+                AssemblyState::Present(_) => {}
+            }
+            let role = models
+                .get(o.reference.as_str())
+                .and_then(|m| m.pins.get(&q.number))
+                .map(|r| r.to_ascii_lowercase());
+            if std::ptr::eq(o, reg) {
+                // The part's own output sources the island; no other pad may
+                // drive or share it.
+                let own_out = net == out && role.as_deref() == Some("out");
+                if !own_out
+                    && (pin_drives(q) || q.kind.trim().eq_ignore_ascii_case("bidirectional"))
+                {
+                    return None;
+                }
+                continue;
+            }
+            // Another regulator fed from the island carries it on to its output.
+            if let Some(m) = models
+                .get(o.reference.as_str())
+                .filter(|m| m.kind == ComponentKind::Vreg)
+            {
+                match role.as_deref() {
+                    Some("in") => {
+                        let next = role_net_id(o, m, "out")?;
+                        if island.insert(next) {
+                            queue.push(next);
+                        }
+                        continue;
+                    }
+                    Some("gnd" | "en" | "shdn" | "fb" | "bypass") => continue,
+                    _ => return None,
+                }
+            }
+            match island_member(board, (o, q), net) {
+                Island::Load => {}
+                Island::Carries(next) => {
+                    if island.insert(next) {
+                        queue.push(next);
+                    }
+                }
+                Island::Source => return None,
+            }
+        }
+    }
+    Some(island)
+}
+
+/// A regulator or load switch whose on-high enable is fed only by the part's
+/// own output: wired to it directly, or to a net downstream of it that nothing
+/// else drives. The output is 0 V until the part runs, so the enable never
+/// rises and the part never starts. It is the one finding for a pin whose
+/// card is silent on an open enable; a pin the open-pin judgement already
+/// reports is reported once there.
+fn self_fed_enable(
+    board: &ExtractedBoard,
+    comp: &Component,
+    models: &HashMap<&str, ModelEntry>,
+) -> Option<LintFinding> {
+    let model = models.get(comp.reference.as_str())?;
+    if model.kind != ComponentKind::Vreg || !super::card_fits(board, comp, model) {
+        return None;
+    }
+    let (role, pad, on_high) = enable_pad(model)?;
+    if !on_high {
+        return None;
+    }
+    let pin = comp.pins.iter().find(|p| p.number == pad)?;
+    let en = pin.net.filter(|id| *id != 0)?;
+    let out = role_net_id(comp, model, "out")?;
+    let input = role_net_id(comp, model, "in");
+    let island = output_island(board, (comp, out), models)?;
+    if !island.contains(&en) || input.is_some_and(|i| island.contains(&i)) {
+        return None;
+    }
+    let name = |id: i64| board.net(id).map_or_else(String::new, |n| n.name.clone());
+    let (en_name, out_name) = (name(en), name(out));
+    let label = if pin.function.trim().is_empty() {
+        role.to_ascii_uppercase()
+    } else {
+        pin.function.trim().to_string()
+    };
+    let how = if en == out {
+        format!("is wired straight to its own output '{out_name}'")
+    } else {
+        format!(
+            "is on net '{en_name}', which is fed only from its own output '{out_name}' through \
+             series parts, and nothing else on it can drive it"
+        )
+    };
+    let fix = match input.map(name) {
+        Some(inp) => format!(
+            "Tie {label} to the input '{inp}', or pull it up to '{inp}' through 10k-100k, or \
+             drive it from a GPIO or supervisor."
+        ),
+        None => format!(
+            "Tie {label} to the part's input rail, or pull it up to that rail through 10k-100k, \
+             or drive it from a GPIO or supervisor."
+        ),
+    };
+    let mut nets = vec![en_name];
+    if !nets.contains(&out_name) {
+        nets.push(out_name.clone());
+    }
+    Some(LintFinding {
+        check: LintCheck::RegulatorHeldOff,
+        severity: Severity::High,
+        message: format!(
+            "{} ({}) {label} pad {} {how}: the output is 0 V until the part is enabled and the \
+             enable is high only when the output is, so the part can never start and \
+             '{out_name}' never comes on; everything powered from it is unpowered. \
+             {REMEDY_MARKER}{fix}",
+            comp.reference,
+            comp.value.trim(),
+            pin.number,
+        ),
+        refs: vec![comp.reference.clone()],
+        nets,
+    })
 }
 
 /// The concrete fix: pull or tie the pin to its on level.
@@ -873,6 +1085,124 @@ mod tests {
         says(
             &found[0],
             &["(p.3: EN low or open = shutdown; card 'en_test_QUOTED')"],
+        );
+    }
+
+    /// A regulator whose card is silent on an open enable (so the open-pin
+    /// judgement abstains), `U1` from `+5V` to `+3V3` with EN on `en`, plus
+    /// `extra` parts, judged by [`regulator_enable_lint`].
+    fn self_fed(tag: &str, en: i64, extra: Vec<Component>) -> Vec<LintFinding> {
+        let card = format!(
+            "[[models]]\nid = \"sf_test_{tag}\"\nkind = \"vreg\"\n\
+             description = \"self-fed enable fixture\"\n[models.match]\n\
+             value_re = \"^SFTEST-{tag}$\"\n[models.params]\nvout = 3.3\n\
+             dropout_v = 0.3\niq_a = 5.0e-5\n[models.pins]\n\
+             \"1\" = \"in\"\n\"2\" = \"gnd\"\n\"3\" = \"en\"\n\"5\" = \"out\"\n"
+        );
+        let dir = std::env::temp_dir().join(format!(
+            "hauksbee_regulator_selffed_{tag}_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("models.toml"), card).unwrap();
+        let mut lib = ModelLibrary::builtin();
+        let errors = lib.load_user_dir(&dir);
+        assert!(errors.is_empty(), "{tag}: {errors:?}");
+        let mut parts = vec![
+            part(
+                "U1",
+                &format!("SFTEST-{tag}"),
+                &[("1", VIN), ("2", GND), ("3", en), ("5", V3)],
+            ),
+            part("C1", "1u", &[("1", VIN), ("2", GND)]),
+            part("C2", "2.2u", &[("1", V3), ("2", GND)]),
+        ];
+        parts.extend(extra);
+        let nets = [
+            (VIN, "+5V"),
+            (V3, "+3V3"),
+            (GND, "GND"),
+            (EN, "/EN"),
+            (GPIO, "/MCU_PA3"),
+        ];
+        regulator_enable_lint(&board(&nets, parts), &lib).findings
+    }
+
+    /// An IC load on `net`: a supply pad, which draws and sets nothing.
+    fn load_on(net: i64) -> Component {
+        let mut load = part("U2", "SomeIC", &[("1", net), ("2", GND)]);
+        load.pins[0].kind = "power_in".into();
+        load.pins[1].kind = "power_in".into();
+        load
+    }
+
+    #[test]
+    fn an_enable_wired_to_the_regulators_own_output_can_never_start() {
+        let found = self_fed("DIRECT", V3, vec![load_on(V3)]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        let f = &found[0];
+        assert_eq!(f.check, LintCheck::RegulatorHeldOff);
+        assert_eq!(f.severity, Severity::High);
+        assert_eq!(f.refs, ["U1"]);
+        assert_eq!(f.nets, ["+3V3"]);
+        says(
+            f,
+            &[
+                "U1 (SFTEST-DIRECT) EN pad 3 is wired straight to its own output '+3V3'",
+                "can never start",
+            ],
+        );
+        assert!(
+            f.own_remedy()
+                .is_some_and(|r| r.starts_with("Tie EN to the input '+5V'")),
+            "{}",
+            f.message
+        );
+    }
+
+    #[test]
+    fn an_enable_fed_only_through_series_parts_from_the_output_can_never_start() {
+        // OUT -> 10k -> EN, with a pull-down on EN: still only the output feeds it.
+        let r = part("R1", "10k", &[("1", V3), ("2", EN)]);
+        let pull = part("R2", "100k", &[("1", EN), ("2", GND)]);
+        let found = self_fed("SERIES", EN, vec![r, pull, load_on(V3)]);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        says(
+            &found[0],
+            &["is on net '/EN', which is fed only from its own output '+3V3'"],
+        );
+        assert_eq!(found[0].nets, ["/EN", "+3V3"]);
+    }
+
+    #[test]
+    fn an_enable_something_else_can_drive_is_silent() {
+        let on = |tag: &str, en: i64, extra: Vec<Component>| {
+            let mut parts = vec![load_on(V3)];
+            parts.extend(extra);
+            self_fed(tag, en, parts)
+        };
+        assert!(on("VIN", VIN, vec![]).is_empty(), "tied to the input");
+        // A divider from the output that is also pulled up to the input.
+        let r = part("R1", "10k", &[("1", V3), ("2", EN)]);
+        let up = part("R2", "100k", &[("1", VIN), ("2", EN)]);
+        assert!(on("PULLED", EN, vec![r, up]).is_empty(), "pulled up to VIN");
+        // A GPIO on the line.
+        let r = part("R1", "10k", &[("1", V3), ("2", EN)]);
+        let mut mcu = part("U3", "SomeMCU", &[("7", EN)]);
+        mcu.pins[0].kind = "bidirectional".into();
+        assert!(on("GPIO", EN, vec![r, mcu]).is_empty(), "a GPIO drives it");
+        // A header: an external enable.
+        let r = part("R1", "10k", &[("1", V3), ("2", EN)]);
+        let header = part("J1", "Conn_01x02", &[("1", EN), ("2", GND)]);
+        assert!(on("HEADER", EN, vec![r, header]).is_empty(), "a header");
+        // Another source on the output rail itself.
+        let mut other = part("U4", "OtherReg", &[("1", V3)]);
+        other.pins[0].kind = "power_out".into();
+        assert!(on("SECOND", V3, vec![other]).is_empty(), "a second source");
+        // A load with no stated pin type is not read as a load.
+        assert!(
+            self_fed("UNTYPED", V3, vec![part("U2", "SomeIC", &[("1", V3)])]).is_empty(),
+            "an unknown pin"
         );
     }
 }

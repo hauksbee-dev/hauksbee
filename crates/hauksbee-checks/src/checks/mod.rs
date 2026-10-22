@@ -59,10 +59,18 @@
 //!   capacitance than its card's stability minimum (`cout_min_f`).
 //! - [`regulator_enable`]: a linear regulator whose card says an open enable
 //!   pin is off (`en_open = "off"`, or an internal pull toward off) with that
-//!   pin left with nothing that can raise it: its rail never comes on.
+//!   pin left with nothing that can raise it: its rail never comes on. It also
+//!   flags an enable whose only source is the device's own output (or a net
+//!   downstream of it), which can never rise.
 //! - [`control_held_off`]: an active-high enable or active-low reset the board
 //!   pulls to its off level with nothing that can release it: the part is never
 //!   enabled, or is held in reset and never runs.
+//! - [`switch_short`]: a switch or push button closed between a sourced supply
+//!   rail and ground, or between two sourced rails of different voltage, with
+//!   nothing in series: a short when pressed.
+//! - [`signal_direction`]: a signal net wired against its pins' directions:
+//!   only outputs (or only inputs) on it, or a transmit pin facing a transmit
+//!   pin, judged from the symbol pin types and the cards' pad roles.
 //! - [`datasheet_field`]: a part's `Datasheet` field whose file name clearly
 //!   names a different device or logic family, so a model drafted from it
 //!   would describe the wrong part (a low-severity, non-gating note).
@@ -140,7 +148,9 @@ pub mod regulator_enable;
 pub mod rest_supply;
 pub mod ripple;
 pub mod siblings;
+pub mod signal_direction;
 pub mod straps;
+pub mod switch_short;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod usb_c;
@@ -558,6 +568,27 @@ fn engine_lint_at(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     report
         .findings
         .extend(node_drive::node_drive_lint(board, lib).findings);
+    report
+        .findings
+        .extend(switch_short::switch_short_lint(board, lib).findings);
+    // A net the contention, floating-input or UART checks already report is
+    // theirs: the direction check says it again only for the nets they skip.
+    let direction: Vec<_> = signal_direction::signal_direction_lint(board, lib)
+        .findings
+        .into_iter()
+        .filter(|f| {
+            !report.findings.iter().any(|r| {
+                matches!(
+                    r.check,
+                    LintCheck::OutputContention
+                        | LintCheck::FloatingInput
+                        | LintCheck::FloatingControlPin
+                        | LintCheck::PinFunction
+                ) && f.nets.iter().any(|n| r.nets.contains(n))
+            })
+        })
+        .collect();
+    report.findings.extend(direction);
     report
         .findings
         .extend(dc_stress::dc_stress_at_corners(board, lib, bound).findings);
