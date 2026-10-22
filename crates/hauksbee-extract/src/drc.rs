@@ -2578,39 +2578,54 @@ impl NetTieOwners {
         }
     }
 
-    /// A paste-free footprint is a copper tie when its own pads join every one
-    /// of its nets into a single island. Pads that merely sit close (an open
-    /// solder jumper) or that leave a net isolated stay ordinary pads.
-    fn bridged_nets(buckets: &LayerBuckets, owner: &str) -> Option<Vec<i64>> {
+    /// The groups of nets a paste-free footprint's own pads join into one
+    /// island of copper. Each island is its own tie: a 3-pad solder jumper
+    /// bridged between pads 1 and 2 ties those two nets and leaves pad 3's net
+    /// an ordinary pad, so a foreign track on pad 3 is still a short. Pads that
+    /// merely sit close (an open solder jumper) join nothing.
+    fn bridged_nets(buckets: &LayerBuckets, owner: &str) -> Vec<Vec<i64>> {
         let pads: Vec<(&String, &Primitive)> = buckets
             .by_layer
             .iter()
             .flat_map(|(layer, prims)| prims.iter().map(move |p| (layer, p)))
             .filter(|(_, p)| p.owner == owner && p.kind == ItemKind::Pad && p.net != 0)
             .collect();
-        let mut all: Vec<i64> = pads.iter().map(|(_, p)| p.net).collect();
-        all.sort_unstable();
-        all.dedup();
-        let mut joined = vec![all.first().copied()?];
-        while let Some(net) = pads.iter().find_map(|(la, a)| {
-            let inside = joined.contains(&a.net);
-            pads.iter()
-                .find(|(lb, b)| {
-                    la == lb
-                        && inside != joined.contains(&b.net)
-                        && is_touching(crate::gerber::geo::shape_gap(&a.shape, &b.shape))
-                })
-                .map(|(_, b)| if inside { b.net } else { a.net })
-        }) {
-            joined.push(net);
+        let mut nets: Vec<i64> = pads.iter().map(|(_, p)| p.net).collect();
+        nets.sort_unstable();
+        nets.dedup();
+        // Union the nets whose pads touch on one layer.
+        let mut island: Vec<usize> = (0..nets.len()).collect();
+        let find = |island: &[usize], mut i: usize| {
+            while island[i] != i {
+                i = island[i];
+            }
+            i
+        };
+        for (i, (la, a)) in pads.iter().enumerate() {
+            for (lb, b) in &pads[i + 1..] {
+                if la == lb
+                    && a.net != b.net
+                    && is_touching(crate::gerber::geo::shape_gap(&a.shape, &b.shape))
+                {
+                    let ia = nets.iter().position(|n| *n == a.net).unwrap_or(0);
+                    let ib = nets.iter().position(|n| *n == b.net).unwrap_or(0);
+                    let (ra, rb) = (find(&island, ia), find(&island, ib));
+                    island[ra] = rb;
+                }
+            }
         }
-        (all.len() >= 2 && joined.len() == all.len()).then_some(all)
+        let mut groups: std::collections::BTreeMap<usize, Vec<i64>> =
+            std::collections::BTreeMap::new();
+        for (i, net) in nets.iter().enumerate() {
+            groups.entry(find(&island, i)).or_default().push(*net);
+        }
+        groups.into_values().filter(|g| g.len() >= 2).collect()
     }
 
     fn capture_geometry(&mut self, buckets: &LayerBuckets) {
         for owner in std::mem::take(&mut self.bare_copper) {
-            if let Some(nets) = Self::bridged_nets(buckets, &owner) {
-                self.insert(owner, nets);
+            for nets in Self::bridged_nets(buckets, &owner) {
+                self.insert(owner.clone(), nets);
             }
         }
         for group in &mut self.groups {

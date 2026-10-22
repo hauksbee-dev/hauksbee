@@ -826,6 +826,145 @@ mod tests {
         );
     }
 
+    // ── Name-only rails that real sources feed (diode-OR, module output, pads) ──
+
+    const SYS: i64 = 8;
+    const BAT: i64 = 9;
+    const BOOST: i64 = 10;
+    const MID: i64 = 11;
+
+    fn nets2() -> Vec<(i64, &'static str)> {
+        let mut n = nets();
+        n.extend([
+            (SYS, "+5V_SYS"),
+            (BAT, "VBAT_RAW"),
+            (BOOST, "+12V_BOOST"),
+            (MID, "MID"),
+        ]);
+        n
+    }
+
+    fn run2(parts: Vec<Component>) -> Vec<LintFinding> {
+        let lib = ModelLibrary::builtin();
+        rail_basis_lint(&board(&nets2(), parts), &lib).findings
+    }
+
+    /// A two-pad diode, KiCad numbering (pad 1 cathode, pad 2 anode).
+    fn diode(reference: &str, value: &str, anode: i64, cathode: i64) -> Component {
+        let mut c = part(reference, value, &[("1", cathode), ("2", anode)]);
+        c.pins[0].function = "K".into();
+        c.pins[1].function = "A".into();
+        c
+    }
+
+    fn bat_conn() -> Component {
+        part("J2", "Conn_01x02", &[("1", BAT), ("2", GND)])
+    }
+
+    /// Legal control: two sources (USB connector, battery connector) each behind
+    /// its own diode onto one named rail: a diode-OR, powered.
+    #[test]
+    fn diode_or_of_two_connector_sources_is_powered() {
+        let found = run2(vec![
+            usb(),
+            bat_conn(),
+            diode("D1", "SS14", VBUS, SYS),
+            diode("D2", "SS14", BAT, SYS),
+            sensor("U2", SYS),
+        ]);
+        assert!(unsourced(&found).is_empty(), "{found:#?}");
+    }
+
+    /// Legal control: a diode-OR whose source is a regulator output.
+    #[test]
+    fn diode_or_of_regulator_outputs_is_powered() {
+        let found = run2(vec![
+            usb(),
+            ldo(),
+            bat_conn(),
+            diode("D1", "SS14", V3, SYS),
+            diode("D2", "SS14", BAT, SYS),
+            sensor("U2", SYS),
+        ]);
+        assert!(unsourced(&found).is_empty(), "{found:#?}");
+    }
+
+    /// Legal control: the diode's anode rail is held by an unmodelled converter
+    /// (an OUT pin on it), not by an entry or a modelled regulator.
+    #[test]
+    fn diode_from_a_rail_an_unmodelled_converter_drives_is_powered() {
+        let mut conv = part("U4", "ZZ9000", &[("1", VBUS), ("2", GND), ("3", BOOST)]);
+        conv.pins[2].function = "VOUT".into();
+        let found = run2(vec![
+            usb(),
+            conv,
+            diode("D1", "SS14", BOOST, SYS),
+            sensor("U2", SYS),
+        ]);
+        assert!(unsourced(&found).is_empty(), "{found:#?}");
+    }
+
+    /// Legal control: a common-cathode dual diode (three pads) ORs two sources.
+    #[test]
+    fn dual_common_cathode_diode_or_is_powered() {
+        let mut d = part("D3", "BAT54C", &[("1", VBUS), ("2", BAT), ("3", SYS)]);
+        d.pins[0].function = "A1".into();
+        d.pins[1].function = "A2".into();
+        d.pins[2].function = "K".into();
+        let found = run2(vec![usb(), bat_conn(), d, sensor("U2", SYS)]);
+        assert!(unsourced(&found).is_empty(), "{found:#?}");
+    }
+
+    /// Legal control: a chain through a diode and a fuse onto the rail.
+    #[test]
+    fn diode_then_fuse_chain_from_a_connector_is_powered() {
+        let found = run2(vec![
+            usb(),
+            diode("D1", "SS14", VBUS, MID),
+            part("F1", "1A", &[("1", MID), ("2", SYS)]),
+            sensor("U2", SYS),
+        ]);
+        assert!(unsourced(&found).is_empty(), "{found:#?}");
+    }
+
+    /// Faulty: the diode points the wrong way (cathode toward the connector):
+    /// it blocks, so the rail is still only a name.
+    #[test]
+    fn a_reversed_diode_does_not_feed_the_rail() {
+        let found = run2(vec![
+            usb(),
+            diode("D1", "SS14", SYS, VBUS),
+            sensor("U2", SYS),
+        ]);
+        assert_eq!(unsourced(&found).len(), 1, "{found:#?}");
+    }
+
+    /// Legal control: a module card that sources the rail on its own pin.
+    #[test]
+    fn module_supply_output_pin_powers_its_rail() {
+        let found = run2(vec![
+            usb(),
+            part(
+                "A1",
+                "Arduino Nano",
+                &[("17", V3), ("4", GND), ("30", VBUS)],
+            ),
+            sensor("U2", V3),
+        ]);
+        assert!(unsourced(&found).is_empty(), "{found:#?}");
+    }
+
+    /// Legal control: the rail reaches a test point pad.
+    #[test]
+    fn a_test_point_on_the_rail_is_an_entry() {
+        let found = run2(vec![
+            usb(),
+            part("TP1", "TestPoint", &[("1", SYS)]),
+            sensor("U2", SYS),
+        ]);
+        assert!(unsourced(&found).is_empty(), "{found:#?}");
+    }
+
     /// A rail with no entry and no unfitted source is held by its name: a
     /// condition naming what may source it, never a finding.
     #[test]

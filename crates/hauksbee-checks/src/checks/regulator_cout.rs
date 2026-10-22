@@ -247,6 +247,12 @@ pub fn regulator_cout_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLin
         if is_ground(&out_net.name) || gnd == Some(out) {
             continue;
         }
+        // An output pad on a net nothing else touches (KiCad's `unconnected-`
+        // placeholder) feeds no load: an unused alternate footprint, not a
+        // regulator short of output capacitance.
+        if super::is_unconnected_net(&out_net.name) {
+            continue;
+        }
         if let Some(slip) = cout_slip {
             report
                 .findings
@@ -406,6 +412,21 @@ mod tests {
         for s in all {
             assert!(f.message.contains(s), "{s:?} in {}", f.message);
         }
+    }
+
+    /// A regulator whose output pad is on no net (the unused alternate
+    /// footprint of a pair) has no output to decouple; the same part with its
+    /// output on a rail and no capacitor is still flagged.
+    #[test]
+    fn a_regulator_with_its_output_on_no_net_is_silent() {
+        let unused = board(
+            &[(1, "+5V"), (2, "unconnected-(U1-OUT-Pad2)"), (3, "GND")],
+            vec![part("U1", MCP1700, &[("1", 3), ("2", 2), ("3", 1)])],
+        );
+        let found = regulator_cout_lint(&unused, &ModelLibrary::builtin()).findings;
+        assert!(found.is_empty(), "{found:?}");
+        let wired = lint(&[]);
+        assert_eq!(wired.len(), 1, "{wired:?}");
     }
 
     #[test]
