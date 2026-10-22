@@ -343,6 +343,31 @@ pub enum LintCheck {
     /// can only be pulled low, so it floats when the part lets go. Produced by
     /// the engine-layer `open_drain_pullup` check.
     MissingOpenDrainPullup,
+    /// A point-to-point signal net wired against its pins' directions: it
+    /// joins only outputs (or only bidirectional or open-drain pins) with
+    /// nothing to receive, or only inputs with nothing to drive them. Fires
+    /// only when every non-passive pin on the net has a known direction.
+    /// Produced by the engine-layer `signal_direction` check.
+    SignalDirection,
+    /// A programming or debug header whose pin order mates a standard adapter
+    /// the wrong way round: the board's transmit facing the adapter's
+    /// transmit, a SWD/JTAG/ISP signal on another signal's pin. Judged
+    /// against the one header table in `hauksbee-ir`. Produced by the
+    /// engine-layer `debug_header` check.
+    DebugHeaderPinout,
+    /// A switch or push button that joins two different supply rails, or a
+    /// rail and ground, with no series resistance: a short when pressed. Also
+    /// the reset or strap line it serves with no pull resistor. Produced by
+    /// the engine-layer `switch_short` check.
+    SwitchShort,
+    /// A net named for a peripheral function (SPI SCK/MOSI/MISO, I2C
+    /// SDA/SCL, UART TX/RX, PWM) on an MCU pin whose card says the pin cannot
+    /// carry it. Produced by the engine-layer `pin_mux` check.
+    PinMuxCapability,
+    /// A symbol pin whose name (a crystal in/out, or another named function)
+    /// disagrees with the model card's pin map for that pin number. Produced
+    /// by the engine-layer `symbol_card_pins` check.
+    SymbolCardPinMismatch,
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
@@ -467,7 +492,7 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [Self; 43] = [
+    pub const ALL: [Self; 48] = [
         Self::MissingI2cPullup,
         Self::MissingSdPullup,
         Self::FloatingControlPin,
@@ -511,6 +536,11 @@ impl LintCheck {
         Self::PowerDomainBackfeed,
         Self::PowerDomainBusLockup,
         Self::MissingOpenDrainPullup,
+        Self::SignalDirection,
+        Self::DebugHeaderPinout,
+        Self::SwitchShort,
+        Self::PinMuxCapability,
+        Self::SymbolCardPinMismatch,
     ];
 
     #[must_use]
@@ -559,6 +589,11 @@ impl LintCheck {
             Self::PowerDomainBackfeed => "power_domain_backfeed",
             Self::PowerDomainBusLockup => "power_domain_bus_lockup",
             Self::MissingOpenDrainPullup => "missing_open_drain_pullup",
+            Self::SignalDirection => "signal_direction",
+            Self::DebugHeaderPinout => "debug_header_pinout",
+            Self::SwitchShort => "switch_short",
+            Self::PinMuxCapability => "pin_mux_capability",
+            Self::SymbolCardPinMismatch => "symbol_card_pin_mismatch",
         }
     }
 }
@@ -2811,6 +2846,13 @@ fn uart_role(p: &Pin) -> Option<(bool, bool)> {
         return None;
     }
     Some((tx, function_tokens(&p.function).count() == 1))
+}
+
+/// The UART role of a pin by its function name, for the engine-layer checks
+/// that share this reading: `Some((transmit, dedicated))`, see `uart_role`.
+#[must_use]
+pub fn uart_pin_role(p: &Pin) -> Option<(bool, bool)> {
+    uart_role(p)
 }
 
 /// A bus transceiver (a part with a `CANH`/`CANL` bus pin): its `TXD` is

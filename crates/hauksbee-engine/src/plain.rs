@@ -1986,6 +1986,31 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "An I2S or TDM audio bus has one bit clock and one frame clock, each driven by exactly one part (the master) and listened to by the rest, and data lines that each have a transmitter and a receiver. Two outputs on one line, a line nobody sends on, a clock on the wrong pin, a clock driven by two parts or none, or a codec missing the master clock it needs all leave the bus silent or noisy, and nothing about the board looks wrong to a power or level check.".to_string(),
                 "Rewire the named pins so each signal reaches the pin with its own role (BCLK to BCLK, LRCLK to LRCLK, one part's data out to the other's data in), make exactly one part the clock master, and connect MCLK where the codec needs it.".to_string(),
             ),
+            LintCheck::SignalDirection => (
+                format!("The signal on {parts} (net \"{net}\") runs against the pins' directions. {}", f.message),
+                "A wire carries a signal from a pin that drives it to pins that listen. A net that joins only outputs has no listener and two parts fighting over the level; a net that joins only inputs has nothing driving it and floats. Both leave the link dead, and nothing about the board looks wrong to a power check.".to_string(),
+                "Rewire so each net has one driver and at least one listener: swap the crossed pair (TX to RX, output to the other part's input), or add the missing driver.".to_string(),
+            ),
+            LintCheck::DebugHeaderPinout => (
+                format!("The programming or debug header {parts} will not mate a standard adapter. {}", f.message),
+                "A UART, SWD, JTAG or ISP header is plugged into a standard adapter whose pin order is fixed by convention. If the board's transmit pin lands on the adapter's transmit pin, or a signal lands on another signal's pin, the cable connects nothing useful and can short a supply to a signal.".to_string(),
+                "Reorder the header to the standard pinout the finding names, or label it as a crossover that needs a matching cable.".to_string(),
+            ),
+            LintCheck::SwitchShort => (
+                format!("A switch or button ({parts}, net \"{net}\") shorts a supply when pressed. {}", f.message),
+                "A switch that joins two supply rails, or a rail and ground, with nothing in series is a dead short while it is closed: the source collapses or the switch and traces burn.".to_string(),
+                "Put a resistor in series with the switch, or make it switch a signal pin that has a pull resistor, not a supply.".to_string(),
+            ),
+            LintCheck::PinMuxCapability => (
+                format!("A pin of {parts} carries a peripheral signal its card says it cannot (net \"{net}\"). {}", f.message),
+                "A microcontroller's hardware peripherals (SPI, I2C, UART, PWM) reach only the pins its pin-mux table lists. A net routed to another pin cannot use the hardware block; firmware would have to bit-bang it, slowly, or the board has to be respun.".to_string(),
+                "Move the net to a pin the card lists for that function, or confirm the firmware bit-bangs it.".to_string(),
+            ),
+            LintCheck::SymbolCardPinMismatch => (
+                format!("The symbol of {parts} names a pin differently from the part's card. {}", f.message),
+                "The schematic symbol and the model card are both meant to describe the same package pin by pin. When they disagree on what a numbered pin is, one of them is wrong: the symbol may be for another package or the card may be mapped to the wrong pins, and every check that reads the card then judges the wrong wiring.".to_string(),
+                "Compare both against the datasheet pin table for this package and correct the symbol or the card.".to_string(),
+            ),
         };
         // A finding that worked out its own remedy is acted on by that, not by
         // the check kind's generic advice.

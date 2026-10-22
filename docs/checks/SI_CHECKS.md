@@ -52,49 +52,85 @@ pin capacitance.
 
 ### Constants, thresholds and error band
 
-- `Cstray = 4.0 pF` - the textbook midpoint (2-3 pF short trace + ~1-2 pF pin).
-  Honest error band: roughly +-3 pF.
-- `CL_TOLERANCE = 8.0 pF` - a finding requires the board CL to deviate from the
-  crystal spec by more than 8 pF. This is set wide *on purpose*: a typical MHz
-  crystal trims +-20..30 ppm, ~4-6 pF of CL slack near 18 pF, and the stray model
-  carries +-3 pF. Summing these, only past 8 pF can the deviation be real rather
-  than model noise. So the model uncertainty can never produce the finding on its
-  own.
-- Severity: `high` when `CL_board < 0.5 * spec` or `> 1.6 * spec` (the oscillator
-  may not start or is grossly off). `medium` otherwise.
+- **Stray**: the board's stray is assumed to sit in a `3.0-5.0 pF` band (short
+  trace 2-3 pF plus 1-2 pF of pin). The judgement uses the edge of the band
+  nearest the crystal's CL, so a mismatch is reported only when *no* stray in the
+  band would make the board right. The crystal's `hauksbee_stray_cap_pf`
+  property (pF) replaces the band with the designer's own figure (+-0.5 pF), and
+  the message says which one it used. The caps suggested in a message are sized
+  at the 4 pF midpoint.
+- **Pull in ppm, not pF**: a load error is judged by the frequency error it
+  causes. A crystal's series-resonance offset is `C1 / (2 (C0 + CL))` (`C1` the
+  motional, `C0` the shunt capacitance), so running it at load `CL_b` instead of
+  its spec `CL_a` pulls it by
+  `1e6 * C1/2 * |1/(C0 + CL_a) - 1/(C0 + CL_b)|` ppm (exact in CL). It fires
+  `medium` from 30 ppm (a typical crystal is specified +-20 ppm at 25 C and
+  +-30 ppm over temperature, so 30 ppm of load error alone spends the whole
+  budget) and `high` from 100 ppm, or when the load is under half or over 1.6x
+  the spec (the oscillator may not start; the pull saturates there).
+- **C1 and C0**: the crystal's card states them (`c1_f`, `c0_f`, see Cards
+  below). When it does not, the check assumes values chosen to *under*-report: MHz
+  AT-cut C1 5 fF (catalogued parts print 5-20 fF), C0 5 pF; 32.768 kHz fork C1
+  2.5 fF, C0 2 pF. The message names each figure as `card` or `assumed`.
+- A finding says the pull in ppm and its direction (a heavier load pulls the
+  frequency low), and the caps that fit: `C = 2 (CL - stray)`, the nearest E12
+  value, and the CL that pair gives.
 
-### The honest reach
+### Where the crystal's CL comes from
 
-The crystal's CL spec is **almost never in the netlist**: nearly every corpus
-board puts only the frequency in the value field (`"12MHz"`, `"8MHz"`,
-`"32.768 kHz"`). CL is derivable only from a recognised part-number value, held
-in a small cited table (`KNOWN_CRYSTAL_CL`):
+In order: the crystal's **card** (`cl_f`, matched by ordering code), its **value**
+("12MHz 18pF", "Q12MHz/20pF/30ppm"), its **part-number properties** (`MPN`,
+`Manufacturer_PN`, ... as a stated CL or a table code), a property **named for the
+load** ("Load Capacitance" = "12 pF" or "12"), and a small cited table
+(`KNOWN_CRYSTAL_CL`, for card-less callers; a drift test ties it to the cards).
+Cards shipped (`passives.toml`, each citing its datasheet and sha256):
 
-| Value match | CL | Citation |
-|-------------|----|----------|
-| `ABM8-272`  | 18 pF | Abracon ABM8 datasheet, `-272` = 18 pF CL option |
+| Ordering code | CL | C0 (max) | Source |
+|---|---|---|---|
+| `ABM8-272-T3` | 10 pF | 3.0 pF | Abracon ABM8-272-T3 Rev B; RP2040 datasheet Table 257 |
+| `ABS07-32.768KHZ[-T]` (blank CL) | 12.5 pF | 2.0 pF | Abracon ABS07, options and part identification |
+| `ABS07-32.768KHZ-9[-T]` / `-7` / `-6` / `-4P` | 9 / 7 / 6 / 4 pF | 2.0 pF | same |
 
-`ABM8G` (used on MNT Reform, value = frequency only) is **deliberately absent**:
-it ships in several CL options and the ordering code is not in the file, so its
-CL is unknown -> info, not a guess.
+`ABM8G`, `ABM8` and `ABS25` are **not carded**: their ordering codes put the CL in
+a free-text field (a pF number, or `S` for series) that the plain part number
+does not pin, so their CL stays unknown -> info rather than a guess.
 
-When CL is unknown, the check emits an `info` note with the computed `CL_board`
-and no judgement. When *both* load caps are absent on a discrete crystal it fires
+When CL is unknown, the check emits an `info` note with the computed band and no
+judgement. When *both* load caps are absent on a discrete crystal it fires
 `medium` (a real omission). A single missing cap is `info` (often the
 series-resistor topology that could not be traced).
 
-Parts that integrate their own load caps are recognised and never flagged for
-"missing caps":
+### Drivers with integrated load caps
 
+An MCU card states the on-chip load capacitance of an oscillator pad pair in
+`[[models.pin_capability.xtal_int_caps]]` (see `docs/models/MODELS.md`): the
+capacitance each pad has to ground, as a `min_f`/`max_f` range, or no range when
+the bank is software-tuned and the datasheet prints none. The driver is found on
+either crystal net or one series resistor away.
+
+- A printed range adds in parallel to each external cap (`series(C1 + Ci, C2 +
+  Ci) + stray`, over the range), and with no external caps the crystal is
+  judged against the on-chip bank alone. The two pins are in series, so the bank
+  reaches at most half its per-pin maximum: on an MCU that integrates 4-24.5 pF
+  per pin a 32.768 kHz crystal with no caps is silent when its CL is 12.25 pF or
+  less and a finding above that, which needs external caps (the EFM32PG22
+  datasheet says the same, Table 4.12 note 2: above 12 pF requires external load
+  capacitors). The limit is derived from the card's range, not a separate field.
+- A tunable bank with no printed range cannot be computed: info, no judgement,
+  with or without external caps.
+- RTCs and other parts without a card are recognised by name as before
+  (PCF8523, PCF8563, PCF85063, RV-8263, RV-3028, DS3231, ABRACON AB18, XR22417,
+  the xG22 family) and never flagged for "missing caps".
 - **Ceramic resonators** (Murata CSTxE / CERALOCK, ZTT, or a `RESONATOR`
   footprint): the 3-terminal centre pin is the integrated cap node.
-- **RTCs with integrated oscillator caps**: PCF8523, PCF8563, PCF85063, RV-8263,
-  RV-3028, DS3231, ABRACON AB18.
 
 ### Calibration evidence
 
-- RP2040 minimal `Y1 = ABM8-272-T3`, two 15 pF caps -> `CL_board ~ 11.5 pF` vs
-  the 18 pF spec, within 8 pF: **info, ok** (the documented RP2040 hint).
+- RP2040 minimal `Y1 = ABM8-272-T3`, two 15 pF caps -> `CL_board ~ 10.5-12.5 pF`
+  vs the 10 pF spec: about 5 ppm, **info, ok** (the documented RP2040 hint).
+- A 12 pF crystal on two 27 pF caps (`CL ~ 16.5-18.5 pF`): 4.5 pF heavy even at
+  3 pF of stray, ~30 ppm low on a typical 12 MHz part: **medium**, with the
+  15 pF caps that fit.
 - crkbd Corne (both split halves), Lily58, SparkFun Pro Micro, Arduino Uno Y1,
   MNT Reform Y1/Y2/Y3: value = frequency only -> **info, CL on the record, no
   fire**.
@@ -107,7 +143,7 @@ Parts that integrate their own load caps are recognised and never flagged for
   computed CL goes on the record as an **info** note:
 
   ```
-  [info] crystal_load_cap - Y1 (32.768KHz): board presents CL ~ 13.0 pF (C1=18p, C2=18p, +4p stray); crystal CL spec unknown from value, no judgement
+  [info] crystal_load_cap - Y1 (32.768KHz): board presents CL ~ 11.0-13.0 pF (C1=18p, C2=18p, 3.0-5.0 pF stray assumed (...)); crystal CL spec unknown from value, no judgement
   ```
 
 ---

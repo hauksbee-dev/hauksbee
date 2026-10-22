@@ -28,6 +28,9 @@ pub(super) struct ActivityStatus {
     pub(super) no_processor: bool,
     /// Executing MCUs that still cannot count as a firmware pass, one line each.
     pub(super) pass_blockers: Vec<String>,
+    /// MCUs whose boot straps kept the user firmware from running, one
+    /// sentence each.
+    pub(super) boot_stops: Vec<String>,
     pub(super) strict_refusal: Option<Refusal>,
     pub(super) boot_advisory: crate::checks::boot::BootAdvisory,
 }
@@ -175,6 +178,7 @@ fn execute_and_collect_observations(
     let zero = engine.scheduler().firmware_quiet(total_toggles, uart_seen);
     let no_processor = cfg.firmware.is_none() && !engine.scheduler().has_processor();
     let pass_blockers = engine.scheduler().firmware_pass_blockers();
+    let boot_stops = engine.scheduler().boot_stops();
     let strict_refusal = if cfg.strict && abort {
         Some(Refusal::new(
                 "a trustworthy strict co-sim verdict for the firmware and analog circuit",
@@ -186,6 +190,16 @@ fn execute_and_collect_observations(
             ))
     } else if cfg.strict && zero && no_processor {
         Some(no_processor_refusal())
+    } else if cfg.strict && zero && !boot_stops.is_empty() {
+        Some(Refusal::new(
+            "firmware behavior during this strict co-simulation",
+            format!(
+                "the chip did not boot the user firmware: {}",
+                boot_stops.join(" | ")
+            ),
+            vec!["board extraction, binding, and static copper findings remain valid"],
+            "fix the boot strap or reset wiring named above, then rerun the same strict command",
+        ))
     } else if cfg.strict && zero {
         Some(Refusal::new(
                 "firmware behavior during this strict co-simulation",
@@ -240,6 +254,7 @@ fn execute_and_collect_observations(
             zero,
             no_processor,
             pass_blockers,
+            boot_stops,
             strict_refusal,
             boot_advisory,
         },
@@ -514,6 +529,9 @@ fn emit_report(
         for blocker in &observations.activity.pass_blockers {
             jr.push_coverage_note(format!("firmware executed but is not a pass: {blocker}"));
         }
+        for stop in &observations.activity.boot_stops {
+            jr.push_coverage_note(format!("boot straps: {stop}"));
+        }
         // Independent of analog_valid: a run can be fully valid AND contain
         // windows a fallback rung produced. Silence here would let a
         // first-order, dissipative window read as a first-class one.
@@ -616,6 +634,11 @@ fn emit_report(
             report.heads_up.push(crate::plain::HeadsUp::note(format!(
                 "firmware executed but is not a pass: {blocker}"
             )));
+        }
+        for stop in &observations.activity.boot_stops {
+            report
+                .heads_up
+                .push(crate::plain::HeadsUp::note(format!("boot straps: {stop}")));
         }
         if fallback_chunk_count > 0 {
             report.heads_up.push(crate::plain::HeadsUp::note(format!(

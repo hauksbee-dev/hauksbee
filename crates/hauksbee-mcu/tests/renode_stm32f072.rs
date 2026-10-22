@@ -81,9 +81,20 @@ fn f072_shipped_descriptor_loads_with_the_verified_offsets() {
     assert!(
         c.timing_limitation
             .as_deref()
-            .is_some_and(|s| s.contains("no two-sided clock-truth gate")),
-        "the shipped part must not claim unmeasured timing fidelity"
+            .is_some_and(|s| s.contains("SYSCLK switches the instant SW is written")),
+        "the shipped part must state its remaining timing departures"
     );
+    // The clock tree is decoded and the oscillators are gated (the stock RCC
+    // stub hung any firmware that waited on a ready flag).
+    assert!(c
+        .decode
+        .iter()
+        .any(|b| b.kind == hauksbee_mcu::periph_snapshot::BlockKind::Clock));
+    assert!(c
+        .clock_ready
+        .iter()
+        .any(|e| e.name == "hse" && e.requires_external));
+    assert!(c.clock_ready.iter().any(|e| e.name == "pll"));
 
     // Six ports, A..F, all at the F0/F4 layout. 0x0C here would be the F1's
     // offset and would observe the wrong register on this part.

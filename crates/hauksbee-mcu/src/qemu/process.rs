@@ -228,9 +228,35 @@ impl QemuProcess {
         arch: QemuArch,
         machine: &str,
         flash_image: &Path,
+        icount_shift: u8,
+        qmp_port: u16,
+        uart_port: u16,
+    ) -> Result<Self> {
+        Self::spawn_with_strap(
+            arch,
+            machine,
+            flash_image,
+            icount_shift,
+            qmp_port,
+            uart_port,
+            None,
+        )
+    }
+
+    /// [`Self::spawn`] with the machine's boot-strap value set
+    /// (`-global driver=<device>,property=strap_mode,value=<v>`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::spawn`].
+    pub fn spawn_with_strap(
+        arch: QemuArch,
+        machine: &str,
+        flash_image: &Path,
         _icount_shift: u8,
         qmp_port: u16,
         uart_port: u16,
+        strap: Option<&crate::boot_mode::QemuStrapMode>,
     ) -> Result<Self> {
         let bin = find_qemu(arch)?;
         let flash = flash_image.to_str().context("non-UTF-8 flash image path")?;
@@ -250,6 +276,9 @@ impl QemuProcess {
             .arg(format!(
                 "driver=timer.{machine}.timg,property=wdt_disable,value=true"
             ));
+        if let Some(strap) = strap {
+            cmd.arg("-global").arg(strap.global_arg());
+        }
         // stderr captured (not /dev/null) so a failed boot can be explained
         // with QEMU's actual complaint (bad image, bad machine, bad drive size).
         Ok(Self {

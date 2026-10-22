@@ -103,6 +103,37 @@ pub const ROWS: &[Row] = &[
         (1e-12, 1e-9),
         "a crystal load capacitor",
     ),
+    // The feedback pin current of a ground-referenced adjustable regulator.
+    row(
+        "ifb_a",
+        "A",
+        Magnitude,
+        (1e-12, 1e-3),
+        "a regulator's feedback pin current",
+    ),
+    // A crystal's datasheet capacitances: the specified load, the shunt (holder)
+    // and the motional capacitance.
+    row(
+        "cl_f",
+        "F",
+        NonNegative,
+        (1e-12, 100e-12),
+        "a crystal's specified load capacitance",
+    ),
+    row(
+        "c0_f",
+        "F",
+        NonNegative,
+        (100e-15, 50e-12),
+        "a crystal's shunt capacitance",
+    ),
+    row(
+        "c1_f",
+        "F",
+        NonNegative,
+        (100e-18, 200e-15),
+        "a crystal's motional capacitance",
+    ),
     // Regulators and supply draws.
     row(
         "dropout_v|bat_dropout_v",

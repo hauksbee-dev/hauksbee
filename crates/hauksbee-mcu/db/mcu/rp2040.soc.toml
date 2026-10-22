@@ -115,9 +115,46 @@ extra_setup = ["sysbus LoadELF @{support}/bootrom.elf"]
 # on real silicon is VTOR = 0 (the boot ROM's table), and the SDK then points it
 # at its own table itself, so pinning both cores to 0 here reproduces hardware
 # rather than second-guessing the image. Both cores, because cpu1 has its own.
+# PADS_BANK0 DRIVE reset value. The vendored PADS model keeps DRIVE (bits 5:4) as a plain
+# field that resets to 0 (2 mA), but the datasheet resets it to 0x1 = 4 mA (RP2040 Datasheet
+# Table 341 PDF p.302-303, reset 0x56 for GPIO0..GPIO29). The co-simulator reads this field
+# to pick each pin's output resistance, so a pin the firmware never configures would be read
+# as 2 mA. Writing the field once per load (and again after every core reboot, as this list
+# is replayed by the reset macro) gives the model the documented reset state without editing
+# the vendored file. Only DRIVE is written (0x10); the pull bits stay as the model has them.
 post_load_setup = [
     "sysbus.cpu0 VectorTableOffset 0x00000000",
     "sysbus.cpu1 VectorTableOffset 0x00000000",
+    "sysbus WriteDoubleWord 0x4001C004 0x10",   # GPIO0
+    "sysbus WriteDoubleWord 0x4001C008 0x10",   # GPIO1
+    "sysbus WriteDoubleWord 0x4001C00C 0x10",   # GPIO2
+    "sysbus WriteDoubleWord 0x4001C010 0x10",   # GPIO3
+    "sysbus WriteDoubleWord 0x4001C014 0x10",   # GPIO4
+    "sysbus WriteDoubleWord 0x4001C018 0x10",   # GPIO5
+    "sysbus WriteDoubleWord 0x4001C01C 0x10",   # GPIO6
+    "sysbus WriteDoubleWord 0x4001C020 0x10",   # GPIO7
+    "sysbus WriteDoubleWord 0x4001C024 0x10",   # GPIO8
+    "sysbus WriteDoubleWord 0x4001C028 0x10",   # GPIO9
+    "sysbus WriteDoubleWord 0x4001C02C 0x10",   # GPIO10
+    "sysbus WriteDoubleWord 0x4001C030 0x10",   # GPIO11
+    "sysbus WriteDoubleWord 0x4001C034 0x10",   # GPIO12
+    "sysbus WriteDoubleWord 0x4001C038 0x10",   # GPIO13
+    "sysbus WriteDoubleWord 0x4001C03C 0x10",   # GPIO14
+    "sysbus WriteDoubleWord 0x4001C040 0x10",   # GPIO15
+    "sysbus WriteDoubleWord 0x4001C044 0x10",   # GPIO16
+    "sysbus WriteDoubleWord 0x4001C048 0x10",   # GPIO17
+    "sysbus WriteDoubleWord 0x4001C04C 0x10",   # GPIO18
+    "sysbus WriteDoubleWord 0x4001C050 0x10",   # GPIO19
+    "sysbus WriteDoubleWord 0x4001C054 0x10",   # GPIO20
+    "sysbus WriteDoubleWord 0x4001C058 0x10",   # GPIO21
+    "sysbus WriteDoubleWord 0x4001C05C 0x10",   # GPIO22
+    "sysbus WriteDoubleWord 0x4001C060 0x10",   # GPIO23
+    "sysbus WriteDoubleWord 0x4001C064 0x10",   # GPIO24
+    "sysbus WriteDoubleWord 0x4001C068 0x10",   # GPIO25
+    "sysbus WriteDoubleWord 0x4001C06C 0x10",   # GPIO26
+    "sysbus WriteDoubleWord 0x4001C070 0x10",   # GPIO27
+    "sysbus WriteDoubleWord 0x4001C074 0x10",   # GPIO28
+    "sysbus WriteDoubleWord 0x4001C078 0x10",   # GPIO29
 ]
 
 # ADC injection. Analog.RP2040ADC is vendored and instantiated, and it exposes
@@ -191,3 +228,42 @@ controllers = ["i2c0", "i2c1"]
 # reproduction. Fixing this means either the upstream model dispatching to its
 # registered peripheral, or a pin-level SPI bridge on the hauksbee side.
 controllers = []
+
+# ── CRYSTAL READINESS ─────────────────────────────────────────────────────────
+# The vendored RP2040XOSC model (rp2040/peripherals/rp2040_xosc.cs) raises
+# STATUS.STABLE the instant CTRL.ENABLE = 0xFAB is written, crystal or not
+# ("simulation have always stable clock"). On silicon STABLE rises only after
+# STARTUP.DELAY x 256 crystal cycles have been seen from a crystal that is
+# there (RP2040 datasheet s2.16.3 "Startup Delay": "how many clock cycles must
+# be seen from the crystal before it can be used. This is specified in
+# multiples of 256"), so a board with no crystal on XIN/XOUT never leaves the
+# SDK's `while (!(xosc_hw->status & XOSC_STATUS_STABLE_BITS))` loop in
+# `runtime_init`. This entry replaces the instant flag with that behaviour:
+#   CTRL     @ +0x00, ENABLE bits 23:12 (0xFAB enable, 0xD1E disable)
+#   STATUS   @ +0x04, STABLE bit 31
+#   STARTUP  @ +0x0C, DELAY bits 13:0 (reset 0xC4), in units of 256 crystal
+#            periods; 12 MHz reference-design crystal -> 256/12 us per count.
+#            X4 (bit 20) "multiplies the startup_delay by 4", so the decode
+#            includes it (`multiplier_mask` / `multiplier` below).
+# (XOSC: CTRL, STATUS and STARTUP register tables, RP2040 datasheet s2.16.7.)
+# What the numbers rest on: the datasheet gives 12 MHz only as the reference
+# design's crystal (s2.16.3), so 256/12 = 21.33 us per count assumes that
+# crystal. `startup_us` is the fallback used only without `startup_scale`; the
+# value 1003 is the pico-sdk's DELAY = 47 (about 1 ms: 47 x 21.33 us), NOT the
+# hardware reset value 0xC4, which would be 196 x 21.33 = about 4.18 ms. With
+# the scale present the time actually applied is the live DELAY (and X4) the
+# firmware wrote, falling back to the reset value only if it never writes
+# STARTUP.
+# The PLLs are not gated: the vendored RP2040PLL locks instantly and its lock
+# time is not modelled.
+[[soc.clock_ready]]
+peripheral = "xosc"
+name = "xosc"
+enable_register = 0x00
+enable_mask = 0xFFF000
+enable_value = 0xFAB000
+ready_register = 0x04
+ready_mask = 0x80000000
+requires_external = true
+startup_us = 1003.0
+startup_scale = { register = 0x0C, mask = 0x3FFF, us_per_count = 21.333333333333332, multiplier_mask = 0x100000, multiplier = 4.0 }

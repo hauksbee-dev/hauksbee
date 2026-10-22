@@ -203,8 +203,11 @@ fn crystal_known_cl_far_off_fires() {
     let r = run_board(&b, check_crystal_load_cap);
     assert_eq!(r.finding_count(), 1, "far-off CL must fire");
     let f = r.of_check(SiCheck::CrystalLoadCap).next().unwrap();
-    assert!(f.message.contains("CL = 10 pF"), "{}", f.message);
+    assert!(f.message.contains("CL = 10.0 pF"), "{}", f.message);
     assert!(f.message.contains("Table 257"), "{}", f.message);
+    // The message says what the mismatch does and what would fit.
+    assert!(f.message.contains("ppm low"), "{}", f.message);
+    assert!(f.message.contains("Caps that fit"), "{}", f.message);
 }
 
 /// A 32.768 kHz crystal whose value states no CL is judged against the class's
@@ -294,18 +297,14 @@ fn crystal_cl_stated_in_its_value_is_judged() {
     let f = faulty.findings_only().next().unwrap();
     assert_eq!(f.severity, SiSeverity::High);
     for says in [
-        "CL ~ 58.0 pF",
-        "CL = 18 pF",
+        "CL ~ 57.0-59.0 pF",
+        "CL = 18.0 pF",
         "the crystal's value states",
         "C1=108p",
     ] {
         assert!(f.message.contains(says), "{says:?} in {}", f.message);
     }
-    for value in [
-        "12MHz 18pF",
-        "Q12MHz/20pF/30ppm/2P/HC-49SM(SMD)",
-        "12MHz/12pF",
-    ] {
+    for value in ["12MHz 18pF", "Q12MHz/20pF/30ppm/2P/HC-49SM(SMD)"] {
         let legal = run_board(&xtal_board(value, "27p", "27p"), check_crystal_load_cap);
         assert_eq!(legal.finding_count(), 0, "{value}: {:?}", legal.findings);
         assert!(
@@ -466,6 +465,244 @@ fn crystal_on_a_driver_without_on_chip_caps_still_fires() {
     // integrate load caps (an STM32F4 HSE oscillator needs two external caps).
     let r = run_board(&xtal_on_driver("STM32F405RGT6"), check_crystal_load_cap);
     assert_eq!(r.finding_count(), 1, "no caps, no integration: must fire");
+}
+
+/// The crystal findings of `b` judged with `cards`.
+fn crystal_findings(b: &ExtractedBoard, cards: &CrystalCards) -> Vec<SiFinding> {
+    b.si_checks_with(None, cards)
+        .of_check(SiCheck::CrystalLoadCap)
+        .cloned()
+        .collect()
+}
+
+fn fired(f: &[SiFinding]) -> Vec<&SiFinding> {
+    f.iter()
+        .filter(|f| f.severity != SiSeverity::Info)
+        .collect()
+}
+
+fn set_value(b: &mut ExtractedBoard, reference: &str, value: &str) {
+    let c = b
+        .components
+        .iter_mut()
+        .find(|c| c.reference == reference)
+        .unwrap();
+    c.value = value.into();
+}
+
+fn add_property(b: &mut ExtractedBoard, reference: &str, key: &str, value: &str) {
+    let c = b
+        .components
+        .iter_mut()
+        .find(|c| c.reference == reference)
+        .unwrap();
+    c.properties.push((key.into(), value.into()));
+}
+
+/// A 12 pF crystal on 27 pF caps is a real mismatch the old 8 pF tolerance let
+/// through: the load is 4.5 pF heavier than the spec even at the lightest end of
+/// the stray band, which pulls a typical 12 MHz crystal about 30 ppm low. The
+/// message says so and names the caps that fit (2 x (12 - 4) = 16 pF, E12 15 pF),
+/// and the fitting 15 pF pair is silent.
+#[test]
+fn a_cl_mismatch_reports_its_ppm_and_the_caps_that_fit() {
+    let r = crystal_findings(
+        &xtal_board("12MHz/12pF", "27p", "27p"),
+        &CrystalCards::new(),
+    );
+    let f = fired(&r);
+    assert_eq!(f.len(), 1, "{r:?}");
+    assert_eq!(f[0].severity, SiSeverity::Medium);
+    for says in [
+        "CL ~ 16.5-18.5 pF",
+        "CL = 12.0 pF",
+        "4.5 pF heavier",
+        "ppm low",
+        "3.0-5.0 pF stray assumed",
+        "hauksbee_stray_cap_pf",
+        "16.0 pF each",
+        "nearest E12 15.0 pF",
+    ] {
+        assert!(f[0].message.contains(says), "{says:?} in {}", f[0].message);
+    }
+    let fits = crystal_findings(
+        &xtal_board("12MHz/12pF", "15p", "15p"),
+        &CrystalCards::new(),
+    );
+    assert!(fired(&fits).is_empty(), "{fits:?}");
+    assert!(fits[0].message.contains("- ok"), "{}", fits[0].message);
+    // Too light a load pulls the other way.
+    let light = crystal_findings(
+        &xtal_board("12MHz/18pF", "6.8p", "6.8p"),
+        &CrystalCards::new(),
+    );
+    assert!(fired(&light)[0].message.contains("ppm high"), "{light:?}");
+}
+
+/// The designer's own stray figure replaces the assumed band: 27 pF caps for a
+/// 12 pF crystal are fine if the layout's stray is really 0 pF (13.5 pF), and
+/// say so in the message when it is not.
+#[test]
+fn the_stray_property_overrides_the_assumed_band() {
+    let mut b = xtal_board("12MHz/12pF", "27p", "27p");
+    add_property(&mut b, "Y1", STRAY_PROPERTY, "0");
+    let r = crystal_findings(&b, &CrystalCards::new());
+    assert!(fired(&r).is_empty(), "{r:?}");
+    assert!(
+        r[0].message
+            .contains("from the hauksbee_stray_cap_pf property"),
+        "{}",
+        r[0].message
+    );
+    let mut heavy = xtal_board("12MHz/12pF", "27p", "27p");
+    add_property(&mut heavy, "Y1", STRAY_PROPERTY, "6");
+    let r = crystal_findings(&heavy, &CrystalCards::new());
+    assert_eq!(fired(&r).len(), 1, "{r:?}");
+    assert!(r[0]
+        .message
+        .contains("from the hauksbee_stray_cap_pf property"));
+}
+
+/// A generic crystal takes its CL from its part-number property or a property
+/// named for the load capacitance, not only its value.
+#[test]
+fn a_cl_in_the_part_number_or_a_load_property_is_the_spec() {
+    // ABM8-272-T3 in the MPN property (value is only the frequency): CL 10 pF
+    // from the table, so 34 pF caps (CL 20-22 pF) fire and 15 pF caps do not.
+    let mut b = xtal_board("12MHz", "34p", "34p");
+    add_property(&mut b, "Y1", "MPN", "ABM8-272-T3");
+    let r = crystal_findings(&b, &CrystalCards::new());
+    assert_eq!(fired(&r).len(), 1, "{r:?}");
+    assert!(
+        r[0].message.contains("from the MPN property"),
+        "{}",
+        r[0].message
+    );
+    let mut ok = xtal_board("12MHz", "15p", "15p");
+    add_property(&mut ok, "Y1", "MPN", "ABM8-272-T3");
+    assert!(fired(&crystal_findings(&ok, &CrystalCards::new())).is_empty());
+    // A "Load Capacitance" property, bare number or with a unit.
+    for text in ["8", "8 pF", "8pF"] {
+        let mut b = xtal_board("12MHz", "27p", "27p");
+        add_property(&mut b, "Y1", "Load Capacitance", text);
+        let r = crystal_findings(&b, &CrystalCards::new());
+        assert_eq!(fired(&r).len(), 1, "{text}: {r:?}");
+        assert!(r[0].message.contains("CL = 8.0 pF"), "{}", r[0].message);
+    }
+    // No such property: nothing to judge against.
+    let none = crystal_findings(&xtal_board("12MHz", "27p", "27p"), &CrystalCards::new());
+    assert!(fired(&none).is_empty(), "{none:?}");
+}
+
+/// A crystal's card states its CL and C0/C1; the check judges against the card
+/// and cites it, using the card's C1 for the ppm instead of the assumed one.
+#[test]
+fn the_crystal_cards_cl_and_motional_capacitance_drive_the_judgement() {
+    let b = xtal_board("12MHz", "27p", "27p");
+    let mut cards = CrystalCards::new();
+    cards.insert(
+        "Y1".into(),
+        CrystalFacts {
+            cl_pf: Some((10.0, "card 'abracon_abm8_272_t3': datasheet table".into())),
+            c0_pf: Some(3.0),
+            c1_ff: Some(10.0),
+            driver_caps: None,
+        },
+    );
+    let r = crystal_findings(&b, &cards);
+    let f = fired(&r);
+    assert_eq!(f.len(), 1, "{r:?}");
+    for says in [
+        "CL = 10.0 pF",
+        "card 'abracon_abm8_272_t3'",
+        "C1 10.0 fF card",
+        "C0 3.0 pF card",
+    ] {
+        assert!(f[0].message.contains(says), "{says:?} in {}", f[0].message);
+    }
+    // The same board with no card and no stated CL is not judged.
+    assert!(fired(&crystal_findings(&b, &CrystalCards::new())).is_empty());
+}
+
+/// A driver whose card prints an on-chip load range: with no external caps the
+/// crystal's CL is judged against series(on-chip) + stray; with external caps the
+/// on-chip capacitance is added in parallel to each; a tunable bank with no
+/// printed range is never judged.
+#[test]
+fn a_drivers_on_chip_load_caps_are_part_of_the_board_cl() {
+    let lfxo = IntegratedCaps::Range {
+        lo_pf: 4.0,
+        hi_pf: 24.5,
+        basis: "card 'efm32pg22' LFXO: Table 4.12".into(),
+    };
+    let facts = |caps: IntegratedCaps| {
+        CrystalCards::from([(
+            "Y1".to_string(),
+            CrystalFacts {
+                driver_caps: Some(caps),
+                ..Default::default()
+            },
+        )])
+    };
+    // No external caps: band 4/4 + 3 = 5 pF to 24.5/24.5 + 5 = 17.25 pF.
+    // A crystal of 12 pF or less is reachable by the bank alone: silent (the
+    // bank reaches half its 24.5 pF maximum, 12.25 pF).
+    for value in ["32.768kHz 9pF", "32.768kHz 12pF"] {
+        let mut inside = xtal_on_driver("EFM32PG22C200F512IM40");
+        set_value(&mut inside, "Y1", value);
+        let r = crystal_findings(&inside, &facts(lfxo.clone()));
+        assert!(fired(&r).is_empty(), "{value}: {r:?}");
+        assert!(r[0].message.contains("- ok"), "{}", r[0].message);
+    }
+    // A 12.5 pF crystal is past that reach (EFM32PG22 Table 4.12 note 2: above
+    // 12 pF needs external load capacitors): it fires and says what to do.
+    let mut over = xtal_on_driver("EFM32PG22C200F512IM40");
+    set_value(&mut over, "Y1", "32.768kHz 12.5pF");
+    let r = crystal_findings(&over, &facts(lfxo.clone()));
+    assert_eq!(fired(&r).len(), 1, "{r:?}");
+    for says in [
+        "no external caps",
+        "reaches at most 12.25 pF",
+        "needs external load capacitors",
+    ] {
+        assert!(r[0].message.contains(says), "{says:?} in {}", r[0].message);
+    }
+    // With external caps the bank is no longer alone: the same crystal is not
+    // flagged for its reach.
+    let mut padded = xtal_board("32.768kHz 12.5pF", "10p", "10p");
+    set_value(&mut padded, "Y1", "32.768kHz 12.5pF");
+    let r = crystal_findings(&padded, &facts(lfxo.clone()));
+    assert!(
+        r.iter().all(|f| !f.message.contains("reaches at most")),
+        "{r:?}"
+    );
+    // A CL the on-chip bank cannot reach is a finding, naming the card.
+    let mut beyond = xtal_on_driver("EFM32PG22C200F512IM40");
+    set_value(&mut beyond, "Y1", "16MHz 30pF");
+    let r = crystal_findings(&beyond, &facts(lfxo.clone()));
+    assert_eq!(fired(&r).len(), 1, "{r:?}");
+    assert!(
+        r[0].message.contains("no external caps"),
+        "{}",
+        r[0].message
+    );
+    assert!(r[0].message.contains("Table 4.12"), "{}", r[0].message);
+    // External caps add in parallel with the on-chip ones: 27p + 4..24.5 per pin.
+    let mut with_ext = xtal_board("12MHz 12pF", "27p", "27p");
+    set_value(&mut with_ext, "Y1", "12MHz 12pF");
+    let r = crystal_findings(&with_ext, &facts(lfxo));
+    assert!(r[0].message.contains("on-chip per pin"), "{}", r[0].message);
+    // Tunable with no printed range: no judgement, with or without caps.
+    let tunable = IntegratedCaps::Unspecified {
+        basis: "card 'efm32pg22' HFXO".into(),
+    };
+    for b in [
+        xtal_board("12MHz 12pF", "27p", "27p"),
+        xtal_on_driver("EFM32PG22C200F512IM40"),
+    ] {
+        let r = crystal_findings(&b, &facts(tunable.clone()));
+        assert!(fired(&r).is_empty(), "{r:?}");
+    }
 }
 
 #[test]

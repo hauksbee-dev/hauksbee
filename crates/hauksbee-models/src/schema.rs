@@ -13,7 +13,7 @@
 //! Long-form how-and-why: docs/how-and-why/hauksbee-models/schema.md.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use hauksbee_ir::evidence::{
     ModelIntervalKind, ModelSourceTier, ModelUncertainty, ModelValidation,
@@ -21,6 +21,7 @@ use hauksbee_ir::evidence::{
 
 use crate::check::positive_finite;
 use crate::peripheral_limits::PeripheralLimits;
+use hauksbee_ir::pin_functions::PeripheralFunction;
 use hauksbee_ir::units::format_volts;
 
 // ── Top-level file container ──────────────────────────────────────────────────
@@ -105,6 +106,26 @@ pub struct ModelEntry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub optional_supplies: Vec<OptionalSupply>,
 
+    /// `[[models.output_drive]]`: the output stage per drive-strength setting,
+    /// as the datasheet's stated VOH / VOL points at stated currents. The
+    /// binder fits one output resistance per direction from them
+    /// ([`OutputDrive::fit`]); with `drive_select` the co-simulation picks the
+    /// row the firmware's live register selects. Absent: the generic fixed
+    /// output resistance applies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_drive: Vec<OutputDrive>,
+
+    /// `[models.drive_select]`: where the firmware's drive-strength field
+    /// lives, so a live register read picks the `output_drive` row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drive_select: Option<DriveSelect>,
+
+    /// `[models.reset]`: brown-out / power-on-reset supply thresholds and the
+    /// reset pin's input thresholds. Absent fields mean "the datasheet gives no
+    /// such figure"; the co-simulation then enforces nothing for them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset: Option<ResetSpec>,
+
     /// Pin-scoped recommended operating conditions and rail relationships.
     /// Every entry carries its own source basis so a static finding can quote
     /// the exact table row that authorizes the constraint.
@@ -124,6 +145,24 @@ pub struct ModelEntry {
     /// Empty for parts with no documented strapping (e.g. AVR).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub straps: Vec<StrapPin>,
+
+    /// `[models.strap_latch]`, `[models.reset_input]`, `[[models.boot_inputs]]`,
+    /// `[[models.boot_modes]]`, `[models.qemu_boot]`: the vendor's boot-mode
+    /// table, which the co-simulator resolves against the solved board at
+    /// reset release. See [`crate::boot_mode`]. The lint's `straps` above stay
+    /// as they are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strap_latch: Option<crate::boot_mode::StrapLatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_input: Option<crate::boot_mode::ResetInput>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boot_inputs: Vec<crate::boot_mode::BootInput>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boot_modes: Vec<crate::boot_mode::BootModeRow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qemu_boot: Option<crate::boot_mode::QemuBoot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rom_bootloader: Option<crate::boot_mode::RomBootloader>,
 
     /// `[models.pin_capability]`: which pads can serve a given peripheral
     /// function, as structured data a board check can read (today the pads that
@@ -245,7 +284,7 @@ pub struct SupplyOutput {
 /// card's `[models.pins]` does not. A card with no table says nothing, and a
 /// check that reads it abstains. Each table carries the datasheet table and
 /// page it was read from (`basis`).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PinCapability {
     /// `[models.pin_capability.adc]`: the pads wired to an ADC input.
@@ -267,6 +306,34 @@ pub struct PinCapability {
     /// only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_up: Option<PullUpPins>,
+    /// `[[models.pin_capability.xtal_int_caps]]`: the crystal oscillators whose
+    /// load capacitors are inside the chip, one entry per oscillator.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub xtal_int_caps: Vec<XtalIntCap>,
+    /// `[models.pin_capability.spi_sck]`: the pads a hardware SPI clock can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spi_sck: Option<FunctionPads>,
+    /// `[models.pin_capability.spi_mosi]`: the pads a hardware SPI data-out can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spi_mosi: Option<FunctionPads>,
+    /// `[models.pin_capability.spi_miso]`: the pads a hardware SPI data-in can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spi_miso: Option<FunctionPads>,
+    /// `[models.pin_capability.i2c_sda]`: the pads a hardware I2C data line can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub i2c_sda: Option<FunctionPads>,
+    /// `[models.pin_capability.i2c_scl]`: the pads a hardware I2C clock can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub i2c_scl: Option<FunctionPads>,
+    /// `[models.pin_capability.uart_tx]`: the pads a hardware UART transmit can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uart_tx: Option<FunctionPads>,
+    /// `[models.pin_capability.uart_rx]`: the pads a hardware UART receive can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uart_rx: Option<FunctionPads>,
+    /// `[models.pin_capability.pwm]`: the pads a timer's PWM output can use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pwm: Option<FunctionPads>,
 }
 
 impl PinCapability {
@@ -277,7 +344,85 @@ impl PinCapability {
             && self.tri_state.is_none()
             && self.open_drain.is_none()
             && self.pull_up.is_none()
+            && self.spi_sck.is_none()
+            && self.spi_mosi.is_none()
+            && self.spi_miso.is_none()
+            && self.i2c_sda.is_none()
+            && self.i2c_scl.is_none()
+            && self.uart_tx.is_none()
+            && self.uart_rx.is_none()
+            && self.pwm.is_none()
+            && self.xtal_int_caps.is_empty()
     }
+
+    /// The table for `function`, when the card declares one.
+    #[must_use]
+    pub const fn table(&self, function: PeripheralFunction) -> Option<&FunctionPads> {
+        match function {
+            PeripheralFunction::SpiSck => self.spi_sck.as_ref(),
+            PeripheralFunction::SpiMosi => self.spi_mosi.as_ref(),
+            PeripheralFunction::SpiMiso => self.spi_miso.as_ref(),
+            PeripheralFunction::I2cSda => self.i2c_sda.as_ref(),
+            PeripheralFunction::I2cScl => self.i2c_scl.as_ref(),
+            PeripheralFunction::UartTx => self.uart_tx.as_ref(),
+            PeripheralFunction::UartRx => self.uart_rx.as_ref(),
+            PeripheralFunction::Pwm => self.pwm.as_ref(),
+        }
+    }
+}
+
+/// The pads of an MCU package that can carry one hardware peripheral function
+/// (see [`PinCapability::table`]).
+///
+/// Like the ADC table it is a complete statement about the package. A pad listed
+/// can carry the function, through the instance named beside it; a pad of
+/// `[models.pins]` not listed cannot, in hardware. A software (bit-banged)
+/// implementation is not covered by it. A part whose pins reach any pad through a
+/// routing matrix (an `ESP32` GPIO matrix, an `RP2040` PIO) declares no table for
+/// the function.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FunctionPads {
+    /// The datasheet table and page the pad list is read from.
+    pub basis: String,
+    /// Pad number to the peripheral instance and signal on it (`SPI1_SCK`,
+    /// `SCK`, `OC1A`). A function the package has no pad for declares the table
+    /// empty.
+    #[serde(default)]
+    pub pads: BTreeMap<String, String>,
+    /// The listed pads that serve the function only when the part is the bus
+    /// master (the pads of a USART's SPI mode, which has no slave role). A
+    /// bus whose master is another part never uses one.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub master_only: BTreeSet<String>,
+}
+
+/// One crystal oscillator of an MCU whose load capacitors are on the die.
+///
+/// See [`PinCapability::xtal_int_caps`]. It names the pads the crystal hangs on
+/// and, when the datasheet gives it, the capacitance each pad carries.
+///
+/// The range is the capacitance on EACH pad to ground over the part's whole
+/// setting range (the pair is in series across the crystal), so with no external
+/// caps the bank reaches at most `max_f / 2`; a crystal with a larger CL needs
+/// external load capacitors, which the crystal check flags. An entry with
+/// neither bound says the caps are integrated and tunable and the datasheet
+/// prints no range, which no check can judge a CL against.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct XtalIntCap {
+    /// The oscillator as the datasheet names it (`HFXO`, `LFXO`).
+    pub oscillator: String,
+    /// The two pads of `[models.pins]` the crystal connects to.
+    pub pads: Vec<String>,
+    /// Smallest on-die capacitance on each pad (farads), when the datasheet gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_f: Option<f64>,
+    /// Largest on-die capacitance on each pad (farads), when the datasheet gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_f: Option<f64>,
+    /// The datasheet table and page this is read from.
+    pub basis: String,
 }
 
 /// The pads a part releases to high impedance (see [`PinCapability::tri_state`]).
@@ -370,6 +515,16 @@ impl ModelEntry {
             .is_some_and(|t| t.pads.contains_key(pad))
     }
 
+    /// The on-die crystal load capacitors of the oscillator `pad` belongs to,
+    /// where the card says that oscillator has them.
+    #[must_use]
+    pub fn xtal_int_caps_on(&self, pad: &str) -> Option<&XtalIntCap> {
+        self.pin_capability
+            .xtal_int_caps
+            .iter()
+            .find(|o| o.pads.iter().any(|p| p == pad))
+    }
+
     /// The ADC channel on `pad`, where the card lists the pad as one.
     #[must_use]
     pub fn adc_channel(&self, pad: &str) -> Option<&str> {
@@ -380,6 +535,152 @@ impl ModelEntry {
             .get(pad)
             .map(String::as_str)
     }
+}
+
+/// Which output level a stated point belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputLevel {
+    /// A high level (VOH) while the pin sources current.
+    High,
+    /// A low level (VOL) while the pin sinks current.
+    Low,
+}
+
+/// One stated output point: the level a pin holds at a load current.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputPoint {
+    pub level: OutputLevel,
+    /// Magnitude of the load current (A), as the datasheet states it.
+    pub current_a: f64,
+    /// The datasheet's bound for the level at that current: a VOH minimum or a
+    /// VOL maximum (V).
+    pub volts: f64,
+}
+
+/// One drive-strength setting of a pin's output stage (see
+/// [`ModelEntry::output_drive`]).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputDrive {
+    /// The setting's datasheet name (`"12 mA"`, `"high drive"`).
+    pub setting: String,
+    /// The value of the drive-select register field that picks this setting
+    /// (see [`DriveSelect`]); absent for a part whose strength is not
+    /// firmware-selectable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<u32>,
+    /// Marks the setting the part comes out of reset in (used until a live
+    /// register read says otherwise).
+    #[serde(default)]
+    pub reset_default: bool,
+    /// The supply (V) the points are stated at.
+    pub vdd: f64,
+    /// The stated points; every direction a setting drives needs one.
+    pub points: Vec<OutputPoint>,
+    /// Levels this setting does not drive at all (an open-drain or open-source
+    /// mode: the pin floats at that level and the net's own pull decides).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disconnected: Vec<OutputLevel>,
+    /// The datasheet table and page the points came from.
+    pub basis: String,
+}
+
+impl OutputDrive {
+    /// The output resistance (ohm) the stated points imply for `level`: the
+    /// least-squares slope of the drop from the rail (high) or from ground
+    /// (low) against current, through the origin. `None` when the setting
+    /// states no usable point for that level.
+    #[must_use]
+    pub fn fit(&self, level: OutputLevel) -> Option<f64> {
+        let (mut num, mut den) = (0.0_f64, 0.0_f64);
+        for p in self.points.iter().filter(|p| p.level == level) {
+            let drop = match level {
+                OutputLevel::High => self.vdd - p.volts,
+                OutputLevel::Low => p.volts,
+            };
+            if p.current_a > 0.0 && drop >= 0.0 {
+                num += drop * p.current_a;
+                den += p.current_a * p.current_a;
+            }
+        }
+        (den > 0.0 && num > 0.0).then(|| num / den)
+    }
+}
+
+/// Where the firmware's drive-strength field lives (see
+/// [`ModelEntry::drive_select`]).
+///
+/// The field for pin `n` of port `P` is
+/// `width` bits at bit `lsb + (n % pins_per_register) * field_pitch_bits` of
+/// the 32-bit word at
+/// `port_bases[P] + (n / pins_per_register) * register_stride`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DriveSelect {
+    /// Port letter (the port letters the `SoC` descriptor uses) to the address
+    /// of the register holding pin 0's field.
+    pub port_bases: BTreeMap<String, u32>,
+    /// Bytes between consecutive registers of one port.
+    pub register_stride: u32,
+    /// How many pins' fields one register holds.
+    pub pins_per_register: u32,
+    /// Bit position of the first pin's field.
+    pub lsb: u32,
+    /// Field width in bits.
+    pub width: u32,
+    /// Bits between consecutive pins' fields inside one register.
+    #[serde(default)]
+    pub field_pitch_bits: u32,
+    /// The datasheet register description the layout came from.
+    pub basis: String,
+}
+
+impl DriveSelect {
+    /// `(address, shift)` of the field for pin `bit` of `port`.
+    #[must_use]
+    pub fn locate(&self, port: char, bit: u8) -> Option<(u32, u32)> {
+        let base = *self.port_bases.get(port.to_string().as_str())?;
+        let per = self.pins_per_register.max(1);
+        let n = u32::from(bit);
+        Some((
+            base + (n / per) * self.register_stride,
+            self.lsb + (n % per) * self.field_pitch_bits,
+        ))
+    }
+}
+
+/// `[models.reset]`: the supply and pin thresholds at which the part holds
+/// itself in reset (see [`ModelEntry::reset`]).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResetSpec {
+    /// The supply pin role (`"vdd"`, `"dvdd"`) the two thresholds below watch:
+    /// a part's reset circuit senses one rail (the RP2040's brown-out sits on
+    /// its 1.1 V core, not its 3.3 V IO supply). Required with either.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supply_pin: Option<String>,
+    /// Supply (V) below which the power-on / brown-out reset asserts (falling
+    /// threshold, typical).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assert_below_v: Option<f64>,
+    /// Supply (V) above which the reset releases (rising threshold, typical).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_above_v: Option<f64>,
+    /// Reset-pin level (V) below which the pin asserts reset (VIL maximum).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_vil_v: Option<f64>,
+    /// Reset-pin level (V) above which the pin releases reset (VIH minimum).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_vih_v: Option<f64>,
+    /// Time (s) the part stays in reset after the supply has risen past the
+    /// release threshold (a power-on reset temporization, typical). Applies to
+    /// the supply path only; a reset pin releases when it crosses `pin_vih_v`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_delay_s: Option<f64>,
+    /// The datasheet tables and pages the figures came from.
+    pub basis: String,
 }
 
 /// A supply pin a board may leave open (see [`ModelEntry::optional_supplies`]).

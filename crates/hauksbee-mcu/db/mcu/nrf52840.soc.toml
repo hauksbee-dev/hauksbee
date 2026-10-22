@@ -54,18 +54,12 @@ frequency_hz = 64_000_000
 expected_e_machine = "EM_ARM"
 mcu_label = "nRF52840 (ARM Cortex-M4)"
 
-# WATCHDOG (measured, and the reason this field exists). Renode's NRF52840 WDT
-# arms convincingly and then does nothing: with a 50 ms reload never fed,
-# RUNSTATUS reads 1, CRV reads back 1638 (50 ms at the model's correct 32768 Hz),
-# the PC sits inside the firmware's busy loop, and 1.000 s of simulated time
-# produces ZERO resets where the part gives twenty. A firmware whose recovery
-# path depends on the watchdog biting is therefore untested here, and a passing
-# run must say so rather than let the user infer otherwise.
-watchdog_limitation = """\
-The nRF52840 watchdog arms in this co-simulator (it reads back as running, with \
-a correct 32768 Hz reload) but never fires: an unserviced watchdog will NOT \
-reset the core, so watchdog recovery is untested on this run.\
-"""
+# WATCHDOG (re-measured 2026-10-22; the earlier "never fires" claim was wrong). Renode's
+# NRF52840_Watchdog does bite: an armed (CRV 1638 = 50 ms at 32768 Hz), never-fed watchdog
+# resets the machine every timeout, and the flash sitting at 0 lets the bare reset land on a
+# valid vector table. The backend now also registers a `reset` macro and counts reboots, so
+# the run reports the bites (testdata/firmware/watchdog, tests/renode_watchdog.rs). No
+# limitation is stated: the starved fixture reboots, the fed control does not.
 
 [[soc.ports]]
 letter = "0"

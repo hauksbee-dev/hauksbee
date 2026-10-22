@@ -31,8 +31,10 @@ platform_repl = """
 //
 // Extends the stock Renode stm32f103.repl with what the HAL clock tree needs:
 //
-//   rcc       STM32F1 RCC with timed HSE/PLL readiness, internal-clock ready
-//             bits, CSR/BDCR storage, and SWS mirroring SW in CFGR.
+//   rcc       STM32F1 RCC register storage: HSIRDY following HSION, CSR/BDCR
+//             storage, and SWS mirroring SW in CFGR. HSERDY and PLLRDY are NOT
+//             stored: the generic [[soc.clock_ready]] model below supplies them
+//             on every read, from the board's crystal and elapsed virtual time.
 //   flashCtrl FLASH_ACR as read/write storage so the HAL's latency read-back
 //             check passes.
 //   dma1      the F1 DMA1. Register-compatible with the STM32G0 DMA IP that
@@ -52,55 +54,18 @@ if request.IsInit:
     rccregs = [0] * (size / 4)
     rccregs[0] = 0x83
     rccregs[9] = 0x0C000000
-    hse_present = False
-    hse_elapsed_us = 0
-    pll_elapsed_us = 0
 elif request.IsRead:
     request.Value = rccregs[request.Offset >> 2]
 elif request.IsWrite:
     rccoff = request.Offset >> 2
     rccval = request.Value
-    if rccoff == 0xFF:
-        hse_present = bool(rccval & 0x1)
-        if not hse_present:
-            rccregs[0] = rccregs[0] & ~0x20000
-            hse_elapsed_us = 0
-            if rccregs[1] & 0x10000:
-                rccregs[0] = rccregs[0] & ~0x2000000
-                pll_elapsed_us = 0
-    elif rccoff == 0xFE:
-        delta_us = rccval
-        hse_was_ready = bool(rccregs[0] & 0x20000)
-        if hse_present and (rccregs[0] & 0x10000):
-            hse_elapsed_us = hse_elapsed_us + delta_us
-            if hse_elapsed_us >= 2000:
-                rccregs[0] = rccregs[0] | 0x20000
-        else:
-            hse_elapsed_us = 0
-            rccregs[0] = rccregs[0] & ~0x20000
-        pll_source_ready = bool(rccregs[0] & 0x2)
-        if rccregs[1] & 0x10000:
-            pll_source_ready = hse_was_ready
-        if (rccregs[0] & 0x1000000) and pll_source_ready:
-            pll_elapsed_us = pll_elapsed_us + delta_us
-            if pll_elapsed_us >= 200:
-                rccregs[0] = rccregs[0] | 0x2000000
-        else:
-            pll_elapsed_us = 0
-            rccregs[0] = rccregs[0] & ~0x2000000
-    elif rccoff == 0:
-        ready = rccregs[0] & 0x2020002
-        rccval = (rccval & ~0x2020002) | ready
+    if rccoff == 0:
+        # HSERDY (bit 17) and PLLRDY (bit 25) are read-only (RM0008 Rev 20
+        # s7.3.1, RCC_CR p.99): a write never sets them, and the readiness
+        # model overrides them on read. HSIRDY (bit 1) follows HSION (bit 0).
+        rccval = rccval & ~0x2020002
         if rccval & 0x1:
             rccval = rccval | 0x2
-        else:
-            rccval = rccval & ~0x2
-        if not (rccval & 0x10000):
-            rccval = rccval & ~0x20000
-            hse_elapsed_us = 0
-        if not (rccval & 0x1000000):
-            rccval = rccval & ~0x2000000
-            pll_elapsed_us = 0
         rccregs[rccoff] = rccval
     elif rccoff == 1:
         rccval = (rccval & 0xFFFFFFF3) | ((rccval & 0x3) << 2)
@@ -134,31 +99,12 @@ dma1: DMA.STM32G0DMA @ sysbus 0x40020000
 
 spi1: SPI.STM32SPI @ sysbus 0x40013000
 
-// The stock platform clocks every STM32_Timer at 10 MHz. HAL projects run the
-// timers from a 72 MHz PLL (8 MHz HSE x9; APB1/2 timer clocks are both 72 MHz
-// on the F1), and the HAL time base is a timer programmed for a 1 ms tick
-// assuming exactly that. At 10 MHz the tick lands at ~139 Hz, so every
-// HAL_Delay(n) takes 7.2n ms of simulated time and boot never finishes inside
-// a sane co-sim window. TIM1/TIM2 also serve as a 64-bit systime pair in some
-// firmware.
-//
-// This is the one clock here that is NOT the part's reset default, and it is a
-// deliberate, bounded divergence rather than an oversight. Renode models no F1
-// clock tree (the RCC above is a stub reporting every PLL as locked), so one
-// fixed timer rate has to serve both firmware classes, and only the post-PLL
-// rate lets a stock HAL project boot at all. The cost is stated instead of
-// hidden: bare-metal firmware that runs TIMx from the reset-default HSI sees
-// its timers 9x fast. SysTick, the core clock and `frequency_hz` all agree on
-// 8 MHz, so the paths a delay loop and a SysTick tick take are covered by the
-// clock-truth gate; a TIMx time base is not.
-timer1:
-    frequency: 72000000
-timer2:
-    frequency: 72000000
-timer3:
-    frequency: 72000000
-timer4:
-    frequency: 72000000
+// The stock platform clocks every STM32_Timer at 10 MHz. The backend retunes
+// each one from the clock tree the firmware has configured (see
+// [[soc.clock_targets]] below): at reset the HSI gives every timer 8 MHz, and a
+// stock CubeMX HAL project that brings the PLL to 72 MHz gets 72 MHz timers from
+// the moment SW=PLL, exactly as on silicon. Nothing here needs to guess which
+// firmware class is running.
 
 iwdg: Timers.STM32_IndependentWatchdog @ sysbus 0x40003000
     frequency: 40000
@@ -205,44 +151,19 @@ frequency_hz = 8_000_000
 expected_e_machine = "EM_ARM"
 mcu_label = "STM32F103 (ARM Cortex-M3)"
 
-# WATCHDOG (measured). The inline platform's IWDG at 40 kHz does time out and
-# does reset: with a 50 ms reload never fed, the firmware's heartbeat stops at
-# the timeout and its boot marker flips a second time. But it resets ONCE, and
-# the core then stays quiet for the remaining 450 ms where the part would reboot
-# every 50 ms forever. So the first bite is real and anything the firmware would
-# have done on the reboots after it is not.
-watchdog_limitation = """\
-The STM32F103 independent watchdog fires and resets the core once in this \
-co-simulator, but the core does not resume afterwards: a part that would reboot \
-repeatedly under a starved watchdog goes quiet here instead, so only the FIRST \
-watchdog reset is represented on this run.\
-"""
+# WATCHDOG (re-measured 2026-10-22). The inline platform's IWDG at 40 kHz times out and
+# resets. It used to "fire once and go quiet" because Renode's Machine.Reset() ran no `reset`
+# macro, so VTOR/PC/SP went to 0 and the core halted ("PC does not lay in memory") on this
+# part, whose flash is at 0x08000000. The backend now registers a `reset` macro that reloads
+# the image, and a starved watchdog reboots the core every timeout. No limitation is stated
+# (testdata/firmware/watchdog, tests/renode_watchdog.rs).
 
-# TIMING (deliberate, bounded divergence; the long why is on the timer1..4
-# overrides in platform_repl above). SysTick and instruction timing are held to
-# the part's 8 MHz reset default by the clock-truth gate; the TIMx blocks are
-# not, because only the post-PLL rate lets a stock CubeMX HAL project boot on a
-# platform with no clock tree. This sentence is the runtime statement of that
-# trade, surfaced on every report surface of any run that binds this part, so
-# the cost is paid where a user sees it rather than only in this file.
-timing_limitation = """\
-The STM32F103 TIMx timer blocks run at the post-PLL 72 MHz in this \
-co-simulator while the core and SysTick run at the 8 MHz reset default (the \
-rate a stock CubeMX HAL project needs to boot on a platform with no clock \
-tree), so bare-metal firmware that clocks a TIMx time base from the \
-reset-default HSI sees those timers 9x fast on this run; delay loops and \
-SysTick time bases are unaffected and clock-truth gated.\
-"""
-
-# Private writes into the descriptor's RCC model. Firmware cannot assert the
-# read-only ready bits through RCC_CR: board presence arrives once before boot,
-# and virtual elapsed time advances the HSE/PLL state machine after each Renode
-# slice. DS5319 rev 20 gives a typical 2 ms HSE startup and a 200 us maximum PLL
-# lock time. Transitions are conservative by at most one co-sim chunk because a
-# tick written after RunFor is visible to firmware on the next slice.
-[soc.clock_control]
-presence_command = "sysbus.rcc WriteDoubleWord 0x3FC {present}"
-tick_command = "sysbus.rcc WriteDoubleWord 0x3F8 {micros}"
+# TIMING. The core, SysTick and every TIMx block follow the clock tree the
+# firmware configures (tests/clock_truth.rs: PLL 64 MHz SysTick and TIM2 images
+# within 1 %), so there is no standing timing divergence to declare. What is
+# still approximated: SYSCLK follows SWS the instant firmware writes SW, whereas
+# silicon switches only once the selected source is ready (the firmware waits
+# for PLLRDY first, as the RM0008 s7.3.2 sequence requires).
 
 [[soc.ports]]
 letter = "A"
@@ -296,3 +217,273 @@ controllers = ["i2c1"]
 # stm32f103.repl at any offset), so no `extra_repl` injection is needed; a
 # second definition would collide with the platform's.
 controllers = ["spi1"]
+
+# ── CLOCK TREE (decoded from the live registers) ──────────────────────────────
+# RM0008 Rev 20 s7.3 (RCC), s7.2 clock tree. Registers: RCC_CR @ +0x00
+# (pp.99-100), RCC_CFGR @ +0x04 (pp.101-103). The backend reads these after every
+# slice and retunes cpu MIPS, SysTick and every TIMx block to the result.
+#   SWS (3:2): 00 HSI, 01 HSE, 10 PLL, 11 not allowed.
+#   PLLSRC (16): 0 HSI/2, 1 HSE (through PLLXTPRE, bit 17: /2).
+#   PLLMUL (21:18): value + 2, with 0b1110 and 0b1111 both x16.
+#   HPRE (7:4): 0xxx /1, 1000 /2, 1001 /4, 1010 /8, 1011 /16, 1100 /64,
+#   1101 /128, 1110 /256, 1111 /512. PPRE1 (10:8), PPRE2 (13:11): 0xx /1,
+#   100 /2, 101 /4, 110 /8, 111 /16.
+# TIMxCLK is the APB clock if the APB prescaler is 1, otherwise twice it
+# (RM0008 s7.2, p.94). HSI is 8 MHz (s7.2.1). The HSE value is the reference
+# design's 8 MHz crystal; a board with another crystal needs that value passed in.
+[[soc.decode]]
+kind = "clock"
+name = "rcc"
+registers = { cr = 0x40021000, cfgr = 0x40021004 }
+vars = [
+    ["hsi", "8000000"],
+    ["hse", "8000000"],
+    ["pll_in", "if(bit(cfgr, 16), hse / (1 + bit(cfgr, 17)), hsi / 2)"],
+    ["pll_out", "pll_in * min(bits(cfgr, 21, 18) + 2, 16)"],
+    ["sysclk", "pick(bits(cfgr, 3, 2), hsi, hse, pll_out)"],
+    ["hclk", "sysclk / pick(bits(cfgr, 7, 4), 1, 1, 1, 1, 1, 1, 1, 1, 2, 4, 8, 16, 64, 128, 256, 512)"],
+    ["pclk1_div", "pick(bits(cfgr, 10, 8), 1, 1, 1, 1, 2, 4, 8, 16)"],
+    ["pclk1", "hclk / pclk1_div"],
+    ["pclk2_div", "pick(bits(cfgr, 13, 11), 1, 1, 1, 1, 2, 4, 8, 16)"],
+    ["pclk2", "hclk / pclk2_div"],
+    ["tim_apb1", "if(pclk1_div == 1, pclk1, pclk1 * 2)"],
+    ["tim_apb2", "if(pclk2_div == 1, pclk2, pclk2 * 2)"],
+    ["core_hz", "hclk"],
+]
+
+# Retune targets. cpu: a Cortex-M3 retires about one instruction per cycle, so
+# MIPS equals the core clock in MHz (the identity the reset-default declaration
+# above already uses). SysTick: HCLK (CLKSOURCE = 1). APB2 timers: TIM1, TIM8,
+# TIM9-11; APB1 timers: TIM2-7, TIM12-14 (RM0008 s7.3.7/s7.3.8 enable registers).
+[[soc.clock_targets]]
+var = "core_hz"
+command = "sysbus.cpu PerformanceInMips {mhz}"
+[[soc.clock_targets]]
+var = "core_hz"
+command = "sysbus.nvic Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb2"
+command = "sysbus.timer1 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb2"
+command = "sysbus.timer8 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb2"
+command = "sysbus.timer9 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb2"
+command = "sysbus.timer10 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb2"
+command = "sysbus.timer11 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer2 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer3 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer4 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer5 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer6 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer7 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer12 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer13 Frequency {hz}"
+[[soc.clock_targets]]
+var = "tim_apb1"
+command = "sysbus.timer14 Frequency {hz}"
+
+# ── OSCILLATOR READINESS ──────────────────────────────────────────────────────
+# RCC_CR (RM0008 s7.3.1, pp.99-100): HSEON bit 16, HSERDY bit 17, PLLON bit 24,
+# PLLRDY bit 25. HSERDY never rises on a board with no crystal; the PLL waits
+# for HSE only while CFGR.PLLSRC selects it. DS5319 Rev 20 gives a typical 2 ms
+# HSE startup (Table 22, tSU(HSE), pdf p.52; typical, not a maximum, and it
+# varies with the crystal) and a 200 us maximum PLL lock time (tLOCK, pdf p.56).
+[[soc.clock_ready]]
+peripheral = "rcc"
+name = "hse"
+enable_register = 0x00
+enable_mask = 0x10000
+ready_register = 0x00
+ready_mask = 0x20000
+requires_external = true
+startup_us = 2000.0
+
+[[soc.clock_ready]]
+peripheral = "rcc"
+name = "pll"
+enable_register = 0x00
+enable_mask = 0x1000000
+ready_register = 0x00
+ready_mask = 0x2000000
+startup_us = 200.0
+needs = [{ entry = "hse", when = { register = 0x04, mask = 0x10000, value = 0x10000 } }]
+
+# ── PERIPHERAL SNAPSHOT DECODE ────────────────────────────────────────────────
+# USART (RM0008 s27.3.4 p.798: baud = fCK / (16 * USARTDIV), USARTDIV =
+# BRR/16, so baud = fCK / BRR; USART1 on PCLK2, USART2/3 on PCLK1). BRR @ +0x08
+# (p.820), CR1 @ +0x0C bit 12 M (p.821), CR2 @ +0x10 STOP 13:12 (p.823).
+# Memory map: RM0008 Table 3, pp.51-52.
+[[soc.decode]]
+kind = "uart"
+name = "usart1"
+registers = { brr = 0x40013808, cr1 = 0x4001380C, cr2 = 0x40013810 }
+vars = [
+    ["baud", "clk_pclk2 / bits(brr, 15, 0)"],
+    ["data_bits", "8 + bit(cr1, 12)"],
+    ["stop_bits", "pick(bits(cr2, 13, 12), 1, 0.5, 2, 1.5)"],
+]
+[[soc.decode]]
+kind = "uart"
+name = "usart2"
+registers = { brr = 0x40004408, cr1 = 0x4000440C, cr2 = 0x40004410 }
+vars = [
+    ["baud", "clk_pclk1 / bits(brr, 15, 0)"],
+    ["data_bits", "8 + bit(cr1, 12)"],
+    ["stop_bits", "pick(bits(cr2, 13, 12), 1, 0.5, 2, 1.5)"],
+]
+[[soc.decode]]
+kind = "uart"
+name = "usart3"
+registers = { brr = 0x40004808, cr1 = 0x4000480C, cr2 = 0x40004810 }
+vars = [
+    ["baud", "clk_pclk1 / bits(brr, 15, 0)"],
+    ["data_bits", "8 + bit(cr1, 12)"],
+    ["stop_bits", "pick(bits(cr2, 13, 12), 1, 0.5, 2, 1.5)"],
+]
+
+# SPI (RM0008 s25.5.1 CR1 pp.742-744: CPHA bit 0, CPOL bit 1, BR 5:3 gives
+# fPCLK / 2^(BR+1)). SPI1 on PCLK2, SPI2 on PCLK1.
+[[soc.decode]]
+kind = "spi"
+name = "spi1"
+registers = { cr1 = 0x40013000 }
+vars = [
+    ["sck_hz", "clk_pclk2 / pick(bits(cr1, 5, 3), 2, 4, 8, 16, 32, 64, 128, 256)"],
+    ["cpol", "bit(cr1, 1)"],
+    ["cpha", "bit(cr1, 0)"],
+]
+[[soc.decode]]
+kind = "spi"
+name = "spi2"
+registers = { cr1 = 0x40003800 }
+vars = [
+    ["sck_hz", "clk_pclk1 / pick(bits(cr1, 5, 3), 2, 4, 8, 16, 32, 64, 128, 256)"],
+    ["cpol", "bit(cr1, 1)"],
+    ["cpha", "bit(cr1, 0)"],
+]
+
+# I2C (RM0008 s26.6.8 CCR pp.781-782: Sm Thigh = Tlow = CCR * TPCLK1; Fm DUTY=0
+# Thigh = CCR, Tlow = 2 CCR; DUTY=1 Thigh = 9 CCR, Tlow = 16 CCR; fSCL ~
+# 1 / (Thigh + Tlow)). CCR @ +0x1C. Both controllers are on APB1.
+[[soc.decode]]
+kind = "i2c"
+name = "i2c1"
+registers = { ccr = 0x4000541C }
+vars = [
+    ["scl_hz", "clk_pclk1 / (bits(ccr, 11, 0) * if(bit(ccr, 15), if(bit(ccr, 14), 25, 3), 2))"],
+]
+[[soc.decode]]
+kind = "i2c"
+name = "i2c2"
+registers = { ccr = 0x4000581C }
+vars = [
+    ["scl_hz", "clk_pclk1 / (bits(ccr, 11, 0) * if(bit(ccr, 15), if(bit(ccr, 14), 25, 3), 2))"],
+]
+
+# TIM2 (general-purpose, APB1): PSC @ +0x28, ARR @ +0x2C; counter clock =
+# TIMxCLK / (PSC + 1), update period = (ARR + 1) / that.
+[[soc.decode]]
+kind = "timer"
+name = "tim2"
+registers = { psc = 0x40000028, arr = 0x4000002C }
+vars = [
+    ["tick_hz", "clk_tim_apb1 / (bits(psc, 15, 0) + 1)"],
+    ["period_s", "(bits(arr, 15, 0) + 1) / tick_hz"],
+]
+
+# Renode's timer departs from silicon in two ways a polled time base hits (see
+# `periph_snapshot::TimerFix`): UIF latches only while TIMx_DIER.UIE is set
+# (silicon: always, RM0090 Rev 22 p.631), and the counter wraps after ARR ticks
+# instead of ARR + 1 (RM0090 s18.3.2 p.589).
+[[soc.timer_fixes]]
+peripheral = "timer1"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer2"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer3"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer4"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer5"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer6"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer7"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer8"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer9"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer10"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer11"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer12"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer13"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C
+[[soc.timer_fixes]]
+peripheral = "timer14"
+enable_register = 0x0C
+enable_mask = 0x1
+auto_reload_register = 0x2C

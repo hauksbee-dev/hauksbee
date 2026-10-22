@@ -22,9 +22,26 @@ LDFLAGS = -nostdlib -Wl,--gc-sections
 SRCS = startup.c tick.c
 TARGETS = stm32f103_tick.elf stm32f4_tick.elf stm32g4_tick.elf stm32l0_tick.elf \
           stm32g4_fault.elf stm32g4_pull_mirror.elf \
-          nrf52840_tick.elf fe310_tick.elf
+          nrf52840_tick.elf fe310_tick.elf $(PLL_TARGETS)
 
-all: $(TARGETS)
+# CONFIGURED-CLOCK images (pll_tick.c): the firmware sets its own clock tree
+# and then ticks from it, once with SysTick (HCLK) and once with TIM2 (the
+# timer input clock). <part>_<clock>_<tick>.elf; the clock and tick choices are
+# -D flags so one source covers the matrix. See pll_tick.c for the numbers.
+PLL_CORTEX_M3 = stm32f103
+PLL_CORTEX_M4 = stm32f4 stm32g4
+PLL_CORTEX_M0 = stm32f072 stm32l0
+PLL_TARGETS = \
+    stm32f103_hsi_tim.elf stm32f103_pll_systick.elf stm32f103_pll_tim.elf \
+    stm32f4_hsi_tim.elf stm32f4_pll_systick.elf stm32f4_pll_tim.elf \
+    stm32f072_hsi_systick.elf stm32f072_pll_systick.elf stm32f072_pll_tim.elf \
+    stm32l0_hsi_tim.elf stm32l0_msi6_systick.elf stm32l0_pll_systick.elf stm32l0_pll_tim.elf \
+    stm32g4_hsi_tim.elf stm32g4_pll_systick.elf stm32g4_pll_tim.elf
+
+# External-clock readiness probes (ready_probe.c): HSERDY then PLLRDY markers.
+READY_TARGETS = stm32f4_ready_probe.elf stm32l0_ready_probe.elf stm32f072_ready_probe.elf stm32g4_ready_probe.elf
+
+all: $(TARGETS) $(READY_TARGETS)
 
 stm32f103_tick.elf: $(SRCS) stm32f103.ld
 	$(CC) $(CFLAGS) -mcpu=cortex-m3 -DPART_STM32F103 $(LDFLAGS) -T stm32f103.ld $(SRCS) -o $@
@@ -55,7 +72,41 @@ fe310_tick.elf: fe310_tick.rs fe310.ld
 	    -C opt-level=2 -C panic=abort -C link-arg=-Tfe310.ld \
 	    fe310_tick.rs -o $@
 
+# stm32<part>_<clock>_<tick>.elf -> -mcpu from the part, -DPART_*, -DCLK_*, -DTICK_*.
+PLL_MCPU_stm32f103 = cortex-m3
+PLL_MCPU_stm32f4 = cortex-m4
+PLL_MCPU_stm32g4 = cortex-m4
+PLL_MCPU_stm32f072 = cortex-m0
+PLL_MCPU_stm32l0 = cortex-m0plus
+PLL_DEF_stm32f103 = PART_STM32F103
+PLL_DEF_stm32f4 = PART_STM32F4
+PLL_DEF_stm32g4 = PART_STM32G4
+PLL_DEF_stm32f072 = PART_STM32F072
+PLL_DEF_stm32l0 = PART_STM32L0
+PLL_LD_stm32f103 = stm32f103.ld
+PLL_LD_stm32f4 = stm32f4.ld
+PLL_LD_stm32g4 = stm32g4.ld
+PLL_LD_stm32f072 = stm32f072.ld
+PLL_LD_stm32l0 = stm32l0.ld
+
+define PLL_RULE
+$(1)_$(2)_$(3).elf: pll_tick.c startup.c $$(PLL_LD_$(1))
+	$$(CC) $$(CFLAGS) -mcpu=$$(PLL_MCPU_$(1)) -D$$(PLL_DEF_$(1)) $$(if $$(filter-out hsi,$(2)),-DCLK_$$(shell echo $(2) | tr a-z A-Z)) \
+	    $$(if $$(filter tim,$(3)),-DTICK_TIM) $$(LDFLAGS) -T $$(PLL_LD_$(1)) startup.c pll_tick.c -o $$@
+endef
+$(foreach t,$(PLL_TARGETS),$(eval $(call PLL_RULE,$(word 1,$(subst _, ,$(t))),$(word 2,$(subst _, ,$(t))),$(patsubst %.elf,%,$(word 3,$(subst _, ,$(t)))))))
+
+define READY_RULE
+$(1)_ready_probe.elf: ready_probe.c startup.c $$(PLL_LD_$(1))
+	$$(CC) $$(CFLAGS) -mcpu=$$(PLL_MCPU_$(1)) -D$$(PLL_DEF_$(1)) $$(LDFLAGS) -T $$(PLL_LD_$(1)) startup.c ready_probe.c -o $$@
+endef
+$(foreach p,stm32f4 stm32l0 stm32f072 stm32g4,$(eval $(call READY_RULE,$(p))))
+
 clean:
-	rm -f $(TARGETS)
+	rm -f $(TARGETS) $(READY_TARGETS)
 
 .PHONY: all clean
+
+pll: $(PLL_TARGETS)
+
+.PHONY: pll
