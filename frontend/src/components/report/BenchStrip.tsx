@@ -91,7 +91,7 @@ function UartRow({ chip, focusNet, onFocus }: { chip: UartChipView; focusNet: st
   return (
     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1" data-testid="bench-uart">
       <Chip name={chip.port} net={chip.net} focused={chip.net !== null && chip.net === focusNet} title={chip.title} onFocus={onFocus}>
-        {chip.baud}, {chip.bytes}
+        {chip.baud ? `${chip.baud}, ` : ''}{chip.bytes}
       </Chip>
       {chip.firstLine !== null && (
         <code

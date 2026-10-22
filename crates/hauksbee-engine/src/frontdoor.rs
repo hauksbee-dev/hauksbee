@@ -439,7 +439,10 @@ fn insert_coverage_fields(
         cosim.insert("bench".to_string(), serde_json::to_value(bench)?);
     }
     if coverage.external_backend {
-        cosim.insert("external_backend".to_string(), serde_json::Value::Bool(true));
+        cosim.insert(
+            "external_backend".to_string(),
+            serde_json::Value::Bool(true),
+        );
     }
     Ok(())
 }
@@ -2057,7 +2060,10 @@ fn analyze_with_firmware_context(
             return (report, coverage);
         }
     };
-    let external_backend = cosim_bound.mcus.iter().any(|m| is_external_backend(&m.backend));
+    let external_backend = cosim_bound
+        .mcus
+        .iter()
+        .any(|m| is_external_backend(&m.backend));
     let (mut cosim, cosim_evidence) = run_web_cosim_with_bound(
         &norm.board,
         cosim_bound,
@@ -2618,7 +2624,10 @@ impl WebCosimWindow<'static> {
 }
 
 #[allow(clippy::too_many_lines, reason = "linear: stage, step, honesty notes")]
-#[allow(clippy::too_many_arguments, reason = "the stages of one run, plus its window")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the stages of one run, plus its window"
+)]
 fn run_web_cosim_with_bound(
     board: &ExtractedBoard,
     bound: crate::binder::BoundBoard,

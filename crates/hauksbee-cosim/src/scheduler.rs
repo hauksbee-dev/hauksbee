@@ -8370,8 +8370,11 @@ fn is_uart_tx_role(role: &str) -> bool {
 /// `pd1_txd`, `pa9_usart1_tx`, `uart0_tx`, `gpio16_txd0`, `d1_tx`.
 fn is_uart_tx_net_role(role: &str) -> bool {
     role.to_ascii_lowercase().split('_').any(|word| {
-        word.strip_prefix("tx")
-            .is_some_and(|rest| rest.trim_start_matches('d').chars().all(|c| c.is_ascii_digit()))
+        word.strip_prefix("tx").is_some_and(|rest| {
+            rest.trim_start_matches('d')
+                .chars()
+                .all(|c| c.is_ascii_digit())
+        })
     })
 }
 

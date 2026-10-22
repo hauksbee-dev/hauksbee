@@ -261,10 +261,14 @@ mod tests {
         let pin = header
             .find_var(&["U1", "PC13:PC13_LED"])
             .expect("the pin is declared as pin:net");
-        let uart = header.find_var(&["U1", "uart", "PA9_TX"]).expect("uart track");
+        let uart = header
+            .find_var(&["U1", "uart", "PA9_TX"])
+            .expect("uart track");
         let bus = header.find_var(&["bus", "U2_I2C"]).expect("i2c track");
         let nack = header.find_var(&["bus", "U2_I2C_nack"]).expect("nack wire");
-        let addr = header.find_var(&["bus", "U2_I2C_addr"]).expect("addr vector");
+        let addr = header
+            .find_var(&["bus", "U2_I2C_addr"])
+            .expect("addr vector");
         assert_eq!(addr.size, 8);
         assert!(
             header.find_var(&["events", "timeline"]).is_some(),

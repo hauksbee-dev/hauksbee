@@ -352,7 +352,10 @@ mod tests {
         let later = doc.find("#2000").unwrap();
         assert!(first_change < later, "changes are time ordered");
         assert!(doc.contains("b01001000 "), "vector is zero padded to width");
-        assert!(doc.contains("sLM75_write_[0x00] "), "spaces in text become _");
+        assert!(
+            doc.contains("sLM75_write_[0x00] "),
+            "spaces in text become _"
+        );
     }
 
     #[test]

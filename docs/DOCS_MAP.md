@@ -52,6 +52,7 @@ own board, firmware, and spec, and the one local command that runs them, and
 |---|---|
 | [`cosim/MCU.md`](cosim/MCU.md) | MCU co-sim backends, supported chips, firmware input tiers |
 | [`cosim/PERIPHERALS.md`](cosim/PERIPHERALS.md) | Runtime peripherals (buttons, pots, I2C/SPI slaves) |
+| [`cosim/OBSERVATIONS.md`](cosim/OBSERVATIONS.md) | The bench view of a run: pin states, core state, bus log, `--vcd` timeline |
 | [`cosim/SIMULATORS.md`](cosim/SIMULATORS.md) | Installing the external backends (Renode, Espressif QEMU) |
 | [`cosim/ORACLES.md`](cosim/ORACLES.md) | Ground-truth oracles (`--oracle`): kicad-cli, ngspice |
 

@@ -34,8 +34,10 @@ export interface UartChipView {
   key: string
   port: string
   net: string | null
-  /** `115200 baud`, or the engine's note on why it has no rate yet. */
-  baud: string
+  /** `115200 baud`, or null when the backend cannot read the rate. */
+  baud: string | null
+  /** Why there is no rate, for the tooltip (never the chip: it is not news). */
+  baudNote: string | null
   bytes: string
   firstLine: string | null
   /** Said when most bytes are not text, which is what a wrong baud looks like. */
@@ -93,7 +95,8 @@ export function pinChip(row: PinRow, mcuRef: string): PinChipView {
 }
 
 export function uartChip(row: UartRow, mcuRef: string): UartChipView {
-  const baud = row.baud ? `${Number(row.baud.toPrecision(6))} baud` : (row.baud_note || 'baud not decoded')
+  const baud = row.baud ? `${Number(row.baud.toPrecision(6))} baud` : null
+  const baudNote = baud ? null : (row.baud_note || 'baud not decoded')
   const text = row.bytes > 0 && row.printable_ratio < 0.7
     ? `only ${Math.round(row.printable_ratio * 100)}% of the bytes are text`
     : null
@@ -102,12 +105,14 @@ export function uartChip(row: UartRow, mcuRef: string): UartChipView {
     port: row.port,
     net: row.net || null,
     baud,
+    baudNote,
     bytes: plural(row.bytes, 'byte'),
     firstLine: row.first_line ? row.first_line : null,
     garbled: text,
-    title: row.net
+    title: (row.net
       ? `${row.port} transmits on ${row.net}: show it on the board and in the run view`
-      : `${row.port} is not tied to a net the binder knows, so there is nothing to show on the board`,
+      : `${row.port} is not tied to a net the binder knows, so there is nothing to show on the board`)
+      + (baudNote ? ` (${baudNote})` : ''),
   }
 }
 

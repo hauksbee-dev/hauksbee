@@ -360,11 +360,7 @@ pub struct ObserveOutputs<'a> {
 }
 
 /// A titled table of nets with their voltage range and toggle counts.
-fn print_net_table(
-    title: &str,
-    rows: &[(&String, &crate::scheduler::NetStat, u64)],
-    limit: usize,
-) {
+fn print_net_table(title: &str, rows: &[(&String, &crate::scheduler::NetStat, u64)], limit: usize) {
     println!("\n{title}");
     println!(
         "┌────────────────────────────┬──────────┬──────────┬──────────┐\n\
@@ -626,7 +622,10 @@ pub fn run_headless(
         if bench.mcus.is_empty() {
             print_net_table("most active nets:", &rows, 15);
         } else {
-            println!("\n{}", hauksbee_cosim::observe::bench::render_text(&bench).trim_end());
+            println!(
+                "\n{}",
+                hauksbee_cosim::observe::bench::render_text(&bench).trim_end()
+            );
             if observe.bus_log {
                 println!(
                     "\n{}",
@@ -808,8 +807,9 @@ pub fn run_headless(
                 path.display()
             );
         } else {
-            std::fs::write(path, sched.bench_vcd())
-                .map_err(|e| anyhow::anyhow!("writing the VCD waveform to {}: {e}", path.display()))?;
+            std::fs::write(path, sched.bench_vcd()).map_err(|e| {
+                anyhow::anyhow!("writing the VCD waveform to {}: {e}", path.display())
+            })?;
             if !quiet {
                 eprintln!("wrote the run's waveform (VCD) to {}", path.display());
             }

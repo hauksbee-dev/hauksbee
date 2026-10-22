@@ -65,9 +65,7 @@ impl SymbolTable {
                 if shndx == 0 || !CODE_SYMBOL_TYPES.contains(&(info & 0xF)) || value == 0 {
                     continue;
                 }
-                let Some(rest) = str_off
-                    .checked_add(name_idx)
-                    .and_then(|at| image.get(at..))
+                let Some(rest) = str_off.checked_add(name_idx).and_then(|at| image.get(at..))
                 else {
                     continue;
                 };

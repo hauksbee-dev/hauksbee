@@ -1774,6 +1774,144 @@
         "explain": "The microcontroller sent or received bytes on its serial port (UART) in the last two seconds of real time; the console shows what it printed."
       },
       {
+        "id": "pin_static_high",
+        "group": "observation",
+        "label": "Static high",
+        "explain": "The firmware drove this pin high and left it there."
+      },
+      {
+        "id": "pin_static_low",
+        "group": "observation",
+        "label": "Static low",
+        "explain": "The firmware drove this pin low and left it there."
+      },
+      {
+        "id": "pin_toggling",
+        "group": "observation",
+        "label": "Toggling",
+        "explain": "The firmware drives this pin and it changes level: the row gives the rate and duty."
+      },
+      {
+        "id": "pin_input",
+        "group": "observation",
+        "label": "Input or Hi-Z",
+        "explain": "The firmware never drove this pin: it is an input or released."
+      },
+      {
+        "id": "core_running",
+        "group": "observation",
+        "label": "Running",
+        "explain": "The core was still producing output at the end of the run."
+      },
+      {
+        "id": "core_parked",
+        "group": "observation",
+        "label": "Parked",
+        "explain": "The core sat in a tight loop with no pin or serial output since the loop began."
+      },
+      {
+        "id": "core_trapped",
+        "group": "observation",
+        "label": "Trapped",
+        "explain": "The core is parked in a function that means the firmware gave up (an error handler, abort or panic)."
+      },
+      {
+        "id": "core_faulted",
+        "group": "observation",
+        "label": "Faulted",
+        "explain": "A fault handler was entered or the core crashed."
+      },
+      {
+        "id": "core_unknown",
+        "group": "observation",
+        "label": "Core state unknown",
+        "explain": "This backend cannot say where the core is."
+      },
+      {
+        "id": "bus_i2c",
+        "group": "observation",
+        "label": "I2C",
+        "explain": "A transaction on an I2C bus, decoded from the controller."
+      },
+      {
+        "id": "bus_spi",
+        "group": "observation",
+        "label": "SPI",
+        "explain": "A chip-select-framed transfer on an SPI bus, decoded from the controller."
+      },
+      {
+        "id": "bus_uart",
+        "group": "observation",
+        "label": "UART",
+        "explain": "A line of serial output."
+      },
+      {
+        "id": "event_reset",
+        "group": "observation",
+        "label": "Reset",
+        "explain": "The board's reset line was pulsed and released."
+      },
+      {
+        "id": "event_watchdog_reset",
+        "group": "observation",
+        "label": "Watchdog reset",
+        "explain": "An unserviced watchdog rebooted the core."
+      },
+      {
+        "id": "event_stall",
+        "group": "observation",
+        "label": "Stall",
+        "explain": "The core stopped producing output and stayed quiet."
+      },
+      {
+        "id": "event_first_uart_byte",
+        "group": "observation",
+        "label": "First serial byte",
+        "explain": "The first byte the firmware sent on its serial port."
+      },
+      {
+        "id": "event_first_edge",
+        "group": "observation",
+        "label": "First pin edge",
+        "explain": "The first time the firmware changed an output pin."
+      },
+      {
+        "id": "event_fault",
+        "group": "observation",
+        "label": "Fault",
+        "explain": "A fault handler was entered."
+      },
+      {
+        "id": "probe_seed_led",
+        "group": "observation",
+        "label": "an indicator LED",
+        "explain": "An LED or indicator net is the first thing a person clips a probe to."
+      },
+      {
+        "id": "probe_seed_uart_tx",
+        "group": "observation",
+        "label": "the serial transmit line",
+        "explain": "The UART TX net shows the firmware's serial output as a waveform."
+      },
+      {
+        "id": "probe_seed_bus",
+        "group": "observation",
+        "label": "a bus line",
+        "explain": "An I2C or SPI line: the decoded transactions hang under it."
+      },
+      {
+        "id": "probe_seed_pwm",
+        "group": "observation",
+        "label": "a pin that toggles",
+        "explain": "The firmware drives this pin at a steady rate."
+      },
+      {
+        "id": "probe_seed_reset",
+        "group": "observation",
+        "label": "the reset line",
+        "explain": "The reset line shows when the board restarts the part."
+      },
+      {
         "id": "simavr:atmega168",
         "group": "backend",
         "label": "ATmega168 (simavr)"
@@ -2417,5 +2555,145 @@
         "output": "Upper case ID"
       }
     ]
-  }
+  },
+  "observations": [
+    {
+      "id": "pin_static_high",
+      "label": "Static high",
+      "meaning": "The firmware drove this pin high and left it there.",
+      "docs_anchor": "pin-states"
+    },
+    {
+      "id": "pin_static_low",
+      "label": "Static low",
+      "meaning": "The firmware drove this pin low and left it there.",
+      "docs_anchor": "pin-states"
+    },
+    {
+      "id": "pin_toggling",
+      "label": "Toggling",
+      "meaning": "The firmware drives this pin and it changes level: the row gives the rate and duty.",
+      "docs_anchor": "pin-states"
+    },
+    {
+      "id": "pin_input",
+      "label": "Input or Hi-Z",
+      "meaning": "The firmware never drove this pin: it is an input or released.",
+      "docs_anchor": "pin-states"
+    },
+    {
+      "id": "core_running",
+      "label": "Running",
+      "meaning": "The core was still producing output at the end of the run.",
+      "docs_anchor": "core-state"
+    },
+    {
+      "id": "core_parked",
+      "label": "Parked",
+      "meaning": "The core sat in a tight loop with no pin or serial output since the loop began.",
+      "docs_anchor": "core-state"
+    },
+    {
+      "id": "core_trapped",
+      "label": "Trapped",
+      "meaning": "The core is parked in a function that means the firmware gave up (an error handler, abort or panic).",
+      "docs_anchor": "core-state"
+    },
+    {
+      "id": "core_faulted",
+      "label": "Faulted",
+      "meaning": "A fault handler was entered or the core crashed.",
+      "docs_anchor": "core-state"
+    },
+    {
+      "id": "core_unknown",
+      "label": "Core state unknown",
+      "meaning": "This backend cannot say where the core is.",
+      "docs_anchor": "core-state"
+    },
+    {
+      "id": "bus_i2c",
+      "label": "I2C",
+      "meaning": "A transaction on an I2C bus, decoded from the controller.",
+      "docs_anchor": "bus-log"
+    },
+    {
+      "id": "bus_spi",
+      "label": "SPI",
+      "meaning": "A chip-select-framed transfer on an SPI bus, decoded from the controller.",
+      "docs_anchor": "bus-log"
+    },
+    {
+      "id": "bus_uart",
+      "label": "UART",
+      "meaning": "A line of serial output.",
+      "docs_anchor": "bus-log"
+    },
+    {
+      "id": "event_reset",
+      "label": "Reset",
+      "meaning": "The board's reset line was pulsed and released.",
+      "docs_anchor": "timeline"
+    },
+    {
+      "id": "event_watchdog_reset",
+      "label": "Watchdog reset",
+      "meaning": "An unserviced watchdog rebooted the core.",
+      "docs_anchor": "timeline"
+    },
+    {
+      "id": "event_stall",
+      "label": "Stall",
+      "meaning": "The core stopped producing output and stayed quiet.",
+      "docs_anchor": "timeline"
+    },
+    {
+      "id": "event_first_uart_byte",
+      "label": "First serial byte",
+      "meaning": "The first byte the firmware sent on its serial port.",
+      "docs_anchor": "timeline"
+    },
+    {
+      "id": "event_first_edge",
+      "label": "First pin edge",
+      "meaning": "The first time the firmware changed an output pin.",
+      "docs_anchor": "timeline"
+    },
+    {
+      "id": "event_fault",
+      "label": "Fault",
+      "meaning": "A fault handler was entered.",
+      "docs_anchor": "timeline"
+    },
+    {
+      "id": "probe_seed_led",
+      "label": "an indicator LED",
+      "meaning": "An LED or indicator net is the first thing a person clips a probe to.",
+      "docs_anchor": "seeded-probes"
+    },
+    {
+      "id": "probe_seed_uart_tx",
+      "label": "the serial transmit line",
+      "meaning": "The UART TX net shows the firmware's serial output as a waveform.",
+      "docs_anchor": "seeded-probes"
+    },
+    {
+      "id": "probe_seed_bus",
+      "label": "a bus line",
+      "meaning": "An I2C or SPI line: the decoded transactions hang under it.",
+      "docs_anchor": "seeded-probes"
+    },
+    {
+      "id": "probe_seed_pwm",
+      "label": "a pin that toggles",
+      "meaning": "The firmware drives this pin at a steady rate.",
+      "docs_anchor": "seeded-probes"
+    },
+    {
+      "id": "probe_seed_reset",
+      "label": "the reset line",
+      "meaning": "The reset line shows when the board restarts the part.",
+      "docs_anchor": "seeded-probes"
+    }
+  ]
 }

@@ -276,7 +276,12 @@ fn uart_row(obs: &McuObs, ctx: &McuContext) -> Option<UartRow> {
     })
 }
 
-fn mcu_events(obs: &McuObs, ctx: &McuContext, bench: &McuBench, duration_s: f64) -> Vec<BenchEvent> {
+fn mcu_events(
+    obs: &McuObs,
+    ctx: &McuContext,
+    bench: &McuBench,
+    duration_s: f64,
+) -> Vec<BenchEvent> {
     let mut events = Vec::new();
     let mcu_ref = &ctx.mcu_ref;
     let first_edge = obs
@@ -358,7 +363,11 @@ pub fn build_report(obs: &Observer, contexts: &[McuContext]) -> BenchReport {
         pins.sort_by(|a, b| {
             rank(a.state)
                 .cmp(&rank(b.state))
-                .then(b.freq_hz.unwrap_or(0.0).total_cmp(&a.freq_hz.unwrap_or(0.0)))
+                .then(
+                    b.freq_hz
+                        .unwrap_or(0.0)
+                        .total_cmp(&a.freq_hz.unwrap_or(0.0)),
+                )
                 .then(a.pin.cmp(&b.pin))
         });
         let (core, park, core_words) = core_state(mobs, ctx, duration_s, obs.chunk_s);
@@ -599,10 +608,20 @@ mod tests {
         obs.ensure_mcu(0, "U1");
         for k in 0..6_u32 {
             let t0 = f64::from(k) * 0.1;
-            let edges = [
-                PinEdge { cycle: 10, port: 'C', bit: 13, level: k % 2 == 0 },
-            ];
-            obs.record_chunk(0, t0, 0.1, (0, 100), &edges, if k == 1 { b"hi\n" } else { b"" });
+            let edges = [PinEdge {
+                cycle: 10,
+                port: 'C',
+                bit: 13,
+                level: k % 2 == 0,
+            }];
+            obs.record_chunk(
+                0,
+                t0,
+                0.1,
+                (0, 100),
+                &edges,
+                if k == 1 { b"hi\n" } else { b"" },
+            );
         }
         obs
     }
@@ -620,7 +639,10 @@ mod tests {
         assert_eq!(pa5.state, PinState::StaticLow);
         assert_eq!(mcu.core, CoreState::Running);
         assert_eq!(mcu.uarts[0].first_line.as_deref(), Some("hi"));
-        assert!(report.events.iter().any(|e| e.kind == EventKind::FirstUartByte));
+        assert!(report
+            .events
+            .iter()
+            .any(|e| e.kind == EventKind::FirstUartByte));
         assert!(report.events.iter().any(|e| e.kind == EventKind::FirstEdge));
     }
 
@@ -630,7 +652,11 @@ mod tests {
         obs.ensure_mcu(0, "U1");
         obs.record_chunk(0, 0.0, 1.0, (0, 100), &[], &[]);
         let mut c = ctx(Some(evidence(64, 1, 0x0800_0202)));
-        c.symbols = SymbolTable::from_image(&crate::observe::symbols::test_image(&[("Error_Handler", 0x0800_0201, 8)]));
+        c.symbols = SymbolTable::from_image(&crate::observe::symbols::test_image(&[(
+            "Error_Handler",
+            0x0800_0201,
+            8,
+        )]));
         let report = build_report(&obs, &[c]);
         let mcu = &report.mcus[0];
         assert_eq!(mcu.core, CoreState::Trapped);
@@ -646,7 +672,12 @@ mod tests {
         // Toggled for the first 0.1 s of 1 s, then silence in a 1-PC loop.
         let mut obs = Observer::default();
         obs.ensure_mcu(0, "U1");
-        let e = [PinEdge { cycle: 1, port: 'C', bit: 13, level: true }];
+        let e = [PinEdge {
+            cycle: 1,
+            port: 'C',
+            bit: 13,
+            level: true,
+        }];
         obs.record_chunk(0, 0.0, 0.1, (0, 10), &e, &[]);
         obs.record_chunk(0, 0.1, 0.9, (10, 20), &[], &[]);
         let parked = build_report(&obs, &[ctx(Some(evidence(64, 1, 0x0800_0300)))]);
@@ -657,7 +688,12 @@ mod tests {
         let mut busy = Observer::default();
         busy.ensure_mcu(0, "U1");
         for k in 0..10_u32 {
-            let ev = [PinEdge { cycle: 1, port: 'C', bit: 13, level: k % 2 == 0 }];
+            let ev = [PinEdge {
+                cycle: 1,
+                port: 'C',
+                bit: 13,
+                level: k % 2 == 0,
+            }];
             busy.record_chunk(0, f64::from(k) * 0.1, 0.1, (0, 10), &ev, &[]);
         }
         let running = build_report(&busy, &[ctx(Some(evidence(64, 1, 0x0800_0300)))]);

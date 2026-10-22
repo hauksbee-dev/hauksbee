@@ -29,10 +29,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 
 pub use hauksbee_frontdoor_api::frontdoor::{
-    CosimJobRunner, CosimProgress, DatasheetChecker, DatasheetExtractor, DatasheetHooks, DatasheetJob, DatasheetReady,
-    DatasheetSaver, DeckSimulator, DepInstaller, DepsStatus, DesignAnalyzer, DesignCheckRunner,
-    DesignLiveLauncher, DesignUpload, ExtractSettingsHooks, LiveLaunch, ModelDrafter, NamedUpload,
-    ToolHooks,
+    CosimJobRunner, CosimProgress, DatasheetChecker, DatasheetExtractor, DatasheetHooks,
+    DatasheetJob, DatasheetReady, DatasheetSaver, DeckSimulator, DepInstaller, DepsStatus,
+    DesignAnalyzer, DesignCheckRunner, DesignLiveLauncher, DesignUpload, ExtractSettingsHooks,
+    LiveLaunch, ModelDrafter, NamedUpload, ToolHooks,
 };
 
 /// A JSON (or plain-text) body with its content-type header: the shape every
@@ -422,7 +422,9 @@ async fn cosim_job_start_handler(
             )
             .into_response();
         }
-        let n = state.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let n = state
+            .next
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let id = format!("cosim-{n}");
         jobs.push((id.clone(), cell.clone()));
         // Old finished jobs go first; the running one is never evicted.
@@ -495,7 +497,10 @@ async fn cosim_job_status_handler(
         .find(|(id, _)| *id == job_id)
         .map(|(_, cell)| cell.clone());
     let Some(cell) = cell else {
-        return job_error(StatusCode::NOT_FOUND, "no such co-sim job (the server may have restarted)");
+        return job_error(
+            StatusCode::NOT_FOUND,
+            "no such co-sim job (the server may have restarted)",
+        );
     };
     let body = match &*cell
         .lock()

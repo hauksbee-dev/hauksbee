@@ -73,13 +73,15 @@ describe('uart rows', () => {
     expect(c.garbled).toBeNull()
   })
 
-  test('without a baud the engine note is shown instead', () => {
+  test('without a baud the engine note goes in the tooltip, not the chip', () => {
     const c = uartChip({ ...base, baud: null, baud_note: 'baud not decoded yet' }, 'U1')
-    expect(c.baud).toBe('baud not decoded yet')
+    expect(c.baud).toBeNull()
+    expect(c.baudNote).toBe('baud not decoded yet')
+    expect(c.title).toContain('baud not decoded yet')
   })
 
-  test('without a baud or a note it still says so', () => {
-    expect(uartChip({ ...base, baud: undefined }, 'U1').baud).toContain('baud')
+  test('without a baud or a note the tooltip still says so', () => {
+    expect(uartChip({ ...base, baud: undefined }, 'U1').title).toContain('baud')
   })
 
   test('one byte is singular and a missing first line is null', () => {
@@ -377,5 +379,37 @@ describe('auto-seeded probes', () => {
   test('a run with no bench seeds exactly what it did before', () => {
     const seed = seedFrom({ ...watchy, cosim: { ran: true, seconds_simulated: 1, uart_output: '', findings: [], analog_valid: true, gpio_nets: [{ name: 'X', volts: 3, driven: true, toggles: 4 }] } }, null)
     expect(seed.probes).toEqual([{ net: 'X', why: 'toggled 4x in the analysis' }])
+  })
+})
+
+describe('real engine captures', () => {
+  // Captured from live Renode runs by crates/hauksbee-engine/tests/bench_observability.rs
+  // (HAUKSBEE_DUMP_BENCH=<dir>): they prove the view-model accepts what the engine really emits.
+  const real = ['bench-real-stm32-blinky.json', 'bench-real-i2c-thermostat.json', 'bench-real-rp2040-blink-uart.json']
+
+  test.each(real)('%s makes a strip, lanes and decoded items', name => {
+    const b = fixture(name)
+    const v = benchView(b)
+    expect(v.mcus.length).toBeGreaterThan(0)
+    const { lanes } = benchLanes(b, null)
+    expect(lanes.length).toBeGreaterThan(0)
+    expect(decodedItems(b.bus_log).length).toBe(b.bus_log?.length ?? 0)
+  })
+
+  test('the blinky capture has PC13 toggling on the net it drives', () => {
+    const pc13 = fixture('bench-real-stm32-blinky.json').mcus[0]?.pins.find(p => p.pin === 'PC13')
+    expect(pc13?.state).toBe('pin_toggling')
+    expect(pc13?.net).toBeTruthy()
+  })
+
+  test('the thermostat capture lists acknowledged I2C transactions to 0x48', () => {
+    const i2c = (fixture('bench-real-i2c-thermostat.json').bus_log ?? []).filter(t => t.bus === 'bus_i2c')
+    expect(i2c.length).toBeGreaterThan(1)
+    expect(i2c.every(t => t.addr === 0x48 && t.acked)).toBe(true)
+  })
+
+  test('the rp2040 capture carries its first serial line', () => {
+    const u = fixture('bench-real-rp2040-blink-uart.json').mcus[0].uarts?.[0]
+    expect(u?.first_line).toBe('hauksbee rp2040: main reached')
   })
 })

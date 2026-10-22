@@ -128,6 +128,9 @@ try {
     check(card.includes(ledNet), `the board's selection card names ${ledNet}`)
     check(await page.locator('[data-testid="bench-show-board"]').count() === 1, 'the run view offers "Show it on the board"')
     await shot(page, '02-blinky-dark-focused')
+    // The whole page, scrolled to the board, to judge the highlighted net as a user sees it.
+    await page.evaluate(() => window.scrollTo(0, 0))
+    await page.screenshot({ path: join(SHOTS, '02b-blinky-dark-board-top.png') })
     check(errors.length === 0, `blinky: no console or page errors ${errors.join(' | ')}`)
     await ctx.close()
   }

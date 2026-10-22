@@ -527,7 +527,11 @@ mod tests {
         let mut log1 = Vec::new();
         for k in 0..5_u64 {
             let (rise, fall) = (k * 400_000, k * 400_000 + 100_000);
-            let log = if rise < 1_000_000 { &mut log0 } else { &mut log1 };
+            let log = if rise < 1_000_000 {
+                &mut log0
+            } else {
+                &mut log1
+            };
             log.push(edge(rise, true));
             log.push(edge(fall, false));
         }
@@ -545,7 +549,14 @@ mod tests {
     fn a_pin_set_once_is_static() {
         let mut obs = Observer::default();
         obs.ensure_mcu(0, "U1");
-        obs.record_chunk(0, 0.0, 0.1, (0, 100), &[edge(10, true), edge(20, true)], &[]);
+        obs.record_chunk(
+            0,
+            0.0,
+            0.1,
+            (0, 100),
+            &[edge(10, true), edge(20, true)],
+            &[],
+        );
         let trace = &obs.mcus[0].pins[&('C', 13)];
         assert_eq!(trace.edge_count, 1, "a repeated level is not an edge");
         assert!(trace.freq_hz().is_none());

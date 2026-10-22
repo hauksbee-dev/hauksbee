@@ -78,12 +78,12 @@ fn bench_stm32_blinky_reports_pc13_toggling() {
 
     // The same view as the CLI prints it, and as the waveform draws it.
     let text = hauksbee_cosim::observe::bench::render_text(&bench);
-    assert!(
-        text.contains("PC13") && text.contains("toggling"),
-        "{text}"
-    );
+    assert!(text.contains("PC13") && text.contains("toggling"), "{text}");
     let vcd = engine.scheduler().bench_vcd();
-    assert!(vcd.contains("$enddefinitions") && vcd.contains("PC13"), "{vcd}");
+    assert!(
+        vcd.contains("$enddefinitions") && vcd.contains("PC13"),
+        "{vcd}"
+    );
 }
 
 /// The RP2040 on a bare QFN-56 board: UART0 TX on GP0 (pad 2), the on-board LED
@@ -218,7 +218,8 @@ fn bench_stm32_i2c_thermostat_bus_log_lists_the_sensor_transactions() {
         "the LM75 is present, so each address byte is acknowledged: {i2c:?}"
     );
     assert!(
-        i2c.iter().any(|t| t.summary.contains("ACK") && t.summary.contains("0x48")),
+        i2c.iter()
+            .any(|t| t.summary.contains("ACK") && t.summary.contains("0x48")),
         "{i2c:?}"
     );
     // Times are in order, so the log reads as a sequence.
